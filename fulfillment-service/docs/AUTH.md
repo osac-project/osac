@@ -697,8 +697,11 @@ new JIT onboarding request, without coupling runtime authorization to generic ar
 Migration backfill retains prior archive evidence; archives for unrelated objects remain.
 
 These checks apply at the authorization or delivery lookup, not by invalidating
-the JWT signature or serializing already-authorized in-flight operations against
-deletion. Retained billing history currently prevents reusing the billed tenant's
+the JWT signature or generally serializing already-authorized in-flight operations
+against deletion. Public `ProjectMemberships/Create` is a grant operation: it
+checks the policy for the exact assigned tenant and project after locking those
+live rows in the request transaction. A manager group in another tenant cannot
+authorize that grant. Retained billing history currently prevents reusing the billed tenant's
 name. Explicit same-name recreation of an unbilled tenant remains a separate
 platform identity-policy gap: supported name-only claims cannot distinguish the
 old and new incarnations. This change introduces no token-epoch or permanent

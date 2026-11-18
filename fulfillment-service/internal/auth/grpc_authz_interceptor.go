@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 
 	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc"
@@ -30,6 +31,20 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 )
+
+const projectMembershipCreateMethod = "/osac.public.v1.ProjectMemberships/Create"
+
+type projectMembershipCreateKey struct{}
+type projectMembershipCreateAuthorizer func(context.Context, string, string) error
+
+// AuthorizeProjectMembershipCreate checks the policy for the exact locked target, not the raw request.
+func AuthorizeProjectMembershipCreate(ctx context.Context, tenant, project string) error {
+	authorize, ok := ctx.Value(projectMembershipCreateKey{}).(projectMembershipCreateAuthorizer)
+	if !ok || tenant == "" || project == "" {
+		return grpcstatus.Error(grpccodes.PermissionDenied, "permission denied")
+	}
+	return authorize(ctx, tenant, project)
+}
 
 // ObjectMetadata contains the metadata fields fetched from the database for authorization decisions.
 type ObjectMetadata struct {
@@ -298,6 +313,28 @@ func (i *GrpcAuthzInterceptor) authorizeWithToken(ctx context.Context, method st
 	// Store subject in context
 	result = ContextWithSubject(ctx, subject)
 	result = ContextWithAuthenticationMethod(result, authContext.AuthMethod)
+	if method == projectMembershipCreateMethod {
+		authorize := projectMembershipCreateAuthorizer(func(ctx context.Context, tenant, project string) error {
+			target := *authContext
+			target.projectMembershipCreatePending = false
+			target.Tenant = tenant
+			target.Project = NormalizeProjectNameForAuthorization(project)
+			decision, err := i.evaluator.Evaluate(ctx, &target, method)
+			if err != nil {
+				logger.ErrorContext(ctx, "Failed to authorize project membership target", slog.Any("error", err))
+				return grpcstatus.Error(grpccodes.Internal, "failed to evaluate authorization policy")
+			}
+			if decision == nil || !decision.Allowed ||
+				(!slices.Contains(decision.SubjectTenants, tenant) && !slices.Contains(decision.SubjectTenants, "*")) ||
+				(decision.ManagedServiceAccount && authContext.ManagedServiceAccountTenantClaim != tenant) {
+				return grpcstatus.Error(grpccodes.PermissionDenied, "permission denied")
+			}
+			return nil
+		})
+		result = context.WithValue(result, projectMembershipCreateKey{}, authorize)
+		logger.DebugContext(result, "Eligible for scoped project membership authorization", slog.String("user", subject.User))
+		return
+	}
 
 	logger.DebugContext(
 		result,
@@ -379,10 +416,11 @@ func (i *GrpcAuthzInterceptor) buildContextExtensions(ctx context.Context, authC
 			}
 		}
 
-		// For project membership Create, extract the project name from the request body.
-		// The OPA policy iterates over the user's tenants to check manager group membership.
-		if method == "/osac.public.v1.ProjectMemberships/Create" {
-			authContext.Project = i.extractProjectFromRequest(request)
+		// This first check establishes eligibility and a subject for normal placement.
+		// The handler verifies the exact target before persisting the membership.
+		if method == projectMembershipCreateMethod {
+			authContext.projectMembershipCreatePending = true
+			authContext.Project = NormalizeProjectNameForAuthorization(i.extractProjectFromRequest(request))
 		}
 	}
 }

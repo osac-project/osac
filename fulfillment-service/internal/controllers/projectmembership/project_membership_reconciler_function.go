@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-
 	"strings"
 
 	"google.golang.org/grpc"
@@ -182,32 +181,19 @@ func (t *task) update(ctx context.Context) error {
 	return t.syncProjectMembership(ctx, existingProject)
 }
 
-// getProjectByNameOrID fetches a project by ID or name. If the provided value is not found as an ID,
-// it attempts to find the project by name.
-func (t *task) getProjectByNameOrID(ctx context.Context, nameOrID string) (*privatev1.Project, error) {
-	// Try fetching by ID first
-	projectResponse, err := t.r.projectsClient.Get(ctx, privatev1.ProjectsGetRequest_builder{
-		Id: nameOrID,
-	}.Build())
-	if err == nil {
-		return projectResponse.GetObject(), nil
+// Both membership targets and project parents are stored as (tenant, full project name)
+// foreign keys. A project's opaque ID is not part of either reference.
+func (t *task) getProjectByName(ctx context.Context, tenant, name string) (*privatev1.Project, error) {
+	if tenant == "" {
+		return nil, status.Error(codes.FailedPrecondition, "project reference has no organization tenant")
 	}
-
-	// Only retry by name if the error was NotFound
-	if status.Code(err) != codes.NotFound {
-		return nil, fmt.Errorf("failed to get project: %w", err)
+	if name == "" {
+		return nil, status.Error(codes.FailedPrecondition, "project reference is required")
 	}
-
-	// If not found by ID, try listing by name
-	t.r.logger.DebugContext(ctx, "Project not found by ID, trying by name",
-		slog.String("!name_or_id", nameOrID),
-	)
-
-	// Escape single quotes in the name to prevent CEL injection
-	escapedName := strings.ReplaceAll(nameOrID, "'", "\\'")
-	filter := fmt.Sprintf("this.metadata.name == '%s'", escapedName)
+	filter := fmt.Sprintf("this.metadata.tenant == %q && this.metadata.name == %q", tenant, name)
 	listResponse, err := t.r.projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
 		Filter: &filter,
+		Limit:  new(int32(2)),
 	}.Build())
 	if err != nil {
 		return nil, fmt.Errorf("failed to list projects by name: %w", err)
@@ -215,13 +201,22 @@ func (t *task) getProjectByNameOrID(ctx context.Context, nameOrID string) (*priv
 
 	projects := listResponse.GetItems()
 	if len(projects) == 0 {
-		return nil, status.Errorf(codes.NotFound, "project with name or ID '%s' not found", nameOrID)
+		return nil, status.Errorf(codes.NotFound, "project %q not found", name)
 	}
 	if len(projects) > 1 {
-		return nil, status.Errorf(codes.FailedPrecondition, "multiple projects found with name '%s'", nameOrID)
+		return nil, status.Errorf(codes.FailedPrecondition, "multiple projects found with name %q", name)
 	}
 
-	return projects[0], nil
+	project := projects[0]
+	if project.GetMetadata().GetTenant() != tenant || project.GetMetadata().GetName() != name || project.GetId() == "" {
+		return nil, status.Error(codes.FailedPrecondition, "project lookup did not match the stored tenant and project reference")
+	}
+	return project, nil
+}
+
+func (t *task) getMembershipProject(ctx context.Context) (*privatev1.Project, error) {
+	metadata := t.membership.GetMetadata()
+	return t.getProjectByName(ctx, metadata.GetTenant(), metadata.GetProject())
 }
 
 func (t *task) addFinalizer() bool {
@@ -250,8 +245,8 @@ func (t *task) setDefaults() {
 // succeed. Returns true with a human-readable reason when the failure cannot
 // resolve on its own (e.g. the project was deleted).
 func (t *task) isTerminalFailure(ctx context.Context) (bool, string, *privatev1.Project) {
-	projectNameOrID := t.membership.GetMetadata().GetProject()
-	if projectNameOrID == "" {
+	projectName := t.membership.GetMetadata().GetProject()
+	if projectName == "" {
 		return true, "Project reference is required", nil
 	}
 
@@ -260,21 +255,20 @@ func (t *task) isTerminalFailure(ctx context.Context) (bool, string, *privatev1.
 		return true, fmt.Sprintf("Unknown project membership role: %v", role), nil
 	}
 
-	project, err := t.getProjectByNameOrID(ctx, projectNameOrID)
+	project, err := t.getMembershipProject(ctx)
 	if err != nil {
 		code := status.Code(err)
-		if code == codes.NotFound || code == codes.FailedPrecondition {
-			return true, fmt.Sprintf("Project '%s' no longer exists", projectNameOrID), nil
+		if code == codes.NotFound {
+			return true, fmt.Sprintf("Project '%s' no longer exists", projectName), nil
+		}
+		if code == codes.FailedPrecondition {
+			return true, fmt.Sprintf("Failed to fetch project: %v", err), nil
 		}
 		return false, "", nil
 	}
 
 	if project.GetMetadata().HasDeletionTimestamp() {
-		return true, fmt.Sprintf("Project '%s' is being deleted", projectNameOrID), nil
-	}
-
-	if project.GetMetadata().GetTenant() == "" {
-		return true, "Project has no organization tenant", nil
+		return true, fmt.Sprintf("Project '%s' is being deleted", projectName), nil
 	}
 
 	return false, "", project
@@ -411,20 +405,18 @@ func (t *task) resolveProjectGroup(ctx context.Context, existingProject *private
 	if existingProject != nil {
 		project = existingProject
 	} else {
-		projectNameOrID := t.membership.GetMetadata().GetProject()
-		if projectNameOrID == "" {
-			t.membership.GetStatus().SetState(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED)
-			t.membership.GetStatus().SetMessage("Project is required")
-			err = fmt.Errorf("project is required")
-			return
-		}
-
-		project, err = t.getProjectByNameOrID(ctx, projectNameOrID)
+		project, err = t.getMembershipProject(ctx)
 		if err != nil {
 			t.membership.GetStatus().SetState(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED)
 			t.membership.GetStatus().SetMessage(fmt.Sprintf("Failed to fetch project: %v", err))
 			return
 		}
+	}
+	if project.GetMetadata().HasDeletionTimestamp() {
+		t.membership.GetStatus().SetState(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED)
+		err = fmt.Errorf("project %q is being deleted", project.GetMetadata().GetName())
+		t.membership.GetStatus().SetMessage(err.Error())
+		return
 	}
 
 	role := t.membership.GetSpec().GetRole()
@@ -436,13 +428,7 @@ func (t *task) resolveProjectGroup(ctx context.Context, existingProject *private
 		return
 	}
 
-	organizationName = project.GetMetadata().GetTenant()
-	if organizationName == "" {
-		t.membership.GetStatus().SetState(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED)
-		t.membership.GetStatus().SetMessage("Project has no organization tenant")
-		err = fmt.Errorf("no tenant")
-		return
-	}
+	organizationName = t.membership.GetMetadata().GetTenant()
 
 	groupPath, pathErr := t.buildProjectGroupPath(ctx, project, groupSuffix)
 	if pathErr != nil {
@@ -526,7 +512,7 @@ func (t *task) mapRoleToGroupSuffix(role privatev1.ProjectMembershipRole) string
 
 const (
 	// MaxProjectHierarchyDepth is the maximum allowed depth of project nesting.
-	// This prevents infinite loops in case of circular references in the project hierarchy.
+	// This bounds the number of lookups even for malformed stored data.
 	MaxProjectHierarchyDepth = 100
 )
 
@@ -534,52 +520,28 @@ const (
 // For a nested project like project1 -> project2 -> project3 with role "managers",
 // this returns "/project1/project2/project3/managers".
 func (t *task) buildProjectGroupPath(ctx context.Context, project *privatev1.Project, groupSuffix string) (string, error) {
-	// Build the path by traversing up the parent chain
-	var pathParts []string
+	tenant := project.GetMetadata().GetTenant()
 	currentProject := project
 
 	for i := 0; i < MaxProjectHierarchyDepth; i++ {
-		// Prepend the current project name
-		projectName := currentProject.GetMetadata().GetName()
-		pathParts = append([]string{projectName}, pathParts...)
-
-		// Check if there's a parent
-		if currentProject.GetMetadata().GetProject() == "" {
-			break
+		parentName := currentProject.GetMetadata().GetProject()
+		if parentName == "" {
+			// Match the group path created by the project controller: the name already
+			// contains the full hierarchy, even for pre-hierarchy rows without a parent.
+			return "/" + strings.ReplaceAll(project.GetMetadata().GetName(), ".", "/") + "/" + groupSuffix, nil
 		}
 
-		// Fetch the parent project
-		parentNameOrID := currentProject.GetMetadata().GetProject()
+		currentName := currentProject.GetMetadata().GetName()
+		if sep := strings.LastIndexByte(currentName, '.'); sep < 0 || parentName != currentName[:sep] {
+			return "", status.Error(codes.FailedPrecondition, "parent project does not match the project name prefix")
+		}
 		var err error
-		currentProject, err = t.getProjectByNameOrID(ctx, parentNameOrID)
+		currentProject, err = t.getProjectByName(ctx, tenant, parentName)
 		if err != nil {
-			return "", fmt.Errorf("failed to fetch parent project %s: %w", parentNameOrID, err)
+			return "", fmt.Errorf("failed to fetch parent project %s: %w", parentName, err)
 		}
 	}
-
-	if len(pathParts) >= MaxProjectHierarchyDepth {
-		return "", fmt.Errorf("project hierarchy exceeded maximum depth of %d (possible circular reference)", MaxProjectHierarchyDepth)
-	}
-
-	// Add the role suffix at the end
-	pathParts = append(pathParts, groupSuffix)
-
-	// Construct the full path with leading slash
-	// For example: pathParts = ["project1", "project2", "project3", "managers"]
-	// Result: "/project1/project2/project3/managers"
-	return "/" + joinPath(pathParts...), nil
-}
-
-// joinPath joins path components with "/" separator
-func joinPath(parts ...string) string {
-	if len(parts) == 0 {
-		return ""
-	}
-	result := parts[0]
-	for i := 1; i < len(parts); i++ {
-		result += "/" + parts[i]
-	}
-	return result
+	return "", fmt.Errorf("project hierarchy exceeded maximum depth of %d", MaxProjectHierarchyDepth)
 }
 
 func (t *task) delete(ctx context.Context) error {
@@ -619,12 +581,11 @@ func (t *task) cleanupProjectMembership(ctx context.Context) error {
 		return nil
 	}
 
-	projectNameOrID := t.membership.GetMetadata().GetProject()
-	if projectNameOrID == "" {
+	if t.membership.GetMetadata().GetProject() == "" {
 		return nil
 	}
 
-	project, err := t.getProjectByNameOrID(ctx, projectNameOrID)
+	project, err := t.getMembershipProject(ctx)
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
 			t.r.logger.DebugContext(ctx, "Project not found during cleanup, skipping")
@@ -639,7 +600,7 @@ func (t *task) cleanupProjectMembership(ctx context.Context) error {
 		return nil
 	}
 
-	organizationName := project.GetMetadata().GetTenant()
+	organizationName := t.membership.GetMetadata().GetTenant()
 
 	groupPath, err := t.buildProjectGroupPath(ctx, project, groupSuffix)
 	if err != nil {
@@ -666,7 +627,7 @@ func (t *task) cleanupProjectMembership(ctx context.Context) error {
 	return nil
 }
 
-// signalProject looks up the project by name and signals it so that the
+// signalProject looks up the membership's project and signals it so that the
 // project reconciler re-runs. This is used when the project membership is deleted to
 // unblock the project's own deletion.
 func (t *task) signalProject(ctx context.Context) {
@@ -674,7 +635,7 @@ func (t *task) signalProject(ctx context.Context) {
 	if projectName == "" {
 		return
 	}
-	project, err := t.getProjectByNameOrID(ctx, projectName)
+	project, err := t.getMembershipProject(ctx)
 	if err != nil {
 		t.r.logger.WarnContext(ctx, "Failed to look up project for signaling",
 			slog.String("project_name", projectName),

@@ -97,9 +97,7 @@ test('creates a catalog item through the Catalog UI and lists it in Catalog', as
   await testStep('catalog-create', 'Create the catalog item', async () => {
     await expect(page.getByRole(...CatalogCreatePage.review)).toBeVisible();
     await page.getByRole(...CatalogCreatePage.create).click();
-    await expect(page).toHaveURL(
-      (url) => /^\/catalog\/vm\/[^/]+$/.test(url.pathname) && url.pathname !== '/catalog/vm/create',
-    );
+    await expect(page).toHaveURL((url) => /^\/catalog\/vms\/[^/]+$/.test(url.pathname));
     await writeFile(ownershipFile, '', {
       encoding: 'utf8',
       flag: 'wx',

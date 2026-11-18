@@ -1379,8 +1379,8 @@ targets the kind `dev-full` UI HTTPRoute.
 
 If the value does not match the URL the browser actually uses, login fails at
 Keycloak with `Invalid parameter: redirect_uri`. `make helm-validate` runs
-`scripts/validate-keycloak-ui-redirect-uris.py`, which fails if the client ever
-regains relative redirect URIs.
+`scripts/helm-validate/tests/identity/test_keycloak-ui-redirect-uris.py`, which
+fails if the client ever regains relative redirect URIs.
 
 ## Uninstall
 

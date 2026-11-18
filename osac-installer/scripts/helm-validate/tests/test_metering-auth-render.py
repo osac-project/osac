@@ -58,7 +58,7 @@ def check_profile(profile: str) -> None:
     assert keep in binding, f"{profile}: rules binding must be kept on uninstall"
 
 
-if __name__ == "__main__":
+def test_main() -> None:
     for profile in PROFILES:
         check_profile(profile)
     print("Metering event-log profile render checks passed.")

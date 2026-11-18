@@ -31,7 +31,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
@@ -89,20 +88,6 @@ type aapCapture struct {
 type aapCaptures struct {
 	Jobs       []aapCapture `json:"jobs"`
 	Unexpected []string     `json:"unexpected"`
-}
-
-// applyObjects serializes typed Kubernetes objects into one v1.List for
-// kubectl apply, so the fixture schema stays type-checked.
-func applyObjects(objects ...any) string {
-	list := &corev1.List{TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "List"}}
-	for _, object := range objects {
-		raw, err := json.Marshal(object)
-		Expect(err).NotTo(HaveOccurred(), "serialize the AAP recorder object")
-		list.Items = append(list.Items, runtime.RawExtension{Raw: raw})
-	}
-	manifest, err := json.Marshal(list)
-	Expect(err).NotTo(HaveOccurred(), "serialize the AAP recorder list")
-	return string(manifest)
 }
 
 // installAAPRecorder deploys the capture-only AAP server the operator points
@@ -184,8 +169,12 @@ func installAAPRecorder() {
 		},
 	}
 
-	_, err := runRecorderKubectl(applyObjects(objects...), "apply", "-f", "-")
-	Expect(err).NotTo(HaveOccurred(), "apply the AAP recorder fixture")
+	for _, object := range objects {
+		manifest, err := json.Marshal(object)
+		Expect(err).NotTo(HaveOccurred(), "serialize the AAP recorder object")
+		_, err = runRecorderKubectl(string(manifest), "apply", "-f", "-")
+		Expect(err).NotTo(HaveOccurred(), "apply the AAP recorder fixture")
+	}
 
 	Eventually(func(g Gomega) {
 		output, err := runRecorderKubectl("", "get", "pod", aapRecorderName, "-n", operatorNamespace,

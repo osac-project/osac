@@ -16,7 +16,7 @@ suite (repository-root `make -C osac-installer help`, `.github/workflows/`).
 | Unit | Co-located Go unit tests | Allocation, lifecycle, client and provider logic in isolation | Kubernetes and provider APIs mocked. |
 | Envtest | `internal/controller/` | Kubernetes API, etcd, OSAC and static Metal3 CRDs | Metal3 controller, Ironic/BMC, hardware and some provider clients faked. |
 | Component integration | Deployed `test/integration/` | Deployed operator, CRDs, API, pool/instance flows, status | Static `BareMetalHost` state and simulated transitions; no real Metal3 operator, Ironic, BMC or hardware. |
-| Component integration (CI) | Installer Kind target, BMF suite | Thin Kind install, installation API endpoint unset | Same static Metal3/provider boundary; installation settings need separate deployed coverage. |
+| Component integration (CI) | Installer Kind target, `SUITE=bmf` | BMF-only suite, then deployed BMF and OSAC controllers against a capture-only AAP service | Static Metal3 state and Fabric outcomes; no real Metal3, Fabric, Ironic, BMC or hardware. Automatic ExternalIP gating is a [follow-up gap](https://redhat.atlassian.net/browse/OSAC-7619). |
 | Contract | None dedicated | No real provider boundary | Static Metal3 CRDs, patched status and simulated transitions do not exercise a real contract; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) for qualifying coverage. |
 | E2E | Cross-component suites | Fulfillment-to-operator journeys where available | Real hardware and providers remain environment-dependent. |
 

@@ -236,6 +236,7 @@ var _ = Describe("CaaS worker registry probe", func() {
 		Expect(string(fileContents["/usr/local/bin/osac-worker-registry-probe"])).To(ContainSubstring("podman pull"))
 		Expect(string(fileContents["/usr/local/bin/osac-worker-network-config"])).To(ContainSubstring("ipv4.route-metric 10"))
 		Expect(string(fileContents["/usr/local/bin/osac-worker-network-config"])).To(ContainSubstring("net.ipv4.ip_forward=1"))
+		Expect(string(fileContents["/usr/local/bin/osac-worker-network-config"])).To(ContainSubstring("10.200.*"))
 
 		systemd, ok := ignition["systemd"].(map[string]any)
 		Expect(ok).To(BeTrue())

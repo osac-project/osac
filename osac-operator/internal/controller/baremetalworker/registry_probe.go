@@ -558,20 +558,27 @@ const workerNetworkConfigScript = `#!/usr/bin/bash
 set -u
 
 tenant_device=""
-tenant_metric=-1
-while read -r _ via _gateway dev _device metric _metric; do
-  [ "${dev:-}" = "dev" ] || continue
-  [ -n "${_device:-}" ] || continue
-  case "$_device" in
+tenant_score=-1
+while read -r route; do
+  device="$(printf '%s\n' "$route" | awk '{for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}')"
+  source="$(printf '%s\n' "$route" | awk '{for (i=1; i<=NF; i++) if ($i == "src") {print $(i+1); exit}}')"
+  metric_value="$(printf '%s\n' "$route" | awk '{for (i=1; i<=NF; i++) if ($i == "metric") {print $(i+1); exit}}')"
+  [ -n "$device" ] || continue
+  case "$device" in
     br-*|ovs-*|ovn-*|cni*|lo) continue ;;
   esac
-  metric_value="${_metric:-0}"
   case "$metric_value" in
     ''|*[!0-9]*) metric_value=0 ;;
   esac
-  if [ "$metric_value" -gt "$tenant_metric" ]; then
-    tenant_device="$_device"
-    tenant_metric="$metric_value"
+  priority=0
+  case "$source" in
+    10.200.*) priority=100 ;;
+    10.*) priority=50 ;;
+  esac
+  score=$((priority * 1000000 + metric_value))
+  if [ "$score" -gt "$tenant_score" ]; then
+    tenant_device="$device"
+    tenant_score="$score"
   fi
 done < <(ip -4 route show default)
 

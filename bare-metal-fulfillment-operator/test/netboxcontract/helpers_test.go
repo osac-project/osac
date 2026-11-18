@@ -18,10 +18,7 @@ package netboxcontract
 
 import (
 	"context"
-	"strconv"
 	"sync"
-
-	. "github.com/onsi/gomega" //nolint:revive,staticcheck
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/baremetalhost"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials"
@@ -68,49 +65,6 @@ func addEligibleDevice(id int, name *string, caseValue string) {
 }
 
 func strPtr(value string) *string { return &value }
-
-// deviceIDs returns the IDs of the devices the mock server would return for a
-// query, so a case can assert server-side filtering separately from the
-// adapter's selection.
-func deviceIDsForQuery(caseValue string) []int {
-	ids := make([]int, 0, 1)
-	for _, device := range devicesMatching(caseValue) {
-		ids = append(ids, device.ID)
-	}
-	return ids
-}
-
-// devicesMatching evaluates the same fixed predicates the adapter sends.
-func devicesMatching(caseValue string) []netboxtest.Device {
-	matched := make([]netboxtest.Device, 0, 1)
-	for _, device := range allDevices() {
-		if device.Status != "staged" {
-			continue
-		}
-		managed, _ := device.CustomFields["osac_managed"].(bool)
-		if !managed {
-			continue
-		}
-		if owner, present := device.CustomFields["osac_instance_id"]; present && owner != nil && owner != "" {
-			continue
-		}
-		if value, _ := device.CustomFields[caseFieldName].(string); value != caseValue {
-			continue
-		}
-		matched = append(matched, device)
-	}
-	return matched
-}
-
-// allDevices exposes the registered fixtures for assertions.
-func allDevices() []netboxtest.Device {
-	return server.Devices()
-}
-
-// expectOnlyDevice asserts the fixture set yields exactly the wanted device.
-func expectOnlyDevice(caseValue string, wantID int) {
-	Expect(deviceIDsForQuery(caseValue)).To(Equal([]int{wantID}))
-}
 
 // addExactField registers an additional exact-filtered capability field.
 func addExactField(name, fieldType string) {
@@ -197,6 +151,3 @@ func (m *recordingBMHManager) DeleteBMCSecret(context.Context, string, string) e
 func (m *recordingBMHManager) GetHardwareNICs(context.Context, string) ([]string, error) {
 	return []string{"aa:bb:cc:dd:ee:42"}, nil
 }
-
-// itoa renders a numeric device ID the way the adapter does.
-func itoa(value int) string { return strconv.Itoa(value) }

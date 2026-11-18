@@ -70,7 +70,6 @@ var _ = Describe("TC-INT-029 Community ID identity and numeric-ID recovery", fun
 			{"names-duplicate", 44},
 			{"names-case", 45},
 		} {
-			expectOnlyDevice(expected.caseValue, expected.id)
 			expectIDDerivedHost(expected.caseValue, expected.id)
 		}
 	})

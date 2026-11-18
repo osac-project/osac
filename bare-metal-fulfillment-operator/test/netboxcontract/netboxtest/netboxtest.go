@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,12 +33,8 @@ import (
 	"time"
 )
 
-// Filter logic values NetBox supports on a custom field definition.
-const (
-	FilterExact    = "exact"
-	FilterLoose    = "loose"
-	FilterDisabled = "disabled"
-)
+// FilterExact is the filter logic used by contract field definitions.
+const FilterExact = "exact"
 
 // Field is one custom-field definition attached to dcim.device.
 type Field struct {
@@ -68,13 +65,12 @@ func (d Device) ETag() string {
 
 // Request records an API call for assertions.
 type Request struct {
-	Method        string
-	Path          string
-	Query         url.Values
-	IfMatch       string
-	Authorization string
-	Body          []byte
-	StatusCode    int
+	Method     string
+	Path       string
+	Query      url.Values
+	IfMatch    string
+	Body       []byte
+	StatusCode int
 }
 
 // Server is a stateful NetBox HTTPS endpoint.
@@ -190,18 +186,6 @@ func (s *Server) Device(id int) (Device, bool) {
 	return copyDevice(device), true
 }
 
-// Devices returns every registered device, sorted by ID.
-func (s *Server) Devices() []Device {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	devices := make([]Device, 0, len(s.devices))
-	for _, device := range s.devices {
-		devices = append(devices, copyDevice(device))
-	}
-	sort.Slice(devices, func(i, j int) bool { return devices[i].ID < devices[j].ID })
-	return devices
-}
-
 // UpdateDevice makes an external edit and invalidates the device ETag.
 func (s *Server) UpdateDevice(id int, mutate func(*Device)) bool {
 	s.mu.Lock()
@@ -229,26 +213,6 @@ func (s *Server) Requests() []Request {
 	return append([]Request(nil), s.requests...)
 }
 
-// RequestsFor returns recorded requests matching a method and exact path.
-func (s *Server) RequestsFor(method, path string) []Request {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var matched []Request
-	for _, request := range s.requests {
-		if request.Method == method && request.Path == path {
-			matched = append(matched, request)
-		}
-	}
-	return matched
-}
-
-// Reset clears recorded requests without touching fixture state.
-func (s *Server) Reset() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.requests = nil
-}
-
 func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	body := readBody(r)
 
@@ -257,12 +221,11 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	s.requests = append(s.requests, Request{
-		Method:        r.Method,
-		Path:          r.URL.Path,
-		Query:         r.URL.Query(),
-		IfMatch:       r.Header.Get("If-Match"),
-		Authorization: r.Header.Get("Authorization"),
-		Body:          body,
+		Method:  r.Method,
+		Path:    r.URL.Path,
+		Query:   r.URL.Query(),
+		IfMatch: r.Header.Get("If-Match"),
+		Body:    body,
 	})
 	token, scheme := s.token, s.tokenScheme
 	s.mu.Unlock()
@@ -420,17 +383,11 @@ func deviceMatchesQuery(device *Device, query url.Values, fields map[string]Fiel
 			lookup = "empty"
 		}
 		field, known := fields[name]
-		if !known || field.FilterLogic == FilterDisabled || !containsString(field.ObjectTypes, "dcim.device") {
+		if !known || !slices.Contains(field.ObjectTypes, "dcim.device") {
 			return false, false
 		}
 		if lookup == "empty" {
 			if (value == "true") != isEmptyValue(device.CustomFields[name]) {
-				return false, true
-			}
-			continue
-		}
-		if field.FilterLogic == FilterLoose {
-			if !strings.Contains(strings.ToLower(fmt.Sprint(device.CustomFields[name])), strings.ToLower(value)) {
 				return false, true
 			}
 			continue
@@ -556,7 +513,7 @@ func (s *Server) listFields(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	matched := make([]Field, 0, len(s.fields))
 	for _, field := range s.fields {
-		if objectType != "" && !containsString(field.ObjectTypes, objectType) {
+		if objectType != "" && !slices.Contains(field.ObjectTypes, objectType) {
 			continue
 		}
 		matched = append(matched, *field)
@@ -760,13 +717,4 @@ func titleCase(value string) string {
 		return ""
 	}
 	return strings.ToUpper(value[:1]) + value[1:]
-}
-
-func containsString(values []string, want string) bool {
-	for _, value := range values {
-		if value == want {
-			return true
-		}
-	}
-	return false
 }

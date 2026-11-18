@@ -18,6 +18,7 @@ package netboxcontract
 
 import (
 	"context"
+	"strconv"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
@@ -152,7 +153,7 @@ var _ = Describe("TC-INT-017 empty-owner representations", func() {
 			host, err := client.FindFreeHost(ctx, map[string]string{caseFieldName: expected.caseValue})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).NotTo(BeNil())
-			Expect(host.Name).To(Equal("netbox-" + itoa(expected.id)))
+			Expect(host.Name).To(Equal("netbox-" + strconv.Itoa(expected.id)))
 		}
 	})
 
@@ -296,7 +297,7 @@ var _ = Describe("TC-INT-022 exact escaped string filtering", func() {
 			host, err := client.FindFreeHost(ctx, map[string]string{"placement_zone": zone})
 			Expect(err).NotTo(HaveOccurred(), "zone %q", zone)
 			Expect(host).NotTo(BeNil(), "zone %q", zone)
-			Expect(host.Name).To(Equal("netbox-"+itoa(42+index)), "zone %q", zone)
+			Expect(host.Name).To(Equal("netbox-"+strconv.Itoa(42+index)), "zone %q", zone)
 
 			request := requestsSince(mark)[0]
 			Expect(request.Query["cf_placement_zone"]).To(Equal([]string{zone}),

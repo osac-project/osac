@@ -21,6 +21,7 @@ import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import AttachNatGatewayWizardPage from '@osac/ui-components/pages/networking/AttachNatGatewayWizardPage';
 import { SecurityGroupDetailPage } from '@osac/ui-components/pages/networking/SecurityGroupDetailPage';
 import { SecurityGroupsListPage } from '@osac/ui-components/pages/networking/SecurityGroupsListPage';
+import { SubnetDetailPage } from '@osac/ui-components/pages/networking/SubnetDetailPage';
 import { VirtualNetworkDetailPage } from '@osac/ui-components/pages/networking/VirtualNetworkDetailPage';
 import { VirtualNetworksListPage } from '@osac/ui-components/pages/networking/VirtualNetworksListPage';
 import { BareMetalRoutes } from '@osac/ui-components/pages/tenant/BareMetalRoutes';
@@ -265,6 +266,14 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           element={
             <ShellRoute>
               <VirtualNetworkDetailPage />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/networking/subnets/:id"
+          element={
+            <ShellRoute>
+              <SubnetDetailPage />
             </ShellRoute>
           }
         />

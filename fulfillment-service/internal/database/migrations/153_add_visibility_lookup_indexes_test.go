@@ -21,11 +21,21 @@ import (
 	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
-
-	"github.com/osac-project/osac/fulfillment-service/internal/database"
 )
 
 var _ = DescribeMigration("Add visibility lookup indexes", func() {
+	// Exercise the historical archive-based lookup this migration indexed. The current resolver requires
+	// the identity store introduced in migration 157, which does not exist in this version-specific fixture.
+	const livenessQuery = `
+		select claimed.name
+		from unnest($1::text[]) with ordinality as claimed(name, position)
+		left join tenants current on current.name = claimed.name
+		where current.deletion_timestamp = 'epoch'
+		   or (current.id is null and not exists (
+		       select 1 from archived_tenants archived where archived.name = claimed.name
+		   ))
+		order by claimed.position
+	`
 	// This is the membership lookup from auth.DefaultTenancyLogic.DetermineVisibility.
 	const membershipQuery = `select tenant, project from project_membership_subjects
 		where tenant = any($1) and "user" = $2`
@@ -57,19 +67,22 @@ var _ = DescribeMigration("Add visibility lookup indexes", func() {
 	})
 
 	It("indexes existing rows without changing visibility and rolls back only its indexes", func(ctx context.Context) {
-		pool, err := db.Pool(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		manager, err := database.NewTxManager().SetLogger(logger).SetPool(pool).Build()
-		Expect(err).ToNot(HaveOccurred())
-		ctx = database.TxManagerIntoContext(ctx, manager)
-
 		checkVisibility := func() {
-			live, err := database.ResolveLiveTenantNames(ctx, []string{
+			rows, err := conn.Query(ctx, livenessQuery, []string{
 				"archived", "tenant-a", "deleting", "missing", "revived", "tenant-b",
 			})
 			Expect(err).ToNot(HaveOccurred())
+			live, err := pgx.CollectRows(rows, pgx.RowTo[string])
+			Expect(err).ToNot(HaveOccurred())
 			Expect(live).To(Equal([]string{"tenant-a", "missing", "revived", "tenant-b"}))
-			rows, err := conn.Query(ctx, membershipQuery, []string{"tenant-a"}, "target-user")
+			rows, err = conn.Query(ctx, livenessQuery, []string{
+				"revived", "archived", "tenant-b", "revived", "missing", "deleting", "tenant-b",
+			})
+			Expect(err).ToNot(HaveOccurred())
+			live, err = pgx.CollectRows(rows, pgx.RowTo[string])
+			Expect(err).ToNot(HaveOccurred())
+			Expect(live).To(Equal([]string{"revived", "tenant-b", "revived", "missing", "tenant-b"}))
+			rows, err = conn.Query(ctx, membershipQuery, []string{"tenant-a"}, "target-user")
 			Expect(err).ToNot(HaveOccurred())
 			memberships, err := pgx.CollectRows(rows, pgx.RowToStructByPos[membership])
 			Expect(err).ToNot(HaveOccurred())
@@ -139,17 +152,8 @@ var _ = DescribeMigration("Add visibility lookup indexes", func() {
 			GinkgoWriter.Println(plan)
 			return plan
 		}
-		// Keep the full query aligned with database.ResolveLiveTenantNames, not just its archive probe.
-		plan := explain(`
-			select claimed.name
-			from unnest($1::text[]) with ordinality as claimed(name, position)
-			left join tenants current on current.name = claimed.name
-			where current.deletion_timestamp = 'epoch'
-			   or (current.id is null and not exists (
-			       select 1 from archived_tenants archived where archived.name = claimed.name
-			   ))
-			order by claimed.position
-		`, []string{"history-100000", "missing", "tenant-a"})
+		// Explain the same full historical query used by the visibility assertions, not just its archive probe.
+		plan := explain(livenessQuery, []string{"history-100000", "missing", "tenant-a"})
 		Expect(plan).To(ContainSubstring("archived_tenants_by_name"))
 		plan = explain(membershipQuery, []string{"tenant-a"}, "target-user")
 		Expect(plan).To(ContainSubstring("project_membership_subjects_by_tenant_user"))

@@ -21,9 +21,9 @@ import (
 )
 
 // ResolveLiveTenantNames removes deleted tenants from a claimed tenant set.
-// Missing tenants are retained for initial JIT onboarding, but archived tenants
+// Missing tenants are retained for initial JIT onboarding, but known deleted tenants
 // are not missing tenants. A current live tenant takes precedence over its old
-// archive. This reads PostgreSQL on every call; there is no revocation cache.
+// deletion identity. This reads PostgreSQL on every call; there is no revocation cache.
 func ResolveLiveTenantNames(ctx context.Context, names []string) ([]string, error) {
 	if len(names) == 0 {
 		return []string{}, nil
@@ -40,7 +40,7 @@ func ResolveLiveTenantNames(ctx context.Context, names []string) ([]string, erro
 		left join tenants current on current.name = claimed.name
 		where current.deletion_timestamp = 'epoch'
 		   or (current.id is null and not exists (
-		       select 1 from archived_tenants archived where archived.name = claimed.name
+		       select 1 from deleted_tenant_identities deleted where deleted.tenant_name = claimed.name
 		   ))
 		order by claimed.position
 	`, names)

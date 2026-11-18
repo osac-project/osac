@@ -59,6 +59,42 @@ var _ = Describe("Database tool", func() {
 			Expect(checker.CheckSchema(ctx)).To(Succeed())
 		})
 
+		It("classifies deleted tenant identities as minimal non-object storage", func(ctx context.Context) {
+			pool, err := checker.Pool(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(pool.Close)
+			implementation := checker.(*tool)
+			columns, err := implementation.fetchColumns(ctx, pool, "deleted_tenant_identities")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(columns).To(Equal(map[string]string{
+				"tenant_name":        "text",
+				"tenant_created_at":  "timestamp with time zone",
+				"deletion_timestamp": "timestamp with time zone",
+				"deleted_by":         "text",
+				"finalized_at":       "timestamp with time zone",
+				"billing_retained":   "boolean",
+			}))
+			Expect(implementation.checkPrimaryKey(ctx, pool, "deleted_tenant_identities", "tenant_name")).To(BeZero())
+			var forbidden int
+			Expect(pool.QueryRow(ctx, `select
+				(select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+				 where n.nspname = 'public' and c.relname in
+				 ('active_deleted_tenant_identities', 'archived_deleted_tenant_identities')) +
+				(select count(*) from pg_trigger t join pg_proc p on p.oid = t.tgfoid
+				 where t.tgrelid = 'deleted_tenant_identities'::regclass and not t.tgisinternal
+				 and (t.tgname in ('enqueue_change', 'materialize_active_objects')
+				      or p.proname in ('enqueue_change', 'materialize_active_objects'))) +
+				(select count(*) from pg_constraint where conrelid = 'deleted_tenant_identities'::regclass
+				 and contype = 'f' and confrelid = 'tenants'::regclass)
+			`).Scan(&forbidden)).To(Succeed())
+			Expect(forbidden).To(BeZero(), "identity evidence must not acquire resource companions, publication or a live FK")
+			objects, err := implementation.listObjectTables(ctx, pool)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(objects).ToNot(ContainElement("deleted_tenant_identities"))
+			Expect(objects).To(ContainElements("tenants", "billing_accounts", "tenant_billing_assignments"))
+			Expect(checker.CheckSchema(ctx)).To(Succeed())
+		})
+
 		DescribeTable("detects bounded billing drift while retaining nonbilling requirements",
 			func(ctx context.Context, mutation string) {
 				pool, err := checker.Pool(ctx)

@@ -198,6 +198,17 @@ func (s *PrivateTenantsServer) Create(ctx context.Context,
 	if tenant == "" {
 		metadata.SetTenant(name)
 	}
+	// Reuse is serialized before validation or any tenant mutation. The DAO repeats this
+	// guard for direct callers and persists the post-key creation timestamp itself.
+	if err = database.CheckTenantIdentityReusable(ctx, name); err != nil {
+		if errors.Is(err, database.ErrTenantIdentityRetained) {
+			err = failedPreconditionWithReason("TENANT_BILLING_HISTORY_RETAINED",
+				"tenant name is retained by billing history")
+		} else {
+			err = grpcstatus.Error(grpccodes.Internal, "failed to check tenant identity")
+		}
+		return
+	}
 
 	if err = s.validateBreakGlassCredentialsSecret(ctx, object, false); err != nil {
 		return
@@ -233,6 +244,11 @@ func (s *PrivateTenantsServer) Create(ctx context.Context,
 
 func (s *PrivateTenantsServer) Update(ctx context.Context,
 	request *privatev1.TenantsUpdateRequest) (response *privatev1.TenantsUpdateResponse, err error) {
+	if id := request.GetObject().GetId(); id != "" {
+		if err = database.LockTenantIdentity(ctx, id); err != nil {
+			return
+		}
+	}
 	// Only validate the break-glass Secret reference when the update actually
 	// touches it. Running the lookup for partial updates that omit the field
 	// would perform a needless Secret resolution and mutate the request object,
@@ -262,6 +278,11 @@ func (s *PrivateTenantsServer) Delete(ctx context.Context,
 		return
 	}
 	defer tx.ReportError(&err)
+	if request.GetId() != "" {
+		if err = database.LockTenantIdentity(ctx, request.GetId()); err != nil {
+			return
+		}
+	}
 
 	// Lock the Tenant, so the guard and the creates in the tenant, which lock it too, run one after the other.
 	if err = s.rejectDeleteWhileResourcesExist(ctx, request.GetId()); err != nil {
@@ -281,24 +302,6 @@ func (s *PrivateTenantsServer) Delete(ctx context.Context,
 	err = s.generic.Delete(ctx, request, &response)
 	if err != nil {
 		return
-	}
-	// Close at deletion acceptance, not at finalizer removal. The tenant lock acquired above also
-	// fences assignment finalization; the interval close and deletion timestamp commit together.
-	closeErr := func() error {
-		floor, lockErr := dao.LockTenantBillingAssignmentForDeletion(ctx, request.GetId())
-		if lockErr != nil {
-			return lockErr
-		}
-		at, clockErr := dao.BillingFinalizationTime(ctx, floor)
-		if clockErr != nil {
-			return clockErr
-		}
-		return dao.CloseTenantBillingAssignmentOnDeletion(ctx, request.GetId(), at)
-	}()
-	if closeErr != nil {
-		s.logger.ErrorContext(ctx, "Failed to close tenant billing assignment on deletion", slog.Any("error", closeErr))
-		err = grpcstatus.Error(grpccodes.Internal, "failed to close tenant billing assignment on deletion")
-		response = nil
 	}
 	return
 }

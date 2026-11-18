@@ -93,14 +93,20 @@ mitigate this here:
   Event emission is therefore atomic with the request: an event is never published for a change
   that rolls back.
 
-Generic DAO creation checks the normalized owning tenant under a transaction-held
-`FOR SHARE` row lock. A create waiting behind tenant deletion rechecks the committed
-deletion state instead of treating a retained billing-history tenant as live merely
-because its foreign key still resolves. Tenant self-bootstrap is exempt. Existing
-controller cleanup updates remain available; this application guard does not constrain
-direct SQL writers that bypass the DAO. Tenant archival takes `FOR UPDATE` outside
-its archive savepoint and, when billing history retains the identity, checks every
-other restrictive tenant foreign key before accepting the tombstone.
+Non-tenant Generic DAO creation checks the normalized owning tenant under a
+transaction-held `FOR SHARE` row lock and rechecks deletion state after waiting.
+Tenant lifecycle writers take the exact-name identity advisory key before tenant row
+locks; bulk locks acquire the complete sorted key set first. Tenant creation binds a
+post-key database timestamp strictly after any prior unbilled finalization. Deletion
+locks tenant → affected accounts → intervals, then uses one clamped database sample
+for first acceptance and billing closure. The durable `deleted_tenant_identities`
+marker captures the original authenticated actor (NULL if unknown), not the creator
+or finalizer controller. Archival retains ordinary dependency checks and its atomic
+savepoint, physically removes finalized tenants, and captures a separate post-delete
+finalization timestamp in the same transaction. Billing history survives without a
+live-tenant FK. Assignment-only finalization uses its tenant row lock without the
+identity key. Existing non-lifecycle create guards and controller cleanup remain;
+direct SQL or mixed transactions bypassing this lock order are not supported.
 
 Known footgun: rollback is driven by `Tx.ReportError(&err)`
 ([`internal/database/database_tx.go`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/database/database_tx.go)),

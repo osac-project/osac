@@ -76,6 +76,17 @@ func (r *LockRequest[O]) Do(ctx context.Context) (response *LockResponse[O], err
 }
 
 func (r *LockRequest[O]) do(ctx context.Context) (response *LockResponse[O], err error) {
+	if r.dao.table == "tenants" {
+		// Lock the complete requested identity set, including absent rows, before ANY row.
+		// Sorting a copy preserves the existing requested-ID NotFound order.
+		names := slices.Clone(r.ids)
+		slices.Sort(names)
+		for _, name := range slices.Compact(names) {
+			if err = database.LockTenantIdentity(ctx, name); err != nil {
+				return
+			}
+		}
+	}
 	// Check visibility:
 	ok, err := r.addVisibilityFilter(ctx)
 	if err != nil {

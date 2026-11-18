@@ -103,6 +103,32 @@ var _ = Describe("Deleted tenant authorization", func() {
 		var closed bool
 		Expect(suiteTx.QueryRow(ctx, `select effective_to is not null from tenant_billing_assignments where tenant_id='tenant-a'`).Scan(&closed)).To(Succeed())
 		Expect(closed).To(BeTrue())
+		marker, found, err := database.GetDeletedTenantIdentity(ctx, "tenant-a")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(found).To(BeTrue())
+		Expect(marker.BillingRetained).To(BeTrue())
+		Expect(marker.FinalizedAt).To(BeNil(), "pending finalizers still retain the live row")
+	}
+	completeDeletion := func(c context.Context, name string) {
+		GinkgoHelper()
+		// Use the ordinary project cleanup and versioned last-finalizer path,
+		// which capture the durable identity under the real identity/row locks.
+		projects, err := dao.NewGenericDAO[*privatev1.Project]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+		tx, err := database.TxFromContext(c)
+		Expect(err).ToNot(HaveOccurred())
+		var projectID string
+		Expect(tx.QueryRow(c, `select id from projects where tenant=$1`, name).Scan(&projectID)).To(Succeed())
+		_, err = projects.Delete().SetId(projectID).Do(c)
+		Expect(err).ToNot(HaveOccurred())
+		current, err := tenants.Get(c, privatev1.TenantsGetRequest_builder{Id: name}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		current.GetObject().GetMetadata().SetFinalizers(nil)
+		_, err = tenants.Update(c, privatev1.TenantsUpdateRequest_builder{
+			Object: current.GetObject(), Lock: true,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
 	}
 	call := func(token *jwt.Token, method string, request any, handler grpc.UnaryHandler) (any, error) {
 		return interceptor.UnaryServer(auth.ContextWithToken(ctx, token), request,
@@ -191,49 +217,114 @@ var _ = Describe("Deleted tenant authorization", func() {
 
 	It("preserves platform administrator and controller access to retained tenant data", func() {
 		deleteTenant()
+		jit, err := auth.NewGrpcJitProvisioningInterceptor().SetLogger(logger).
+			SetProvisioner(auth.NewMockUserProvisioner(ctrl)).Build()
+		Expect(err).ToNot(HaveOccurred())
 		for _, username := range []string{"service-account-osac-admin", "service-account-osac-controller"} {
 			token := &jwt.Token{Claims: jwt.MapClaims{"preferred_username": username}}
 			_, err := call(token, "/osac.public.v1.ServiceAccounts/Get", nil, func(c context.Context, _ any) (any, error) {
 				Expect(auth.SubjectFromContext(c).Tenants.Finite()).To(BeFalse())
-				return accounts.Get(c, publicv1.ServiceAccountsGetRequest_builder{Id: accountID}.Build())
+				return jit.UnaryServer(c, nil, &grpc.UnaryServerInfo{}, func(c context.Context, _ any) (any, error) {
+					return accounts.Get(c, publicv1.ServiceAccountsGetRequest_builder{Id: accountID}.Build())
+				})
 			})
 			Expect(err).ToNot(HaveOccurred())
 		}
 	})
 
-	It("distinguishes onboarding from retained and archived deletion", func() {
-		deleteTenant()
+	It("does not use generic archives to revoke tenant names without a deletion identity", func() {
 		_, err := suiteTx.Exec(ctx, `insert into archived_tenants
 			(id, name, tenant, creation_timestamp, deletion_timestamp, data)
-			values ('archived', 'archived', 'archived', now(), now(), '{}')`)
+			values ('archive-only', 'archive-only', 'archive-only', now(), now(), '{}')`)
 		Expect(err).ToNot(HaveOccurred())
-		names, err := database.ResolveLiveTenantNames(ctx, []string{"new-tenant", "tenant-a", "archived", "tenant-b"})
+		names, err := database.ResolveLiveTenantNames(ctx, []string{"archive-only", "new-tenant", "archive-only"})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(names).To(Equal([]string{"new-tenant", "tenant-b"}))
+		Expect(names).To(Equal([]string{"archive-only", "new-tenant", "archive-only"}))
 	})
 
-	It("does not provision or regain tenant access from an old JWT after complete archival", func() {
+	It("preserves empty inputs without requiring a database", func() {
+		for _, names := range [][]string{nil, {}} {
+			live, err := database.ResolveLiveTenantNames(context.Background(), names)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(live).To(Equal([]string{}))
+		}
+	})
+
+	DescribeTable("distinguishes never-known onboarding from finalized deletion without losing order or duplicates",
+		func(billed bool) {
+			const name = "deleted-identity"
+			seedAuthorizationTenant(ctx, name)
+			if billed {
+				seedTenantBillingInterval(ctx, name, seedTenantBillingAccount(ctx), "deleted-assignment", false)
+			}
+			deletionCtx := auth.ContextWithSubject(ctx, &auth.Subject{User: "deletion-operator", Tenants: auth.AllTenants})
+			_, err := tenants.Delete(deletionCtx, privatev1.TenantsDeleteRequest_builder{Id: name}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			completeDeletion(ctx, name)
+			marker, found, err := database.GetDeletedTenantIdentity(ctx, name)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(found).To(BeTrue())
+			Expect(marker.BillingRetained).To(Equal(billed))
+			Expect(marker.FinalizedAt).ToNot(BeNil())
+			Expect(marker.DeletedBy).ToNot(BeNil())
+			Expect(*marker.DeletedBy).To(Equal("deletion-operator"))
+			Expect(marker.TenantCreatedAt.After(marker.DeletionTimestamp)).To(BeFalse())
+			Expect(marker.FinalizedAt.Before(marker.DeletionTimestamp)).To(BeFalse())
+			names, err := database.ResolveLiveTenantNames(ctx, []string{"new-tenant", name, "tenant-b", "", "new-tenant", name, "tenant-b"})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(names).To(Equal([]string{"new-tenant", "tenant-b", "", "new-tenant", "tenant-b"}))
+		},
+		Entry("unbilled identity still revokes stale claims", false),
+		Entry("billing-retained identity revokes stale claims", true),
+	)
+
+	It("uses a short transaction with only a manager and filters deletion pending cleanup", func() {
+		deleteTenant()
+		Expect(suiteTx.End(ctx)).To(Succeed())
+		suiteTx = nil
+		managerCtx := database.TxManagerIntoContext(context.Background(), tm)
+		names, err := database.ResolveLiveTenantNames(managerCtx, []string{"tenant-b", "tenant-a", "new-tenant", "tenant-b"})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(names).To(Equal([]string{"tenant-b", "new-tenant", "tenant-b"}))
+	})
+
+	It("keeps actual finite-tenant JIT limited to User creation with ordinary SQL timestamps", func() {
+		var before string
+		Expect(suiteTx.QueryRow(ctx, `select to_jsonb(t)::text from tenants t where name='tenant-b'`).Scan(&before)).To(Succeed())
+		users, err := NewPrivateUsersServer().SetLogger(logger).SetTenancyLogic(logic).SetAttributionLogic(attribution).Build()
+		Expect(err).ToNot(HaveOccurred())
+		provisioner, err := provisioners.NewUserProvisioner().SetLogger(logger).SetUsersServer(users).Build()
+		Expect(err).ToNot(HaveOccurred())
+		jit, err := auth.NewGrpcJitProvisioningInterceptor().SetLogger(logger).SetProvisioner(provisioner).Build()
+		Expect(err).ToNot(HaveOccurred())
+		info := &grpc.UnaryServerInfo{FullMethod: "/osac.public.v1.ServiceAccounts/List"}
+		_, err = call(humanToken("tenant-b"), info.FullMethod, nil, func(c context.Context, request any) (any, error) {
+			return jit.UnaryServer(c, request, info, func(c context.Context, _ any) (any, error) {
+				return accounts.List(c, &publicv1.ServiceAccountsListRequest{})
+			})
+		})
+		Expect(err).ToNot(HaveOccurred())
+		var count int
+		Expect(suiteTx.QueryRow(ctx, `select count(*) from users where tenant='tenant-b' and creation_timestamp=now()`).
+			Scan(&count)).To(Succeed())
+		Expect(count).To(Equal(1))
+		var after string
+		Expect(suiteTx.QueryRow(ctx, `select to_jsonb(t)::text from tenants t where name='tenant-b'`).Scan(&after)).To(Succeed())
+		Expect(after).To(Equal(before), "UserProvisioner does not create or mutate Tenants")
+	})
+
+	It("revokes finalized unbilled scope until explicit recreation, then revokes the next incarnation", func() {
 		const name = "fully-archived"
 		seedAuthorizationTenant(ctx, name)
 		token := humanToken(name)
 		_, err := tenants.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: name}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		// Complete the ordinary non-billed cleanup: archive the default project,
-		// then remove the retained tenant's finalizer using its current version.
-		projects, err := dao.NewGenericDAO[*privatev1.Project]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+		completeDeletion(ctx, name)
+		oldMarker, found, err := database.GetDeletedTenantIdentity(ctx, name)
 		Expect(err).ToNot(HaveOccurred())
-		var projectID string
-		Expect(suiteTx.QueryRow(ctx, `select id from projects where tenant=$1`, name).Scan(&projectID)).To(Succeed())
-		_, err = projects.Delete().SetId(projectID).Do(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		current, err := tenants.Get(ctx, privatev1.TenantsGetRequest_builder{Id: name}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		current.GetObject().GetMetadata().SetFinalizers(nil)
-		_, err = tenants.Update(ctx, privatev1.TenantsUpdateRequest_builder{
-			Object: current.GetObject(), Lock: true,
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}},
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
+		Expect(found).To(BeTrue())
+		Expect(oldMarker.FinalizedAt).ToNot(BeNil())
+		Expect(oldMarker.BillingRetained).To(BeFalse())
 		Expect(suiteTx.End(ctx)).To(Succeed())
 		suiteTx = nil
 		managerCtx := database.TxManagerIntoContext(context.Background(), tm)
@@ -251,24 +342,94 @@ var _ = Describe("Deleted tenant authorization", func() {
 		txInterceptor, err := database.NewTxInterceptor().SetLogger(logger).SetManager(tm).Build()
 		Expect(err).ToNot(HaveOccurred())
 		info := &grpc.UnaryServerInfo{FullMethod: "/osac.public.v1.ServiceAccounts/List"}
+		assertRevoked := func() {
+			GinkgoHelper()
+			_, err := txInterceptor.UnaryServer(auth.ContextWithToken(managerCtx, token), nil, info,
+				func(c context.Context, request any) (any, error) {
+					return interceptor.UnaryServer(c, request, info, func(c context.Context, request any) (any, error) {
+						return jit.UnaryServer(c, request, info, func(c context.Context, _ any) (any, error) {
+							Expect(auth.SubjectFromContext(c).Tenants.Empty()).To(BeTrue())
+							visibility, err := logic.DetermineVisibility(c)
+							Expect(err).ToNot(HaveOccurred())
+							Expect(visibility.IsProjectVisible(name, "project")).To(BeFalse())
+							return accounts.List(c, &publicv1.ServiceAccountsListRequest{})
+						})
+					})
+				})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(testPool.QueryRow(managerCtx, `select count(*) from tenants where name=$1`, name).Scan(&live)).To(Succeed())
+			Expect(live).To(BeZero())
+			var provisioned int
+			Expect(testPool.QueryRow(managerCtx, `select count(*) from users where tenant=$1`, name).Scan(&provisioned)).To(Succeed())
+			Expect(provisioned).To(BeZero())
+		}
+		assertRevoked()
+		publicTenants, err := NewTenantsServer().SetLogger(logger).SetTenancyLogic(logic).SetAttributionLogic(attribution).Build()
+		Expect(err).ToNot(HaveOccurred())
+		for _, username := range []string{"service-account-osac-admin", "service-account-osac-controller"} {
+			for _, private := range []bool{false, true} {
+				getInfo := &grpc.UnaryServerInfo{FullMethod: "/osac.public.v1.Tenants/Get"}
+				if private {
+					getInfo.FullMethod = "/osac.private.v1.Tenants/Get"
+				}
+				_, err = txInterceptor.UnaryServer(auth.ContextWithToken(managerCtx,
+					&jwt.Token{Claims: jwt.MapClaims{"preferred_username": username}}), nil, getInfo,
+					func(c context.Context, request any) (any, error) {
+						return interceptor.UnaryServer(c, request, getInfo, func(c context.Context, request any) (any, error) {
+							return jit.UnaryServer(c, request, getInfo, func(c context.Context, _ any) (any, error) {
+								Expect(auth.SubjectFromContext(c).Tenants.Universal()).To(BeTrue())
+								if private {
+									return tenants.Get(c, privatev1.TenantsGetRequest_builder{Id: name}.Build())
+								}
+								return publicTenants.Get(c, publicv1.TenantsGetRequest_builder{Id: name}.Build())
+							})
+						})
+					})
+				Expect(status.Code(err)).To(Equal(codes.NotFound))
+			}
+		}
+		_, err = database.WithNewTx(managerCtx, func(c context.Context) (struct{}, error) {
+			created, err := tenants.Create(c, privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{Metadata: privatev1.Metadata_builder{
+					Name: name, Finalizers: []string{"hold-for-cleanup"},
+				}.Build()}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(created.GetObject().GetMetadata().GetCreationTimestamp().AsTime().After(*oldMarker.FinalizedAt)).To(BeTrue())
+			unchanged, found, err := database.GetDeletedTenantIdentity(c, name)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(found).To(BeTrue())
+			Expect(unchanged).To(Equal(oldMarker), "creation must not purge or replace the old marker")
+			return struct{}{}, err
+		})
+		Expect(err).ToNot(HaveOccurred())
+		names, err := database.ResolveLiveTenantNames(managerCtx, []string{name, "new-tenant", name})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(names).To(Equal([]string{name, "new-tenant", name}), "the new live incarnation wins the old marker")
 		_, err = txInterceptor.UnaryServer(auth.ContextWithToken(managerCtx, token), nil, info,
 			func(c context.Context, request any) (any, error) {
-				return interceptor.UnaryServer(c, request, info, func(c context.Context, request any) (any, error) {
-					return jit.UnaryServer(c, request, info, func(c context.Context, _ any) (any, error) {
-						Expect(auth.SubjectFromContext(c).Tenants.Empty()).To(BeTrue())
-						visibility, err := logic.DetermineVisibility(c)
-						Expect(err).ToNot(HaveOccurred())
-						Expect(visibility.IsProjectVisible(name, "project")).To(BeFalse())
-						return accounts.List(c, &publicv1.ServiceAccountsListRequest{})
-					})
+				return interceptor.UnaryServer(c, request, info, func(c context.Context, _ any) (any, error) {
+					Expect(auth.SubjectFromContext(c).Tenants.Inclusions()).To(Equal([]string{name}))
+					return accounts.List(c, &publicv1.ServiceAccountsListRequest{})
 				})
 			})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(testPool.QueryRow(managerCtx, `select count(*) from tenants where name=$1`, name).Scan(&live)).To(Succeed())
-		Expect(live).To(BeZero())
-		var provisioned int
-		Expect(testPool.QueryRow(managerCtx, `select count(*) from users where tenant=$1`, name).Scan(&provisioned)).To(Succeed())
-		Expect(provisioned).To(BeZero())
+		_, err = database.WithNewTx(managerCtx, func(c context.Context) (struct{}, error) {
+			c = auth.ContextWithSubject(c, &auth.Subject{User: "second-deleter", Tenants: auth.AllTenants})
+			_, err := tenants.Delete(c, privatev1.TenantsDeleteRequest_builder{Id: name}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			completeDeletion(c, name)
+			marker, found, err := database.GetDeletedTenantIdentity(c, name)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(found).To(BeTrue())
+			Expect(marker.TenantCreatedAt.After(*oldMarker.FinalizedAt)).To(BeTrue())
+			Expect(marker.FinalizedAt).ToNot(BeNil())
+			Expect(marker.DeletedBy).ToNot(BeNil())
+			Expect(*marker.DeletedBy).To(Equal("second-deleter"))
+			return struct{}{}, err
+		})
+		Expect(err).ToNot(HaveOccurred())
+		assertRevoked()
 	})
 
 	It("rechecks direct tenancy decisions made with a subject obtained before deletion", func() {

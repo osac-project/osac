@@ -23,6 +23,7 @@ import (
 
 	"buf.build/go/protovalidate"
 	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -295,8 +296,18 @@ func (s *PrivateTenantBillingAssignmentsServer) assignmentSnapshot(
 	// Preflight is strictly read-only. Finalization locks the original complete set, never a newly discovered
 	// previous account (which could have a lower SQL id). A changed required set aborts instead.
 	if expected != nil {
-		if _, err := s.tenants.Lock().AddId(in.TenantID).SetReturnObjects(true).Do(ctx); err != nil {
-			return snapshot, billingSnapshotLockError(err)
+		// Assignment-only finalization is fenced by this bounded tenant row lock, not the
+		// lifecycle identity key. Keep the canonical DAO reread and material checks below.
+		tx, err := database.TxFromContext(ctx)
+		if err != nil {
+			return snapshot, err
+		}
+		var lockedID string
+		if err = tx.QueryRow(ctx, `select id from tenants where id = $1 for update`, in.TenantID).Scan(&lockedID); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return snapshot, errAssignChanged
+			}
+			return snapshot, err
 		}
 		ids := []string{accountID}
 		if expected.current != nil {

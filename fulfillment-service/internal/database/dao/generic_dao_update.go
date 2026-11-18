@@ -59,6 +59,11 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		err = errors.New("object identifier is mandatory")
 		return
 	}
+	if r.dao.table == "tenants" {
+		if err = database.LockTenantIdentity(ctx, id); err != nil {
+			return
+		}
+	}
 
 	// Check visibility:
 	ok, err := r.addVisibilityFilter(ctx)
@@ -80,6 +85,11 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		r.sql.filter.WriteString(` and`)
 	}
 	fmt.Fprintf(&r.sql.filter, ` id = $%d`, len(r.sql.params))
+	if r.dao.table == "tenants" {
+		if _, err = r.lockTenantLifecycle(ctx, id); err != nil {
+			return
+		}
+	}
 
 	// Get the requested finalizers, name, labels, annotations and tenant:
 	metadata := r.getMetadata(r.object)

@@ -573,17 +573,20 @@ hidden provider retries. One post-I/O, post-lock database clock sample, clamped 
 boundaries, is used for both the old interval's end and its replacement's start. No durable
 billing operation lease or separate eligibility transaction is used.
 
-Tenant deletion closes its active assignment in the deletion transaction and records a
-read-only tombstone message, releasing the account for another tenant. Billing history retains
-the referenced, deletion-marked tenant identity until provider retention permits cleanup.
-The foreign key currently prevents reusing that retained name. Public `Tenants.List` hides
-deleted tenants; private lists and `Tenants.Get` retain their existing behavior. This does not
-define permanent retention, a purge schedule, or a platform-wide name-reservation policy.
+Tenant deletion closes its active assignment at the same stored deletion boundary,
+releasing the account for another tenant. A durable deletion-identity record retains the
+stored creation/deletion times and first authenticated deleting actor (NULL when unknown).
+Pending finalizers retain the deletion-marked live row; after successful cleanup both public
+and private `Tenants.Get` return `NotFound`, with no live list entry. Billing history remains
+queryable and name reuse fails with `TENANT_BILLING_HISTORY_RETAINED` while that history is
+retained. Unbilled explicit recreation is allowed strictly after prior finalization; its live
+row takes precedence over the older marker until the next deletion. Existing live duplicates
+remain `AlreadyExists`. This does not define a purge schedule or global name reservation.
 Retaining billing history does not bypass other restrictive tenant dependencies.
 Domain reservations remain while deletion cleanup has finalizers, and are released
 after successful cleanup completes, matching the physical-deletion baseline.
-Historical domain text on a retained tenant is not live ownership; later tombstone
-updates must not reserve those domains again. This domain-release timing is an
+Historical domain text in an archived tenant is not live ownership; finalized
+tenants cannot be updated to reserve those domains again. This domain-release timing is an
 approved lifecycle compatibility choice, not a new billing-retention requirement.
 
 In general, services should not have any additional ad-hoc methods beyond those listed above. There

@@ -137,13 +137,37 @@ var _ = Describe("Billed tenant domain lifecycle", func() {
 		})).To(Succeed())
 		return result
 	}
+	finalizedIdentity := func() database.DeletedTenantIdentity {
+		GinkgoHelper()
+		var result database.DeletedTenantIdentity
+		Expect(run(func(ctx context.Context) error {
+			var found bool
+			var err error
+			result, found, err = database.GetDeletedTenantIdentity(ctx, "domain-history")
+			Expect(found).To(BeTrue())
+			return err
+		})).To(Succeed())
+		Expect(result.TenantName).To(Equal("domain-history"))
+		Expect(result.BillingRetained).To(BeTrue())
+		Expect(result.FinalizedAt).NotTo(BeNil())
+		Expect(result.DeletionTimestamp).NotTo(BeTemporally("<", result.TenantCreatedAt))
+		Expect(*result.FinalizedAt).NotTo(BeTemporally("<", result.DeletionTimestamp))
+		var count int
+		Expect(testPool.QueryRow(ctx, `select count(*) from tenants where name = 'domain-history'`).Scan(&count)).To(Succeed())
+		Expect(count).To(BeZero())
+		Expect(grpcstatus.Code(run(func(ctx context.Context) error {
+			_, err := tenants.Get(ctx, privatev1.TenantsGetRequest_builder{Id: "domain-history"}.Build())
+			return err
+		}))).To(Equal(grpccodes.NotFound))
+		return result
+	}
 
 	DescribeTable("releases domains only after successful cleanup while retaining billing identity", func(withFinalizers bool) {
 		var finalizers []string
 		if withFinalizers {
 			finalizers = []string{"cleanup-one", "cleanup-two"}
 		}
-		_, err := create("domain-history", finalizers)
+		original, err := create("domain-history", finalizers)
 		Expect(err).ToNot(HaveOccurred())
 		var closedID, activeID string
 		Expect(run(func(ctx context.Context) error {
@@ -179,6 +203,8 @@ var _ = Describe("Billed tenant domain lifecycle", func() {
 
 		if withFinalizers {
 			Expect(owner()).To(Equal("domain-history"), "Delete acceptance is not finalization")
+			Expect(get().GetMetadata().GetDeletionTimestamp()).NotTo(BeNil())
+			Expect(get().GetMetadata().GetFinalizers()).To(Equal(finalizers))
 			Expect(deleteTenant()).To(Succeed())
 			Expect(removeFinalizers([]string{"cleanup-two"})).To(Succeed())
 			Expect(owner()).To(Equal("domain-history"), "one remaining finalizer still protects the domain")
@@ -193,19 +219,22 @@ var _ = Describe("Billed tenant domain lifecycle", func() {
 			Expect(removeFinalizers(nil)).To(Succeed())
 		}
 		Expect(owner()).To(BeEmpty())
-		retained := get()
-		Expect(retained.GetMetadata().GetFinalizers()).To(BeEmpty())
-		Expect(retained.GetMetadata().GetDeletionTimestamp()).NotTo(BeNil())
-		Expect(retained.GetMetadata().GetName()).To(Equal("domain-history"))
-		Expect(retained.GetSpec().GetDomains()).To(Equal([]string{"reusable.example.com"}))
+		retained := finalizedIdentity()
+		Expect(retained.TenantCreatedAt).To(BeTemporally("==", original.GetMetadata().GetCreationTimestamp().AsTime()))
+		Expect(retained.DeletionTimestamp).To(BeTemporally("==", closedOnDelete.GetStatus().GetEffectiveToTimestamp().AsTime()))
+		// Domain text remains generic archive evidence, not a successfully readable live Tenant payload.
+		var archivedDomain, archivedBefore string
+		Expect(testPool.QueryRow(ctx, `select data #>> '{spec,domains,0}', row_to_json(a)::text
+			from archived_tenants a where name = 'domain-history'`).Scan(&archivedDomain, &archivedBefore)).To(Succeed())
+		Expect(archivedDomain).To(Equal("reusable.example.com"))
 		Expect(assignment(closedID)).To(Equal(closedBefore))
 		Expect(assignment(activeID)).To(Equal(closedOnDelete))
 
 		_, err = create("different-domain-owner", nil)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(owner()).To(Equal("different-domain-owner"))
-		Expect(deleteTenant()).To(Succeed())
-		Expect(run(func(ctx context.Context) error {
+		Expect(grpcstatus.Code(deleteTenant())).To(Equal(grpccodes.NotFound))
+		Expect(grpcstatus.Code(run(func(ctx context.Context) error {
 			_, err := tenants.Update(ctx, privatev1.TenantsUpdateRequest_builder{
 				Object: privatev1.Tenant_builder{
 					Id: "domain-history", Status: privatev1.TenantStatus_builder{Message: new("cleanup completed")}.Build(),
@@ -213,16 +242,20 @@ var _ = Describe("Billed tenant domain lifecycle", func() {
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.message"}},
 			}.Build())
 			return err
-		})).To(Succeed())
+		}))).To(Equal(grpccodes.NotFound))
 		Expect(owner()).To(Equal("different-domain-owner"))
-		Expect(get().GetSpec().GetDomains()).To(Equal([]string{"reusable.example.com"}))
+		Expect(finalizedIdentity()).To(Equal(retained))
+		var archivedAfter string
+		Expect(testPool.QueryRow(ctx, `select row_to_json(a)::text from archived_tenants a
+			where name = 'domain-history'`).Scan(&archivedAfter)).To(Succeed())
+		Expect(archivedAfter).To(Equal(archivedBefore))
 		Expect(assignment(closedID)).To(Equal(closedBefore))
 		Expect(assignment(activeID)).To(Equal(closedOnDelete))
 		_, err = create("replacement-collision", nil)
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.AlreadyExists))
 
-		// Historical domain text must not make public identity discovery ambiguous. Public List already applies
-		// liveness filtering; the private cleanup/history view intentionally retains the original tenant.
+		// Historical domain text must not make public identity discovery ambiguous. The finalized tenant exists
+		// only as durable identity/billing and generic archive evidence, never as a live public or private resource.
 		public, err := NewTenantsServer().SetLogger(logger).
 			SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
 		Expect(err).ToNot(HaveOccurred())

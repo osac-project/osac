@@ -590,7 +590,8 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		// not the ambient transaction's earlier now() used for the tenant deletion timestamp.
 		var beforeDelete, afterDelete time.Time
 		Expect(tx.QueryRow(ctx, "select clock_timestamp()").Scan(&beforeDelete)).To(Succeed())
-		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
+		deleteCtx := auth.ContextWithSubject(ctx, &auth.Subject{User: "authenticated-billing-deleter"})
+		_, err = tenantsServer.Delete(deleteCtx, privatev1.TenantsDeleteRequest_builder{
 			Id: tenant.GetId(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
@@ -610,11 +611,10 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		Expect(currentRow.GetStatus().GetConnectionState()).To(Equal(
 			privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
 
-		// The tenant row stays live-but-deleted rather than archived, so the tombstone intervals stay queryable: it
-		// carries a deletion timestamp and has no archived copy.
+		// Finalized tenants leave live storage; the durable identity retains deletion evidence.
 		var deletedAt time.Time
 		err = tx.QueryRow(ctx,
-			"select deletion_timestamp from tenants where name = 'billed-tenant'").Scan(&deletedAt)
+			"select deletion_timestamp from deleted_tenant_identities where tenant_name = 'billed-tenant'").Scan(&deletedAt)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(deletedAt.After(time.Unix(1, 0))).To(BeTrue(),
 			"the live tenant row must carry the deletion timestamp, not the epoch default")
@@ -623,7 +623,7 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		Expect(closedAt.AsTime()).To(BeTemporally(">", time.Unix(1, 0)))
 		Expect(closedAt.AsTime()).To(BeTemporally(">=", beforeDelete),
 			"the interval must close using the post-lock database clock, not transaction now()")
-		Expect(closedAt.AsTime()).To(BeTemporally(">=", deletedAt))
+		Expect(closedAt.AsTime()).To(BeTemporally("==", deletedAt), "first acceptance and closure share one explicit sample")
 		Expect(closedAt.AsTime()).To(BeTemporally(">=", floor),
 			"the close must not precede any historical boundary or the current interval start")
 		upperBound := afterDelete
@@ -640,15 +640,18 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		err = tx.QueryRow(ctx,
 			"select count(*) from archived_tenants where name = 'billed-tenant'").Scan(&archived)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(archived).To(BeZero(),
-			"the deferred assignment FK must leave the tenant live-but-deleted, not archived")
-		// This permanent billing identity anchor stays privately visible but is not a public list entry.
+		Expect(archived).To(Equal(1))
+		marker, found, err := database.GetDeletedTenantIdentity(ctx, tenant.GetId())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(found).To(BeTrue())
+		Expect(marker.DeletedBy).To(Equal(new("authenticated-billing-deleter")))
+		Expect(marker.FinalizedAt).NotTo(BeNil())
+		Expect(*marker.FinalizedAt).To(BeTemporally(">=", deletedAt))
 		privateList, err := tenantsServer.List(ctx, privatev1.TenantsListRequest_builder{
 			Filter: new(`this.metadata.name == "billed-tenant"`),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		Expect(privateList.GetItems()).To(HaveLen(1))
-		Expect(privateList.GetItems()[0].GetMetadata().GetDeletionTimestamp()).NotTo(BeNil())
+		Expect(privateList.GetItems()).To(BeEmpty())
 		publicServer, err := NewTenantsServer().SetLogger(logger).
 			SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
 		Expect(err).ToNot(HaveOccurred())
@@ -658,13 +661,22 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(publicList.GetTotal()).To(BeZero())
 		Expect(publicList.GetItems()).To(BeEmpty())
-		publicGet, err := publicServer.Get(ctx, publicv1.TenantsGetRequest_builder{Id: tenant.GetId()}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		Expect(publicGet.GetObject().GetMetadata().GetDeletionTimestamp()).NotTo(BeNil())
-
-		// A repeated delete must not rewrite either closed interval or reserve the released account again.
-		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: tenant.GetId()}.Build())
-		Expect(err).ToNot(HaveOccurred())
+		err = tx.Savepoint(ctx, func(c context.Context) error {
+			_, err := publicServer.Get(c, publicv1.TenantsGetRequest_builder{Id: tenant.GetId()}.Build())
+			return err
+		})
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+		err = tx.Savepoint(ctx, func(c context.Context) error {
+			_, err := tenantsServer.Get(c, privatev1.TenantsGetRequest_builder{Id: tenant.GetId()}.Build())
+			return err
+		})
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+		// Repeated Delete after physical removal is NotFound and cannot rewrite retained history.
+		err = tx.Savepoint(ctx, func(c context.Context) error {
+			_, err := tenantsServer.Delete(c, privatev1.TenantsDeleteRequest_builder{Id: tenant.GetId()}.Build())
+			return err
+		})
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 		repeated, err := readTenantBillingInterval(ctx, currentAssignment)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(repeated).To(Equal(currentRow))
@@ -672,7 +684,7 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(repeatedHistory).To(Equal(historyBefore))
 		var repeatedDeletedAt time.Time
-		Expect(tx.QueryRow(ctx, "select deletion_timestamp from tenants where name = 'billed-tenant'").
+		Expect(tx.QueryRow(ctx, "select deletion_timestamp from deleted_tenant_identities where tenant_name = 'billed-tenant'").
 			Scan(&repeatedDeletedAt)).To(Succeed())
 		Expect(repeatedDeletedAt).To(BeTemporally("==", deletedAt))
 
@@ -692,7 +704,7 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		Expect(active.GetSpec().GetBillingAccount().GetId()).To(Equal(account2))
 		Expect(active.GetStatus().HasEffectiveToTimestamp()).To(BeFalse())
 
-		// Billed identities remain reserved even after all intervals close. Isolate the expected duplicate
+		// Billed identities remain reserved even after all intervals close. Isolate the retained-history
 		// error so the assertions above can commit rather than being undone by this rejected create.
 		err = tx.Savepoint(ctx, func(spCtx context.Context) error {
 			_, err := tenantsServer.Create(spCtx, privatev1.TenantsCreateRequest_builder{
@@ -702,7 +714,8 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 			}.Build())
 			return err
 		})
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.AlreadyExists))
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+		Expect(grpcstatus.Convert(err).Message()).To(Equal("tenant name is retained by billing history"))
 	})
 
 	// insertBillingHistory gives the tenant one closed and one current billing assignment, so both a
@@ -714,7 +727,7 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		return
 	}
 
-	It("Retains the billed tenant identity with only closed history after finalizer cleanup", func() {
+	It("Archives the billed tenant with only closed history after finalizer cleanup", func() {
 		created, err := tenantsServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
@@ -737,7 +750,8 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		secondBefore, err := readTenantBillingInterval(ctx, second)
 		Expect(err).ToNot(HaveOccurred())
 
-		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
+		_, err = tenantsServer.Delete(auth.ContextWithSubject(ctx, &auth.Subject{User: "original-deleter"}),
+			privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		projects, err := projectsServer.List(ctx, privatev1.ProjectsListRequest_builder{
 			Filter: new(`this.metadata.tenant == "history-only-tenant"`),
@@ -750,14 +764,20 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		deleting, err := tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		deleting.GetObject().GetMetadata().SetFinalizers(nil)
-		_, err = tenantsServer.Update(ctx, privatev1.TenantsUpdateRequest_builder{
+		_, err = tenantsServer.Update(auth.ContextWithSubject(ctx, &auth.Subject{User: "finalizer-controller"}), privatev1.TenantsUpdateRequest_builder{
 			Object: deleting.GetObject(), UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}},
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		retained, err := tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		Expect(retained.GetObject().GetMetadata().GetFinalizers()).To(BeEmpty())
-		Expect(retained.GetObject().GetMetadata().GetDeletionTimestamp()).NotTo(BeNil())
+		err = tx.Savepoint(ctx, func(c context.Context) error {
+			_, err := tenantsServer.Get(c, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+			return err
+		})
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+		marker, found, err := database.GetDeletedTenantIdentity(ctx, id)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(found).To(BeTrue())
+		Expect(marker.DeletedBy).To(Equal(new("original-deleter")))
+		Expect(marker.FinalizedAt).NotTo(BeNil())
 		firstAfter, err := readTenantBillingInterval(ctx, first)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(firstAfter).To(Equal(firstBefore))
@@ -766,7 +786,7 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		Expect(secondAfter).To(Equal(secondBefore))
 		var archived int
 		Expect(tx.QueryRow(ctx, `select count(*) from archived_tenants where name = $1`, id).Scan(&archived)).To(Succeed())
-		Expect(archived).To(BeZero())
+		Expect(archived).To(Equal(1))
 	})
 
 	It("Rolls back tenant deletion when closing its active billing interval fails", func() {
@@ -822,20 +842,6 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	// deferProjectsFK makes projects_tenant_fk deferrable initially deferred, so the immediate
-	// billing assignment FK is the violation reported when the tenant row is deleted.
-	deferProjectsFK := func() {
-		GinkgoHelper()
-		tx, err := database.TxFromContext(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		_, err = tx.Exec(ctx, `alter table projects drop constraint projects_tenant_fk`)
-		Expect(err).ToNot(HaveOccurred())
-		_, err = tx.Exec(ctx, `
-			alter table projects add constraint projects_tenant_fk
-			foreign key (tenant) references tenants (name) deferrable initially deferred`)
-		Expect(err).ToNot(HaveOccurred())
-	}
-
 	// expectIntactTenant asserts, inside the current transaction, that the tenant row is still live,
 	// that both billing assignment rows survived, and that nothing was archived.
 	expectIntactTenant := func(tenant, closed, current string) {
@@ -880,9 +886,12 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 
 		// The delete must be rejected because of the project, not accepted because of the
 		// assignment history:
-		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
-			Id: tenant.GetId(),
-		}.Build())
+		tx, err := database.TxFromContext(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		err = tx.Savepoint(ctx, func(c context.Context) error {
+			_, err := tenantsServer.Delete(c, privatev1.TenantsDeleteRequest_builder{Id: tenant.GetId()}.Build())
+			return err
+		})
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
@@ -893,11 +902,7 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		expectIntactTenant("blocked-tenant", closed, current)
 	})
 
-	It("Cannot delete a tenant that has projects and billing assignments when the assignment FK is "+
-		"the reported violation", func() {
-		// Same shape as the default-order spec, but with projects_tenant_fk deferred: the deferred project check
-		// rolls back with the savepoint, leaving the assignment FK as the reported violation, so only the explicit
-		// projects check can catch the blocker.
+	It("Cannot delete a tenant with both historical and current billing while a project remains", func() {
 		createResponse, err := tenantsServer.Create(
 			ctx,
 			privatev1.TenantsCreateRequest_builder{
@@ -912,11 +917,13 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		tenant := createResponse.GetObject()
 
 		closed, current := insertBillingHistory("forced-tenant")
-		deferProjectsFK()
 
-		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
-			Id: tenant.GetId(),
-		}.Build())
+		tx, err := database.TxFromContext(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		err = tx.Savepoint(ctx, func(c context.Context) error {
+			_, err := tenantsServer.Delete(c, privatev1.TenantsDeleteRequest_builder{Id: tenant.GetId()}.Build())
+			return err
+		})
 		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
@@ -947,7 +954,6 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		closed, current := insertBillingHistory("finalizer-tenant")
 		historyBefore, err := readTenantBillingInterval(ctx, closed)
 		Expect(err).ToNot(HaveOccurred())
-		deferProjectsFK()
 
 		// The soft delete succeeds because the finalizers are present:
 		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
@@ -967,7 +973,7 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		ctx = database.TxManagerIntoContext(context.Background(), tm)
 
 		// Clearing the last finalizers triggers the archive attempt, which the project blocker
-		// must reject even though the assignment FK is the reported violation:
+		// must reject without losing already closed billing history:
 		_, err = database.WithNewTx(ctx, func(ctx context.Context) (*privatev1.TenantsUpdateResponse, error) {
 			getResponse, getErr := tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{
 				Id: id,
@@ -1034,10 +1040,7 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		Expect(archived).To(BeZero())
 	})
 
-	It("Leaves no committed damage when a deferred-order delete is rejected", func() {
-		// Same forced-order setup, but committed before the delete so the rejection can be verified
-		// from an independent transaction: the failed delete runs in its own transaction, which
-		// rolls back completely.
+	It("Leaves no committed damage when a project-blocked billed delete is rejected", func() {
 		createResponse, err := tenantsServer.Create(
 			ctx,
 			privatev1.TenantsCreateRequest_builder{
@@ -1052,7 +1055,6 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		tenant := createResponse.GetObject()
 
 		closed, current := insertBillingHistory("committed-tenant")
-		deferProjectsFK()
 
 		// Commit the setup and release the suite transaction, following the pattern of the tenant
 		// billing assignments specs:

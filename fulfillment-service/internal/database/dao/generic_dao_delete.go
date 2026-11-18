@@ -25,6 +25,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 )
 
@@ -59,6 +60,11 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 		err = errors.New("object identifier is mandatory")
 		return
 	}
+	if r.dao.table == "tenants" {
+		if err = database.LockTenantIdentity(ctx, r.args.id); err != nil {
+			return
+		}
+	}
 
 	// Check visibility:
 	ok, err := r.addVisibilityFilter(ctx)
@@ -80,6 +86,27 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 	}
 	r.sql.params = append(r.sql.params, r.args.id)
 	fmt.Fprintf(&r.sql.filter, ` id = $%d`, len(r.sql.params))
+	deletionValue := "now()"
+	var identity database.DeletedTenantIdentity
+	var closeAt time.Time
+	if r.dao.table == "tenants" {
+		identity, err = r.lockTenantLifecycle(ctx, r.args.id)
+		if err != nil {
+			return
+		}
+		closeAt, err = tenantDeletionTime(ctx, identity)
+		if err != nil {
+			return
+		}
+		if identity.DeletionTimestamp.Equal(time.Unix(0, 0)) {
+			if subject, ok := auth.LookupSubject(ctx); ok && subject.User != "" {
+				actor := subject.User
+				identity.DeletedBy = &actor
+			}
+		}
+		r.sql.params = append(r.sql.params, closeAt)
+		deletionValue = fmt.Sprintf("$%d", len(r.sql.params))
+	}
 
 	// Set the deletion timestamp of the row and simultaneousyly retrieve the data, as we need it to fire the event
 	// later:
@@ -89,7 +116,7 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 		`
 		update %s set
 			deletion_timestamp = case
-				when deletion_timestamp = 'epoch' then now()
+				when deletion_timestamp = 'epoch' then %s
 				else deletion_timestamp
 			end
 		where
@@ -108,6 +135,7 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 			data
 		`,
 		r.dao.table,
+		deletionValue,
 		r.sql.filter.String(),
 	)
 
@@ -156,6 +184,14 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 		err = r.translateError(ctx, tenant, err)
 		return
 	}
+	if r.dao.table == "tenants" {
+		identity.TenantName = name
+		identity.TenantCreatedAt = creationTs
+		identity.DeletionTimestamp = deletionTs
+		if err = captureTenantDeletion(ctx, identity, closeAt); err != nil {
+			return
+		}
+	}
 	_, err = r.objectFromRow(storedObject{
 		id:              r.args.id,
 		name:            name,
@@ -181,17 +217,18 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 
 	// If there are no finalizers we can now archive the object:
 	err = r.archive(ctx, archiveArgs{
-		id:              r.args.id,
-		creationTs:      creationTs,
-		deletionTs:      deletionTs,
-		creator:         creator,
-		tenant:          tenant,
-		project:         project,
-		name:            name,
-		labelsData:      labelsData,
-		annotationsData: annotationsData,
-		version:         version,
-		data:            data,
+		id:                     r.args.id,
+		creationTs:             creationTs,
+		deletionTs:             deletionTs,
+		creator:                creator,
+		tenant:                 tenant,
+		project:                project,
+		name:                   name,
+		labelsData:             labelsData,
+		annotationsData:        annotationsData,
+		version:                version,
+		data:                   data,
+		tenantDeletionCaptured: r.dao.table == "tenants",
 	})
 	if err != nil {
 		return

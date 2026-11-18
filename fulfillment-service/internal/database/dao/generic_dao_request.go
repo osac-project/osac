@@ -59,6 +59,8 @@ type archiveArgs struct {
 	annotationsData []byte
 	version         int32
 	data            []byte
+	// Delete has already closed history and captured acceptance using its stored RETURNING state.
+	tenantDeletionCaptured bool
 }
 
 type storedObject struct {
@@ -106,29 +108,83 @@ func (r *request[O]) objectFromRow(row storedObject) (O, error) {
 	return object, nil
 }
 
-// archiveDeferredConstraint names a foreign key whose violation during archival is not an error: the referencing
-// table outlives its archived parent row. tenant_billing_assignments keeps assignment history as a read-only
-// tombstone after its tenant is deleted, so leaving the parent row live-but-deleted is the correct final state,
-// not a retry condition.
-const archiveDeferredConstraint = "tenant_billing_assignments_tenant_id_fkey"
+// lockTenantLifecycle reads authoritative lifecycle columns under the tenant row lock. The caller
+// must first acquire the identity key and construct its visibility/id filter.
+func (r *request[O]) lockTenantLifecycle(ctx context.Context, id string) (database.DeletedTenantIdentity, error) {
+	var identity database.DeletedTenantIdentity
+	err := r.queryRow(ctx, getOpType, `select name, creation_timestamp, deletion_timestamp from tenants where `+
+		r.sql.filter.String()+` for update`, r.sql.params...).Scan(
+		&identity.TenantName, &identity.TenantCreatedAt, &identity.DeletionTimestamp,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return identity, &ErrNotFound{IDs: []string{id}}
+	}
+	return identity, err
+}
 
-// archive moves a deleted object to the archived table and removes it from the main table, inside a savepoint so
-// archiveDeferredConstraint can be rolled back without poisoning the caller's transaction.
-//
-// When that constraint is the violation, the rollback leaves the row live-but-deleted; checkDeferredArchiveBlockers
-// then decides whether that tombstone is the intended final state. Any other error is translated as usual.
+// tenantDeletionTime locks the complete affected account set before interval rows. The single
+// post-lock clock sample is used unchanged for first acceptance and the current interval close.
+func tenantDeletionTime(ctx context.Context, identity database.DeletedTenantIdentity) (time.Time, error) {
+	floor, err := LockTenantBillingAssignmentForDeletion(ctx, identity.TenantName)
+	if err != nil {
+		return time.Time{}, err
+	}
+	floor = tenantLifecycleFloor(identity, floor)
+	return BillingFinalizationTime(ctx, floor)
+}
+
+func tenantLifecycleFloor(identity database.DeletedTenantIdentity, floor time.Time) time.Time {
+	if identity.TenantCreatedAt.After(floor) {
+		floor = identity.TenantCreatedAt
+	}
+	if !identity.DeletionTimestamp.Equal(time.Unix(0, 0)) && identity.DeletionTimestamp.After(floor) {
+		floor = identity.DeletionTimestamp
+	}
+	return floor
+}
+
+func captureTenantDeletion(ctx context.Context, identity database.DeletedTenantIdentity, at time.Time) error {
+	if err := CloseTenantBillingAssignmentOnDeletion(ctx, identity.TenantName, at); err != nil {
+		return err
+	}
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	if err = tx.QueryRow(ctx, `select exists(select 1 from tenant_billing_assignments where tenant_id = $1)`,
+		identity.TenantName).Scan(&identity.BillingRetained); err != nil {
+		return err
+	}
+	return database.CaptureDeletedTenantIdentity(ctx, identity)
+}
+
+// archive moves a deleted object to the archived table and physically removes it atomically in a
+// savepoint. Tenant callers MUST already hold the identity key before any tenant row lock.
 func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
+	identity := database.DeletedTenantIdentity{}
 	if r.dao.table == "tenants" {
-		// Take the key lock outside the savepoint: rolling back the failed DELETE must not release it.
-		// FK checks on concurrent dependent inserts take KEY SHARE, so wait for earlier inserts before
-		// taking the fresh READ COMMITTED snapshot used by the recovery probe.
-		var id string
-		if err := r.queryRow(ctx, getOpType, `select id from tenants where id = $1 for update`, args.id).
-			Scan(&id); err != nil {
+		// Keep this row lock outside the archive savepoint. Re-read all authoritative SQL state:
+		// a last-finalizer caller cannot spoof lifecycle columns through its protobuf metadata.
+		if err := r.queryRow(ctx, getOpType, `select name, creation_timestamp, deletion_timestamp,
+			creator, tenant, project, labels, annotations, version, data from tenants where id = $1 for update`, args.id).
+			Scan(&args.name, &args.creationTs, &args.deletionTs, &args.creator, &args.tenant, &args.project,
+				&args.labelsData, &args.annotationsData, &args.version, &args.data); err != nil {
 			return r.translateArchiveError(ctx, args.tenant, err)
 		}
+		identity = database.DeletedTenantIdentity{
+			TenantName: args.name, TenantCreatedAt: args.creationTs, DeletionTimestamp: args.deletionTs,
+		}
+		if !args.tenantDeletionCaptured {
+			at, err := tenantDeletionTime(ctx, identity)
+			if err != nil {
+				return err
+			}
+			// A legacy deleting row without a marker has no provable original actor.
+			if err = captureTenantDeletion(ctx, identity, at); err != nil {
+				return err
+			}
+		}
 	}
-	deferred := false
 	outerTx := r.tx
 	err := outerTx.Savepoint(ctx, func(spCtx context.Context) error {
 		spTx, err := database.TxFromContext(spCtx)
@@ -185,93 +241,37 @@ func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 			args.version,
 			args.data,
 		); err != nil {
-			deferred = isArchiveDeferred(err)
 			return err
 		}
 		deleteSQL := fmt.Sprintf(`delete from %s where id = $1`, r.dao.table)
-		if _, err := r.exec(spCtx, deleteOpType, deleteSQL, args.id); err != nil {
-			deferred = isArchiveDeferred(err)
+		tag, err := r.exec(spCtx, deleteOpType, deleteSQL, args.id)
+		if err != nil {
 			return err
+		}
+		if tag.RowsAffected() != 1 {
+			return errors.New("archive did not remove exactly one object")
+		}
+		if r.dao.table == "tenants" {
+			floor, err := TenantBillingHistoryFloor(spCtx, args.name)
+			if err != nil {
+				return err
+			}
+			at, err := BillingFinalizationTime(spCtx, tenantLifecycleFloor(identity, floor))
+			if err != nil {
+				return err
+			}
+			identity.FinalizedAt = &at
+			// spCtx is essential: ambient helpers must use the same savepoint as r.tx.
+			if err = database.CaptureDeletedTenantIdentity(spCtx, identity); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
 	if err == nil {
 		return nil
 	}
-	if deferred {
-		return r.checkDeferredArchiveBlockers(ctx, args)
-	}
 	return r.translateArchiveError(ctx, args.tenant, err)
-}
-
-// checkDeferredArchiveBlockers runs after the archive savepoint rolled back. The retained billing identity must not
-// mask any other restrictive FK, including soft-deleted dependents still awaiting cleanup. Derive the probes from
-// the actual schema rather than maintaining another partial list of tenant-scoped tables. Cascades are not blockers;
-// the tenant's own self-reference disappears with a physical delete and is excluded from its probe.
-func (r *request[O]) checkDeferredArchiveBlockers(ctx context.Context, args archiveArgs) error {
-	if r.dao.table != "tenants" {
-		return fmt.Errorf(
-			"deferred archive constraint '%s' is only expected while archiving a tenant, but the table is '%s'",
-			archiveDeferredConstraint,
-			r.dao.table,
-		)
-	}
-	var probes string
-	err := r.queryRow(
-		ctx,
-		existsOpType,
-		`select coalesce(string_agg(format(
-			'select %L::text as blocker where exists (select 1 from %s as child join tenants as parent on %s
-			 where parent.id = $1 %s)',
-			fk.conname, fk.conrelid::regclass, keys.predicate,
-			case when fk.conrelid = fk.confrelid then 'and child.id <> parent.id' else '' end
-		), ' union all ' order by (fk.conname = 'projects_tenant_fk') desc, fk.conname), '')
-		from pg_catalog.pg_constraint as fk
-		cross join lateral (
-			select string_agg(format('child.%I = parent.%I', child.attname, parent.attname), ' and ') as predicate
-			from unnest(fk.conkey, fk.confkey) as key(child, parent)
-			join pg_catalog.pg_attribute as child on child.attrelid = fk.conrelid and child.attnum = key.child
-			join pg_catalog.pg_attribute as parent on parent.attrelid = fk.confrelid and parent.attnum = key.parent
-		) as keys
-		where fk.contype = 'f' and fk.confrelid = 'tenants'::regclass
-		and fk.confdeltype in ('a', 'r') and fk.conname <> $1`,
-		archiveDeferredConstraint,
-	).Scan(&probes)
-	if err == nil && probes == "" {
-		err = errors.New("no restrictive tenant foreign keys found")
-	}
-	var blocker string
-	if err == nil {
-		err = r.queryRow(ctx, existsOpType,
-			`select coalesce((select blocker from (`+probes+`) as blockers limit 1), '')`, args.id,
-		).Scan(&blocker)
-	}
-	if err != nil {
-		return fmt.Errorf(
-			"failed to check dependencies for tenant '%s' after deferred archive: %w",
-			args.name,
-			err,
-		)
-	}
-	if blocker == "projects_tenant_fk" {
-		return &ErrInUse{
-			Reason: fmt.Sprintf("tenant '%s' cannot be deleted because it still has projects", args.name),
-		}
-	}
-	if blocker != "" {
-		r.dao.logger.WarnContext(ctx, "Tenant archive blocked by a restrictive dependency",
-			slog.String("constraint", blocker))
-		return &ErrInUse{Reason: "object cannot be deleted because it is still referenced by other objects"}
-	}
-	return nil
-}
-
-// isArchiveDeferred reports whether err is a "not yet" deferred-constraint violation that archive can treat as
-// success.
-func isArchiveDeferred(err error) bool {
-	var pgErr *pgconn.PgError
-	return errors.As(err, &pgErr) && pgErr.Code == pgerrcode.ForeignKeyViolation &&
-		pgErr.ConstraintName == archiveDeferredConstraint
 }
 
 // translateArchiveError translates a raw PostgreSQL error from either statement of archive() into
@@ -290,7 +290,7 @@ func (r *request[O]) translateArchiveError(ctx context.Context, tenant string, e
 		return &ErrInUse{
 			Reason: pgErr.Message,
 		}
-	case pgerrcode.ForeignKeyViolation:
+	case pgerrcode.ForeignKeyViolation, pgerrcode.RestrictViolation:
 		switch pgErr.ConstraintName {
 		case "projects_tenant_fk":
 			return &ErrInUse{

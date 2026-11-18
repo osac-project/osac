@@ -39,6 +39,19 @@ var _ = Describe("Subject inside context", func() {
 		}).To(PanicWith("failed to get subject from context"))
 	})
 
+	It("optionally looks up the same authenticated subject without changing mandatory lookup", func() {
+		subject := &Subject{User: "deleter"}
+		actual, ok := LookupSubject(ContextWithSubject(context.Background(), subject))
+		Expect(ok).To(BeTrue())
+		Expect(actual).To(BeIdenticalTo(subject))
+		actual, ok = LookupSubject(context.Background())
+		Expect(ok).To(BeFalse())
+		Expect(actual).To(BeNil())
+		actual, ok = LookupSubject(ContextWithSubject(context.Background(), nil))
+		Expect(ok).To(BeFalse())
+		Expect(actual).To(BeNil())
+	})
+
 	Describe("controller service account detection", func() {
 		It("recognizes the fulfillment controller identity", func() {
 			ctx := ContextWithSubject(context.Background(), &Subject{User: "service-account-osac-controller"})

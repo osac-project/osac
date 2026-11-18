@@ -62,6 +62,13 @@ func SubjectFromContext(ctx context.Context) *Subject {
 	}
 }
 
+// LookupSubject returns the authenticated subject when one is present. Unlike SubjectFromContext,
+// it also supports internal callers that deliberately have no authentication context.
+func LookupSubject(ctx context.Context) (*Subject, bool) {
+	subject, ok := ctx.Value(subjectContextKey).(*Subject)
+	return subject, ok && subject != nil
+}
+
 // IsControllerServiceAccount reports whether the authenticated caller is the
 // fulfillment controller service account. This is intentionally narrower than
 // IsAdmin: it is used only for controller-owned lifecycle operations that must

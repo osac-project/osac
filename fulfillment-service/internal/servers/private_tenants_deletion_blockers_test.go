@@ -15,13 +15,9 @@ package servers
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
-	"github.com/jackc/pgerrcode"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
@@ -124,33 +120,6 @@ var _ = Describe("Tenant archive dependency blockers", func() {
 		}.Build())
 		return err
 	}
-	forceBillingFirst := func(tenant string) {
-		GinkgoHelper()
-		tx, err := database.TxFromContext(ctx)
-		Expect(err).NotTo(HaveOccurred())
-		var trigger string
-		Expect(tx.QueryRow(ctx, `select tgname from pg_trigger join pg_constraint on tgconstraint = pg_constraint.oid
-			where tgrelid = 'tenants'::regclass and (tgtype & 8) <> 0
-			and conname = 'tenant_billing_assignments_tenant_id_fkey'`).Scan(&trigger)).To(Succeed())
-		// AFTER triggers run in name order. Rename only the billing action trigger in this disposable database;
-		// every FK remains immediate and enforced, including concurrent INSERT checks.
-		_, err = tx.Exec(ctx, `alter trigger `+pgx.Identifier{trigger}.Sanitize()+
-			` on tenants rename to "000_billing_first"`)
-		Expect(err).NotTo(HaveOccurred())
-		err = tx.Savepoint(ctx, func(ctx context.Context) error {
-			tx, err := database.TxFromContext(ctx)
-			if err != nil {
-				return err
-			}
-			_, err = tx.Exec(ctx, `delete from tenants where id = $1`, tenant)
-			return err
-		})
-		var pgErr *pgconn.PgError
-		Expect(errors.As(err, &pgErr)).To(BeTrue())
-		Expect(pgErr.Code).To(Equal(pgerrcode.ForeignKeyViolation))
-		Expect(pgErr.ConstraintName).To(Equal("tenant_billing_assignments_tenant_id_fkey"),
-			"prove the regression reaches billing recovery, not an incidental earlier FK")
-	}
 	snapshot := func(ctx context.Context, tx database.Tx, tenant string) (string, string) {
 		GinkgoHelper()
 		var object, history string
@@ -169,13 +138,10 @@ var _ = Describe("Tenant archive dependency blockers", func() {
 	}
 
 	DescribeTable("preserves a service-account blocker and recovers after its cleanup",
-		func(withFinalizer, billed, billingFirst bool) {
+		func(withFinalizer, billed bool) {
 			tenant := createTenant(withFinalizer, billed)
 			account, err := createAccount(ctx, tenant)
 			Expect(err).NotTo(HaveOccurred())
-			if billingFirst {
-				forceBillingFirst(tenant)
-			}
 			if withFinalizer {
 				_, err = tenants.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: tenant}.Build())
 				Expect(err).NotTo(HaveOccurred())
@@ -243,36 +209,32 @@ var _ = Describe("Tenant archive dependency blockers", func() {
 				Expect(tx.QueryRow(ctx, `select count(*), count(*) filter (where effective_to is null)
 					from tenant_billing_assignments where tenant_id = $1`, tenant).Scan(&history, &open)).To(Succeed())
 				Expect(open).To(BeZero())
+				Expect(live).To(BeZero())
+				Expect(archived).To(Equal(1))
+				marker, found, err := database.GetDeletedTenantIdentity(ctx, tenant)
+				if err != nil {
+					return err
+				}
+				Expect(found).To(BeTrue())
+				Expect(marker.FinalizedAt).NotTo(BeNil())
+				Expect(marker.BillingRetained).To(Equal(billed))
 				if billed {
-					Expect(live).To(Equal(1))
-					Expect(archived).To(BeZero())
 					Expect(history).To(Equal(2))
-					read, err := tenants.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenant}.Build())
-					if err != nil {
-						return err
-					}
-					Expect(read.GetObject().GetMetadata().GetFinalizers()).To(BeEmpty())
-					Expect(read.GetObject().GetMetadata().GetDeletionTimestamp()).NotTo(BeNil())
 				} else {
-					Expect(live).To(BeZero())
-					Expect(archived).To(Equal(1))
 					Expect(history).To(BeZero())
 				}
 				return nil
 			})).To(Succeed())
 		},
-		Entry("direct Delete without billing", false, false, false),
-		Entry("direct Delete with billing, normal order", false, true, false),
-		Entry("direct Delete with billing first", false, true, true),
-		Entry("last-finalizer Update without billing", true, false, false),
-		Entry("last-finalizer Update with billing, normal order", true, true, false),
-		Entry("last-finalizer Update with billing first", true, true, true),
+		Entry("direct Delete without billing", false, false),
+		Entry("direct Delete with billing", false, true),
+		Entry("last-finalizer Update without billing", true, false),
+		Entry("last-finalizer Update with billing", true, true),
 	)
 
 	DescribeTable("sees a concurrent service-account creation before completing deletion",
 		func(withFinalizer bool) {
 			tenant := createTenant(withFinalizer, true)
-			forceBillingFirst(tenant)
 			if withFinalizer {
 				_, err := tenants.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: tenant}.Build())
 				Expect(err).NotTo(HaveOccurred())
@@ -337,7 +299,6 @@ var _ = Describe("Tenant archive dependency blockers", func() {
 
 	It("checks new restrictive foreign keys without a hard-coded tenant column or table list", func() {
 		tenant := createTenant(false, true)
-		forceBillingFirst(tenant)
 		tx, err := database.TxFromContext(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		_, err = tx.Exec(ctx, `create table extra_tenant_dependency (
@@ -361,7 +322,7 @@ var _ = Describe("Tenant archive dependency blockers", func() {
 			from pg_constraint where contype = 'f' and confrelid = 'tenants'::regclass`).Scan(&inventory)).To(Succeed())
 		fmt.Fprintln(GinkgoWriter, inventory)
 		Expect(inventory).To(ContainSubstring("service_accounts: FOREIGN KEY (tenant) REFERENCES tenants(name)"))
-		Expect(inventory).To(ContainSubstring("tenant_billing_assignments: FOREIGN KEY (tenant_id) REFERENCES tenants(name)"))
+		Expect(inventory).NotTo(ContainSubstring("tenant_billing_assignments:"))
 		Expect(inventory).To(ContainSubstring("tenants: FOREIGN KEY (tenant) REFERENCES tenants(name)"))
 		Expect(inventory).To(ContainSubstring("active_tenants: FOREIGN KEY (id) REFERENCES tenants(id) ON DELETE CASCADE"))
 		Expect(inventory).To(ContainSubstring("tenant_domains: FOREIGN KEY (tenant) REFERENCES tenants(name) ON DELETE CASCADE"))

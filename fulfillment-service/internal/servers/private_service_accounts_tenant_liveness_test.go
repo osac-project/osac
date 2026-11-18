@@ -27,6 +27,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Service-account tenant liveness at creation", func() {
@@ -107,6 +108,9 @@ var _ = Describe("Service-account tenant liveness at creation", func() {
 	DescribeTable("rejects a create waiting behind deletion when deletion commits first",
 		func(withFinalizer, complete, billed bool) {
 			tenant := createTenant(withFinalizer, billed)
+			var createdAt time.Time
+			Expect(suiteTx.QueryRow(ctx, `select creation_timestamp from tenants where name=$1`, tenant).
+				Scan(&createdAt)).To(Succeed())
 			if complete {
 				_, err := tenants.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: tenant}.Build())
 				Expect(err).NotTo(HaveOccurred())
@@ -153,15 +157,78 @@ var _ = Describe("Service-account tenant liveness at creation", func() {
 			var count int
 			Expect(testPool.QueryRow(ctx, `select count(*) from service_accounts where tenant = $1`, tenant).
 				Scan(&count)).To(Succeed())
-			Expect(count).To(BeZero(), "no account may commit under a retained deletion-marked identity")
-			if billed {
+			Expect(count).To(BeZero(), "no account may commit under a deleting or physically absent tenant")
+			pending := withFinalizer && !complete
+			Expect(testPool.QueryRow(ctx, `select count(*) from tenants where name=$1`, tenant).
+				Scan(&count)).To(Succeed())
+			if pending {
+				Expect(count).To(Equal(1))
 				var deleted bool
-				Expect(testPool.QueryRow(ctx, `select deletion_timestamp <> 'epoch' from tenants where name = $1`, tenant).
+				Expect(testPool.QueryRow(ctx, `select deletion_timestamp <> 'epoch' from tenants where name=$1`, tenant).
 					Scan(&deleted)).To(Succeed())
 				Expect(deleted).To(BeTrue())
+			} else {
+				Expect(count).To(BeZero(), "completed deletion must not retain a live Tenant for billing history")
+			}
+			Expect(testPool.QueryRow(ctx, `select count(*) from archived_tenants where name=$1`, tenant).
+				Scan(&count)).To(Succeed())
+			if pending {
+				Expect(count).To(BeZero())
+			} else {
+				Expect(count).To(Equal(1))
+			}
+			marker, err := database.WithNewTx(ctx, func(c context.Context) (database.DeletedTenantIdentity, error) {
+				marker, found, err := database.GetDeletedTenantIdentity(c, tenant)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(found).To(BeTrue())
+				return marker, err
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(marker.TenantCreatedAt).To(BeTemporally("==", createdAt))
+			Expect(marker.DeletedBy).To(BeNil(), "the fixture's creator is not a deletion actor")
+			Expect(marker.BillingRetained).To(Equal(billed))
+			Expect(marker.DeletionTimestamp.Before(createdAt)).To(BeFalse())
+			if pending {
+				Expect(marker.FinalizedAt).To(BeNil())
+			} else {
+				Expect(marker.FinalizedAt).NotTo(BeNil())
+				Expect(marker.FinalizedAt.Before(marker.DeletionTimestamp)).To(BeFalse())
+				_, err = database.WithNewTx(ctx, func(c context.Context) (any, error) {
+					return tenants.Get(c, privatev1.TenantsGetRequest_builder{Id: tenant}.Build())
+				})
+				Expect(status.Code(err)).To(Equal(codes.NotFound))
+				publicTenants, err := NewTenantsServer().SetLogger(logger).
+					SetTenancyLogic(tenancy).SetAttributionLogic(attribution).Build()
+				Expect(err).NotTo(HaveOccurred())
+				_, err = database.WithNewTx(ctx, func(c context.Context) (any, error) {
+					return publicTenants.Get(c, publicv1.TenantsGetRequest_builder{Id: tenant}.Build())
+				})
+				Expect(status.Code(err)).To(Equal(codes.NotFound))
+			}
+			liveNames, err := database.ResolveLiveTenantNames(ctx, []string{tenant})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(liveNames).To(BeEmpty(), "an unbilled marker revokes scope just as a billed marker does")
+			if billed {
 				Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments
 					where tenant_id = $1 and effective_to is not null`, tenant).Scan(&count)).To(Succeed())
 				Expect(count).To(Equal(1), "preserve the read-only billing history")
+			}
+			if !billed && !pending {
+				_, err = database.WithNewTx(ctx, func(c context.Context) (any, error) {
+					_, err := tenants.Create(c, privatev1.TenantsCreateRequest_builder{
+						Object: privatev1.Tenant_builder{Metadata: privatev1.Metadata_builder{Name: tenant}.Build()}.Build(),
+					}.Build())
+					Expect(err).NotTo(HaveOccurred())
+					unchanged, found, err := database.GetDeletedTenantIdentity(c, tenant)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(found).To(BeTrue())
+					Expect(unchanged).To(Equal(marker))
+					return createAccount(c, tenant)
+				})
+				Expect(err).NotTo(HaveOccurred(), "revocation is not a permanent unbilled name ban")
+				liveNames, err = database.ResolveLiveTenantNames(ctx, []string{tenant})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(liveNames).To(Equal([]string{tenant}))
 			}
 		},
 		Entry("billed direct deletion", false, false, true),
@@ -169,11 +236,22 @@ var _ = Describe("Service-account tenant liveness at creation", func() {
 		Entry("billed deletion acceptance with cleanup pending", true, false, true),
 		Entry("unbilled direct deletion", false, false, false),
 		Entry("unbilled finalizer completion", true, true, false),
+		Entry("unbilled deletion acceptance with cleanup pending", true, false, false),
 	)
 
 	It("preserves a live tenant when a service-account insert commits before deletion", func() {
 		tenant := createTenant(false, true)
 		commitSetup()
+		// Snapshot complete rows, not only deletion timestamps: a failed Delete
+		// must roll back history closure, metadata, capture and archival together.
+		const snapshotSQL = `select jsonb_build_object(
+			'tenant', (select to_jsonb(t) from tenants t where name=$1),
+			'history', (select jsonb_agg(to_jsonb(h) order by id) from tenant_billing_assignments h where tenant_id=$1),
+			'marker', (select to_jsonb(m) from deleted_tenant_identities m where tenant_name=$1),
+			'archive', (select jsonb_agg(to_jsonb(a) order by archival_timestamp) from archived_tenants a where name=$1)
+		)::text`
+		var before string
+		Expect(testPool.QueryRow(ctx, snapshotSQL, tenant).Scan(&before)).To(Succeed())
 		createCtx, creator := begin()
 		creatorEnded := false
 		DeferCleanup(func() {
@@ -211,6 +289,13 @@ var _ = Describe("Service-account tenant liveness at creation", func() {
 		Expect(testPool.QueryRow(ctx, `select deletion_timestamp = 'epoch' from tenants where name = $1`, tenant).
 			Scan(&live)).To(Succeed())
 		Expect(live).To(BeTrue())
+		var after string
+		Expect(testPool.QueryRow(ctx, snapshotSQL, tenant).Scan(&after)).To(Succeed())
+		Expect(after).To(Equal(before), "the failed deletion must roll back every tenant/history/marker/archive change")
+		var count int
+		Expect(testPool.QueryRow(ctx, `select count(*) from service_accounts where tenant=$1`, tenant).
+			Scan(&count)).To(Succeed())
+		Expect(count).To(Equal(1), "the insert committed first remains a restrictive dependency")
 	})
 
 	DescribeTable("preserves live-tenant and reserved-system creation",

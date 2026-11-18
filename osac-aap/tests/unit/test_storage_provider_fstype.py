@@ -215,10 +215,7 @@ def existing_block_class(provider, name, fstype):
         "kind": "StorageClass",
         "metadata": {
             "name": name,
-            "labels": {
-                "osac.openshift.io/tenant": "fstype-test",
-                "app.kubernetes.io/managed-by": "osac-aap",
-            },
+            "labels": {"osac.openshift.io/tenant": "fstype-test", "app.kubernetes.io/managed-by": "osac-aap"},
         },
         "provisioner": "csi.vastdata.com" if provider == "vast" else "topolvm.io",
         "parameters": parameters,

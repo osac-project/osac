@@ -20,6 +20,7 @@ from tests.e2e.core.inventory import InventoryBackend, assert_bmi_lifecycle_on_r
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.serial
 
@@ -68,7 +69,8 @@ def test_baremetal_instance_inventory_exhausted(
     """Exhaust host inventory, assert overflow stalls/fails, then recover after free capacity.
 
     Portable across labs/CI and inventory backends (e.g. 2 virtual hosts →
-    BMI #1, #2, then #3 overflow; BMHs on metal3, fixture devices on netbox):
+    BMI #1, #2, then #3 overflow; BMHs on metal3, pre-staged devices on
+    netbox):
     1. Create N BMIs up front so cluster-side provisioning can overlap
     2. Wait for all N to reach RUNNING, then run full lifecycle checks on BMI #1
     3. Create BMI N+1 and assert it does not reach RUNNING (no free host)
@@ -135,6 +137,8 @@ def test_baremetal_instance_inventory_exhausted(
             retries=120,
             delay=10,
             description="at least one host available after release",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=overflow_id,
         )
 
         wait_for_bmi_running_after_recovery(grpc=grpc, bmi_id=overflow_id)

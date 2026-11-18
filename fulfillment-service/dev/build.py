@@ -122,12 +122,10 @@ def _sync_cleanapi_version() -> None:
 @build.command()
 def sync_cleanapi_version() -> None:
     """
-    Syncs the cleanapi version from dev/tools.py to buf.yaml and buf.gen.yaml.
-
-    This command is automatically run during proto builds, but can be run manually
-    to update the YAML files without generating code.
+    Syncs the cleanapi version in YAML files and refreshes buf.lock without generating code.
     """
     _sync_cleanapi_version()
+    commands.run(args=["buf", "dep", "update"], cwd=dirs.proto(), check=True)
 
 
 def _strip_metering_annotations(proto_dir: pathlib.Path) -> None:

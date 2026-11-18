@@ -46,7 +46,7 @@ Then build the image:
   set -euo pipefail
   build_context=$(mktemp -d /tmp/osac-ui-e2e-build.XXXXXXXX)
   trap 'rm -rf -- "$build_context"' EXIT
-  git archive HEAD osac-ui | tar -x -C "$build_context"
+  git archive HEAD osac-ui | tar -x --same-permissions -C "$build_context"
   podman build \
     -f "$build_context/osac-ui/apps/e2e-tests/container/Containerfile" \
     --build-arg FULFILLMENT_SERVICE_IMAGE="${FULFILLMENT_SERVICE_IMAGE}" \
@@ -54,6 +54,10 @@ Then build the image:
     "$build_context"
 )
 ```
+
+The temporary build context is private. Preserving archive permissions keeps
+the entrypoint executable by the container's non-root user even with a
+restrictive umask.
 
 | Build argument              | Default                                           | Purpose                                                                   |
 | --------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------- |
@@ -119,7 +123,7 @@ fi
 - The admin user defaults to `admin`; change it with `--admin-user=USER`. The
   runner also logs the bundled `osac` CLI in with these credentials, so no CLI
   configuration needs to be mounted.
-- The Playwright HTML report and the test results are copied to
+- The Playwright HTML report and test results, when generated, are copied to
   `test-output/playwright-report/` and `test-output/test-results/` when the
   run ends. These two directories are cleared before each run, so use a
   separate output directory to keep earlier reports. They are owned by your
@@ -178,15 +182,21 @@ password.
 ### Before a run
 
 The flows create a tenant, instance type, disk image, storage tier, catalog
-item, and VM with the names in `extravars.yaml`, and the create steps fail if
-those objects already exist. After an interrupted run, delete the leftover
-`*-e2e` objects first, for example:
+item, and VM using names from `extravars.yaml`. The runner appends the
+`--instance` index (default `1`) to indexed resource names; for example, the
+default tenant is `tenant-item-e2e-1`. Create steps can fail if the resulting
+objects already exist. After an interrupted run, check for leftovers before
+starting again. The following discovery example requires an `osac` CLI
+installed and authenticated on the host with permission to list the resources:
 
 ```bash
 for r in tenants instancetypes computeinstancecatalogitems diskimages storagetiers users; do
   osac get "${r}" | grep -i e2e
 done
 ```
+
+The search can include resources from other runs. Verify the exact names and
+ownership before deleting any leftover test resources.
 
 The image does not run the prepare script's capacity check, which needs a
 kubeconfig at build time. Make sure the cluster can schedule the VM that
@@ -195,8 +205,8 @@ kubeconfig at build time. Make sure the cluster can schedule the VM that
 ## Use in CI
 
 The image is a self-contained test step: it takes a flow tag, runs it against
-a deployed OSAC, returns the result as its exit code, and leaves an HTML
-report. That is enough to run it from a CI pipeline or a GitHub Actions job.
+a deployed OSAC, returns the result as its exit code, and exports reports when
+generated. It can run from a CI pipeline or a GitHub Actions job.
 
 It has been run end to end on two different hosts (a Fedora workstation with
 podman 5.8, and a RHEL 9 lab host with podman 5.4), with both route discovery
@@ -228,10 +238,10 @@ inside a hosted CI service; the workflow below is a starting template.
   so no CLI session or token needs to be provided.
 - Capacity for the VM described in `extravars.yaml`, and a storage backend
   for its storage tier (LVMS in the default values).
-- No objects left with the names in `extravars.yaml` (tenant, instance type,
-  catalog item). Only one run per deployment at a time: concurrent runs use
-  the same names and fail. To run in parallel against one deployment, give
-  each run its own `extravars.yaml` with different names.
+- No leftover objects with the resulting indexed test names (tenant, instance
+  type, catalog item, and other resources). Different `--instance` values or
+  different `extravars.yaml` names can avoid naming collisions. Before running
+  concurrently, also check capacity and any other shared state.
 
 ### Inputs
 
@@ -252,22 +262,30 @@ the first attempt left behind.
 
 ### Outcomes
 
-- **Exit code:** `0` when every test of the flow passed, non-zero otherwise
-  (a test failure, or a setup error such as an unreachable route or a failed
-  CLI login). An artifact export failure also returns non-zero; an existing
-  test failure code takes precedence. The first test failure stops the run.
-- **Artifacts:** `playwright-report/` (open `index.html`) and
-  `test-results/` in the results directory, copied there even when the run
-  fails. There is no JUnit output. Tracing and video are off because the
-  flows type the admin password.
+- **Exit code:** `0` when the runner succeeds and artifact export does not
+  fail; non-zero for a test failure, setup error, or artifact export failure.
+  An existing runner failure code takes precedence over an export failure. A
+  successful exit can include skipped tests, and `--list` does not execute
+  tests. Check the passed and skipped counts before claiming full coverage.
+  The first test failure stops the run.
+- **Artifacts:** `playwright-report/` (open `index.html`) and `test-results/`
+  are copied to the results directory if generated, including after a failed
+  run. An early failure can leave no report, so retain the container log too.
+  There is no JUnit output. Tracing and video are off because the flows type
+  the admin password.
 - **Log:** the container's standard output shows each step as
   `[flow] Starting/Completed/Failed: ...`.
-- **Cleanup:** `full_*` flows and `vmaas_full_happy_basic` delete everything
-  they created when they pass. `create_*` flows keep it. A failed run leaves
-  what it had created, and the `delete_*` tags cannot clean it up from a new
-  container: they read the run state from the previous container's `/tmp`,
-  which `--rm` removed. Delete the leftovers by name with the `osac` CLI
-  (see [Before a run](#before-a-run)).
+- **Cleanup:** `full_*` flows and `vmaas_full_happy_basic` include deletion
+  steps; verify removal when those steps execute and pass. Skipped steps or a
+  failed run can leave resources behind, and `create_*` flows keep them.
+  Delete flows differ: `delete_instance_type` uses an indexed name and can
+  operate in a new container, but may create the object if it is absent. Full
+  VM-flow deletion relies on run-specific state in `/tmp` or the original run
+  IDs, and tenant deletion needs its credential file; `--rm` discards files
+  stored in the container. Inspect the specific flow and its dependencies before
+  using a `delete_*` tag for cleanup. Otherwise, identify and delete only the
+  leftover test resources using an authenticated CLI or API (see
+  [Before a run](#before-a-run)).
 - **Duration:** about 6 minutes for `vmaas_full_happy_basic` and about
   8 to 9 minutes for `full_vm_power` on a lab deployment, plus the image
   build.
@@ -276,10 +294,10 @@ the first attempt left behind.
 
 1. Build the image from the commit under test, with
    `FULFILLMENT_SERVICE_IMAGE` set to the image the deployment runs.
-2. Check that no objects with the `extravars.yaml` names exist; stop or clean
-   up if they do.
+2. Check that no objects with the resulting indexed test names exist; stop or
+   clean up verified leftovers if they do.
 3. Run the image with the flow tag. Its exit code is the job result.
-4. Always keep the results directory as a job artifact.
+4. Always retain the container log and any generated results as job artifacts.
 5. If the run failed, delete the objects it left behind before the next run.
 6. Remove the password file.
 
@@ -298,7 +316,7 @@ jobs:
           set -o pipefail
           build_context=$(mktemp -d /tmp/osac-ui-e2e-build.XXXXXXXX)
           trap 'rm -rf -- "$build_context"' EXIT
-          git archive HEAD osac-ui | tar -x -C "$build_context"
+          git archive HEAD osac-ui | tar -x --same-permissions -C "$build_context"
           podman build \
             -f "$build_context/osac-ui/apps/e2e-tests/container/Containerfile" \
             --build-arg FULFILLMENT_SERVICE_IMAGE="${{ vars.FULFILLMENT_SERVICE_IMAGE }}" \

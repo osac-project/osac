@@ -80,6 +80,29 @@ func (c *failDNSHoldReleaseOnceClient) Patch(
 }
 
 var _ = Describe("ClusterOrder networking lifecycle", func() {
+	It("uses the in-hub kube-apiserver Service FQDN and frontend port for guest API access", func() {
+		hc := &hypershiftv1beta1.HostedCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "guest", Namespace: "hosted"},
+			Status: hypershiftv1beta1.HostedClusterStatus{
+				ControlPlaneEndpoint: hypershiftv1beta1.APIEndpoint{Port: 6443},
+			},
+		}
+		service := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "kube-apiserver", Namespace: hostedControlPlaneNamespace(hc)},
+			Spec: corev1.ServiceSpec{
+				Type:  corev1.ServiceTypeLoadBalancer,
+				Ports: []corev1.ServicePort{{Port: 6443}},
+			},
+			Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{
+				Ingress: []corev1.LoadBalancerIngress{{IP: "192.0.2.44"}},
+			}},
+		}
+
+		server, ready := serviceNetworkAPIServerURL(hc, service)
+		Expect(ready).To(BeTrue())
+		Expect(server).To(Equal("https://kube-apiserver.hosted-guest.svc:6443"))
+	})
+
 	It("uses the configured AAP prefix for cluster endpoint jobs", func() {
 		h := newNetHarness(true)
 		h.engine = networktask.New(k8sClient, k8sClient, h.aap, networktask.Config{

@@ -590,6 +590,20 @@ func hostedControlPlaneNamespace(hc *hypershiftv1beta1.HostedCluster) string {
 	return hc.Namespace + "-" + hc.Name
 }
 
+func serviceNetworkAPIServerURL(
+	hc *hypershiftv1beta1.HostedCluster,
+	service *corev1.Service,
+) (string, bool) {
+	if hc == nil || service == nil || hc.Status.ControlPlaneEndpoint.Port == 0 {
+		return "", false
+	}
+	_, port, check := managementAPIVIP(service, hc.Status.ControlPlaneEndpoint.Port)
+	if !check.ready {
+		return "", false
+	}
+	return fmt.Sprintf("https://kube-apiserver.%s.svc:%d", service.Namespace, port), true
+}
+
 func (r *ClusterOrderReconciler) guestClusterClient(
 	ctx context.Context, hc *hypershiftv1beta1.HostedCluster,
 ) (kubernetes.Interface, bool, bool, error) {
@@ -612,6 +626,19 @@ func (r *ClusterOrderReconciler) guestClusterClient(
 	if err != nil {
 		return nil, false, false, fmt.Errorf("parse HostedControlPlane service-network kubeconfig: %w", err)
 	}
+	service, err := r.hostedControlPlaneAPIServerService(ctx, hc)
+	if err != nil {
+		return nil, false, false, err
+	}
+	apiServerURL, serviceReady := serviceNetworkAPIServerURL(hc, service)
+	if !serviceReady {
+		return nil, false, false, nil
+	}
+	// The in-hub kubeconfig uses the short Service name, which is only
+	// resolvable from the HostedControlPlane namespace. The ClusterOrder
+	// controller reaches the same in-hub API through the Service FQDN.
+	config.Host = apiServerURL
+	config.TLSClientConfig.ServerName = ""
 	config.Timeout = guestClusterAPITimeout
 	guestClient, err := kubernetes.NewForConfig(config)
 	if err != nil {

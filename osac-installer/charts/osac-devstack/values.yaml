@@ -69,7 +69,8 @@ ui:
     enabled: false  # Kind uses the Gateway API HTTPRoute in templates/ui.yaml.
   api:
     fulfillment:
-      url: "https://fulfillment-api.osac.localhost:8000"
+      # The UI proxy needs private RPCs for provider-admin pages.
+      url: "https://fulfillment-internal-api:8001"
       certs:
         caBundle:
           configMap: ca-bundle

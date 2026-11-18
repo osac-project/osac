@@ -101,7 +101,7 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 			query := waitForAAPTemplate(bmaasQueryTemplate)
 			Eventually(func(g Gomega) {
 				bmi := getBMAASObject("BareMetalInstance", fixture.id)
-				condition := bmaasCondition(bmi, "NetworkHandoffComplete")
+				condition := findNetworkingCondition(bmi, "NetworkHandoffComplete")
 				g.Expect(condition).To(HaveKeyWithValue("status", "True"))
 			}, readyTimeout, time.Second).Should(Succeed())
 			completeAAPJob(query, "successful", map[string]any{
@@ -113,9 +113,9 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 			By("waiting until discovery completes before the single requested restart")
 			waitForBMAASRebootAnnotation(fixture.host)
 			bmi := getBMAASObject("BareMetalInstance", fixture.id)
-			Expect(bmaasCondition(bmi, "IPDiscoveryComplete")).To(HaveKeyWithValue("status", "True"))
-			Expect(bmaasCondition(bmi, "NetworkAttachmentsReady")).To(HaveKeyWithValue("status", "True"))
-			Expect(bmaasCondition(bmi, "IPDiscoveryComplete")).To(HaveKeyWithValue("reason", "Succeeded"))
+			Expect(findNetworkingCondition(bmi, "IPDiscoveryComplete")).To(HaveKeyWithValue("status", "True"))
+			Expect(findNetworkingCondition(bmi, "NetworkAttachmentsReady")).To(HaveKeyWithValue("status", "True"))
+			Expect(findNetworkingCondition(bmi, "IPDiscoveryComplete")).To(HaveKeyWithValue("reason", "Succeeded"))
 			patchBMAASHostRebootComplete(fixture.host)
 			waitForBMAASPhase(fixture.id, "Ready")
 			bmi = getBMAASObject("BareMetalInstance", fixture.id)
@@ -142,7 +142,7 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 
 			Eventually(func(g Gomega) {
 				bmi := getBMAASObject("BareMetalInstance", fixture.id)
-				condition := bmaasCondition(bmi, "NetworkAttachmentsReady")
+				condition := findNetworkingCondition(bmi, "NetworkAttachmentsReady")
 				g.Expect(condition).To(HaveKeyWithValue("status", "False"))
 				g.Expect(condition).To(HaveKeyWithValue("reason", "NetworkAttachmentFailed"))
 				g.Expect(condition).To(HaveKeyWithValue("message", "Fabric apply rejected"))
@@ -160,9 +160,9 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 
 			Eventually(func(g Gomega) {
 				bmi := getBMAASObject("BareMetalInstance", fixture.id)
-				networkReady := bmaasCondition(bmi, "NetworkAttachmentsReady")
+				networkReady := findNetworkingCondition(bmi, "NetworkAttachmentsReady")
 				g.Expect(networkReady).To(HaveKeyWithValue("status", "True"))
-				ipReady := bmaasCondition(bmi, "IPDiscoveryComplete")
+				ipReady := findNetworkingCondition(bmi, "IPDiscoveryComplete")
 				g.Expect(ipReady).To(HaveKeyWithValue("status", "False"))
 				g.Expect(ipReady).To(HaveKeyWithValue("reason", "IPDiscoveryFailed"))
 				g.Expect(ipReady).To(HaveKeyWithValue("message",
@@ -181,8 +181,8 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 
 			Eventually(func(g Gomega) {
 				bmi := getBMAASObject("BareMetalInstance", fixture.id)
-				g.Expect(bmaasCondition(bmi, "NetworkAttachmentsReady")).To(HaveKeyWithValue("status", "True"))
-				ipReady := bmaasCondition(bmi, "IPDiscoveryComplete")
+				g.Expect(findNetworkingCondition(bmi, "NetworkAttachmentsReady")).To(HaveKeyWithValue("status", "True"))
+				ipReady := findNetworkingCondition(bmi, "IPDiscoveryComplete")
 				g.Expect(ipReady).To(HaveKeyWithValue("status", "False"))
 				g.Expect(ipReady).To(HaveKeyWithValue("reason", "LeasePending"))
 				g.Expect(ipReady["message"]).To(ContainSubstring("DHCP service unavailable"))
@@ -270,7 +270,7 @@ var _ = Describe("BMaaS networking disabled on deployed controllers",
 			waitForBMAASPhase(fixture.id, "Ready")
 
 			bmi := getBMAASObject("BareMetalInstance", fixture.id)
-			condition := bmaasCondition(bmi, "NetworkAttachmentsReady")
+			condition := findNetworkingCondition(bmi, "NetworkAttachmentsReady")
 			Expect(condition).To(HaveKeyWithValue("status", "True"))
 			Expect(condition).To(HaveKeyWithValue("reason", "Skipped"))
 			Expect(condition).To(HaveKeyWithValue("message", "Networking provisioning disabled"))
@@ -321,10 +321,11 @@ metadata:
   labels:
     osac.openshift.io/virtualnetwork-uuid: %s
   annotations:
+    osac.openshift.io/tenant: %s
     osac.openshift.io/management-state: unmanaged
 spec:
   ipv4Cidr: 192.0.2.0/24
-`, fixture.virtualNetwork, operatorNamespace, fixture.virtualNetwork)
+`, fixture.virtualNetwork, operatorNamespace, fixture.virtualNetwork, bmaasTenant)
 	_, err := kubectl(virtualNetwork, "create", "-f", "-")
 	Expect(err).NotTo(HaveOccurred())
 	patchFixtureStatus("VirtualNetwork", fixture.virtualNetwork, `{
@@ -346,6 +347,7 @@ metadata:
   labels:
     osac.openshift.io/subnet-uuid: %s
   annotations:
+    osac.openshift.io/tenant: %s
     osac.openshift.io/management-state: unmanaged
 spec:
   virtualNetwork: %s
@@ -354,7 +356,7 @@ spec:
     overlay: 0
     fabric: 16
     lbVip: 0
-`, fixture.subnet, operatorNamespace, fixture.subnet, fixture.virtualNetwork)
+`, fixture.subnet, operatorNamespace, fixture.subnet, bmaasTenant, fixture.virtualNetwork)
 	_, err = kubectl(subnet, "create", "-f", "-")
 	Expect(err).NotTo(HaveOccurred())
 	patchFixtureStatus("Subnet", fixture.subnet, `{
@@ -516,17 +518,6 @@ func waitForBMAASPhase(id, phase string) {
 	}, readyTimeout, time.Second).Should(Succeed())
 }
 
-func bmaasCondition(bmi *unstructured.Unstructured, conditionType string) map[string]any {
-	conditions, _, _ := unstructured.NestedSlice(bmi.Object, "status", "conditions")
-	for _, item := range conditions {
-		condition, ok := item.(map[string]any)
-		if ok && condition["type"] == conditionType {
-			return condition
-		}
-	}
-	return nil
-}
-
 func completeApplyAndWaitForQuery(fixture bmaasFixture) aapCapture {
 	waitForBMAASHostAssignment(fixture)
 	waitForBMAASAttachment(fixture)
@@ -648,21 +639,9 @@ func resetAAPRecorder() {
 }
 
 func waitForAAPTemplate(template string) aapCapture {
-	var found aapCapture
-	Eventually(func(g Gomega) {
-		captures, err := readAAPCaptures()
-		g.Expect(err).NotTo(HaveOccurred(), "read the AAP recorder captures")
-		g.Expect(captures.Unexpected).To(BeEmpty(), "the operator must call only supported AAP endpoints")
-		matches := make([]aapCapture, 0, 1)
-		for _, job := range captures.Jobs {
-			if job.Template == template {
-				matches = append(matches, job)
-			}
-		}
-		g.Expect(matches).To(HaveLen(1), "captured jobs: %s", captureSummary(captures.Jobs))
-		found = matches[0]
-	}, aapLaunchTimeout, time.Second).Should(Succeed())
-	return found
+	return waitForAAPCapture(func(job aapCapture) bool {
+		return job.Template == template
+	}, "the operator must call only supported AAP endpoints")
 }
 
 func completeAAPJob(job aapCapture, state string, artifacts map[string]any) {

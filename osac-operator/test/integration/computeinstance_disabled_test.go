@@ -248,24 +248,32 @@ func captureSummary(jobs []aapCapture) string {
 	return strings.Join(summaries, ", ")
 }
 
-// waitForAAPLaunch waits until exactly one launch of template carries the
-// ComputeInstance API ID that the operator put in the job's resource labels.
-func waitForAAPLaunch(template, id string) aapCapture {
+// waitForAAPCapture waits until the recorder contains exactly one matching job.
+func waitForAAPCapture(matches func(aapCapture) bool, unexpectedMessage string) aapCapture {
 	var found aapCapture
 	Eventually(func(g Gomega) {
 		captures, err := readAAPCaptures()
 		g.Expect(err).NotTo(HaveOccurred(), "read the AAP recorder captures")
-		g.Expect(captures.Unexpected).To(BeEmpty(), "the operator must launch no other AAP operation")
-		var matches []aapCapture
+		g.Expect(captures.Unexpected).To(BeEmpty(), unexpectedMessage)
+		var matchingJobs []aapCapture
 		for _, job := range captures.Jobs {
-			if job.Template == template && job.Payload.ExtraVars.JobVars.Resource.Metadata.Labels[computeInstanceIDLabel] == id {
-				matches = append(matches, job)
+			if matches(job) {
+				matchingJobs = append(matchingJobs, job)
 			}
 		}
-		g.Expect(matches).To(HaveLen(1), "captured jobs: %s", captureSummary(captures.Jobs))
-		found = matches[0]
+		g.Expect(matchingJobs).To(HaveLen(1), "captured jobs: %s", captureSummary(captures.Jobs))
+		found = matchingJobs[0]
 	}, aapLaunchTimeout, time.Second).Should(Succeed())
 	return found
+}
+
+// waitForAAPLaunch waits until exactly one launch of template carries the
+// ComputeInstance API ID that the operator put in the job's resource labels.
+func waitForAAPLaunch(template, id string) aapCapture {
+	return waitForAAPCapture(func(job aapCapture) bool {
+		resourceID := job.Payload.ExtraVars.JobVars.Resource.Metadata.Labels[computeInstanceIDLabel]
+		return job.Template == template && resourceID == id
+	}, "the operator must launch no other AAP operation")
 }
 
 // createTenantStorageClass creates a StorageClass labeled for the Tenant and

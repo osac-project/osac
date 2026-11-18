@@ -23,8 +23,8 @@ storage_provider_csi_backends_namespace: "osac-csi-backends"
 #   2. The IG pod's own namespace, read from the standard K8s-mounted service
 #      account file — always accurate for wherever the pod actually runs, no
 #      per-deployment config needed.
-# No hardcoded fallback — fail loudly if neither source is available
-# rather than silently targeting a wrong namespace.
+# No hardcoded fallback — tasks/main.yaml rejects an empty value before
+# dispatching hub-Secret operations rather than targeting a wrong namespace.
 storage_provider_config_namespace: >-
   {{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
      | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore'), true) }}

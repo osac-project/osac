@@ -2494,9 +2494,12 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
         / "tasks"
         / "main.yaml"
     )
-    tier_tenant_when = _find_task(
+    tier_tenant_task = _find_task(
         dispatcher_tasks, "Validate tenant_name is a valid DNS label"
-    )["when"]
+    )
+    assert tier_tenant_task.get("no_log") is True
+    assert "{{" not in tier_tenant_task["ansible.builtin.fail"]["msg"]
+    tier_tenant_when = tier_tenant_task["when"]
     for invalid_tenant in ("", "-bad", "bad-", "Bad_Tenant", "a" * 64):
         assert _render_when(tier_tenant_when, {"tenant_name": invalid_tenant}) is True
     for valid_tenant in ("a", "acme-01"):

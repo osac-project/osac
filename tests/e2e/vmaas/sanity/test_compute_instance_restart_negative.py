@@ -10,7 +10,7 @@ from tests.e2e.core.helpers import unique_name, wait_for_cr, wait_for_deletion, 
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 
-pytestmark = pytest.mark.regression
+pytestmark = pytest.mark.sanity
 
 
 def test_compute_instance_restart_past_timestamp_ignored(

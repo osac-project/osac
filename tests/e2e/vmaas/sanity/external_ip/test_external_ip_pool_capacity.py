@@ -3,9 +3,9 @@ from __future__ import annotations
 import pytest
 
 from tests.e2e.core.grpc_client import GRPCClient
-from tests.e2e.vmaas.regression.external_ip.helpers import pool_status
+from tests.e2e.vmaas.sanity.external_ip.helpers import pool_status
 
-pytestmark = pytest.mark.regression
+pytestmark = pytest.mark.sanity
 
 
 class TestPoolCapacity:

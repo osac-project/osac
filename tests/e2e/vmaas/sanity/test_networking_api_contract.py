@@ -7,7 +7,7 @@ import pytest
 from tests.e2e.core.grpc_client import PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import assert_grpc_method_unavailable
 
-pytestmark = pytest.mark.regression
+pytestmark = pytest.mark.sanity
 
 
 # SecurityGroups.Update is a scoped exception for rule updates (OSAC-5679).

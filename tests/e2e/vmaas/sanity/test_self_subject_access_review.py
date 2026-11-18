@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
-from typing import Any
+from contextlib import suppress
 from uuid import uuid4
 
 import pytest
@@ -54,10 +54,8 @@ class TestSelfSubjectAccessReviewPermissions:
         finally:
             # Cleanup
             if vn_id:
-                try:
+                with suppress(subprocess.CalledProcessError):
                     jwt_grpc_tenant1_admin.delete_virtual_network(vn_id=vn_id)
-                except subprocess.CalledProcessError:
-                    pass  # Cleanup failure is non-fatal
 
     def test_tenant_user_denied_for_higher_role_operation(self, jwt_grpc_tenant1: GRPCClient):
         """AC1: Client (tenant user) is denied operations reserved for higher roles."""
@@ -77,8 +75,8 @@ class TestSelfSubjectAccessReviewPermissions:
         # Proto3 JSON omits default values - when allowed is false (default), it may be omitted
         allowed = status.get("allowed", False)
         assert allowed is False, (
-            f"Client check failed: role=tenant_user, service=Users, method=Delete, "
-            f"tenant=tenant1, expected=denied (only tenant_admin can manage users)"
+            "Client check failed: role=tenant_user, service=Users, method=Delete, "
+            "tenant=tenant1, expected=denied (only tenant_admin can manage users)"
         )
 
     def test_tenant_user_checking_infrastructure_operation(self, jwt_grpc_tenant1: GRPCClient):
@@ -99,8 +97,8 @@ class TestSelfSubjectAccessReviewPermissions:
         # Proto3 JSON omits default values - when allowed is false (default), it may be omitted
         allowed = status.get("allowed", False)
         assert allowed is True, (
-            f"Tenant user check failed: role=tenant_user, service=ComputeInstances, "
-            f"method=List, tenant=tenant1, expected=allowed"
+            "Tenant user check failed: role=tenant_user, service=ComputeInstances, "
+            "method=List, tenant=tenant1, expected=allowed"
         )
 
         # Verify actual operation succeeds
@@ -128,8 +126,8 @@ class TestSelfSubjectAccessReviewPermissions:
         # Proto3 JSON omits default values - when allowed is false (default), it may be omitted
         allowed = status.get("allowed", False)
         assert allowed is False, (
-            f"Cross-tenant check failed: role=tenant_user, service=VirtualNetworks, "
-            f"method=Create, tenant=tenant2, expected=denied (user belongs to tenant1)"
+            "Cross-tenant check failed: role=tenant_user, service=VirtualNetworks, "
+            "method=Create, tenant=tenant2, expected=denied (user belongs to tenant1)"
         )
 
         # Verify denial reason does NOT disclose tenant2 name (information disclosure prevention)

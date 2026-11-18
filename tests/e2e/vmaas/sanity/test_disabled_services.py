@@ -8,7 +8,7 @@ import pytest
 
 from tests.e2e.core.grpc_client import PRIVATE_API, PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import assert_grpc_rejected
-from tests.e2e.core.runner import run, run_unchecked
+from tests.e2e.core.runner import CommandFailed, CommandTimedOut, run, run_unchecked
 
 pytestmark = pytest.mark.sanity
 
@@ -21,14 +21,32 @@ def test_disabled_service_grpc_unavailable(grpc: GRPCClient) -> None:
     assert "bmaas" in combined.lower(), f"Error should mention bmaas service, got: {combined.strip()}"
 
 
-def test_disabled_service_absent_from_reflection(fulfillment_address: str, grpc: GRPCClient) -> None:
+def _reflection_services(fulfillment_address: str, grpc: GRPCClient) -> list[str]:
+    __tracebackhide__ = True
     env = os.environ.copy()
     env["REFLECTION_JWT"] = grpc.token
-    result = subprocess.run(
-        ["grpcurl", "-insecure", "-expand-headers", "-H", "Authorization: Bearer ${REFLECTION_JWT}", fulfillment_address, "list"],
-        capture_output=True, text=True, timeout=30, check=True, env=env,
-    )
-    services = result.stdout.strip().splitlines()
+    args = [
+        "grpcurl",
+        "-insecure",
+        "-expand-headers",
+        "-H",
+        "Authorization: Bearer ${REFLECTION_JWT}",
+        fulfillment_address,
+        "list",
+    ]
+    try:
+        result = subprocess.run(args, capture_output=True, text=True, timeout=30, check=True, env=env)
+    except subprocess.CalledProcessError as exc:
+        raise CommandFailed(exc.returncode, args, exc.stdout, exc.stderr) from None
+    except subprocess.TimeoutExpired as exc:
+        raise CommandTimedOut(args, exc.timeout, exc.stdout, exc.stderr) from None
+    except OSError as exc:
+        raise exc.with_traceback(None) from None
+    return result.stdout.strip().splitlines()
+
+
+def test_disabled_service_absent_from_reflection(fulfillment_address: str, grpc: GRPCClient) -> None:
+    services = _reflection_services(fulfillment_address, grpc)
     assert f"{PUBLIC_API}.BareMetalInstances" not in services, (
         "Disabled BareMetalInstances should not appear in reflection"
     )

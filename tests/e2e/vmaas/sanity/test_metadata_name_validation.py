@@ -13,7 +13,7 @@ from tests.e2e.vmaas.networking_lifecycle_helpers import (
     delete_and_wait_for_virtual_network,
 )
 
-pytestmark = pytest.mark.regression
+pytestmark = pytest.mark.sanity
 
 
 class TestVirtualNetworkNameValidation:

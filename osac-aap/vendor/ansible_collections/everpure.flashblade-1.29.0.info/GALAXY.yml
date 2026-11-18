@@ -1,0 +1,43 @@
+download_url: https://console.redhat.com/api/automation-hub/v3/plugin/ansible/content/published/collections/artifacts/everpure-flashblade-1.29.0.tar.gz
+format_version: 1.0.0
+name: flashblade
+namespace: everpure
+server: https://console.redhat.com/api/automation-hub/content/published/
+signatures:
+- pubkey_fingerprint: 39B5D759361A97464C564A8FE1A4BD708A828AAD
+  pulp_created: '2026-10-30T21:47:17.901150Z'
+  signature: '-----BEGIN PGP SIGNATURE-----
+
+
+    iQIcBAABCAAGBQJq5RBjAAoJEOGkvXCKgoqtd9UP/1tcWqhD6flnzJDLRavxKbJp
+
+    zdKSEOQu112LPLCT77znqTF6H0yhNSQjSvEAoYHO/4ek0O/V1gzkwL97jeXuLQXK
+
+    rJ93H/NQoQmFtyOJtHOslM7FZQEdSrJe7W3bvMtVDJZVurO+UgCyOBCMc8qNEM+T
+
+    DZ0O0bCouLQbZU2J3fpwbwe4M9e29Zkd4DQ0rFjFPt5s9SFTfZBmnl7g+x/PgE/j
+
+    QmTe1wwk9vuoy65ALKepMm1h/G5UkFl2V27KaHjw/PEdtEzfQD5wKZJURj8Tnd5t
+
+    NWaoVj0RpYxOvnihgzyQ5c1xbZhnbU2UrWK0h2XN3FXBqeT4Z1RGcS5jKWG81Rjb
+
+    ScQKWe2QvqKsCpzj5Alp3UhCaYPebcnDGNkOJKeoFvz9bTKk0paRn29PgjCV8cNs
+
+    wCsuzTUvL1ZICUMryTlWqDrgLDAgXarxk+7HVPzrnsEMw4MfDwUpvN9mYdcFoFYg
+
+    5m/0jEDxsgAQuPujXstn2PFR2EpK42eWfcA8MQy40Yzc1Uw7O3TKlqeMxg+LdhdR
+
+    wUWdMDL0TpmuOEXUaiaYtMl+YBNF+4oP20gxAOiiqDEc28bGlyyciWQJSG9KCvtl
+
+    zOgR3Qi7dN+p9DuS6C0OcZz9+2/g0piwlChiufsDtdStbNj4buk9Ei0+tmEODJnT
+
+    Y90V3W91f++J6kIqCU3f
+
+    =Uu/R
+
+    -----END PGP SIGNATURE-----
+
+    '
+  signing_service: null
+version: 1.29.0
+version_url: /api/automation-hub/content/published/v3/plugin/ansible/content/published/collections/index/everpure/flashblade/versions/1.29.0/

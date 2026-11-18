@@ -2,36 +2,35 @@
  "collection_info": {
   "namespace": "purestorage",
   "name": "flashblade",
-  "version": "1.26.0",
+  "version": "1.28.0",
   "authors": [
-   "Everpure Ansible Team <pure-ansible-team@everpuredata.com>"
+   "Everpure"
   ],
   "readme": "README.md",
   "tags": [
-   "everpure",
-   "purestorage",
-   "flashblade",
    "storage",
-   "object",
-   "nfs"
+   "everpure",
+   "flashblade",
+   "deprecated"
   ],
-  "description": "Collection of modules to manage Everpure FlashBlade",
+  "description": "Deprecated namespace shim. This collection has been renamed to everpure.flashblade. It contains redirects only and pulls in the new collection as a dependency. Please update playbooks to the everpure.flashblade namespace.",
   "license": [
-   "GPL-3.0-or-later",
-   "BSD-2-Clause"
+   "GPL-3.0-or-later"
   ],
   "license_file": null,
-  "dependencies": {},
+  "dependencies": {
+   "everpure.flashblade": ">=1.27.0,<2.0.0"
+  },
   "repository": "https://github.com/Everpure-Ansible/FlashBlade-Collection",
-  "documentation": "https://docs.ansible.com/ansible/latest/collections/purestorage/flashblade/index.html#plugins-in-purestorage-flashblade",
+  "documentation": null,
   "homepage": null,
-  "issues": "https://github.com/Everpure-Ansible/FlashBlade-Collection/issues"
+  "issues": null
  },
  "file_manifest_file": {
   "name": "FILES.json",
   "ftype": "file",
   "chksum_type": "sha256",
-  "chksum_sha256": "5b667c8620c8a9e018b1a11105109b890e53776965f0c0f6270bce12976ee07c",
+  "chksum_sha256": "03e64ecbc4038e20c9efc9e2e1ccc92c4bd30a443d5fd7ebba72e19010b7bcab",
   "format": 1
  },
  "format": 1

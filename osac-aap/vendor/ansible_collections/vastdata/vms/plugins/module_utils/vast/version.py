@@ -8,6 +8,118 @@ from .client import VastClient
 from .errors import VastAPIError
 
 
+class VersionAwareMixin:
+    """Shared cluster-version gating for resource base classes.
+
+    Owns the multi-version metadata attributes plus the parse/enforce logic that
+    would otherwise be duplicated between ``BaseResource`` and
+    ``SubEndpointResource``. Subclasses set ``self.module`` before calling
+    ``_set_cluster_mm``/``_enforce_version_compatibility`` and override
+    ``_version_entity`` to label themselves in error messages.
+    """
+
+    # --- multi-version metadata (auto-generated per subclass) ---------------
+    resource_min_version: Optional[Tuple[int, int]] = None
+    resource_max_version: Optional[Tuple[int, int]] = None
+    # Oldest VMS version these modules were generated for. field_versions is
+    # relative to it, so a cluster below it cannot be served correctly.
+    generated_min_version: Optional[Tuple[int, int]] = None
+    # Live cluster (major, minor); set against a real cluster during __init__.
+    cluster_mm: Optional[Tuple[int, int]] = None
+
+    # Supported VMS product version band, shared by all base classes.
+    _MIN_VERSION: Tuple[int, int, int] = (5, 4, 0)
+    _MAX_VERSION: Optional[Tuple[int, int, int]] = (5, 6, 0)
+
+    def _init_vast_connection(self, module: "AnsibleModule") -> None:
+        """Shared setup for all resource base classes.
+
+        Validates auth, builds the client, validates and captures the cluster
+        version, and enforces resource/field version compatibility. Sets
+        ``module``, ``params``, ``check_mode``, ``client``, ``cluster_version``
+        and ``cluster_mm`` on the instance.
+        """
+        # Imported here to avoid a circular import (auth/client import version).
+        from .auth import build_connection, validate_auth
+        from .client import VastClient
+
+        self.module = module
+        self.params = module.params
+        self.check_mode = module.check_mode
+
+        try:
+            validate_auth(self.params)
+        except Exception as e:
+            module.fail_json(msg=str(e))
+
+        conn = build_connection(self.params)
+        try:
+            self.client = VastClient(conn)
+        except RuntimeError as e:
+            module.fail_json(msg=str(e))
+
+        self.client.debug = conn.debug
+
+        product_version = ensure_supported_version(
+            module, self.client, min_version=self._MIN_VERSION, max_version=self._MAX_VERSION
+        )
+        self.cluster_version = product_version
+        self._set_cluster_mm(product_version)
+        self._enforce_version_compatibility()
+
+    @staticmethod
+    def _fmt_mm(mm: Optional[Tuple[int, int]]) -> str:
+        """Format a (major, minor) tuple as 'X.Y'."""
+        return f"{mm[0]}.{mm[1]}" if mm else "unknown"
+
+    def _version_entity(self) -> str:
+        """Human-readable label for this entity in version error messages."""
+        return "Resource"
+
+    def _set_cluster_mm(self, product_version: str) -> None:
+        """Capture the cluster's (major, minor) from a product version string."""
+        try:
+            parts = parse_version(product_version)
+            self.cluster_mm = (parts[0], parts[1])
+        except ValueError:
+            self.cluster_mm = None
+
+    def _enforce_version_compatibility(self) -> None:
+        """Fail the module if the cluster is incompatible with these modules."""
+        if self.cluster_mm is None:
+            return
+
+        # Self-describing generation floor: field_versions is relative to it, so
+        # a cluster below it would have universal fields silently assumed present.
+        gen_min = self.generated_min_version
+        if gen_min and self.cluster_mm < tuple(gen_min):
+            self.module.fail_json(
+                msg=(
+                    f"These modules were generated for VMS {self._fmt_mm(gen_min)} or later, "
+                    f"but the cluster is {self._fmt_mm(self.cluster_mm)}. Regenerate the collection "
+                    f"including the swagger for VMS {self._fmt_mm(self.cluster_mm)} "
+                    f"(tools/generate_from_swagger.py --swagger ...) to support this version."
+                )
+            )
+
+        entity = self._version_entity()
+        rmin = self.resource_min_version
+        if rmin and self.cluster_mm < tuple(rmin):
+            self.module.fail_json(
+                msg=(
+                    f"{entity} was introduced in VMS {self._fmt_mm(rmin)}, " f"but the cluster is {self._fmt_mm(self.cluster_mm)}."
+                )
+            )
+
+        rmax = self.resource_max_version
+        if rmax and self.cluster_mm > tuple(rmax):
+            self.module.fail_json(
+                msg=(
+                    f"{entity} was removed after VMS {self._fmt_mm(rmax)}, " f"but the cluster is {self._fmt_mm(self.cluster_mm)}."
+                )
+            )
+
+
 def parse_version(version_str: str) -> Tuple[int, int, int]:
     """
     Parse a version string like '5.4.0' or '5.4.0-123' into (major, minor, patch).
@@ -53,7 +165,7 @@ def get_product_version(client: VastClient) -> str:
 
 
 def is_version_supported(
-    version_str: str, min_version: Tuple[int, int, int] = (5, 4, 0), max_version: Optional[Tuple[int, int, int]] = (5, 5, 0)
+    version_str: str, min_version: Tuple[int, int, int] = (5, 4, 0), max_version: Optional[Tuple[int, int, int]] = (5, 6, 0)
 ) -> Tuple[bool, str]:
     """
     Check if a product version is within the supported range.
@@ -61,8 +173,8 @@ def is_version_supported(
     Args:
         version_str: Version string to check (e.g., '5.4.0')
         min_version: Minimum supported version (inclusive), default (5, 4, 0)
-        max_version: Maximum supported version (exclusive), default (5, 5, 0) for 5.4.x series.
-                     If None, no upper bound is enforced.
+        max_version: Maximum supported version (exclusive), default (5, 6, 0) covering the
+                     5.4.x and 5.5.x series. If None, no upper bound is enforced.
 
     Returns:
         Tuple of (is_supported, reason_message)
@@ -91,7 +203,7 @@ def ensure_supported_version(
     module: AnsibleModule,
     client: VastClient,
     min_version: Tuple[int, int, int] = (5, 4, 0),
-    max_version: Optional[Tuple[int, int, int]] = (5, 5, 0),
+    max_version: Optional[Tuple[int, int, int]] = (5, 6, 0),
 ) -> str:
     """
     Validate that the target VAST product version is supported.
@@ -103,7 +215,7 @@ def ensure_supported_version(
         module: AnsibleModule instance
         client: VastClient instance
         min_version: Minimum supported version (inclusive), default (5, 4, 0)
-        max_version: Maximum supported version (exclusive), default (5, 5, 0).
+        max_version: Maximum supported version (exclusive), default (5, 6, 0).
                      Set to None to disable upper bound checking.
 
     Returns:
@@ -116,6 +228,11 @@ def ensure_supported_version(
             msg="Failed to validate product version compatibility",
             details=str(e),
         )
+
+    # Greppable detection log. Gated on debug so production runs stay quiet but
+    # the per-task version fetch is observable when troubleshooting.
+    if getattr(client, "debug", False):
+        module.warn(f"[VAST] Detected VMS version: {product_version}")
 
     supported, reason = is_version_supported(product_version, min_version, max_version)
 

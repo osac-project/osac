@@ -1,3 +1,0 @@
-minor_changes:
- - purefb_info - Expose SMTP encryption mode
- - purefb_smtp - Add encryption mode support from Purity//FB 4.5.0

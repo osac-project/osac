@@ -7,8 +7,10 @@ Tools and configuration to run playbooks that interact with both OpenStack/ESI a
 1. Update `requirements.txt` from `pyproject.toml` in the top directory:
 
     ```
-    uv pip compile ../pyproject.toml > requirements.txt
+    uv pip compile ../pyproject.toml --python-version 3.12 --output-file requirements.txt
     ```
+
+   Preserve the documented `ansible-core` security pin in the generated file.
 
 2. Build the execution environment:
 

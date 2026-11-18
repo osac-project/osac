@@ -128,6 +128,20 @@ options:
       - Should only be used when needed, such as when the user needs the cloud to
         transform image format.
     type: bool
+  import_method:
+    description:
+      - Method to use for importing the image. Not all deployments support all methods.
+      - Supports web-download or glance-download.
+      - copy-image is not supported with create actions.
+      - glance-direct is removed from the import method so use_import can be used in that case.
+    type: str
+    choices: [web-download, glance-download]
+  uri:
+    description:
+      - Required only if using the web-download import method.
+      - This url is where the data is made available to the Image service.
+    type: str
+
 extends_documentation_fragment:
   - openstack.cloud.openstack
 '''
@@ -399,11 +413,13 @@ class ImageModule(OpenStackModule):
         visibility=dict(choices=['public', 'private', 'shared', 'community']),
         volume=dict(),
         use_import=dict(type='bool'),
+        import_method=dict(choices=['web-download', 'glance-download']),
+        uri=dict()
     )
 
     module_kwargs = dict(
         mutually_exclusive=[
-            ('filename', 'volume'),
+            ('filename', 'volume', 'uri'),
             ('visibility', 'is_public'),
         ],
     )
@@ -412,7 +428,7 @@ class ImageModule(OpenStackModule):
     attr_params = ('id', 'name', 'filename', 'disk_format',
                    'container_format', 'wait', 'timeout', 'is_public',
                    'is_protected', 'min_disk', 'min_ram', 'volume', 'tags',
-                   'use_import')
+                   'use_import', 'import_method', 'uri')
 
     def _resolve_visibility(self):
         """resolve a visibility value to be compatible with older versions"""
@@ -469,6 +485,28 @@ class ImageModule(OpenStackModule):
 
         return update_payload
 
+    def _wait_for_image_active(self, image):
+        if not self.params['wait']:
+            return image
+
+        return self.sdk.resource.wait_for_status(
+            self.conn.image,
+            image,
+            status='active',
+            failures=['error', 'deleted', 'killed'],
+            wait=self.params['timeout'],
+            attribute='status')
+
+    def _import_uploaded_image(self, image):
+        if not hasattr(self.conn.image, 'import_image'):
+            self.fail_json(
+                msg="The installed openstacksdk library does not support "
+                    "image import operations required for images in the "
+                    "'uploading' state.")
+
+        self.conn.image.import_image(image, method='glance-direct')
+        return self._wait_for_image_active(self.conn.get_image(image.id))
+
     def run(self):
         changed = False
         image_name_or_id = self.params['id'] or self.params['name']
@@ -513,6 +551,29 @@ class ImageModule(OpenStackModule):
             if image['status'] == 'deactivated':
                 self.conn.image.reactivate_image(image)
                 changed = True
+            elif image['status'] == 'queued':
+                if (
+                        self.params['filename']
+                        and hasattr(self.conn.image, 'stage_image')):
+                    self.conn.image.stage_image(
+                        image, filename=self.params['filename'])
+                    changed = True
+                elif self.params['filename']:
+                    with open(self.params['filename'], 'rb') as image_data:
+                        self.conn.image.upload_image(
+                            container_format=self.params['container_format'],
+                            disk_format=self.params['disk_format'],
+                            data=image_data,
+                            id=image.id,
+                            name=image.name)
+                    changed = True
+                image = self.conn.get_image(image.id)
+
+            if image['status'] == 'uploading' and self.params['use_import']:
+                image = self._import_uploaded_image(image)
+                changed = True
+            elif image['status'] == 'importing':
+                image = self._wait_for_image_active(image)
 
             update_payload = self._build_update(image)
 

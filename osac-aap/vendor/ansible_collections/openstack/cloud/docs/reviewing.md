@@ -22,6 +22,8 @@ How to do a review? What to look for when reviewing patches?
   attributes to `name` to be consistent with other modules and with openstacksdk. When refactoring a module, then add
   the old attribute as an alias to keep backward compatibility.
 * Does the module have integration tests in `ci/roles`?
+* Does the patch include a changelog fragment? Every new feature, or important bugfix must include one. Ensure that
+  the fragment follows the Ansible format and that `reno` is not used.
 * Is documentation in `DOCUMENTATION`, `RETURN` and `EXAMPLES` up to date?
 * Does `RETURN` list all values which are returned by the module?
 * Are descriptions, keys, names, types etc. in `RETURN` up to date and sorted?
@@ -46,7 +48,7 @@ How to do a review? What to look for when reviewing patches?
   Example:
   ```sh
   ansible-playbook -vvv ci/run-collection.yml \
-      -e "sdk_version=1.0.0 cloud=devstack-admin cloud_alt=devstack-alt" \
+      -e "cloud=devstack-admin cloud_alt=devstack-alt" \
       --tags floating_ip_info
   ```
 * Does a patch remove any functionality or break backwards compatibility? The author must give a good explanation for

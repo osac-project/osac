@@ -33,8 +33,13 @@ options:
     description:
       - A dictionary of tags to add or remove from the resource.
       - If the value provided for a key is not set and O(state=absent), the tag will be removed regardless of its current value.
+      - The O(resource_tags) alias was added in release 12.0.0, matching the naming used by
+        M(amazon.aws.ec2_instance). It is available for users who prefer to avoid the name
+        C(tags), which ansible-core treats as a reserved variable name. Both names are fully
+        supported and behave identically.
     type: dict
     required: true
+    aliases: ['resource_tags']
   purge_tags:
     description:
       - Whether unspecified tags should be removed from the resource.
@@ -58,6 +63,15 @@ EXAMPLES = r"""
     resource: vol-XXXXXX
     state: present
     tags:
+      Name: ubervol
+      env: prod
+
+- name: Ensure tags are present, using the resource_tags alias
+  amazon.aws.ec2_tag:
+    region: eu-west-1
+    resource: vol-XXXXXX
+    state: present
+    resource_tags:
       Name: ubervol
       env: prod
 
@@ -122,7 +136,7 @@ from ansible_collections.amazon.aws.plugins.module_utils.tagging import compare_
 def main():
     argument_spec = dict(
         resource=dict(required=True),
-        tags=dict(type="dict", required=True),
+        tags=dict(type="dict", required=True, aliases=["resource_tags"]),
         purge_tags=dict(type="bool", default=False),
         state=dict(default="present", choices=["present", "absent"]),
     )

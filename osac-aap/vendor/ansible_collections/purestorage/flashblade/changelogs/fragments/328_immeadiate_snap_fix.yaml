@@ -1,2 +1,0 @@
-bugfixes:
- - purefb_snap - Fixed issue where ``target`` incorrectly required for a regular snapshot

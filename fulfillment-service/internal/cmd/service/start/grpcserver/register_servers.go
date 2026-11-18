@@ -69,8 +69,8 @@ type ResourceServers struct {
 
 // registerBillingResourceServers shares the configured provider and private delegates between both APIs.
 // Billing resources use GenericDAO with public filter descriptors, while registration remains separate from the
-// ordinary resource servers because the provider is constructed by the caller. Unreviewed CRUD methods remain
-// generated Unimplemented scaffolds, denied by the closed billing authorization allow-list.
+// ordinary resource servers because the provider is constructed by the caller. Unsupported CRUD methods use
+// generated Unimplemented scaffolds and are denied by the closed billing authorization allow-list.
 func registerBillingResourceServers(ctx context.Context, registrar grpc.ServiceRegistrar, logger *slog.Logger,
 	provider *billing.Provider) error {
 	logger.InfoContext(ctx, "Creating billing accounts servers")

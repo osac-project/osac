@@ -44,7 +44,7 @@ import (
 // Exercise the actual Root command graph and native gRPC transport. Only the
 // OS-console/config pre-run is overridden for stdout capture: these are NOT
 // login, saved-setting resolution, JWT, OPA or server-authorization tests.
-func p6ExecuteRoot(private bool, invoke func(string, proto.Message, proto.Message) error, args ...string) (string, error) {
+func executeRootWithRPC(private bool, invoke func(string, proto.Message, proto.Message) error, args ...string) (string, error) {
 	server := itesting.NewServer(grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
 		defer GinkgoRecover()
 		path, ok := grpc.MethodFromServerStream(stream)
@@ -88,7 +88,7 @@ func p6ExecuteRoot(private bool, invoke func(string, proto.Message, proto.Messag
 	return stdout.String(), err
 }
 
-func p6RootList(response proto.Message, start, count, total int) {
+func populateRootBillingList(response proto.Message, start, count, total int) {
 	items := make([]any, count)
 	for i := range items {
 		items[i] = map[string]any{"id": fmt.Sprintf("billing-%04d", start+i),
@@ -99,7 +99,7 @@ func p6RootList(response proto.Message, start, count, total int) {
 	Expect(protojson.Unmarshal(data, response)).To(Succeed())
 }
 
-func p6RootItem(private bool, kind string, index int) map[string]any {
+func rootBillingItem(private bool, kind string, index int) map[string]any {
 	metadata := map[string]any{"name": fmt.Sprintf("billing-name-%04d", index), "tenant": "customer",
 		"labels": map[string]any{"environment": "test"}}
 	if private {
@@ -129,17 +129,17 @@ func p6RootItem(private bool, kind string, index int) map[string]any {
 	return item
 }
 
-func p6RootInventory(response proto.Message, private bool, kind string, start, count, total int) {
+func populateRootBillingInventory(response proto.Message, private bool, kind string, start, count, total int) {
 	items := make([]any, count)
 	for i := range items {
-		items[i] = p6RootItem(private, kind, start+i)
+		items[i] = rootBillingItem(private, kind, start+i)
 	}
 	data, err := json.Marshal(map[string]any{"items": items, "size": count, "total": total})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(protojson.Unmarshal(data, response)).To(Succeed())
 }
 
-func p6RootValues(stdout, format string, count int) []any {
+func decodeRootOutputValues(stdout, format string, count int) []any {
 	var value any
 	if format == "json" {
 		Expect(json.Unmarshal([]byte(stdout), &value)).To(Succeed())
@@ -155,7 +155,7 @@ func p6RootValues(stdout, format string, count int) []any {
 	return values
 }
 
-func p6RootHeaders(kind string) []string {
+func rootBillingHeaders(kind string) []string {
 	if kind == "billingproviderstatus" {
 		return []string{"STATE", "PROVIDER", "MESSAGE", "CAPABILITIES", "LAST-SUCCESSFUL-CHECK", "USAGE-DELIVERY"}
 	}
@@ -169,7 +169,7 @@ func p6RootHeaders(kind string) []string {
 	return append([]string{headers[0], "DELETING"}, headers[1:]...)
 }
 
-var _ = Describe("P6 actual Root billing acceptance", func() {
+var _ = Describe("actual Root billing acceptance", func() {
 	It("retains only the non-billing get children without altering the command graph", func() {
 		root, err := Root()
 		Expect(err).NotTo(HaveOccurred())
@@ -189,7 +189,7 @@ var _ = Describe("P6 actual Root billing acceptance", func() {
 			if private {
 				pkg = "private"
 			}
-			_, err := p6ExecuteRoot(private, func(path string, request, response proto.Message) error {
+			_, err := executeRootWithRPC(private, func(path string, request, response proto.Message) error {
 				calls++
 				Expect(path).To(Equal("/osac." + pkg + ".v1." + service + "/List"))
 				filter := request.ProtoReflect().Get(request.ProtoReflect().Descriptor().Fields().ByName("filter")).String()
@@ -201,7 +201,7 @@ var _ = Describe("P6 actual Root billing acceptance", func() {
 				} else {
 					Expect(filter).To(ContainSubstring(`this.metadata.tenant == "customer"`))
 				}
-				p6RootList(response, 0, 0, 0)
+				populateRootBillingList(response, 0, 0, 0)
 				return nil
 			}, "get", resource, "one", `two"quoted`, "--filter", `this.metadata.labels["environment"] == "test"`, "-o", "json")
 			Expect(err).NotTo(HaveOccurred())
@@ -226,10 +226,10 @@ var _ = Describe("P6 actual Root billing acceptance", func() {
 			for _, format := range []string{"table", "json", "yaml"} {
 				DescribeTable(pkg+" "+kind+" "+format+" actual Root cardinality and nested descriptor output", func(count int) {
 					calls := 0
-					stdout, err := p6ExecuteRoot(private, func(path string, _, response proto.Message) error {
+					stdout, err := executeRootWithRPC(private, func(path string, _, response proto.Message) error {
 						calls++
 						Expect(path).To(Equal("/" + pkg + "." + service + "/List"))
-						p6RootInventory(response, private, kind, 0, count, count)
+						populateRootBillingInventory(response, private, kind, 0, count, count)
 						return nil
 					}, "get", kind, "billing-0000", "--output="+format)
 					Expect(err).NotTo(HaveOccurred())
@@ -239,15 +239,15 @@ var _ = Describe("P6 actual Root billing acceptance", func() {
 							Expect(stdout).To(ContainSubstring("There are no objects matching the given criteria."))
 						} else {
 							lines := strings.Split(strings.TrimSpace(stdout), "\n")
-							Expect(strings.Fields(lines[0])).To(Equal(p6RootHeaders(kind)))
+							Expect(strings.Fields(lines[0])).To(Equal(rootBillingHeaders(kind)))
 							Expect(lines).To(HaveLen(count + 1))
 							Expect(stdout).To(ContainSubstring("billing-name-0000"))
 						}
 						Expect(stdout).NotTo(ContainSubstring("native-reference-not-for-table"))
 						return
 					}
-					for i, value := range p6RootValues(stdout, format, count) {
-						expected := p6RootItem(private, kind, i)
+					for i, value := range decodeRootOutputValues(stdout, format, count) {
+						expected := rootBillingItem(private, kind, i)
 						expected["@type"] = "type.googleapis.com/" + pkg + "." + object
 						Expect(value).To(Equal(expected))
 					}
@@ -260,7 +260,7 @@ var _ = Describe("P6 actual Root billing acceptance", func() {
 						expected = `this.metadata.tenant == "customer" && (` + expected + `)`
 					}
 					calls := 0
-					stdout, err := p6ExecuteRoot(private, func(path string, request, response proto.Message) error {
+					stdout, err := executeRootWithRPC(private, func(path string, request, response proto.Message) error {
 						Expect(path).To(Equal("/" + pkg + "." + service + "/List"))
 						message := request.ProtoReflect()
 						fields := message.Descriptor().Fields()
@@ -270,7 +270,7 @@ var _ = Describe("P6 actual Root billing acceptance", func() {
 						Expect(message.Get(fields.ByName("offset")).Int()).To(Equal(int64(start)))
 						calls++
 						Expect(start).To(BeNumerically("<", total), "pagination circuit breaker")
-						p6RootInventory(response, private, kind, start, min(37, total-start), total)
+						populateRootBillingInventory(response, private, kind, start, min(37, total-start), total)
 						return nil
 					}, "get", kind, "one", `two"quoted`, "--filter="+user, "--output="+format)
 					Expect(err).NotTo(HaveOccurred())
@@ -282,7 +282,7 @@ var _ = Describe("P6 actual Root billing acceptance", func() {
 							Expect(strings.Fields(line)[0]).To(Equal(fmt.Sprintf("billing-%04d", i)))
 						}
 					} else {
-						for i, value := range p6RootValues(stdout, format, total) {
+						for i, value := range decodeRootOutputValues(stdout, format, total) {
 							Expect(value).To(HaveKeyWithValue("id", fmt.Sprintf("billing-%04d", i)))
 						}
 					}
@@ -291,7 +291,7 @@ var _ = Describe("P6 actual Root billing acceptance", func() {
 
 				DescribeTable(pkg+" "+kind+" "+format+" actual Root never emits a partial inventory", func(fail bool) {
 					calls := 0
-					stdout, err := p6ExecuteRoot(private, func(path string, request, response proto.Message) error {
+					stdout, err := executeRootWithRPC(private, func(path string, request, response proto.Message) error {
 						Expect(path).To(Equal("/" + pkg + "." + service + "/List"))
 						message := request.ProtoReflect()
 						Expect(message.Get(message.Descriptor().Fields().ByName("offset")).Int()).To(Equal(int64(calls)))
@@ -301,9 +301,9 @@ var _ = Describe("P6 actual Root billing acceptance", func() {
 							if fail {
 								return status.Error(codes.Unavailable, "acceptance later-page failure")
 							}
-							p6RootInventory(response, private, kind, 1, 0, 2)
+							populateRootBillingInventory(response, private, kind, 1, 0, 2)
 						} else {
-							p6RootInventory(response, private, kind, 0, 1, 2)
+							populateRootBillingInventory(response, private, kind, 0, 1, 2)
 						}
 						return nil
 					}, "get", kind, "--output="+format)
@@ -321,7 +321,7 @@ var _ = Describe("P6 actual Root billing acceptance", func() {
 		for _, format := range []string{"table", "json", "yaml"} {
 			DescribeTable(pkg+" "+format+" actual Root singleton presence", func(mode string) {
 				calls := 0
-				stdout, err := p6ExecuteRoot(private, func(path string, request, response proto.Message) error {
+				stdout, err := executeRootWithRPC(private, func(path string, request, response proto.Message) error {
 					calls++
 					Expect(path).To(Equal("/" + pkg + ".BillingProviderStatuses/Get"))
 					Expect(proto.Size(request)).To(BeZero())
@@ -342,14 +342,14 @@ var _ = Describe("P6 actual Root billing acceptance", func() {
 				}
 				Expect(err).NotTo(HaveOccurred())
 				if format == "table" {
-					Expect(strings.Fields(strings.Split(strings.TrimSpace(stdout), "\n")[0])).To(Equal(p6RootHeaders("billingproviderstatus")))
+					Expect(strings.Fields(strings.Split(strings.TrimSpace(stdout), "\n")[0])).To(Equal(rootBillingHeaders("billingproviderstatus")))
 				} else {
 					expected := map[string]any{"@type": "type.googleapis.com/" + pkg + ".BillingProviderStatus"}
 					if mode == "not configured" {
 						expected["state"] = "BILLING_PROVIDER_STATE_NOT_CONFIGURED"
 						expected["usage_delivery_state"] = "BILLING_USAGE_DELIVERY_STATE_UNKNOWN"
 					}
-					Expect(p6RootValues(stdout, format, 1)).To(Equal([]any{expected}))
+					Expect(decodeRootOutputValues(stdout, format, 1)).To(Equal([]any{expected}))
 				}
 			}, Entry("absent response", "absent"), Entry("present empty object", "empty"), Entry("NOT_CONFIGURED succeeds", "not configured"))
 		}
@@ -357,7 +357,7 @@ var _ = Describe("P6 actual Root billing acceptance", func() {
 
 	DescribeTable("actual Root canonical singular plural and qualified package priority", func(private bool, resource, pkg, service string, singleton bool) {
 		calls := 0
-		_, err := p6ExecuteRoot(private, func(path string, request, response proto.Message) error {
+		_, err := executeRootWithRPC(private, func(path string, request, response proto.Message) error {
 			calls++
 			method := "List"
 			if singleton {
@@ -365,7 +365,7 @@ var _ = Describe("P6 actual Root billing acceptance", func() {
 				Expect(proto.Size(request)).To(BeZero())
 				Expect(protojson.Unmarshal([]byte(`{"object":{}}`), response)).To(Succeed())
 			} else {
-				p6RootList(response, 0, 0, 0)
+				populateRootBillingList(response, 0, 0, 0)
 			}
 			Expect(path).To(Equal("/osac." + pkg + ".v1." + service + "/" + method))
 			return nil
@@ -389,7 +389,7 @@ var _ = Describe("P6 actual Root billing acceptance", func() {
 
 	DescribeTable("actual Root retired aliases are wrong-object guidance without RPC", func(name string) {
 		calls := 0
-		stdout, err := p6ExecuteRoot(false, func(string, proto.Message, proto.Message) error { calls++; return nil }, "get", name)
+		stdout, err := executeRootWithRPC(false, func(string, proto.Message, proto.Message) error { calls++; return nil }, "get", name)
 		Expect(err).NotTo(HaveOccurred(), "preserve the existing wrong-object exit policy")
 		Expect(stdout).To(ContainSubstring(name))
 		Expect(calls).To(BeZero())
@@ -398,7 +398,7 @@ var _ = Describe("P6 actual Root billing acceptance", func() {
 
 	DescribeTable("actual Root retired pagination flags fail parsing without RPC", func(flag string) {
 		calls := 0
-		_, err := p6ExecuteRoot(false, func(string, proto.Message, proto.Message) error { calls++; return nil }, "get", "billingaccount", flag+"=1")
+		_, err := executeRootWithRPC(false, func(string, proto.Message, proto.Message) error { calls++; return nil }, "get", "billingaccount", flag+"=1")
 		Expect(err).To(MatchError(ContainSubstring("unknown flag: " + flag)))
 		Expect(calls).To(BeZero())
 	}, Entry("limit", "--limit"), Entry("offset", "--offset"))

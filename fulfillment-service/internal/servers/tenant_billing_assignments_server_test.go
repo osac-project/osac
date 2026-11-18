@@ -380,7 +380,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 			Expect(fake.Calls()).To(BeEmpty())
 		})
 
-		DescribeTable("P6 native CLI key OR plus user CEL plus selected tenant stays inside trusted SQL scope", func(history bool) {
+		DescribeTable("native CLI key OR plus user CEL plus selected tenant stays inside trusted SQL scope", func(history bool) {
 			seedHistory()
 			keys := `this.id in ["b", "d", "two\"quoted"] || this.metadata.name in ["b", "d", "two\"quoted"]`
 			presence := "has(this.status.effective_to_timestamp)"
@@ -413,7 +413,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 			Expect(fake.Calls()).To(BeEmpty())
 		}, Entry("history", true), Entry("current selection excludes closed history", false))
 
-		DescribeTable("P6 native timestamp constructor failures remain InvalidArgument through both delegates", func(constructor string) {
+		DescribeTable("native timestamp constructor failures remain InvalidArgument through both delegates", func(constructor string) {
 			seedHistory()
 			filter := `this.status.effective_from_timestamp >= ` + constructor
 			response, err := billingRPC(callerCtx(auth.AllTenants), server.List,
@@ -431,7 +431,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 			Entry("nonliteral", `timestamp(this.metadata.name)`),
 			Entry("SQL-like text", `timestamp("2026-01-01T00:00:00Z'); select 1; --")`))
 
-		DescribeTable("P6 native private assignment still uses the public query descriptor", func(filter string) {
+		DescribeTable("native private assignment still uses the public query descriptor", func(filter string) {
 			seedHistory()
 			_, err := billingRPC(callerCtx(auth.AllTenants), server.private.List, privatev1.TenantBillingAssignmentsListRequest_builder{Filter: &filter}.Build())
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
@@ -440,7 +440,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 			Entry("legacy tenant id", `this.spec.tenant_id == "test-tenant"`),
 			Entry("private provider identity", `this.status.provider_account_reference == "native"`))
 
-		DescribeTable("P6 native assignment SQL complete inventory retains scoped count and unique offsets", func(total int) {
+		DescribeTable("native assignment SQL complete inventory retains scoped count and unique offsets", func(total int) {
 			seedHistory(slices.Repeat([]string{testTenant}, total)...)
 			seen := map[string]bool{}
 			filter := fmt.Sprintf(`this.metadata.tenant == %q && (this.status.connection_state == 2 || this.spec.tenant.id == "foreign-tenant")`, testTenant)

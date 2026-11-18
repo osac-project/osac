@@ -24,7 +24,7 @@ import (
 )
 
 var _ = Describe("ObjectTypeNames", func() {
-	It("P6 keeps canonical billing get names without reviving retired aliases or Update scaffolds", func() {
+	It("keeps canonical billing get names without reviving retired aliases or Update scaffolds", func() {
 		for _, pkg := range []string{packages.PublicV1, packages.PrivateV1} {
 			getNames := GetObjectTypeNames(pkg)
 			Expect(getNames).To(ContainElements(
@@ -41,7 +41,7 @@ var _ = Describe("ObjectTypeNames", func() {
 		}
 	})
 
-	Describe("P2 human lock: mutation completion stays collection-only", func() {
+	Describe("mutation completion stays collection-only", func() {
 		It("excludes get-only singleton names from public and private mutation completion", func() {
 			for _, pkg := range []string{packages.PublicV1, packages.PrivateV1} {
 				mutationNames := ObjectTypeNames(pkg)
@@ -56,9 +56,9 @@ var _ = Describe("ObjectTypeNames", func() {
 		DescribeTable("validates registered collection response shapes before advertising names",
 			func(shape string) {
 				names := map[string]bool{}
-				descriptor := p2RegisteredService(protoreflect.FullName("osac.public.v1.Clusters"), func(file *descriptorpb.FileDescriptorProto) {
+				descriptor := cloneRegisteredService(protoreflect.FullName("osac.public.v1.Clusters"), func(file *descriptorpb.FileDescriptorProto) {
 					if shape != "valid" {
-						p2ObjectShape(file, shape)
+						setGetResponseObjectShape(file, shape)
 					}
 				})
 				Expect(func() { scanServiceForNames(descriptor, names, false, false) }).NotTo(Panic())

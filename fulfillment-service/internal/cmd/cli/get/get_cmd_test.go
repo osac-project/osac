@@ -48,9 +48,9 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// P2 human lock: exercise the real reflection/Cobra-facing fetch path with a
+// Exercises the real reflection/Cobra-facing fetch path with a
 // recording client interceptor. No server, generated mock, or provider is needed.
-func p2GetRunner(invoke func(context.Context, string, proto.Message, proto.Message) error) *runnerContext {
+func newInterceptedGetRunner(invoke func(context.Context, string, proto.Message, proto.Message) error) *runnerContext {
 	connection, err := grpc.NewClient("passthrough:///p2-unit.invalid",
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithUnaryInterceptor(func(ctx context.Context, method string, request, response any,
@@ -66,7 +66,7 @@ func p2GetRunner(invoke func(context.Context, string, proto.Message, proto.Messa
 	return &runnerContext{globalHelper: helper, objectHelper: helper.Lookup("cluster")}
 }
 
-func p2Clusters(start, count int) []*publicv1.Cluster {
+func clusterPageItems(start, count int) []*publicv1.Cluster {
 	items := make([]*publicv1.Cluster, count)
 	for i := range items {
 		items[i] = &publicv1.Cluster{Id: fmt.Sprintf("p2-cluster-%04d", start+i)}
@@ -76,9 +76,9 @@ func p2Clusters(start, count int) []*publicv1.Cluster {
 
 // Run the actual Cmd/runner.run/console path against the native local gRPC test
 // server. Dynamic wire messages avoid generated server doubles for singleton
-// services. Removing child registrations selects generic dispatch only; it is
-// not evidence that the production adapters have been retired (P6).
-func p2ExecuteGet(private bool, invoke func(string, proto.Message, proto.Message) error, args ...string) (string, error) {
+// services. Removing child registrations selects generic dispatch only;
+// unrelated child commands remain registered in production.
+func executeGenericGet(private bool, invoke func(string, proto.Message, proto.Message) error, args ...string) (string, error) {
 	server := testing.NewServer(grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
 		defer GinkgoRecover()
 		path, ok := grpc.MethodFromServerStream(stream)
@@ -123,9 +123,9 @@ func p2ExecuteGet(private bool, invoke func(string, proto.Message, proto.Message
 
 // Synthetic provider text is deliberately not normalized by generic structured
 // output. Terminal table sanitization has separate renderer coverage.
-const p6AttributionToken = "  p6-token\t\n\x1b\"quoted\"  "
+const structuredAttributionToken = "  p6-token\t\n\x1b\"quoted\"  "
 
-func p6BillingItem(private bool, kind string, index int) map[string]any {
+func genericBillingItem(private bool, kind string, index int) map[string]any {
 	metadata := map[string]any{
 		"name": fmt.Sprintf("billing-name-%d", index), "tenant": "p2-tenant",
 		"labels": map[string]any{"env": "test"},
@@ -140,7 +140,7 @@ func p6BillingItem(private bool, kind string, index int) map[string]any {
 		status := map[string]any{
 			"provider_key": "m360", "display_name": "Provider display label", "base_currency": "USD",
 			"state": "BILLING_ACCOUNT_STATE_ACTIVE", "state_observation_timestamp": "2026-01-01T00:00:00Z",
-			"external_billing_account_id": p6AttributionToken,
+			"external_billing_account_id": structuredAttributionToken,
 		}
 		if private {
 			status["provider_account_reference"] = "provider-native-reference"
@@ -164,10 +164,10 @@ func p6BillingItem(private bool, kind string, index int) map[string]any {
 	return item
 }
 
-func p6BillingResponse(response proto.Message, private bool, kind string, start, count, total int) error {
+func populateGenericBillingResponse(response proto.Message, private bool, kind string, start, count, total int) error {
 	items := make([]any, count)
 	for i := range items {
-		items[i] = p6BillingItem(private, kind, start+i)
+		items[i] = genericBillingItem(private, kind, start+i)
 	}
 	data, err := json.Marshal(map[string]any{"items": items, "size": count, "total": total})
 	if err != nil {
@@ -191,7 +191,7 @@ var _ = Describe("Get command", func() {
 		mockHelper.EXPECT().IsSingleton().Return(false).AnyTimes()
 	})
 
-	Describe("P6 generic billing command", func() {
+	Describe("generic billing command", func() {
 		for _, private := range []bool{false, true} {
 			pkg := packages.PublicV1
 			if private {
@@ -206,12 +206,12 @@ var _ = Describe("Get command", func() {
 					DescribeTable(pkg+" "+kind+" "+format+" uses List-only Any item cardinality and descriptor visibility",
 						func(count int) {
 							calls := 0
-							stdout, err := p2ExecuteGet(private, func(method string, request, response proto.Message) error {
+							stdout, err := executeGenericGet(private, func(method string, request, response proto.Message) error {
 								calls++
 								Expect(method).To(Equal("/"+pkg+"."+service+"/List"), "keyed billing must not invoke the account Get scaffold")
 								message := request.ProtoReflect()
 								Expect(message.Get(message.Descriptor().Fields().ByName("offset")).Int()).To(BeZero())
-								return p6BillingResponse(response, private, kind, 0, count, count)
+								return populateGenericBillingResponse(response, private, kind, 0, count, count)
 							}, kind, "billing-id-0", `second"key`, "--output="+format)
 							Expect(err).NotTo(HaveOccurred())
 							Expect(calls).To(Equal(1))
@@ -231,7 +231,7 @@ var _ = Describe("Get command", func() {
 							}
 							Expect(values).To(HaveLen(count))
 							for i, value := range values {
-								expected := p6BillingItem(private, kind, i)
+								expected := genericBillingItem(private, kind, i)
 								expected["@type"] = "type.googleapis.com/" + pkg + "." + objectName
 								Expect(value).To(Equal(expected), "private descriptors retain their fields; public descriptors omit native identity and finalizers")
 							}
@@ -243,10 +243,10 @@ var _ = Describe("Get command", func() {
 				DescribeTable(pkg+" "+kind+" reaches domain tables and the generic empty message",
 					func(count int) {
 						calls := 0
-						stdout, err := p2ExecuteGet(private, func(method string, _, response proto.Message) error {
+						stdout, err := executeGenericGet(private, func(method string, _, response proto.Message) error {
 							calls++
 							Expect(method).To(Equal("/" + pkg + "." + service + "/List"))
-							return p6BillingResponse(response, private, kind, 0, count, count)
+							return populateGenericBillingResponse(response, private, kind, 0, count, count)
 						}, kind)
 						Expect(err).NotTo(HaveOccurred())
 						Expect(calls).To(Equal(1))
@@ -287,7 +287,7 @@ var _ = Describe("Get command", func() {
 							expected = `this.metadata.tenant == "p2-tenant" && (` + expected + `)`
 						}
 						calls := 0
-						stdout, err := p2ExecuteGet(private, func(method string, request, response proto.Message) error {
+						stdout, err := executeGenericGet(private, func(method string, request, response proto.Message) error {
 							calls++
 							Expect(calls).To(BeNumerically("<=", 2))
 							Expect(method).To(Equal("/" + pkg + "." + service + "/List"))
@@ -296,7 +296,7 @@ var _ = Describe("Get command", func() {
 							Expect(message.Get(fields.ByName("filter")).String()).To(Equal(expected))
 							Expect(message.Get(fields.ByName("limit")).Int()).To(Equal(int64(100)))
 							Expect(message.Get(fields.ByName("offset")).Int()).To(Equal(int64(calls - 1)))
-							return p6BillingResponse(response, private, kind, calls-1, 1, 2)
+							return populateGenericBillingResponse(response, private, kind, calls-1, 1, 2)
 						}, kind, "first", `two"quoted`, "--output=json", "--filter="+filter)
 						Expect(err).NotTo(HaveOccurred())
 						Expect(calls).To(Equal(2))
@@ -311,7 +311,7 @@ var _ = Describe("Get command", func() {
 					DescribeTable(pkg+" "+kind+" "+format+" buffers actual command stdout on later-page errors",
 						func(rpcFailure bool) {
 							calls := 0
-							stdout, err := p2ExecuteGet(private, func(method string, request, response proto.Message) error {
+							stdout, err := executeGenericGet(private, func(method string, request, response proto.Message) error {
 								calls++
 								Expect(calls).To(BeNumerically("<=", 2))
 								Expect(method).To(Equal("/" + pkg + "." + service + "/List"))
@@ -321,9 +321,9 @@ var _ = Describe("Get command", func() {
 									if rpcFailure {
 										return grpcstatus.Error(codes.Internal, "p6 billing second page failed")
 									}
-									return p6BillingResponse(response, private, kind, 1, 0, 2)
+									return populateGenericBillingResponse(response, private, kind, 1, 0, 2)
 								}
-								return p6BillingResponse(response, private, kind, 0, 1, 2)
+								return populateGenericBillingResponse(response, private, kind, 0, 1, 2)
 							}, kind, "--output="+format)
 							Expect(calls).To(Equal(2), "the later failure must actually be reached")
 							Expect(stdout).To(BeEmpty(), "no buffered billing inventory may escape the real console path")
@@ -359,7 +359,7 @@ var _ = Describe("Get command", func() {
 		})
 	})
 
-	It("P6 retirement leaves only the three unrelated registered children", func() {
+	It("uses generic billing dispatch and retains unrelated registered children", func() {
 		var names []string
 		for _, child := range Cmd().Commands() {
 			names = append(names, child.Name())
@@ -367,11 +367,11 @@ var _ = Describe("Get command", func() {
 		Expect(names).To(ConsistOf("externalippool", "storagetier", "token"))
 	})
 
-	Describe("P2 human lock: complete bounded collection reads", func() {
+	Describe("complete bounded collection reads", func() {
 		DescribeTable("returns every item with checked offsets, including short pages",
 			func(total, pageSize int) {
 				var requests []*publicv1.ClustersListRequest
-				runner := p2GetRunner(func(_ context.Context, method string, request, response proto.Message) error {
+				runner := newInterceptedGetRunner(func(_ context.Context, method string, request, response proto.Message) error {
 					Expect(method).To(Equal("/osac.public.v1.Clusters/List"))
 					req := request.(*publicv1.ClustersListRequest)
 					requests = append(requests, proto.Clone(req).(*publicv1.ClustersListRequest))
@@ -383,7 +383,7 @@ var _ = Describe("Get command", func() {
 					Expect(start).To(BeNumerically("<=", total))
 					count := min(pageSize, total-start)
 					proto.Merge(response, publicv1.ClustersListResponse_builder{
-						Items: p2Clusters(start, count), Total: int32(total),
+						Items: clusterPageItems(start, count), Total: int32(total),
 					}.Build())
 					return nil
 				})
@@ -407,7 +407,7 @@ var _ = Describe("Get command", func() {
 
 		It("preserves keys, explicit filter, tenant and project on every page", func() {
 			var filters []string
-			runner := p2GetRunner(func(_ context.Context, _ string, request, response proto.Message) error {
+			runner := newInterceptedGetRunner(func(_ context.Context, _ string, request, response proto.Message) error {
 				req := request.(*publicv1.ClustersListRequest)
 				filters = append(filters, req.GetFilter())
 				if len(filters) > 3 {
@@ -415,7 +415,7 @@ var _ = Describe("Get command", func() {
 				}
 				start := int(req.GetOffset())
 				proto.Merge(response, publicv1.ClustersListResponse_builder{
-					Items: p2Clusters(start, min(100, 101-start)), Total: 101,
+					Items: clusterPageItems(start, min(100, 101-start)), Total: 101,
 				}.Build())
 				return nil
 			})
@@ -436,27 +436,27 @@ var _ = Describe("Get command", func() {
 		DescribeTable("fails closed without returning buffered partial results",
 			func(scenario string) {
 				calls := 0
-				runner := p2GetRunner(func(_ context.Context, _ string, request, response proto.Message) error {
+				runner := newInterceptedGetRunner(func(_ context.Context, _ string, request, response proto.Message) error {
 					calls++
 					if calls > 3 {
 						return errors.New("test circuit breaker")
 					}
 					total := int32(101)
-					items := p2Clusters(0, 100)
+					items := clusterPageItems(0, 100)
 					switch scenario {
 					case "negative total":
 						total = -1
 					case "empty first page":
 						items = nil
 					case "oversized page":
-						items = p2Clusters(0, 101)
+						items = clusterPageItems(0, 101)
 					case "duplicate ids":
 						items, total = []*publicv1.Cluster{{Id: "same"}, {Id: "same"}}, 2
 					case "more items than total":
 						total = 1
 					case "changing total":
 						if calls == 2 {
-							items, total = p2Clusters(100, 1), 102
+							items, total = clusterPageItems(100, 1), 102
 						}
 					case "empty later page":
 						if calls == 2 {
@@ -489,9 +489,9 @@ var _ = Describe("Get command", func() {
 			canceled, cancel := context.WithCancel(ctx)
 			DeferCleanup(cancel)
 			calls := 0
-			runner := p2GetRunner(func(_ context.Context, _ string, _, response proto.Message) error {
+			runner := newInterceptedGetRunner(func(_ context.Context, _ string, _, response proto.Message) error {
 				calls++
-				proto.Merge(response, publicv1.ClustersListResponse_builder{Items: p2Clusters(0, 100), Total: 101}.Build())
+				proto.Merge(response, publicv1.ClustersListResponse_builder{Items: clusterPageItems(0, 100), Total: 101}.Build())
 				cancel()
 				return nil
 			})
@@ -504,17 +504,17 @@ var _ = Describe("Get command", func() {
 		})
 	})
 
-	Describe("P2 human lock: seam budgets and checked offset arithmetic", func() {
+	Describe("seam budgets and checked offset arithmetic", func() {
 		DescribeTable("uses the actual traversal budgets with tiny progressing pages",
 			func(rpcBudget, objectBudget, total, pageSize, expectedCalls int, failure string) {
 				calls := 0
-				runner := p2GetRunner(func(_ context.Context, _ string, request, response proto.Message) error {
+				runner := newInterceptedGetRunner(func(_ context.Context, _ string, request, response proto.Message) error {
 					calls++
 					if calls > 4 {
 						return errors.New("test circuit breaker, not the budget oracle")
 					}
 					start := int(request.(*publicv1.ClustersListRequest).GetOffset())
-					proto.Merge(response, &publicv1.ClustersListResponse{Items: p2Clusters(start, min(pageSize, total-start)), Total: int32(total)})
+					proto.Merge(response, &publicv1.ClustersListResponse{Items: clusterPageItems(start, min(pageSize, total-start)), Total: int32(total)})
 					return nil
 				})
 				runner.listRPCBudget, runner.listObjectBudget = rpcBudget, objectBudget
@@ -552,21 +552,21 @@ var _ = Describe("Get command", func() {
 		)
 	})
 
-	Describe("P2 human lock: seam descriptor fallback is honest", func() {
+	Describe("seam descriptor fallback is honest", func() {
 		for _, format := range []string{outputFormatTable, outputFormatJson, outputFormatYaml} {
 			DescribeTable(format+" respects authoritative totals and discloses unknown completeness on stderr",
 				func(known, offset bool, total int32, count int, fails bool) {
 					var stdout, stderr bytes.Buffer
 					console, err := terminal.NewConsole().SetLogger(logger).SetStdout(&stdout).SetStderr(&stderr).Build()
 					Expect(err).NotTo(HaveOccurred())
-					runner := p2GetRunner(func(context.Context, string, proto.Message, proto.Message) error {
+					runner := newInterceptedGetRunner(func(context.Context, string, proto.Message, proto.Message) error {
 						return errors.New("unexpected rendering RPC")
 					})
 					runner.objectHelper, runner.console, runner.logger = mockHelper, console, logger
 					runner.marshalOptions = protojson.MarshalOptions{UseProtoNames: true}
 					runner.args.format = format
 					items := make([]proto.Message, count)
-					for i, item := range p2Clusters(0, count) {
+					for i, item := range clusterPageItems(0, count) {
 						items[i] = item
 					}
 					mockHelper.EXPECT().List(gomock.Any(), gomock.Any()).Return(reflection.ListResult{
@@ -610,12 +610,12 @@ var _ = Describe("Get command", func() {
 		}
 	})
 
-	Describe("P2 human lock: Secret List then keyed Get compatibility", func() {
+	Describe("Secret List then keyed Get compatibility", func() {
 		DescribeTable("only expands keyed structured reads, after completing List",
 			func(format string, keyed bool, total int) {
 				var methods []string
 				getCalls := 0
-				runner := p2GetRunner(func(_ context.Context, method string, request, response proto.Message) error {
+				runner := newInterceptedGetRunner(func(_ context.Context, method string, request, response proto.Message) error {
 					methods = append(methods, method)
 					if strings.HasSuffix(method, "/List") {
 						req := request.(*publicv1.SecretsListRequest)
@@ -668,7 +668,7 @@ var _ = Describe("Get command", func() {
 		)
 	})
 
-	Describe("P2 human lock: get-only completion and validation order", func() {
+	Describe("get-only completion and validation order", func() {
 		It("rejects invalid output even without configuration or connection context", func() {
 			command := &cobra.Command{Use: "osac", SilenceUsage: true, SilenceErrors: true}
 			command.AddCommand(Cmd())
@@ -706,14 +706,14 @@ var _ = Describe("Get command", func() {
 		})
 	})
 
-	Describe("P2 human lock: generic command buffers stdout until traversal succeeds", func() {
+	Describe("generic command buffers stdout until traversal succeeds", func() {
 		for _, format := range []string{outputFormatTable, outputFormatJson, outputFormatYaml} {
 			It(format+" success control reaches the local RPC and the real output writer", func() {
 				calls := 0
-				stdout, err := p2ExecuteGet(false, func(method string, _, response proto.Message) error {
+				stdout, err := executeGenericGet(false, func(method string, _, response proto.Message) error {
 					calls++
 					Expect(method).To(Equal("/osac.public.v1.Clusters/List"))
-					data, err := proto.Marshal(&publicv1.ClustersListResponse{Items: p2Clusters(0, 1), Total: 1})
+					data, err := proto.Marshal(&publicv1.ClustersListResponse{Items: clusterPageItems(0, 1), Total: 1})
 					Expect(err).NotTo(HaveOccurred())
 					return proto.Unmarshal(data, response)
 				}, "clusters", "--output="+format)
@@ -725,13 +725,13 @@ var _ = Describe("Get command", func() {
 			DescribeTable(format+" emits zero inventory bytes on a second-page failure",
 				func(scenario string) {
 					calls := 0
-					stdout, err := p2ExecuteGet(false, func(method string, request, response proto.Message) error {
+					stdout, err := executeGenericGet(false, func(method string, request, response proto.Message) error {
 						calls++
 						Expect(method).To(Equal("/osac.public.v1.Clusters/List"))
 						if calls > 2 {
 							return grpcstatus.Error(codes.Internal, "test circuit breaker, not the error oracle")
 						}
-						items := p2Clusters(0, 1)
+						items := clusterPageItems(0, 1)
 						if calls == 2 {
 							req := request.ProtoReflect()
 							Expect(req.Get(req.Descriptor().Fields().ByName("offset")).Int()).To(Equal(int64(1)))
@@ -756,7 +756,7 @@ var _ = Describe("Get command", func() {
 		}
 	})
 
-	Describe("P2 human lock: generic singleton command uses one empty Get", func() {
+	Describe("generic singleton command uses one empty Get", func() {
 		for _, private := range []bool{false, true} {
 			pkg := packages.PublicV1
 			if private {
@@ -766,7 +766,7 @@ var _ = Describe("Get command", func() {
 				DescribeTable(pkg+" "+format+" preserves singleton payload presence without identity/metadata",
 					func(shape string) {
 						calls := 0
-						stdout, err := p2ExecuteGet(private, func(method string, request, response proto.Message) error {
+						stdout, err := executeGenericGet(private, func(method string, request, response proto.Message) error {
 							calls++
 							Expect(method).To(Equal("/"+pkg+".BillingProviderStatuses/Get"), "never List, Watch, or a keyed fallback")
 							Expect(request.ProtoReflect().Descriptor().Fields().Len()).To(BeZero())
@@ -824,7 +824,7 @@ var _ = Describe("Get command", func() {
 				func(extra []string) {
 					calls := 0
 					args := append([]string{"billingproviderstatus"}, extra...)
-					stdout, err := p2ExecuteGet(private, func(string, proto.Message, proto.Message) error {
+					stdout, err := executeGenericGet(private, func(string, proto.Message, proto.Message) error {
 						calls++
 						return grpcstatus.Error(codes.Internal, "singleton validation reached RPC")
 					}, args...)
@@ -839,7 +839,7 @@ var _ = Describe("Get command", func() {
 		}
 	})
 
-	DescribeTable("P2 human lock: singleton structured output has truthful shape",
+	DescribeTable("singleton structured output has truthful shape",
 		func(format string, count int) {
 			var stdout bytes.Buffer
 			console, err := terminal.NewConsole().SetLogger(logger).SetStdout(&stdout).SetStderr(&bytes.Buffer{}).Build()

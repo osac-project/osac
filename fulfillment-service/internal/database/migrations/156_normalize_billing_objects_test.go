@@ -236,7 +236,7 @@ var _ = DescribeMigration("Normalize billing objects", func() {
 		var tenantFKs int
 		Expect(conn.QueryRow(ctx, `select count(*) from pg_constraint where conrelid = 'tenant_billing_assignments'::regclass
 			and confrelid = 'tenants'::regclass and contype = 'f'`).Scan(&tenantFKs)).To(Succeed())
-		Expect(tenantFKs).To(Equal(1), "do not add a second metadata.tenant live FK before P5")
+		Expect(tenantFKs).To(Equal(1), "do not add a second metadata.tenant live FK before the deletion-identity cutover")
 		var tenantFK string
 		Expect(conn.QueryRow(ctx, `select conname from pg_constraint where conrelid = 'tenant_billing_assignments'::regclass
 			and confrelid = 'tenants'::regclass and contype = 'f'`).Scan(&tenantFK)).To(Succeed())

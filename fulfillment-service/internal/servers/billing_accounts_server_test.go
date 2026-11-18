@@ -299,7 +299,7 @@ var _ = Describe("Billing accounts server", func() {
 		Entry("legacy token", `this.status.correlation_id == "token"`),
 	)
 
-	It("P6 native account List intersects actual CLI key OR user predicates without customer or project injection", func() {
+	It("native account List intersects actual CLI key OR user predicates without customer or project injection", func() {
 		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
 			{ID: "native-first", Name: `Acme "quoted" 雪`, State: billing.AccountActive},
 			{ID: "native-second", Name: "Other", State: billing.AccountInactive},
@@ -341,7 +341,7 @@ var _ = Describe("Billing accounts server", func() {
 		Expect(empty.GetItems()).To(BeEmpty())
 	})
 
-	It("P6 native private account JSON permission does not grant native filter permission", func() {
+	It("native private account JSON permission does not grant native filter permission", func() {
 		server := build(billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "private-native", State: billing.AccountActive}}}).Provider())
 		response, err := billingRPC(ctx, server.private.List, &privatev1.BillingAccountsListRequest{})
 		Expect(err).NotTo(HaveOccurred())
@@ -363,7 +363,7 @@ var _ = Describe("Billing accounts server", func() {
 		return accounts
 	}
 
-	It("P6 native account discovery rejects a single 1001-account provider walk as MALFORMED", func() {
+	It("native account discovery rejects a single 1001-account provider walk as MALFORMED", func() {
 		Expect(billingAccountsDiscoverPageSize).To(Equal(20))
 		Expect(billing.MaxListPages).To(Equal(50))
 		fake := billingfake.New(billingfake.Scenario{Accounts: inventory(1001)})
@@ -379,7 +379,7 @@ var _ = Describe("Billing accounts server", func() {
 		Expect(count).To(BeZero(), "a rejected provider walk must not store a partial inventory")
 	})
 
-	DescribeTable("P6 native account SQL retained inventory has stable count and page intersections", func(total int) {
+	DescribeTable("native account SQL retained inventory has stable count and page intersections", func(total int) {
 		accounts := inventory(total)
 		first := billingfake.New(billingfake.Scenario{Accounts: accounts[:min(total, 1000)]})
 		server := build(first.Provider())

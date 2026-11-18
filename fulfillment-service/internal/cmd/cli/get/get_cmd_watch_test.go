@@ -35,16 +35,16 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-// P2 human lock: only the client-stream methods used by Watch are replaced.
-type p2WatchStream struct {
+// Only the client-stream methods used by Watch are replaced.
+type recordingWatchStream struct {
 	grpc.ClientStream
 	send    func(any) error
 	receive func(any) error
 }
 
-func (s *p2WatchStream) SendMsg(message any) error { return s.send(message) }
-func (s *p2WatchStream) CloseSend() error          { return nil }
-func (s *p2WatchStream) RecvMsg(message any) error { return s.receive(message) }
+func (s *recordingWatchStream) SendMsg(message any) error { return s.send(message) }
+func (s *recordingWatchStream) CloseSend() error          { return nil }
+func (s *recordingWatchStream) RecvMsg(message any) error { return s.receive(message) }
 
 var _ = Describe("Watch command", func() {
 	DescribeTable("extractObjectFromEvent",
@@ -131,7 +131,7 @@ var _ = Describe("Watch command", func() {
 		),
 	)
 
-	DescribeTable("P2 human lock: buildEventFilter",
+	DescribeTable("buildEventFilter",
 		func(object proto.Message, keys []string, expectedFilter string) {
 			ctrl := gomock.NewController(GinkgoT())
 			helper := reflection.NewMockObjectHelper(ctrl)
@@ -147,7 +147,7 @@ var _ = Describe("Watch command", func() {
 		Entry("private cluster keeps escaped keys", &privatev1.Cluster{}, []string{`one"two`}, `has(event.cluster) && (event.cluster.id == "one\"two" || event.cluster.metadata.name == "one\"two")`),
 	)
 
-	DescribeTable("P2 human lock: ordinary Watch public/private routing and termination",
+	DescribeTable("ordinary Watch public/private routing and termination",
 		func(pkg, termination string) {
 			ctx, cancel := context.WithCancel(context.Background())
 			DeferCleanup(cancel)
@@ -157,7 +157,7 @@ var _ = Describe("Watch command", func() {
 				grpc.WithStreamInterceptor(func(streamCtx context.Context, _ *grpc.StreamDesc, _ *grpc.ClientConn,
 					method string, _ grpc.Streamer, _ ...grpc.CallOption) (grpc.ClientStream, error) {
 					Expect(method).To(Equal("/" + pkg + ".Events/Watch"))
-					return &p2WatchStream{
+					return &recordingWatchStream{
 						send: func(request any) error {
 							message := request.(proto.Message).ProtoReflect()
 							Expect(message.Get(message.Descriptor().Fields().ByName("filter")).String()).To(Equal("has(event.cluster)"))

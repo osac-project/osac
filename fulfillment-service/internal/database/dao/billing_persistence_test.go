@@ -513,7 +513,7 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 		Expect(page.GetItems()[0].GetSpec().GetTenant().GetId()).To(Equal("billing-c"))
 	})
 
-	It("TC15/TC16 commits billing create/update/close/replacement without enqueue while Tenant INSERT/UPDATE enqueue", func() {
+	It("commits billing create/update/close/replacement without enqueue while Tenant INSERT/UPDATE enqueue", func() {
 		// Hold a separate physical connection so post-commit observations cannot accidentally reuse the writer session.
 		reader, err := pool.Acquire(ctx)
 		Expect(err).NotTo(HaveOccurred())
@@ -585,7 +585,7 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 		})).To(Succeed())
 	})
 
-	It("TC15/TC16 rolls back both canonical billing bodies and the proven nonbilling outbox row", func() {
+	It("rolls back both canonical billing bodies and the proven nonbilling outbox row", func() {
 		account, err := accounts.Create().SetObject(accountObject("rollback-account", nil)).Do(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		_, err = assignments.Create().SetObject(assignmentObject("rollback-interval", "billing-a", account.GetObject())).Do(ctx)

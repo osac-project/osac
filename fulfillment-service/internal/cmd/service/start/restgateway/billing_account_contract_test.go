@@ -69,8 +69,8 @@ func billingAccountContractMarshaler() *runtime.HTTPBodyMarshaler {
 	}}
 }
 
-// P1's flat tag-7 proof is retained in the P1 evidence snapshot and migration155
-// tests. This final envelope deliberately changes the wire contract, not just JSON.
+// Migration 155 covers the SQL-column rename; the flat tag-7 API rename retained its wire layout.
+// The nested envelope below changes the wire contract, not just the JSON field names.
 var _ = Describe("Billing account final API contract", func() {
 	wire := []byte{0x22, 0x07, 0x32, 0x05, 'e', 'x', 't', '-', '1'}
 	field := func(message protoreflect.MessageDescriptor, name protoreflect.Name,

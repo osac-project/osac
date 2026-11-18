@@ -208,7 +208,7 @@ var _ = Describe("Table renderer", func() {
 		})
 	})
 
-	DescribeTable("P2 human lock: DELETING requires a singular Timestamp descriptor",
+	DescribeTable("DELETING requires a singular Timestamp descriptor",
 		func(shape string) {
 			metadataFields := []*descriptorpb.FieldDescriptorProto{{
 				Name: proto.String("name"), Number: proto.Int32(1), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),

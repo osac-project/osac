@@ -492,6 +492,9 @@ const matchesStorageTierActiveFilter = (
 };
 
 export type MockTransportOverrides = {
+  onComputeInstanceCatalogItemGet?: () =>
+    | { object?: ComputeInstanceCatalogItem | undefined }
+    | Promise<{ object?: ComputeInstanceCatalogItem | undefined }>;
   onSelfSubjectAccessReview?: (
     req: SelfSubjectAccessReviewsCreateRequest,
   ) =>
@@ -744,9 +747,10 @@ export const createMockConnectTransport = (
         list: (req) => ({
           items: catalogItems.filter((item) => catalogItemMatchesListFilter(item, req.filter)),
         }),
-        get: (req) => ({
-          object: catalogItems.find((i) => i.id === req.id),
-        }),
+        get: (req) =>
+          overrides.onComputeInstanceCatalogItemGet?.() ?? {
+            object: catalogItems.find((i) => i.id === req.id),
+          },
         create: (req) => {
           if (overrides.onComputeInstanceCatalogItemCreate) {
             return overrides.onComputeInstanceCatalogItemCreate(req);

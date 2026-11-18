@@ -25,18 +25,6 @@ type ResourceQueryOptions<Data extends DescMessage, SelectedData = MessageShape<
   'queryFn' | 'queryKey' | 'select' | 'placeholderData'
 >;
 
-// Options for queries that preload a resource a wizard was opened with: fetch
-// once and never refresh in the background. Query options are per-observer,
-// so every observer of the query (launch page and wizard) must pass these —
-// a single defaulting observer re-enables background refetch for the query.
-// A failed background refetch would surface an error or swap the cached item
-// under an in-progress form and discard user input.
-export const wizardPreloadQueryOptions = {
-  refetchInterval: false,
-  refetchOnWindowFocus: false,
-  refetchOnReconnect: false,
-} as const;
-
 type PaginatedListRequest = { offset?: number; limit?: number };
 
 type PaginatedListResponse = {

@@ -31,7 +31,10 @@ const BareMetalInstanceCreateWizard = ({ catalogItem, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const provision = useCreateBareMetalInstance();
-  const includeCatalogStep = !catalogItem;
+  // Freeze the item this wizard was opened with: a later cache update must
+  // not reset an in-progress form through enableReinitialize.
+  const [launchItem] = useState(catalogItem);
+  const includeCatalogStep = !launchItem;
   const [activeStep, setActiveStep] = useState<BareMetalWizardStepId>(
     includeCatalogStep ? 'catalog' : 'general',
   );
@@ -57,7 +60,7 @@ const BareMetalInstanceCreateWizard = ({ catalogItem, onClosed }: Props) => {
     async (values: BareMetalInstanceWizardValues) => {
       try {
         const created = await provision.mutateAsync(
-          buildBareMetalInstanceCreatePayload(values, selectedCatalogItem ?? catalogItem),
+          buildBareMetalInstanceCreatePayload(values, selectedCatalogItem ?? launchItem),
         );
         if (created?.id) {
           navigate(`/bare-metal/${created.id}`);
@@ -66,13 +69,10 @@ const BareMetalInstanceCreateWizard = ({ catalogItem, onClosed }: Props) => {
         // Surfaced via provision.error in the footer; nothing further to do here.
       }
     },
-    [catalogItem, navigate, provision, selectedCatalogItem],
+    [launchItem, navigate, provision, selectedCatalogItem],
   );
 
-  const initialValues = useMemo(
-    () => getBareMetalInstanceInitialValues(catalogItem),
-    [catalogItem],
-  );
+  const initialValues = useMemo(() => getBareMetalInstanceInitialValues(launchItem), [launchItem]);
   const schema = useMemo(() => buildBareMetalInstanceStepSchema(activeStep, t), [activeStep, t]);
   const stepHasErrors = useCallback(
     (_stepId: string, errors: Record<string, unknown>) => {

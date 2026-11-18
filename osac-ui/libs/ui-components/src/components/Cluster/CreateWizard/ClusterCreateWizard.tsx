@@ -29,7 +29,10 @@ const ClusterCreateWizard = ({ catalogItem, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const provision = useCreateResource(Clusters);
-  const includeCatalogStep = !catalogItem;
+  // Freeze the item this wizard was opened with: a later cache update must
+  // not reset an in-progress form through enableReinitialize.
+  const [launchItem] = useState(catalogItem);
+  const includeCatalogStep = !launchItem;
   const [activeStep, setActiveStep] = useState<ClusterWizardStepId>(
     includeCatalogStep ? 'catalog' : 'general',
   );
@@ -63,7 +66,7 @@ const ClusterCreateWizard = ({ catalogItem, onClosed }: Props) => {
     [navigate, provision],
   );
 
-  const initialValues = useMemo(() => getInitialFormValues(catalogItem), [catalogItem]);
+  const initialValues = useMemo(() => getInitialFormValues(launchItem), [launchItem]);
 
   const schema = useMemo(() => buildClusterStepSchema(activeStep, t), [activeStep, t]);
   const stepHasErrors = useCallback(

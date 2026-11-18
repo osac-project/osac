@@ -11,8 +11,9 @@ import {
 import { BareMetalInstanceCatalogItems } from '@osac/types';
 
 import BareMetalInstanceCreateWizard from './BareMetalInstanceCreateWizard';
-import { useGetResource, wizardPreloadQueryOptions } from '../../../api/use-resource';
+import { useGetResource } from '../../../api/use-resource';
 import { useTranslation } from '../../../hooks/useTranslation';
+import { wizardPreloadQueryOptions } from '../../ProvisioningWizard/wizardPreloadQueryOptions';
 import ResourceDetailsPage from '../../Resource/ResourceDetailsPage';
 
 const BareMetalCatalogLaunchPage = () => {

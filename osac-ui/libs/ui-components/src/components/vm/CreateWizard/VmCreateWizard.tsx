@@ -36,7 +36,10 @@ const VmCreateWizard = ({ catalogItem, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const provision = useCreateResource(ComputeInstances);
-  const includeCatalogStep = !catalogItem;
+  // Freeze the item this wizard was opened with: a later cache update must
+  // not reset an in-progress form through enableReinitialize.
+  const [launchItem] = useState(catalogItem);
+  const includeCatalogStep = !launchItem;
   const [activeStep, setActiveStep] = useState<VmWizardStepId>(
     includeCatalogStep ? 'catalog' : 'general',
   );
@@ -68,7 +71,7 @@ const VmCreateWizard = ({ catalogItem, onClosed }: Props) => {
       }
       try {
         const created = await provision.mutateAsync({
-          object: buildComputeInstanceCreatePayload(values, selectedCatalogItem ?? catalogItem),
+          object: buildComputeInstanceCreatePayload(values, selectedCatalogItem ?? launchItem),
         });
         if (created?.object?.id) {
           navigate(`/vms/${created.object.id}`);
@@ -77,10 +80,10 @@ const VmCreateWizard = ({ catalogItem, onClosed }: Props) => {
         // Surfaced via provision.error in the footer; nothing further to do here.
       }
     },
-    [catalogItem, navigate, provision, selectedCatalogItem],
+    [launchItem, navigate, provision, selectedCatalogItem],
   );
 
-  const initialValues = useMemo(() => getComputeInstanceInitialValues(catalogItem), [catalogItem]);
+  const initialValues = useMemo(() => getComputeInstanceInitialValues(launchItem), [launchItem]);
   const schema = useMemo(() => buildComputeInstanceStepSchema(activeStep, t), [activeStep, t]);
   const stepHasErrors = useCallback(
     (_stepId: string, errors: Record<string, unknown>) => {

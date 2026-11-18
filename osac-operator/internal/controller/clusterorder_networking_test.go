@@ -1267,6 +1267,14 @@ var _ = Describe("ClusterOrder delete dependency sequence", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(Equal(time.Second))
 		Expect(aap.tasks(clusterID)).To(HaveLen(2), "endpoint cleanup must not launch Fabric ingress tasks")
+		for _, attachment := range attachments {
+			latest := &v1alpha1.ExternalIPAttachment{}
+			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(attachment), latest)).To(Succeed())
+			Expect(latest.Finalizers).NotTo(ContainElement(clusterEndpointDNSFinalizer),
+				"release DNS holds before Fulfillment removes the attachment")
+			Expect(fakeClient.Delete(ctx, latest)).To(Succeed(),
+				"Fulfillment, not the ClusterOrder controller, deletes the automatic attachment")
+		}
 		for attempts := 0; !apimeta.IsStatusConditionTrue(instance.Status.Conditions,
 			string(v1alpha1.ClusterOrderConditionClusterTeardownReady)); attempts++ {
 			if attempts >= 3 {

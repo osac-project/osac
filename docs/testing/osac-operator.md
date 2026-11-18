@@ -105,7 +105,10 @@ intent without a provider outcome remains ambiguous and can block deletion.
 The deployed Kind cases exercise OSAC-owned networking cleanup and restart
 recovery through the real Kubernetes API; test finalizers and persisted launch
 claims hold cleanup at checkpoints, and no AAP or real provider runs. Inspect the
-deployed suite's fixtures.
+deployed suite's fixtures. Fulfillment owns deletion of automatic
+ExternalIPAttachments and ExternalIPs; the test explicitly requests each child
+delete to stand in for Fulfillment, while the operator only holds the workload
+finalizer until the child CRs disappear.
 
 Run this leg through the installer's Kind target with the operator suite
 (repository-root `make -C osac-installer help`), on a dedicated cluster with environment configs

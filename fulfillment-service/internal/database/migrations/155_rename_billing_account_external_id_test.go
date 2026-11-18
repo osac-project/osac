@@ -24,12 +24,12 @@ import (
 )
 
 var _ = DescribeMigration("Rename billing account external id", func() {
-	// DescribeMigration clones the real version-154 predecessor for each spec.
+	// DescribeMigration clones the real predecessor for each spec.
 	BeforeEach(func(ctx context.Context) {
 		var version int
 		var dirty bool
 		Expect(conn.QueryRow(ctx, `select version, dirty from schema_migrations`).Scan(&version, &dirty)).To(Succeed())
-		Expect(version).To(Equal(154))
+		Expect(version).To(Equal(155))
 		Expect(dirty).To(BeFalse())
 		_, err := conn.Exec(ctx, `
 			insert into tenants (id, name, tenant, data) values

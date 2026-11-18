@@ -11,7 +11,7 @@
 -- specific language governing permissions and limitations under the License.
 --
 
--- Forward-only normalization of the actual populated version-155 schema. Metadata columns and private protobuf
+-- Forward-only normalization of the populated predecessor schema. Metadata columns and private protobuf
 -- JSON are authoritative. The old business columns remain only as one-way projections for existing selectors,
 -- foreign keys and named unique indexes. In particular, never trim/canonicalize attribution tokens.
 -- No enqueue_change triggers: billing objects deliberately remain unpublished.
@@ -70,7 +70,7 @@ update billing_accounts set
     || case when external_billing_account_id is null then '{}'::jsonb
        else jsonb_build_object('external_billing_account_id', external_billing_account_id) end);
 
--- Assignment creation_timestamp and creator ARE historical evidence in 155: keep them verbatim.
+-- Existing assignment creation_timestamp and creator values are historical evidence: keep them verbatim.
 update tenant_billing_assignments a set
   tenant = tenant_id,
   annotations = jsonb_build_object('osac.openshift.io/tenant', tenant_id),

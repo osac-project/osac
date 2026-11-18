@@ -50,7 +50,7 @@ var _ = DescribeMigration("Normalize billing objects", func() {
 	BeforeEach(func(ctx context.Context) {
 		var version int
 		Expect(conn.QueryRow(ctx, `select version from schema_migrations`).Scan(&version)).To(Succeed())
-		Expect(version).To(Equal(155))
+		Expect(version).To(Equal(156))
 		_, err := conn.Exec(ctx, `
 			insert into tenants (id, name, tenant, data) values
 				('tenant', 'tenant', 'tenant', '{}'), ('other-tenant', 'other-tenant', 'other-tenant', '{}');

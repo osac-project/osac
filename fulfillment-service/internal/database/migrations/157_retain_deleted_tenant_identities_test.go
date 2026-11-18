@@ -34,7 +34,7 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 	BeforeEach(func(ctx context.Context) {
 		var version int
 		Expect(conn.QueryRow(ctx, `select version from schema_migrations`).Scan(&version)).To(Succeed())
-		Expect(version).To(Equal(156))
+		Expect(version).To(Equal(157))
 		_, err := conn.Exec(ctx, `
 			insert into tenants (id, name, tenant, creation_timestamp, deletion_timestamp, finalizers, data) values
 			 ('pending', 'pending', 'pending', '2026-01-01Z', '2026-03-01Z', '{cleanup}', '{}'),

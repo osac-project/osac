@@ -411,20 +411,37 @@ var _ = Describe("typed finalizer updates", func() {
 					object.SetMetadata(nil)
 				}
 				// Keep the same canonical account: nil masks revalidate, they must not reassign or clear it.
-				response, err := billingRPC(f.caller, f.public.Update, publicv1.TenantBillingAssignmentsUpdateRequest_builder{
+				request := publicv1.TenantBillingAssignmentsUpdateRequest_builder{
 					Object: object, UpdateMask: mask,
-				}.Build())
+				}.Build()
+				response, err := billingRPC(f.caller, f.public.Update, request)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(response.GetObject().GetId()).To(Equal(f.current.GetId()))
 				Expect(response.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(f.current.GetSpec().GetBillingAccount().GetId()))
-				f.expectUnchanged()
-				Expect(f.fake.Count("SetCorrelationValue")).To(BeZero(), "the configured read-only provider already has the matching token")
 				if mask == nil {
-					Expect(f.fake.Succeeded("GetAccount")).To(BeNumerically(">", 0))
-					Expect(f.fake.Succeeded("CorrelationValue")).To(BeNumerically(">", 0))
+					Expect(f.fake.Succeeded("GetAccount")).To(Equal(1))
+					Expect(f.fake.Succeeded("ListAccounts")).To(Equal(1), "revalidation must check the token's carrier")
+					Expect(response.GetObject().GetStatus().GetConnectionState()).To(Equal(
+						publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
+
+					// Only the current interval's observation and version may change; billing never emits outbox events.
+					expected := proto.Clone(f.current).(*privatev1.TenantBillingAssignment)
+					expected.GetStatus().SetConnectionState(privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED)
+					expected.GetStatus().SetMessage("")
+					expected.GetMetadata().SetVersion(f.current.GetMetadata().GetVersion() + 1)
+					f.expectStored(expected)
+
+					// The same evidence still gets read on a second nil mask but must not write the assignment again.
+					_, err = billingRPC(f.caller, f.public.Update, request)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(f.fake.Succeeded("GetAccount")).To(Equal(2))
+					Expect(f.fake.Succeeded("ListAccounts")).To(Equal(2))
+					f.expectStored(expected)
 				} else {
+					f.expectUnchanged()
 					Expect(f.fake.Calls()).To(BeEmpty(), "an empty mask must be a true no-op")
 				}
+				Expect(f.fake.Count("SetCorrelationValue")).To(BeZero(), "the configured read-only provider already has the matching token")
 			},
 			Entry("nil mask, current version", (*fieldmaskpb.FieldMask)(nil), "current", false),
 			Entry("nil mask, stale version", (*fieldmaskpb.FieldMask)(nil), "stale", false),

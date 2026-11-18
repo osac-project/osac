@@ -120,7 +120,7 @@ var _ = DescribeMigration("Release finalized tenant domains", func() {
 		var version int
 		var dirty bool
 		Expect(conn.QueryRow(ctx, `select version, dirty from schema_migrations`).Scan(&version, &dirty)).To(Succeed())
-		Expect(version).To(Equal(154))
+		Expect(version).To(Equal(155))
 		Expect(dirty).To(BeTrue())
 		Expect(function(ctx)).To(Equal(beforeFunction))
 		Expect(owners(ctx)).To(Equal(beforeOwners))

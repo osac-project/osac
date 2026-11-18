@@ -297,14 +297,12 @@ func newFinalizerAssignmentFixture(deleting bool) finalizerAssignmentFixture {
 		if closed {
 			f.history = created.GetObject()
 		} else {
-			// Give stale public requests a real earlier version without making metadata writable in the API.
+			// Seed a pending observation that the provider's matching carrier can resolve. This also gives
+			// stale public requests a real earlier version without making metadata writable in the API.
 			object := created.GetObject()
+			object.GetStatus().SetConnectionState(privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_PENDING)
 			object.GetStatus().SetMessage("earlier observation")
 			updated, updateErr := fixtureDAO[*privatev1.TenantBillingAssignment]().Update().SetObject(object).Do(ctx)
-			Expect(updateErr).ToNot(HaveOccurred())
-			object = updated.GetObject()
-			object.GetStatus().SetMessage("")
-			updated, updateErr = fixtureDAO[*privatev1.TenantBillingAssignment]().Update().SetObject(object).Do(ctx)
 			Expect(updateErr).ToNot(HaveOccurred())
 			f.current = updated.GetObject()
 		}
@@ -337,10 +335,16 @@ func (f finalizerAssignmentFixture) changeCount() int {
 
 func (f finalizerAssignmentFixture) expectUnchanged() {
 	GinkgoHelper()
-	for _, before := range []*privatev1.TenantBillingAssignment{f.current, f.history} {
-		got, err := billingRPC(f.caller, f.private.Get, privatev1.TenantBillingAssignmentsGetRequest_builder{Id: before.GetId()}.Build())
+	f.expectStored(f.current)
+}
+
+func (f finalizerAssignmentFixture) expectStored(current *privatev1.TenantBillingAssignment) {
+	GinkgoHelper()
+	for _, expected := range []*privatev1.TenantBillingAssignment{current, f.history} {
+		got, err := billingRPC(f.caller, f.private.Get, privatev1.TenantBillingAssignmentsGetRequest_builder{Id: expected.GetId()}.Build())
 		Expect(err).ToNot(HaveOccurred(), "current and historical intervals must remain readable, not archived")
-		Expect(proto.Equal(got.GetObject(), before)).To(BeTrue(), "all stored metadata, version, spec and status must remain unchanged")
+		Expect(proto.Equal(got.GetObject(), expected)).To(BeTrue(),
+			"stored interval %q must match in metadata, version, spec and status; got %v, want %v", expected.GetId(), got.GetObject(), expected)
 	}
 	Expect(f.changeCount()).To(Equal(f.changes), "no assignment mutation may enter the changes outbox")
 	var rows int

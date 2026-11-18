@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"time"
 
-	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -50,20 +50,7 @@ var _ = Describe("Project membership authorization", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		projectID := projectResponse.GetObject().GetId()
-		DeferCleanup(func(cleanupCtx context.Context) {
-			_, deleteErr := projectsAdmin.Delete(cleanupCtx, privatev1.ProjectsDeleteRequest_builder{
-				Id: projectID,
-			}.Build())
-			if grpcstatus.Code(deleteErr) != grpccodes.NotFound {
-				Expect(deleteErr).ToNot(HaveOccurred())
-			}
-			Eventually(func(g Gomega) {
-				_, getErr := projectsAdmin.Get(cleanupCtx, privatev1.ProjectsGetRequest_builder{
-					Id: projectID,
-				}.Build())
-				g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
-			}, time.Minute, time.Second).Should(Succeed())
-		})
+		deferMembershipAuthorizationProjectDeletion(projectsAdmin, projectID)
 
 		projectFilter := fmt.Sprintf(
 			"this.metadata.name == %q && this.metadata.tenant == %q", projectName, usersGroup,
@@ -136,62 +123,67 @@ var _ = Describe("Project membership authorization", func() {
 
 	It("allows a tenant-bound manager to grant membership only in the project they manage", func(ctx context.Context) {
 		adminConn := tool.InternalView().AdminConn()
+		projectsAdmin := privatev1.NewProjectsClient(adminConn)
 		usersAdmin := privatev1.NewUsersClient(adminConn)
 		membershipsAdmin := privatev1.NewProjectMembershipsClient(adminConn)
 
-		By("provisioning the tenant user and viewer through the normal authentication path")
-		viewerConn, err := tool.MakeUserConnection(ctx, sshKeyProjectOwnerUsername, usersPassword)
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { Expect(viewerConn.Close()).To(Succeed()) })
-		for _, projects := range []publicv1.ProjectsClient{
-			publicv1.NewProjectsClient(tool.ExternalView().UserConn()),
-			publicv1.NewProjectsClient(viewerConn),
-		} {
-			_, err := projects.List(ctx, publicv1.ProjectsListRequest_builder{}.Build())
-			Expect(err).NotTo(HaveOccurred())
-		}
-		userID := func(username string) string {
+		// Create through the public API so the project controller can grant its
+		// initial manager membership to a real User instead of the system actor.
+		createProject := func(username string) (projectName, userID string) {
 			GinkgoHelper()
-			filter := fmt.Sprintf("this.spec.username == %q && this.metadata.tenant == %q", username, usersGroup)
-			response, err := usersAdmin.List(ctx, privatev1.UsersListRequest_builder{Filter: &filter}.Build())
+			revokeTenantAdmin := grantMCPDiscoveryTenantAdmin(ctx, username)
+			conn, err := tool.MakeUserConnection(ctx, username, usersPassword)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(response.GetItems()).To(HaveLen(1))
-			return response.GetItems()[0].GetId()
-		}
-		managerID := userID(userUsername)
-		viewerID := userID(sshKeyProjectOwnerUsername)
+			DeferCleanup(conn.Close)
+			projects := publicv1.NewProjectsClient(conn)
+			// Provision the Fulfillment User through the normal authentication path.
+			_, err = projects.List(ctx, publicv1.ProjectsListRequest_builder{}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			filter := fmt.Sprintf("this.spec.username == %q && this.metadata.tenant == %q", username, usersGroup)
+			users, err := usersAdmin.List(ctx, privatev1.UsersListRequest_builder{Filter: &filter}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(users.GetItems()).To(HaveLen(1))
+			userID = users.GetItems()[0].GetId()
+			Expect(userID).NotTo(BeEmpty())
 
-		By("granting the tenant user a manager membership in just one fixture project")
-		managedProject := createCatalogItemProjectFixture(ctx, usersGroup)
-		otherProject := createCatalogItemProjectFixture(ctx, usersGroup)
-		projectsAdmin := privatev1.NewProjectsClient(adminConn)
-		for _, project := range []string{managedProject, otherProject} {
-			filter := fmt.Sprintf("this.metadata.tenant == %q && this.metadata.name == %q", usersGroup, project)
-			Eventually(func(g Gomega) {
-				response, err := projectsAdmin.List(ctx, privatev1.ProjectsListRequest_builder{Filter: &filter}.Build())
+			projectName = "membership-access-" + uuid.New()[24:]
+			response, err := projects.Create(ctx, publicv1.ProjectsCreateRequest_builder{
+				Object: publicv1.Project_builder{
+					Metadata: publicv1.Metadata_builder{Name: projectName, Tenant: usersGroup}.Build(),
+					Spec:     publicv1.ProjectSpec_builder{Title: projectName}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			projectID := response.GetObject().GetId()
+			deferMembershipAuthorizationProjectDeletion(projectsAdmin, projectID)
+			revokeTenantAdmin(ctx)
+			Expect(response.GetObject().GetMetadata().GetCreator()).To(Equal(userID))
+
+			Eventually(ctx, func(g Gomega, ctx context.Context) {
+				response, err := projectsAdmin.Get(ctx, privatev1.ProjectsGetRequest_builder{Id: projectID}.Build())
 				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(response.GetItems()).To(HaveLen(1))
-				g.Expect(response.GetItems()[0].GetStatus().GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_ACTIVE))
+				status := response.GetObject().GetStatus()
+				g.Expect(status.GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_ACTIVE), status.GetMessage())
 			}, time.Minute, time.Second).Should(Succeed())
+			return projectName, userID
 		}
-		membership, err := membershipsAdmin.Create(ctx, privatev1.ProjectMembershipsCreateRequest_builder{
-			Object: privatev1.ProjectMembership_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name: managedProject + "-manager", Tenant: usersGroup, Project: managedProject,
-				}.Build(),
-				Spec: privatev1.ProjectMembershipSpec_builder{
-					Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
-					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: managerID}.Build()},
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).NotTo(HaveOccurred())
-		membershipID := membership.GetObject().GetId()
-		deferProjectMembershipDeletion(membershipsAdmin, membershipID)
-		Eventually(func(g Gomega) {
-			response, err := membershipsAdmin.Get(ctx, privatev1.ProjectMembershipsGetRequest_builder{Id: membershipID}.Build())
+
+		By("creating two projects with distinct owners in the same tenant")
+		managedProject, managerID := createProject(userUsername)
+		otherProject, viewerID := createProject(sshKeyProjectOwnerUsername)
+		Expect(viewerID).NotTo(Equal(managerID))
+
+		By("waiting for the controller to reconcile the caller's creator membership")
+		membershipFilter := fmt.Sprintf("this.metadata.tenant == %q && this.metadata.project == %q", usersGroup, managedProject)
+		Eventually(ctx, func(g Gomega, ctx context.Context) {
+			response, err := membershipsAdmin.List(ctx, privatev1.ProjectMembershipsListRequest_builder{Filter: &membershipFilter}.Build())
 			g.Expect(err).NotTo(HaveOccurred())
-			status := response.GetObject().GetStatus()
+			g.Expect(response.GetItems()).To(HaveLen(1))
+			membership := response.GetItems()[0]
+			g.Expect(membership.GetSpec().GetRole()).To(Equal(privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER))
+			g.Expect(membership.GetSpec().GetUsers()).To(HaveLen(1))
+			g.Expect(membership.GetSpec().GetUsers()[0].GetId()).To(Equal(managerID))
+			status := membership.GetStatus()
 			g.Expect(status.GetState()).To(Equal(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_READY), status.GetMessage())
 			g.Expect(status.GetUsers()).To(HaveLen(1))
 		}, time.Minute, time.Second).Should(Succeed())
@@ -243,6 +235,21 @@ var _ = Describe("Project membership authorization", func() {
 	})
 })
 
+func deferMembershipAuthorizationProjectDeletion(client privatev1.ProjectsClient, id string) {
+	GinkgoHelper()
+	Expect(id).NotTo(BeEmpty())
+	DeferCleanup(func(ctx context.Context) {
+		_, err := client.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{Id: id}.Build())
+		if grpcstatus.Code(err) != grpccodes.NotFound {
+			Expect(err).NotTo(HaveOccurred())
+		}
+		Eventually(ctx, func(g Gomega, ctx context.Context) {
+			_, err := client.Get(ctx, privatev1.ProjectsGetRequest_builder{Id: id}.Build())
+			g.Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+		}, time.Minute, time.Second).Should(Succeed())
+	}, NodeTimeout(2*time.Minute))
+}
+
 func deferProjectMembershipDeletion(client privatev1.ProjectMembershipsClient, id string) {
 	GinkgoHelper()
 	Expect(id).NotTo(BeEmpty())
@@ -251,9 +258,9 @@ func deferProjectMembershipDeletion(client privatev1.ProjectMembershipsClient, i
 		if grpcstatus.Code(err) != grpccodes.NotFound {
 			Expect(err).NotTo(HaveOccurred())
 		}
-		Eventually(func(g Gomega) {
+		Eventually(ctx, func(g Gomega, ctx context.Context) {
 			_, err := client.Get(ctx, privatev1.ProjectMembershipsGetRequest_builder{Id: id}.Build())
 			g.Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 		}, time.Minute, time.Second).Should(Succeed())
-	})
+	}, NodeTimeout(2*time.Minute))
 }

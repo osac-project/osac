@@ -329,7 +329,8 @@ var _ = Describe("Generic DAO", func() {
 
 					_, err = generic.Delete().SetId("native-id-alpha").Do(ctx)
 					Expect(err).ToNot(HaveOccurred())
-					expectOperations([]string{"update", "archive", "delete"}, []int{1, 11, 1})
+					// The archive insert binds the optional finalization timestamp even when it is NULL.
+					expectOperations([]string{"update", "archive", "delete"}, []int{1, 12, 1})
 					var archived []byte
 					Expect(tx.QueryRow(ctx, `select data from archived_objects where id = $1`,
 						"native-id-alpha").Scan(&archived)).To(Succeed())

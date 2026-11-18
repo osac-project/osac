@@ -71,6 +71,15 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
   );
   await testStep('catalog-launch', 'Click Launch instance', () => launchCatalogItem(page));
 
+  await testStep('catalog-launch', 'Verify the Catalog item wizard step', async () => {
+    const catalogCard = page
+      .locator(...VmCreatePage.catalogItemCards)
+      .filter({ hasText: catalogTestData.name })
+      .first();
+    await expect(catalogCard.locator(...VmCreatePage.catalogItemSelection)).toBeChecked();
+    await page.getByRole(...VmCreatePage.next).click();
+  });
+
   const projectName = await testStep('catalog-launch', 'Set the project and VM name', async () => {
     const selectedProject = await selectOption(page, VmCreatePage.project, /.*/);
     await page.locator(...VmCreatePage.vmName).fill(vmName);

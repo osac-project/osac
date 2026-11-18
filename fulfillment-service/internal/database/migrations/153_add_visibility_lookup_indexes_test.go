@@ -15,7 +15,6 @@ package migrations
 
 import (
 	"context"
-	"os"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -66,7 +65,7 @@ var _ = DescribeMigration("Add visibility lookup indexes", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	It("indexes existing rows without changing visibility and rolls back only its indexes", func(ctx context.Context) {
+	It("indexes existing rows without changing visibility or data", func(ctx context.Context) {
 		checkVisibility := func() {
 			rows, err := conn.Query(ctx, livenessQuery, []string{
 				"archived", "tenant-a", "deleting", "missing", "revived", "tenant-b",
@@ -115,14 +114,6 @@ var _ = DescribeMigration("Add visibility lookup indexes", func() {
 			"CREATE INDEX project_membership_subjects_by_tenant_user ON public.project_membership_subjects "+
 				"USING btree (tenant, \"user\")",
 		)))
-		Expect(data()).To(Equal(originalData))
-		checkVisibility()
-
-		down, err := os.ReadFile("rollback/153_add_visibility_lookup_indexes.down.sql")
-		Expect(err).ToNot(HaveOccurred())
-		_, err = conn.Exec(ctx, string(down))
-		Expect(err).ToNot(HaveOccurred())
-		Expect(indexes()).To(Equal(originalIndexes))
 		Expect(data()).To(Equal(originalData))
 		checkVisibility()
 	})

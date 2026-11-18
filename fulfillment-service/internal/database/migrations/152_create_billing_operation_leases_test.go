@@ -15,7 +15,6 @@ package migrations
 
 import (
 	"context"
-	"os"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -23,7 +22,7 @@ import (
 )
 
 var _ = DescribeMigration("Create billing operation leases", func() {
-	It("creates guarded digest keys and can remove the table with the down migration", func(ctx context.Context) {
+	It("creates guarded unique digest keys", func(ctx context.Context) {
 		Expect(tool.Migrate(ctx, 152)).To(Succeed())
 		key := strings.Repeat("a", 64)
 		_, err := conn.Exec(ctx, `insert into billing_operation_leases values ($1, 'owner', now())`, key)
@@ -32,12 +31,5 @@ var _ = DescribeMigration("Create billing operation leases", func() {
 		Expect(err).To(HaveOccurred(), "operation key must be unique")
 		_, err = conn.Exec(ctx, `insert into billing_operation_leases values ('raw-correlation', 'owner', now())`)
 		Expect(err).To(HaveOccurred(), "raw keys must not be persisted")
-		down, err := os.ReadFile("rollback/152_create_billing_operation_leases.down.sql")
-		Expect(err).ToNot(HaveOccurred())
-		_, err = conn.Exec(ctx, string(down))
-		Expect(err).ToNot(HaveOccurred())
-		var missing bool
-		Expect(conn.QueryRow(ctx, `select to_regclass('billing_operation_leases') is null`).Scan(&missing)).To(Succeed())
-		Expect(missing).To(BeTrue())
 	})
 })

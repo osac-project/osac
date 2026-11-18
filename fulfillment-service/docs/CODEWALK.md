@@ -101,10 +101,13 @@ post-key database timestamp strictly after any prior unbilled finalization. Dele
 locks tenant → affected accounts → intervals, then uses one clamped database sample
 for first acceptance and billing closure. The durable `deleted_tenant_identities`
 marker captures the original authenticated actor (NULL if unknown), not the creator
-or finalizer controller. Archival retains ordinary dependency checks and its atomic
+or finalizer controller. Tenant finalization retains ordinary dependency checks and its atomic
 savepoint, physically removes finalized tenants, and captures a separate post-delete
-finalization timestamp in the same transaction. Billing history survives without a
-live-tenant FK. Assignment-only finalization uses its tenant row lock without the
+finalization timestamp in the same transaction. This one durable identity store supports
+runtime liveness and the billing-only name-reuse guard, without reading tenant archives.
+Generic archival for unrelated objects and preexisting archive evidence are not removed.
+Billing history stays in the assignment object table without a live-tenant FK; its account
+FK and partial uniqueness indexes remain. Assignment-only finalization uses its tenant row lock without the
 identity key. Existing non-lifecycle create guards and controller cleanup remain;
 direct SQL or mixed transactions bypassing this lock order are not supported.
 
@@ -128,6 +131,15 @@ database clock sample after I/O and locks, clamped to all history, closes and op
 There are no billing nested transactions, durable operation leases or remote account writes. A bounded
 provider read may occupy a pooled connection; cancellation releases admission and the request transaction.
 All public/private billing handlers report their final RPC error, including public mapping failures.
+
+The billing tables use the same metadata columns and private protobuf JSON body as other objects.
+Their old business columns are read-only projections for existing indexes, constraints and selectors,
+not a second writable model. Account Spec is empty and provider observations are nested in Status;
+assignments retain canonical typed tenant/account references and timestamped interval history.
+Billing deliberately has no generic change trigger or controller: discovery, assignment mutation and
+private Signal do not enqueue billing object events. Generic outbox behavior for other objects is
+unchanged. Historical migration 152 remains immutable; forward migration 158 removes its obsolete
+lease table only after all runtime acquisition/reservation/fencing consumers have been retired.
 
 Streaming RPCs use `TxInterceptor.StreamServer`, which supplies a manager-only context and
 shadows any ambient transaction. Authorization, JIT, and each Watch visibility check can use

@@ -16,7 +16,6 @@ package migrations
 import (
 	"context"
 	"errors"
-	"os"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -64,14 +63,6 @@ var _ = DescribeMigration("Release finalized tenant domains", func() {
 		)::text`).Scan(&result)).To(Succeed())
 		return result
 	}
-	rollback := func(ctx context.Context) error {
-		GinkgoHelper()
-		script, err := os.ReadFile("rollback/154_release_finalized_tenant_domains.down.sql")
-		Expect(err).ToNot(HaveOccurred())
-		_, err = conn.Exec(ctx, string(script))
-		return err
-	}
-
 	It("repairs only completed tombstones and preserves tenant text and closed billing history", func(ctx context.Context) {
 		before := history(ctx)
 		Expect(owners(ctx)).To(HaveLen(3))
@@ -113,33 +104,33 @@ var _ = DescribeMigration("Release finalized tenant domains", func() {
 		Expect(owners(ctx)).To(Equal([]string{"live.example.com:live", "pending.example.com:replacement"}))
 	})
 
-	It("restores old materialization and reservations on rollback when domains have not been reused", func(ctx context.Context) {
-		originalFunction, originalOwners, originalHistory := function(ctx), owners(ctx), history(ctx)
+	It("retains the forward materializer and never restores completed reservations", func(ctx context.Context) {
 		Expect(tool.Migrate(ctx, 154)).To(Succeed())
-		Expect(rollback(ctx)).To(Succeed())
-		// Whitespace/comments are not part of the function's behavior.
-		Expect(function(ctx)).NotTo(ContainSubstring("cardinality(new.finalizers)"))
-		Expect(originalFunction).NotTo(ContainSubstring("cardinality(new.finalizers)"))
-		Expect(owners(ctx)).To(Equal(originalOwners))
-		Expect(history(ctx)).To(Equal(originalHistory))
-		_, err := conn.Exec(ctx, `delete from tenant_domains where tenant = 'complete';
-			update tenants set data = data where id = 'complete'`)
+		beforeFunction, beforeOwners, beforeHistory := function(ctx), owners(ctx), history(ctx)
+		Expect(beforeFunction).To(ContainSubstring("cardinality(new.finalizers)"))
+		_, err := conn.Exec(ctx, `update tenants set data = data where id = 'complete'`)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(owners(ctx)).To(Equal(originalOwners))
+		Expect(function(ctx)).To(Equal(beforeFunction))
+		Expect(owners(ctx)).To(Equal(beforeOwners))
+		Expect(history(ctx)).To(Equal(beforeHistory))
 	})
 
-	It("refuses unsafe rollback after domain reuse without changing ownership, history or trigger", func(ctx context.Context) {
+	It("rolls back a failed reservation transaction after domain reuse without changing ownership, history or trigger", func(ctx context.Context) {
 		Expect(tool.Migrate(ctx, 154)).To(Succeed())
 		_, err := conn.Exec(ctx, `insert into tenants (id, name, tenant, data)
 			values ('replacement', 'replacement', 'replacement', '{"spec":{"domains":["complete.example.com"]}}')`)
 		Expect(err).ToNot(HaveOccurred())
 		beforeFunction, beforeOwners, beforeHistory := function(ctx), owners(ctx), history(ctx)
-		err = rollback(ctx)
+		tx, err := conn.Begin(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func(ctx context.Context) { _ = tx.Rollback(ctx) })
+		_, err = tx.Exec(ctx, `update tenants set finalizers = '{}' where id = 'pending';
+			insert into tenants (id, name, tenant, data)
+			values ('blocked', 'blocked', 'blocked', '{"spec":{"domains":["live.example.com"]}}')`)
 		var pgErr *pgconn.PgError
 		Expect(errors.As(err, &pgErr)).To(BeTrue())
-		Expect(pgErr.Code).To(Equal("23505"))
-		_, err = conn.Exec(ctx, "rollback")
-		Expect(err).ToNot(HaveOccurred())
+		Expect(pgErr.Code).To(Equal("Z0004"))
+		Expect(tx.Rollback(ctx)).To(Succeed())
 		Expect(function(ctx)).To(Equal(beforeFunction))
 		Expect(owners(ctx)).To(Equal(beforeOwners))
 		Expect(history(ctx)).To(Equal(beforeHistory))

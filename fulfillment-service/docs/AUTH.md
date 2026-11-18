@@ -515,8 +515,9 @@ The following tenancy logic implementations are available:
 
 Use `--tenancy-logic=default` (this is the default). This implementation starts with the subject's
 `tenants` field (see [Subject Resolution](#subject-resolution)). In the server, finite scopes are
-intersected with authoritative PostgreSQL tenant liveness: deleted or archived names are removed,
-while never-seen names remain eligible for initial JIT onboarding. Universal platform scope is
+intersected with authoritative PostgreSQL tenant liveness: deletion-marked live rows and names in
+`deleted_tenant_identities` without a current live incarnation are removed. Runtime liveness does
+not query `archived_tenants`; never-seen names remain eligible for initial JIT onboarding. Universal platform scope is
 unchanged; this is not a time-based authorization cache.
 
 - **Assignable Tenants**: Subject tenants remaining after the liveness check
@@ -663,8 +664,26 @@ served by a closed, reviewed allow-list: `BillingAccounts/List`,
 `TenantBillingAssignments/Signal` method is admin-only. Any other billing method is
 denied for every subject, and no tenant role or other realm role grants billing access.
 No `cloud-provider-admin` realm role is provisioned; a token that claims it grants
-nothing. `tenant_id` on an assignment is data, not an authorization credential, and
+nothing. Cloud-provider administrator here names a workflow/persona using an existing
+`is_admin` identity, not a new realm-role grant. The typed `spec.tenant` reference on an
+assignment is data, not an authorization credential, and
 there is no tenant self-service assignment read.
+
+Account `Get`, `Create` and `Delete`, and assignment `Delete`, are descriptor-only
+scaffolds: direct handlers remain `Unimplemented`, while normal requests are denied by
+this allow-list even for administrators. Accounts are system-global objects, with empty
+Spec and read-only nested Status; only private descriptors expose
+`status.provider_account_reference`. Its omission from the public API is enforced by the
+schema, not by a caller-supplied output flag. Assignment access checks the stored canonical
+tenant against trusted scope, not a replacement request reference or selected CLI project.
+Generic CLI discovery/completion does not grant these methods or expose private fields.
+See [billing contracts and CLI](API.md#billing-account-and-assignment-contracts).
+
+The OAuth `aud` claim identifies the Fulfillment API audience described above, not a
+billing account or metering consumer. `status.external_billing_account_id` is an
+attribution token, not an authentication token, M360 account ID or permission grant.
+Neither a provider capability nor private API access authorizes OSAC to write provider
+accounts; matching is read-only and PENDING remediation is performed externally.
 
 ### Tenant deletion and existing tokens
 
@@ -673,7 +692,9 @@ construction/JIT, again for resource visibility, and for each Events.Watch
 delivery. Deleted memberships are removed without a time-based cache; managed
 service-account credentials also require a live tenant. Other live memberships,
 shared visibility, and platform administrator/controller cleanup access remain.
-An archived tenant name is not treated as a new JIT onboarding request.
+The durable deleted-identity marker prevents a removed tenant from being treated as a
+new JIT onboarding request, without coupling runtime authorization to generic archives.
+Migration backfill retains prior archive evidence; archives for unrelated objects remain.
 
 These checks apply at the authorization or delivery lookup, not by invalidating
 the JWT signature or serializing already-authorized in-flight operations against

@@ -500,38 +500,69 @@ appear in the public API.
 
 `TenantBillingAssignments.Signal` is a private, synchronous exception: it revalidates the current assignment
 through the same path as re-submitting `Update`, without creating another history interval. Closed intervals
-are rejected. Its flat table has no generic change trigger or billing controller, so it emits no outbox
+are rejected. Its normalized object table has no generic change trigger or billing controller, so it emits no outbox
 signal and starts no background reconciliation. Only global administrators/controllers may call it.
 
 #### Billing account and assignment contracts
 
-Billing methods use the existing `is_admin` authorization allow-list. Assignment reads and
-writes are additionally constrained by the authenticated subject's trusted tenant scope;
-current platform administrators have universal tenant scope. A `cloud-provider-admin` realm
-claim alone grants no access. There is no tenant self-service assignment read, and
-`spec.tenant_id` is data, not an authorization credential. The private metering read and
-identity are owned by
+The cloud-provider administrator workflow uses the public API under the existing `is_admin`
+authorization allow-list: discover accounts with `BillingAccounts.List`, check configuration
+with `BillingProviderStatuses.Get`, and `List`, `Get`, `Create` or `Update` tenant billing
+assignments. The private API provides the same operations plus assignment `Signal` for
+administrators/controllers. Assignment reads and writes are additionally constrained by the
+authenticated subject's trusted tenant scope; current platform administrators have universal
+tenant scope. A `cloud-provider-admin` realm claim alone grants no access. There is no tenant
+self-service assignment read, and `spec.tenant` is data, not an authorization credential.
+The private metering read and identity are owned by
 [OSAC-6888](https://redhat.atlassian.net/browse/OSAC-6888), not this administrative API.
 
-Billing list filters use normalized stored values: `this.state == "ACTIVE"` for accounts and
-`this.status.connection_state == "CONNECTED"` for assignments. The type-prefixed enum names
-in JSON responses are not filter literals.
+Descriptor presence does not mean available CRUD: account `Get`, `Create` and `Delete`, and
+assignment `Delete`, are descriptor-only scaffolds. They retain `Unimplemented` handlers and
+are denied by authorization even for administrators. Accounts have no Update or Signal RPC.
+Provider status is a get-only singleton, not a lifecycle object.
 
-`BillingAccount.external_billing_account_id` is the locally retained, provider-agnostic
-attribution identifier, distinct from the tenant id and the private provider-native account
-reference. It can be established locally while an assignment is `PENDING`, before a provider
-account carries it. Account filters and order expressions use `external_billing_account_id`
-too. The former `correlation_id` name is not an alias: REST and CLI JSON/YAML use the new
-snake-case name, and the table header is `EXTERNAL-BILLING-ACCOUNT-ID`. Protobuf field number
-7 and its string type are unchanged, preserving binary data compatibility, but generated Go
-accessors and JSON names change. The default protoJSON name is `externalBillingAccountId`.
+Accounts and assignments use the standard `id`, `metadata`, `spec`, `status` envelope:
 
-Migration 155 renames the SQL column without rewriting values or assignment links. Coordinate
-the service/database cutover: old service binaries require the old column name. This is a
-forward-only migration; no inverse script is supplied. Stable correlation-related reason
-codes and provider-native `externalId` remain unchanged. This naming change does not change
-assignment resolution or the existing tenant/metering attribution source, and does not add
-an assignment-to-metering bridge.
+- Discovered accounts are system-global: `metadata.tenant` is `system`, project is empty,
+  new discovery records use creator `system`, and `spec` is empty. Migrated legacy accounts
+  retain unknown creation/creator evidence (epoch/empty), not invented discovery-time history.
+  Their stable `metadata.name` is `ba-` plus the
+  first 60 lowercase hexadecimal SHA-256 characters of the UTF-8 OSAC `id`. Provider labels
+  never determine identity. All observations live in `status`, including `provider_key`,
+  `display_name`, `base_currency`, `state` and `state_observation_timestamp`.
+- `status.provider_account_reference` is the private provider-native account identity and
+  is absent from the public descriptor, responses, filters and ordering. It is neither the
+  OSAC `id` nor the display label.
+- `status.external_billing_account_id` is the optional, locally retained, provider-agnostic
+  attribution token, not an M360 account ID, tenant ID or credential. Absence and a present
+  empty value are distinct, and stored raw values are not trimmed or rewritten. It can be
+  established locally while an assignment is `PENDING`, before any provider account carries it.
+- Assignments use typed `spec.tenant` and `spec.billing_account` references, each accepting
+  `id`, `name` or both; both must agree. Responses retain canonical identities even after
+  tenant deletion. The owner is also recorded in `metadata.tenant` and the
+  `osac.openshift.io/tenant` annotation; assignments are not project-scoped. Only the atomic
+  `spec.billing_account` reference is writable on Update. Replacement closes the old interval
+  and creates a new ID with the same metadata name; same-account revalidation preserves both
+  ID and `status.effective_from_timestamp`. `status.effective_to_timestamp` is absent for the
+  current interval; closed intervals are immutable `[from, to)` history, including zero-length
+  intervals. `status.connection_state` and `status.message` report validation/remediation.
+
+Billing filters and ordering use nested descriptor paths, such as `this.status.state == 1`
+(ACTIVE), `this.status.connection_state == 2` (CONNECTED),
+`!has(this.status.effective_to_timestamp)`, and `status.external_billing_account_id`.
+Enum comparisons are numeric, not the type-prefixed names used by JSON responses. Timestamp
+predicates use `timestamp("2026-01-01T00:00:00Z")`. Old flat account fields,
+`correlation_id`, scalar `tenant_id`/`billing_account_id`, and `effective_from`/`effective_to`
+are not aliases. REST and CLI structured output use the nested snake-case field names.
+
+Migration 155 is the historical SQL-column rename, preserving raw values and links; 156
+normalizes the object envelope, and 157 retains deleted tenant identities. The final envelope
+and typed references are a breaking wire/JSON amendment, not merely a binary-compatible rename.
+Migration 158 drops only the retired lease table and its own indexes, including stale rows;
+it leaves account data, assignment history, identity markers and their constraints untouched.
+These migrations are forward-only, with no inverse scripts. Coordinate service/database
+cutover: old binaries require the old schema. Stable correlation-related reason codes and
+provider-native `externalId` remain unchanged. This does not add an assignment-to-metering bridge.
 
 Discovery refreshes a supplied, nonempty `base_currency` from a non-older provider observation;
 empty or stale observations do not erase it. Three-letter currency codes are normalized to
@@ -543,11 +574,13 @@ Correlation resolution is read-only for every adapter. It retains, adopts or gen
 local identifier, then completes one bounded exact-carrier walk. `CONNECTED` requires the
 selected account to be the sole provider-side carrier; zero carriers leaves the assignment
 `PENDING`. An external administrator sets the provider `externalId` to the
-`external_billing_account_id` shown by `BillingAccounts.List`, then re-submits same-account
+`status.external_billing_account_id` shown by `BillingAccounts.List`, then re-submits same-account
 Update (or private Signal) to validate the unique match without replacing or retiming the
 interval. Foreign, multiple or inconsistent carriers fail with `ACCOUNT_AMBIGUOUS`.
-Vendor write capabilities do not change this application contract; OSAC never calls an
-account setter.
+OSAC makes no provider account writes, regardless of vendor capabilities. `PENDING` requires
+manual provider-side remediation; gated publish/launch remain blocked with
+`BILLING_ACCOUNT_UNAVAILABLE` until successful revalidation. This is not a provider setter
+or write/readback workflow.
 
 Assignment creation, replacement, and same-account revalidation read the selected
 account's normalized state from the provider before resolving correlation. The stored
@@ -582,12 +615,50 @@ queryable and name reuse fails with `TENANT_BILLING_HISTORY_RETAINED` while that
 retained. Unbilled explicit recreation is allowed strictly after prior finalization; its live
 row takes precedence over the older marker until the next deletion. Existing live duplicates
 remain `AlreadyExists`. This does not define a purge schedule or global name reservation.
-Retaining billing history does not bypass other restrictive tenant dependencies.
+Retaining billing history does not bypass other restrictive tenant dependencies. One durable
+`deleted_tenant_identities` store drives deletion liveness and the billing-only reuse guard;
+runtime billing retention and authorization do not consult `archived_tenants`. Generic archives
+for unrelated objects and historical tenant archive evidence remain; this is not a platform-wide
+removal of GenericArchive or a second assignment-history store.
 Domain reservations remain while deletion cleanup has finalizers, and are released
 after successful cleanup completes, matching the physical-deletion baseline.
 Historical domain text in an archived tenant is not live ownership; finalized
 tenants cannot be updated to reserve those domains again. This domain-release timing is an
 approved lifecycle compatibility choice, not a new billing-retention requirement.
+
+##### Billing CLI
+
+Billing uses generic descriptor-driven `get`, `create`, `edit`, `label` and `delete` dispatch,
+not billing-specific command adapters. Dispatch/completion support does not make a scaffold
+RPC available: the service/authorization restrictions above still apply. Prefer the public
+API for the administrator workflow; private Signal is an internal revalidation operation.
+
+Canonical short types are `billingaccount`/`billingaccounts`,
+`tenantbillingassignment`/`tenantbillingassignments`, and
+`billingproviderstatus`/`billingproviderstatuses`; fully qualified public/private names also
+work. Private mode prefers private descriptors for short names. The former `billing-accounts`,
+`tenant-billing-assignments`, `billing-provider-status` and `tba` names are retired, as are
+billing-specific `--limit`/`--offset` flags and per-page notices.
+
+Account keys match OSAC ID or stable metadata name, not display label, private native identity
+or attribution token. Accounts ignore selected tenant/project filters; assignments retain
+selected tenant scoping but never selected project scoping. Explicit CEL filters still narrow
+results and cannot expand server-authorized visibility. Create/edit use the standard envelope
+and typed references, not the retired scalar flags.
+
+All six table layouts (public/private account, assignment and provider status) are generic.
+Accounts show ID, NAME, provider, display label, currency, state, attribution token and observation
+time; assignments show ID, NAME, canonical tenant/account, state, interval timestamps and message.
+Descriptor-supported lifecycle objects also show DELETING. Provider status instead uses six
+horizontal status columns: state, provider, message, capabilities, last successful check and usage
+delivery; it has no lifecycle columns. Native identity is not a default table column, even privately.
+Table cells sanitize control characters without rewriting structured output or stored raw tokens.
+
+JSON/YAML render each item through protobuf Any with `@type` and snake-case fields: zero items
+are an empty list, one item is an object, and multiple items are a list. There is no CLI
+`size`/`total`/`items` envelope; the API List envelope remains unchanged. Provider status performs
+exactly one empty Get and rejects keys, `--filter` and `--watch`, including explicit empty/false
+flags. Its capability display describes provider information, not permission for provider writes.
 
 In general, services should not have any additional ad-hoc methods beyond those listed above. There
 are some existing exceptions, and the project will work to remove them over time.

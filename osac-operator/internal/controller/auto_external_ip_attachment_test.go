@@ -67,6 +67,17 @@ func (c *testExternalIPAttachmentsClient) Create(_ context.Context, request *pri
 	return &privatev1.ExternalIPAttachmentsCreateResponse{Object: attachment}, nil
 }
 
+type testBareMetalInstancesGetter struct {
+	response *privatev1.BareMetalInstancesGetResponse
+	err      error
+	getCalls int
+}
+
+func (c *testBareMetalInstancesGetter) Get(context.Context, *privatev1.BareMetalInstancesGetRequest, ...grpc.CallOption) (*privatev1.BareMetalInstancesGetResponse, error) {
+	c.getCalls++
+	return c.response, c.err
+}
+
 type countingAutomaticExternalIPClient struct {
 	client.Client
 	listCalls int
@@ -234,6 +245,224 @@ func TestReconcileAutomaticExternalIPAttachmentsRetriesFulfillmentReadinessRace(
 	}
 	if result.RequeueAfter != time.Second {
 		t.Fatalf("RequeueAfter = %s, want %s", result.RequeueAfter, time.Second)
+	}
+}
+
+func TestReconcileAutomaticExternalIPAttachmentsWaitsForUnavailableEndpointOnlyWhileNeeded(t *testing.T) {
+	target := testAutomaticAttachmentTarget(bareMetalInstanceOwner, "bmi-1", "tenant-1")
+	target.availableEndpoints[""] = false
+
+	failedIP := testAutomaticExternalIP("eip-1", target, "", "192.0.2.10")
+	failedIP.Status.Conditions = []metav1.Condition{{Type: v1alpha1.NetworkConditionReady, Status: metav1.ConditionFalse,
+		Reason: v1alpha1.ReasonFailed, Message: "pool exhausted", LastTransitionTime: metav1.Now()}}
+
+	for _, tc := range []struct {
+		name        string
+		ip          *v1alpha1.ExternalIP
+		attachments []*privatev1.ExternalIPAttachment
+		wantRequeue bool
+	}{
+		{
+			name:        "allocated IP has no attachment",
+			ip:          testAutomaticExternalIP("eip-1", target, "", "192.0.2.10"),
+			wantRequeue: true,
+		},
+		{
+			name: "failed IP",
+			ip:   failedIP,
+		},
+		{
+			name:        "attachment already exists",
+			ip:          testAutomaticExternalIP("eip-1", target, "", "192.0.2.10"),
+			attachments: []*privatev1.ExternalIPAttachment{testExpectedAutomaticAttachment("eip-1", target, "")},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			attachmentsClient := &testExternalIPAttachmentsClient{attachments: tc.attachments}
+			result, err := reconcileAutomaticExternalIPAttachments(context.Background(),
+				testAutomaticExternalIPClient(t, tc.ip), "networking", attachmentsClient,
+				automaticExternalAccessRecheck, target)
+			if err != nil {
+				t.Fatalf("reconcile unavailable endpoint: %v", err)
+			}
+			if tc.wantRequeue && result.RequeueAfter != automaticExternalAccessRecheck {
+				t.Fatalf("RequeueAfter = %s, want %s", result.RequeueAfter, automaticExternalAccessRecheck)
+			}
+			if !tc.wantRequeue && result.RequeueAfter != 0 {
+				t.Fatalf("RequeueAfter = %s, want no requeue", result.RequeueAfter)
+			}
+			if len(attachmentsClient.created) != 0 {
+				t.Fatalf("created %d attachments for an unavailable endpoint", len(attachmentsClient.created))
+			}
+		})
+	}
+}
+
+func TestBareMetalCleanupAutomaticExternalIPAttachmentRequiresReadyAlways(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		phase       bmfov1alpha1.BareMetalInstancePhaseType
+		runStrategy bmfov1alpha1.BareMetalInstanceRunStrategy
+		primaryIP   string
+		autoAccess  bool
+		deleting    bool
+		wantGet     bool
+		wantList    bool
+		wantCreate  bool
+		wantRequeue bool
+	}{
+		{name: "ready and always", phase: bmfov1alpha1.BareMetalInstancePhaseReady, runStrategy: bmfov1alpha1.RunStrategyAlways, primaryIP: "192.0.2.12", autoAccess: true, wantGet: true, wantList: true, wantCreate: true},
+		{name: "halted", phase: bmfov1alpha1.BareMetalInstancePhaseReady, runStrategy: bmfov1alpha1.RunStrategyHalted, primaryIP: "192.0.2.12", autoAccess: true, wantGet: true, wantList: true, wantRequeue: true},
+		{name: "unspecified run strategy", phase: bmfov1alpha1.BareMetalInstancePhaseReady, primaryIP: "192.0.2.12", autoAccess: true, wantGet: true, wantList: true, wantRequeue: true},
+		{name: "progressing", phase: bmfov1alpha1.BareMetalInstancePhaseProgressing, runStrategy: bmfov1alpha1.RunStrategyAlways, primaryIP: "192.0.2.12", autoAccess: true, wantGet: true, wantList: true, wantRequeue: true},
+		{name: "no primary address", phase: bmfov1alpha1.BareMetalInstancePhaseReady, runStrategy: bmfov1alpha1.RunStrategyAlways, autoAccess: true, wantGet: true, wantList: true, wantRequeue: true},
+		{name: "failed BMI", phase: bmfov1alpha1.BareMetalInstancePhaseFailed, runStrategy: bmfov1alpha1.RunStrategyAlways, primaryIP: "192.0.2.12", autoAccess: true},
+		{name: "deleting BMI", phase: bmfov1alpha1.BareMetalInstancePhaseReady, runStrategy: bmfov1alpha1.RunStrategyAlways, primaryIP: "192.0.2.12", autoAccess: true, deleting: true},
+		{name: "automatic access not requested", phase: bmfov1alpha1.BareMetalInstancePhaseReady, runStrategy: bmfov1alpha1.RunStrategyAlways, primaryIP: "192.0.2.12", wantGet: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := testAutomaticAttachmentTarget(bareMetalInstanceOwner, "bmi-1", "tenant-1")
+			autoAttach := tc.autoAccess
+			instance := privatev1.BareMetalInstance_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: "tenant-1"}.Build(),
+				Spec:     privatev1.BareMetalInstanceSpec_builder{AutoExternalIpAttachment: &autoAttach}.Build(),
+			}.Build()
+			instancesClient := &testBareMetalInstancesGetter{
+				response: privatev1.BareMetalInstancesGetResponse_builder{Object: instance}.Build(),
+			}
+			attachmentsClient := &testExternalIPAttachmentsClient{}
+			reconciler := NewBareMetalInstanceCleanupReconciler(
+				testAutomaticExternalIPClient(t, testAutomaticExternalIP("eip-1", target, "", "192.0.2.10")),
+				"bmi", "networking")
+			reconciler.BareMetalInstancesClient = instancesClient
+			reconciler.ExternalIPAttachmentsClient = attachmentsClient
+			bmi := &bmfov1alpha1.BareMetalInstance{Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase:       tc.phase,
+				RunStrategy: tc.runStrategy,
+			}}
+			if tc.primaryIP != "" {
+				bmi.Status.NetworkAttachmentStatuses = []bmfov1alpha1.BareMetalNetworkAttachmentStatus{{
+					Primary: true, IPAddress: tc.primaryIP,
+				}}
+			}
+			if tc.deleting {
+				deletionTimestamp := metav1.NewTime(time.Now())
+				bmi.DeletionTimestamp = &deletionTimestamp
+			}
+
+			result, err := reconciler.reconcileAutomaticExternalIPAttachments(context.Background(), bmi, "bmi-1")
+			if err != nil {
+				t.Fatalf("reconcile automatic attachment: %v", err)
+			}
+			wantGet := 0
+			if tc.wantGet {
+				wantGet = 1
+			}
+			if instancesClient.getCalls != wantGet {
+				t.Fatalf("Fulfillment Get calls = %d, want %d", instancesClient.getCalls, wantGet)
+			}
+			wantList := 0
+			if tc.wantList {
+				wantList = 1
+			}
+			if attachmentsClient.listCalls != wantList {
+				t.Fatalf("Fulfillment attachment List calls = %d, want %d", attachmentsClient.listCalls, wantList)
+			}
+			if tc.wantRequeue && result.RequeueAfter != automaticExternalAccessRecheck {
+				t.Fatalf("RequeueAfter = %s, want %s", result.RequeueAfter, automaticExternalAccessRecheck)
+			}
+			if !tc.wantRequeue && result.RequeueAfter != 0 {
+				t.Fatalf("RequeueAfter = %s, want no requeue", result.RequeueAfter)
+			}
+			if tc.wantCreate {
+				if len(attachmentsClient.created) != 1 {
+					t.Fatalf("attachment creates = %d, want 1", len(attachmentsClient.created))
+				}
+				if got := attachmentsClient.created[0].GetMetadata().GetName(); got != "auto-eipa-eip-1" {
+					t.Fatalf("automatic attachment name = %q, want auto-eipa-eip-1", got)
+				}
+				return
+			}
+			if len(attachmentsClient.created) != 0 {
+				t.Fatalf("created %d attachments for an ineligible BMI", len(attachmentsClient.created))
+			}
+		})
+	}
+}
+
+func TestBareMetalCleanupAutomaticExternalIPAttachmentWaitsForExternalIP(t *testing.T) {
+	autoAttach := true
+	instance := privatev1.BareMetalInstance_builder{
+		Metadata: privatev1.Metadata_builder{Tenant: "tenant-1"}.Build(),
+		Spec:     privatev1.BareMetalInstanceSpec_builder{AutoExternalIpAttachment: &autoAttach}.Build(),
+	}.Build()
+	instancesClient := &testBareMetalInstancesGetter{
+		response: privatev1.BareMetalInstancesGetResponse_builder{Object: instance}.Build(),
+	}
+	attachmentsClient := &testExternalIPAttachmentsClient{}
+	reconciler := NewBareMetalInstanceCleanupReconciler(testAutomaticExternalIPClient(t), "bmi", "networking")
+	reconciler.BareMetalInstancesClient = instancesClient
+	reconciler.ExternalIPAttachmentsClient = attachmentsClient
+	bmi := &bmfov1alpha1.BareMetalInstance{Status: bmfov1alpha1.BareMetalInstanceStatus{
+		Phase:       bmfov1alpha1.BareMetalInstancePhaseReady,
+		RunStrategy: bmfov1alpha1.RunStrategyAlways,
+		NetworkAttachmentStatuses: []bmfov1alpha1.BareMetalNetworkAttachmentStatus{{
+			Primary: true, IPAddress: "192.0.2.12",
+		}},
+	}}
+
+	result, err := reconciler.reconcileAutomaticExternalIPAttachments(context.Background(), bmi, "bmi-1")
+	if err != nil {
+		t.Fatalf("reconcile before automatic ExternalIP appears: %v", err)
+	}
+	if instancesClient.getCalls != 1 {
+		t.Fatalf("Fulfillment Get calls = %d, want 1", instancesClient.getCalls)
+	}
+	if attachmentsClient.listCalls != 0 || len(attachmentsClient.created) != 0 {
+		t.Fatalf("Fulfillment attachment calls: lists=%d creates=%d, want none before ExternalIP appears",
+			attachmentsClient.listCalls, len(attachmentsClient.created))
+	}
+	if result.RequeueAfter != automaticExternalAccessRecheck {
+		t.Fatalf("RequeueAfter = %s, want %s", result.RequeueAfter, automaticExternalAccessRecheck)
+	}
+}
+
+func TestBareMetalCleanupAutomaticExternalIPAttachmentReadinessRaceUsesThirtySeconds(t *testing.T) {
+	for _, code := range []codes.Code{codes.FailedPrecondition, codes.NotFound} {
+		t.Run(code.String(), func(t *testing.T) {
+			target := testAutomaticAttachmentTarget(bareMetalInstanceOwner, "bmi-1", "tenant-1")
+			autoAttach := true
+			instance := privatev1.BareMetalInstance_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: "tenant-1"}.Build(),
+				Spec:     privatev1.BareMetalInstanceSpec_builder{AutoExternalIpAttachment: &autoAttach}.Build(),
+			}.Build()
+			instancesClient := &testBareMetalInstancesGetter{
+				response: privatev1.BareMetalInstancesGetResponse_builder{Object: instance}.Build(),
+			}
+			attachmentsClient := &testExternalIPAttachmentsClient{
+				createErr: status.Error(code, "target is not ready yet"),
+			}
+			reconciler := NewBareMetalInstanceCleanupReconciler(
+				testAutomaticExternalIPClient(t, testAutomaticExternalIP("eip-1", target, "", "192.0.2.10")),
+				"bmi", "networking")
+			reconciler.BareMetalInstancesClient = instancesClient
+			reconciler.ExternalIPAttachmentsClient = attachmentsClient
+			bmi := &bmfov1alpha1.BareMetalInstance{Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Phase:       bmfov1alpha1.BareMetalInstancePhaseReady,
+				RunStrategy: bmfov1alpha1.RunStrategyAlways,
+				NetworkAttachmentStatuses: []bmfov1alpha1.BareMetalNetworkAttachmentStatus{{
+					Primary: true, IPAddress: "192.0.2.12",
+				}},
+			}}
+
+			result, err := reconciler.reconcileAutomaticExternalIPAttachments(context.Background(), bmi, "bmi-1")
+			if err != nil {
+				t.Fatalf("readiness race should be retried without failing BMI reconcile: %v", err)
+			}
+			if result.RequeueAfter != automaticExternalAccessRecheck {
+				t.Fatalf("RequeueAfter = %s, want %s", result.RequeueAfter, automaticExternalAccessRecheck)
+			}
+		})
 	}
 }
 

@@ -332,8 +332,11 @@ def ensure_jwt_users(ensure_tenants: None, private_grpc: GRPCClient) -> None:
 
 
 @pytest.fixture(scope="session")
-def keycloak_admin_password() -> str:
-    return env("OSAC_KEYCLOAK_ADMIN_PASSWORD", "admin")
+def keycloak_admin_password(k8s_hub_client: K8sClient) -> str:
+    """Read the Keycloak admin credential from the environment or its Secret."""
+    return os.environ.get("OSAC_KEYCLOAK_ADMIN_PASSWORD") or k8s_hub_client.get_secret_value(
+        name="keycloak-admin-credentials", key="admin-password", namespace="keycloak"
+    )
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -438,8 +441,11 @@ def keycloak_url(cluster_domain: str) -> str:
 
 
 @pytest.fixture(scope="session")
-def jwt_password() -> str:
-    return env("OSAC_JWT_PASSWORD", "foobar")
+def jwt_password(k8s_hub_client: K8sClient) -> str:
+    """Read the test-user credential from the environment or Keycloak Secret."""
+    return os.environ.get("OSAC_JWT_PASSWORD") or k8s_hub_client.get_secret_value(
+        name="keycloak-admin-credentials", key="default-user-password", namespace="keycloak"
+    )
 
 
 def _make_jwt_token_script(keycloak_url: str, username: str, password: str) -> str:

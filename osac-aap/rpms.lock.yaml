@@ -4,27 +4,27 @@ lockfileVendor: redhat
 arches:
 - arch: x86_64
   packages:
-  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/b/bind-libs-9.18.33-15.el10_2.12.x86_64.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/b/bind-libs-9.18.33-15.el10_2.14.x86_64.rpm
     repoid: ubi-10-for-x86_64-appstream-rpms
-    size: 1356283
-    checksum: sha256:5a6b4c0bd9a3b00a3491b2d6b1212fa5d890db158d0ce9bd7f95287caaae0dbf
+    size: 1357396
+    checksum: sha256:4d73966c510b70dc3ff40658c272434e860cab8060d484633556e05d5e0f5163
     name: bind-libs
-    evr: 32:9.18.33-15.el10_2.12
-    sourcerpm: bind-9.18.33-15.el10_2.12.src.rpm
-  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/b/bind-license-9.18.33-15.el10_2.12.noarch.rpm
+    evr: 32:9.18.33-15.el10_2.14
+    sourcerpm: bind-9.18.33-15.el10_2.14.src.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/b/bind-license-9.18.33-15.el10_2.14.noarch.rpm
     repoid: ubi-10-for-x86_64-appstream-rpms
-    size: 21113
-    checksum: sha256:f1e81803a79fb541e05b4c7b036f6877daadb99ad986f20f0ed173efc4ef8f05
+    size: 21559
+    checksum: sha256:e903b4daa8ad8845cb95ca03e237d55b6018ee52e83dc2eb617bec8407dde359
     name: bind-license
-    evr: 32:9.18.33-15.el10_2.12
-    sourcerpm: bind-9.18.33-15.el10_2.12.src.rpm
-  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/b/bind-utils-9.18.33-15.el10_2.12.x86_64.rpm
+    evr: 32:9.18.33-15.el10_2.14
+    sourcerpm: bind-9.18.33-15.el10_2.14.src.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/b/bind-utils-9.18.33-15.el10_2.14.x86_64.rpm
     repoid: ubi-10-for-x86_64-appstream-rpms
-    size: 240625
-    checksum: sha256:2729c2b24908edd447b9b2ea139bcfcccb4835095050e3334136087b14719d42
+    size: 241083
+    checksum: sha256:d28eee433a121353270cd6cf69eea5a71306bb774cc65c606ab0c02a3a3c44fe
     name: bind-utils
-    evr: 32:9.18.33-15.el10_2.12
-    sourcerpm: bind-9.18.33-15.el10_2.12.src.rpm
+    evr: 32:9.18.33-15.el10_2.14
+    sourcerpm: bind-9.18.33-15.el10_2.14.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/c/cargo-1.92.0-2.el10_2.x86_64.rpm
     repoid: ubi-10-for-x86_64-appstream-rpms
     size: 8425437
@@ -32,6 +32,27 @@ arches:
     name: cargo
     evr: 1.92.0-2.el10_2
     sourcerpm: rust-1.92.0-2.el10_2.src.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/c/cmake-3.31.8-1.el10.x86_64.rpm
+    repoid: ubi-10-for-x86_64-appstream-rpms
+    size: 13236770
+    checksum: sha256:58f46800909df49e884b696d43c5bc37fc1810e9639a5eff9a6d7867832391c3
+    name: cmake
+    evr: 3.31.8-1.el10
+    sourcerpm: cmake-3.31.8-1.el10.src.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/c/cmake-data-3.31.8-1.el10.noarch.rpm
+    repoid: ubi-10-for-x86_64-appstream-rpms
+    size: 2831160
+    checksum: sha256:05668345cea2df1de19fff71bd9aabd0833fcf79f072790a0e7aa06fb254f7ed
+    name: cmake-data
+    evr: 3.31.8-1.el10
+    sourcerpm: cmake-3.31.8-1.el10.src.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/c/cmake-filesystem-3.31.8-1.el10.x86_64.rpm
+    repoid: ubi-10-for-x86_64-appstream-rpms
+    size: 21385
+    checksum: sha256:05abb6b55848549d2893e164158486eae6ef1c6dcdc595a2493b5028c56ed7cf
+    name: cmake-filesystem
+    evr: 3.31.8-1.el10
+    sourcerpm: cmake-3.31.8-1.el10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/c/cpp-14.3.1-4.4.el10.x86_64.rpm
     repoid: ubi-10-for-x86_64-appstream-rpms
     size: 13449388
@@ -39,6 +60,13 @@ arches:
     name: cpp
     evr: 14.3.1-4.4.el10
     sourcerpm: gcc-14.3.1-4.4.el10.src.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/e/emacs-filesystem-29.4-12.el10.noarch.rpm
+    repoid: ubi-10-for-x86_64-appstream-rpms
+    size: 10440
+    checksum: sha256:d0393cd2f6560ca0008dea881970c01026e4b4b50acd3bd090d9252dc4b26378
+    name: emacs-filesystem
+    evr: 1:29.4-12.el10
+    sourcerpm: emacs-29.4-12.el10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/f/fstrm-0.6.1-12.el10.x86_64.rpm
     repoid: ubi-10-for-x86_64-appstream-rpms
     size: 31392
@@ -88,13 +116,13 @@ arches:
     name: glibc-devel
     evr: 2.39-145.el10_2
     sourcerpm: glibc-2.39-145.el10_2.src.rpm
-  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/k/kernel-headers-6.12.0-211.67.1.el10_2.x86_64.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/k/kernel-headers-6.12.0-211.74.1.el10_2.x86_64.rpm
     repoid: ubi-10-for-x86_64-appstream-rpms
-    size: 3779365
-    checksum: sha256:92df17f9b79737361aa09c088e4f86d738eb2e4c8b586dc2794eff2c385fc92b
+    size: 3789065
+    checksum: sha256:74eb045ad0eda5d8c2aec91eca86a813494480e2c29ef5b9e5b1e5e5a026f79d
     name: kernel-headers
-    evr: 6.12.0-211.67.1.el10_2
-    sourcerpm: kernel-6.12.0-211.67.1.el10_2.src.rpm
+    evr: 6.12.0-211.74.1.el10_2
+    sourcerpm: kernel-6.12.0-211.74.1.el10_2.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/k/keyutils-libs-devel-1.6.3-5.el10.x86_64.rpm
     repoid: ubi-10-for-x86_64-appstream-rpms
     size: 66541
@@ -193,6 +221,20 @@ arches:
     name: llvm-libs
     evr: 21.1.8-1.el10
     sourcerpm: llvm-21.1.8-1.el10.src.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/n/nss_wrapper-1.1.15-7.el10.x86_64.rpm
+    repoid: ubi-10-for-x86_64-appstream-rpms
+    size: 18090
+    checksum: sha256:2998997393e3df84080ee225c8773a2606bef5295e5adc030e44009713c92b05
+    name: nss_wrapper
+    evr: 1.1.15-7.el10
+    sourcerpm: nss_wrapper-1.1.15-7.el10.src.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/n/nss_wrapper-libs-1.1.15-7.el10.x86_64.rpm
+    repoid: ubi-10-for-x86_64-appstream-rpms
+    size: 43732
+    checksum: sha256:ac2324bfd9f4eafdd4022a270784d1b486e88946de4708afa41c8899bb11e91a
+    name: nss_wrapper-libs
+    evr: 1.1.15-7.el10
+    sourcerpm: nss_wrapper-1.1.15-7.el10.src.rpm
   - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/appstream/os/Packages/o/openssl-devel-3.5.8-2.el10_2.x86_64.rpm
     repoid: ubi-10-for-x86_64-appstream-rpms
     size: 4443996
@@ -844,5 +886,12 @@ arches:
     name: rsync
     evr: 3.5.0-3.el10_2
     sourcerpm: rsync-3.5.0-3.el10_2.src.rpm
+  - url: https://cdn-ubi.redhat.com/content/public/ubi/dist/ubi10/10/x86_64/baseos/os/Packages/v/vim-filesystem-9.1.083-9.el10_2.22.noarch.rpm
+    repoid: ubi-10-for-x86_64-baseos-rpms
+    size: 25350
+    checksum: sha256:ec4656f5e01def83595bf56c6490dfbf34189223b35ef6cbaccd947a51a67e04
+    name: vim-filesystem
+    evr: 2:9.1.083-9.el10_2.22
+    sourcerpm: vim-9.1.083-9.el10_2.22.src.rpm
   source: []
   module_metadata: []

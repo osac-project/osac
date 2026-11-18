@@ -49,6 +49,26 @@ step of the Helm lint CI job.
 | Unit with command stubs ([DEV] OSAC-7050) | The target graph and recipe expansion of every installation entry point, serial plus `make -j4` for `install`, against a throwaway copy of the installer; `INFRA_HELM_ARGS` parity across the OpenShift install's renders and upgrades; invalid remote-cluster identifiers aborting before any mutation; the shared remote kubeconfig argument construction and its precedence in the gate render and the upgrade; the gate running `netbox_seed_check` before the bridged render | Helm, `oc`, `kubectl` and `kind` are stubs: schema evaluation, chart rendering and the deployed install are not covered here |
 | Helm contract ([DEV] OSAC-7050) | Offline `helm template` of the umbrella and infra charts with CI values; the exact schema-rejection messages (field and constraint) for the non-negative bounds and closed objects; valid boundary and default renders; the `bmaas-netbox-ci` profile's raw lookup failure and its bridged gate render with the offline token placeholder — taken when either `netbox_seed_check` sees the install's infra values deploy the `netbox-token-seed` hook or a read-only lookup finds the Secret the osac chart reads and its key, and refused when neither holds — and caller-supplied NetBox tokens (`--set` and values file) reaching the gate's render unmasked | No cluster; the gate's OpenShift values assembly (domain/version lookups) runs only in the stubbed section |
 
+## Security hardening contracts (OSAC-6809)
+
+The following Helm contracts run from `osac-installer/` and are included in
+`make helm-validate`:
+
+- `make osac-deps-hook-security-render-test` renders the AAP and cert-manager
+  hook Jobs for the default OpenShift and Kind profiles. It checks pod identity,
+  read-only root filesystems, disabled privilege escalation, and dropped
+  capabilities. It does not execute hooks or contact a cluster.
+- `make keycloak-security-context-test` renders bundled Keycloak and PostgreSQL
+  workloads and standalone prerequisite manifests. It checks read-only root
+  filesystems, writable mounts, and preservation of the database image UID for
+  existing PVCs. It does not start either service or exercise an upgrade against
+  a real PVC.
+- `make keycloak-admin-rotation-test` renders an upgrade with an existing admin
+  Secret and checks the canonical Secret, hook RBAC, and Secret references. It
+  also runs the rotation script against stubbed Keycloak HTTP and Kubernetes
+  commands, including recovery after a previous attempt changed the password.
+  No live Keycloak server or Kubernetes cluster is contacted.
+
 ## Install preflight (OSAC-6561)
 
 Preflight runs while Helm renders the chart. The unit/render/Kind tiers are

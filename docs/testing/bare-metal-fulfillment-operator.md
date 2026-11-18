@@ -17,6 +17,7 @@ suite (repository-root `make -C osac-installer help`, `.github/workflows/`).
 | Envtest | `internal/controller/` | Kubernetes API, etcd, OSAC and static Metal3 CRDs | Metal3 controller, Ironic/BMC, hardware and some provider clients faked. |
 | Component integration | Deployed `test/integration/` | Deployed operator, CRDs, API, pool/instance flows, status | Static `BareMetalHost` state and simulated transitions; no real Metal3 operator, Ironic, BMC or hardware. |
 | Component integration (CI) | Installer Kind target, BMF suite | Thin Kind install, installation API endpoint unset | Same static Metal3/provider boundary; installation settings need separate deployed coverage. |
+| BareMetalPool admin aggregate RBAC ([DEV] OSAC-6809) | `test/contract/aggregate_roles_test.go` in `make test`; `test/integration/aggregate_rbac_test.go` in `make integration-tests` | Contract checks exact Helm ClusterRole verbs; Kind checks Kubernetes aggregation into the built-in admin ClusterRole. | RBAC aggregation only; no provider or hardware behavior is exercised. |
 | Contract | None dedicated | No real provider boundary | Static Metal3 CRDs, patched status and simulated transitions do not exercise a real contract; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) for qualifying coverage. |
 | E2E | Cross-component suites | Fulfillment-to-operator journeys where available | Real hardware and providers remain environment-dependent. |
 

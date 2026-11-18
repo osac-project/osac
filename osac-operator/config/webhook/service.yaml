@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: osac-operator-clusterorder-rbac
+spec:
+  ports:
+  - name: https
+    port: 443
+    targetPort: webhook
+    protocol: TCP
+  selector:
+    osac.openshift.io/clusterorder-rbac-webhook: "true"

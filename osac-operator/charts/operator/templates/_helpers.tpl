@@ -69,6 +69,11 @@ Service account name
 {{- end }}
 {{- end }}
 
+{{/* Keep the webhook and its certificate names within Kubernetes' DNS limit. */}}
+{{- define "osac-operator.clusterOrderRBACWebhookName" -}}
+{{- printf "%s-clusterorder-rbac" (include "osac-operator.fullname" .) | trunc 50 | trimSuffix "-" }}
+{{- end }}
+
 {{/*
 Resolve a service-tier controller flag from global.services or a local override.
 Args: list of [context, controllerKey, serviceKey]

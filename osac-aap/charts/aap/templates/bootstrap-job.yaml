@@ -59,8 +59,61 @@ spec:
       labels:
         {{- include "osac-aap.labels" . | nindent 8 }}
     spec:
+      {{ if not (.Capabilities.APIVersions.Has "security.openshift.io/v1") }}
+      # Kind has no SCC to assign a writable-volume group. The EE image's
+      # /runner directory is group-0 writable; OpenShift supplies its own group.
+      securityContext:
+        fsGroup: 0
+      {{ end }}
       serviceAccountName: {{ include "osac-aap.fullname" . }}-bootstrap
       initContainers:
+      - name: prepare-nss
+        image: {{ .Values.bootstrap.image }}
+        command:
+          - /bin/bash
+          - -c
+          - |
+            set -euo pipefail
+            uid="$(id -u)"
+            gid="$(id -g)"
+            passwd_file=/tmp/osac-passwd
+            awk -F: -v uid="${uid}" -v gid="${gid}" '
+              BEGIN { OFS = ":" }
+              $3 == uid {
+                found = 1
+                $4 = gid
+                $6 = "/runner"
+                $7 = "/bin/bash"
+              }
+              { print }
+              END {
+                if (!found) {
+                  printf "osac-user-%s:x:%s:%s:OSAC execution user:/runner:/bin/bash\n", uid, uid, gid
+                }
+              }
+            ' /etc/passwd > "${passwd_file}"
+            chmod 0644 "${passwd_file}"
+        env:
+        - name: HOME
+          value: /tmp
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
       - name: wait-for-admin-secret
         image: {{ .Values.bootstrap.cliImage }}
         command:
@@ -97,14 +150,45 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
+        - name: HOME
+          value: /runner
+        - name: EP_ON_ERROR
+          value: fail
+        - name: NSS_WRAPPER_PASSWD
+          value: /tmp/osac-passwd
+        - name: NSS_WRAPPER_GROUP
+          value: /etc/group
+        - name: LD_PRELOAD
+          value: /usr/lib64/libnss_wrapper.so
         volumeMounts:
+        - name: runner
+          mountPath: /runner
+        - name: tmp
+          mountPath: /tmp
         - name: config-as-code-manifest-volume
           mountPath: /var/secrets/config-as-code-manifest
           readOnly: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: "1"
+            memory: 1Gi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          capabilities:
+            drop: ["ALL"]
+          seccompProfile:
+            type: RuntimeDefault
       volumes:
       - name: config-as-code-manifest-volume
         secret:
           secretName: {{ .Values.configAsCode.manifestSecret }}
+      - name: runner
+        emptyDir: {}
       - name: tmp
         emptyDir: {}
       restartPolicy: Never

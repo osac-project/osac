@@ -1,0 +1,16 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: osac-operator-clusterorder-rbac
+spec:
+  issuerRef:
+    kind: ClusterIssuer
+    name: default-ca
+  dnsNames:
+  - osac-operator-clusterorder-rbac
+  - osac-operator-clusterorder-rbac.osac-devel
+  - osac-operator-clusterorder-rbac.osac-devel.svc
+  - osac-operator-clusterorder-rbac.osac-devel.svc.cluster.local
+  secretName: osac-operator-clusterorder-rbac-tls
+  privateKey:
+    rotationPolicy: Always

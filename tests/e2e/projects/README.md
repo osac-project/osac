@@ -42,8 +42,10 @@ uv run pytest tests/e2e/projects/test_project_e2e.py -k metadata
 - **JWT Authentication**: tenant1_admin, tenant1_user, tenant2_admin, tenant2_user must be configured
 - **Environment Variables**:
   - `OSAC_KEYCLOAK_URL`: Keycloak base URL
-  - `OSAC_KEYCLOAK_ADMIN_PASSWORD`: Keycloak admin password (default: "admin")
-  - `OSAC_JWT_PASSWORD`: Password for JWT test users (default: "foobar")
+  - `OSAC_KEYCLOAK_ADMIN_PASSWORD`: optional Keycloak admin-password override;
+    defaults to `keycloak/keycloak-admin-credentials` in the installed cluster
+  - `OSAC_JWT_PASSWORD`: optional JWT test-user password override; defaults to
+    the `default-user-password` key in that installed Secret
   - `OSAC_SKIP_KEYCLOAK_SYNC`: Set to "true" to skip Keycloak sync verification (default: "false"). Useful when the project sync feature isn't deployed yet.
 
 The metadata journey uses real `tenant1_admin` and `tenant1_user` JWT identities

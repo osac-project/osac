@@ -30,12 +30,14 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end }}
 
 {{/*
-Pod security context shared by the credential-generation Jobs. The explicit
-runAsNonRoot requirement applies to both the default OpenShift path and the
-numeric security context used by Kind profiles.
+Pod security context shared by osac-infra pods that run origin-cli containers.
+The explicit runAsNonRoot requirement applies to both the default OpenShift
+path and the numeric security context used by Kind profiles.
 */}}
 {{- define "osac-infra.cliJobPodSecurityContext" -}}
 runAsNonRoot: true
+seccompProfile:
+  type: RuntimeDefault
 {{- with .Values.cliJobPodSecurityContext }}
 {{- with .runAsUser }}
 runAsUser: {{ . }}
@@ -43,6 +45,18 @@ runAsUser: {{ . }}
 {{- with .runAsGroup }}
 runAsGroup: {{ . }}
 {{- end }}
+{{- with .fsGroup }}
+fsGroup: {{ . }}
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{/* Keep the database image's UID so existing PVC ownership survives upgrades. */}}
+{{- define "osac-infra.keycloakDatabasePodSecurityContext" -}}
+runAsNonRoot: true
+seccompProfile:
+  type: RuntimeDefault
+{{- with .Values.cliJobPodSecurityContext }}
 {{- with .fsGroup }}
 fsGroup: {{ . }}
 {{- end }}

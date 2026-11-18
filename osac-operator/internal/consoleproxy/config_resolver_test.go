@@ -16,11 +16,15 @@ import (
 )
 
 func validKubeconfig() []byte {
+	return validKubeconfigFor("https://remote-cluster:6443")
+}
+
+func validKubeconfigFor(host string) []byte {
 	return []byte(`apiVersion: v1
 kind: Config
 clusters:
 - cluster:
-    server: https://remote-cluster:6443
+    server: ` + host + `
   name: remote
 contexts:
 - context:
@@ -134,6 +138,17 @@ var _ = Describe("RemoteConfigResolver", func() {
 				}),
 			},
 			"https://remote-cluster:6443", ""),
+		Entry("selects the labeled secret in the ComputeInstance namespace",
+			"tenant-a",
+			[]runtime.Object{
+				labeledSecret("tenant-b", "other-tenant-kubeconfig", map[string][]byte{
+					DefaultRemoteKubeconfigSecretKey: validKubeconfigFor("https://tenant-b-cluster:6443"),
+				}),
+				labeledSecret("tenant-a", "tenant-kubeconfig", map[string][]byte{
+					DefaultRemoteKubeconfigSecretKey: validKubeconfigFor("https://tenant-a-cluster:6443"),
+				}),
+			},
+			"https://tenant-a-cluster:6443", ""),
 		Entry("no labeled secret",
 			"osac-dev",
 			[]runtime.Object{},
@@ -165,7 +180,7 @@ var _ = Describe("RemoteConfigResolver", func() {
 				}),
 			},
 			"https://remote-cluster:6443", ""),
-		Entry("secret in wrong namespace is not found",
+		Entry("secret outside the ComputeInstance namespace is not found",
 			"osac-dev",
 			[]runtime.Object{
 				labeledSecret("other-namespace", "remote-kubeconfig", map[string][]byte{

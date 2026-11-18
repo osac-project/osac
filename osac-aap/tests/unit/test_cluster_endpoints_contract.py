@@ -126,6 +126,19 @@ def test_metallb_tasks_do_not_log_the_admin_kubeconfig() -> None:
                 assert task.get("no_log") is True, task["name"]
 
 
+def test_metallb_wait_retries_transient_api_errors_and_any_running_agent() -> None:
+    tasks = load(METALLB_TASKS / "configure_metallb_ingress.yml")
+    wait = tasks[1]
+    module = wait["kubernetes.core.k8s_info"]
+
+    assert wait["failed_when"] is False
+    assert wait["retries"] == 60
+    assert wait["delay"] == 10
+    assert "selectattr('status.phase', 'equalto', 'Running')" in str(wait["until"])
+    assert "resources[0]" not in str(wait["until"])
+    assert module["label_selectors"] == ["app=konnectivity-agent"]
+
+
 def test_dns_tasks_enforce_supported_domain_and_record_conventions() -> None:
     for task_name, record_name in (
         ("publish_public_dns_api", "api-int."),

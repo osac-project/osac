@@ -14,9 +14,11 @@
     label_selectors:
       - app=konnectivity-agent
   register: _konnectivity_check
+  failed_when: false
   until:
-    - _konnectivity_check.resources | length > 0
-    - _konnectivity_check.resources[0].status.phase == "Running"
+    - >-
+      _konnectivity_check.resources | default([])
+      | selectattr('status.phase', 'equalto', 'Running') | list | length > 0
   retries: 60
   delay: 10
   no_log: true

@@ -7,6 +7,14 @@ argument_specs:
       Validates inputs and enforces the provider and protocol allowlists
       before any dynamic role name construction to prevent role-name injection.
     options:
+      storage_provider_block_fstype:
+        type: raw
+        required: false
+        description: >-
+          Opaque nonempty filesystem string for newly created block StorageClasses.
+          Defaults to OSAC_STORAGE_BLOCK_FSTYPE in the worker environment, or ext4
+          when unset. An explicit variable takes precedence. Type and content are
+          validated only when a new block class consumes this setting.
       storage_provider_tiers:
         type: list
         required: true

@@ -1,243 +1,230 @@
-"""Execute provider tasks with recording Kubernetes and VMS module boundaries."""
+"""Emit actual Ansible StorageClasses across discovered providers and dispatch routes."""
 
+import copy
 import importlib.util
 import json
-import os
-from pathlib import Path
-import subprocess
-import sys
 import ssl
+import subprocess
 import threading
 
 import pytest
+import yaml
 
+from .storage_provider_cases import (
+    BLOCK_CREATORS, CASES, CONTRACTS, CREATORS, LOCAL, ProviderCase, assert_success,
+    created_classes, discover_cases, run_provider,
+)
+from .storage_runner import OSAC_AAP
 
-OSAC_AAP = Path(__file__).resolve().parents[2]
 FSTYPE = "csi.storage.k8s.io/fstype"
 OPAQUE = " Opaque:FS/9 "
-LITERAL_STRINGS = ["123", "True", "False", "None", "[]", "{}"]
-KUBERNETES_MODULE = """
-import base64
-import json
-import os
-from ansible.module_utils.basic import AnsibleModule
-
-module = AnsibleModule(argument_spec={
-    "kubeconfig": {"type": "str"},
-    "validate_certs": {"type": "bool"},
-    "api_version": {"type": "str"},
-    "kind": {"type": "str"},
-    "name": {"type": "str"},
-    "namespace": {"type": "str"},
-    "label_selectors": {"type": "list", "elements": "str"},
-    "state": {"type": "str"},
-    "definition": {"type": "dict"},
-})
-params = module.params
-with open(os.environ["OSAC_FSTYPE_STATE"]) as state_file:
-    storage_classes = json.load(state_file)
-resources = []
-if params["kind"] == "StorageClass":
-    resources = [entry for name, entry in storage_classes.items()
-                 if params["name"] is None or name == params["name"]]
-elif params["kind"] == "CSIDriver":
-    resources = [{"metadata": {"name": params["name"]}}]
-elif params["kind"] == "Secret" and params["state"] is None:
-    values = {
-        "vast_tenant_id": "1", "tenant_manager_username": "fixture-manager",
-        "tenant_manager_password": "fixture-only", "vip_pool_name": "fixture-pool",
-        "vast_endpoint": "fixture.invalid", "tenant_uid_hash": "12345678",
-    }
-    resources = [{"metadata": {"name": params["name"] or "fixture-secret",
-                               "labels": {"osac.openshift.io/storage-backend-id": "fixture"}},
-                  "data": {key: base64.b64encode(value.encode()).decode()
-                           for key, value in values.items()}}]
-definition = params["definition"] or {}
-if definition.get("kind") == "StorageClass" and params["state"] == "present":
-    name = definition["metadata"]["name"]
-    storage_classes[name] = definition
-    deleted_name = json.loads(os.environ["OSAC_FSTYPE_DELETE_ON_CREATE"]).get(name)
-    if deleted_name is not None:
-        storage_classes.pop(deleted_name, None)
-    with open(os.environ["OSAC_FSTYPE_STATE"], "w") as state_file:
-        json.dump(storage_classes, state_file)
-with open(os.environ["OSAC_FSTYPE_CAPTURE"], "a") as capture:
-    capture.write(json.dumps({"module": "__MODULE_NAME__", "resources": resources,
-                             "storage_classes": storage_classes, **params}) + "\\n")
-module.exit_json(changed=False, resources=resources)
-"""
-VMS_MODULE = """
-from ansible.module_utils.basic import AnsibleModule
-
-module = AnsibleModule(argument_spec={
-    "vms": {"type": "dict"}, "name": {"type": "str"},
-    "flavor": {"type": "str"}, "tenant_id": {"type": "str"},
-    "state": {"type": "str"}, "path": {"type": "str"},
-    "create_dir": {"type": "bool"}, "policy_id": {"type": "str"},
-    "protocols": {"type": "list", "elements": "str"},
-    "force_remove": {"type": "bool"},
-})
-module.exit_json(changed=False, viewpolicies={"id": 1})
-"""
 
 
-def run_provider(
-    tmp_path,
-    provider,
-    fstype=None,
-    action="ensure_storage_class",
-    protocols=("block",),
-    existing=(),
-    tier_names=None,
-    endpoint="fixture.invalid",
-    explicit_fstype=None,
-    expected_classes=None,
-    delete_on_create=None,
-):
-    for collection, names, source in (
-        ("kubernetes/core", ("k8s", "k8s_info"), KUBERNETES_MODULE),
-        ("vastdata/vms", ("viewpolicies", "views", "tenants"), VMS_MODULE),
-    ):
-        modules = tmp_path / "ansible_collections" / collection / "plugins/modules"
-        modules.mkdir(parents=True)
-        for name in names:
-            (modules / f"{name}.py").write_text(source.replace("__MODULE_NAME__", name))
-    tiers = [
-        {"name": name, "protocol": protocol, "provider": provider, "backend_id": "fixture"}
-        for name, protocol in zip(tier_names or protocols, protocols, strict=True)
-    ]
-    overrides = {} if explicit_fstype is None else {"storage_provider_block_fstype": explicit_fstype}
-    playbook = tmp_path / "provider.json"
-    playbook.write_text(
-        json.dumps(
-            [
-                {
-                    "name": "Exercise storage provider filesystem configuration",
-                    "hosts": "localhost",
-                    "gather_facts": False,
-                    "vars": {
-                        **overrides,
-                        "ansible_connection": "local",
-                        "ansible_python_interpreter": sys.executable,
-                        "tenant_name": "fstype-test",
-                        "tenant_namespace": "osac-tenants",
-                        "vast_storage_config_namespace": "osac-system",
-                        "vast_storage_validate_certs": False,
-                        "lvms_storage_config_namespace": "osac-system",
-                        "_cluster_name": "fixture-cluster",
-                        "storage_provider_tiers": tiers,
-                        "storage_provider_action": action,
-                        "storage_provider_backend_connections": {
-                            "fixture": {"endpoint": endpoint, "username": "fixture", "password": "fixture-only"}
-                        },
-                    },
-                    "tasks": [
-                        {
-                            "name": "Dispatch real provider tasks",
-                            "ansible.builtin.include_role": {"name": "osac.service.storage_provider"},
-                        }
-                    ]
-                    + (
-                        [
-                            {
-                                "name": "Verify complete returned StorageClass names",
-                                "ansible.builtin.assert": {
-                                    "that": "storage_provider_storage_class_names == expected_classes"
-                                },
-                                "vars": {"expected_classes": expected_classes},
-                            }
-                        ]
-                        if expected_classes is not None
-                        else []
-                    ),
-                }
-            ]
-        )
+@pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
+def test_every_discovered_dispatch_emits_declared_protocols(tmp_path, case):
+    result, calls = run_provider(tmp_path, case)
+    assert_success(result)
+    classes = created_classes(calls)
+    assert len(classes) == len(case.protocols)
+    contract = CONTRACTS[case.role]
+    for protocol in case.protocols:
+        emitted = next(entry for entry in classes if entry["metadata"]["name"].endswith(f"-{protocol}"))
+        assert emitted["provisioner"] == contract.get(f"{protocol}_provisioner", contract["provisioner"])
+        if protocol == "block":
+            assert emitted["parameters"][FSTYPE] == "ext4"
+            if case.mode == "shared":
+                assert emitted["parameters"]["storagePools"] == "fixture:.*"
+            elif case.mode == "dedicated":
+                assert emitted["parameters"]["selector"].endswith(";tier=block")
+                assert "storagePools" not in emitted["parameters"]
+        else:
+            assert not any(key == FSTYPE or key.lower() == "fstype" for key in emitted["parameters"])
+            assert contract["nfs_parameters"].items() <= emitted["parameters"].items()
+            if case.role == "vast_storage":
+                assert emitted["volumeBindingMode"] == "Immediate"
+
+
+def test_unknown_provider_fails_coverage(tmp_path):
+    metadata = tmp_path / "uncovered_storage/meta"
+    metadata.mkdir(parents=True)
+    (metadata / "osac.yaml").write_text(yaml.safe_dump({"template_type": "storage_provider"}))
+    with pytest.raises(AssertionError, match="Uncovered storage provider: uncovered_storage"):
+        discover_cases(tmp_path)
+
+
+def test_nfs_only_discovery_does_not_require_block(tmp_path, monkeypatch):
+    from . import storage_provider_cases
+
+    monkeypatch.setitem(storage_provider_cases.DEFAULTS, "storage_provider_role_overrides", {})
+    metadata = tmp_path / "nfs_only_storage/meta"
+    metadata.mkdir(parents=True)
+    (metadata / "osac.yaml").write_text(yaml.safe_dump({
+        "template_type": "storage_provider", "capabilities": {"supported_protocols": ["nfs"]},
+    }))
+    cases = discover_cases(tmp_path, {"nfs_only_storage": {
+        "modes": ["default"], "nfs_parameters": {},
+    }})
+    assert cases
+    assert all(case.protocols == ("nfs",) for case in cases)
+    assert not [case for case in cases if "block" in case.protocols]
+
+
+def test_production_dispatch_consumes_mapping(tmp_path):
+    case = ProviderCase("contract-route", "lvms_storage")
+    result, calls = run_provider(tmp_path, case, overrides={
+        "storage_provider_role_overrides": {"contract_route": "lvms_storage"},
+    })
+    assert_success(result)
+    assert created_classes(calls)[0]["provisioner"] == CONTRACTS[case.role]["provisioner"]
+
+
+@pytest.fixture(scope="module", params=[*BLOCK_CREATORS, LOCAL], ids=lambda case: case.id)
+def snapshot(request, tmp_path_factory):
+    case = request.param
+    directory = tmp_path_factory.mktemp(case.id)
+    result, calls = run_provider(directory, case, protocols=("block",), names=("existing",))
+    assert_success(result)
+    classes = created_classes(calls)
+    assert len(classes) == 1
+    assert classes[0]["parameters"][FSTYPE] == "ext4"
+    return case, json.loads((directory / "objects.json").read_text()), classes[0]
+
+
+def test_partial_creates_only_new_filesystem_selection(tmp_path, snapshot):
+    case, objects, existing = snapshot
+    result, calls = run_provider(tmp_path, case, protocols=("block", "block"), names=("existing", "new"),
+                                 existing=objects, environment={"OSAC_STORAGE_BLOCK_FSTYPE": "xfs"})
+    assert_success(result)
+    classes = created_classes(calls)
+    new = [entry for entry in classes if entry["metadata"]["name"] != existing["metadata"]["name"]]
+    assert len(new) == 1
+    assert new[0]["parameters"][FSTYPE] == "xfs"
+    for entry in classes:
+        if entry["metadata"]["name"] == existing["metadata"]["name"]:
+            assert entry["parameters"] == existing["parameters"]
+    assert not [call for call in calls if call.get("state") == "absent"]
+
+
+def test_vast_detects_existing_block_deleted_during_creation(tmp_path):
+    case = next(case for case in BLOCK_CREATORS if case.role == "vast_storage")
+    result, calls = run_provider(tmp_path / "seed", case, protocols=("block",), names=("gold",))
+    assert_success(result)
+    gold = created_classes(calls)[0]
+    gold["parameters"].pop(FSTYPE)
+    gold_name = gold["metadata"]["name"]
+    silver_name = gold_name.removesuffix("gold") + "silver"
+    result, calls = run_provider(
+        tmp_path / "disappear", case, protocols=("block", "block"), names=("gold", "silver"), existing=[gold],
+        environment={"OSAC_STORAGE_DELETE_ON_CREATE": json.dumps({silver_name: gold_name})},
     )
-    capture = tmp_path / "calls.jsonl"
-    state = tmp_path / "storage-classes.json"
-    state.write_text(
-        json.dumps(
-            {
-                entry["metadata"]["name"] if isinstance(entry, dict) else entry: entry
-                if isinstance(entry, dict)
-                else {"metadata": {"name": entry}, "parameters": {"legacy-option": "retained"}}
-                for entry in existing
-            }
-        )
-    )
-    environment = {
-        **os.environ,
-        "ANSIBLE_CONFIG": str(OSAC_AAP / "ansible.cfg"),
-        "ANSIBLE_COLLECTIONS_PATH": f"{tmp_path}:{OSAC_AAP / 'collections'}:{OSAC_AAP / 'vendor'}",
-        "ANSIBLE_FORCE_COLOR": "false",
-        "ANSIBLE_STDOUT_CALLBACK": "default",
-        "NO_PROXY": "127.0.0.1,localhost",
-        "no_proxy": "127.0.0.1,localhost",
-        "OSAC_FSTYPE_CAPTURE": str(capture),
-        "OSAC_FSTYPE_STATE": str(state),
-        "OSAC_FSTYPE_DELETE_ON_CREATE": json.dumps(delete_on_create or {}),
-    }
-    environment.pop("OSAC_STORAGE_BLOCK_FSTYPE", None)
-    if fstype is not None:
-        environment["OSAC_STORAGE_BLOCK_FSTYPE"] = fstype
-    result = subprocess.run(
-        ["ansible-playbook", "-i", "localhost,", str(playbook)],
-        cwd=OSAC_AAP,
-        env=environment,
-        capture_output=True,
-        text=True,
-        timeout=90,
-        check=False,
-    )
-    calls = [json.loads(line) for line in capture.read_text().splitlines()] if capture.exists() else []
-    return result, calls
+    assert [entry["metadata"]["name"] for entry in created_classes(calls)] == [silver_name]
+    write = next(call for call in calls if (call.get("definition") or {}).get("kind") == "StorageClass")
+    names = [entry["metadata"]["name"] for entry in write["objects"] if entry.get("kind") == "StorageClass"]
+    assert gold_name not in names
+    assert silver_name in names
+    assert result.returncode != 0
+    assert "VAST block StorageClasses missing at completion" in result.stdout
+    assert gold_name in result.stdout
+    assert len([call for call in calls if call["module"] == "k8s_info" and call["kind"] == "StorageClass"]) == 2
+    assert not [call for call in calls if call.get("state") == "absent"]
 
 
-def created_classes(calls):
-    return [
-        call["definition"]
-        for call in calls
-        if call["state"] == "present" and (call["definition"] or {}).get("kind") == "StorageClass"
-    ]
+def test_each_new_consumer_rejects_invalid_before_writes(tmp_path, snapshot):
+    case, _, _ = snapshot
+    result, calls = run_provider(tmp_path, case, protocols=("block",),
+                                 overrides={"storage_provider_block_fstype": {"bad": "type"}})
+    assert result.returncode != 0
+    assert "must be a nonempty string" in result.stdout
+    assert all(call["module"] == "k8s_info" for call in calls)
 
 
-def existing_block_class(provider, name, fstype):
-    parameters = (
-        {"subsystem": "view-fstype-test-12345678-block", "tenant_name": "fstype-test"}
-        if provider == "vast"
-        else {"topolvm.io/device-class": "vg1"}
-    )
-    if fstype is not None:
-        parameters[FSTYPE] = fstype
-    return {
-        "apiVersion": "storage.k8s.io/v1",
-        "kind": "StorageClass",
-        "metadata": {
-            "name": name,
-            "labels": {"osac.openshift.io/tenant": "fstype-test", "app.kubernetes.io/managed-by": "osac-aap"},
-        },
-        "provisioner": "csi.vastdata.com" if provider == "vast" else "topolvm.io",
-        "parameters": parameters,
-        "reclaimPolicy": "Delete",
-        "volumeBindingMode": "WaitForFirstConsumer",
-    }
+@pytest.mark.parametrize("original", [None, "ext4"])
+def test_existing_filesystem_and_absence_survive_unused_bad_override(tmp_path, snapshot, original):
+    case, original_objects, existing = snapshot
+    objects = copy.deepcopy(original_objects)
+    for entry in objects:
+        if entry.get("kind") == "StorageClass":
+            entry["parameters"].pop(FSTYPE, None)
+            if original is not None:
+                entry["parameters"][FSTYPE] = original
+    expected = None if case == LOCAL else [existing["metadata"]["name"]]
+    result, calls = run_provider(tmp_path, case, protocols=("block",), names=("existing",), existing=objects,
+                                 overrides={"storage_provider_block_fstype": {"bad": "unused"}}, expected=expected)
+    assert_success(result)
+    assert not [call for call in calls if call.get("state") == "absent"]
+    for entry in created_classes(calls):
+        assert entry["parameters"].get(FSTYPE) == original
+        assert (FSTYPE in entry["parameters"]) == (original is not None)
+    if case.role == "vast_storage":
+        assert not created_classes(calls)
+        assert len(calls) == 1
 
 
-def assert_existing_classes_untouched(calls, existing):
-    lookups = [call for call in calls if call["module"] == "k8s_info" and call["kind"] == "StorageClass"]
-    assert lookups
-    assert lookups[0]["resources"] == existing
-    existing_names = {resource["metadata"]["name"] for resource in existing}
-    for call in calls:
-        if call["module"] != "k8s":
-            continue
-        assert call["state"] == "present"
-        definition = call["definition"] or {}
-        kind = definition.get("kind", call["kind"])
-        assert kind not in ("PersistentVolume", "PersistentVolumeClaim")
-        if kind == "StorageClass":
-            assert definition.get("metadata", {}).get("name", call["name"]) not in existing_names
+@pytest.mark.parametrize("value", ["", [], ["xfs"], {"not": "a string"}, 123, True, 1.5, None])
+def test_invalid_consumed_override_fails_before_writes(tmp_path, value):
+    case = next(case for case in BLOCK_CREATORS if case.role == "lvms_storage")
+    result, calls = run_provider(tmp_path, case, overrides={"storage_provider_block_fstype": value})
+    assert result.returncode != 0
+    assert "must be a nonempty string" in result.stdout
+    assert all(call["module"] == "k8s_info" for call in calls)
+
+
+@pytest.mark.parametrize("value", [OPAQUE, "   ", "123", "False", "None", "[]", "{}"])
+def test_opaque_string_override_precedes_environment(tmp_path, value):
+    case = next(case for case in BLOCK_CREATORS if case.role == "lvms_storage")
+    result, calls = run_provider(tmp_path, case, overrides={"storage_provider_block_fstype": value},
+                                 environment={"OSAC_STORAGE_BLOCK_FSTYPE": "environment-value"})
+    assert_success(result)
+    assert type(created_classes(calls)[0]["parameters"][FSTYPE]) is str
+    assert created_classes(calls)[0]["parameters"][FSTYPE] == value
+
+
+@pytest.mark.parametrize("case", [case for case in BLOCK_CREATORS if "nfs" in case.protocols],
+                         ids=lambda case: case.id)
+def test_nfs_and_existing_block_ignore_invalid_setting(tmp_path, case):
+    result, calls = run_provider(tmp_path / "seed", case, protocols=("block",), names=("existing",))
+    assert_success(result)
+    existing = created_classes(calls)[0]
+    result, calls = run_provider(tmp_path / "nfs", case, protocols=("block", "nfs"), names=("existing", "new"),
+                                 existing=[existing], overrides={"storage_provider_block_fstype": ["xfs"]})
+    assert_success(result)
+    classes = created_classes(calls)
+    assert len(classes) == 1
+    assert FSTYPE not in classes[0]["parameters"]
+    if case.role == "vast_storage":
+        assert classes[0]["parameters"]["root_export"].endswith("/new")
+        assert classes[0]["parameters"]["view_policy"] == "osac-fstype-test-nfs"
+        assert classes[0]["volumeBindingMode"] == "Immediate"
+        assert len([call for call in calls if call["module"] == "k8s_info" and call["kind"] == "StorageClass"]) == 1
+
+
+@pytest.mark.parametrize("case", [case for case in CREATORS if "nfs" in case.protocols], ids=lambda case: case.id)
+def test_nfs_only_ignores_invalid_setting(tmp_path, case):
+    result, calls = run_provider(tmp_path, case, protocols=("nfs",),
+                                 overrides={"storage_provider_block_fstype": ["xfs"]})
+    assert_success(result)
+    assert len(created_classes(calls)) == 1
+    assert FSTYPE not in created_classes(calls)[0]["parameters"]
+
+
+def test_empty_environment_fails_at_consumer(tmp_path):
+    result, calls = run_provider(tmp_path, BLOCK_CREATORS[0], protocols=("block",),
+                                 environment={"OSAC_STORAGE_BLOCK_FSTYPE": ""})
+    assert result.returncode != 0
+    assert "must be a nonempty string" in result.stdout
+    assert not created_classes(calls)
+
+
+def test_local_immutable_nonfilesystem_fields_still_checked(tmp_path, snapshot):
+    case, original_objects, existing = snapshot
+    if case != LOCAL:
+        return
+    objects = copy.deepcopy(original_objects)
+    next(entry for entry in objects if entry.get("kind") == "StorageClass")["parameters"]["osac.tier"] = "wrong"
+    result, calls = run_provider(tmp_path, case, names=("existing",), existing=objects)
+    assert result.returncode != 0
+    assert "incompatible" in result.stdout
+    assert not created_classes(calls)
 
 
 @pytest.fixture
@@ -248,24 +235,9 @@ def vms_server(tmp_path):
     certificate = tmp_path / "fixture.crt"
     key = tmp_path / "fixture.key"
     subprocess.run(
-        [
-            "openssl",
-            "req",
-            "-x509",
-            "-newkey",
-            "rsa:2048",
-            "-nodes",
-            "-days",
-            "1",
-            "-subj",
-            "/CN=localhost",
-            "-keyout",
-            str(key),
-            "-out",
-            str(certificate),
-        ],
-        check=True,
-        capture_output=True,
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
+         "-subj", "/CN=localhost", "-keyout", str(key), "-out", str(certificate)],
+        check=True, capture_output=True,
     )
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -282,245 +254,24 @@ def vms_server(tmp_path):
         thread.join(timeout=5)
 
 
-@pytest.mark.parametrize("provider", ["vast", "lvms"])
-@pytest.mark.parametrize("fstype", [None, "xfs", OPAQUE, "   ", *LITERAL_STRINGS])
-def test_generated_block_fstype(tmp_path, provider, fstype):
-    result, calls = run_provider(tmp_path, provider, fstype)
-    assert result.returncode == 0, result.stdout + result.stderr
-    classes = created_classes(calls)
-    assert len(classes) == 1
-    assert type(classes[0]["parameters"][FSTYPE]) is str
-    assert classes[0]["parameters"][FSTYPE] == ("ext4" if fstype is None else fstype)
-    assert classes[0]["volumeBindingMode"] == "WaitForFirstConsumer"
-
-
-@pytest.mark.parametrize("provider", ["vast", "lvms"])
-def test_empty_fstype_rejected_at_block_consumer(tmp_path, provider):
-    result, calls = run_provider(tmp_path, provider, "")
-    assert result.returncode != 0
-    assert "must be defined and nonempty for block StorageClasses" in result.stdout
-    assert created_classes(calls) == []
-
-
-@pytest.mark.parametrize("provider", ["vast", "lvms"])
-@pytest.mark.parametrize("explicit_fstype", [["xfs"], {"filesystem": "xfs"}, 123, True, 1.5])
-def test_nonstring_fstype_rejected_before_writes(tmp_path, provider, explicit_fstype):
-    result, calls = run_provider(tmp_path, provider, explicit_fstype=explicit_fstype)
-    assert result.returncode != 0
-    assert "must be defined and nonempty" in result.stdout
-    assert not any(call["state"] in ("present", "absent") for call in calls)
-
-
-@pytest.mark.parametrize("provider", ["vast", "lvms"])
-@pytest.mark.parametrize("explicit_fstype", ["xfs", OPAQUE, "   ", "", *LITERAL_STRINGS])
-def test_ansible_override_precedes_environment(tmp_path, provider, explicit_fstype):
-    result, calls = run_provider(tmp_path, provider, "environment-value", explicit_fstype=explicit_fstype)
-    if explicit_fstype:
-        assert result.returncode == 0, result.stdout + result.stderr
-        classes = created_classes(calls)
-        assert len(classes) == 1
-        assert type(classes[0]["parameters"][FSTYPE]) is str
-        assert classes[0]["parameters"][FSTYPE] == explicit_fstype
-    else:
-        assert result.returncode != 0
-        assert "must be defined and nonempty for block StorageClasses" in result.stdout
-        assert created_classes(calls) == []
-
-
-@pytest.mark.parametrize("fstype", [None, OPAQUE, ""])
-@pytest.mark.parametrize("explicit_fstype", [None, ["xfs"]])
-def test_nfs_unchanged(tmp_path, fstype, explicit_fstype):
-    result, calls = run_provider(tmp_path, "vast", fstype, protocols=("nfs",), explicit_fstype=explicit_fstype)
-    assert result.returncode == 0, result.stdout + result.stderr
-    classes = created_classes(calls)
-    assert len(classes) == 1
-    parameters = classes[0]["parameters"]
-    assert FSTYPE not in parameters
-    assert parameters["root_export"] == "/osac-fstype-test-12345678/nfs"
-    assert parameters["view_policy"] == "osac-fstype-test-nfs"
-    assert classes[0]["provisioner"] == "csi.vastdata.com"
-    assert classes[0]["volumeBindingMode"] == "Immediate"
-
-
-@pytest.mark.parametrize("provider", ["vast", "lvms"])
-@pytest.mark.parametrize("action", ["teardown_cluster_storage", "teardown_backend"])
-@pytest.mark.parametrize("explicit_fstype", [None, ["xfs"]])
-def test_teardown_ignores_empty_block_setting(tmp_path, vms_server, provider, action, explicit_fstype):
+@pytest.mark.parametrize("case", CREATORS, ids=lambda case: case.id)
+@pytest.mark.parametrize("action", ["teardown_backend", "teardown_cluster_storage"])
+def test_teardown_does_not_consume_invalid_filesystem(tmp_path, case, action, vms_server):
     endpoint, requests = vms_server
-    result, calls = run_provider(
-        tmp_path, provider, "", action=action, endpoint=endpoint, explicit_fstype=explicit_fstype
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert created_classes(calls) == []
-    if action == "teardown_backend":
-        assert any(call["state"] == "absent" and call["kind"] == "Secret" for call in calls)
-        if provider == "vast":
-            assert any(request["path"].startswith("/api/views/") for request in requests)
-    else:
-        assert any(call["kind"] == "StorageClass" for call in calls)
-
-
-@pytest.mark.parametrize("provider", ["vast", "lvms"])
-@pytest.mark.parametrize("fstype", [OPAQUE, ""])
-@pytest.mark.parametrize("explicit_fstype", [None, ["xfs"]])
-def test_existing_class_short_circuit(tmp_path, provider, fstype, explicit_fstype):
-    name = "vast-block-fstype-test-block" if provider == "vast" else "osac-fstype-test-block"
-    result, calls = run_provider(tmp_path, provider, fstype, existing=[name], explicit_fstype=explicit_fstype)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert created_classes(calls) == []
-    assert len(calls) == 1
-
-
-def test_lvms_creates_only_missing_class(tmp_path):
-    result, calls = run_provider(
-        tmp_path,
-        "lvms",
-        OPAQUE,
-        protocols=("block", "block"),
-        tier_names=("existing", "block"),
-        existing=["osac-fstype-test-existing"],
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert [entry["metadata"]["name"] for entry in created_classes(calls)] == ["osac-fstype-test-block"]
-
-
-@pytest.mark.parametrize("fstype", [None, OPAQUE])
-def test_vast_creates_only_missing_block_class(tmp_path, fstype):
-    existing_name = "vast-block-fstype-test-existing"
-    missing_name = "vast-block-fstype-test-new"
-    result, calls = run_provider(
-        tmp_path,
-        "vast",
-        fstype,
-        protocols=("block", "block"),
-        tier_names=("existing", "new"),
-        existing=[existing_name],
-        expected_classes=[{"name": existing_name, "tier": "existing"}, {"name": missing_name, "tier": "new"}],
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    classes = created_classes(calls)
-    assert [entry["metadata"]["name"] for entry in classes] == [missing_name]
-    assert classes[0]["parameters"][FSTYPE] == ("ext4" if fstype is None else fstype)
-
-
-def test_vast_detects_existing_block_deleted_during_creation(tmp_path):
-    gold = "vast-block-fstype-test-gold"
-    silver = "vast-block-fstype-test-silver"
-    result, calls = run_provider(
-        tmp_path,
-        "vast",
-        protocols=("block", "block"),
-        tier_names=("gold", "silver"),
-        existing=[existing_block_class("vast", gold, None)],
-        delete_on_create={silver: gold},
-        expected_classes=[{"name": gold, "tier": "gold"}, {"name": silver, "tier": "silver"}],
-    )
-    classes = created_classes(calls)
-    assert [entry["metadata"]["name"] for entry in classes] == [silver]
-    silver_write = next(call for call in calls if call["definition"] in classes)
-    assert gold not in silver_write["storage_classes"]
-    assert silver in silver_write["storage_classes"]
-    assert result.returncode != 0, result.stdout + result.stderr
-    assert "VAST block StorageClasses missing at completion" in result.stdout
-    assert gold in result.stdout
-
-
-@pytest.mark.parametrize("explicit_fstype", [None, "", ["xfs"], {"filesystem": "xfs"}, 123, True])
-def test_vast_existing_block_creates_nfs_with_empty_fstype(tmp_path, explicit_fstype):
-    block_name = "vast-block-fstype-test-block"
-    nfs_name = "vast-nfs-fstype-test-nfs"
-    result, calls = run_provider(
-        tmp_path,
-        "vast",
-        "",
-        protocols=("block", "nfs"),
-        existing=[block_name],
-        explicit_fstype=explicit_fstype,
-        expected_classes=[{"name": block_name, "tier": "block"}, {"name": nfs_name, "tier": "nfs"}],
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    classes = created_classes(calls)
-    assert [entry["metadata"]["name"] for entry in classes] == [nfs_name]
-    parameters = classes[0]["parameters"]
-    assert FSTYPE not in parameters
-    assert parameters["root_export"] == "/osac-fstype-test-12345678/nfs"
-    assert parameters["view_policy"] == "osac-fstype-test-nfs"
-    assert classes[0]["provisioner"] == "csi.vastdata.com"
-    assert classes[0]["volumeBindingMode"] == "Immediate"
-
-
-@pytest.mark.parametrize("explicit_fstype", [None, ""])
-def test_vast_missing_block_rejects_empty_fstype_before_writes(tmp_path, explicit_fstype):
-    result, calls = run_provider(
-        tmp_path,
-        "vast",
-        "",
-        protocols=("nfs", "block"),
-        existing=["vast-nfs-fstype-test-nfs"],
-        explicit_fstype=explicit_fstype,
-    )
-    assert result.returncode != 0
-    assert "must be defined and nonempty for block StorageClasses" in result.stdout
-    assert created_classes(calls) == []
-    assert len(calls) == 1
-
-
-def test_vast_all_existing_returns_complete_class_names(tmp_path):
-    names = ["vast-block-fstype-test-block", "vast-nfs-fstype-test-nfs"]
-    result, calls = run_provider(
-        tmp_path,
-        "vast",
-        "",
-        protocols=("block", "nfs"),
-        existing=names,
-        expected_classes=[{"name": name, "tier": tier} for name, tier in zip(names, ("block", "nfs"), strict=True)],
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert created_classes(calls) == []
-    assert len(calls) == 1
-
-
-@pytest.mark.parametrize("provider", ["vast", "lvms"])
-@pytest.mark.parametrize("original_fstype", ["ext4", None], ids=["ext4", "legacy-missing"])
-@pytest.mark.parametrize("source", ["environment", "explicit"])
-def test_changed_override_preserves_existing_classes(tmp_path, provider, original_fstype, source):
-    name = "vast-block-fstype-test-block" if provider == "vast" else "osac-fstype-test-block"
-    existing = [existing_block_class(provider, name, original_fstype)]
-    result, calls = run_provider(
-        tmp_path,
-        provider,
-        "xfs" if source == "environment" else "environment-value",
-        explicit_fstype="xfs" if source == "explicit" else None,
-        existing=existing,
-        expected_classes=[{"name": name, "tier": "block"}],
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert_existing_classes_untouched(calls, existing)
-    assert len(calls) == 1
-    assert calls[0]["module"] == "k8s_info"
-
-
-@pytest.mark.parametrize("original_fstype", ["ext4", None], ids=["ext4", "legacy-missing"])
-@pytest.mark.parametrize("missing_protocol", ["block", "nfs"])
-def test_vast_changed_override_creates_only_missing_class(tmp_path, original_fstype, missing_protocol):
-    existing_name = "vast-block-fstype-test-existing"
-    missing_name = f"vast-{missing_protocol}-fstype-test-new"
-    existing = [existing_block_class("vast", existing_name, original_fstype)]
-    result, calls = run_provider(
-        tmp_path,
-        "vast",
-        "xfs",
-        protocols=("block", missing_protocol),
-        tier_names=("existing", "new"),
-        existing=existing,
-        expected_classes=[{"name": existing_name, "tier": "existing"}, {"name": missing_name, "tier": "new"}],
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert_existing_classes_untouched(calls, existing)
-    classes = created_classes(calls)
-    assert [entry["metadata"]["name"] for entry in classes] == [missing_name]
-    if missing_protocol == "block":
-        assert type(classes[0]["parameters"][FSTYPE]) is str
-        assert classes[0]["parameters"][FSTYPE] == "xfs"
-    else:
-        assert FSTYPE not in classes[0]["parameters"]
+    result, calls = run_provider(tmp_path, case, action=action, overrides={
+        "storage_provider_block_fstype": ["xfs"],
+        "storage_provider_backend_connections": {"fixture": {
+            "endpoint": endpoint, "username": "fixture", "password": "fixture-only",
+        }},
+    })
+    assert_success(result)
+    assert not created_classes(calls)
+    if case.role in ("lvms_storage", "vast_storage"):
+        if action == "teardown_backend":
+            assert any(call.get("state") == "absent" and call.get("kind") == "Secret" for call in calls)
+            if case.role == "vast_storage":
+                assert any(request["path"].startswith("/api/views/") for request in requests)
+                secret_lists = [call for call in calls if call.get("kind") == "Secret" and call.get("name") is None]
+                assert any(call["resources"][0]["metadata"]["name"] for call in secret_lists if call.get("resources"))
+        else:
+            assert any(call.get("kind") == "StorageClass" for call in calls)

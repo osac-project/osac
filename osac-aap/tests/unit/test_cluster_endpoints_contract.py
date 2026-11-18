@@ -92,6 +92,13 @@ def test_guest_ingress_uses_the_hosted_control_plane_service_network_kubeconfig(
     fail_msg = require_secret["ansible.builtin.assert"]["fail_msg"]
     assert "was not found" in fail_msg
     assert "hosted_control_plane_namespace" not in fail_msg
+    decode = by_name[
+        "Decode the service-network admin kubeconfig with the cross-namespace API Service FQDN"
+    ]["ansible.builtin.set_fact"]["_cluster_endpoint_admin_kubeconfig"]
+    assert "regex_replace" in decode
+    assert "kube-apiserver." in decode
+    assert "hosted_control_plane_namespace" in decode
+    assert ".svc" in decode
     configure = by_name["Configure guest ingress with the allocated address"]
     assert configure["ansible.builtin.include_role"]["name"] == (
         "osac.service.metallb_ingress"
@@ -307,6 +314,7 @@ def test_actual_playbook_binds_controller_ingress_inputs_without_cluster_access(
             "OSAC_TEST_HCP_NAMESPACE": "cluster-a-hcp",
             "OSAC_TEST_INGRESS_ADDRESS": address,
             "OSAC_TEST_KUBECONFIG_TOKEN": fixture_token,
+            "OSAC_TEST_EXPECTED_SERVER": "https://kube-apiserver.cluster-a-hcp.svc:6443",
         },
     )
 

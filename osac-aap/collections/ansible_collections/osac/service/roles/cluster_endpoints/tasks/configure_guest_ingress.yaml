@@ -23,11 +23,15 @@
     fail_msg: >-
       Secret service-network-admin-kubeconfig was not found.
 
-- name: Decode the service-network admin kubeconfig
+- name: Decode the service-network admin kubeconfig with the cross-namespace API Service FQDN
   ansible.builtin.set_fact:
     _cluster_endpoint_admin_kubeconfig: >-
       {{ _cluster_endpoint_kubeconfig_secret.resources[0].data.kubeconfig
-         | b64decode | from_yaml }}
+         | b64decode
+         | regex_replace(
+             'https://kube-apiserver(?=[:/]|$)',
+             'https://kube-apiserver.' ~ hosted_control_plane_namespace ~ '.svc')
+         | from_yaml }}
   no_log: true
 
 - name: Configure guest ingress with the allocated address

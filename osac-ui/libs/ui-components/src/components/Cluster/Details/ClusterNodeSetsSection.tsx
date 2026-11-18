@@ -1,4 +1,4 @@
-import { Content, Stack, StackItem, Title } from '@patternfly/react-core';
+import { Content, Divider, Stack, StackItem, Title } from '@patternfly/react-core';
 
 import type { Cluster } from '@osac/types';
 
@@ -20,6 +20,7 @@ const ClusterNodeSetsSection = ({ cluster }: ClusterNodeSetsSectionProps) => {
         <Title headingLevel="h3" size="md">
           {t('Node sets')}
         </Title>
+        <Divider />
       </StackItem>
       <StackItem>
         {nodeSetEntries.length > 0 ? (

@@ -30,6 +30,7 @@ import ClusterExternalIpAttachmentStatusLabel from './ClusterExternalIpAttachmen
 import { useListResource } from '../../../api/use-resource';
 import { clusterAttachmentFilter } from '../../../api/v1/external-ip-data';
 import { useTranslation } from '../../../hooks/useTranslation';
+import { displayValue } from '../../../utils/detailFormatters';
 import QueryErrorState from '../../Resource/QueryErrorState';
 
 export interface ClusterEndpointAttachments {
@@ -142,6 +143,12 @@ const EndpointRow = ({
               />
             </Flex>
           </FlexItem>
+          {attachment && (
+            <FlexItem>
+              <span>{t('External IP')}: </span>
+              <span>{displayValue(attachment.status?.externalIpAddress)}</span>
+            </FlexItem>
+          )}
           <FlexItem>{actionButton}</FlexItem>
         </Flex>
       </DescriptionListDescription>

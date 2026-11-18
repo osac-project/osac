@@ -11,7 +11,6 @@ import {
 import type { Cluster } from '@osac/types';
 
 import { useTranslation } from '../../../hooks/useTranslation';
-import { displayValue } from '../../../utils/detailFormatters';
 import { Timestamp } from '../../Primitives/Timestamp';
 
 const ClusterLifecycleSection = ({ cluster }: { cluster: Cluster }) => {
@@ -30,12 +29,6 @@ const ClusterLifecycleSection = ({ cluster }: { cluster: Cluster }) => {
             <DescriptionListTerm>{t('Created')}</DescriptionListTerm>
             <DescriptionListDescription>
               <Timestamp value={cluster.metadata?.creationTimestamp} />
-            </DescriptionListDescription>
-          </DescriptionListGroup>
-          <DescriptionListGroup>
-            <DescriptionListTerm>{t('Creator')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {displayValue(cluster.metadata?.creator)}
             </DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>

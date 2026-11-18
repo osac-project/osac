@@ -3,6 +3,7 @@ import {
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
+  Divider,
   Stack,
   StackItem,
   Title,
@@ -22,6 +23,7 @@ const ClusterSettingsSection = ({ cluster }: { cluster: Cluster }) => {
         <Title headingLevel="h3" size="md">
           {t('Settings')}
         </Title>
+        <Divider />
       </StackItem>
       <StackItem>
         <DescriptionList isCompact aria-label={t('Cluster settings')}>

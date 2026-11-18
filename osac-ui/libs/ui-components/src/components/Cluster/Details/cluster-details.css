@@ -39,6 +39,10 @@
   --pf-v6-c-table--BackgroundColor: transparent;
 }
 
+.cluster-details__networking-table .pf-v6-c-table > tbody:last-child > tr:last-child {
+  border-block-end: 0;
+}
+
 .cluster-details__node-sets {
   list-style: none;
   padding: 0;

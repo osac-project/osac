@@ -46,15 +46,17 @@ const RefreshVersion = () => {
 };
 
 describe('ClusterConfigurationCard', () => {
-  it('separates only the card header while preserving the body groups', () => {
+  it('separates the card header and each subsection title from its content', () => {
     const { container } = renderWithProviders(<ClusterConfigurationCard cluster={cluster} />);
     const header = container.querySelector('.pf-v6-c-card__header');
     expect(header?.nextElementSibling?.tagName).toBe('HR');
-    expect(container.querySelectorAll('hr')).toHaveLength(1);
+    expect(container.querySelectorAll('hr')).toHaveLength(3);
     const body = container.querySelector('.pf-v6-c-card__body');
-    expect(body?.querySelector('hr')).toBeNull();
+    expect(body?.querySelectorAll('hr')).toHaveLength(2);
     for (const name of ['Node sets', 'Settings']) {
-      expect(body).toContainElement(screen.getByRole('heading', { name }));
+      const heading = screen.getByRole('heading', { name });
+      expect(body).toContainElement(heading);
+      expect(heading.nextElementSibling?.tagName).toBe('HR');
     }
   });
   it.each([false, true])(

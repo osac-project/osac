@@ -129,7 +129,7 @@ describe('ClusterDetailsPageContent', () => {
       expect(header).not.toBeNull();
       expect(header?.nextElementSibling?.tagName).toBe('HR');
       expect(header?.nextElementSibling?.nextElementSibling).toHaveClass('pf-v6-c-card__body');
-      expect(card.querySelectorAll('hr')).toHaveLength(1);
+      expect(card.querySelectorAll(':scope > hr')).toHaveLength(1);
     }
     expect(cards[0]).toContainElement(screen.getByRole('heading', { name: 'Cluster version' }));
     expect(cards[0]).toContainElement(screen.getByRole('heading', { name: 'Node sets' }));
@@ -148,7 +148,7 @@ describe('ClusterDetailsPageContent', () => {
       expect(rail).not.toContainElement(screen.getByRole('heading', { name }));
     }
     expect(mainColumn?.querySelectorAll('hr')).toHaveLength(2);
-    expect(rail?.querySelectorAll('hr')).toHaveLength(2);
+    expect(rail?.querySelectorAll('hr')).toHaveLength(4);
     for (const card of cards) {
       expect(rail).toContainElement(card);
       expect(mainColumn).not.toContainElement(card);
@@ -179,7 +179,9 @@ describe('ClusterDetailsPageContent', () => {
     expect(screen.queryByText('99')).not.toBeInTheDocument();
     expect(screen.getByText('https://api.example.com:6443').closest('a')).toBeNull();
     expect(screen.getByText('https://console.example.com').closest('a')).toBeNull();
-    expect(screen.getByText('cluster-owner')).toBeInTheDocument();
+    expect(screen.queryByText('Creator')).not.toBeInTheDocument();
+    expect(screen.queryByText('cluster-owner')).not.toBeInTheDocument();
+    expect(screen.getByText('Created')).toBeInTheDocument();
     expect(container.querySelector('time')).toHaveAttribute('datetime', '2025-01-01T00:00:00.000Z');
     expect(screen.getByText('4.17.0')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();

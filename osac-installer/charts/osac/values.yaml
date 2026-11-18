@@ -212,6 +212,35 @@ service:
   externalHostname: ""
   # [REQUIRED] Hostname for the internal API Route (e.g. fulfillment-internal-api-osac.apps.mycluster.example.com)
   internalHostname: ""
+  # Ingress driver for the public/internal APIs. envoy (default) deploys the
+  # bundled fulfillment-ingress-proxy; gatewayapi uses the OpenShift
+  # CIO-managed Gateway API and skips the bundled Envoy. gatewayapi requires
+  # the cluster-scoped GatewayClass prerequisite (osac-infra gatewayapi.enabled)
+  # and OpenShift 4.19+. In gatewayapi mode every cross-origin browser caller
+  # (the UI origin) MUST be listed in httpCorsAllowedOrigins below -- the
+  # gateway has no CORS filter, so app-side CORS is the only enforcement.
+  ingress:
+    driver: envoy
+    gatewayapi:
+      # Namespace of the CIO-managed Gateway (where istiod/Envoy run).
+      gatewayNamespace: openshift-ingress
+      # GatewayClass installed as a cluster prerequisite by osac-infra.
+      gatewayClassName: openshift-default
+      gatewayName: osac-gateway
+      # How in-cluster callers reach the gateway. service (recommended)
+      # bridges the selectorless fulfillment-api/-internal-api Services to
+      # the gateway Service ClusterIP via the post-install hook Job.
+      bridge: service
+      # In-cluster address of the gateway Service. Leave empty: the
+      # installer's post-install hook resolves the ClusterIP and maintains
+      # the bridge EndpointSlices.
+      gatewayAddress: ""
+      # Request timeouts. gRPC stream routes MUST stay 0s (uncapped).
+      grpcRequestTimeout: "0s"
+      restRequestTimeout: "300s"
+      jwksRequestTimeout: "10s"
+      # ConfigMap (keyed ca.crt) for BackendTLSPolicy upstream validation.
+      backendCaConfigMap: osac-backend-ca
   mcp:
     enabled: false
     externalHostname: ""

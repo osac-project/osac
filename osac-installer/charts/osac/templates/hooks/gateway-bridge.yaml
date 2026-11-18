@@ -1,0 +1,190 @@
+{{/*
+Copyright (c) 2025 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+the License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+*/}}
+
+{{/*
+Post-install bridge for the gatewayapi ingress driver (OSAC-7866).
+
+In gatewayapi mode the fulfillment-api / fulfillment-internal-api Services are
+rendered selectorless by the fulfillment-service chart and the gateway Service
+ClusterIP is not known at render time, so this hook resolves it after the
+release is up and maintains the bridge EndpointSlices. Only rendered when the
+driver is gatewayapi and no static gatewayAddress was set (the chart renders
+the EndpointSlices itself in that case). Envoy mode never sees any of this.
+*/}}
+{{- if and (eq .Values.service.ingress.driver "gatewayapi") (not .Values.service.ingress.gatewayapi.gatewayAddress) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "osac.fullname" . }}-gateway-bridge
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "-1"
+data:
+  gateway-bridge.sh: |
+{{ .Files.Get "files/gateway-bridge.sh" | indent 4 }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "osac.fullname" . }}-gateway-bridge
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "-1"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "osac.fullname" . }}-gateway-bridge
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "-1"
+rules:
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "osac.fullname" . }}-gateway-bridge
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "-1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "osac.fullname" . }}-gateway-bridge
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "osac.fullname" . }}-gateway-bridge
+    namespace: {{ .Release.Namespace }}
+---
+# Read-only access to the gateway Service in the gateway namespace. The
+# fulfillment-service chart already deploys the gateway Certificate there,
+# so the cross-namespace write pattern is established.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "osac.fullname" . }}-gateway-bridge
+  namespace: {{ .Values.service.ingress.gatewayapi.gatewayNamespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "-1"
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames:
+      - {{ .Values.service.ingress.gatewayapi.gatewayName }}-{{ .Values.service.ingress.gatewayapi.gatewayClassName }}
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "osac.fullname" . }}-gateway-bridge
+  namespace: {{ .Values.service.ingress.gatewayapi.gatewayNamespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "-1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "osac.fullname" . }}-gateway-bridge
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "osac.fullname" . }}-gateway-bridge
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "osac.fullname" . }}-gateway-bridge
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-output-log-policy": hook-failed
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 1200
+  template:
+    metadata:
+      labels:
+        {{- include "osac.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "osac.fullname" . }}-gateway-bridge
+      restartPolicy: OnFailure
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: scripts
+          configMap:
+            name: {{ include "osac.fullname" . }}-gateway-bridge
+      containers:
+        - name: gateway-bridge
+          image: {{ .Values.cliImage }}
+          env:
+            - name: HOME
+              value: /tmp
+            - name: GATEWAY_NAMESPACE
+              value: {{ .Values.service.ingress.gatewayapi.gatewayNamespace | quote }}
+            - name: GATEWAY_SERVICE
+              value: {{ printf "%s-%s" .Values.service.ingress.gatewayapi.gatewayName .Values.service.ingress.gatewayapi.gatewayClassName | quote }}
+            - name: RELEASE_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: TIMEOUT_SECONDS
+              value: "900"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: scripts
+              mountPath: /scripts
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          command:
+            - /bin/bash
+            - /scripts/gateway-bridge.sh
+{{- end }}

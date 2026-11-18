@@ -38,6 +38,17 @@ caIssuer:
 envoygateway:
   enabled: false
 
+# OpenShift CIO-managed Gateway API (OSAC-7866). Installs the cluster-scoped
+# GatewayClass that activates OpenShift's built-in ingress (embedded Sail/Istio,
+# controller openshift.io/gateway-controller/v1) for fulfillment-service
+# releases running with service.ingress.driver=gatewayapi. OpenShift only --
+# Kind/dev keeps the Envoy Gateway above. Deliberately separate from
+# envoygateway: different controller and different purpose (that one serves
+# devstack UI/Keycloak traffic on Kind).
+gatewayapi:
+  enabled: false
+  gatewayClassName: openshift-default
+
 keycloak:
   enabled: true
   realmOverwrite: true

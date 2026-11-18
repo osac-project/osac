@@ -806,6 +806,63 @@
           "minLength": 1,
           "description": "Hostname for the internal API Route"
         },
+        "ingress": {
+          "type": "object",
+          "description": "Ingress driver for the public/internal APIs (mirrors fulfillment-service chart)",
+          "additionalProperties": false,
+          "properties": {
+            "driver": {
+              "type": "string",
+              "description": "envoy deploys the bundled fulfillment-ingress-proxy; gatewayapi uses the OpenShift CIO-managed Gateway API",
+              "enum": ["envoy", "gatewayapi"],
+              "default": "envoy"
+            },
+            "gatewayapi": {
+              "type": "object",
+              "description": "gatewayapi driver settings",
+              "additionalProperties": false,
+              "properties": {
+                "gatewayNamespace": {
+                  "type": "string",
+                  "description": "Namespace of the CIO-managed Gateway"
+                },
+                "gatewayClassName": {
+                  "type": "string",
+                  "description": "GatewayClass installed as a cluster prerequisite by osac-infra"
+                },
+                "gatewayName": {
+                  "type": "string",
+                  "description": "Name of the CIO-managed Gateway"
+                },
+                "bridge": {
+                  "type": "string",
+                  "description": "How in-cluster callers reach the gateway",
+                  "enum": ["service", "pod"]
+                },
+                "gatewayAddress": {
+                  "type": "string",
+                  "description": "In-cluster address of the gateway Service; empty lets the installer hook resolve it"
+                },
+                "grpcRequestTimeout": {
+                  "type": "string",
+                  "description": "gRPC route request timeout; must stay 0s (uncapped) for streams"
+                },
+                "restRequestTimeout": {
+                  "type": "string",
+                  "description": "REST route request timeout"
+                },
+                "jwksRequestTimeout": {
+                  "type": "string",
+                  "description": "JWKS route request timeout"
+                },
+                "backendCaConfigMap": {
+                  "type": "string",
+                  "description": "ConfigMap (keyed ca.crt) for BackendTLSPolicy upstream validation"
+                }
+              }
+            }
+          }
+        },
         "mcp": {
           "type": "object",
           "description": "Optional fulfillment MCP endpoint",

@@ -2931,33 +2931,61 @@ var _ = Describe("BareMetalInstance network offboard shutdown (OSAC-1448)", func
 		controllerutil.AddFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer)
 		controllerutil.AddFinalizer(bareMetalInstance, BareMetalInstanceInventoryFinalizer)
 		Expect(k8sClient.Create(ctx, bareMetalInstance)).To(Succeed())
-		attachment := newTestNetworkAttachment("default", "offboard-test-bmi-id", "eth0")
+		attachment := newTestNetworkAttachment("default", "offboard-test-bmi-id", "eth0",
+			BareMetalInstanceNetworkingFinalizer, "osac.openshift.io/networkattachment")
 		Expect(k8sClient.Create(ctx, attachment)).To(Succeed())
+		attachmentKey := client.ObjectKeyFromObject(attachment)
 		defer func() {
 			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, bareMetalInstance))).To(Succeed())
 		}()
 		defer func() {
-			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, attachment))).To(Succeed())
+			stored := &opv1alpha1.NetworkAttachment{}
+			if k8sClient.Get(ctx, attachmentKey, stored) == nil {
+				stored.Finalizers = nil
+				Expect(client.IgnoreNotFound(k8sClient.Update(ctx, stored))).To(Succeed())
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, stored))).To(Succeed())
+			}
 		}()
+		var reads []client.ObjectKey
+		reconciler.APIReader = networkAttachmentReadRecorder{Reader: k8sClient, keys: &reads}
 
 		now := metav1.Now()
 		bareMetalInstance.DeletionTimestamp = &now
 
+		powerState := management.PowerOn
 		mockMgmtClient.getPowerStateFunc = func(_ context.Context, _ string) (*management.PowerStatus, error) {
-			return &management.PowerStatus{State: management.PowerOn, IsTransitioning: false}, nil
+			return &management.PowerStatus{State: powerState, IsTransitioning: false}, nil
 		}
 
 		result, err := reconciler.handleDeletion(ctx, bareMetalInstance)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 		Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseDeleting))
+		Expect(reads).To(Equal([]client.ObjectKey{attachmentKey}), "one attachment observation per pass")
 
 		cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkOffboardComplete)
 		Expect(cond).NotTo(BeNil())
 		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(setPowerCallCount).To(Equal(1))
+		Expect(setPowerTarget).To(Equal(management.PowerOff))
 
 		Expect(controllerutil.ContainsFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer)).
 			To(BeTrue(), "networking finalizer should still be present — shutdown runs before networking deletion")
+		stored := &opv1alpha1.NetworkAttachment{}
+		Expect(k8sClient.Get(ctx, attachmentKey, stored)).To(Succeed())
+		Expect(stored.DeletionTimestamp).To(BeNil(), "the attachment is not deleted while the host is on")
+
+		// Once the host is observed off, the same pass deletes the attachment it observed.
+		powerState = management.PowerOff
+		reads = nil
+		result, err = reconciler.handleDeletion(ctx, bareMetalInstance)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(reads).To(Equal([]client.ObjectKey{attachmentKey}), "one attachment observation per pass")
+		Expect(bareMetalInstance.IsStatusConditionTrue(v1alpha1.HostConditionNetworkOffboardComplete)).To(BeTrue())
+		Expect(k8sClient.Get(ctx, attachmentKey, stored)).To(Succeed())
+		Expect(stored.DeletionTimestamp).NotTo(BeNil())
+		Expect(controllerutil.ContainsFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer)).To(BeTrue())
 	})
 
 	It("skips offboarding when no attachment create was attempted", func() {

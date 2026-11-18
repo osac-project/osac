@@ -993,6 +993,10 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffPowerCycle(
 	}
 
 	message := networkHandoffPendingMessage(target, setErr, powerStatus, getErr)
+	// Power-on steps stay Unknown. The False-to-Unknown change when the host
+	// is first observed off resets LastTransitionTime, which
+	// networkHandoffDeadline uses as the start of power-on's own deadline;
+	// reporting False here would move that start.
 	pendingStatus := metav1.ConditionFalse
 	if target == management.PowerOn {
 		pendingStatus = metav1.ConditionUnknown
@@ -1340,31 +1344,31 @@ func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMe
 	var done bool
 	var err error
 
-	// Power off only when an attachment exists or an earlier Create may have
-	// reached the API. The networking finalizer is retained while an uncertain
-	// Create is resolved, so inventory ownership cannot be released early.
-	var observedAttachment *opv1alpha1.NetworkAttachment
-	if r.NetworkingEnabled && controllerutil.ContainsFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer) &&
-		r.networkingRequested(bareMetalInstance) {
-		_, attachment, lookupErr := r.getNetworkAttachmentForDeletion(ctx, bareMetalInstance)
-		if lookupErr != nil {
-			return ctrl.Result{}, lookupErr
+	// Observe the NetworkAttachment once per pass. Power off only when this pass
+	// observed one; cleanup receives the same observation and never deletes an
+	// attachment this pass did not see, so one that appears later is powered
+	// off on a later pass before it is deleted. The networking finalizer is
+	// retained while an uncertain Create is resolved, so inventory ownership
+	// cannot be released early.
+	observedAttachment, err := r.getNetworkAttachmentForDeletion(ctx, bareMetalInstance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if observedAttachment != nil && bareMetalInstance.Spec.ExternalHostID != "" {
+		result, err = r.reconcileNetworkOffboardShutdown(ctx, bareMetalInstance)
+		if err != nil {
+			return result, err
 		}
-		observedAttachment = attachment
-		if attachment != nil && bareMetalInstance.Spec.ExternalHostID != "" {
-			result, err = r.reconcileNetworkOffboardShutdown(ctx, bareMetalInstance)
-			if err != nil {
-				return result, err
-			}
-			if !result.IsZero() {
-				bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseDeleting
-				return result, nil
-			}
+		if !result.IsZero() {
+			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseDeleting
+			return result, nil
 		}
 	}
 
-	// Network attachment cleanup (port tenant → provisioning); host is off at this point
-	result, done, err = r.reconcileNetworkingDeletionObserved(ctx, bareMetalInstance, observedAttachment)
+	// Network attachment cleanup (port tenant → provisioning). When a host is
+	// assigned, an observed attachment is deleted only after offboard shutdown
+	// confirmed the host off.
+	result, done, err = r.reconcileNetworkingDeletion(ctx, bareMetalInstance, observedAttachment)
 	if err != nil {
 		return result, err
 	}

@@ -121,19 +121,25 @@ func networkAttachmentKeys(bmi *v1alpha1.BareMetalInstance) []client.ObjectKey {
 	return keys
 }
 
+// getNetworkAttachmentForDeletion observes the NetworkAttachment of a deleting
+// BareMetalInstance. A deletion pass calls it once and passes the result to
+// both the offboard shutdown gate and reconcileNetworkingDeletion. It returns
+// nil without a lookup when BMF owns no network cleanup: the networking
+// finalizer is absent, provisioning is disabled, or no attachment is requested.
 func (r *BareMetalInstanceReconciler) getNetworkAttachmentForDeletion(
 	ctx context.Context, bmi *v1alpha1.BareMetalInstance,
-) (client.ObjectKey, *opv1alpha1.NetworkAttachment, error) {
+) (*opv1alpha1.NetworkAttachment, error) {
+	if !controllerutil.ContainsFinalizer(bmi, BareMetalInstanceNetworkingFinalizer) ||
+		!r.NetworkingEnabled || !r.networkingRequested(bmi) {
+		return nil, nil
+	}
 	for _, key := range networkAttachmentKeys(bmi) {
 		na, err := r.getNetworkAttachment(ctx, key)
-		if err != nil {
-			return key, nil, err
-		}
-		if na != nil {
-			return key, na, nil
+		if err != nil || na != nil {
+			return na, err
 		}
 	}
-	return client.ObjectKey{}, nil, nil
+	return nil, nil
 }
 
 // networkAttachmentMayExist reports whether a previous reconcile could have
@@ -443,26 +449,11 @@ func (r *BareMetalInstanceReconciler) failSelectedPortMAC(
 // back to the provisioning network before it removes its own finalizer; BMF
 // then removes its finalizer from the NetworkAttachment and from the
 // BareMetalInstance. It returns true once network cleanup is complete.
+//
+// observedAttachment is the result of getNetworkAttachmentForDeletion from the
+// same pass, which also gated offboard shutdown. This function never looks up
+// or deletes a newly appeared attachment in a pass that did not observe it.
 func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
-	ctx context.Context,
-	bareMetalInstance *v1alpha1.BareMetalInstance,
-) (ctrl.Result, bool, error) {
-	var observedAttachment *opv1alpha1.NetworkAttachment
-	if controllerutil.ContainsFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer) &&
-		r.NetworkingEnabled && r.networkingRequested(bareMetalInstance) {
-		_, attachment, err := r.getNetworkAttachmentForDeletion(ctx, bareMetalInstance)
-		if err != nil {
-			return ctrl.Result{}, false, err
-		}
-		observedAttachment = attachment
-	}
-	return r.reconcileNetworkingDeletionObserved(ctx, bareMetalInstance, observedAttachment)
-}
-
-// reconcileNetworkingDeletionObserved uses the attachment observed by the
-// caller that checked whether offboard shutdown was required. It never looks
-// up or deletes a newly appeared attachment in a pass that did not observe it.
-func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletionObserved(
 	ctx context.Context,
 	bareMetalInstance *v1alpha1.BareMetalInstance,
 	observedAttachment *opv1alpha1.NetworkAttachment,
@@ -524,7 +515,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletionObserved(
 		if networkAttachmentMayExist(bareMetalInstance) {
 			setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse,
 				v1alpha1.HostConditionReasonNetworkAttachmentAwaitingVisibility,
-				"Waiting for the network attachment to become visible before cleanup")
+				networkAttachmentAwaitingVisibilityMessage)
 			return ctrl.Result{RequeueAfter: networkAttachmentDeleteRetryInterval}, false, nil
 		}
 	}

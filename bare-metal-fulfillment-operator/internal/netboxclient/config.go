@@ -25,6 +25,8 @@ import (
 	"strings"
 )
 
+const netBoxAuthorizationScheme = "Bearer "
+
 var (
 	errInvalidEndpoint        = errors.New("NetBox endpoint must be an HTTP or HTTPS origin")
 	errInsecureHTTPNotAllowed = errors.New("NetBox HTTP endpoints require AllowInsecureHTTP")

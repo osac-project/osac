@@ -13,7 +13,8 @@ scripts:
 
 The image is based on UBI 9 with Node.js
 (`registry.access.redhat.com/ubi9/nodejs-22-minimal`) and adds pnpm, Chromium and its
-system libraries, `oc`, and the `osac` CLI. UBI 9 repositories have no Xvfb,
+system libraries, and `oc`. The matching `osac` CLI is mounted at runtime.
+UBI 9 repositories have no Xvfb,
 so the image runs headless only; `--headed` stops with `Xvfb is missing`. The
 host needs podman, git, tar, and oc for the examples below,
 a kubeconfig that can read the `osac` namespace, and network access to the
@@ -25,21 +26,7 @@ Build from the repository root at the commit you want to test. The build
 context below contains only files tracked in that commit; it does not include
 uncommitted changes or local credentials from the working checkout.
 
-The `osac` CLI is copied from a fulfillment-service image. Use the image the
-cluster runs; the flows create and delete resources with the CLI, so it must
-match the deployed service. To find the image the cluster runs:
-
-```bash
-FULFILLMENT_SERVICE_IMAGE=$(oc get pods \
-  -n osac \
-  -l app=fulfillment-grpc-server \
-  -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="grpc-server")].imageID}')
-```
-
-The value must include the image repository and `@sha256:` digest. If the
-runtime returns only a digest, prepend the deployed image's repository name.
-
-Then build the image:
+Build the image independently of the fulfillment-service image:
 
 ```bash
 (
@@ -49,7 +36,6 @@ Then build the image:
   git archive HEAD osac-ui | tar -x --same-permissions -C "$build_context"
   podman build \
     -f "$build_context/osac-ui/apps/e2e-tests/container/Containerfile" \
-    --build-arg FULFILLMENT_SERVICE_IMAGE="${FULFILLMENT_SERVICE_IMAGE}" \
     -t osac-ui-e2e \
     "$build_context"
 )
@@ -61,7 +47,6 @@ restrictive umask.
 
 | Build argument              | Default                                           | Purpose                                                                   |
 | --------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------- |
-| `FULFILLMENT_SERVICE_IMAGE` | Required                                          | Digest-qualified image the `osac` CLI is copied from                     |
 | `OC_VERSION`                | `4.22.22`                                         | `oc` client version                                                       |
 | `PNPM_RELEASE`              | `10.34.5`                                         | pnpm version; keep it equal to `packageManager` in `osac-ui/package.json` |
 
@@ -72,12 +57,37 @@ as the build context: it can contain untracked secrets and other local files.
 
 ## Run
 
+Extract the CLI from the exact fulfillment-service image used by the
+deployment. For a deployment with multiple service pods, check that their
+running image IDs agree before selecting one, and repeat the extraction after
+the deployment changes. The following reads the first pod's running image ID:
+
+```bash
+service_image=$(oc get pods \
+  -n osac \
+  -l app=fulfillment-grpc-server \
+  -o jsonpath='{.items[0].status.containerStatuses[?(@.name=="grpc-server")].imageID}')
+service_image=${service_image#docker-pullable://}
+```
+
+If this is only a digest, use a matching local image ID or prepend the deployed
+image's repository to form `repository@sha256:...`. For a locally built CI
+image, use the same local image that was loaded onto the cluster. The helper
+accepts a local image or a digest-qualified registry reference; it never pulls
+a mutable tag. Pulling a private image requires registry credentials. It pins
+the locally resolved image ID, creates a temporary container, and copies the
+CLI without starting that container. Record the selected image and printed
+local image ID with the test results. Only use a trusted image: the extracted
+CLI receives the admin credentials during the run.
+
 Put the Keycloak admin password in a file only you can read, outside the
 repository. Do not pass it on the command line.
 
 ```bash
 umask 077
 secret_dir=$(mktemp -d /tmp/osac-ui-e2e-secrets.XXXXXXXX)
+cli_file="$secret_dir/osac"
+bash osac-ui/apps/e2e-tests/container/extract-osac-cli.sh "$service_image" "$cli_file"
 password_file="$secret_dir/admin-password"
 read -rs -p 'OSAC admin password: ' p && printf %s "$p" > "$password_file"; echo
 unset p
@@ -94,6 +104,7 @@ else
     --user "$(id -u):0" \
     -v "$container_kubeconfig":/work/kubeconfig:ro,Z \
     -v "$password_file":/work/admin-password:ro,Z \
+    -v "$cli_file":/work/osac-cli:ro,Z \
     -v ./test-output:/tmp/test-output:Z \
     -e KUBECONFIG=/work/kubeconfig \
     osac-ui-e2e \
@@ -121,7 +132,7 @@ fi
   [Without a kubeconfig](#without-a-kubeconfig).
 - `--ignore-tls` accepts the self-signed certificates of lab routes.
 - The admin user defaults to `admin`; change it with `--admin-user=USER`. The
-  runner also logs the bundled `osac` CLI in with these credentials, so no CLI
+  runner also logs the mounted `osac` CLI in with these credentials, so no CLI
   configuration needs to be mounted.
 - The Playwright HTML report and test results, when generated, are copied to
   `test-output/playwright-report/` and `test-output/test-results/` when the
@@ -134,7 +145,9 @@ fi
 ### Without a kubeconfig
 
 When you cannot provide a kubeconfig, pass the two routes instead. The image
-then needs no `oc` access to the cluster:
+then needs no `oc` access to the cluster. Obtain the deployed service image
+identity separately and extract its CLI as described above, or use the CLI
+already extracted by the CI job from the same locally built service image:
 
 ```bash
 podman run --rm \
@@ -142,6 +155,7 @@ podman run --rm \
   --userns=keep-id \
   --user "$(id -u):0" \
   -v "$password_file":/work/admin-password:ro,Z \
+  -v "$cli_file":/work/osac-cli:ro,Z \
   -v ./test-output:/tmp/test-output:Z \
   -e OSAC_UI_BASE_URL=https://osac-ui-osac.apps.<cluster-domain> \
   -e OSAC_API_BASE_URL=https://fulfillment-api-osac.apps.<cluster-domain> \
@@ -237,7 +251,7 @@ inside a hosted CI service; the workflow below is a starting template.
 - OSAC is installed and healthy, with the `osac-ui` and `fulfillment-api`
   routes.
 - A Keycloak user with the cloud provider admin role (default `admin`). The
-  runner uses it for the UI and also logs the bundled `osac` CLI in with it,
+  runner uses it for the UI and also logs the mounted `osac` CLI in with it,
   so no CLI session or token needs to be provided.
 - Capacity for the VM described in `extravars.yaml`, and a storage backend
   for its storage tier (LVMS in the default values).
@@ -257,7 +271,7 @@ inside a hosted CI service; the workflow below is a starting template.
 | Test data                      | committed `extravars.yaml`, or a mounted file with `--extravars=PATH`                                              |
 | Self-signed route certificates | `--ignore-tls`                                                                                                     |
 | Results directory              | a writable directory mounted at `/tmp/test-output`                                                                 |
-| `osac` CLI version             | build argument `FULFILLMENT_SERVICE_IMAGE`; pin it to the image the deployment runs                                |
+| `osac` CLI version             | mount the CLI extracted from the fulfillment-service image the deployment runs                                    |
 
 Do not pass `-e CI=true`: with `CI` set, the Playwright configuration
 retries a failed test once, and a retried create step fails on the object
@@ -295,8 +309,8 @@ the first attempt left behind.
 
 ### Suggested pipeline
 
-1. Build the image from the commit under test, with
-   `FULFILLMENT_SERVICE_IMAGE` set to the image the deployment runs.
+1. Build the runner image from the commit under test. Extract the CLI from the
+   same fulfillment-service image used by the deployment and mount it at runtime.
 2. Check that no objects with the resulting indexed test names exist; stop or
    clean up verified leftovers if they do.
 3. Run the image with the flow tag. Its exit code is the job result.
@@ -322,16 +336,19 @@ jobs:
           git archive HEAD osac-ui | tar -x --same-permissions -C "$build_context"
           podman build \
             -f "$build_context/osac-ui/apps/e2e-tests/container/Containerfile" \
-            --build-arg FULFILLMENT_SERVICE_IMAGE="${{ vars.FULFILLMENT_SERVICE_IMAGE }}" \
             -t osac-ui-e2e:${{ github.sha }} \
             "$build_context"
       - name: Run the happy flow
         env:
           OSAC_ADMIN_PASSWORD: ${{ secrets.OSAC_ADMIN_PASSWORD }}
+          FULFILLMENT_SERVICE_IMAGE: ${{ vars.FULFILLMENT_SERVICE_IMAGE }}
         run: |
           umask 077
           password_file=$(mktemp "${RUNNER_TEMP}/osac-ui-e2e-password.XXXXXXXX")
-          trap 'rm -f -- "$password_file"' EXIT
+          cli_dir=$(mktemp -d "${RUNNER_TEMP}/osac-ui-e2e-cli.XXXXXXXX")
+          trap 'rm -f -- "$password_file" "$cli_dir/osac"; rmdir -- "$cli_dir"' EXIT
+          bash osac-ui/apps/e2e-tests/container/extract-osac-cli.sh \
+            "$FULFILLMENT_SERVICE_IMAGE" "$cli_dir/osac"
           printf %s "$OSAC_ADMIN_PASSWORD" > "$password_file"
           mkdir -p test-output
           podman run --rm \
@@ -339,6 +356,7 @@ jobs:
             --userns=keep-id \
             --user "$(id -u):0" \
             -v "$password_file":/work/admin-password:ro,Z \
+            -v "$cli_dir/osac":/work/osac-cli:ro,Z \
             -v ./test-output:/tmp/test-output:Z \
             -e OSAC_UI_BASE_URL="${{ vars.OSAC_UI_BASE_URL }}" \
             -e OSAC_API_BASE_URL="${{ vars.OSAC_API_BASE_URL }}" \

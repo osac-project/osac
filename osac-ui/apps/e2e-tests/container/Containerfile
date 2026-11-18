@@ -6,21 +6,13 @@
 # Build from a committed source archive, not the working checkout. See the
 # README for the build command and its private temporary build context.
 #
-# Use the osac CLI of the build under test: the flows create and delete
-# resources with it, so it must match the deployed fulfillment service. Pass
-# the image the cluster runs, for example:
-#   --build-arg FULFILLMENT_SERVICE_IMAGE=ghcr.io/osac-project/fulfillment-service@sha256:...
+# Mount the osac CLI from the deployed fulfillment-service image at runtime.
 #
 # See osac-ui/apps/e2e-tests/container/README.md for running it.
-
-ARG FULFILLMENT_SERVICE_IMAGE
-
-FROM ${FULFILLMENT_SERVICE_IMAGE} AS osac-cli
 
 # UBI 9 with Node.js; add dnf and git for the shared preparation script.
 FROM registry.access.redhat.com/ubi9/nodejs-22-minimal:latest
 
-ARG FULFILLMENT_SERVICE_IMAGE
 ARG TARGETARCH=amd64
 ARG OC_VERSION=4.22.22
 # Same pnpm as the workspace's packageManager field. Not named PNPM_VERSION:
@@ -31,12 +23,7 @@ ARG PNPM_RELEASE=10.34.5
 # The build runs as root: the prepare script installs packages with dnf.
 USER 0
 
-RUN printf '%s' "${FULFILLMENT_SERVICE_IMAGE}" | grep -Eq '@sha256:[[:xdigit:]]{64}$' \
-    || { echo 'FULFILLMENT_SERVICE_IMAGE must be digest-qualified' >&2; exit 1; }
-
 RUN microdnf install -y dnf git && microdnf clean all
-
-COPY --from=osac-cli /usr/local/bin/osac /usr/local/bin/osac
 
 # Installed system-wide so any run-time user finds it; the prepare script
 # then accepts it instead of installing pnpm under root's home.
@@ -55,7 +42,7 @@ COPY osac-ui/ ./osac-ui/
 # repositories have no Xvfb, so the image runs headless only.
 RUN bash osac-ui/apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
       --osac-ui-dir=/work/osac-ui \
-      --osac-cli=/usr/local/bin/osac \
+      --skip-osac-cli \
     && dnf clean all
 
 # oc: run-ui-e2e.sh reads the osac-ui and fulfillment-api routes with it.
@@ -84,7 +71,7 @@ RUN chgrp -R 0 /work/osac-ui /ms-playwright \
     && chmod -R g=u /work/osac-ui /ms-playwright \
     && mkdir -m 1777 /home/e2e
 ENV HOME=/home/e2e \
-    OSAC_CLI_PATH=/usr/local/bin/osac \
+    OSAC_CLI_PATH=/work/osac-cli \
     OSAC_UI_DIR=/work/osac-ui \
     OSAC_UI_E2E_OUTPUT=/tmp/test-output
 # run-ui-e2e.sh refuses credentialed runs as root. Group 0 gives the default

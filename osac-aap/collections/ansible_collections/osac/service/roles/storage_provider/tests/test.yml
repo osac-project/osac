@@ -618,6 +618,45 @@
             success_msg: "Role correctly rejected empty storage_provider_config_namespace"
 
 # ──────────────────────────────────────────────────────────────
+# Test 12c: Explicit YAML null storage_provider_config_namespace -- error path
+# Expected: `is none` guard rejects explicit null before `| string` can coerce
+# it to the 4-char string "None".
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- null storage_provider_config_namespace (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run null-config-namespace failure test
+      block:
+        - name: Attempt setup with null storage_provider_config_namespace (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-test
+            storage_provider_action: setup
+            storage_provider_config_namespace: null
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Dispatcher unexpectedly accepted null hub namespace"
+
+      rescue:
+        - name: Verify role failed with expected storage_provider_config_namespace message for null
+          ansible.builtin.assert:
+            that:
+              - "'storage_provider_config_namespace' in ansible_failed_result.msg"
+              - "'non-empty string' in ansible_failed_result.msg"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected null storage_provider_config_namespace"
+
+# ──────────────────────────────────────────────────────────────
 # Test 13: Tier name too long to safely derive a qos_policy -- error path
 # Expected: role fails at the length-guard task (not the downstream qos_policy DNS-label
 # validation -- that task is unreachable for auto-derived values, since the length-guard

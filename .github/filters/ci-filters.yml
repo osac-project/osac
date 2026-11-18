@@ -12,7 +12,7 @@
 # as separate alternatives: four disjoint full patterns as separate entries
 # would require a single file to satisfy all of them, which no real file does.
 
-# A change to the CI wiring itself runs everything.
+# CI wiring changes run all checks except proto-check, which needs its own match.
 ci-config:
   - '{.github/workflows/ci.yml,.github/filters/ci-filters.yml}'
 
@@ -277,6 +277,7 @@ helm-osac-installer:
 proto-check:
   - '{proto/**,fulfillment-service/dev/**,fulfillment-service/dev.py,fulfillment-service/cmd/buf-plugin-osac-lint/**,.github/workflows/check-generated-code.yaml}'
   - '!proto/**/*.md'
+  - '!.github/**'
 
 # Gates check-pull-request.yaml.
 fulfillment-service-checks:

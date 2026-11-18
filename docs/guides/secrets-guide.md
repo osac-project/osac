@@ -288,11 +288,14 @@ for the current Windows admission rules.
 
 **Required key:** `userdata` (nonempty)
 
-**Availability:** Secret creation and retrieval are supported. Referencing this
-type from a ComputeInstance is not yet supported; that work is tracked in
-[OSAC-7713](https://redhat.atlassian.net/browse/OSAC-7713). Inline Windows XML
-remains supported; see the
-[ComputeInstance guide](developer/computeinstance-guide.md#user-data-inline-or-secret).
+**Availability:** Use this type for new Windows ComputeInstance Secret
+references. Linux ComputeInstances and BareMetalInstances continue to require
+`user-data`. The Secret must be tenant-local and in the same project as the
+ComputeInstance; shared and cross-project references are rejected. Existing
+Windows ComputeInstances that retain the same legacy `user-data` reference
+remain manageable. Inline Windows XML also remains supported. See the
+[ComputeInstance guide](developer/computeinstance-guide.md#user-data-inline-or-secret)
+for the complete admission and compatibility rules.
 
 **Format:** One well-formed XML 1.0 document encoded as UTF-8. The `userdata`
 value must be at most 65,536 bytes (64 KiB), including any byte-order mark

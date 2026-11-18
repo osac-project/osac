@@ -534,11 +534,27 @@ osac create secret \
   --from-file=userdata=/path/to/Unattend.xml
 ```
 
-Referencing a `windows-user-data` Secret from a ComputeInstance is not yet
-supported; that work is tracked in
-[OSAC-7713](https://redhat.atlassian.net/browse/OSAC-7713). Current
-`user_data_source.secret` references accept only `user-data` Secrets. For a
-Windows DiskImage, their contents are checked as XML during VM admission.
+Reference the Secret from a Windows ComputeInstance in the same way:
+
+```bash
+  --user-data-secret windows-answer
+```
+
+When a new Windows ComputeInstance uses a Secret source, it requires a
+`windows-user-data` Secret. Linux and unspecified images, and
+BareMetalInstances, continue to require `user-data`. The Secret must be
+tenant-local and in the same project as the ComputeInstance; shared and
+cross-project references are rejected. Responses contain the canonical Secret
+ID and name, but not its data.
+
+An existing Windows ComputeInstance that already references a legacy
+`user-data` Secret remains manageable while it retains that exact reference.
+OSAC still checks that the Secret exists, is accessible in the instance's
+project, contains `userdata`, and is within the size limit. New Windows
+ComputeInstances and inline-to-Secret updates require `windows-user-data`.
+Once a ComputeInstance uses a Secret source, that reference cannot be replaced
+or removed.
+
 For Windows Secret validation and lifecycle rules, see
 [Managing Secrets](../secrets-guide.md#windows-user-data-windows-user-data).
 

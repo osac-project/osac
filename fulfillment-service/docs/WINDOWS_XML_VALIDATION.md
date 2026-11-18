@@ -55,11 +55,20 @@ declaration, and whitespace; it is independent of JSON's base64 encoding.
 Parser failures map to fixed `InvalidArgument` messages before storage.
 Generic `USER_DATA` Secret creation does not use the XML parser.
 
-The existing Windows ComputeInstance admission path uses the same XML helper
-for inline data and for resolved generic `USER_DATA` Secret contents. The XML
-helper itself imposes no byte limit; callers own size validation. Supporting
-`WINDOWS_USER_DATA` Secret references is separate work tracked in
-[OSAC-7713](https://redhat.atlassian.net/browse/OSAC-7713).
+Windows ComputeInstance admission uses the same XML helper only for inline
+user data, which has no Secret-creation validation boundary. For a Secret
+source, admission resolves the reference within the ComputeInstance's tenant
+and project, enforces the image-specific Secret type, required `userdata` key,
+and 65,536-byte limit, and stores the canonical reference. It does not parse
+the resolved Secret contents again because `WINDOWS_USER_DATA` XML was checked
+at Secret creation and both its type and data are immutable.
+
+An existing Windows ComputeInstance that retains the same legacy `USER_DATA`
+reference is exempt only from the image-specific type requirement. Reference
+lookup, tenant/project access, required-key, and size checks continue to run.
+New Windows references require `WINDOWS_USER_DATA`; Linux and
+BareMetalInstance behavior remains `USER_DATA`-only. The XML helper itself
+imposes no byte limit; callers own size validation.
 
 Windows Secret data and type updates are rejected, and the `HUB` backend is
 unsupported. Metadata-only updates are supported.
@@ -75,7 +84,10 @@ not exercise the deployed transport.
 
 The deployed [`it/it_windows_user_data_secret_test.go`](../it/it_windows_user_data_secret_test.go)
 suite exercises CLI creation, description and deletion, authenticated public
-Get byte preservation, size boundaries, and rejection without persistence.
-It requires a running service built from the checkout; compilation alone does
-not verify that boundary. Follow the prerequisites and commands in
+Get byte preservation, size boundaries, rejection without persistence,
+Windows and Linux ComputeInstance type pairing, canonical references by ID and
+name, tenant/project isolation, and BareMetalInstance type preservation when
+BMaaS is enabled. It requires a running service built from the checkout;
+compilation alone does not verify that boundary. Follow the prerequisites and
+commands in
 [Fulfillment integration testing](../../docs/INTEGRATION-TESTING.md#fulfillment-service).

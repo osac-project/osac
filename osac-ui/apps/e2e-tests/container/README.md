@@ -228,7 +228,11 @@ generated. It can run from a CI pipeline or a GitHub Actions job.
 It has been run end to end on two different hosts (a Fedora workstation with
 podman 5.8, and a RHEL 9 lab host with podman 5.4), with both route discovery
 methods, for `vmaas_full_happy_basic` and `full_vm_power`. It has not yet run
-inside a hosted CI service; the workflow below is a starting template.
+inside a hosted CI service; the example below is illustrative, not an OSAC
+project CI integration. For that integration, follow the authorization, suite
+selection, path-filter, check, and merge-queue requirements in the
+[OSAC CI guide](../../../../.github/CI.md). Do not expose deployment secrets
+to untrusted pull request code.
 
 ### Runner prerequisites
 
@@ -238,7 +242,8 @@ inside a hosted CI service; the workflow below is a starting template.
 - **Network access to the deployment:** the `osac-ui` and `fulfillment-api`
   routes over HTTPS, plus the Kubernetes API when route discovery uses a
   kubeconfig. Lab clusters are usually reachable only from inside the lab, so
-  use a self-hosted runner there; GitHub-hosted runners cannot reach them.
+  use a self-hosted runner with verified access; a runner fleet label alone
+  does not guarantee connectivity to a particular lab deployment.
 - **Internet access to build the image** (UBI 9 repositories, npm, the
   Playwright Chromium build, `mirror.openshift.com`), about 5 GB of disk for
   the image, and several minutes for the build. Build once per commit under
@@ -257,8 +262,11 @@ inside a hosted CI service; the workflow below is a starting template.
   for its storage tier (LVMS in the default values).
 - No leftover objects with the resulting indexed test names (tenant, instance
   type, catalog item, and other resources). Different `--instance` values or
-  different `extravars.yaml` names can avoid naming collisions. Before running
-  concurrently, also check capacity and any other shared state.
+  different `extravars.yaml` names can avoid naming collisions, but do not
+  isolate capacity or other shared state. Prefer a separate ephemeral
+  deployment per job. For a shared deployment, coordinate all users of that
+  deployment with a shared lock, including other workflows, repositories, and
+  manual runs.
 
 ### Inputs
 
@@ -318,14 +326,25 @@ the first attempt left behind.
 5. If the run failed, delete the objects it left behind before the next run.
 6. Remove the password file.
 
-GitHub Actions template for a self-hosted runner in the lab (not yet run in
-GitHub Actions; adjust the labels, secrets, and the cleanup step to your
-environment):
+Illustrative GitHub Actions job for trusted code on a self-hosted runner (not
+yet run in GitHub Actions). Replace `YOUR_RUNNER_LABEL` with a real label for
+a runner that can reach the deployment, and configure the variables, secrets,
+pre-run checks, and cleanup for your environment. This fragment does not
+implement OSAC CI's pull-request authorization or integration requirements.
+
+For a shared deployment, replace `YOUR_DEPLOYMENT_ID` with the same identifier
+in every job in this repository that uses it. The concurrency group coordinates
+only jobs in the same repository using that group; it does not lock out other
+repositories or manual runs. Use an external lock covering all users where
+needed. GitHub can cancel an older pending job when a newer one joins the group.
 
 ```yaml
 jobs:
   ui-e2e:
-    runs-on: [self-hosted, osac-lab]
+    concurrency:
+      group: ui-e2e-YOUR_DEPLOYMENT_ID
+      cancel-in-progress: false
+    runs-on: [self-hosted, YOUR_RUNNER_LABEL]
     steps:
       - uses: actions/checkout@v4
       - name: Build the UI E2E image

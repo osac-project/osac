@@ -50,6 +50,8 @@ operator:
     tenant: true
     networking: true
     storage: true
+  ignition:
+    trustIngressCA: true
   hubAccess:
     enabled: true
   tenants:

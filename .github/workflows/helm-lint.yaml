@@ -189,6 +189,10 @@ jobs:
       working-directory: osac-installer
       run: uv run --project .. make mce-render-test
 
+    - name: Test ignition trust rendering
+      working-directory: osac-installer
+      run: make ignition-trust-render-test
+
     - name: Test infra readiness waits
       working-directory: osac-installer
       run: make infra-ready-wait-test

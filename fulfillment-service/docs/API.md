@@ -537,6 +537,12 @@ Accounts and assignments use the standard `id`, `metadata`, `spec`, `status` env
   attribution token, not an M360 account ID, tenant ID or credential. Absence and a present
   empty value are distinct, and stored raw values are not trimmed or rewritten. It can be
   established locally while an assignment is `PENDING`, before any provider account carries it.
+- `status.provider_external_id` is the raw provider-reported external ID, separate from the
+  assignment token. Discovery retains each account by its native identity even if multiple
+  accounts report the same external ID. Administrators can inspect the reported values or filter
+  on `this.status.provider_external_id` to find accounts reporting an exact value. A new observation
+  reflects provider corrections; absence clears the observed ID. Discovery records no conflict status
+  and never reserves an assignment token.
 - Assignments use typed `spec.tenant` and `spec.billing_account` references, each accepting
   `id`, `name` or both; both must agree. Responses retain canonical identities even after
   tenant deletion. The owner is also recorded in `metadata.tenant` and the
@@ -560,6 +566,8 @@ normalizes the object envelope, and 157 retains deleted tenant identities. The f
 and typed references are a breaking wire/JSON amendment, not merely a binary-compatible rename.
 Migration 158 drops only the retired lease table and its own indexes, including stale rows;
 it leaves account data, assignment history, identity markers and their constraints untouched.
+Migration 159 separates observed provider IDs from assignment tokens. It releases older
+discovery-only token reservations and preserves tokens referenced by current or historical assignments.
 These migrations are forward-only, with no inverse scripts. Coordinate service/database
 cutover: old binaries require the old schema. Stable correlation-related reason codes and
 provider-native `externalId` remain unchanged. This does not add an assignment-to-metering bridge.
@@ -577,6 +585,8 @@ selected account to be the sole provider-side carrier; zero carriers leaves the 
 `status.external_billing_account_id` shown by `BillingAccounts.List`, then re-submits same-account
 Update (or private Signal) to validate the unique match without replacing or retiming the
 interval. Foreign, multiple or inconsistent carriers fail with `ACCOUNT_AMBIGUOUS`.
+Fix duplicate external IDs in the provider and retry; the next discovery refresh reflects the
+correction. A token already used by an assignment is not rotated by discovery.
 OSAC makes no provider account writes, regardless of vendor capabilities. `PENDING` requires
 manual provider-side remediation; gated publish/launch remain blocked with
 `BILLING_ACCOUNT_UNAVAILABLE` until successful revalidation. This is not a provider setter

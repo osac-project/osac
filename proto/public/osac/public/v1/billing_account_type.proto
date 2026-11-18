@@ -85,6 +85,10 @@ message BillingAccountStatus {
   // Assignment validation checks for a unique provider-side carrier; this field alone is not evidence of a
   // native identity or metering integration. Absence and a present empty value are distinct; raw bytes are retained.
   optional string external_billing_account_id = 6 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // The raw external ID reported by the provider in the latest inventory, independent of the OSAC attribution token.
+  // Unset if the account was not observed or the provider adapter reported no value.
+  optional string provider_external_id = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Platform-scoped reference to a discovered billing account by immutable OSAC id, stable name, or both.

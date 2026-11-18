@@ -150,11 +150,14 @@ var _ = Describe("Billing account final API contract", func() {
 				Expect(token.HasOptionalKeyword()).To(BeTrue())
 				Expect(token.HasPresence()).To(BeTrue())
 				Expect(token.JSONName()).To(Equal("externalBillingAccountId"))
+				observed := field(d, "provider_external_id", 8, protoreflect.StringKind)
+				Expect(observed.HasOptionalKeyword()).To(BeTrue())
+				Expect(observed.HasPresence()).To(BeTrue())
 				if layer.name == "private" {
-					Expect(d.Fields().Len()).To(Equal(7))
+					Expect(d.Fields().Len()).To(Equal(8))
 					field(d, "provider_account_reference", 7, protoreflect.StringKind)
 				} else {
-					Expect(d.Fields().Len()).To(Equal(6))
+					Expect(d.Fields().Len()).To(Equal(7))
 					Expect(d.Fields().ByName("provider_account_reference")).To(BeNil())
 				}
 			})

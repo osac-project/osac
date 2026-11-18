@@ -394,28 +394,18 @@ func (s *PrivateBillingAccountsServer) storeAccounts(
 			}.Build()
 		}
 		delete(observations, ref)
-		merged, changed := mergeBillingAccountObservation(current, observed)
-		if !changed {
-			continue
-		}
-		err = tx.Savepoint(ctx, func(ctx context.Context) error {
-			_, err := s.dao.Update().SetObject(merged).Do(ctx)
-			return err
-		})
-		var conflict *dao.ErrAlreadyExists
-		if errors.As(err, &conflict) && conflict.ConstraintName == "billing_accounts_unique_correlation_id" {
-			// Optional adoption lost a raw-token race. Restore exactly the original presence/value, then keep
-			// the valid observation. Re-merging also avoids an unnecessary version increment for adoption alone.
-			withoutToken := proto.Clone(observed).(*privatev1.BillingAccountStatus)
-			withoutToken.ClearExternalBillingAccountId()
-			merged, changed = mergeBillingAccountObservation(current, withoutToken)
-			err = nil
-			if changed {
-				_, err = s.dao.Update().SetObject(merged).Do(ctx)
+		merged, fresh := mergeBillingAccountObservation(current, observed)
+		if fresh {
+			if observed.HasProviderExternalId() {
+				merged.GetStatus().SetProviderExternalId(observed.GetProviderExternalId())
+			} else {
+				merged.GetStatus().ClearProviderExternalId()
 			}
 		}
-		if err != nil {
-			return err
+		if !proto.Equal(current, merged) {
+			if _, err := s.dao.Update().SetObject(merged).Do(ctx); err != nil {
+				return err
+			}
 		}
 	}
 	// Go string ordering compares UTF-8 bytes, independently of database collation. New rows are private to
@@ -435,26 +425,12 @@ func (s *PrivateBillingAccountsServer) storeAccounts(
 			Id: id, Metadata: privatev1.Metadata_builder{Name: name, Tenant: auth.SystemTenant, Creator: "system"}.Build(),
 			Spec: &privatev1.BillingAccountSpec{}, Status: observations[ref],
 		}.Build()
-		for attempt := 0; attempt < 2; attempt++ {
-			err = tx.Savepoint(ctx, func(ctx context.Context) error {
-				_, err := s.dao.Create().SetObject(candidate).Do(ctx)
-				return err
-			})
+		if _, err := s.dao.Create().SetObject(candidate).Do(ctx); err != nil {
 			var conflict *dao.ErrAlreadyExists
-			if !errors.As(err, &conflict) {
-				break
-			}
-			if conflict.ConstraintName == "billing_accounts_unique_provider_account" {
+			if errors.As(err, &conflict) && conflict.ConstraintName == "billing_accounts_unique_provider_account" {
 				// Never acquire a late winner lock: an unguarded writer is a protocol violation.
 				return status.Error(codes.Aborted, "billing account inventory changed; retry the request")
 			}
-			if attempt != 0 || conflict.ConstraintName != "billing_accounts_unique_correlation_id" ||
-				!candidate.GetStatus().HasExternalBillingAccountId() {
-				break
-			}
-			candidate.GetStatus().ClearExternalBillingAccountId()
-		}
-		if err != nil {
 			return err
 		}
 	}
@@ -478,9 +454,9 @@ func billingAccountObservations(providerKey string, accounts []billing.Account,
 			DisplayName: billing.SanitizeProviderText(account.Name), BaseCurrency: validCurrency(account.BaseCurrency),
 			State: mapBillingAccountState(string(account.State)), StateObservationTimestamp: timestamppb.New(observedAt),
 		}.Build()
-		// The adapter's empty scalar means no candidate. Optional presence on stored protobufs is never collapsed.
-		if strings.TrimSpace(account.ExternalID) != "" {
-			observed.SetExternalBillingAccountId(account.ExternalID)
+		// The adapter uses an empty scalar for absence. Preserve every other value exactly.
+		if account.ExternalID != "" {
+			observed.SetProviderExternalId(account.ExternalID)
 		}
 		observations[ref] = observed
 	}
@@ -497,9 +473,10 @@ func billingAccountName(id string) (string, error) {
 }
 
 // mergeBillingAccountObservation is shared with assignment revalidation. It owns its result, preserves all
-// metadata and immutable provider identity, and never persists or increments a version itself.
+// metadata and immutable provider identity, and never persists or increments a version itself. Its second return
+// value tells discovery whether it can apply inventory-only fields; assignment never writes those fields.
 func mergeBillingAccountObservation(current *privatev1.BillingAccount,
-	observed *privatev1.BillingAccountStatus) (merged *privatev1.BillingAccount, changed bool) {
+	observed *privatev1.BillingAccountStatus) (merged *privatev1.BillingAccount, fresh bool) {
 	merged = proto.Clone(current).(*privatev1.BillingAccount)
 	if observed == nil || observed.GetStateObservationTimestamp() == nil {
 		return merged, false
@@ -521,11 +498,7 @@ func mergeBillingAccountObservation(current *privatev1.BillingAccount,
 	if currency := validCurrency(observed.GetBaseCurrency()); currency != "" {
 		next.SetBaseCurrency(currency)
 	}
-	if strings.TrimSpace(previous.GetExternalBillingAccountId()) == "" &&
-		observed.HasExternalBillingAccountId() && strings.TrimSpace(observed.GetExternalBillingAccountId()) != "" {
-		next.SetExternalBillingAccountId(observed.GetExternalBillingAccountId())
-	}
-	return merged, !proto.Equal(current, merged)
+	return merged, true
 }
 
 // Accounts are platform inventory, not resources of the caller-selected customer tenant. This fixed visibility

@@ -94,6 +94,10 @@ message BillingAccountStatus {
     (cleanapi.field).private = true,
     (google.api.field_behavior) = OUTPUT_ONLY
   ];
+
+  // The raw external ID reported by the provider in the latest inventory, independent of the OSAC attribution token.
+  // Unset if the account was not observed or the provider adapter reported no value.
+  optional string provider_external_id = 8 [(google.api.field_behavior) = OUTPUT_ONLY];
 }
 
 // Platform-scoped reference to a discovered billing account by immutable OSAC id, stable name, or both.

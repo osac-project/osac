@@ -104,7 +104,8 @@ var _ = Describe("Billing accounts server", func() {
 			item := response.GetItems()[0]
 			Expect(item.GetStatus().GetProviderKey()).To(Equal("fake"))
 			Expect(item.GetStatus().GetDisplayName()).To(Equal("Acme"))
-			Expect(item.GetStatus().GetExternalBillingAccountId()).To(Equal("ext-1"))
+			Expect(item.GetStatus().GetProviderExternalId()).To(Equal("ext-1"))
+			Expect(item.GetStatus().HasExternalBillingAccountId()).To(BeFalse())
 			Expect(item.GetStatus().GetState()).To(Equal(publicv1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE))
 			Expect(item.GetStatus().GetBaseCurrency()).To(BeEmpty())
 			encoded, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(item)
@@ -112,7 +113,7 @@ var _ = Describe("Billing accounts server", func() {
 			var body map[string]any
 			Expect(json.Unmarshal(encoded, &body)).To(Succeed())
 			Expect(body["status"]).To(HaveKeyWithValue("provider_key", "fake"))
-			Expect(body["status"]).To(HaveKeyWithValue("external_billing_account_id", "ext-1"))
+			Expect(body["status"]).To(HaveKeyWithValue("provider_external_id", "ext-1"))
 			Expect(body["status"]).ToNot(HaveKey("provider_account_reference"))
 			Expect(body).To(HaveKey("metadata"))
 			Expect(body).ToNot(HaveKey("provider_key"))
@@ -124,6 +125,30 @@ var _ = Describe("Billing accounts server", func() {
 				Expect(ok).To(BeFalse(), "public BillingAccount must not carry %s", name)
 			}
 		})
+
+	It("lets admins find all accounts reporting the same raw external ID across pages", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "a", ExternalID: " shared ", State: billing.AccountActive},
+			{ID: "b", ExternalID: " shared ", State: billing.AccountActive},
+			{ID: "c", ExternalID: "shared", State: billing.AccountActive},
+		}})
+		server := build(fake.Provider())
+		var ids []string
+		for i := int32(0); i < 2; i++ {
+			req := publicv1.BillingAccountsListRequest_builder{
+				Limit: proto.Int32(1), Offset: proto.Int32(i), Order: proto.String("id"),
+				Filter: proto.String(`this.status.provider_external_id == " shared "`),
+			}.Build()
+			response, err := billingRPC(ctx, server.List, req)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(response.GetItems()).To(HaveLen(1))
+			Expect(response.GetTotal()).To(Equal(int32(2)))
+			account := response.GetItems()[0]
+			Expect(account.GetStatus().GetProviderExternalId()).To(Equal(" shared "))
+			ids = append(ids, account.GetId())
+		}
+		Expect(ids[0]).NotTo(Equal(ids[1]))
+	})
 
 	It("passes the shared list params (filter, order, limit, offset) through to the private request", func() {
 		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{

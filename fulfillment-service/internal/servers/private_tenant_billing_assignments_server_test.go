@@ -678,14 +678,19 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(page.GetTotal()).To(BeZero())
 		})
 
-		It("rejects two provider accounts carrying the same value with ACCOUNT_AMBIGUOUS and creates no row", func() {
+		It("rejects a discovered duplicate with ACCOUNT_AMBIGUOUS and allows assignment after the provider corrects it", func() {
 			var accounts []billingfake.AccountSpec
-			account := newAccount(&accounts, "corr-dup", "corr-dup", "ACTIVE")
-			// A second, unrelated provider account carries the same value. Every resolution branch runs the bounded
-			// uniqueness scan, so this exercises its ACCOUNT_AMBIGUOUS verdict.
+			account := newAccount(&accounts, "corr-dup", "", "ACTIVE")
 			accounts = append(accounts, billingfake.AccountSpec{ID: "decoy", ExternalID: "corr-dup", State: billing.AccountActive})
-			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
-			server := build(fake.Provider())
+			refresh := func() *billing.Provider {
+				provider := billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider()
+				inventory, err := NewPrivateBillingAccountsServer().SetLogger(logger).SetProvider(provider).Build()
+				Expect(err).NotTo(HaveOccurred())
+				_, err = billingRPC(adminCtx(), inventory.List, &privatev1.BillingAccountsListRequest{})
+				Expect(err).NotTo(HaveOccurred())
+				return provider
+			}
+			server := build(refresh())
 
 			_, err := billingRPC(adminCtx(), server.Create, createRequest(testTenant, account, "asg-1"))
 			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
@@ -694,6 +699,13 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			page, listErr := server.bindings.List().SetLimit(10).SetFilter(`this.spec.billing_account.id == "` + account + `"`).Do(ctx)
 			Expect(listErr).ToNot(HaveOccurred())
 			Expect(page.GetTotal()).To(BeZero())
+
+			accounts[1].ExternalID = "corrected"
+			server = build(refresh())
+			row, err := billingRPC(adminCtx(), server.Create, createRequest(testTenant, account, "asg-1"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(row.GetObject().GetStatus().GetConnectionState()).To(Equal(
+				privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
 		})
 
 		It("rejects a foreign provider carrier without creating an assignment", func() {

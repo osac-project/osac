@@ -270,7 +270,8 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(item.GetStatus().GetProviderKey()).To(Equal("fake"))
 		Expect(item.GetStatus().GetDisplayName()).To(Equal("Acme"))
 		Expect(item.GetStatus().GetState()).To(Equal(privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE))
-		Expect(item.GetStatus().GetExternalBillingAccountId()).To(Equal("ext-1"))
+		Expect(item.GetStatus().GetProviderExternalId()).To(Equal("ext-1"))
+		Expect(item.GetStatus().HasExternalBillingAccountId()).To(BeFalse())
 		Expect(item.GetStatus().HasStateObservationTimestamp()).To(BeTrue())
 		Expect(item.GetMetadata().GetTenant()).To(Equal("system"))
 		Expect(item.GetMetadata().GetProject()).To(BeEmpty())
@@ -880,7 +881,7 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(billingStore(ctx, server, accounts, start.Add(-time.Second))).To(Succeed())
 		var gotID, gotName, token, label, state string
 		var gotVersion int32
-		Expect(testPool.QueryRow(ctx, `select id, name, external_billing_account_id, display_name, state, version
+		Expect(testPool.QueryRow(ctx, `select id, name, data->'status'->>'provider_external_id', display_name, state, version
 			from billing_accounts`).Scan(&gotID, &gotName, &token, &label, &state, &gotVersion)).To(Succeed())
 		Expect(gotID).To(Equal(id))
 		Expect(gotName).To(Equal(name))
@@ -915,51 +916,33 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(after).To(Equal(before + 1))
 	})
 
-	It("recovers token insert and adoption collisions using savepoints without losing valid observations", func() {
+	It("stores duplicate provider external IDs without reserving them and reflects corrections", func() {
 		server := build(billingfake.New(billingfake.Scenario{}).Provider())
 		start := time.Now().UTC().Truncate(time.Microsecond)
-		_, err := testPool.Exec(ctx, `create sequence token_insert_attempts;
-		create sequence token_candidate_identity minvalue 0;
-		create function check_token_retry_identity() returns trigger language plpgsql as $$
-		declare attempt bigint; identity_hash bigint;
-		begin
-			if new.data->'status'->>'provider_account_reference' = 'b' then
-				attempt := nextval('token_insert_attempts');
-				identity_hash := hashtextextended(new.id || '/' || new.name, 0) & 9223372036854775807;
-				if attempt = 1 then
-					perform setval('token_candidate_identity', identity_hash);
-				elsif (select last_value from token_candidate_identity) <> identity_hash then
-					raise exception 'retry changed id or name';
-				end if;
-			end if;
-			return new;
-		end $$;
-		create trigger check_token_retry_identity before insert on billing_accounts
-		for each row execute function check_token_retry_identity()`)
-		Expect(err).ToNot(HaveOccurred())
 		accounts := []billing.Account{
-			{Ref: billing.NewAccountRef("a"), ExternalID: "same", State: billing.AccountActive},
-			{Ref: billing.NewAccountRef("b"), ExternalID: "same", State: billing.AccountActive},
+			{Ref: billing.NewAccountRef("a"), ExternalID: " shared ", State: billing.AccountActive},
+			{Ref: billing.NewAccountRef("b"), ExternalID: " shared ", State: billing.AccountActive},
 		}
 		Expect(billingStore(ctx, server, accounts, start)).To(Succeed())
-		var attempts int
-		Expect(testPool.QueryRow(ctx, `select last_value from token_insert_attempts`).Scan(&attempts)).To(Succeed())
-		Expect(attempts).To(Equal(2), "one token collision permits exactly one same-id/name tokenless insert retry")
-		var id, name string
-		Expect(testPool.QueryRow(ctx, `select id, name from billing_accounts where provider_account_reference = 'b'`).
-			Scan(&id, &name)).To(Succeed())
-		accounts[1].Name, accounts[1].State = "Observed", billing.AccountInactive
+		check := func(ref string, value *string) string {
+			var id string
+			var observed, token *string
+			Expect(testPool.QueryRow(ctx, `select id, data->'status'->>'provider_external_id', external_billing_account_id
+				from billing_accounts where provider_account_reference = $1`, ref).
+				Scan(&id, &observed, &token)).To(Succeed())
+			Expect(observed).To(Equal(value))
+			Expect(token).To(BeNil())
+			return id
+		}
+		a := check("a", proto.String(" shared "))
+		b := check("b", proto.String(" shared "))
+		Expect(a).NotTo(Equal(b))
+		accounts[0].ExternalID = "shared" // Not the same value: the provider's bytes are not normalized.
 		Expect(billingStore(ctx, server, accounts, start.Add(time.Second))).To(Succeed())
-		var gotID, gotName, label, state string
-		var token *string
-		Expect(testPool.QueryRow(ctx, `select id, name, display_name, state, external_billing_account_id
-			from billing_accounts where provider_account_reference = 'b'`).
-			Scan(&gotID, &gotName, &label, &state, &token)).To(Succeed())
-		Expect(gotID).To(Equal(id))
-		Expect(gotName).To(Equal(name))
-		Expect(token).To(BeNil())
-		Expect(label).To(Equal("Observed"))
-		Expect(state).To(Equal("INACTIVE"))
+		Expect(check("a", proto.String("shared"))).To(Equal(a))
+		Expect(check("b", proto.String(" shared "))).To(Equal(b))
+		Expect(billingStore(ctx, server, accounts[1:], start.Add(2*time.Second))).To(Succeed())
+		Expect(check("a", nil)).To(Equal(a))
 		Expect(storedCount()).To(Equal(2))
 	})
 
@@ -1229,8 +1212,9 @@ var _ = Describe("Billing account observation merge", func() {
 			Expect(merged.GetStatus().GetBaseCurrency()).To(Equal("USD"))
 			Expect(merged.GetStatus().HasExternalBillingAccountId()).To(Equal(token != nil))
 			Expect(merged.GetStatus().GetExternalBillingAccountId()).To(Equal(current.GetStatus().GetExternalBillingAccountId()))
-			_, changed = mergeBillingAccountObservation(merged, observed)
-			Expect(changed).To(BeFalse())
+			again, fresh := mergeBillingAccountObservation(merged, observed)
+			Expect(fresh).To(BeTrue())
+			Expect(proto.Equal(again, merged)).To(BeTrue())
 		}
 	})
 })

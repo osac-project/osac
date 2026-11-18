@@ -1045,6 +1045,10 @@ func (s *PrivateTenantBillingAssignmentsServer) mapTenantBillingAssignmentError(
 	}
 	var resErr *billing.CorrelationResolutionError
 	if errors.As(err, &resErr) {
+		if resErr.Reason == billing.ReasonAccountAmbiguous {
+			return failedPreconditionWithReason(resErr.Reason,
+				"billing provider external ID is ambiguous; verify that only the selected provider account reports it")
+		}
 		return failedPreconditionWithReason(resErr.Reason, "billing correlation resolution failed: %s", resErr.Reason)
 	}
 	if errors.Is(err, database.ErrBillingAccountExternalIDConflict) {

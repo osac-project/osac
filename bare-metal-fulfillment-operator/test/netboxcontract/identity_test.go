@@ -29,7 +29,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/test/netboxcontract/netboxtest"
 )
 
-var _ = Describe("TC-INT-029 Community ID identity and numeric-ID recovery", func() {
+var _ = Describe("NetBox device ID identity and recovery", func() {
 	var (
 		ctx    context.Context
 		cancel context.CancelFunc

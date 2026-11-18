@@ -27,7 +27,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/test/netboxcontract/netboxtest"
 )
 
-var _ = Describe("TC-INT-016 exact AND semantics across distinct fields", func() {
+var _ = Describe("Exact selection across distinct fields", func() {
 	var (
 		ctx    context.Context
 		cancel context.CancelFunc
@@ -118,7 +118,7 @@ var _ = Describe("TC-INT-016 exact AND semantics across distinct fields", func()
 	})
 })
 
-var _ = Describe("TC-INT-017 empty-owner representations", func() {
+var _ = Describe("Empty owner representations", func() {
 	var (
 		ctx    context.Context
 		cancel context.CancelFunc
@@ -179,7 +179,7 @@ var _ = Describe("TC-INT-017 empty-owner representations", func() {
 	})
 })
 
-var _ = Describe("TC-INT-019 scalar filtering and stored choice values", func() {
+var _ = Describe("Scalar filtering and stored choice values", func() {
 	var (
 		ctx    context.Context
 		cancel context.CancelFunc
@@ -265,7 +265,7 @@ var _ = Describe("TC-INT-019 scalar filtering and stored choice values", func() 
 	})
 })
 
-var _ = Describe("TC-INT-022 exact escaped string filtering", func() {
+var _ = Describe("Exact escaped string filtering", func() {
 	var (
 		ctx    context.Context
 		cancel context.CancelFunc

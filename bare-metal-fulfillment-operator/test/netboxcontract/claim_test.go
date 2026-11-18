@@ -26,7 +26,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/test/netboxcontract/netboxtest"
 )
 
-var _ = Describe("TC-INT-020 tags are independent and administrator metadata survives", func() {
+var _ = Describe("Independent tags and preserved administrator metadata", func() {
 	var (
 		ctx     context.Context
 		cancel  context.CancelFunc
@@ -128,7 +128,7 @@ var _ = Describe("TC-INT-020 tags are independent and administrator metadata sur
 	})
 })
 
-var _ = Describe("TC-INT-021 conditional claims and release races", func() {
+var _ = Describe("Conditional claims and release races", func() {
 	var (
 		ctx       context.Context
 		cancel    context.CancelFunc

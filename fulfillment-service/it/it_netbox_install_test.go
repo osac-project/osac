@@ -27,7 +27,7 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-var _ = Describe("TC-INT-027 deployed NetBox install", Label("bmf-netbox"), func() {
+var _ = Describe("Deployed BMF with mock NetBox", Label("bmf-netbox"), func() {
 	It("allocates, releases, and reconnects after token rotation", func(ctx context.Context) {
 		deviceID := strconv.FormatInt(time.Now().UnixMilli()%1_000_000_000+1, 10)
 		name := "it-netbox-" + deviceID

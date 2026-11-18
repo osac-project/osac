@@ -978,7 +978,7 @@ def live_cycle(namespace: str, device_id: int, name: str, token_secret: str) -> 
 
 
 def check_bmf_live_install(device_id: int) -> None:
-    """TC-INT-027: install BMF in Kind with a private mock NetBox API."""
+    """Install BMF in Kind with a private mock NetBox API."""
     namespace = f"osac-netbox-it-{uuid.uuid4().hex[:6]}"
     first, second = secrets.token_hex(20), secrets.token_hex(20)
     with tempfile.TemporaryDirectory(prefix="bmf-netbox-install-") as temp:
@@ -1038,7 +1038,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--live-install-only", action="store_true",
-        help="run TC-INT-027 against a Kind cluster with a mock NetBox API",
+        help="run the deployed BMF check against a mock NetBox API in Kind",
     )
     parser.add_argument("--device-id", type=int, help="numeric NetBox device ID for the live install fixture")
     args = parser.parse_args()
@@ -1047,7 +1047,7 @@ def main() -> None:
         if args.device_id is None or args.device_id <= 0:
             parser.error("--live-install-only requires a positive --device-id")
         check_bmf_live_install(args.device_id)
-        print("TC-INT-027 BMF NetBox Kind install checks passed.")
+        print("BMF NetBox Kind install checks passed.")
         return
 
     with tempfile.TemporaryDirectory(prefix="bmf-netbox-render-") as temp:

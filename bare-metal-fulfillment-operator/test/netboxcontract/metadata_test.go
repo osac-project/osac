@@ -27,7 +27,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/test/netboxcontract/netboxtest"
 )
 
-var _ = Describe("TC-INT-015 Community metadata discovery and pool default", func() {
+var _ = Describe("NetBox metadata discovery and pool default", func() {
 	var (
 		ctx    context.Context
 		cancel context.CancelFunc
@@ -115,7 +115,7 @@ var _ = Describe("TC-INT-015 Community metadata discovery and pool default", fun
 
 })
 
-var _ = Describe("TC-INT-023 capability added after startup", func() {
+var _ = Describe("Capability added after startup", func() {
 	var (
 		ctx    context.Context
 		cancel context.CancelFunc

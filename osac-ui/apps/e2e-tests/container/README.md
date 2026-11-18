@@ -181,17 +181,20 @@ password.
 
 ### Before a run
 
-The flows create a tenant, instance type, disk image, storage tier, catalog
-item, and VM using names from `extravars.yaml`. The runner appends the
+The flows create a tenant, instance type, disk image, storage tier, and catalog
+item using names from `extravars.yaml`, as well as a VM. The runner appends the
 `--instance` index (default `1`) to indexed resource names; for example, the
 default tenant is `tenant-item-e2e-1`. Create steps can fail if the resulting
 objects already exist. After an interrupted run, check for leftovers before
 starting again. The following discovery example requires an `osac` CLI
-installed and authenticated on the host with permission to list the resources:
+installed and authenticated on the host with permission to list the resources.
+Repeat it for each configured name in `extravars.yaml`, and for the generated
+VM and user names (for example, `vm-e2e` and the tenant name):
 
 ```bash
-for r in tenants instancetypes computeinstancecatalogitems diskimages storagetiers users; do
-  osac get "${r}" | grep -i e2e
+read -r -p 'Resource name to search for: ' resource_name
+for r in tenants instancetypes computeinstancecatalogitems computeinstances diskimages storagetiers users; do
+  osac get "${r}" | grep -iF -- "$resource_name"
 done
 ```
 

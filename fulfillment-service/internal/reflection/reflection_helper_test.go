@@ -15,6 +15,7 @@ package reflection
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 
@@ -200,6 +201,78 @@ var _ = Describe("Reflection helper", func() {
 		)
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(connection.Close)
+	})
+
+	Describe("P6 billing scope configuration", func() {
+		for _, pkg := range []string{packages.PublicV1, packages.PrivateV1} {
+			DescribeTable(pkg+" classifies the existing descriptors without changing discovery",
+				func(name string, tenant, project, singleton bool) {
+					helper, err := NewHelper().SetLogger(logger).SetConnection(connection).
+						AddPackage(pkg, 0).EnableSingletonGet().Build()
+					Expect(err).NotTo(HaveOccurred())
+					object := helper.Lookup(name)
+					Expect(object).NotTo(BeNil())
+					Expect(object.IsTenantScoped()).To(Equal(tenant))
+					Expect(object.IsProjectScoped()).To(Equal(project))
+					Expect(object.IsSingleton()).To(Equal(singleton))
+					Expect(object.UseGetForStructuredOutput()).To(BeFalse(), "billing keys must remain List predicates")
+				},
+				Entry("system-global account", "billingaccount", false, false, false),
+				Entry("tenant-only assignment", "tenantbillingassignment", true, false, false),
+				Entry("platform singleton", "billingproviderstatus", false, false, true),
+				Entry("ordinary cluster control", "cluster", true, true, false),
+				Entry("tenant-only service-account control", "serviceaccount", true, false, false),
+			)
+
+			for _, selected := range []bool{false, true} {
+				DescribeTable(pkg+" preserves caller CEL at every offset; selection="+fmt.Sprint(selected),
+					func(name, service string, tenant, project bool) {
+						const caller = `(this.id in ["one", "two\"quoted"] || this.metadata.name in ["one", "two\"quoted"]) && ((this.metadata.labels["env"] == "test" && this.metadata.creation_timestamp >= timestamp("2026-01-01T00:00:00Z")) || this.metadata.tenant == "other")`
+						var requests []proto.Message
+						recording, err := grpc.NewClient("passthrough:///p6-scope.invalid",
+							grpc.WithTransportCredentials(insecure.NewCredentials()),
+							grpc.WithUnaryInterceptor(func(_ context.Context, method string, request, _ any,
+								_ *grpc.ClientConn, _ grpc.UnaryInvoker, _ ...grpc.CallOption) error {
+								Expect(method).To(Equal("/" + pkg + "." + service + "/List"))
+								requests = append(requests, proto.Clone(request.(proto.Message)))
+								return nil
+							}))
+						Expect(err).NotTo(HaveOccurred())
+						DeferCleanup(recording.Close)
+						helper, err := NewHelper().SetLogger(logger).SetConnection(recording).AddPackage(pkg, 0).
+							SetTenantFunc(testTenantFromContext).SetProjectFunc(testProjectFromContext).Build()
+						Expect(err).NotTo(HaveOccurred())
+						selectedCtx := ctx
+						if selected {
+							selectedCtx = testProjectIntoContext(testTenantIntoContext(ctx, `customer"tenant`), `selected"project`)
+						}
+						for _, offset := range []int32{0, 100, 200} {
+							_, err = helper.Lookup(name).List(selectedCtx, ListOptions{Filter: caller, Limit: 100, Offset: offset})
+							Expect(err).NotTo(HaveOccurred())
+						}
+						Expect(requests).To(HaveLen(3))
+						expected := caller
+						if selected && tenant {
+							expected = `this.metadata.tenant == "customer\"tenant" && (` + expected + `)`
+						}
+						if selected && project {
+							expected = `this.metadata.project == "selected\"project" && (` + expected + `)`
+						}
+						for i, request := range requests {
+							message := request.ProtoReflect()
+							fields := message.Descriptor().Fields()
+							Expect(message.Get(fields.ByName("filter")).String()).To(Equal(expected))
+							Expect(message.Get(fields.ByName("limit")).Int()).To(Equal(int64(100)))
+							Expect(message.Get(fields.ByName("offset")).Int()).To(Equal(int64(i * 100)))
+						}
+					},
+					Entry("account", "billingaccount", "BillingAccounts", false, false),
+					Entry("assignment", "tenantbillingassignment", "TenantBillingAssignments", true, false),
+					Entry("cluster control", "cluster", "Clusters", true, true),
+					Entry("service-account control", "serviceaccount", "ServiceAccounts", true, false),
+				)
+			}
+		}
 	})
 
 	Describe("P2 human lock: discovery safety and singleton opt-in", func() {

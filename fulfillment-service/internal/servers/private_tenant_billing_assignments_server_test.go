@@ -2038,17 +2038,13 @@ var _ = Describe("Private tenant billing assignments server", func() {
 		})
 
 		DescribeTable("hides foreign current and historical rows before disclosing state or doing provider I/O",
-			func(historical, empty bool) {
+			func(historical bool, tenants collections.Set[string]) {
 				createOtherTenant()
 				var accounts []billingfake.AccountSpec
 				account := newAccount(&accounts, "", "", "ACTIVE")
 				seedInterval("foreign", otherTenant, account, historical)
 				fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
 				server := build(fake.Provider())
-				tenants := collections.NewSet(testTenant)
-				if empty {
-					tenants = collections.NewSet[string]()
-				}
 				_, err := billingRPC(readCtx(tenants), server.Get, privatev1.TenantBillingAssignmentsGetRequest_builder{Id: "foreign"}.Build())
 				Expect(status.Code(err)).To(Equal(codes.NotFound))
 				// An authorized tenant in the submitted spec/metadata cannot authorize the foreign stored row.
@@ -2067,9 +2063,56 @@ var _ = Describe("Private tenant billing assignments server", func() {
 					Scan(&closed)).To(Succeed())
 				Expect(closed).To(Equal(historical))
 			},
-			Entry("finite/current", false, false), Entry("finite/history", true, false),
-			Entry("empty/current", false, true), Entry("empty/history", true, true),
+			Entry("finite/current", false, collections.NewSet(testTenant)),
+			Entry("finite/history", true, collections.NewSet(testTenant)),
+			Entry("empty/current", false, collections.NewSet[string]()),
+			Entry("empty/history", true, collections.NewSet[string]()),
+			Entry("complement/current", false, auth.AllTenants.Difference(collections.NewSet(otherTenant))),
+			Entry("complement/history", true, auth.AllTenants.Difference(collections.NewSet(otherTenant))),
 		)
+
+		It("constrains complementary reads while preserving internal inventory", func() {
+			createOtherTenant()
+			var accounts []billingfake.AccountSpec
+			account := newAccount(&accounts, "", "", "ACTIVE")
+			seedInterval("excluded-current", otherTenant, account, false)
+			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+			server := build(fake.Provider())
+			tenants := auth.AllTenants.Difference(collections.NewSet(otherTenant))
+			response, err := billingRPC(scopedCtx(tenants), server.List, &privatev1.TenantBillingAssignmentsListRequest{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(response.GetTotal()).To(BeZero())
+			Expect(response.GetItems()).To(BeEmpty())
+			page, err := database.WithNewTx(scopedCtx(tenants), func(c context.Context) (*dao.ListResponse[*privatev1.TenantBillingAssignment], error) {
+				return server.bindings.List().SetLimit(1).Do(c)
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(page.GetTotal()).To(Equal(int32(1)), "occupancy checks must still see foreign current bindings")
+			Expect(fake.Calls()).To(BeEmpty())
+		})
+
+		DescribeTable("reads an authorized current target under complementary scope without changing the subject", func(method string) {
+			var accounts []billingfake.AccountSpec
+			account := newAccount(&accounts, "", "", "ACTIVE")
+			seedInterval("own-current", testTenant, account, false)
+			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+			server := build(fake.Provider())
+			tenants := auth.AllTenants.Difference(collections.NewSet(otherTenant, "absent"))
+			caller := scopedCtx(tenants)
+			if method == "Get" {
+				got, err := billingRPC(caller, server.Get, privatev1.TenantBillingAssignmentsGetRequest_builder{Id: "own-current"}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(got.GetObject().GetId()).To(Equal("own-current"))
+			} else {
+				request := updateRequest("own-current", testTenant, account)
+				request.SetUpdateMask(&fieldmaskpb.FieldMask{})
+				updated, err := billingRPC(caller, server.Update, request)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(updated.GetObject().GetId()).To(Equal("own-current"))
+			}
+			Expect(auth.SubjectFromContext(caller).Tenants.Equal(tenants)).To(BeTrue())
+			Expect(fake.Calls()).To(BeEmpty())
+		}, Entry("Get", "Get"), Entry("empty-mask Update", "Update"))
 
 		DescribeTable("rejects unauthorized Create without persisting or calling the provider",
 			func(tenants collections.Set[string]) {
@@ -2096,12 +2139,11 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Entry("empty tenant set", collections.NewSet[string]()),
 		)
 
-		It("allows finite-scope assignment, reassignment, Get and Signal for an authorized tenant", func() {
+		DescribeTable("allows scoped assignment, reassignment, Get and Signal for an authorized tenant", func(tenants collections.Set[string]) {
 			var accounts []billingfake.AccountSpec
 			first := newAccount(&accounts, "", "", "ACTIVE")
 			second := newAccount(&accounts, "", "", "ACTIVE")
 			server := build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider())
-			tenants := collections.NewSet(testTenant, otherTenant)
 			created, err := billingRPC(scopedCtx(tenants), server.Create, createRequest(testTenant, first, "allowed"))
 			Expect(err).ToNot(HaveOccurred())
 			updated, err := billingRPC(scopedCtx(tenants), server.Update, updateRequest(created.GetObject().GetId(), testTenant, second))
@@ -2111,7 +2153,8 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			got, err := billingRPC(readCtx(tenants), server.Get, privatev1.TenantBillingAssignmentsGetRequest_builder{Id: created.GetObject().GetId()}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(got.GetObject().GetStatus().GetEffectiveToTimestamp()).ToNot(BeNil())
-		})
+		}, Entry("finite", collections.NewSet(testTenant, otherTenant)),
+			Entry("complement", auth.AllTenants.Difference(collections.NewSet(otherTenant))))
 
 		DescribeTable("rejects reserved tenant targets before provider I/O or correlation generation", func(tenantID string) {
 			_, err := testPool.Exec(ctx, `insert into tenants (id, name, tenant, creator, data)

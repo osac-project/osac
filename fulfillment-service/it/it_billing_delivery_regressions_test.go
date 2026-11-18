@@ -244,15 +244,16 @@ var _ = Describe("Billing delivery regressions", Label("billing", "billing-confi
 		}
 		Expect(status.Code(err)).To(Equal(codes.AlreadyExists), "deletion acceptance is not completed cleanup")
 		removeDeliveryTenantHold(ctx, tenants, tenant.GetId(), hold)
-		retained, err := tenants.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenant.GetId()}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		Expect(retained.GetObject().GetMetadata().GetFinalizers()).To(BeEmpty())
-		Expect(retained.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
-		Expect(retained.GetObject().GetSpec().GetDomains()).To(ConsistOf(domain))
+		publicTenants := publicv1.NewTenantsClient(tool.ExternalView().AdminConn())
+		Eventually(ctx, func(g Gomega) {
+			_, err := tenants.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenant.GetId()}.Build())
+			g.Expect(status.Code(err)).To(Equal(codes.NotFound))
+			_, err = publicTenants.Get(ctx, publicv1.TenantsGetRequest_builder{Id: tenant.GetId()}.Build())
+			g.Expect(status.Code(err)).To(Equal(codes.NotFound))
+		}, 3*time.Minute, time.Second).Should(Succeed())
 
 		replacement := newBillingTenant(ctx, []string{domain}, nil)
 		Expect(replacement.GetId()).ToNot(Equal(tenant.GetId()))
-		publicTenants := publicv1.NewTenantsClient(tool.ExternalView().AdminConn())
 		listed, err := publicTenants.List(ctx, publicv1.TenantsListRequest_builder{
 			Filter: new(fmt.Sprintf("%q in this.spec.domains", domain)),
 		}.Build())
@@ -351,13 +352,15 @@ var _ = Describe("Billing delivery regressions", Label("billing", "billing-confi
 		Expect(closed).To(HaveLen(1), "accepted deletion must retain the interval instead of removing history")
 		Expect(closed[0].GetId()).To(Equal(created.GetObject().GetId()))
 		Expect(closed[0].GetStatus().GetEffectiveToTimestamp()).ToNot(BeNil(),
-			"accepted deletion must close the interval even though the billed tenant tombstone remains")
+			"accepted deletion must close the interval independently of finalization")
+		publicTenants := publicv1.NewTenantsClient(tool.ExternalView().AdminConn())
 		Eventually(ctx, func(g Gomega) {
-			tombstone, err := tenants.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenant.GetId()}.Build())
-			g.Expect(err).ToNot(HaveOccurred())
-			g.Expect(tombstone.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
-			g.Expect(tombstone.GetObject().GetMetadata().GetFinalizers()).To(BeEmpty())
+			_, err := tenants.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenant.GetId()}.Build())
+			g.Expect(status.Code(err)).To(Equal(codes.NotFound))
+			_, err = publicTenants.Get(ctx, publicv1.TenantsGetRequest_builder{Id: tenant.GetId()}.Build())
+			g.Expect(status.Code(err)).To(Equal(codes.NotFound))
 		}, 3*time.Minute, time.Second).Should(Succeed())
+		expectSameHistory(closed, history(ctx, name))
 		// Normal deployed reconciliation is restored before cleanup. No claims about existing-token revocation or
 		// an end-to-end Keycloak deletion journey follow from this database/API blocker regression.
 	})

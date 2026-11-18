@@ -27,7 +27,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
-	"sigs.k8s.io/yaml"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingstub"
@@ -65,7 +64,7 @@ var _ = Describe("Billing account naming", Label("billing", "billing-configured"
 
 	It("publishes external_billing_account_id over deployed public and private REST and CLI", func(ctx context.Context) {
 		// Decode the items so every name assertion inspects parsed keys, not the raw response body.
-		decode := func(body []byte) ([]map[string]any, error) {
+		decodeREST := func(body []byte) ([]map[string]any, error) {
 			var response struct {
 				Items []map[string]any `json:"items"`
 			}
@@ -104,7 +103,7 @@ var _ = Describe("Billing account naming", Label("billing", "billing-configured"
 					body, statusCode, err := get(route.client, route.path+"?"+query.Encode())
 					g.Expect(err).ToNot(HaveOccurred())
 					g.Expect(statusCode).To(Equal(http.StatusOK))
-					items, err := decode(body)
+					items, err := decodeREST(body)
 					g.Expect(err).ToNot(HaveOccurred())
 					g.Expect(items).To(HaveLen(1))
 					g.Expect(items[0]["status"]).To(HaveKeyWithValue("external_billing_account_id", fixture.ExternalID))
@@ -121,7 +120,7 @@ var _ = Describe("Billing account naming", Label("billing", "billing-configured"
 			body, statusCode, err := get(route.client, route.path+"?"+query.Encode())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(statusCode).To(Equal(http.StatusOK))
-			items, err := decode(body)
+			items, err := decodeREST(body)
 			Expect(err).ToNot(HaveOccurred())
 			selected := []string{}
 			for _, item := range items {
@@ -158,7 +157,7 @@ var _ = Describe("Billing account naming", Label("billing", "billing-configured"
 		Expect(exitCode).To(Equal(0), "login should succeed")
 		for _, format := range []string{"json", "yaml", "table"} {
 			By("reading billing accounts as " + format)
-			stdout, stderr, exitCode := tool.RunCLI(ctx, homeDir, "get", "billingaccount", "--limit", "1000",
+			stdout, stderr, exitCode := tool.RunCLI(ctx, homeDir, "get", "billingaccount",
 				"-o", format)
 			Expect(exitCode).To(Equal(0), "stdout: %s\nstderr: %s", stdout, stderr)
 			if format == "table" {
@@ -184,12 +183,7 @@ var _ = Describe("Billing account naming", Label("billing", "billing-configured"
 				}
 				continue
 			}
-			body := []byte(stdout)
-			if format == "yaml" {
-				body, err = yaml.YAMLToJSON(body)
-				Expect(err).ToNot(HaveOccurred())
-			}
-			items, err := decode(body)
+			items, err := decodeBillingCLIItems(stdout, format, "osac.public.v1.BillingAccount")
 			Expect(err).ToNot(HaveOccurred())
 			for _, fixture := range fixtures {
 				matched := 0

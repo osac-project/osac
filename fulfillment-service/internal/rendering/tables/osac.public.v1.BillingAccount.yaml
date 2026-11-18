@@ -1,0 +1,48 @@
+#
+# Copyright (c) 2026 Red Hat Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+# the License. You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+# specific language governing permissions and limitations under the License.
+#
+
+columns:
+
+- header: ID
+  value: "this.id != '' ? this.id : '-'"
+
+- header: NAME
+  value: "this.metadata.name != '' ? this.metadata.name : '-'"
+
+# Replace C0/C1 controls only in table cells, preserving labels and raw attribution tokens.
+- header: PROVIDER
+  value: >-
+    this.status.provider_key != '' ? this.status.provider_key.split('').map(c,
+      c < ' ' || (c >= '\u007f' && c <= '\u009f') ? ' ' : c).join('') : '-'
+
+- header: DISPLAY-NAME
+  value: >-
+    this.status.display_name != '' ? this.status.display_name.split('').map(c,
+      c < ' ' || (c >= '\u007f' && c <= '\u009f') ? ' ' : c).join('') : '-'
+
+- header: CURRENCY
+  value: >-
+    this.status.base_currency != '' ? this.status.base_currency.split('').map(c,
+      c < ' ' || (c >= '\u007f' && c <= '\u009f') ? ' ' : c).join('') : '-'
+
+- header: STATE
+  value: "this.status.state == 0 ? dyn('UNKNOWN') : dyn(this.status.state)"
+  type: osac.public.v1.BillingAccountState
+
+- header: EXTERNAL-BILLING-ACCOUNT-ID
+  value: >-
+    this.status.external_billing_account_id != '' ? this.status.external_billing_account_id.split('').map(c,
+      c < ' ' || (c >= '\u007f' && c <= '\u009f') ? ' ' : c).join('') : '-'
+
+- header: STATUS-OBSERVED
+  value: "has(this.status.state_observation_timestamp) ? string(this.status.state_observation_timestamp) : '-'"

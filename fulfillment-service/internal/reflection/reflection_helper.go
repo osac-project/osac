@@ -1171,6 +1171,7 @@ func equalMaps(a, b protoreflect.Map, fd protoreflect.FieldDescriptor) bool {
 // automatic tenant field setting on generic Create, and the TENANT column in table output. Keyed
 // by short message name so that public and private API variants are handled automatically.
 var platformScopedTypes = map[protoreflect.Name]bool{
+	"BillingAccount":   true,
 	"Capabilities":     true,
 	"ClusterVersion":   true,
 	"ConsoleSession":   true,
@@ -1189,5 +1190,6 @@ var platformScopedTypes = map[protoreflect.Name]bool{
 // nonProjectScopedTypes are tenant-scoped resources whose metadata still has a project field,
 // but which are not associated with any project.
 var nonProjectScopedTypes = map[protoreflect.Name]bool{
-	"ServiceAccount": true,
+	"ServiceAccount":          true,
+	"TenantBillingAssignment": true,
 }

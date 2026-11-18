@@ -24,6 +24,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -33,6 +35,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingstub"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
@@ -58,9 +61,21 @@ var _ = Describe("Billing provider status", Label("billing"), func() {
 		stdout, _, exitCode := tool.RunCLI(ctx, homeDir, "get", "billingproviderstatus", "-o", "json")
 		Expect(exitCode).To(Equal(0))
 		Expect(stdout).To(MatchJSON(`{
+			"@type": "type.googleapis.com/osac.public.v1.BillingProviderStatus",
 			"state": "BILLING_PROVIDER_STATE_NOT_CONFIGURED",
 			"usage_delivery_state": "BILLING_USAGE_DELIVERY_STATE_UNKNOWN"
 		}`))
+		items := billingCLIItems(ctx, homeDir, "billingproviderstatus", "yaml", "osac.public.v1.BillingProviderStatus")
+		Expect(items).To(ConsistOf(map[string]any{
+			"@type":                "type.googleapis.com/osac.public.v1.BillingProviderStatus",
+			"state":                "BILLING_PROVIDER_STATE_NOT_CONFIGURED",
+			"usage_delivery_state": "BILLING_USAGE_DELIVERY_STATE_UNKNOWN",
+		}))
+		table := expectBillingCLITable(ctx, homeDir, "billingproviderstatus", []string{
+			"STATE", "PROVIDER", "MESSAGE", "CAPABILITIES", "LAST-SUCCESSFUL-CHECK", "USAGE-DELIVERY",
+		}, 1)
+		Expect(strings.Fields(strings.Split(strings.TrimSpace(table), "\n")[1])).To(Equal(
+			[]string{"NOT_CONFIGURED", "-", "-", "-", "-", "UNKNOWN"}))
 	})
 })
 
@@ -205,6 +220,166 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		Expect(stub.Writes()).To(BeEmpty(), "OSAC must never attempt an M360 account PUT or any other provider write")
 	}
 
+	It("reads platform accounts and singleton status with saved customer/project selections in both API modes", func(ctx context.Context) {
+		first, second := findAccount(ctx, accounts[0].Name), findAccount(ctx, accounts[1].Name)
+		tenant := newTenant(ctx)
+		for _, private := range []bool{false, true} {
+			home := newBillingCLI(ctx, tenant, private)
+			pkg := "osac.public.v1."
+			if private {
+				pkg = "osac.private.v1."
+			}
+			for _, format := range []string{"json", "yaml"} {
+				// Keys are immutable OSAC id/name, not a display label, native id or attribution token.
+				for _, key := range []string{first.GetId(), first.GetMetadata().GetName()} {
+					items := billingCLIItems(ctx, home, "billingaccount", format, pkg+"BillingAccount", key,
+						"--filter", `this.status.state == 1 && has(this.status.state_observation_timestamp) && this.status.state_observation_timestamp >= timestamp("2026-01-01T00:00:00Z")`)
+					Expect(items).To(HaveLen(1))
+					Expect(items[0]).To(HaveKeyWithValue("id", first.GetId()))
+					Expect(items[0]).To(HaveKey("spec"))
+					metadata := items[0]["metadata"].(map[string]any)
+					Expect(metadata).To(HaveKeyWithValue("name", first.GetMetadata().GetName()))
+					Expect(metadata).To(HaveKeyWithValue("tenant", "system"))
+					Expect(metadata).ToNot(HaveKey("project"))
+					observed := items[0]["status"].(map[string]any)
+					Expect(observed).To(HaveKeyWithValue("display_name", accounts[0].Name))
+					Expect(observed).To(HaveKeyWithValue("external_billing_account_id", accounts[0].ExternalID))
+					Expect(observed).To(HaveKeyWithValue("state", "BILLING_ACCOUNT_STATE_ACTIVE"))
+					if private {
+						Expect(observed).To(HaveKeyWithValue("provider_account_reference", accounts[0].ID))
+					} else {
+						Expect(observed).ToNot(HaveKey("provider_account_reference"))
+						Expect(metadata).ToNot(HaveKey("finalizers"))
+					}
+				}
+				many := billingCLIItems(ctx, home, "billingaccounts", format, pkg+"BillingAccount",
+					first.GetId(), second.GetMetadata().GetName())
+				Expect(many).To(HaveLen(2))
+				Expect([]any{many[0]["id"], many[1]["id"]}).To(ConsistOf(first.GetId(), second.GetId()))
+				for _, key := range []string{accounts[0].Name, accounts[0].ID, accounts[0].ExternalID} {
+					Expect(billingCLIItems(ctx, home, "billingaccount", format, pkg+"BillingAccount", key)).To(BeEmpty())
+				}
+				Expect(billingCLIItems(ctx, home, "billingaccount", format, pkg+"BillingAccount", first.GetId(),
+					"--filter", fmt.Sprintf("this.metadata.tenant == %q", tenant))).To(BeEmpty(),
+					"explicit caller scope must remain, even for a platform account")
+				provider := billingCLIItems(ctx, home, "billingproviderstatus", format, pkg+"BillingProviderStatus")
+				Expect(provider).To(HaveLen(1))
+				Expect(provider[0]).To(HaveKeyWithValue("state", "BILLING_PROVIDER_STATE_AVAILABLE"))
+				Expect(provider[0]).To(HaveKeyWithValue("provider_key", "m360"))
+				Expect(provider[0]).To(HaveKeyWithValue("usage_delivery_state", "BILLING_USAGE_DELIVERY_STATE_UNKNOWN"))
+			}
+			headers := []string{
+				"ID", "DELETING", "NAME", "PROVIDER", "DISPLAY-NAME", "CURRENCY", "STATE",
+				"EXTERNAL-BILLING-ACCOUNT-ID", "STATUS-OBSERVED",
+			}
+			table := expectBillingCLITable(ctx, home, "billingaccount", headers, 2, first.GetId(), second.GetMetadata().GetName())
+			Expect(table).To(ContainSubstring(accounts[0].Name))
+			Expect(table).To(ContainSubstring(first.GetMetadata().GetName()))
+			Expect(table).ToNot(ContainSubstring(accounts[0].ID), "private native identity is not a default column")
+			expectBillingCLITable(ctx, home, "billingaccount", headers, 1, first.GetMetadata().GetName())
+			expectBillingCLITable(ctx, home, "billingaccount", headers, 0, accounts[0].Name)
+			expectBillingCLITable(ctx, home, "billingproviderstatus", []string{
+				"STATE", "PROVIDER", "MESSAGE", "CAPABILITIES", "LAST-SUCCESSFUL-CHECK", "USAGE-DELIVERY",
+			}, 1)
+		}
+		Expect(stub.Writes()).To(BeEmpty())
+	})
+
+	It("retains 1001 stored accounts across two legal provider discovery epochs and traverses every CLI page", func(ctx context.Context) {
+		prefix := "billing-inventory-" + uuid.New() + "-"
+		inventory := make([]billingfake.AccountSpec, 1001)
+		for i := range inventory {
+			inventory[i] = billingfake.AccountSpec{ID: uuid.New(), Name: fmt.Sprintf("%s%04d", prefix, i),
+				ExternalID: fmt.Sprintf("inventory-attribution-%s%04d", prefix, i), RawStatus: "Active", ApprovalStatus: "Approved"}
+		}
+		// A single 1001-account provider walk is deliberately MALFORMED (20 x 50 maximum).
+		// This positive case accumulates retained rows across two separately bounded walks instead.
+		stub.SetScenario(billingfake.Scenario{Accounts: inventory[:1000]})
+		client := publicv1.NewBillingAccountsClient(tool.ExternalView().AdminConn())
+		filter := fmt.Sprintf("this.status.display_name.startsWith(%q)", prefix)
+		eventuallyStored := func(total int32) {
+			GinkgoHelper()
+			Eventually(ctx, func(g Gomega) {
+				response, err := client.List(ctx, publicv1.BillingAccountsListRequest_builder{
+					Filter: &filter, Limit: new(int32(37)),
+				}.Build())
+				g.Expect(err).ToNot(HaveOccurred())
+				g.Expect(response.GetTotal()).To(Equal(total))
+				g.Expect(response.GetSize()).To(Equal(int32(37)))
+				g.Expect(response.GetItems()).To(HaveLen(37))
+			}, time.Minute, time.Second).Should(Succeed())
+		}
+		eventuallyStored(1000)
+		before := stub.Succeeded("ListAccounts")
+		Expect(before).To(Equal(50), "the first legal discovery uses 50 ordinary 20-account pages")
+		stub.SetScenario(billingfake.Scenario{Accounts: inventory[1000:]})
+		// Poll List through the normal 30-second freshness window; no sleep, restart or cache override.
+		eventuallyStored(1001)
+		Expect(stub.Succeeded("ListAccounts")).To(BeNumerically(">", before))
+		tenant := newTenant(ctx)
+		home := newBillingCLI(ctx, tenant, false)
+		for _, format := range []string{"json", "yaml"} {
+			items := billingCLIItems(ctx, home, "billingaccounts", format, "osac.public.v1.BillingAccount", "--filter", filter)
+			Expect(items).To(HaveLen(1001))
+			ids, names := map[string]bool{}, map[string]bool{}
+			unknown := 0
+			for _, item := range items {
+				id := item["id"].(string)
+				Expect(id).ToNot(BeEmpty())
+				Expect(ids).ToNot(HaveKey(id))
+				ids[id] = true
+				observed := item["status"].(map[string]any)
+				name := observed["display_name"].(string)
+				Expect(names).ToNot(HaveKey(name))
+				names[name] = true
+				if name == inventory[1000].Name {
+					Expect(observed["state"]).To(Equal("BILLING_ACCOUNT_STATE_ACTIVE"))
+				} else {
+					Expect(observed["state"]).To(Equal("BILLING_ACCOUNT_STATE_UNKNOWN"))
+					unknown++
+				}
+			}
+			Expect(unknown).To(Equal(1000))
+			for _, account := range inventory {
+				Expect(names).To(HaveKey(account.Name))
+			}
+		}
+		expectBillingCLITable(ctx, home, "billingaccounts", []string{
+			"ID", "DELETING", "NAME", "PROVIDER", "DISPLAY-NAME", "CURRENCY", "STATE",
+			"EXTERNAL-BILLING-ACCOUNT-ID", "STATUS-OBSERVED",
+		}, 1001, "--filter", filter)
+		end, err := client.List(ctx, publicv1.BillingAccountsListRequest_builder{
+			Filter: &filter, Offset: new(int32(1001)), Limit: new(int32(37)),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(end.GetTotal()).To(Equal(int32(1001)))
+		Expect(end.GetSize()).To(BeZero())
+		Expect(end.GetItems()).To(BeEmpty())
+		Expect(stub.Writes()).To(BeEmpty())
+	})
+
+	It("rejects an oversized single provider walk without printing partial CLI inventory", func(ctx context.Context) {
+		inventory := make([]billingfake.AccountSpec, 1001)
+		prefix := "billing-oversized-" + uuid.New() + "-"
+		for i := range inventory {
+			inventory[i] = billingfake.AccountSpec{ID: uuid.New(), Name: fmt.Sprintf("%s%04d", prefix, i),
+				RawStatus: "Active", ApprovalStatus: "Approved"}
+		}
+		stub.SetScenario(billingfake.Scenario{Accounts: inventory})
+		response, err := publicv1.NewBillingAccountsClient(tool.ExternalView().AdminConn()).List(ctx,
+			publicv1.BillingAccountsListRequest_builder{}.Build())
+		Expect(response).To(BeNil())
+		expectBillingReason(err, "MALFORMED")
+		Expect(stub.Succeeded("ListAccounts")).To(Equal(50))
+		home := newBillingCLI(ctx, newTenant(ctx), false)
+		for _, format := range []string{"table", "json", "yaml"} {
+			stdout, stderr, code := tool.RunCLI(ctx, home, "get", "billingaccounts", "-o", format)
+			Expect(code).ToNot(Equal(0), "stderr: %s", stderr)
+			Expect(stdout).To(BeEmpty(), "failed discovery must not emit partial inventory in %s", format)
+		}
+		Expect(stub.Writes()).To(BeEmpty())
+	})
+
 	It("discovers existing correlations and connects Create and reassignment Update using exact-match reads only", func(ctx context.Context) {
 		first := findAccount(ctx, accounts[0].Name)
 		second := findAccount(ctx, accounts[1].Name)
@@ -217,6 +392,7 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		Expect(stub.Succeeded("ListAccounts")).To(BeNumerically(">", 0))
 		Expect(stub.Writes()).To(BeEmpty(), "discovery must not perform account writes")
 		tenant := newTenant(ctx)
+		home := newBillingCLI(ctx, tenant, false)
 		client := publicv1.NewTenantBillingAssignmentsClient(tool.ExternalView().AdminConn())
 		beforeCreate := len(stub.Requests())
 		created, err := client.Create(ctx, publicv1.TenantBillingAssignmentsCreateRequest_builder{
@@ -238,6 +414,8 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		Expect(assignment.GetStatus().GetMessage()).To(BeEmpty())
 		Expect(assignment.GetStatus().GetEffectiveFromTimestamp()).ToNot(BeNil())
 		Expect(assignment.GetStatus().GetEffectiveToTimestamp()).To(BeNil())
+		Expect(assignment.GetMetadata().GetCreator()).ToNot(BeEmpty())
+		expectBillingAssignmentCLI(ctx, home, false, []*publicv1.TenantBillingAssignment{assignment}, assignment.GetId())
 		expectReadOnlyResolution(accounts[0].ID, first.GetStatus().GetExternalBillingAccountId(), beforeCreate)
 		refreshed := findAccount(ctx, accounts[0].Name)
 		Expect(refreshed.GetId()).To(Equal(first.GetId()))
@@ -289,6 +467,28 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 			}
 		}
 		Expect(active).To(Equal(1), "exactly one interval must remain active after reassignment")
+		Expect(history.GetSize()).To(Equal(int32(2)))
+		Expect(history.GetTotal()).To(Equal(int32(2)))
+		expectBillingAssignmentCLI(ctx, home, false, history.GetItems())
+		expectBillingAssignmentCLI(ctx, home, false, []*publicv1.TenantBillingAssignment{old.GetObject()},
+			assignment.GetMetadata().GetName(), "--filter", "has(this.status.effective_to_timestamp)")
+		expectBillingAssignmentCLI(ctx, home, false, []*publicv1.TenantBillingAssignment{updated.GetObject()},
+			"--filter", `this.status.connection_state == 2 && !has(this.status.effective_to_timestamp) && this.status.effective_from_timestamp >= timestamp("2026-01-01T00:00:00Z")`)
+		privateHome := newBillingCLI(ctx, tenant, true)
+		expectBillingAssignmentCLI(ctx, privateHome, true, history.GetItems(), assignment.GetId(), updated.GetObject().GetMetadata().GetName())
+		expectBillingAssignmentCLI(ctx, privateHome, true, []*publicv1.TenantBillingAssignment{updated.GetObject()}, updated.GetObject().GetId())
+		expectBillingAssignmentCLI(ctx, privateHome, true, nil, assignment.GetId(), "--filter", "!has(this.status.effective_to_timestamp)")
+		otherHome := newBillingCLI(ctx, newTenant(ctx), false)
+		expectBillingAssignmentCLI(ctx, otherHome, false, nil, assignment.GetId(), "--filter",
+			fmt.Sprintf("this.spec.tenant.id == %q || this.id == %q", tenant, assignment.GetId()))
+		// The admin is universal; the preceding empty result is a saved-selection intersection, not auth proof.
+		// A real non-admin token must be denied by the billing method allow-list, not leak foreign history.
+		_, err = publicv1.NewTenantBillingAssignmentsClient(tool.ExternalView().UserConn()).Get(ctx,
+			publicv1.TenantBillingAssignmentsGetRequest_builder{Id: assignment.GetId()}.Build())
+		Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
+		_, err = publicv1.NewTenantBillingAssignmentsClient(tool.ExternalView().UserConn()).List(ctx,
+			publicv1.TenantBillingAssignmentsListRequest_builder{Filter: new(fmt.Sprintf("this.spec.tenant.id == %q", tenant))}.Build())
+		Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
 		Expect(stub.Writes()).To(BeEmpty())
 		expectCleanLog(ctx)
 	})
@@ -299,11 +499,12 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		account := findAccount(ctx, accounts[0].Name)
 		Expect(account.GetStatus().GetExternalBillingAccountId()).To(BeEmpty())
 		tenant := newTenant(ctx)
+		home := newBillingCLI(ctx, tenant, false)
 		client := publicv1.NewTenantBillingAssignmentsClient(tool.ExternalView().AdminConn())
 		beforeCreate := len(stub.Requests())
 		created, err := client.Create(ctx, publicv1.TenantBillingAssignmentsCreateRequest_builder{
 			Object: publicv1.TenantBillingAssignment_builder{
-				Metadata: publicv1.Metadata_builder{Name: "billing-" + uuid.New()}.Build(),
+				Metadata: publicv1.Metadata_builder{Name: "billing-" + uuid.New(), Labels: map[string]string{"billing-cli": "configured"}}.Build(),
 				Spec: publicv1.TenantBillingAssignmentSpec_builder{
 					Tenant:         publicv1.TenantReference_builder{Id: tenant}.Build(),
 					BillingAccount: publicv1.BillingAccountReference_builder{Id: account.GetId()}.Build(),
@@ -322,6 +523,9 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		Expect(pending.GetStatus().GetMessage()).To(Equal(remediation))
 		Expect(pending.GetStatus().GetEffectiveFromTimestamp()).ToNot(BeNil())
 		Expect(pending.GetStatus().GetEffectiveToTimestamp()).To(BeNil())
+		Expect(pending.GetMetadata().GetCreator()).ToNot(BeEmpty())
+		expectBillingAssignmentCLI(ctx, home, false, []*publicv1.TenantBillingAssignment{pending}, pending.GetMetadata().GetName(),
+			"--filter", `this.metadata.labels["billing-cli"] == "configured" && this.status.connection_state == 1 && !has(this.status.effective_to_timestamp)`)
 		Expect(stub.Writes()).To(BeEmpty(), "unsupported capability must not attempt even a failed PUT")
 		accountID := account.GetId()
 		account = findAccount(ctx, accounts[0].Name)
@@ -363,6 +567,7 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 			publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
 		Expect(updated.GetObject().GetStatus().GetMessage()).To(BeEmpty())
 		Expect(updated.GetObject().GetId()).To(Equal(pending.GetId()))
+		Expect(updated.GetObject().GetMetadata().GetCreator()).To(Equal(pending.GetMetadata().GetCreator()))
 		Expect(updated.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(accountID))
 		Expect(proto.Equal(updated.GetObject().GetStatus().GetEffectiveFromTimestamp(),
 			pending.GetStatus().GetEffectiveFromTimestamp())).To(BeTrue())
@@ -380,8 +585,55 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		Expect(err).ToNot(HaveOccurred())
 		Expect(history.GetItems()).To(HaveLen(1), "same-account revalidation must not create another interval")
 		Expect(history.GetItems()[0].GetId()).To(Equal(pending.GetId()))
+		Expect(history.GetTotal()).To(Equal(int32(1)))
+		Expect(history.GetSize()).To(Equal(int32(1)))
+		expectBillingAssignmentCLI(ctx, home, false, history.GetItems(), pending.GetId(),
+			"--filter", `this.status.connection_state == 2 && !has(this.status.effective_to_timestamp)`)
 		Expect(stub.Writes()).To(BeEmpty())
 		expectCleanLog(ctx)
+	})
+
+	It("reads retained closed history through the CLI after the billed tenant is physically removed", func(ctx context.Context) {
+		account := findAccount(ctx, accounts[0].Name)
+		tenant := newBillingTenant(ctx, nil, nil)
+		home := newBillingCLI(ctx, tenant.GetMetadata().GetName(), false)
+		tenants := privatev1.NewTenantsClient(tool.InternalView().AdminConn())
+		waitForTenantSyncedWithFinalizers(ctx, tenants, tenant.GetId())
+		assignments := publicv1.NewTenantBillingAssignmentsClient(tool.ExternalView().AdminConn())
+		created, err := assignments.Create(ctx, publicv1.TenantBillingAssignmentsCreateRequest_builder{
+			Object: publicv1.TenantBillingAssignment_builder{
+				Metadata: publicv1.Metadata_builder{Name: "billing-retained-" + uuid.New()}.Build(),
+				Spec: publicv1.TenantBillingAssignmentSpec_builder{
+					Tenant:         publicv1.TenantReference_builder{Name: tenant.GetMetadata().GetName()}.Build(),
+					BillingAccount: publicv1.BillingAccountReference_builder{Id: account.GetId()}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		// The established lifecycle helper also removes named projects: the tenant
+		// controller deliberately waits for those, including our saved CLI selection.
+		deleteTenant(ctx, tenants, privatev1.NewProjectsClient(tool.InternalView().AdminConn()),
+			tenant.GetId(), tenant.GetMetadata().GetName())
+		_, err = tenants.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenant.GetId()}.Build())
+		Expect(status.Code(err)).To(Equal(codes.NotFound))
+		retained, err := assignments.Get(ctx, publicv1.TenantBillingAssignmentsGetRequest_builder{Id: created.GetObject().GetId()}.Build())
+		Expect(err).ToNot(HaveOccurred(), "history must not re-resolve a live tenant")
+		Expect(retained.GetObject().GetStatus().GetEffectiveToTimestamp()).ToNot(BeNil())
+		Expect(retained.GetObject().GetMetadata().GetCreator()).To(Equal(created.GetObject().GetMetadata().GetCreator()))
+		Expect(proto.Equal(retained.GetObject().GetStatus().GetEffectiveFromTimestamp(),
+			created.GetObject().GetStatus().GetEffectiveFromTimestamp())).To(BeTrue())
+		listed, err := assignments.List(ctx, publicv1.TenantBillingAssignmentsListRequest_builder{
+			Filter: new(fmt.Sprintf("this.metadata.tenant == %q", tenant.GetMetadata().GetName())),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(listed.GetSize()).To(Equal(int32(1)))
+		Expect(listed.GetTotal()).To(Equal(int32(1)))
+		Expect(listed.GetItems()).To(HaveLen(1))
+		Expect(proto.Equal(listed.GetItems()[0], retained.GetObject())).To(BeTrue())
+		expectBillingAssignmentCLI(ctx, home, false, listed.GetItems(), retained.GetObject().GetMetadata().GetName(),
+			"--filter", "has(this.status.effective_to_timestamp)")
+		expectBillingAssignmentCLI(ctx, home, false, nil, "--filter", "!has(this.status.effective_to_timestamp)")
+		Expect(stub.Writes()).To(BeEmpty())
 	})
 
 	It("is AVAILABLE when the stub provider answers, using reads only", func(ctx context.Context) {

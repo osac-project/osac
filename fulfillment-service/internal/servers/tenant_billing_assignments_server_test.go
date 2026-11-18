@@ -15,6 +15,8 @@ package servers
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -267,6 +269,8 @@ var _ = Describe("Tenant billing assignments server", func() {
 		Entry("negative limit", "", "", int32(0), int32(-1)))
 
 	Describe("trusted tenant scope through the public delegate", func() {
+		// Subject doubles exercise trusted server/SQL mechanics, not JWT/OPA grants. Production billing
+		// authorization remains admin-only, and current platform administrators have universal scope.
 		const foreignTenant = "foreign-tenant"
 		var (
 			server  *TenantBillingAssignmentsServer
@@ -287,8 +291,15 @@ var _ = Describe("Tenant billing assignments server", func() {
 			})
 			server = build(fake.Provider())
 		})
-		seedHistory := func() {
-			for i, tenantID := range []string{foreignTenant, testTenant, foreignTenant, testTenant} {
+		seedHistory := func(tenantIDs ...string) {
+			if len(tenantIDs) == 0 {
+				tenantIDs = []string{foreignTenant, testTenant, foreignTenant, testTenant}
+			}
+			for i, tenantID := range tenantIDs {
+				id := string(rune('a' + i))
+				if len(tenantIDs) > 26 {
+					id = fmt.Sprintf("interval-%04d", i)
+				}
 				_, err := database.WithNewTx(ctx, func(c context.Context) (*dao.CreateResponse[*privatev1.TenantBillingAssignment], error) {
 					d, err := dao.NewGenericDAO[*privatev1.TenantBillingAssignment]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
 					if err != nil {
@@ -299,8 +310,9 @@ var _ = Describe("Tenant billing assignments server", func() {
 						return nil, err
 					}
 					at := time.Now().UTC().Truncate(time.Microsecond)
-					return d.Create().SetObject(privatev1.TenantBillingAssignment_builder{Id: string(rune('a' + i)),
-						Metadata: privatev1.Metadata_builder{Name: string(rune('a' + i)), Tenant: tenantID, Creator: "admin",
+					return d.Create().SetObject(privatev1.TenantBillingAssignment_builder{Id: id,
+						Metadata: privatev1.Metadata_builder{Name: id, Tenant: tenantID, Creator: "admin",
+							Labels:      map[string]string{"environment": "test"},
 							Annotations: map[string]string{"osac.openshift.io/tenant": tenantID}}.Build(),
 						Spec: privatev1.TenantBillingAssignmentSpec_builder{
 							Tenant:         privatev1.TenantReference_builder{Id: tenantID, Name: tenantID}.Build(),
@@ -342,7 +354,137 @@ var _ = Describe("Tenant billing assignments server", func() {
 			Entry("finite multi-tenant", collections.NewSet(testTenant, foreignTenant), int32(4)),
 			Entry("universal", auth.AllTenants, int32(4)),
 			Entry("empty", collections.NewSet[string](), int32(0)),
+			Entry("exclusion set", auth.AllTenants.Difference(collections.NewSet(foreignTenant)), int32(2)),
+			Entry("multiple exclusions", auth.AllTenants.Difference(collections.NewSet(foreignTenant, "absent-tenant")), int32(2)),
+			Entry("all seeded tenants excluded", auth.AllTenants.Difference(collections.NewSet(foreignTenant, testTenant)), int32(0)),
+			Entry("unbounded without exclusions", auth.AllTenants.Difference(collections.NewSet[string]()), int32(4)),
 		)
+
+		It("intersects an exclusion-set subject with a foreign OR before count and pages", func() {
+			seedHistory()
+			caller := callerCtx(auth.AllTenants.Difference(collections.NewSet(foreignTenant)))
+			for offset := int32(0); offset < 3; offset++ {
+				response, err := billingRPC(caller, server.List, publicv1.TenantBillingAssignmentsListRequest_builder{
+					Filter: new(`this.spec.tenant.id == "foreign-tenant" || this.metadata.name in ["b", "d"]`),
+					Order:  new("id"), Limit: new(int32(1)), Offset: &offset,
+				}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(response.GetTotal()).To(Equal(int32(2)))
+				if offset == 2 {
+					Expect(response.GetItems()).To(BeEmpty())
+				} else {
+					Expect(response.GetItems()).To(HaveLen(1))
+					Expect(response.GetItems()[0].GetSpec().GetTenant().GetId()).To(Equal(testTenant))
+				}
+			}
+			Expect(fake.Calls()).To(BeEmpty())
+		})
+
+		DescribeTable("P6 native CLI key OR plus user CEL plus selected tenant stays inside trusted SQL scope", func(history bool) {
+			seedHistory()
+			keys := `this.id in ["b", "d", "two\"quoted"] || this.metadata.name in ["b", "d", "two\"quoted"]`
+			presence := "has(this.status.effective_to_timestamp)"
+			expected := 2
+			if !history {
+				presence = "!" + presence
+				expected = 0
+			}
+			user := `(this.status.connection_state == 2 && this.metadata.labels["environment"] == "test" && this.status.effective_from_timestamp >= timestamp("2026-01-01T00:00:00Z") && ` + presence + `) || this.spec.tenant.id == "foreign-tenant"`
+			filter := fmt.Sprintf(`this.metadata.tenant == %q && ((%s) && (%s))`, testTenant, keys, user)
+			for _, tenants := range []collections.Set[string]{collections.NewSet(testTenant), auth.AllTenants,
+				auth.AllTenants.Difference(collections.NewSet(foreignTenant))} {
+				for offset := 0; offset <= expected; offset++ {
+					response, err := billingRPC(callerCtx(tenants), server.List, publicv1.TenantBillingAssignmentsListRequest_builder{
+						Filter: &filter, Order: new("id"), Limit: new(int32(1)), Offset: new(int32(offset)),
+					}.Build())
+					Expect(err).NotTo(HaveOccurred())
+					Expect(response.GetTotal()).To(Equal(int32(expected)))
+					if offset == expected {
+						Expect(response.GetItems()).To(BeEmpty())
+					} else {
+						Expect(response.GetItems()).To(HaveLen(1))
+						item := response.GetItems()[0]
+						Expect(item.GetId()).To(Equal([]string{"b", "d"}[offset]))
+						Expect(item.GetMetadata().GetTenant()).To(Equal(item.GetSpec().GetTenant().GetId()))
+						Expect(item.GetMetadata().GetProject()).To(BeEmpty(), "no selected-project predicate may hide these rows")
+					}
+				}
+			}
+			Expect(fake.Calls()).To(BeEmpty())
+		}, Entry("history", true), Entry("current selection excludes closed history", false))
+
+		DescribeTable("P6 native timestamp constructor failures remain InvalidArgument through both delegates", func(constructor string) {
+			seedHistory()
+			filter := `this.status.effective_from_timestamp >= ` + constructor
+			response, err := billingRPC(callerCtx(auth.AllTenants), server.List,
+				publicv1.TenantBillingAssignmentsListRequest_builder{Filter: &filter}.Build())
+			Expect(response).To(BeNil())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			privateResponse, err := billingRPC(callerCtx(auth.AllTenants), server.private.List,
+				privatev1.TenantBillingAssignmentsListRequest_builder{Filter: &filter}.Build())
+			Expect(privateResponse).To(BeNil())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(fake.Calls()).To(BeEmpty())
+		}, Entry("arity", `timestamp()`),
+			Entry("type", `timestamp(0)`),
+			Entry("value", `timestamp("2026-02-30T00:00:00Z")`),
+			Entry("nonliteral", `timestamp(this.metadata.name)`),
+			Entry("SQL-like text", `timestamp("2026-01-01T00:00:00Z'); select 1; --")`))
+
+		DescribeTable("P6 native private assignment still uses the public query descriptor", func(filter string) {
+			seedHistory()
+			_, err := billingRPC(callerCtx(auth.AllTenants), server.private.List, privatev1.TenantBillingAssignmentsListRequest_builder{Filter: &filter}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(fake.Calls()).To(BeEmpty())
+		}, Entry("private finalizer", `has(this.metadata.finalizers)`),
+			Entry("legacy tenant id", `this.spec.tenant_id == "test-tenant"`),
+			Entry("private provider identity", `this.status.provider_account_reference == "native"`))
+
+		DescribeTable("P6 native assignment SQL complete inventory retains scoped count and unique offsets", func(total int) {
+			seedHistory(slices.Repeat([]string{testTenant}, total)...)
+			seen := map[string]bool{}
+			filter := fmt.Sprintf(`this.metadata.tenant == %q && (this.status.connection_state == 2 || this.spec.tenant.id == "foreign-tenant")`, testTenant)
+			for offset := 0; offset < total; offset += 37 {
+				response, err := billingRPC(callerCtx(auth.AllTenants.Difference(collections.NewSet(foreignTenant))), server.List,
+					publicv1.TenantBillingAssignmentsListRequest_builder{Filter: &filter, Order: new("id"), Limit: new(int32(37)), Offset: new(int32(offset))}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(response.GetTotal()).To(Equal(int32(total)))
+				Expect(response.GetItems()).To(HaveLen(min(37, total-offset)))
+				for i, item := range response.GetItems() {
+					Expect(item.GetId()).To(Equal(fmt.Sprintf("interval-%04d", offset+i)))
+					Expect(item.GetMetadata().GetTenant()).To(Equal(testTenant))
+					Expect(item.GetSpec().GetTenant().GetId()).To(Equal(testTenant))
+					Expect(item.GetMetadata().GetProject()).To(BeEmpty())
+					Expect(seen[item.GetId()]).To(BeFalse())
+					seen[item.GetId()] = true
+				}
+			}
+			Expect(seen).To(HaveLen(total))
+			Expect(fake.Calls()).To(BeEmpty())
+		}, Entry("101", 101), Entry("1001", 1001))
+
+		DescribeTable("rejects caller syntax that could escape trusted filter parentheses", func(filter string) {
+			seedHistory()
+			response, err := billingRPC(callerCtx(auth.AllTenants.Difference(collections.NewSet(foreignTenant))),
+				server.List, publicv1.TenantBillingAssignmentsListRequest_builder{Filter: &filter}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(response).To(BeNil())
+			Expect(fake.Calls()).To(BeEmpty())
+		}, Entry("unbalanced OR", `true) || (true`),
+			Entry("commented OR", "true) || true // ignored close\n || (false"))
+
+		It("preserves a narrowing caller filter ending in a line comment", func() {
+			seedHistory()
+			response, err := billingRPC(callerCtx(auth.AllTenants.Difference(collections.NewSet(foreignTenant))),
+				server.List, publicv1.TenantBillingAssignmentsListRequest_builder{
+					Filter: new("this.metadata.name == \"b\" // trailing ) || true"),
+				}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(response.GetTotal()).To(Equal(int32(1)))
+			Expect(response.GetItems()).To(HaveLen(1))
+			Expect(response.GetItems()[0].GetId()).To(Equal("b"))
+			Expect(fake.Calls()).To(BeEmpty())
+		})
 
 		It("cannot widen trusted scope with a public tenant filter", func() {
 			seedHistory()
@@ -353,6 +495,73 @@ var _ = Describe("Tenant billing assignments server", func() {
 			Expect(response.GetTotal()).To(BeZero())
 			Expect(response.GetItems()).To(BeEmpty())
 		})
+
+		DescribeTable("intersects complementary scope with narrowing and quoted tenant literals", func(excluded string, expected int32) {
+			seedHistory()
+			// The extra exclusion need not be a live tenant; neither live-tenant enumeration nor caller
+			// filters define this trusted scope. Include CEL/SQL delimiters and non-ASCII UTF-8 bytes.
+			response, err := billingRPC(callerCtx(auth.AllTenants.Difference(collections.NewSet(foreignTenant, excluded))),
+				server.List, publicv1.TenantBillingAssignmentsListRequest_builder{
+					Filter: new(`this.metadata.name == "b"`), Order: new("id"),
+				}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(response.GetTotal()).To(Equal(expected))
+			Expect(response.GetItems()).To(HaveLen(int(expected)))
+			if expected != 0 {
+				Expect(response.GetItems()[0].GetId()).To(Equal("b"))
+			}
+			Expect(fake.Calls()).To(BeEmpty())
+		}, Entry("authorized narrowing", "absent-tenant", int32(1)),
+			Entry("excluded narrowing", testTenant, int32(0)),
+			Entry("quoted UTF-8 exclusion", "tenant-雪'\"\\) || true //", int32(1)))
+
+		It("scopes actual quoted UTF-8 tenant ownership without interpreting its delimiters", func() {
+			const quoted = "tenant-雪'\"\\) || true //"
+			_, err := testPool.Exec(ctx, `insert into tenants (id, name, tenant, creator, data)
+				values ($1, $1, $1, 'system', '{}')`, quoted)
+			Expect(err).NotTo(HaveOccurred())
+			seedHistory(quoted, testTenant, quoted, testTenant)
+			caller := callerCtx(auth.AllTenants.Difference(collections.NewSet(quoted)))
+			response, err := billingRPC(caller, server.List, publicv1.TenantBillingAssignmentsListRequest_builder{
+				Filter: new(`this.metadata.name in ["a", "b", "c", "d"]`), Order: new("id"),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(response.GetTotal()).To(Equal(int32(2)))
+			Expect(response.GetItems()).To(HaveLen(2))
+			Expect(response.GetItems()[0].GetId()).To(Equal("b"))
+			Expect(response.GetItems()[1].GetId()).To(Equal("d"))
+			for _, id := range []string{"a", "c", `unknown'"\\ || true`} {
+				_, err = billingRPC(caller, server.Get, publicv1.TenantBillingAssignmentsGetRequest_builder{Id: id}.Build())
+				Expect(status.Code(err)).To(Equal(codes.NotFound))
+			}
+			Expect(fake.Calls()).To(BeEmpty())
+		})
+
+		DescribeTable("hides excluded Get targets while retaining authorized history after physical tenant removal",
+			func(tenants collections.Set[string]) {
+				seedHistory()
+				// Remove the trigger-created root project first. This is a physical-removal fixture,
+				// not lifecycle API proof; reads must use retained assignment ownership, not live tenants.
+				_, err := testPool.Exec(ctx, `delete from projects where tenant = $1`, foreignTenant)
+				Expect(err).NotTo(HaveOccurred())
+				_, err = testPool.Exec(ctx, `delete from tenants where id = $1`, foreignTenant)
+				Expect(err).NotTo(HaveOccurred())
+				for _, id := range []string{"b", "d", "unknown-id"} {
+					_, err = billingRPC(callerCtx(tenants), server.Get, publicv1.TenantBillingAssignmentsGetRequest_builder{Id: id}.Build())
+					Expect(status.Code(err)).To(Equal(codes.NotFound))
+				}
+				for _, id := range []string{"a", "c"} {
+					got, getErr := billingRPC(callerCtx(tenants), server.Get, publicv1.TenantBillingAssignmentsGetRequest_builder{Id: id}.Build())
+					Expect(getErr).NotTo(HaveOccurred())
+					Expect(got.GetObject().GetId()).To(Equal(id))
+					Expect(got.GetObject().GetSpec().GetTenant().GetName()).To(Equal(foreignTenant))
+				}
+				listed, err := billingRPC(callerCtx(tenants), server.List, &publicv1.TenantBillingAssignmentsListRequest{})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(listed.GetTotal()).To(Equal(int32(2)))
+				Expect(fake.Calls()).To(BeEmpty())
+			}, Entry("finite", collections.NewSet(foreignTenant)),
+			Entry("complement", auth.AllTenants.Difference(collections.NewSet(testTenant))))
 
 		DescribeTable("rejects foreign reads and tenant-spoofed writes without provider calls", func(empty bool) {
 			seedHistory()

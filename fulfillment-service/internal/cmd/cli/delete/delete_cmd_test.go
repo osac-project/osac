@@ -20,6 +20,15 @@ import (
 )
 
 var _ = Describe("Delete command", func() {
+	It("P6 keeps billing collections but not the identity-free status in delete completion", func() {
+		completed, directive := completeObjectTypes(nil, nil, "")
+		Expect(directive).To(Equal(cobra.ShellCompDirectiveNoFileComp))
+		Expect(completed).To(ContainElements("billingaccount", "billingaccounts", "tenantbillingassignment", "tenantbillingassignments"))
+		for _, absent := range []string{"billingproviderstatus", "billingproviderstatuses", "billing-accounts", "tenant-billing-assignments", "billing-provider-status", "tba"} {
+			Expect(completed).NotTo(ContainElement(absent))
+		}
+	})
+
 	It("offers all networking resources for delete completion", func() {
 		completed, directive := completeObjectTypes(nil, nil, "")
 		Expect(directive).To(Equal(cobra.ShellCompDirectiveNoFileComp))

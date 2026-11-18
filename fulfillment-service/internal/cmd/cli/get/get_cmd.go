@@ -29,11 +29,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/billingaccount"
-	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/billingproviderstatus"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/externalippool"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/storagetier"
-	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/tenantbillingassignment"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/token"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -68,11 +65,8 @@ func Cmd() *cobra.Command {
 		RunE:                  runner.run,
 		ValidArgsFunction:     completeObjectTypes,
 	}
-	result.AddCommand(billingaccount.Cmd())
-	result.AddCommand(billingproviderstatus.Cmd())
 	result.AddCommand(externalippool.Cmd())
 	result.AddCommand(storagetier.Cmd())
-	result.AddCommand(tenantbillingassignment.Cmd())
 	result.AddCommand(token.Cmd())
 	flags := result.Flags()
 	flags.StringVarP(
@@ -472,7 +466,9 @@ const longHelp = `
 List or retrieve objects from the server.
 
 When called with just an object type it lists all objects of that type. When called with one or more identifiers or
-names it retrieves only the matching objects.
+names it retrieves only the matching objects. Collections are read to completion within finite safety limits before
+any inventory is printed. A failed traversal prints no partial inventory. This is not a point-in-time snapshot;
+concurrent changes may cause the read to fail. Services without a total report unknown completeness on standard error.
 
 To list all clusters:
 
@@ -508,6 +504,47 @@ The output format can be changed with the {{ bt }}--output{{ bt }} flag. Support
 {{ bt 3 }}shell
 {{ binary }} get clusters -o yaml
 {{ bt 3 }}
+
+Structured output uses protobuf field names ({{ bt }}snake_case{{ bt }}) and includes an {{ bt }}@type{{ bt }} on
+each item: zero items are an empty list, one item is an object, and multiple items are a list. There is no CLI
+{{ bt }}size{{ bt }}/{{ bt }}total{{ bt }}/{{ bt }}items{{ bt }} envelope; REST and gRPC response envelopes are unchanged.
+Fields follow the selected public or private API descriptor, not a global output privacy filter.
+
+## Billing objects
+
+Use {{ bt }}billingaccount{{ bt }}/{{ bt }}billingaccounts{{ bt }},
+{{ bt }}tenantbillingassignment{{ bt }}/{{ bt }}tenantbillingassignments{{ bt }}, or
+{{ bt }}billingproviderstatus{{ bt }}/{{ bt }}billingproviderstatuses{{ bt }}. Fully qualified public/private names
+also work. The configured API packages select short names, with private types preferred when private APIs are enabled.
+The former hyphenated billing names and {{ bt }}tba{{ bt }} are not aliases. There are no billing
+{{ bt }}--limit{{ bt }} or {{ bt }}--offset{{ bt }} flags or per-page notices.
+
+Billing accounts are system-global: the selected tenant and project do not add filters. Assignments are scoped by
+the selected tenant, never the selected project. Explicit CEL predicates are retained in both cases. These client
+filters only narrow results; server authorization still controls visibility.
+
+Keys match an immutable OSAC {{ bt }}id{{ bt }} or stable {{ bt }}metadata.name{{ bt }}, not the provider display
+label, provider-native account reference, or locally retained attribution token. For accounts these are distinct
+{{ bt }}status.display_name{{ bt }}, private {{ bt }}status.provider_account_reference{{ bt }}, and
+{{ bt }}status.external_billing_account_id{{ bt }} fields. A locally retained token alone does not prove provider
+matching or metering integration. Native identity is not a default table column.
+
+Billing filters use nested fields, numeric enum values and timestamps. For example, list active accounts and current
+assignments (use {{ bt }}has{{ bt }} instead of {{ bt }}!has{{ bt }} for closed assignment history):
+
+{{ bt 3 }}shell
+{{ binary }} get billingaccounts --filter 'this.status.state == 1 && this.status.state_observation_timestamp >= timestamp("2026-01-01T00:00:00Z")'
+{{ binary }} get tenantbillingassignments --filter 'this.status.connection_state == 1 && !has(this.status.effective_to_timestamp)'
+{{ bt 3 }}
+
+An assignment in {{ bt }}PENDING{{ bt }} still needs provider-side matching and may require manual remediation;
+gated publish and launch remain blocked with {{ bt }}BILLING_ACCOUNT_UNAVAILABLE{{ bt }}.
+
+Billing provider status is a get-only singleton: exactly one empty Get request, independent of tenant/project.
+It accepts no keys, {{ bt }}--filter{{ bt }} or {{ bt }}--watch{{ bt }}, even explicitly empty/false flags.
+Its table has six horizontal status columns, not a vertical key/value display. Account and assignment tables include
+{{ bt }}NAME{{ bt }} and descriptor-supported {{ bt }}DELETING{{ bt }} columns; assignments also show {{ bt }}TENANT{{ bt }}.
+Empty collection tables use the generic no-matching-objects message.
 
 To watch for changes to objects in real time use the
 {{ bt }}--watch{{ bt }} flag:

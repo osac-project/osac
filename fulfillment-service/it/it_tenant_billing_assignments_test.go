@@ -15,12 +15,14 @@ package it
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -49,3 +51,54 @@ var _ = Describe("Tenant billing assignments", Label("billing"), func() {
 		Expect(stdout + stderr).To(ContainSubstring("billing is not configured"))
 	})
 })
+
+// Compare CLI items with the actual authenticated RPC objects, including complete nested
+// spec/status and metadata. Private metadata may additionally expose its own finalizers.
+func expectBillingAssignmentCLI(ctx context.Context, home string, private bool, expected []*publicv1.TenantBillingAssignment, args ...string) {
+	GinkgoHelper()
+	typeName := "osac.public.v1.TenantBillingAssignment"
+	if private {
+		typeName = "osac.private.v1.TenantBillingAssignment"
+	}
+	for _, format := range []string{"json", "yaml"} {
+		items := billingCLIItems(ctx, home, "tenantbillingassignment", format, typeName, args...)
+		Expect(items).To(HaveLen(len(expected)))
+		for _, object := range expected {
+			encoded, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(object)
+			Expect(err).ToNot(HaveOccurred())
+			var value map[string]any
+			Expect(json.Unmarshal(encoded, &value)).To(Succeed())
+			var actual map[string]any
+			for _, item := range items {
+				if item["id"] == object.GetId() {
+					Expect(actual).To(BeNil(), "each interval must appear exactly once")
+					actual = item
+				}
+			}
+			Expect(actual).ToNot(BeNil(), "missing interval %s", object.GetId())
+			Expect(actual["spec"]).To(Equal(value["spec"]))
+			Expect(actual["status"]).To(Equal(value["status"]))
+			metadata := actual["metadata"].(map[string]any)
+			for key, field := range value["metadata"].(map[string]any) {
+				Expect(metadata).To(HaveKeyWithValue(key, field))
+			}
+			Expect(metadata).ToNot(HaveKey("project"), "selected project must not hide tenant-only assignments")
+			if !private {
+				Expect(metadata).ToNot(HaveKey("finalizers"))
+			}
+			Expect(actual).ToNot(HaveKey("connection_state"), "status fields must stay nested")
+		}
+	}
+	table := expectBillingCLITable(ctx, home, "tenantbillingassignment", []string{
+		"ID", "DELETING", "NAME", "TENANT", "ACCOUNT", "STATE", "EFFECTIVE-FROM", "EFFECTIVE-TO", "MESSAGE",
+	}, len(expected), args...)
+	for _, object := range expected {
+		Expect(table).To(ContainSubstring(object.GetId()))
+		Expect(table).To(ContainSubstring(object.GetMetadata().GetName()))
+		Expect(table).To(ContainSubstring(object.GetSpec().GetTenant().GetId()))
+		Expect(table).To(ContainSubstring(object.GetSpec().GetBillingAccount().GetId()))
+		if object.GetStatus().GetMessage() != "" {
+			Expect(table).To(ContainSubstring(object.GetStatus().GetMessage()))
+		}
+	}
+}

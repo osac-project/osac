@@ -121,6 +121,61 @@ func p2ExecuteGet(private bool, invoke func(string, proto.Message, proto.Message
 	return stdout.String(), err
 }
 
+// Synthetic provider text is deliberately not normalized by generic structured
+// output. Terminal table sanitization has separate renderer coverage.
+const p6AttributionToken = "  p6-token\t\n\x1b\"quoted\"  "
+
+func p6BillingItem(private bool, kind string, index int) map[string]any {
+	metadata := map[string]any{
+		"name": fmt.Sprintf("billing-name-%d", index), "tenant": "p2-tenant",
+		"labels": map[string]any{"env": "test"},
+	}
+	if private {
+		metadata["finalizers"] = []any{"p6-test-finalizer"}
+	}
+	item := map[string]any{"id": fmt.Sprintf("billing-id-%d", index), "metadata": metadata}
+	if kind == "billingaccount" {
+		metadata["tenant"] = "system"
+		item["spec"] = map[string]any{}
+		status := map[string]any{
+			"provider_key": "m360", "display_name": "Provider display label", "base_currency": "USD",
+			"state": "BILLING_ACCOUNT_STATE_ACTIVE", "state_observation_timestamp": "2026-01-01T00:00:00Z",
+			"external_billing_account_id": p6AttributionToken,
+		}
+		if private {
+			status["provider_account_reference"] = "provider-native-reference"
+		}
+		item["status"] = status
+	} else {
+		item["spec"] = map[string]any{
+			"tenant":          map[string]any{"id": "p2-tenant", "name": "customer"},
+			"billing_account": map[string]any{"id": "account-id", "name": "ba-stable-name"},
+		}
+		status := map[string]any{
+			"connection_state":         "TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_PENDING",
+			"effective_from_timestamp": "2026-01-01T00:00:00Z",
+			"message":                  "BILLING_PROVIDER_CORRELATION_WRITE_UNSUPPORTED: manual remediation required",
+		}
+		if index > 0 {
+			status["effective_to_timestamp"] = "2026-02-01T00:00:00Z"
+		}
+		item["status"] = status
+	}
+	return item
+}
+
+func p6BillingResponse(response proto.Message, private bool, kind string, start, count, total int) error {
+	items := make([]any, count)
+	for i := range items {
+		items[i] = p6BillingItem(private, kind, start+i)
+	}
+	data, err := json.Marshal(map[string]any{"items": items, "size": count, "total": total})
+	if err != nil {
+		return err
+	}
+	return protojson.Unmarshal(data, response)
+}
+
 var _ = Describe("Get command", func() {
 	var (
 		ctx        context.Context
@@ -134,6 +189,182 @@ var _ = Describe("Get command", func() {
 		DeferCleanup(ctrl.Finish)
 		mockHelper = reflection.NewMockObjectHelper(ctrl)
 		mockHelper.EXPECT().IsSingleton().Return(false).AnyTimes()
+	})
+
+	Describe("P6 generic billing command", func() {
+		for _, private := range []bool{false, true} {
+			pkg := packages.PublicV1
+			if private {
+				pkg = packages.PrivateV1
+			}
+			for _, kind := range []string{"billingaccount", "tenantbillingassignment"} {
+				service, objectName := "BillingAccounts", "BillingAccount"
+				if kind == "tenantbillingassignment" {
+					service, objectName = "TenantBillingAssignments", "TenantBillingAssignment"
+				}
+				for _, format := range []string{outputFormatJson, outputFormatYaml} {
+					DescribeTable(pkg+" "+kind+" "+format+" uses List-only Any item cardinality and descriptor visibility",
+						func(count int) {
+							calls := 0
+							stdout, err := p2ExecuteGet(private, func(method string, request, response proto.Message) error {
+								calls++
+								Expect(method).To(Equal("/"+pkg+"."+service+"/List"), "keyed billing must not invoke the account Get scaffold")
+								message := request.ProtoReflect()
+								Expect(message.Get(message.Descriptor().Fields().ByName("offset")).Int()).To(BeZero())
+								return p6BillingResponse(response, private, kind, 0, count, count)
+							}, kind, "billing-id-0", `second"key`, "--output="+format)
+							Expect(err).NotTo(HaveOccurred())
+							Expect(calls).To(Equal(1))
+							var value any
+							if format == outputFormatJson {
+								Expect(json.Unmarshal([]byte(stdout), &value)).To(Succeed())
+							} else {
+								Expect(yaml.Unmarshal([]byte(stdout), &value)).To(Succeed())
+							}
+							var values []any
+							if count == 1 {
+								values = []any{value}
+							} else {
+								var ok bool
+								values, ok = value.([]any)
+								Expect(ok).To(BeTrue(), "zero/many must be sequences, never size/total/items envelopes")
+							}
+							Expect(values).To(HaveLen(count))
+							for i, value := range values {
+								expected := p6BillingItem(private, kind, i)
+								expected["@type"] = "type.googleapis.com/" + pkg + "." + objectName
+								Expect(value).To(Equal(expected), "private descriptors retain their fields; public descriptors omit native identity and finalizers")
+							}
+						},
+						Entry("zero", 0), Entry("one", 1), Entry("many", 2),
+					)
+				}
+
+				DescribeTable(pkg+" "+kind+" reaches domain tables and the generic empty message",
+					func(count int) {
+						calls := 0
+						stdout, err := p2ExecuteGet(private, func(method string, _, response proto.Message) error {
+							calls++
+							Expect(method).To(Equal("/" + pkg + "." + service + "/List"))
+							return p6BillingResponse(response, private, kind, 0, count, count)
+						}, kind)
+						Expect(err).NotTo(HaveOccurred())
+						Expect(calls).To(Equal(1))
+						if count == 0 {
+							Expect(stdout).To(ContainSubstring("There are no objects matching the given criteria."))
+							return
+						}
+						Expect(stdout).To(ContainSubstring("billing-id-0"))
+						Expect(stdout).To(ContainSubstring("billing-name-0"))
+						Expect(stdout).To(MatchRegexp(`\bNAME\b`))
+						Expect(stdout).NotTo(ContainSubstring("provider-native-reference"))
+						if kind == "billingaccount" {
+							Expect(stdout).NotTo(MatchRegexp(`\bTENANT\b`))
+							Expect(stdout).To(ContainSubstring("ACTIVE"))
+						} else {
+							Expect(stdout).To(MatchRegexp(`\bTENANT\b`))
+							Expect(stdout).To(ContainSubstring("PENDING"))
+							Expect(stdout).To(ContainSubstring("manual remediation required"))
+						}
+					},
+					Entry("empty", 0), Entry("one", 1),
+				)
+
+				DescribeTable(pkg+" "+kind+" carries keys and domain CEL unchanged through every page",
+					func(history bool) {
+						filter := `this.status.state == 1 && this.status.state_observation_timestamp >= timestamp("2026-01-01T00:00:00Z") && this.metadata.labels["env"] == "test"`
+						if kind == "tenantbillingassignment" {
+							filter = `this.status.connection_state == 1 && this.status.effective_from_timestamp >= timestamp("2026-01-01T00:00:00Z") && this.metadata.labels["env"] == "test" && `
+							if history {
+								filter += `has(this.status.effective_to_timestamp)`
+							} else {
+								filter += `!has(this.status.effective_to_timestamp)`
+							}
+						}
+						filter = "(" + filter + `) || this.metadata.tenant == "other-tenant"`
+						expected := `(this.id in ["first", "two\"quoted"] || this.metadata.name in ["first", "two\"quoted"]) && (` + filter + `)`
+						if kind == "tenantbillingassignment" {
+							expected = `this.metadata.tenant == "p2-tenant" && (` + expected + `)`
+						}
+						calls := 0
+						stdout, err := p2ExecuteGet(private, func(method string, request, response proto.Message) error {
+							calls++
+							Expect(calls).To(BeNumerically("<=", 2))
+							Expect(method).To(Equal("/" + pkg + "." + service + "/List"))
+							message := request.ProtoReflect()
+							fields := message.Descriptor().Fields()
+							Expect(message.Get(fields.ByName("filter")).String()).To(Equal(expected))
+							Expect(message.Get(fields.ByName("limit")).Int()).To(Equal(int64(100)))
+							Expect(message.Get(fields.ByName("offset")).Int()).To(Equal(int64(calls - 1)))
+							return p6BillingResponse(response, private, kind, calls-1, 1, 2)
+						}, kind, "first", `two"quoted`, "--output=json", "--filter="+filter)
+						Expect(err).NotTo(HaveOccurred())
+						Expect(calls).To(Equal(2))
+						var values []any
+						Expect(json.Unmarshal([]byte(stdout), &values)).To(Succeed())
+						Expect(values).To(HaveLen(2))
+					},
+					Entry("current", false), Entry("history", true),
+				)
+
+				for _, format := range []string{outputFormatTable, outputFormatJson, outputFormatYaml} {
+					DescribeTable(pkg+" "+kind+" "+format+" buffers actual command stdout on later-page errors",
+						func(rpcFailure bool) {
+							calls := 0
+							stdout, err := p2ExecuteGet(private, func(method string, request, response proto.Message) error {
+								calls++
+								Expect(calls).To(BeNumerically("<=", 2))
+								Expect(method).To(Equal("/" + pkg + "." + service + "/List"))
+								message := request.ProtoReflect()
+								Expect(message.Get(message.Descriptor().Fields().ByName("offset")).Int()).To(Equal(int64(calls - 1)))
+								if calls == 2 {
+									if rpcFailure {
+										return grpcstatus.Error(codes.Internal, "p6 billing second page failed")
+									}
+									return p6BillingResponse(response, private, kind, 1, 0, 2)
+								}
+								return p6BillingResponse(response, private, kind, 0, 1, 2)
+							}, kind, "--output="+format)
+							Expect(calls).To(Equal(2), "the later failure must actually be reached")
+							Expect(stdout).To(BeEmpty(), "no buffered billing inventory may escape the real console path")
+							if rpcFailure {
+								Expect(err).To(MatchError(ContainSubstring("p6 billing second page failed")))
+							} else {
+								Expect(err).To(MatchError(ContainSubstring("no progress")))
+							}
+						},
+						Entry("RPC failure", true), Entry("no progress", false),
+					)
+				}
+			}
+		}
+
+		It("has no public Signal descriptor and preserves descriptor-specific field visibility", func() {
+			_, err := protoregistry.GlobalFiles.FindDescriptorByName("osac.public.v1.BillingAccountSignal")
+			Expect(err).To(HaveOccurred())
+			for _, pkg := range []string{packages.PublicV1, packages.PrivateV1} {
+				descriptor, err := protoregistry.GlobalFiles.FindDescriptorByName(protoreflect.FullName(pkg + ".BillingAccount"))
+				Expect(err).NotTo(HaveOccurred())
+				fields := descriptor.(protoreflect.MessageDescriptor).Fields()
+				status := fields.ByName("status").Message().Fields()
+				metadata := fields.ByName("metadata").Message().Fields()
+				if pkg == packages.PublicV1 {
+					Expect(status.ByName("provider_account_reference")).To(BeNil())
+					Expect(metadata.ByName("finalizers")).To(BeNil())
+				} else {
+					Expect(status.ByName("provider_account_reference")).NotTo(BeNil())
+					Expect(metadata.ByName("finalizers")).NotTo(BeNil())
+				}
+			}
+		})
+	})
+
+	It("P6 retirement leaves only the three unrelated registered children", func() {
+		var names []string
+		for _, child := range Cmd().Commands() {
+			names = append(names, child.Name())
+		}
+		Expect(names).To(ConsistOf("externalippool", "storagetier", "token"))
 	})
 
 	Describe("P2 human lock: complete bounded collection reads", func() {
@@ -564,6 +795,9 @@ var _ = Describe("Get command", func() {
 						Expect(stdout).NotTo(BeEmpty())
 						if format == outputFormatTable {
 							Expect(stdout).NotTo(MatchRegexp(`\b(ID|NAME|TENANT|DELETING)\b`))
+							Expect(strings.Fields(strings.Split(strings.TrimSpace(stdout), "\n")[0])).To(Equal([]string{
+								"STATE", "PROVIDER", "MESSAGE", "CAPABILITIES", "LAST-SUCCESSFUL-CHECK", "USAGE-DELIVERY",
+							}))
 							if shape == "payload" {
 								Expect(stdout).To(ContainSubstring("p2 singleton payload"))
 							}

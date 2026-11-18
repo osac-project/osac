@@ -13,7 +13,7 @@ You can use the above fully qualified names, or the short names:
 
 For example, to get the list of clusters:
 
-  {{ binary }} get fulfillment.v1.Cluster
+  {{ binary }} get osac.public.v1.Cluster
 
 Or:
 
@@ -21,5 +21,8 @@ Or:
 
 Note that the short names may be ambiguous if the same object type exists in different packages. In
 that case the one whose fully qualified name appears first in the list will be used.
+
+Billing accounts are system-global; assignments use the selected tenant, not project. Billing provider
+status is a singleton read with no keys, filter, or watch. See '--help' for scope and output details.
 
 Use the '--help' option to get more details about the command.

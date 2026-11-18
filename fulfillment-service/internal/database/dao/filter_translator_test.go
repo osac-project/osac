@@ -15,6 +15,7 @@ package dao
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -132,6 +133,126 @@ var _ = Describe("Filter translator", func() {
 				SetDescriptor((*testsv1.Object)(nil).ProtoReflect().Descriptor()).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
+		})
+	})
+
+	Describe("Literal timestamp constructor", func() {
+		var translator *FilterTranslator
+
+		BeforeEach(func() {
+			var err error
+			translator, err = NewFilterTranslator().SetLogger(logger).
+				SetDescriptor((*testsv1.Object)(nil).ProtoReflect().Descriptor()).Build()
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		DescribeTable("translates validated instants through the existing string literal machinery",
+			func(ctx context.Context, literal, instant string) {
+				actual, err := translator.Translate(ctx, `this.status.status_timestamp >= timestamp(`+literal+`)`)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(actual).To(Equal(`cast(data->'status'->>'status_timestamp' as timestamp with time zone) >= cast('` + instant + `' as timestamp with time zone)`))
+			},
+			Entry("UTC", `"2026-01-01T00:00:00Z"`, "2026-01-01T00:00:00Z"),
+			Entry("positive offset", `"2026-01-01T03:30:00+03:30"`, "2026-01-01T00:00:00Z"),
+			Entry("negative offset", `'2025-12-31T19:00:00-05:00'`, "2026-01-01T00:00:00Z"),
+			Entry("fractions", `"2026-01-01T00:00:00.123456789Z"`, "2026-01-01T00:00:00.123456789Z"),
+			Entry("epoch", `"1970-01-01T00:00:00Z"`, "1970-01-01T00:00:00Z"),
+			Entry("subsecond epoch", `"1970-01-01T00:00:00.000001Z"`, "1970-01-01T00:00:00.000001Z"),
+			Entry("minimum protobuf instant", `"0001-01-01T00:00:00Z"`, "0001-01-01T00:00:00Z"),
+			Entry("maximum protobuf instant", `"9999-12-31T23:59:59.999999999Z"`, "9999-12-31T23:59:59.999999999Z"),
+		)
+
+		DescribeTable("rejects invalid and unsupported forms as validation, never SQL",
+			func(ctx context.Context, constructor string) {
+				actual, err := translator.Translate(ctx, `this.status.status_timestamp == `+constructor)
+				Expect(err).To(BeAssignableToTypeOf(&ErrValidation{}))
+				Expect(actual).To(BeEmpty())
+			},
+			Entry("no arguments", `timestamp()`),
+			Entry("two arguments", `timestamp("2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z")`),
+			Entry("integer epoch overload is not supported", `timestamp(0)`),
+			Entry("boolean", `timestamp(true)`),
+			Entry("null", `timestamp(null)`),
+			Entry("double", `timestamp(1.5)`),
+			Entry("bytes", `timestamp(b"2026-01-01T00:00:00Z")`),
+			Entry("list", `timestamp(["2026-01-01T00:00:00Z"])`),
+			Entry("field", `timestamp(this.my_string)`),
+			Entry("concatenation is not evaluated", `timestamp("2026-01-01T" + "00:00:00Z")`),
+			Entry("timestamp identity is not evaluated", `timestamp(now)`),
+			Entry("empty", `timestamp("")`),
+			Entry("date only", `timestamp("2026-01-01")`),
+			Entry("no timezone", `timestamp("2026-01-01T00:00:00")`),
+			Entry("invalid calendar date", `timestamp("2026-02-30T00:00:00Z")`),
+			Entry("before protobuf range", `timestamp("0000-01-01T00:00:00Z")`),
+			Entry("offset outside protobuf range", `timestamp("0001-01-01T00:00:00+01:00")`),
+			Entry("SQL-like text", `timestamp("2026-01-01T00:00:00Z'); drop table objects; --")`),
+			Entry("CEL-like text", `timestamp("2026-01-01T00:00:00Z\") || true //")`),
+		)
+
+		It("does not make private or reserved paths available on a public descriptor", func(ctx context.Context) {
+			tr, err := NewFilterTranslator().SetLogger(logger).
+				SetDescriptor((*publicv1.BillingAccount)(nil).ProtoReflect().Descriptor()).Build()
+			Expect(err).NotTo(HaveOccurred())
+			for _, predicate := range []string{
+				`this.status.provider_account_reference == "native"`,
+				`has(this.metadata.finalizers)`,
+				`this.metadata.labels["admin.osac.openshift.io/private"] == "secret"`,
+			} {
+				actual, err := tr.Translate(ctx, `this.status.state_observation_timestamp >= timestamp("2026-01-01T00:00:00Z") && (`+predicate+`)`)
+				Expect(err).To(HaveOccurred(), predicate)
+				Expect(actual).To(BeEmpty())
+			}
+		})
+
+		It("compares metadata and nested status instants in real PostgreSQL, preserving absence", func(ctx context.Context) {
+			db, err := server.NewInstance().Build()
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(db.Close)
+			pool, err := db.Pool(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(pool.Close)
+			// Metadata's exact epoch is the established absence sentinel; nested JSON epoch is a real instant.
+			for _, tc := range []struct {
+				filter string
+				ids    []string
+			}{
+				{`this.metadata.creation_timestamp == timestamp("2026-01-01T00:00:00.123456Z")`, []string{"match"}},
+				{`this.status.status_timestamp == timestamp("2026-01-01T03:30:00.123456+03:30")`, []string{"match"}},
+				{`timestamp("2025-12-31T19:00:00.123456-05:00") == this.metadata.creation_timestamp`, []string{"match"}},
+				{`this.metadata.creation_timestamp < timestamp("2026-01-01T00:00:00Z")`, []string{"before", "fractional-epoch"}},
+				{`this.status.status_timestamp < timestamp("2026-01-01T00:00:00Z")`, []string{"before", "epoch", "fractional-epoch"}},
+				{`this.metadata.creation_timestamp >= timestamp("2026-01-01T00:00:00.123456Z")`, []string{"after", "match"}},
+				{`this.status.status_timestamp > timestamp("2026-01-01T00:00:00.123456Z")`, []string{"after"}},
+				{`this.metadata.creation_timestamp <= timestamp("1970-01-01T00:00:00Z")`, []string{}},
+				{`this.status.status_timestamp == timestamp("1970-01-01T00:00:00Z")`, []string{"epoch"}},
+				{`this.metadata.creation_timestamp == timestamp("1970-01-01T00:00:00.000001Z")`, []string{"fractional-epoch"}},
+				{`this.metadata.creation_timestamp != timestamp("2026-01-01T00:00:00.123456Z")`, []string{"after", "before", "fractional-epoch"}},
+				{`this.status.status_timestamp != timestamp("2026-01-01T00:00:00.123456Z")`, []string{"after", "before", "epoch", "fractional-epoch"}},
+				{`!has(this.metadata.creation_timestamp)`, []string{"absent", "epoch"}},
+				{`!has(this.status.status_timestamp)`, []string{"absent"}},
+			} {
+				translated, err := translator.Translate(ctx, tc.filter)
+				Expect(err).NotTo(HaveOccurred(), tc.filter)
+				rows, err := pool.Query(ctx, `select id from (
+					select id, at::timestamptz as creation_timestamp,
+					case when id = 'absent' then '{"status":{}}'::jsonb
+					else jsonb_build_object('status', jsonb_build_object('status_timestamp', at)) end as data
+					from (values ('absent', $1::text), ('epoch', $1), ('fractional-epoch', $2),
+					('before', $3), ('match', $4), ('after', $5)) as fixture(id, at)
+				) as objects where `+translated+` order by id`,
+					"1970-01-01T00:00:00Z", "1970-01-01T00:00:00.000001Z", "2025-01-01T00:00:00Z",
+					"2026-01-01T00:00:00.123456Z", "2027-01-01T00:00:00Z")
+				Expect(err).NotTo(HaveOccurred(), tc.filter)
+				ids := []string{}
+				for rows.Next() {
+					var id string
+					Expect(rows.Scan(&id)).To(Succeed())
+					ids = append(ids, id)
+				}
+				Expect(rows.Err()).NotTo(HaveOccurred())
+				rows.Close()
+				Expect(ids).To(Equal(tc.ids), fmt.Sprintf("PostgreSQL filter: %s", tc.filter))
+			}
 		})
 	})
 

@@ -24,6 +24,23 @@ import (
 )
 
 var _ = Describe("ObjectTypeNames", func() {
+	It("P6 keeps canonical billing get names without reviving retired aliases or Update scaffolds", func() {
+		for _, pkg := range []string{packages.PublicV1, packages.PrivateV1} {
+			getNames := GetObjectTypeNames(pkg)
+			Expect(getNames).To(ContainElements(
+				"billingaccount", "billingaccounts", "tenantbillingassignment", "tenantbillingassignments",
+				"billingproviderstatus", "billingproviderstatuses",
+			))
+			Expect(getNames).NotTo(ContainElements(
+				"billing-accounts", "billing-provider-status", "tenant-billing-assignments", "tba",
+			))
+			Expect(ObjectTypeNames(pkg)).NotTo(ContainElements("billingproviderstatus", "billingproviderstatuses"))
+			Expect(UpdatableObjectTypeNames(pkg)).NotTo(ContainElements(
+				"billingaccount", "billingaccounts", "billingproviderstatus", "billingproviderstatuses",
+			))
+		}
+	})
+
 	Describe("P2 human lock: mutation completion stays collection-only", func() {
 		It("excludes get-only singleton names from public and private mutation completion", func() {
 			for _, pkg := range []string{packages.PublicV1, packages.PrivateV1} {

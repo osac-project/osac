@@ -22,11 +22,13 @@ import (
 	"log/slog"
 	"math"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/ast"
 	"github.com/google/cel-go/common/operators"
+	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
@@ -272,6 +274,7 @@ func (t *FilterTranslator) Translate(ctx context.Context, filter string) (sql st
 	if issues != nil {
 		err = issues.Err()
 		if err != nil {
+			err = &ErrValidation{Reason: err.Error()}
 			return
 		}
 	}
@@ -419,6 +422,28 @@ func (t *FilterTranslator) translateCall(expr ast.CallExpr) (result filterTransl
 		result, err = t.translateIn(funcArgs)
 	case operators.Index:
 		result, err = t.translateIndex(funcArgs)
+	case "timestamp":
+		// Only the literal RFC3339 constructor is supported, not CEL's integer/identity overloads or evaluation.
+		if len(funcArgs) != 1 || funcArgs[0].Kind() != ast.LiteralKind {
+			return result, &ErrValidation{Reason: "timestamp requires exactly one literal RFC3339 string"}
+		}
+		text, ok := funcArgs[0].AsLiteral().Value().(string)
+		if !ok {
+			return result, &ErrValidation{Reason: "timestamp requires exactly one literal RFC3339 string"}
+		}
+		instant, parseErr := time.Parse(time.RFC3339Nano, text)
+		if parseErr != nil || timestamppb.New(instant).CheckValid() != nil {
+			return result, &ErrValidation{Reason: "timestamp requires a valid RFC3339 instant in the protobuf Timestamp range"}
+		}
+		// Normalize before lowering so PostgreSQL need not interpret the caller's date syntax. Reuse literal
+		// escaping; no caller text is interpolated into SQL, and descriptor/type checking remains in CEL.
+		result, err = t.translateLiteral(types.String(instant.UTC().Format(time.RFC3339Nano)))
+		if err != nil {
+			return
+		}
+		result.sql = "cast(" + result.sql + " as timestamp with time zone)"
+		result.kind = filterTranslatorTimeKind
+		result.hasStringValue = false
 	case "contains":
 		if len(funcArgs) != 1 {
 			err = fmt.Errorf(

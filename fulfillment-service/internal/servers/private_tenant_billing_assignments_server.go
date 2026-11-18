@@ -15,9 +15,11 @@ package servers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -190,8 +192,7 @@ func (s *PrivateTenantBillingAssignmentsServer) List(ctx context.Context,
 	if strings.TrimSpace(order) == "" {
 		order = "status.effective_from_timestamp desc,id"
 	}
-	page, err := s.assignments.List().SetOffset(request.GetOffset()).SetLimit(limit).
-		SetFilter(request.GetFilter()).SetOrder(order).Do(ctx)
+	page, err := s.listAssignments(ctx, request.GetFilter(), order, request.GetOffset(), limit)
 	if err != nil {
 		var invalid *dao.ErrValidation
 		var invalidFilter *dao.ErrInvalidFilter
@@ -223,7 +224,7 @@ func (s *PrivateTenantBillingAssignmentsServer) Get(ctx context.Context,
 	if request.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "id is required")
 	}
-	stored, err := s.assignments.Get().SetId(request.GetId()).Do(ctx)
+	stored, err := s.getAssignment(ctx, request.GetId())
 	if err != nil {
 		var missing *dao.ErrNotFound
 		if errors.As(err, &missing) {
@@ -233,8 +234,68 @@ func (s *PrivateTenantBillingAssignmentsServer) Get(ctx context.Context,
 		return nil, status.Errorf(codes.Internal, "failed to get tenant billing assignment")
 	}
 	return privatev1.TenantBillingAssignmentsGetResponse_builder{
-		Object: stored.GetObject(),
+		Object: stored,
 	}.Build(), nil
+}
+
+// listAssignments owns every assignment list query. Visibility handles finite sets, but cannot express
+// complements. Add their trusted predicate here, before the DAO counts or pages, and parenthesize the caller
+// expression so an OR can only narrow scope. Do not return a query builder that could replace this constraint.
+// Use retained assignment ownership, not live tenants: history outlives the tenant row.
+func (s *PrivateTenantBillingAssignmentsServer) listAssignments(ctx context.Context,
+	filter, order string, offset, limit int32,
+) (*dao.ListResponse[*privatev1.TenantBillingAssignment], error) {
+	set := auth.SubjectFromContext(ctx).Tenants
+	if !set.Finite() && !set.Universal() {
+		excluded := set.Exclusions()
+		slices.Sort(excluded)
+		// JSON string literals are valid CEL literals, including quotes, backslashes and UTF-8. The
+		// existing descriptor-validated translator owns SQL escaping; never interpolate raw SQL here.
+		literal, err := json.Marshal(excluded)
+		if err != nil {
+			return nil, err
+		}
+		trusted := fmt.Sprintf("!(this.metadata.tenant in %s)", literal)
+		if filter == "" {
+			filter = trusted
+		} else {
+			// Validate the caller expression on its own before composition: unmatched parentheses
+			// must not escape the trusted AND. Newlines keep a trailing line comment inside its group.
+			if err := validateCELSyntax(filter); err != nil {
+				return nil, &dao.ErrInvalidFilter{Reason: err.Error()}
+			}
+			filter = fmt.Sprintf("(%s) && (\n%s\n)", trusted, filter)
+		}
+	}
+	return s.assignments.List().SetFilter(filter).SetOrder(order).SetOffset(offset).SetLimit(limit).Do(ctx)
+}
+
+// getAssignment is shared by Get and stored-target authorization for Update/Signal and their rereads.
+// Complementary scopes need the same SQL constraint as List; finite/universal scopes keep the indexed Get
+// fast path. An expected miss uses a bounded List, not a failed DAO Get followed by another query in a poisoned tx.
+func (s *PrivateTenantBillingAssignmentsServer) getAssignment(ctx context.Context,
+	id string,
+) (*privatev1.TenantBillingAssignment, error) {
+	set := auth.SubjectFromContext(ctx).Tenants
+	if set.Finite() || set.Universal() {
+		stored, err := s.assignments.Get().SetId(id).Do(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return stored.GetObject(), nil
+	}
+	literal, err := json.Marshal(id)
+	if err != nil {
+		return nil, err
+	}
+	page, err := s.listAssignments(ctx, fmt.Sprintf("this.id == %s", literal), "", 0, 1)
+	if err != nil {
+		return nil, err
+	}
+	if page.GetTotal() == 0 {
+		return nil, &dao.ErrNotFound{IDs: []string{id}}
+	}
+	return page.GetItems()[0], nil
 }
 
 // Create assigns a tenant to a billing account for the first time.
@@ -447,7 +508,7 @@ func (s *PrivateTenantBillingAssignmentsServer) Update(ctx context.Context,
 func (s *PrivateTenantBillingAssignmentsServer) currentAssignment(
 	ctx context.Context, id string,
 ) (*privatev1.TenantBillingAssignment, error) {
-	stored, err := s.assignments.Get().SetId(id).Do(ctx)
+	row, err := s.getAssignment(ctx, id)
 	var missing *dao.ErrNotFound
 	if errors.As(err, &missing) {
 		return nil, status.Errorf(codes.NotFound, "tenant billing assignment %q not found", id)
@@ -455,7 +516,6 @@ func (s *PrivateTenantBillingAssignmentsServer) currentAssignment(
 	if err != nil {
 		return nil, err
 	}
-	row := stored.GetObject()
 	// Check the stored tenant before interval state or caller-supplied spec.tenant. Otherwise a spoofed tenant
 	// could authorize a foreign row, including a historical interval.
 	if !auth.SubjectFromContext(ctx).Tenants.Contains(row.GetSpec().GetTenant().GetId()) {
@@ -882,8 +942,10 @@ func assignmentAccountState(account *privatev1.BillingAccount) billing.AccountSt
 	}
 }
 
-// The read DAO intersects trusted visibility separately from the caller filter, for both count and page. Only
-// internal binding checks/tenant resolution use complete inventory; they cannot grant method or object access.
+// Finite read visibility is enforced by the DAO. Visibility cannot represent exclusions: all read entry points
+// MUST use listAssignments/getAssignment, which add their SQL constraint. Mutation paths separately check
+// Contains on the stored target. Internal binding checks/tenant resolution intentionally use complete inventory;
+// they cannot grant method or object access.
 type billingAssignmentTenancy struct{ inventory bool }
 
 func (billingAssignmentTenancy) DetermineAssignableTenants(context.Context) (collections.Set[string], error) {
@@ -898,6 +960,8 @@ func (t billingAssignmentTenancy) DetermineVisibility(ctx context.Context) (*aut
 	}
 	set := auth.SubjectFromContext(ctx).Tenants
 	if !set.Finite() {
+		// Coarse DAO visibility only. The read helpers enforce exclusions without enumerating live tenants
+		// or changing the subject; writes retain their existing stored-target Contains authorization.
 		return auth.TotalVisibility(), nil
 	}
 	return auth.NewVisibility().AddVisibleTenants(set.Inclusions()...).Build()

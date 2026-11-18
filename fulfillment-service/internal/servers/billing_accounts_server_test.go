@@ -16,6 +16,7 @@ package servers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -30,6 +31,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
@@ -296,4 +298,154 @@ var _ = Describe("Billing accounts server", func() {
 		Entry("legacy flat state", `this.state == 1`),
 		Entry("legacy token", `this.status.correlation_id == "token"`),
 	)
+
+	It("P6 native account List intersects actual CLI key OR user predicates without customer or project injection", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "native-first", Name: `Acme "quoted" 雪`, State: billing.AccountActive},
+			{ID: "native-second", Name: "Other", State: billing.AccountInactive},
+		}})
+		server := build(fake.Provider())
+		// Explicit subject double: this is PostgreSQL/wrapper proof, not JWT/OPA.
+		caller := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: collections.NewSet("customer")})
+		all, err := billingRPC(caller, server.List, &publicv1.BillingAccountsListRequest{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(all.GetTotal()).To(Equal(int32(2)))
+		var first, second *publicv1.BillingAccount
+		for _, item := range all.GetItems() {
+			Expect(item.GetMetadata().GetTenant()).To(Equal(auth.SystemTenant))
+			Expect(item.GetMetadata().GetProject()).To(BeEmpty())
+			if item.GetStatus().GetDisplayName() == `Acme "quoted" 雪` {
+				first = item
+			} else {
+				second = item
+			}
+		}
+		Expect(first).NotTo(BeNil())
+		Expect(second).NotTo(BeNil())
+		_, err = testPool.Exec(ctx, `update billing_accounts set labels = '{"environment":"test"}' where id = $1`, first.GetId())
+		Expect(err).NotTo(HaveOccurred())
+		keys := fmt.Sprintf(`this.id in [%q, %q] || this.metadata.name in [%q, %q]`, first.GetId(), second.GetMetadata().GetName(), first.GetId(), second.GetMetadata().GetName())
+		filter := "(" + keys + `) && (this.status.state == 1 && has(this.status.state_observation_timestamp) && this.status.state_observation_timestamp >= timestamp("2026-01-01T00:00:00Z") && this.metadata.labels["environment"] == "test" && ` + fmt.Sprintf(`this.status.display_name == %q`, first.GetStatus().GetDisplayName()) + ")"
+		page, err := billingRPC(caller, server.List, publicv1.BillingAccountsListRequest_builder{
+			Filter: &filter, Order: new("id"), Limit: new(int32(1)),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(page.GetTotal()).To(Equal(int32(1)))
+		Expect(page.GetItems()).To(HaveLen(1))
+		Expect(page.GetItems()[0].GetId()).To(Equal(first.GetId()))
+		// An explicit contradictory user scope is valid and must NOT be stripped.
+		contradiction := "(" + filter + `) && this.metadata.tenant == "customer"`
+		empty, err := billingRPC(caller, server.List, publicv1.BillingAccountsListRequest_builder{Filter: &contradiction}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(empty.GetTotal()).To(BeZero())
+		Expect(empty.GetItems()).To(BeEmpty())
+	})
+
+	It("P6 native private account JSON permission does not grant native filter permission", func() {
+		server := build(billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "private-native", State: billing.AccountActive}}}).Provider())
+		response, err := billingRPC(ctx, server.private.List, &privatev1.BillingAccountsListRequest{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(1))
+		encoded, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(response.GetItems()[0])
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(encoded)).To(ContainSubstring(`"provider_account_reference":"private-native"`))
+		for _, filter := range []string{`this.status.provider_account_reference == "private-native"`, `has(this.metadata.finalizers)`, `this.state == 1`} {
+			_, err = billingRPC(ctx, server.private.List, privatev1.BillingAccountsListRequest_builder{Filter: &filter}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		}
+	})
+
+	inventory := func(total int) []billingfake.AccountSpec {
+		accounts := make([]billingfake.AccountSpec, total)
+		for i := range accounts {
+			accounts[i] = billingfake.AccountSpec{ID: fmt.Sprintf("native-%04d", i), Name: fmt.Sprintf("Inventory %04d", i), State: billing.AccountActive}
+		}
+		return accounts
+	}
+
+	It("P6 native account discovery rejects a single 1001-account provider walk as MALFORMED", func() {
+		Expect(billingAccountsDiscoverPageSize).To(Equal(20))
+		Expect(billing.MaxListPages).To(Equal(50))
+		fake := billingfake.New(billingfake.Scenario{Accounts: inventory(1001)})
+		server := build(fake.Provider())
+		response, err := billingRPC(ctx, server.List, &publicv1.BillingAccountsListRequest{})
+		Expect(response).To(BeNil())
+		Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+		Expect(status.Convert(err).Message()).To(ContainSubstring("MALFORMED"))
+		Expect(fake.Count("ListAccounts")).To(Equal(50))
+		Expect(server.private.lastDiscovery).To(BeZero())
+		var count int
+		Expect(testPool.QueryRow(ctx, `select count(*) from billing_accounts`).Scan(&count)).To(Succeed())
+		Expect(count).To(BeZero(), "a rejected provider walk must not store a partial inventory")
+	})
+
+	DescribeTable("P6 native account SQL retained inventory has stable count and page intersections", func(total int) {
+		accounts := inventory(total)
+		first := billingfake.New(billingfake.Scenario{Accounts: accounts[:min(total, 1000)]})
+		server := build(first.Provider())
+		var later *billingfake.Fake
+		if total > 1000 {
+			// This proves accumulated STORED inventory, not an unbounded provider walk: one instance commits
+			// exactly 50 ordinary 20-account pages, then a fresh instance discovers one distinct account.
+			// Both use the same DB and provider key, without sleeping or changing freshness/cache fields.
+			initial, err := billingRPC(ctx, server.List, publicv1.BillingAccountsListRequest_builder{Limit: new(int32(37))}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(initial.GetTotal()).To(Equal(int32(1000)))
+			Expect(initial.GetItems()).To(HaveLen(37))
+			Expect(first.Count("ListAccounts")).To(Equal(50))
+			later = billingfake.New(billingfake.Scenario{Accounts: accounts[1000:]})
+			server = build(later.Provider())
+		}
+		seen := map[string]bool{}
+		names := map[string]bool{}
+		unknown := 0
+		previousID := ""
+		for offset := int32(0); offset < int32(total); offset += 37 {
+			response, err := billingRPC(ctx, server.List, publicv1.BillingAccountsListRequest_builder{
+				Filter: new(`this.status.state in [1, 3] || this.status.display_name == "absent"`),
+				Order:  new("id"), Offset: &offset, Limit: new(int32(37)),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(response.GetTotal()).To(Equal(int32(total)))
+			Expect(response.GetItems()).To(HaveLen(min(37, total-int(offset))))
+			for _, item := range response.GetItems() {
+				Expect(item.GetMetadata().GetTenant()).To(Equal(auth.SystemTenant))
+				Expect(item.GetMetadata().GetProject()).To(BeEmpty())
+				Expect(seen[item.GetId()]).To(BeFalse())
+				Expect(item.GetId() > previousID).To(BeTrue(), "stable id order across page boundaries")
+				previousID = item.GetId()
+				seen[item.GetId()] = true
+				name := item.GetStatus().GetDisplayName()
+				Expect(names[name]).To(BeFalse())
+				names[name] = true
+				if total > 1000 && name != "Inventory 1000" {
+					Expect(item.GetStatus().GetState()).To(Equal(publicv1.BillingAccountState_BILLING_ACCOUNT_STATE_UNKNOWN))
+					unknown++
+				} else {
+					Expect(item.GetStatus().GetState()).To(Equal(publicv1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE))
+				}
+			}
+		}
+		Expect(seen).To(HaveLen(total))
+		for i := range total {
+			Expect(names).To(HaveKey(fmt.Sprintf("Inventory %04d", i)))
+		}
+		end, err := billingRPC(ctx, server.List, publicv1.BillingAccountsListRequest_builder{
+			Filter: new(`this.status.state in [1, 3] || this.status.display_name == "absent"`),
+			Order:  new("id"), Offset: new(int32(total)), Limit: new(int32(37)),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(end.GetTotal()).To(Equal(int32(total)))
+		Expect(end.GetSize()).To(BeZero())
+		Expect(end.GetItems()).To(BeEmpty())
+		Expect(first.Count("ListAccounts")).To(Equal((min(total, 1000) + 19) / 20))
+		Expect(first.Count("SetCorrelationValue")).To(BeZero())
+		if later != nil {
+			Expect(later.Count("ListAccounts")).To(Equal(1))
+			Expect(later.Count("SetCorrelationValue")).To(BeZero())
+			Expect(unknown).To(Equal(1000), "the prior unseen rows remain readable, now UNKNOWN")
+		} else {
+			Expect(unknown).To(BeZero())
+		}
+	}, Entry("101 from one bounded refresh", 101), Entry("1001 accumulated across two bounded refreshes", 1001))
 })

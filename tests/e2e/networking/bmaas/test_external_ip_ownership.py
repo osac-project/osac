@@ -307,11 +307,12 @@ def _request_task_retry(*, k8s: K8sClient, external_ip_name: str, completed_job:
         {"op": "test", "path": f"/status/jobs/{index}/state", "value": "Succeeded"},
         {"op": "replace", "path": f"/status/jobs/{index}/state", "value": "Cancelled"},
     ]
+    # The osac-managed-resources admission policy lets only OSAC identities
+    # change networking status, so act as the operator that owns status.jobs.
     command = ["kubectl"]
     if k8s.kubeconfig:
         command.extend(["--kubeconfig", k8s.kubeconfig])
-    if k8s.as_system_admin:
-        command.extend(["--as", "system:admin"])
+    command.extend(["--as", f"system:serviceaccount:{k8s.namespace}:{_operator_service_account(k8s)}"])
     command.extend(
         [
             "patch",
@@ -326,6 +327,23 @@ def _request_task_retry(*, k8s: K8sClient, external_ip_name: str, completed_job:
         ]
     )
     run(*command)
+
+
+def _operator_service_account(k8s: K8sClient) -> str:
+    """Return the OSAC operator's ServiceAccount, read from its running pod."""
+    service_account = run(
+        *k8s.base_args(),
+        "get",
+        "pods",
+        "-n",
+        k8s.namespace,
+        "-l",
+        "app.kubernetes.io/name=operator,control-plane=controller-manager",
+        "-o",
+        "jsonpath={.items[0].spec.serviceAccountName}",
+    ).strip()
+    assert service_account, f"No OSAC operator pod with a ServiceAccount in namespace {k8s.namespace}"
+    return service_account
 
 
 def _is_not_found(exc: subprocess.CalledProcessError) -> bool:

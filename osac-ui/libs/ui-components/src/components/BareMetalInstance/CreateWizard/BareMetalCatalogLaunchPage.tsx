@@ -53,7 +53,7 @@ const BareMetalCatalogLaunchPage = () => {
           </Stack>
         </PageSection>
         <BareMetalInstanceCreateWizard
-          initialCatalogItemId={id}
+          catalogItem={query.data?.object}
           onClosed={() => navigate(`/catalog/bare-metal/${id}`)}
         />
       </>

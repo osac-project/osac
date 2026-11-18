@@ -4,7 +4,6 @@ import { PageSection, PageSectionTypes, Wizard, WizardStep } from '@patternfly/r
 import { Formik } from 'formik';
 
 import { BareMetalInstanceCatalogItem, BareMetalInstanceCatalogItems } from '@osac/types';
-import { useGetResource, wizardPreloadQueryOptions } from '@osac/ui-components/api/use-resource';
 import { useCreateBareMetalInstance } from '@osac/ui-components/api/v1/baremetal-instance';
 import { FieldValidationProvider } from '@osac/ui-components/components/Form/FieldValidationContext';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
@@ -23,20 +22,16 @@ import { buildBareMetalInstanceCreatePayload } from './payload';
 import { type BareMetalWizardStepId, buildBareMetalInstanceStepSchema } from './schemas';
 
 interface Props {
-  initialCatalogItemId?: string;
+  /** Catalog item snapshot for a catalog-origin launch; omit for list-origin creation. */
+  catalogItem?: BareMetalInstanceCatalogItem;
   onClosed: () => void;
 }
 
-const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
+const BareMetalInstanceCreateWizard = ({ catalogItem, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const provision = useCreateBareMetalInstance();
-  const catalogItemQuery = useGetResource(
-    BareMetalInstanceCatalogItems,
-    { id: initialCatalogItemId ?? '' },
-    { enabled: Boolean(initialCatalogItemId), ...wizardPreloadQueryOptions },
-  );
-  const includeCatalogStep = !initialCatalogItemId;
+  const includeCatalogStep = !catalogItem;
   const [activeStep, setActiveStep] = useState<BareMetalWizardStepId>(
     includeCatalogStep ? 'catalog' : 'general',
   );
@@ -62,10 +57,7 @@ const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props
     async (values: BareMetalInstanceWizardValues) => {
       try {
         const created = await provision.mutateAsync(
-          buildBareMetalInstanceCreatePayload(
-            values,
-            selectedCatalogItem ?? catalogItemQuery.data?.object,
-          ),
+          buildBareMetalInstanceCreatePayload(values, selectedCatalogItem ?? catalogItem),
         );
         if (created?.id) {
           navigate(`/bare-metal/${created.id}`);
@@ -74,12 +66,12 @@ const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props
         // Surfaced via provision.error in the footer; nothing further to do here.
       }
     },
-    [catalogItemQuery.data?.object, navigate, provision, selectedCatalogItem],
+    [catalogItem, navigate, provision, selectedCatalogItem],
   );
 
   const initialValues = useMemo(
-    () => getBareMetalInstanceInitialValues(catalogItemQuery.data?.object),
-    [catalogItemQuery.data?.object],
+    () => getBareMetalInstanceInitialValues(catalogItem),
+    [catalogItem],
   );
   const schema = useMemo(() => buildBareMetalInstanceStepSchema(activeStep, t), [activeStep, t]);
   const stepHasErrors = useCallback(

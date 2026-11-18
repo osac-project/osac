@@ -53,7 +53,7 @@ const ClusterCatalogLaunchPage = () => {
           </Stack>
         </PageSection>
         <ClusterCreateWizard
-          initialCatalogItemId={id}
+          catalogItem={query.data?.object}
           onClosed={() => navigate(`/catalog/clusters/${id}`)}
         />
       </>

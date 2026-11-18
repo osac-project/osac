@@ -4,11 +4,7 @@ import { PageSection, PageSectionTypes, Wizard, WizardStep } from '@patternfly/r
 import { Formik } from 'formik';
 
 import { ClusterCatalogItem, ClusterCatalogItems, Clusters } from '@osac/types';
-import {
-  useCreateResource,
-  useGetResource,
-  wizardPreloadQueryOptions,
-} from '@osac/ui-components/api/use-resource';
+import { useCreateResource } from '@osac/ui-components/api/use-resource';
 import { FieldValidationProvider } from '@osac/ui-components/components/Form/FieldValidationContext';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
 import { CatalogStep } from '@osac/ui-components/components/ProvisioningWizard/CatalogStep';
@@ -24,20 +20,16 @@ import { buildClusterCreatePayload } from './payload';
 import { type ClusterWizardStepId, buildClusterStepSchema } from './schemas';
 
 interface Props {
-  initialCatalogItemId?: string;
+  /** Catalog item snapshot for a catalog-origin launch; omit for list-origin creation. */
+  catalogItem?: ClusterCatalogItem;
   onClosed: () => void;
 }
 
-const ClusterCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
+const ClusterCreateWizard = ({ catalogItem, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const provision = useCreateResource(Clusters);
-  const catalogItemQuery = useGetResource(
-    ClusterCatalogItems,
-    { id: initialCatalogItemId ?? '' },
-    { enabled: Boolean(initialCatalogItemId), ...wizardPreloadQueryOptions },
-  );
-  const includeCatalogStep = !initialCatalogItemId;
+  const includeCatalogStep = !catalogItem;
   const [activeStep, setActiveStep] = useState<ClusterWizardStepId>(
     includeCatalogStep ? 'catalog' : 'general',
   );
@@ -71,10 +63,7 @@ const ClusterCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
     [navigate, provision],
   );
 
-  const initialValues = useMemo(
-    () => getInitialFormValues(catalogItemQuery.data?.object),
-    [catalogItemQuery.data?.object],
-  );
+  const initialValues = useMemo(() => getInitialFormValues(catalogItem), [catalogItem]);
 
   const schema = useMemo(() => buildClusterStepSchema(activeStep, t), [activeStep, t]);
   const stepHasErrors = useCallback(

@@ -52,7 +52,10 @@ const VmCatalogLaunchPage = () => {
             </Content>
           </Stack>
         </PageSection>
-        <VmCreateWizard initialCatalogItemId={id} onClosed={() => navigate(`/catalog/vms/${id}`)} />
+        <VmCreateWizard
+          catalogItem={query.data?.object}
+          onClosed={() => navigate(`/catalog/vms/${id}`)}
+        />
       </>
     </ResourceDetailsPage>
   );

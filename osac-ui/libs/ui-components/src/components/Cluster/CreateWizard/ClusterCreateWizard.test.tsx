@@ -113,7 +113,7 @@ describe('ClusterCreateWizard', () => {
 
   it('starts on General without a catalog step for catalog launches', async () => {
     renderWithProviders(
-      <ClusterCreateWizard initialCatalogItemId={clusterCatalogItem.id} onClosed={vi.fn()} />,
+      <ClusterCreateWizard catalogItem={clusterCatalogItem} onClosed={vi.fn()} />,
       {
         apiFixtures: { clusterCatalogItems: [clusterCatalogItem] },
         session: { role: 'tenant-user' },

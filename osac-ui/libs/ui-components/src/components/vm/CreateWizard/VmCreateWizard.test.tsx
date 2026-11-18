@@ -105,13 +105,10 @@ describe('VmCreateWizard', () => {
   });
 
   it('starts on General without a catalog step for catalog launches', async () => {
-    renderWithProviders(
-      <VmCreateWizard initialCatalogItemId={vmCatalogItem.id} onClosed={vi.fn()} />,
-      {
-        apiFixtures: { catalogItems: [vmCatalogItem] },
-        session: { role: 'tenant-user' },
-      },
-    );
+    renderWithProviders(<VmCreateWizard catalogItem={vmCatalogItem} onClosed={vi.fn()} />, {
+      apiFixtures: { catalogItems: [vmCatalogItem] },
+      session: { role: 'tenant-user' },
+    });
 
     expect(await screen.findByRole('textbox', { name: 'Name' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Catalog item' })).not.toBeInTheDocument();

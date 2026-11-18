@@ -109,10 +109,7 @@ describe('BareMetalInstanceCreateWizard', () => {
 
   it('starts on General without a catalog step for catalog launches', async () => {
     renderWithProviders(
-      <BareMetalInstanceCreateWizard
-        initialCatalogItemId={bareMetalCatalogItem.id}
-        onClosed={vi.fn()}
-      />,
+      <BareMetalInstanceCreateWizard catalogItem={bareMetalCatalogItem} onClosed={vi.fn()} />,
       {
         apiFixtures: { bareMetalCatalogItems: [bareMetalCatalogItem] },
         session: { role: 'tenant-user' },

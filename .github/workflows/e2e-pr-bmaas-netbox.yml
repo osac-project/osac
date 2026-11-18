@@ -1,15 +1,23 @@
 ---
-# The BMaaS NetBox suite of a pull request, as a run of its own. The decision of e2e-pr.yml (osac-ci) starts it with
-# workflow_dispatch for the commit that was approved, because the policy names this file for the suite
-# (`workflow: e2e-pr-bmaas-netbox.yml` in .github/e2e-policy.yml). It does what e2e-pr-bmaas.yml does with the same
-# arguments, plus `inventory-backend: netbox`; nothing else runs here.
+# The BMaaS NetBox suite of a pull request, as a run of its own.
 #
-# The inputs are given by the decision and checked by `verify` (osac-ci) against the pull request: anyone with write
-# access can start this workflow with any inputs, and the fork author and association, which decide whether a fork's code
-# may run with secrets, are read from the pull request, not taken from the inputs. The name of the run is how its end is
-# recognised again (`E2E suite · <suite id> · #<pull request> · <commit>`, quoted because an unquoted ` #` starts a YAML
-# comment), so it must keep that exact format. The workflow runs from the default branch, while the code under test is
-# the commit. The suite is manual_only in the policy until the flavor is validated end to end. See .github/CI.md.
+# What runs here: what e2e-pr-bmaas.yml does with the same arguments, plus
+# `inventory-backend: netbox` — nothing else. The decision of e2e-pr.yml
+# (osac-ci) starts it with workflow_dispatch for the approved commit; the
+# policy names this file for the suite (`workflow: e2e-pr-bmaas-netbox.yml`
+# in .github/e2e-policy.yml). The suite is manual_only in the policy until
+# the flavor is validated end to end.
+#
+# Input trust: anyone with write access can dispatch this workflow with any
+# inputs. `verify` (osac-ci) checks them against the pull request — the
+# fork author and association, which decide whether a fork's code may run
+# with secrets, are read from the pull request, never taken from the inputs.
+#
+# Do not rename the run: its end is recognised by the exact format
+# `E2E suite · <suite id> · #<pull request> · <commit>` (the `#` is quoted
+# because an unquoted one starts a YAML comment). The workflow runs from
+# the default branch, while the code under test is the commit.
+# See .github/CI.md.
 name: E2E BMaaS NetBox PR suite
 run-name: "E2E suite · bmaas-netbox · #${{ inputs.pr-number }} · ${{ inputs.sha }}"
 

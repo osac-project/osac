@@ -453,7 +453,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(getOrder().Status.Workers).To(BeEmpty())
 	})
 
-	It("retains a winning intent through deletion racing before the external Create", func() {
+	It("compensates a created BMI when deletion races before the identity write", func() {
 		ready()
 		step()
 		cancel := buildReconciler(k8sClient)
@@ -465,24 +465,59 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 				_, err := cancel.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(co)})
 				Expect(err).NotTo(HaveOccurred())
 			}
-			Expect(getOrder().Status.Workers).To(HaveLen(1))
-			Expect(getOrder().Finalizers).To(ContainElement("osac.openshift.io/baremetalworker-finalizer"))
+			// Authoritative empty List confirms no BMI exists;
+			// cancellation completes cleanup and removes the finalizer.
+			Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), &api.ClusterOrder{}))).To(BeTrue())
 			return nil
 		}})
 		_, err := run()
-		Expect(apierrors.IsConflict(err)).To(BeTrue(), "retirement must reject the delayed identity write")
+		// The primary reconciler's Create succeeds but the identity
+		// write fails because the order was already finalized. The
+		// reconciler compensates by deleting the orphaned BMI.
+		Expect(err).To(HaveOccurred())
 		Expect(fc.CreateCalls()).To(HaveLen(1))
-		r = buildReconciler(k8sClient)
-		step() // Owned name recovery.
-		Expect(getOrder().Status.Workers[0].BareMetalInstance.ID).NotTo(BeEmpty())
-		step() // Request BMI deletion.
-		step() // Confirm absence and finalize.
-		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), &api.ClusterOrder{}))).To(BeTrue())
-		Expect(fc.CreateCalls()).To(HaveLen(1))
-		Expect(fc.DeleteCalls()).To(HaveLen(1))
+		Expect(fc.DeleteCalls()).To(HaveLen(1), "orphaned BMI must be compensated")
+		// The compensating delete must target the exact BMI that Create returned.
+		Expect(fc.DeleteCalls()[0]).NotTo(BeEmpty())
+		// The BMI must not remain in the provider after compensation.
+		bmis, listErr := fc.ListBareMetalInstances(ctx, "")
+		Expect(listErr).NotTo(HaveOccurred())
+		Expect(bmis).To(BeEmpty(), "no BMI should remain after compensation")
 	})
 
-	It("retains persisted intent interrupted before the API call across restart", func() {
+	It("reports compensation failure when the orphaned BMI delete fails", func() {
+		ready()
+		step()
+		cancel := buildReconciler(k8sClient)
+		r = buildReconciler(&workerAttemptRaceClient{Client: k8sClient, after: func() error {
+			Expect(getOrder().Status.Workers[0].BMICreateState).To(Equal(api.WorkerBMICreateStateAttempted))
+			Expect(fc.CreateCalls()).To(BeEmpty())
+			Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+			for range 2 {
+				_, err := cancel.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(co)})
+				Expect(err).NotTo(HaveOccurred())
+			}
+			Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), &api.ClusterOrder{}))).To(BeTrue())
+			// Inject a delete error so compensation fails.
+			fc.SetDeleteError(status.Error(codes.Internal, "provider unavailable"))
+			return nil
+		}})
+		_, err := run()
+		// The identity write fails and the compensating delete also
+		// fails. The original write error is still returned so the
+		// caller sees the root cause, and the BMI leak is observable
+		// through the CRITICAL log and event.
+		Expect(err).To(HaveOccurred())
+		Expect(fc.CreateCalls()).To(HaveLen(1))
+		Expect(fc.DeleteCalls()).To(HaveLen(1), "compensation must be attempted even when it fails")
+		// The BMI remains because the delete failed; this is an
+		// observable leak, not a silent one.
+		bmis, listErr := fc.ListBareMetalInstances(ctx, "")
+		Expect(listErr).NotTo(HaveOccurred())
+		Expect(bmis).To(HaveLen(1))
+	})
+
+	It("cleans up persisted intent when no Create reached the API", func() {
 		ready()
 		step()
 		interrupted := errors.New("interrupted after intent persistence")
@@ -492,12 +527,13 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(getOrder().Status.Workers[0].BMICreateState).To(Equal(api.WorkerBMICreateStateAttempted))
 		Expect(fc.CreateCalls()).To(BeEmpty())
 		Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+		// Authoritative empty List confirms no BMI was ever created;
+		// retirement and cleanup complete within bounded reconciles.
+		r = buildReconciler(k8sClient)
 		for range 3 {
-			r = buildReconciler(k8sClient)
 			step()
-			Expect(getOrder().Status.Workers).To(HaveLen(1))
-			Expect(getOrder().Finalizers).To(ContainElement("osac.openshift.io/baremetalworker-finalizer"))
 		}
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), &api.ClusterOrder{}))).To(BeTrue())
 		Expect(fc.CreateCalls()).To(BeEmpty())
 		Expect(fc.DeleteCalls()).To(BeEmpty())
 	})
@@ -614,7 +650,7 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		// Growing backoff, due retries and no-tight-loop policy live in Unit.
 	})
 
-	It("retains legacy ID-less state without inferring safety from its timestamp", func() {
+	It("cleans up legacy ID-less state when authoritative List confirms absence", func() {
 		ready()
 		step()
 		latest := getOrder()
@@ -622,13 +658,14 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(latest.Status.Workers[0].AttemptStartedAt).NotTo(BeNil())
 		Expect(k8sClient.Status().Update(ctx, latest)).To(Succeed())
 		Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
+		// Authoritative empty List proves no BMI exists regardless
+		// of legacy state or timestamp; retirement and cleanup
+		// complete within bounded reconciles.
+		r = buildReconciler(k8sClient)
 		for range 3 {
-			r = buildReconciler(k8sClient)
 			step()
-			Expect(getOrder().Status.Workers).To(HaveLen(1))
-			Expect(getOrder().Status.Workers[0].BMICreateState).To(BeEmpty())
-			Expect(getOrder().Finalizers).To(ContainElement("osac.openshift.io/baremetalworker-finalizer"))
 		}
+		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), &api.ClusterOrder{}))).To(BeTrue())
 		Expect(fc.CreateCalls()).To(BeEmpty())
 	})
 
@@ -643,20 +680,27 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(attempted.BMICreateState).To(Equal(api.WorkerBMICreateStateAttempted))
 		Expect(attempted.BareMetalInstance.ID).To(BeEmpty())
 		Expect(k8sClient.Delete(ctx, getOrder())).To(Succeed())
-		fc.SetListEmptyCalls(10) // Both observation and fresh cleanup may list.
+		// A successful empty List now proves absence; use a List error
+		// to model genuine provider delay where the BMI exists but is
+		// not yet visible through the authoritative listing.
+		fc.SetListError(status.Error(codes.Internal, "delayed visibility"))
 		r = buildReconciler(k8sClient)
 		for range 3 {
-			step()
+			_, err := run()
+			Expect(err).To(HaveOccurred())
 			Expect(getOrder().Status.Workers[0].BareMetalInstance.ID).To(BeEmpty())
 			Expect(getOrder().Finalizers).To(ContainElement("osac.openshift.io/baremetalworker-finalizer"))
 		}
 		Expect(fc.DeleteCalls()).To(BeEmpty())
-		fc.SetListEmptyCalls(0)
+		fc.SetListError(nil)
 		step() // Recover the same owned BMI.
 		Expect(getOrder().Status.Workers[0].BareMetalInstance.Name).To(Equal(attempted.BareMetalInstance.Name))
 		Expect(getOrder().Status.Workers[0].BareMetalInstance.ID).NotTo(BeEmpty())
-		step() // Delete request.
-		step() // Authoritative absence.
+		// Retirement, deletion request and authoritative absence may
+		// need separate persistence boundaries.
+		for range 4 {
+			step()
+		}
 		Expect(apierrors.IsNotFound(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), &api.ClusterOrder{}))).To(BeTrue())
 		Expect(fc.CreateCalls()).To(HaveLen(1))
 		Expect(fc.DeleteCalls()).To(HaveLen(1))

@@ -98,15 +98,20 @@ def bmh_nmstate_interfaces(bmh, selected_macs):
     interfaces = bmh.get("status", {}).get("hardware", {}).get("nics", [])
     normalized = {str(mac).lower().replace("-", ":") for mac in selected_macs}
     result = []
+    seen = set()
     for interface in interfaces:
         name = interface.get("name")
         mac = interface.get("mac") or interface.get("macAddress")
         if not name or not mac:
             continue
+        key = (name, str(mac).lower().replace("-", ":"))
+        if key in seen:
+            continue
+        seen.add(key)
         result.append({
             "name": name,
             "macAddress": mac,
-            "selected": str(mac).lower().replace("-", ":") in normalized,
+            "selected": key[1] in normalized,
         })
     return result
 

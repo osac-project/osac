@@ -76,6 +76,7 @@ def test_bmh_nmstate_interfaces_maps_inspected_nics_before_agent_exists():
                 "nics": [
                     {"name": "ens4", "mac": "52:54:09:00:00:03"},
                     {"name": "ens6", "mac": "52:29:B0:BC:EC:E1"},
+                    {"name": "ens6", "mac": "52:29:B0:BC:EC:E1"},
                 ]
             }
         }

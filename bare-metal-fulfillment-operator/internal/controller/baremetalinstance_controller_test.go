@@ -1348,6 +1348,48 @@ var _ = Describe("BareMetalInstance Controller", func() {
 			})
 		})
 
+		It("does not persist a speculative claim when the claim write fails", func() {
+			bareMetalInstance.Name = "reconcile-claim-error"
+			bareMetalInstance.Spec.HostClass = "external-mgmt"
+			bareMetalInstance.Spec.ExternalHostID = "test-host-123"
+			bareMetalInstance.Spec.TemplateID = shared.OsacNoopTemplate
+			bareMetalInstance.Spec.RestartTrigger = 1
+			bareMetalInstance.Status.RestartTrigger = 0
+			Expect(k8sClient.Create(ctx, bareMetalInstance)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, bareMetalInstance)
+			})
+
+			claimErr := errors.New("claim write failed")
+			mockK8sClient.statusUpdateFunc = func(ctx context.Context, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				if bmi, ok := obj.(*v1alpha1.BareMetalInstance); ok {
+					if cond := bmi.GetStatusCondition(v1alpha1.HostConditionRestartInProgress); cond != nil &&
+						cond.Reason == v1alpha1.HostConditionReasonRestartSubmissionPending {
+						return claimErr
+					}
+				}
+				return k8sClient.Status().Update(ctx, obj, opts...)
+			}
+			mockMgmtClient.getPowerStateFunc = func(ctx context.Context, hostID string) (*management.PowerStatus, error) {
+				return &management.PowerStatus{State: management.PowerOn}, nil
+			}
+			triggered := false
+			mockMgmtClient.triggerRestartFunc = func(ctx context.Context, hostID string) error {
+				triggered = true
+				return nil
+			}
+
+			_, err := reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: client.ObjectKeyFromObject(bareMetalInstance),
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(triggered).To(BeFalse(), "a failed claim must not dispatch")
+
+			stored := &v1alpha1.BareMetalInstance{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bareMetalInstance), stored)).To(Succeed())
+			Expect(stored.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)).To(BeNil())
+		})
+
 		Context("NIC metadata — error and recovery paths through reconcileManagement", func() {
 			BeforeEach(func() {
 				bareMetalInstance.Spec.RunStrategy = v1alpha1.RunStrategyUnspecified

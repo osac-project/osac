@@ -17,7 +17,7 @@ suite (repository-root `make -C osac-installer help`, `.github/workflows/`).
 | Envtest | `internal/controller/` | Kubernetes API, etcd, OSAC and static Metal3 CRDs | Metal3 controller, Ironic/BMC, hardware and some provider clients faked. |
 | Component integration | Deployed `test/integration/` | Deployed operator, CRDs, API, pool/instance flows, status | Static `BareMetalHost` state and simulated transitions; no real Metal3 operator, Ironic, BMC or hardware. |
 | Component integration (CI) | Installer Kind target, BMF suite | Thin Kind install, installation API endpoint unset | Same static Metal3/provider boundary; installation settings need separate deployed coverage. |
-| Contract | `test/netboxcontract/` | Production NetBox HTTP client and inventory adapter | NetBox API is a stateful HTTPS mock; no real NetBox compatibility claim. See [OSAC-7518](https://redhat.atlassian.net/browse/OSAC-7518). |
+| Contract | NetBox HTTP specs in `internal/inventory/netbox_test.go` | Production NetBox HTTP client and inventory adapter | NetBox API is a stateful HTTPS mock; no real NetBox compatibility claim. See [OSAC-7518](https://redhat.atlassian.net/browse/OSAC-7518). |
 | Component integration (Kind) | Installer BMF NetBox test target | Deployed BMF controller, Kubernetes API, Metal3 CRDs, Fulfillment Secret API | NetBox HTTP API is mocked in-cluster; Metal3/Ironic/BMC hardware remains absent. See [OSAC-7519](https://redhat.atlassian.net/browse/OSAC-7519). |
 | E2E | Cross-component suites | Fulfillment-to-operator journeys where available | Real hardware and providers remain environment-dependent. |
 
@@ -27,8 +27,8 @@ after provisioning the Kind infrastructure. It uses the OSAC Helm chart and
 asserts allocation, release, and use of a rotated token in `test/integration`.
 After a local run, the BMF release stays configured against the fixture
 Deployment, Service, and synthetic token Secrets in the test namespace.
-CI runs both BMF scenarios with shared images and CRDs. The Go contract suite
-runs as part of BMF's `make test`. To run it on its own from the repository
+CI runs both BMF scenarios with shared images and CRDs. The NetBox HTTP
+contract specs run in the inventory suite as part of BMF's `make test`. To run it on its own from the repository
 root, use `make -C bare-metal-fulfillment-operator netbox-contract-test`.
 The contract cases cover selector filtering, conditional claims and releases,
 metadata preservation, and stable device identity.

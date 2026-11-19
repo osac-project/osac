@@ -14,8 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package netboxtest provides the stateful mock API used by NetBox tests.
-package netboxtest
+// Package netboxmock provides the stateful mock API used by NetBox tests.
+package netboxmock
 
 import (
 	"crypto/x509"

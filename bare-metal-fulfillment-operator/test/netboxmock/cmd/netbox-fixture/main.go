@@ -24,7 +24,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/osac-project/osac/bare-metal-fulfillment-operator/test/netboxcontract/netboxtest"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/test/netboxmock"
 )
 
 func main() {
@@ -34,17 +34,17 @@ func main() {
 	if first == "" || rotated == "" || first == rotated {
 		log.Fatal("the NetBox test fixture requires two distinct tokens")
 	}
-	mock := netboxtest.NewHandler()
+	mock := netboxmock.NewHandler()
 	mock.SetAuth("Bearer", first, rotated)
 	for name, fieldType := range map[string]string{
 		"osac_managed": "boolean", "osac_instance_id": "text", "fixture": "text",
 	} {
-		mock.AddField(netboxtest.Field{
-			Name: name, Type: fieldType, FilterLogic: netboxtest.FilterExact,
+		mock.AddField(netboxmock.Field{
+			Name: name, Type: fieldType, FilterLogic: netboxmock.FilterExact,
 			ObjectTypes: []string{"dcim.device"},
 		})
 	}
-	mock.AddDevice(netboxtest.Device{
+	mock.AddDevice(netboxmock.Device{
 		ID: deviceID, Name: "Kind fixture", Status: "staged",
 		CustomFields: map[string]any{
 			"osac_managed":     true,
@@ -72,7 +72,7 @@ func main() {
 
 // countRotatedClaims counts successful claim PATCHes authenticated with the
 // second token supplied to SetAuth.
-func countRotatedClaims(requests []netboxtest.Request, deviceID int) int {
+func countRotatedClaims(requests []netboxmock.Request, deviceID int) int {
 	const rotatedTokenIndex = 1
 	devicePath := fmt.Sprintf("/api/dcim/devices/%d/", deviceID)
 	count := 0

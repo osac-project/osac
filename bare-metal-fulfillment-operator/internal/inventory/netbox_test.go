@@ -18,13 +18,18 @@ package inventory
 
 import (
 	"context"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
@@ -42,6 +47,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/directclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/netboxclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/test/netboxmock"
 )
 
 const testNetBoxHostClass = "metal3"
@@ -1460,4 +1466,795 @@ func stagedManagedDeviceSnapshot(etag string) netboxclient.DeviceSnapshot {
 		},
 		ETag: etag,
 	}
+}
+
+var _ = Describe("NetBox HTTP contract", Label("netbox-contract"), func() {
+	const (
+		metal3Namespace = "metal3-system"
+		caseFieldName   = "contract_case"
+		// A synthetic v2 token exercises the production Bearer authentication.
+		testToken = "nbt_aaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	var (
+		ctx       context.Context
+		server    *netboxmock.Server
+		caFile    string
+		tokenFile string
+	)
+
+	// requestMark records how many requests the server has handled, so a case can
+	// assert exactly what the adapter sent.
+	requestMark := func() int { return len(server.Requests()) }
+
+	// requestsSince returns the adapter requests recorded after mark.
+	requestsSince := func(mark int) []netboxmock.Request {
+		all := server.Requests()
+		if mark > len(all) {
+			return nil
+		}
+		return all[mark:]
+	}
+
+	// patchBodies returns the decoded body of every recorded PATCH.
+	patchBodies := func(requests []netboxmock.Request) []map[string]any {
+		bodies := make([]map[string]any, 0, len(requests))
+		for _, request := range requests {
+			if request.Method != "PATCH" {
+				continue
+			}
+			var body map[string]any
+			if err := json.Unmarshal(request.Body, &body); err != nil {
+				continue
+			}
+			bodies = append(bodies, body)
+		}
+		return bodies
+	}
+
+	// contractFields are the custom-field definitions the adapter's fixed filters
+	// require. Every one is exact-filtered, which is the schema the adapter assumes
+	// an administrator has provisioned.
+	contractFields := func() []netboxmock.Field {
+		return []netboxmock.Field{
+			{Name: "osac_managed", Label: "OSAC managed", Type: "boolean", FilterLogic: netboxmock.FilterExact},
+			{Name: "osac_instance_id", Label: "OSAC instance ID", Type: "text", FilterLogic: netboxmock.FilterExact},
+			{Name: "osac_bmc_address", Label: "OSAC BMC address", Type: "text", FilterLogic: netboxmock.FilterExact},
+			{Name: "osac_boot_mac", Label: "OSAC boot MAC", Type: "text", FilterLogic: netboxmock.FilterExact},
+			{Name: "osac_interface_macs", Label: "OSAC interface MACs", Type: "json", FilterLogic: netboxmock.FilterExact},
+			{Name: caseFieldName, Label: "Contract case", Type: "text", FilterLogic: netboxmock.FilterExact},
+		}
+	}
+
+	// eligibleFields marks a device as an enrolled, unowned pool member for one
+	// case. osac_instance_id is deliberately absent, which is the representation an
+	// administrator-created device has.
+	eligibleFields := func(caseValue string) map[string]any {
+		return map[string]any{
+			"osac_managed": true,
+			caseFieldName:  caseValue,
+		}
+	}
+
+	// addEligibleDevice registers a staged, managed, unowned device. A nil name
+	// models a device an administrator created without a name.
+	addEligibleDevice := func(id int, name *string, caseValue string) {
+		deviceName := ""
+		if name != nil {
+			deviceName = *name
+		}
+		server.AddDevice(netboxmock.Device{
+			ID:           id,
+			Name:         deviceName,
+			Status:       "staged",
+			CustomFields: eligibleFields(caseValue),
+		})
+	}
+
+	// addExactField registers an additional exact-filtered capability field.
+	addExactField := func(name, fieldType string) {
+		server.AddField(netboxmock.Field{
+			Name:        name,
+			Label:       "Contract " + name,
+			Type:        fieldType,
+			FilterLogic: netboxmock.FilterExact,
+		})
+	}
+
+	// claimableFields returns the custom fields a device needs before the adapter
+	// can resolve Metal3 connection data and credentials for it.
+	claimableFields := func(caseValue string) map[string]any {
+		fields := eligibleFields(caseValue)
+		fields["osac_bmc_address"] = "redfish-virtualmedia+https://192.0.2.42/redfish/v1/Systems/1"
+		fields["osac_boot_mac"] = "aa:bb:cc:dd:ee:42"
+		return fields
+	}
+
+	// addClaimableDevice registers a staged, managed, unowned device that carries
+	// valid BMC connection metadata.
+	addClaimableDevice := func(id int, name *string, caseValue string) {
+		deviceName := ""
+		if name != nil {
+			deviceName = *name
+		}
+		server.AddDevice(netboxmock.Device{
+			ID:           id,
+			Name:         deviceName,
+			Status:       "staged",
+			CustomFields: claimableFields(caseValue),
+		})
+	}
+
+	BeforeEach(func() {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 30*time.Second)
+		DeferCleanup(cancel)
+
+		server = netboxmock.New()
+		DeferCleanup(server.Stop)
+		server.SetAuth("Bearer", testToken)
+		for _, field := range contractFields() {
+			server.AddField(field)
+		}
+
+		fixtureDir := GinkgoT().TempDir()
+		caFile = filepath.Join(fixtureDir, "netbox-ca.pem")
+		cert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+		Expect(os.WriteFile(caFile, cert, 0o600)).To(Succeed())
+		tokenFile = filepath.Join(fixtureDir, "netbox-token")
+		Expect(os.WriteFile(tokenFile, []byte(testToken+"\n"), 0o600)).To(Succeed())
+	})
+
+	newAPIClient := func() *netboxclient.Client {
+		client, err := netboxclient.New(netboxclient.Config{
+			Endpoint: server.URL(), CAFile: caFile, TokenFile: tokenFile,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		return client
+	}
+
+	newInventoryClient := func() *NetBoxClient {
+		manager := baremetalhost.NewMockBMHLifecycleManager(gomock.NewController(GinkgoT()))
+		manager.EXPECT().Namespace().Return(metal3Namespace).AnyTimes()
+		return newTestNetBoxClientWithManager(newAPIClient(), nil, manager)
+	}
+
+	newContractClientWithManager := func(manager baremetalhost.BMHLifecycleManager) *NetBoxClient {
+		reader := &fakeCredentialsReaderRepository{credentials: testNetBoxCredentials()}
+		return newTestNetBoxClientWithManager(newAPIClient(), reader, manager)
+	}
+
+	Describe("Independent tags and preserved administrator metadata", func() {
+		var (
+			manager *netBoxContractBMHManager
+			client  *NetBoxClient
+		)
+
+		BeforeEach(func() {
+			manager = &netBoxContractBMHManager{namespace: metal3Namespace}
+			client = newContractClientWithManager(manager)
+			addExactField("cpu_cores", "integer")
+			addExactField("placement_zone", "text")
+		})
+
+		It("selects on capabilities only, then preserves every other field across claim and release", func() {
+			tagged := claimableFields("tags-a")
+			tagged["cpu_cores"] = 16
+			tagged["placement_zone"] = "west"
+			server.AddDevice(netboxmock.Device{
+				ID: 42, Name: "worker-01", Status: "staged",
+				CustomFields: tagged, Tags: []string{"rack-a", "managed-by-osac"},
+			})
+			addClaimableDevice(43, new("worker-02"), "tags-b")
+			// A legacy tag alone must not enroll a device.
+			server.AddDevice(netboxmock.Device{
+				ID: 44, Name: "worker-03", Status: "staged",
+				CustomFields: map[string]any{caseFieldName: "tags-c"},
+				Tags:         []string{"managed-by-osac"},
+			})
+
+			host, err := client.FindFreeHost(ctx, map[string]string{caseFieldName: "tags-a"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host.Name).To(Equal("netbox-42"))
+			host, err = client.FindFreeHost(ctx, map[string]string{caseFieldName: "tags-b"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host.Name).To(Equal("netbox-43"))
+			host, err = client.FindFreeHost(ctx, map[string]string{caseFieldName: "tags-c"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).To(BeNil(), "a legacy tag is not an enrollment signal")
+
+			hostID := metal3Namespace + "/netbox-42"
+			mark := requestMark()
+			host, err = client.AssignHost(ctx, hostID, "bmi-uid-A", nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).NotTo(BeNil())
+
+			// The write is limited to the native status and the owner custom field.
+			bodies := patchBodies(requestsSince(mark))
+			Expect(bodies).To(HaveLen(1))
+			Expect(bodies[0]).To(Equal(map[string]any{
+				"status":        "active",
+				"custom_fields": map[string]any{"osac_instance_id": "bmi-uid-A"},
+			}))
+
+			device, ok := server.Device(42)
+			Expect(ok).To(BeTrue())
+			Expect(device.Status).To(Equal("active"))
+			Expect(device.CustomFields["osac_instance_id"]).To(Equal("bmi-uid-A"))
+			Expect(device.CustomFields["osac_managed"]).To(BeTrue())
+			Expect(device.CustomFields["cpu_cores"]).To(Equal(16))
+			Expect(device.CustomFields["placement_zone"]).To(Equal("west"))
+			Expect(device.CustomFields["osac_bmc_address"]).To(Equal(
+				"redfish-virtualmedia+https://192.0.2.42/redfish/v1/Systems/1",
+			))
+			Expect(device.Tags).To(Equal([]string{"rack-a", "managed-by-osac"}))
+			Expect(manager.created).To(HaveLen(1), "Metal3 resources are prepared after the claim")
+
+			// A same-owner retry must not claim again.
+			mark = requestMark()
+			host, err = client.AssignHost(ctx, hostID, "bmi-uid-A", nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).NotTo(BeNil())
+			Expect(patchBodies(requestsSince(mark))).To(BeEmpty())
+
+			mark = requestMark()
+			Expect(client.UnassignHost(ctx, hostID, "bmi-uid-A", nil)).To(Succeed())
+
+			release := patchBodies(requestsSince(mark))
+			Expect(release).To(HaveLen(1))
+			Expect(release[0]).To(Equal(map[string]any{
+				"status":        "staged",
+				"custom_fields": map[string]any{"osac_instance_id": nil},
+			}))
+
+			device, ok = server.Device(42)
+			Expect(ok).To(BeTrue())
+			Expect(device.Status).To(Equal("staged"))
+			Expect(device.CustomFields["osac_instance_id"]).To(BeNil())
+			Expect(device.CustomFields["cpu_cores"]).To(Equal(16), "release must not clear capabilities")
+			Expect(device.Tags).To(Equal([]string{"rack-a", "managed-by-osac"}))
+		})
+	})
+
+	Describe("Conditional claims and release races", func() {
+		var (
+			managerA  *netBoxContractBMHManager
+			managerB  *netBoxContractBMHManager
+			clientA   *NetBoxClient
+			clientB   *NetBoxClient
+			hostID    = metal3Namespace + "/netbox-42"
+			winnerUID = "bmi-uid-winner"
+			loserUID  = "bmi-uid-loser"
+		)
+
+		BeforeEach(func() {
+			managerA = &netBoxContractBMHManager{namespace: metal3Namespace}
+			managerB = &netBoxContractBMHManager{namespace: metal3Namespace}
+			clientA = newContractClientWithManager(managerA)
+			clientB = newContractClientWithManager(managerB)
+			addClaimableDevice(42, new("worker-01"), "race")
+		})
+
+		It("lets exactly one claim win, resumes ownership, and never releases a foreign claim", func() {
+			// The loser reads a staged device, then a competing claim lands before its
+			// conditional PATCH. The server must answer 412; the adapter must re-read
+			// ownership and return no host instead of retrying the write.
+			server.SetBeforePatchHook(func(id int) {
+				server.SetBeforePatchHook(nil)
+				server.UpdateDevice(id, func(device *netboxmock.Device) {
+					device.Status = "active"
+					device.CustomFields["osac_instance_id"] = winnerUID
+				})
+			})
+
+			mark := requestMark()
+			host, err := clientB.AssignHost(ctx, hostID, loserUID, nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).To(BeNil(), "the losing instance must not report ownership")
+
+			requests := requestsSince(mark)
+			Expect(requests).To(HaveLen(3), "read, conditional write, ownership re-read")
+			Expect(requests[0].Method).To(Equal("GET"))
+			Expect(requests[0].Path).To(Equal("/api/dcim/devices/42/"))
+			Expect(requests[1].Method).To(Equal("PATCH"))
+			Expect(requests[1].IfMatch).NotTo(BeEmpty(), "every claim must be conditional")
+			Expect(requests[1].StatusCode).To(Equal(412), "a stale claim must be rejected")
+			Expect(requests[2].Method).To(Equal("GET"))
+
+			device, ok := server.Device(42)
+			Expect(ok).To(BeTrue())
+			Expect(device.CustomFields["osac_instance_id"]).To(Equal(winnerUID))
+			Expect(managerB.created).To(BeEmpty(), "the loser must not create Metal3 resources")
+
+			// The winner resumes from the persisted binding without claiming again.
+			mark = requestMark()
+			host, err = clientA.AssignHost(ctx, hostID, winnerUID, nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).NotTo(BeNil())
+			Expect(patchBodies(requestsSince(mark))).To(BeEmpty())
+
+			// Releasing with the losing UID must leave the winner's claim intact.
+			mark = requestMark()
+			Expect(clientB.UnassignHost(ctx, hostID, loserUID, nil)).To(Succeed())
+			Expect(patchBodies(requestsSince(mark))).To(BeEmpty())
+			Expect(managerB.deletedBMH).To(BeEmpty(), "a foreign claim must not be torn down")
+			device, _ = server.Device(42)
+			Expect(device.CustomFields["osac_instance_id"]).To(Equal(winnerUID))
+		})
+
+		It("fails a stale release with 412 and preserves the administrator edit", func() {
+			// The winner claims, then an administrator edits an unrelated field between
+			// the release read and its conditional PATCH.
+			host, err := clientA.AssignHost(ctx, hostID, winnerUID, nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).NotTo(BeNil())
+
+			server.SetBeforePatchHook(func(id int) {
+				server.SetBeforePatchHook(nil)
+				server.UpdateDevice(id, func(device *netboxmock.Device) {
+					device.CustomFields["placement_zone"] = "west"
+				})
+			})
+
+			mark := requestMark()
+			err = clientA.UnassignHost(ctx, hostID, winnerUID, nil)
+			Expect(err).To(HaveOccurred(), "a stale release must fail rather than overwrite the edit")
+
+			requests := requestsSince(mark)
+			patch := requests[len(requests)-1]
+			Expect(patch.Method).To(Equal("PATCH"))
+			Expect(patch.StatusCode).To(Equal(412))
+
+			// The failed release must not have cleared the claim, and the external
+			// edit must still be there for the next reconciliation.
+			device, ok := server.Device(42)
+			Expect(ok).To(BeTrue())
+			Expect(device.Status).To(Equal("active"))
+			Expect(device.CustomFields["osac_instance_id"]).To(Equal(winnerUID))
+			Expect(device.CustomFields["placement_zone"]).To(Equal("west"))
+
+			// Retrying with a fresh ETag completes the release and keeps the edit.
+			Expect(clientA.UnassignHost(ctx, hostID, winnerUID, nil)).To(Succeed())
+			device, _ = server.Device(42)
+			Expect(device.Status).To(Equal("staged"))
+			Expect(device.CustomFields["osac_instance_id"]).To(BeNil())
+			Expect(device.CustomFields["placement_zone"]).To(Equal("west"))
+		})
+	})
+
+	Describe("NetBox device ID identity and recovery", func() {
+		var client *NetBoxClient
+
+		BeforeEach(func() {
+			client = newInventoryClient()
+		})
+
+		// expectIDDerivedHost asserts the adapter derives host identity from the
+		// numeric device ID and never from the mutable device name.
+		expectIDDerivedHost := func(caseValue string, wantID int) {
+			host, err := client.FindFreeHost(ctx, map[string]string{caseFieldName: caseValue})
+			Expect(err).NotTo(HaveOccurred(), "case %q", caseValue)
+			Expect(host).NotTo(BeNil(), "case %q", caseValue)
+			Expect(host.Name).To(Equal(fmt.Sprintf("netbox-%d", wantID)))
+			Expect(host.InventoryHostID).To(Equal(fmt.Sprintf("%s/netbox-%d", metal3Namespace, wantID)))
+		}
+
+		It("derives netbox-<id> for named, unnamed, duplicate, and case-equivalent device names", func() {
+			addEligibleDevice(42, new("worker-01"), "names-named")
+			addEligibleDevice(43, nil, "names-unnamed")
+			addEligibleDevice(44, new("worker-01"), "names-duplicate")
+			addEligibleDevice(45, new("WORKER-01"), "names-case")
+
+			for _, expected := range []struct {
+				caseValue string
+				id        int
+			}{
+				{"names-named", 42},
+				{"names-unnamed", 43},
+				{"names-duplicate", 44},
+				{"names-case", 45},
+			} {
+				expectIDDerivedHost(expected.caseValue, expected.id)
+			}
+		})
+
+		It("keeps the ID-derived identity when the device name changes or is cleared", func() {
+			addEligibleDevice(42, new("worker-01"), "rename")
+			expectIDDerivedHost("rename", 42)
+
+			mark := requestMark()
+
+			server.UpdateDevice(42, func(device *netboxmock.Device) { device.Name = "worker-renamed" })
+			expectIDDerivedHost("rename", 42)
+
+			server.UpdateDevice(42, func(device *netboxmock.Device) { device.Name = "" })
+			expectIDDerivedHost("rename", 42)
+
+			// Selection only reads; the adapter never writes the device name.
+			for _, request := range requestsSince(mark) {
+				Expect(request.Method).To(Equal("GET"), "selection must not write to NetBox")
+				Expect(request.Path).To(HavePrefix("/api/dcim/devices"))
+			}
+		})
+
+		It("never resolves a device by its raw name when a replacement reuses it", func() {
+			addEligibleDevice(42, new("worker-01"), "reuse-original")
+			host, err := client.FindFreeHost(ctx, map[string]string{caseFieldName: "reuse-original"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host.Name).To(Equal("netbox-42"))
+
+			server.UpdateDevice(42, func(device *netboxmock.Device) { device.Name = "worker-renamed" })
+			addEligibleDevice(99, new("worker-01"), "reuse-replacement")
+
+			expectIDDerivedHost("reuse-original", 42)
+			expectIDDerivedHost("reuse-replacement", 99)
+		})
+
+		It("keeps the saved binding on 404 and never touches a replacement device", func() {
+			addEligibleDevice(42, new("worker-01"), "gone")
+			host, err := client.FindFreeHost(ctx, map[string]string{caseFieldName: "gone"})
+			Expect(err).NotTo(HaveOccurred())
+			binding := host.InventoryHostID
+			Expect(binding).To(Equal(fmt.Sprintf("%s/netbox-42", metal3Namespace)))
+
+			server.DeleteDevice(42)
+			addEligibleDevice(99, new("worker-01"), "gone-replacement")
+
+			mark := requestMark()
+			_, err = client.AssignHost(ctx, binding, "bmi-uid-contract", nil)
+
+			Expect(err).To(HaveOccurred())
+			var apiError *netboxclient.APIError
+			Expect(errors.As(err, &apiError)).To(BeTrue(), "expected a classified NetBox error, got %v", err)
+			Expect(apiError.Kind).To(Equal(netboxclient.ErrorKindNotFound))
+
+			requests := requestsSince(mark)
+			Expect(requests).To(HaveLen(1), "recovery must re-read only the saved device ID")
+			Expect(requests[0].Method).To(Equal("GET"))
+			Expect(requests[0].Path).To(Equal("/api/dcim/devices/42/"),
+				"a 404 must never fall back to a replacement device")
+		})
+	})
+
+	Describe("NetBox metadata discovery and pool default", func() {
+		var client *NetBoxClient
+
+		BeforeEach(func() {
+			client = newInventoryClient()
+		})
+
+		It("excludes a device whose pool flag is omitted and selects the managed one", func() {
+			// 42 models a device an administrator created without setting the pool
+			// flag: the custom field is absent, which is not an explicit true.
+			server.AddDevice(netboxmock.Device{
+				ID:           42,
+				Name:         "worker-01",
+				Status:       "staged",
+				CustomFields: map[string]any{caseFieldName: "pool-off"},
+			})
+			addEligibleDevice(43, new("worker-02"), "pool-on")
+
+			host, err := client.FindFreeHost(ctx, map[string]string{caseFieldName: "pool-off"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).To(BeNil(), "an omitted pool flag must not enroll a device")
+
+			host, err = client.FindFreeHost(ctx, map[string]string{caseFieldName: "pool-on"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).NotTo(BeNil())
+			Expect(host.Name).To(Equal("netbox-43"))
+
+			Expect(server.Requests()).NotTo(BeEmpty())
+			last := server.Requests()[len(server.Requests())-1]
+			Expect(last.Query.Get("cf_osac_managed")).To(Equal("true"),
+				"the adapter must always require an explicit pool flag")
+		})
+
+	})
+
+	Describe("Capability added after startup", func() {
+		var client *NetBoxClient
+
+		BeforeEach(func() {
+			// Build the adapter before adding the capability.
+			client = newInventoryClient()
+		})
+
+		It("matches a capability created after the adapter was built, without restart", func() {
+			device := eligibleFields("late")
+			device["placement_zone"] = "west"
+			server.AddDevice(netboxmock.Device{ID: 42, Name: "worker-01", Status: "staged", CustomFields: device})
+
+			addExactField("placement_zone", "text")
+			host, err := client.FindFreeHost(ctx, map[string]string{caseFieldName: "late", "placement_zone": "west"})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).NotTo(BeNil())
+			Expect(host.Name).To(Equal("netbox-42"))
+		})
+	})
+
+	Describe("Exact selection across distinct fields", func() {
+		var client *NetBoxClient
+
+		BeforeEach(func() {
+			client = newInventoryClient()
+			addExactField("cpu_cores", "integer")
+			addExactField("gpu_model", "text")
+			addExactField("memory_gb", "integer")
+		})
+
+		addDevice := func(id int, mutate func(map[string]any)) {
+			fields := eligibleFields("and")
+			fields["cpu_cores"] = 16
+			fields["gpu_model"] = "a100"
+			fields["memory_gb"] = 128
+			mutate(fields)
+			server.AddDevice(netboxmock.Device{ID: id, Name: "worker", Status: "staged", CustomFields: fields})
+		}
+
+		It("selects only the device matching every capability and fixed predicate", func() {
+			addDevice(42, func(map[string]any) {})                                 // exact match
+			addDevice(43, func(fields map[string]any) { fields["cpu_cores"] = 8 }) // differs
+			addDevice(44, func(fields map[string]any) { fields["gpu_model"] = "h100" })
+			addDevice(45, func(fields map[string]any) { fields["memory_gb"] = 64 })
+			addDevice(46, func(fields map[string]any) { fields["osac_managed"] = false })
+			addDevice(47, func(fields map[string]any) { fields["osac_instance_id"] = "other-owner" })
+			// 48 differs only by native status, which is not a capability.
+			server.AddDevice(netboxmock.Device{
+				ID: 48, Name: "worker", Status: "active",
+				CustomFields: map[string]any{
+					"osac_managed": true, caseFieldName: "and",
+					"cpu_cores": 16, "gpu_model": "a100", "memory_gb": 128,
+				},
+			})
+
+			mark := requestMark()
+			host, err := client.FindFreeHost(ctx, map[string]string{
+				"cpu_cores": "16", "gpu_model": "a100", "memory_gb": "128",
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).NotTo(BeNil())
+			Expect(host.Name).To(Equal("netbox-42"))
+
+			// The adapter sends every capability plus the fixed predicates as
+			// separate exact filters and then takes the server's first result.
+			requests := requestsSince(mark)
+			Expect(requests).To(HaveLen(1))
+			query := requests[0].Query
+			Expect(query.Get("status")).To(Equal("staged"))
+			Expect(query.Get("cf_osac_managed")).To(Equal("true"))
+			Expect(query.Get("cf_osac_instance_id__empty")).To(Equal("true"))
+			Expect(query.Get("cf_cpu_cores")).To(Equal("16"))
+			Expect(query.Get("cf_gpu_model")).To(Equal("a100"))
+			Expect(query.Get("cf_memory_gb")).To(Equal("128"))
+		})
+
+		It("claims no partial match when the matching device is gone", func() {
+			addDevice(43, func(fields map[string]any) { fields["cpu_cores"] = 8 })
+			addDevice(44, func(fields map[string]any) { fields["gpu_model"] = "h100" })
+
+			host, err := client.FindFreeHost(ctx, map[string]string{
+				"cpu_cores": "16", "gpu_model": "a100", "memory_gb": "128",
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(host).To(BeNil(), "no partial-match device may be claimed")
+		})
+
+		It("cannot widen the fixed pool predicate from the selector", func() {
+			addDevice(42, func(map[string]any) {})
+			mark := requestMark()
+
+			host, err := client.FindFreeHost(ctx, map[string]string{"osac_managed": "false"})
+			Expect(err).NotTo(HaveOccurred())
+			// The device is still eligible: only the fixed predicate is sent, so the
+			// selector cannot exclude managed devices either.
+			Expect(host).NotTo(BeNil())
+			Expect(host.Name).To(Equal("netbox-42"))
+			Expect(requestsSince(mark)[0].Query.Get("cf_osac_managed")).To(Equal("true"),
+				"the fixed managed predicate must win over the selector")
+		})
+	})
+
+	Describe("Empty owner representations", func() {
+		var client *NetBoxClient
+
+		BeforeEach(func() {
+			client = newInventoryClient()
+		})
+
+		addWithOwner := func(id int, caseValue string, owner any, includeOwner bool) {
+			fields := eligibleFields(caseValue)
+			if includeOwner {
+				fields["osac_instance_id"] = owner
+			}
+			server.AddDevice(netboxmock.Device{ID: id, Name: "worker", Status: "staged", CustomFields: fields})
+		}
+
+		It("treats an absent owner and an empty-string owner as unassigned", func() {
+			addWithOwner(42, "absent", nil, false)
+			addWithOwner(43, "empty", "", true)
+
+			for _, expected := range []struct {
+				caseValue string
+				id        int
+			}{{"absent", 42}, {"empty", 43}} {
+				host, err := client.FindFreeHost(ctx, map[string]string{caseFieldName: expected.caseValue})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(host).NotTo(BeNil())
+				Expect(host.Name).To(Equal("netbox-" + strconv.Itoa(expected.id)))
+			}
+		})
+
+		It("excludes populated and whitespace-only owners and never claims them", func() {
+			addWithOwner(44, "owned", "another-instance", true)
+			addWithOwner(45, "whitespace", "   ", true)
+
+			for _, caseValue := range []string{"owned", "whitespace"} {
+				host, err := client.FindFreeHost(ctx, map[string]string{caseFieldName: caseValue})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(host).To(BeNil(), "case %q must not be selectable", caseValue)
+			}
+
+			// If a malformed owner is ever reached directly, the adapter rejects it
+			// instead of adopting the device under a bogus owner.
+			mark := requestMark()
+			_, err := client.AssignHost(ctx, metal3Namespace+"/netbox-45", "bmi-uid-contract", nil)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("malformed"))
+			for _, request := range requestsSince(mark) {
+				Expect(request.Method).To(Equal("GET"), "a malformed owner must not be overwritten")
+			}
+		})
+	})
+
+	Describe("Scalar filtering and stored choice values", func() {
+		var client *NetBoxClient
+
+		BeforeEach(func() {
+			client = newInventoryClient()
+			addExactField("cpu_cores", "integer")
+			addExactField("accelerated", "boolean")
+			addExactField("placement_zone", "text")
+			server.AddField(netboxmock.Field{
+				Name: "accelerator", Label: "NVIDIA A100", Type: "select", FilterLogic: netboxmock.FilterExact,
+			})
+		})
+
+		addWithCapability := func(id int, name string, value any) {
+			fields := eligibleFields("scalars")
+			fields[name] = value
+			server.AddDevice(netboxmock.Device{ID: id, Name: "worker", Status: "staged", CustomFields: fields})
+		}
+
+		expectSelection := func(selector map[string]string, wantName string) {
+			host, err := client.FindFreeHost(ctx, selector)
+			Expect(err).NotTo(HaveOccurred(), "selector %v", selector)
+			if wantName == "" {
+				Expect(host).To(BeNil(), "selector %v must match nothing", selector)
+				return
+			}
+			Expect(host).NotTo(BeNil(), "selector %v", selector)
+			Expect(host.Name).To(Equal(wantName), "selector %v", selector)
+		}
+
+		It("matches exact typed values, including zero, negatives, and booleans", func() {
+			addWithCapability(42, "cpu_cores", 0)
+			addWithCapability(43, "cpu_cores", -8)
+			addWithCapability(44, "cpu_cores", int64(9007199254740993))
+			addWithCapability(45, "accelerated", true)
+			addWithCapability(46, "accelerated", false)
+			addWithCapability(47, "placement_zone", "Lab A")
+			addWithCapability(48, "placement_zone", "lab a")
+			addWithCapability(49, "accelerator", "a100")
+
+			expectSelection(map[string]string{"cpu_cores": "0"}, "netbox-42")
+			expectSelection(map[string]string{"cpu_cores": "-8"}, "netbox-43")
+			expectSelection(map[string]string{"cpu_cores": "9007199254740993"}, "netbox-44")
+			expectSelection(map[string]string{"accelerated": "true"}, "netbox-45")
+			expectSelection(map[string]string{"accelerated": "false"}, "netbox-46")
+			expectSelection(map[string]string{"placement_zone": "Lab A"}, "netbox-47")
+			// No trimming and no case folding: the near-match is not selected.
+			expectSelection(map[string]string{"placement_zone": "lab a"}, "netbox-48")
+			expectSelection(map[string]string{"placement_zone": " Lab A"}, "")
+			expectSelection(map[string]string{"placement_zone": "lab A"}, "")
+		})
+
+		It("filters select fields by stored value and never by display label", func() {
+			addWithCapability(49, "accelerator", "a100")
+			mark := requestMark()
+
+			expectSelection(map[string]string{"accelerator": "a100"}, "netbox-49")
+			Expect(requestsSince(mark)[0].Query["cf_accelerator"]).To(Equal([]string{"a100"}),
+				"the stored value must be sent, never the label")
+
+			expectSelection(map[string]string{"accelerator": "NVIDIA A100"}, "")
+
+			// Changing only the choice label must not change matching.
+			server.AddField(netboxmock.Field{
+				Name: "accelerator", Label: "NVIDIA A100 80GB", Type: "select", FilterLogic: netboxmock.FilterExact,
+			})
+			mark = requestMark()
+			expectSelection(map[string]string{"accelerator": "a100"}, "netbox-49")
+			Expect(requestsSince(mark)[0].Query["cf_accelerator"]).To(Equal([]string{"a100"}))
+		})
+
+		It("does not match a device whose capability is missing or null", func() {
+			addWithCapability(50, "accelerated", nil)
+			expectSelection(map[string]string{"accelerated": "false"}, "")
+		})
+	})
+
+	Describe("Exact escaped string filtering", func() {
+		var client *NetBoxClient
+
+		BeforeEach(func() {
+			client = newInventoryClient()
+			addExactField("placement_zone", "text")
+		})
+
+		It("keeps every stored string in one custom-field parameter", func() {
+			zones := []string{"&status=active", "a+b", "x=y", "אזור-מערב", "Lab A", "active"}
+			for index, zone := range zones {
+				fields := eligibleFields("escaped")
+				fields["placement_zone"] = zone
+				server.AddDevice(netboxmock.Device{
+					ID: 42 + index, Name: "worker", Status: "staged", CustomFields: fields,
+				})
+			}
+
+			for index, zone := range zones {
+				mark := requestMark()
+				host, err := client.FindFreeHost(ctx, map[string]string{"placement_zone": zone})
+				Expect(err).NotTo(HaveOccurred(), "zone %q", zone)
+				Expect(host).NotTo(BeNil(), "zone %q", zone)
+				Expect(host.Name).To(Equal("netbox-"+strconv.Itoa(42+index)), "zone %q", zone)
+
+				request := requestsSince(mark)[0]
+				Expect(request.Query["cf_placement_zone"]).To(Equal([]string{zone}),
+					"the value must survive encoding unchanged")
+				Expect(request.Query["status"]).To(Equal([]string{"staged"}),
+					"an embedded status= fragment must not become a second predicate")
+			}
+		})
+	})
+})
+
+// netBoxContractBMHManager records the Metal3 side effects the adapter requests.
+type netBoxContractBMHManager struct {
+	namespace  string
+	mutex      sync.Mutex
+	created    []baremetalhost.CreateParams
+	deletedBMH []string
+}
+
+func (m *netBoxContractBMHManager) Namespace() string { return m.namespace }
+
+func (m *netBoxContractBMHManager) CreateBMH(_ context.Context, params baremetalhost.CreateParams) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.created = append(m.created, params)
+	return nil
+}
+
+func (m *netBoxContractBMHManager) DeleteBMH(_ context.Context, name, _ string) error {
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+	m.deletedBMH = append(m.deletedBMH, name)
+	return nil
+}
+
+func (m *netBoxContractBMHManager) BMHExists(context.Context, string) (bool, error) {
+	return false, nil
+}
+
+func (m *netBoxContractBMHManager) IsBMHAvailable(context.Context, string) (bool, error) {
+	return true, nil
+}
+
+func (m *netBoxContractBMHManager) EnsureBMCSecret(context.Context, string, string, string, string) error {
+	return nil
+}
+
+func (m *netBoxContractBMHManager) DeleteBMCSecret(context.Context, string, string) error { return nil }
+
+func (m *netBoxContractBMHManager) GetHardwareNICs(context.Context, string) ([]string, error) {
+	return []string{"aa:bb:cc:dd:ee:42"}, nil
 }

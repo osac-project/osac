@@ -71,7 +71,7 @@ integration-tests: manifests generate ## Run integration tests against a Kind cl
 
 .PHONY: netbox-contract-test
 netbox-contract-test: ## Run the NetBox inventory adapter against the mock HTTPS API.
-	go test ./test/netboxcontract -count=1
+	go test ./internal/inventory -run '^TestBCMInventoryAdapter$$' -ginkgo.label-filter=netbox-contract -count=1
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter

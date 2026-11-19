@@ -19,7 +19,8 @@
             "grpcRequestTimeout": { "type": "string" },
             "restRequestTimeout": { "type": "string" },
             "jwksRequestTimeout": { "type": "string" },
-            "backendCaConfigMap": { "type": "string" }
+            "backendCaConfigMap": { "type": "string" },
+            "backendCaSecret": { "type": "string" }
           }
         }
       }

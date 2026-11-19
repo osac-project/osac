@@ -13,21 +13,28 @@ specific language governing permissions and limitations under the License.
 
 {{/*
 BackendTLSPolicy needs a ConfigMap keyed ca.crt. The shared trust bundle
-(certs.caBundle.configMap) is keyed bundle.pem, so re-materialize it under ca.crt via
-a trust-manager Bundle. trust-manager ships with osac-deps. Rendered only when a CA
-bundle source is configured; otherwise provide the ConfigMap named by
-ingress.gatewayapi.backendCaConfigMap out of band.
+(certs.caBundle.configMap) is keyed bundle.pem, so re-materialize the CA under
+ca.crt via a trust-manager Bundle. trust-manager ships with osac-deps.
+
+The source is the ClusterIssuer's CA Secret, NOT the ca-bundle ConfigMap:
+trust-manager reads Bundle sources in its own namespace (cert-manager), and the
+ca-bundle ConfigMap only exists in the workload namespaces. The ClusterIssuer CA
+Secret lives in cert-manager, next to trust-manager, so it is readable. This
+mirrors how the osac-infra ca-bundle Bundle sources the same secret. Requires
+certs.issuerRef.kind=ClusterIssuer; override the secret name with
+ingress.gatewayapi.backendCaSecret when it differs from the issuer name.
 */}}
-{{- if and (eq .Values.ingress.driver "gatewayapi") .Values.certs.caBundle.configMap }}
+{{- if and (eq .Values.ingress.driver "gatewayapi") (eq .Values.certs.issuerRef.kind "ClusterIssuer") }}
+{{- $caSecret := .Values.ingress.gatewayapi.backendCaSecret | default .Values.certs.issuerRef.name }}
 apiVersion: trust.cert-manager.io/v1alpha1
 kind: Bundle
 metadata:
   name: {{ .Values.ingress.gatewayapi.backendCaConfigMap }}
 spec:
   sources:
-  - configMap:
-      name: {{ .Values.certs.caBundle.configMap }}
-      key: bundle.pem
+  - secret:
+      name: {{ $caSecret }}
+      key: ca.crt
   target:
     configMap:
       key: ca.crt

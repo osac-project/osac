@@ -858,6 +858,10 @@
                 "backendCaConfigMap": {
                   "type": "string",
                   "description": "ConfigMap (keyed ca.crt) for BackendTLSPolicy upstream validation"
+                },
+                "backendCaSecret": {
+                  "type": "string",
+                  "description": "ClusterIssuer CA Secret sourced by the trust-manager Bundle; defaults to certs.issuerRef.name"
                 }
               }
             }

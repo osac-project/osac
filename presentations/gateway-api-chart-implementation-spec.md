@@ -121,7 +121,7 @@ ingress:
 | `certificate-gateway.yaml` | second `Certificate` (same SANs + issuer as `ingress-proxy/certificate.yaml`), `secretName: fulfillment-api-tls`, in the gateway namespace. |
 | `httproute-external.yaml` | hostnames `externalHostname` + `fulfillment-api`; attached to `external` + `ext-svc`. Rules: console-ws `Exact /api/fulfillment/v1/console_sessions/connect` -> console-proxy:8090 (`0s`); jwks `Exact /.well-known/jwks.json` -> rest-gateway:8000 (`jwksRequestTimeout`); REST `PathPrefix /api/fulfillment` + `/api/events` -> rest-gateway:8000 (`restRequestTimeout`); **Connect `Exact /osac.public.v1.ConsoleProxy/Connect` -> console-proxy:8000 (`grpcRequestTimeout`)**; unary `RegularExpression /(osac\.public\.|grpc\.(reflection|health)\.).*` -> grpc-server:8000 (`grpcRequestTimeout`). |
 | `httproute-internal.yaml` | hostnames `internalHostname` + `fulfillment-internal-api`; attached to `internal` + `int-svc`. Same console-ws/jwks; REST `PathPrefix /api`; Connect `Exact` as above; unary `PathPrefix /` -> grpc-server:8000 (`grpcRequestTimeout`). |
-| `backendtlspolicy.yaml` | ×3 (grpc-server / rest-gateway / console-proxy) -> `caCertificateRefs` = `backendCaConfigMap`, `validation.hostname = fulfillment-<svc>.{{ .Release.Namespace }}.svc.cluster.local`. |
+| `backendtlspolicy.yaml` | ×3 (grpc-server / rest-gateway / console-proxy) -> `caCertificateRefs` = `backendCaConfigMap`, `validation.hostname = fulfillment-<svc>.{{ .Release.Namespace }}.svc.cluster.local`. **apiVersion `gateway.networking.k8s.io/v1`** — OpenShift 4.22 CIO serves BackendTLSPolicy at GA v1, not v1alpha3 (caught on the edge-16 greenfield install; the schema shape is unchanged). |
 | `backend-ca-bundle.yaml` | trust-manager `Bundle` -> target ConfigMap `backendCaConfigMap` with key `ca.crt`, sourced from the ClusterIssuer CA. |
 | `bridge.yaml` | `bridge=service`: selectorless Services wired (EndpointSlice) to the gateway **Service ClusterIP**:443 with port names `external-api` / `internal-api`. `bridge=pod`: `EndpointSlice` -> gateway pod IP:443 (requires the osac-operator reconciler). Delete-legacy-Endpoints concern disappears because the Services are chart-managed selectorless from the start. |
 
@@ -162,6 +162,12 @@ RegEx ordering.
 4. `helm lint` in gateway mode; schema accepts the new keys and rejects bad enums.
 5. Functional: deploy on a real OpenShift 4.22 cluster (CIO Gateway API). Kind
    cannot provide the CIO-managed gateway (see Testing environments below).
+   **First live run (edge-16 SNO, OCP 4.22.14, 2026-11-19):** install-infra
+   green (GatewayClass `openshift-default` Accepted, CIO wait-hook Complete);
+   first install-osac attempt failed because the cluster serves
+   `BackendTLSPolicy` v1, not v1alpha3 — fixed in the template. Retried with
+   `service.ingress.driver=gatewayapi` + the UI origin in
+   `httpCorsAllowedOrigins`.
 
 ## 7. Testing environments
 

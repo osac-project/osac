@@ -7,7 +7,9 @@
 # the well-known service DNS names, so the bridge wires each Service to the
 # gateway Service ClusterIP via EndpointSlices. The ClusterIP is not known at
 # render time and is stable across gateway pod replacement, which is why this
-# runs as a post-install/post-upgrade hook instead of a chart resource.
+# runs as a chart-resource Job created with the release (not a post-install
+# hook: the callers crash-loop without the bridge, so a hook gated on the
+# release becoming ready would deadlock the install under `helm --wait`).
 set -euo pipefail
 
 GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:?GATEWAY_NAMESPACE must be set}"

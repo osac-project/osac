@@ -96,6 +96,10 @@ ingress:
     jwksRequestTimeout: "10s"
     # ConfigMap (keyed ca.crt) for BackendTLSPolicy upstream validation.
     backendCaConfigMap: osac-backend-ca
+    # trust-manager Bundle source: the ClusterIssuer CA Secret (in trust-manager's
+    # namespace). Defaults to certs.issuerRef.name; set when the CA Secret of the
+    # ClusterIssuer is named differently.
+    backendCaSecret: ""
 
 # MCP is an opt-in integration endpoint.
 # Custom external ports are supported on Kind; OpenShift Routes use HTTPS port 443.

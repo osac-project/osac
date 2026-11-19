@@ -12,14 +12,22 @@ specific language governing permissions and limitations under the License.
 */}}
 
 {{/*
-Post-install bridge for the gatewayapi ingress driver (OSAC-7866).
+Gateway bridge for the gatewayapi ingress driver (OSAC-7866).
 
 In gatewayapi mode the fulfillment-api / fulfillment-internal-api Services are
 rendered selectorless by the fulfillment-service chart and the gateway Service
-ClusterIP is not known at render time, so this hook resolves it after the
-release is up and maintains the bridge EndpointSlices. Only rendered when the
-driver is gatewayapi and no static gatewayAddress was set (the chart renders
-the EndpointSlices itself in that case). Envoy mode never sees any of this.
+ClusterIP is not known at render time, so this Job resolves it and maintains
+the bridge EndpointSlices. Only rendered when the driver is gatewayapi and no
+static gatewayAddress was set (the chart renders the EndpointSlices itself in
+that case). Envoy mode never sees any of this.
+
+This MUST be a regular chart resource, not a post-install hook: the in-cluster
+callers (UI, operator, rest-gateway) dial the selectorless Services at startup
+and crash-loop without the bridge, so a post-install hook can never run under
+`helm --wait` -- the wait blocks on those very pods, deadlocking the install.
+As a chart resource the Job is created with the release, applies the bridge
+while the deployments are still rolling, and the pods then converge. The TTL
+lets a later upgrade recreate the Job after a script change.
 */}}
 {{- if and (eq .Values.service.ingress.driver "gatewayapi") (not .Values.service.ingress.gatewayapi.gatewayAddress) }}
 apiVersion: v1
@@ -29,10 +37,6 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "osac.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "helm.sh/hook-weight": "-1"
 data:
   gateway-bridge.sh: |
 {{ .Files.Get "files/gateway-bridge.sh" | indent 4 }}
@@ -43,12 +47,7 @@ metadata:
   name: {{ include "osac.fullname" . }}-gateway-bridge
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "osac.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "helm.sh/hook-weight": "-1"
----
+    {{- include "osac.labels" . | nindent 4 }}---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -56,10 +55,6 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "osac.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "helm.sh/hook-weight": "-1"
 rules:
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]
@@ -72,10 +67,6 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "osac.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "helm.sh/hook-weight": "-1"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -95,10 +86,6 @@ metadata:
   namespace: {{ .Values.service.ingress.gatewayapi.gatewayNamespace }}
   labels:
     {{- include "osac.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "helm.sh/hook-weight": "-1"
 rules:
   - apiGroups: [""]
     resources: ["services"]
@@ -113,10 +100,6 @@ metadata:
   namespace: {{ .Values.service.ingress.gatewayapi.gatewayNamespace }}
   labels:
     {{- include "osac.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "helm.sh/hook-weight": "-1"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -133,13 +116,12 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "osac.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "helm.sh/hook-output-log-policy": hook-failed
 spec:
   backoffLimit: 3
   activeDeadlineSeconds: 1200
+  # Delete the completed Job so a later upgrade with a changed template can
+  # recreate it (Job specs are immutable).
+  ttlSecondsAfterFinished: 300
   template:
     metadata:
       labels:

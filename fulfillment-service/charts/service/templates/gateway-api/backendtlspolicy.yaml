@@ -19,7 +19,7 @@ SAN.
 {{- if eq .Values.ingress.driver "gatewayapi" }}
 {{- range $svc := list "grpc-server" "rest-gateway" "console-proxy" }}
 ---
-apiVersion: gateway.networking.k8s.io/v1alpha3
+apiVersion: gateway.networking.k8s.io/v1
 kind: BackendTLSPolicy
 metadata:
   namespace: {{ $.Release.Namespace }}

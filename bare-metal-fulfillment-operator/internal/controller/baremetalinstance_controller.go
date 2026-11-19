@@ -1208,25 +1208,63 @@ func (r *BareMetalInstanceReconciler) reconcileRestartTrigger(ctx context.Contex
 		return completeRestartTrigger(bareMetalInstance, "Restart trigger updated (host not running)")
 	}
 
+	// Claim the restart durably before dispatching it. If the status write after
+	// a successful TriggerRestart is lost, the persisted marker lets the next
+	// reconcile resume the completion poll instead of submitting the same trigger
+	// again and rebooting the host twice.
+	bareMetalInstance.SetStatusCondition(
+		v1alpha1.HostConditionRestartInProgress,
+		metav1.ConditionTrue,
+		v1alpha1.HostConditionReasonProgressing,
+		"Restart submission pending",
+	)
+	if err := r.updateStatusWithRetry(ctx, client.ObjectKeyFromObject(bareMetalInstance), bareMetalInstance.Status); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	result, err := r.triggerRestart(ctx, bareMetalInstance)
 	if err != nil {
-		setRestartError(bareMetalInstance, err, "failed to trigger restart")
+		setRestartSubmitError(bareMetalInstance, err)
 		return result, err
 	}
 	return result, nil
 }
 
-// setRestartError records a restart-path error. Only a terminal host operational
-// error ends the lifecycle; everything else stays retryable. The message stays
-// bounded, so the detail belongs in the caller's log.
+// setRestartError records a restart-path error while preserving restart
+// ownership. Only a terminal host operational error ends the lifecycle;
+// everything else stays retryable, and an owned restart keeps its marker so the
+// completion poll is retried instead of the reboot being re-dispatched. The
+// message stays bounded, so the detail belongs in the caller's log.
 func setRestartError(bmi *v1alpha1.BareMetalInstance, err error, message string) {
-	reason := v1alpha1.HostConditionReasonPowerSyncRequired
 	if errors.Is(err, management.ErrHostOperational) {
 		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-		reason = v1alpha1.HostConditionReasonIronicAPIFailure
+		bmi.SetStatusCondition(v1alpha1.HostConditionPowerSynced,
+			metav1.ConditionFalse, v1alpha1.HostConditionReasonIronicAPIFailure, message)
+		bmi.SetStatusCondition(v1alpha1.HostConditionRestartInProgress,
+			metav1.ConditionFalse, v1alpha1.HostConditionReasonPowerSyncFailed, "Restart failed")
+		return
 	}
 	bmi.SetStatusCondition(v1alpha1.HostConditionPowerSynced,
-		metav1.ConditionFalse, reason, message)
+		metav1.ConditionFalse, v1alpha1.HostConditionReasonPowerSyncRequired, message)
+}
+
+// setRestartSubmitError classifies a failed restart submission. The durable
+// claim has already been written, so the marker must be released explicitly:
+// terminal host errors report a failure, everything else leaves the trigger
+// pending for a retry.
+func setRestartSubmitError(bmi *v1alpha1.BareMetalInstance, err error) {
+	if errors.Is(err, management.ErrHostOperational) {
+		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		bmi.SetStatusCondition(v1alpha1.HostConditionPowerSynced,
+			metav1.ConditionFalse, v1alpha1.HostConditionReasonIronicAPIFailure, "failed to trigger restart")
+		bmi.SetStatusCondition(v1alpha1.HostConditionRestartInProgress,
+			metav1.ConditionFalse, v1alpha1.HostConditionReasonPowerSyncFailed, "Restart failed")
+		return
+	}
+	bmi.SetStatusCondition(v1alpha1.HostConditionPowerSynced,
+		metav1.ConditionFalse, v1alpha1.HostConditionReasonPowerSyncRequired, "failed to trigger restart")
+	bmi.SetStatusCondition(v1alpha1.HostConditionRestartInProgress,
+		metav1.ConditionFalse, v1alpha1.HostConditionReasonPowerSyncRequired, "Restart not initiated")
 }
 
 // restartBlocked reports whether the last restart submission was rejected by an

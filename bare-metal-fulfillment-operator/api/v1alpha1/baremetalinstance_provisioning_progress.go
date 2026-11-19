@@ -203,7 +203,7 @@ func IsProvisionRetrying(cond *metav1.Condition) bool {
 // reconciler (OSAC-5347) calls this and applies the presentation layer.
 //
 // Precedence: failure (earliest in stage order) > retrying > Ready > Provisioned > in-progress.
-func DeriveProvisioningProgress(conds []metav1.Condition) ProvisioningProgress {
+func DeriveProvisioningProgress(conds []metav1.Condition, restartPending bool) ProvisioningProgress {
 	// 1. Failure takes priority. Walk the surfaced conditions in stage order; the
 	//    first one that is False while carrying a hard-failure reason wins.
 	//
@@ -216,9 +216,36 @@ func DeriveProvisioningProgress(conds []metav1.Condition) ProvisioningProgress {
 	//    A new benign False reason MUST be added to this skip set, or it will be
 	//    misclassified as a hard failure (the exhaustiveness test guards condition
 	//    types, not reason values).
+	restartCond := apimeta.FindStatusCondition(conds, string(HostConditionRestartInProgress))
+	// A withdrawn restart (spec and acknowledged triggers match) whose
+	// initiation error is still recorded is not a live power failure. Keep it
+	// converging until the operator writes a fresh power observation.
+	restartWithdrawn := restartCond != nil &&
+		restartCond.Status == metav1.ConditionFalse &&
+		restartCond.Reason == HostConditionReasonPowerSyncFailed &&
+		!restartPending
+	restartRetrying := false
 	for _, ct := range hostConditionStageOrder {
 		cond := apimeta.FindStatusCondition(conds, string(ct))
 		if cond == nil || cond.Status != metav1.ConditionFalse {
+			continue
+		}
+		// Retryable restart: readiness is pending, not failed. The retry markers
+		// are only meaningful while a restart is actually pending.
+		restartSnapshot := restartCond != nil &&
+			(restartCond.Status == metav1.ConditionTrue ||
+				(restartPending &&
+					(restartCond.Reason == HostConditionReasonPowerSyncRequired ||
+						restartCond.Reason == HostConditionReasonPowerSyncFailed)))
+		if ct == HostConditionPowerSynced && restartSnapshot &&
+			(cond.Reason == HostConditionReasonProgressing ||
+				cond.Reason == HostConditionReasonPowerSyncFailed ||
+				cond.Reason == HostConditionReasonPowerSyncRequired) {
+			restartRetrying = true
+			continue
+		}
+		if ct == HostConditionPowerSynced && restartWithdrawn &&
+			cond.Reason == HostConditionReasonPowerSyncFailed {
 			continue
 		}
 		if cond.Reason == HostConditionReasonProgressing ||
@@ -237,6 +264,14 @@ func DeriveProvisioningProgress(conds []metav1.Condition) ProvisioningProgress {
 	//    while its replacement attempt is backing off.
 	if IsProvisionRetrying(apimeta.FindStatusCondition(conds, string(HostConditionProvisionTemplateComplete))) {
 		return ProvisioningProgress{State: StateInProgress, Step: StepProvisioning, Retrying: true}
+	}
+
+	// 2b. An owned restart is being retried after a failed poll, or a withdrawn
+	//     initiation error is waiting for a fresh power observation: the instance
+	//     is provisioned and the ready axis is still converging, whether or not it
+	//     has network attachments.
+	if restartRetrying || restartWithdrawn {
+		return ProvisioningProgress{State: StateProvisioned, Step: StepReadyPowerSync}
 	}
 
 	// 3. Ready: PowerSynced True is the READY axis — provisioning is complete and the

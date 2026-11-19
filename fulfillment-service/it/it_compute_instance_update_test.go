@@ -197,6 +197,36 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 			Expect(updated.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("failure-status-test", "preserved"))
 		}
 
+		By("projecting retry progress alongside the latest failure")
+		Eventually(func(g Gomega) {
+			stored, getErr := privateClient.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			object := stored.GetObject()
+			object.GetStatus().SetConditions([]*privatev1.ComputeInstanceCondition{
+				privatev1.ComputeInstanceCondition_builder{
+					Type:   privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED,
+					Status: privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+					Reason: proto.String("RetryScheduled"), Message: proto.String("A provisioning attempt failed; another attempt is scheduled."),
+				}.Build(),
+			})
+			_, updateErr := privateClient.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: object, UpdateMask: catalogItemUpdateMask("status.conditions"), Lock: true,
+			}.Build())
+			g.Expect(updateErr).NotTo(HaveOccurred())
+			got, getErr := publicClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			listed, listErr := publicClient.List(ctx, publicv1.ComputeInstancesListRequest_builder{Filter: &filter}.Build())
+			g.Expect(listErr).NotTo(HaveOccurred())
+			g.Expect(listed.GetItems()).To(HaveLen(1))
+			for _, current := range []*publicv1.ComputeInstance{got.GetObject(), listed.GetItems()[0]} {
+				g.Expect(current.GetStatus().HasLastProvisioningFailure()).To(BeTrue())
+				g.Expect(current.GetStatus().GetConditions()).To(ContainElement(Satisfy(func(condition *publicv1.ComputeInstanceCondition) bool {
+					return condition.GetType() == publicv1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED &&
+						condition.GetStatus() == publicv1.ConditionStatus_CONDITION_STATUS_FALSE && condition.GetReason() == "RetryScheduled"
+				})))
+			}
+		}, 10*time.Second, 100*time.Millisecond).Should(Succeed())
+
 		By("hiding the instance and its diagnostics from an unrelated tenant")
 		outsider := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
 		_, err = outsider.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: id}.Build())

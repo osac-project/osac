@@ -55,7 +55,8 @@ var _ = Describe("Network classes server", func() {
 				EastWestCapabilities: privatev1.NetworkClassEastWestCapabilities_builder{
 					SupportsEastWestEthernet: true,
 				}.Build(),
-				AddressPlan: fixtureAddressPlan(),
+				AddressPlan:         fixtureAddressPlan(),
+				ProvisioningEnabled: new(true),
 			}.Build(),
 		}.Build()
 	}
@@ -67,6 +68,10 @@ var _ = Describe("Network classes server", func() {
 
 	BeforeEach(func() {
 		server = newServer(DefaultNetworkingSettings())
+		_, err := suiteTx.Exec(ctx,
+			`insert into installation_settings (id, provisioning_enabled, enabled_services, release)
+			 values (1, true, '{}', '0.0.0')`)
+		Expect(err).ToNot(HaveOccurred())
 	})
 
 	Describe("Create", func() {
@@ -84,6 +89,42 @@ var _ = Describe("Network classes server", func() {
 			_, err = create(installerObject())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
 			Expect(err.Error()).To(ContainSubstring("only one NetworkClass per deployment is allowed"))
+		})
+
+		It("rejects a create without a provisioning mode", func() {
+			object := installerObject()
+			object.GetSpec().ClearProvisioningEnabled()
+			_, err := create(object)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("spec.provisioning_enabled"))
+		})
+
+		It("rejects a provisioning mode that differs from the installation setting", func() {
+			object := installerObject()
+			object.GetSpec().SetProvisioningEnabled(false)
+			_, err := create(object)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring(
+				"global.networking.provisioningEnabled cannot change after installation; reinstall to change it"))
+		})
+
+		It("accepts a disabled provisioning mode that matches the installation setting", func() {
+			_, err := suiteTx.Exec(ctx, `update installation_settings set provisioning_enabled = false`)
+			Expect(err).ToNot(HaveOccurred())
+			object := installerObject()
+			object.GetSpec().SetProvisioningEnabled(false)
+			created, err := create(object)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(created.GetSpec().HasProvisioningEnabled()).To(BeTrue())
+			Expect(created.GetSpec().GetProvisioningEnabled()).To(BeFalse())
+		})
+
+		It("rejects a create when the installation settings are not initialized", func() {
+			_, err := suiteTx.Exec(ctx, `delete from installation_settings`)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = create(installerObject())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(err.Error()).To(ContainSubstring("installation settings are not initialized"))
 		})
 
 		It("rejects status on create", func() {
@@ -158,6 +199,21 @@ var _ = Describe("Network classes server", func() {
 
 		It("accepts writing the stored address plan again", func() {
 			Expect(patchPlan(object.GetSpec().GetAddressPlan())).To(Succeed())
+		})
+
+		It("rejects a provisioning mode change", func() {
+			_, err := server.Update(ctx, privatev1.NetworkClassesUpdateRequest_builder{
+				Object: privatev1.NetworkClass_builder{
+					Id: object.GetId(),
+					Spec: privatev1.NetworkClassSpec_builder{
+						AddressPlan:         object.GetSpec().GetAddressPlan(),
+						ProvisioningEnabled: new(false),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.provisioning_enabled"}},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("spec is immutable"))
 		})
 
 		It("rejects an address plan change even when no VirtualNetwork exists", func() {

@@ -2083,7 +2083,8 @@ var _ = Describe("Default networking readiness", func() {
 		ctx = context.Background()
 		networkClasses = &readinessNetworkClasses{items: []*privatev1.NetworkClass{
 			privatev1.NetworkClass_builder{
-				Id: "nc-1",
+				Id:   "nc-1",
+				Spec: privatev1.NetworkClassSpec_builder{ProvisioningEnabled: new(true)}.Build(),
 				Status: privatev1.NetworkClassStatus_builder{
 					State: privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY,
 				}.Build(),
@@ -2095,7 +2096,6 @@ var _ = Describe("Default networking readiness", func() {
 		eips = &readinessExternalIPs{}
 		gateways = &readinessNATGateways{}
 		reconciler = &function{
-			provisioningEnabled:   true,
 			logger:                logger,
 			networkClassesClient:  networkClasses,
 			virtualNetworksClient: vns,
@@ -2192,7 +2192,7 @@ var _ = Describe("Default networking readiness", func() {
 	})
 
 	It("needs only the VirtualNetwork, Subnet and SecurityGroup when provider networking is disabled", func() {
-		reconciler.provisioningEnabled = false
+		networkClasses.items[0].GetSpec().SetProvisioningEnabled(false)
 		setAllReady()
 		eips.items = nil
 		gateways.items = nil

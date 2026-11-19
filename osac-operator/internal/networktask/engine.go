@@ -33,6 +33,7 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/internal/networkingmode"
 	"github.com/osac-project/osac/osac-operator/pkg/aap"
 )
 
@@ -88,9 +89,16 @@ type Config struct {
 	TemplatePrefix string
 	// Organization is the AAP organization (name or ID) where job labels are created.
 	Organization string
-	// ProvisioningEnabled is global.networking.provisioningEnabled. When false
-	// no networking job may run.
-	ProvisioningEnabled bool
+	// NetworkingNamespace is the namespace of the deployment NetworkClass that
+	// carries the installation-wide provider networking mode.
+	NetworkingNamespace string
+	// ExpectedProvisioning is global.networking.provisioningEnabled as rendered for
+	// this deployment. When set, it must match the mode recorded on the
+	// NetworkClass; the NetworkClass is the authority.
+	ExpectedProvisioning *bool
+	// ProvisioningMode overrides the NetworkClass resolver. Tests and deployments
+	// without a NetworkClass use it; production leaves it nil.
+	ProvisioningMode ModeResolver
 	// PollInterval is how often a running job is read; DefaultPollInterval when zero.
 	PollInterval time.Duration
 }
@@ -148,8 +156,25 @@ func (e *Engine) WithClock(c clock.PassiveClock) *Engine {
 	return e
 }
 
-// ProvisioningEnabled reports global.networking.provisioningEnabled.
-func (e *Engine) ProvisioningEnabled() bool { return e.cfg.ProvisioningEnabled }
+// ProvisioningMode returns the installation-wide provider networking mode from the deployment's NetworkClass.
+// It returns an error wrapping networkingmode.ErrUnresolved while the mode isn't available. Callers must not treat
+// that as disabled and must take no provider action.
+func (e *Engine) ProvisioningMode(ctx context.Context) (bool, error) {
+	var mode bool
+	var err error
+	if e.cfg.ProvisioningMode != nil {
+		mode, err = e.cfg.ProvisioningMode.Mode(ctx)
+	} else {
+		mode, err = networkingmode.Resolve(ctx, e.client, e.cfg.NetworkingNamespace)
+	}
+	if err != nil {
+		return false, err
+	}
+	if e.cfg.ExpectedProvisioning != nil && *e.cfg.ExpectedProvisioning != mode {
+		return false, &networkingmode.MismatchError{Configured: *e.cfg.ExpectedProvisioning, Accepted: mode}
+	}
+	return mode, nil
+}
 
 // TemplateName returns the complete AAP job template name for a task suffix.
 func (e *Engine) TemplateName(task string) string {
@@ -158,6 +183,22 @@ func (e *Engine) TemplateName(task string) string {
 
 // APIReader returns the reader that bypasses the cache.
 func (e *Engine) APIReader() client.Reader { return e.apiReader }
+
+// ModeResolver resolves the installation-wide provider networking mode.
+type ModeResolver interface {
+	Mode(ctx context.Context) (bool, error)
+}
+
+// StaticMode returns a fixed provider networking mode for tests and deployments without a NetworkClass.
+func StaticMode(enabled bool) ModeResolver {
+	return staticMode(enabled)
+}
+
+type staticMode bool
+
+func (mode staticMode) Mode(context.Context) (bool, error) {
+	return bool(mode), nil
+}
 
 // Request describes one task of one resource on one manager.
 type Request struct {
@@ -234,8 +275,14 @@ func (e *Engine) Run(ctx context.Context, obj v1alpha1.NetworkTaskObject, req Re
 	if req.Manager == v1alpha1.NetworkJobManagerNone && req.Template == "" {
 		return Outcome{}, fmt.Errorf("task %s with manager none needs a job template", req.Task)
 	}
-	if req.Manager != v1alpha1.NetworkJobManagerNone && !e.cfg.ProvisioningEnabled {
-		return Outcome{}, errors.New("provider networking is disabled: no networking task may run")
+	if req.Manager != v1alpha1.NetworkJobManagerNone {
+		enabled, err := e.ProvisioningMode(ctx)
+		if err != nil {
+			return Outcome{}, fmt.Errorf("cannot run task %s: %w", req.Task, err)
+		}
+		if !enabled {
+			return Outcome{}, errors.New("provider networking is disabled: no networking task may run")
+		}
 	}
 	entry := FindJob(obj.GetNetworkJobs(), req.Task, req.Manager)
 	if entry == nil {

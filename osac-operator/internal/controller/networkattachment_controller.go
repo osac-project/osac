@@ -104,7 +104,14 @@ func (r *NetworkAttachmentReconciler) workload(ctx context.Context, na *v1alpha1
 }
 
 func (r *NetworkAttachmentReconciler) create(ctx context.Context, na *v1alpha1.NetworkAttachment) (ctrl.Result, error) {
-	if !r.Engine.ProvisioningEnabled() {
+	enabled, requeue, modeErr := networkingMode(ctx, r.Engine)
+	if modeErr != nil {
+		return ctrl.Result{}, modeErr
+	}
+	if requeue {
+		return ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, nil
+	}
+	if !enabled {
 		// Workload services create no NetworkAttachment with provider networking disabled.
 		networktask.SetFailed(na, networktask.MessageNetworkingDisabled)
 		return ctrl.Result{}, nil

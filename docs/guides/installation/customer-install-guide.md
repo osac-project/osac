@@ -1496,9 +1496,9 @@ be updated. Restore the earlier value and roll out again.
 
 | Setting | Rule after the first install | What enforces it |
 |---|---|---|
-| `global.networking.provisioningEnabled` | Never changes. To change it, reinstall. | The fulfillment service, the OSAC operator and the bare-metal fulfillment operator refuse to start: "global.networking.provisioningEnabled cannot change after installation; reinstall to change it". |
+| `global.networking.provisioningEnabled` | Never changes. To change it, reinstall. The installer also writes it to the `NetworkClass`, which is what every consumer reads. | The fulfillment service refuses to start: "global.networking.provisioningEnabled cannot change after installation; reinstall to change it". The installer refuses to create or replace the `NetworkClass` with a different mode, and the OSAC operator and BMF take no provider action on a mismatch. |
 | Enabled services (`global.services.*`) | Enabling BMaaS or CaaS while any VirtualNetwork exists is not supported. Disabling CaaS or BMaaS changes a derived address plan; see the `addressPlan` row. | The fulfillment service refuses to start: "Enabling BMaaS or CaaS after networking resources exist is not supported in this release; delete every VirtualNetwork or reinstall". |
-| `fabricManager`, `k8sManager`, `networkClass.defaults`, `networkClass.eastWestCapabilities` | Any difference from the `NetworkClass` fails the rollout. Set `k8sManager` at the first install if VMaaS will run. To change them, see [Section 4.4.8](#448-replacing-the-networkclass). | The installer: "NetworkClass <field>[, <field>] cannot change after installation; see Replacing the NetworkClass". |
+| `fabricManager`, `k8sManager`, `networkClass.defaults`, `networkClass.eastWestCapabilities` | Any difference from the `NetworkClass` fails the rollout. Set `k8sManager` at the first install if VMaaS will run. To change them, see [Section 4.4.8](#448-replacing-the-networkclass). Replacing the class never changes `provisioningEnabled`. | The installer: "NetworkClass <field>[, <field>] cannot change after installation; see Replacing the NetworkClass". |
 | `networkClass.addressPlan` | Never changes. The installer compares the plan in force with the stored one at every rollout. With `addressPlan` set, that is your plan. Unset, the installer derives it again from the enabled services and `k8sManager` ([Table 4.1](#table-41-default-address-plan)), so enabling or disabling CaaS or BMaaS changes it. To change it, see [Section 4.4.8](#448-replacing-the-networkclass). To disable a service without replacing the `NetworkClass`, first set `addressPlan` to the stored plan. | The installer: "NetworkClass spec.address_plan cannot change after installation; see Replacing the NetworkClass". A plan that breaks a rule fails earlier with the rule's message, for example "global.networking.networkClass.addressPlan.lbVip must be greater than 0 when CaaS is enabled". |
 | `excludedIpv4Cidrs` | You can add ranges that overlap none of these: the default `virtualNetworkIPv4CIDR`, a VirtualNetwork, or an ExternalIPPool. | The fulfillment service refuses to start: "excludedIpv4Cidrs range <CIDR> overlaps <kind> <ID or CIDR>". |
 | Node ASN, VTEP range and VNI range (`evpn.bgp.asn` and `evpn.nodes[].asn`, `evpn.vtepCIDR`, the Fabric Manager's VNI setting; none for Netris) | Fixed. To change them, reinstall. You can add or remove VMaaS nodes ([Section 2.6](#26-evpn-host-networking-for-vmaas)). | Nothing: agree on both sides before the first install ([Section 4.4.2](#442-prerequisites-for-provider-networking)). |
@@ -1702,7 +1702,9 @@ get no default NATGateway and no pool is needed.
 You need a new `NetworkClass` for a new Fabric Manager role name or network
 types, new `fabricManager`, `k8sManager`, or `networkClass` values, or a new
 address plan, for example to enable CaaS on a plan without `lbVip`: once the
-`NetworkClass` is `READY`, every resource uses the managers it recorded.
+`NetworkClass` is `READY`, every resource uses the managers it recorded. A
+replacement keeps the installation-wide `provisioningEnabled` mode; changing
+that mode requires reinstalling with a fresh Fulfillment database.
 
 **Procedure**
 

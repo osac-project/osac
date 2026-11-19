@@ -125,8 +125,6 @@ var _ = Describe("Permission catalog", func() {
 			Entry("Role bindings", "osac.public.rolebindings", "osac.public.v1.RoleBindings"),
 			Entry("NAT gateways", "osac.private.natgateways", "osac.private.v1.NATGateways"),
 			Entry("Compute instances", "osac.public.computeinstances", "osac.public.v1.ComputeInstances"),
-			Entry("Installation settings, private only", "osac.private.installationsettings",
-				"osac.private.v1.InstallationSettings"),
 		)
 
 		It("Maps methods to full gRPC methods", func() {

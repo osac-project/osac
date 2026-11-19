@@ -31,11 +31,15 @@ custom resources and reconciles them to their desired state:
 
 ## Configuration
 
-When connected to Fulfillment, the operator compares
-`global.networking.provisioningEnabled` with the saved installation value
-before reconciliation. Set `fulfillment.serverAddress` to the private gRPC
-endpoint and provide the matching credentials and CA bundle. The operator can
-also run without Fulfillment for standalone tests.
+The operator reads the installation-wide provider networking mode from the
+deployment's `NetworkClass` CR, which the fulfillment service projects from the
+installation setting. It keeps `global.networking.provisioningEnabled`
+(`OSAC_PROVISIONING_ENABLED`) only as an assertion: a rendered value that
+differs from the class means the Helm value changed without reinstalling, and
+the operator then takes no provider action. Set `fulfillment.serverAddress` to
+the private gRPC endpoint and provide the matching credentials and CA bundle
+for the fulfillment-backed controllers. The operator can also run without
+Fulfillment for standalone tests.
 
 Configuration is supplied via environment variables (e.g. from a Secret mounted
 into the manager deployment). The following are supported:

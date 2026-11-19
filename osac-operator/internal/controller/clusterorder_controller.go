@@ -77,23 +77,21 @@ func (r *ClusterOrderReconciler) components() []component {
 // ClusterOrderReconciler reconciles a ClusterOrder object
 type ClusterOrderReconciler struct {
 	client.Client
-	apiReader             client.Reader
-	Scheme                *runtime.Scheme
-	ClusterOrderNamespace string
-	AgentNamespace        string
-	NetworkingNamespace   string
-	// NetworkingProvisioningEnabled is global.networking.provisioningEnabled.
-	NetworkingProvisioningEnabled bool
-	ClustersClient                automaticClustersGetter
-	ExternalIPAttachmentsClient   automaticExternalIPAttachmentsClient
-	managementProbe               managementEndpointProbe
-	ManagementRootCAs             *x509.CertPool
-	Engine                        *networktask.Engine
-	ProvisioningProvider          provisioning.ProvisioningProvider
-	StatusPollInterval            time.Duration
-	MaxJobHistory                 int
-	StallThresholds               ClusterOrderStallThresholds
-	Recorder                      events.EventRecorder
+	apiReader                   client.Reader
+	Scheme                      *runtime.Scheme
+	ClusterOrderNamespace       string
+	AgentNamespace              string
+	NetworkingNamespace         string
+	ClustersClient              automaticClustersGetter
+	ExternalIPAttachmentsClient automaticExternalIPAttachmentsClient
+	managementProbe             managementEndpointProbe
+	ManagementRootCAs           *x509.CertPool
+	Engine                      *networktask.Engine
+	ProvisioningProvider        provisioning.ProvisioningProvider
+	StatusPollInterval          time.Duration
+	MaxJobHistory               int
+	StallThresholds             ClusterOrderStallThresholds
+	Recorder                    events.EventRecorder
 	// SecretsClient resolves the Cluster's registered SSH-key Secret through
 	// the fulfillment private API. The resolved material is passed only as an
 	// AAP launch variable; it is never persisted on the ClusterOrder.
@@ -150,18 +148,17 @@ func NewClusterOrderReconciler(
 	}
 
 	return &ClusterOrderReconciler{
-		Client:                        client,
-		apiReader:                     apiReader,
-		Scheme:                        scheme,
-		ClusterOrderNamespace:         clusterOrderNamespace,
-		NetworkingNamespace:           networkingNamespace,
-		NetworkingProvisioningEnabled: true,
-		ProvisioningProvider:          provisioningProvider,
-		StatusPollInterval:            statusPollInterval,
-		MaxJobHistory:                 maxJobHistory,
-		StallThresholds:               DefaultClusterOrderStallThresholds(),
-		Recorder:                      nil,
-		now:                           time.Now,
+		Client:                client,
+		apiReader:             apiReader,
+		Scheme:                scheme,
+		ClusterOrderNamespace: clusterOrderNamespace,
+		NetworkingNamespace:   networkingNamespace,
+		ProvisioningProvider:  provisioningProvider,
+		StatusPollInterval:    statusPollInterval,
+		MaxJobHistory:         maxJobHistory,
+		StallThresholds:       DefaultClusterOrderStallThresholds(),
+		Recorder:              nil,
+		now:                   time.Now,
 	}
 }
 
@@ -842,7 +839,7 @@ func (r *ClusterOrderReconciler) reconcileClusterOrderReadiness(
 	}
 
 	instance.SetStatusCondition(v1alpha1.ConditionClusterAvailable, metav1.ConditionTrue, "", v1alpha1.ReasonAsExpected)
-	if requiresEndpointLifecycle && r.Engine != nil && r.Engine.ProvisioningEnabled() &&
+	if requiresEndpointLifecycle &&
 		!apimeta.IsStatusConditionTrue(instance.Status.Conditions, string(v1alpha1.ClusterOrderConditionEndpointsReady)) &&
 		!r.clusterOrderHasTransientEndpointProbeFailure(instance, priorPhase) {
 		setClusterOrderPhase(&instance.Status, v1alpha1.ClusterOrderPhaseProgressing)
@@ -1357,7 +1354,11 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 
 	// Worker resources can outlive the HostedCluster. Keep a recorded ingress
 	// reservation until the worker controller has removed its references.
-	if r.clusterIngressReservationRecorded(instance) && len(instance.Status.Workers) > 0 {
+	reservationRecorded, reservationErr := r.clusterIngressReservationRecorded(ctx, instance)
+	if reservationErr != nil {
+		return ctrl.Result{}, reservationErr
+	}
+	if reservationRecorded && len(instance.Status.Workers) > 0 {
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
 	}
 
@@ -1403,9 +1404,18 @@ func (r *ClusterOrderReconciler) reconcileAutomaticExternalIPAttachmentsWithLook
 	instance *v1alpha1.ClusterOrder,
 	clusterLookup *fulfillmentClusterLookup,
 ) (ctrl.Result, error) {
-	if !r.NetworkingProvisioningEnabled || r.Engine == nil || !r.Engine.ProvisioningEnabled() ||
-		r.ClustersClient == nil ||
+	if r.Engine == nil || r.ClustersClient == nil ||
 		r.ExternalIPAttachmentsClient == nil || r.NetworkingNamespace == "" {
+		return ctrl.Result{}, nil
+	}
+	networkingEnabled, networkingRequeue, networkingErr := networkingMode(ctx, r.Engine)
+	if networkingErr != nil {
+		return ctrl.Result{}, networkingErr
+	}
+	if networkingRequeue {
+		return ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, nil
+	}
+	if !networkingEnabled {
 		return ctrl.Result{}, nil
 	}
 	clusterID := instance.Labels[osacClusterOrderIDLabel]

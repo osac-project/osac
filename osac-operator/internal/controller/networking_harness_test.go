@@ -201,16 +201,17 @@ func (f *netFakeAAP) cancelledJobs() []int {
 
 // netHarness is one networking namespace with an engine on the fake AAP.
 type netHarness struct {
-	ns     string
-	aap    *netFakeAAP
-	engine *networktask.Engine
+	ns      string
+	aap     *netFakeAAP
+	engine  *networktask.Engine
+	enabled bool
 }
 
 func newNetHarness(enabled bool) *netHarness {
-	h := &netHarness{ns: crdTestName("net"), aap: newNetFakeAAP()}
+	h := &netHarness{ns: crdTestName("net"), aap: newNetFakeAAP(), enabled: enabled}
 	Expect(k8sClient.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: h.ns}})).To(Succeed())
 	h.engine = networktask.New(k8sClient, k8sClient, h.aap, networktask.Config{
-		TemplatePrefix: "osac", Organization: "osac", ProvisioningEnabled: enabled,
+		TemplatePrefix: "osac", Organization: "osac", ProvisioningMode: networktask.StaticMode(enabled),
 	})
 	return h
 }
@@ -239,12 +240,14 @@ func (h *netHarness) meta(kind, id string) metav1.ObjectMeta {
 
 // networkClass creates a Ready NetworkClass.
 func (h *netHarness) networkClass(k8s, eastWest bool) {
+	enabled := h.enabled
 	nc := &v1alpha1.NetworkClass{
 		ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: h.ns, Labels: map[string]string{osacNetworkClassIDLabel: "nc-1"}},
 		Spec: v1alpha1.NetworkClassSpec{
-			FabricManager: "acme_fabric",
-			Defaults:      v1alpha1.NetworkClassDefaults{VirtualNetworkIPv4CIDR: "10.0.0.0/16", SubnetIPv4CIDR: "10.0.1.0/24"},
-			AddressPlan:   v1alpha1.SubnetAddressPlan{Overlay: 8, Fabric: 4, LBVIP: 4},
+			FabricManager:       "acme_fabric",
+			Defaults:            v1alpha1.NetworkClassDefaults{VirtualNetworkIPv4CIDR: "10.0.0.0/16", SubnetIPv4CIDR: "10.0.1.0/24"},
+			AddressPlan:         v1alpha1.SubnetAddressPlan{Overlay: 8, Fabric: 4, LBVIP: 4},
+			ProvisioningEnabled: &enabled,
 		},
 	}
 	if k8s {

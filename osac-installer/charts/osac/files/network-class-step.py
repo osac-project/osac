@@ -118,6 +118,8 @@ def normalize_plan(plan: dict | None) -> dict:
 
 def validate(inp: dict) -> None:
     """Re-check the values the chart validated, plus the rules render time cannot."""
+    if not isinstance(inp.get("provisioning_enabled"), bool):
+        raise StepError("provisioning_enabled must be a boolean")
     services = inp.get("services", {})
     k8s_manager = inp.get("k8s_manager") or ""
     plan = normalize_plan(inp["address_plan"])
@@ -197,6 +199,9 @@ def changed_fields(stored: dict, inp: dict) -> list[str]:
     stored_ew = bool((spec.get("east_west_capabilities") or {}).get("supports_east_west_ethernet"))
     wanted_ew = bool(inp["east_west_capabilities"].get("supports_east_west_ethernet"))
     fields = []
+    stored_mode = spec.get("provisioning_enabled")
+    if stored_mode is not None and stored_mode != bool(inp["provisioning_enabled"]):
+        fields.append("spec.provisioning_enabled")
     if (stored.get("fabric_manager") or "") != inp["fabric_manager"]:
         fields.append("fabric_manager")
     if (stored.get("k8s_manager") or "") != (inp.get("k8s_manager") or ""):
@@ -218,6 +223,7 @@ def create_body(inp: dict) -> dict:
             "defaults": inp["defaults"],
             "east_west_capabilities": inp["east_west_capabilities"],
             "address_plan": normalize_plan(inp["address_plan"]),
+            "provisioning_enabled": bool(inp["provisioning_enabled"]),
         },
     }
     if inp.get("k8s_manager"):

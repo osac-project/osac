@@ -61,7 +61,6 @@ type NetworkClassReconciler struct {
 	Client              clnt.Client
 	APIReader           clnt.Reader
 	NetworkingNamespace string
-	ProvisioningEnabled bool
 	// RegistrationNamespace is the namespace of the manager registrations (the
 	// operator's Helm release namespace).
 	RegistrationNamespace string
@@ -80,8 +79,14 @@ func (r *NetworkClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if meta.IsStatusConditionTrue(nc.Status.Conditions, v1alpha1.NetworkConditionReady) {
 		return ctrl.Result{}, nil
 	}
+	// The fulfillment controller projects the installation-wide provisioning mode. Until it does, the class cannot be
+	// resolved: the mode must never default, because disabled and unresolved have different consequences.
+	if nc.Spec.ProvisioningEnabled == nil {
+		log.Info("NetworkClass has no provisioning mode yet; waiting for the fulfillment controller to project it")
+		return ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, nil
+	}
 	before := nc.Status.DeepCopy()
-	if !r.ProvisioningEnabled {
+	if !*nc.Spec.ProvisioningEnabled {
 		nc.Status.NetworkManagers = nil
 		nc.Status.NetworkType = ""
 		nc.Status.SecurityGroupICMP = nil
@@ -186,7 +191,7 @@ func (r *NetworkClassReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	controller := ctrl.NewControllerManagedBy(localMgr).
 		Named("networkclass").
 		For(&v1alpha1.NetworkClass{}, builder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)))
-	if !r.ProvisioningEnabled {
+	if r.RegistrationNamespace == "" {
 		return controller.Complete(r)
 	}
 	registrations, err := cache.New(localMgr.GetConfig(), cache.Options{

@@ -48,6 +48,19 @@ var _ = Describe("BareMetalInstance cleanup automatic external access", func() {
 				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespaceName}}))).To(Succeed())
 			})
 		}
+		enabled := true
+		Expect(k8sClient.Create(ctx, &osacv1alpha1.NetworkClass{
+			ObjectMeta: metav1.ObjectMeta{Name: "default", Namespace: networkNamespace},
+			Spec: osacv1alpha1.NetworkClassSpec{
+				FabricManager: "test",
+				Defaults: osacv1alpha1.NetworkClassDefaults{
+					VirtualNetworkIPv4CIDR: "10.0.0.0/16",
+					SubnetIPv4CIDR:         "10.0.1.0/24",
+				},
+				AddressPlan:         osacv1alpha1.SubnetAddressPlan{Overlay: 8, Fabric: 4, LBVIP: 4},
+				ProvisioningEnabled: &enabled,
+			},
+		})).To(Succeed())
 		return bmiNamespace, networkNamespace
 	}
 

@@ -52,8 +52,15 @@ func (r *VirtualNetworkReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 }
 
 func (r *VirtualNetworkReconciler) create(ctx context.Context, vn *v1alpha1.VirtualNetwork) (ctrl.Result, error) {
+	enabled, requeue, modeErr := networkingMode(ctx, r.Engine)
+	if modeErr != nil {
+		return ctrl.Result{}, modeErr
+	}
+	if requeue {
+		return ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, nil
+	}
 	if vn.Status.NetworkManagers == nil {
-		nc, err := readyNetworkClass(ctx, r.Client, vn.Namespace, r.Engine.ProvisioningEnabled())
+		nc, err := readyNetworkClass(ctx, r.Client, vn.Namespace)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -74,7 +81,7 @@ func (r *VirtualNetworkReconciler) create(ctx context.Context, vn *v1alpha1.Virt
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if !r.Engine.ProvisioningEnabled() {
+	if !enabled {
 		networktask.SetProvisioningDisabled(vn, networktask.CreateVirtualNetwork)
 		return ctrl.Result{}, store()
 	}

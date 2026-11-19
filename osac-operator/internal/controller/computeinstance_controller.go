@@ -102,8 +102,8 @@ type ComputeInstanceReconciler struct {
 	ComputeInstanceNamespace string
 	TenantNamespace          string
 	NetworkingNamespace      string
-	// Engine launches and tracks the provision and deprovision jobs. Its
-	// ProvisioningEnabled is global.networking.provisioningEnabled.
+	// Engine launches and tracks the provision and deprovision jobs, and resolves
+	// the installation-wide provider networking mode.
 	Engine *networktask.Engine
 	// ProvisionTemplate and DeprovisionTemplate are the ocp_virt_vm job templates.
 	ProvisionTemplate   string
@@ -395,9 +395,10 @@ func (r *ComputeInstanceReconciler) mapTenantToComputeInstances(ctx context.Cont
 	return requests
 }
 
-// provisioningEnabled reports global.networking.provisioningEnabled.
-func (r *ComputeInstanceReconciler) provisioningEnabled() bool {
-	return r.Engine.ProvisioningEnabled()
+// provisioningEnabled resolves the installation-wide provider networking mode. When the mode isn't resolved yet it
+// reports requeue, and the caller must take no provider action.
+func (r *ComputeInstanceReconciler) provisioningEnabled(ctx context.Context) (bool, bool, error) {
+	return networkingMode(ctx, r.Engine)
 }
 
 func (r *ComputeInstanceReconciler) clock() time.Time {
@@ -473,7 +474,14 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	// or the Tenant namespace with provider networking disabled.
 	var na *v1alpha1.NetworkAttachment
 	vmNamespace := ""
-	if r.provisioningEnabled() {
+	networkingEnabled, networkingRequeue, networkingErr := r.provisioningEnabled(ctx)
+	if networkingErr != nil {
+		return ctrl.Result{}, networkingErr
+	}
+	if networkingRequeue {
+		return ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, nil
+	}
+	if networkingEnabled {
 		var wait bool
 		na, wait, err = r.reconcileNetworkAttachment(ctx, instance)
 		if err != nil || wait {
@@ -827,7 +835,14 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 	if err != nil {
 		return networktask.Outcome{}, fmt.Errorf("build the provision job input: %w", err)
 	}
-	vars["vm_network"] = vmNetwork(vmNamespace, instance.Labels[osacComputeInstanceIDLabel], r.provisioningEnabled())
+	networkingEnabled, networkingRequeue, networkingErr := r.provisioningEnabled(ctx)
+	if networkingErr != nil {
+		return networktask.Outcome{}, networkingErr
+	}
+	if networkingRequeue {
+		return networktask.Outcome{}, nil
+	}
+	vars["vm_network"] = vmNetwork(vmNamespace, instance.Labels[osacComputeInstanceIDLabel], networkingEnabled)
 	desired := instance.Status.DesiredConfigVersion
 	return r.Engine.Run(ctx, instance, networktask.Request{
 		Task:     computeInstanceProvisionTask,
@@ -867,7 +882,13 @@ func computeInstanceConfigApplied(instance *v1alpha1.ComputeInstance) bool {
 // (VMaaS design, Network status and address discovery).
 func (r *ComputeInstanceReconciler) reconcileNetworkStatus(ctx context.Context, instance *v1alpha1.ComputeInstance,
 	na *v1alpha1.NetworkAttachment, kv *kubevirtv1.VirtualMachine) (ctrl.Result, error) {
-	enabled := r.provisioningEnabled()
+	enabled, requeue, modeErr := r.provisioningEnabled(ctx)
+	if modeErr != nil {
+		return ctrl.Result{}, modeErr
+	}
+	if requeue {
+		return ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, nil
+	}
 	failed := na != nil && networkAttachmentFailed(na)
 	oldAddress := instance.Status.IPAddress
 
@@ -1135,7 +1156,14 @@ func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ reconcil
 		return result, err
 	}
 
-	if r.provisioningEnabled() {
+	networkingEnabled, networkingRequeue, networkingErr := r.provisioningEnabled(ctx)
+	if networkingErr != nil {
+		return ctrl.Result{}, networkingErr
+	}
+	if networkingRequeue {
+		return ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, nil
+	}
+	if networkingEnabled {
 		naGone, err := r.deleteNetworkAttachment(ctx, instance)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -1196,7 +1224,14 @@ func (r *ComputeInstanceReconciler) removeVM(ctx context.Context, instance *v1al
 	if err != nil {
 		return false, ctrl.Result{}, fmt.Errorf("build the deprovision job input: %w", err)
 	}
-	vars["vm_network"] = vmNetwork(namespace, instance.Labels[osacComputeInstanceIDLabel], r.provisioningEnabled())
+	networkingEnabled, networkingRequeue, networkingErr := r.provisioningEnabled(ctx)
+	if networkingErr != nil {
+		return false, ctrl.Result{}, networkingErr
+	}
+	if networkingRequeue {
+		return false, ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, nil
+	}
+	vars["vm_network"] = vmNetwork(namespace, instance.Labels[osacComputeInstanceIDLabel], networkingEnabled)
 	outcome, err := r.Engine.Run(ctx, instance, networktask.Request{
 		Task:     computeInstanceDeprovisionTask,
 		Manager:  v1alpha1.NetworkJobManagerNone,

@@ -51,6 +51,12 @@ var (
 	// waits for a READY IPv4 ExternalIPPool. The other default resources are
 	// still ensured; the controller retries later.
 	ErrNoReadyPool = errors.New("no READY IPv4 ExternalIPPool")
+
+	// ErrModeUnresolved tells the owning controller that the installation
+	// networking mode isn't available yet, because there is no NetworkClass or
+	// because its provisioning mode hasn't been backfilled. It is transient: the
+	// controller retries and takes no provider action in the meantime.
+	ErrModeUnresolved = errors.New("the installation networking mode is not resolved")
 )
 
 type networkClassesReader interface {
@@ -99,9 +105,8 @@ type Manager interface {
 
 // ManagerBuilder contains the data needed to create a default-networking manager.
 type ManagerBuilder struct {
-	logger              *slog.Logger
-	connection          *grpc.ClientConn
-	provisioningEnabled *bool
+	logger     *slog.Logger
+	connection *grpc.ClientConn
 }
 
 // NewManager creates a builder for the shared default-networking manager.
@@ -121,13 +126,6 @@ func (b *ManagerBuilder) SetConnection(value *grpc.ClientConn) *ManagerBuilder {
 	return b
 }
 
-// SetProvisioningEnabled sets the value of global.networking.provisioningEnabled. With provider networking disabled
-// the manager creates no ExternalIP and no NATGateway. The default is true.
-func (b *ManagerBuilder) SetProvisioningEnabled(value bool) *ManagerBuilder {
-	b.provisioningEnabled = &value
-	return b
-}
-
 // Build creates a manager backed by the private fulfillment API.
 func (b *ManagerBuilder) Build() (Manager, error) {
 	if b.logger == nil {
@@ -136,33 +134,27 @@ func (b *ManagerBuilder) Build() (Manager, error) {
 	if b.connection == nil {
 		return nil, errors.New("connection is mandatory")
 	}
-	provisioningEnabled := true
-	if b.provisioningEnabled != nil {
-		provisioningEnabled = *b.provisioningEnabled
-	}
 	return &manager{
-		provisioningEnabled: provisioningEnabled,
-		logger:              b.logger,
-		networkClasses:      privatev1.NewNetworkClassesClient(b.connection),
-		virtualNetworks:     privatev1.NewVirtualNetworksClient(b.connection),
-		subnets:             privatev1.NewSubnetsClient(b.connection),
-		securityGroups:      privatev1.NewSecurityGroupsClient(b.connection),
-		externalIPPools:     privatev1.NewExternalIPPoolsClient(b.connection),
-		externalIPs:         privatev1.NewExternalIPsClient(b.connection),
-		natGateways:         privatev1.NewNATGatewaysClient(b.connection),
+		logger:          b.logger,
+		networkClasses:  privatev1.NewNetworkClassesClient(b.connection),
+		virtualNetworks: privatev1.NewVirtualNetworksClient(b.connection),
+		subnets:         privatev1.NewSubnetsClient(b.connection),
+		securityGroups:  privatev1.NewSecurityGroupsClient(b.connection),
+		externalIPPools: privatev1.NewExternalIPPoolsClient(b.connection),
+		externalIPs:     privatev1.NewExternalIPsClient(b.connection),
+		natGateways:     privatev1.NewNATGatewaysClient(b.connection),
 	}, nil
 }
 
 type manager struct {
-	provisioningEnabled bool
-	logger              *slog.Logger
-	networkClasses      networkClassesReader
-	virtualNetworks     virtualNetworksClient
-	subnets             subnetsClient
-	securityGroups      securityGroupsClient
-	externalIPPools     externalIPPoolsReader
-	externalIPs         externalIPsClient
-	natGateways         natGatewaysClient
+	logger          *slog.Logger
+	networkClasses  networkClassesReader
+	virtualNetworks virtualNetworksClient
+	subnets         subnetsClient
+	securityGroups  securityGroupsClient
+	externalIPPools externalIPPoolsReader
+	externalIPs     externalIPsClient
+	natGateways     natGatewaysClient
 }
 
 // Ensure creates the default resources of a tenant from the defaults of the
@@ -191,13 +183,18 @@ func (m *manager) Ensure(ctx context.Context, tenantName string) (*privatev1.Net
 		networkClass.GetMetadata().HasDeletionTimestamp() {
 		return defaults, nil
 	}
+	if !networkClass.GetSpec().HasProvisioningEnabled() {
+		return defaults, fmt.Errorf("%w: NetworkClass '%s' has no provisioning mode", ErrModeUnresolved,
+			networkClass.GetId())
+	}
+	provisioningEnabled := networkClass.GetSpec().GetProvisioningEnabled()
 	vn, err := m.ensureVirtualNetwork(ctx, tenantName, defaults)
 	if err != nil {
 		return nil, fmt.Errorf("failed to ensure default VirtualNetwork: %w", err)
 	}
 	var externalIP *privatev1.ExternalIP
 	var waitErr error
-	if m.provisioningEnabled {
+	if provisioningEnabled {
 		externalIP, err = m.ensureExternalIP(ctx, tenantName)
 		switch {
 		case errors.Is(err, ErrNoPoolCapacity):

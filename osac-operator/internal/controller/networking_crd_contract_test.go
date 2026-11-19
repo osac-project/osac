@@ -167,7 +167,8 @@ var _ = Describe("Networking CRD contracts", func() {
 					VirtualNetworkIPv4CIDR: "10.0.0.0/16", SubnetIPv4CIDR: "10.0.1.0/24",
 					EgressRules: []v1alpha1.SecurityRule{{Protocol: "all", DestinationCIDR: "0.0.0.0/0"}},
 				},
-				AddressPlan: evenPlan(),
+				AddressPlan:         evenPlan(),
+				ProvisioningEnabled: ptr.To(true),
 			}}
 		}
 

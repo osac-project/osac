@@ -292,9 +292,7 @@ func findExternalIP(ctx context.Context, c client.Reader, namespace, id string) 
 // readyNetworkClass returns the deployment's NetworkClass when it is Ready
 // (a deployment has exactly one), or nil while none is. Manager status is
 // required only when provider networking is enabled.
-func readyNetworkClass(
-	ctx context.Context, c client.Reader, namespace string, provisioningEnabled bool,
-) (*v1alpha1.NetworkClass, error) {
+func readyNetworkClass(ctx context.Context, c client.Reader, namespace string) (*v1alpha1.NetworkClass, error) {
 	list := &v1alpha1.NetworkClassList{}
 	if err := c.List(ctx, list, client.InNamespace(namespace)); err != nil {
 		return nil, fmt.Errorf("listing NetworkClasses: %w", err)
@@ -302,8 +300,14 @@ func readyNetworkClass(
 	var ready []*v1alpha1.NetworkClass
 	for i := range list.Items {
 		nc := &list.Items[i]
-		if nc.DeletionTimestamp == nil && meta.IsStatusConditionTrue(nc.Status.Conditions, v1alpha1.NetworkConditionReady) &&
-			(!provisioningEnabled || (nc.Status.NetworkManagers != nil && nc.Status.NetworkManagers.Fabric != nil)) {
+		// A class without a provisioning mode predates the field, or its mode is not projected yet. It is not ready
+		// for any consumer: the mode is installation state and must never default.
+		if nc.DeletionTimestamp != nil || nc.Spec.ProvisioningEnabled == nil ||
+			!meta.IsStatusConditionTrue(nc.Status.Conditions, v1alpha1.NetworkConditionReady) {
+			continue
+		}
+		enabled := *nc.Spec.ProvisioningEnabled
+		if !enabled || (nc.Status.NetworkManagers != nil && nc.Status.NetworkManagers.Fabric != nil) {
 			ready = append(ready, nc)
 		}
 	}

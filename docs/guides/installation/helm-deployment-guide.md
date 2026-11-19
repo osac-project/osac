@@ -1096,9 +1096,11 @@ upgrades, preserve the existing `global.networking.provisioningEnabled`,
 `global.networking.fabricManager`, `global.networking.k8sManager`,
 `global.services.*`, and NetworkClass settings in `my-values.yaml`.
 `provisioningEnabled` cannot change after installation; changing it prevents
-the Fulfillment Service from starting. The `create-network-class` hook rejects
-changed manager selections or NetworkClass defaults, capabilities, or address
-plan. A service-toggle change can also fail the check if it changes the derived
+the Fulfillment Service from starting. On upgrade, the Fulfillment Service
+backfills the existing `NetworkClass` from the stored value, and the OSAC
+operator and BMF read the mode from it. The `create-network-class` hook rejects
+changed manager selections or NetworkClass defaults, capabilities, address
+plan, or provisioning mode. A service-toggle change can also fail the check if it changes the derived
 address plan or violates a service constraint. Before upgrading, compare the
 stored NetworkClass with the networking values in
 `my-values.yaml`; see the customer install guide's

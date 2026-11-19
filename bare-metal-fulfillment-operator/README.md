@@ -303,10 +303,15 @@ with a diagnostic for invalid input. Helm installations use the shared boolean
 `global.networking.provisioningEnabled`. The removed `env.enableNetworkingProvisioning`
 key is rejected. See the [shared configuration and upgrade guide](../osac-installer/docs/network-backend.md#shared-provider-networking-provisioning-setting)
 for coordinated rollout and migration from mixed settings.
-When `secretAPI.url` is set, BMF reads Fulfillment's saved installation value
-through the authenticated private API before reconciliation. It exits if
-Fulfillment cannot be reached or if the value differs. An empty URL selects
-standalone mode, as used by the BMF integration suite. The chart mounts the Fulfillment client
+When `secretAPI.url` is set, BMF reads the installation-wide provider
+networking mode from the deployment's `NetworkClass` through the authenticated
+private API. It retries while the mode cannot be read and takes no provider
+action, and it never treats a missing mode as disabled. Its rendered
+`OSAC_ENABLE_NETWORKING_PROVISIONING` value is an assertion: a value that
+differs from the class reports the mismatch and runs no networking work. An
+empty URL selects standalone mode, which uses the explicit
+`OSAC_ENABLE_NETWORKING_PROVISIONING` value, as used by the BMF integration
+suite. The chart mounts the Fulfillment client
 credentials for this check even when NetBox is disabled. The CA bundle is
 optional: set `secretAPI.caBundle.configMap` to a ConfigMap in the BMF namespace
 when Fulfillment's certificate is not trusted by the system CA bundle. The OSAC

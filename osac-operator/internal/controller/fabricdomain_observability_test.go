@@ -498,7 +498,7 @@ var _ = Describe("FabricDomain observability conflicts, restarts and toggles", f
 		<-recorder.Events
 		enabled := r.Engine
 		r.Engine = networktask.New(k8sClient, k8sClient, h.aap, networktask.Config{
-			TemplatePrefix: "osac", Organization: "osac", ProvisioningEnabled: false})
+			TemplatePrefix: "osac", Organization: "osac", ProvisioningMode: networktask.StaticMode(false)})
 		reconcileNet(r, fd)
 		expectReady(fd, metav1.ConditionTrue, v1alpha1.ReasonProvisioningDisabled)
 		r.Engine = enabled
@@ -510,7 +510,7 @@ var _ = Describe("FabricDomain observability conflicts, restarts and toggles", f
 
 	It("does not count Ready with provisioning disabled as provisioned", func() {
 		r.Engine = networktask.New(k8sClient, k8sClient, h.aap, networktask.Config{
-			TemplatePrefix: "osac", Organization: "osac", ProvisioningEnabled: false})
+			TemplatePrefix: "osac", Organization: "osac", ProvisioningMode: networktask.StaticMode(false)})
 		fd := newDomain("fd-c6")
 		reconcileNet(r, fd)
 		expectReady(fd, metav1.ConditionTrue, v1alpha1.ReasonProvisioningDisabled)

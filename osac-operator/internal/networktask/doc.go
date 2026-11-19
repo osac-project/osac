@@ -72,7 +72,11 @@ Engine, created in cmd/main.go with New, is shared by every controller.
 A networking resource controller reconciles roughly like this:
 
 	// Create, once the parent is Ready (copy managers and network type first).
-	if eng := r.Engine; !eng.ProvisioningEnabled() {
+	enabled, requeue, err := networkingMode(ctx, r.Engine) // reads the NetworkClass provisioning mode
+	if err != nil || requeue {
+		return ctrl.Result{RequeueAfter: ProvisioningModeRequeue}, err // no provider action while unresolved
+	}
+	if !enabled {
 		networktask.SetProvisioningDisabled(obj, networktask.CreateSubnet) // no job; delete removes the finalizer
 		...
 	}

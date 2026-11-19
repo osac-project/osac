@@ -84,7 +84,7 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 	It("uses the configured AAP prefix for cluster endpoint jobs", func() {
 		h := newNetHarness(true)
 		h.engine = networktask.New(k8sClient, k8sClient, h.aap, networktask.Config{
-			TemplatePrefix: "tenant-osac", Organization: "osac", ProvisioningEnabled: true,
+			TemplatePrefix: "tenant-osac", Organization: "osac", ProvisioningMode: networktask.StaticMode(true),
 		})
 		instance := createClusterOrderForIngress(h, "endpoint-template-prefix", "unused-subnet")
 		reconciler := &ClusterOrderReconciler{Client: k8sClient, Engine: h.engine}
@@ -218,10 +218,9 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 			}},
 		}
 		reconciler := &ClusterOrderReconciler{
-			Client:                        k8sClient,
-			apiReader:                     k8sClient,
-			Engine:                        h.engine,
-			NetworkingProvisioningEnabled: false,
+			Client:    k8sClient,
+			apiReader: k8sClient,
+			Engine:    h.engine,
 			ClustersClient: &mockClustersClient{
 				getResponse: privatev1.ClustersGetResponse_builder{
 					Object: privatev1.Cluster_builder{
@@ -656,15 +655,14 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 		hc.Status.ControlPlaneEndpoint.Port = 6443
 		clustersClient := &mockClustersClient{getError: status.Error(codes.NotFound, "cluster not found")}
 		reconciler := &ClusterOrderReconciler{
-			Client:                        k8sClient,
-			apiReader:                     k8sClient,
-			Engine:                        h.engine,
-			NetworkingNamespace:           h.ns,
-			NetworkingProvisioningEnabled: true,
-			ClustersClient:                clustersClient,
-			ProvisioningProvider:          noopProvisioningProvider{},
-			MaxJobHistory:                 10,
-			StatusPollInterval:            time.Second,
+			Client:               k8sClient,
+			apiReader:            k8sClient,
+			Engine:               h.engine,
+			NetworkingNamespace:  h.ns,
+			ClustersClient:       clustersClient,
+			ProvisioningProvider: noopProvisioningProvider{},
+			MaxJobHistory:        10,
+			StatusPollInterval:   time.Second,
 		}
 
 		apiReady, address, failure, err := reconciler.externalEndpointReady(ctx, instance, autoCreatedEndpointAPI)
@@ -1145,7 +1143,7 @@ var _ = Describe("ClusterOrder delete dependency sequence", func() {
 			Build()
 		aap := newNetFakeAAP()
 		engine := networktask.New(fakeClient, fakeClient, aap, networktask.Config{
-			TemplatePrefix: "osac", Organization: "osac", ProvisioningEnabled: true,
+			TemplatePrefix: "osac", Organization: "osac", ProvisioningMode: networktask.StaticMode(true),
 		})
 		reconciler := &ClusterOrderReconciler{
 			Client: fakeClient, Engine: engine, StatusPollInterval: time.Second,
@@ -1252,7 +1250,7 @@ var _ = Describe("ClusterOrder delete dependency sequence", func() {
 		Expect(fakeClient.Status().Update(ctx, instance)).To(Succeed())
 		aap := newNetFakeAAP()
 		engine := networktask.New(fakeClient, fakeClient, aap, networktask.Config{
-			TemplatePrefix: "osac", Organization: "osac", ProvisioningEnabled: true,
+			TemplatePrefix: "osac", Organization: "osac", ProvisioningMode: networktask.StaticMode(true),
 		})
 		reconciler := &ClusterOrderReconciler{
 			Client: fakeClient, Engine: engine, NetworkingNamespace: networkingNamespace,
@@ -1411,7 +1409,7 @@ func newDisabledEndpointDeleteFixture(jobs []v1alpha1.NetworkJobStatus) disabled
 	Expect(fakeClient.Status().Update(ctx, order)).To(Succeed())
 	aapServer := newNetFakeAAP()
 	engine := networktask.New(fakeClient, fakeClient, aapServer, networktask.Config{
-		TemplatePrefix: "osac", Organization: "osac", ProvisioningEnabled: false,
+		TemplatePrefix: "osac", Organization: "osac", ProvisioningMode: networktask.StaticMode(false),
 	})
 	return disabledEndpointDeleteFixture{
 		client: fakeClient,

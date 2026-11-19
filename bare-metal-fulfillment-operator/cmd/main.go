@@ -147,12 +147,11 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
-	networkingProvisioningEnabled := loadNetworkingProvisioning()
-	setupLog.Info("networking provisioning feature gate", "enabled", networkingProvisioningEnabled)
 
 	ctx := ctrl.SetupSignalHandler()
-	if err := checkInstallationProvisioning(ctx, networkingProvisioningEnabled); err != nil {
-		setupLog.Error(err, "unable to verify installation networking setting")
+	provisioningMode, provisioningModeErr := newProvisioningMode(ctx)
+	if provisioningModeErr != nil {
+		setupLog.Error(provisioningModeErr, "unable to create the networking provisioning mode resolver")
 		os.Exit(1)
 	}
 
@@ -323,7 +322,7 @@ func main() {
 	}
 
 	if err := setupBareMetalInstanceController(
-		ctx, mgr, provisioningProvider, networkingProvisioningEnabled,
+		ctx, mgr, provisioningProvider, provisioningMode,
 	); err != nil {
 		setupLog.Error(err, "unable to setup controller", "controller", "BareMetalInstance")
 		os.Exit(1)
@@ -429,7 +428,7 @@ func setupBareMetalInstanceController(
 	ctx context.Context,
 	mgr ctrl.Manager,
 	provisioningProvider provisioning.ProvisioningProvider,
-	networkingEnabled bool,
+	provisioningMode controller.ProvisioningMode,
 ) error {
 	// Read and parse inventory configuration
 	inventoryConfigPath := helpers.GetEnvWithDefault(envInventoryConfigPath, "/etc/osac/inventory/inventory.yaml")
@@ -507,7 +506,7 @@ func setupBareMetalInstanceController(
 		inventoryClient,
 		managementClient,
 		provisioningProvider,
-		networkingEnabled,
+		provisioningMode,
 		noFreeHostsPollInterval,
 		tryLockFailPollInterval,
 		managementRecheckInterval,

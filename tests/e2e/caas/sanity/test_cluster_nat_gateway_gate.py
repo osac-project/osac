@@ -43,8 +43,9 @@ def test_cluster_create_requires_ready_nat_gateway(
     pull_secret_name: str,
     ssh_key_secret: str,
 ) -> None:
-    settings = private_grpc.call(service=f"{PRIVATE_API}.InstallationSettings/Get")
-    if not settings.get("networkingProvisioningEnabled", False):
+    classes = private_grpc.call(service=f"{PRIVATE_API}.NetworkClasses/List").get("items") or []
+    assert len(classes) == 1, f"expected one NetworkClass, found {len(classes)}"
+    if not classes[0].get("spec", {}).get("provisioning_enabled", False):
         pytest.skip("Cluster NATGateway readiness is not required when provider networking is disabled")
 
     private_grpc.ensure_bare_metal_instance_type(

@@ -107,13 +107,29 @@ configured, its networking workflows can then run.
 
 Fulfillment stores the setting on its first start and rejects a later rollout
 with a different value; changing it requires reinstalling with a fresh
-Fulfillment database. When connected to Fulfillment's private API, the OSAC
-Operator and BMF compare their configured value with the saved value before
-reconciliation. The Fulfillment controller retries transient `Unavailable` and
-`DeadlineExceeded` errors for up to one minute, with a 15-second deadline for
-each request. The Operator and BMF each make one request with a 15-second
-deadline and exit if it fails. A value mismatch stops startup for every
-consumer.
+Fulfillment database. The installer also writes the accepted value into the
+deployment's singleton `NetworkClass` (`spec.provisioningEnabled`), and every
+consumer reads the installation mode from that class:
+
+- The Fulfillment controller reads the class record for tenant and default
+  networking.
+- The OSAC operator reads the projected `NetworkClass` CR. It marks the class
+  `READY` with reason `ProvisioningDisabled` without reading manager
+  registrations when the mode is disabled, and every networking controller
+  runs no provider task while the mode is disabled or not yet resolvable.
+- BMF reads the class through the authenticated private `NetworkClasses` API.
+  A standalone BMF deployment, which has no Fulfillment service and no
+  `NetworkClass`, uses its explicit
+  `OSAC_ENABLE_NETWORKING_PROVISIONING` value.
+
+The installation setting stays the historical lock. It refuses a changed
+rollout value, it rejects deleting and recreating the `NetworkClass` with a
+different mode, and Fulfillment backfills an existing class from the stored
+value at startup (or after a database restore). A consumer that cannot read
+the mode yet retries and runs no provider work; a missing value is never
+treated as disabled. The operator and BMF keep their rendered value as an
+assertion: when it differs from the class, they report the mismatch and take no
+provider action.
 
 Standalone BMF deployments can set `secretAPI.caBundle.configMap` when the
 Fulfillment API certificate needs a custom CA bundle. The ConfigMap must exist

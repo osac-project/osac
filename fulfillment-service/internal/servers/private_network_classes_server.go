@@ -159,6 +159,14 @@ func (s *PrivateNetworkClassesServer) Create(ctx context.Context,
 	if err = s.validateNetworkClass(nc); err != nil {
 		return
 	}
+	var provisioningMode *bool
+	if spec := nc.GetSpec(); spec != nil && spec.HasProvisioningEnabled() {
+		value := spec.GetProvisioningEnabled()
+		provisioningMode = &value
+	}
+	if err = validateProvisioningMode(ctx, provisioningMode); err != nil {
+		return
+	}
 
 	// The gate: no other NetworkClass record exists, also one being deleted. The network_classes_singleton unique
 	// index (all rows) is the race-free enforcement; GenericServer maps its violation to FAILED_PRECONDITION.

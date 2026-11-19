@@ -50,13 +50,12 @@ import (
 
 // FunctionBuilder contains the data needed to build instances of the reconciler function.
 type FunctionBuilder struct {
-	provisioningEnabled *bool
-	hubCache            controllers.HubCache
-	logger              *slog.Logger
-	connection          *grpc.ClientConn
-	idpManager          *idp.TenantManager
-	vaultLifecycle      vault.LifecycleClient
-	defaultNetwork      defaultnetworking.Manager
+	hubCache       controllers.HubCache
+	logger         *slog.Logger
+	connection     *grpc.ClientConn
+	idpManager     *idp.TenantManager
+	vaultLifecycle vault.LifecycleClient
+	defaultNetwork defaultnetworking.Manager
 }
 
 // NewFunction creates a builder that can be used to configure and create reconciler functions.
@@ -95,13 +94,6 @@ func (b *FunctionBuilder) SetHubCache(value controllers.HubCache) *FunctionBuild
 	return b
 }
 
-// SetProvisioningEnabled sets the value of global.networking.provisioningEnabled. With provider networking disabled
-// the default ExternalIP and NATGateway are not required. The default is true.
-func (b *FunctionBuilder) SetProvisioningEnabled(value bool) *FunctionBuilder {
-	b.provisioningEnabled = &value
-	return b
-}
-
 // SetDefaultNetworking sets the controller-owned manager for tenant default
 // networking. This is optional for focused controller tests and reserved
 // tenants, but is configured by the production controller process.
@@ -134,12 +126,7 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		return
 	}
 
-	provisioningEnabled := true
-	if b.provisioningEnabled != nil {
-		provisioningEnabled = *b.provisioningEnabled
-	}
 	result = &function{
-		provisioningEnabled:   provisioningEnabled,
 		hubCache:              b.hubCache,
 		hubsClient:            privatev1.NewHubsClient(b.connection),
 		logger:                b.logger,
@@ -163,7 +150,6 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 
 // function is the implementation of the reconciler function.
 type function struct {
-	provisioningEnabled   bool
 	hubCache              controllers.HubCache
 	hubsClient            privatev1.HubsClient
 	logger                *slog.Logger
@@ -999,12 +985,17 @@ func (t *task) checkDefaultNetworkingReadiness(ctx context.Context) error {
 			networkClass.GetStatus().GetState()))
 		return nil
 	}
+	if !networkClass.GetSpec().HasProvisioningEnabled() {
+		return fmt.Errorf("%w: NetworkClass '%s' has no provisioning mode", defaultnetworking.ErrModeUnresolved,
+			networkClass.GetId())
+	}
+	provisioningEnabled := networkClass.GetSpec().GetProvisioningEnabled()
 	if errors.Is(t.defaultNetworkErr, defaultnetworking.ErrNoPoolCapacity) {
 		t.setFailed("no READY IPv4 ExternalIPPool has capacity")
 		return nil
 	}
 
-	resources, err := t.listDefaultResources(ctx)
+	resources, err := t.listDefaultResources(ctx, provisioningEnabled)
 	if err != nil {
 		return err
 	}
@@ -1032,7 +1023,7 @@ func (t *task) checkDefaultNetworkingReadiness(ctx context.Context) error {
 		return nil
 	}
 	reason, message := "AllResourcesReady", "All default networking resources are ready"
-	if !t.r.provisioningEnabled {
+	if !provisioningEnabled {
 		reason = "ProvisioningDisabled"
 		message = "The default VirtualNetwork, Subnet and SecurityGroup are ready; provider networking is " +
 			"disabled, so there is no default ExternalIP or NATGateway"
@@ -1058,7 +1049,7 @@ func (t *task) setFailed(message string) {
 }
 
 // listDefaultResources returns the required default resources of the tenant, including the missing ones.
-func (t *task) listDefaultResources(ctx context.Context) ([]defaultResource, error) {
+func (t *task) listDefaultResources(ctx context.Context, provisioningEnabled bool) ([]defaultResource, error) {
 	tenantName := t.tenant.GetMetadata().GetName()
 	byName := func(name string) string {
 		return fmt.Sprintf("%s && this.metadata.tenant == %q && this.metadata.name == %q",
@@ -1104,7 +1095,7 @@ func (t *task) listDefaultResources(ctx context.Context) ([]defaultResource, err
 	}
 	result = append(result, resource)
 
-	if !t.r.provisioningEnabled {
+	if !provisioningEnabled {
 		return result, nil
 	}
 

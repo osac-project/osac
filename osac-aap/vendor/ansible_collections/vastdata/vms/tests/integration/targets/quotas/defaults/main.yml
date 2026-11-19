@@ -1,0 +1,25 @@
+---
+# Default variables for quotas integration tests
+# Override these in tests/integration/integration_config.yml
+
+# VAST system connection details
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+# Quota test configuration
+test_quota_name: "ansible-test-quota"
+test_quota_path: "/ansible-test-quota"
+test_quota_hard_limit: 10737418240
+test_quota_soft_limit: 8589934592
+test_quota_grace_period: "7 00:00:00"
+test_quota_hard_limit_updated: 21474836480
+test_quota_soft_limit_updated: 17179869184
+
+# Reusable connection dict — reference as ``vms: "{{ vms_auth }}"`` in tasks
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true

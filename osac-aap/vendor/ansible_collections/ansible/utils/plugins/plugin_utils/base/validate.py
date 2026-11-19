@@ -12,7 +12,8 @@ import os
 from importlib import import_module
 
 from ansible.errors import AnsibleError
-from ansible.module_utils.common.text.converters import to_native, to_text
+from ansible.module_utils._text import to_native, to_text
+from ansible.module_utils.six import iteritems
 
 from ansible_collections.ansible.utils.plugins.module_utils.common.argspec_validate import (
     check_argspec,
@@ -74,7 +75,7 @@ class ValidateBase(object):
         if not options:
             return None
 
-        for option_name, option_value in options.items():
+        for option_name, option_value in iteritems(options):
             option_var_name_list = option_value.get("vars", [])
             option_env_name_list = option_value.get("env", [])
 

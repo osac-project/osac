@@ -54,3 +54,31 @@ def test_cleanup_waits_for_api_removal_with_or_without_cr(
     if cr_name:
         expected_events.append("cr-removal-wait")
     assert events == expected_events
+
+
+def test_task_retry_patches_status_as_the_operator_service_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    k8s = K8sClient(namespace="osac-e2e-ci", kubeconfig="hub.kubeconfig")
+    job = {"task": "create_external_ip", "manager": "fabric", "attempt": 1, "jobID": "42", "state": "Succeeded"}
+    monkeypatch.setattr(k8s, "get_json", lambda **_: {"status": {"jobs": [job]}})
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run(*args: str, **_: object) -> str:
+        commands.append(args)
+        return "osac-operator-sa\n" if "pods" in args else ""
+
+    monkeypatch.setattr(ownership, "run", fake_run)
+
+    ownership._request_task_retry(k8s=k8s, external_ip_name="externalip-a", completed_job=job)
+
+    lookup, patch = commands
+    assert lookup[:5] == ("kubectl", "--kubeconfig", "hub.kubeconfig", "--as", "system:admin")
+    assert "jsonpath={.items[0].spec.serviceAccountName}" in lookup
+    assert patch[:5] == (
+        "kubectl",
+        "--kubeconfig",
+        "hub.kubeconfig",
+        "--as",
+        "system:serviceaccount:osac-e2e-ci:osac-operator-sa",
+    )
+    assert "system:admin" not in patch
+    assert "--subresource=status" in patch

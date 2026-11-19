@@ -679,16 +679,17 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 	// 2) Move the fabric port provisioning network -> tenant network (post-provision).
 	result, netErr := r.reconcileNetworking(ctx, bareMetalInstance)
 	if netErr != nil {
-		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		// Reconcile errors are retryable; a terminal attachment failure is
+		// reported through NetworkAttachmentsReady below.
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
 		return result, netErr
 	}
 	if !result.IsZero() {
 		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
 		return result, nil
 	}
-	if bareMetalInstance.Status.Phase == v1alpha1.BareMetalInstancePhaseFailed {
-		return ctrl.Result{}, nil
-	}
+	// Phase is retained status and can be stale after a retryable error. Use the
+	// current attachment condition, rather than the old phase, to detect failure.
 	netCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 	if netCond == nil || netCond.Status != metav1.ConditionTrue {
 		if netCond != nil && isFinalNetworkAttachmentFailure(netCond.Reason) {
@@ -698,6 +699,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
+	bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
 
 	// 3) Power-cycle so the OS re-DHCPs on the tenant network (single default route).
 	result, rbErr := r.reconcileNetworkHandoffPowerCycle(ctx, bareMetalInstance)
@@ -1089,10 +1091,17 @@ func (r *BareMetalInstanceReconciler) reconcileRestartTrigger(ctx context.Contex
 		"status", bareMetalInstance.Status.RestartTrigger,
 		"hostID", bareMetalInstance.Spec.ExternalHostID)
 
-	// If run strategy is halted, just update the status without triggering restart
-	if bareMetalInstance.Spec.RunStrategy == v1alpha1.RunStrategyHalted {
+	// If run strategy is halted, just update the status without triggering restart.
+	// status.runStrategy echoes the host's actual power state, so this also covers
+	// starting a halted instance and bumping the restart trigger in the same update:
+	// spec.runStrategy is already Always while the host is still off. A restart
+	// cannot complete before the host is powered on, so acknowledge the trigger and
+	// let reconcilePower power the host on.
+	if bareMetalInstance.Spec.RunStrategy == v1alpha1.RunStrategyHalted ||
+		bareMetalInstance.Status.RunStrategy == v1alpha1.RunStrategyHalted {
 		log.Info("RunStrategy is halted, updating restart trigger without restart",
-			"trigger", bareMetalInstance.Spec.RestartTrigger)
+			"trigger", bareMetalInstance.Spec.RestartTrigger,
+			"statusRunStrategy", bareMetalInstance.Status.RunStrategy)
 		bareMetalInstance.Status.RestartTrigger = bareMetalInstance.Spec.RestartTrigger
 		bareMetalInstance.SetStatusCondition(
 			v1alpha1.HostConditionPowerSynced,

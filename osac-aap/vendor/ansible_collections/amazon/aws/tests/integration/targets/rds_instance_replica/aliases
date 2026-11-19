@@ -1,5 +1,3 @@
-time=25m
-
 cloud/aws
-
+time=25m
 rds_instance

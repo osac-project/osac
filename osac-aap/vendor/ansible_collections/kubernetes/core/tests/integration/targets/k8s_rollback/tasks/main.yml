@@ -33,6 +33,7 @@
                     ports:
                       - containerPort: 80
 
+
     - name: Crash the existing deployment
       k8s:
         state: present
@@ -227,7 +228,7 @@
                     hostPath:
                       path: /var/lib/docker/containers
       register: crash
-      ignore_errors: yes
+      ignore_errors: true
 
     - name: Assert that the Daemonset failed
       assert:

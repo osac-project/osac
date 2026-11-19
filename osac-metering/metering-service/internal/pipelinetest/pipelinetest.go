@@ -86,13 +86,13 @@ func NewPipelineWithRevisions(
 	if err != nil {
 		t.Fatalf("creating calculator: %v", err)
 	}
-	foldLoop, err := fold.New(store, testenv.NewConsumer(t), logr.Discard())
+	foldLoop, err := fold.New(store, testenv.NewConsumer(t), logr.Discard(), "")
 	if err != nil {
 		t.Fatalf("creating fold: %v", err)
 	}
 	roundLoop, err := round.New(
 		store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(),
-		&sync.RWMutex{},
+		&sync.RWMutex{}, "",
 	)
 	if err != nil {
 		t.Fatalf("creating round: %v", err)

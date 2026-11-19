@@ -29,28 +29,15 @@ def test_init(monkeypatch):
     kwargs = {"example": sentinel.KWARG}
     require_aws_sdk = MagicMock(name="require_aws_sdk")
     require_aws_sdk.return_value = sentinel.RETURNED_SDK
-    mock_play_context = MagicMock(name="_play_context")
-    mock_play_context.remote_addr = sentinel.REMOTE_ADDR
 
     monkeypatch.setattr(utils_connection.AWSConnectionBase, "__abstractmethods__", set())
     monkeypatch.setattr(utils_connection.ConnectionBase, "__init__", MagicMock(name="__init__"))
     monkeypatch.setattr(utils_connection.AWSConnectionBase, "require_aws_sdk", require_aws_sdk)
 
-    connection = utils_connection.AWSConnectionBase(sentinel.PARAM_TERMS, sentinel.PARAM_VARS, **kwargs)
-    connection._play_context = mock_play_context
-    connection.__init__(sentinel.PARAM_TERMS, sentinel.PARAM_VARS, **kwargs)
+    utils_connection.AWSConnectionBase(sentinel.PARAM_TERMS, sentinel.PARAM_VARS, **kwargs)
     assert require_aws_sdk.call_args == call(botocore_version=None, boto3_version=None)
-    assert connection.host == sentinel.REMOTE_ADDR
 
-    connection = utils_connection.AWSConnectionBase(
-        sentinel.PARAM_ONE,
-        sentinel.PARAM_TWO,
-        boto3_version=sentinel.PARAM_BOTO3,
-        botocore_version=sentinel.PARAM_BOTOCORE,
-        **kwargs,
-    )
-    connection._play_context = mock_play_context
-    connection.__init__(
+    utils_connection.AWSConnectionBase(
         sentinel.PARAM_ONE,
         sentinel.PARAM_TWO,
         boto3_version=sentinel.PARAM_BOTO3,
@@ -60,4 +47,3 @@ def test_init(monkeypatch):
     assert require_aws_sdk.call_args == call(
         botocore_version=sentinel.PARAM_BOTOCORE, boto3_version=sentinel.PARAM_BOTO3
     )
-    assert connection.host == sentinel.REMOTE_ADDR

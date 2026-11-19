@@ -33,6 +33,7 @@ def test_modify_instance_type(
 ):
     instance_id = MagicMock()
     client = MagicMock()
+    state = "present"
     changes = MagicMock()
     desired_module_state = "running" if state == "present" else state
 

@@ -20,7 +20,7 @@ def test_create_organization(run_module, admin_user):
         'controller_username': None,
         'controller_password': None,
         'validate_certs': None,
-        'aap_token': None,
+        'controller_oauthtoken': None,
         'controller_config_file': None,
     }
 
@@ -53,7 +53,7 @@ def test_galaxy_credential_order(run_module, admin_user):
         'controller_username': None,
         'controller_password': None,
         'validate_certs': None,
-        'aap_token': None,
+        'controller_oauthtoken': None,
         'controller_config_file': None,
         'galaxy_credentials': cred_ids,
     }
@@ -78,7 +78,7 @@ def test_galaxy_credential_order(run_module, admin_user):
         'controller_username': None,
         'controller_password': None,
         'validate_certs': None,
-        'aap_token': None,
+        'controller_oauthtoken': None,
         'controller_config_file': None,
         'galaxy_credentials': cred_ids,
     }

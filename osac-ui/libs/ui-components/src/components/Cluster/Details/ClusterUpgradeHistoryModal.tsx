@@ -1,4 +1,4 @@
-import { Modal, ModalBody, ModalHeader } from '@patternfly/react-core';
+import { Content, Modal, ModalBody, ModalHeader } from '@patternfly/react-core';
 import ClockIcon from '@patternfly/react-icons/dist/esm/icons/clock-icon';
 import HourglassHalfIcon from '@patternfly/react-icons/dist/esm/icons/hourglass-half-icon';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
@@ -43,41 +43,49 @@ const ClusterUpgradeHistoryModal = ({ attempts, onClose }: ClusterUpgradeHistory
     <Modal isOpen onClose={onClose} variant="large" aria-labelledby="cluster-upgrade-history-title">
       <ModalHeader title={t('Upgrade history')} labelId="cluster-upgrade-history-title" />
       <ModalBody>
-        <Table aria-label={t('Upgrade history')} variant="compact">
-          <Thead>
-            <Tr>
-              <Th>{t('Upgrade')}</Th>
-              <Th>{t('Status')}</Th>
-              <Th>{t('Accepted')}</Th>
-              <Th>{t('Completed')}</Th>
-              <Th>{t('Details')}</Th>
-            </Tr>
-          </Thead>
-          <Tbody>
-            {attempts.map((attempt, index) => {
-              const completed =
-                attempt.state === ClusterUpgradeState.SUCCEEDED ||
-                attempt.state === ClusterUpgradeState.FAILED;
-              return (
-                <Tr key={index}>
-                  <Td dataLabel={t('Upgrade')}>
-                    {attempt.sourceVersion || '—'} → {attempt.targetVersion || '—'}
-                  </Td>
-                  <Td dataLabel={t('Status')}>
-                    <ResourceStatusLabel {...stateDisplay(attempt.state)} noIcon={false} isPlain />
-                  </Td>
-                  <Td dataLabel={t('Accepted')}>
-                    <Timestamp value={attempt.acceptedTime} />
-                  </Td>
-                  <Td dataLabel={t('Completed')}>
-                    <Timestamp value={completed ? attempt.stateTransitionTime : undefined} />
-                  </Td>
-                  <Td dataLabel={t('Details')}>{attempt.message || '—'}</Td>
-                </Tr>
-              );
-            })}
-          </Tbody>
-        </Table>
+        {attempts.length === 0 ? (
+          <Content component="p">{t('No control plane upgrades have been recorded.')}</Content>
+        ) : (
+          <Table aria-label={t('Upgrade history')} variant="compact">
+            <Thead>
+              <Tr>
+                <Th>{t('Upgrade')}</Th>
+                <Th>{t('Status')}</Th>
+                <Th>{t('Accepted')}</Th>
+                <Th>{t('Completed')}</Th>
+                <Th>{t('Details')}</Th>
+              </Tr>
+            </Thead>
+            <Tbody>
+              {attempts.map((attempt, index) => {
+                const completed =
+                  attempt.state === ClusterUpgradeState.SUCCEEDED ||
+                  attempt.state === ClusterUpgradeState.FAILED;
+                return (
+                  <Tr key={index}>
+                    <Td dataLabel={t('Upgrade')}>
+                      {attempt.sourceVersion || '—'} → {attempt.targetVersion || '—'}
+                    </Td>
+                    <Td dataLabel={t('Status')}>
+                      <ResourceStatusLabel
+                        {...stateDisplay(attempt.state)}
+                        noIcon={false}
+                        isPlain
+                      />
+                    </Td>
+                    <Td dataLabel={t('Accepted')}>
+                      <Timestamp value={attempt.acceptedTime} />
+                    </Td>
+                    <Td dataLabel={t('Completed')}>
+                      <Timestamp value={completed ? attempt.stateTransitionTime : undefined} />
+                    </Td>
+                    <Td dataLabel={t('Details')}>{attempt.message || '—'}</Td>
+                  </Tr>
+                );
+              })}
+            </Tbody>
+          </Table>
+        )}
       </ModalBody>
     </Modal>
   );

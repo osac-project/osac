@@ -216,6 +216,82 @@ func TestRoundWithSteadyEventStream(t *testing.T) {
 	}
 }
 
+// TestRoundBillsEventsOnACustomPrefix checks that round.New reads the event topic
+// fulfillment published under a custom prefix. The round's other tests pass an empty
+// prefix, so a regression that ignored this argument would still pass them.
+func TestRoundBillsEventsOnACustomPrefix(t *testing.T) {
+	const prefix = "custom.events."
+	const tenant = "prefixed-round"
+	store := testenv.Database(t)
+	owners, err := usage.RegistryOwners()
+	if err != nil {
+		t.Fatalf("reading owners: %v", err)
+	}
+	calculator, err := usage.NewCalculator(
+		[]rules.Revision{testenv.DefaultRevision(t)}, "us-east", owners,
+	)
+	if err != nil {
+		t.Fatalf("creating calculator: %v", err)
+	}
+	producePrefixedRoundEvent(t, prefix+tenant, tenant)
+	foldLoop, err := fold.New(store, testenv.NewConsumer(t), logr.Discard(), prefix)
+	if err != nil {
+		t.Fatalf("creating fold: %v", err)
+	}
+	foldCtx, cancelFold := context.WithCancel(context.Background())
+	defer cancelFold()
+	go func() { _ = foldLoop.RunTenant(foldCtx, tenant) }()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		progress, err := store.GetTenantProgress(context.Background(), tenant)
+		if err == nil && progress.EventOffset >= 1 {
+			break
+		}
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("reading progress: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("fold did not reach the prefixed topic, stopped at %d", progress.EventOffset)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	roundLoop, err := round.New(
+		store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(),
+		&sync.RWMutex{}, prefix,
+	)
+	if err != nil {
+		t.Fatalf("creating round: %v", err)
+	}
+	if err := roundLoop.Once(context.Background(), tenant, base.Add(time.Minute)); err != nil {
+		t.Fatalf("round: %v", err)
+	}
+	if outboxCount(t, store, tenant) == 0 {
+		t.Fatal("the round must bill events on the prefixed topic")
+	}
+}
+
+// producePrefixedRoundEvent writes one billable VM event to topic.
+func producePrefixedRoundEvent(t *testing.T, topic, tenant string) {
+	t.Helper()
+	if err := testenv.Kafka(t).CreateTopic(topic); err != nil {
+		t.Fatalf("creating topic %s: %v", topic, err)
+	}
+	event := testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
+		base, base, "web", "RUNNING", base, "small", base)
+	testenv.StampTenant(event, tenant)
+	value, err := proto.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshaling event: %v", err)
+	}
+	_, _, err = testenv.NewProducer(t).SendMessage(&sarama.ProducerMessage{
+		Topic: topic, Key: sarama.StringEncoder(event.GetId()), Value: sarama.ByteEncoder(value),
+	})
+	if err != nil {
+		t.Fatalf("producing event to %s: %v", topic, err)
+	}
+}
+
 // gatingProbe pauses the round inside its first calculator call, so a test can observe
 // what the rules gate allows while a tick is mid-run. Every later call passes through:
 // the release channel is closed by then.
@@ -280,7 +356,7 @@ func TestOnceHoldsRulesGateForWholeTick(t *testing.T) {
 		testenv.VMEvent("e1", privatev1.EventType_EVENT_TYPE_OBJECT_CREATED,
 			base, base, "web", "RUNNING", base, "small", base),
 	})
-	foldLoop, err := fold.New(store, testenv.NewConsumer(t), logr.Discard())
+	foldLoop, err := fold.New(store, testenv.NewConsumer(t), logr.Discard(), "")
 	if err != nil {
 		t.Fatalf("creating fold: %v", err)
 	}
@@ -317,7 +393,7 @@ func TestOnceHoldsRulesGateForWholeTick(t *testing.T) {
 	}
 	gate := &sync.RWMutex{}
 	r, err := round.New(
-		store, probe, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(), gate,
+		store, probe, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(), gate, "",
 	)
 	if err != nil {
 		t.Fatalf("creating round: %v", err)
@@ -763,7 +839,7 @@ func restore(t *testing.T, snap tenantSnapshot, tenant string) *database.Store {
 	}
 	sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
 	for _, offset := range offsets {
-		if err := database.InsertFacts(ctx, tx, tenant, groups[offset], offset); err != nil {
+		if err := database.InsertFacts(ctx, tx, tenant, groups[offset], offset, ""); err != nil {
 			t.Fatalf("restoring history: %v", err)
 		}
 	}
@@ -1219,7 +1295,7 @@ func TestStateChangeAtRoundTimeIsNotANewFact(t *testing.T) {
 		{ResourceType: "ComputeInstance", ResourceID: "vm-7", Field: "status.state",
 			Since: previous, Value: "STOPPED"},
 	}
-	if err := database.InsertFacts(context.Background(), tx, tenant, facts, int64(total)); err != nil {
+	if err := database.InsertFacts(context.Background(), tx, tenant, facts, int64(total), ""); err != nil {
 		t.Fatalf("restoring history: %v", err)
 	}
 	if err := tx.Commit(context.Background()); err != nil {
@@ -1850,7 +1926,7 @@ func (consumer failingFoldConsumer) ConsumePartition(string, int32, int64) (sara
 func TestFoldAllReportsWorkerError(t *testing.T) {
 	if os.Getenv("OSAC_FOLD_ERROR_HELPER") == "1" {
 		store := testenv.Database(t)
-		worker, err := fold.New(store, failingFoldConsumer{}, logr.Discard())
+		worker, err := fold.New(store, failingFoldConsumer{}, logr.Discard(), "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1920,7 +1996,7 @@ func TestFoldAllWaitsForConsumerRelease(t *testing.T) {
 	}
 	var releaseOnce sync.Once
 	release := func() { releaseOnce.Do(func() { close(consumer.release) }) }
-	worker, err := fold.New(pipeline.Store, consumer, logr.Discard())
+	worker, err := fold.New(pipeline.Store, consumer, logr.Discard(), "")
 	if err != nil {
 		t.Fatal(err)
 	}

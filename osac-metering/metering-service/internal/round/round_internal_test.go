@@ -36,7 +36,7 @@ func TestEventsFoldedClearsTargetOnImmediatePass(t *testing.T) {
 			base, base, "web", "RUNNING", base, "small", base),
 	})
 
-	r, err := New(nil, nil, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(), &sync.RWMutex{})
+	r, err := New(nil, nil, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(), &sync.RWMutex{}, "")
 	if err != nil {
 		t.Fatalf("creating round: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestOverflowingQuantityFailsTheRoundNamingTheResource(t *testing.T) {
 		fact("Volume", "vol-1", "status.vendor_volume_id", base, "vend-9"),
 		fact("Volume", "vol-1", "status.provisioned_size_gib", base, "200000000"),
 	}
-	if err := database.InsertFacts(ctx, store.Pool(), tenant, facts, 1); err != nil {
+	if err := database.InsertFacts(ctx, store.Pool(), tenant, facts, 1, ""); err != nil {
 		t.Fatal(err)
 	}
 	owners, err := usage.RegistryOwners()
@@ -165,7 +165,7 @@ func TestOverflowingQuantityFailsTheRoundNamingTheResource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := New(store, calculator, nil, nil, logr.Discard(), &sync.RWMutex{})
+	r, err := New(store, calculator, nil, nil, logr.Discard(), &sync.RWMutex{}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestRootOfWalksToTheTopmostOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating calculator: %v", err)
 	}
-	r, err := New(store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(), &sync.RWMutex{})
+	r, err := New(store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(), &sync.RWMutex{}, "")
 	if err != nil {
 		t.Fatalf("creating round: %v", err)
 	}
@@ -306,10 +306,10 @@ func TestRootOfWalksToTheTopmostOwner(t *testing.T) {
 		created("WaaS2", "top-1", base),
 		state("WaaS2", "top-1", base, "ACTIVE"),
 	}
-	if err := database.InsertFacts(ctx, store.Pool(), tenant, waasFacts, 1); err != nil {
+	if err := database.InsertFacts(ctx, store.Pool(), tenant, waasFacts, 1, ""); err != nil {
 		t.Fatalf("writing WaaS facts: %v", err)
 	}
-	if err := database.InsertFacts(ctx, store.Pool(), tenant, waas2Facts, 2); err != nil {
+	if err := database.InsertFacts(ctx, store.Pool(), tenant, waas2Facts, 2, ""); err != nil {
 		t.Fatalf("writing WaaS2 facts: %v", err)
 	}
 
@@ -324,7 +324,7 @@ func TestRootOfWalksToTheTopmostOwner(t *testing.T) {
 	// A missing root holds billing shut: empty facts, never a silent fallback.
 	if err := database.InsertFacts(ctx, store.Pool(), tenant, []database.Fact{
 		fact("WaaS", "waas-2", "status.owner", base, "gone-1"),
-	}, 3); err != nil {
+	}, 3, ""); err != nil {
 		t.Fatalf("writing orphan facts: %v", err)
 	}
 	root, err = r.rootOf(ctx, store.Pool(), tenant, "WaaS", []database.Fact{
@@ -360,7 +360,7 @@ func TestScanResourcesDragsOwnedResourcesAlong(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating calculator: %v", err)
 	}
-	r, err := New(store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(), &sync.RWMutex{})
+	r, err := New(store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(), &sync.RWMutex{}, "")
 	if err != nil {
 		t.Fatalf("creating round: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestScanResourcesDragsOwnedResourcesAlong(t *testing.T) {
 		fact("BareMetalInstance", "bm-1", "spec.instance_type", base, "m7a"),
 		fact("BareMetalInstance", "bm-1", "status.cluster", base, "c-1"),
 		fact("BareMetalInstance", "bm-1", "status.node_set", base, "workers"),
-	}, 1); err != nil {
+	}, 1, ""); err != nil {
 		t.Fatalf("writing worker facts: %v", err)
 	}
 	lastRound := base.Add(time.Minute)
@@ -380,7 +380,7 @@ func TestScanResourcesDragsOwnedResourcesAlong(t *testing.T) {
 		created("Cluster", "c-1", base),
 		state("Cluster", "c-1", base, "PROGRESSING"),
 		state("Cluster", "c-1", lastRound.Add(time.Second), "READY"),
-	}, 2); err != nil {
+	}, 2, ""); err != nil {
 		t.Fatalf("writing cluster facts: %v", err)
 	}
 
@@ -438,7 +438,7 @@ func TestScanResourcesDragsOwnedThroughRevisionChanges(t *testing.T) {
 		fact("BareMetalInstance", "bm-1", "status.node_set", base, "workers"),
 		created("Cluster", "c-1", base),
 		state("Cluster", "c-1", base, "PROGRESSING"),
-	}, 1); err != nil {
+	}, 1, ""); err != nil {
 		t.Fatalf("writing worker facts: %v", err)
 	}
 
@@ -462,7 +462,7 @@ func TestScanResourcesDragsOwnedThroughRevisionChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("creating calculator: %v", err)
 	}
-	r, err := New(store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(), &sync.RWMutex{})
+	r, err := New(store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(), &sync.RWMutex{}, "")
 	if err != nil {
 		t.Fatalf("creating round: %v", err)
 	}

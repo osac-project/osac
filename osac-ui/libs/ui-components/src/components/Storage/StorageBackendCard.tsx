@@ -7,7 +7,7 @@ import {
   DescriptionListTerm,
   Divider,
 } from '@patternfly/react-core';
-import { RhUiStorageIcon } from '@patternfly/react-icons/dist/esm/icons/rh-ui-storage-icon';
+import { RhUiStorageDomainIcon } from '@patternfly/react-icons/dist/esm/icons/rh-ui-storage-domain-icon';
 
 import type { StorageBackend } from '@osac/types/private';
 import ListPageCard from '@osac/ui-components/components/Page/ListPageCard';
@@ -33,7 +33,7 @@ const StorageBackendCard = ({ backend }: StorageBackendCardProps) => {
       title={
         <ResourceNameField resource={backend} detailsUrl={storageBackendDetailsPath(backend.id)} />
       }
-      icon={<RhUiStorageIcon />}
+      icon={<RhUiStorageDomainIcon />}
       statusLabel={<StorageBackendStatusLabel state={backend.status?.state} />}
       actionMenu={<StorageBackendActionsMenu backend={backend} />}
     >

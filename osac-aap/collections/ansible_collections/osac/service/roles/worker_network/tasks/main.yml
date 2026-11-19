@@ -88,19 +88,23 @@
     - _worker_network_agents.resources | length >= worker_network_expected_workers | int
     - >-
       (_worker_network_agents.resources
-       | selectattr('status.inventory.interfaces', 'defined') | list | length)
+       | osac.service.agents_matching_selected_macs(_worker_network_selected_macs)
+       | length)
       >= worker_network_expected_workers | int
   retries: "{{ worker_network_poll_retries }}"
   delay: "{{ worker_network_poll_delay }}"
 
 - name: Build MAC-driven Agent network mappings
   ansible.builtin.set_fact:
+    _worker_network_ready_agents: >-
+      {{ _worker_network_agents.resources
+         | osac.service.agents_matching_selected_macs(_worker_network_selected_macs) }}
     _worker_network_mappings: >-
       {{ (_worker_network_mappings | default([])) + [{
         'agent': item,
         'interfaces': item | osac.service.agent_network_interfaces(_worker_network_selected_macs)
       }] }}
-  loop: "{{ _worker_network_agents.resources }}"
+  loop: "{{ _worker_network_ready_agents }}"
 
 - name: Validate every Agent has exactly one selected fabric interface
   ansible.builtin.assert:

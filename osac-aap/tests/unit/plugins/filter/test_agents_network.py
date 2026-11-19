@@ -69,6 +69,25 @@ def test_agent_nmstate_interfaces_preserves_all_mac_selectors():
     ]
 
 
+def test_agents_matching_selected_macs_ignores_stale_disconnected_agents():
+    current = {
+        "metadata": {"name": "current"},
+        "status": {"inventory": {"interfaces": [
+            {"name": "ens6", "macAddress": "52:83:8d:0c:40:a9"},
+        ]}},
+    }
+    stale = {
+        "metadata": {"name": "stale"},
+        "status": {"inventory": {"interfaces": [
+            {"name": "ens6", "macAddress": "52:29:b0:bc:ec:e1"},
+        ]}},
+    }
+
+    assert agents.agents_matching_selected_macs(
+        [stale, current], ["52:83:8d:0c:40:a9"]
+    ) == [current]
+
+
 def test_baremetal_instances_accepts_current_and_legacy_cluster_identity():
     instances = [
         {

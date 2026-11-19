@@ -60,6 +60,25 @@ def agent_network_interfaces(agent, selected_macs):
     return result
 
 
+def agents_matching_selected_macs(agents, selected_macs):
+    """Return only Agents with an inventory interface for a selected MAC.
+
+    Assisted keeps disconnected Agents in an InfraEnv after a failed or
+    replaced attempt.  Those historical objects must not block the current
+    worker from receiving its MAC-driven NMStateConfig.
+    """
+    return [
+        agent
+        for agent in agents or []
+        if sum(
+            1
+            for interface in agent_network_interfaces(agent, selected_macs)
+            if interface["selected"]
+        )
+        == 1
+    ]
+
+
 def agent_nmstate_interfaces(agent, selected_macs):
     """Return NMStateConfig interface selectors for an Agent inventory."""
     return [
@@ -95,6 +114,7 @@ class FilterModule:
             "agent_vpc_interfaces": agent_vpc_interfaces,
             "agent_mgmt_ip": agent_mgmt_ip,
             "agent_network_interfaces": agent_network_interfaces,
+            "agents_matching_selected_macs": agents_matching_selected_macs,
             "agent_nmstate_interfaces": agent_nmstate_interfaces,
             "baremetal_instances_for_cluster": baremetal_instances_for_cluster,
         }

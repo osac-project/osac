@@ -312,6 +312,7 @@ def main():
 
     if args.tls:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.load_cert_chain(args.cert, args.key)
         httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
         print(f"Mock FlashBlade API server running on https://127.0.0.1:{args.port}")

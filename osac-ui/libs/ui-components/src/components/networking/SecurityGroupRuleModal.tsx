@@ -61,11 +61,14 @@ export const SecurityGroupRuleModal = ({
   const { t } = useTranslation();
   const updateSecurityGroup = useUpdateSecurityGroup();
 
+  const { error, isPending, mutateAsync } = updateSecurityGroup;
+  const showRestrictedError = Boolean(editingDisabledReason && error);
+
   useEffect(() => {
-    if (editingDisabledReason && !updateSecurityGroup.isPending) {
+    if (editingDisabledReason && !isPending && !error) {
       onClose();
     }
-  }, [editingDisabledReason, onClose, updateSecurityGroup.isPending]);
+  }, [editingDisabledReason, error, isPending, onClose]);
 
   const mode: 'add' | 'edit' = ruleIndex === undefined ? 'add' : 'edit';
   const initialValues: SecurityRule | undefined =
@@ -79,6 +82,10 @@ export const SecurityGroupRuleModal = ({
   };
 
   const handleSubmit = async (values: RuleFormValues) => {
+    if (editingDisabledReason || isPending) {
+      return;
+    }
+
     const rule: MessageInitShape<typeof SecurityRuleSchema> = {
       protocol: values.protocol,
     };
@@ -114,57 +121,57 @@ export const SecurityGroupRuleModal = ({
     };
 
     try {
-      await updateSecurityGroup.mutateAsync({ object });
+      await mutateAsync({ object });
       onClose();
     } catch {
-      // Error is surfaced via updateSecurityGroup.error below
+      // The modal displays the rejected mutation below.
     }
   };
 
   return (
-    <Modal
-      variant={ModalVariant.small}
-      isOpen
-      onClose={onClose}
-      aria-label={mode === 'add' ? t('Add rule') : t('Edit rule')}
+    <Formik
+      initialValues={defaultValues}
+      validationSchema={createRuleValidationSchema(t)}
+      onSubmit={handleSubmit}
     >
-      <ModalHeader title={mode === 'add' ? t('Add rule') : t('Edit rule')} />
-      <Formik
-        initialValues={defaultValues}
-        validationSchema={createRuleValidationSchema(t)}
-        onSubmit={handleSubmit}
-      >
-        {({ handleSubmit: formikSubmit, isValid }) => (
-          <>
+      {({ submitForm, isSubmitting, isValid }) => {
+        const saving = isSubmitting || isPending;
+
+        return (
+          <Modal
+            variant={ModalVariant.small}
+            isOpen
+            onClose={saving || showRestrictedError ? undefined : onClose}
+            onEscapePress={!saving && showRestrictedError ? onClose : undefined}
+            aria-label={mode === 'add' ? t('Add rule') : t('Edit rule')}
+          >
+            <ModalHeader title={mode === 'add' ? t('Add rule') : t('Edit rule')} />
             <ModalBody>
-              {!!updateSecurityGroup.error && (
-                <Alert
-                  variant="danger"
-                  title={t('Error')}
-                  isInline
-                  style={{ marginBottom: '1rem' }}
-                >
-                  {getErrorMessage(updateSecurityGroup.error)}
+              {!!error && (
+                <Alert variant="danger" title={t('Error')} isInline className="pf-v6-u-mb-md">
+                  {getErrorMessage(error)}
                 </Alert>
               )}
-              <SecurityGroupRuleForm />
+              {!showRestrictedError && <SecurityGroupRuleForm />}
             </ModalBody>
             <ModalFooter>
-              <Button
-                variant="primary"
-                onClick={() => formikSubmit()}
-                isDisabled={updateSecurityGroup.isPending || !isValid}
-                isLoading={updateSecurityGroup.isPending}
-              >
-                {mode === 'add' ? t('Add') : t('Save')}
-              </Button>
-              <Button variant="link" onClick={onClose} isDisabled={updateSecurityGroup.isPending}>
-                {t('Cancel')}
+              {!showRestrictedError && (
+                <Button
+                  variant="primary"
+                  onClick={() => submitForm()}
+                  isDisabled={saving || Boolean(editingDisabledReason) || !isValid}
+                  isLoading={saving}
+                >
+                  {mode === 'add' ? t('Add') : t('Save')}
+                </Button>
+              )}
+              <Button variant="link" onClick={onClose} isDisabled={saving}>
+                {showRestrictedError ? t('Close') : t('Cancel')}
               </Button>
             </ModalFooter>
-          </>
-        )}
-      </Formik>
-    </Modal>
+          </Modal>
+        );
+      }}
+    </Formik>
   );
 };

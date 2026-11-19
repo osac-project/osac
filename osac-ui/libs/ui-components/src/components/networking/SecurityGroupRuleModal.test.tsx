@@ -131,7 +131,9 @@ describe('SecurityGroupRuleModal', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('disables Save and Cancel while the update is pending', () => {
+  it('prevents dismissal and another save while the update is pending', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
     vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
       mutateAsync,
       isPending: true,
@@ -140,7 +142,7 @@ describe('SecurityGroupRuleModal', () => {
 
     render(
       <SecurityGroupRuleModal
-        onClose={vi.fn()}
+        onClose={onClose}
         securityGroup={securityGroup}
         direction="ingress"
         ruleIndex={0}
@@ -149,6 +151,9 @@ describe('SecurityGroupRuleModal', () => {
 
     expect(screen.getByRole('button', { name: /Save/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /Cancel/i })).toBeDisabled();
+    await user.keyboard('{Escape}');
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /^Close$/ })).not.toBeInTheDocument();
   });
 
   it('calls onClose when Escape is pressed', async () => {
@@ -204,6 +209,43 @@ describe('SecurityGroupRuleModal', () => {
     );
 
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('keeps the original error visible if a restricted group rejects a pending save', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const reason = 'Rules cannot be edited while the security group is updating.';
+    const modal = () => (
+      <SecurityGroupRuleModal
+        onClose={onClose}
+        securityGroup={securityGroup}
+        direction="ingress"
+        editingDisabledReason={reason}
+        ruleIndex={0}
+      />
+    );
+
+    vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
+      mutateAsync,
+      isPending: true,
+      error: null,
+    } as unknown as ReturnType<typeof networkingApi.useUpdateSecurityGroup>);
+    const view = render(modal());
+
+    const message = 'Security group is being updated. Try again after it is ready.';
+    vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
+      mutateAsync,
+      isPending: false,
+      error: new Error(message),
+    } as unknown as ReturnType<typeof networkingApi.useUpdateSecurityGroup>);
+    view.rerender(modal());
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(message, { exact: true })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Port From/i)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^Close$/ }));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('rejects semantically invalid IPv4 CIDR 999.555.666.777/99 (OSAC-3899)', async () => {

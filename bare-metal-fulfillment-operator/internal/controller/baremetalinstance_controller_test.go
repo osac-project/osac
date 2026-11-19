@@ -1974,11 +1974,21 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				Spec: v1alpha1.BareMetalInstanceSpec{
 					ExternalHostID: "test-host-123",
 					RestartTrigger: 1,
+					TemplateID:     "testtemplate",
+					Selector: v1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"type": "test"},
+					},
 				},
 				Status: v1alpha1.BareMetalInstanceStatus{
 					RestartTrigger: 0, // Different from spec, should trigger restart
 				},
 			}
+			// The durable claim before a restart submission writes status, so the
+			// object must exist for direct reconcileRestartTrigger calls.
+			Expect(k8sClient.Create(ctx, bareMetalInstance)).To(Succeed())
+			DeferCleanup(func() {
+				_ = k8sClient.Delete(ctx, bareMetalInstance)
+			})
 		})
 
 		Context("when restart trigger matches status", func() {
@@ -2281,6 +2291,76 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					Expect(condition).NotTo(BeNil())
 					Expect(condition.Status).To(Equal(metav1.ConditionFalse))
 					Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncRequired))
+
+					// The durable claim must be released so the trigger is retried
+					// instead of being polled as if the reboot had been submitted.
+					marker := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
+					Expect(marker).NotTo(BeNil())
+					Expect(marker.Status).To(Equal(metav1.ConditionFalse))
+					Expect(marker.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncRequired))
+				})
+
+				It("should not dispatch when the durable claim cannot be persisted", func() {
+					claimErr := errors.New("status write failed")
+					mockK8sClient.statusUpdateFunc = func(ctx context.Context, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+						return claimErr
+					}
+					triggerCalled := false
+					mockMgmtClient.triggerRestartFunc = func(ctx context.Context, hostID string) error {
+						triggerCalled = true
+						return nil
+					}
+
+					_, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+
+					Expect(err).To(MatchError(claimErr))
+					Expect(triggerCalled).To(BeFalse(),
+						"restart must not be dispatched when its ownership cannot be recorded")
+				})
+
+				It("should not re-dispatch the same trigger after the claim is persisted", func() {
+					// Simulates a lost status write after TriggerRestart: the claim
+					// written before dispatch is what the next reconcile observes, so
+					// it resumes polling instead of rebooting the host again.
+					triggerCalls := 0
+					mockMgmtClient.triggerRestartFunc = func(ctx context.Context, hostID string) error {
+						triggerCalls++
+						return nil
+					}
+					polled := false
+					mockMgmtClient.isRestartCompleteFunc = func(ctx context.Context, hostID string) (bool, error) {
+						polled = true
+						return false, nil
+					}
+
+					_, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(triggerCalls).To(Equal(1))
+
+					_, err = reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(polled).To(BeTrue())
+					Expect(triggerCalls).To(Equal(1), "the same trigger must not be dispatched twice")
+				})
+
+				It("should fail terminally when the backend reports a host error", func() {
+					mockMgmtClient.triggerRestartFunc = func(ctx context.Context, hostID string) error {
+						return management.ErrHostOperational
+					}
+
+					_, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+
+					Expect(err).To(HaveOccurred())
+					Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+
+					condition := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
+					Expect(condition).NotTo(BeNil())
+					Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonIronicAPIFailure))
+
+					marker := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
+					Expect(marker).NotTo(BeNil())
+					Expect(marker.Status).To(Equal(metav1.ConditionFalse))
+					Expect(marker.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncFailed))
 				})
 
 				It("should handle transitioning error", func() {
@@ -2301,6 +2381,12 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					Expect(condition).NotTo(BeNil())
 					Expect(condition.Status).To(Equal(metav1.ConditionFalse))
 					Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncRequired))
+
+					// Publish the marker as False so the fulfillment pass-through treats
+					// this benign backpressure as "not in progress", not as a failure.
+					marker := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
+					Expect(marker).NotTo(BeNil())
+					Expect(marker.Status).To(Equal(metav1.ConditionFalse))
 				})
 
 				It("should re-trigger (not poll) on the reconcile after transitioning backpressure", func() {
@@ -2465,6 +2551,29 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					Expect(err).To(HaveOccurred())
 					Expect(err).To(Equal(expectedErr))
 					Expect(result).To(Equal(ctrl.Result{}))
+
+					// A transient poll failure must not drop restart ownership, or the
+					// reboot could be re-dispatched once the host reads powered on.
+					Expect(bareMetalInstance.IsStatusConditionTrue(v1alpha1.HostConditionRestartInProgress)).To(BeTrue())
+					condition := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
+					Expect(condition).NotTo(BeNil())
+					Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncRequired))
+				})
+
+				It("should release ownership when the completion check reports a host error", func() {
+					mockMgmtClient.isRestartCompleteFunc = func(ctx context.Context, hostID string) (bool, error) {
+						return false, management.ErrHostOperational
+					}
+
+					_, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+
+					Expect(err).To(HaveOccurred())
+					Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+
+					marker := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
+					Expect(marker).NotTo(BeNil())
+					Expect(marker.Status).To(Equal(metav1.ConditionFalse))
+					Expect(marker.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncFailed))
 				})
 			})
 		})

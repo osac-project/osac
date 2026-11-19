@@ -134,6 +134,7 @@ func (s *TenantsServer) List(ctx context.Context,
 		filter = fmt.Sprintf("(%s) && (%s)", callerFilter, filter)
 	}
 	privateRequest.SetFilter(filter)
+	privateRequest.SetOrder(request.GetOrder())
 
 	// Delegate to private server:
 	privateResponse, err := s.private.List(ctx, privateRequest)

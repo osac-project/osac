@@ -133,6 +133,7 @@ func (s *AddOnOperatorsServer) List(ctx context.Context,
 		return nil, err
 	}
 	privateRequest.SetFilter(composedFilter)
+	privateRequest.SetOrder(request.GetOrder())
 
 	privateResponse, err := s.delegate.List(ctx, privateRequest)
 	if err != nil {

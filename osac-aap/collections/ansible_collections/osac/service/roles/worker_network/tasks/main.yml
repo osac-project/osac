@@ -68,7 +68,7 @@
 - name: Collect selected tenant MACs from BMI status
   ansible.builtin.set_fact:
     _worker_network_selected_macs: "{{ (_worker_network_selected_macs | default([])) + [item.1.macAddress] }}"
-  loop: "{{ _worker_network_bmis.resources | subelements('status.networkAttachmentStatuses', skip_missing=True) }}"
+  loop: "{{ _worker_network_bmis | subelements('status.networkAttachmentStatuses', skip_missing=True) }}"
   when:
     - item.1.macAddress is defined
     - item.1.macAddress | length > 0

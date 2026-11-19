@@ -79,5 +79,5 @@ jobs:
       kind: ${{ matrix.kind }}
       dir: ${{ matrix.dir || '' }}
       cmd: ${{ matrix.cmd || '' }}
-      timeout: ${{ matrix.timeout || 360 }}
+      timeout: ${{ matrix.timeout || 11 }}
       artifact_suffix: ${{ inputs.artifact_suffix || '' }}

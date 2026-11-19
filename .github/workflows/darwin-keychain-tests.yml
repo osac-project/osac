@@ -31,29 +31,18 @@ permissions:
 
 jobs:
   run-darwin-keychain-tests:
+    timeout-minutes: 180
     name: Run darwin keychain tests
     runs-on: macos-latest
     steps:
-    - name: Set test deadline
-      shell: bash
-      run: echo "TEST_DEADLINE=$(( $(date +%s) + 355 * 60 ))" >> "$GITHUB_ENV"
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       with:
         persist-credentials: false
     - uses: ./.github/actions/setup-go
+      timeout-minutes: 12
       with:
         working-directory: fulfillment-service
-    - name: Calculate remaining test budget
-      id: test-budget
-      shell: bash
-      run: |
-        remaining_minutes=$(( (TEST_DEADLINE - $(date +%s)) / 60 ))
-        if ((remaining_minutes <= 0)); then
-          echo "::error::Unit test time budget exhausted during setup"
-          exit 1
-        fi
-        echo "minutes=${remaining_minutes}" >> "$GITHUB_OUTPUT"
     - working-directory: fulfillment-service
-      timeout-minutes: ${{ fromJSON(steps.test-budget.outputs.minutes) }}
+      timeout-minutes: 11
       run: |
         go test -run 'TestKeychainAvailable|TestSettingsSave_FallsBackToFileWithNoKeychain' -v ./internal/config/...

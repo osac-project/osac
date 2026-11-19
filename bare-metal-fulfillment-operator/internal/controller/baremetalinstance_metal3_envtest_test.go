@@ -737,6 +737,55 @@ var _ = Describe("BareMetalInstance Metal3 Integration", func() {
 			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
 			Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonIronicAPIFailure))
 		})
+
+		It("keeps a power-management error retryable and proceeds after recovery", func() {
+			createMetal3BMH(bmhName, map[string]string{
+				inventory.Metal3HostTypeLabel: "power-error-node",
+			}, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+
+			bmi := &v1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: bmiName, Namespace: metal3TestNS},
+				Spec: v1alpha1.BareMetalInstanceSpec{
+					Selector: v1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"type": "power-error-node"},
+					},
+					TemplateID:  shared.OsacNoopTemplate,
+					RunStrategy: v1alpha1.RunStrategyAlways,
+				},
+			}
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+
+			reconciler := newMetal3Reconciler()
+			reconcileN(reconciler, bmiName, 4)
+
+			// A power-management error must not be terminal for the restart path.
+			bmh := getBMH(bmhName)
+			bmh.Status.OperationalStatus = metal3api.OperationalStatusError
+			bmh.Status.ErrorType = metal3api.PowerManagementError
+			bmh.Status.ErrorMessage = "BMC reset in progress"
+			Expect(k8sClient.Status().Update(ctx, bmh)).To(Succeed())
+
+			_, err := reconciler.Reconcile(ctx, ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: bmiName, Namespace: metal3TestNS},
+			})
+			Expect(err).To(HaveOccurred())
+			bmi = getBMI(bmiName)
+			Expect(bmi.Status.Phase).NotTo(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+
+			// Heal the host; the next reconcile proceeds instead of staying Failed.
+			bmh = getBMH(bmhName)
+			bmh.Status.OperationalStatus = metal3api.OperationalStatusOK
+			bmh.Status.ErrorType = ""
+			bmh.Status.ErrorMessage = ""
+			Expect(k8sClient.Status().Update(ctx, bmh)).To(Succeed())
+
+			reconcileN(reconciler, bmiName, 2)
+			bmi = getBMI(bmiName)
+			Expect(bmi.Status.Phase).NotTo(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+			condition := bmi.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Reason).NotTo(Equal(v1alpha1.HostConditionReasonIronicAPIFailure))
+		})
 	})
 
 	Describe("Management finalizer conflict handling", func() {

@@ -116,6 +116,12 @@ func (m *Metal3Client) GetPowerState(ctx context.Context, hostID string) (*Power
 		return nil, err
 	}
 	if bmh.Status.OperationalStatus == metal3api.OperationalStatusError {
+		if bmh.Status.ErrorType == metal3api.PowerManagementError {
+			// Power-management faults (BMC resets, transient Ironic errors) are
+			// recoverable; keep the power/restart path retryable instead of marking
+			// the instance terminally Failed.
+			return nil, fmt.Errorf("BareMetalHost %s has power-management error: %s", hostID, bmh.Status.ErrorMessage)
+		}
 		return nil, fmt.Errorf("%w: BareMetalHost %s has error status: %s", ErrHostOperational, hostID, bmh.Status.ErrorMessage)
 	}
 

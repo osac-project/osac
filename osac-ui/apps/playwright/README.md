@@ -165,8 +165,10 @@ has no specs, Playwright reports that no tests were found.
 The tenant specs read `tenant_name` and the optional break-glass replacement
 password from `apps/e2e-tests/extravars.yaml`.
 Set `tenant_password` to the password used after the generated break-glass user
-completes its first login. When it is omitted, the tenant name is used. The
-create flow logs in with the generated break-glass identity, which JIT-creates
+completes its first login. When it is omitted, a password is generated. If you
+set it, use a private file outside the repository with `--extravars=PATH`; do
+not commit credentials. The create flow logs in with the generated break-glass
+identity, which JIT-creates
 the OSAC User, then uses the private admin CLI to grant that user
 `tenant-admin` through a RoleBinding and waits for `READY`. The same credentials
 are reused for the VM and delete flows. The runner authenticates the OSAC CLI
@@ -214,7 +216,7 @@ The creation and VM portion of the full-flow journey runs in this order:
    storage-backend readiness, and tenant.
 2. Create and publish the catalog item using the resources from step 1.
 3. Log in with the generated tenant break-glass credentials, set the
-   replacement password from `tenant_password` (or the tenant name), grant
+   replacement password from `tenant_password` (or a generated password), grant
    the identity `tenant-admin` permissions through a private-API RoleBinding,
    log in again as the tenant admin, and create a tenant-scoped SSH public-key
    Secret in the Default project.

@@ -14,6 +14,7 @@ import {
   expectTenantToExist,
   openCreateTenantPage,
   readTenantCredentials,
+  tenantReplacementPassword,
   updateTenantCredentialsPassword,
 } from '../../../../libs/test-utils/src/tenants.page';
 
@@ -78,14 +79,14 @@ test('creates a tenant from the Administration tenants page', async ({ page }) =
     () => readTenantCredentials(credentialsFile),
   );
 
-  const replacementPassword = tenantPassword?.trim() || configuredTenantName;
+  const replacementPassword = tenantReplacementPassword(tenantPassword);
   await testStep('tenant-create', 'Log in with the generated tenant credentials', async () => {
     await logout(page);
     logProgress(
       'tenant-create',
       tenantPassword?.trim()
         ? 'Using the configured replacement password for the tenant login.'
-        : `Using tenant "${configuredTenantName}" as the replacement password.`,
+        : 'Using a generated replacement password for the tenant login.',
     );
     const passwordUpdated = await openAndLogin(
       page,

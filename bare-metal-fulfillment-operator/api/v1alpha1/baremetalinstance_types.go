@@ -339,6 +339,11 @@ type BareMetalInstanceStatus struct {
 	// RestartTrigger is the observed restart version of the instance
 	// +kubebuilder:validation:Optional
 	RestartTrigger int64 `json:"restartTrigger"`
+	// RestartRequestID is the durable identity of the last restart request. It
+	// distinguishes a retry of the same request from a new request that reuses an
+	// earlier trigger value.
+	// +kubebuilder:validation:Optional
+	RestartRequestID string `json:"restartRequestID,omitempty"`
 	// NetworkAttachmentStatuses captures runtime networking state for each NIC.
 	// Populated by the operator after DHCP lease discovery.
 	// +kubebuilder:validation:Optional

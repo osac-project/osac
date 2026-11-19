@@ -216,48 +216,8 @@ func DeriveProvisioningProgress(conds []metav1.Condition, restartPending bool) P
 	//    A new benign False reason MUST be added to this skip set, or it will be
 	//    misclassified as a hard failure (the exhaustiveness test guards condition
 	//    types, not reason values).
-	restartCond := apimeta.FindStatusCondition(conds, string(HostConditionRestartInProgress))
-	// A withdrawn restart (spec and acknowledged triggers match) whose
-	// initiation error is still recorded is not a live power failure. Keep it
-	// converging until the operator writes a fresh power observation.
-	restartWithdrawn := restartCond != nil &&
-		restartCond.Status == metav1.ConditionFalse &&
-		restartCond.Reason == HostConditionReasonPowerSyncFailed &&
-		!restartPending
-	restartRetrying := false
-	for _, ct := range hostConditionStageOrder {
-		cond := apimeta.FindStatusCondition(conds, string(ct))
-		if cond == nil || cond.Status != metav1.ConditionFalse {
-			continue
-		}
-		// Retryable restart: readiness is pending, not failed. The retry markers
-		// are only meaningful while a restart is actually pending.
-		restartSnapshot := restartCond != nil &&
-			(restartCond.Status == metav1.ConditionTrue ||
-				(restartPending &&
-					(restartCond.Reason == HostConditionReasonPowerSyncRequired ||
-						restartCond.Reason == HostConditionReasonPowerSyncFailed)))
-		if ct == HostConditionPowerSynced && restartSnapshot &&
-			(cond.Reason == HostConditionReasonProgressing ||
-				cond.Reason == HostConditionReasonPowerSyncFailed ||
-				cond.Reason == HostConditionReasonPowerSyncRequired ||
-				cond.Reason == HostConditionReasonPowerReadFailed) {
-			restartRetrying = true
-			continue
-		}
-		if ct == HostConditionPowerSynced && restartWithdrawn &&
-			cond.Reason == HostConditionReasonPowerSyncFailed {
-			continue
-		}
-		if cond.Reason == HostConditionReasonProgressing ||
-			IsProvisionRetrying(cond) ||
-			cond.Reason == HostConditionReasonPowerSyncRequired ||
-			cond.Reason == HostConditionReasonPowerReadFailed ||
-			cond.Reason == "" ||
-			isPendingNetworkConditionReason(ct, cond.Reason) {
-			continue
-		}
-		step, failure := classifyHostConditionFailure(ct, cond.Reason)
+	rp := classifyRestartProgress(conds, restartPending)
+	if step, failure, failed := firstHardFailure(conds, rp); failed {
 		return ProvisioningProgress{State: StateFailed, Step: step, Failure: failure}
 	}
 
@@ -272,7 +232,7 @@ func DeriveProvisioningProgress(conds []metav1.Condition, restartPending bool) P
 	//     initiation error is waiting for a fresh power observation: the instance
 	//     is provisioned and the ready axis is still converging, whether or not it
 	//     has network attachments.
-	if restartRetrying || restartWithdrawn {
+	if rp.retrying || rp.withdrawn {
 		return ProvisioningProgress{State: StateProvisioned, Step: StepReadyPowerSync}
 	}
 
@@ -310,6 +270,73 @@ func DeriveProvisioningProgress(conds []metav1.Condition, restartPending bool) P
 		step = StepNetworkSetupIPDiscovery
 	}
 	return ProvisioningProgress{State: StateInProgress, Step: step}
+}
+
+// restartProgress captures how the operator's restart marker affects failure
+// classification and the ready-axis result.
+type restartProgress struct {
+	withdrawn bool
+	retrying  bool
+}
+
+func classifyRestartProgress(conds []metav1.Condition, restartPending bool) restartProgress {
+	cond := apimeta.FindStatusCondition(conds, string(HostConditionRestartInProgress))
+	var rp restartProgress
+	if cond == nil {
+		return rp
+	}
+
+	// A withdrawn request (spec and acknowledged triggers match) with a stale
+	// initiation error is not a live power failure.
+	rp.withdrawn = cond.Status == metav1.ConditionFalse &&
+		cond.Reason == HostConditionReasonPowerSyncFailed && !restartPending
+
+	// Retryable restart: readiness is pending, not failed. The retry markers are
+	// only meaningful while a restart is actually pending.
+	snapshot := cond.Status == metav1.ConditionTrue ||
+		(restartPending && (cond.Reason == HostConditionReasonPowerSyncRequired ||
+			cond.Reason == HostConditionReasonPowerSyncFailed))
+	power := apimeta.FindStatusCondition(conds, string(HostConditionPowerSynced))
+	rp.retrying = snapshot && power != nil && power.Status == metav1.ConditionFalse &&
+		(power.Reason == HostConditionReasonProgressing ||
+			power.Reason == HostConditionReasonPowerSyncFailed ||
+			power.Reason == HostConditionReasonPowerSyncRequired ||
+			power.Reason == HostConditionReasonPowerReadFailed)
+	return rp
+}
+
+// restartObservationBenign reports a PowerSynced failure that actually belongs to
+// an owned or withdrawn restart, not to provisioning.
+func restartObservationBenign(cond *metav1.Condition, rp restartProgress) bool {
+	if rp.withdrawn && cond.Reason == HostConditionReasonPowerSyncFailed {
+		return true
+	}
+	return rp.retrying
+}
+
+// firstHardFailure walks the surfaced conditions in stage order and returns the
+// first one that is False with a hard-failure reason.
+func firstHardFailure(conds []metav1.Condition, rp restartProgress) (ProvisioningStep, FailureClassification, bool) {
+	for _, ct := range hostConditionStageOrder {
+		cond := apimeta.FindStatusCondition(conds, string(ct))
+		if cond == nil || cond.Status != metav1.ConditionFalse {
+			continue
+		}
+		if ct == HostConditionPowerSynced && restartObservationBenign(cond, rp) {
+			continue
+		}
+		if cond.Reason == HostConditionReasonProgressing ||
+			IsProvisionRetrying(cond) ||
+			cond.Reason == HostConditionReasonPowerSyncRequired ||
+			cond.Reason == HostConditionReasonPowerReadFailed ||
+			cond.Reason == "" ||
+			isPendingNetworkConditionReason(ct, cond.Reason) {
+			continue
+		}
+		step, failure := classifyHostConditionFailure(ct, cond.Reason)
+		return step, failure, true
+	}
+	return "", "", false
 }
 
 // isPendingNetworkConditionReason recognizes network operations that have not

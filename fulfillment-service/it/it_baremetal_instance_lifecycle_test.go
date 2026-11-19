@@ -27,6 +27,8 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
@@ -42,6 +44,8 @@ import (
 // requirement that a BareMetalInstance provide at least one authentication
 // method (ssh_key or user_data) at create time.
 const bmiTestSSHPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIG8K1ZuSC7tmzxD5LJJXwkCfStVEjzXWYCFhJaLBxWAn test@example.com"
+
+const bmiNetworkStatusTestFinalizer = "it.osac.openshift.io/network-status-test"
 
 var _ = Describe("BareMetalInstance lifecycle", func() {
 	var (
@@ -278,6 +282,168 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 			"persisted attachment should reference the tenant default SecurityGroup")
 		Expect(persistedAttachment.GetInterface()).To(Equal("data-0"),
 			"persisted attachment should select the first fabric-role interface")
+	})
+
+	It("projects network status without exposing diagnostics and reports deletion", func(ctx context.Context) {
+		createResp, err := bareMetalInstancesClient.Create(ctx, publicv1.BareMetalInstancesCreateRequest_builder{
+			Object: publicv1.BareMetalInstance_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("test-bmi-network-status-%s", uuid.New()[24:32]),
+				}.Build(),
+				Spec: publicv1.BareMetalInstanceSpec_builder{
+					CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
+					InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
+					UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
+					DiskImage:      publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		bmiID := createResp.GetObject().GetId()
+		kubeClient := tool.KubeClient()
+		bmiList := &bmfov1alpha1.BareMetalInstanceList{}
+		var kubeObject *bmfov1alpha1.BareMetalInstance
+		deletionRequested := false
+		// Register cleanup before waiting for the hub CR so a failed wait still
+		// deletes the API instance.
+		DeferCleanup(func(cleanupCtx context.Context) {
+			if !deletionRequested {
+				_, deleteErr := privateBareMetalInstancesClient.Delete(cleanupCtx,
+					privatev1.BareMetalInstancesDeleteRequest_builder{Id: bmiID}.Build())
+				if grpcstatus.Code(deleteErr) != grpccodes.NotFound {
+					Expect(deleteErr).NotTo(HaveOccurred())
+				}
+			}
+
+			if kubeObject != nil {
+				fresh := &bmfov1alpha1.BareMetalInstance{}
+				if getErr := kubeClient.Get(cleanupCtx, crclient.ObjectKeyFromObject(kubeObject), fresh); getErr == nil {
+					fresh.Finalizers = removeString(fresh.Finalizers, bmiNetworkStatusTestFinalizer)
+					Expect(kubeClient.Update(cleanupCtx, fresh)).To(Succeed())
+				} else {
+					Expect(apierrors.IsNotFound(getErr)).To(BeTrue())
+				}
+			}
+			_, signalErr := privateBareMetalInstancesClient.Signal(cleanupCtx,
+				privatev1.BareMetalInstancesSignalRequest_builder{Id: bmiID}.Build())
+			if grpcstatus.Code(signalErr) != grpccodes.NotFound {
+				Expect(signalErr).NotTo(HaveOccurred())
+			}
+			Eventually(func(g Gomega) {
+				_, getErr := privateBareMetalInstancesClient.Get(cleanupCtx,
+					privatev1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
+				g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound))
+			}, 2*time.Minute, time.Second).Should(Succeed())
+		})
+
+		Eventually(func(g Gomega) {
+			g.Expect(kubeClient.List(ctx, bmiList, crclient.InNamespace(hubNamespace),
+				crclient.MatchingLabels{labels.BareMetalInstanceUuid: bmiID})).To(Succeed())
+			g.Expect(bmiList.Items).To(HaveLen(1))
+			kubeObject = &bmiList.Items[0]
+		}, time.Minute, time.Second).Should(Succeed())
+
+		By("projecting fixed tenant-safe network failure status")
+		diagnostic := "fabric-manager detail; AAP job id 7391; secret sentinel"
+		setBMFStatus := func(phase bmfov1alpha1.BareMetalInstancePhaseType, conditions []metav1.Condition) {
+			Eventually(func(g Gomega) {
+				fresh := &bmfov1alpha1.BareMetalInstance{}
+				g.Expect(kubeClient.Get(ctx, crclient.ObjectKeyFromObject(kubeObject), fresh)).To(Succeed())
+				fresh.Status.Phase = phase
+				fresh.Status.Conditions = conditions
+				g.Expect(kubeClient.Status().Update(ctx, fresh)).To(Succeed())
+			}).Should(Succeed())
+			_, signalErr := privateBareMetalInstancesClient.Signal(ctx,
+				privatev1.BareMetalInstancesSignalRequest_builder{Id: bmiID}.Build())
+			Expect(signalErr).NotTo(HaveOccurred())
+		}
+		setBMFStatus(bmfov1alpha1.BareMetalInstancePhaseFailed, []metav1.Condition{{
+			Type:               string(bmfov1alpha1.HostConditionNetworkAttachmentsReady),
+			Status:             metav1.ConditionFalse,
+			Reason:             "FabricManagerInternalError",
+			Message:            diagnostic,
+			LastTransitionTime: metav1.Now(),
+		}})
+
+		Eventually(func(g Gomega) {
+			response, getErr := bareMetalInstancesClient.Get(ctx,
+				publicv1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			condition := findBareMetalInstanceCondition(response.GetObject().GetStatus().GetConditions(),
+				publicv1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY)
+			g.Expect(condition).NotTo(BeNil())
+			g.Expect(condition.GetStatus()).To(Equal(publicv1.ConditionStatus_CONDITION_STATUS_FALSE))
+			g.Expect(condition.GetReason()).To(Equal("NetworkSetupFailed"))
+			g.Expect(condition.GetMessage()).To(Equal("Network setup did not complete."))
+			g.Expect(condition.GetMessage()).NotTo(ContainSubstring(diagnostic))
+		}, time.Minute, time.Second).Should(Succeed())
+		fresh := &bmfov1alpha1.BareMetalInstance{}
+		Expect(kubeClient.Get(ctx, crclient.ObjectKeyFromObject(kubeObject), fresh)).To(Succeed())
+		Expect(fresh.GetStatusCondition(bmfov1alpha1.HostConditionNetworkAttachmentsReady).Message).
+			To(Equal(diagnostic), "the internal diagnostic should remain on the hub CR")
+
+		By("leaving NETWORK_READY unset when provisioning fails before networking")
+		setBMFStatus(bmfov1alpha1.BareMetalInstancePhaseFailed, nil)
+		Eventually(func(g Gomega) {
+			response, getErr := bareMetalInstancesClient.Get(ctx,
+				publicv1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(response.GetObject().GetStatus().GetState()).To(Equal(
+				publicv1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED))
+			g.Expect(findBareMetalInstanceCondition(response.GetObject().GetStatus().GetConditions(),
+				publicv1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY)).
+				To(BeNil())
+		}, time.Minute, time.Second).Should(Succeed())
+
+		By("reporting DELETING while the hub object is held by a finalizer")
+		fresh = &bmfov1alpha1.BareMetalInstance{}
+		Expect(kubeClient.Get(ctx, crclient.ObjectKeyFromObject(kubeObject), fresh)).To(Succeed())
+		fresh.Finalizers = append(fresh.Finalizers, bmiNetworkStatusTestFinalizer)
+		Expect(kubeClient.Update(ctx, fresh)).To(Succeed())
+		_, err = privateBareMetalInstancesClient.Delete(ctx,
+			privatev1.BareMetalInstancesDeleteRequest_builder{Id: bmiID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		deletionRequested = true
+		_, err = privateBareMetalInstancesClient.Signal(ctx,
+			privatev1.BareMetalInstancesSignalRequest_builder{Id: bmiID}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(func(g Gomega) {
+			response, getErr := privateBareMetalInstancesClient.Get(ctx,
+				privatev1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(response.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+			g.Expect(response.GetObject().GetStatus().GetState()).To(Equal(
+				privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING))
+		}, time.Minute, time.Second).Should(Succeed())
+
+		By("projecting cleanup progress while the instance is deleting")
+		cleanupDiagnostic := "private BMC cleanup diagnostic; job id 9402"
+		setBMFStatus(bmfov1alpha1.BareMetalInstancePhaseDeleting, []metav1.Condition{{
+			Type:               string(bmfov1alpha1.HostConditionNetworkOffboardComplete),
+			Status:             metav1.ConditionFalse,
+			Reason:             "PowerOffFailed",
+			Message:            cleanupDiagnostic,
+			LastTransitionTime: metav1.Now(),
+		}})
+		expectCleanupStatus := func(g Gomega) {
+			response, getErr := bareMetalInstancesClient.Get(ctx,
+				publicv1.BareMetalInstancesGetRequest_builder{Id: bmiID}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(response.GetObject().GetStatus().GetState()).To(Equal(
+				publicv1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING))
+			condition := findBareMetalInstanceCondition(response.GetObject().GetStatus().GetConditions(),
+				publicv1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY)
+			g.Expect(condition).NotTo(BeNil())
+			g.Expect(condition.GetStatus()).To(Equal(publicv1.ConditionStatus_CONDITION_STATUS_FALSE))
+			g.Expect(condition.GetReason()).To(Equal("PowerOffFailed"))
+			g.Expect(condition.GetMessage()).To(Equal("Network cleanup did not complete."))
+			g.Expect(condition.GetMessage()).NotTo(ContainSubstring(cleanupDiagnostic))
+		}
+		Eventually(expectCleanupStatus, time.Minute, time.Second).Should(Succeed())
+
+		By("retaining the last network condition while cleanup retries")
+		setBMFStatus(bmfov1alpha1.BareMetalInstancePhaseDeleting, nil)
+		Eventually(expectCleanupStatus, time.Minute, time.Second).Should(Succeed())
 	})
 
 	It("waits for automatic ExternalIP cleanup before deleting the BMFO CR", func(ctx context.Context) {
@@ -1256,3 +1422,23 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 		})
 	})
 })
+
+func findBareMetalInstanceCondition(conditions []*publicv1.BareMetalInstanceCondition,
+	conditionType publicv1.BareMetalInstanceConditionType) *publicv1.BareMetalInstanceCondition {
+	for _, condition := range conditions {
+		if condition.GetType() == conditionType {
+			return condition
+		}
+	}
+	return nil
+}
+
+func removeString(values []string, value string) []string {
+	filtered := values[:0]
+	for _, current := range values {
+		if current != value {
+			filtered = append(filtered, current)
+		}
+	}
+	return filtered
+}

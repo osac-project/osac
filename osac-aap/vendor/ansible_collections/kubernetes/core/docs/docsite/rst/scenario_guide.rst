@@ -13,5 +13,6 @@ To get started, please select one of the following topics.
    :maxdepth: 1
 
    kubernetes_scenarios/k8s_intro
+   kubernetes_scenarios/k8s_inventory
    kubernetes_scenarios/k8s_scenarios
 

@@ -1,4 +1,4 @@
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -15,7 +15,6 @@ import { useTranslation } from '../../../hooks/useTranslation';
 const BareMetalInstanceCreatePage = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { catalogItemId } = useParams<{ catalogItemId?: string }>();
   const navigateToParent = () => navigate('/bare-metal');
 
   return (
@@ -38,10 +37,7 @@ const BareMetalInstanceCreatePage = () => {
           </Content>
         </Stack>
       </PageSection>
-      <BareMetalInstanceCreateWizard
-        initialCatalogItemId={catalogItemId}
-        onClosed={navigateToParent}
-      />
+      <BareMetalInstanceCreateWizard onClosed={navigateToParent} />
     </>
   );
 };

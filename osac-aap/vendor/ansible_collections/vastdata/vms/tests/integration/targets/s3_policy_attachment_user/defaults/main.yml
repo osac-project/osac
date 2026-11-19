@@ -1,0 +1,32 @@
+---
+# Default variables for s3_policy_attachment_user integration tests
+# Override in tests/integration/integration_config.yml
+#
+# Either set test_attachment_user_uid or test_attachment_username for an existing user,
+# or leave both unset and the test will create a local user and use it.
+
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+# S3 policy (created during test or use existing id)
+test_s3policy_name: ansible-test-s3policy-attach-user
+test_s3policy_tenant_id: 1
+test_s3policy_document: >-
+  {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":"*"}]}
+
+# Target user: optional. If none set, the test creates a local user.
+test_attachment_user_uid:
+test_attachment_username:
+# User created by the test when no attachment target is configured
+test_attachment_user_name: ansible-test-s3policy-attach-user
+test_created_user_uid: 19998
+test_created_group_gid: 19999
+
+# Reusable connection dict — reference as ``vms: "{{ vms_auth }}"`` in tasks
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true

@@ -3,6 +3,7 @@
 # This file is part of Ansible
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
+import re
 from unittest.mock import MagicMock
 from unittest.mock import call
 from unittest.mock import patch
@@ -11,6 +12,8 @@ from unittest.mock import sentinel
 import pytest
 
 import ansible.plugins.inventory as base_inventory
+from ansible.errors import AnsibleError
+from ansible.module_utils.six import string_types
 
 import ansible_collections.amazon.aws.plugins.plugin_utils.inventory as utils_inventory
 
@@ -67,6 +70,36 @@ def test_inventory_verify_file(monkeypatch, filename, result):
     assert inventory_plugin.verify_file(filename) is False
 
 
+class AwsUnitTestTemplar:
+    def __init__(self, config):
+        self.config = config
+
+    def is_template_string(self, key):
+        m = re.findall("{{([ ]*[a-zA-Z0-9_]*[ ]*)}}", key)
+        return bool(m)
+
+    def is_template(self, data):
+        if isinstance(data, string_types):
+            return self.is_template_string(data)
+        elif isinstance(data, (list, tuple)):
+            for v in data:
+                if self.is_template(v):
+                    return True
+        elif isinstance(data, dict):
+            for k in data:
+                if self.is_template(k) or self.is_template(data[k]):
+                    return True
+        return False
+
+    def template(self, variable, disable_lookups):
+        for k, v in self.config.items():
+            variable = re.sub("{{([ ]*%s[ ]*)}}" % k, v, variable)
+        if self.is_template_string(variable):
+            m = re.findall("{{([ ]*[a-zA-Z0-9_]*[ ]*)}}", variable)
+            raise AnsibleError(f"Missing variables: {','.join([k.replace(' ', '') for k in m])}")
+        return variable
+
+
 @pytest.fixture(name="aws_inventory_base")
 def fixture_aws_inventory_base():
     inventory = utils_inventory.AWSInventoryBase()
@@ -75,11 +108,26 @@ def fixture_aws_inventory_base():
     return inventory
 
 
-def test_inventory_get_options_without_templar(aws_inventory_base, mocker):
-    """Test get_options() returns TemplatedOptions that can retrieve values."""
+@pytest.mark.parametrize(
+    "option,value",
+    [
+        ("access_key", "amazon_ansible_access_key_001"),
+        ("secret_key", "amazon_ansible_secret_key_890"),
+        ("session_token", None),
+        ("use_ssm_inventory", False),
+        ("This_field_is_undefined", None),
+        ("assume_role_arn", "arn:aws:iam::123456789012:role/ansible-test-inventory"),
+        ("region", "us-east-2"),
+    ],
+)
+def test_inventory_get_options_without_templar(aws_inventory_base, mocker, option, value):
     inventory_options = {
         "access_key": "amazon_ansible_access_key_001",
+        "secret_key": "amazon_ansible_secret_key_890",
+        "endpoint": "http//ansible.amazon.com",
+        "assume_role_arn": "arn:aws:iam::123456789012:role/ansible-test-inventory",
         "region": "us-east-2",
+        "use_ssm_inventory": False,
     }
     aws_inventory_base._options = inventory_options
 
@@ -89,29 +137,36 @@ def test_inventory_get_options_without_templar(aws_inventory_base, mocker):
     super_get_options_patch.return_value = aws_inventory_base._options
 
     options = aws_inventory_base.get_options()
-
-    # Verify it returns TemplatedOptions wrapper
-    assert isinstance(options, utils_inventory.AWSInventoryBase.TemplatedOptions)
-
-    # Verify basic get() works
-    assert options.get("access_key") == "amazon_ansible_access_key_001"
-    assert options.get("region") == "us-east-2"
-    assert options.get("missing_key") is None
+    assert value == options.get(option)
 
 
-def test_inventory_get_options_with_templar(aws_inventory_base, mocker):
-    """Test get_options() and get_option() integrate with templar."""
+@pytest.mark.parametrize(
+    "option,value,error",
+    [
+        ("access_key", "amazon_ansible_access_key_001", None),
+        ("session_token", None, None),
+        ("use_ssm_inventory", "{{ aws_inventory_use_ssm }}", None),
+        ("This_field_is_undefined", None, None),
+        ("region", "us-east-1", None),
+        ("profile", None, "Missing variables: ansible_version"),
+    ],
+)
+def test_inventory_get_options_with_templar(aws_inventory_base, mocker, option, value, error):
     inventory_options = {
-        "access_key": "plain_value",
-        "region": "{{ templated_region }}",
+        "access_key": "amazon_ansible_access_key_001",
+        "profile": "ansbile_{{ ansible_os }}_{{ ansible_version }}",
+        "endpoint": "{{ aws_endpoint }}",
+        "region": "{{ aws_region_country }}-east-{{ aws_region_id }}",
+        "use_ssm_inventory": "{{ aws_inventory_use_ssm }}",
     }
     aws_inventory_base._options = inventory_options
-
-    # Mock templar
-    mock_templar = MagicMock(name="templar")
-    mock_templar.is_template.side_effect = lambda x: "{{" in str(x) if x else False
-    mock_templar.template.return_value = "us-east-1"
-    aws_inventory_base.templar = mock_templar
+    templar_config = {
+        "ansible_os": "RedHat",
+        "aws_region_country": "us",
+        "aws_region_id": "1",
+        "aws_endpoint": "http//ansible.amazon.com",
+    }
+    aws_inventory_base.templar = AwsUnitTestTemplar(templar_config)
 
     super_get_options_patch = mocker.patch(
         "ansible_collections.amazon.aws.plugins.plugin_utils.inventory.BaseInventoryPlugin.get_options"
@@ -123,13 +178,21 @@ def test_inventory_get_options_with_templar(aws_inventory_base, mocker):
     )
     super_get_option_patch.side_effect = lambda x, hostvars=None: aws_inventory_base._options.get(x)
 
-    # Test get_options() returns TemplatedOptions that uses templar
-    options = aws_inventory_base.get_options()
-    assert isinstance(options, utils_inventory.AWSInventoryBase.TemplatedOptions)
-    assert options.get("region") == "us-east-1"
+    if error:
+        # test using get_options()
+        with pytest.raises(AnsibleError) as exc:
+            options = aws_inventory_base.get_options()
+            options.get(option)
+        assert error == str(exc.value)
 
-    # Verify templar was called
-    assert mock_templar.template.called
+        # test using get_option()
+        with pytest.raises(AnsibleError) as exc:
+            aws_inventory_base.get_option(option)
+        assert error == str(exc.value)
+    else:
+        # test using get_options()
+        options = aws_inventory_base.get_options()
+        assert value == options.get(option)
 
-    # Test get_option() also uses templar
-    assert aws_inventory_base.get_option("region") == "us-east-1"
+        # test using get_option()
+        assert value == aws_inventory_base.get_option(option)

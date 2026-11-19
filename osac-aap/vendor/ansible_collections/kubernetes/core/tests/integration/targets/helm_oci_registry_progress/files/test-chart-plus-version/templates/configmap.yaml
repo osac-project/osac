@@ -1,6 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: test-chart-plus-version-configmap
-data:
-  myValue: test

@@ -1,0 +1,358 @@
+---
+# Integration tests for s3policies module
+# These tests run against a real VAST system
+#
+# Configuration:
+# Set values in tests/integration/integration_config.yml
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials }}"
+
+# ====================
+# Cleanup - Remove existing test S3 policy if present
+# ====================
+
+- name: Clean up - ensure test S3 policy doesn't exist before starting
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - ensure test S3 policy -updated doesn't exist either
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}-updated"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    state: absent
+  register: cleanup_result2
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Create Tests
+# ====================
+
+- name: Test creating an S3 policy
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    policy: "{{ test_s3policy_document }}"
+    state: present
+  register: create_result
+  when: can_run_tests | bool
+
+- name: Verify S3 policy was created
+  ansible.builtin.assert:
+    that:
+      - create_result is changed
+      - create_result.s3policies is defined
+      - create_result.s3policies.name == test_s3policy_name
+      # Note: enabled field defaults to true when not specified during creation
+      - create_result.s3policies.enabled == true
+      - create_result.diff is defined
+      - create_result.diff.before == {}
+      - create_result.diff.after is defined
+  when: create_result is not skipped
+
+# ====================
+# Idempotency Tests - Create
+# ====================
+
+- name: Test idempotency - create same S3 policy again
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    policy: "{{ test_s3policy_document }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify idempotency (should not change)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.s3policies is defined
+  when: result is not skipped
+
+# ====================
+# Update Tests - Change name and enable/disable
+# ====================
+
+- name: "Test update - change name and disable policy"
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    id: "{{ create_result.s3policies.id }}" # Use ID for lookup to enable rename
+    name: "{{ test_s3policy_name }}-updated"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    policy: "{{ test_s3policy_document }}"
+    enabled: false
+    state: present
+  register: update_result
+  when: can_run_tests | bool
+
+- name: Verify S3 policy name was updated and enabled was set to false
+  ansible.builtin.assert:
+    that:
+      - update_result is changed
+      - update_result.s3policies is defined
+      - update_result.s3policies.name == test_s3policy_name + '-updated'
+      - update_result.s3policies.enabled == false
+  when: update_result is not skipped
+
+# ====================
+# Idempotency Tests - After Update
+# ====================
+
+- name: Test idempotency after update
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}-updated"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    policy: "{{ test_s3policy_document }}"
+    enabled: false
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify idempotency after update
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.s3policies is defined
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests - Create
+# ====================
+
+- name: Test check mode - create new S3 policy
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}-checkmode"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    policy: "{{ test_s3policy_document }}"
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode create reported changes
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually create the S3 policy
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}-checkmode"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify S3 policy was never created
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Delete Tests
+# ====================
+
+- name: Test deleting S3 policy (using updated name)
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}-updated"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify S3 policy was deleted
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after == {}
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Delete
+# ====================
+
+- name: Test delete idempotency - delete again
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}-updated"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify delete idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Check Mode Delete Test
+# ====================
+
+- name: Create S3 policy for check mode delete test
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}-delcheck"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    policy: "{{ test_s3policy_document }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Test check mode - delete
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}-delcheck"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    state: absent
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported deletion
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually delete
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}-delcheck"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Check that S3 policy still exists
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.s3policies is defined
+  when: result is not skipped
+
+- name: Clean up check mode delete test S3 policy
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}-delcheck"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Diff Mode Tests
+# ====================
+
+- name: Create S3 policy for diff mode test
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}-diff"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    policy: "{{ test_s3policy_document }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify create diff output
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before == {}
+      - result.diff.after is defined
+  when: result is not skipped
+
+- name: Delete S3 policy with diff mode
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}-diff"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    state: absent
+  diff: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify delete diff output
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after == {}
+  when: result is not skipped
+
+# ====================
+# Cleanup
+# ====================
+
+- name: Final cleanup - remove test S3 policy if it exists (original name)
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove test S3 policy if it exists (updated name)
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}-updated"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove diff test S3 policy if it exists
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}-diff"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping s3policies integration tests - credentials not configured.
+
+      To enable integration tests, set credentials in:
+        tests/integration/integration_config.yml
+
+      Example:
+        vast_vms: "vast-vms.example.com"
+        vast_username: "admin"
+        vast_password: "password"
+
+      Then run: ansible-test integration s3policies -v
+  when: not (can_run_tests | bool)

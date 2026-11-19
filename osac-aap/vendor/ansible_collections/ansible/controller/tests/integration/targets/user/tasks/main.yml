@@ -1,116 +1,108 @@
 ---
 - name: Generate a test ID
-  ansible.builtin.set_fact:
+  set_fact:
     test_id: "{{ lookup('password', '/dev/null chars=ascii_letters length=16') }}"
   when: test_id is not defined
 
 - name: Generate names
-  ansible.builtin.set_fact:
+  set_fact:
     username: "AWX-Collection-tests-user-user-{{ test_id }}"
 
 - name: Create a User
-  ansible.controller.user:
+  user:
     username: "{{ username }}"
     first_name: Joe
     password: "{{ 65535 | random | to_uuid }}"
     state: present
   register: result
 
-- name: Assert result changed
-  ansible.builtin.assert:
+- assert:
     that:
-      - result.changed
+      - "result is changed"
 
 - name: Create a User with exists
-  ansible.controller.user:
+  user:
     username: "{{ username }}"
     first_name: Joe
     password: "{{ 65535 | random | to_uuid }}"
     state: exists
   register: result
 
-- name: Assert results did not change
-  ansible.builtin.assert:
+- assert:
     that:
-      - not result.changed
+      - "result is not changed"
 
 - name: Delete a User
-  ansible.controller.user:
+  user:
     username: "{{ username }}"
     first_name: Joe
     password: "{{ 65535 | random | to_uuid }}"
     state: absent
   register: result
 
-- name: Assert result changed
-  ansible.builtin.assert:
+- assert:
     that:
-      - result.changed
+      - "result is changed"
 
 - name: Create a User with exists
-  ansible.controller.user:
+  user:
     username: "{{ username }}"
     first_name: Joe
     password: "{{ 65535 | random | to_uuid }}"
     state: exists
   register: result
 
-- name: Assert result changed
-  ansible.builtin.assert:
+- assert:
     that:
-      - result.changed
+      - "result is changed"
 
 - name: Change a User by ID
-  ansible.controller.user:
+  user:
     username: "{{ result.id }}"
     last_name: User
     email: joe@example.org
     state: present
   register: result
 
-- name: Assert result changed
-  ansible.builtin.assert:
+- assert:
     that:
-      - result.changed
+      - "result is changed"
 
 - name: Check idempotency
-  ansible.controller.user:
+  user:
     username: "{{ username }}"
     first_name: Joe
     last_name: User
   register: result
 
-- name: Assert result did not change
-  ansible.builtin.assert:
+- assert:
     that:
-      - not (result.changed)
+      - "result is not changed"
 
 - name: Rename a User
-  ansible.controller.user:
+  user:
     username: "{{ username }}"
     new_username: "{{ username }}-renamed"
     email: joe@example.org
   register: result
 
-- name: Assert result changed
-  ansible.builtin.assert:
+- assert:
     that:
-      - result.changed
+      - "result is changed"
 
 - name: Delete a User
-  ansible.controller.user:
+  user:
     username: "{{ username }}-renamed"
     email: joe@example.org
     state: absent
   register: result
 
-- name: Assert result changed
-  ansible.builtin.assert:
+- assert:
     that:
-      - result.changed
+      - "result is changed"
 
 - name: Create an Auditor
-  ansible.controller.user:
+  user:
     first_name: Joe
     last_name: Auditor
     username: "{{ username }}"
@@ -120,25 +112,23 @@
     auditor: true
   register: result
 
-- name: Assert result changed
-  ansible.builtin.assert:
+- assert:
     that:
-      - result.changed
+      - "result is changed"
 
 - name: Delete an Auditor
-  ansible.controller.user:
+  user:
     username: "{{ username }}"
     email: joe@example.org
     state: absent
   register: result
 
-- name: Assert result changed
-  ansible.builtin.assert:
+- assert:
     that:
-      - result.changed
+      - "result is changed"
 
 - name: Create a Superuser
-  ansible.controller.user:
+  user:
     first_name: Joe
     last_name: Super
     username: "{{ username }}"
@@ -148,25 +138,23 @@
     superuser: true
   register: result
 
-- name: Assert result changed
-  ansible.builtin.assert:
+- assert:
     that:
-      - result.changed
+      - "result is changed"
 
 - name: Delete a Superuser
-  ansible.controller.user:
+  user:
     username: "{{ username }}"
     email: joe@example.org
     state: absent
   register: result
 
-- name: Assert result changed
-  ansible.builtin.assert:
+- assert:
     that:
-      - result.changed
+      - "result is changed"
 
 - name: Test SSL parameter
-  ansible.controller.user:
+  user:
     first_name: Joe
     last_name: User
     username: "{{ username }}"
@@ -178,18 +166,17 @@
   ignore_errors: true
   register: result
 
-- name: Assert SSL parameter failure message is meaningful
-  ansible.builtin.assert:
+- assert:
     that:
-      - result is failed or result.failed | default(false)
+      - "'Unable to resolve controller_host' in result.msg or
+        'Can not verify ssl with non-https protocol' in result.exception"
 
-- name: Org tasks
-  block:
+- block:
     - name: Generate an org name
-      ansible.builtin.set_fact:
+      set_fact:
         org_name: "AWX-Collection-tests-organization-org-{{ test_id }}"
 
-    - name: Make sure organization is absent
+    - name: Make sure {{ org_name }} is not there
       organization:
         name: "{{ org_name }}"
         state: absent
@@ -202,40 +189,38 @@
           - Ansible Galaxy
       register: result
 
-    - name: Assert result changed
-      ansible.builtin.assert:
-        that: result.changed
+    - assert:
+        that: "result is changed"
 
-    - name: Create a User to become admin of an organization
-      ansible.controller.user:
+    - name: Create a User to become admin of an organization {{ org_name }}
+      user:
         username: "{{ username }}-orgadmin"
         password: "{{ username }}-orgadmin"
         state: present
         organization: "{{ org_name }}"
       register: result
 
-    - name: Assert result changed
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
-    - name: Add the user -orgadmin as an admin of the organization
-      ansible.controller.role:
+    - name: Add the user {{ username }}-orgadmin as an admin of the organization {{ org_name }}
+      role:
         user: "{{ username }}-orgadmin"
         role: admin
         organization: "{{ org_name }}"
         state: present
       register: result
 
-    - name: Assert that user was added as org admin
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed | default(false)
+          - "result is changed"
 
-    - name: Create a User as -orgadmin without using an organization (must fail)
-      ansible.controller.user:
+    - name: Create a User as {{ username }}-orgadmin without using an organization (must fail)
+      user:
         controller_username: "{{ username }}-orgadmin"
         controller_password: "{{ username }}-orgadmin"
+        controller_oauthtoken: false  # Hack for CI where we use oauth in config file
         username: "{{ username }}"
         first_name: Joe
         password: "{{ 65535 | random | to_uuid }}"
@@ -243,17 +228,12 @@
       register: result
       ignore_errors: true
 
-    - name: Assert result failed
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result is defined
-          - result.failed is defined
-          - result.failed | bool
-        fail_msg: "The task did not fail as expected."
-        success_msg: "The task failed as expected."
+          - "result is failed"
 
-    - name: Create a User as -orgadmin using an organization
-      ansible.controller.user:
+    - name: Create a User as {{ username }}-orgadmin using an organization
+      user:
         controller_username: "{{ username }}-orgadmin"
         controller_password: "{{ username }}-orgadmin"
         username: "{{ username }}"
@@ -263,13 +243,12 @@
         organization: "{{ org_name }}"
       register: result
 
-    - name: Assert result changed
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
-    - name: Change a User as -orgadmin by ID using an organization
-      ansible.controller.user:
+    - name: Change a User as {{ username }}-orgadmin by ID using an organization
+      user:
         controller_username: "{{ username }}-orgadmin"
         controller_password: "{{ username }}-orgadmin"
         username: "{{ result.id }}"
@@ -279,13 +258,12 @@
         organization: "{{ org_name }}"
       register: result
 
-    - name: Assert result changed
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
-    - name: Check idempotency as -orgadmin using an organization
-      ansible.controller.user:
+    - name: Check idempotency as {{ username }}-orgadmin using an organization
+      user:
         controller_username: "{{ username }}-orgadmin"
         controller_password: "{{ username }}-orgadmin"
         username: "{{ username }}"
@@ -294,13 +272,12 @@
         organization: "{{ org_name }}"
       register: result
 
-    - name: Assert result did not change
-      ansible.builtin.assert:
+    - assert:
         that:
-          - not (result.changed)
+          - "result is not changed"
 
-    - name: Rename a User as -orgadmin using an organization
-      ansible.controller.user:
+    - name: Rename a User as {{ username }}-orgadmin using an organization
+      user:
         controller_username: "{{ username }}-orgadmin"
         controller_password: "{{ username }}-orgadmin"
         username: "{{ username }}"
@@ -309,13 +286,12 @@
         organization: "{{ org_name }}"
       register: result
 
-    - name: Assert result changed
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
-    - name: Delete a User as -orgadmin using an organization
-      ansible.controller.user:
+    - name: Delete a User as {{ username }}-orgadmin using an organization
+      user:
         controller_username: "{{ username }}-orgadmin"
         controller_password: "{{ username }}-orgadmin"
         username: "{{ username }}-renamed"
@@ -324,12 +300,11 @@
         organization: "{{ org_name }}"
       register: result
 
-    - name: Assert result changed
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
-    - name: Remove the user -orgadmin as an admin of the organization
+    - name: Remove the user {{ username }}-orgadmin as an admin of the organization {{ org_name }}
       role:
         user: "{{ username }}-orgadmin"
         role: admin
@@ -337,23 +312,21 @@
         state: absent
       register: result
 
-    - name: Assert result changed
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
-    - name: Delete the User -orgadmin
-      ansible.controller.user:
+    - name: Delete the User {{ username }}-orgadmin
+      user:
         username: "{{ username }}-orgadmin"
         password: "{{ username }}-orgadmin"
         state: absent
         organization: "{{ org_name }}"
       register: result
 
-    - name: Assert result changed
-      ansible.builtin.assert:
+    - assert:
         that:
-          - result.changed
+          - "result is changed"
 
     - name: Delete the Organization {{ org_name }}
       organization:
@@ -361,7 +334,6 @@
         state: absent
       register: result
 
-    - name: Assert result changed
-      ansible.builtin.assert:
-        that: result.changed
+    - assert:
+        that: "result is changed"
 ...

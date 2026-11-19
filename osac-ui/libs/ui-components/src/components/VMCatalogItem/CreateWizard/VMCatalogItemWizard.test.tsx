@@ -399,7 +399,7 @@ describe('VMCatalogItemWizard', () => {
     expect(Object.keys(request.object?.fields ?? {}).filter((key) => key !== '$typeName')).toEqual(
       [],
     );
-    expect(mockNavigate).toHaveBeenCalledWith('/catalog/vm/catalog-item-1');
+    expect(mockNavigate).toHaveBeenCalledWith('/catalog/vms/catalog-item-1');
   });
 
   it('sends an editable field value as editable.default_value', async () => {
@@ -503,7 +503,7 @@ describe('VMCatalogItemWizard', () => {
       expect(request.updateMask?.paths).not.toContain('template');
       expect(request.updateMask?.paths).not.toContain('metadata.name');
       expect(request.updateMask?.paths).not.toContain('metadata.tenant');
-      expect(mockNavigate).toHaveBeenCalledWith('/catalog/vm/catalog-item-1');
+      expect(mockNavigate).toHaveBeenCalledWith('/catalog/vms/catalog-item-1');
     });
 
     it('stays on the edit review after a failed submission', async () => {

@@ -243,18 +243,19 @@ func createReaderRoleBindingAndConnection(
 	Expect(err).ToNot(HaveOccurred())
 	Expect(usersResponse.GetItems()).To(HaveLen(1))
 
-	createReaderRoleBinding(ctx, usersResponse.GetItems()[0].GetId(), roleName)
+	user := usersResponse.GetItems()[0]
+	createReaderRoleBinding(ctx, user.GetId(), roleName, user.GetMetadata().GetTenant())
 	conn, tokenSource := newReaderTestConnection(ctx, username)
 	Expect(readerTokenRoles(ctx, tokenSource)).To(ContainElement(roleName))
 	return conn, tokenSource
 }
 
-func createReaderRoleBinding(ctx context.Context, userID, roleName string) string {
+func createReaderRoleBinding(ctx context.Context, userID, roleName, tenant string) string {
 	GinkgoHelper()
 	client := privatev1.NewRoleBindingsClient(tool.InternalView().AdminConn())
 	response, err := client.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
 		Object: privatev1.RoleBinding_builder{
-			Metadata: privatev1.Metadata_builder{Name: "reader-" + uuid.New()}.Build(),
+			Metadata: privatev1.Metadata_builder{Name: "reader-" + uuid.New(), Tenant: tenant}.Build(),
 			Spec: privatev1.RoleBindingSpec_builder{
 				Role: privatev1.RoleReference_builder{Name: roleName}.Build(),
 				Users: []*privatev1.UserReference{

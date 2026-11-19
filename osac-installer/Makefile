@@ -13,7 +13,8 @@
 #   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
 #   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
 #   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
-#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac  SUITE=all|fulfillment|compute-storage|operator|bmf|bmf-netbox
+#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac  SUITE=all|fulfillment|compute-storage|operator|bmf|bmf-netbox|bmf-all
+#   make BMF_NETBOX_TEST PLATFORM=kind  PROFILE=dev  NS=osac
 #
 # PROFILE=dev-full (kind only) is a superset of dev: it runs the same chart-based
 # control plane, then layers on the full local dev stack (KubeVirt/CDI/Multus, AWX,
@@ -246,10 +247,10 @@ endif
 SUITE_TARGETS := test
 ifneq ($(filter $(SUITE_TARGETS),$(MAKECMDGOALS)),)
 ifndef SUITE
-$(error SUITE is required (all|fulfillment|compute-storage|operator|bmf|bmf-netbox))
+$(error SUITE is required (all|fulfillment|compute-storage|operator|bmf|bmf-netbox|bmf-all))
 endif
-ifeq ($(filter $(SUITE),all fulfillment compute-storage operator bmf bmf-netbox),)
-$(error SUITE=$(SUITE) is invalid; must be all, fulfillment, compute-storage, operator, bmf, or bmf-netbox)
+ifeq ($(filter $(SUITE),all fulfillment compute-storage operator bmf bmf-netbox bmf-all),)
+$(error SUITE=$(SUITE) is invalid; must be all, fulfillment, compute-storage, operator, bmf, bmf-netbox, or bmf-all)
 endif
 ifeq ($(MCP_TEST_ENABLED),true)
 ifneq ($(PLATFORM),kind)
@@ -1225,8 +1226,12 @@ uninstall: uninstall-osac uninstall-infra ## Full uninstall: osac + infra (PLATF
 METERING_IT_IMAGE := localhost/metering-service:it
 METERING_IT_IMAGE_ARGS := --set metering.image.repository=localhost/metering-service --set metering.image.tag=it --set metering.image.pullPolicy=Never
 
+.PHONY: BMF_NETBOX_TEST
+BMF_NETBOX_TEST: ## Run both BMF integration scenarios with shared Kind setup.
+	$(MAKE) test SUITE=bmf-all
+
 .PHONY: test
-test: validate-ns ## Run integration tests (SUITE= required: all|fulfillment|compute-storage|operator|bmf|bmf-netbox)
+test: validate-ns ## Run integration tests (SUITE= required: all|fulfillment|compute-storage|operator|bmf|bmf-netbox|bmf-all)
 ifeq ($(SUITE),all)
 	$(MAKE) test SUITE=fulfillment
 	$(MAKE) test SUITE=operator
@@ -1286,20 +1291,20 @@ ifeq ($(SUITE),operator)
 		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.fulfillment.serverAddress= --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.provisioningEnabled=true --set global.networking.fabricManager=netris --set global.networking.k8sManager=cudn_evpn $(METERING_IT_IMAGE_ARGS)"
 	cd ../osac-operator && ginkgo run --timeout 15m -v --label-filter 'networkclass' test/integration
 endif
-ifneq ($(filter $(SUITE),bmf bmf-netbox),)
+ifneq ($(filter $(SUITE),bmf bmf-netbox bmf-all),)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/bmf-operator:it -f ../bare-metal-fulfillment-operator/Containerfile ..)
 	$(call kind-load-image,localhost/bmf-operator:it)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
 	$(call kind-load-image,$(METERING_IT_IMAGE))
 	kubectl apply --server-side --force-conflicts -f ../bare-metal-fulfillment-operator/test/crds/
 endif
-ifeq ($(SUITE),bmf)
+ifneq ($(filter $(SUITE),bmf bmf-all),)
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set global.services.bmaas.enabled=true --set bmf.replicaCount=1 --set bmf.image.repository=localhost/bmf-operator --set bmf.image.tag=it --set bmf.image.pullPolicy=Never --set bmf.secretAPI.url= --set operator.enabled=false --set operator.networkManagers.enabled=true --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.networking.provisioningEnabled=true $(METERING_IT_IMAGE_ARGS)"
 	cd ../bare-metal-fulfillment-operator && ginkgo run --timeout 30m -v --label-filter '!bmf-netbox' test/integration
 endif
 # CI runs both BMF scenarios without rebuilding their shared images or CRDs.
-ifneq ($(or $(filter bmf-netbox,$(SUITE)),$(and $(filter bmf,$(SUITE)),$(filter true,$(BMF_NETBOX_TEST)))),)
+ifneq ($(filter $(SUITE),bmf-netbox bmf-all),)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
 	$(call kind-load-image,localhost/fulfillment-service:it)
 	$(call kind-container-build,-t localhost/bmf-netbox-fixture:it -f ../bare-metal-fulfillment-operator/test/netboxcontract/cmd/netbox-fixture/Containerfile ../bare-metal-fulfillment-operator)

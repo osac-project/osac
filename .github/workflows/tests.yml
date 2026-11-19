@@ -286,7 +286,7 @@ jobs:
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
         env:
           CONTAINER_TOOL: docker
-        run: make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf BMF_NETBOX_TEST=true
+        run: make -C osac-installer BMF_NETBOX_TEST PLATFORM=kind PROFILE=dev NS=osac
 
       - name: Collect diagnostic logs
         if: inputs.kind == 'it-bare-metal-fulfillment-operator' && always()

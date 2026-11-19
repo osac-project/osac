@@ -750,7 +750,8 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 func (t *task) syncRestartStatus(restartCond *metav1.Condition, object *bmfov1alpha1.BareMetalInstance) {
 	withdrawn := object.Spec.RestartTrigger == object.Status.RestartTrigger
 	inProgress := restartCond.Status == metav1.ConditionTrue && !withdrawn &&
-		restartCond.Reason != bmfov1alpha1.HostConditionReasonRestartSubmissionPending
+		restartCond.Reason != bmfov1alpha1.HostConditionReasonRestartSubmissionPending &&
+		restartCond.Reason != bmfov1alpha1.HostConditionReasonRestartSubmissionUnconfirmed
 	failed := restartCond.Status == metav1.ConditionFalse && !withdrawn &&
 		restartCond.Reason == bmfov1alpha1.HostConditionReasonPowerSyncFailed
 

@@ -238,6 +238,12 @@ const (
 	// must not be reported as RESTART_IN_PROGRESS.
 	HostConditionReasonRestartSubmissionPending = "RestartSubmissionPending"
 
+	// HostConditionReasonRestartSubmissionUnconfirmed marks a restart whose
+	// submission could not be confirmed by the backend (no durable request
+	// identity) and whose completion cannot be distinguished from a host that was
+	// already settled. It is preserved instead of re-dispatching the request.
+	HostConditionReasonRestartSubmissionUnconfirmed = "RestartSubmissionUnconfirmed"
+
 	// HostConditionReasonNoMatchingHosts indicates no hosts match the selector labels
 	HostConditionReasonNoMatchingHosts = "NoMatchingHosts"
 

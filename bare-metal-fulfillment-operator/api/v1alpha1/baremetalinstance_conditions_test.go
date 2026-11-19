@@ -54,4 +54,17 @@ var _ = Describe("BareMetalInstance conditions", func() {
 
 		Expect(bmi.GetStatusCondition(HostConditionPowerSynced).LastTransitionTime.Equal(&stored)).To(BeTrue())
 	})
+
+	It("keeps the PowerSynced transition time when only the message changes", func() {
+		bmi := &BareMetalInstance{}
+		bmi.SetStatusCondition(HostConditionPowerSynced, metav1.ConditionFalse,
+			HostConditionReasonProgressing, "powering off node")
+		stored := metav1.NewTime(time.Now().Add(-time.Hour))
+		bmi.GetStatusCondition(HostConditionPowerSynced).LastTransitionTime = stored
+
+		bmi.SetStatusCondition(HostConditionPowerSynced, metav1.ConditionFalse,
+			HostConditionReasonProgressing, "node power state is transitioning")
+
+		Expect(bmi.GetStatusCondition(HostConditionPowerSynced).LastTransitionTime.Equal(&stored)).To(BeTrue())
+	})
 })

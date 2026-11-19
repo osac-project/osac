@@ -51,7 +51,7 @@ deployment is a *profile* that combines one choice from each dimension; the
 | CSP-managed storage for providers other than NetApp | Planned |
 | Dedicated-SVM CSP-managed profiles | Planned |
 | CaaS tenant-cluster storage tiers | Planned |
-| OSAC CSI routing meta-driver (VAST, NetApp/Trident, Pure) | Router/chart implemented; full vendor integration unverified ([OSAC-4845](https://redhat.atlassian.net/browse/OSAC-4845); [driver overview](../../osac-csi-driver/README.md)) |
+| OSAC CSI routing meta-driver (VAST, NetApp/Trident, Pure) | Router/chart implemented; full vendor integration unverified ([driver overview](../../osac-csi-driver/README.md)) |
 | Local LVMS StorageClasses through OSAC CSI | Dev/CI: [SNO VMaaS](../../osac-aap/README.md#local-lvms-csi-storageclasses) |
 | File API | Planned |
 

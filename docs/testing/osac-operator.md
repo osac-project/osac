@@ -53,8 +53,14 @@ or credentials
 ([OSAC-5939](https://redhat.atlassian.net/browse/OSAC-5939)); LVMS Envtest uses
 a minimal TopoLVM CRD and fixture status, so real device provisioning and CSI
 mounting remain E2E
-([OSAC-3711](https://redhat.atlassian.net/browse/OSAC-3711)). Remote StorageClass
-coverage needs dual Envtest plus a second Kind cluster.
+([OSAC-3711](https://redhat.atlassian.net/browse/OSAC-3711)). Remote StorageClass coverage needs dual Envtest plus a second Kind cluster.
+Remote Tenant namespace lifecycle ([OSAC-7297](https://redhat.atlassian.net/browse/OSAC-7297))
+uses the same two-cluster Kind suite to check creation and name-based adoption
+using the Fulfillment `tenant-ref` and `project` labels. It verifies those
+labels are overwritten when needed, unrelated metadata is preserved, no new
+Tenant ID/UID labels or tenant annotation are added, the management-cluster
+namespace is absent in this fixture, and deletion waits for the remote namespace.
+It does not run AAP or create a VM.
 
 ClusterOrder upgrade dispatch, observation, and deadline coverage
 ([DEV] OSAC-6265, OSAC-7232) uses Envtest for dispatch and feedback against the

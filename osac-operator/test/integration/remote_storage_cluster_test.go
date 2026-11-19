@@ -33,6 +33,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -41,12 +42,15 @@ import (
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/osac-operator/test/utils"
@@ -64,6 +68,13 @@ const (
 	localDecoyStorageClass           = "local-mgmt-only-gold-sc"
 	remoteWorkloadStorageClass       = "remote-workload-gold-sc"
 	remoteWorkloadSilverStorageClass = "remote-workload-silver-sc"
+
+	// Tenant namespace labels mirrored here because this integration package is separate.
+	osacTenantRefLabel       = "osac.openshift.io/tenant-ref"
+	osacProjectRefLabel      = "osac.openshift.io/project"
+	osacTenantIDLabel        = "osac.openshift.io/tenant-id"
+	osacTenantKey            = "osac.openshift.io/tenant"
+	tenantNamespaceFinalizer = "osac.openshift.io/tenant"
 
 	cspFixtureResourceName  = "csp-storage-fixture"
 	cspFixtureCAConfigMap   = "csp-storage-fixture-ca"
@@ -511,6 +522,192 @@ var _ = Describe("Remote cluster StorageClass reconciliation across two Kind clu
 			Expect(err).NotTo(HaveOccurred())
 		}
 	})
+
+	It("creates and deletes only the Tenant namespace on the remote cluster", func() {
+		const name = "osac-7297-tenant-namespace"
+		const tenantFinalizer = "osac.openshift.io/tenant"
+		const holdFinalizer = "test.osac.openshift.io/hold-tenant-namespace"
+		const namespaceHoldFinalizer = "test.osac.openshift.io/hold-remote-namespace"
+
+		By("creating a standalone Tenant with a test finalizer and no storage controller ownership")
+		tenantUID, err := createMgmtFixtureFromYAML(tenantNamespaceLifecycleCRYAML(name, operatorNamespace))
+		Expect(err).NotTo(HaveOccurred())
+		tenantUIDs[name] = tenantUID
+
+		By("waiting for the Tenant controller to create the named namespace on the workload cluster")
+		Eventually(func(g Gomega) {
+			status := fetchTenantStatus(g, name)
+			g.Expect(status.Phase).To(Equal("Ready"))
+			g.Expect(status.Finalizers).To(ContainElement(tenantFinalizer))
+			g.Expect(status.Finalizers).To(ContainElement(holdFinalizer))
+
+			out, err := runKubectlWithKubeconfig(remoteKubeconfigPath, "get", "namespace", name, "-o", "json")
+			g.Expect(err).NotTo(HaveOccurred())
+			var namespace struct {
+				Metadata struct {
+					Labels      map[string]string `json:"labels"`
+					Annotations map[string]string `json:"annotations"`
+				} `json:"metadata"`
+			}
+			g.Expect(json.Unmarshal(out, &namespace)).To(Succeed())
+			g.Expect(namespace.Metadata.Labels).To(HaveKeyWithValue("osac.openshift.io/tenant-ref", name))
+			g.Expect(namespace.Metadata.Labels).To(HaveKeyWithValue("osac.openshift.io/project", operatorNamespace))
+			g.Expect(namespace.Metadata.Labels).NotTo(HaveKey("osac.openshift.io/tenant"))
+			g.Expect(namespace.Metadata.Labels).NotTo(HaveKey("osac.openshift.io/tenant-id"))
+			g.Expect(namespace.Metadata.Labels).NotTo(HaveKey("osac.openshift.io/tenant-uid"))
+			g.Expect(namespace.Metadata.Annotations).NotTo(HaveKey("osac.openshift.io/tenant"))
+		}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+		managementNamespace, err := runMgmtKubectl("get", "namespace", name, "--ignore-not-found", "-o", "name")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.TrimSpace(string(managementNamespace))).To(BeEmpty())
+
+		By("adding a test finalizer to the remote namespace so deletion can be observed")
+		Expect(updateRemoteNamespaceFinalizer(
+			remoteKubeconfigPath, name, corev1.FinalizerName(namespaceHoldFinalizer), true,
+		)).To(Succeed())
+
+		By("deleting the Tenant and verifying its namespace stays until the other finalizer is removed")
+		Expect(deleteMgmtObjectByUID(
+			"osac.openshift.io/v1alpha1", "Tenant", operatorNamespace, name, tenantUID,
+		)).To(Succeed())
+		Eventually(func(g Gomega) string {
+			out, err := runMgmtKubectl(
+				"get", "tenant", name, "-n", operatorNamespace, "-o", "jsonpath={.metadata.deletionTimestamp}",
+			)
+			g.Expect(err).NotTo(HaveOccurred())
+			return strings.TrimSpace(string(out))
+		}, 30*time.Second, time.Second).ShouldNot(BeEmpty())
+		namespaceNameOutput, err := runKubectlWithKubeconfig(
+			remoteKubeconfigPath, "get", "namespace", name, "--ignore-not-found", "-o", "name",
+		)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.TrimSpace(string(namespaceNameOutput))).NotTo(BeEmpty())
+
+		By("releasing the test finalizer and waiting for namespace and Tenant deletion")
+		tenantJSON, err := runMgmtKubectl("get", "tenant", name, "-n", operatorNamespace, "-o", "json")
+		Expect(err).NotTo(HaveOccurred())
+		var tenant struct {
+			Metadata struct {
+				Finalizers []string `json:"finalizers"`
+			} `json:"metadata"`
+		}
+		Expect(json.Unmarshal(tenantJSON, &tenant)).To(Succeed())
+		holdIndex := slices.Index(tenant.Metadata.Finalizers, holdFinalizer)
+		Expect(holdIndex).To(BeNumerically(">=", 0))
+		patch := fmt.Sprintf(`[{"op":"remove","path":"/metadata/finalizers/%d"}]`, holdIndex)
+		_, err = runMgmtKubectl("patch", "tenant", name, "-n", operatorNamespace, "--type=json", "-p", patch)
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(func(g Gomega) {
+			remoteNamespaceJSON, err := runKubectlWithKubeconfig(
+				remoteKubeconfigPath, "get", "namespace", name, "-o", "json",
+			)
+			g.Expect(err).NotTo(HaveOccurred())
+			var remoteNamespace struct {
+				Metadata struct {
+					DeletionTimestamp string `json:"deletionTimestamp"`
+				} `json:"metadata"`
+				Spec struct {
+					Finalizers []string `json:"finalizers"`
+				} `json:"spec"`
+			}
+			g.Expect(json.Unmarshal(remoteNamespaceJSON, &remoteNamespace)).To(Succeed())
+			g.Expect(remoteNamespace.Metadata.DeletionTimestamp).NotTo(BeEmpty())
+			g.Expect(remoteNamespace.Spec.Finalizers).To(ContainElement(namespaceHoldFinalizer))
+			g.Expect(fetchTenantStatus(g, name).Finalizers).To(ContainElement(tenantFinalizer))
+		}, 60*time.Second, 2*time.Second).Should(Succeed())
+
+		By("releasing the remote namespace finalizer")
+		Expect(updateRemoteNamespaceFinalizer(
+			remoteKubeconfigPath, name, corev1.FinalizerName(namespaceHoldFinalizer), false,
+		)).To(Succeed())
+		Eventually(func(g Gomega) {
+			remoteNamespace, err := runKubectlWithKubeconfig(
+				remoteKubeconfigPath, "get", "namespace", name, "--ignore-not-found", "-o", "name",
+			)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(strings.TrimSpace(string(remoteNamespace))).To(BeEmpty())
+			managementTenant, err := runMgmtKubectl(
+				"get", "tenant", name, "-n", operatorNamespace, "--ignore-not-found", "-o", "name",
+			)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(strings.TrimSpace(string(managementTenant))).To(BeEmpty())
+		}, 90*time.Second, 2*time.Second).Should(Succeed())
+		delete(tenantUIDs, name)
+	})
+
+	for _, testCase := range []struct {
+		description    string
+		name           string
+		tenantID       string
+		existingLabels map[string]string
+		expectedLabels map[string]string
+		absentLabels   []string
+	}{
+		{
+			description: "repairs Fulfillment labels on an existing remote namespace",
+			name:        "osac-7297-tenant-namespace-adopt",
+			tenantID:    "tenant-id-osac-7297-adopt",
+			existingLabels: map[string]string{
+				osacTenantRefLabel:                "previous-tenant",
+				osacProjectRefLabel:               "previous-project",
+				osacTenantIDLabel:                 "tenant-id-osac-7297-adopt",
+				"test.osac.openshift.io/preserve": "yes",
+			},
+			expectedLabels: map[string]string{
+				osacTenantRefLabel:                "osac-7297-tenant-namespace-adopt",
+				osacProjectRefLabel:               operatorNamespace,
+				osacTenantIDLabel:                 "tenant-id-osac-7297-adopt",
+				"test.osac.openshift.io/preserve": "yes",
+			},
+			absentLabels: []string{osacTenantKey},
+		},
+		{
+			description: "adopts and deletes a same-name namespace using Fulfillment labels",
+			name:        "osac-7297-tenant-namespace-adopt-by-name",
+			tenantID:    "tenant-id-osac-7297-adopt-by-name",
+			existingLabels: map[string]string{
+				osacTenantKey:                     "previous-tenant",
+				osacTenantRefLabel:                "previous-tenant",
+				osacProjectRefLabel:               "previous-project",
+				"test.osac.openshift.io/preserve": "yes",
+			},
+			expectedLabels: map[string]string{
+				osacTenantRefLabel:                "osac-7297-tenant-namespace-adopt-by-name",
+				osacProjectRefLabel:               operatorNamespace,
+				osacTenantKey:                     "previous-tenant",
+				"test.osac.openshift.io/preserve": "yes",
+			},
+			absentLabels: []string{osacTenantIDLabel},
+		},
+	} {
+		testCase := testCase
+		It(testCase.description, func() {
+			namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+				Name:        testCase.name,
+				Labels:      testCase.existingLabels,
+				Annotations: map[string]string{"test.osac.openshift.io/preserve": "yes"},
+			}}
+
+			By("creating an existing remote namespace and its same-name Tenant")
+			tenantUID := createTenantNamespaceAdoptionFixture(
+				remoteKubeconfigPath, operatorNamespace, testCase.tenantID, namespace, tenantUIDs,
+			)
+
+			By("waiting for association labels to be repaired without changing other metadata")
+			expectRemoteTenantNamespaceState(
+				remoteKubeconfigPath, testCase.name,
+				testCase.expectedLabels,
+				map[string]string{"test.osac.openshift.io/preserve": "yes"},
+				testCase.absentLabels, []string{osacTenantKey},
+			)
+
+			By("deleting the Tenant and waiting for remote namespace cleanup")
+			deleteTenantNamespaceAdoptionFixture(
+				remoteKubeconfigPath, operatorNamespace, testCase.name, tenantUID, tenantUIDs,
+			)
+		})
+	}
 
 	It(
 		"reconciles CSP-managed StorageClass readiness, unconfigured tiers, live watch fan-out, "+
@@ -1794,6 +1991,97 @@ func fetchTenantStatus(g Gomega, name string) tenantStatusSnapshot {
 	return wrapper.Status
 }
 
+func createTenantNamespaceAdoptionFixture(
+	remoteKubeconfigPath, tenantNamespace, tenantID string,
+	namespace *corev1.Namespace,
+	tenantUIDs map[string]string,
+) string {
+	GinkgoHelper()
+
+	namespace.APIVersion = "v1"
+	namespace.Kind = "Namespace"
+	namespaceYAML, err := json.Marshal(namespace)
+	Expect(err).NotTo(HaveOccurred())
+	_, err = runKubectlWithStdin(remoteKubeconfigPath, string(namespaceYAML), "apply", "-f", "-")
+	Expect(err).NotTo(HaveOccurred())
+
+	tenantYAML := fmt.Sprintf(`apiVersion: osac.openshift.io/v1alpha1
+kind: Tenant
+metadata:
+  name: %s
+  namespace: %s
+  labels:
+    %s: %s
+  annotations:
+    osac.openshift.io/management-state: unmanaged
+spec: {}
+`, namespace.Name, tenantNamespace, osacTenantIDLabel, tenantID)
+	tenantUID, err := createMgmtFixtureFromYAML(tenantYAML)
+	Expect(err).NotTo(HaveOccurred())
+	tenantUIDs[namespace.Name] = tenantUID
+	return tenantUID
+}
+
+func expectRemoteTenantNamespaceState(
+	remoteKubeconfigPath, name string,
+	expectedLabels, expectedAnnotations map[string]string,
+	absentLabels, absentAnnotations []string,
+) {
+	GinkgoHelper()
+
+	Eventually(func(g Gomega) {
+		status := fetchTenantStatus(g, name)
+		g.Expect(status.Phase).To(Equal("Ready"))
+		g.Expect(status.Finalizers).To(ContainElement(tenantNamespaceFinalizer))
+
+		out, err := runKubectlWithKubeconfig(remoteKubeconfigPath, "get", "namespace", name, "-o", "json")
+		g.Expect(err).NotTo(HaveOccurred())
+		var namespace struct {
+			Metadata struct {
+				Labels      map[string]string `json:"labels"`
+				Annotations map[string]string `json:"annotations"`
+			} `json:"metadata"`
+		}
+		g.Expect(json.Unmarshal(out, &namespace)).To(Succeed())
+		for key, value := range expectedLabels {
+			g.Expect(namespace.Metadata.Labels).To(HaveKeyWithValue(key, value))
+		}
+		for _, key := range absentLabels {
+			g.Expect(namespace.Metadata.Labels).NotTo(HaveKey(key))
+		}
+		for key, value := range expectedAnnotations {
+			g.Expect(namespace.Metadata.Annotations).To(HaveKeyWithValue(key, value))
+		}
+		for _, key := range absentAnnotations {
+			g.Expect(namespace.Metadata.Annotations).NotTo(HaveKey(key))
+		}
+	}, 60*time.Second, 2*time.Second).Should(Succeed())
+}
+
+func deleteTenantNamespaceAdoptionFixture(
+	remoteKubeconfigPath, tenantNamespace, name, tenantUID string,
+	tenantUIDs map[string]string,
+) {
+	GinkgoHelper()
+
+	Expect(deleteMgmtObjectByUID(
+		"osac.openshift.io/v1alpha1", "Tenant", tenantNamespace, name, tenantUID,
+	)).To(Succeed())
+	Eventually(func(g Gomega) {
+		remoteNamespace, err := runKubectlWithKubeconfig(
+			remoteKubeconfigPath, "get", "namespace", name, "--ignore-not-found", "-o", "name",
+		)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(strings.TrimSpace(string(remoteNamespace))).To(BeEmpty())
+		tenant, err := runMgmtKubectl(
+			"get", "tenant", name, "-n", tenantNamespace, "--ignore-not-found", "-o", "name",
+		)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(strings.TrimSpace(string(tenant))).To(BeEmpty())
+	}, 90*time.Second, 2*time.Second).Should(Succeed())
+	delete(tenantUIDs, name)
+}
+
 // findCondition returns a pointer to the named condition in conds, or nil if absent.
 func findCondition(conds []tenantConditionEntry, condType string) *tenantConditionEntry {
 	for i := range conds {
@@ -1830,6 +2118,48 @@ func runKubectlWithKubeconfig(kubeconfigPath string, args ...string) ([]byte, er
 		return runKubectl(args...)
 	}
 	return runMgmtKubectl(args...)
+}
+
+// updateRemoteNamespaceFinalizer uses the finalize subresource because the
+// regular Namespace endpoint does not persist spec.finalizers (OSAC-7297).
+func updateRemoteNamespaceFinalizer(
+	kubeconfigPath, namespaceName string,
+	finalizer corev1.FinalizerName,
+	add bool,
+) error {
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	if err != nil {
+		return fmt.Errorf("load remote kubeconfig: %w", err)
+	}
+	kubeClient, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return fmt.Errorf("create remote Kubernetes client: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), kubectlCommandTimeout)
+	defer cancel()
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		namespace, err := kubeClient.CoreV1().Namespaces().Get(ctx, namespaceName, metav1.GetOptions{})
+		if err != nil {
+			return err
+		}
+
+		index := slices.Index(namespace.Spec.Finalizers, finalizer)
+		if add {
+			if index >= 0 {
+				return nil
+			}
+			namespace.Spec.Finalizers = append(namespace.Spec.Finalizers, finalizer)
+		} else {
+			if index < 0 {
+				return nil
+			}
+			namespace.Spec.Finalizers = slices.Delete(namespace.Spec.Finalizers, index, index+1)
+		}
+
+		_, err = kubeClient.CoreV1().Namespaces().Finalize(ctx, namespace, metav1.UpdateOptions{})
+		return err
+	})
 }
 
 // runKubectlWithStdin runs kubectl with stdin populated from manifest, binding
@@ -2540,6 +2870,20 @@ kind: Tenant
 metadata:
   name: %s
   namespace: %s
+spec: {}
+`, name, namespace)
+}
+
+func tenantNamespaceLifecycleCRYAML(name, namespace string) string {
+	return fmt.Sprintf(`apiVersion: osac.openshift.io/v1alpha1
+kind: Tenant
+metadata:
+  name: %s
+  namespace: %s
+  annotations:
+    osac.openshift.io/management-state: unmanaged
+  finalizers:
+    - test.osac.openshift.io/hold-tenant-namespace
 spec: {}
 `, name, namespace)
 }

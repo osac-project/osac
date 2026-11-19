@@ -58,7 +58,7 @@ var (
 	osacProjectRefLabel string = fmt.Sprintf("%s/project", osacPrefix)
 
 	// osacTenantKey is the key used to associate resources with a tenant.
-	// Used as a label on StorageClasses/Secrets and as an annotation on ComputeInstances.
+	// Tenant-scoped resources use it as a label or annotation.
 	osacTenantKey string = fmt.Sprintf("%s/tenant", osacPrefix)
 
 	// osacStorageTierLabel is the label key that identifies the storage tier of a StorageClass

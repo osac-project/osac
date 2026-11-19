@@ -69,7 +69,7 @@ unchanged values sends no update; a changed address or TTL replaces the record.
 | `DNS_RFC2136_PROTOCOL` | `tcp` | `tcp` or `udp` |
 | `DNS_RFC2136_KEY_NAME` | — (required) | Name of the TSIG key |
 | `DNS_RFC2136_KEY_ALGORITHM` | `hmac-sha256` | `hmac-md5`, `hmac-sha1`, `hmac-sha224`, `hmac-sha256`, `hmac-sha384` or `hmac-sha512` |
-| `DNS_SERVER` | — | Optional resolver for the readiness wait after the records are created. Set it to the update server when the zone is not delegated from the resolvers the execution environment uses |
+| `DNS_SERVER` | — | Optional resolver for the readiness wait after the records are created, queried with `dig` over UDP port 53. Set it when the zone is not delegated from the resolvers the execution environment uses; point it at the update server only if that server answers queries on UDP port 53 |
 
 ### Secret Variables
 
@@ -124,6 +124,10 @@ internet access or external DNS provider.
 
 - The AAP job pods on the hub can reach `DNS_RFC2136_SERVER` on the configured
   port and protocol.
+- The server also answers queries for names in the zone, signed with the same
+  key: on a rerun the driver queries an existing record to compare its TTL.
+  BIND's default `allow-query` permits this; if you restrict it, include the
+  key, for example `allow-query { key osac-update; };`.
 - The managed clusters' workers, the hub, and the clients of the clusters
   resolve the zone: delegate it from the parent zone with NS records, or
   forward it to this server from the resolvers they use.
@@ -147,6 +151,8 @@ dig +short @192.0.2.53 console-openshift-console.apps.<cluster>.<base> A
 
 While the cluster exists, the first two return the API address and the third
 the ingress address. After the cluster is deleted, all three return nothing.
+If the server listens on a port other than 53 or answers only over TCP, add
+`-p <port>` and `+tcp` to match `DNS_RFC2136_PORT` and `DNS_RFC2136_PROTOCOL`.
 
 ### Troubleshooting
 
@@ -159,6 +165,7 @@ The driver's failure messages name the setting to check:
 | `RFC 2136 DNS update failed: DNS_RFC2136_KEY_SECRET is not a valid base64 TSIG secret` | Copy the `secret` value from the BIND key file exactly |
 | `… the server rejected the TSIG signature` | The key name, algorithm or secret does not match a key the server knows |
 | `… no answer from the server` | Check the server address, port and protocol, and that the AAP job pods can reach the server |
+| `… the server refused a query for the existing record` | The key may update the zone but not query it. Allow the key in the zone's `allow-query` |
 | `RFC 2136 DNS update failed (REFUSED)` | The key may not change these records. Check the zone's `update-policy` (or `allow-update`) for this key |
 | `RFC 2136 DNS update failed (NOTAUTH)` | The server is not the primary for `DNS_ZONE`, or it did not accept the key |
 | `RFC 2136 DNS update failed (NOTZONE)` | The record is outside the zone configured on the server; check `DNS_ZONE` |

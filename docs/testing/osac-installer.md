@@ -11,6 +11,7 @@ Run `make help` to list the test targets.
 |---|---|---|---|
 | Unit | `make kind-runtime-test` | Makefile/runtime routing and shell behavior | Container engines, Helm, host privilege changes and downloads are command stubs |
 | Unit | `make infra-ready-wait-test` | The readiness waits that end `make install-infra` fail the step naming a dependency that never becomes ready | Commands and time are mocked through a stub `kubectl`; no cluster is started |
+| Unit (Helm unittest) | `helm unittest -f 'tests/dns_rfc2136*_test.yaml' charts/osac` (also in the full `helm unittest charts/osac`) | DNS backend values (`DNS_CLASS`, `DNS_RFC2136_*`, `DNS_SERVER`), their schema checks and rendering into `cluster-fulfillment-ig` | No cluster, AAP or DNS server |
 | Contract (Helm render) | `make mce-render-test`, `make fulfillment-trust-render-test`, `make helm-networking-test` | Production chart templates and their configuration contracts | No Kubernetes API, running hooks, MCE catalog, deployed TLS or provider calls |
 | Component integration | `make test` (suite selection in `make help`) | Current images and chart wiring in Kind | Depends on the selected suite; provider networking is disabled in the standard profile |
 

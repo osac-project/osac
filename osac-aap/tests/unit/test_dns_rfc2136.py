@@ -288,6 +288,18 @@ def test_refused_create_fails(tmp_path, server, secret):
     assert "update policy" in out
 
 
+def test_refused_query_on_rerun_fails_with_clear_message(tmp_path, server, secret):
+    """nsupdate queries an existing record to compare its TTL on a rerun."""
+    env = driver_env(server, secret)
+    assert run(tmp_path, "create", env)[0] == 0
+    server.state.refuse_queries = True
+    rc, out = run(tmp_path, "create", env)
+    assert rc != 0
+    assert "refused a query for the existing record" in out
+    assert server.records() == caas_records_on(server)
+    assert_no_leaks(out, secret)
+
+
 @pytest.mark.parametrize("operation", ["create", "delete"])
 def test_zone_not_served_fails(tmp_path, operation):
     """DNS_ZONE that the server is not authoritative for must fail, also on delete."""
@@ -367,11 +379,15 @@ RECORD_DATA = [record["name"] for record in CAAS_RECORDS] + [API_IP, INGRESS_IP]
 
 
 def _event_tasks(output):
-    """Return {task name: serialized host results} from JSON callback output."""
+    """Return [(task name, serialized host results)] for every task occurrence.
+
+    The driver runs the same task names once per record, so a mapping keyed by
+    name would keep only the last record's results.
+    """
     document = json.loads(output[output.index("{") : output.rindex("}") + 1])
-    return {
-        task["task"]["name"]: json.dumps(task["hosts"]) for play in document["plays"] for task in play["tasks"]
-    }
+    return [
+        (task["task"]["name"], json.dumps(task["hosts"])) for play in document["plays"] for task in play["tasks"]
+    ]
 
 
 @pytest.mark.parametrize(
@@ -401,8 +417,10 @@ def test_event_data_holds_no_secret_or_record_data(tmp_path, server, secret, ope
     assert (rc == 0) == (scenario == "success"), out
     assert leaked_secret not in out
     tasks = _event_tasks(out)
-    assert any("Validate RFC 2136" in name for name in tasks), "driver tasks must be recorded"
-    for name, results in tasks.items():
+    validations = [name for name, _ in tasks if "Validate RFC 2136" in name]
+    # A success runs the driver once per record; a failure stops at the first.
+    assert len(validations) == (len(CAAS_RECORDS) if scenario == "success" else 1), validations
+    for name, results in tasks:
         for value in RECORD_DATA:
             assert value not in results, f"{value!r} in results of task {name!r}"
 
@@ -412,8 +430,9 @@ def test_event_data_check_detects_unprotected_callers(tmp_path, server, secret):
     rc, out = run(tmp_path, "create", {**driver_env(server, secret), **EVENT_DATA_ENV})
     assert rc == 0, out
     assert secret not in out
-    caller_results = _event_tasks(out)["Run DNS driver entry point"]
-    assert CAAS_RECORDS[0]["name"] in caller_results
+    caller_results = [results for name, results in _event_tasks(out) if name == "Run DNS driver entry point"]
+    assert caller_results
+    assert all(record["name"] in caller_results[0] for record in CAAS_RECORDS)
 
 
 # --- Static checks on the shipped role ---------------------------------------

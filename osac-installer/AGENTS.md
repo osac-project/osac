@@ -76,10 +76,6 @@ Focused contracts, selected by the changed wiring:
 | EVPN host networking | `make evpn-render-test` |
 | OpenBao security context on Kind/OpenShift | `make openbao-security-context-test` |
 
-For DNS backend values (`DNS_CLASS`, `DNS_RFC2136_*`, `DNS_SERVER`), the
-focused selection is `helm unittest -f 'tests/dns_rfc2136*_test.yaml' charts/osac`;
-the full umbrella suite includes it.
-
 For metering reader values, the focused selection is
 `helm unittest -f 'tests/metering_readers*_test.yaml' charts/osac`; the full
 umbrella suite includes it. Kafka exporter/PodMonitor contracts belong to the

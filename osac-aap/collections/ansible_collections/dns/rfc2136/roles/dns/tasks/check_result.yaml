@@ -26,6 +26,9 @@
       {%- elif dns_rfc2136_error_msg is match('DNS server error') -%}
       no answer from the server; check DNS_RFC2136_SERVER, DNS_RFC2136_PORT,
       DNS_RFC2136_PROTOCOL and network access from the execution environment.
+      {%- elif dns_rfc2136_error_msg is match('Failed to lookup TTL') -%}
+      the server refused a query for the existing record; allow
+      DNS_RFC2136_KEY_NAME to query DNS_ZONE as well as update it.
       {%- elif dns_rfc2136_rcode == 'REFUSED' -%}
       the server refused the update; check that its update policy allows
       DNS_RFC2136_KEY_NAME to change records in DNS_ZONE.

@@ -63,7 +63,8 @@ in `osac-aap/Makefile`.
 - Netris transport unit tests: real HTTP transport and module subprocesses
   against a synthetic loopback provider; no live Netris login, so cookie
   refresh and live-provider compatibility remain unverified.
-- `dns.rfc2136.dns` driver tests (`tests/unit/test_dns_rfc2136.py`): the real
+- `dns.rfc2136.dns` driver tests (`tests/unit/test_dns_rfc2136.py`; run
+  `uv run --group development pytest tests/unit/test_dns_rfc2136.py`): the real
   role and `community.general.nsupdate` run in child Ansible processes, over
   TCP and UDP, against the in-memory RFC 2136 server
   `tests/unit/rfc2136_fake_server.py`. No real DNS server, Kubernetes, AAP or
@@ -138,5 +139,5 @@ only. Run the applicable integration tests separately for workflow behavior.
   Keycloak, AAP and Fulfillment. Track under
   [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 - The RFC 2136 DNS driver has fake-server coverage only; no automated test
-  runs it against a real DNS server or a deployed CaaS journey. Unresolved: no
-  owning ticket.
+  runs it against a real DNS server or a deployed CaaS journey. Track under
+  [OSAC-7938](https://redhat.atlassian.net/browse/OSAC-7938).

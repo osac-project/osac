@@ -108,6 +108,13 @@ const networkingDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   '../e2e-tests/src/networking',
 );
+
+// The standalone pool cleanup must never run as part of an unfiltered run: it
+// would race the External IP flows for the pool. Select it explicitly
+// (--project=external-ip-pool-delete) and the project matches its spec.
+const poolCleanupSelected = process.argv.some((argument) =>
+  argument.includes('external-ip-pool-delete'),
+);
 const preResourceBaseCreateTestMatch =
   /create\.(instance_type|disk_images|storage_tier|tenant)\.spec\.ts/;
 const preResourceCatalogCreateTestMatch = /create\.catalog\.spec\.ts/;
@@ -365,7 +372,7 @@ export default defineConfig({
     {
       name: 'external-ip-pool-delete',
       testDir: networkingDir,
-      testMatch: /delete\.external_ip_pool\.spec\.ts/,
+      testMatch: poolCleanupSelected ? /delete\.external_ip_pool\.spec\.ts/ : /$^/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {

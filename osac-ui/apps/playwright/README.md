@@ -529,16 +529,16 @@ list columns and states, create wizard validation, create, delete, tenant
 scoping, and the list error state. It reads environment variables rather than
 `extravars.yaml`:
 
-| Variable                                                              | Purpose                                                                           |
-| --------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `OSAC_E2E_TENANT_NAME`                                                | Tenant whose break-glass credentials the flows log in with                        |
-| `OSAC_TENANT_ADMIN_USERNAME` / `OSAC_TENANT_ADMIN_PASSWORD`           | Alternative to the credentials file                                               |
-| `OSAC_EXT_IP_CIDR`                                                    | CIDR for the pool the suite creates and later deletes                             |
-| `OSAC_EXT_IP_POOL`                                                    | Reuse an existing pool instead of creating one                                    |
-| `OSAC_EXT_IP_PROJECT`                                                 | Optional project for the created External IP                                      |
-| `OSAC_E2E_SECOND_TENANT_USERNAME` / `OSAC_E2E_SECOND_TENANT_PASSWORD` | Second tenant's admin; enables the cross-tenant denial assertion                  |
-| `OSAC_E2E_POOL_CLEANUP`                                               | Set to `1` to let the standalone pool-cleanup project delete the suite-owned pool |
-| `OSAC_E2E_INSTANCE`                                                   | Run index appended to resource names, default `1`                                 |
+| Variable                                                              | Purpose                                                                       |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `OSAC_E2E_TENANT_NAME`                                                | Tenant whose break-glass credentials the flows log in with                    |
+| `OSAC_TENANT_ADMIN_USERNAME` / `OSAC_TENANT_ADMIN_PASSWORD`           | Alternative to the credentials file                                           |
+| `OSAC_EXT_IP_CIDR`                                                    | CIDR for the pool the suite creates and later deletes                         |
+| `OSAC_EXT_IP_POOL`                                                    | Reuse an existing pool instead of creating one                                |
+| `OSAC_EXT_IP_PROJECT`                                                 | Optional project for the created External IP                                  |
+| `OSAC_E2E_SECOND_TENANT_USERNAME` / `OSAC_E2E_SECOND_TENANT_PASSWORD` | Second tenant's admin; enables the cross-tenant denial assertion              |
+| `OSAC_E2E_POOL_CLEANUP`                                               | Set to `1`, and select the project explicitly, to delete the suite-owned pool |
+| `OSAC_E2E_INSTANCE`                                                   | Run index appended to resource names, default `1`                             |
 
 ```bash
 export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>

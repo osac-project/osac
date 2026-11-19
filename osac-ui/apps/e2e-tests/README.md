@@ -180,7 +180,10 @@ cd osac-ui
 export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
 export OSAC_ADMIN_USERNAME=<keycloak-admin>
 export OSAC_E2E_TENANT_NAME=<tenant-name>
+# Fresh install: create the pool from this CIDR.
 export OSAC_EXT_IP_CIDR=172.27.9.0/24
+# Reusing a bootstrap pool instead: export OSAC_EXT_IP_POOL=<pool-name> and
+# leave OSAC_EXT_IP_CIDR unset.
 read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD
 
 pnpm --filter @osac/playwright exec playwright test \
@@ -189,7 +192,10 @@ pnpm --filter @osac/playwright exec playwright test \
 
 Playwright runs `external-ip-pool`, then `external-ip` (`create`, `isolation`,
 `list` in that order), then `external-ip-delete`, which deletes the External IP
-as the tenant and the pool as the provider admin.
+as the tenant and, when the suite owns the pool, the pool as the provider admin.
+Pool cleanup happens only when the suite owns it: `OSAC_EXT_IP_CIDR` is set and
+`OSAC_EXT_IP_POOL` is not. Otherwise the teardown logs why it leaves the pool
+alone.
 
 If the suite created the pool and a tenant was onboarded afterwards, that
 tenant's `default-nat` address comes from the same pool. The provider refuses to
@@ -208,8 +214,9 @@ pnpm --filter @osac/playwright exec playwright test --project=external-ip-pool
 export OSAC_E2E_INSTANCE=1
 pnpm --filter @osac/playwright exec playwright test --project=external-ip-delete
 
-# The standalone pool cleanup is opt-in: it deletes only the suite-owned pool,
-# needs provider-admin credentials, and needs no OSAC_EXT_IP_CIDR.
+# The standalone pool cleanup only runs when this project is selected
+# explicitly, so an unfiltered run can never delete a pool that is in use. It
+# also needs the opt-in flag and provider-admin credentials; no OSAC_EXT_IP_CIDR.
 OSAC_E2E_POOL_CLEANUP=1 \
   pnpm --filter @osac/playwright exec playwright test --project=external-ip-pool-delete
 

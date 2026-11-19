@@ -32,9 +32,10 @@ unit tier gate for this component. The Playwright flows are manual: see
 - **A suite-created pool can outlive the run.** When the tenant is onboarded
   after the pool, its `default-nat` address comes from that pool, and the
   provider refuses to delete a pool with allocated addresses. The teardown then
-  logs the retained pool and its reason instead of failing; the standalone
-  `external-ip-pool-delete` project is opt-in (`OSAC_E2E_POOL_CLEANUP=1`) so an
-  unfiltered run cannot delete a pool in use.
+  logs the retained pool and its reason instead of failing. The standalone
+  `external-ip-pool-delete` project only runs when it is selected explicitly and
+  `OSAC_E2E_POOL_CLEANUP=1` is set, so an unfiltered run never deletes a pool
+  that is in use.
 - **Provider networking must be enabled.** The fulfillment service rejects
   External IP creates with `FailedPrecondition: provider networking is disabled`
   when `global.networking.provisioningEnabled` is `false`, and the stock

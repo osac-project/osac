@@ -168,26 +168,42 @@ const waitForExternalIpRow = async (
   name: string,
   timeout = 15_000,
 ): Promise<boolean> => {
-  const listState = await waitForExternalIpList(page);
-  if (listState === 'error') {
+  const row = externalIpRow(page, name);
+  const settledState = await waitForExternalIpList(page);
+  if (settledState === 'error') {
     throw new Error(
       `The External IP list failed to load, so the presence of "${name}" cannot be ` +
         'verified. Nothing was deleted; re-run once the list request succeeds.',
     );
   }
   try {
-    await expect(externalIpRow(page, name)).toHaveCount(1, { timeout });
+    await expect(row).toHaveCount(1, { timeout });
     return true;
-  } catch {
-    // A refetch can fail during the poll and replace the table with the error
-    // state, which is not evidence of absence.
-    if ((await readExternalIpListState(page)) === 'error') {
+  } catch (error) {
+    // The list can fail or still be refreshing when the row poll expires. Wait
+    // for it to settle before concluding anything about the row.
+    const state = await waitForExternalIpList(page).catch(() => 'unsettled' as const);
+    if (state === 'error') {
       throw new Error(
         `The External IP list failed while checking for "${name}". Nothing was ` +
           'deleted; re-run once the list request succeeds.',
       );
     }
-    return false;
+    if (state === 'unsettled') {
+      throw new Error(
+        `The External IP list did not settle while checking for "${name}". ` +
+          'Nothing was deleted.',
+      );
+    }
+    const matches = await row.count();
+    if (matches === 0) {
+      return false;
+    }
+    if (matches === 1) {
+      return true;
+    }
+    // More than one match is not absence; keep the original assertion failure.
+    throw error;
   }
 };
 
@@ -244,12 +260,8 @@ export const expectExternalIpListScopedToProject = async (
   }
 };
 
-/**
- * Fail the list request and verify the page renders its error state. Install
- * the route before the first list load: a query already in the TanStack cache
- * is not re-issued, so intercepting after a successful load proves nothing.
- */
-export const expectExternalIpListLoadError = async (page: Page): Promise<void> => {
+/** Fail every External IP list request until the route is removed. */
+export const failExternalIpListRequests = async (page: Page): Promise<void> => {
   await page.route(externalIpListRoute, (route) =>
     route.fulfill({
       status: 500,
@@ -257,13 +269,27 @@ export const expectExternalIpListLoadError = async (page: Page): Promise<void> =
       body: JSON.stringify({ code: 'internal', message: 'Injected E2E list failure' }),
     }),
   );
+};
+
+/** Remove the injected list failure. */
+export const restoreExternalIpListRequests = async (page: Page): Promise<void> => {
+  await page.unroute(externalIpListRoute);
+};
+
+/**
+ * Fail the list request and verify the page renders its error state. Install
+ * the route before the first list load: a query already in the TanStack cache
+ * is not re-issued, so intercepting after a successful load proves nothing.
+ */
+export const expectExternalIpListLoadError = async (page: Page): Promise<void> => {
+  await failExternalIpListRequests(page);
   try {
     await openExternalIpListPage(page);
     await expect(page.getByRole(...ExternalIpsPage.loadErrorTitle)).toBeVisible({
       timeout: 30_000,
     });
   } finally {
-    await page.unroute(externalIpListRoute);
+    await restoreExternalIpListRequests(page);
   }
 };
 
@@ -528,7 +554,7 @@ export const deleteExternalIpPoolIfPresent = async (page: Page, name: string): P
 
     await page
       .getByRole('button', { name: 'Cancel', exact: true })
-      .click()
+      .click({ timeout: 5_000 })
       .catch(() => {});
 
     if (allocatedAddressRefusal.test(detail)) {

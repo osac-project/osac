@@ -22,24 +22,16 @@ import { logProgress, testStep } from '../../../../libs/test-utils/src/general/t
 test('deletes the external IP created by the create flow', async ({ page }) => {
   // Teardown for the external-ip project: removes the External IP as its tenant
   // and, when this suite provisioned it, the pool as the provider admin. The
-  // pool step does not depend on tenant credentials being available.
+  // pool step runs even when the tenant session cannot be established, and the
+  // tenant failure is re-raised afterwards so it is not hidden.
   test.setTimeout(900_000);
   const flow = 'external-ip-delete';
+  let tenantFailure: Error | undefined;
 
-  const tenantIdentity = await testStep(flow, 'Resolve the tenant admin identity', async () => {
-    try {
-      return await resolveTenantAdminIdentity();
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      logProgress(flow, `Skipping the External IP cleanup step: ${reason}`);
-      return undefined;
-    }
-  });
+  try {
+    const identity = await resolveTenantAdminIdentity();
 
-  if (tenantIdentity) {
-    await testStep(flow, 'Log in as the tenant admin', () =>
-      loginAsTenantAdmin(page, tenantIdentity),
-    );
+    await testStep(flow, 'Log in as the tenant admin', () => loginAsTenantAdmin(page, identity));
 
     await testStep(flow, 'Open Networking > External IPs', () => openExternalIpListPage(page));
 
@@ -55,11 +47,17 @@ test('deletes the external IP created by the create flow', async ({ page }) => {
         ? `Deleted external IP "${externalIpName}".`
         : `External IP "${externalIpName}" was already absent.`,
     );
+  } catch (error) {
+    tenantFailure = error instanceof Error ? error : new Error(String(error));
+    logProgress(flow, `Tenant cleanup did not complete: ${tenantFailure.message}`);
   }
 
   const poolSkipReason = externalIpPoolProvisioningSkipReason();
   if (poolSkipReason) {
     logProgress(flow, `Leaving the pool alone: ${poolSkipReason}`);
+    if (tenantFailure) {
+      throw tenantFailure;
+    }
     return;
   }
 
@@ -71,7 +69,20 @@ test('deletes the external IP created by the create flow', async ({ page }) => {
     openExternalIpPoolListPage(page),
   );
 
-  await testStep(flow, `Delete pool "${externalIpPoolName}" when it is still present`, () =>
-    deleteExternalIpPoolIfPresent(page, externalIpPoolName),
+  const poolDeleted = await testStep(
+    flow,
+    `Delete pool "${externalIpPoolName}" when it is still present`,
+    () => deleteExternalIpPoolIfPresent(page, externalIpPoolName),
   );
+
+  logProgress(
+    flow,
+    poolDeleted
+      ? `Deleted pool "${externalIpPoolName}".`
+      : `Pool "${externalIpPoolName}" was absent or retained.`,
+  );
+
+  if (tenantFailure) {
+    throw tenantFailure;
+  }
 });

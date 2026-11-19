@@ -1,7 +1,7 @@
 import { Stack, StackItem, Title } from '@patternfly/react-core';
 
-import TextAreaField from '@osac/ui-components/components/Form/base/TextAreaField';
 import TextField from '@osac/ui-components/components/Form/base/TextField';
+import DescriptionField from '@osac/ui-components/components/Form/DescriptionField';
 import NameField from '@osac/ui-components/components/Form/NameField';
 import OsacForm from '@osac/ui-components/components/Form/OsacForm';
 
@@ -29,12 +29,7 @@ const IdpGeneralStep = ({ isEdit }: IdpGeneralStepProps) => {
             helperText={t('Human-friendly short title for this IdP')}
             fieldId="idp-title"
           />
-          <TextAreaField
-            name="spec.description"
-            label={t('Description')}
-            fieldId="idp-description"
-            rows={3}
-          />
+          <DescriptionField name="spec.description" fieldId="idp-description" />
         </OsacForm>
       </StackItem>
     </Stack>

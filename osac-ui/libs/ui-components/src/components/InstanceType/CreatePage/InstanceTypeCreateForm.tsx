@@ -20,8 +20,8 @@ import { InstanceTypeCreateFormValues, instanceTypeCreateValues } from './values
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
 import IntegerField from '../../Form/base/IntegerField';
-import TextAreaField from '../../Form/base/TextAreaField';
 import TextField from '../../Form/base/TextField';
+import DescriptionField from '../../Form/DescriptionField';
 import LeaveFormConfirmation from '../../Form/LeaveFormConfirmation';
 import NameField from '../../Form/NameField';
 import OsacForm from '../../Form/OsacForm';
@@ -76,9 +76,8 @@ const InstanceTypeCreateForm = () => {
             <StackItem>
               <OsacForm>
                 <NameField fieldId={instanceTypeFieldIds.name} />
-                <TextAreaField
+                <DescriptionField
                   name="spec.description"
-                  label={t('Description')}
                   fieldId={instanceTypeFieldIds.description}
                 />
                 <IntegerField

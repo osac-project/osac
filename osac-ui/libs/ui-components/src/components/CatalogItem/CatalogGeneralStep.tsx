@@ -12,7 +12,7 @@ import CatalogScopeField from './CatalogScopeField';
 import { useSession } from '../../hooks/use-session';
 import { useTranslation } from '../../hooks/useTranslation';
 import { GLOBAL_TENANT_VALUE } from '../catalog/catalogItemDisplay';
-import TextAreaField from '../Form/base/TextAreaField';
+import DescriptionField from '../Form/DescriptionField';
 import NameField from '../Form/NameField';
 import OsacForm from '../Form/OsacForm';
 import ProjectField from '../Form/ProjectField';
@@ -138,11 +138,7 @@ const CatalogGeneralStep = ({
             <ProjectField isDisabled={isEdit} />
           )}
           <NameField isDisabled={isEdit} />
-          <TextAreaField
-            name="description"
-            label={t('Description')}
-            fieldId="catalog-item-description"
-          />
+          <DescriptionField fieldId="catalog-item-description" />
           <ResourceSelectField
             name="template"
             label={t('Provisioning template')}

@@ -82,3 +82,23 @@ export const secondTenantSkipReason = (): string | undefined => {
   }
   return undefined;
 };
+
+const poolCleanupOptIn = process.env.OSAC_E2E_POOL_CLEANUP?.trim() === '1';
+
+/**
+ * Reason the standalone pool-cleanup project must skip, or `undefined` when it
+ * may delete the suite-owned pool. The gate keeps an unfiltered `playwright
+ * test` run from deleting the pool while the External IP flows still use it.
+ */
+export const standalonePoolCleanupSkipReason = (): string | undefined => {
+  if (externalIpPoolIsReused) {
+    return `OSAC_EXT_IP_POOL is set, so pool "${externalIpPoolName}" is not suite-owned.`;
+  }
+  if (!poolCleanupOptIn) {
+    return (
+      'Set OSAC_E2E_POOL_CLEANUP=1 to delete the suite-owned pool from a standalone ' +
+      'cleanup run.'
+    );
+  }
+  return undefined;
+};

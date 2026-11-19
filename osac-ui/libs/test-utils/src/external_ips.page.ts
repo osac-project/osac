@@ -90,26 +90,39 @@ export const openExternalIpPoolListPage = async (page: Page): Promise<void> => {
   await expect(page.getByRole(...ExternalIpPoolsPage.pageTitle)).toBeVisible();
 };
 
-/** Wait until the list settles on rows, an empty state, or an error. */
-export const waitForExternalIpList = async (page: Page): Promise<void> => {
+type ExternalIpListState = 'empty' | 'error' | 'table';
+
+const readExternalIpListState = async (page: Page): Promise<ExternalIpListState | 'loading'> => {
+  if ((await page.getByRole(...ExternalIpsPage.loadErrorTitle).count()) > 0) {
+    return 'error';
+  }
+  if ((await externalIpTable(page).count()) > 0) {
+    return 'table';
+  }
+  if ((await page.getByText(...ExternalIpsPage.emptyStateTitle).count()) > 0) {
+    return 'empty';
+  }
+  return 'loading';
+};
+
+/**
+ * Wait until the list settles on rows, an empty state, or an error, and report
+ * which. Callers that need "this resource is absent" must reject the error
+ * state: a failed list is not evidence of absence.
+ */
+export const waitForExternalIpList = async (page: Page): Promise<ExternalIpListState> => {
   await selectExternalIpListView(page);
+  let settled: ExternalIpListState | 'loading' = 'loading';
   await expect
     .poll(
       async () => {
-        if ((await page.getByRole(...ExternalIpsPage.loadErrorTitle).count()) > 0) {
-          return 'error';
-        }
-        if ((await externalIpTable(page).count()) > 0) {
-          return 'table';
-        }
-        if ((await page.getByText(...ExternalIpsPage.emptyStateTitle).count()) > 0) {
-          return 'empty';
-        }
-        return 'loading';
+        settled = await readExternalIpListState(page);
+        return settled;
       },
       { timeout: 30_000, message: 'The External IP list did not finish loading.' },
     )
     .not.toBe('loading');
+  return settled === 'loading' ? 'empty' : settled;
 };
 
 /** Verify the list renders the documented columns. */
@@ -149,6 +162,13 @@ const waitForExternalIpRow = async (
   name: string,
   timeout = 15_000,
 ): Promise<boolean> => {
+  const listState = await waitForExternalIpList(page);
+  if (listState === 'error') {
+    throw new Error(
+      `The External IP list failed to load, so the presence of "${name}" cannot be ` +
+        'verified. Nothing was deleted; re-run once the list request succeeds.',
+    );
+  }
   try {
     await expect(externalIpRow(page, name)).toHaveCount(1, { timeout });
     return true;
@@ -451,14 +471,19 @@ export const expectExternalIpPoolNotListed = async (page: Page, name: string): P
   }
 };
 
-/** Delete an External IP pool row when it exists; a missing pool is not an error. */
-export const deleteExternalIpPoolIfPresent = async (page: Page, name: string): Promise<void> => {
+/**
+ * Delete an External IP pool row when it exists; a missing pool is not an error.
+ * A pool that the provider refuses to delete (for example because a tenant's
+ * `default-nat` address still references it) is reported and retained rather
+ * than failing the run.
+ */
+export const deleteExternalIpPoolIfPresent = async (page: Page, name: string): Promise<boolean> => {
   await openExternalIpPoolListPage(page);
   await waitForExternalIpPoolList(page);
   const row = externalIpPoolRow(page, name);
   if ((await row.count()) === 0) {
     logProgress('external-ip-pool-delete', `Pool "${name}" is already absent.`);
-    return;
+    return false;
   }
 
   await rowActionsToggle(page, name).click();
@@ -468,6 +493,32 @@ export const deleteExternalIpPoolIfPresent = async (page: Page, name: string): P
   await expect(page.locator(...ExternalIpDeleteDialog.title)).toContainText(`Delete ${name}?`);
   await expect(page.getByText(...ExternalIpPoolsPage.deleteWarning)).toBeVisible();
   await page.getByRole(...ExternalIpPoolsPage.confirmDelete).click();
-  await expect(dialog).toBeHidden({ timeout: 60_000 });
+
+  const refused = page.getByText(...ExternalIpPoolsPage.deleteError);
+  const outcome = await Promise.race([
+    dialog.waitFor({ state: 'hidden', timeout: 60_000 }).then(() => 'deleted' as const),
+    refused.waitFor({ state: 'visible', timeout: 60_000 }).then(() => 'refused' as const),
+  ]).catch(() => 'timeout' as const);
+
+  if (outcome !== 'deleted') {
+    const alert = page
+      .locator('[class*="c-alert"]')
+      .filter({ hasText: ExternalIpPoolsPage.deleteError[0] })
+      .first();
+    const detail = (await alert.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+    logProgress(
+      'external-ip-pool-delete',
+      `Pool "${name}" was retained${detail ? ` (${detail})` : ''}. ` +
+        'A tenant holding one of its addresses keeps it alive; delete that tenant ' +
+        'first, or delete the pool by hand.',
+    );
+    await page
+      .getByRole('button', { name: 'Cancel', exact: true })
+      .click()
+      .catch(() => {});
+    return false;
+  }
+
   await expect(row).toHaveCount(0, { timeout: 300_000 });
+  return true;
 };

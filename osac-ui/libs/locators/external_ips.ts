@@ -39,7 +39,8 @@ export const ExternalIpCreatePage = {
   validationAlert: ['Fix the highlighted errors before continuing.'],
   submitError: ['Failed to create external IP'],
   name: id('metadata-name'),
-  project: id('metadata.project'),
+  // The field id contains a dot, so a CSS id selector would read it as a class.
+  project: ['[id="metadata.project"]'],
   pool: id('create-external-ip-pool'),
   next: ['button', { name: 'Next', exact: true }],
   submit: ['button', { name: 'Create external IP', exact: true }],
@@ -62,6 +63,7 @@ export const ExternalIpPoolsPage = {
   emptyStateTitle: ['No external IP pools found'],
   deleteMenuItem: ['menuitem', { name: 'Delete', exact: true }],
   confirmDelete: ['button', { name: 'Delete', exact: true }],
+  deleteError: ['Failed to delete external IP pool'],
   deleteWarning: [
     'This permanently deletes the external IP pool. Pools with allocated IPs cannot be deleted. This action cannot be undone.',
   ],

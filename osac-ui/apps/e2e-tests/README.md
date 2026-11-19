@@ -139,6 +139,7 @@ value by accident.
 | `OSAC_EXT_IP_POOL`                                                    | one of            | Name of an existing pool the suite reuses instead of creating one                 |
 | `OSAC_EXT_IP_PROJECT`                                                 | no                | Project for the created External IP; empty uses the tenant default project        |
 | `OSAC_E2E_SECOND_TENANT_USERNAME` / `OSAC_E2E_SECOND_TENANT_PASSWORD` | no                | Second tenant's admin; enables the cross-tenant denial assertion                  |
+| `OSAC_E2E_POOL_CLEANUP`                                               | no                | Set to `1` to let the standalone pool-cleanup project delete the suite-owned pool |
 | `OSAC_E2E_INSTANCE`                                                   | no                | Run index appended to resource names; defaults to `1`                             |
 
 Pick the pool CIDR from an address range the target cluster can actually
@@ -161,6 +162,15 @@ so run `--project=external-ip-pool` before the VMaaS tenant flow; a tenant
 onboarded without a pool reports `DefaultNetworkingReady=False` and the
 tenant-admin flows then run against a degraded tenant.
 
+Onboard the tenant in create mode (`run-ui-e2e.sh --tag=create_tenant`, or
+`OSAC_VM_FLOW_MODE=create` for a direct Playwright run): the `tenant` project
+defaults to `full`, whose teardown deletes the tenant and the RoleBinding that
+hold the credentials this suite reads.
+
+The pool project refuses to recreate a pool that already exists, so after that
+bootstrap run set `OSAC_EXT_IP_POOL` to the pool it created and leave
+`OSAC_EXT_IP_CIDR` unset before running the full suite.
+
 Run the whole suite. `external-ip` depends on `external-ip-pool`, and its
 teardown (`external-ip-delete`) removes the External IP and, when the suite
 created it, the pool:
@@ -181,15 +191,27 @@ Playwright runs `external-ip-pool`, then `external-ip` (`create`, `isolation`,
 `list` in that order), then `external-ip-delete`, which deletes the External IP
 as the tenant and the pool as the provider admin.
 
+If the suite created the pool and a tenant was onboarded afterwards, that
+tenant's `default-nat` address comes from the same pool. The provider refuses to
+delete a pool that still has allocated addresses, so the teardown reports the
+pool as **retained** with the reason instead of failing the run. Delete the
+tenant that holds the address first, or remove the pool by hand.
+
 Run the pool alone, or keep the resources for inspection:
 
 ```bash
 # Provision the pool only; no teardown runs, so it stays for a later run.
 pnpm --filter @osac/playwright exec playwright test --project=external-ip-pool
 
-# Delete only, against resources a previous run created.
+# Delete only, against resources a previous run created. Re-export the same
+# OSAC_E2E_INSTANCE the original run used, or these target another run's names.
+export OSAC_E2E_INSTANCE=1
 pnpm --filter @osac/playwright exec playwright test --project=external-ip-delete
-pnpm --filter @osac/playwright exec playwright test --project=external-ip-pool-delete
+
+# The standalone pool cleanup is opt-in: it deletes only the suite-owned pool,
+# needs provider-admin credentials, and needs no OSAC_EXT_IP_CIDR.
+OSAC_E2E_POOL_CLEANUP=1 \
+  pnpm --filter @osac/playwright exec playwright test --project=external-ip-pool-delete
 
 # Discovery without a browser run.
 pnpm --filter @osac/playwright exec playwright test \

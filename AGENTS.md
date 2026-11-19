@@ -104,6 +104,7 @@ is invoked. Keep them current in the same PR as changes to the contracts they de
 
 - Optimize for trusted, deployable changes rather than the volume of generated code or artifacts. Include the effort needed to verify changes in delivery planning.
 - Treat generated code, tests, review comments, and agent agreement as proposals, not proof of correctness. Verify important claims with applicable executed tests, policy checks, and boundary evidence; report unresolved findings and checks that could not run.
+- Avoid low-value tests that merely restate the edit without independently checking meaningful behavior or a documented external contract—for example, asserting that a newly added exclusion string appears in YAML. Prefer existing coverage or proportionate behavioral validation; do not add a test solely because a file changed.
 - Automate repeatable validation where practical. Define human approval and escalation gates for failed checks, high-risk changes, ambiguity, or insufficient evidence, and keep routine agent coordination from becoming the engineer's main task.
 - Make remaining uncertainty visible before approval. Do not silently carry forward unread findings, untrusted generated tests, or unresolved recommendations.
 

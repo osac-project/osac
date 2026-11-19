@@ -327,8 +327,8 @@ aap:
     # Number of retries for the bootstrap job. AAP takes time to start,
     # so a high backoff limit is normal.
     backoffLimit: 15
-    # Hostnames for AAP component routes. Leave empty to auto-detect
-    # from the AAP instance CR status.
+    # Unused: no template reads these values. The bootstrap job derives the
+    # AAP hostnames from aap.aap.instance.name.
     gateway:
       hostname: ""
     controller:

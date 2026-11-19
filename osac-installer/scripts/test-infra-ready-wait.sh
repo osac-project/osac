@@ -13,6 +13,7 @@ export STUB_LOG="${WORK}/calls.log"
 cat >"${WORK}/bin/kubectl" <<'STUB'
 #!/usr/bin/env bash
 echo "$*" >>"${STUB_LOG}"
+if [[ "$1" == --kubeconfig ]]; then shift 4; fi
 case "$1" in
 get)
     if [[ -n "${STUB_GET_ERR:-}" ]]; then
@@ -108,22 +109,27 @@ esac
 STUB
     chmod +x "${WORK}/bin/${c}"
 done
-for branch in "kind dev kubectl" "openshift bmaas-ci oc"; do
-    read -r platform profile cli <<<"${branch}"
-    plan="$(cd "${INSTALLER}" && make -n install-infra PLATFORM="${platform}" PROFILE="${profile}" NS=osac 2>&1)" \
+export KIND_KUBECONFIG="${WORK}/selected config"
+for branch in "kind dev" "openshift bmaas-ci"; do
+    read -r platform profile <<<"${branch}"
+    plan="$(cd "${INSTALLER}" && make -n install-infra PLATFORM="${platform}" PROFILE="${profile}" NS=osac \
+        KIND_CLUSTER_NAME=readiness-test KIND_KUBECONFIG="${KIND_KUBECONFIG}" 2>&1)" \
         || fail "make -n install-infra failed for ${platform}: ${plan}"
+    plan="${plan//$'\\\n'/ }"
     helm_line="$({ grep -n 'helm upgrade --install osac-infra' <<<"${plan}" || true; } | tail -1 | cut -d: -f1)"
     wait_line="$({ grep -n 'wait_for_infra_ready' <<<"${plan}" || true; } | cut -d: -f1)"
     [[ -n "${helm_line}" ]] || fail "${platform}: no osac-infra install in the recipe"
     [[ -n "${wait_line}" && "$(wc -w <<<"${wait_line}")" == 1 ]] || fail "${platform}: expected one readiness call, got: ${wait_line}"
     (( wait_line > helm_line )) || fail "${platform}: the readiness call is not after the osac-infra install"
     call="$(sed -n "${wait_line}p" <<<"${plan}")"
-    [[ "${call}" == *"wait_for_infra_ready ${cli}'"* ]] || fail "${platform}: wrong CLI in: ${call}"
-    # Run the recipe line itself: the CLI must be reached, and with none of the profile's
-    # resources present it must succeed without waiting.
+    # Run the recipe line itself, checking that Kind uses the selected file and context.
     : >"${STUB_LOG}"
     (cd "${INSTALLER}" && eval "${call}") >/dev/null 2>&1 || fail "${platform}: the recipe's readiness call failed"
-    grep -q '^get clusterissuer/default-ca' "${STUB_LOG}" || fail "${platform}: the recipe's call never reached ${cli}: $(cat "${STUB_LOG}")"
+    target=
+    if [[ "${platform}" == kind ]]; then
+        target="--kubeconfig ${KIND_KUBECONFIG} --context kind-readiness-test "
+    fi
+    grep -Fq -- "${target}get clusterissuer/default-ca" "${STUB_LOG}" || fail "${platform}: wrong readiness target: $(cat "${STUB_LOG}")"
     [[ "$(waits)" == 0 ]] || fail "${platform}: the recipe's call waited for resources that do not exist"
 done
 

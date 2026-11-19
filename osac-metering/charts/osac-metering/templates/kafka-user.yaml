@@ -19,7 +19,7 @@ spec:
     acls:
       - resource:
           type: topic
-          name: osac.events.
+          name: {{ .Values.global.eventTopicPrefix | default "osac.events." | quote }}
           patternType: prefix
         operations:
           - Read

@@ -21,7 +21,7 @@
       spec:
         nmStateConfigLabelSelector:
           matchLabels:
-            "{{ worker_network_label }}": "{{ worker_network_cluster_order.metadata.name }}"
+            osac.openshift.io/clusterorder: "{{ worker_network_cluster_order.metadata.name }}"
 
 - name: Wait for worker BMIs to report accepted tenant interfaces
   kubernetes.core.k8s_info:
@@ -115,7 +115,7 @@
         name: "{{ worker_network_cluster_order.metadata.name }}-{{ item.agent.metadata.name }}-network"
         namespace: "{{ worker_network_namespace }}"
         labels:
-          "{{ worker_network_label }}": "{{ worker_network_cluster_order.metadata.name }}"
+          osac.openshift.io/clusterorder: "{{ worker_network_cluster_order.metadata.name }}"
           infraenvs.agent-install.openshift.io: "{{ worker_network_infraenv_name }}"
       spec:
         interfaces: "{{ item.agent | osac.service.agent_nmstate_interfaces(_worker_network_selected_macs) }}"

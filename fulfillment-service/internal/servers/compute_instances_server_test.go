@@ -356,6 +356,10 @@ var _ = Describe("Compute instances server", func() {
 					}.Build(),
 					Status: publicv1.ComputeInstanceStatus_builder{
 						State: publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+						LastProvisioningFailure: publicv1.ComputeInstanceProvisioningFailure_builder{
+							Reason:  publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_TIMED_OUT,
+							Message: "The provisioning attempt timed out.", Attempt: 2, ObservedAt: timestamppb.Now(),
+						}.Build(),
 						Volumes: []*publicv1.ComputeInstanceVolume{
 							publicv1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-spoofed"}.Build(),
 						},
@@ -379,6 +383,7 @@ var _ = Describe("Compute instances server", func() {
 			Expect(object.GetStatus().GetState()).To(Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_UNSPECIFIED))
 			Expect(object.GetStatus().GetComputeNetworkAttachmentStatuses()).To(BeEmpty())
 			Expect(object.GetStatus().GetVolumes()).To(BeEmpty())
+			Expect(object.GetStatus().HasLastProvisioningFailure()).To(BeFalse())
 		})
 
 		DescribeTable("Projects the latest provisioning failure through public reads",
@@ -463,6 +468,60 @@ var _ = Describe("Compute instances server", func() {
 			Entry("job not started", privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_JOB_NOT_STARTED, publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_JOB_NOT_STARTED, "Internal error"),
 			Entry("invalid result", privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_INVALID_RESULT, publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_INVALID_RESULT, "Internal error"),
 			Entry("provider error", privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_ERROR, publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_ERROR, "Internal error"),
+		)
+
+		DescribeTable("Rejects public provisioning failure writes",
+			func(operation string) {
+				createTemplate("general.small")
+				created, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+					Object: publicv1.ComputeInstance_builder{
+						Metadata: publicv1.Metadata_builder{Name: "protected-failure"}.Build(),
+						Spec: publicv1.ComputeInstanceSpec_builder{
+							Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id := created.GetObject().GetId()
+				instances, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+					SetLogger(logger).SetTenancyLogic(tenancy).Build()
+				Expect(err).ToNot(HaveOccurred())
+				stored, err := instances.Get().SetId(id).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				object := stored.GetObject()
+				object.SetStatus(privatev1.ComputeInstanceStatus_builder{
+					State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+					StateTransitionTime: timestamppb.Now(),
+				}.Build())
+				if operation != "set" {
+					object.GetStatus().SetLastProvisioningFailure(privatev1.ComputeInstanceProvisioningFailure_builder{
+						Reason:  privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_REPORTED,
+						Message: "Provisioning failed.", Attempt: 1, ObservedAt: timestamppb.Now(),
+					}.Build())
+				}
+				_, err = instances.Update().SetObject(object).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				before, err := instances.Get().SetId(id).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				publicStatus := &publicv1.ComputeInstanceStatus{}
+				if operation != "clear" {
+					publicStatus.SetLastProvisioningFailure(publicv1.ComputeInstanceProvisioningFailure_builder{
+						Reason:  publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_TIMED_OUT,
+						Message: "The provisioning attempt timed out.", Attempt: 2, ObservedAt: timestamppb.Now(),
+					}.Build())
+				}
+				_, err = server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+					Object:     publicv1.ComputeInstance_builder{Id: id, Status: publicStatus}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.last_provisioning_failure"}},
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+				after, err := instances.Get().SetId(id).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(proto.Equal(after.GetObject().GetStatus(), before.GetObject().GetStatus())).To(BeTrue())
+			},
+			Entry("set", "set"),
+			Entry("alter", "alter"),
+			Entry("clear", "clear"),
 		)
 
 		It("List objects", func() {
@@ -741,6 +800,10 @@ var _ = Describe("Compute instances server", func() {
 			storedObject.SetStatus(privatev1.ComputeInstanceStatus_builder{
 				State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
 				StateTransitionTime: storedTime,
+				LastProvisioningFailure: privatev1.ComputeInstanceProvisioningFailure_builder{
+					Reason:  privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_TIMED_OUT,
+					Message: "The provisioning attempt timed out.", Attempt: 2, ObservedAt: storedTime,
+				}.Build(),
 				Volumes: []*privatev1.ComputeInstanceVolume{
 					privatev1.ComputeInstanceVolume_builder{DiskKey: "boot", VolumeId: "volume-stored"}.Build(),
 				},
@@ -761,6 +824,8 @@ var _ = Describe("Compute instances server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			tampered := getResponse.GetObject()
+			originalFailure := proto.Clone(tampered.GetStatus().GetLastProvisioningFailure())
+			tampered.GetStatus().GetLastProvisioningFailure().SetMessage("forged failure")
 			tampered.GetStatus().SetState(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
 			tampered.GetStatus().SetStateTransitionTime(timestamppb.New(time.Now().Truncate(time.Second)))
 			Expect(tampered.GetStatus().GetVolumes()).To(HaveLen(1))
@@ -797,6 +862,7 @@ var _ = Describe("Compute instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(persisted.GetObject().GetStatus().GetVolumeRegistration()[0].GetState()).To(
 				Equal(privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED))
+			Expect(proto.Equal(after.GetObject().GetStatus().GetLastProvisioningFailure(), originalFailure)).To(BeTrue())
 		})
 
 		It("projects disk correlations without private registration state in responses and logs", func() {
@@ -1073,6 +1139,13 @@ var _ = Describe("Compute instances server", func() {
 			Entry("Rejects the state", "status.state", "status.state is output-only"),
 			Entry("Rejects the state transition time", "status.state_transition_time", "status.state_transition_time is output-only"),
 			Entry("Rejects the conditions", "status.conditions", "status.conditions is output-only"),
+			Entry("Rejects status.last_provisioning_failure", "status.last_provisioning_failure", "status.last_provisioning_failure is output-only"),
+			Entry("Rejects status.last_provisioning_failure.reason", "status.last_provisioning_failure.reason", "status.last_provisioning_failure.reason is output-only"),
+			Entry("Rejects status.last_provisioning_failure.message", "status.last_provisioning_failure.message", "status.last_provisioning_failure.message is output-only"),
+			Entry("Rejects status.last_provisioning_failure.attempt", "status.last_provisioning_failure.attempt", "status.last_provisioning_failure.attempt is output-only"),
+			Entry("Rejects status.last_provisioning_failure.observed_at", "status.last_provisioning_failure.observed_at", "status.last_provisioning_failure.observed_at is output-only"),
+			Entry("Rejects status.last_provisioning_failure.observed_at.seconds", "status.last_provisioning_failure.observed_at.seconds", "status.last_provisioning_failure.observed_at.seconds is output-only"),
+			Entry("Rejects normalized failure path", " status .. last_provisioning_failure ", "status.last_provisioning_failure is output-only"),
 			Entry("Rejects the running instance type", "status.instance_type", "status.instance_type is output-only"),
 			Entry("Rejects a running instance type subpath", "status.instance_type.name", "status.instance_type.name is output-only"),
 			Entry("Rejects the running instance type transition time", "status.instance_type_transition_time", "status.instance_type_transition_time is output-only"),
@@ -1117,6 +1190,10 @@ var _ = Describe("Compute instances server", func() {
 			storedObject.SetStatus(privatev1.ComputeInstanceStatus_builder{
 				State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
 				StateTransitionTime: storedTime,
+				LastProvisioningFailure: privatev1.ComputeInstanceProvisioningFailure_builder{
+					Reason:  privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_TIMED_OUT,
+					Message: "The provisioning attempt timed out.", Attempt: 2, ObservedAt: storedTime,
+				}.Build(),
 			}.Build())
 			_, err = ciDao.Update().SetObject(storedObject).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -1128,6 +1205,8 @@ var _ = Describe("Compute instances server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			echoed := getResponse.GetObject()
+			originalFailure := proto.Clone(echoed.GetStatus().GetLastProvisioningFailure())
+			echoed.GetStatus().ClearLastProvisioningFailure()
 			restartTime := timestamppb.New(time.Now().Truncate(time.Second))
 			echoed.GetSpec().SetRestartRequestedAt(restartTime)
 			updateResponse, err := server.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
@@ -1150,6 +1229,7 @@ var _ = Describe("Compute instances server", func() {
 				Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
 			Expect(after.GetObject().GetStatus().GetStateTransitionTime().AsTime()).To(
 				Equal(storedTime.AsTime()))
+			Expect(proto.Equal(after.GetObject().GetStatus().GetLastProvisioningFailure(), originalFailure)).To(BeTrue())
 		})
 
 		It("Exposes private status feedback through the public API", func() {

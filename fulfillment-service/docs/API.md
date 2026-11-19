@@ -128,6 +128,15 @@ the observed source, not a new retry policy. Provider-reported failures use
 `Provisioning failed.`, timeouts use `The provisioning attempt timed out.`, and
 other sources use `Internal error`.
 
+Public Update rejects explicit `status` masks and all descendants, including
+`status.last_provisioning_failure` and its fields, with `InvalidArgument`.
+The stored failure is unchanged by attempts to set, replace, or clear it.
+Public Create ignores supplied status. A maskless public update infers only
+writable fields, so an echoed or modified failure object is ignored; updates
+masked to writable spec or metadata fields also preserve observed status.
+Trusted private updates can replace the failure or clear it with an explicit
+`status.last_provisioning_failure` mask and an absent field.
+
 ## File organization
 
 Each object type is defined across two files:

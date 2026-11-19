@@ -154,6 +154,17 @@ func safeStaleVersionError() error {
 	)
 }
 
+func safeUnknownOutcomeError(kind, id string) error {
+	envelope := newToolError(
+		"unknown_outcome",
+		"Unknown",
+		"The Create result could not be confirmed. Check the resource before retrying.",
+		false,
+	)
+	envelope.Details = []string{fmt.Sprintf("%s ID %s may exist; use get_resource to check it.", kind, id)}
+	return envelope
+}
+
 func safePrerequisiteError(kind, id string, err error) error {
 	switch status.Code(err) {
 	case codes.NotFound:
@@ -177,6 +188,8 @@ func safePublicAPIError(err error) error {
 		return newToolError("not_found", "NotFound", "The requested OSAC resource was not found.", false)
 	case codes.AlreadyExists:
 		return newToolError("conflict", "AlreadyExists", "The resource already exists or conflicts with current state. Resolve the conflict and retry.", false)
+	case codes.Aborted:
+		return newToolError("conflict", "Aborted", "The operation conflicted with current OSAC state. Review the resource before retrying.", false)
 	case codes.FailedPrecondition:
 		return newToolError("protocol_incompatible", "FailedPrecondition", "The request is incompatible with the current OSAC service. Update the client and retry.", false)
 	case codes.ResourceExhausted:

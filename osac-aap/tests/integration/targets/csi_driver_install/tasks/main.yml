@@ -446,6 +446,7 @@
       - name: local
         protocol: block
         provider: lvms
+        backend_id: "lvms-backend-1"
 
   tasks:
     - name: Call csi_driver_install role with an unsupported provider (lvms) alongside a supported one (vast)
@@ -488,6 +489,7 @@
       - name: local
         protocol: block
         provider: lvms
+        backend_id: "lvms-backend-1"
 
   tasks:
     - name: Read installed csi-driver release before the zero-supported-vendor dispatch

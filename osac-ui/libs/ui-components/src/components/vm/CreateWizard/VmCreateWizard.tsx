@@ -8,7 +8,7 @@ import {
   ComputeInstanceCatalogItems,
   ComputeInstances,
 } from '@osac/types';
-import { useCreateResource, useGetResource } from '@osac/ui-components/api/use-resource';
+import { useCreateResource } from '@osac/ui-components/api/use-resource';
 import { FieldValidationProvider } from '@osac/ui-components/components/Form/FieldValidationContext';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
 import { CatalogStep } from '@osac/ui-components/components/ProvisioningWizard/CatalogStep';
@@ -27,31 +27,30 @@ import { VmReviewStep } from './VmReviewStep';
 import { VmStorageStep } from './VmStorageStep';
 
 interface Props {
-  initialCatalogItemId?: string;
+  /** Catalog item snapshot for a catalog-origin launch; omit for list-origin creation. */
+  catalogItem?: ComputeInstanceCatalogItem;
   onClosed: () => void;
 }
 
-const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
+const VmCreateWizard = ({ catalogItem, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const provision = useCreateResource(ComputeInstances);
-  const catalogItemQuery = useGetResource(
-    ComputeInstanceCatalogItems,
-    { id: initialCatalogItemId ?? '' },
-    { enabled: Boolean(initialCatalogItemId) },
+  const [selectedCatalogItem, setSelectedCatalogItem] = useState(catalogItem);
+  const includeCatalogStep = !catalogItem;
+  const [activeStep, setActiveStep] = useState<VmWizardStepId>(
+    includeCatalogStep ? 'catalog' : 'general',
   );
-  const [activeStep, setActiveStep] = useState<VmWizardStepId>('catalog');
   const [validationAlert, setValidationAlert] = useState(false);
-  const [selectedCatalogItem, setSelectedCatalogItem] = useState<ComputeInstanceCatalogItem>();
-  const steps = [
-    'catalog',
+  const steps: VmWizardStepId[] = [
+    ...(includeCatalogStep ? (['catalog'] as const) : []),
     'general',
     'configuration',
     'storage',
     'networking',
     'access',
     'review',
-  ] as const;
+  ];
   const stepLabels: Record<VmWizardStepId, string> = {
     catalog: t('Catalog item'),
     general: t('General'),
@@ -69,10 +68,7 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
       }
       try {
         const created = await provision.mutateAsync({
-          object: buildComputeInstanceCreatePayload(
-            values,
-            selectedCatalogItem ?? catalogItemQuery.data?.object,
-          ),
+          object: buildComputeInstanceCreatePayload(values, selectedCatalogItem),
         });
         if (created?.object?.id) {
           navigate(`/vms/${created.object.id}`);
@@ -81,12 +77,12 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
         // Surfaced via provision.error in the footer; nothing further to do here.
       }
     },
-    [catalogItemQuery.data?.object, navigate, provision, selectedCatalogItem],
+    [navigate, provision, selectedCatalogItem],
   );
 
   const initialValues = useMemo(
-    () => getComputeInstanceInitialValues(catalogItemQuery.data?.object),
-    [catalogItemQuery.data?.object],
+    () => getComputeInstanceInitialValues(selectedCatalogItem),
+    [selectedCatalogItem],
   );
   const schema = useMemo(() => buildComputeInstanceStepSchema(activeStep, t), [activeStep, t]);
   const stepHasErrors = useCallback(
@@ -122,10 +118,9 @@ const VmCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
           >
             {steps.map((step) => (
               <WizardStep key={step} id={step} name={stepLabels[step]}>
-                {step === 'catalog' && (
+                {includeCatalogStep && step === 'catalog' && (
                   <CatalogStep<ComputeInstanceCatalogItem, ComputeInstanceWizardValues>
                     catalogService={ComputeInstanceCatalogItems}
-                    isInitializing={Boolean(initialCatalogItemId) && catalogItemQuery.isPending}
                     getInitialFormValues={getComputeInstanceInitialValues}
                     onCatalogItemSelected={setSelectedCatalogItem}
                   />

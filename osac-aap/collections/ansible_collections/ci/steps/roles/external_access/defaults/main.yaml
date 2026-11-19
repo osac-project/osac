@@ -1,0 +1,4 @@
+---
+# Jobs sharing the CI guest range use one registry in the AAP namespace.
+external_access_vip_registry_namespace: "{{ lookup('env', 'POD_NAMESPACE') }}"
+external_access_vip_registry_name: osac-ci-guest-ingress-vip-claims

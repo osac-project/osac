@@ -57,6 +57,14 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   Fulfillment and PostgreSQL; the network provider is omitted, so that
   coverage does not imply a provisioned VM or provider execution. Read the
   fixtures before extending those cases.
+- MCP write safety ([OSAC-5851](https://redhat.atlassian.net/browse/OSAC-5851))
+  uses typed client failure injection, a pass-through token exchanger, deployed
+  Fulfillment, and PostgreSQL. Its unit suite also uses the generated public
+  gRPC client and an in-process server to cover a successful Create whose
+  response exceeds the client receive limit. Broader transport faults and
+  host-driven stop behavior remain with
+  [OSAC-5852](https://redhat.atlassian.net/browse/OSAC-5852). Provider
+  provisioning is out of scope.
 - FabricDomain setup and focused execution are documented in
   [the suite README](../../fulfillment-service/it/README.fabric-domain.md).
 - Deployed service-account journeys, secret rotation included, are the
@@ -73,6 +81,8 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   with a missing or not-ready tenant default are rejected in the private
   servers suite and the deployed public Create; provider provisioning remains
   E2E coverage.
+
+- **StorageTier/Volume reference guard ([OSAC-7049](https://redhat.atlassian.net/browse/OSAC-7049), DEV):** `internal/cmd/service/start/grpcserver`, `internal/servers` and `internal/database/migrations` exercise production DAOs and in-process handlers against temporary PostgreSQL, including concurrent access. Tenancy and attribution are controlled; deployed service, operator and provider behavior is not covered.
 
 ## Coverage gaps
 

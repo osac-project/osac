@@ -44,7 +44,10 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
 
-const testNetBoxHostClass = "metal3"
+const (
+	testNetBoxHostClass = "metal3"
+	testNetBoxV2Token   = "nbt_aaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
 
 func testNetBoxCredentials() *credentials.BMC {
 	return &credentials.BMC{
@@ -86,7 +89,7 @@ var _ = Describe("NetBox inventory client", func() {
 				"url":                              "https://netbox.example.test/",
 				"tokenFile":                        "/var/run/secrets/netbox/token",
 				"caFile":                           "/var/run/secrets/netbox/ca.crt",
-				"allowInsecureHTTP":                true,
+				"clientAllowInsecureHTTP":          true,
 				"enableBMCCertificateVerification": false,
 			}}
 
@@ -97,7 +100,7 @@ var _ = Describe("NetBox inventory client", func() {
 				URL:                              "https://netbox.example.test/",
 				TokenFile:                        "/var/run/secrets/netbox/token",
 				CAFile:                           "/var/run/secrets/netbox/ca.crt",
-				AllowInsecureHTTP:                true,
+				ClientAllowInsecureHTTP:          true,
 				EnableBMCCertificateVerification: new(false),
 			}))
 		})
@@ -133,7 +136,7 @@ var _ = Describe("NetBox inventory client", func() {
 	Describe("NewNetBoxClient", func() {
 		It("retains the injected API, manager, and host class", func() {
 			tokenFile := filepath.Join(GinkgoT().TempDir(), "token")
-			Expect(os.WriteFile(tokenFile, []byte("test-token\n"), 0o600)).To(Succeed())
+			Expect(os.WriteFile(tokenFile, []byte(testNetBoxV2Token+"\n"), 0o600)).To(Succeed())
 
 			api, err := NewNetBoxAPI(&Config{Options: map[string]any{"netbox": map[string]any{
 				"url":       "https://netbox.example.test/",
@@ -169,7 +172,7 @@ var _ = Describe("NetBox inventory client", func() {
 			Entry("HTTP URL without opt-in", &Config{Options: map[string]any{"netbox": map[string]any{
 				"url":       "http://netbox.example.test",
 				"tokenFile": "/unused/token",
-			}}}, "NetBox HTTP endpoints require AllowInsecureHTTP"),
+			}}}, "NetBox HTTP endpoints require ClientAllowInsecureHTTP"),
 		)
 
 		It("rejects an unreadable token file", func() {

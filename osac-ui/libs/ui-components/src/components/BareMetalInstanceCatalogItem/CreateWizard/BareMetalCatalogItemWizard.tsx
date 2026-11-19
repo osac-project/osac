@@ -61,12 +61,12 @@ const BareMetalCatalogItemWizard = ({ item }: BareMetalCatalogItemWizardProps) =
     try {
       if (item) {
         await updateAsync(buildBareMetalCatalogItemUpdateRequest(item, values));
-        navigate(`/catalog/bm/${item.id}`);
+        navigate(`/catalog/bare-metal/${item.id}`);
       } else {
         const resp = await createAsync({
           object: buildBareMetalCatalogItemCreatePayload(values),
         });
-        navigate(resp.object?.id ? `/catalog/bm/${resp.object.id}` : '/catalog');
+        navigate(resp.object?.id ? `/catalog/bare-metal/${resp.object.id}` : '/catalog/bare-metal');
       }
     } catch {
       // nothing to do, tanstack handles the error

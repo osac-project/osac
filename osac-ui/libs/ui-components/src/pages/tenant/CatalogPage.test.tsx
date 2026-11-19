@@ -1,4 +1,4 @@
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes, useLocation } from 'react-router-dom';
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError, createRouterTransport } from '@connectrpc/connect';
 import { screen, waitFor, within } from '@testing-library/react';
@@ -196,6 +196,9 @@ const toCatalogListResponse = <T extends CatalogListFilterableItem>(
 const toServiceTierFilterButtonId = (serviceTier: ServiceTier) =>
   `catalog-type-filter-${serviceTier}`;
 
+const catalogListPathForKind = (kind: string) =>
+  kind === 'bm' ? '/catalog/bare-metal' : kind === 'cluster' ? '/catalog/clusters' : '/catalog/vms';
+
 const createCatalogPageTransport = ({
   enabledServices = [ServiceTier.CAAS, ServiceTier.VMAAS, ServiceTier.BMAAS],
   capabilitiesError,
@@ -344,12 +347,20 @@ const renderCatalogPage = (
   routerEntries = ['/catalog'],
   role: UserRole = 'admin',
 ) =>
-  renderWithProviders(<CatalogPage />, {
-    transport,
-    routerEntries,
-    apiFixtures: { enabledServices },
-    session: { role },
-  });
+  renderWithProviders(
+    <Routes>
+      <Route path="/catalog" element={<CatalogPage />} />
+      <Route path="/catalog/vms" element={<CatalogPage routeKind="vm" />} />
+      <Route path="/catalog/clusters" element={<CatalogPage routeKind="cluster" />} />
+      <Route path="/catalog/bare-metal" element={<CatalogPage routeKind="bm" />} />
+    </Routes>,
+    {
+      transport,
+      routerEntries,
+      apiFixtures: { enabledServices },
+      session: { role },
+    },
+  );
 
 const renderCatalogPageWithDetailRoutes = (
   transport = createCatalogPageTransport(),
@@ -359,11 +370,13 @@ const renderCatalogPageWithDetailRoutes = (
   renderWithProviders(
     <Routes>
       <Route path="/catalog" element={<CatalogPage />} />
-      <Route path="/catalog/vm/:id" element={<VMCatalogItemDetailPage />} />
-      <Route path="/catalog/cluster/:id" element={<ClusterCatalogItemDetailPage />} />
-      <Route path="/catalog/bm/:id" element={<BareMetalInstanceCatalogItemDetailPage />} />
-      <Route path="/clusters/create/:catalogItemId" element={<div>Create cluster page</div>} />
-      <Route path="/vms/create/:catalogItemId" element={<div>Create virtual machine page</div>} />
+      <Route path="/catalog/vms" element={<CatalogPage routeKind="vm" />} />
+      <Route path="/catalog/clusters" element={<CatalogPage routeKind="cluster" />} />
+      <Route path="/catalog/vms/:id" element={<VMCatalogItemDetailPage />} />
+      <Route path="/catalog/clusters/:id" element={<ClusterCatalogItemDetailPage />} />
+      <Route path="/catalog/bare-metal/:id" element={<BareMetalInstanceCatalogItemDetailPage />} />
+      <Route path="/catalog/clusters/:id/launch" element={<div>Create cluster page</div>} />
+      <Route path="/catalog/vms/:id/launch" element={<div>Create virtual machine page</div>} />
     </Routes>,
     {
       transport,
@@ -382,6 +395,9 @@ const renderCatalogPageWithCreateRoute = (
   renderWithProviders(
     <Routes>
       <Route path="/catalog" element={<CatalogPage />} />
+      <Route path="/catalog/vms" element={<CatalogPage routeKind="vm" />} />
+      <Route path="/catalog/clusters" element={<CatalogPage routeKind="cluster" />} />
+      <Route path="/catalog/bare-metal" element={<CatalogPage routeKind="bm" />} />
       <Route path="/catalog/:kind/create" element={<div>Create catalog item page</div>} />
     </Routes>,
     { transport, routerEntries, apiFixtures: { enabledServices }, session: { role } },
@@ -434,7 +450,7 @@ describe('CatalogPage', () => {
     renderCatalogPage(
       createCatalogPageTransport({ vmDelayMs: 250, clusterItems: [] }),
       allCatalogServiceTiers,
-      ['/catalog?types=vm'],
+      ['/catalog/vms'],
     );
 
     expect(screen.getByRole('progressbar')).toBeInTheDocument();
@@ -598,42 +614,9 @@ describe('CatalogPage', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('ignores a disabled type in the URL filter', async () => {
-    renderCatalogPage(createCatalogPageTransport(), [ServiceTier.CAAS], ['/catalog?types=vm']);
-
-    await waitFor(() => {
-      expect(screen.getByText(clusterCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
-    });
-    expect(screen.queryByText(vmCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
-    expect(
-      document.getElementById(toServiceTierFilterButtonId(ServiceTier.VMAAS)),
-    ).not.toBeInTheDocument();
-    expect(
-      document.getElementById(toServiceTierFilterButtonId(ServiceTier.CAAS)),
-    ).toBeInTheDocument();
-  });
-
-  it('ignores comma-separated type values in the URL filter', async () => {
-    renderCatalogPage(
-      createCatalogPageTransport({ bmItems: [bareMetalCatalogItem] }),
-      allCatalogServiceTiers,
-      ['/catalog?types=vm,cluster'],
-    );
-
-    await waitFor(() => {
-      expect(screen.getByText(bareMetalCatalogItem.metadata?.name ?? '')).toBeInTheDocument();
-    });
-    expect(screen.queryByText(vmCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
-    expect(screen.queryByText(clusterCatalogItem.metadata?.name ?? '')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Bare Metal/ })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
-  });
-
   it('shows only the selected type when a different type is chosen', async () => {
     const { user } = renderCatalogPage(createCatalogPageTransport(), allCatalogServiceTiers, [
-      '/catalog?types=vm',
+      '/catalog/vms',
     ]);
 
     await waitFor(() => {
@@ -653,7 +636,7 @@ describe('CatalogPage', () => {
     renderCatalogPage(
       createCatalogPageTransport({ clusterItems: [clusterCatalogItem] }),
       allCatalogServiceTiers,
-      ['/catalog?types=vm'],
+      ['/catalog/vms'],
     );
 
     await waitFor(() => {
@@ -682,7 +665,7 @@ describe('CatalogPage', () => {
         clusterItems: [],
       }),
       allCatalogServiceTiers,
-      ['/catalog?types=vm'],
+      ['/catalog/vms'],
     );
 
     await waitFor(() => {
@@ -739,7 +722,7 @@ describe('CatalogPage', () => {
         clusterItems: [],
       }),
       [ServiceTier.VMAAS],
-      ['/catalog?types=vm'],
+      ['/catalog/vms'],
       'tenant-user',
     );
 
@@ -755,7 +738,7 @@ describe('CatalogPage', () => {
         clusterError: Object.assign(new Error(), { name: 'UnauthorizedError' }),
       }),
       allCatalogServiceTiers,
-      ['/catalog?types=vm'],
+      ['/catalog/vms'],
     );
 
     await waitFor(() => {
@@ -776,7 +759,7 @@ describe('CatalogPage', () => {
         requestCounts,
       }),
       allCatalogServiceTiers,
-      ['/catalog?types=vm'],
+      ['/catalog/vms'],
     );
 
     await waitFor(() => {
@@ -794,7 +777,7 @@ describe('CatalogPage', () => {
     renderCatalogPage(
       createCatalogPageTransport({ clusterError: new Error('Catalog service unavailable') }),
       allCatalogServiceTiers,
-      ['/catalog?types=cluster'],
+      ['/catalog/clusters'],
     );
 
     await waitFor(() => {
@@ -834,13 +817,18 @@ describe('CatalogPage', () => {
       title: 'Fedora 40 catalog',
     };
 
-    renderWithProviders(<CatalogPage />, {
-      transport: createCatalogPageTransport({
-        vmItems: [vmCatalogItem, secondVmItem],
-        clusterItems: [],
-      }),
-      routerEntries: ['/catalog?types=vm&search=fedora'],
-    });
+    renderWithProviders(
+      <Routes>
+        <Route path="/catalog/vms" element={<CatalogPage routeKind="vm" />} />
+      </Routes>,
+      {
+        transport: createCatalogPageTransport({
+          vmItems: [vmCatalogItem, secondVmItem],
+          clusterItems: [],
+        }),
+        routerEntries: ['/catalog/vms?search=fedora'],
+      },
+    );
 
     await waitFor(() => {
       expect(screen.getByText(secondVmItem.metadata?.name ?? '')).toBeInTheDocument();
@@ -849,10 +837,15 @@ describe('CatalogPage', () => {
   });
 
   it('shows a search-specific empty state when the filter matches nothing', async () => {
-    renderWithProviders(<CatalogPage />, {
-      transport: createCatalogPageTransport({ clusterItems: [] }),
-      routerEntries: ['/catalog?types=vm&search=no-such-catalog-item'],
-    });
+    renderWithProviders(
+      <Routes>
+        <Route path="/catalog/vms" element={<CatalogPage routeKind="vm" />} />
+      </Routes>,
+      {
+        transport: createCatalogPageTransport({ clusterItems: [] }),
+        routerEntries: ['/catalog/vms?search=no-such-catalog-item'],
+      },
+    );
 
     await waitFor(() => {
       expect(
@@ -865,13 +858,30 @@ describe('CatalogPage', () => {
     expect(screen.getByRole('button', { name: 'Clear all filters' })).toBeInTheDocument();
   });
 
-  it('clears type, publish, and search filters together without dropping other params', async () => {
+  it('clears publish and search filters without dropping unrelated params or the selected kind', async () => {
+    const LocationSearchProbe = () => {
+      const { search } = useLocation();
+      return <div data-testid="location-search">{search}</div>;
+    };
     localStorage.setItem(catalogItemsViewPrefKey, 'list');
 
-    const { user } = renderWithProviders(<CatalogPage />, {
-      transport: createCatalogPageTransport({ bmItems: [bareMetalCatalogItem] }),
-      routerEntries: ['/catalog?types=cluster&published=unpublished&search=no-such-item'],
-    });
+    const { user } = renderWithProviders(
+      <Routes>
+        <Route
+          path="/catalog/clusters"
+          element={
+            <>
+              <CatalogPage routeKind="cluster" />
+              <LocationSearchProbe />
+            </>
+          }
+        />
+      </Routes>,
+      {
+        transport: createCatalogPageTransport({ bmItems: [bareMetalCatalogItem] }),
+        routerEntries: ['/catalog/clusters?published=unpublished&search=no-such-item&keep=1'],
+      },
+    );
 
     await waitFor(() => {
       expect(
@@ -892,23 +902,22 @@ describe('CatalogPage', () => {
 
     await user.click(screen.getByRole('button', { name: 'Clear all filters' }));
 
-    // Clearing the type param falls back to the default (highest-priority) type.
+    // Clearing the filters keeps the route-selected kind; only the publish and
+    // search filters are reset.
     await waitFor(() => {
-      expect(screen.getByText(bareMetalCatalogItem.metadata?.name || 'N/A')).toBeInTheDocument();
+      expect(screen.getByText(clusterCatalogItem.metadata?.name || 'N/A')).toBeInTheDocument();
     });
 
-    expect(screen.getByRole('button', { name: /Bare Metal/ })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
     expect(screen.getByRole('button', { name: /Clusters/ })).toHaveAttribute(
       'aria-pressed',
-      'false',
+      'true',
     );
     expect(
       screen.getByRole('button', { name: 'Filter catalog by publication status' }),
     ).toHaveTextContent('All publish states');
     expect(screen.getByRole('textbox', { name: 'Filter catalog by keyword' })).toHaveValue('');
+    // Only the filter params are removed; unrelated params must survive.
+    expect(screen.getByTestId('location-search')).toHaveTextContent('?keep=1');
     // View preference is stored separately from URL filters, so list view must survive the clear.
     expect(screen.getByRole('grid', { name: 'Catalog items' })).toBeInTheDocument();
   });
@@ -916,7 +925,7 @@ describe('CatalogPage', () => {
   it('navigates to cluster create from the catalog item detail page', async () => {
     const { user } = renderCatalogPageWithDetailRoutes(
       createCatalogPageTransport(),
-      ['/catalog?types=cluster'],
+      ['/catalog/clusters'],
       'tenant-admin',
     );
 
@@ -941,7 +950,7 @@ describe('CatalogPage', () => {
   it('navigates to VM create from the catalog item detail page', async () => {
     const { user } = renderCatalogPageWithDetailRoutes(
       createCatalogPageTransport(),
-      ['/catalog?types=vm'],
+      ['/catalog/vms'],
       'tenant-admin',
     );
 
@@ -973,7 +982,7 @@ describe('CatalogPage', () => {
         requestCounts,
       }),
       allCatalogServiceTiers,
-      ['/catalog?types=vm'],
+      ['/catalog/vms'],
     );
 
     await waitFor(() => {
@@ -1011,14 +1020,14 @@ describe('CatalogPage', () => {
 
     expect(
       screen.getByRole('link', { name: vmCatalogItemWithReferences.metadata?.name }),
-    ).toHaveAttribute('href', `/catalog/vm/${vmCatalogItemWithReferences.id}`);
+    ).toHaveAttribute('href', `/catalog/vms/${vmCatalogItemWithReferences.id}`);
 
     await user.click(screen.getByRole('button', { name: /Clusters/ }));
 
     await waitFor(() => {
       expect(screen.getByRole('link', { name: clusterCatalogItem.metadata?.name })).toHaveAttribute(
         'href',
-        `/catalog/cluster/${clusterCatalogItem.id}`,
+        `/catalog/clusters/${clusterCatalogItem.id}`,
       );
     });
   });
@@ -1038,7 +1047,7 @@ describe('CatalogPage', () => {
     renderCatalogPage(
       createCatalogPageTransport({ vmItems: [catalogItem], clusterItems: [] }),
       allCatalogServiceTiers,
-      ['/catalog?types=vm'],
+      ['/catalog/vms'],
       'tenant-admin',
     );
 
@@ -1066,7 +1075,7 @@ describe('CatalogPage', () => {
           clusterItems: [clusterCatalogItem],
           bmItems: [bareMetalCatalogItem],
         }),
-        [`/catalog?types=${kind}`],
+        [catalogListPathForKind(kind)],
       );
 
       await waitFor(() => {
@@ -1089,7 +1098,7 @@ describe('CatalogPage', () => {
           clusterItems: [clusterCatalogItem],
           bmItems: [bareMetalCatalogItem],
         }),
-        ['/catalog?types=vm'],
+        ['/catalog/vms'],
       );
 
       expect(

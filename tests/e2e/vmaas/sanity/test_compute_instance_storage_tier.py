@@ -1,0 +1,908 @@
+from __future__ import annotations
+
+import re
+import subprocess
+from typing import Any
+
+import pytest
+
+from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
+from tests.e2e.core.helpers import assert_grpc_rejected, unique_name, wait_for_cr, wait_for_deletion, wait_for_provision
+from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.osac_cli import OsacCLI
+from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
+
+pytestmark = pytest.mark.sanity
+
+
+def verify_datavolume_storage_classes(
+    k8s_hub_client: K8sClient, k8s_virt_client: K8sClient, ci_name: str, cr: dict[str, Any]
+) -> None:
+    """Verify that DataVolumes were created with correct StorageClasses.
+
+    The fulfillment service resolves a tier independently for the boot disk and each
+    additional disk; the resulting names determine the DataVolume StorageClasses.
+    """
+    vm_namespace = k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name) or None
+    tenant_name = (
+        cr.get("status", {}).get("tenantReference", {}).get("name")
+        or cr.get("metadata", {}).get("annotations", {}).get("osac.openshift.io/tenant")
+        or None
+    )
+
+    # Verify boot disk
+    boot_tier = cr["spec"]["bootDisk"]["storageTier"]
+    expected_boot_sc = k8s_hub_client.get_storage_class_for_tier(
+        tier_name=boot_tier, tenant_name=tenant_name, storage_class_client=k8s_virt_client
+    )
+    boot_dv_name = f"{ci_name}-root-disk"
+    actual_boot_sc = k8s_virt_client.get_datavolume_storage_class(name=boot_dv_name, namespace=vm_namespace)
+    assert actual_boot_sc == expected_boot_sc, (
+        f"Boot disk StorageClass mismatch: {actual_boot_sc!r} != {expected_boot_sc!r}"
+    )
+
+    # Verify additional disks (1-indexed)
+    for idx, disk in enumerate(cr.get("spec", {}).get("additionalDisks", [])):
+        tier = disk["storageTier"]
+        expected_sc = k8s_hub_client.get_storage_class_for_tier(
+            tier_name=tier, tenant_name=tenant_name, storage_class_client=k8s_virt_client
+        )
+
+        dv_name = f"{ci_name}-disk-{idx + 1}"
+        actual_sc = k8s_virt_client.get_datavolume_storage_class(name=dv_name, namespace=vm_namespace)
+        assert actual_sc == expected_sc, (
+            f"Additional disk {idx} StorageClass mismatch: {actual_sc!r} != {expected_sc!r}"
+        )
+
+
+def test_compute_instance_explicit_boot_disk_tier(
+    cli: OsacCLI,
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    k8s_virt_client: K8sClient,
+    vm_template: str,
+    default_network_attachment: dict[str, object],
+    default_storage_tier: str,
+    default_instance_type: str,
+) -> None:
+    """Verify that explicit boot disk storage tier is persisted correctly."""
+    name = unique_name("e2e-ci-tier")
+    uuid = cli.create_compute_instance(
+        name=name,
+        template=vm_template,
+        instance_type=default_instance_type,
+        network_attachments=[default_network_attachment],
+        boot_disk_storage_tier=default_storage_tier,
+    )
+
+    ci_name = None
+    try:
+        ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
+        wait_for_provision(k8s=k8s_hub_client, name=ci_name)
+
+        # Verify CR has the correct storage tier
+        cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
+        assert cr["spec"]["bootDisk"]["storageTier"] == default_storage_tier, (
+            f"Boot disk tier mismatch: {cr['spec']['bootDisk']['storageTier']!r} != {default_storage_tier!r}"
+        )
+
+        verify_datavolume_storage_classes(
+            k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+        )
+    finally:
+        grpc.delete_compute_instance(ci_id=uuid)
+        if ci_name is not None:
+            wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+
+
+def test_compute_instance_multiple_disks_different_tiers(
+    cli: OsacCLI,
+    grpc: GRPCClient,
+    private_grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    k8s_virt_client: K8sClient,
+    vm_template: str,
+    default_network_attachment: dict[str, object],
+    default_storage_tier: str,
+    additional_storage_tiers: dict[str, dict[str, str]],
+    default_instance_type: str,
+) -> None:
+    """Verify that boot disk and additional disks can use different storage tiers independently."""
+    fast_tier = additional_storage_tiers["fast"]["name"]
+    archive_tier = additional_storage_tiers["archive"]["name"]
+
+    name = unique_name("e2e-ci-multi-tier")
+    uuid = cli.create_compute_instance(
+        name=name,
+        template=vm_template,
+        instance_type=default_instance_type,
+        network_attachments=[default_network_attachment],
+        boot_disk_storage_tier=fast_tier,
+        additional_disks=[
+            {"size_gib": 1, "storage_tier": {"name": default_storage_tier}},
+            {"size_gib": 2, "storage_tier": {"name": archive_tier}},
+        ],
+    )
+
+    ci_name = None
+    volume_ids: dict[str, str] = {}
+    try:
+        ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
+        wait_for_provision(k8s=k8s_hub_client, name=ci_name)
+
+        # Verify CR has the correct storage tiers
+        cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
+        assert cr["spec"]["bootDisk"]["storageTier"] == fast_tier
+        assert len(cr["spec"]["additionalDisks"]) == 2
+        assert cr["spec"]["additionalDisks"][0]["storageTier"] == default_storage_tier
+        assert cr["spec"]["additionalDisks"][1]["storageTier"] == archive_tier
+
+        verify_datavolume_storage_classes(
+            k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+        )
+
+        saved_volumes = grpc.get_compute_instance(ci_id=uuid)["object"]["status"]["volumes"]
+        assert len(saved_volumes) == 3, f"Expected three disk Volume IDs, got {len(saved_volumes)}"
+        volume_ids = {volume["diskKey"]: volume["volumeId"] for volume in saved_volumes}
+        assert set(volume_ids) == {"boot", "disk-1", "disk-2"}
+        assert all(volume_ids.values()) and len(set(volume_ids.values())) == 3
+        assert cr["spec"]["diskVolumeIDs"] == volume_ids
+
+        vm_namespace = k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name)
+        assert vm_namespace, f"ComputeInstance {ci_name} has no VM namespace"
+        dv_names = {"boot": f"{ci_name}-root-disk", "disk-1": f"{ci_name}-disk-1", "disk-2": f"{ci_name}-disk-2"}
+        for key, dv_name in dv_names.items():
+            volume = private_grpc.call(service=f"{PRIVATE_API}.Volumes/Get", data={"id": volume_ids[key]})["object"]
+            assert volume["id"] == volume_ids[key]
+
+            dv = k8s_virt_client.get_json(resource="datavolume", name=dv_name, namespace=vm_namespace)
+            assert dv["metadata"]["annotations"]["osac.openshift.io/storage-volume-id"] == volume_ids[key]
+    finally:
+        grpc.delete_compute_instance(ci_id=uuid)
+        if ci_name is not None:
+            wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+
+    def instance_is_absent() -> bool:
+        try:
+            grpc.get_compute_instance(ci_id=uuid)
+        except subprocess.CalledProcessError as exc:
+            output = (exc.stderr or "") + "\n" + (exc.stdout or "")
+            if re.search(r"(?m)^[ \t]*Code:[ \t]*NotFound[ \t]*$", output):
+                return True
+            raise
+        return False
+
+    poll_until(
+        fn=instance_is_absent,
+        until=lambda gone: gone is True,
+        retries=30,
+        delay=2,
+        description=f"ComputeInstance {uuid} API deletion",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=uuid,
+    )
+    for volume_id in volume_ids.values():
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            private_grpc.call(service=f"{PRIVATE_API}.Volumes/Get", data={"id": volume_id})
+        assert_grpc_rejected(exc_info, "NotFound")
+
+
+def test_compute_instance_nonexistent_tier_rejected(
+    grpc: GRPCClient,
+    vm_template: str,
+    default_subnet: str,
+    default_security_group: str,
+    default_instance_type: str,
+    default_disk_image: str,
+) -> None:
+    """Verify that requesting a nonexistent storage tier returns INVALID_ARGUMENT."""
+    nonexistent_tier = f"nonexistent-tier-{unique_name('test')}"
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        grpc.call(
+            service="osac.public.v1.ComputeInstances/Create",
+            data={
+                "object": {
+                    "metadata": {"name": unique_name("e2e-ci-bad-tier")},
+                    "spec": {
+                        "template": {"name": vm_template, "shared": True},
+                        "instance_type": {"name": default_instance_type, "shared": True},
+                        "boot_disk": {"size_gib": 20, "storage_tier": {"name": nonexistent_tier}},
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
+                        "disk_image": {"name": default_disk_image},
+                        "run_strategy": "Always",
+                    },
+                }
+            },
+        )
+
+    assert_grpc_rejected(exc_info, "InvalidArgument")
+    error_lower = str(exc_info.value.stderr).lower()
+    assert nonexistent_tier in error_lower and "tier" in error_lower, (
+        f"Expected missing tier error, got: {exc_info.value.stderr}"
+    )
+
+
+def test_compute_instance_tier_immutability(
+    cli: OsacCLI,
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    k8s_virt_client: K8sClient,
+    vm_template: str,
+    default_network_attachment: dict[str, object],
+    default_storage_tier: str,
+    additional_storage_tiers: dict[str, dict[str, str]],
+    default_instance_type: str,
+) -> None:
+    """Verify that storage tier cannot be changed after ComputeInstance creation."""
+    fast_tier = additional_storage_tiers["fast"]["name"]
+
+    name = unique_name("e2e-ci-immutable")
+    uuid = cli.create_compute_instance(
+        name=name,
+        template=vm_template,
+        instance_type=default_instance_type,
+        network_attachments=[default_network_attachment],
+        boot_disk_storage_tier=default_storage_tier,
+    )
+
+    ci_name = None
+    try:
+        ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
+        wait_for_provision(k8s=k8s_hub_client, name=ci_name)
+
+        # Verify CR has the correct storage tier
+        cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
+        assert cr["spec"]["bootDisk"]["storageTier"] == default_storage_tier
+
+        verify_datavolume_storage_classes(
+            k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+        )
+
+        # Attempt to update the storage tier via K8s
+        import json
+
+        patch_json = json.dumps({"spec": {"bootDisk": {"storageTier": fast_tier}}})
+        output, rc = k8s_hub_client.patch(resource="computeinstance", name=ci_name, patch=patch_json)
+
+        # Verify patch was rejected
+        assert rc != 0, "storage tier should be immutable"
+
+        # Verify error mentions immutability
+        error_output = output.lower()
+        assert "immutable" in error_output or "invalid" in error_output, f"Expected immutability error, got: {output}"
+    finally:
+        grpc.delete_compute_instance(ci_id=uuid)
+        if ci_name is not None:
+            wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+
+
+@pytest.mark.parametrize("storage_tier", [None, {"name": ""}])
+def test_compute_instance_boot_disk_tier_required(
+    grpc: GRPCClient,
+    vm_template: str,
+    default_subnet: str,
+    default_security_group: str,
+    default_instance_type: str,
+    default_disk_image: str,
+    storage_tier: dict[str, str] | None,
+) -> None:
+    """Verify that absent and empty boot disk tiers return INVALID_ARGUMENT."""
+    boot_disk: dict[str, Any] = {"size_gib": 20}
+    if storage_tier is not None:
+        boot_disk["storage_tier"] = storage_tier
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        grpc.call(
+            service="osac.public.v1.ComputeInstances/Create",
+            data={
+                "object": {
+                    "metadata": {"name": unique_name("e2e-ci-no-tier")},
+                    "spec": {
+                        "template": {"name": vm_template, "shared": True},
+                        "instance_type": {"name": default_instance_type, "shared": True},
+                        "boot_disk": boot_disk,
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
+                        "disk_image": {"name": default_disk_image},
+                        "run_strategy": "Always",
+                    },
+                }
+            },
+        )
+
+    assert_grpc_rejected(exc_info, "InvalidArgument")
+    # Param-aware: None → "storage_tier is required" (validateDisk);
+    # {"name": ""} → "storagetier reference must specify id or name" (reference interceptor).
+    if storage_tier is None:
+        assert "storage_tier is required" in str(exc_info.value.stderr).lower()
+    else:
+        assert "storagetier reference must specify id or name" in str(exc_info.value.stderr).lower()
+
+
+@pytest.mark.parametrize("storage_tier", [None, {"name": ""}])
+def test_compute_instance_additional_disk_tier_required(
+    grpc: GRPCClient,
+    vm_template: str,
+    default_subnet: str,
+    default_security_group: str,
+    default_storage_tier: str,
+    default_instance_type: str,
+    default_disk_image: str,
+    storage_tier: dict[str, str] | None,
+) -> None:
+    """Verify that absent and empty additional disk tiers return INVALID_ARGUMENT."""
+    additional_disk: dict[str, Any] = {"size_gib": 50}
+    if storage_tier is not None:
+        additional_disk["storage_tier"] = storage_tier
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        grpc.call(
+            service="osac.public.v1.ComputeInstances/Create",
+            data={
+                "object": {
+                    "metadata": {"name": unique_name("e2e-ci-add-disk-no-tier")},
+                    "spec": {
+                        "template": {"name": vm_template, "shared": True},
+                        "instance_type": {"name": default_instance_type, "shared": True},
+                        "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
+                        "additional_disks": {"items": [additional_disk]},
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
+                        "disk_image": {"name": default_disk_image},
+                        "run_strategy": "Always",
+                    },
+                }
+            },
+        )
+
+    assert_grpc_rejected(exc_info, "InvalidArgument")
+    # Param-aware: None → "additional_disks[0].storage_tier is required" (validateDisk);
+    # {"name": ""} → "storagetier reference must specify id or name" (reference interceptor).
+    if storage_tier is None:
+        assert "additional_disks[0].storage_tier is required" in str(exc_info.value.stderr).lower()
+    else:
+        assert "storagetier reference must specify id or name" in str(exc_info.value.stderr).lower()
+
+
+def test_compute_instance_boot_disk_tier_from_catalog_item_default(
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    k8s_virt_client: K8sClient,
+    vm_template: str,
+    default_subnet: str,
+    default_security_group: str,
+    default_storage_tier: str,
+    default_instance_type: str,
+    default_disk_image: str,
+) -> None:
+    """Verify that boot disk tier is resolved from CatalogItem typed policy default."""
+    fields = {
+        "boot_disk": {
+            "storage_tier": {"editable": {"default_value": {"name": default_storage_tier}}},
+            "size_gib": {"editable": {}},
+        },
+        "network_attachments": {"editable": {}},
+        "disk_image": {"editable": {}},
+        "instance_type": {"editable": {}},
+        "run_strategy": {"editable": {}},
+    }
+    catalog_item_id = grpc.create_compute_instance_catalog_item(
+        name=unique_name("e2e-cat-tier"), template=vm_template, published=True, fields=fields
+    )
+
+    try:
+        # Create CI using catalog item WITHOUT specifying boot_disk_storage_tier
+        ci_obj = grpc.call(
+            service="osac.public.v1.ComputeInstances/Create",
+            data={
+                "object": {
+                    "metadata": {"name": unique_name("e2e-ci-cat-def")},
+                    "spec": {
+                        "catalog_item": {"id": catalog_item_id},
+                        "instance_type": {"name": default_instance_type, "shared": True},
+                        "boot_disk": {"size_gib": 20},  # No storage_tier
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
+                        "disk_image": {"name": default_disk_image},
+                        "run_strategy": "Always",
+                    },
+                }
+            },
+        )
+        uuid = ci_obj["object"]["id"]
+
+        ci_name = None
+        try:
+            ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
+            wait_for_provision(k8s=k8s_hub_client, name=ci_name)
+
+            # Verify CatalogItem default was applied
+            cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
+            assert cr["spec"]["bootDisk"]["storageTier"] == default_storage_tier
+            assert len(cr["spec"].get("additionalDisks", [])) == 0
+
+            verify_datavolume_storage_classes(
+                k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+            )
+        finally:
+            grpc.delete_compute_instance(ci_id=uuid)
+            wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+    finally:
+        grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
+
+
+@pytest.mark.skip(
+    reason="Custom-template CI provisioning is not e2e-testable: spec.templateID is used verbatim "
+    "by AAP as the Ansible role to include, and only shipped templates (e.g. ocp-virt-vm) have a "
+    "backing role, so a CI created from a custom template can neither provision nor delete "
+    "(hangs wait_for_provision, then teardown). Unskip when the backend supports provisionable "
+    "custom templates."
+)
+def test_compute_instance_boot_disk_tier_from_template_default() -> None:
+    """Verify a ComputeInstance resolves its boot disk storage_tier from Template spec_defaults.
+
+    Intent: create a ComputeInstanceTemplate with spec_defaults.boot_disk.storage_tier, then
+    create a CI referencing it WITHOUT a boot_disk, and assert the CR's spec.bootDisk.storageTier
+    (and sizeGiB) are inherited from the template — and the VM provisions.
+
+    Why skipped: a custom template cannot drive real VM provisioning in e2e. Its spec.templateID
+    is written verbatim into the CR and used by AAP as the role name to include
+    (playbook_osac_create_compute_instance.yml), and only AAP-published templates have a backing
+    role, so the CI can neither provision nor delete. API-only template DiskImage default resolution
+    is covered in fulfillment-service/it/it_disk_images_api_test.go; it does not establish custom
+    template provisioning.
+    """
+
+
+def test_compute_instance_user_tier_overrides_catalog_item_default(
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    k8s_virt_client: K8sClient,
+    vm_template: str,
+    default_subnet: str,
+    default_security_group: str,
+    default_storage_tier: str,
+    additional_storage_tiers: dict[str, dict[str, str]],
+    default_instance_type: str,
+    default_disk_image: str,
+) -> None:
+    """Verify that user-provided tier overrides CatalogItem default."""
+    fast_tier = additional_storage_tiers["fast"]["name"]
+
+    fields = {
+        "boot_disk": {
+            "storage_tier": {"editable": {"default_value": {"name": default_storage_tier}}},
+            "size_gib": {"editable": {}},
+        },
+        "network_attachments": {"editable": {}},
+        "disk_image": {"editable": {}},
+        "instance_type": {"editable": {}},
+        "run_strategy": {"editable": {}},
+    }
+    catalog_item_id = grpc.create_compute_instance_catalog_item(
+        name=unique_name("e2e-cat-override"), template=vm_template, published=True, fields=fields
+    )
+
+    try:
+        # Create CI with explicit storage_tier (should override default)
+        ci_obj = grpc.call(
+            service="osac.public.v1.ComputeInstances/Create",
+            data={
+                "object": {
+                    "metadata": {"name": unique_name("e2e-ci-override")},
+                    "spec": {
+                        "catalog_item": {"id": catalog_item_id},
+                        "instance_type": {"name": default_instance_type, "shared": True},
+                        "boot_disk": {"size_gib": 20, "storage_tier": {"name": fast_tier}},  # Override
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
+                        "disk_image": {"name": default_disk_image},
+                        "run_strategy": "Always",
+                    },
+                }
+            },
+        )
+        uuid = ci_obj["object"]["id"]
+
+        ci_name = None
+        try:
+            ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
+            wait_for_provision(k8s=k8s_hub_client, name=ci_name)
+
+            # Verify user value was used, not CatalogItem default
+            cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
+            assert cr["spec"]["bootDisk"]["storageTier"] == fast_tier
+            assert len(cr["spec"].get("additionalDisks", [])) == 0
+
+            verify_datavolume_storage_classes(
+                k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+            )
+        finally:
+            grpc.delete_compute_instance(ci_id=uuid)
+            wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+    finally:
+        grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
+
+
+def test_compute_instance_explicit_additional_disks_without_catalog_item_default(
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    k8s_virt_client: K8sClient,
+    vm_template: str,
+    default_subnet: str,
+    default_security_group: str,
+    default_storage_tier: str,
+    additional_storage_tiers: dict[str, dict[str, str]],
+    default_instance_type: str,
+    default_disk_image: str,
+) -> None:
+    """Verify that explicit additional disks work when CatalogItem has no additional_disks default."""
+    fast_tier = additional_storage_tiers["fast"]["name"]
+    archive_tier = additional_storage_tiers["archive"]["name"]
+
+    # CatalogItem with boot_disk.storage_tier default ONLY (no additional_disks default)
+    fields = {
+        "boot_disk": {
+            "storage_tier": {"editable": {"default_value": {"name": default_storage_tier}}},
+            "size_gib": {"editable": {}},
+        },
+        "additional_disks": {"editable": {}},
+        "network_attachments": {"editable": {}},
+        "disk_image": {"editable": {}},
+        "instance_type": {"editable": {}},
+        "run_strategy": {"editable": {}},
+    }
+    catalog_item_id = grpc.create_compute_instance_catalog_item(
+        name=unique_name("e2e-cat-no-add-def"), template=vm_template, published=True, fields=fields
+    )
+
+    try:
+        # Create CI with explicit additional_disks (CatalogItem has no default for this field)
+        ci_obj = grpc.call(
+            service="osac.public.v1.ComputeInstances/Create",
+            data={
+                "object": {
+                    "metadata": {"name": unique_name("e2e-ci-explicit-add")},
+                    "spec": {
+                        "catalog_item": {"id": catalog_item_id},
+                        "instance_type": {"name": default_instance_type, "shared": True},
+                        "boot_disk": {"size_gib": 20},  # Uses CatalogItem default tier
+                        "additional_disks": {
+                            "items": [
+                                {"size_gib": 5, "storage_tier": {"name": fast_tier}},
+                                {"size_gib": 10, "storage_tier": {"name": archive_tier}},
+                            ]
+                        },
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
+                        "disk_image": {"name": default_disk_image},
+                        "run_strategy": "Always",
+                    },
+                }
+            },
+        )
+        uuid = ci_obj["object"]["id"]
+
+        ci_name = None
+        try:
+            ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
+            wait_for_provision(k8s=k8s_hub_client, name=ci_name)
+
+            # Verify boot disk got CatalogItem default, additional disks got user values
+            cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
+            assert cr["spec"]["bootDisk"]["storageTier"] == default_storage_tier
+            assert len(cr["spec"]["additionalDisks"]) == 2
+            assert cr["spec"]["additionalDisks"][0]["sizeGiB"] == 5
+            assert cr["spec"]["additionalDisks"][0]["storageTier"] == fast_tier
+            assert cr["spec"]["additionalDisks"][1]["sizeGiB"] == 10
+            assert cr["spec"]["additionalDisks"][1]["storageTier"] == archive_tier
+
+            verify_datavolume_storage_classes(
+                k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+            )
+        finally:
+            grpc.delete_compute_instance(ci_id=uuid)
+            wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+    finally:
+        grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
+
+
+def test_compute_instance_additional_disks_from_catalog_item_default(
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    k8s_virt_client: K8sClient,
+    vm_template: str,
+    default_subnet: str,
+    default_security_group: str,
+    default_storage_tier: str,
+    additional_storage_tiers: dict[str, dict[str, str]],
+    default_instance_type: str,
+    default_disk_image: str,
+) -> None:
+    """Verify that additional disks are defaulted from CatalogItem typed policy."""
+    fast_tier = additional_storage_tiers["fast"]["name"]
+
+    fields = {
+        "additional_disks": {
+            "editable": {"default_value": {"items": [{"size_gib": 10, "storage_tier": {"name": fast_tier}}]}}
+        },
+        "boot_disk": {"size_gib": {"editable": {}}, "storage_tier": {"editable": {}}},
+        "network_attachments": {"editable": {}},
+        "disk_image": {"editable": {}},
+        "instance_type": {"editable": {}},
+        "run_strategy": {"editable": {}},
+    }
+    catalog_item_id = grpc.create_compute_instance_catalog_item(
+        name=unique_name("e2e-cat-add-disks"), template=vm_template, published=True, fields=fields
+    )
+
+    try:
+        # Create CI WITHOUT specifying additional_disks (should use default)
+        ci_obj = grpc.call(
+            service="osac.public.v1.ComputeInstances/Create",
+            data={
+                "object": {
+                    "metadata": {"name": unique_name("e2e-ci-add-def")},
+                    "spec": {
+                        "catalog_item": {"id": catalog_item_id},
+                        "instance_type": {"name": default_instance_type, "shared": True},
+                        "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
+                        # No additional_disks specified
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
+                        "disk_image": {"name": default_disk_image},
+                        "run_strategy": "Always",
+                    },
+                }
+            },
+        )
+        uuid = ci_obj["object"]["id"]
+
+        ci_name = None
+        try:
+            ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
+            wait_for_provision(k8s=k8s_hub_client, name=ci_name)
+
+            # Verify CatalogItem default was applied
+            cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
+            assert len(cr["spec"]["additionalDisks"]) == 1
+            assert cr["spec"]["additionalDisks"][0]["sizeGiB"] == 10
+            assert cr["spec"]["additionalDisks"][0]["storageTier"] == fast_tier
+
+            verify_datavolume_storage_classes(
+                k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+            )
+        finally:
+            grpc.delete_compute_instance(ci_id=uuid)
+            wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+    finally:
+        grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
+
+
+def test_compute_instance_additional_disks_from_catalog_item_typed_name_default(
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    k8s_virt_client: K8sClient,
+    vm_template: str,
+    default_subnet: str,
+    default_security_group: str,
+    default_storage_tier: str,
+    additional_storage_tiers: dict[str, dict[str, str]],
+    default_instance_type: str,
+    default_disk_image: str,
+) -> None:
+    """Verify name references in typed additional-disk defaults are resolved."""
+    fast_tier = additional_storage_tiers["fast"]["name"]
+
+    # Typed StorageTier name reference inside the disk list
+    fields = {
+        "additional_disks": {
+            "editable": {"default_value": {"items": [{"size_gib": 10, "storage_tier": {"name": fast_tier}}]}}
+        },
+        "boot_disk": {"size_gib": {"editable": {}}, "storage_tier": {"editable": {}}},
+        "network_attachments": {"editable": {}},
+        "disk_image": {"editable": {}},
+        "instance_type": {"editable": {}},
+        "run_strategy": {"editable": {}},
+    }
+    catalog_item_id = grpc.create_compute_instance_catalog_item(
+        name=unique_name("e2e-cat-typed-name"), template=vm_template, published=True, fields=fields
+    )
+
+    try:
+        # Create CI without additional_disks to exercise the array default normalization
+        ci_obj = grpc.call(
+            service="osac.public.v1.ComputeInstances/Create",
+            data={
+                "object": {
+                    "metadata": {"name": unique_name("e2e-ci-legacy-def")},
+                    "spec": {
+                        "catalog_item": {"id": catalog_item_id},
+                        "instance_type": {"name": default_instance_type, "shared": True},
+                        "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
+                        # No additional_disks specified
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
+                        "disk_image": {"name": default_disk_image},
+                        "run_strategy": "Always",
+                    },
+                }
+            },
+        )
+        uuid = ci_obj["object"]["id"]
+
+        ci_name = None
+        try:
+            ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
+            wait_for_provision(k8s=k8s_hub_client, name=ci_name)
+
+            cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
+            assert len(cr["spec"]["additionalDisks"]) == 1
+            assert cr["spec"]["additionalDisks"][0]["sizeGiB"] == 10
+            assert cr["spec"]["additionalDisks"][0]["storageTier"] == fast_tier
+
+            verify_datavolume_storage_classes(
+                k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+            )
+        finally:
+            grpc.delete_compute_instance(ci_id=uuid)
+            wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+    finally:
+        grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
+
+
+def test_compute_instance_user_additional_disks_override_catalog_item_default(
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    k8s_virt_client: K8sClient,
+    vm_template: str,
+    default_subnet: str,
+    default_security_group: str,
+    default_storage_tier: str,
+    additional_storage_tiers: dict[str, dict[str, str]],
+    default_instance_type: str,
+    default_disk_image: str,
+) -> None:
+    """Verify that user-provided additional disks replace CatalogItem default entirely."""
+    fast_tier = additional_storage_tiers["fast"]["name"]
+    archive_tier = additional_storage_tiers["archive"]["name"]
+
+    fields = {
+        "additional_disks": {
+            "editable": {"default_value": {"items": [{"size_gib": 10, "storage_tier": {"name": fast_tier}}]}}
+        },
+        "boot_disk": {"size_gib": {"editable": {}}, "storage_tier": {"editable": {}}},
+        "network_attachments": {"editable": {}},
+        "disk_image": {"editable": {}},
+        "instance_type": {"editable": {}},
+        "run_strategy": {"editable": {}},
+    }
+    catalog_item_id = grpc.create_compute_instance_catalog_item(
+        name=unique_name("e2e-cat-add-override"), template=vm_template, published=True, fields=fields
+    )
+
+    try:
+        # Create CI with explicit additional_disks (should replace default)
+        ci_obj = grpc.call(
+            service="osac.public.v1.ComputeInstances/Create",
+            data={
+                "object": {
+                    "metadata": {"name": unique_name("e2e-ci-add-override")},
+                    "spec": {
+                        "catalog_item": {"id": catalog_item_id},
+                        "instance_type": {"name": default_instance_type, "shared": True},
+                        "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
+                        "additional_disks": {  # Override
+                            "items": [{"size_gib": 10, "storage_tier": {"name": archive_tier}}]
+                        },
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
+                        "disk_image": {"name": default_disk_image},
+                        "run_strategy": "Always",
+                    },
+                }
+            },
+        )
+        uuid = ci_obj["object"]["id"]
+
+        ci_name = None
+        try:
+            ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
+            wait_for_provision(k8s=k8s_hub_client, name=ci_name)
+
+            # Verify user value was used (1 disk with archive tier), not default (1 disk with fast tier)
+            cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
+            assert len(cr["spec"]["additionalDisks"]) == 1
+            assert cr["spec"]["additionalDisks"][0]["sizeGiB"] == 10
+            assert cr["spec"]["additionalDisks"][0]["storageTier"] == archive_tier
+
+            verify_datavolume_storage_classes(
+                k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+            )
+        finally:
+            grpc.delete_compute_instance(ci_id=uuid)
+            wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+    finally:
+        grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)
+
+
+def test_compute_instance_empty_additional_disks_disables_catalog_item_default(
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    k8s_virt_client: K8sClient,
+    vm_template: str,
+    default_subnet: str,
+    default_security_group: str,
+    default_storage_tier: str,
+    additional_storage_tiers: dict[str, dict[str, str]],
+    default_instance_type: str,
+    default_disk_image: str,
+) -> None:
+    """Verify that an explicit empty additional-disks wrapper disables the Catalog Item default."""
+    fast_tier = additional_storage_tiers["fast"]["name"]
+
+    fields = {
+        "additional_disks": {
+            "editable": {"default_value": {"items": [{"size_gib": 10, "storage_tier": {"name": fast_tier}}]}}
+        },
+        "boot_disk": {"size_gib": {"editable": {}}, "storage_tier": {"editable": {}}},
+        "network_attachments": {"editable": {}},
+        "disk_image": {"editable": {}},
+        "instance_type": {"editable": {}},
+        "run_strategy": {"editable": {}},
+    }
+    catalog_item_id = grpc.create_compute_instance_catalog_item(
+        name=unique_name("e2e-cat-add-empty"), template=vm_template, published=True, fields=fields
+    )
+
+    try:
+        ci_obj = grpc.call(
+            service="osac.public.v1.ComputeInstances/Create",
+            data={
+                "object": {
+                    "metadata": {"name": unique_name("e2e-ci-add-empty")},
+                    "spec": {
+                        "catalog_item": {"id": catalog_item_id},
+                        "instance_type": {"name": default_instance_type, "shared": True},
+                        "boot_disk": {"size_gib": 20, "storage_tier": {"name": default_storage_tier}},
+                        "additional_disks": {"items": []},  # Explicit empty list
+                        "network_attachments": [
+                            {"subnet": {"id": default_subnet}, "security_groups": [{"id": default_security_group}]}
+                        ],
+                        "disk_image": {"name": default_disk_image},
+                        "run_strategy": "Always",
+                    },
+                }
+            },
+        )
+        uuid = ci_obj["object"]["id"]
+
+        ci_name = None
+        try:
+            ci_name = wait_for_cr(k8s=k8s_hub_client, uuid=uuid)
+            wait_for_provision(k8s=k8s_hub_client, name=ci_name)
+
+            # An explicit empty list suppresses the Catalog Item default.
+            cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
+            assert cr["spec"].get("additionalDisks", []) == []
+
+            verify_datavolume_storage_classes(
+                k8s_hub_client=k8s_hub_client, k8s_virt_client=k8s_virt_client, ci_name=ci_name, cr=cr
+            )
+        finally:
+            grpc.delete_compute_instance(ci_id=uuid)
+            wait_for_deletion(k8s=k8s_hub_client, name=ci_name)
+    finally:
+        grpc.delete_compute_instance_catalog_item(catalog_item_id=catalog_item_id)

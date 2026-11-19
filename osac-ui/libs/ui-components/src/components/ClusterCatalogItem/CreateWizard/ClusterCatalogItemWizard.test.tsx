@@ -265,7 +265,7 @@ describe('ClusterCatalogItemWizard', () => {
     expect(Object.keys(request.object?.fields ?? {}).filter((key) => key !== '$typeName')).toEqual(
       [],
     );
-    expect(mockNavigate).toHaveBeenCalledWith('/catalog/cluster/catalog-item-1');
+    expect(mockNavigate).toHaveBeenCalledWith('/catalog/clusters/catalog-item-1');
   });
 
   it('stays on Review with entered values after a failed submit', async () => {
@@ -364,6 +364,6 @@ describe('ClusterCatalogItemWizard', () => {
     expect(request.updateMask?.paths).not.toContain('template');
     expect(request.updateMask?.paths).not.toContain('metadata.name');
     expect(request.updateMask?.paths).not.toContain('metadata.tenant');
-    expect(mockNavigate).toHaveBeenCalledWith('/catalog/cluster/catalog-item-1');
+    expect(mockNavigate).toHaveBeenCalledWith('/catalog/clusters/catalog-item-1');
   });
 });

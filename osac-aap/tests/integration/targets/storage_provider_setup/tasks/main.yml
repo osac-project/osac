@@ -45,7 +45,7 @@
             state: absent
             api_version: v1
             kind: Secret
-            name: "vast-tenant-config-test-setup"
+            name: "vast-tenant-config-test-setup-be-test"
             namespace: "osac-system"
 
         - name: Call storage_provider role with setup action
@@ -81,7 +81,7 @@
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Secret
-        name: "vast-tenant-config-test-setup"
+        name: "vast-tenant-config-test-setup-be-test"
         namespace: "osac-system"
       register: _hub_secret
 
@@ -89,7 +89,7 @@
       ansible.builtin.assert:
         that:
           - _hub_secret.resources | length == 1
-        fail_msg: "Hub Secret 'vast-tenant-config-test-setup' was not created"
+        fail_msg: "Hub Secret 'vast-tenant-config-test-setup-be-test' was not created"
         success_msg: "Hub Secret exists"
 
     - name: Decode hub Secret fields
@@ -110,8 +110,8 @@
     - name: Assert hub Secret has tenant manager name
       ansible.builtin.assert:
         that:
-          - _secret_data.tenant_manager_name == "osac-test-setup"
-        fail_msg: "Expected tenant_manager_name 'osac-test-setup', got '{{ _secret_data.tenant_manager_name }}'"
+          - _secret_data.tenant_manager_name == "osac-test-setup-be-test"
+        fail_msg: "Expected tenant_manager_name 'osac-test-setup-be-test', got '{{ _secret_data.tenant_manager_name }}'"
         success_msg: "tenant_manager_name correct"
 
     - name: Assert hub Secret has manager credentials (non-empty)
@@ -163,6 +163,8 @@
         that:
           - _hub_secret.resources[0].metadata.labels['app.kubernetes.io/managed-by'] == 'osac-aap'
           - _hub_secret.resources[0].metadata.labels['osac.openshift.io/tenant'] == 'test-setup'
+          - _hub_secret.resources[0].metadata.labels['osac.openshift.io/storage-backend-id'] == 'be-test'
+          - _hub_secret.resources[0].metadata.labels['osac.openshift.io/storage-provider'] == 'vast'
         fail_msg: "Hub Secret labels incorrect"
         success_msg: "Hub Secret labels correct"
 
@@ -171,12 +173,87 @@
         that:
           - storage_provider_tenant_configs is defined
           - storage_provider_tenant_configs is mapping
-          - "'vast' in storage_provider_tenant_configs"
-          - storage_provider_tenant_configs.vast.vast_tenant_id is defined
-          - storage_provider_tenant_configs.vast.vip_pool_name == "osac-test-setup-vippool"
+          - "'be-test' in storage_provider_tenant_configs"
+          - storage_provider_tenant_configs['be-test'].vast_tenant_id is defined
+          - storage_provider_tenant_configs['be-test'].vip_pool_name == "osac-test-setup-vippool"
         fail_msg: "storage_provider_tenant_configs output not set correctly: {{ storage_provider_tenant_configs | default('undefined') }}"
         success_msg: "storage_provider_tenant_configs output correct"
 
+# ── Test: Re-run setup to verify idempotency (Secret count stays at 1) ──
+- name: "Storage Provider Setup - Re-run setup"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    vast_storage_config_namespace: osac-system
+    tenant_name: "test-setup"
+    tenant_namespace: "osac-system"
+    tenant_uid: "test-uid-setup"
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        backend_id: be-test
+        qos_limits:
+          static_limits:
+            max_reads_bw_mbps: 100
+            max_writes_bw_mbps: 100
+    storage_provider_backend_connections:
+      be-test:
+        endpoint: "127.0.0.1:18443"
+        username: "admin"
+        password: "mock-admin-password"
+    storage_provider_action: setup
+    storage_provider_provisioning_target: vmaas
+    vast_storage_validate_certs: false
+
+  tasks:
+    - name: Call storage_provider role with setup action (second run)
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: setup
+
+- name: "Storage Provider Setup - Verify idempotency"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Read hub Secrets by label
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: "osac-system"
+        label_selectors:
+          - "osac.openshift.io/tenant=test-setup"
+          - "osac.openshift.io/storage-provider=vast"
+          - "osac.openshift.io/storage-backend-id=be-test"
+      register: _hub_secrets_after_rerun
+
+    - name: Assert exactly one hub Secret exists after re-run
+      ansible.builtin.assert:
+        that:
+          - _hub_secrets_after_rerun.resources | length == 1
+        fail_msg: "Expected exactly 1 hub Secret after re-run, got {{ _hub_secrets_after_rerun.resources | length }}"
+        success_msg: "Re-run idempotent: exactly 1 hub Secret"
+
+# ── Continue verification ──
+- name: "Storage Provider Setup - Verify results (continued)"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    vast_storage_config_namespace: osac-system
+    tenant_name: "test-setup"
+
+  tasks:
     # ── Verify mock server received expected API calls ──
     - name: Get mock server call log
       ansible.builtin.uri:
@@ -224,6 +301,32 @@
         fail_msg: "No manager creation API call found in mock call log"
         success_msg: "Manager creation API call detected"
 
+    # The re-run above only proved the hub Secret count stays at 1, which a
+    # second provisioning pass would also satisfy (the Secret is just rewritten).
+    # Count the manager POSTs instead: create_tenant_manager.yaml must take its
+    # hub-Secret idempotency short-circuit on the second run.
+    - name: Count tenant-manager POSTs across both setup runs
+      ansible.builtin.set_fact:
+        _manager_post_count: >-
+          {% set _n = [] -%}
+          {% for _c in _call_log -%}
+          {% if _c.method == 'POST' and 'managers' in _c.path
+                and (_c.body | default({})).get('username', '') == 'osac-test-setup-be-test' -%}
+          {% set _ = _n.append(1) -%}
+          {% endif -%}
+          {% endfor -%}
+          {{ _n | length }}
+
+    - name: Assert the tenant VMS manager was created exactly once across both runs
+      ansible.builtin.assert:
+        that:
+          - _manager_post_count | int == 1
+        fail_msg: >-
+          Expected exactly 1 POST /api/managers/ for 'osac-test-setup-be-test' across the
+          initial setup and the re-run, got {{ _manager_post_count }}. The re-run
+          must reuse the credentials already in the hub Secret.
+        success_msg: "Re-run idempotent: the VMS manager was created exactly once"
+
 # ── Cleanup ──
 - name: "Storage Provider Setup - Cleanup"
   hosts: localhost
@@ -235,6 +338,6 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-tenant-config-test-setup"
+        name: "vast-tenant-config-test-setup-be-test"
         namespace: "osac-system"
       failed_when: false

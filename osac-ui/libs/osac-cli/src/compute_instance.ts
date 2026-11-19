@@ -88,6 +88,41 @@ const getComputeInstance = async (tenantName: string, name: string): Promise<Com
   return parseResource<ComputeInstance>(result.stdout, `compute instance '${name}'`);
 };
 
+/** Confirm deletion through the API, independently of the VM list in the UI. */
+export const expectComputeInstanceDeleted = async (
+  tenantName: string,
+  name: string,
+  timeout = 180_000,
+): Promise<void> => {
+  await expect
+    .poll(
+      async () => {
+        const result = await runOsacCommand([
+          '--tenant',
+          tenantName,
+          'get',
+          'computeinstance',
+          '--filter',
+          `this.metadata.name == ${JSON.stringify(name)}`,
+          '--output',
+          'json',
+        ]);
+        expectOsacCommandSucceeded(result, `List compute instance '${name}'`);
+        const instances: unknown = JSON.parse(result.stdout);
+        if (!Array.isArray(instances)) {
+          throw new Error('The CLI returned an unexpected compute instance list.');
+        }
+        return instances.length;
+      },
+      {
+        message: `Wait for compute instance '${name}' to be deleted`,
+        timeout,
+        intervals: [1_000, 2_000, 5_000],
+      },
+    )
+    .toBe(0);
+};
+
 /** Return the time the controller last processed a restart, if any. */
 export const getComputeInstanceLastRestartedAt = async (
   tenantName: string,

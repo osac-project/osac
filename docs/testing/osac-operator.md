@@ -32,10 +32,15 @@ registrations, not to run provider tasks. Inspect the deployed suite before a
 focused run.
 
 The networking suite and task engine use an in-memory AAP; shared wire goldens
-under `../tests/contract/network-task/` bind only covered create/apply/attach
-shapes at Unit/Envtest tier, not the deployed AAP boundary. Delete/detach,
-SecurityGroup, DHCP-lease, FabricDomain, cluster-ingress and physical-interface
-shapes remain unbound with no owning ticket.
+under `../tests/contract/network-task/` bind covered producer inputs and result
+parsers at Unit/Envtest tier, not the deployed AAP boundary. Physical
+NetworkAttachment apply, delete and query_dhcp_lease inputs are bound with the
+same fixtures as osac-aap; the DHCP lease result is parsed against the input
+MAC and Subnet IPAM. NetworkAttachment overlay delete/detach, other
+delete/detach tasks, SecurityGroup and FabricDomain shapes remain unbound.
+Cluster ingress reservation (`reserve_cluster_ingress_ip`) is bound by its
+shared input and result goldens. Cluster ingress release
+(`release_cluster_ingress_ip`) is unbound.
 
 ExternalIP Envtest specs verify that allocation sends the stable Fulfillment API
 ID separately from Kubernetes `metadata.uid`, and that a failed release retains
@@ -50,6 +55,12 @@ a minimal TopoLVM CRD and fixture status, so real device provisioning and CSI
 mounting remain E2E
 ([OSAC-3711](https://redhat.atlassian.net/browse/OSAC-3711)). Remote StorageClass
 coverage needs dual Envtest plus a second Kind cluster.
+
+ClusterOrder upgrade dispatch, observation, and deadline coverage
+([DEV] OSAC-6265, OSAC-7232) uses Envtest for dispatch and feedback against the
+real API, etcd, and CRDs with controlled AAP/HyperShift inputs; the deployed
+Kind suite covers installed CRD/status handling and manager timeout variables.
+Fulfillment persistence and the AAP workflow are not exercised.
 
 Subnet compute eligibility is covered at Unit and Envtest tier, in the
 Fulfillment servers suite (see the

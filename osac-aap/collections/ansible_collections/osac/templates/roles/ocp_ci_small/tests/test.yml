@@ -1,5 +1,5 @@
 ---
-- name: CI cluster deletion uses service-owned infrastructure and access tasks
+- name: CI cluster deletion uses shared infrastructure and CI-owned external access
   hosts: localhost
   gather_facts: false
   vars:
@@ -34,11 +34,11 @@
         name: osac.templates.ocp_ci_small
         tasks_from: delete.yaml
 
-    - name: Verify CI delete uses service-owned external access tasks
+    - name: Verify CI delete uses CI-owned external access orchestration
       ansible.builtin.assert:
         that:
           - delete_step_cluster_infra_default is not defined
           - delete_step_external_access_default is defined
-          - delete_step_external_access_default.name == "osac.service.external_access"
-          - delete_step_external_access_default.tasks_from == "caas_delete.yaml"
+          - delete_step_external_access_default.name == "ci.steps.external_access"
+          - delete_step_external_access_default.tasks_from == "delete.yaml"
           - delete_step_cluster_network_default is not defined

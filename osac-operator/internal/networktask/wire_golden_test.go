@@ -57,4 +57,13 @@ func TestParsersAcceptTheWireResultGoldens(t *testing.T) {
 	if err != nil || address != "203.0.113.1" {
 		t.Fatalf("external ip result: %q %v", address, err)
 	}
+	lease, err := ParseDHCPLease(
+		wireResult(t, "query_dhcp_lease.physical.fabric.json"),
+		"aa:bb:cc:dd:ee:ff",
+		"10.20.1.0/24",
+		&v1alpha1.SubnetIPAM{GatewayIPv4: "10.20.1.1", PhysicalIPv4CIDRs: []string{"10.20.1.128/26"}},
+	)
+	if err != nil || *lease != (v1alpha1.NetworkAttachmentDHCPLease{IPAddress: "10.20.1.130", MACAddress: "aa:bb:cc:dd:ee:ff"}) {
+		t.Fatalf("DHCP lease result: %+v %v", lease, err)
+	}
 }

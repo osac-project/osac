@@ -12,6 +12,9 @@
     fail_msg: >-
       _provider_tiers must be provided by the service role dispatcher.
 
+- name: Resolve the backend_id this dispatch is scoped to
+  ansible.builtin.include_tasks: _resolve_backend_id.yaml
+
 - name: Include shared tier protocol validation
   ansible.builtin.include_tasks: _validate_tier_protocols.yaml
 
@@ -149,7 +152,7 @@
 
     - name: Set CSI Secret resource name
       ansible.builtin.set_fact:
-        _vast_csi_secret_name: "vast-csi-{{ tenant_name }}"
+        _vast_csi_secret_name: "vast-csi-{{ tenant_name }}-{{ _vast_backend_id }}"
 
     - name: Set block encryption passphrase from caller or persisted hub Secret
       ansible.builtin.set_fact:

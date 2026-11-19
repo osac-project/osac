@@ -48,18 +48,32 @@ in `osac-aap/Makefile`.
   Netris is a stateful in-process fake; CUDN/VTEP CRDs are minimal schemas
   with fixture-supplied readiness — no OVN, real CRD validation, data plane or
   AAP server. The CUDN target refuses pre-existing CUDN/VTEP CRDs.
+  The Netris fake covers EVPN physical-range DHCP creation and repair; live
+  DHCP leases and port behavior remain [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 - `config_as_code_job_templates`, `config_as_code_pod_specs`: rendered AAP
   template/pod configuration only; no controller, Kubernetes objects or live
   provider.
+- `cluster_upgrade_workflow`
+  ([OSAC-7232](https://redhat.atlassian.net/browse/OSAC-7232)): runs the
+  existing cluster workflow through its same-type Lease against real Kind and
+  minimal HyperShift CRDs, covering the control-plane and NodePool image batch,
+  shared attempt annotations, later image preservation, and malformed
+  NodePool-hook rejection. No deployed AAP, HyperShift controller, operator
+  dispatch loop, or provider/data-plane upgrade runs.
 - Netris transport unit tests: real HTTP transport and module subprocesses
   against a synthetic loopback provider; no live Netris login, so cookie
   refresh and live-provider compatibility remain unverified.
 - Wire-contract unit tests: shared operator/AAP goldens against doubles and
   the CUDN planner; no deployed AAP, Kubernetes objects or provider execution.
 
-The shared goldens do not bind delete/detach, SecurityGroup, DHCP-lease,
-FabricDomain, cluster-ingress or physical-interface shapes; those gaps have no
-owning ticket. Read both sides' suites before extending a task contract.
+The shared goldens bind physical NetworkAttachment apply, delete and
+query_dhcp_lease inputs plus the DHCP lease result; both the operator producer
+and this AAP consumer read the same files. The AAP contract runs the generic
+playbook against a fake Netris endpoint, with no deployed AAP or provider.
+NetworkAttachment overlay delete/detach, other unbound delete/detach tasks,
+SecurityGroup and FabricDomain shapes remain unbound. Cluster ingress
+reservation (`reserve_cluster_ingress_ip`) is bound by shared input and result
+goldens. Cluster ingress release (`release_cluster_ingress_ip`) is unbound.
 AgentlessNet Fabric and switch-VLAN targets ([OSAC-7156](https://redhat.atlassian.net/browse/OSAC-7156))
 run generic-playbook child jobs with real SQLite against one stateful fake SSH
 switch endpoint: physical NetworkAttachment apply, partial-retry, delete-wins

@@ -1,4 +1,4 @@
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -15,7 +15,6 @@ import { useTranslation } from '../../../hooks/useTranslation';
 const VmCreatePage = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { catalogItemId } = useParams<{ catalogItemId?: string }>();
   const navigateToParent = () => navigate('/vms');
 
   return (
@@ -38,7 +37,7 @@ const VmCreatePage = () => {
           </Content>
         </Stack>
       </PageSection>
-      <VmCreateWizard initialCatalogItemId={catalogItemId} onClosed={navigateToParent} />
+      <VmCreateWizard onClosed={navigateToParent} />
     </>
   );
 };

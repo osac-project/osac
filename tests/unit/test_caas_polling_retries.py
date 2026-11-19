@@ -92,7 +92,13 @@ def test_cluster_deletion_bmi_poll_retries_transient_grpc_failure(monkeypatch: p
     monkeypatch.setattr(scenario, "wait_for_cluster_grpc_deleting_or_archived", lambda **_kwargs: None)
     monkeypatch.setattr(scenario, "poll_until", poll)
 
-    cluster = scenario._ClusterResources(co_name="order-a", owned_bmi_ids={"bmi-a"}, infra_env_name="order-a-infraenv")
+    cluster = scenario._ClusterResources(
+        co_name="order-a",
+        owned_bmi_ids={"bmi-a"},
+        infra_env_name="order-a-infraenv",
+        hosted_cluster_name="hosted-a",
+        hosted_cluster_namespace="hosted-a-ns",
+    )
     with pytest.raises(RuntimeError, match="poll captured"):
         scenario._assert_cluster_deleted(grpc=Mock(), k8s=Mock(), metering=Mock(), uuid="uuid-a", cluster=cluster)
 
@@ -109,22 +115,23 @@ def cluster_deletion_waits(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(scenario, "wait_for_cluster_grpc_removal", lambda **_kwargs: None)
     monkeypatch.setattr(scenario, "_assert_worker_billing_stops", lambda **_kwargs: None)
     monkeypatch.setattr(
-        scenario,
-        "poll_until",
-        lambda **kwargs: runner.poll_until(**(kwargs | {"retries": 2, "delay": 0})),
+        scenario, "poll_until", lambda **kwargs: runner.poll_until(**(kwargs | {"retries": 2, "delay": 0}))
     )
 
 
 def test_cluster_deletion_bmi_poll_recovers_after_transient_grpc_failure(cluster_deletion_waits: None) -> None:
     """A retried transport failure must still reach the successful-removal outcome."""
     grpc = Mock()
-    grpc.list_baremetal_instance_ids.side_effect = [
-        subprocess.CalledProcessError(1, ["grpcurl"]),
-        [],
-    ]
+    grpc.list_baremetal_instance_ids.side_effect = [subprocess.CalledProcessError(1, ["grpcurl"]), []]
     k8s = Mock(spec=K8sClient)
     k8s.is_present.return_value = False
-    cluster = scenario._ClusterResources(co_name="order-a", owned_bmi_ids={"bmi-a"}, infra_env_name="order-a-infraenv")
+    cluster = scenario._ClusterResources(
+        co_name="order-a",
+        owned_bmi_ids={"bmi-a"},
+        infra_env_name="order-a-infraenv",
+        hosted_cluster_name="hosted-a",
+        hosted_cluster_namespace="hosted-a-ns",
+    )
 
     scenario._assert_cluster_deleted(
         grpc=grpc, k8s=k8s, metering=Mock(spec=MeteringCollector), uuid="uuid-a", cluster=cluster
@@ -139,7 +146,13 @@ def test_cluster_deletion_bmi_poll_exhausts_on_persistent_grpc_failure(cluster_d
     grpc.list_baremetal_instance_ids.side_effect = subprocess.CalledProcessError(1, ["grpcurl"])
     k8s = Mock(spec=K8sClient)
     k8s.is_present.return_value = False
-    cluster = scenario._ClusterResources(co_name="order-a", owned_bmi_ids={"bmi-a"}, infra_env_name="order-a-infraenv")
+    cluster = scenario._ClusterResources(
+        co_name="order-a",
+        owned_bmi_ids={"bmi-a"},
+        infra_env_name="order-a-infraenv",
+        hosted_cluster_name="hosted-a",
+        hosted_cluster_namespace="hosted-a-ns",
+    )
 
     with pytest.raises(runner.StuckState, match="CaaS worker BMI removal"):
         scenario._assert_cluster_deleted(

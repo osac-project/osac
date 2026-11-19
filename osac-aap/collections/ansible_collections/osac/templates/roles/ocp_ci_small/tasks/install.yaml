@@ -1,6 +1,6 @@
 - name: Set install step defaults
   ansible.builtin.set_fact:
-    # CaaS external access uses service-owned DNS and endpoint entry points.
+    # CI owns ingress claims and orchestration, reusing service DNS and ingress helpers.
     install_step_pre_install_hook_default:
       name: osac.templates.ocp_ci_small
       tasks_from: noop.yaml
@@ -8,8 +8,8 @@
       name: osac.service.hosted_cluster
       tasks_from: main.yaml
     install_step_external_access_default:
-      name: osac.service.external_access
-      tasks_from: caas_create.yaml
+      name: ci.steps.external_access
+      tasks_from: create.yaml
     install_step_retrieve_kubeconfig_default:
       name: osac.service.retrieve_kubeconfig
       tasks_from: main.yaml
@@ -54,7 +54,7 @@
     external_access_name: "{{ cluster_order.metadata.name }}"
     external_access_state: present
     external_access_namespace: "{{ cluster_working_namespace }}"
-    external_access_agent_namespace: "{{ cluster_order.metadata.namespace }}"
+    external_access_skip_network_operator_wait: true
 
 - name: Step - Retrieve kubeconfig
   ansible.builtin.include_role:

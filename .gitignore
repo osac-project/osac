@@ -36,6 +36,10 @@ osac-docs/
 # tools/link-agent-skills.sh --codex; generated output, never committed.
 .agents/
 
+# Local agent-instruction overrides
+AGENTS.override.md
+CLAUDE.local.md
+
 # Per-worktree agent context (Jira summary written by osac-new-worktree).
 .ai-context/
 

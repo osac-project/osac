@@ -35,7 +35,7 @@ CALLER_CREATE_FILES = {
     / "roles"
     / "external_access"
     / "tasks"
-    / "caas_dns_create.yaml",
+    / "caas_dns_publish.yaml",
     "nico": COLLECTIONS / "nico" / "steps" / "roles" / "external_access" / "tasks" / "create.yaml",
     "ocp_ci_small": COLLECTIONS
     / "osac"
@@ -43,7 +43,7 @@ CALLER_CREATE_FILES = {
     / "roles"
     / "external_access"
     / "tasks"
-    / "caas_dns_create.yaml",
+    / "caas_dns_publish.yaml",
 }
 
 # A representative negative-cache (SOA minimum) TTL, in seconds. The DNS wait

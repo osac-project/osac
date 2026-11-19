@@ -259,7 +259,8 @@ var _ = Describe("createInventoryClient", func() {
 
 	It("constructs a NetBox backend with Metal3 startup configuration", func() {
 		tokenFile := filepath.Join(GinkgoT().TempDir(), "netbox-token")
-		Expect(os.WriteFile(tokenFile, []byte("test-token\n"), 0o600)).To(Succeed())
+		Expect(os.WriteFile(tokenFile, []byte(
+			"nbt_aaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n"), 0o600)).To(Succeed())
 		clientIDFile := filepath.Join(GinkgoT().TempDir(), "secret-api-client-id")
 		Expect(os.WriteFile(clientIDFile, []byte("osac-controller\n"), 0o600)).To(Succeed())
 		clientSecretFile := filepath.Join(GinkgoT().TempDir(), "secret-api-client-secret")

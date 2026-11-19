@@ -19,12 +19,12 @@ import {
 } from '@patternfly/react-core';
 
 import { type SecurityGroup, SecurityGroupSchema, SecurityGroupState } from '@osac/types';
+import SecurityGroupDeleteConfirmModal from '@osac/ui-components/components/networking/SecurityGroupDeleteConfirmModal';
 import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import {
   isDefaultNetworkingResource,
   resourceDisplayName,
-  useDeleteSecurityGroup,
   useSecurityGroup,
   useUpdateSecurityGroup,
   useVirtualNetworks,
@@ -69,7 +69,6 @@ export const SecurityGroupDetailPage = () => {
 
   const { data: sg, isLoading, error } = useSecurityGroup(id);
   const { data: virtualNetworks = [] } = useVirtualNetworks();
-  const deleteSecurityGroup = useDeleteSecurityGroup();
   const updateSecurityGroup = useUpdateSecurityGroup();
 
   const sgName = sg?.metadata?.name ?? id;
@@ -227,17 +226,11 @@ export const SecurityGroupDetailPage = () => {
         />
       )}
 
-      {showDeleteSgModal && canDeleteSg && (
-        <DeleteResourceModal
-          resourceName={sgName}
-          label={t(
-            'This will permanently delete the security group and all its rules. This action cannot be undone.',
-          )}
-          errorLabel={t('Failed to delete security group')}
+      {showDeleteSgModal && canDeleteSg && sg && (
+        <SecurityGroupDeleteConfirmModal
+          securityGroup={sg}
           onClose={() => setShowDeleteSgModal(false)}
           onSuccess={() => navigate('/networking/security-groups')}
-          mutation={deleteSecurityGroup}
-          variables={id}
         />
       )}
     </ListPage>

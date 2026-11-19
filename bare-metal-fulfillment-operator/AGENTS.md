@@ -42,7 +42,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#bare-met
 | Pure inventory, selection, validation, or client logic | Unit | `make test` |
 | Reconciliation, finalizers, allocation, or status transitions | Envtest | `make test` |
 | Controller deployment, CRDs, pool flows, or Kubernetes wiring | Component integration | Deploy current image/manifests, then `make integration-tests`; [installer alternative](../docs/INTEGRATION-TESTING.md#bare-metal-fulfillment-operator) |
-| BareMetalInstance host teardown waits for OSAC networking cleanup, then leaves network resources untouched (NET-CLEAN-08) | Kind component integration — DEV | Isolated installer run and coverage boundary: [NET-CLEAN-08](../docs/INTEGRATION-TESTING.md#net-clean-08-deployed-bmf-ownership-boundary) |
+| BareMetalInstance network handoff, lease discovery, failure handling, and cleanup ordering (OSAC-7603; NET-CLEAN-08) | Kind component integration — DEV | `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf`; combined BMF/OSAC phase and boundary: [OSAC-7603](../docs/testing/bare-metal-fulfillment-operator.md#test-tiers) |
 | Metal3, BCM, Ironic, BMC, power, or hardware semantics | Contract or real-provider integration | Follow the owning [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) task |
 | Generated CRDs or Helm CRDs | Envtest plus Kind | `make manifests generate helm-crds check-helm-crds`, then the required test command |
 

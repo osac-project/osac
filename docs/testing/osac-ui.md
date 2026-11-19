@@ -50,5 +50,8 @@ unit tier gate for this component. The Playwright flows are manual: see
   External IP moving to `In use`, which also leaves the "detach before deleting"
   guard unexercised.
 - **Cross-tenant denial is asserted from the tenant session only.** The suite
-  proves a tenant session lists only its own project's External IPs; it does not
-  log in as a second tenant to show a denial response.
+  proves a tenant session lists only its own project's External IPs. It does not
+  log in as a second tenant to observe a denial response, and the provider admin
+  console cannot stand in for that: its Networking navigation group is empty, so
+  a provider-admin session has no tenant External IPs page at all (verified on a
+  deployed caas environment, 2026-11-19).

@@ -369,12 +369,14 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
-      // Playwright runs files in this project alphabetically: create, then
-      // isolation and list against the created resource, then the teardown.
+      // One worker keeps files in order: create, then isolation and list
+      // against the created resource, then the teardown. fullyParallel alone
+      // only serializes tests inside a file, not files against each other.
       name: 'external-ip',
       testDir: networkingDir,
       testMatch: /(?:create|isolation|list)\.external_ip\.spec\.ts/,
       fullyParallel: false,
+      workers: 1,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       dependencies: ['external-ip-pool'],
       teardown: 'external-ip-delete',

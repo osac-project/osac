@@ -33,20 +33,42 @@ const externalIpTableColumns = [
 ] as const;
 
 /**
- * The External IPs list is a Connect call to the private ExternalIPs service.
- * The glob keeps session, project and pool lookups untouched so only the list
- * request fails.
+ * The External IPs list is a Connect call to the ExternalIPs service (the
+ * public one for a tenant session). Matching the service segment keeps
+ * session, project and pool lookups untouched so only the list request fails.
  */
-const externalIpListRoute = '**/api/fulfillment/**/ExternalIPs/**';
+const externalIpListRoute = /\/api\/fulfillment\/[\w.]*\.ExternalIPs\//;
 
 const externalIpTable = (page: Page) => page.getByRole(...ExternalIpsPage.externalIpsTable);
 
 const externalIpPoolTable = (page: Page) => page.getByRole(...ExternalIpPoolsPage.poolsTable);
 
+/**
+ * Both list pages default to card view, which renders no table or cells. Table
+ * assertions switch to list view; a page in an error state has no switcher, so
+ * a missing toggle is not an error.
+ */
+const selectListView = async (page: Page, buttonId: string): Promise<void> => {
+  const toggle = page.locator(`#${buttonId}`);
+  if ((await toggle.count()) === 0) {
+    return;
+  }
+  if ((await toggle.getAttribute('aria-pressed')) === 'true') {
+    return;
+  }
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+};
+
+/** Switch the External IPs page to list view so its table and cells exist. */
+export const selectExternalIpListView = (page: Page): Promise<void> =>
+  selectListView(page, 'list-view');
+
 const externalIpRow = (page: Page, name: string) =>
   externalIpTable(page)
     .getByRole('row')
-    .filter({ has: page.getByRole('cell', { name, exact: true }) });
+    // The table renders role="grid", so its <td> elements are gridcell, not cell.
+    .filter({ has: page.getByRole('gridcell', { name, exact: true }) });
 
 const externalIpPoolRow = (page: Page, name: string) =>
   externalIpPoolTable(page)
@@ -70,6 +92,7 @@ export const openExternalIpPoolListPage = async (page: Page): Promise<void> => {
 
 /** Wait until the list settles on rows, an empty state, or an error. */
 export const waitForExternalIpList = async (page: Page): Promise<void> => {
+  await selectExternalIpListView(page);
   await expect
     .poll(
       async () => {
@@ -112,7 +135,25 @@ export const expectExternalIpListed = async (
   const row = externalIpRow(page, name);
   await expect(row).toHaveCount(1, { timeout: 30_000 });
   if (projectLabel) {
-    await expect(row.getByRole('cell', { name: projectLabel, exact: true })).toHaveCount(1);
+    await expect(row.locator('td[data-label="Project"]')).toHaveText(projectLabel);
+  }
+};
+
+/**
+ * Wait, bounded, for a named row to exist. The list response can lag a just
+ * created resource, so a single immediate count is not a reliable absence
+ * signal.
+ */
+const waitForExternalIpRow = async (
+  page: Page,
+  name: string,
+  timeout = 15_000,
+): Promise<boolean> => {
+  try {
+    await expect(externalIpRow(page, name)).toHaveCount(1, { timeout });
+    return true;
+  } catch {
+    return false;
   }
 };
 
@@ -169,9 +210,12 @@ export const expectExternalIpListScopedToProject = async (
   }
 };
 
-/** Fail the list request and verify the page renders its error state. */
+/**
+ * Fail the list request and verify the page renders its error state. Install
+ * the route before the first list load: a query already in the TanStack cache
+ * is not re-issued, so intercepting after a successful load proves nothing.
+ */
 export const expectExternalIpListLoadError = async (page: Page): Promise<void> => {
-  await openExternalIpListPage(page);
   await page.route(externalIpListRoute, (route) =>
     route.fulfill({
       status: 500,
@@ -180,7 +224,7 @@ export const expectExternalIpListLoadError = async (page: Page): Promise<void> =
     }),
   );
   try {
-    await page.reload();
+    await openExternalIpListPage(page);
     await expect(page.getByRole(...ExternalIpsPage.loadErrorTitle)).toBeVisible({
       timeout: 30_000,
     });
@@ -305,7 +349,7 @@ export const expectExternalIpHasNoEditAction = async (page: Page, name: string):
 /** Delete an External IP from its list row and wait for the row to disappear. */
 export const deleteExternalIpIfPresent = async (page: Page, name: string): Promise<boolean> => {
   await waitForExternalIpList(page);
-  if ((await externalIpRow(page, name).count()) === 0) {
+  if (!(await waitForExternalIpRow(page, name))) {
     logProgress('external-ip-delete', `External IP "${name}" is already absent.`);
     return false;
   }
@@ -326,6 +370,7 @@ export const deleteExternalIpIfPresent = async (page: Page, name: string): Promi
 
 /** Wait until the pool list settles on rows or an empty state. */
 export const waitForExternalIpPoolList = async (page: Page): Promise<void> => {
+  await selectListView(page, 'list-view');
   await expect
     .poll(
       async () => {

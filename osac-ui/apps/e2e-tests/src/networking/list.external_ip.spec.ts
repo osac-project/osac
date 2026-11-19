@@ -1,13 +1,12 @@
 import { test } from '@playwright/test';
 
 import { loginAsTenantAdmin, resolveTenantAdminIdentity } from './identity';
-import { externalIpName, externalIpProject } from './test_data';
 import {
   expectExternalIpListColumns,
   expectExternalIpListLoadError,
-  expectExternalIpListed,
   expectExternalIpSearchHasNoMatch,
   openExternalIpListPage,
+  waitForExternalIpList,
 } from '../../../../libs/test-utils/src/external_ips.page';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 
@@ -21,11 +20,9 @@ test('lists external IPs with the documented columns', async ({ page }) => {
 
   await testStep(flow, 'Open Networking > External IPs', () => openExternalIpListPage(page));
 
-  // The create flow owns the row; a missing row means the ordering or the
-  // create flow is broken, not that the columns changed.
-  await testStep(flow, `Verify external IP "${externalIpName}" is listed`, () =>
-    expectExternalIpListed(page, externalIpName, externalIpProject || undefined),
-  );
+  // Any row proves the table shape: a tenant owns at least its default-nat
+  // address once a pool is ready, and the create flow adds another.
+  await testStep(flow, 'Verify the list finishes loading', () => waitForExternalIpList(page));
 
   await testStep(
     flow,

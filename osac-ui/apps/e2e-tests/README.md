@@ -194,6 +194,18 @@ pnpm --filter @osac/playwright exec playwright test \
   --project=external-ip --list
 ```
 
+Iterating on one spec: `--project=external-ip` pulls in the pool project as a
+dependency and the delete project as a teardown, so a single-file run still
+touches three projects. Add `--no-deps` to run only that file. The list and
+error specs stand alone; the create, isolation and delete specs need the
+resource they act on:
+
+```bash
+# Read-only checks, no dependency or teardown projects.
+pnpm --filter @osac/playwright exec playwright test list.external_ip.spec.ts \
+  --project=external-ip --no-deps --headed --reporter=line
+```
+
 Reusing an existing pool instead of provisioning one:
 
 ```bash

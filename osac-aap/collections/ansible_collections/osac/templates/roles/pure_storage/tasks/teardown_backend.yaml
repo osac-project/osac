@@ -30,6 +30,9 @@
     kind: Secret
     name: "{{ pure_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _pure_backend_id }}"
     namespace: "{{ pure_storage_config_namespace }}"
+  module_defaults:
+    kubernetes.core.k8s_info:
+      kubeconfig: "{{ none }}"
   register: _pure_teardown_config
   no_log: true
   failed_when: false
@@ -56,6 +59,9 @@
         kind: Secret
         name: "{{ pure_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _pure_backend_id }}"
         namespace: "{{ pure_storage_config_namespace }}"
+      module_defaults:
+        kubernetes.core.k8s:
+          kubeconfig: "{{ none }}"
       no_log: true
 
     - name: Report backend teardown summary

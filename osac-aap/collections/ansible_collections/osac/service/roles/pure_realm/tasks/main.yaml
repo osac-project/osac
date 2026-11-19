@@ -672,9 +672,47 @@
       and re-run this job template.
   when: _pure_realm_token | length == 0
 
+# A run that receives no token assumes an earlier run recorded the credential.
+# If that Secret is gone or truncated, publishing the Realm to pure-realm-pool
+# would hand tenants an allocation whose credentials do not exist. Fail before
+# pool publication instead of leaving the Realm unusable.
+- name: "Read the Realm credential Secret left by an earlier run"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ pure_realm_secret_prefix }}{{ realm.name }}"
+    namespace: "{{ pure_realm_config_namespace }}"
+  register: _pure_realm_credential_secret
+  no_log: true
+  when: _pure_realm_token | length == 0
+
+- name: "Fail when an existing token left the Realm Secret missing or incomplete"
+  ansible.builtin.fail:
+    msg: >-
+      Service account '{{ realm.name }}-{{ pure_realm_admin_user }}' already
+      holds an API token, but Secret
+      '{{ pure_realm_secret_prefix }}{{ realm.name }}' is missing from
+      {{ pure_realm_config_namespace }} or lacks required credential fields.
+      Delete the service account's token on the array, then re-run this job
+      template.
+  when:
+    - _pure_realm_token | length == 0
+    - >-
+      (_pure_realm_credential_secret.resources | length == 0) or
+      (['realm_name', 'api_token', 'mgmt_endpoint', 'nfs_endpoint']
+       | difference(_pure_realm_credential_secret.resources[0].data
+                    | default({}) | list) | length > 0) or
+      (['realm_name', 'api_token', 'mgmt_endpoint', 'nfs_endpoint']
+       | select('in', _pure_realm_credential_secret.resources[0].data
+                | default({}) | list)
+       | map('extract', _pure_realm_credential_secret.resources[0].data
+             | default({}))
+       | select('equalto', '') | list | length > 0)
+
 # Facts outlive the role, and the playbook loops it over every Realm. Clearing
 # the token here keeps one Realm's credential out of the next iteration and
 # out of anything that runs after the loop.
 - name: "Clear the Realm credentials from the fact cache"
   ansible.builtin.set_fact:
     _pure_realm_token: ""
+    _pure_realm_credential_secret: {}

@@ -36,7 +36,9 @@
 
 - name: Extract unique backend_id values from the dispatched tier subset
   ansible.builtin.set_fact:
-    _pure_backend_ids: "{{ _provider_tiers | map(attribute='backend_id') | unique | list }}"
+    _pure_backend_ids: >-
+      {{ _provider_tiers | map(attribute='backend_id') | map('string')
+         | unique | list }}
 
 - name: Validate the dispatched tiers reference exactly one backend_id
   ansible.builtin.fail:

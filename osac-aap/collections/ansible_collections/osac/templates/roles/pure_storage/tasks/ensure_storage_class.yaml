@@ -1,13 +1,19 @@
 ---
-# Pure Storage ensure_storage_class: creates CSI Secret + StorageClasses
+# Pure Storage ensure_storage_class: creates the CSI Secret + StorageClasses.
 # The Pure CSI driver creates filesystems on-demand when PVCs are provisioned.
-# Creates: CSI Secret with FlashBlade credentials, StorageClasses
+# Creates: backend-scoped CSI Secret, StorageClasses
 #
 # Receives from dispatcher:
 #   _provider_tiers                — tiers with provider: pure
 #   _provider_backend_connections  — connection details for backend_id
 #   tenant_name                    — tenant identifier
 #   tenant_namespace               — namespace on tenant cluster
+#
+# Hub-side reads must not inherit the dispatcher's target kubeconfig
+# (storage_provider_target_kubeconfig). The dispatcher sets that kubeconfig as
+# a module_default inside the block that includes this role, so each hub-side
+# task overrides it with `kubeconfig: "{{ none }}"` to fall back to the hub's
+# ambient credentials.
 #
 # Target cluster routing:
 #   - Cluster-as-a-Service: dispatcher sets storage_provider_target_kubeconfig
@@ -41,7 +47,13 @@
       {% endfor -%}
       {{ names }}
 
-# Short-circuit -- check if ALL tiers' StorageClasses already exist
+# One Secret per backend: a tenant with two Pure backends must keep each
+# backend's credentials separate, because a StorageClass resolves its Secret
+# by name from its own parameters.
+- name: Set the backend-scoped CSI Secret name
+  ansible.builtin.set_fact:
+    _pure_csi_secret_name: "pure-csi-secret-{{ _pure_backend_id }}"
+
 - name: Check existing tenant StorageClasses
   kubernetes.core.k8s_info:
     api_version: storage.k8s.io/v1
@@ -49,6 +61,8 @@
     label_selectors:
       - "osac.openshift.io/tenant={{ tenant_name }}"
       - "app.kubernetes.io/managed-by=osac-aap"
+      - "osac.openshift.io/storage-provider=pure"
+      - "osac.openshift.io/storage-backend-id={{ _pure_backend_id }}"
   register: _pure_sc_checks
 
 - name: Determine if all StorageClasses already exist
@@ -56,8 +70,10 @@
     _pure_all_sc_exist: >-
       {{ (_pure_sc_checks.resources | map(attribute='metadata.name') | list | sort) == (_pure_expected_sc_names | sort) }}
 
+# Only StorageClass creation is skipped when the classes already exist. The CSI
+# Secret is reconciled on every run: a tenant whose classes survive but whose
+# Secret was deleted would otherwise report success and fail at first PVC.
 - name: Provision CSI Secret and StorageClasses
-  when: not (_pure_all_sc_exist | bool)
   block:
     # ── Read Realm credentials from hub Secret ──
     - name: Read hub Secret for Realm allocation
@@ -66,6 +82,9 @@
         kind: Secret
         name: "{{ pure_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _pure_backend_id }}"
         namespace: "{{ pure_storage_config_namespace }}"
+      module_defaults:
+        kubernetes.core.k8s_info:
+          kubeconfig: "{{ none }}"
       register: _pure_hub_secret
       no_log: true
 
@@ -103,11 +122,13 @@
           apiVersion: v1
           kind: Secret
           metadata:
-            name: pure-csi-secret
+            name: "{{ _pure_csi_secret_name }}"
             namespace: "{{ tenant_namespace }}"
             labels:
               app.kubernetes.io/managed-by: osac-aap
               osac.openshift.io/tenant: "{{ tenant_name }}"
+              osac.openshift.io/storage-provider: pure
+              osac.openshift.io/storage-backend-id: "{{ _pure_backend_id }}"
           type: Opaque
           stringData:
             pure.json: |
@@ -124,6 +145,7 @@
 
     # ── Create StorageClasses per tier ──
     - name: Create StorageClass per tier
+      when: not (_pure_all_sc_exist | bool)
       kubernetes.core.k8s:
         state: present
         definition:
@@ -141,11 +163,11 @@
           parameters:
             backend: "{{ _pure_nfs_endpoint }}"
             nfs_version: "{{ pure_storage_nfs_version }}"
-            csi.storage.k8s.io/provisioner-secret-name: pure-csi-secret
+            csi.storage.k8s.io/provisioner-secret-name: "{{ _pure_csi_secret_name }}"
             csi.storage.k8s.io/provisioner-secret-namespace: "{{ tenant_namespace }}"
-            csi.storage.k8s.io/controller-expand-secret-name: pure-csi-secret
+            csi.storage.k8s.io/controller-expand-secret-name: "{{ _pure_csi_secret_name }}"
             csi.storage.k8s.io/controller-expand-secret-namespace: "{{ tenant_namespace }}"
-            csi.storage.k8s.io/node-publish-secret-name: pure-csi-secret
+            csi.storage.k8s.io/node-publish-secret-name: "{{ _pure_csi_secret_name }}"
             csi.storage.k8s.io/node-publish-secret-namespace: "{{ tenant_namespace }}"
           reclaimPolicy: Delete
           allowVolumeExpansion: true
@@ -175,8 +197,3 @@
         _pure_nfs_endpoint: ""
         _pure_hub_secret: {}
       no_log: true
-
-- name: Set output when StorageClasses already existed
-  when: _pure_all_sc_exist | bool
-  ansible.builtin.set_fact:
-    storage_provider_storage_class_names: "{{ _pure_expected_sc_names }}"

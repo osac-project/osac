@@ -29,6 +29,9 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Set test deadline
+        shell: bash
+        run: echo "TEST_DEADLINE=$(( $(date +%s) + 355 * 60 ))" >> "$GITHUB_ENV"
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -41,7 +44,18 @@ jobs:
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
         with:
           install_only: true
+      - name: Calculate remaining test budget
+        id: test-budget
+        shell: bash
+        run: |
+          remaining_minutes=$(( (TEST_DEADLINE - $(date +%s)) / 60 ))
+          if ((remaining_minutes <= 0)); then
+            echo "::error::Unit test time budget exhausted during setup"
+            exit 1
+          fi
+          echo "minutes=${remaining_minutes}" >> "$GITHUB_OUTPUT"
       - name: Run unit tests
+        timeout-minutes: ${{ fromJSON(steps.test-budget.outputs.minutes) }}
         working-directory: bare-metal-fulfillment-operator
         run: make test
 

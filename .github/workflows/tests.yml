@@ -40,7 +40,7 @@ on:  # yamllint disable-line rule:truthy
         type: string
         default: ""
       timeout:
-        description: Minutes before the job is cancelled
+        description: Total minutes, including five minutes reserved for timeout termination and diagnostics
         required: false
         type: number
         default: 360
@@ -53,9 +53,21 @@ jobs:
     name: ${{ inputs.dir || inputs.kind }}
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout }}
+    defaults:
+      run:
+        shell: >-
+          bash --noprofile --norc -c
+          "remaining=$((TEST_DEADLINE - $(date +%s)));
+          if ((remaining <= 0)); then echo '::error::UT/IT time budget exhausted'; exit 124; fi;
+          exec timeout --verbose --signal=KILL $remaining bash --noprofile --norc -eo pipefail \"$0\"" {0}
     env:
       KIND_EXPERIMENTAL_PROVIDER: docker
     steps:
+      - name: Set test deadline
+        shell: bash
+        env:
+          TEST_TIMEOUT_MINUTES: ${{ inputs.timeout }}
+        run: echo "TEST_DEADLINE=$(( $(date +%s) + (TEST_TIMEOUT_MINUTES - 5) * 60 ))" >> "$GITHUB_ENV"
       # --- unit tests of a Go module (fulfillment-service, osac-metering/...)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: inputs.kind == 'go-unit'
@@ -160,6 +172,8 @@ jobs:
           make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
       - name: Collect diagnostic logs
         if: inputs.kind == 'it-fulfillment-service' && always()
+        shell: bash
+        timeout-minutes: 2
         run: |
           export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
           # The upload below takes this directory, so the diagnostics go to a file in it as well as to the log.
@@ -177,6 +191,7 @@ jobs:
             kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
           } 2>&1 | tee fulfillment-service/logs/diagnostics.txt
       - if: inputs.kind == 'it-fulfillment-service' && always()
+        timeout-minutes: 2
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: logs${{ inputs.artifact_suffix }}
@@ -226,6 +241,8 @@ jobs:
 
       - name: Collect diagnostic logs
         if: inputs.kind == 'it-osac-operator' && always()
+        shell: bash
+        timeout-minutes: 2
         run: |
           export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
           echo "=== Pods ==="
@@ -290,6 +307,8 @@ jobs:
 
       - name: Collect diagnostic logs
         if: inputs.kind == 'it-bare-metal-fulfillment-operator' && always()
+        shell: bash
+        timeout-minutes: 2
         run: |
           export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
           echo "=== Pods ==="

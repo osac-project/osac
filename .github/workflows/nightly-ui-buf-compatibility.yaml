@@ -23,6 +23,9 @@ jobs:
       issues: write  # restore/update PR labels
       pull-requests: write  # create and update the automated PR
     steps:
+      - name: Set test deadline
+        shell: bash
+        run: echo "TEST_DEADLINE=$(( $(date +%s) + 25 * 60 ))" >> "$GITHUB_ENV"
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -72,7 +75,19 @@ jobs:
         working-directory: osac-ui
         run: pnpm lint
 
+      - name: Calculate remaining test budget
+        id: test-budget
+        if: steps.buf-release.outputs.update-available == 'true'
+        shell: bash
+        run: |
+          remaining_minutes=$(( (TEST_DEADLINE - $(date +%s)) / 60 ))
+          if ((remaining_minutes <= 0)); then
+            echo "::error::Unit test time budget exhausted before UI tests"
+            exit 1
+          fi
+          echo "minutes=${remaining_minutes}" >> "$GITHUB_OUTPUT"
       - name: Run UI tests
+        timeout-minutes: ${{ fromJSON(steps.test-budget.outputs.minutes) }}
         if: steps.buf-release.outputs.update-available == 'true'
         working-directory: osac-ui
         run: pnpm test

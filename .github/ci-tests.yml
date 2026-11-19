@@ -10,7 +10,7 @@
 # group    unit | integration
 # kind     which steps of tests.yml run
 # dir/cmd  go-unit only: the module and the command run in it
-# timeout  minutes before the job is cancelled (default 360)
+# timeout  total minutes, including five minutes for timeout termination and diagnostics (default 360)
 - id: Unit tests (fulfillment-service)
   group: unit
   kind: go-unit

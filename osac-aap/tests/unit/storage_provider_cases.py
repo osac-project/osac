@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from ansible.parsing.dataloader import DataLoader
 from ansible.template import Templar
+from jinja2 import Environment, nodes
 import yaml
 
 from .storage_runner import FIXTURES, OSAC_AAP, run_tasks
@@ -12,7 +13,6 @@ from .storage_runner import FIXTURES, OSAC_AAP, run_tasks
 ROLES = OSAC_AAP / "collections/ansible_collections/osac/templates/roles"
 SERVICE = OSAC_AAP / "collections/ansible_collections/osac/service/roles"
 CONTRACTS = yaml.safe_load((FIXTURES / "providers.yaml").read_text())
-DEFAULTS = yaml.safe_load((SERVICE / "storage_provider/defaults/main.yaml").read_text())
 DISPATCH = yaml.safe_load((SERVICE / "storage_provider/tasks/_dispatch_provider.yaml").read_text())
 DISPATCH_NAME = next(task for task in DISPATCH if "block" in task)["block"][0]["ansible.builtin.include_role"]["name"]
 
@@ -29,9 +29,14 @@ class ProviderCase:
         return f"{self.provider}-{self.mode}"
 
 
-def discover_cases(roles=ROLES, contracts=CONTRACTS):
+def discover_cases(roles=ROLES, contracts=CONTRACTS, dispatch_name=DISPATCH_NAME):
     metadata = {}
-    candidates = set(DEFAULTS["storage_provider_role_overrides"])
+    assignments = [assignment for assignment in Environment().parse(dispatch_name).find_all(nodes.Assign)
+                   if isinstance(assignment.target, nodes.Name) and assignment.target.name == "_csi_managed"]
+    assert len(assignments) == 1, "Uncovered dispatcher managed-provider expression"
+    managed = assignments[0].node.as_const()
+    assert isinstance(managed, list) and all(isinstance(provider, str) for provider in managed)
+    candidates = set(managed)
     for role in roles.iterdir():
         path = role / "meta/osac.yaml"
         if (role / "tasks/ensure_storage_class.yaml").exists():
@@ -47,15 +52,17 @@ def discover_cases(roles=ROLES, contracts=CONTRACTS):
         assert protocols, f"Provider {role.name} must declare supported_protocols"
         assert set(protocols) <= {"block", "nfs"}, f"Uncovered protocols for {role.name}: {protocols}"
         metadata[canonical] = meta
-        candidates.update({role.name.replace("_", "-"), role.name.removesuffix("_storage").replace("_", "-")})
+        for alias in (role.name, role.name.removesuffix("_storage")):
+            candidates.add(alias.replace("_", "-"))
     assert set(metadata) == set(contracts), "Stale or missing storage provider fixture contracts"
     cases = []
     for provider in sorted(candidates):
-        templar = Templar(loader=DataLoader(), variables={**DEFAULTS, "_current_provider": provider})
-        dispatched = templar.template(DISPATCH_NAME).strip().split(".")[-1]
+        templar = Templar(loader=DataLoader(), variables={"_current_provider": provider.replace("-", "_")})
+        dispatched = templar.template(dispatch_name).strip().split(".")[-1]
         assert (roles / dispatched).exists(), f"Uncovered dispatch target: {provider} -> {dispatched}"
         canonical = (roles / dispatched).resolve().name
         assert canonical in contracts, f"Uncovered dispatch provider: {provider} -> {canonical}"
+        assert "provisioner" in contracts[canonical], f"Missing emitted-class contract: {canonical}"
         protocols = tuple(metadata[canonical]["capabilities"]["supported_protocols"])
         if "nfs" in protocols:
             assert "nfs_parameters" in contracts[canonical], f"Missing NFS fixture contract: {canonical}"
@@ -65,7 +72,7 @@ def discover_cases(roles=ROLES, contracts=CONTRACTS):
 
 CASES = discover_cases()
 CREATORS = list({(case.role, case.mode): case for case in CASES}.values())
-BLOCK_CREATORS = [case for case in CREATORS if "block" in case.protocols]
+BLOCK_CREATORS = [case for case in CREATORS if "block" in case.protocols and "driver_chart" not in CONTRACTS[case.role]]
 LOCAL = ProviderCase("lvms", "csi_driver_install", "local")
 
 

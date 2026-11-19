@@ -193,7 +193,7 @@ func (c *OpenStackClient) SetPowerState(ctx context.Context, hostID string, targ
 	return nil
 }
 
-func (c *OpenStackClient) TriggerRestart(ctx context.Context, hostID string) error {
+func (c *OpenStackClient) TriggerRestart(ctx context.Context, hostID, _ string) error {
 	err := c.withAuthRetry(ctx, func(client *gophercloud.ServiceClient) error {
 		// Use Ironic's reboot command which automatically cycles power off then on
 		res := nodes.ChangePowerState(ctx, client, hostID, nodes.PowerStateOpts{

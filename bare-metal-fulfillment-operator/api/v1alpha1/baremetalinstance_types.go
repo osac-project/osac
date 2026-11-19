@@ -228,6 +228,16 @@ const (
 	// restart is initiated. Set by triggerRestart on management.ErrTransitioning.
 	HostConditionReasonPowerSyncRequired = "PowerSyncRequired"
 
+	// HostConditionReasonPowerReadFailed indicates a transient power-state read
+	// failure. The lifecycle stays in its last confirmed state; no power
+	// transition is reported.
+	HostConditionReasonPowerReadFailed = "PowerReadFailed"
+
+	// HostConditionReasonRestartSubmissionPending marks a durable restart claim
+	// written before the reboot is dispatched. It is not yet a power cycle and
+	// must not be reported as RESTART_IN_PROGRESS.
+	HostConditionReasonRestartSubmissionPending = "RestartSubmissionPending"
+
 	// HostConditionReasonNoMatchingHosts indicates no hosts match the selector labels
 	HostConditionReasonNoMatchingHosts = "NoMatchingHosts"
 

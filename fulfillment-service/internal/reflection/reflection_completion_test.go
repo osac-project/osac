@@ -24,35 +24,23 @@ import (
 )
 
 var _ = Describe("ObjectTypeNames", func() {
-	It("keeps canonical billing get names without reviving retired aliases or Update scaffolds", func() {
+	It("lists billing collections without advertising status or unsupported updates", func() {
 		for _, pkg := range []string{packages.PublicV1, packages.PrivateV1} {
-			getNames := GetObjectTypeNames(pkg)
-			Expect(getNames).To(ContainElements(
+			names := ObjectTypeNames(pkg)
+			Expect(names).To(ContainElements(
 				"billingaccount", "billingaccounts", "tenantbillingassignment", "tenantbillingassignments",
-				"billingproviderstatus", "billingproviderstatuses",
 			))
-			Expect(getNames).NotTo(ContainElements(
-				"billing-accounts", "billing-provider-status", "tenant-billing-assignments", "tba",
-			))
-			Expect(ObjectTypeNames(pkg)).NotTo(ContainElements("billingproviderstatus", "billingproviderstatuses"))
-			Expect(UpdatableObjectTypeNames(pkg)).NotTo(ContainElements(
-				"billingaccount", "billingaccounts", "billingproviderstatus", "billingproviderstatuses",
-			))
+			updates := UpdatableObjectTypeNames(pkg)
+			for _, name := range []string{"billingproviderstatus", "billingproviderstatuses"} {
+				Expect(names).NotTo(ContainElement(name))
+				Expect(updates).NotTo(ContainElement(name))
+			}
+			Expect(updates).NotTo(ContainElement("billingaccount"))
+			Expect(updates).NotTo(ContainElement("billingaccounts"))
 		}
 	})
 
 	Describe("mutation completion stays collection-only", func() {
-		It("excludes get-only singleton names from public and private mutation completion", func() {
-			for _, pkg := range []string{packages.PublicV1, packages.PrivateV1} {
-				mutationNames := ObjectTypeNames(pkg)
-				updateNames := UpdatableObjectTypeNames(pkg)
-				for _, name := range []string{"billingproviderstatus", "billingproviderstatuses"} {
-					Expect(mutationNames).NotTo(ContainElement(name))
-					Expect(updateNames).NotTo(ContainElement(name))
-				}
-			}
-		})
-
 		DescribeTable("validates registered collection response shapes before advertising names",
 			func(shape string) {
 				names := map[string]bool{}
@@ -61,7 +49,7 @@ var _ = Describe("ObjectTypeNames", func() {
 						setGetResponseObjectShape(file, shape)
 					}
 				})
-				Expect(func() { scanServiceForNames(descriptor, names, false, false) }).NotTo(Panic())
+				Expect(func() { scanServiceForNames(descriptor, names, false) }).NotTo(Panic())
 				if shape == "valid" {
 					Expect(names).To(Equal(map[string]bool{"cluster": true, "clusters": true}))
 				} else {

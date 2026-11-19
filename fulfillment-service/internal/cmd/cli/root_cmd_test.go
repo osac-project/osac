@@ -171,7 +171,7 @@ func rootBillingHeaders(kind string) []string {
 }
 
 var _ = Describe("actual Root billing acceptance", func() {
-	It("retains only the non-billing get children without altering the command graph", func() {
+	It("registers billing status alongside the existing get subcommands", func() {
 		root, err := Root()
 		Expect(err).NotTo(HaveOccurred())
 		command, _, err := root.Find([]string{"get"})
@@ -180,7 +180,7 @@ var _ = Describe("actual Root billing acceptance", func() {
 		for _, child := range command.Commands() {
 			names = append(names, child.Name())
 		}
-		Expect(names).To(ConsistOf("externalippool", "storagetier", "token"))
+		Expect(names).To(ConsistOf("billingproviderstatus", "externalippool", "storagetier", "token"))
 	})
 
 	DescribeTable("routes canonical keyed collection reads through the actual generic Root",
@@ -417,7 +417,7 @@ var _ = Describe("actual Root billing acceptance", func() {
 				Expect(names).NotTo(ContainElement(retired))
 			}
 			if verb == "get" {
-				Expect(names).To(ContainElements("billingaccount", "billingaccounts", "tenantbillingassignment", "tenantbillingassignments", "billingproviderstatus", "billingproviderstatuses"))
+				Expect(names).To(ContainElements("billingaccount", "billingaccounts", "tenantbillingassignment", "tenantbillingassignments"))
 			} else {
 				Expect(names).NotTo(ContainElements("billingproviderstatus", "billingproviderstatuses"))
 				if verb == "edit" {

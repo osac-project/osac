@@ -112,7 +112,6 @@ func executeGenericGet(private bool, invoke func(string, proto.Message, proto.Me
 	ctx = config.ProjectIntoContext(config.TenantIntoContext(ctx, "p2-tenant"), "p2-project")
 	ctx = logging.LoggerIntoContext(terminal.ConsoleIntoContext(config.SettingsIntoContext(ctx, settings), console), logger)
 	command := Cmd()
-	command.RemoveCommand(command.Commands()...)
 	root := &cobra.Command{Use: "osac", SilenceErrors: true, SilenceUsage: true}
 	root.AddCommand(command)
 	root.SetOut(&stdout)
@@ -189,7 +188,6 @@ var _ = Describe("Get command", func() {
 		ctrl = gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
 		mockHelper = reflection.NewMockObjectHelper(ctrl)
-		mockHelper.EXPECT().IsSingleton().Return(false).AnyTimes()
 	})
 
 	Describe("generic billing command", func() {
@@ -360,12 +358,12 @@ var _ = Describe("Get command", func() {
 		})
 	})
 
-	It("uses generic billing dispatch and retains unrelated registered children", func() {
+	It("registers billing status alongside the existing get subcommands", func() {
 		var names []string
 		for _, child := range Cmd().Commands() {
 			names = append(names, child.Name())
 		}
-		Expect(names).To(ConsistOf("externalippool", "storagetier", "token"))
+		Expect(names).To(ConsistOf("billingproviderstatus", "externalippool", "storagetier", "token"))
 	})
 
 	Describe("bounded collection reads", func() {
@@ -728,10 +726,15 @@ var _ = Describe("Get command", func() {
 			Expect(command.ExecuteContext(context.Background())).To(MatchError(ContainSubstring("unknown output format")))
 		})
 
-		It("includes the singleton in generic get completion without using adapter registration", func() {
-			names, directive := completeObjectTypes(nil, nil, "")
-			Expect(directive).To(Equal(cobra.ShellCompDirectiveNoFileComp))
-			Expect(names).To(ContainElements("billingproviderstatus", "billingproviderstatuses"))
+		It("completes billing status through Cobra subcommand registration", func() {
+			var output bytes.Buffer
+			command := &cobra.Command{Use: "osac"}
+			command.AddCommand(Cmd())
+			command.SetOut(&output)
+			command.SetErr(&bytes.Buffer{})
+			command.SetArgs([]string{"__completeNoDesc", "get", "billingprovider"})
+			Expect(command.ExecuteContext(context.Background())).To(Succeed())
+			Expect(strings.Fields(output.String())).To(ContainElement("billingproviderstatus"))
 		})
 
 		It("rejects invalid output before connection setup can parse configured CA data", func() {
@@ -809,7 +812,7 @@ var _ = Describe("Get command", func() {
 		}
 	})
 
-	Describe("generic singleton command uses one empty Get", func() {
+	Describe("billing status subcommand uses one empty Get", func() {
 		for _, private := range []bool{false, true} {
 			pkg := packages.PublicV1
 			if private {

@@ -227,20 +227,6 @@ func (mr *MockObjectHelperMockRecorder) IsProjectScoped() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsProjectScoped", reflect.TypeOf((*MockObjectHelper)(nil).IsProjectScoped))
 }
 
-// IsSingleton mocks base method.
-func (m *MockObjectHelper) IsSingleton() bool {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "IsSingleton")
-	ret0, _ := ret[0].(bool)
-	return ret0
-}
-
-// IsSingleton indicates an expected call of IsSingleton.
-func (mr *MockObjectHelperMockRecorder) IsSingleton() *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "IsSingleton", reflect.TypeOf((*MockObjectHelper)(nil).IsSingleton))
-}
-
 // IsTenantScoped mocks base method.
 func (m *MockObjectHelper) IsTenantScoped() bool {
 	m.ctrl.T.Helper()

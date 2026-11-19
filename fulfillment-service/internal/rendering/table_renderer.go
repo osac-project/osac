@@ -204,22 +204,16 @@ func (r *TableRenderer) Render(ctx context.Context, objects any) error {
 		}
 	}
 
-	// Show lifecycle state only when this descriptor actually supports it.
+	// Always show a DELETING column so users can see objects being torn down.
 	// TODO: remove this column once all resource types have DELETING in their state enum.
+	deletingCol := &columnLayout{
+		Header: "DELETING",
+		Value:  "has(this.metadata.deletion_timestamp)? 'Yes': '-'",
+	}
+	table.Columns = slices.Insert(table.Columns, 1, deletingCol)
+
 	// Get the descriptor for the object type:
 	thisDesc := helper.Descriptor()
-	metadata := thisDesc.Fields().ByName("metadata")
-	if metadata != nil && !metadata.IsList() && metadata.Kind() == protoreflect.MessageKind {
-		deletion := metadata.Message().Fields().ByName("deletion_timestamp")
-		if deletion != nil && !deletion.IsList() && deletion.Kind() == protoreflect.MessageKind &&
-			deletion.Message().FullName() == "google.protobuf.Timestamp" {
-			deletingCol := &columnLayout{
-				Header: "DELETING",
-				Value:  "has(this.metadata.deletion_timestamp)? 'Yes': '-'",
-			}
-			table.Columns = slices.Insert(table.Columns, min(1, len(table.Columns)), deletingCol)
-		}
-	}
 
 	// Build CEL environment. Only the row type is registered eagerly; lookup targets are
 	// registered lazily inside lookupFunction when the expression actually evaluates lookup().

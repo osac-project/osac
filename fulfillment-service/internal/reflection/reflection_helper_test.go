@@ -170,14 +170,6 @@ func setGetResponseObjectShape(file *descriptorpb.FileDescriptorProto, shape str
 	Fail("fixture response has no object field")
 }
 
-func enableSingletonGetForTest(builder *HelperBuilder) {
-	method := reflect.ValueOf(builder).MethodByName("EnableSingletonGet")
-	Expect(method.IsValid()).To(BeTrue(), "limited capability RED: EnableSingletonGet is absent; assertions after this gate have NOT executed")
-	Expect(method.Type().NumIn()).To(BeZero())
-	Expect(method.Type().NumOut()).To(Equal(1))
-	Expect(method.Call(nil)[0].Interface()).To(BeIdenticalTo(builder))
-}
-
 func testTenantFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(testTenantKey{}).(string)
 	return v
@@ -227,22 +219,20 @@ var _ = Describe("Reflection helper", func() {
 	Describe("billing scope configuration", func() {
 		for _, pkg := range []string{packages.PublicV1, packages.PrivateV1} {
 			DescribeTable(pkg+" classifies the existing descriptors without changing discovery",
-				func(name string, tenant, project, singleton bool) {
+				func(name string, tenant, project bool) {
 					helper, err := NewHelper().SetLogger(logger).SetConnection(connection).
-						AddPackage(pkg, 0).EnableSingletonGet().Build()
+						AddPackage(pkg, 0).Build()
 					Expect(err).NotTo(HaveOccurred())
 					object := helper.Lookup(name)
 					Expect(object).NotTo(BeNil())
 					Expect(object.IsTenantScoped()).To(Equal(tenant))
 					Expect(object.IsProjectScoped()).To(Equal(project))
-					Expect(object.IsSingleton()).To(Equal(singleton))
 					Expect(object.UseGetForStructuredOutput()).To(BeFalse(), "billing keys must remain List predicates")
 				},
-				Entry("system-global account", "billingaccount", false, false, false),
-				Entry("tenant-only assignment", "tenantbillingassignment", true, false, false),
-				Entry("platform singleton", "billingproviderstatus", false, false, true),
-				Entry("ordinary cluster control", "cluster", true, true, false),
-				Entry("tenant-only service-account control", "serviceaccount", true, false, false),
+				Entry("system-global account", "billingaccount", false, false),
+				Entry("tenant-only assignment", "tenantbillingassignment", true, false),
+				Entry("ordinary cluster control", "cluster", true, true),
+				Entry("tenant-only service-account control", "serviceaccount", true, false),
 			)
 
 			for _, selected := range []bool{false, true} {
@@ -296,7 +286,7 @@ var _ = Describe("Reflection helper", func() {
 		}
 	})
 
-	Describe("discovery safety and singleton opt-in", func() {
+	Describe("collection discovery safety", func() {
 		DescribeTable("rejects streaming methods even when all message types are registered",
 			func(methodName string) {
 				original, err := protoregistry.GlobalFiles.FindDescriptorByName("osac.public.v1.Clusters")
@@ -349,174 +339,6 @@ var _ = Describe("Reflection helper", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(h.Lookup("billingproviderstatus")).To(BeNil())
 			Expect(string(h.Lookup("cluster").FullName())).To(Equal(packages.PrivateV1 + ".Cluster"))
-		})
-
-		It("offers an explicit singleton opt-in without requiring future symbols to compile", func() {
-			builder := NewHelper().SetLogger(logger).SetConnection(connection).
-				AddPackage(packages.PublicV1, 1).AddPackage(packages.PrivateV1, 0)
-			enableSingletonGetForTest(builder)
-			h, err := builder.Build()
-			Expect(err).NotTo(HaveOccurred())
-			object := h.Lookup("billingproviderstatus")
-			Expect(object).NotTo(BeNil())
-			Expect(string(object.FullName())).To(Equal(packages.PrivateV1 + ".BillingProviderStatus"))
-			Expect(object.Descriptor().Fields().ByName("id")).To(BeNil())
-			Expect(object.Descriptor().Fields().ByName("metadata")).To(BeNil())
-		})
-	})
-
-	Describe("singleton Get invocation and unsupported operations", func() {
-		for _, pkg := range []string{packages.PublicV1, packages.PrivateV1} {
-			DescribeTable(pkg+" distinguishes absent from present-empty and NOT_CONFIGURED",
-				func(shape string) {
-					calls := 0
-					conn, err := grpc.NewClient("passthrough:///p2-singleton.invalid",
-						grpc.WithTransportCredentials(insecure.NewCredentials()),
-						grpc.WithUnaryInterceptor(func(_ context.Context, method string, request, response any,
-							_ *grpc.ClientConn, _ grpc.UnaryInvoker, _ ...grpc.CallOption) error {
-							calls++
-							Expect(method).To(Equal("/" + pkg + ".BillingProviderStatuses/Get"))
-							req := request.(proto.Message)
-							Expect(req.ProtoReflect().Descriptor().Fields().Len()).To(BeZero())
-							Expect(proto.Size(req)).To(BeZero())
-							if shape != "absent" {
-								res := response.(proto.Message).ProtoReflect()
-								object := res.Mutable(res.Descriptor().Fields().ByName("object")).Message()
-								if shape == "NOT_CONFIGURED" {
-									state := object.Descriptor().Fields().ByName("state")
-									object.Set(state, protoreflect.ValueOfEnum(state.Enum().Values().ByName("BILLING_PROVIDER_STATE_NOT_CONFIGURED").Number()))
-								}
-							}
-							return nil
-						}))
-					Expect(err).NotTo(HaveOccurred())
-					DeferCleanup(conn.Close)
-					builder := NewHelper().SetLogger(logger).SetConnection(conn).AddPackage(pkg, 0)
-					enableSingletonGetForTest(builder)
-					h, err := builder.Build()
-					Expect(err).NotTo(HaveOccurred())
-					singleton := h.Lookup("billingproviderstatus")
-					Expect(singleton).NotTo(BeNil())
-					Expect(singleton.IsTenantScoped()).To(BeFalse())
-					Expect(singleton.IsProjectScoped()).To(BeFalse())
-					var object proto.Message
-					Expect(func() { object, err = singleton.Get(ctx, "") }).NotTo(Panic())
-					Expect(calls).To(Equal(1), "one empty Get, never List or identity lookup")
-					if shape == "absent" {
-						Expect(err).To(HaveOccurred())
-						Expect(object).To(BeNil())
-					} else {
-						Expect(err).NotTo(HaveOccurred())
-						Expect(object).NotTo(BeNil())
-						Expect(object.ProtoReflect().IsValid()).To(BeTrue())
-						Expect(object.ProtoReflect().Descriptor().Fields().ByName("id")).To(BeNil())
-						Expect(object.ProtoReflect().Descriptor().Fields().ByName("metadata")).To(BeNil())
-						if shape == "empty" {
-							Expect(proto.Size(object)).To(BeZero())
-						} else {
-							Expect(object.ProtoReflect().Get(object.ProtoReflect().Descriptor().Fields().ByName("state")).Enum()).NotTo(BeZero())
-						}
-					}
-				},
-				Entry("absent", "absent"), Entry("present empty", "empty"), Entry("NOT_CONFIGURED", "NOT_CONFIGURED"),
-			)
-		}
-
-		DescribeTable("rejects unsupported operations before any RPC or template/identity access",
-			func(operation string) {
-				calls := 0
-				conn, err := grpc.NewClient("passthrough:///p2-singleton.invalid",
-					grpc.WithTransportCredentials(insecure.NewCredentials()),
-					grpc.WithUnaryInterceptor(func(context.Context, string, any, any, *grpc.ClientConn, grpc.UnaryInvoker, ...grpc.CallOption) error {
-						calls++
-						return nil
-					}))
-				Expect(err).NotTo(HaveOccurred())
-				DeferCleanup(conn.Close)
-				builder := NewHelper().SetLogger(logger).SetConnection(conn).AddPackage(packages.PublicV1, 0)
-				enableSingletonGetForTest(builder)
-				h, err := builder.Build()
-				Expect(err).NotTo(HaveOccurred())
-				singleton := h.Lookup("billingproviderstatus")
-				Expect(singleton).NotTo(BeNil())
-				Expect(singleton.IsUpdatable()).To(BeFalse())
-				object := &publicv1.BillingProviderStatus{}
-				Expect(func() {
-					switch operation {
-					case "List":
-						_, err = singleton.List(ctx, ListOptions{})
-					case "Create":
-						_, err = singleton.Create(ctx, object)
-					case "Update":
-						_, err = singleton.Update(ctx, object)
-					case "UpdateWithMask":
-						_, err = singleton.UpdateWithMask(ctx, object, object)
-					case "Delete":
-						err = singleton.Delete(ctx, "")
-					case "keyed Get":
-						_, err = singleton.Get(ctx, "invented-id")
-					}
-				}).NotTo(Panic())
-				Expect(err).To(HaveOccurred())
-				Expect(grpcstatus.Code(err)).To(Equal(codes.FailedPrecondition))
-				Expect(calls).To(BeZero())
-			},
-			Entry("List", "List"), Entry("Create", "Create"), Entry("Update", "Update"),
-			Entry("UpdateWithMask", "UpdateWithMask"), Entry("Delete", "Delete"), Entry("keyed Get", "keyed Get"),
-		)
-
-		DescribeTable("only accepts the registered unary empty-request singular-object singleton shape",
-			func(shape string) {
-				descriptor := cloneRegisteredService("osac.public.v1.BillingProviderStatuses", func(file *descriptorpb.FileDescriptorProto) {
-					switch shape {
-					case "nonempty request":
-						file.MessageType[0].Field = []*descriptorpb.FieldDescriptorProto{{
-							Name: proto.String("id"), Number: proto.Int32(1), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
-						}}
-					case "server streaming":
-						file.Service[0].Method[0].ServerStreaming = proto.Bool(true)
-					case "client streaming":
-						file.Service[0].Method[0].ClientStreaming = proto.Bool(true)
-					case "extra method":
-						extra := proto.Clone(file.Service[0].Method[0]).(*descriptorpb.MethodDescriptorProto)
-						extra.Name = proto.String("Signal")
-						file.Service[0].Method = append(file.Service[0].Method, extra)
-					case "valid":
-					default:
-						setGetResponseObjectShape(file, shape)
-					}
-				})
-				builder := NewHelper().SetLogger(logger).SetConnection(connection).AddPackage(packages.PublicV1, 0)
-				enableSingletonGetForTest(builder)
-				built, err := builder.Build()
-				Expect(err).NotTo(HaveOccurred())
-				scanner := built.(*helper)
-				Expect(func() { scanner.scanService(descriptor) }).NotTo(Panic())
-				if shape == "valid" {
-					Expect(scanner.helpers).To(HaveLen(1))
-				} else {
-					Expect(scanner.helpers).To(BeEmpty())
-				}
-			},
-			Entry("registered valid counterpart", "valid"), Entry("nonempty request", "nonempty request"),
-			Entry("server streaming", "server streaming"), Entry("client streaming", "client streaming"),
-			Entry("extra method is not Get-only", "extra method"),
-			Entry("missing object", "missing"), Entry("scalar object", "scalar"),
-			Entry("map object", "map"), Entry("repeated object", "repeated"),
-		)
-
-		It("rejects an otherwise valid but unregistered singleton without panicking", func() {
-			descriptor := unregisteredCollectionService(func(file *descriptorpb.FileDescriptorProto) {
-				file.Service[0].Method = file.Service[0].Method[:1]
-				file.MessageType[0].Field = nil
-			})
-			builder := NewHelper().SetLogger(logger).SetConnection(connection).AddPackage(packages.PublicV1, 0)
-			enableSingletonGetForTest(builder)
-			built, err := builder.Build()
-			Expect(err).NotTo(HaveOccurred())
-			scanner := built.(*helper)
-			Expect(func() { scanner.scanService(descriptor) }).NotTo(Panic())
-			Expect(scanner.helpers).To(BeEmpty())
 		})
 	})
 

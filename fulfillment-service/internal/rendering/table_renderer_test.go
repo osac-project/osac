@@ -29,11 +29,8 @@ import (
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
-	"google.golang.org/protobuf/types/descriptorpb"
-	"google.golang.org/protobuf/types/dynamicpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gopkg.in/yaml.v3"
 
@@ -208,65 +205,6 @@ var _ = Describe("Table renderer", func() {
 		})
 	})
 
-	DescribeTable("DELETING requires a singular Timestamp descriptor",
-		func(shape string) {
-			metadataFields := []*descriptorpb.FieldDescriptorProto{{
-				Name: proto.String("name"), Number: proto.Int32(1), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(),
-			}}
-			if shape != "absent" {
-				deletion := &descriptorpb.FieldDescriptorProto{
-					Name: proto.String("deletion_timestamp"), Number: proto.Int32(2),
-					Type: descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(), TypeName: proto.String(".google.protobuf.Timestamp"),
-				}
-				switch shape {
-				case "scalar":
-					deletion.Type, deletion.TypeName = descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(), nil
-				case "repeated":
-					deletion.Label = descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum()
-				case "other message":
-					deletion.TypeName = proto.String(".p2.render.Empty")
-				}
-				metadataFields = append(metadataFields, deletion)
-			}
-			file, err := protodesc.NewFile(&descriptorpb.FileDescriptorProto{
-				Name: proto.String("p2_renderer.proto"), Package: proto.String("p2.render"), Syntax: proto.String("proto3"),
-				Dependency: []string{"google/protobuf/timestamp.proto"},
-				MessageType: []*descriptorpb.DescriptorProto{
-					{Name: proto.String("Resource"), Field: []*descriptorpb.FieldDescriptorProto{
-						{Name: proto.String("id"), Number: proto.Int32(1), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
-						{Name: proto.String("metadata"), Number: proto.Int32(2), Type: descriptorpb.FieldDescriptorProto_TYPE_MESSAGE.Enum(), TypeName: proto.String(".p2.render.Metadata")},
-					}},
-					{Name: proto.String("Metadata"), Field: metadataFields},
-					{Name: proto.String("Empty")},
-				},
-			}, protoregistry.GlobalFiles)
-			Expect(err).NotTo(HaveOccurred())
-			object := dynamicpb.NewMessage(file.Messages().ByName("Resource"))
-			object.Set(object.Descriptor().Fields().ByName("id"), protoreflect.ValueOfString("synthetic-resource"))
-			objectHelper := reflection.NewMockObjectHelper(ctrl)
-			objectHelper.EXPECT().FullName().Return(object.Descriptor().FullName()).AnyTimes()
-			objectHelper.EXPECT().String().Return(string(object.Descriptor().FullName())).AnyTimes()
-			objectHelper.EXPECT().Descriptor().Return(object.Descriptor()).AnyTimes()
-			objectHelper.EXPECT().IsTenantScoped().Return(false).AnyTimes()
-			helper := reflection.NewMockHelper(ctrl)
-			helper.EXPECT().Lookup(string(object.Descriptor().FullName())).Return(objectHelper).AnyTimes()
-			var output bytes.Buffer
-			renderer, err := NewTableRenderer().SetLogger(logger).SetHelper(helper).SetWriter(&output).Build()
-			Expect(err).NotTo(HaveOccurred())
-			Expect(renderer.Render(context.Background(), []proto.Message{object})).To(Succeed())
-			Expect(output.String()).To(ContainSubstring("synthetic-resource"))
-			if shape == "timestamp" {
-				Expect(output.String()).To(ContainSubstring("DELETING"))
-			} else {
-				Expect(output.String()).NotTo(ContainSubstring("DELETING"))
-			}
-		},
-		Entry("no deletion field", "absent"), Entry("scalar is not a lifecycle timestamp", "scalar"),
-		Entry("repeated Timestamp is not a lifecycle timestamp", "repeated"),
-		Entry("arbitrary message is not a lifecycle timestamp", "other message"),
-		Entry("ordinary singular Timestamp remains supported", "timestamp"),
-	)
-
 	renderInstanceTypes := func(ctx context.Context, items []*publicv1.InstanceType) string {
 		objectHelper := makeObjectHelper(&publicv1.InstanceType{})
 		lookupHelper := makeLookupHelper()
@@ -373,12 +311,8 @@ var _ = Describe("Table renderer", func() {
 		assignmentHeaders := []string{
 			"ID", "NAME", "TENANT", "ACCOUNT", "STATE", "EFFECTIVE-FROM", "EFFECTIVE-TO", "MESSAGE",
 		}
-		statusHeaders := []string{
-			"STATE", "PROVIDER", "MESSAGE", "CAPABILITIES", "LAST-SUCCESSFUL-CHECK", "USAGE-DELIVERY",
-		}
-
 		// An inventory of existing files cannot detect a missing domain layout.
-		DescribeTable("Requires all six explicit billing layouts and their domain headers",
+		DescribeTable("Requires all four billing collection layouts and their domain headers",
 			func(filename string, headers []string) {
 				data, err := tablesFS.ReadFile("tables/" + filename)
 				Expect(err).NotTo(HaveOccurred())
@@ -394,8 +328,6 @@ var _ = Describe("Table renderer", func() {
 			Entry("private account", "osac.private.v1.BillingAccount.yaml", accountHeaders),
 			Entry("public assignment", "osac.public.v1.TenantBillingAssignment.yaml", assignmentHeaders),
 			Entry("private assignment", "osac.private.v1.TenantBillingAssignment.yaml", assignmentHeaders),
-			Entry("public status", "osac.public.v1.BillingProviderStatus.yaml", statusHeaders),
-			Entry("private status", "osac.private.v1.BillingProviderStatus.yaml", statusHeaders),
 		)
 
 		// Decode fixtures into the actual generated types, not synthetic descriptors.
@@ -644,61 +576,6 @@ var _ = Describe("Table renderer", func() {
 						}})
 						expectBillingRows(renderBilling(ctx, object), domainHeaders(assignmentHeaders),
 							withDeleting([]string{"-", "-", "-", "-", "PENDING", "-", "-", message + controlSpaces + "end"}))
-					}
-				})
-			})
-		}
-
-		for _, prototype := range []proto.Message{&publicv1.BillingProviderStatus{}, &privatev1.BillingProviderStatus{}} {
-			Describe(string(prototype.ProtoReflect().Descriptor().FullName()), func() {
-				It("Keeps the six status columns free of identity, tenant and lifecycle", func(ctx context.Context) {
-					for _, tenant := range []string{"", "selected-tenant"} {
-						scoped := config.ProjectIntoContext(config.TenantIntoContext(ctx, tenant), "selected-project")
-						expectBillingRows(renderBilling(scoped, prototype), statusHeaders,
-							[]string{"UNSPECIFIED", "-", "-", "-", "-", "UNSPECIFIED"})
-					}
-				})
-
-				It("Preserves full provider text, controls and real timestamps without mutating raw output", func(ctx context.Context) {
-					message := strings.Repeat("Remediation 雲 — ", 100)
-					for _, timestamp := range []string{"1970-01-01T00:00:00Z", "2026-11-17T01:02:03.123456789Z"} {
-						object := billingObject(prototype, map[string]any{
-							"state": 2, "provider_key": "m" + controlText + "360", "message": message + controlText + "end",
-							"supported_capabilities": []int{1, 991}, "last_successful_check": timestamp, "usage_delivery_state": 1,
-						})
-						expectBillingRows(renderBilling(ctx, object), statusHeaders, []string{
-							"AVAILABLE", "m" + controlSpaces + "360", message + controlSpaces + "end", "PRICING,UNKNOWN:991", timestamp, "UNKNOWN",
-						})
-					}
-				})
-
-				It("Shortens every declared singleton enum and preserves future scalar and repeated values", func(ctx context.Context) {
-					for _, field := range []string{"state", "supported_capabilities", "usage_delivery_state"} {
-						enum := prototype.ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name(field)).Enum()
-						expected := map[string][]string{
-							"state":                  {"UNSPECIFIED", "NOT_CONFIGURED", "AVAILABLE", "UNAVAILABLE"},
-							"supported_capabilities": {"UNSPECIFIED", "PRICING"},
-							"usage_delivery_state":   {"UNSPECIFIED", "UNKNOWN", "AVAILABLE", "UNAVAILABLE"},
-						}[field]
-						Expect(enum.Values().Len()).To(Equal(len(expected)))
-						for number, text := range append(expected, "UNKNOWN:991") {
-							value := number
-							if number == len(expected) {
-								value = 991
-							}
-							var fixture any = value
-							cells := []string{"UNSPECIFIED", "-", "-", "-", "-", "UNSPECIFIED"}
-							switch field {
-							case "state":
-								cells[0] = text
-							case "supported_capabilities":
-								fixture, cells[3] = []int{value}, text
-							case "usage_delivery_state":
-								cells[5] = text
-							}
-							object := billingObject(prototype, map[string]any{field: fixture})
-							expectBillingRows(renderBilling(ctx, object), statusHeaders, cells)
-						}
 					}
 				})
 			})

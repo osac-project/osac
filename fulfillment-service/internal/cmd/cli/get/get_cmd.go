@@ -29,6 +29,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/billingproviderstatus"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/externalippool"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/storagetier"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/get/token"
@@ -65,6 +66,7 @@ func Cmd() *cobra.Command {
 		RunE:                  runner.run,
 		ValidArgsFunction:     completeObjectTypes,
 	}
+	result.AddCommand(billingproviderstatus.Cmd())
 	result.AddCommand(externalippool.Cmd())
 	result.AddCommand(storagetier.Cmd())
 	result.AddCommand(token.Cmd())
@@ -157,7 +159,6 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		SetTenantFunc(config.TenantFromContext).
 		SetProjectFunc(config.ProjectFromContext).
 		UseGetForStructuredOutput(&publicv1.Secret{}).
-		EnableSingletonGet().
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create reflection tool: %w", err)
@@ -181,12 +182,6 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Singleton reads have no collection, key, filter, or watch semantics. Changed
-	// matters here: explicit empty/false flags are still unsupported requests.
-	if c.objectHelper.IsSingleton() && (len(args) > 1 || cmd.Flags().Changed("filter") || cmd.Flags().Changed("watch")) {
-		return fmt.Errorf("singleton object type %q does not support keys, --filter or --watch", args[0])
-	}
-
 	// If watch mode is enabled, watch for events instead of listing
 	if c.args.watch {
 		return c.watch(ctx, args[1:])
@@ -199,17 +194,14 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Render the items:
-	var render func(context.Context, []proto.Message) error
 	switch c.args.format {
 	case outputFormatJson:
-		render = c.renderJson
+		return c.renderJson(ctx, objects)
 	case outputFormatYaml:
-		render = c.renderYaml
+		return c.renderYaml(ctx, objects)
 	default:
-		render = c.renderTable
+		return c.renderTable(ctx, objects)
 	}
-	return render(ctx, objects)
 }
 
 // fetchObjects returns objects for the given keys.
@@ -224,16 +216,6 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 // This can result in partial data for resources like secrets where the data field is redacted
 // when list is called and no names or identifiers are provided.
 func (c *runnerContext) fetchObjects(ctx context.Context, keys []string) ([]proto.Message, error) {
-	if c.objectHelper.IsSingleton() {
-		if len(keys) != 0 || c.args.filter != "" || c.args.watch {
-			return nil, fmt.Errorf("singleton reads do not support keys, filters or watch")
-		}
-		object, err := c.objectHelper.Get(ctx, "")
-		if err != nil {
-			return nil, err
-		}
-		return []proto.Message{object}, nil
-	}
 	if len(keys) > 0 && c.args.format != outputFormatTable && c.objectHelper.UseGetForStructuredOutput() {
 		return c.getByKeys(ctx, keys)
 	}
@@ -461,7 +443,7 @@ func completeObjectTypes(cmd *cobra.Command, args []string, toComplete string) (
 	if cmd != nil {
 		ctx = cmd.Context()
 	}
-	return reflection.GetObjectTypeNames(config.PackageNamesFromContext(ctx)...), cobra.ShellCompDirectiveNoFileComp
+	return reflection.ObjectTypeNames(config.PackageNamesFromContext(ctx)...), cobra.ShellCompDirectiveNoFileComp
 }
 
 const shortHelp = `Get objects`

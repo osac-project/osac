@@ -381,6 +381,90 @@ var _ = Describe("Compute instances server", func() {
 			Expect(object.GetStatus().GetVolumes()).To(BeEmpty())
 		})
 
+		DescribeTable("Projects the latest provisioning failure through public reads",
+			func(reason privatev1.ComputeInstanceProvisioningFailureReason, publicReason publicv1.ComputeInstanceProvisioningFailureReason, message string) {
+				createTemplate("general.small")
+				created, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
+					Object: publicv1.ComputeInstance_builder{
+						Metadata: publicv1.Metadata_builder{Name: "failure-status"}.Build(),
+						Spec: publicv1.ComputeInstanceSpec_builder{
+							Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "general.small"}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id := created.GetObject().GetId()
+				Expect(created.GetObject().GetStatus().HasLastProvisioningFailure()).To(BeFalse())
+
+				instances, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+					SetLogger(logger).SetTenancyLogic(tenancy).Build()
+				Expect(err).ToNot(HaveOccurred())
+				observedAt := timestamppb.New(time.Now().Truncate(time.Second))
+				seed, err := instances.Get().SetId(id).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				seed.GetObject().SetStatus(privatev1.ComputeInstanceStatus_builder{
+					State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
+					StateTransitionTime: observedAt,
+				}.Build())
+				_, err = instances.Update().SetObject(seed.GetObject()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				for _, attempt := range []int32{1, 2} {
+					stored, getErr := instances.Get().SetId(id).Do(ctx)
+					Expect(getErr).ToNot(HaveOccurred())
+					object := stored.GetObject()
+					if !object.HasStatus() {
+						object.SetStatus(&privatev1.ComputeInstanceStatus{})
+					}
+					before := proto.Clone(object.GetStatus()).(*privatev1.ComputeInstanceStatus)
+					object.GetStatus().SetLastProvisioningFailure(privatev1.ComputeInstanceProvisioningFailure_builder{
+						Reason: reason, Message: message, Attempt: attempt, ObservedAt: observedAt,
+					}.Build())
+					_, err = instances.Update().SetObject(object).Do(ctx)
+					Expect(err).ToNot(HaveOccurred())
+
+					got, getErr := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+					Expect(getErr).ToNot(HaveOccurred())
+					listed, listErr := server.List(ctx, publicv1.ComputeInstancesListRequest_builder{}.Build())
+					Expect(listErr).ToNot(HaveOccurred())
+					Expect(listed.GetItems()).To(HaveLen(1))
+					for _, item := range []*publicv1.ComputeInstance{got.GetObject(), listed.GetItems()[0]} {
+						Expect(item.GetStatus().HasLastProvisioningFailure()).To(BeTrue())
+						failure := item.GetStatus().GetLastProvisioningFailure()
+						Expect(failure.GetReason()).To(Equal(publicReason))
+						Expect(failure.GetMessage()).To(Equal(message))
+						Expect(failure.GetAttempt()).To(Equal(attempt))
+						Expect(proto.Equal(failure.GetObservedAt(), observedAt)).To(BeTrue())
+					}
+					after, getErr := instances.Get().SetId(id).Do(ctx)
+					Expect(getErr).ToNot(HaveOccurred())
+					afterStatus := proto.Clone(after.GetObject().GetStatus()).(*privatev1.ComputeInstanceStatus)
+					before.ClearLastProvisioningFailure()
+					afterStatus.ClearLastProvisioningFailure()
+					Expect(proto.Equal(afterStatus, before)).To(BeTrue())
+				}
+
+				stored, err := instances.Get().SetId(id).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				stored.GetObject().GetStatus().ClearLastProvisioningFailure()
+				_, err = instances.Update().SetObject(stored.GetObject()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				got, err := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(got.GetObject().GetStatus().HasLastProvisioningFailure()).To(BeFalse())
+				listed, err := server.List(ctx, publicv1.ComputeInstancesListRequest_builder{}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(listed.GetItems()).To(HaveLen(1))
+				Expect(listed.GetItems()[0].GetStatus().HasLastProvisioningFailure()).To(BeFalse())
+			},
+			Entry("provider reported", privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_REPORTED, publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_REPORTED, "Provisioning failed."),
+			Entry("result rejected", privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_RESULT_REJECTED, publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_RESULT_REJECTED, "Internal error"),
+			Entry("timed out", privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_TIMED_OUT, publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_TIMED_OUT, "The provisioning attempt timed out."),
+			Entry("job lost", privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_JOB_LOST, publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_JOB_LOST, "Internal error"),
+			Entry("job not started", privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_JOB_NOT_STARTED, publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_JOB_NOT_STARTED, "Internal error"),
+			Entry("invalid result", privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_INVALID_RESULT, publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_INVALID_RESULT, "Internal error"),
+			Entry("provider error", privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_ERROR, publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_ERROR, "Internal error"),
+		)
+
 		It("List objects", func() {
 			// Create templates and objects:
 			const count = 10

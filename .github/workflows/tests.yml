@@ -40,6 +40,11 @@ on:  # yamllint disable-line rule:truthy
         type: string
         default: ""
       timeout:
+        description: Minutes before the job is cancelled
+        required: false
+        type: number
+        default: 180
+      step_timeout:
         description: Minutes before a test step fails
         required: false
         type: number
@@ -52,7 +57,7 @@ jobs:
   run:
     name: ${{ inputs.dir || inputs.kind }}
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: ${{ inputs.timeout }}
     env:
       KIND_EXPERIMENTAL_PROVIDER: docker
     steps:
@@ -68,7 +73,7 @@ jobs:
         with:
           working-directory: ${{ inputs.dir }}
       - working-directory: ${{ inputs.dir }}
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: ${{ inputs.step_timeout }}
         if: inputs.kind == 'go-unit'
         env:
           COMMAND: ${{ inputs.cmd }}
@@ -100,7 +105,7 @@ jobs:
         timeout-minutes: 15
         if: inputs.kind == 'metering-contract'
       - name: Check the metering contract and published schemas
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: ${{ inputs.step_timeout }}
         if: inputs.kind == 'metering-contract'
         working-directory: osac-metering
         run: make contract-check schemas-unchanged-test rules-render-test rules-unchanged-test
@@ -128,7 +133,7 @@ jobs:
         if: inputs.kind == 'ui-unit'
         run: pnpm install --frozen-lockfile
       - working-directory: osac-ui
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: ${{ inputs.step_timeout }}
         if: inputs.kind == 'ui-unit'
         run: pnpm test
       # --- integration test: fulfillment-service
@@ -159,7 +164,7 @@ jobs:
           CONTAINER_TOOL: docker
         run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
       - name: Run integration tests
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: ${{ inputs.step_timeout }}
         if: inputs.kind == 'it-fulfillment-service'
         env:
           CONTAINER_TOOL: docker
@@ -237,7 +242,7 @@ jobs:
         run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
 
       - name: Run integration tests
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: ${{ inputs.step_timeout }}
         if: inputs.kind == 'it-osac-operator'
         env:
           CONTAINER_TOOL: docker
@@ -309,7 +314,7 @@ jobs:
           uv run --project . python osac-installer/scripts/test-bmf-netbox-render.py --live-lookup-only
 
       - name: Run integration tests
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: ${{ inputs.step_timeout }}
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
         env:
           CONTAINER_TOOL: docker
@@ -380,7 +385,7 @@ jobs:
           version: v3.22.0
 
       - name: Run integration tests
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: ${{ inputs.step_timeout }}
         if: inputs.kind == 'it-osac-aap'
         working-directory: osac-aap
         run: uv run make test

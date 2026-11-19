@@ -94,21 +94,7 @@ operator catalog provides, add them to the `additionalImages` section:
 
 ## Execution Steps
 
-### Step 1 — Verify MCE operator images are mirrored
-
-The `multicluster-engine` operator catalog, mirrored in Category A,
-includes most Metal3 agent images.  Verify they are present:
-
-```bash
-# Verify IDMS mirror rules include MCE/assisted entries
-# (this confirms mirror configuration, not that images are
-# present — test a pull to verify registry content)
-oc get idms -o yaml | grep -i "multicluster-engine\|assisted"
-```
-
-<!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target prereqs.md §BMaaS mirrored-agent diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
-
-### Step 2 — Add any additional agent images (if needed)
+### Step 1 — Add any additional agent images (if needed)
 
 If specific agent images are missing from the MCE catalog mirror, add them
 to the unified `ImageSetConfiguration` and re-run `oc mirror` using the
@@ -116,7 +102,7 @@ canonical command from
 [mirroring-operators.md § Step 1](mirroring-operators.md#step-1--dry-run-connected-bastion)
 (dry run first, then full mirror).
 
-### Step 3 — Apply IDMS (disconnected cluster)
+### Step 2 — Apply IDMS (disconnected cluster)
 
 Metal3 agent images mirrored from the MCE operator catalog are
 typically referenced by digest and require an **ImageDigestMirrorSet**
@@ -131,6 +117,20 @@ explicit `AllowContactingSource` replacement. Complete validation of both
 kinds before either is applied. An absent ITMS is legitimate only when the
 selected inventory needs no tag-based mappings; malformed or empty entry
 arrays in an existing document are not an optional-file skip.
+
+### Step 3 — Verify MCE operator images are mirrored
+
+The `multicluster-engine` operator catalog, mirrored in Category A,
+includes most Metal3 agent images.  Verify they are present:
+
+```bash
+# Verify IDMS mirror rules include MCE/assisted entries
+# (this confirms mirror configuration, not that images are
+# present — test a pull to verify registry content)
+oc get idms -o yaml | grep -i "multicluster-engine\|assisted"
+```
+
+<!-- HOLD — awaiting BMaaS Doc 2 qualification; proposed target prereqs.md §BMaaS mirrored-agent diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
 
 ### BMaaS inventory scope
 

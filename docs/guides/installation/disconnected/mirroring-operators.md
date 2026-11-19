@@ -423,9 +423,20 @@ jq -se '
 
 mirror_count=$(jq -er '.items | length' "$policy_work/mirrors.json")
 ((mirror_count > 0)) || exit 1
+for catalog_kind in CatalogSource ClusterCatalog; do
+  jq -se --arg kind "$catalog_kind" '
+    [.[] | select(.kind == $kind)] |
+    if length == 1 then .[0]
+    else error("expected exactly one generated " + $kind) end
+  ' "$policy_work/all.json" > "$policy_work/$catalog_kind.json"
+done
+jq -e '
+  .metadata.name == "redhat-operators" and
+  .metadata.namespace == "openshift-marketplace"
+' "$policy_work/CatalogSource.json" >/dev/null
 oc apply --server-side -f "$policy_work/mirrors.json"
-oc apply --server-side -f "$resource_dir/cs-redhat-operator-index-v4-22.yaml"
-oc apply --server-side -f "$resource_dir/cc-redhat-operator-index-v4-22.yaml"
+oc apply --server-side -f "$policy_work/CatalogSource.json"
+oc apply --server-side -f "$policy_work/ClusterCatalog.json"
 if [ "$platform_selected" = true ]; then
   oc apply --server-side -f "$resource_dir/signature-configmap.yaml"
 fi

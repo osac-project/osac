@@ -305,13 +305,13 @@ func (t *task) buildConfigFromIdp(idp *privatev1.IdentityProvider, clientSecret 
 }
 
 // validateTenant verifies that the identity provider has a valid tenant assigned.
-// Identity providers must belong to a specific tenant, not "shared" or "system".
+// Identity providers must belong to a tenant, not "shared".
 func (t *task) validateTenant() error {
 	if !t.identityProvider.HasMetadata() || t.identityProvider.GetMetadata().GetTenant() == "" {
 		return errors.New("Identity provider must have a tenant assigned") //nolint:staticcheck // ST1005: Identity provider is an API resource name
 	}
 	tenant := t.identityProvider.GetMetadata().GetTenant()
-	if tenant == auth.SharedTenant || tenant == auth.SystemTenant {
+	if tenant == auth.SharedTenant {
 		return fmt.Errorf("Identity provider cannot belong to '%s' tenant - must be scoped to a specific tenant", tenant) //nolint:staticcheck // ST1005: Identity provider is an API resource name
 	}
 	return nil

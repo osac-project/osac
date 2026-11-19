@@ -255,22 +255,6 @@ var _ = Describe("Tenant Validation", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("cannot belong to 'shared' tenant"))
 	})
-
-	It("should fail when tenant is 'system'", func() {
-		identityProvider := privatev1.IdentityProvider_builder{
-			Metadata: privatev1.Metadata_builder{
-				Tenant: "system",
-			}.Build(),
-		}.Build()
-
-		task := &task{
-			identityProvider: identityProvider,
-		}
-
-		err := task.validateTenant()
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring("cannot belong to 'system' tenant"))
-	})
 })
 
 var _ = Describe("Provider Type Detection", func() {

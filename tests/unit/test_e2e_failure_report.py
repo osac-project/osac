@@ -59,9 +59,10 @@ class TestSanitizeText:
 
 class TestSanitizeArgs:
     def test_grpcurl_argv_drops_token_and_payload(self) -> None:
+        """Keep the RPC method but hide endpoint, credentials and request data."""
         cleaned = sanitize_args(grpcurl_argv())
         assert cleaned[0] == "grpcurl"
-        assert "fulfillment.example:443" in cleaned
+        assert "fulfillment.example" not in " ".join(cleaned)
         assert "osac.public.v1.ComputeInstances/Create" in cleaned
         joined = " ".join(cleaned)
         assert JWT not in joined

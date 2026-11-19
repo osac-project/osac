@@ -22,7 +22,7 @@ export interface ComputeInstanceNetworkingValues {
 }
 
 export interface ComputeInstanceDiskValues {
-  sizeGib: string;
+  sizeGib: number | undefined;
   storageTier: ResourceSelectValue;
 }
 
@@ -46,7 +46,7 @@ export interface ComputeInstanceWizardValues {
     instanceType: ProvisioningFieldValue<ResourceSelectValue>;
     userData: UserDataSourceFormField;
     bootDisk: {
-      sizeGib: ProvisioningFieldValue<string>;
+      sizeGib: ProvisioningFieldValue<number | undefined>;
       storageTier: ProvisioningFieldValue<ResourceSelectValue>;
     };
     additionalDisks: ProvisioningFieldValue<ComputeInstanceDiskValues[]>;
@@ -64,7 +64,7 @@ export const createEmptyComputeInstanceValues = (): ComputeInstanceWizardValues 
     instanceType: provisioningFieldValue(emptyResourceSelectValue()),
     userData: provisioningFieldValue({ source: 'inline', inline: '', secret: '' }),
     bootDisk: {
-      sizeGib: provisioningFieldValue(''),
+      sizeGib: provisioningFieldValue(undefined),
       storageTier: provisioningFieldValue(emptyResourceSelectValue()),
     },
     additionalDisks: provisioningFieldValue([]),
@@ -126,10 +126,7 @@ export const getComputeInstanceInitialValues = (
         );
       })(),
       bootDisk: {
-        sizeGib: (() => {
-          const field = getFieldFromCatalogItemPolicy(catalogItem.fields?.bootDisk?.sizeGib, 0);
-          return provisioningFieldValue(String(field.value || ''), field.locked);
-        })(),
+        sizeGib: getFieldFromCatalogItemPolicy(catalogItem.fields?.bootDisk?.sizeGib, undefined),
         storageTier: getFieldFromCatalogItemPolicy(
           catalogItem.fields?.bootDisk?.storageTier,
           emptyResourceSelectValue(),
@@ -142,7 +139,7 @@ export const getComputeInstanceInitialValues = (
         );
         return provisioningFieldValue(
           field.value.items.map((entry) => ({
-            sizeGib: String(entry.sizeGib ?? ''),
+            sizeGib: entry.sizeGib,
             storageTier: entry.storageTier
               ? { id: entry.storageTier.id, name: entry.storageTier.name }
               : emptyResourceSelectValue(),
@@ -160,9 +157,3 @@ export const getComputeInstanceInitialValues = (
     },
   };
 };
-
-export const CONFIGURATION_CATALOG_PATHS = [
-  'spec.user_data_source',
-  'spec.boot_disk.size_gib',
-  'spec.boot_disk.storage_tier',
-] as const;

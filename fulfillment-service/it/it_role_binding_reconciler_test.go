@@ -35,6 +35,9 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
+const keycloakFixtureTimeout = 30 * time.Second
+const userCleanupRPCTimeout = 10 * time.Second
+
 var _ = Describe("Role binding reconciler", func() {
 	var (
 		ctx            context.Context
@@ -150,15 +153,17 @@ var _ = Describe("Role binding reconciler", func() {
 
 		userBName := fmt.Sprintf("my-user-b-%s", uuid.New()[24:])
 		userBID, userBKeycloakID := createRoleBindingTestUser(testCtx, usersClient, userBName, nil)
-		bindingID := createReaderRoleBinding(testCtx, testUserID, testRoleName)
+		bindingID := createReaderRoleBinding(testCtx, testUserID, testRoleName, auth.SharedTenant)
 
+		initialMappingPollCtx, cancelInitialMappingPoll := context.WithTimeout(testCtx, time.Minute)
+		defer cancelInitialMappingPoll()
 		Eventually(func(g Gomega) {
-			userAMappings, err := keycloakRealmRoleMappings(testCtx, testKeycloakID)
+			userAMappings, err := keycloakRealmRoleMappings(initialMappingPollCtx, testKeycloakID)
 			if err != nil {
 				g.Expect(err).ToNot(HaveOccurred())
 				return
 			}
-			userBMappings, err := keycloakRealmRoleMappings(testCtx, userBKeycloakID)
+			userBMappings, err := keycloakRealmRoleMappings(initialMappingPollCtx, userBKeycloakID)
 			if err != nil {
 				g.Expect(err).ToNot(HaveOccurred())
 				return
@@ -181,8 +186,10 @@ var _ = Describe("Role binding reconciler", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
+		updatedMappingPollCtx, cancelUpdatedMappingPoll := context.WithTimeout(testCtx, time.Minute)
+		defer cancelUpdatedMappingPoll()
 		Eventually(func(g Gomega) {
-			bindingResponse, err := client.Get(testCtx, privatev1.RoleBindingsGetRequest_builder{
+			bindingResponse, err := client.Get(updatedMappingPollCtx, privatev1.RoleBindingsGetRequest_builder{
 				Id: bindingID,
 			}.Build())
 			if err != nil {
@@ -200,12 +207,12 @@ var _ = Describe("Role binding reconciler", func() {
 			}
 			g.Expect(binding.GetStatus().GetUsers()[0].GetId()).To(Equal(userBID))
 
-			userAMappings, err := keycloakRealmRoleMappings(testCtx, testKeycloakID)
+			userAMappings, err := keycloakRealmRoleMappings(updatedMappingPollCtx, testKeycloakID)
 			if err != nil {
 				g.Expect(err).ToNot(HaveOccurred())
 				return
 			}
-			userBMappings, err := keycloakRealmRoleMappings(testCtx, userBKeycloakID)
+			userBMappings, err := keycloakRealmRoleMappings(updatedMappingPollCtx, userBKeycloakID)
 			if err != nil {
 				g.Expect(err).ToNot(HaveOccurred())
 				return
@@ -305,7 +312,7 @@ var _ = Describe("Role binding reconciler", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResponse.GetObject().GetId()).To(Equal(original.GetId()))
 
-			createReaderRoleBinding(ctx, testUserID, roleName)
+			createReaderRoleBinding(ctx, testUserID, roleName, auth.SharedTenant)
 			Expect(readerTokenRoles(ctx, staticOldTokenSource)).ToNot(ContainElement(roleName))
 
 			getResponse, err = oldClient.Get(ctx, publicv1.ClustersGetRequest_builder{
@@ -454,7 +461,7 @@ var _ = Describe("Role binding reconciler", func() {
 })
 
 var _ = Describe("RoleBinding references", func() {
-	It("resolves a global role by name for a tenant RoleBinding", func() {
+	It("falls back to a shared role by name for a tenant RoleBinding", func() {
 		ctx := context.Background()
 		conn := tool.InternalView().AdminConn()
 		tenantClient := privatev1.NewTenantsClient(conn)
@@ -500,6 +507,7 @@ var _ = Describe("RoleBinding references", func() {
 
 		bindingID = response.GetObject().GetId()
 		Expect(response.GetObject().GetSpec().GetRole().GetId()).ToNot(BeEmpty())
+		Expect(response.GetObject().GetSpec().GetRole().GetTenant()).To(Equal("shared"))
 	})
 })
 
@@ -510,7 +518,7 @@ func createRoleBindingTestUser(
 	metadata *privatev1.Metadata,
 ) (userID, keycloakUserID string) {
 	GinkgoHelper()
-	fixtureCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	fixtureCtx, cancel := context.WithTimeout(ctx, keycloakFixtureTimeout)
 	defer cancel()
 	if metadata == nil {
 		metadata = privatev1.Metadata_builder{
@@ -536,7 +544,7 @@ func createRoleBindingTestUser(
 	Expect(code).To(Equal(http.StatusCreated))
 
 	DeferCleanup(func(cleanupCtx context.Context) {
-		requestCtx, cancel := context.WithTimeout(cleanupCtx, 10*time.Second)
+		requestCtx, cancel := context.WithTimeout(cleanupCtx, keycloakFixtureTimeout)
 		defer cancel()
 		if keycloakUserID == "" {
 			getUserCode, getUserBody, err := tool.KeycloakAdminRequest(
@@ -563,6 +571,78 @@ func createRoleBindingTestUser(
 		Expect(code).To(Or(Equal(http.StatusNoContent), Equal(http.StatusNotFound)))
 	})
 
+	DeferCleanup(func(cleanupCtx context.Context) {
+		userIDToDelete := userID
+		if userIDToDelete == "" {
+			filter := fmt.Sprintf(
+				"this.metadata.name == %q && this.metadata.tenant == %q",
+				metadata.GetName(), metadata.GetTenant(),
+			)
+			listCtx, cancelList := context.WithTimeout(cleanupCtx, userCleanupRPCTimeout)
+			listResponse, err := usersClient.List(listCtx, privatev1.UsersListRequest_builder{
+				Filter: &filter,
+			}.Build())
+			cancelList()
+			Expect(err).ToNot(HaveOccurred())
+			if len(listResponse.GetItems()) == 0 {
+				return
+			}
+			Expect(listResponse.GetItems()).To(HaveLen(1))
+			if len(listResponse.GetItems()) != 1 {
+				return
+			}
+			candidate := listResponse.GetItems()[0]
+			Expect(keycloakUserID).ToNot(BeEmpty())
+			if keycloakUserID == "" {
+				return
+			}
+			Expect(candidate.GetStatus().GetKeycloakUserId()).To(
+				Equal(keycloakUserID),
+				"cleanup must only delete the OSAC User created for this Keycloak fixture",
+			)
+			if candidate.GetStatus().GetKeycloakUserId() != keycloakUserID {
+				return
+			}
+			userIDToDelete = candidate.GetId()
+		}
+
+		deleteCtx, cancelDelete := context.WithTimeout(cleanupCtx, userCleanupRPCTimeout)
+		_, err := usersClient.Delete(deleteCtx, privatev1.UsersDeleteRequest_builder{
+			Id: userIDToDelete,
+		}.Build())
+		cancelDelete()
+		if grpcstatus.Code(err) == grpccodes.NotFound {
+			return
+		}
+		Expect(err).ToNot(HaveOccurred())
+		Eventually(func(g Gomega) bool {
+			getCtx, cancelGet := context.WithTimeout(cleanupCtx, userCleanupRPCTimeout)
+			_, err := usersClient.Get(getCtx, privatev1.UsersGetRequest_builder{
+				Id: userIDToDelete,
+			}.Build())
+			cancelGet()
+			if grpcstatus.Code(err) == grpccodes.NotFound {
+				return true
+			}
+			if err != nil {
+				g.Expect(err).ToNot(HaveOccurred())
+				return false
+			}
+
+			// Re-signal while present so the controller retries transient Keycloak failures.
+			signalCtx, cancelSignal := context.WithTimeout(cleanupCtx, userCleanupRPCTimeout)
+			_, err = usersClient.Signal(signalCtx, privatev1.UsersSignalRequest_builder{
+				Id: userIDToDelete,
+			}.Build())
+			cancelSignal()
+			if grpcstatus.Code(err) == grpccodes.NotFound {
+				return true
+			}
+			g.Expect(err).ToNot(HaveOccurred())
+			return false
+		}, time.Minute, time.Second).Should(BeTrue())
+	})
+
 	getUserCode, getUserBody, err := tool.KeycloakAdminRequest(
 		fixtureCtx, http.MethodGet, fmt.Sprintf("/users?username=%s&exact=true", username), nil,
 	)
@@ -587,28 +667,12 @@ func createRoleBindingTestUser(
 	Expect(err).ToNot(HaveOccurred())
 	userID = userResponse.GetObject().GetId()
 
-	DeferCleanup(func(cleanupCtx context.Context) {
-		_, err := usersClient.Delete(cleanupCtx, privatev1.UsersDeleteRequest_builder{
-			Id: userID,
-		}.Build())
-		if grpcstatus.Code(err) == grpccodes.NotFound {
-			return
-		}
-		Expect(err).ToNot(HaveOccurred())
-		Eventually(func(g Gomega) {
-			_, err := usersClient.Get(cleanupCtx, privatev1.UsersGetRequest_builder{
-				Id: userID,
-			}.Build())
-			g.Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
-		}, time.Minute, time.Second).Should(Succeed())
-	})
-
 	return userID, keycloakUserID
 }
 
 func keycloakRealmRoleMappings(ctx context.Context, keycloakUserID string) ([]map[string]any, error) {
 	GinkgoHelper()
-	requestCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	requestCtx, cancel := context.WithTimeout(ctx, keycloakFixtureTimeout)
 	defer cancel()
 
 	code, body, err := tool.KeycloakAdminRequest(

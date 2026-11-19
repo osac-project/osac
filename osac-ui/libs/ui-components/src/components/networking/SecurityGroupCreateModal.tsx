@@ -14,9 +14,10 @@ import { Formik } from 'formik';
 import type { TFunction } from 'i18next';
 import * as Yup from 'yup';
 
-import type { SecurityGroupSchema } from '@osac/types';
+import { type SecurityGroupSchema, VirtualNetworks } from '@osac/types';
 
-import { useCreateSecurityGroup, useVirtualNetworks } from '../../api/v1/networking';
+import { useListResource } from '../../api/use-resource';
+import { useCreateSecurityGroup } from '../../api/v1/networking';
 import OsacForm from '../../components/Form/OsacForm';
 import { SelectField } from '../../components/Form/SelectField';
 import { useTranslation } from '../../hooks/useTranslation';
@@ -51,7 +52,12 @@ export const SecurityGroupCreateModal = ({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const createSecurityGroup = useCreateSecurityGroup();
-  const { data: virtualNetworks = [], isLoading, error: vnError } = useVirtualNetworks();
+  const {
+    data: virtualNetworksResponse,
+    isLoading,
+    error: vnError,
+  } = useListResource(VirtualNetworks);
+  const virtualNetworks = virtualNetworksResponse?.items ?? [];
 
   const virtualNetworkOptions = virtualNetworks.map((vn) => ({
     value: vn.id,

@@ -1272,6 +1272,32 @@ func TestGetHostNICs(t *testing.T) {
 	})
 }
 
+func TestGetHostNICsDedupesDualStackNICs(t *testing.T) {
+	// OSAC-7263: Metal3 inspection data lists a dual-stack NIC once per IP
+	// family — same MAC, two entries.
+	ctx := context.Background()
+	objs := newBMHBuilder("host-dual-stack").WithHardwareDataNICs(
+		testNIC("FF:00:11:22:33:44"),
+		testNIC("52:54:00:BB:CC:01"),
+		testNIC("52:54:00:bb:cc:01"),
+	).BuildObjects()
+
+	m := newMetal3ClientForTest(objs...)
+	nics, err := m.GetHostNICs(ctx, testNamespace+"/host-dual-stack")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantMACs := []string{"52:54:00:bb:cc:01", "ff:00:11:22:33:44"}
+	if len(nics) != len(wantMACs) {
+		t.Fatalf("expected %d NICs, got %d: %+v", len(wantMACs), len(nics), nics)
+	}
+	for i, want := range wantMACs {
+		if nics[i].MAC != want {
+			t.Errorf("NIC[%d].MAC = %q, want %q", i, nics[i].MAC, want)
+		}
+	}
+}
+
 // --- parseMetal3Namespace ---
 
 func TestParseMetal3Namespace(t *testing.T) {

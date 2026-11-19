@@ -5,11 +5,11 @@
 # like an AAP job (-e @extravars), with the job pod's NETRIS_* settings as
 # environment variables pointing at fixtures/netris/fake_netris.py (a stateful
 # in-process fake of the Netris controller, started here as a background
-# process) and an unusable KUBECONFIG, which proves the manager needs no hub
-# access. The target creates no Kubernetes objects. Checks:
+# process). Checks:
 #   - lifecycle: all 21 tasks of the Fabric set run once with valid input and
 #     publish their contract result, or nothing for the documented no-ops;
-#   - VirtualNetwork / Subnet: result keys, VNIs, V-Net gateway and DHCP,
+#   - VirtualNetwork / Subnet: result keys, VNIs, V-Net gateway, EVPN and plain
+#     Subnet physical-range DHCP at creation and on rerun;
 #     reruns that write nothing, a parent l3Vni that differs from the VPC;
 #   - NetworkAttachment: physical port move with DHCP over the physical range
 #     on an EVPN Subnet, DHCP lease lookup by MAC, ports moved back on delete;
@@ -59,7 +59,8 @@
     nf_l3_vni: 10001
     nf_ipam:
       gateway_ipv4: 10.20.1.1
-      physical_ipv4_cidrs: ["10.20.1.8/29", "10.20.1.16/28"]
+      overlay_ipv4_cidrs: ["10.20.1.64/26", "10.20.1.128/26"]
+      physical_ipv4_cidrs: ["10.20.1.192/26"]
       lb_vip_ipv4_cidrs: ["10.20.1.32/28"]
     # The job pod environment (ConfigMap/Secret network-fulfillment-ig).
     nf_settings:
@@ -73,9 +74,8 @@
       NETRIS_BM_PROVISIONING_VNET: provisioning
       NETRIS_RESOURCE_CLASS_MAP: '{"gpu": {"server_cluster_template_id": 7}}'
       NETRIS_PORT_SETTLE_SECONDS: "0"
-      # No hub API: a Netris task that reached for it would fail.
-      KUBECONFIG: /nonexistent/osac-no-hub/kubeconfig
-      K8S_AUTH_KUBECONFIG: /nonexistent/osac-no-hub/kubeconfig
+      KUBECONFIG: "{{ lookup('ansible.builtin.env', 'KUBECONFIG') }}"
+      K8S_AUTH_KUBECONFIG: "{{ lookup('ansible.builtin.env', 'KUBECONFIG') }}"
     nf_child_env:
       ANSIBLE_STDOUT_CALLBACK: ansible.posix.json
       ANSIBLE_SHOW_CUSTOM_STATS: "true"
@@ -247,7 +247,7 @@
           collection: ipam_hosts
           objects:
             - key: "301"
-              rows: [{name: bm-host, address: 10.20.1.10, mac: [{address: aa:bb:cc:dd:ee:01, source: dhcp, state: active}]},
+              rows: [{name: bm-host, address: 10.20.1.193, mac: [{address: aa:bb:cc:dd:ee:01, source: dhcp, state: active}]},
                      {name: other, address: 10.20.1.11, mac: [{address: aa:bb:cc:dd:ee:02, source: dhcp, state: active}]}]
     nf_reset: [{path: reset}]
     nf_fabric_tasks:
@@ -286,7 +286,7 @@
          iface: "{{ nf_overlay }}"}
       - {name: apply_physical, task: apply_network_attachment, job: nf_na_job, evpn: true, result: {}}
       - {name: query_dhcp_lease, task: query_dhcp_lease, job: nf_na_job, evpn: true,
-         result: {dhcp_lease: {ip_address: 10.20.1.10, mac_address: "AA:BB:CC:DD:EE:01"}}}
+         result: {dhcp_lease: {ip_address: 10.20.1.193, mac_address: "AA:BB:CC:DD:EE:01"}}}
       - {name: create_external_ip_pool, task: create_external_ip_pool, job: nf_pool_job, result: {}}
       - {name: create_external_ip, task: create_external_ip, job: nf_eip_job, result: {external_ip: {address: 203.0.113.1}}}
       - {name: attach_external_ip, task: attach_external_ip, job: nf_eipa_job, result: {}}

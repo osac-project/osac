@@ -13,6 +13,8 @@ import {
   Flex,
   FlexItem,
   Spinner,
+  Stack,
+  StackItem,
 } from '@patternfly/react-core';
 
 import {
@@ -28,6 +30,7 @@ import ClusterExternalIpAttachmentStatusLabel from './ClusterExternalIpAttachmen
 import { useListResource } from '../../../api/use-resource';
 import { clusterAttachmentFilter } from '../../../api/v1/external-ip-data';
 import { useTranslation } from '../../../hooks/useTranslation';
+import { displayValue } from '../../../utils/detailFormatters';
 import QueryErrorState from '../../Resource/QueryErrorState';
 
 export interface ClusterEndpointAttachments {
@@ -140,6 +143,12 @@ const EndpointRow = ({
               />
             </Flex>
           </FlexItem>
+          {attachment && (
+            <FlexItem>
+              <span>{t('External IP')}: </span>
+              <span>{displayValue(attachment.status?.externalIpAddress)}</span>
+            </FlexItem>
+          )}
           <FlexItem>{actionButton}</FlexItem>
         </Flex>
       </DescriptionListDescription>
@@ -178,31 +187,35 @@ const ClusterExternalIpCard = ({ cluster, onAttach, onDetach }: ClusterExternalI
   ];
 
   return (
-    <Card variant="secondary">
+    <Card variant="secondary" aria-label={t('External IP endpoints')}>
       <CardHeader>
-        <CardTitle>{t('External IP endpoints')}</CardTitle>
+        <CardTitle component="h2">{t('External IP endpoints')}</CardTitle>
       </CardHeader>
       <Divider />
       <CardBody>
-        {isLoading ? (
-          <Bullseye>
-            <Spinner aria-label={t('Loading external IP attachments')} />
-          </Bullseye>
-        ) : error ? (
-          <QueryErrorState error={error} title={t('Failed to load external IP attachments')} />
-        ) : (
-          <DescriptionList isCompact aria-label={t('External IP endpoints')}>
-            {endpointRows.map((row) => (
-              <EndpointRow
-                key={row.endpoint}
-                cluster={cluster}
-                {...row}
-                onAttach={onAttach}
-                onDetach={onDetach}
-              />
-            ))}
-          </DescriptionList>
-        )}
+        <Stack hasGutter>
+          <StackItem>
+            {isLoading ? (
+              <Bullseye>
+                <Spinner aria-label={t('Loading external IP attachments')} />
+              </Bullseye>
+            ) : error ? (
+              <QueryErrorState error={error} title={t('Failed to load external IP attachments')} />
+            ) : (
+              <DescriptionList isCompact aria-label={t('External IP endpoints')}>
+                {endpointRows.map((row) => (
+                  <EndpointRow
+                    key={row.endpoint}
+                    cluster={cluster}
+                    {...row}
+                    onAttach={onAttach}
+                    onDetach={onDetach}
+                  />
+                ))}
+              </DescriptionList>
+            )}
+          </StackItem>
+        </Stack>
       </CardBody>
     </Card>
   );

@@ -14,6 +14,15 @@
   loop_control:
     index_var: idx
 
+- name: Require ComputeInstance tenant annotation for VM resources
+  ansible.builtin.assert:
+    that:
+      - >-
+        (compute_instance.metadata.annotations | default({}, true)).get('osac.openshift.io/tenant', '') | default('', true) | length > 0
+    fail_msg: >-
+      ComputeInstance must have a non-empty 'osac.openshift.io/tenant'
+      annotation before creating VM resources
+
 # Phase 1: Resolve all storage tiers before creating any resources.
 
 - name: Resolve StorageClass for boot disk tier
@@ -60,6 +69,7 @@
         namespace: "{{ compute_instance_target_namespace }}"
         annotations:
           osac.openshift.io/storage-volume-id: "{{ vm_disk_volume_ids['boot'] }}"
+          osac.openshift.io/tenant: "{{ compute_instance.metadata.annotations['osac.openshift.io/tenant'] }}"
       spec:
         source:
           registry:
@@ -89,6 +99,7 @@
         namespace: "{{ compute_instance_target_namespace }}"
         annotations:
           osac.openshift.io/storage-volume-id: "{{ vm_disk_volume_ids['disk-' ~ (idx + 1)] }}"
+          osac.openshift.io/tenant: "{{ compute_instance.metadata.annotations['osac.openshift.io/tenant'] }}"
       spec:
         source:
           blank: {}
@@ -136,11 +147,15 @@
         name: "{{ compute_instance_name }}"
         namespace: "{{ compute_instance_target_namespace }}"
         labels: "{{ default_vm_labels }}"
+        annotations:
+          osac.openshift.io/tenant: "{{ compute_instance.metadata.annotations['osac.openshift.io/tenant'] }}"
       spec:
         runStrategy: "{{ vm_run_strategy }}"
         template:
           metadata:
             labels: "{{ default_vm_labels }}"
+            annotations:
+              osac.openshift.io/tenant: "{{ compute_instance.metadata.annotations['osac.openshift.io/tenant'] }}"
           spec: "{{ vm_template_spec }}"
     state: present
 

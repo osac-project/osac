@@ -305,7 +305,8 @@ func (s *PrivateSubnetsServer) lockParent(ctx context.Context, subnet *privatev1
 	if ref == nil || key == "" {
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.virtual_network' is required")
 	}
-	virtualNetwork, err := lockParentVirtualNetwork(ctx, s.guards, s.virtualNetworks, key, subnet.GetMetadata())
+	virtualNetwork, err := lockParentVirtualNetwork(ctx, s.guards, s.virtualNetworks,
+		ref.GetId(), ref.GetName(), subnet.GetMetadata())
 	if err != nil {
 		return nil, err
 	}
@@ -320,9 +321,10 @@ func (s *PrivateSubnetsServer) lockParent(ctx context.Context, subnet *privatev1
 // new record, with the caller-scoped DAO, then locks it by ID and checks that it is READY and not being deleted. A
 // missing VirtualNetwork, or one of another tenant or project, fails with INVALID_ARGUMENT.
 func lockParentVirtualNetwork(ctx context.Context, guards *networkingGuards,
-	scoped *dao.GenericDAO[*privatev1.VirtualNetwork], key string, owner *privatev1.Metadata) (
+	scoped *dao.GenericDAO[*privatev1.VirtualNetwork], id, name string, owner *privatev1.Metadata) (
 	*privatev1.VirtualNetwork, error) {
-	match, err := findInScope(ctx, scoped, owner.GetTenant(), owner.GetProject(), key)
+	key := referenceIdentifier(id, name)
+	match, err := findInScope(ctx, scoped, owner.GetTenant(), owner.GetProject(), "VirtualNetwork", id, name)
 	if err != nil {
 		return nil, err
 	}

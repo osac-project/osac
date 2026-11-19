@@ -30,6 +30,8 @@ interface RawInstanceType {
   gpu?: RawInstanceTypeGpu;
 }
 
+type RawResizeInstanceType = Omit<RawInstanceType, 'gpu'>;
+
 interface RawDiskImage {
   name?: string;
   source_type: 'Registry';
@@ -73,6 +75,8 @@ interface RawStorageTier {
 interface RawExtravars {
   catalog: RawCatalog;
   instance_type: RawInstanceType;
+  resize_instance_type: RawResizeInstanceType;
+  resize_cpu_up_memory_down_instance_type: RawResizeInstanceType;
   disk_image: RawDiskImage;
   storage_tier: RawStorageTier;
   lifecycle_actions: LifecycleAction[];
@@ -110,6 +114,8 @@ export interface InstanceTypeTestData {
   gpu?: InstanceTypeGpu;
   lifecycleActions: LifecycleAction[];
 }
+
+export type ResizeInstanceTypeTestData = Omit<InstanceTypeTestData, 'lifecycleActions' | 'gpu'>;
 
 export interface DiskImageTestData extends DiskImageCreateParams {
   lifecycleActions: LifecycleAction[];
@@ -204,6 +210,11 @@ const parseExtravars = (value: unknown): RawExtravars => {
   const catalogBootDisk = asRecord(catalogFields.boot_disk, 'catalog.fields.boot_disk');
   const catalogDiskImage = asRecord(catalogFields.disk_image, 'catalog.fields.disk_image');
   const instanceType = asRecord(root.instance_type, 'instance_type');
+  const resizeInstanceType = asRecord(root.resize_instance_type, 'resize_instance_type');
+  const resizeCpuUpMemoryDownInstanceType = asRecord(
+    root.resize_cpu_up_memory_down_instance_type,
+    'resize_cpu_up_memory_down_instance_type',
+  );
   const diskImage = asRecord(root.disk_image, 'disk_image');
   const storageTier = asRecord(root.storage_tier, 'storage_tier');
   const gpu =
@@ -249,6 +260,33 @@ const parseExtravars = (value: unknown): RawExtravars => {
           }
         : {}),
     },
+    resize_instance_type: {
+      name: requiredString(resizeInstanceType.name, 'resize_instance_type.name'),
+      description: requiredString(
+        resizeInstanceType.description,
+        'resize_instance_type.description',
+      ),
+      vcpus: positiveInteger(resizeInstanceType.vcpus, 'resize_instance_type.vcpus'),
+      memory_gib: positiveInteger(resizeInstanceType.memory_gib, 'resize_instance_type.memory_gib'),
+    },
+    resize_cpu_up_memory_down_instance_type: {
+      name: requiredString(
+        resizeCpuUpMemoryDownInstanceType.name,
+        'resize_cpu_up_memory_down_instance_type.name',
+      ),
+      description: requiredString(
+        resizeCpuUpMemoryDownInstanceType.description,
+        'resize_cpu_up_memory_down_instance_type.description',
+      ),
+      vcpus: positiveInteger(
+        resizeCpuUpMemoryDownInstanceType.vcpus,
+        'resize_cpu_up_memory_down_instance_type.vcpus',
+      ),
+      memory_gib: positiveInteger(
+        resizeCpuUpMemoryDownInstanceType.memory_gib,
+        'resize_cpu_up_memory_down_instance_type.memory_gib',
+      ),
+    },
     disk_image: {
       name: optionalString(diskImage.name, 'disk_image.name'),
       source_type: registrySourceType(diskImage.source_type),
@@ -277,36 +315,48 @@ const rawExtravars = parseExtravars(parse(readFileSync(extravarsPath, 'utf8')));
 const {
   catalog: rawCatalog,
   instance_type: rawInstanceType,
+  resize_instance_type: rawResizeInstanceType,
+  resize_cpu_up_memory_down_instance_type: rawResizeCpuUpMemoryDownInstanceType,
   disk_image: rawDiskImage,
   storage_tier: rawStorageTier,
   lifecycle_actions: rawLifecycleActions,
   tenant_name: rawTenantName,
   tenant_password: rawTenantPassword,
 } = rawExtravars;
-const diskImageTestRunId = requiredString(
-  process.env.OSAC_DISK_IMAGE_TEST_RUN_ID,
-  'OSAC_DISK_IMAGE_TEST_RUN_ID',
-);
-const storageTierTestRunId = requiredString(
-  process.env.OSAC_STORAGE_TIER_TEST_RUN_ID,
-  'OSAC_STORAGE_TIER_TEST_RUN_ID',
-);
-const catalogTestRunId = requiredString(
+
+const testInstance = process.env.OSAC_E2E_INSTANCE ?? '1';
+if (!/^[0-9]+$/.test(testInstance)) {
+  throw new Error('OSAC_E2E_INSTANCE must be a non-negative integer.');
+}
+
+const indexedResourceName = (name: string): string => `${name.trim()}-${testInstance}`;
+
+export const catalogTestRunId = requiredString(
   process.env.OSAC_CATALOG_TEST_RUN_ID,
   'OSAC_CATALOG_TEST_RUN_ID',
 );
-const diskImageTestName = rawDiskImage.name
-  ? `${rawDiskImage.name}-${diskImageTestRunId}`
+const tenantTestName = rawTenantName ? indexedResourceName(rawTenantName) : undefined;
+const instanceTypeTestName = rawInstanceType.name
+  ? indexedResourceName(rawInstanceType.name)
   : undefined;
+const diskImageTestName = rawDiskImage.name ? indexedResourceName(rawDiskImage.name) : undefined;
 const storageTierTestName = rawStorageTier.name
-  ? `${rawStorageTier.name}-${storageTierTestRunId}`
+  ? indexedResourceName(rawStorageTier.name)
   : undefined;
+const resizeInstanceTypeTestName = rawResizeInstanceType.name
+  ? indexedResourceName(rawResizeInstanceType.name)
+  : undefined;
+const resizeCpuUpMemoryDownInstanceTypeTestName = rawResizeCpuUpMemoryDownInstanceType.name
+  ? indexedResourceName(rawResizeCpuUpMemoryDownInstanceType.name)
+  : undefined;
+const catalogName = indexedResourceName(rawCatalog.name);
+const catalogInstanceTypeName = indexedResourceName(rawCatalog.fields.instance_type.name);
 const catalogDiskImageName =
-  diskImageTestName !== undefined && rawCatalog.fields.disk_image.name === rawDiskImage.name
-    ? diskImageTestName
+  rawCatalog.fields.disk_image.name.trim() === rawDiskImage.name
+    ? (diskImageTestName ?? indexedResourceName(rawCatalog.fields.disk_image.name))
     : rawCatalog.fields.disk_image.name;
 
-export const tenantName: string | undefined = rawTenantName;
+export const tenantName: string | undefined = tenantTestName;
 export const tenantPassword: string | undefined = rawTenantPassword;
 
 export const tenantNameOrSkip = (): string | undefined => {
@@ -319,8 +369,8 @@ export const tenantNameOrSkip = (): string | undefined => {
 };
 
 export const instanceTypeNameOrSkip = (): string | undefined => {
-  if (rawInstanceType.name !== undefined) {
-    return rawInstanceType.name;
+  if (instanceTypeTestName !== undefined) {
+    return instanceTypeTestName;
   }
 
   test.skip(true, 'instance_type.name is not set in apps/e2e-tests/extravars.yaml.');
@@ -345,16 +395,11 @@ export const storageTierNameOrSkip = (): string | undefined => {
   return undefined;
 };
 
-const catalogName = rawCatalog.name?.trim();
-if (!catalogName) {
-  throw new Error('catalog.name must be set in extravars.yaml');
-}
-
 export const catalogTestData: CatalogTestData = {
   description: rawCatalog.description,
   fields: {
     instanceType: {
-      name: rawCatalog.fields.instance_type.name,
+      name: catalogInstanceTypeName,
     },
     bootDisk: {
       sizeGib: rawCatalog.fields.boot_disk.size_gib,
@@ -376,10 +421,11 @@ const safeCatalogName = (name: string): string =>
 export const catalogOwnershipFilePath = (name: string): string =>
   path.join(tmpdir(), `osac-catalog-${safeCatalogName(name)}-${catalogTestRunId}.created`);
 
-export const vmTestName = `vm-e2e-${catalogTestRunId}`;
+export const vmTestName = indexedResourceName('vm-e2e');
+export const resizeVmTestName = indexedResourceName('vm-e2e-resize');
 
 export const instanceTypeTestData: InstanceTypeTestData = {
-  name: rawInstanceType.name ?? '',
+  name: instanceTypeTestName ?? '',
   description: rawInstanceType.description,
   vcpus: rawInstanceType.vcpus,
   memoryGib: rawInstanceType.memory_gib,
@@ -391,6 +437,20 @@ export const instanceTypeTestData: InstanceTypeTestData = {
       }
     : undefined,
   lifecycleActions: rawLifecycleActions,
+};
+
+export const resizeInstanceTypeTestData: ResizeInstanceTypeTestData = {
+  name: resizeInstanceTypeTestName ?? '',
+  description: rawResizeInstanceType.description,
+  vcpus: rawResizeInstanceType.vcpus,
+  memoryGib: rawResizeInstanceType.memory_gib,
+};
+
+export const resizeCpuUpMemoryDownInstanceTypeTestData: ResizeInstanceTypeTestData = {
+  name: resizeCpuUpMemoryDownInstanceTypeTestName ?? '',
+  description: rawResizeCpuUpMemoryDownInstanceType.description,
+  vcpus: rawResizeCpuUpMemoryDownInstanceType.vcpus,
+  memoryGib: rawResizeCpuUpMemoryDownInstanceType.memory_gib,
 };
 
 export const diskImagesTestData: DiskImageTestData = {

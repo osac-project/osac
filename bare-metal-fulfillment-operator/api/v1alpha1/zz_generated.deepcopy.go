@@ -174,13 +174,6 @@ func (in *BareMetalInstanceStatus) DeepCopyInto(out *BareMetalInstanceStatus) {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
 	}
-	if in.IPDiscoveryJobs != nil {
-		in, out := &in.IPDiscoveryJobs, &out.IPDiscoveryJobs
-		*out = make([]apiv1alpha1.JobStatus, len(*in))
-		for i := range *in {
-			(*in)[i].DeepCopyInto(&(*out)[i])
-		}
-	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))

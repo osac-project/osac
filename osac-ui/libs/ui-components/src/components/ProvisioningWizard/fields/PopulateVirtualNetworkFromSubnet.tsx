@@ -2,7 +2,9 @@ import { useEffect } from 'react';
 import { Alert, Button, Stack, StackItem } from '@patternfly/react-core';
 import { useField, useFormikContext } from 'formik';
 
-import { useSubnet } from '../../../api/v1/networking';
+import { Subnets } from '@osac/types';
+
+import { useGetResource } from '../../../api/use-resource';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
 import type { ResourceSelectValue } from '../../Form/resourceSelectValue';
@@ -26,7 +28,16 @@ const PopulateVirtualNetworkFromSubnet = ({
   const [virtualNetworkField] = useField<ResourceSelectValue>(virtualNetworkName);
   const subnetId = subnetField.value?.id ?? '';
   const virtualNetworkId = virtualNetworkField.value?.id ?? '';
-  const { data: subnet, error, refetch } = useSubnet(virtualNetworkId ? '' : subnetId);
+  const {
+    data: subnetResponse,
+    error,
+    refetch,
+  } = useGetResource(
+    Subnets,
+    { id: subnetId },
+    { enabled: !virtualNetworkId && Boolean(subnetId) },
+  );
+  const subnet = subnetResponse?.object;
 
   useEffect(() => {
     const reference = subnet?.spec?.virtualNetwork;

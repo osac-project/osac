@@ -316,7 +316,6 @@ func (t *task) delete(ctx context.Context) (err error) {
 			slog.String("name", object.GetName()),
 		)
 	}
-
 	// Don't remove finalizer: K8s object still exists with finalizers being processed.
 	return controllers.RequeueAfterKubernetesDeletion("external IP")
 }

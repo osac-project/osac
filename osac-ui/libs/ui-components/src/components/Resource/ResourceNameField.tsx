@@ -1,3 +1,4 @@
+import { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Content, Flex, FlexItem } from '@patternfly/react-core';
 
@@ -11,7 +12,7 @@ export interface ResourceNameFieldProps {
     };
   };
   title?: string; // Used to override the name/id used as the title
-  subTitle?: string;
+  subTitle?: string | ReactNode;
   detailsUrl?: string;
   maxCharsDisplayed?: number;
 }
@@ -44,7 +45,11 @@ const ResourceNameField = ({
       </FlexItem>
       {subTitle ? (
         <FlexItem>
-          <Content component="small">{renderContent(subTitle)}</Content>
+          {typeof subTitle === 'string' ? (
+            <Content component="small">{renderContent(subTitle)}</Content>
+          ) : (
+            subTitle
+          )}
         </FlexItem>
       ) : null}
     </Flex>

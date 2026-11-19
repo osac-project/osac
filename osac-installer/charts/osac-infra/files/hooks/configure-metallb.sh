@@ -21,11 +21,25 @@ oc wait --for=condition=Available deploy/metallb-operator-webhook-server -n meta
 echo "Applying MetalLB configuration..."
 oc apply -f /config/config.yaml
 
-echo "Computing subnet from node IP..."
-NODE_IP=$(oc get nodes -o 'jsonpath={.items[0].status.addresses[?(@.type=="InternalIP")].address}')
-SUBNET_PREFIX="${NODE_IP%.*}"
-echo "Patching MetalLB address pool: ${SUBNET_PREFIX}.240-${SUBNET_PREFIX}.250"
-oc patch ipaddresspool caas-address-pool -n metallb-system --type=merge \
-  -p "{\"spec\":{\"addresses\":[\"${SUBNET_PREFIX}.240-${SUBNET_PREFIX}.250\"]}}"
+derive_pool="${METALLB_DERIVE_POOL_FROM_NODE_IP:-false}"
+pool_start="${METALLB_POOL_RANGE_START:-240}"
+pool_end="${METALLB_POOL_RANGE_END:-250}"
+
+if [[ "${derive_pool}" == "true" ]]; then
+  if (( pool_start >= pool_end )); then
+    echo "metallb.poolRangeStart must be less than metallb.poolRangeEnd (got ${pool_start} and ${pool_end})" >&2
+    exit 1
+  fi
+
+  echo "Computing subnet from node IP..."
+  NODE_IP=$(oc get nodes -o 'jsonpath={.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+  SUBNET_PREFIX="${NODE_IP%.*}"
+  POOL_RANGE="${SUBNET_PREFIX}.${pool_start}-${SUBNET_PREFIX}.${pool_end}"
+  echo "Patching MetalLB address pool: ${POOL_RANGE}"
+  oc patch ipaddresspool caas-address-pool -n metallb-system --type=merge \
+    -p "{\"spec\":{\"addresses\":[\"${POOL_RANGE}\"]}}"
+else
+  echo "Leaving MetalLB address pool from chart values (derivePoolFromNodeIP=false)."
+fi
 
 echo "MetalLB configuration complete."

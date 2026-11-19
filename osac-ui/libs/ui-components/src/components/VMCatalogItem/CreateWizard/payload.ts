@@ -13,19 +13,14 @@ type CatalogItemFieldsInit = NonNullable<
   MessageInitShape<typeof ComputeInstanceCatalogItemSchema>['fields']
 >;
 
-const isEmptyString = (value: string) => !value.trim();
 const isEmptyResource = (value: ResourceSelectValue) => !value.id;
 const isEmptyDiskList = (value: ComputeInstanceDiskValues[]) => !value.length;
 
-const toTrimmedString = (value: string) => value.trim();
-
 const toDiskListRef = (value: ComputeInstanceDiskValues[]) => ({
-  items: value
-    .filter((disk) => disk.sizeGib.trim())
-    .map((disk) => ({
-      sizeGib: Number(disk.sizeGib.trim()),
-      ...(disk.storageTier.id ? { storageTier: disk.storageTier } : {}),
-    })),
+  items: value.map((disk) => ({
+    sizeGib: disk.sizeGib,
+    ...(disk.storageTier.id ? { storageTier: disk.storageTier } : {}),
+  })),
 });
 
 const buildComputeCatalogItemFieldsPayload = (
@@ -55,11 +50,14 @@ const buildComputeCatalogItemFieldsPayload = (
     fields.userDataSource = undefined;
   }
 
-  const bootDiskSizeGib = catalogFieldPolicyFromValue(
-    values.bootDiskSizeGib,
-    isEmptyString,
-    (value) => Number(toTrimmedString(value)),
-  );
+  const bootDiskSizeValue = values.bootDiskSizeGib.value;
+  const bootDiskSizeGib =
+    bootDiskSizeValue === undefined
+      ? undefined
+      : catalogFieldPolicyFromValue(
+          { value: bootDiskSizeValue, locked: values.bootDiskSizeGib.locked },
+          () => false,
+        );
   const bootDiskStorageTier = catalogFieldPolicyFromValue(
     values.bootDiskStorageTier,
     isEmptyResource,

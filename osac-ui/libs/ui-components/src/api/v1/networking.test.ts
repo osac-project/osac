@@ -15,7 +15,9 @@ import {
   SecurityGroups,
   type SecurityGroupsUpdateRequest,
   SubnetState,
+  Subnets,
   VirtualNetworkState,
+  VirtualNetworks,
 } from '@osac/types';
 
 import {
@@ -45,21 +47,15 @@ i18n.use(initReactI18next).init({
 });
 
 describe('networking list filters', () => {
-  it('finds only ready IPv4 tenant-default subnets in the selected project', () => {
-    expect(defaultSubnetListFilter('project-a')).toBe(
-      `this.metadata.labels["osac.openshift.io/default"] == "true" && this.metadata.project == "project-a" && this.status.state == ${SubnetState.READY} && has(this.spec.ipv4_cidr)`,
-    );
-  });
-
-  it('escapes a project name in the default subnet filter', () => {
-    expect(defaultSubnetListFilter('project-"a')).toContain(
-      'this.metadata.project == "project-\\"a"',
+  it("finds only ready IPv4 tenant-default subnets in the tenant's default project", () => {
+    expect(defaultSubnetListFilter()).toBe(
+      `this.metadata.labels["osac.openshift.io/default"] == "true" && this.metadata.project == "" && this.status.state == ${SubnetState.READY} && has(this.spec.ipv4_cidr)`,
     );
   });
 
   it('finds the ready tenant-default security group in the subnet network', () => {
-    expect(defaultSecurityGroupListFilter('project-a', 'vn-a')).toBe(
-      `this.metadata.labels["osac.openshift.io/default"] == "true" && this.metadata.project == "project-a" && this.spec.virtual_network.id == "vn-a" && this.status.state == ${SecurityGroupState.READY}`,
+    expect(defaultSecurityGroupListFilter('vn-a')).toBe(
+      `this.metadata.labels["osac.openshift.io/default"] == "true" && this.metadata.project == "" && this.spec.virtual_network.id == "vn-a" && this.status.state == ${SecurityGroupState.READY}`,
     );
   });
 
@@ -154,39 +150,48 @@ describe('networking list filters', () => {
 
 describe('networking query invalidation', () => {
   const asApiQueryClient = (qc: QueryClient) =>
-    qc as unknown as Parameters<typeof invalidateVirtualNetworksQueries>[0];
+    ({
+      invalidateQueries: (filters: { queryKey: readonly unknown[] }) =>
+        qc.invalidateQueries(filters),
+    }) as unknown as Parameters<typeof invalidateVirtualNetworksQueries>[0];
 
   it('invalidates both the list and by-id virtual network queries', async () => {
     const qc = new QueryClient();
     qc.setQueryData(['v1/virtual_networks'], { items: [] });
     qc.setQueryData(['v1/virtual_networks', ['vn-1']], { id: 'vn-1' });
+    qc.setQueryData([VirtualNetworks.typeName, 'list', {}], { items: [] });
 
     await invalidateVirtualNetworksQueries(asApiQueryClient(qc));
 
     expect(qc.getQueryState(['v1/virtual_networks'])?.isInvalidated).toBe(true);
     expect(qc.getQueryState(['v1/virtual_networks', ['vn-1']])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState([VirtualNetworks.typeName, 'list', {}])?.isInvalidated).toBe(true);
   });
 
   it('invalidates both the list and by-id subnet queries', async () => {
     const qc = new QueryClient();
     qc.setQueryData(['v1/subnets'], { items: [] });
     qc.setQueryData(['v1/subnets', ['subnet-1']], { id: 'subnet-1' });
+    qc.setQueryData([Subnets.typeName, 'list', {}], { items: [] });
 
     await invalidateSubnetsQueries(asApiQueryClient(qc));
 
     expect(qc.getQueryState(['v1/subnets'])?.isInvalidated).toBe(true);
     expect(qc.getQueryState(['v1/subnets', ['subnet-1']])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState([Subnets.typeName, 'list', {}])?.isInvalidated).toBe(true);
   });
 
   it('invalidates both the list and by-id security group queries', async () => {
     const qc = new QueryClient();
     qc.setQueryData(['v1/security_groups'], { items: [] });
     qc.setQueryData(['v1/security_groups', ['sg-1']], { id: 'sg-1' });
+    qc.setQueryData([SecurityGroups.typeName, 'list', {}], { items: [] });
 
     await invalidateSecurityGroupsQueries(asApiQueryClient(qc));
 
     expect(qc.getQueryState(['v1/security_groups'])?.isInvalidated).toBe(true);
     expect(qc.getQueryState(['v1/security_groups', ['sg-1']])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState([SecurityGroups.typeName, 'list', {}])?.isInvalidated).toBe(true);
   });
 });
 

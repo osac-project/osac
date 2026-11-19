@@ -83,9 +83,14 @@ import {
   SelfSubjectAccessReviewsCreateResponseSchema,
   ServiceTier,
   Subnet,
+  SubnetsDeleteRequest,
+  SubnetsDeleteResponse,
   SubnetsGetRequest,
   User,
   VirtualNetwork,
+  VirtualNetworksDeleteRequest,
+  VirtualNetworksDeleteResponse,
+  VirtualNetworksGetRequest,
   Volume,
   VolumesCreateRequest,
   VolumesCreateResponse,
@@ -338,6 +343,50 @@ const matchesVirtualNetworkScopeFilter = (
   return matchesStringEqualityFilter(filter, 'this.spec.virtual_network.id', virtualNetwork);
 };
 
+const matchesNameContainsFilter = (
+  filter: string | undefined,
+  name: string | undefined,
+): boolean => {
+  const searchLiteral = filter?.match(/this\.metadata\.name\.contains\(("(?:\\.|[^"\\])*")\)/)?.[1];
+  if (!searchLiteral) {
+    return true;
+  }
+  const search = JSON.parse(searchLiteral) as string;
+  return (name ?? '').includes(search);
+};
+
+const matchesStatusStateInFilter = (
+  filter: string | undefined,
+  state: number | undefined,
+): boolean => {
+  const inMarker = 'this.status.state in ';
+  const inIndex = filter?.indexOf(inMarker) ?? -1;
+  if (inIndex < 0) {
+    return true;
+  }
+  if (!filter) {
+    return false;
+  }
+  const afterIn = filter.slice(inIndex + inMarker.length);
+  const bracketEnd = afterIn.indexOf(']');
+  if (bracketEnd < 0) {
+    return false;
+  }
+  const states = afterIn
+    .slice(1, bracketEnd)
+    .split(',')
+    .map((value) => Number(value.trim()))
+    .filter((value) => !Number.isNaN(value));
+  return states.includes(state ?? 0);
+};
+
+const matchesExternalIpPoolListFilter = (
+  filter: string | undefined,
+  pool: ExternalIPPool,
+): boolean =>
+  matchesNameContainsFilter(filter, pool.metadata?.name) &&
+  matchesStatusStateInFilter(filter, pool.status?.state);
+
 const matchesUnallocatedExternalIpFilter = (
   filter: string | undefined,
   state: number | undefined,
@@ -388,7 +437,7 @@ const matchesInstanceTypeActiveFilter = (
   return state === InstanceTypeState.ACTIVE;
 };
 
-const matchesDiskImageLifecycleFilter = (
+export const matchesDiskImageLifecycleFilter = (
   filter: string | undefined,
   lifecycle: number | undefined,
 ): boolean => {
@@ -448,6 +497,9 @@ const matchesStorageTierActiveFilter = (
 };
 
 export type MockTransportOverrides = {
+  onComputeInstanceCatalogItemGet?: () =>
+    | { object?: ComputeInstanceCatalogItem | undefined }
+    | Promise<{ object?: ComputeInstanceCatalogItem | undefined }>;
   onSelfSubjectAccessReview?: (
     req: SelfSubjectAccessReviewsCreateRequest,
   ) =>
@@ -614,8 +666,17 @@ export type MockTransportOverrides = {
   onDiskImageCreate?: (req: DiskImagesCreateRequest) => DiskImagesCreateResponse;
   onDiskImageUpdate?: (req: DiskImagesUpdateRequest) => DiskImagesUpdateResponse;
   onDiskImageDelete?: (req: DiskImagesDeleteRequest) => DiskImagesDeleteResponse;
-  onSubnetGet?: (req: SubnetsGetRequest) => { object?: Subnet };
+  onSubnetGet?: (req: SubnetsGetRequest) => { object?: Subnet } | Promise<{ object?: Subnet }>;
   onSubnetList?: (req: unknown) => void;
+  onVirtualNetworkGet?: (
+    req: VirtualNetworksGetRequest,
+  ) => { object?: VirtualNetwork } | Promise<{ object?: VirtualNetwork }>;
+  onSubnetDelete?: (
+    req: SubnetsDeleteRequest,
+  ) => SubnetsDeleteResponse | Promise<SubnetsDeleteResponse>;
+  onVirtualNetworkDelete?: (
+    req: VirtualNetworksDeleteRequest,
+  ) => VirtualNetworksDeleteResponse | Promise<VirtualNetworksDeleteResponse>;
   onSecurityGroupList?: (req: unknown) => void;
   onNatGatewayList?: (req: NATGatewaysListRequest) => void;
   onNatGatewayCreate?: (
@@ -663,8 +724,8 @@ export const createMockConnectTransport = (
   const identityProviders = fixtures.identityProviders ?? [];
   const projects = fixtures.projects ?? [];
   const projectMemberships = fixtures.projectMemberships ?? [];
-  const virtualNetworks = fixtures.virtualNetworks ?? [];
-  const subnets = fixtures.subnets ?? [];
+  const virtualNetworks = [...(fixtures.virtualNetworks ?? [])];
+  const subnets = [...(fixtures.subnets ?? [])];
   const securityGroups = fixtures.securityGroups ?? [];
   const instanceTypes = fixtures.instanceTypes ?? [];
   const publicBaremetalInstanceTypes = fixtures.publicBaremetalInstanceTypes ?? [];
@@ -700,9 +761,10 @@ export const createMockConnectTransport = (
         list: (req) => ({
           items: catalogItems.filter((item) => catalogItemMatchesListFilter(item, req.filter)),
         }),
-        get: (req) => ({
-          object: catalogItems.find((i) => i.id === req.id),
-        }),
+        get: (req) =>
+          overrides.onComputeInstanceCatalogItemGet?.() ?? {
+            object: catalogItems.find((i) => i.id === req.id),
+          },
         create: (req) => {
           if (overrides.onComputeInstanceCatalogItemCreate) {
             return overrides.onComputeInstanceCatalogItemCreate(req);
@@ -879,9 +941,24 @@ export const createMockConnectTransport = (
           }
           return { items, size: items.length, total };
         },
-        get: (req) => ({
-          object: virtualNetworks.find((i) => i.id === req.id),
-        }),
+        get: async (req) => {
+          if (overrides.onVirtualNetworkGet) {
+            return await overrides.onVirtualNetworkGet(req);
+          }
+          return {
+            object: virtualNetworks.find((i) => i.id === req.id),
+          };
+        },
+        delete: async (req) => {
+          if (overrides.onVirtualNetworkDelete) {
+            return overrides.onVirtualNetworkDelete(req);
+          }
+          const index = virtualNetworks.findIndex((item) => item.id === req.id);
+          if (index >= 0) {
+            virtualNetworks.splice(index, 1);
+          }
+          return {};
+        },
       });
 
       router.service(Subnets, {
@@ -894,13 +971,23 @@ export const createMockConnectTransport = (
           );
           return { items, size: items.length, total: items.length };
         },
-        get: (req) => {
+        get: async (req) => {
           if (overrides.onSubnetGet) {
-            return overrides.onSubnetGet(req);
+            return await overrides.onSubnetGet(req);
           }
           return {
             object: subnets.find((i) => i.id === req.id),
           };
+        },
+        delete: async (req) => {
+          if (overrides.onSubnetDelete) {
+            return overrides.onSubnetDelete(req);
+          }
+          const index = subnets.findIndex((item) => item.id === req.id);
+          if (index >= 0) {
+            subnets.splice(index, 1);
+          }
+          return {};
         },
       });
 
@@ -1004,10 +1091,16 @@ export const createMockConnectTransport = (
           if (overrides.onStorageBackendList) {
             return overrides.onStorageBackendList(req);
           }
-          const items = storageBackends.filter((item) =>
-            matchesStorageBackendReadyFilter(req.filter, item.status?.state),
+          const items = storageBackends.filter(
+            (item) =>
+              matchesStorageBackendReadyFilter(req.filter, item.status?.state) &&
+              matchesNameContainsFilter(req.filter, item.metadata?.name),
           );
-          return { items, size: items.length, total: items.length };
+          return {
+            items: req.limit === 0 ? [] : items,
+            size: req.limit === 0 ? 0 : items.length,
+            total: items.length,
+          };
         },
         get: (req) => {
           if (overrides.onStorageBackendGet) {
@@ -1065,10 +1158,13 @@ export const createMockConnectTransport = (
           if (overrides.onExternalIPPoolList) {
             return overrides.onExternalIPPoolList(req);
           }
+          const items = privateExternalIpPools.filter((pool) =>
+            matchesExternalIpPoolListFilter(req.filter, pool),
+          );
           return {
-            items: privateExternalIpPools,
-            size: privateExternalIpPools.length,
-            total: privateExternalIpPools.length,
+            items: req.limit === 0 ? [] : items,
+            size: items.length,
+            total: items.length,
           };
         },
         get: (req) => ({

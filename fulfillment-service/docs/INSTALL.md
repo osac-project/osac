@@ -4,10 +4,12 @@ This document describes how to install the service on OpenShift. It uses the Key
 identity management and presents three options for the PostgreSQL database: CloudNativePG (CNPG),
 the Crunchy PostgreSQL operator (PGO), and the Zalando PostgreSQL operator. These are just
 suggestions. The service will work with any PostgreSQL 18+ database as long as the connection
-details are provided correctly. Similarly, the service requires Keycloak specifically, but it will
-work with any Keycloak installation regardless of how it was deployed - whether via the operator,
-manually, or by other means - as long as it is correctly configured with the required realm,
-clients, and roles.
+details are provided correctly. Similarly, the service requires Keycloak specifically and supports
+any deployment method—operator, manual, or otherwise—provided it is correctly configured with the
+required realm, clients, and roles. When using organization-linked tenant identity providers,
+Keycloak 26.6.0 or later is required. Earlier versions do not apply OSAC's setting to hide these
+providers when the login email does not resolve an organization. See the [Keycloak version
+requirement](../../docs/guides/keycloak-configuration.md#keycloak-version-requirement).
 
 The steps below are meant to be followed in order. Each step assumes the previous ones have been
 completed. The commands are designed to be copied and executed directly, and the result should be a
@@ -43,14 +45,12 @@ export DOMAIN=$(oc get ingresses.config.openshift.io cluster -o json | jq -r '.s
 All commands in this guide use `${DOMAIN}` to construct hostnames, so you only need to set this
 once.
 
-## Enable HTTP/2
+## TLS and gRPC routing
 
-The service uses gRPC, which requires HTTP/2. This is not enabled by default in OpenShift, so you
-need to enable it first:
-
-```shell
-oc annotate ingresses.config.openshift.io cluster ingress.operator.openshift.io/default-enable-http2=true
-```
+The fulfillment-service exposes its gRPC endpoints via OpenShift Routes with
+`tls.termination: passthrough`. The ingress controller forwards the raw TLS
+connection to the pod without terminating it, so no router-level HTTP/2 support and no
+cluster-level HTTP/2 annotation are required.
 
 ## Install cert-manager
 

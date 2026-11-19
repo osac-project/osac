@@ -15,11 +15,10 @@ import type { ExternalIPPool } from '@osac/types/private';
 
 import ExternalIpPoolCidrsSection from './ExternalIpPoolCidrsSection';
 import ExternalIpPoolStatusLabel from './ExternalIpPoolStatusLabel';
+import { getPoolTenant } from './utils';
 import { useTranslation } from '../../hooks/useTranslation';
 import { displayValue } from '../../utils/detailFormatters';
 import { Timestamp } from '../Primitives/Timestamp';
-
-const SHARED_TENANT = 'shared';
 
 interface ExternalIpPoolDetailsPageContentProps {
   pool: ExternalIPPool;
@@ -58,7 +57,7 @@ const ExternalIpPoolDetailsPageContent = ({ pool }: ExternalIpPoolDetailsPageCon
                   <DescriptionListGroup>
                     <DescriptionListTerm>{t('Tenant')}</DescriptionListTerm>
                     <DescriptionListDescription>
-                      {tenant === SHARED_TENANT ? t('Shared') : tenant}
+                      {getPoolTenant(pool, t)}
                     </DescriptionListDescription>
                   </DescriptionListGroup>
                 ) : null}

@@ -132,7 +132,11 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
 
 def _run_scenario(clients: dict[str, Mock]) -> None:
     regression.test_cluster_create_with_two_node_sets(
-        **clients, cluster_template="template", pull_secret_name="pull-secret", ssh_key_secret="test-ssh-key-secret"
+        **clients,
+        request=Mock(),
+        cluster_template="template",
+        pull_secret_name="pull-secret",
+        ssh_key_secret="test-ssh-key-secret",
     )
 
 

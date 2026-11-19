@@ -60,7 +60,7 @@ def run_dispatches(tmp_path, targets, remote_env="", provider="lvms", module_opt
                 "vars": {
                     "storage_provider_action": "ensure_storage_class",
                     "storage_provider_tiers": [
-                        {"name": "fast", "protocol": "block", "provider": provider}
+                        {"name": "fast", "protocol": "block", "provider": provider, "backend_id": f"{provider}-backend-1"}
                     ],
                     **target,
                 },

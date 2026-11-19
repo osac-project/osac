@@ -46,7 +46,11 @@ const subnets = [
   }),
   create(SubnetSchema, {
     id: 'subnet-default',
-    metadata: { name: 'default-ipv4', labels: { 'osac.openshift.io/default': 'true' } },
+    metadata: {
+      name: 'default-ipv4',
+      tenant: 'test-tenant',
+      labels: { 'osac.openshift.io/default': 'true' },
+    },
     spec: {
       virtualNetwork: { id: 'vn-default', name: 'tenant-workload' },
       ipv4Cidr: '10.42.0.0/24',
@@ -60,6 +64,7 @@ const securityGroups = [
     id: 'sg-default',
     metadata: {
       name: 'allow-ssh-https',
+      tenant: 'test-tenant',
       labels: { 'osac.openshift.io/default': 'true' },
     },
     spec: { virtualNetwork: { id: 'vn-default' } },
@@ -111,29 +116,22 @@ describe('ClusterNetworkingStep', () => {
     expect(screen.queryByLabelText(/^Select virtual network/)).not.toBeInTheDocument();
   });
 
-  it('shows the default subnet for the selected project', async () => {
+  it('shows the tenant default subnet when another project is selected', async () => {
     const values = createEmptyClusterValues();
     values.metadata.project = 'project-a';
-    const otherProjectSubnet = create(SubnetSchema, {
-      id: 'subnet-project-b',
-      metadata: {
-        name: 'project-b-default',
-        project: 'project-b',
-        labels: { 'osac.openshift.io/default': 'true' },
-      },
-      spec: { virtualNetwork: { id: 'vn-default' }, ipv4Cidr: '10.40.0.0/24' },
-      status: { state: SubnetState.READY },
-    });
-    const selectedProjectSubnet = create(SubnetSchema, {
-      id: 'subnet-project-a',
-      metadata: {
-        name: 'project-a-default',
-        project: 'project-a',
-        labels: { 'osac.openshift.io/default': 'true' },
-      },
-      spec: { virtualNetwork: { id: 'vn-default' }, ipv4Cidr: '10.41.0.0/24' },
-      status: { state: SubnetState.READY },
-    });
+    const makeDefaultSubnet = (id: string, project: string, cidr: string, seconds: bigint) =>
+      create(SubnetSchema, {
+        id,
+        metadata: {
+          name: id,
+          tenant: 'test-tenant',
+          project,
+          labels: { 'osac.openshift.io/default': 'true' },
+          creationTimestamp: { seconds, nanos: 0 },
+        },
+        spec: { virtualNetwork: { id: 'vn-default' }, ipv4Cidr: cidr },
+        status: { state: SubnetState.READY },
+      });
 
     renderWithProviders(
       <Formik initialValues={values} onSubmit={() => undefined}>
@@ -142,13 +140,19 @@ describe('ClusterNetworkingStep', () => {
       {
         apiFixtures: {
           virtualNetworks,
-          subnets: [otherProjectSubnet, selectedProjectSubnet],
+          subnets: [
+            makeDefaultSubnet('tenant-default', '', '10.41.0.0/24', 1n),
+            // Newer, so the summary would pick it if it accepted a default-labeled
+            // subnet outside the tenant's default project.
+            makeDefaultSubnet('project-a-labeled', 'project-a', '10.40.0.0/24', 2n),
+          ],
           securityGroups: [
             create(SecurityGroupSchema, {
-              id: 'sg-project-a',
+              id: 'sg-tenant-default',
               metadata: {
-                name: 'project-a-group',
-                project: 'project-a',
+                name: 'tenant-default-group',
+                tenant: 'test-tenant',
+                project: '',
                 labels: { 'osac.openshift.io/default': 'true' },
               },
               spec: { virtualNetwork: { id: 'vn-default' } },
@@ -159,13 +163,16 @@ describe('ClusterNetworkingStep', () => {
       },
     );
 
-    expect(await screen.findByText('project-a-default')).toBeInTheDocument();
-    expect(await screen.findByText('project-a-group')).toBeInTheDocument();
-    expect(screen.queryByText('project-b-default')).not.toBeInTheDocument();
+    expect(await screen.findByText('tenant-default')).toBeInTheDocument();
+    expect(await screen.findByText('tenant-default-group')).toBeInTheDocument();
+    expect(screen.queryByText('project-a-labeled')).not.toBeInTheDocument();
   });
 
   it('summarizes the newest ready tenant default subnet', async () => {
-    const defaultMetadata = { labels: { 'osac.openshift.io/default': 'true' } };
+    const defaultMetadata = {
+      tenant: 'test-tenant',
+      labels: { 'osac.openshift.io/default': 'true' },
+    };
     const makeSubnet = (id: string, seconds: bigint) =>
       create(SubnetSchema, {
         id,

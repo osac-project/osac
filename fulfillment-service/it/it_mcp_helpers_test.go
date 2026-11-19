@@ -18,7 +18,58 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
 )
 
+var expectedMCPServerToolNames = []string{
+	"check_connection",
+	"list_resources",
+	"get_resource",
+	"create_compute_instance",
+	"update_compute_instance",
+	"delete_compute_instance",
+	"create_network_resource",
+	"delete_network_resource",
+	"create_project",
+	"update_project",
+}
+
+func connectMCPTokenSource(
+	ctx context.Context, endpoint, clientName string, tokenSource auth.TokenSource,
+) *mcp.ClientSession {
+	GinkgoHelper()
+	httpClient := &http.Client{Transport: ghttp.RoundTripperFunc(func(request *http.Request) (*http.Response, error) {
+		token, err := tokenSource.Token(request.Context())
+		if err != nil {
+			return nil, err
+		}
+		request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.Access))
+		return http.DefaultTransport.RoundTrip(request)
+	})}
+	client := mcp.NewClient(&mcp.Implementation{
+		Name: fmt.Sprintf("it-mcp-%s", clientName), Version: "0.1.0",
+	}, nil)
+	session, err := client.Connect(ctx, &mcp.StreamableClientTransport{
+		Endpoint: endpoint, HTTPClient: httpClient,
+	}, nil)
+	Expect(err).ToNot(HaveOccurred())
+	return session
+}
+
+func mcpToolNames(tools []*mcp.Tool) []string {
+	names := make([]string, len(tools))
+	for index, registeredTool := range tools {
+		names[index] = registeredTool.Name
+	}
+	return names
+}
+
 func startInProcessMCPServer(ctx context.Context, userAgent string) *httptest.Server {
+	return startInProcessMCPServerWithDeps(ctx, userAgent, nil)
+}
+
+func startInProcessMCPServerWithDeps(
+	ctx context.Context,
+	userAgent string,
+	configureDeps func(mcpserver.ServerDeps) mcpserver.ServerDeps,
+) *httptest.Server {
 	jwksCache, err := auth.NewJwksCache().
 		SetLogger(logger).
 		SetCaPool(tool.CaPool()).
@@ -39,8 +90,12 @@ func startInProcessMCPServer(ctx context.Context, userAgent string) *httptest.Se
 		Build()
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
 	DeferCleanup(func() { ExpectWithOffset(1, grpcConn.Close()).To(Succeed()) })
+	deps := mcpserver.NewServerDeps(grpcConn)
+	if configureDeps != nil {
+		deps = configureDeps(deps)
+	}
 	handler, err := mcpserver.NewHandler(
-		mcpserver.NewServerDeps(grpcConn), jwtValidator, "", "",
+		deps, jwtValidator, "", "",
 		mcpserver.TokenExchangerFunc(func(_ context.Context, subjectToken string, _ *jwt.Token) (string, error) {
 			return subjectToken, nil
 		}),

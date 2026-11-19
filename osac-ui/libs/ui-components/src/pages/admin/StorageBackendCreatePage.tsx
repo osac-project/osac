@@ -26,8 +26,8 @@ import {
   useGetResource,
   useUpdateResource,
 } from '@osac/ui-components/api/use-resource';
+import TextField from '@osac/ui-components/components/Form/base/TextField';
 import { CheckboxField } from '@osac/ui-components/components/Form/CheckboxField';
-import { InputField } from '@osac/ui-components/components/Form/InputField';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
 import NameField from '@osac/ui-components/components/Form/NameField';
 import OsacForm from '@osac/ui-components/components/Form/OsacForm';
@@ -185,7 +185,7 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
           validationSchema={getStorageBackendSchema(t, isEdit)}
           onSubmit={onSubmit}
         >
-          {({ submitForm, isSubmitting, setFieldValue, values }) => (
+          {({ submitForm, isSubmitting, setValues, values }) => (
             <Stack hasGutter>
               <LeaveFormConfirmation />
               <StackItem>
@@ -198,7 +198,13 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
                     isRequired
                     isDisabled={isEdit}
                     options={providerOptions}
-                    onSelect={(provider) => void setFieldValue('cspManaged', provider === 'netapp')}
+                    onSelect={(provider) =>
+                      void setValues({
+                        ...values,
+                        provider: String(provider),
+                        cspManaged: provider === 'netapp',
+                      })
+                    }
                   />
                   <CheckboxField
                     name="cspManaged"
@@ -220,18 +226,18 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
                     fieldId="storage-backend-csp-managed"
                     isDisabled
                   />
-                  <InputField
+                  <TextField
                     name="endpoint"
                     label={t('Endpoint')}
                     fieldId="storage-backend-endpoint"
                     isRequired={!values.cspManaged}
                   />
-                  <InputField
+                  <TextField
                     name="description"
                     label={t('Description')}
                     fieldId="storage-backend-description"
                   />
-                  <InputField
+                  <TextField
                     name="credentials.username"
                     label={t('Username')}
                     fieldId="storage-backend-username"
@@ -240,7 +246,7 @@ const StorageBackendForm = ({ backend }: { backend?: StorageBackend }) => {
                       isEdit ? t('Leave blank to keep the current credentials.') : undefined
                     }
                   />
-                  <InputField
+                  <TextField
                     name="credentials.password"
                     label={t('Password')}
                     fieldId="storage-backend-password"

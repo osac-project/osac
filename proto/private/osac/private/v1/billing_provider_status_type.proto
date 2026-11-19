@@ -1,0 +1,82 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "cleanapi/cleanapi.proto";
+import "google/protobuf/timestamp.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+
+// Reachability of the account API probed by the billing adapter, not the health of pricing or usage delivery.
+enum BillingProviderState {
+  // Unset. Never reported by the server.
+  BILLING_PROVIDER_STATE_UNSPECIFIED = 0;
+
+  // No billing provider is configured: billing is off for this deployment.
+  BILLING_PROVIDER_STATE_NOT_CONFIGURED = 1;
+
+  // The account API answered the last probe.
+  BILLING_PROVIDER_STATE_AVAILABLE = 2;
+
+  // A provider is configured but its account API did not answer the last probe.
+  BILLING_PROVIDER_STATE_UNAVAILABLE = 3;
+}
+
+// Operations implemented by the billing adapter. Listing a capability means the operation exists, not that calls to it
+// are currently healthy.
+enum BillingProviderCapability {
+  // Unset. Never reported by the server.
+  BILLING_PROVIDER_CAPABILITY_UNSPECIFIED = 0;
+
+  // Rate cards, catalog prices, coverage checks and price estimates.
+  BILLING_PROVIDER_CAPABILITY_PRICING = 1;
+}
+
+// Whether metering usage is reaching the billing provider.
+enum BillingUsageDeliveryState {
+  // Unset. Never reported by the server.
+  BILLING_USAGE_DELIVERY_STATE_UNSPECIFIED = 0;
+
+  // Fulfillment has no signal for usage delivery. This is the only value reported today.
+  BILLING_USAGE_DELIVERY_STATE_UNKNOWN = 1;
+
+  // Reserved until fulfillment can observe usage delivery.
+  BILLING_USAGE_DELIVERY_STATE_AVAILABLE = 2;
+
+  // Reserved until fulfillment can observe usage delivery.
+  BILLING_USAGE_DELIVERY_STATE_UNAVAILABLE = 3;
+}
+
+// Deployment-wide status of the billing provider connection.
+message BillingProviderStatus {
+  // State of the provider account API.
+  BillingProviderState state = 1;
+
+  // Configured billing adapter, such as `m360`. Empty when billing is not configured.
+  string provider_key = 2;
+
+  // Short administrator-facing text. It never contains a provider response body or a provider-native identifier.
+  string message = 3;
+
+  // Operations implemented by the adapter.
+  repeated BillingProviderCapability supported_capabilities = 4;
+
+  // Time of the last successful account API probe. Omitted when no probe has succeeded.
+  google.protobuf.Timestamp last_successful_check = 5;
+
+  // Usage delivery state. Always `UNKNOWN` today.
+  BillingUsageDeliveryState usage_delivery_state = 6;
+}

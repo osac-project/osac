@@ -13,6 +13,7 @@ import {
   listVmNames,
   openVmDetailsPage,
   openVmsPage,
+  selectVmListView,
   waitForVmToBeDeleted,
 } from '../../../../libs/test-utils/src/vms.page';
 
@@ -45,6 +46,7 @@ test(`deletes VM ${vmTestName}`, async ({ page }) => {
   );
 
   await testStep('vm-delete', 'Open the tenant Virtual Machines page', () => openVmsPage(page));
+  await testStep('vm-delete', 'Select the VM list view', () => selectVmListView(page));
   const vmNames = await testStep('vm-delete', 'Check the tenant VM list', () => listVmNames(page));
   if (!vmNames.includes(vmTestName)) {
     if (vmNames.length === 0) {

@@ -6,7 +6,7 @@ import {
   isKubernetesLabelKey,
   isKubernetesLabelValue,
 } from '@osac/ui-components/validation/kubernetes-label';
-import { positiveIntegerSchema } from '@osac/ui-components/validation/positive-integer';
+import { bigIntSchema, intSchema } from '@osac/ui-components/validation/number';
 import { resourceNameSchema } from '@osac/ui-components/validation/resource-name';
 
 import type { BareMetalInstanceTypeFormValues } from './values';
@@ -55,13 +55,6 @@ const hostLabelSelectorSchema = (t: TFunction) => {
   });
 };
 
-const positiveBigIntSchema = (t: TFunction) =>
-  Yup.mixed<bigint>().test(
-    'positive-integer',
-    t('Must be greater than zero'),
-    (value) => value === undefined || value > 0n,
-  );
-
 export const getBareMetalInstanceTypeSchema = (t: TFunction) =>
   Yup.object({
     metadata: Yup.object({
@@ -70,19 +63,19 @@ export const getBareMetalInstanceTypeSchema = (t: TFunction) =>
     spec: Yup.object({
       description: Yup.string(),
       cpu: Yup.object({
-        cores: positiveIntegerSchema(t).required(t('Cores are required')),
+        cores: intSchema(t).required(t('Cores are required')),
         architecture: Yup.string().required(t('Architecture is required')),
         model: Yup.string(),
-        threadsPerCore: positiveIntegerSchema(t).required(t('Threads per core are required')),
+        threadsPerCore: intSchema(t).required(t('Threads per core are required')),
       }),
       memory: Yup.object({
-        totalGb: positiveBigIntSchema(t).required(t('Total (GB) is required')),
+        totalGb: bigIntSchema(t).required(t('Total (GB) is required')),
         type: Yup.string(),
       }),
       disks: Yup.array().of(
         Yup.object({
           type: Yup.string().required(t('Type is required')),
-          capacityGb: positiveBigIntSchema(t).required(t('Capacity (GB) is required')),
+          capacityGb: bigIntSchema(t).required(t('Capacity (GB) is required')),
           interface: Yup.string().required(t('Interface is required')),
         }),
       ),
@@ -91,7 +84,7 @@ export const getBareMetalInstanceTypeSchema = (t: TFunction) =>
           type: Yup.string().required(t('Type is required')),
           model: Yup.string().required(t('Model is required')),
           vendor: Yup.string(),
-          memoryGb: positiveIntegerSchema(t),
+          memoryGb: intSchema(t),
         }),
       ),
       networkPorts: Yup.array().of(

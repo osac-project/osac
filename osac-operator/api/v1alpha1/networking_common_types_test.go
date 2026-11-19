@@ -82,7 +82,11 @@ var _ = Describe("Accessors", func() {
 
 var _ = Describe("NetworkAttachmentName", func() {
 	It("is the lowercase target kind and the target API ID", func() {
-		Expect(v1alpha1.NetworkAttachmentName(v1alpha1.NetworkAttachmentTargetComputeInstance, "abc")).To(Equal("computeinstance-abc"))
-		Expect(v1alpha1.NetworkAttachmentName(v1alpha1.NetworkAttachmentTargetBareMetalInstance, "abc")).To(Equal("baremetalinstance-abc"))
+		Expect(v1alpha1.NetworkAttachmentName(v1alpha1.NetworkAttachmentTargetComputeInstance, "abc", "")).To(Equal("computeinstance-abc"))
+		Expect(v1alpha1.NetworkAttachmentName(v1alpha1.NetworkAttachmentTargetBareMetalInstance, "abc", "")).To(Equal("baremetalinstance-abc"))
+	})
+
+	It("appends the resolved interface name when the interface is named", func() {
+		Expect(v1alpha1.NetworkAttachmentName(v1alpha1.NetworkAttachmentTargetBareMetalInstance, "abc", "eth9")).To(Equal("baremetalinstance-abc-eth9"))
 	})
 })

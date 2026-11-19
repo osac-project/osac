@@ -734,7 +734,7 @@ func (r *ComputeInstanceReconciler) reconcileNetworkAttachment(ctx context.Conte
 		return nil, true, nil
 	}
 
-	name := v1alpha1.NetworkAttachmentName(v1alpha1.NetworkAttachmentTargetComputeInstance, id)
+	name := v1alpha1.NetworkAttachmentName(v1alpha1.NetworkAttachmentTargetComputeInstance, id, "")
 	na := &v1alpha1.NetworkAttachment{}
 	err := r.Get(ctx, client.ObjectKey{Namespace: r.NetworkingNamespace, Name: name}, na)
 	if apierrors.IsNotFound(err) {
@@ -1269,7 +1269,7 @@ func (r *ComputeInstanceReconciler) deleteNetworkAttachment(ctx context.Context,
 		return true, nil
 	}
 	na := &v1alpha1.NetworkAttachment{}
-	key := client.ObjectKey{Namespace: r.NetworkingNamespace, Name: v1alpha1.NetworkAttachmentName(v1alpha1.NetworkAttachmentTargetComputeInstance, id)}
+	key := client.ObjectKey{Namespace: r.NetworkingNamespace, Name: v1alpha1.NetworkAttachmentName(v1alpha1.NetworkAttachmentTargetComputeInstance, id, "")}
 	if err := r.APIReader.Get(ctx, key, na); err != nil {
 		if apierrors.IsNotFound(err) {
 			return true, nil

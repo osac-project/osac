@@ -176,7 +176,7 @@ describe('ClusterConfigurationStep', () => {
                 {
                   ...row,
                   hostType: { id: 'acme_1tb', name: 'acme_1tb' },
-                  size: '3',
+                  size: 3,
                 },
               ]),
             },
@@ -200,7 +200,7 @@ describe('ClusterConfigurationStep', () => {
     fireEvent.blur(sizeInput);
 
     await waitFor(() => {
-      expect(screen.getByText('Pool size must be greater than zero')).toBeInTheDocument();
+      expect(screen.getByText('Must be greater than zero')).toBeInTheDocument();
     });
   });
 
@@ -220,13 +220,13 @@ describe('ClusterConfigurationStep', () => {
                   ...createEmptyNodeSetRow(),
                   name: 'workers',
                   hostType: { id: 'acme_1tb', name: 'acme_1tb' },
-                  size: '3',
+                  size: 3,
                 },
                 {
                   ...createEmptyNodeSetRow(),
                   name: 'workers',
                   hostType: { id: 'acme_1tb', name: 'acme_1tb' },
-                  size: '2',
+                  size: 2,
                 },
               ]),
             },

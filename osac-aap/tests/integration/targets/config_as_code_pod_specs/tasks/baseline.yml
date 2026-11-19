@@ -52,6 +52,32 @@
           - "_pod_spec is search('storage-operations-ig')"
         fail_msg: Expected storage-operations-ig references in pod spec
 
+    - name: Assert compute-instance pod mounts the cluster trust bundle
+      ansible.builtin.assert:
+        that:
+          - >-
+            _pod.spec.containers[0].volumeMounts
+            | selectattr('name', 'equalto', 'ca-bundle')
+            | selectattr('mountPath', 'equalto', '/etc/ca-bundle')
+            | selectattr('readOnly', 'equalto', true)
+            | list | length == 1
+          - >-
+            _pod.spec.volumes
+            | selectattr('name', 'equalto', 'ca-bundle')
+            | map(attribute='configMap')
+            | selectattr('name', 'equalto', 'ca-bundle')
+            | selectattr('optional', 'equalto', true)
+            | list | length == 1
+          - >-
+            (_pod.spec.volumes | selectattr('name', 'equalto', 'ca-bundle')
+             | map(attribute='configMap.items') | first | default([]))
+            == [{'key': 'bundle.pem', 'path': 'bundle.pem'}]
+        fail_msg: >-
+          Compute-instance operations run the VM just-in-time storage dispatch,
+          so the pod must mount the optional trust-manager ca-bundle ConfigMap
+          read-only at /etc/ca-bundle (bundle.pem), which storage provider
+          roles read to verify storage management endpoints.
+
 - name: Compute-instance pod spec with remote kubeconfig
   hosts: localhost
   gather_facts: false
@@ -110,6 +136,31 @@
         fail_msg: >-
           Storage operations must keep their isolated optional credentials and
           omit the remote kubeconfig mount when no secret is configured.
+
+    - name: Assert storage-operations pod mounts the cluster trust bundle
+      ansible.builtin.assert:
+        that:
+          - >-
+            _storage_pod.spec.containers[0].volumeMounts
+            | selectattr('name', 'equalto', 'ca-bundle')
+            | selectattr('mountPath', 'equalto', '/etc/ca-bundle')
+            | selectattr('readOnly', 'equalto', true)
+            | list | length == 1
+          - >-
+            _storage_pod.spec.volumes
+            | selectattr('name', 'equalto', 'ca-bundle')
+            | map(attribute='configMap')
+            | selectattr('name', 'equalto', 'ca-bundle')
+            | selectattr('optional', 'equalto', true)
+            | list | length == 1
+          - >-
+            (_storage_pod.spec.volumes | selectattr('name', 'equalto', 'ca-bundle')
+             | map(attribute='configMap.items') | first)
+            == [{'key': 'bundle.pem', 'path': 'bundle.pem'}]
+        fail_msg: >-
+          Storage operations must mount the optional trust-manager ca-bundle
+          ConfigMap read-only at /etc/ca-bundle (bundle.pem), which storage
+          provider roles read to verify storage management endpoints.
 
 - name: Storage operations pod spec with remote kubeconfig
   hosts: localhost

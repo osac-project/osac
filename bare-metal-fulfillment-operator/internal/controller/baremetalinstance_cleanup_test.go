@@ -201,7 +201,7 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 		}
 		reconciler = NewBareMetalInstanceReconciler(
 			k8sClient, k8sClient.Scheme(), reconciler.InventoryClient, reconciler.ManagementClient,
-			provider, nil, nil, nil, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond,
+			provider, false, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond,
 		)
 
 		key := client.ObjectKeyFromObject(bmi)
@@ -267,7 +267,7 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 
 		restartedReconciler := NewBareMetalInstanceReconciler(
 			k8sClient, k8sClient.Scheme(), reconciler.InventoryClient, reconciler.ManagementClient,
-			provider, nil, nil, nil, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond,
+			provider, false, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond, time.Millisecond,
 		)
 		result, err = restartedReconciler.Reconcile(ctx, ctrl.Request{NamespacedName: key})
 		Expect(err).NotTo(HaveOccurred())
@@ -305,9 +305,17 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 			}
 		}()
 
+		// The networking controller has finished its cleanup, so only BMF's
+		// finalizer is left on the NetworkAttachment.
+		reconciler.NetworkingEnabled = true
+		networkAttachment := newTestNetworkAttachment(full.Namespace, "ownership-test-id", "data-0", BareMetalInstanceNetworkingFinalizer)
+		Expect(k8sClient.Create(ctx, networkAttachment)).To(Succeed())
+		attachmentKey := client.ObjectKeyFromObject(networkAttachment)
+		attachmentGone := func() bool {
+			return apierrors.IsNotFound(k8sClient.Get(ctx, attachmentKey, &opv1alpha1.NetworkAttachment{}))
+		}
 		poweredOn := true
 		powerOffCalls := 0
-		networkDeprovisionCalls := 0
 		providerDeprovisionCalls := 0
 		reconciler.ManagementClient = &mockManagementClient{
 			getPowerStateFunc: func(_ context.Context, _ string) (*management.PowerStatus, error) {
@@ -318,21 +326,15 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 			},
 			setPowerStateFunc: func(_ context.Context, _ string, target management.PowerState) error {
 				Expect(target).To(Equal(management.PowerOff))
+				Expect(attachmentGone()).To(BeFalse(), "power off must happen before network cleanup")
 				poweredOn = false
 				powerOffCalls++
 				return nil
 			},
 		}
-		reconciler.NetworkingProvider = &mockProvisioningProvider{
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []opv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
-				Expect(poweredOn).To(BeFalse())
-				networkDeprovisionCalls++
-				return &provisioning.DeprovisionResult{Action: provisioning.DeprovisionTriggered, JobID: "network-job"}, nil
-			},
-		}
 		reconciler.ProvisioningProvider = &mockProvisioningProvider{
 			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []opv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
-				Expect(networkDeprovisionCalls).To(Equal(1))
+				Expect(attachmentGone()).To(BeTrue(), "network cleanup must finish before deprovisioning")
 				providerDeprovisionCalls++
 				return &provisioning.DeprovisionResult{Action: provisioning.DeprovisionTriggered, JobID: "provider-job"}, nil
 			},
@@ -343,7 +345,7 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 		Expect(poweredOn).To(BeTrue())
 		Expect(powerOffCalls).To(Equal(0))
-		Expect(networkDeprovisionCalls).To(Equal(0))
+		Expect(attachmentGone()).To(BeFalse())
 		Expect(providerDeprovisionCalls).To(Equal(0))
 		Expect(unassigned).To(BeFalse())
 
@@ -353,7 +355,7 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 		Expect(k8sClient.Update(ctx, latest)).To(Succeed())
 
 		completed := false
-		for range 8 {
+		for range 12 {
 			result, err := reconciler.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(full)})
 			Expect(err).NotTo(HaveOccurred())
 			fresh := &v1alpha1.BareMetalInstance{}
@@ -375,7 +377,7 @@ var _ = Describe("BareMetalInstance network cleanup ownership", func() {
 		}
 		Expect(completed).To(BeTrue())
 		Expect(powerOffCalls).To(Equal(1))
-		Expect(networkDeprovisionCalls).To(Equal(1))
+		Expect(attachmentGone()).To(BeTrue())
 		Expect(providerDeprovisionCalls).To(Equal(1))
 		Expect(unassigned).To(BeTrue())
 	})

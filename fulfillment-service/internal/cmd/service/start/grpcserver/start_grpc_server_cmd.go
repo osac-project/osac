@@ -697,6 +697,32 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create public attribution logic: %w", err)
 	}
 
+	// Resolve the billing provider once; this makes no provider call:
+	billingProvider := newBillingProvider(os.Getenv, os.ReadFile, c.logger)
+
+	// Create the billing provider statuses servers:
+	c.logger.InfoContext(ctx, "Creating billing provider statuses servers")
+	privateBillingProviderStatusesServer, err := servers.NewPrivateBillingProviderStatusesServer().
+		SetLogger(c.logger).
+		SetProvider(billingProvider).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private billing provider statuses server: %w", err)
+	}
+	billingProviderStatusesServer, err := servers.NewBillingProviderStatusesServer().
+		SetLogger(c.logger).
+		SetDelegate(privateBillingProviderStatusesServer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create public billing provider statuses server: %w", err)
+	}
+	// The public and private services share the same private server so that they report the same last successful
+	// check.
+	// filterable-resource-exempt: singleton status read, no List RPC or CEL filter field
+	publicv1.RegisterBillingProviderStatusesServer(grpcServer, billingProviderStatusesServer)
+	// filterable-resource-exempt: singleton status read, no List RPC or CEL filter field
+	privatev1.RegisterBillingProviderStatusesServer(grpcServer, privateBillingProviderStatusesServer)
+
 	// Create the capabilities servers:
 	c.logger.InfoContext(ctx, "Creating capabilities servers")
 	capabilitiesServer, err := servers.NewCapabilitiesServer().
@@ -1031,7 +1057,21 @@ func newDAOTierResolver(
 		if len(items) == 0 {
 			return nil, grpcstatus.Errorf(grpccodes.NotFound, "storage tier %q not found", tierName)
 		}
-		tier := items[0]
+		// Hold a shared tier lock through Volume insertion in the same request
+		// transaction. Concurrent creates can share it, while deletion must wait
+		// until their Volume references are committed or rolled back.
+		locked, err := tiersDAO.Get().SetId(items[0].GetId()).SetShareLock(true).Do(ctx)
+		if err != nil {
+			var notFound *dao.ErrNotFound
+			if errors.As(err, &notFound) {
+				return nil, grpcstatus.Errorf(grpccodes.NotFound, "storage tier %q not found", tierName)
+			}
+			return nil, fmt.Errorf("failed to lock storage tier %q: %w", tierName, err)
+		}
+		tier := locked.GetObject()
+		if tier.GetMetadata().GetDeletionTimestamp() != nil {
+			return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "storage tier %q is being deleted", tierName)
+		}
 
 		if tier.GetStatus().GetState() != privatev1.StorageTierState_STORAGE_TIER_STATE_ACTIVE {
 			return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "storage tier %q is not active", tierName)

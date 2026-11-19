@@ -36,24 +36,43 @@ export const tenantCredentialsFilePath = (tenantName: string): string =>
     `${safeTenantName(tenantName)}-break-glass-credentials.txt`,
   );
 
-const credentialFromFile = (contents: string, label: string, credentialsFile: string): string => {
+const credentialFromFile = (contents: string, label: string): string => {
   const line = contents.split(/\r?\n/).find((entry) => entry.startsWith(`${label}:`));
   const value = line?.slice(label.length + 1).trim();
   if (!value) {
-    throw new Error(`Tenant credentials file "${credentialsFile}" is missing ${label}.`);
+    throw new Error(`Tenant credentials file is missing ${label}.`);
   }
   return value;
+};
+
+// Filesystem errors include the credentials file path, which contains the
+// tenant name (possibly also the replacement password), and testStep logs
+// error messages verbatim. Rethrow them without the path.
+const readCredentialsFile = async (credentialsFile: string): Promise<string> => {
+  try {
+    return await readFile(credentialsFile, 'utf8');
+  } catch {
+    throw new Error('Could not read the tenant credentials file.');
+  }
+};
+
+const writeCredentialsFile = async (credentialsFile: string, contents: string): Promise<void> => {
+  try {
+    await writeFile(credentialsFile, contents, { encoding: 'utf8', mode: 0o600 });
+  } catch {
+    throw new Error('Could not write the tenant credentials file.');
+  }
 };
 
 /** Read tenant credentials previously saved by createTenant. */
 export const readTenantCredentials = async (
   credentialsFile: string,
 ): Promise<TenantCredentials> => {
-  logProgress('tenant-credentials', `Reading credentials from ${credentialsFile}.`);
-  const contents = await readFile(credentialsFile, 'utf8');
+  logProgress('tenant-credentials', 'Reading the generated tenant credentials.');
+  const contents = await readCredentialsFile(credentialsFile);
   return {
-    username: credentialFromFile(contents, 'Username', credentialsFile),
-    password: credentialFromFile(contents, 'Password', credentialsFile),
+    username: credentialFromFile(contents, 'Username'),
+    password: credentialFromFile(contents, 'Password'),
   };
 };
 
@@ -62,9 +81,9 @@ export const updateTenantCredentialsPassword = async (
   credentialsFile: string,
   password?: string,
 ): Promise<void> => {
-  logProgress('tenant-credentials', `Updating credentials in ${credentialsFile}.`);
-  const contents = await readFile(credentialsFile, 'utf8');
-  const tenantName = credentialFromFile(contents, 'Tenant', credentialsFile);
+  logProgress('tenant-credentials', 'Updating the generated tenant credentials.');
+  const contents = await readCredentialsFile(credentialsFile);
+  const tenantName = credentialFromFile(contents, 'Tenant');
   const replacementPassword = password?.trim() || tenantName;
   logProgress(
     'tenant-credentials',
@@ -77,9 +96,9 @@ export const updateTenantCredentialsPassword = async (
     () => `Password: ${replacementPassword}`,
   );
   if (updatedContents === contents) {
-    throw new Error(`Tenant credentials file "${credentialsFile}" is missing Password.`);
+    throw new Error('Tenant credentials file is missing Password.');
   }
-  await writeFile(credentialsFile, updatedContents, { encoding: 'utf8', mode: 0o600 });
+  await writeCredentialsFile(credentialsFile, updatedContents);
 };
 
 /** Remove the saved credentials for a tenant, if present. */
@@ -110,6 +129,16 @@ const getTenantRow = (page: Page, tenantName: string): Locator => {
   );
 };
 
+/** Select the table view so tenant rows are available to list-based helpers. */
+export const selectTenantListView = async (page: Page): Promise<void> => {
+  const listView = page.locator(...TenantsMainPage.listView);
+  await expect(listView).toBeVisible();
+  if ((await listView.getAttribute('aria-pressed')) !== 'true') {
+    await listView.click();
+  }
+  await expect(listView).toHaveAttribute('aria-pressed', 'true');
+};
+
 const getTenantNames = async (page: Page): Promise<string[]> =>
   (
     await page
@@ -136,6 +165,7 @@ export const expectTenantToExist = async (
   tenantName: string,
   timeout = 15_000,
 ): Promise<Locator> => {
+  await selectTenantListView(page);
   const tenantRow = getTenantRow(page, tenantName);
   await expect(tenantRow).toHaveCount(1, { timeout });
   return tenantRow;
@@ -143,6 +173,7 @@ export const expectTenantToExist = async (
 
 /** Verify that the requested tenant is not already present on the Tenants page. */
 export const expectTenantNotToExist = async (page: Page, tenantName: string): Promise<void> => {
+  await selectTenantListView(page);
   await expectRowNotToExist(
     getTenantRow(page, tenantName),
     `Cannot create tenant "${tenantName}": a tenant with this name already exists.`,
@@ -234,6 +265,7 @@ export const expectTenantToBeSynced = async (
 
 /** Verify that the default shared and system tenants are synced. */
 export const expectDefaultTenants = async (page: Page): Promise<void> => {
+  await selectTenantListView(page);
   for (const tenantName of defaultTenantNames) {
     const tenantRow = getTenantRow(page, tenantName);
     await expect(tenantRow).toHaveCount(1);

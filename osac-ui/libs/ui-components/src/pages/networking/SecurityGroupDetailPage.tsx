@@ -23,6 +23,7 @@ import { type SecurityGroup, SecurityGroupSchema, SecurityGroupState } from '@os
 import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import {
+  isDefaultNetworkingResource,
   resourceDisplayName,
   useDeleteSecurityGroup,
   useSecurityGroup,
@@ -31,12 +32,12 @@ import {
 } from '../../api/v1/networking';
 import { SecurityGroupRuleModal } from '../../components/networking/SecurityGroupRuleModal';
 import { SecurityGroupRulesTable } from '../../components/networking/SecurityGroupRulesTable';
-import { toPlainRule } from '../../components/networking/securityGroupRuleUtils';
 import { SecurityGroupStatusLabel } from '../../components/networking/SecurityGroupStatusLabel';
 import ListPage from '../../components/Page/ListPage';
 import ListPageBody from '../../components/Page/ListPageBody';
 import DeleteResourceModal from '../../components/Resource/DeleteResourceModal';
 import { useTranslation } from '../../hooks/useTranslation';
+import { defaultResourceDeleteReason } from '../../utils/networking';
 
 type RuleTarget = { direction: 'ingress' | 'egress'; ruleIndex?: number };
 
@@ -44,18 +45,17 @@ const securityGroupWithoutRule = (
   sg: SecurityGroup,
   target: Required<RuleTarget>,
 ): MessageInitShape<typeof SecurityGroupSchema> => {
-  const newIngress = (sg.spec?.ingress ?? []).map(toPlainRule);
-  const newEgress = (sg.spec?.egress ?? []).map(toPlainRule);
-  const targetList = target.direction === 'ingress' ? newIngress : newEgress;
+  const spec = {
+    egress: [...(sg.spec?.egress || [])],
+    ingress: [...(sg.spec?.ingress || [])],
+  };
+
+  const targetList = target.direction === 'ingress' ? spec.ingress : spec.egress;
   targetList.splice(target.ruleIndex, 1);
+
   return {
     id: sg.id,
-    metadata: { name: sg.metadata?.name ?? '' },
-    spec: {
-      virtualNetwork: sg.spec?.virtualNetwork,
-      ingress: newIngress,
-      egress: newEgress,
-    },
+    spec,
   };
 };
 
@@ -139,11 +139,23 @@ export const SecurityGroupDetailPage = () => {
   const vnId = sg?.spec?.virtualNetwork?.id ?? '';
   const vn = virtualNetworks.find((v) => v.id === vnId);
   const vnName = resourceDisplayName(vn?.metadata, vnId);
+  const isDefault = isDefaultNetworkingResource(sg);
+  const canDeleteSg = Boolean(sg) && !isDefault;
 
   return (
     <ListPage
       title={sgName}
-      actions={<DeleteResourceButton onClick={() => setShowDeleteSgModal(true)} />}
+      actions={
+        <DeleteResourceButton
+          canDelete={canDeleteSg}
+          disabledReason={isDefault ? defaultResourceDeleteReason(t) : undefined}
+          onClick={() => {
+            if (canDeleteSg) {
+              setShowDeleteSgModal(true);
+            }
+          }}
+        />
+      }
       breadcrumb={
         <Breadcrumb>
           <BreadcrumbItem>
@@ -267,7 +279,7 @@ export const SecurityGroupDetailPage = () => {
         />
       )}
 
-      {showDeleteSgModal && (
+      {showDeleteSgModal && canDeleteSg && (
         <DeleteResourceModal
           resourceName={sgName}
           label={t(

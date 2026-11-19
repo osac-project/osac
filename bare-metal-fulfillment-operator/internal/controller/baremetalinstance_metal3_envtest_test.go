@@ -95,10 +95,8 @@ func newMetal3Reconciler() *BareMetalInstanceReconciler {
 		k8sClient.Scheme(),
 		invClient,
 		mgmtClient,
-		nil, // provisioning provider
-		nil, // networking provider
-		nil, // IP discovery provider
-		nil, // AAP client
+		nil,   // provisioning provider
+		false, // networking namespace (networking disabled)
 		0, 0, 0, 0, 0,
 	)
 }
@@ -269,100 +267,6 @@ var _ = Describe("BareMetalInstance Metal3 Integration", func() {
 		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
 	})
 
-	It("does not resubmit network provisioning after an immutable attachment update is rejected and continues status and deletion", func() {
-		const name = "immutable-network-reconcile"
-		instance := &v1alpha1.BareMetalInstance{
-			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: metal3TestNS},
-			Spec: v1alpha1.BareMetalInstanceSpec{
-				Selector:   v1alpha1.HostSelectorSpec{HostSelector: map[string]string{"type": "network-reconcile"}},
-				TemplateID: shared.OsacNoopTemplate,
-				NetworkAttachments: []v1alpha1.BareMetalNetworkAttachment{{
-					SubnetRef: "subnet-a", Primary: true, SecurityGroupRefs: []string{"sg-a"},
-				}},
-			},
-		}
-		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
-		DeferCleanup(func() { cleanupBMI(name) })
-
-		provisionCalls := 0
-		provisionPolls := 0
-		deprovisionCalls := 0
-		deprovisionPolls := 0
-		provider := &mockProvisioningProvider{
-			triggerProvisionFunc: func(_ context.Context, _ client.Object) (*provisioning.ProvisionResult, error) {
-				provisionCalls++
-				return &provisioning.ProvisionResult{JobID: "network-provision", InitialState: opv1alpha1.JobStatePending}, nil
-			},
-			getProvisionStatusFunc: func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
-				provisionPolls++
-				return provisioning.ProvisionStatus{JobID: jobID, State: opv1alpha1.JobStateSucceeded, Message: "Network provisioned"}, nil
-			},
-			triggerDeprovisionFunc: func(_ context.Context, _ client.Object, _ []opv1alpha1.JobStatus) (*provisioning.DeprovisionResult, error) {
-				deprovisionCalls++
-				return &provisioning.DeprovisionResult{
-					Action:                 provisioning.DeprovisionTriggered,
-					JobID:                  "network-deprovision",
-					BlockDeletionOnFailure: true,
-				}, nil
-			},
-			getDeprovisionStatusFunc: func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
-				deprovisionPolls++
-				return provisioning.ProvisionStatus{JobID: jobID, State: opv1alpha1.JobStateSucceeded, Message: "Network deprovisioned"}, nil
-			},
-		}
-		reconciler := newMetal3Reconciler()
-		reconciler.NetworkingProvider = provider
-
-		// Add the network finalizer, then dispatch exactly one provider job.
-		_, err := reconciler.reconcileNetworking(ctx, instance)
-		Expect(err).NotTo(HaveOccurred())
-		instance = getBMI(name)
-		Expect(controllerutil.ContainsFinalizer(instance, BareMetalInstanceNetworkingFinalizer)).To(BeTrue())
-		_, err = reconciler.reconcileNetworking(ctx, instance)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(provisionCalls).To(Equal(1))
-
-		// Admission rejects the attempted attachment mutation before reconcile.
-		instance = getBMI(name)
-		instance.Spec.NetworkAttachments[0].SecurityGroupRefs = []string{"sg-b"}
-		err = k8sClient.Update(ctx, instance)
-		Expect(err).To(HaveOccurred())
-		Expect(apierrors.IsInvalid(err)).To(BeTrue())
-
-		// The unchanged desired config polls the existing job and reports success.
-		instance = getBMI(name)
-		_, err = reconciler.reconcileNetworking(ctx, instance)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(provisionCalls).To(Equal(1))
-		Expect(provisionPolls).To(BeNumerically(">", 0))
-		condition := instance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-		Expect(condition).NotTo(BeNil())
-		Expect(condition.Status).To(Equal(metav1.ConditionTrue))
-		// The outer Reconcile persists the condition after networking finishes.
-		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
-		instance = getBMI(name)
-		condition = instance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-		Expect(condition).NotTo(BeNil())
-		Expect(condition.Status).To(Equal(metav1.ConditionTrue))
-		Expect(instance.Status.NetworkingJobs).To(HaveLen(1))
-
-		// Deletion still dispatches and polls the network cleanup job, then
-		// removes the networking finalizer and lets Kubernetes remove the BMI.
-		Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
-		instance = getBMI(name)
-		_, done, err := reconciler.reconcileNetworkingDeletion(ctx, instance)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(done).To(BeFalse())
-		Expect(deprovisionCalls).To(Equal(1))
-		instance = getBMI(name)
-		_, done, err = reconciler.reconcileNetworkingDeletion(ctx, instance)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(done).To(BeTrue())
-		Expect(deprovisionPolls).To(BeNumerically(">", 0))
-		err = k8sClient.Get(ctx, types.NamespacedName{Namespace: metal3TestNS, Name: name}, &v1alpha1.BareMetalInstance{})
-		Expect(apierrors.IsNotFound(err)).To(BeTrue())
-	})
-
 	Describe("Allocation flow", func() {
 		const bmiName = "alloc-test-bmi"
 		const bmhName = "alloc-test-bmh"
@@ -395,10 +299,11 @@ var _ = Describe("BareMetalInstance Metal3 Integration", func() {
 			bmi = getBMI(bmiName)
 			Expect(bmi.Finalizers).To(ContainElement(BareMetalInstanceInventoryFinalizer))
 
-			// Reconcile 2: FindFreeHost → set ExternalHostID
+			// Reconcile 2: FindFreeHost → set ExternalHostID and the inventory host name
 			reconcileN(reconciler, bmiName, 1)
 			bmi = getBMI(bmiName)
 			Expect(bmi.Spec.ExternalHostID).To(Equal(metal3TestNS + "/" + bmhName))
+			Expect(bmi.Spec.ExternalHostName).To(Equal(bmhName))
 
 			// Reconcile 3: AssignHost → set HostClass, status persisted as Progressing
 			reconcileN(reconciler, bmiName, 1)
@@ -736,6 +641,62 @@ var _ = Describe("BareMetalInstance Metal3 Integration", func() {
 			Expect(condition.Status).To(Equal(metav1.ConditionTrue))
 			Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerOff))
 		})
+
+		It("powers on a halted host started with a restart trigger in the same update", func() {
+			createMetal3BMH(bmhName, map[string]string{
+				inventory.Metal3HostTypeLabel: "compute",
+			}, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+
+			bmi := &v1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: bmiName, Namespace: metal3TestNS},
+				Spec: v1alpha1.BareMetalInstanceSpec{
+					Selector: v1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"type": "compute"},
+					},
+					TemplateID:  shared.OsacNoopTemplate,
+					RunStrategy: v1alpha1.RunStrategyHalted,
+				},
+			}
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+
+			reconciler := newMetal3Reconciler()
+			reconcileN(reconciler, bmiName, 5)
+
+			bmi = getBMI(bmiName)
+			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseReady))
+			Expect(getBMH(bmhName).Spec.Online).To(BeFalse(), "precondition: halted host is off")
+
+			// Start the instance and bump the restart trigger in one update. The
+			// restart can't complete before the host is powered on, so the trigger
+			// must be acknowledged and left to power reconciliation instead of
+			// gating it behind IsRestartComplete (which requires PoweredOn and
+			// would deadlock).
+			bmi.Spec.RunStrategy = v1alpha1.RunStrategyAlways
+			bmi.Spec.RestartTrigger = 1
+			Expect(k8sClient.Update(ctx, bmi)).To(Succeed())
+
+			reconcileN(reconciler, bmiName, 1)
+
+			Expect(getBMH(bmhName).Spec.Online).To(BeTrue(),
+				"operator must power the host on instead of waiting for a restart that cannot complete")
+			bmi = getBMI(bmiName)
+			Expect(bmi.Status.RestartTrigger).To(Equal(int64(1)))
+			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
+
+			// Simulate BMO completing the power-on.
+			bmh := getBMH(bmhName)
+			bmh.Status.PoweredOn = true
+			Expect(k8sClient.Status().Update(ctx, bmh)).To(Succeed())
+
+			// First reconcile verifies convergence (stale-read guard), second reaches Ready.
+			reconcileN(reconciler, bmiName, 2)
+			bmi = getBMI(bmiName)
+			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseReady))
+			condition := bmi.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionTrue))
+			Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerOn))
+		})
 	})
 
 	Describe("Metal3 error propagation", func() {
@@ -851,7 +812,7 @@ var _ = Describe("BareMetalInstance Metal3 Integration", func() {
 				k8sClient.Scheme(),
 				inventory.NewMetal3ClientForTest(k8sClient, metal3TestNS, metal3HostClass),
 				management.NewMetal3ClientForTest(k8sClient, metal3TestNS),
-				nil, nil, nil, nil,
+				nil, false,
 				0, 0, 0, 0, 0,
 			)
 

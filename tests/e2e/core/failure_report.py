@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import time
+import traceback
 from collections.abc import Callable, Generator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -46,6 +47,11 @@ def _utc(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, UTC).isoformat(timespec="seconds")
 
 
+def _log_internal_error(message: str) -> None:
+    """Retain reporting-error tracebacks without handing raw exception data to log handlers."""
+    logger.warning("%s\n%s", message, sanitize_text(traceback.format_exc()))
+
+
 def _guarded(
     method: Callable[Concatenate[FailureReporter, P], None],
 ) -> Callable[Concatenate[FailureReporter, P], None]:
@@ -56,9 +62,14 @@ def _guarded(
         try:
             method(self, *args, **kwargs)
         except Exception:
-            logger.warning("E2E failure reporting hit an internal error", exc_info=True)
+            _log_internal_error("E2E failure reporting hit an internal error")
 
     return wrapper
+
+
+def _module_of(nodeid: str) -> str:
+    """The test file of a node ID; a fixture failure's name has no "::" and is its own key."""
+    return nodeid.split("::", 1)[0]
 
 
 class FailureReporter:
@@ -72,6 +83,8 @@ class FailureReporter:
         self.snapshotter: Snapshotter = Snapshotter(self.output_dir, self.worker, sources)
         self._path: Path = self.output_dir / f"results-{self.worker}.jsonl"
         self._started: dict[str, float] = {}
+        # First test start per module: the snapshot logs begin there, where an ordered suite built its state.
+        self._module_started: dict[str, float] = {}
         self._exceptions: dict[int, tuple[BaseException, str]] = {}
         self._counts: dict[str, int] = {}
 
@@ -116,7 +129,9 @@ class FailureReporter:
 
     @_guarded
     def pytest_runtest_logstart(self, nodeid: str, location: tuple[str, int | None, str]) -> None:
-        self._started[nodeid] = time.time()
+        now = time.time()
+        self._started[nodeid] = now
+        self._module_started.setdefault(_module_of(nodeid), now)
 
     # Per test
 
@@ -166,14 +181,14 @@ class FailureReporter:
             classified = classify(exc)
         except Exception:
             # A bug in classification must not lose the failure: report it as unclassified.
-            logger.warning("E2E failure classification hit an internal error", exc_info=True)
+            _log_internal_error("E2E failure classification hit an internal error")
             classified = Classified(Kind.UNCLASSIFIED, type(exc).__name__, {})
         entry.update(kind=str(classified.kind), summary=classified.summary, ids=classified.ids)
 
         first = self._remembered(exc)
         if first is not None:
             entry["repeat_of"] = first
-            logger.error("E2E FAILURE %s [%s] repeats the failure of %s", test, classified.kind, first)
+            logger.error("%s", sanitize_text(f"E2E FAILURE {test} [{classified.kind}] repeats the failure of {first}"))
             return
         self._exceptions[id(exc)] = (exc, test)
 
@@ -181,8 +196,8 @@ class FailureReporter:
             f"E2E FAILURE {test} [{classified.kind}] phase={entry['phase']} ids={classified.ids} "
             f"{sanitize_text(classified.summary)[:_LOG_SUMMARY_LIMIT]}"
         )
-        logger.error("%s", line)
-        entry["snapshot"] = self._snapshot(test, classified.kind, started, entry)
+        logger.error("%s", sanitize_text(line))
+        entry["snapshot"] = self._snapshot(sanitize_text(test), classified.kind, started, entry)
 
     def _remembered(self, exc: BaseException) -> str | None:
         """The test that already reported `exc`, or an exception in its chain (a cleanup error replaces it)."""
@@ -196,22 +211,23 @@ class FailureReporter:
             link = link.__cause__ or link.__context__
         return None
 
-    @_guarded
     def capture_fixture_failure(self, exc: BaseException, name: str, started: float | None) -> None:
-        """Report a fixture failure now, while the system it built is still there.
+        """Report a fixture failure before its cleanup starts."""
+        self.capture_failure(exc, name, started, phase="setup")
 
-        A generator fixture's `finally` runs before `makereport`, so waiting for the hook would snapshot a cleaned
-        system. This classifies, logs, writes the record and takes the snapshot; `makereport` then finds the
-        exception remembered and writes a repeat without a second snapshot.
-        """
+    @_guarded
+    def capture_failure(
+        self, exc: BaseException, name: str, started: float | None = None, *, phase: str = "call"
+    ) -> None:
+        """Report before in-body cleanup; the later pytest hook recognizes the remembered exception."""
         if not self.enabled:
             return
-        began = started if started is not None else time.time()
+        began = started if started is not None else self._started.get(name, time.time())
         entry: dict[str, Any] = {
             "ts": _utc(time.time()),
             "nodeid": name,
             "test": name,
-            "phase": "setup",
+            "phase": phase,
             "outcome": "failed",
             "duration_s": round(time.time() - began, 3),
             "started_at": _utc(began),
@@ -224,11 +240,25 @@ class FailureReporter:
         self._on_failure(None, exc, entry, began)
         self._append(entry)
 
+    @_guarded
+    def capture_snapshot(self, name: str) -> None:
+        """Take a bounded pre-delete checkpoint while leaving the test's outcome and failure cap untouched."""
+        if self.enabled:
+            started = datetime.fromtimestamp(self._started.get(name, time.time()), UTC)
+            module_started = self._module_started.get(_module_of(name))
+            logs_since = datetime.fromtimestamp(module_started, UTC) if module_started is not None else None
+            path = self.snapshotter.take(
+                name, Kind.UNCLASSIFIED, started, {"reason": "before-delete"}, logs_since=logs_since, checkpoint=True
+            )
+            logger.info("E2E snapshot before delete: %s", sanitize_text(path))
+
     def _snapshot(self, test: str, kind: Kind, started: float, entry: dict[str, Any]) -> str | None:
         try:
-            return self.snapshotter.take(test, kind, datetime.fromtimestamp(started, UTC), entry)
+            module_started = self._module_started.get(_module_of(str(entry.get("nodeid", ""))))
+            logs_since = datetime.fromtimestamp(module_started, UTC) if module_started is not None else None
+            return self.snapshotter.take(test, kind, datetime.fromtimestamp(started, UTC), entry, logs_since=logs_since)
         except Exception:
-            logger.warning("E2E failure snapshot hit an internal error", exc_info=True)
+            _log_internal_error("E2E failure snapshot hit an internal error")
             return None
 
 
@@ -242,6 +272,26 @@ def register(config: pytest.Config, *, sources: SnapshotSources = SOURCES) -> Fa
     return reporter
 
 
+def capture_failure(config: pytest.Config, exc: BaseException, name: str) -> None:
+    """Report a test-body failure before cleanup. Never raises, and does nothing without the plugin."""
+    try:
+        reporter = config.pluginmanager.get_plugin(PLUGIN_NAME)
+        if reporter is not None:
+            reporter.capture_failure(exc, name)
+    except Exception:
+        _log_internal_error("E2E test failure capture hit an internal error")
+
+
+def capture_snapshot(config: pytest.Config, name: str) -> None:
+    """Capture state immediately before intentional deletion without reporting a failure."""
+    try:
+        reporter = config.pluginmanager.get_plugin(PLUGIN_NAME)
+        if reporter is not None:
+            reporter.capture_snapshot(name)
+    except Exception:
+        _log_internal_error("E2E checkpoint capture hit an internal error")
+
+
 def capture_fixture_failure(config: pytest.Config, exc: BaseException, name: str, started: float | None = None) -> None:
     """Report a failing fixture before it cleans up. Never raises, and does nothing without the plugin."""
     try:
@@ -249,4 +299,4 @@ def capture_fixture_failure(config: pytest.Config, exc: BaseException, name: str
         if reporter is not None:
             reporter.capture_fixture_failure(exc, name, started)
     except Exception:
-        logger.warning("E2E fixture failure capture hit an internal error", exc_info=True)
+        _log_internal_error("E2E fixture failure capture hit an internal error")

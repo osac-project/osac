@@ -26,7 +26,7 @@ import {
 import { useTranslation } from '../../hooks/useTranslation';
 import { useApiFetch } from '../api-context';
 import { type CelFilter, cel } from '../cel';
-import { type ListParams, apiQueryKey } from '../types';
+import { type ApiQueryKey, type ListParams, apiQueryKey } from '../types';
 import { type ApiQueryClient, useApiQuery, useApiQueryClient } from '../use-api-query';
 import { useListResource } from '../use-resource';
 
@@ -99,21 +99,28 @@ export const VIRTUAL_NETWORK_READY_LIST_FILTER = cel<VirtualNetwork>((filter) =>
 
 const DEFAULT_NETWORK_LABEL_FILTER = 'this.metadata.labels["osac.openshift.io/default"] == "true"';
 
-export const defaultSubnetListFilter = (project: string) =>
+export const isDefaultNetworkingResource = (resource?: {
+  metadata?: { labels?: Record<string, string> };
+}): boolean => resource?.metadata?.labels?.['osac.openshift.io/default'] === 'true';
+
+// Tenant defaults are tenant-wide: they live in the tenant's default project ("")
+// and apply to every project of the tenant. The server scopes a tenant user's lists
+// to their tenant, so the filters carry no tenant clause.
+export const defaultSubnetListFilter = () =>
   cel<Subnet>((filter) =>
     filter.and(
       DEFAULT_NETWORK_LABEL_FILTER as CelFilter<Subnet>,
-      filter.field('metadata.project').equals(project),
+      filter.field('metadata.project').equals(''),
       filter.field('status.state').equals(SubnetState.READY),
       'has(this.spec.ipv4_cidr)' as CelFilter<Subnet>,
     ),
   );
 
-export const defaultSecurityGroupListFilter = (project: string, virtualNetworkId: string) =>
+export const defaultSecurityGroupListFilter = (virtualNetworkId: string) =>
   cel<SecurityGroup>((filter) =>
     filter.and(
       DEFAULT_NETWORK_LABEL_FILTER as CelFilter<SecurityGroup>,
-      filter.field('metadata.project').equals(project),
+      filter.field('metadata.project').equals(''),
       filter.field('spec.virtualNetwork.id').equals(virtualNetworkId),
       filter.field('status.state').equals(SecurityGroupState.READY),
     ),
@@ -290,13 +297,28 @@ export const useSecurityGroup = (id: string) => {
 };
 
 export const invalidateVirtualNetworksQueries = (qc: ApiQueryClient) =>
-  qc.invalidateQueries({ queryKey: apiQueryKey('v1/virtual_networks') });
+  Promise.all([
+    qc.invalidateQueries({ queryKey: apiQueryKey('v1/virtual_networks') }),
+    qc.invalidateQueries({
+      queryKey: [VirtualNetworks.typeName] as unknown as ApiQueryKey,
+    }),
+  ]);
 
 export const invalidateSubnetsQueries = (qc: ApiQueryClient) =>
-  qc.invalidateQueries({ queryKey: apiQueryKey('v1/subnets') });
+  Promise.all([
+    qc.invalidateQueries({ queryKey: apiQueryKey('v1/subnets') }),
+    qc.invalidateQueries({
+      queryKey: [Subnets.typeName] as unknown as ApiQueryKey,
+    }),
+  ]);
 
 export const invalidateSecurityGroupsQueries = (qc: ApiQueryClient) =>
-  qc.invalidateQueries({ queryKey: apiQueryKey('v1/security_groups') });
+  Promise.all([
+    qc.invalidateQueries({ queryKey: apiQueryKey('v1/security_groups') }),
+    qc.invalidateQueries({
+      queryKey: [SecurityGroups.typeName] as unknown as ApiQueryKey,
+    }),
+  ]);
 
 export const useCreateVirtualNetwork = () => {
   const client = useApiFetch(VirtualNetworks);

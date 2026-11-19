@@ -20,6 +20,7 @@
 #   whenAny        Values paths; the check is skipped unless at least one is set/true.
 #   whenAll        Values paths; the check is skipped unless every one is set/true.
 #   unless         Values path that, when set/true, skips the check.
+#   unlessReason   Optional skip message when the `unless` path is set.
 #   platforms      [openshift] limits the check to OpenShift clusters.
 #   dependsOn      Check ids. If one of them did not pass, this check is
 #                  `unknown` (not counted as a second root cause).
@@ -269,6 +270,8 @@
   severity: required
   category: operators
   requiredFor: [vmaas]
+  unless: operator.remoteClusterKubeconfigSecretName
+  unlessReason: "VMaaS targets a remote cluster"
   title: "OpenShift Virtualization is installed"
   params:
     crds: [kubevirts.kubevirt.io]

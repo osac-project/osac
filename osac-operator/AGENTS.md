@@ -1,19 +1,13 @@
 # OSAC operator
 
+Never edit this file except for minor corrections. Do not append new content.
+
 Kubernetes controllers for OSAC resources, provisioning through AAP, feedback
 to the fulfillment service, and the KubeVirt console proxy.
 
-This component is part of the OSAC monorepo, not an isolated project. Its APIs,
-generated artifacts, deployment configuration, and runtime behavior may affect
-other components. Apply the repository-wide rules in
-[`../AGENTS.md`](../AGENTS.md), consider downstream consumers before changing
-behavior, and follow the instructions for every affected component.
-
 ## Required context
 
-Before changing this component, identify the documents relevant to the change
-below, then read and follow them. These documents are authoritative for their
-respective areas.
+Read the applicable references before changing behavior:
 
 - Component setup and architecture: [`README.md`](README.md)
 - Cross-component contracts: [`../docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md) and [`../docs/CONVENTIONS.md`](../docs/CONVENTIONS.md)
@@ -30,146 +24,118 @@ respective areas.
 - `pkg/provisioning` and `pkg/aap` have external consumers, including the bare-metal fulfillment operator; interface changes are cross-component changes.
 - Networking manager tasks run only through `internal/networktask` (see its `doc.go`): one generic job template per task, `status.jobs` entries, typed result validation.
 - When debugging operators, check for stale `vendor/` dependencies and cached images before rebuilding.
-- The fulfillment proto types are the shared top-level `proto/` module, imported as `github.com/osac-project/osac/proto/gen/...`. This component no longer generates its own copy.
-- Never put credentials in logs, samples, or manifests.
+- Worker recovery retains attempted or uncertain Create intent, including
+  legacy state and empty List results; do not equate missing evidence with
+  deletion. Only an invocation entering with explicit Reserved intent may
+  re-arm its own definitively rejected Create; later rejection cannot erase
+  earlier uncertainty.
+- Preserve optimistic worker checkpoints, authoritative identity/tenant/owner
+  checks before destruction, UID-safe resumes and strict Agent association.
+  Keep per-NodeSet capacity, retry clocks and continuous-readiness accounting.
+- Observe once per worker invocation. Rejected-create checkpoints atomically
+  test UID and the complete selected worker without overwriting unrelated
+  workers, conditions or metadata; do not erase prior uncertain outcomes.
+- Cleanup waits for owner-driven detach; never force CAP-Agent/Machine hooks
+  or NodePool replicas. Archived-Cluster ownership lookup remains unresolved.
+- Failed ExternalIP release retains the object, address and finalizer for retry;
+  dispatch allocation with the Fulfillment API ID.
+- Reject networking results when dependency identity or tenant snapshots change.
+  ComputeInstance feedback preserves disk correlation/registration lists while
+  excluding them from outgoing update masks.
+- LVMS resumes preserve authoritative volume identity across stale snapshots,
+  status conflicts and terminating-resource replacement; absence of TopoLVM
+  must not prevent the Volume controller from becoming ready.
 
 ## Generated files
 
 - After changing `api/v1alpha1/*_types.go`, run `make manifests generate`.
 - Then run `make helm-crds` to synchronize `config/crd/` with `charts/operator-crds/`; use `make check-helm-crds` to verify the result.
-- Fulfillment proto changes are regenerated once in the shared module: `make -C ../proto generate` (see `proto/AGENTS.md`). Do not regenerate anything proto-related from `osac-operator/`.
+- From `osac-operator/`, regenerate Fulfillment protos through
+  `make -C ../proto generate` (see [proto instructions](../proto/AGENTS.md)).
+  Do not run a separate component-local protobuf generator.
 - Never hand-edit `config/crd/`, `zz_generated.deepcopy.go`, or `go.sum`; run `go mod tidy` for module changes.
 
-## Integration Testing
+<a id="integration-testing"></a>
+
+## Validation
 
 See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#osac-operator).
 
-| Touched area | Required validation | Command / follow-up |
-|---|---|---|
-| Pure helpers, validation, or state calculations | Unit | `make test` |
-| NATGateway dependency snapshot, tenant and identity checks, result rejection on changed dependencies, and Subnet-independent input | Unit / Envtest | `internal/controller/natgateway_contract_test.go` and the NATGateway specs in `internal/controller/networking_attachments_test.go`; run `make test` |
-| ExternalIP task ownership and release retry/finalizer retention | Envtest | `internal/controller/networking_attachments_test.go`; `make test`. Verifies allocation dispatch uses the Fulfillment API ID, and a failed release retains the ExternalIP, address, and finalizer until a later release succeeds. |
-| Fulfillment client CA parsing, TLS verification, or bundle rotation | Unit with local TLS endpoint; component integration for deployment | `make test`, then [installer Kind target](../docs/INTEGRATION-TESTING.md#osac-operator) and `make -C ../osac-installer fulfillment-trust-render-test` |
-| Controller reconciliation, finalizers, status, or CRD interactions | Envtest | `make test` |
-| Controller deployment, watches (including optional TopoLVM watch, remote VMaaS `StorageClass` watch, and CSP-managed `Tenant` `StorageClass` readiness with test-controlled Fulfillment/AAP), RBAC, console proxy, networking, or Helm wiring | Component integration | `test/integration/remote_storage_cluster_test.go`; deploy current image/manifests, then `make integration-tests`; [installer alternative](../docs/INTEGRATION-TESTING.md#osac-operator) |
-| ClusterOrder upgrade observation admission and deployed timeout settings | Kind component integration | `test/integration/clusterorder_upgrade_contract_test.go`; deploy the current operator, then run `make integration-tests` |
-| ComputeInstance `diskVolumeIDs` schema round-trip and AAP payload preservation | Envtest, provider Unit, and Kind CRD component integration | `make test` and `make integration-tests` |
-| ComputeInstance provisioning with provider networking disabled (GATE-VM-01..04) | Unit / Envtest and Kind component integration | `internal/controller/computeinstance_networking_test.go` covers the disabled create and delete fallback; `test/integration/computeinstance_disabled_test.go` records the operator's AAP launch with a recording double and skips unless the phase sets `IT_TEST_SUITE=operator`, as standalone `make integration-tests` does not. Run `make test` and `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator`. No real AAP, KubeVirt VM, or network provider runs. |
-| ComputeInstance disk records and class mappings through real Fulfillment and operator controllers | Component integration, OSAC-6685 | `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage`; see [real and recorded boundaries](../docs/INTEGRATION-TESTING.md#computeinstance-disk-handoff-osac-6685). |
-| Automatic ExternalIP cleanup for ClusterOrder, ComputeInstance, and BareMetalInstance (NET-CLEAN-07) | Kind component integration — DEV | Isolated installer run and coverage boundary: [NET-CLEAN-07](../docs/INTEGRATION-TESTING.md#net-clean-07-deployed-osac-cleanup) |
-| CaaS ClusterOrder endpoint discovery, automatic ExternalIPAttachment ordering, ingress reservation, DNS lifecycle, and deletion dependencies (OSAC-7152), including the MaaS wrapper that delegates cluster creation/deletion to `ocp_small` | Unit / Envtest plus AAP component contract | `internal/controller/clusterorder_networking_test.go`, `internal/controller/clusterorder_controller_test.go`, and `make test`; AAP manager task coverage is in `osac-aap/tests/unit/test_netris_cluster_ingress.py` and the `netris_fabric` integration target. Disabled-mode coverage (OSAC-5998): deletion with recorded ingress/DNS jobs asserts no reserve, release, DNS or remove launch and no fabricated removal claim, and a ready HostedCluster with workers reaches `Ready` without the endpoint gate or a networking job. The AAP side of GATE-CAAS-04 is `osac-aap/tests/integration/targets/caas_core_lifecycle`. Existing CaaS create/delete E2E regression cases are run unchanged; no E2E tests are added by this work. Retry-safe persistence and orphan recovery remain OSAC-6655. |
-| Networking task inputs, `network_type`/`network_segment` launch keys, `nat_gateway_context`, or accepted manager results (`l3_vni`, `l2_vni`, `external_ip`, `cluster_ingress`, `vm_attachment`, `dhcp_lease`) | Unit / Envtest against the shared wire goldens | `internal/controller/networking_wire_golden_test.go` and `internal/networktask/wire_golden_test.go` read `../tests/contract/network-task`; run `make test`. The osac-aap half is `test_network_task_wire_contract.py`; change both in one PR. Bound: create/apply/attach tasks of VirtualNetwork, Subnet, ExternalIPPool, ExternalIP, ExternalIPAttachment, NetworkAttachment overlay apply and physical apply/delete/query_dhcp_lease, NATGateway, and ClusterOrder ingress reservation (`reserve_cluster_ingress_ip`). Not bound (no ticket): NetworkAttachment overlay delete/detach, other delete_*/detach_* tasks, SecurityGroup tasks, FabricDomain, and ClusterOrder ingress release (`release_cluster_ingress_ip`) |
-| AAP, network task engine, provisioning-provider, KubeVirt, or fulfillment boundary | Qualifying Contract or E2E | Use a boundary-specific suite; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) when coverage is missing |
-| Generated CRDs or manifests | Envtest plus applicable Kind suite | `make manifests generate helm-crds check-helm-crds`, then the required test command |
+Shared goldens bind physical NetworkAttachment apply/delete/`query_dhcp_lease`,
+the `dhcp_lease` result and ClusterOrder ingress reservation. Keep
+`internal/controller/networking_wire_golden_test.go`,
+`internal/networktask/wire_golden_test.go`, AAP's
+`tests/unit/test_network_task_wire_contract.py` and
+`../tests/contract/network-task` synchronized in one PR; run `make test` from
+`osac-operator/`. DHCP validation uses the interface MAC and physical subnet
+range. Overlay delete/detach, other deletes, SecurityGroup, FabricDomain and
+ingress release remain unbound; see [wire boundaries](../docs/testing/osac-operator.md#coverage-boundaries).
 
-Envtest runs via `make test`; Kind tests require the current operator deployment.
-The existing Controller Suite (`internal/controller/suite_test.go`) owns all
-worker persistence coverage alongside the other operator controllers. Worker
-specs are co-located as `internal/controller/baremetalworker_*_test.go`, labelled
-`baremetalworker`; there is no separate worker test harness. Dependency doubles
-and explicit CR fixture writes live only in `*_test.go`, not importable packages.
-Kubernetes/etcd and OSAC CRDs are real; fulfillment responses, ignition HTTP and
-external Agent/InfraEnv progression are test-controlled. Keep the minimal
-InfraEnv/ClusterDeployment and existing Agent/NodePool test CRDs: the controller
-Envtest assertions consume them, not an environment bootstrap.
+### Local build and checks
 
-ComputeInstance feedback coverage ([OSAC-6608](https://redhat.atlassian.net/browse/OSAC-6608))
-is in `internal/controller/computeinstance_feedback_controller_test.go`. It
-checks that normal and deleting feedback updates retain the disk correlation
-and registration lists while excluding them from the outgoing update mask. The
-Controller Suite uses real Kubernetes API/etcd and CRDs; Fulfillment responses
-are controlled by the test client. Run `make test`; this does not exercise a
-deployed Fulfillment service or Volume API.
+Run from `osac-operator/`, using Go from `go.mod` and Helm for chart checks:
 
-Worker coverage is owned by **osac-operator [DEV]**:
+```bash
+make fmt
+make vet
+make lint
+make helm-lint
+make check-helm-crds
+make test
+make build
+```
 
-- Ginkgo Unit specs under `internal/controller/baremetalworker/` use descriptive
-  behavior names and cover reservation and identity recovery, one observation per invocation, optimistic status writes,
-  authoritative destructive checks, per-NodeSet capacity, retry/cleanup,
-  InfraEnv evidence, strict Agent association and CAP-Agent handoff, per-call
-  availability classification, fixed attempt/continuous-ready clocks and
-  intent-derived counts. `reservation_cleanup_test.go` covers explicit Reserved
-  cancellation, both optimistic Create-intent race orderings, attempted/legacy
-  empty-List retention, lost acknowledgement recovery and retry-state reset.
-  `bmi_rejection_test.go` covers terminal-code classification, exact rejected-create
-  checkpoint fields and verified response accounting, one status patch without
-  a post-Create ClusterOrder Get, retry-path re-rejection backoff, transport and
-  prior unknown/legacy-outcome conservatism, and AlreadyExists-recovery exclusion.
-  Only an invocation entering with explicit Reserved intent may re-arm its own
-  definitively rejected Create; a later rejection cannot clear earlier uncertainty.
-  `metrics_test.go` checks the exact two-instance-type
-  desired/zero-ready series before reservations without creating missing series
-  through metric accessors.
-- `baremetalworker_reconciler_test.go` and `baremetalworker_lifecycle_test.go`
-  drive public Reconcile through InfraEnv ownership/artifact changes, BMI
-  creation/recovery, Agent binding/demotion/handoff, scale-up/down and finalization.
-- `baremetalworker_convergence_test.go` preserves R01–R10 persistence and
-  fault traces: interrupted/lost Create acknowledgement, definitively rejected
-  creates racing deletion to finalizer removal and minimal Failed/retry/condition
-  convergence. Rejection checkpoint cases exercise real atomic JSON Patch tests
-  on UID and the complete selected worker: target mutation/removal/reordering
-  and same-name object replacement fail without partial writes or success
-  accounting; unrelated other-worker, condition, spec and metadata updates survive
-  a successful checkpoint without a resourceVersion fence. Other traces include
-  delayed List/NotFound/
-  outage evidence, conflicts and restart recovery, prerequisite-free progress,
-  delayed cleanup and real Agent Delete UID-precondition rejection, selector
-  union/ambiguity, stale-ignition classification before UID recording, separate
-  order availability, attempt-clock/backfill and continuous readiness, and
-  NodeSet-partitioned counts. Reservation cleanup specs add pre-Create
-  cancellation/finalization, real create-intent resourceVersion races, restart after persisted intent but
-  before the API call, legacy conservatism and lost-ack delayed-List cleanup.
-  Each case uses explicit calls; legacy fixture
-  convergence is bounded by `16 + 8*N`, not a latency SLA or fallback polling.
-- `baremetalworker_tenant_safety_test.go` preserves tenant/owner rejection and
-  immutable ownership assertions. The fixture client models scoped-name
-  uniqueness but does not establish the real fulfillment/Postgres guarantee.
-- `test/integration/baremetalworker_test.go`, run by `make integration-tests`,
-  checks the installed service account's worker permissions through real
-  Kubernetes authorization. It does not allocate hosts or exercise providers.
+`make test` prepares Envtest and regenerates manifests/DeepCopy code; review
+generated changes. `make build` also runs that unit-test path before building
+the manager and console proxy, so it is not a compile-only shortcut.
 
-Focused validation from `osac-operator/`:
+### Select coverage by boundary
+
+Controller regressions reuse `internal/controller/suite_test.go` and real
+Envtest API-server writes for status/version behavior. Fake updates do not
+establish conflicts or watch delivery.
+
+All commands below also run from `osac-operator/`. Integration targets require
+the current image/manifests deployed into an explicitly selected Kind cluster.
+
+| Touched area | Required tier and command |
+|---|---|
+| Go/Helm changes | Static: `make fmt lint helm-lint check-helm-crds` |
+| Helpers, reconciliation, finalizers, status, CRDs, worker recovery or LVMS | Unit/Envtest/Contract: `make test` |
+| Networking task input/result contracts | `make test`; synchronize shared `../tests/contract/network-task` goldens with AAP in the same PR; see `internal/networktask/doc.go` for the bound task surface |
+| Deployment, watches, RBAC, console proxy, networking or Helm wiring | Deploy current image/manifests, then `make integration-tests` against Kind |
+| Provider-disabled ComputeInstance launches | `make test` and `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator` (standalone integration target does not select this phase) |
+| ComputeInstance disk handoff through Fulfillment/operator | `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage` |
+| Fulfillment TLS and trust rotation | `make test`, Kind integration, and `make -C ../osac-installer fulfillment-trust-render-test` |
+| Generated CRDs/manifests | `make manifests generate helm-crds check-helm-crds`, then applicable Envtest/Kind suite |
+| AAP, provisioning, KubeVirt or Fulfillment boundary | Qualifying real-boundary Contract/E2E; report missing coverage via the linked suite guide |
+
+Worker persistence uses the shared Controller Envtest Suite, labelled
+`baremetalworker`; keep dependency doubles and explicit CR fixture writes in
+`*_test.go`, not importable packages. Kubernetes/etcd and OSAC CRDs are real;
+Fulfillment responses, ignition HTTP and Agent/InfraEnv progression are
+controlled. Keep the minimal InfraEnv/ClusterDeployment and Agent/NodePool CRDs
+consumed by the suite.
+
+For focused worker controller coverage, with `KUBEBUILDER_ASSETS` pointing to
+the Envtest binaries prepared by the Makefile:
+
+```bash
+go test ./internal/controller -count=1 -ginkgo.label-filter=baremetalworker
+```
+
+These focused pure-helper checks do not replace controller Envtest:
 
 ```bash
 go test ./internal/controller/baremetalworker -count=1
 go test -race ./internal/controller/baremetalworker -count=1
-KUBEBUILDER_ASSETS="$PWD/bin/k8s/1.31.0-linux-amd64" \
-  go test ./internal/controller -count=1 -ginkgo.label-filter=baremetalworker
 ```
 
-The complete `make test` runs Unit, the shared Controller Envtest Suite and
-Contract checks. `make integration-tests` uses the existing deployed Kind suite;
-no extra environment or CaaS-only test command is required. Real fulfillment
-API fixture validation, fulfillment-generated ClusterOrders, Postgres
-same-name uniqueness/recovery and provider deletion are not established by
-these local doubles or the RBAC check. Those **[DEV] Contract** gaps, manager
-Agent-watch delivery and real Assisted Service behavior remain under
-[OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843); deployed
-create/scale/delete, CAP-Agent/drain and hardware journeys remain **[QE] E2E**.
-Production archived-Cluster ownership lookup still requires an approved fix
-and a dedicated owner/ticket (unresolved); cleanup waits for owner-driven detach
-rather than forcing CAP-Agent/Machine hooks or NodePool replicas.
+Local doubles and Kind worker RBAC checks do not establish real Fulfillment/
+Postgres uniqueness or recovery, Agent-watch delivery, Assisted Service or
+provider deletion. These remain [Contract gaps](../docs/INTEGRATION-TESTING.md#osac-operator);
+deployed lifecycle, CAP-Agent/drain and hardware checks are QE E2E.
+LVMS fixture CRDs/status do not prove device provisioning, mounting or CSI I/O.
 
-The LVMS envtest lifecycle cases exercise generated LogicalVolume names,
-persisted UID-safe resumes, terminating-resource replacement and deletion
-through the public Volume reconciler for RWO and RWOP. They use a minimal
-TopoLVM CRD and test-controlled status; stale parent snapshots and status
-conflicts verify authoritative identity preservation. They do not provision or
-mount real devices. The Kind LVMS-disabled case checks that the Volume
-controller remains ready without the TopoLVM CRD, not LVMS provisioning or CSI I/O.
-
-## Validation
-
-From `osac-operator/`:
-
-```bash
-make fmt
-make lint
-make test
-make helm-lint
-make check-helm-crds
-make integration-tests       # Requires a pre-existing Kind cluster
-```
-
-`make build` also runs the unit-test path. The console proxy integration tests
-are under `test/integration/`; E2E suites are under [`../tests/e2e/`](../tests/e2e/).
+The console proxy integration tests are under `test/integration/`; E2E suites
+are under [`../tests/e2e/`](../tests/e2e/).

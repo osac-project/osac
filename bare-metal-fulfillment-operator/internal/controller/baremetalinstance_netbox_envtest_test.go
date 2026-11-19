@@ -447,8 +447,7 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			Expect(query["cf_osac_managed"]).To(ConsistOf("true"))
 			Expect(query["cf_osac_instance_id__empty"]).To(ConsistOf("true"))
 			Expect(query["cf_cpu_cores"]).To(ConsistOf("16"))
-			authorized := listRequests[0].Authorization == "Token "+testNetBoxToken
-			Expect(authorized).To(BeTrue())
+			Expect(listRequests[0].Authorization).To(Equal("Bearer " + testNetBoxToken))
 			claimPatches := len(mock.requestsFor(http.MethodPatch, "/api/dcim/devices/42/"))
 			Expect(claimPatches).To(Equal(0))
 

@@ -229,12 +229,15 @@ func (m *Metal3Client) TriggerRestart(ctx context.Context, hostID, requestID str
 // IsRestartSubmitted reports whether the backend already accepted this request.
 // The annotation is written in the same patch as the reboot annotation, so it is
 // durable evidence even when the response to that patch was lost.
-func (m *Metal3Client) IsRestartSubmitted(ctx context.Context, hostID, requestID string) (bool, error) {
+func (m *Metal3Client) IsRestartSubmitted(ctx context.Context, hostID, requestID string) (RestartSubmissionState, error) {
 	bmh, err := m.getBMH(ctx, hostID)
 	if err != nil {
-		return false, err
+		return RestartSubmissionUnknown, err
 	}
-	return bmh.Annotations[RestartRequestAnnotation] == requestID, nil
+	if bmh.Annotations[RestartRequestAnnotation] == requestID {
+		return RestartSubmissionSubmitted, nil
+	}
+	return RestartSubmissionNotSubmitted, nil
 }
 
 func (m *Metal3Client) IsRestartComplete(ctx context.Context, hostID string) (bool, error) {

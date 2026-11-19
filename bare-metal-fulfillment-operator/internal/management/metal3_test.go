@@ -291,13 +291,13 @@ var _ = Describe("Metal3 Management Backend", func() {
 
 			submitted, err := m.IsRestartSubmitted(ctx, metal3TestNamespace+"/host-submitted", "req-1")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(submitted).To(BeFalse())
+			Expect(submitted).To(Equal(management.RestartSubmissionNotSubmitted))
 
 			Expect(m.TriggerRestart(ctx, metal3TestNamespace+"/host-submitted", "req-1")).To(Succeed())
 
 			submitted, err = m.IsRestartSubmitted(ctx, metal3TestNamespace+"/host-submitted", "req-1")
 			Expect(err).NotTo(HaveOccurred())
-			Expect(submitted).To(BeTrue())
+			Expect(submitted).To(Equal(management.RestartSubmissionSubmitted))
 		})
 
 		It("returns ErrTransitioning for a host that is powering off", func() {

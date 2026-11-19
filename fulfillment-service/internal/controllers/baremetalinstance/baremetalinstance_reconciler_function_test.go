@@ -2619,6 +2619,52 @@ var _ = Describe("syncStatus", func() {
 		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(stopTime))
 	})
 
+	It("should preserve state on a read failure and use the later stop timestamp", func() {
+		t := newTask(0)
+		running := time.Date(2026, time.January, 1, 0, 0, 10, 0, time.UTC)
+		status := t.bareMetalInstance.GetStatus()
+		status.SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING)
+		status.SetStateTransitionTime(timestamppb.New(running))
+
+		// Observation 1: a transient read failure keeps the last confirmed state.
+		readFailure := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{RunStrategy: bmfov1alpha1.RunStrategyHalted},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionPowerSynced),
+						Status: metav1.ConditionFalse,
+						Reason: bmfov1alpha1.HostConditionReasonPowerReadFailed,
+					},
+				},
+			},
+		}
+		t.syncStatus(readFailure)
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING))
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(running))
+
+		// Observation 2: the stop is observed later; use its timestamp.
+		stopTime := running.Add(10 * time.Minute)
+		stop := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{RunStrategy: bmfov1alpha1.RunStrategyHalted},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Conditions: []metav1.Condition{
+					{
+						Type:               string(bmfov1alpha1.HostConditionPowerSynced),
+						Status:             metav1.ConditionFalse,
+						Reason:             bmfov1alpha1.HostConditionReasonProgressing,
+						LastTransitionTime: metav1.NewTime(stopTime),
+					},
+				},
+			},
+		}
+		t.syncStatus(stop)
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPING))
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(stopTime))
+	})
+
 	It("should keep the last state for a withdrawn restart with a read failure", func() {
 		t := newTask(42)
 		stored := time.Date(2026, time.January, 1, 0, 0, 10, 0, time.UTC)

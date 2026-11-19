@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"maps"
@@ -200,7 +201,31 @@ func (r *BareMetalInstanceReconciler) updateStatusWithRetry(ctx context.Context,
 			// provider operation, but never publish its stale Ready/Progressing phase.
 			status.Phase = v1alpha1.BareMetalInstancePhaseDeleting
 		}
+
+		// Never let a stale snapshot erase a newer restart claim. A claim is
+		// monotonic across different requests, but the reconcile that owns the
+		// same request may intentionally clear it.
+		prevMarker := latest.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
+		var claimed *metav1.Condition
+		if prevMarker != nil && prevMarker.Status == metav1.ConditionTrue {
+			copied := *prevMarker
+			claimed = &copied
+		}
+		prevRequestID := latest.Status.RestartRequestID
+
 		latest.Status = status
+		if claimed != nil && status.RestartRequestID != prevRequestID {
+			latest.SetStatusCondition(
+				v1alpha1.HostConditionRestartInProgress,
+				claimed.Status,
+				claimed.Reason,
+				claimed.Message,
+			)
+			if cond := latest.GetStatusCondition(v1alpha1.HostConditionRestartInProgress); cond != nil {
+				cond.LastTransitionTime = claimed.LastTransitionTime
+			}
+			latest.Status.RestartRequestID = prevRequestID
+		}
 		return r.Status().Update(ctx, latest)
 	})
 }
@@ -626,6 +651,11 @@ func (r *BareMetalInstanceReconciler) reconcilePower(ctx context.Context, bareMe
 		}
 		log.Error(err, "failed to power "+action+" node", "nodeID", bareMetalInstance.Spec.ExternalHostID)
 		return false, err
+	}
+	if targetState == management.PowerOff {
+		// A submitted stop supersedes the cancelled-restart observation, so
+		// callers can report the stop with its own transition time.
+		clearCancelledRestart(bareMetalInstance)
 	}
 
 	return true, nil
@@ -1120,7 +1150,6 @@ func (r *BareMetalInstanceReconciler) reconcileRestartTrigger(ctx context.Contex
 				"Cancelled",
 				"",
 			)
-			bareMetalInstance.Status.RestartRequestID = ""
 		}
 		return ctrl.Result{}, nil
 	}
@@ -1357,7 +1386,6 @@ func setRestartSubmitError(bmi *v1alpha1.BareMetalInstance, err error) {
 			metav1.ConditionFalse, v1alpha1.HostConditionReasonIronicAPIFailure, "failed to trigger restart")
 		bmi.SetStatusCondition(v1alpha1.HostConditionRestartInProgress,
 			metav1.ConditionFalse, v1alpha1.HostConditionReasonPowerSyncFailed, "Restart failed")
-		bmi.Status.RestartRequestID = ""
 		return
 	}
 	bmi.SetStatusCondition(v1alpha1.HostConditionPowerSynced,
@@ -1412,25 +1440,46 @@ func (r *BareMetalInstanceReconciler) resubmitPendingClaim(ctx context.Context, 
 	if cond == nil || cond.Reason != v1alpha1.HostConditionReasonRestartSubmissionPending {
 		return false, ctrl.Result{}, nil
 	}
-	submitted, err := r.ManagementClient.IsRestartSubmitted(ctx, bmi.Spec.ExternalHostID, bmi.Status.RestartRequestID)
+	state, err := r.ManagementClient.IsRestartSubmitted(ctx, bmi.Spec.ExternalHostID, bmi.Status.RestartRequestID)
 	if err != nil {
 		setRestartError(bmi, err, "failed to confirm restart submission")
 		return true, ctrl.Result{}, err
 	}
-	if !submitted {
+	switch state {
+	case management.RestartSubmissionNotSubmitted:
 		result, err := r.triggerRestart(ctx, bmi)
 		if err != nil {
 			setRestartSubmitError(bmi, err)
 		}
 		return true, result, err
+	case management.RestartSubmissionSubmitted:
+		bmi.SetStatusCondition(
+			v1alpha1.HostConditionRestartInProgress,
+			metav1.ConditionTrue,
+			v1alpha1.HostConditionReasonProgressing,
+			"Restart operation initiated",
+		)
+		return false, ctrl.Result{}, nil
+	default:
+		// The backend exposes no request identity (OpenStack). Keep the pending
+		// marker so callers do not report a power cycle that may not have started,
+		// and poll to completion instead of re-submitting.
+		return false, ctrl.Result{}, nil
 	}
-	bmi.SetStatusCondition(
-		v1alpha1.HostConditionRestartInProgress,
-		metav1.ConditionTrue,
-		v1alpha1.HostConditionReasonProgressing,
-		"Restart operation initiated",
-	)
-	return false, ctrl.Result{}, nil
+}
+
+// clearCancelledRestart drops a restart marker left by a halt so a submitted stop
+// is reported as an ordinary power transition.
+func clearCancelledRestart(bmi *v1alpha1.BareMetalInstance) {
+	cond := bmi.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
+	if cond != nil && cond.Status == metav1.ConditionFalse && cond.Reason == "Cancelled" {
+		bmi.SetStatusCondition(
+			v1alpha1.HostConditionRestartInProgress,
+			metav1.ConditionFalse,
+			"Completed",
+			"",
+		)
+	}
 }
 
 // ackRestartTrigger echoes a skipped restart request and clears restart progress.
@@ -1444,7 +1493,6 @@ func ackRestartTrigger(bareMetalInstance *v1alpha1.BareMetalInstance, reason str
 		"",
 	)
 	bareMetalInstance.Status.RestartTrigger = bareMetalInstance.Spec.RestartTrigger
-	bareMetalInstance.Status.RestartRequestID = ""
 	return ctrl.Result{}, nil
 }
 
@@ -1457,7 +1505,6 @@ func completeRestartTrigger(bareMetalInstance *v1alpha1.BareMetalInstance, messa
 		"",
 	)
 	bareMetalInstance.Status.RestartTrigger = bareMetalInstance.Spec.RestartTrigger
-	bareMetalInstance.Status.RestartRequestID = ""
 	bareMetalInstance.SetStatusCondition(
 		v1alpha1.HostConditionPowerSynced,
 		metav1.ConditionTrue,
@@ -1467,11 +1514,16 @@ func completeRestartTrigger(bareMetalInstance *v1alpha1.BareMetalInstance, messa
 	return ctrl.Result{}, nil
 }
 
-// newRestartRequestID returns a fresh identity for one restart request. It is
-// persisted in the claim so a retry reuses it, even when a later request reuses
-// an earlier trigger value.
+// newRestartRequestID returns a fresh, hard-to-collide identity for one restart
+// request. It is persisted in the claim so a retry reuses it, even when a later
+// request reuses an earlier trigger value.
 func newRestartRequestID(bmi *v1alpha1.BareMetalInstance) string {
-	return fmt.Sprintf("%s:%d", bmi.UID, time.Now().UnixNano())
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		// crypto/rand only fails in pathological environments; keep an identity.
+		return fmt.Sprintf("%s:%d", bmi.UID, time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%s:%x", bmi.UID, random)
 }
 
 func (r *BareMetalInstanceReconciler) triggerRestart(ctx context.Context, bareMetalInstance *v1alpha1.BareMetalInstance) (ctrl.Result, error) {

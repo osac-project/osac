@@ -52,6 +52,7 @@
     worker_network_cluster_order: "{{ cluster_order }}"
     worker_network_infraenv_name: "{{ cluster_order.metadata.name }}-infraenv"
     worker_network_namespace: "{{ cluster_order.metadata.namespace }}"
+    worker_network_hosted_cluster_namespace: "{{ cluster_working_namespace }}"
     worker_network_cluster_id: "{{ cluster_order.metadata.labels['osac.openshift.io/clusterorder-uuid'] }}"
     worker_network_expected_workers: "{{ cluster_order.spec.nodeRequests | map(attribute='numberOfNodes') | map('int') | sum }}"
 

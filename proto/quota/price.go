@@ -25,7 +25,10 @@ import (
 )
 
 // TypeLookup resolves the type a reference points at, so the price can apply the type's
-// annotations. Enforcement wires the database; tests use in-memory lookups.
+// annotations. Enforcement wires the database; tests use in-memory lookups. The lookup
+// only knows quota kinds: a set path that must resolve a reference of a kind no quota
+// annotation maps, such as a storage tier, fails the price, so callers must resolve
+// such references before the price runs and store both the id and the name.
 type TypeLookup interface {
 	// Type returns the message of the named kind of type the key points at, or nil when
 	// the lookup doesn't know it. A key is a reference's id when set, else its name:
@@ -42,7 +45,9 @@ type Quote struct {
 
 	// Creates are the resources OSAC will create for the request: one entry per planned
 	// resource, whose Count says how many resources OSAC creates with its fields, such
-	// as the hosts of one node set.
+	// as the hosts of one node set. The plans are one level deep: a resource a planned
+	// resource itself creates counts in Dimensions but produces no plan entry of its
+	// own. Nothing in the check consumes the plans; they serve debugging and tests.
 	Creates []PlannedCreate
 }
 
@@ -230,7 +235,9 @@ func addThrough(
 			}
 		}
 	}
-	mergeMax(dimensions, askedDimensions, runningDimensions)
+	if err := mergeMax(dimensions, askedDimensions, runningDimensions); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -494,18 +501,23 @@ func convert(
 }
 
 // mergeMax adds to the destination the larger amount of each dimension in a and b.
-func mergeMax(dst, a, b map[string]int64) {
+func mergeMax(dst, a, b map[string]int64) error {
 	for dimension, amount := range a {
 		if b[dimension] > amount {
 			amount = b[dimension]
 		}
-		dst[dimension] += amount
+		if err := addDimension(dst, dimension, amount); err != nil {
+			return err
+		}
 	}
 	for dimension, amount := range b {
 		if _, ok := a[dimension]; !ok {
-			dst[dimension] += amount
+			if err := addDimension(dst, dimension, amount); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 // navigate reads the value at a field path from the message, and the descriptor of the

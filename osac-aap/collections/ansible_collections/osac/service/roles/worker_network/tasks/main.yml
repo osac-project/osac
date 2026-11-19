@@ -49,11 +49,6 @@
     - >-
       (_worker_network_bmis.resources
        | osac.service.baremetal_instances_for_cluster(worker_network_cluster_id)
-       | selectattr('status.phase', 'equalto', 'Ready') | list | length)
-      >= worker_network_expected_workers | int
-    - >-
-      (_worker_network_bmis.resources
-       | osac.service.baremetal_instances_for_cluster(worker_network_cluster_id)
        | selectattr('status.networkAttachmentStatuses', 'defined') | list | length)
       >= worker_network_expected_workers | int
   retries: "{{ worker_network_poll_retries }}"

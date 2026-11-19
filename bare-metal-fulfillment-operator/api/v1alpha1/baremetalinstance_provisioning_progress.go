@@ -326,6 +326,7 @@ func firstHardFailure(conds []metav1.Condition, rp restartProgress) (Provisionin
 			continue
 		}
 		if cond.Reason == HostConditionReasonProgressing ||
+			(ct == HostConditionPowerSynced && cond.Reason == HostConditionReasonPoweringOff) ||
 			IsProvisionRetrying(cond) ||
 			cond.Reason == HostConditionReasonPowerSyncRequired ||
 			cond.Reason == HostConditionReasonPowerReadFailed ||

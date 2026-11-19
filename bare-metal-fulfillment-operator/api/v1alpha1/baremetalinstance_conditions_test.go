@@ -67,4 +67,20 @@ var _ = Describe("BareMetalInstance conditions", func() {
 
 		Expect(bmi.GetStatusCondition(HostConditionPowerSynced).LastTransitionTime.Equal(&stored)).To(BeTrue())
 	})
+
+	It("preserves the stop timestamp across a read failure", func() {
+		bmi := &BareMetalInstance{}
+		bmi.SetStatusCondition(HostConditionPowerSynced, metav1.ConditionFalse,
+			HostConditionReasonPoweringOff, "powering off node")
+		stored := metav1.NewTime(time.Now().Add(-time.Hour))
+		bmi.GetStatusCondition(HostConditionPowerSynced).LastTransitionTime = stored
+
+		bmi.SetStatusCondition(HostConditionPowerSynced, metav1.ConditionFalse,
+			HostConditionReasonPowerReadFailed, "failed to sync power status")
+		Expect(bmi.GetStatusCondition(HostConditionPowerSynced).LastTransitionTime.Equal(&stored)).To(BeTrue())
+
+		bmi.SetStatusCondition(HostConditionPowerSynced, metav1.ConditionFalse,
+			HostConditionReasonPoweringOff, "powering off node")
+		Expect(bmi.GetStatusCondition(HostConditionPowerSynced).LastTransitionTime.Equal(&stored)).To(BeTrue())
+	})
 })

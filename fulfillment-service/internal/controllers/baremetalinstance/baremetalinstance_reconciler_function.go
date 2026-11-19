@@ -1084,6 +1084,9 @@ func classifyPowerSynced(object *bmfov1alpha1.BareMetalInstance, powerSynced *me
 		restartCond.Reason == powerSynced.Reason
 
 	switch powerSynced.Reason {
+	case bmfov1alpha1.HostConditionReasonPoweringOff:
+		// A submitted stop keeps its own interval; read failures cannot restart it.
+		return observationTransitioning
 	case bmfov1alpha1.HostConditionReasonProgressing:
 		if (restartOwned || restartCancelled) && object.Spec.RunStrategy == bmfov1alpha1.RunStrategyHalted {
 			// The observation belongs to a restart, not to the requested stop. Wait

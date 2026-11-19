@@ -664,7 +664,7 @@ func (r *BareMetalInstanceReconciler) reconcilePower(ctx context.Context, bareMe
 		bareMetalInstance.SetStatusCondition(
 			v1alpha1.HostConditionPowerSynced,
 			metav1.ConditionFalse,
-			v1alpha1.HostConditionReasonProgressing,
+			v1alpha1.HostConditionReasonPoweringOff,
 			"powering off node",
 		)
 		// Force a fresh interval boundary for the stop; the previous observation
@@ -1209,11 +1209,18 @@ func (r *BareMetalInstanceReconciler) syncBareMetalInstanceStatus(bareMetalInsta
 		bareMetalInstance.Status.RunStrategy = v1alpha1.RunStrategyHalted
 	}
 
+	transitionReason := v1alpha1.HostConditionReasonProgressing
+	if bareMetalInstance.Spec.RunStrategy == v1alpha1.RunStrategyHalted {
+		// Keep a stable reason for the whole stop so its interval is not restarted
+		// by a transient read failure or a later observation.
+		transitionReason = v1alpha1.HostConditionReasonPoweringOff
+	}
+
 	if powerStatus.IsTransitioning {
 		bareMetalInstance.SetStatusCondition(
 			v1alpha1.HostConditionPowerSynced,
 			metav1.ConditionFalse,
-			v1alpha1.HostConditionReasonProgressing,
+			transitionReason,
 			"node power state is transitioning",
 		)
 		return
@@ -1223,7 +1230,7 @@ func (r *BareMetalInstanceReconciler) syncBareMetalInstanceStatus(bareMetalInsta
 		bareMetalInstance.SetStatusCondition(
 			v1alpha1.HostConditionPowerSynced,
 			metav1.ConditionFalse,
-			v1alpha1.HostConditionReasonProgressing,
+			transitionReason,
 			"waiting for node power state to converge",
 		)
 	} else if poweredOn {

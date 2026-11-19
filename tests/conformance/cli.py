@@ -208,11 +208,11 @@ def _plan_names(plan_path: Path) -> list[str]:
 def _derive_profiles(plan: Plan, outcomes: Sequence[TestOutcome], catalog: Catalog) -> tuple[ProfileResult, ...]:
     by_id = {outcome.identity.id: outcome for outcome in outcomes}
     results: list[ProfileResult] = []
-    for profile_id in sorted(catalog.profiles):
+    # Report the profiles this run selected, not every profile the image ships.
+    for profile_id in plan.profiles:
         profile: ProfileDefinition = catalog.profiles[profile_id]
         selected = [test for test in plan.tests if profile_id in test.profiles]
-        required = profile_id in plan.profiles and bool(selected)
-        if not required:
+        if not selected:
             results.append(ProfileResult(profile_id, profile.selectors, False, Result.SKIP))
             continue
         blocking = [by_id.get(test.id) for test in selected if test.classification is Classification.BLOCKING]

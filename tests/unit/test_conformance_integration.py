@@ -43,8 +43,13 @@ def _catalog() -> Catalog:
         selectors={
             "generic": Selector("generic", "marker", ("conformance_generic",)),
             "vmaas": Selector("vmaas", "marker", ("conformance_vmaas",)),
+            "bmaas": Selector("bmaas", "marker", ("conformance_bmaas",)),
         },
-        profiles={"generic": ProfileDefinition("generic", ("generic",)), "vm": ProfileDefinition("vm", ("vmaas",))},
+        profiles={
+            "generic": ProfileDefinition("generic", ("generic",)),
+            "vm": ProfileDefinition("vm", ("vmaas",)),
+            "baremetal": ProfileDefinition("baremetal", ("bmaas",)),
+        },
     )
 
 
@@ -103,6 +108,9 @@ def test_list_and_run_the_core_against_a_synthetic_tree(tmp_path: Path) -> None:
     assert report["result"] == "conformant"
     assert report["complete"] is True
     assert report["tests"][0]["result"] == "pass"
+    # The report describes the selection, not the whole catalog.
+    assert [selector["id"] for selector in report["selectors"]] == ["generic", "vmaas"]
+    assert [profile["id"] for profile in report["profiles"]] == ["generic", "vm"]
     assert [check["id"] for check in report["checks"]] == ["all-blocking-tests-pass", "no-leftovers", "complete-plan"]
     assert (results / "junit.xml").exists()
     assert _REDACTION_MARKER not in (results / "conformance.log").read_text()

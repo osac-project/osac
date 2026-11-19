@@ -2640,7 +2640,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					Expect(triggered).To(BeFalse(), "an unknown submission must not be re-submitted")
 					Expect(polled).To(BeTrue())
 					cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
-					Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
+					Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonRestartSubmissionPending))
 				})
 
 				It("should mark an unconfirmed settled submission as unknown", func() {
@@ -2665,10 +2665,44 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					// Never acknowledge a restart that may not have been dispatched.
 					Expect(bareMetalInstance.Status.RestartTrigger).To(Equal(int64(0)))
 					marker := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
-					Expect(marker.Status).To(Equal(metav1.ConditionFalse))
-					Expect(marker.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncFailed))
+					Expect(marker.Status).To(Equal(metav1.ConditionTrue))
+					Expect(marker.Reason).To(Equal(v1alpha1.HostConditionReasonRestartSubmissionUnconfirmed))
 					power := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
 					Expect(power.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncRequired))
+				})
+
+				It("should preserve an unconfirmed submission across reconciles", func() {
+					bareMetalInstance.Status.RestartRequestID = "uid:1"
+					bareMetalInstance.SetStatusCondition(
+						v1alpha1.HostConditionRestartInProgress,
+						metav1.ConditionTrue,
+						v1alpha1.HostConditionReasonRestartSubmissionUnconfirmed,
+						"Restart submission unconfirmed",
+					)
+					Expect(reconciler.updateStatusWithRetry(ctx,
+						client.ObjectKeyFromObject(bareMetalInstance), bareMetalInstance.Status)).To(Succeed())
+
+					mockMgmtClient.isRestartSubmittedFunc = func(ctx context.Context, hostID, requestID string) (management.RestartSubmissionState, error) {
+						return management.RestartSubmissionUnknown, nil
+					}
+					mockMgmtClient.isRestartCompleteFunc = func(ctx context.Context, hostID string) (bool, error) {
+						return true, nil
+					}
+					triggered := false
+					mockMgmtClient.triggerRestartFunc = func(ctx context.Context, hostID string) error {
+						triggered = true
+						return nil
+					}
+
+					stored := &v1alpha1.BareMetalInstance{}
+					Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bareMetalInstance), stored)).To(Succeed())
+					_, err := reconciler.reconcileRestartTrigger(ctx, stored)
+
+					Expect(err).NotTo(HaveOccurred())
+					Expect(triggered).To(BeFalse(), "an unconfirmed request must not be re-dispatched")
+					marker := stored.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
+					Expect(marker.Reason).To(Equal(v1alpha1.HostConditionReasonRestartSubmissionUnconfirmed))
+					Expect(stored.Status.RestartTrigger).To(Equal(int64(0)))
 				})
 
 				It("generates distinct request IDs for each claim", func() {

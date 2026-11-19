@@ -667,6 +667,11 @@ func (r *BareMetalInstanceReconciler) reconcilePower(ctx context.Context, bareMe
 			v1alpha1.HostConditionReasonProgressing,
 			"powering off node",
 		)
+		// Force a fresh interval boundary for the stop; the previous observation
+		// may belong to a restart.
+		if cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced); cond != nil {
+			cond.LastTransitionTime = metav1.Now()
+		}
 	}
 
 	return true, nil
@@ -1285,15 +1290,17 @@ func (r *BareMetalInstanceReconciler) reconcileRestartTrigger(ctx context.Contex
 			return ctrl.Result{}, err
 		}
 		if completed {
-			// A pending submission means the backend could not confirm dispatch
-			// (OpenStack). Do not acknowledge a restart that may never have run.
+			// A pending or unconfirmed submission means the backend could not
+			// confirm dispatch (OpenStack). Do not acknowledge a restart that may
+			// never have run, and preserve the unknown state across reconciles.
 			if cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress); cond != nil &&
-				cond.Reason == v1alpha1.HostConditionReasonRestartSubmissionPending {
+				(cond.Reason == v1alpha1.HostConditionReasonRestartSubmissionPending ||
+					cond.Reason == v1alpha1.HostConditionReasonRestartSubmissionUnconfirmed) {
 				log.Info("Restart completion is unconfirmed; not acknowledging", "hostID", bareMetalInstance.Spec.ExternalHostID)
 				bareMetalInstance.SetStatusCondition(
 					v1alpha1.HostConditionRestartInProgress,
-					metav1.ConditionFalse,
-					v1alpha1.HostConditionReasonPowerSyncFailed,
+					metav1.ConditionTrue,
+					v1alpha1.HostConditionReasonRestartSubmissionUnconfirmed,
 					"Restart submission unconfirmed",
 				)
 				bareMetalInstance.SetStatusCondition(
@@ -1306,17 +1313,6 @@ func (r *BareMetalInstanceReconciler) reconcileRestartTrigger(ctx context.Contex
 			}
 			log.Info("Restart completed successfully", "hostID", bareMetalInstance.Spec.ExternalHostID)
 			return completeRestartTrigger(bareMetalInstance, "Restart trigger updated")
-		}
-		// A not-complete poll while the submission is still pending proves the host
-		// is transitioning: promote the request to in-progress.
-		if cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress); cond != nil &&
-			cond.Reason == v1alpha1.HostConditionReasonRestartSubmissionPending {
-			bareMetalInstance.SetStatusCondition(
-				v1alpha1.HostConditionRestartInProgress,
-				metav1.ConditionTrue,
-				v1alpha1.HostConditionReasonProgressing,
-				"Restart operation initiated",
-			)
 		}
 		powerStatus, err := r.ManagementClient.GetPowerState(ctx, bareMetalInstance.Spec.ExternalHostID)
 		if err != nil {
@@ -1565,7 +1561,9 @@ func adoptLegacyRestart(bmi *v1alpha1.BareMetalInstance) {
 // done=true when the caller should return result/err.
 func (r *BareMetalInstanceReconciler) resubmitPendingClaim(ctx context.Context, bmi *v1alpha1.BareMetalInstance) (bool, ctrl.Result, error) {
 	cond := bmi.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
-	if cond == nil || cond.Reason != v1alpha1.HostConditionReasonRestartSubmissionPending {
+	if cond == nil ||
+		(cond.Reason != v1alpha1.HostConditionReasonRestartSubmissionPending &&
+			cond.Reason != v1alpha1.HostConditionReasonRestartSubmissionUnconfirmed) {
 		return false, ctrl.Result{}, nil
 	}
 	state, err := r.ManagementClient.IsRestartSubmitted(ctx, bmi.Spec.ExternalHostID, bmi.Status.RestartRequestID)

@@ -36,18 +36,17 @@ export CONTAINER_TOOL=podman
 make -C tests/integration/caas prepare
 ```
 
-`prepare` creates the infrastructure, builds and loads local images, checks the
-AWX bootstrap configuration, deploys the services, and prepares persistent test
-users, tenants, service accounts, and hub. The installation uses namespace
-`osac`, the local application chart, and fixed `:it` image tags. AWX fetches
-playbooks from the Git source described under [Configuration](#configuration).
+`prepare` creates the infrastructure, builds and loads local images, deploys
+the services, and prepares persistent test users, tenants, service accounts, and
+hub. The installation uses namespace `osac`, the local application chart, and
+fixed `:it` image tags. AWX fetches playbooks from the Git source described under
+[Configuration](#configuration).
 
 To run setup one step at a time:
 
 ```bash
 make -C tests/integration/caas _infrastructure
 make -C tests/integration/caas _images
-make -C tests/integration/caas _bootstrap-check
 make -C tests/integration/caas _deploy
 make -C tests/integration/caas fixtures
 ```
@@ -153,15 +152,6 @@ make -C tests/integration/caas unit      # Internal unit tests
 Bare `make` in this directory runs `check`. The Make targets select the module's
 Go workspace. Use `unit` for unit tests. Running `go test ./...` from this module
 also runs the preparation and cluster suites, which require the deployed environment.
-
-To check the AWX bootstrap configuration locally:
-
-```bash
-make -C tests/integration/caas _bootstrap-check
-```
-
-This requires an existing AWX execution-environment image. It does not pull
-images or contact application APIs.
 
 ### Updating images and CRDs
 

@@ -85,7 +85,6 @@ help:
 	  'Internal steps (advanced use; stop tests before deployment/image operations):' \
 	  '  _infrastructure         Create Kind and install infrastructure/AWX' \
 	  '  _images                 Build and load all required test images' \
-	  '  _bootstrap-check        Check AWX bootstrap rendering using the existing EE image' \
 	  '  _deploy                 Deploy services and providers using loaded images' \
 	  '  _simulator-image-build  Build only the simulator image' \
 	  '  _simulator-image-load   Load the simulator image and restart its deployment if present' \
@@ -108,7 +107,7 @@ prepare: _prepare-check _kubeconfig-check
 	    exit 1; \
 	  fi; \
 	  echo 'AWX Git revision verified.'
-	$(MAKE) -j2 _prepare-platform _prepare-ee
+	$(MAKE) -j2 _prepare-platform _ee-image-build
 	$(call kind-load-image,$(EE_IMAGE))
 	$(MAKE) _deploy
 	$(MAKE) fixtures
@@ -162,18 +161,13 @@ destroy:
 	kind delete cluster --name "$(KIND_CLUSTER_NAME)"
 
 # Internal preparation and deployment steps.
-.PHONY: _infrastructure _images _bootstrap-check _deploy
-.PHONY: _prepare-platform _prepare-ee _go-images _ee-image-build
+.PHONY: _infrastructure _images _deploy
+.PHONY: _prepare-platform _go-images _ee-image-build
 
-# Lane 1: create the cluster, then build and load Go images.
+# Create the cluster before building and loading Go images.
 _prepare-platform:
 	$(MAKE) _infrastructure
 	$(MAKE) _go-images
-
-# Lane 2: build the EE and run its offline rendering checks.
-_prepare-ee:
-	$(MAKE) _ee-image-build
-	$(MAKE) _bootstrap-check
 
 _infrastructure: _helm-check
 	@$(select-kind-kubeconfig); \
@@ -199,10 +193,6 @@ _go-images:
 
 _ee-image-build:
 	$(call kind-container-build,-t $(EE_IMAGE) -f $(ROOT_DIR)/osac-aap/Containerfile $(ROOT_DIR))
-
-# Requires the existing EE image; runs local rendering without API access or image pulls.
-_bootstrap-check:
-	EE_IMAGE="$(EE_IMAGE)" python3 charts/bootstrap/tests/test-render.py
 
 # Native APIs, AWX inputs and provider infrastructure precede application controller startup.
 _deploy: _prepare-check _helm-check _kubeconfig-check

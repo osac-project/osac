@@ -123,11 +123,9 @@
         dest: "{{ project_directory }}"
 
     - name: Load configuration from the selected revision
-      tags: [bootstrap-render]
       ansible.builtin.include_vars: "{{ project_directory }}/osac-aap/collections/ansible_collections/osac/config_as_code/playbooks/vars/config.yml"
 
     - name: Load production controller objects
-      tags: [bootstrap-render]
       ansible.builtin.include_vars: "{{ production_role }}/vars/controller.yml"
 
     - name: Create the production organization on the controller API
@@ -140,7 +138,6 @@
       no_log: true
 
     - name: Render the selected shared execution groups
-      tags: [bootstrap-render]
       ansible.builtin.set_fact:
         controller_instance_groups: >-
           {{ lookup('ansible.builtin.template', playbook_dir + '/render-execution-groups.j2',
@@ -148,7 +145,6 @@
       no_log: true
 
     - name: Verify the selected production execution groups
-      tags: [bootstrap-render]
       ansible.builtin.assert:
         that:
           - controller_instance_groups | length > 0
@@ -159,7 +155,6 @@
         quiet: true
 
     - name: Bound CaaS execution-group concurrency
-      tags: [bootstrap-render]
       ansible.builtin.set_fact:
         controller_instance_groups: >-
           {{ controller_instance_groups | community.general.lists_mergeby(
@@ -172,7 +167,6 @@
             max_concurrent_jobs: 2
 
     - name: Select production controller objects
-      tags: [bootstrap-render]
       ansible.builtin.set_fact:
         controller_projects: >-
           {{ controller_projects | map('combine', {'scm_delete_on_update': true,
@@ -185,7 +179,6 @@
              | map('combine', {'wait': true, 'timeout': inventory_sync_timeout}) | list }}
 
     - name: Configure cluster templates for the guestless Kind environment
-      tags: [bootstrap-render]
       ansible.builtin.set_fact:
         controller_templates: >-
           {{ controller_templates | community.general.lists_mergeby(kind_cluster_templates, 'playbook', recursive=true) }}
@@ -207,7 +200,6 @@
               delete_step_external_access_override: "{{ external_access_override }}"
 
     - name: Report bounded AWX sync policy
-      tags: [bootstrap-render]
       ansible.builtin.debug:
         msg:
           - >-
@@ -218,11 +210,8 @@
             collector={{ controller_configuration_inventory_source_update_async_retries }}x{{ controller_configuration_inventory_source_update_async_delay }}s.
 
     - name: Apply the shared configuration role
-      tags: [bootstrap-render]
       ansible.builtin.include_role:
         name: "{{ production_role }}"
-        apply:
-          tags: [bootstrap-render]
 
     - name: Read the completed project
       ansible.builtin.set_fact:

@@ -88,7 +88,9 @@ message GpuSpec {
   string resource_name = 2 [(buf.validate.field).string.min_len = 1];
 
   // Number of GPU devices of this type.
-  int32 count = 3 [(buf.validate.field).int32 = {gte: 1, lte: 16}];
+  int32 count = 3 [
+    (buf.validate.field).int32 = {gte: 1, lte: 16}
+  ];
 }
 
 // Defines the desired configuration for an InstanceType.
@@ -98,10 +100,14 @@ message GpuSpec {
 // to manage the instance type lifecycle.
 message InstanceTypeSpec {
   // Number of virtual CPUs. Immutable after creation.
-  int32 vcpus = 1 [(buf.validate.field).int32.gt = 0];
+  int32 vcpus = 1 [
+    (buf.validate.field).int32.gt = 0
+  ];
 
   // Amount of memory in GiB. Immutable after creation.
-  int32 memory_gib = 2 [(buf.validate.field).int32.gt = 0];
+  int32 memory_gib = 2 [
+    (buf.validate.field).int32.gt = 0
+  ];
 
   // Human friendly description of the instance type, using Markdown format.
   string description = 3;

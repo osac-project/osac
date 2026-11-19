@@ -156,7 +156,7 @@ message ClusterSpec {
   // availability of resources or system errors, the cluster will be marked as degraded, and the details will be in the
   // `DEGRADED` condition.
   //
-  // Quota: for each node set, as many hosts as its size, each of the node set's host type.
+  // Quota: for each node set, as many hosts as its size, of the node set's bare metal instance type.
   map<string, ClusterNodeSet> node_sets = 3 [(buf.validate.field).map.keys.string = {
     min_len: 1,
     max_len: 63,
@@ -219,7 +219,10 @@ message ClusterSpec {
   // This field is immutable after creation — it cannot be changed on update.
   //
   // Quota: two external IP addresses, one for the cluster's API and one for its apps.
-  optional bool auto_external_ip_attachment = 10 [(google.api.field_behavior) = IMMUTABLE, (osac.private.v1.quota) = {creates: {kind: "ExternalIP", count: 2}}];
+  optional bool auto_external_ip_attachment = 10 [
+    (google.api.field_behavior) = IMMUTABLE,
+    (osac.private.v1.quota) = {creates: {kind: "ExternalIP", count: 2}}
+  ];
 
   // Reference to a Secret resource containing pull secret credentials.
   //

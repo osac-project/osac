@@ -798,7 +798,7 @@ type ClusterSpec_builder struct {
 	// availability of resources or system errors, the cluster will be marked as degraded, and the details will be in the
 	// `DEGRADED` condition.
 	//
-	// Quota: for each node set, as many hosts as its size, each of the node set's host type.
+	// Quota: for each node set, as many hosts as its size, of the node set's bare metal instance type.
 	NodeSets map[string]*ClusterNodeSet
 	// Reference to a Secret containing an OpenSSH public key installed into the
 	// `authorized_keys` file on cluster worker nodes.

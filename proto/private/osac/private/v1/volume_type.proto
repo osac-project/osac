@@ -115,7 +115,10 @@ message VolumeSpec {
   string storage_tier = 1 [(buf.validate.field).string.min_len = 1, (osac.private.v1.metering) = {kind: METERING_FIELD_KIND_CONSTANT}];
 
   // Requested storage capacity in gibibytes (GiB).
-  int64 size_gib = 2 [(buf.validate.field).int64.gt = 0, (osac.private.v1.quota) = {dimension: "storage.{spec.storage_tier}.gib"}];
+  int64 size_gib = 2 [
+    (buf.validate.field).int64.gt = 0,
+    (osac.private.v1.quota) = {dimension: "storage.{spec.storage_tier}.gib"}
+  ];
 
   // Kubernetes access mode for the volume.
   VolumeAccessMode access_mode = 3 [(buf.validate.field).enum.defined_only = true];

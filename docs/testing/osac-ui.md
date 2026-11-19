@@ -45,13 +45,19 @@ unit tier gate for this component. The Playwright flows are manual: see
   coverage is tracked separately by
   [OSAC-4847](https://redhat.atlassian.net/browse/OSAC-4847); this component's
   flows are verified by manual runs recorded in the owning task or PR.
-- **External IP attachment paths are untested.** Attach and detach run through
-  the VM, bare-metal, cluster and NAT gateway flows; no UI flow covers an
-  External IP moving to `In use`, which also leaves the "detach before deleting"
-  guard unexercised.
-- **Cross-tenant denial is asserted from the tenant session only.** The suite
-  proves a tenant session lists only its own project's External IPs. It does not
-  log in as a second tenant to observe a denial response, and the provider admin
-  console cannot stand in for that: its Networking navigation group is empty, so
-  a provider-admin session has no tenant External IPs page at all (verified on a
-  deployed caas environment, 2026-11-19).
+- **Attach and detach are out of scope for OSAC-6539.** The product supports
+  attaching an External IP from a VM or Cluster details page, which moves the row
+  to `In use` and disables Delete with "Detach this external IP before deleting
+  it." That is deliberately not covered here: the story asks for list, create,
+  delete, isolation, immutability and error states. Exercising it means driving
+  the VM or Cluster details journey, so it belongs to those suites or a follow-up
+  ticket; none exists yet.
+- **Cross-tenant denial needs a second tenant identity.** The suite always
+  asserts that a tenant session lists only its own project's External IPs. When
+  `OSAC_E2E_SECOND_TENANT_USERNAME` and `OSAC_E2E_SECOND_TENANT_PASSWORD` name a
+  second tenant's admin, it also logs in as that tenant and asserts the first
+  tenant's External IP is not visible, then skips that step with a logged reason
+  when the variables are unset. The provider admin console cannot substitute for
+  it: its Networking navigation group is empty, so a provider-admin session has
+  no tenant External IPs page at all (verified on a deployed caas environment,
+  2026-11-19).

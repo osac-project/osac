@@ -63,3 +63,22 @@ export const externalIpPoolProvisioningSkipReason = (): string | undefined => {
 
 /** Tenant name whose break-glass credentials the tenant-admin specs use. */
 export const externalIpTenantName = process.env.OSAC_E2E_TENANT_NAME?.trim() ?? '';
+
+/** Optional second tenant admin, used to assert cross-tenant denial. */
+export const secondTenantAdminUsername = process.env.OSAC_E2E_SECOND_TENANT_USERNAME?.trim() ?? '';
+
+export const secondTenantAdminPassword = process.env.OSAC_E2E_SECOND_TENANT_PASSWORD ?? '';
+
+/**
+ * Reason the cross-tenant denial check must skip, or `undefined` when a second
+ * tenant admin is configured.
+ */
+export const secondTenantSkipReason = (): string | undefined => {
+  if (!secondTenantAdminUsername || !secondTenantAdminPassword) {
+    return (
+      'Set OSAC_E2E_SECOND_TENANT_USERNAME and OSAC_E2E_SECOND_TENANT_PASSWORD ' +
+      'to assert cross-tenant denial.'
+    );
+  }
+  return undefined;
+};

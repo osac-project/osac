@@ -61,6 +61,16 @@ export const loginAsTenantAdmin = async (page: Page, identity: E2eIdentity): Pro
   await openAndLogin(page, '/', identity.username, identity.password, 'tenant_admin');
 };
 
+/** Resolve the optional second tenant admin used for cross-tenant checks. */
+export const resolveSecondTenantAdminIdentity = (): E2eIdentity | undefined => {
+  const username = process.env.OSAC_E2E_SECOND_TENANT_USERNAME?.trim() ?? '';
+  const password = process.env.OSAC_E2E_SECOND_TENANT_PASSWORD ?? '';
+  if (!username || !password) {
+    return undefined;
+  }
+  return { username, password };
+};
+
 /** Log in as the provider admin that owns External IP pools. */
 export const loginAsProviderAdmin = async (page: Page): Promise<void> => {
   const username = requireEnv('OSAC_ADMIN_USERNAME');

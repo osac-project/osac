@@ -1,20 +1,23 @@
 import { test } from '@playwright/test';
 
-import { loginAsTenantAdmin, resolveTenantAdminIdentity } from './identity';
-import { externalIpName, externalIpProject } from './test_data';
+import {
+  loginAsTenantAdmin,
+  resolveSecondTenantAdminIdentity,
+  resolveTenantAdminIdentity,
+  switchIdentity,
+} from './identity';
+import { externalIpName, externalIpProject, secondTenantSkipReason } from './test_data';
 import {
   expectExternalIpListScopedToProject,
   expectExternalIpListed,
+  expectExternalIpSearchHasNoMatch,
   openExternalIpListPage,
   readExternalIpProjectLabel,
 } from '../../../../libs/test-utils/src/external_ips.page';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 
 test('keeps the tenant External IP list scoped to the owning project', async ({ page }) => {
-  // The provider admin has no tenant External IPs page in this build (its
-  // Networking navigation group is empty), so isolation is asserted from the
-  // tenant session alone: see the coverage gaps in docs/testing/osac-ui.md.
-  test.setTimeout(300_000);
+  test.setTimeout(600_000);
   const flow = 'external-ip-isolation';
   const identity = await resolveTenantAdminIdentity();
   logProgress(flow, `Starting isolation checks for "${externalIpName}".`);
@@ -33,5 +36,30 @@ test('keeps the tenant External IP list scoped to the owning project', async ({ 
 
   await testStep(flow, `Verify every listed external IP belongs to project "${projectLabel}"`, () =>
     expectExternalIpListScopedToProject(page, projectLabel),
+  );
+
+  // Cross-tenant denial needs a second tenant identity. The provider admin
+  // console cannot stand in for it: its Networking navigation group is empty,
+  // so a provider admin has no tenant External IPs page.
+  const secondIdentity = resolveSecondTenantAdminIdentity();
+  if (!secondIdentity) {
+    logProgress(flow, `Skipped cross-tenant denial: ${secondTenantSkipReason()}`);
+    return;
+  }
+
+  await testStep(flow, `Log out of "${identity.username}"`, () => switchIdentity(page));
+
+  await testStep(flow, `Log in as the second tenant admin "${secondIdentity.username}"`, () =>
+    loginAsTenantAdmin(page, secondIdentity),
+  );
+
+  await testStep(flow, 'Open Networking > External IPs as the second tenant', () =>
+    openExternalIpListPage(page),
+  );
+
+  await testStep(
+    flow,
+    `Verify external IP "${externalIpName}" is not visible to the second tenant`,
+    () => expectExternalIpSearchHasNoMatch(page, externalIpName),
   );
 });

@@ -124,20 +124,22 @@ nearest existing page helper and locator for the feature being tested.
 ## External IP (networking) suite
 
 `src/networking/` covers the tenant External IP management UI: list columns,
-create wizard validation, create and delete, tenant scoping, and the list error
-state. Its inputs are environment variables, not `extravars.yaml`, so it can
-never pick up a VMaaS value by accident.
+create wizard validation, create and delete, tenant scoping, cross-tenant denial
+(when a second tenant admin is configured), and the list error state. Its inputs
+are environment variables, not `extravars.yaml`, so it can never pick up a VMaaS
+value by accident.
 
-| Variable | Required | Description |
-| --- | --- | --- |
-| `OSAC_UI_BASE_URL` | yes | URL of the deployed `osac-ui` instance |
-| `OSAC_ADMIN_USERNAME` / `OSAC_ADMIN_PASSWORD` | yes | Provider admin used for the External IP pool |
-| `OSAC_E2E_TENANT_NAME` | yes* | Tenant created by the VMaaS tenant flow, used to read its break-glass credentials |
-| `OSAC_TENANT_ADMIN_USERNAME` / `OSAC_TENANT_ADMIN_PASSWORD` | alternative to * | Tenant-admin credentials supplied directly |
-| `OSAC_EXT_IP_CIDR` | one of | CIDR the suite uses to create and later delete its own `/24` or larger pool |
-| `OSAC_EXT_IP_POOL` | one of | Name of an existing pool the suite reuses instead of creating one |
-| `OSAC_EXT_IP_PROJECT` | no | Project for the created External IP; empty uses the tenant default project |
-| `OSAC_E2E_INSTANCE` | no | Run index appended to resource names; defaults to `1` |
+| Variable                                                              | Required          | Description                                                                       |
+| --------------------------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------- |
+| `OSAC_UI_BASE_URL`                                                    | yes               | URL of the deployed `osac-ui` instance                                            |
+| `OSAC_ADMIN_USERNAME` / `OSAC_ADMIN_PASSWORD`                         | yes               | Provider admin used for the External IP pool                                      |
+| `OSAC_E2E_TENANT_NAME`                                                | yes\*             | Tenant created by the VMaaS tenant flow, used to read its break-glass credentials |
+| `OSAC_TENANT_ADMIN_USERNAME` / `OSAC_TENANT_ADMIN_PASSWORD`           | alternative to \* | Tenant-admin credentials supplied directly                                        |
+| `OSAC_EXT_IP_CIDR`                                                    | one of            | CIDR the suite uses to create and later delete its own `/24` or larger pool       |
+| `OSAC_EXT_IP_POOL`                                                    | one of            | Name of an existing pool the suite reuses instead of creating one                 |
+| `OSAC_EXT_IP_PROJECT`                                                 | no                | Project for the created External IP; empty uses the tenant default project        |
+| `OSAC_E2E_SECOND_TENANT_USERNAME` / `OSAC_E2E_SECOND_TENANT_PASSWORD` | no                | Second tenant's admin; enables the cross-tenant denial assertion                  |
+| `OSAC_E2E_INSTANCE`                                                   | no                | Run index appended to resource names; defaults to `1`                             |
 
 Pick the pool CIDR from an address range the target cluster can actually
 allocate from — the pytest networking suite allocates `172.27.<n>.0/24`

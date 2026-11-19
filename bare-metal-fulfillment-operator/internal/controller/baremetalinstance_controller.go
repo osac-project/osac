@@ -679,16 +679,17 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 	// 2) Move the fabric port provisioning network -> tenant network (post-provision).
 	result, netErr := r.reconcileNetworking(ctx, bareMetalInstance)
 	if netErr != nil {
-		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		// Reconcile errors are retryable; a terminal attachment failure is
+		// reported through NetworkAttachmentsReady below.
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
 		return result, netErr
 	}
 	if !result.IsZero() {
 		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
 		return result, nil
 	}
-	if bareMetalInstance.Status.Phase == v1alpha1.BareMetalInstancePhaseFailed {
-		return ctrl.Result{}, nil
-	}
+	// Phase is retained status and can be stale after a retryable error. Use the
+	// current attachment condition, rather than the old phase, to detect failure.
 	netCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 	if netCond == nil || netCond.Status != metav1.ConditionTrue {
 		if netCond != nil && isFinalNetworkAttachmentFailure(netCond.Reason) {
@@ -698,6 +699,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
+	bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
 
 	// 3) Power-cycle so the OS re-DHCPs on the tenant network (single default route).
 	result, rbErr := r.reconcileNetworkHandoffPowerCycle(ctx, bareMetalInstance)

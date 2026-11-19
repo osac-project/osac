@@ -262,6 +262,9 @@ jq -er '.[].name' "$rule_work/images.json" > "$rule_work/references"
 while IFS= read -r image_ref; do
   if [[ "$image_ref" == *@* ]]; then
     source_repo=${image_ref%@*}
+    if [[ "${source_repo##*/}" == *:* ]]; then
+      source_repo=${source_repo%:*}
+    fi
     rule_kind=imageDigestMirrors
     rule_file="$rule_work/digests.json"
   else

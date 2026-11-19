@@ -463,8 +463,12 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, tenant *v1alpha1.T
 	// Runs after VMaaS (Stage 2) because CaaS requires StorageBackendReady (Stage 1)
 	// to have completed during tenant onboarding before cluster-side resources can
 	// be installed.
-	caasResult, caasErr := r.handleCaaSUpdate(ctx, tenant)
-	if caasErr != nil || caasResult.RequeueAfter > 0 {
+	//
+	// A CaaS requeue (job in flight or an incomplete tier result) is not returned
+	// early: it is merged into the result of the VMaaS stages below so a pending
+	// CaaS retry never skips VMaaS job polling or the Stage 4 retry.
+	caasResult, caasErr := r.handleCaaSUpdate(ctx, tenant, osacTiers)
+	if caasErr != nil {
 		return caasResult, caasErr
 	}
 
@@ -473,18 +477,30 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, tenant *v1alpha1.T
 	// lifecycle management is never blocked by VMaaS job polling.
 	latestClassJob := provisioning.FindLatestJobByType(tenant.Status.ClusterStorageJobs, v1alpha1.JobTypeProvision)
 	if latestClassJob != nil && !latestClassJob.State.IsTerminal() {
-		return provisioning.PollJob(ctx, r.ClusterStorageProvider, tenant,
+		pollResult, pollErr := provisioning.PollJob(ctx, r.ClusterStorageProvider, tenant,
 			&provisioning.State{Jobs: &tenant.Status.ClusterStorageJobs},
 			latestClassJob, r.StatusPollInterval, nil)
+		return mergeRequeueAfter(caasResult, pollResult), pollErr
 	}
 
 	// Stage 4: Retry provisioning for any storage tiers that failed to resolve.
 	// This runs after handleCaaSUpdate to avoid blocking cluster lifecycle.
 	if hasMissingTiers {
-		return r.handleClusterStorageProvisioning(ctx, tenant, hubSecretReady)
+		stage4Result, stage4Err := r.handleClusterStorageProvisioning(ctx, tenant, hubSecretReady)
+		return mergeRequeueAfter(caasResult, stage4Result), stage4Err
 	}
 
-	return ctrl.Result{}, nil
+	return caasResult, nil
+}
+
+// mergeRequeueAfter returns result carrying the shorter of the two
+// RequeueAfter values, so a requeue pending from an earlier stage is never
+// dropped when a later stage also returns a result.
+func mergeRequeueAfter(result, other ctrl.Result) ctrl.Result {
+	if other.RequeueAfter > 0 && (result.RequeueAfter == 0 || other.RequeueAfter < result.RequeueAfter) {
+		result.RequeueAfter = other.RequeueAfter
+	}
+	return result
 }
 
 // clearOSACManagedStorageStatus clears OSAC-managed storage backend status and
@@ -509,12 +525,28 @@ func (r *StorageReconciler) canProvisionOSACStorage(ctx context.Context) bool {
 // handleCaaSUpdate provisions cluster-side storage on CaaS clusters belonging
 // to this tenant. For each Ready ClusterOrder without ClusterStorageReady=True,
 // it retrieves the kubeconfig and triggers the AAP provisioning job.
-func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, tenant *v1alpha1.Tenant) (ctrl.Result, error) {
+// ClusterStorageReady is set True only when every OSAC tier resolved to a
+// StorageClass on the CaaS cluster — a partial result keeps the condition
+// False so the ClusterOrder is retried until the tier set is complete.
+func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, tenant *v1alpha1.Tenant, osacTiers []provisioning.TierDefinition) (ctrl.Result, error) {
 	if !r.canProvisionOSACStorage(ctx) {
 		return ctrl.Result{}, nil
 	}
 	log := ctrllog.FromContext(ctx)
 	tenantName := tenant.GetName()
+
+	// Desired config version hashed from the resolved tier definitions, so a
+	// changed tier set re-triggers the CaaS provision job instead of skipping
+	// on the previous job's success (mirrors the Tenant-level stages, which
+	// pass DesiredConfigVersion for the same reason).
+	desiredVersion, _ := provisioning.ComputeDesiredConfigVersion(provisioning.StorageTierDefinitionsFromContext(ctx))
+
+	// Bounded retry for incomplete CaaS results: when any cluster's tier set
+	// does not fully resolve, requeue after the status poll interval (a
+	// delayed requeue, never an immediate loop) so the controller keeps
+	// retrying until the tier set is complete. Zero when every processed
+	// cluster is complete, preserving the no-requeue result for that case.
+	var retryAfter time.Duration
 
 	clusterOrders := &v1alpha1.ClusterOrderList{}
 	if err := r.List(ctx, clusterOrders); err != nil {
@@ -573,7 +605,10 @@ func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, tenant *v1alph
 		provCtx := provisioning.WithAdminKubeconfig(ctx, string(kubeconfig))
 
 		provResult, provErr := provisioning.RunProvisioningLifecycle(provCtx, r.ClusterStorageProvider, co,
-			&provisioning.State{Jobs: &co.Status.ClusterStorageJobs},
+			&provisioning.State{
+				Jobs:                 &co.Status.ClusterStorageJobs,
+				DesiredConfigVersion: desiredVersion,
+			},
 			r.MaxJobHistory, r.StatusPollInterval, nil,
 			func() bool {
 				return provisioning.CheckAPIServerForNonTerminalProvisionJob(ctx, r.Client,
@@ -620,24 +655,19 @@ func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, tenant *v1alph
 			r.Recorder.Eventf(co, nil, corev1.EventTypeWarning, eventReasonDuplicateStorageClass, eventActionDetectDuplicate, "%s", msg)
 		}
 
-		if len(scResult.resolved) > 0 {
-			co.SetStatusCondition(
-				string(v1alpha1.ClusterOrderConditionClusterStorageReady),
-				metav1.ConditionTrue,
-				scResult.conditionMessage(),
-				v1alpha1.TenantReasonFound)
+		condStatus, condReason, condMsg := caasStorageCondition(osacTiers, scResult)
+		co.SetStatusCondition(
+			string(v1alpha1.ClusterOrderConditionClusterStorageReady),
+			condStatus,
+			condMsg,
+			condReason)
+		if condStatus == metav1.ConditionTrue {
 			r.Recorder.Eventf(co, nil, corev1.EventTypeNormal, "ClusterStorageProvisioned", "Provision",
 				"Storage provisioned on CaaS cluster %s", co.Name)
-		} else {
-			reason := v1alpha1.TenantReasonNotFound
-			if len(scResult.duplicateMessages) > 0 {
-				reason = v1alpha1.TenantReasonMultipleFound
-			}
-			co.SetStatusCondition(
-				string(v1alpha1.ClusterOrderConditionClusterStorageReady),
-				metav1.ConditionFalse,
-				scResult.conditionMessage(),
-				reason)
+		} else if retryAfter == 0 {
+			// Partial or ambiguous tier resolution: schedule the bounded retry
+			// so this cluster is re-attempted until the tier set is complete.
+			retryAfter = r.StatusPollInterval
 		}
 
 		if err := r.patchClusterOrderStorageStatus(ctx, client.ObjectKeyFromObject(co), co.Status); err != nil {
@@ -647,7 +677,28 @@ func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, tenant *v1alph
 		r.updateTenantClusterStorage(tenant, co)
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: retryAfter}, nil
+}
+
+// caasStorageCondition computes the ClusterStorageReady condition verdict for
+// a CaaS cluster from the StorageClasses discovered on it. Ready requires
+// every OSAC tier to resolve to exactly one StorageClass; a partial or
+// ambiguous resolution keeps the condition False so the ClusterOrder keeps
+// being retried until the tier set is complete.
+func caasStorageCondition(osacTiers []provisioning.TierDefinition, scResult tierResolutionResult) (metav1.ConditionStatus, string, string) {
+	missing := missingTierNames(osacTiers, scResult.resolved, scResult.ambiguousTiers)
+	if len(scResult.resolved) > 0 && len(missing) == 0 && len(scResult.duplicateMessages) == 0 {
+		return metav1.ConditionTrue, v1alpha1.TenantReasonFound, scResult.conditionMessage()
+	}
+	reason := v1alpha1.TenantReasonNotFound
+	condMsg := scResult.conditionMessage()
+	if len(scResult.duplicateMessages) > 0 {
+		reason = v1alpha1.TenantReasonMultipleFound
+	}
+	if len(missing) > 0 {
+		condMsg = fmt.Sprintf("%s; missing tiers: %s", condMsg, strings.Join(missing, ", "))
+	}
+	return metav1.ConditionFalse, reason, condMsg
 }
 
 func (r *StorageReconciler) buildClientFromKubeconfig(kubeconfig []byte) (client.Client, error) {

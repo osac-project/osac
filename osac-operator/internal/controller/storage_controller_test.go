@@ -34,6 +34,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -3545,6 +3546,314 @@ var _ = Describe("Storage Controller", func() {
 			updatedCO := &v1alpha1.ClusterOrder{}
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
 			Expect(updatedCO.Finalizers).NotTo(ContainElement(clusterStorageFinalizer))
+		})
+	})
+
+	Context("CaaS: partial tier resolution", func() {
+		// setupPartialTierCaaS prepares a Ready ClusterOrder whose kubeconfig
+		// points at the envtest API server, hub Secrets for both backends,
+		// and a reconciler whose tier catalog starts as local+block (local
+		// maps to the lvms backend, other tiers to vast). The returned
+		// setTiers swaps the resolved tier catalog between reconciles.
+		setupPartialTierCaaS := func(tenantName string, provider *mockProvisioningProvider) (*StorageReconciler, *v1alpha1.ClusterOrder, types.NamespacedName, func(tiers ...string)) {
+			createReadyTenantForStorage(ctx, tenantName, testNamespace)
+			createHubSecretForBackend(ctx, tenantName, "backend-lvms", "lvms", secretsNamespace)
+			createHubSecretForBackend(ctx, tenantName, "backend-vast", "vast", secretsNamespace)
+
+			// A real kubeconfig pointing at the envtest API server, so
+			// buildClientFromKubeconfig can list StorageClasses on the
+			// "CaaS cluster".
+			apiCfg := clientcmdapi.Config{
+				Clusters: map[string]*clientcmdapi.Cluster{
+					"caas": {
+						Server:                   cfg.Host,
+						CertificateAuthorityData: cfg.CAData,
+						CertificateAuthority:     cfg.CAFile,
+						InsecureSkipTLSVerify:    cfg.Insecure,
+					},
+				},
+				AuthInfos: map[string]*clientcmdapi.AuthInfo{
+					"caas-user": {
+						ClientCertificateData: cfg.CertData,
+						ClientCertificate:     cfg.CertFile,
+						ClientKeyData:         cfg.KeyData,
+						ClientKey:             cfg.KeyFile,
+						Token:                 cfg.BearerToken,
+					},
+				},
+				Contexts: map[string]*clientcmdapi.Context{
+					"caas": {Cluster: "caas", AuthInfo: "caas-user"},
+				},
+				CurrentContext: "caas",
+			}
+			kubeconfigData, err := clientcmd.Write(apiCfg)
+			Expect(err).NotTo(HaveOccurred())
+
+			hcNamespace := "clusters-" + tenantName
+			hcName := tenantName + "-hcp"
+			hcpNamespace := hcNamespace + "-" + hcName
+			for _, nsName := range []string{hcNamespace, hcpNamespace} {
+				ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
+				if err := k8sClient.Create(ctx, ns); err != nil {
+					Expect(client.IgnoreAlreadyExists(err)).To(Succeed())
+				}
+			}
+
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: "admin-kubeconfig", Namespace: hcpNamespace},
+				Data:       map[string][]byte{"kubeconfig": kubeconfigData},
+			}
+			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, secret) })
+
+			hcp := &hypershiftv1beta1.HostedControlPlane{
+				ObjectMeta: metav1.ObjectMeta{Name: hcName, Namespace: hcpNamespace},
+			}
+			Expect(k8sClient.Create(ctx, hcp)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, hcp) })
+			hcp.Status.KubeConfig = &hypershiftv1beta1.KubeconfigSecretRef{
+				Name: "admin-kubeconfig",
+				Key:  "kubeconfig",
+			}
+			Expect(k8sClient.Status().Update(ctx, hcp)).To(Succeed())
+
+			co := newClusterOrder(tenantName+"-co", testNamespace, map[string]string{
+				osacTenantKey: tenantName,
+			})
+			Expect(k8sClient.Create(ctx, co)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, co) })
+			co.Status.Phase = v1alpha1.ClusterOrderPhaseReady
+			co.Status.ClusterReference = &v1alpha1.ClusterOrderClusterReferenceType{
+				Namespace:         hcNamespace,
+				HostedClusterName: hcName,
+			}
+			Expect(k8sClient.Status().Update(ctx, co)).To(Succeed())
+
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, provider, pollInterval, provisioning.DefaultMaxJobHistory,
+			)
+			backendForTier := func(tier string) string {
+				if tier == "local" {
+					return "backend-lvms"
+				}
+				return "backend-vast"
+			}
+			setTiers := func(tiers ...string) {
+				r.TiersClient = &mockStorageTiersLister{
+					listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+						items := make([]*privatev1.StorageTier, 0, len(tiers))
+						for _, tier := range tiers {
+							items = append(items, newTestStorageTier(tier, backendForTier(tier)))
+						}
+						return privatev1.StorageTiersListResponse_builder{Items: items}.Build(), nil
+					},
+				}
+			}
+			setTiers("local", "block")
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					switch in.GetId() {
+					case "backend-lvms":
+						return newTestStorageBackendGetResponse("lvms"), nil
+					case "backend-vast":
+						return newTestStorageBackendGetResponse("vast"), nil
+					}
+					return nil, status.Error(codes.NotFound, "backend not found")
+				},
+			}
+
+			return r, co, types.NamespacedName{Name: tenantName, Namespace: testNamespace}, setTiers
+		}
+
+		It("should keep ClusterStorageReady=False when a provision job resolves only some tiers", func() {
+			tenantName := "caas-partial-tiers"
+			r, co, nn, _ := setupPartialTierCaaS(tenantName, &mockProvisioningProvider{name: "caas-partial-mock"})
+
+			// The provision job resolved only the local tier: its labeled
+			// StorageClass exists on the CaaS cluster, the block tier's does
+			// not.
+			createLabeledStorageClass(ctx, tenantName+"-local-sc", tenantName, "local")
+
+			// The first reconcile triggers the provision job; the mock
+			// reports it Succeeded, so a second reconcile runs StorageClass
+			// discovery on the CaaS cluster.
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			updatedCO := &v1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+			cond := apimeta.FindStatusCondition(updatedCO.Status.Conditions,
+				string(v1alpha1.ClusterOrderConditionClusterStorageReady))
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse),
+				"partial tier resolution must not set ClusterStorageReady")
+			Expect(cond.Message).To(ContainSubstring("block"),
+				"message must name the missing tier")
+		})
+
+		It("should requeue after the status poll interval while the CaaS tier set is incomplete", func() {
+			tenantName := "caas-partial-requeue"
+			r, _, nn, _ := setupPartialTierCaaS(tenantName, &mockProvisioningProvider{name: "caas-requeue-mock"})
+			createLabeledStorageClass(ctx, tenantName+"-local-sc", tenantName, "local")
+
+			// First reconcile triggers the provision job; the mock reports it
+			// Succeeded, so the second reconcile runs discovery and leaves
+			// the ClusterOrder with an incomplete tier result.
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			// Wait for the cached client to observe the partial result, then
+			// call handleCaaSUpdate directly — bypassing handleUpdate's VMaaS
+			// stages, which also requeue on this setup — to pin the bounded
+			// retry to the CaaS partial-tier path.
+			coKey := client.ObjectKey{Namespace: testNamespace, Name: tenantName + "-co"}
+			Eventually(func() bool {
+				cachedCO := &v1alpha1.ClusterOrder{}
+				if err := r.Client.Get(ctx, coKey, cachedCO); err != nil {
+					return false
+				}
+				return cachedCO.IsStatusConditionFalse(string(v1alpha1.ClusterOrderConditionClusterStorageReady))
+			}, 5*time.Second, 10*time.Millisecond).Should(BeTrue())
+
+			rctx, osacTiers, _, _, err := r.resolveTenantTierContext(ctx, tenantName)
+			Expect(err).NotTo(HaveOccurred())
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			result, err := r.handleCaaSUpdate(rctx, tenant, osacTiers)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(pollInterval),
+				"incomplete CaaS tier result must schedule a bounded retry")
+		})
+
+		It("should stop requeueing once every CaaS tier resolves", func() {
+			tenantName := "caas-partial-complete"
+			r, co, nn, _ := setupPartialTierCaaS(tenantName, &mockProvisioningProvider{name: "caas-complete-mock"})
+			// Both tiers' StorageClasses exist, so discovery resolves the
+			// full tier set.
+			createLabeledStorageClass(ctx, tenantName+"-local-sc", tenantName, "local")
+			createLabeledStorageClass(ctx, tenantName+"-block-sc", tenantName, "block")
+
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			updatedCO := &v1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+			Expect(updatedCO.IsStatusConditionTrue(
+				string(v1alpha1.ClusterOrderConditionClusterStorageReady))).To(BeTrue(),
+				"complete tier resolution must set ClusterStorageReady")
+
+			rctx, osacTiers, _, _, err := r.resolveTenantTierContext(ctx, tenantName)
+			Expect(err).NotTo(HaveOccurred())
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			result, err := r.handleCaaSUpdate(rctx, tenant, osacTiers)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeZero(),
+				"complete CaaS tier result must not schedule a retry")
+		})
+
+		It("should re-trigger the CaaS provision job when the tier set changes", func() {
+			tenantName := "caas-partial-retier"
+			caasTriggers := 0
+			provider := &mockProvisioningProvider{
+				name: "caas-retier-mock",
+				triggerProvisionFunc: func(_ context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					if _, ok := resource.(*v1alpha1.ClusterOrder); ok {
+						caasTriggers++
+					}
+					return &provisioning.ProvisionResult{
+						JobID:        fmt.Sprintf("caas-retier-job-%d", caasTriggers),
+						InitialState: v1alpha1.JobStatePending,
+						Message:      "Provisioning job triggered",
+					}, nil
+				},
+			}
+			r, co, nn, setTiers := setupPartialTierCaaS(tenantName, provider)
+			createLabeledStorageClass(ctx, tenantName+"-local-sc", tenantName, "local")
+
+			// Trigger the first CaaS job and let the mock report it
+			// Succeeded.
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(caasTriggers).To(Equal(1))
+
+			updatedCO := &v1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+			Expect(updatedCO.Status.ClusterStorageJobs).To(HaveLen(1))
+			firstVersion := updatedCO.Status.ClusterStorageJobs[0].ConfigVersion
+			Expect(firstVersion).NotTo(BeEmpty(),
+				"CaaS provision jobs must record a config version")
+
+			// The tier catalog gains a tier: the recorded config version no
+			// longer matches, so the succeeded job must not cause a skip.
+			setTiers("local", "block", "fast")
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(caasTriggers).To(Equal(2),
+				"a changed tier set must re-trigger the CaaS provision job")
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+			provisionJobs := 0
+			latestVersion := ""
+			for _, job := range updatedCO.Status.ClusterStorageJobs {
+				if job.Type == v1alpha1.JobTypeProvision {
+					provisionJobs++
+					latestVersion = job.ConfigVersion
+				}
+			}
+			Expect(provisionJobs).To(Equal(2))
+			Expect(latestVersion).NotTo(Equal(firstVersion),
+				"the re-triggered job must record the new config version")
+		})
+
+		It("should run the VMaaS Stage 4 retry while a CaaS provision job is in flight", func() {
+			tenantName := "caas-partial-sequencing"
+			provider := &mockProvisioningProvider{
+				name: "caas-sequencing-mock",
+				triggerProvisionFunc: func(context.Context, client.Object) (*provisioning.ProvisionResult, error) {
+					return &provisioning.ProvisionResult{
+						JobID:        "caas-sequencing-job",
+						InitialState: v1alpha1.JobStatePending,
+						Message:      "Provisioning job triggered",
+					}, nil
+				},
+				getProvisionStatusFunc: func(_ context.Context, _ client.Object, jobID string) (provisioning.ProvisionStatus, error) {
+					return provisioning.ProvisionStatus{
+						JobID:   jobID,
+						State:   v1alpha1.JobStatePending,
+						Message: "Job still running",
+					}, nil
+				},
+			}
+			r, co, nn, _ := setupPartialTierCaaS(tenantName, provider)
+			// Only the local tier resolves on VMaaS, so Stage 4 (the VMaaS
+			// retry for missing tiers) must run in the same reconcile.
+			createLabeledStorageClass(ctx, tenantName+"-local-sc", tenantName, "local")
+
+			result, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+
+			// The CaaS job was triggered and is still in flight...
+			updatedCO := &v1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+			Expect(updatedCO.Status.ClusterStorageJobs).To(HaveLen(1))
+
+			// ...and the VMaaS Stage 4 retry still ran instead of being
+			// skipped by the pending CaaS requeue.
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			Expect(tenant.Status.ClusterStorageJobs).To(HaveLen(1),
+				"a pending CaaS requeue must not skip the VMaaS Stage 4 retry")
 		})
 	})
 

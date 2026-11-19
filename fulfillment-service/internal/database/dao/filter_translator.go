@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"math"
 	"strings"
 	"unicode"
@@ -53,6 +54,12 @@ type FilterTranslator struct {
 	isProject bool
 	isPublic  bool
 	celEnv    *cel.Env
+
+	// Translation-local state, populated only on a copy in Translate. DAOs share
+	// translators, so iterator bindings must never mutate the original instance.
+	sourceInfo  *ast.SourceInfo
+	variables   map[string]filterTranslatorResult
+	existsDepth int
 }
 
 // filterTranslatorResultKind is the type of the result inferred during the translation process.
@@ -116,8 +123,7 @@ type filterTranslatorResult struct {
 	// kind is the type of the result.
 	kind filterTranslatorResultKind
 
-	// desc is the descriptor of the type of the result. Will only be set when the kind of the result is a protobuf
-	// message.
+	// desc describes a JSON message, or the element type of a repeated message field.
 	desc protoreflect.MessageDescriptor
 
 	// enumDesc is the descriptor of the enum type. Set when the result is an enum field extracted from JSON.
@@ -260,6 +266,7 @@ func (b *FilterTranslatorBuilder) createCelEnv() (result *cel.Env, err error) {
 
 	// Declare the current date:
 	options = append(options, cel.Variable("now", cel.TimestampType))
+	options = append(options, cel.EnableMacroCallTracking())
 
 	// Create the CEL environment:
 	result, err = cel.NewEnv(options...)
@@ -280,7 +287,9 @@ func (t *FilterTranslator) Translate(ctx context.Context, filter string) (sql st
 		err = errors.New("filter references reserved metadata key")
 		return
 	}
-	result, err := t.translate(expr)
+	translation := *t
+	translation.sourceInfo = tree.NativeRep().SourceInfo()
+	result, err := translation.translate(expr)
 	if err != nil {
 		return
 	}
@@ -292,6 +301,8 @@ func (t *FilterTranslator) translate(expr ast.Expr) (result filterTranslatorResu
 	switch expr.Kind() {
 	case ast.CallKind:
 		result, err = t.translateCall(expr.AsCall())
+	case ast.ComprehensionKind:
+		result, err = t.translateExists(expr)
 	case ast.IdentKind:
 		result, err = t.translateIdent(expr.AsIdent())
 	case ast.LiteralKind:
@@ -303,6 +314,51 @@ func (t *FilterTranslator) translate(expr ast.Expr) (result filterTranslatorResu
 		return
 	}
 	return
+}
+
+// translateExists handles only CEL's standard exists macro, not arbitrary folds.
+// Read the predicate from the checked expansion: macro source arguments can
+// contain placeholders for nested macros rather than their expanded expressions.
+func (t *FilterTranslator) translateExists(expr ast.Expr) (filterTranslatorResult, error) {
+	macro, ok := t.sourceInfo.GetMacroCall(expr.ID())
+	if !ok || macro.Kind() != ast.CallKind || macro.AsCall().FunctionName() != "exists" {
+		return filterTranslatorResult{}, errors.New("only the exists comprehension is supported")
+	}
+	comprehension := expr.AsComprehension()
+	array, err := t.translate(comprehension.IterRange())
+	if err != nil {
+		return filterTranslatorResult{}, err
+	}
+	if array.kind != filterTranslatorJsonArrayKind || array.desc == nil {
+		return filterTranslatorResult{}, errors.New("exists is supported only on repeated message fields")
+	}
+
+	// Copy the lexical scope so nested/shadowed variables cannot leak into a
+	// sibling expression. SQL aliases are generated, never taken from CEL input.
+	scope := *t
+	scope.variables = maps.Clone(t.variables)
+	if scope.variables == nil {
+		scope.variables = make(map[string]filterTranslatorResult)
+	}
+	alias := fmt.Sprintf("cel_element_%d", t.existsDepth)
+	scope.existsDepth++
+	scope.variables[comprehension.IterVar()] = filterTranslatorResult{
+		sql:        alias + ".value",
+		kind:       filterTranslatorJsonKind,
+		desc:       array.desc,
+		precedence: filterTranslatorMaxPrecedence,
+	}
+	// The standard exists expansion folds accumulator || predicate.
+	predicate, err := scope.translate(comprehension.LoopStep().AsCall().Args()[1])
+	if err != nil {
+		return filterTranslatorResult{}, err
+	}
+	return filterTranslatorResult{
+		sql: fmt.Sprintf("exists (select 1 from jsonb_array_elements(%s) as %s(value) where %s)",
+			array.sql, alias, predicate.sql),
+		kind:       filterTranslatorBooleanKind,
+		precedence: filterTranslatorMaxPrecedence,
+	}, nil
 }
 
 func (t *FilterTranslator) translateCall(expr ast.CallExpr) (result filterTranslatorResult, err error) {
@@ -537,6 +593,9 @@ func (t *FilterTranslator) translateNot(value ast.Expr) (result filterTranslator
 }
 
 func (t *FilterTranslator) translateIdent(name string) (result filterTranslatorResult, err error) {
+	if variable, ok := t.variables[name]; ok {
+		return variable, nil
+	}
 	switch name {
 	case "this":
 		result.sql = ""
@@ -1148,6 +1207,7 @@ func (t *FilterTranslator) translateSelectJsonField(operandSql string, msgDesc p
 	if fieldDesc.IsList() {
 		result.sql = fmt.Sprintf("%s->%s", operandSql, fieldSql)
 		result.kind = filterTranslatorJsonArrayKind
+		result.desc = fieldDesc.Message()
 		result.precedence = filterTranslatorMaxPrecedence
 		return
 	}

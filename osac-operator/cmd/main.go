@@ -523,6 +523,7 @@ func setupClusterControllers(
 		os.Getenv(envClusterOrderNamespace),
 	)
 	baremetalworkerReconciler.NetworkingProvisioningEnabled = networkingProvisioningEnabled()
+	baremetalworkerReconciler.SetWorkerNetworkConfigGate(true)
 	baremetalworkerReconciler.SetNetworkingNamespace(os.Getenv(envNetworkingNamespace))
 	if grpcConn != nil {
 		baremetalworkerReconciler.SetSecretsClient(privatev1.NewSecretsClient(grpcConn))

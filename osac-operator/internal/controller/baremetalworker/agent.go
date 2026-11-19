@@ -9,6 +9,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	meta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -165,6 +166,17 @@ func (r *Reconciler) matchAndBindAgents(
 				(!proof.bindingReady || !agentMatchesWorkerLease(association.agent, proof.mac, proof.leaseAddress)) {
 				continue
 			}
+			if r.WorkerNetworkConfigGate {
+				ready, err := r.workerNetworkConfigReady(ctx, co, association.agent)
+				if err != nil {
+					return bound, err
+				}
+				if !ready {
+					log.Info("waiting for MAC-driven worker NMStateConfig before Agent approval",
+						"worker", w.Name, "agent", association.agent.GetName())
+					continue
+				}
+			}
 			if r.NetworkingProvisioningEnabled && w.RegistryProbePrepared {
 				image := workerRegistryProbeImage(co, w)
 				if image == "" {
@@ -203,6 +215,40 @@ func (r *Reconciler) matchAndBindAgents(
 		bound++
 	}
 	return bound, nil
+}
+
+var nmStateConfigListGVK = schema.GroupVersionKind{
+	Group: assistedservice.AgentInstallAPIGroup, Version: agentInstallAPIVersion, Kind: "NMStateConfigList",
+}
+
+func (r *Reconciler) workerNetworkConfigReady(
+	ctx context.Context, co *v1alpha1.ClusterOrder, agent *unstructured.Unstructured,
+) (bool, error) {
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(nmStateConfigListGVK)
+	reader := r.apiReader
+	if reader == nil {
+		reader = r.Client
+	}
+	err := reader.List(ctx, list, client.InNamespace(co.Namespace), client.MatchingLabels{
+		"osac.openshift.io/clusterorder": co.Name,
+	})
+	if err != nil {
+		// Older installations may not have the NMStateConfig CRD. Preserve the
+		// legacy approval path there; CaaS deployments install the CRD and use
+		// the gate.
+		if meta.IsNoMatchError(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	wanted := co.Name + "-" + agent.GetName() + "-network"
+	for i := range list.Items {
+		if list.Items[i].GetName() == wanted {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // bindAgent sets the Agent's clusterDeploymentName (late binding), marks it approved,

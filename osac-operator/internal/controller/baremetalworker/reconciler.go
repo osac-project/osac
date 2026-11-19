@@ -68,6 +68,9 @@ type Reconciler struct {
 	registryProbeGuestResolver registryProbeGuestResolver
 	// NetworkingProvisioningEnabled reflects global.networking.provisioningEnabled.
 	NetworkingProvisioningEnabled bool
+	// WorkerNetworkConfigGate prevents Assisted from approving a CaaS Agent until
+	// its MAC-driven NMStateConfig exists.
+	WorkerNetworkConfigGate bool
 }
 
 // SecretsClient is the Secrets.Get subset used to materialize a registered
@@ -125,11 +128,18 @@ func (r *Reconciler) SetSecretsClient(client SecretsClient) {
 	r.secrets = client
 }
 
+// SetWorkerNetworkConfigGate enables the CaaS Agent approval gate that waits for
+// the MAC-driven NMStateConfig created by the provisioning workflow.
+func (r *Reconciler) SetWorkerNetworkConfigGate(enabled bool) {
+	r.WorkerNetworkConfigGate = enabled
+}
+
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders,verbs=get;list;watch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;create
 // +kubebuilder:rbac:groups=agent-install.openshift.io,resources=infraenvs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=agent-install.openshift.io,resources=agents,verbs=get;list;watch;patch;delete
+// +kubebuilder:rbac:groups=agent-install.openshift.io,resources=nmstateconfigs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=baremetalinstances;networkattachments,verbs=get;list;watch
 // +kubebuilder:rbac:groups=hypershift.openshift.io,resources=nodepools,verbs=get;list;watch;patch;update
 

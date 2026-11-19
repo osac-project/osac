@@ -130,6 +130,42 @@ def test_vast_detects_existing_block_deleted_during_creation(tmp_path):
     assert not [call for call in calls if call.get("state") == "absent"]
 
 
+@pytest.mark.parametrize("disappear", [False, True])
+@pytest.mark.parametrize("insecure", [False, True])
+def test_csi_partial_completion_checks_requested_classes(tmp_path, disappear, insecure):
+    case = next(case for case in BLOCK_CREATORS if case.role == "osac_csi_storage")
+    result, calls = run_provider(tmp_path / "seed", case, protocols=("block",), names=("gold",))
+    assert_success(result)
+    gold = created_classes(calls)[0]
+    gold["parameters"].pop(FSTYPE)
+    gold_name = gold["metadata"]["name"]
+    silver_name = gold_name.removesuffix("gold") + "silver"
+    result, calls = run_provider(
+        tmp_path / "partial", case, protocols=("block", "block"), names=("gold", "silver"), existing=[gold],
+        environment={"OSAC_STORAGE_DELETE_ON_CREATE": json.dumps({silver_name: gold_name} if disappear else {}),
+                     "OSAC_STORAGE_BLOCK_FSTYPE": OPAQUE},
+        overrides={"_remote_kubeconfig_insecure": insecure},
+    )
+    classes = created_classes(calls)
+    assert [entry["metadata"]["name"] for entry in classes] == [silver_name]
+    assert classes[0]["parameters"][FSTYPE] == OPAQUE
+    write = next(call for call in calls if (call.get("definition") or {}).get("kind") == "StorageClass")
+    remaining = [entry for entry in write["objects"] if entry.get("kind") == "StorageClass"]
+    assert (gold in remaining) is not disappear
+    assert not [call for call in calls if call.get("state") == "absent"]
+    if disappear:
+        assert result.returncode != 0
+        assert "OSAC CSI StorageClasses missing at completion" in result.stdout
+        assert gold_name in result.stdout
+        assert "TASK [Verify every requested tier is returned]" not in result.stdout
+    else:
+        assert_success(result)
+    reads = [call for call in calls if call["module"] == "k8s_info" and call["kind"] == "StorageClass"]
+    assert len(reads) == 2
+    assert all(call["kubeconfig"] == "/fixture/guest" for call in reads)
+    assert all(call["validate_certs"] is not insecure for call in reads)
+
+
 def test_each_new_consumer_rejects_invalid_before_writes(tmp_path, snapshot):
     case, _, _ = snapshot
     result, calls = run_provider(tmp_path, case, protocols=("block",),
@@ -159,6 +195,9 @@ def test_existing_filesystem_and_absence_survive_unused_bad_override(tmp_path, s
     if case.role == "vast_storage":
         assert not created_classes(calls)
         assert len(calls) == 1
+    if case.role == "osac_csi_storage":
+        assert not created_classes(calls)
+        assert len([call for call in calls if call["module"] == "k8s_info" and call["kind"] == "StorageClass"]) == 1
 
 
 @pytest.mark.parametrize("value", ["", [], ["xfs"], {"not": "a string"}, 123, True, 1.5, None])

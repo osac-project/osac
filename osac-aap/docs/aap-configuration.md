@@ -18,11 +18,12 @@ retain their filesystem parameters, including an absent parameter; changing the
 setting does not migrate classes, PVCs, PVs, or data. Use a separately named class
 for future claims and plan workload/data migration separately.
 
-After creating missing VAST block classes, the provider checks that all requested
-block class names exist before returning them. If a class disappeared, it fails
+After creating missing VAST block classes or OSAC CSI classes, the provider checks
+that all requested block classes (VAST) or classes (OSAC CSI) exist before
+returning their names. If a class disappeared, it fails
 with the missing names; it does not recreate existing classes or retry. This is
 a point-in-time completion check, not a guarantee against deletion after the
-check. All-existing and NFS-only creation paths do not perform this extra check.
+check. All-existing requests and VAST NFS-only creation skip this extra check.
 
 For deployment configuration, see the
 [installer Helm example](../../osac-installer/docs/aap-configuration.md#block-storageclass-filesystem-type).

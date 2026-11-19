@@ -154,6 +154,28 @@
         label: "{{ item.name }}"
       no_log: true
 
+- name: Verify requested OSAC CSI StorageClasses at completion
+  when: _osac_csi_missing_sc_entries | length > 0
+  block:
+    - name: Read OSAC CSI StorageClasses after creation
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+      register: _osac_csi_completed_sc_check
+
+    - name: Reject missing requested OSAC CSI StorageClasses
+      vars:
+        _osac_csi_missing_completed_names: >-
+          {{ _osac_csi_expected_sc_entries | map(attribute='name') | list
+             | difference(_osac_csi_completed_sc_check.resources | map(attribute='metadata.name') | list) }}
+      ansible.builtin.assert:
+        that:
+          - _osac_csi_missing_completed_names | length == 0
+        fail_msg: >-
+          OSAC CSI StorageClasses missing at completion: {{ _osac_csi_missing_completed_names | join(', ') }}
+
 - name: Set StorageClass names output
   ansible.builtin.set_fact:
     storage_provider_storage_class_names: "{{ _osac_csi_expected_sc_entries }}"

@@ -22,10 +22,7 @@ const GeneralStep = ({ isEdit }: GeneralStepProps) => {
       <StackItem>
         <OsacForm>
           <NameField isDisabled={isEdit} />
-          <DescriptionField
-            name="spec.description"
-            fieldId="baremetal-instance-type-description"
-          />
+          <DescriptionField name="spec.description" fieldId="baremetal-instance-type-description" />
           <KeyValueMapField
             name="spec.hostLabelSelector"
             fieldId="baremetal-instance-type-host-label-selector"

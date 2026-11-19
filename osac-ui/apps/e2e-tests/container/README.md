@@ -329,7 +329,8 @@ the first attempt left behind.
 2. Check that no objects with the resulting indexed test names exist; stop or
    clean up verified leftovers if they do.
 3. Run the image with the flow tag. Its exit code is the job result.
-4. Always retain the container log and any generated results as job artifacts.
+4. Keep the container log and generated results in restricted storage, including
+   on failure. Do not publish them as artifacts of a public workflow run.
 5. If the run failed, delete the objects it left behind before the next run.
 6. Remove the password file.
 
@@ -338,6 +339,15 @@ yet run in GitHub Actions). Replace `YOUR_RUNNER_LABEL` with a real label for
 a runner that can reach the deployment, and configure the variables, secrets,
 pre-run checks, and cleanup for your environment. This fragment does not
 implement OSAC CI's pull-request authorization or integration requirements.
+
+The example captures the container log and reports in a private temporary
+directory on the runner; it does not upload them. For OSAC CI, integrate the
+OSAC CI app's private `osac-project/osac-ci-artifacts` storage for both logs
+and reports, including on failure. Do not fall back to a public workflow
+artifact if private storage is unavailable. Configure private retention and
+cleanup before using this example: the directory can remain on a self-hosted
+runner after the job. The workflow's other console output must also be kept
+free of sensitive data.
 
 The example builds the image in every job. A runner may reuse local cached
 layers, but different runners do not share a build automatically. The tagged
@@ -381,28 +391,24 @@ jobs:
           umask 077
           password_file=$(mktemp "${RUNNER_TEMP}/osac-ui-e2e-password.XXXXXXXX")
           cli_dir=$(mktemp -d "${RUNNER_TEMP}/osac-ui-e2e-cli.XXXXXXXX")
+          result_dir=$(mktemp -d "${RUNNER_TEMP}/osac-ui-e2e-results.XXXXXXXX")
           trap 'rm -f -- "$password_file" "$cli_dir/osac"; rmdir -- "$cli_dir"' EXIT
           bash osac-ui/apps/e2e-tests/container/extract-osac-cli.sh \
             "$FULFILLMENT_SERVICE_IMAGE" "$cli_dir/osac"
           printf %s "$OSAC_ADMIN_PASSWORD" > "$password_file"
-          mkdir -p test-output
+          printf 'Private results directory: %s\n' "$result_dir"
           podman run --rm \
             --network=host \
             --userns=keep-id \
             --user "$(id -u):0" \
             -v "$password_file":/work/admin-password:ro,Z \
             -v "$cli_dir/osac":/work/osac-cli:ro,Z \
-            -v ./test-output:/tmp/test-output:Z \
+            -v "$result_dir":/tmp/test-output:Z \
             -e OSAC_UI_BASE_URL="${{ vars.OSAC_UI_BASE_URL }}" \
             -e OSAC_API_BASE_URL="${{ vars.OSAC_API_BASE_URL }}" \
             osac-ui-e2e:${{ github.sha }} \
             --tag=vmaas_full_happy_basic \
             --ignore-tls \
-            --admin-password-file=/work/admin-password
-      - name: Keep the Playwright report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: ui-e2e-report
-          path: test-output/
+            --admin-password-file=/work/admin-password \
+            > "$result_dir/runner.log" 2>&1
 ```

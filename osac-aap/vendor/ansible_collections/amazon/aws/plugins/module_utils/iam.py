@@ -10,7 +10,7 @@ try:
 except ImportError:
     pass  # Modules are responsible for handling this.
 
-from ansible.module_utils.common.text.converters import to_native
+from ansible.module_utils._text import to_native
 
 from .arn import parse_aws_arn
 from .arn import validate_aws_arn
@@ -95,7 +95,7 @@ def list_iam_role_attached_policies(client, role_name):
 @AWSRetry.jittered_backoff()
 def list_iam_users(client, path=None):
     args = {}
-    if path is not None:
+    if path is None:
         args = {"PathPrefix": path}
     paginator = client.get_paginator("list_users")
     return paginator.paginate(**args).build_full_result()["Users"]
@@ -160,18 +160,9 @@ def get_iam_access_keys(client, user):
 
 @IAMErrorHandler.list_error_handler("get user")
 @AWSRetry.jittered_backoff()
-def get_iam_user(client, user, normalize=True):
+def get_iam_user(client, user):
     results = client.get_user(UserName=user)
-    if normalize:
-        return normalize_iam_user(results.get("User", []))
-    return results.get("User", [])
-
-
-@IAMErrorHandler.list_error_handler("get user tags")
-@AWSRetry.jittered_backoff()
-def list_iam_user_tags(client, user):
-    results = client.list_user_tags(UserName=user)
-    return results.get("Tags", [])
+    return normalize_iam_user(results.get("User", []))
 
 
 def find_iam_managed_policy_by_name(client, name):

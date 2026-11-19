@@ -204,7 +204,7 @@ describe('BareMetalCatalogItemWizard', () => {
     expect(Object.keys(request.object?.fields ?? {}).filter((key) => key !== '$typeName')).toEqual(
       [],
     );
-    expect(mockNavigate).toHaveBeenCalledWith('/catalog/bm/catalog-item-1');
+    expect(mockNavigate).toHaveBeenCalledWith('/catalog/bare-metal/catalog-item-1');
   });
 
   it('stays on Review after a failed submit', async () => {
@@ -306,6 +306,6 @@ describe('BareMetalCatalogItemWizard', () => {
     expect(request.updateMask?.paths).not.toContain('template');
     expect(request.updateMask?.paths).not.toContain('metadata.name');
     expect(request.updateMask?.paths).not.toContain('metadata.tenant');
-    expect(mockNavigate).toHaveBeenCalledWith('/catalog/bm/catalog-item-1');
+    expect(mockNavigate).toHaveBeenCalledWith('/catalog/bare-metal/catalog-item-1');
   });
 });

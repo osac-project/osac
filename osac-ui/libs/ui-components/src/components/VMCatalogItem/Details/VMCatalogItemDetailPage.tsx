@@ -26,7 +26,7 @@ export const VMCatalogItemDetailPage = () => {
       error={error}
       found={!!item}
       isLoading={isLoading}
-      parentTo="/catalog"
+      parentTo="/catalog/vms"
       parentLabel={t('Catalog')}
       refetch={() => void refetch()}
       resourceLabel={t('VM catalog item')}
@@ -38,7 +38,7 @@ export const VMCatalogItemDetailPage = () => {
             <VMCatalogItemDeleteModal
               item={item}
               onClose={() => setDeleteOpen(false)}
-              onSuccess={() => navigate('/catalog')}
+              onSuccess={() => navigate('/catalog/vms')}
             />
           ) : null}
           <CatalogItemDetails

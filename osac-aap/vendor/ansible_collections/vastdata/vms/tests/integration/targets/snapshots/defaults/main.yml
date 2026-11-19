@@ -1,0 +1,23 @@
+---
+# Default variables for snapshots integration tests
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true
+
+# Test snapshot configuration
+test_snapshot_name: "ansible-test-snapshot"
+test_snapshot_name_updated: "ansible-test-snapshot-updated"
+
+# Test view for snapshot source
+test_view_path: "/ansible-test-snapshot-view"
+test_view_policy_id: 1
+
+# Expiration time for testing (ISO 8601 format)
+test_expiration_time: "2026-12-31T23:59:59Z"

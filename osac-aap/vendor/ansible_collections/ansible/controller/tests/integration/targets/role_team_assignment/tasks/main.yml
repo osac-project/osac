@@ -29,10 +29,9 @@
     object_id: "{{ job_template.id }}"
   register: result
 
-- name: Assert result is changed
-  ansible.builtin.assert:
+- assert:
     that:
-      - result.changed
+      - result is changed
 
 - name: Delete Role Team Assigment
   role_team_assignment:
@@ -42,10 +41,9 @@
     state: absent
   register: result
 
-- name: Assert result is changed
-  ansible.builtin.assert:
+- assert:
     that:
-      - result.changed
+      - result is changed
 
 - name: Create Role Definition
   role_definition:

@@ -224,13 +224,10 @@
         that:
           - _result_delete_snapshot.changed
 
-    - name: Ensure DB cluster is in available state
+    - name: Get info of the existing DB cluster
       amazon.aws.rds_cluster_info:
         cluster_id: "{{ cluster_id }}"
       register: _result_cluster_info
-      retries: 30
-      delay: 5
-      until: _result_cluster_info.clusters[0].status == "available"
 
     - ansible.builtin.assert:
         that:

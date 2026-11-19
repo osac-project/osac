@@ -1,0 +1,282 @@
+---
+# Integration tests for eventdefinitionconfigs module.
+# eventdefinitionconfigs is update-only (no create/delete). Global config typically has id=1.
+#
+# Configuration: Set values in tests/integration/integration_config.yml
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials | bool }}"
+
+# ====================
+# eventdefinitionconfigs – read (idempotent present)
+# ====================
+
+- name: Read event definition config (no change)
+  vastdata.vms.eventdefinitionconfigs:
+    vms: "{{ vms_auth }}"
+    id: "{{ eventdefinitionconfig_id }}"
+    state: present
+  register: read_result
+  when: can_run_tests | bool
+
+- name: Verify event definition config was read
+  ansible.builtin.assert:
+    that:
+      - read_result.eventdefinitionconfigs is defined
+      - read_result.eventdefinitionconfigs.id is defined
+  when: can_run_tests | bool
+
+- name: Save current info_value for restore later
+  ansible.builtin.set_fact:
+    saved_info_value: "{{ read_result.eventdefinitionconfigs.info_value | default('INFO') }}"
+  when: can_run_tests | bool and read_result is succeeded
+
+# ====================
+# eventdefinitionconfigs – update
+# ====================
+
+- name: Update event definition config – set info_value to MINOR
+  vastdata.vms.eventdefinitionconfigs:
+    vms: "{{ vms_auth }}"
+    id: "{{ eventdefinitionconfig_id }}"
+    info_value: "MINOR"
+    state: present
+  register: update_result
+  when: can_run_tests | bool
+
+- name: Verify event definition config was updated
+  ansible.builtin.assert:
+    that:
+      - update_result is changed
+      - update_result.eventdefinitionconfigs is defined
+      - update_result.eventdefinitionconfigs.info_value == "MINOR"
+  when: can_run_tests | bool
+
+- name: Test update idempotency – run again with same params
+  vastdata.vms.eventdefinitionconfigs:
+    vms: "{{ vms_auth }}"
+    id: "{{ eventdefinitionconfig_id }}"
+    info_value: "MINOR"
+    state: present
+  register: idempotent_result
+  when: can_run_tests | bool
+
+- name: Verify update idempotency
+  ansible.builtin.assert:
+    that:
+      - idempotent_result is not changed
+  when: can_run_tests | bool
+
+- name: Restore original info_value
+  vastdata.vms.eventdefinitionconfigs:
+    vms: "{{ vms_auth }}"
+    id: "{{ eventdefinitionconfig_id }}"
+    info_value: "{{ saved_info_value }}"
+    state: present
+  when: can_run_tests | bool
+
+# ====================
+# eventdefinitionconfigs – check mode
+# ====================
+
+- name: Test check mode – update info_value (no actual change)
+  vastdata.vms.eventdefinitionconfigs:
+    vms: "{{ vms_auth }}"
+    id: "{{ eventdefinitionconfig_id }}"
+    info_value: "MAJOR"
+    state: present
+  register: check_mode_result
+  check_mode: true
+  when: can_run_tests | bool
+
+- name: Verify check mode reported change
+  ansible.builtin.assert:
+    that:
+      - check_mode_result is changed
+  when: can_run_tests | bool
+
+- name: Apply same update without check mode
+  vastdata.vms.eventdefinitionconfigs:
+    vms: "{{ vms_auth }}"
+    id: "{{ eventdefinitionconfig_id }}"
+    info_value: "MAJOR"
+    state: present
+  register: apply_result
+  when: can_run_tests | bool
+
+- name: Verify actual update
+  ansible.builtin.assert:
+    that:
+      - apply_result is changed
+      - apply_result.eventdefinitionconfigs.info_value == "MAJOR"
+  when: can_run_tests | bool
+
+- name: Restore info_value after check mode test
+  vastdata.vms.eventdefinitionconfigs:
+    vms: "{{ vms_auth }}"
+    id: "{{ eventdefinitionconfig_id }}"
+    info_value: "{{ saved_info_value }}"
+    state: present
+  when: can_run_tests | bool
+
+# ====================
+# eventdefinitionconfigs – test syslog_port idempotency
+# ====================
+
+- name: Save current syslog configuration for restore
+  ansible.builtin.set_fact:
+    saved_syslog_port: "{{ read_result.eventdefinitionconfigs.syslog_port | default(514) }}"
+    saved_syslog_protocol: "{{ read_result.eventdefinitionconfigs.syslog_protocol | default('udp') }}"
+  when: can_run_tests | bool and read_result is succeeded
+
+- name: Update syslog_port (first run)
+  vastdata.vms.eventdefinitionconfigs:
+    vms: "{{ vms_auth }}"
+    id: "{{ eventdefinitionconfig_id }}"
+    syslog_port: 520
+    syslog_protocol: "tcp"
+    email_recipients: []
+    state: present
+  register: syslog_update_result
+  when: can_run_tests | bool
+
+- name: Verify syslog_port was updated
+  ansible.builtin.assert:
+    that:
+      - syslog_update_result.eventdefinitionconfigs is defined
+      - syslog_update_result.eventdefinitionconfigs.syslog_port == 520
+      - syslog_update_result.eventdefinitionconfigs.syslog_protocol == "tcp"
+  when: can_run_tests | bool
+
+- name: Test syslog_port idempotency – run again with same params
+  vastdata.vms.eventdefinitionconfigs:
+    vms: "{{ vms_auth }}"
+    id: "{{ eventdefinitionconfig_id }}"
+    syslog_port: 520
+    syslog_protocol: "tcp"
+    email_recipients: []
+    state: present
+  register: syslog_idempotent_result
+  when: can_run_tests | bool
+
+- name: Verify syslog_port idempotency (should not report changed)
+  ansible.builtin.assert:
+    that:
+      - syslog_idempotent_result is not changed
+    fail_msg: "syslog_port idempotency failed - module reported changed when no changes were made"
+  when: can_run_tests | bool
+
+- name: Restore original syslog configuration
+  vastdata.vms.eventdefinitionconfigs:
+    vms: "{{ vms_auth }}"
+    id: "{{ eventdefinitionconfig_id }}"
+    syslog_port: "{{ saved_syslog_port }}"
+    syslog_protocol: "{{ saved_syslog_protocol }}"
+    state: present
+  when: can_run_tests | bool
+
+# ====================
+# eventdefinitionconfigs – test syslog_port idempotency
+# ====================
+
+- name: Save current syslog configuration for restore
+  ansible.builtin.set_fact:
+    saved_syslog_port: "{{ read_result.eventdefinitionconfigs.syslog_port | default(514) }}"
+    saved_syslog_protocol: "{{ read_result.eventdefinitionconfigs.syslog_protocol | default('udp') }}"
+  when: can_run_tests | bool and read_result is succeeded
+
+- name: Update syslog_port (first run)
+  vastdata.vms.eventdefinitionconfigs:
+    vms: "{{ vms_auth }}"
+    id: "{{ eventdefinitionconfig_id }}"
+    syslog_port: 520
+    syslog_protocol: "tcp"
+    email_recipients: []
+    state: present
+  register: syslog_update_result
+  when: can_run_tests | bool
+
+- name: Verify syslog_port was updated
+  ansible.builtin.assert:
+    that:
+      - syslog_update_result.eventdefinitionconfigs is defined
+      - syslog_update_result.eventdefinitionconfigs.syslog_port == 520
+      - syslog_update_result.eventdefinitionconfigs.syslog_protocol == "tcp"
+  when: can_run_tests | bool
+
+- name: Test syslog_port idempotency – run again with same params
+  vastdata.vms.eventdefinitionconfigs:
+    vms: "{{ vms_auth }}"
+    id: "{{ eventdefinitionconfig_id }}"
+    syslog_port: 520
+    syslog_protocol: "tcp"
+    email_recipients: []
+    state: present
+  register: syslog_idempotent_result
+  when: can_run_tests | bool
+
+- name: Verify syslog_port idempotency (should not report changed)
+  ansible.builtin.assert:
+    that:
+      - syslog_idempotent_result is not changed
+    fail_msg: "syslog_port idempotency failed - module reported changed when no changes were made"
+  when: can_run_tests | bool
+
+- name: Restore original syslog configuration
+  vastdata.vms.eventdefinitionconfigs:
+    vms: "{{ vms_auth }}"
+    id: "{{ eventdefinitionconfig_id }}"
+    syslog_port: "{{ saved_syslog_port }}"
+    syslog_protocol: "{{ saved_syslog_protocol }}"
+    state: present
+  when: can_run_tests | bool
+
+# ====================
+# eventdefinitionconfigs – non-existent resource (fail with clear message)
+# ====================
+
+- name: Test non-existent id returns error
+  vastdata.vms.eventdefinitionconfigs:
+    vms: "{{ vms_auth }}"
+    id: 999999
+    info_value: "INFO"
+    state: present
+  register: create_result
+  failed_when: false
+  when: can_run_tests | bool
+
+- name: Verify non-existent id returns error
+  ansible.builtin.assert:
+    that:
+      - create_result.msg is defined
+      - "'405' in create_result.msg or '404' in create_result.msg or 'not allowed' in create_result.msg"
+  when: can_run_tests | bool
+
+# ====================
+# Skip message when no credentials
+# ====================
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping eventdefinitionconfigs integration tests - missing credentials.
+
+      To enable integration tests, set the following in:
+        tests/integration/integration_config.yml
+
+      VAST credentials:
+        vast_vms: "vms.example.com"
+        vast_username: "admin"
+        vast_password: "password"
+
+      Then run: ansible-test integration eventdefinitionconfigs -v
+  when: not (can_run_tests | bool)

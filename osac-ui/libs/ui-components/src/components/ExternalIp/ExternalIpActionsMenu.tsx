@@ -50,7 +50,7 @@ const ExternalIpActionsMenu = ({ externalIp }: ExternalIpActionsMenuProps) => {
           <DeleteResourceButton
             isDropdown
             canDelete={canDelete}
-            description={deleteDisabledReasonText}
+            disabledReason={deleteDisabledReasonText}
             onClick={() => {
               if (!canDelete) {
                 return;

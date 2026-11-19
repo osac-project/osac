@@ -61,7 +61,7 @@ EXAMPLES = r"""
 - name: Retrieve EC2 key pair by fingerprint
   amazon.aws.ec2_key_info:
     filters:
-      fingerprint: "EXAMPLE1234567890abcdefghijklmnop="
+      fingerprint: "1bSd8jVye3In5oF4zZI4o8BcXfdbYN+daCt9O1fh3Qk="
 """
 
 RETURN = r"""

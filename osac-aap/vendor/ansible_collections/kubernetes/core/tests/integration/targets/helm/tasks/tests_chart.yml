@@ -30,9 +30,9 @@
         binary_path: "{{ helm_binary }}"
         name: "{{ chart_release_name }}"
         chart_ref: "{{ chart_source }}"
-        chart_version: "{{ chart_test_version }}"
+        chart_version: "{{ chart_source_version | default(omit) }}"
         namespace: "{{ helm_namespace }}"
-      ignore_errors: true
+      ignore_errors: yes
       register: install_fail
 
     - name: "Assert that Install fail {{ chart_test }} from {{ source }}"
@@ -46,7 +46,7 @@
         binary_path: "{{ helm_binary }}"
         name: "{{ chart_release_name }}"
         chart_ref: "{{ chart_source }}"
-        chart_version: "{{ chart_test_version }}"
+        chart_version: "{{ chart_source_version | default(omit) }}"
         namespace: "{{ helm_namespace }}"
         create_namespace: true
       register: install_check_mode
@@ -64,18 +64,17 @@
         binary_path: "{{ helm_binary }}"
         name: "{{ chart_release_name }}"
         chart_ref: "{{ chart_source }}"
-        chart_version: "{{ chart_test_version }}"
+        chart_version: "{{ chart_source_version | default(omit) }}"
         namespace: "{{ helm_namespace }}"
         create_namespace: true
       register: install
 
-    - name: "Assert that {{ chart_test }} chart version {{ chart_test_version }} is installed from {{ source }}"
+    - name: "Assert that {{ chart_test }} chart is installed from {{ source }}"
       assert:
         that:
           - install is changed
           - install.status.chart == chart_test+"-"+chart_test_version
           - install.status.status | lower == 'deployed'
-          - install.status.release_values == {}
 
     - name: Check helm_info content
       helm_info:
@@ -93,7 +92,7 @@
           - deployed
       register: release_state_content_info
 
-    - name: "Assert that {{ chart_test }} chart version {{ chart_test_version }} is installed from {{ source }} with helm_info"
+    - name: "Assert that {{ chart_test }} is installed from {{ source }} with helm_info"
       assert:
         that:
           - content_info.status.chart == chart_test+"-"+chart_test_version
@@ -105,10 +104,9 @@
         binary_path: "{{ helm_binary }}"
         name: "{{ chart_release_name }}"
         chart_ref: "{{ chart_source }}"
-        chart_version: "{{ chart_test_version }}"
+        chart_version: "{{ chart_source_version | default(omit) }}"
         namespace: "{{ helm_namespace }}"
       register: install
-      diff: true
 
     - name: Assert idempotency
       assert:
@@ -122,7 +120,7 @@
         binary_path: "{{ helm_binary }}"
         name: "{{ chart_release_name }}"
         chart_ref: "{{ chart_source }}"
-        chart_version: "{{ chart_test_version }}"
+        chart_version: "{{ chart_source_version | default(omit) }}"
         namespace: "{{ helm_namespace }}"
         values: "{{ chart_test_values }}"
       register: install
@@ -133,18 +131,17 @@
           - install is changed
           - install.status.status | lower == 'deployed'
           - install.status.chart == chart_test+"-"+chart_test_version
-          - install.status['release_values'] == chart_test_values
+          - "install.status['release_values'].revisionHistoryLimit == 0"
 
     - name: Check idempotency after adding vars
       helm:
         binary_path: "{{ helm_binary }}"
         name: "{{ chart_release_name }}"
         chart_ref: "{{ chart_source }}"
-        chart_version: "{{ chart_test_version }}"
+        chart_version: "{{ chart_source_version | default(omit) }}"
         namespace: "{{ helm_namespace }}"
         values: "{{ chart_test_values }}"
       register: install
-      diff: true
 
     - name: Assert idempotency after add vars
       assert:
@@ -152,14 +149,14 @@
           - install is not changed
           - install.status.status | lower == 'deployed'
           - install.status.chart == chart_test+"-"+chart_test_version
-          - install.status['release_values'] == chart_test_values
+          - "install.status['release_values'].revisionHistoryLimit == 0"
 
     - name: "Remove Vars to {{ chart_test }} from {{ source }}"
       helm:
         binary_path: "{{ helm_binary }}"
         name: "{{ chart_release_name }}"
         chart_ref: "{{ chart_source }}"
-        chart_version: "{{ chart_test_version }}"
+        chart_version: "{{ chart_source_version | default(omit) }}"
         namespace: "{{ helm_namespace }}"
       register: install
 
@@ -176,10 +173,9 @@
         binary_path: "{{ helm_binary }}"
         name: "{{ chart_release_name }}"
         chart_ref: "{{ chart_source }}"
-        chart_version: "{{ chart_test_version }}"
+        chart_version: "{{ chart_source_version | default(omit) }}"
         namespace: "{{ helm_namespace }}"
       register: install
-      diff: true
 
     - name: Assert idempotency after removing vars
       assert:
@@ -194,7 +190,7 @@
         binary_path: "{{ helm_binary }}"
         name: "{{ chart_release_name }}"
         chart_ref: "{{ chart_source_upgrade | default(chart_source) }}"
-        chart_version: "{{ chart_test_version_upgrade }}"
+        chart_version: "{{ chart_source_version_upgrade | default(omit) }}"
         namespace: "{{ helm_namespace }}"
       register: install
 
@@ -210,10 +206,9 @@
         binary_path: "{{ helm_binary }}"
         name: "{{ chart_release_name }}"
         chart_ref: "{{ chart_source_upgrade | default(chart_source) }}"
-        chart_version: "{{ chart_test_version_upgrade }}"
+        chart_version: "{{ chart_source_version_upgrade | default(omit) }}"
         namespace: "{{ helm_namespace }}"
       register: install
-      diff: true
 
     - name: Assert idempotency after upgrade
       assert:
@@ -242,7 +237,6 @@
         name: "{{ chart_release_name }}"
         namespace: "{{ helm_namespace }}"
       register: install
-      diff: true
 
     - name: Assert idempotency
       assert:
@@ -255,7 +249,7 @@
         binary_path: "{{ helm_binary }}"
         name: "{{ chart_release_replaced_name }}"
         chart_ref: "{{ chart_source }}"
-        chart_version: "{{ chart_test_version }}"
+        chart_version: "{{ chart_source_version | default(omit) }}"
         namespace: "{{ helm_namespace }}"
       register: install
 
@@ -283,7 +277,7 @@
         binary_path: "{{ helm_binary }}"
         name: "{{ chart_release_replaced_name }}"
         chart_ref: "{{ chart_source }}"
-        chart_version: "{{ chart_test_version }}"
+        chart_version: "{{ chart_source_version | default(omit) }}"
         namespace: "{{ helm_namespace }}"
         replace: True
       register: install
@@ -311,7 +305,7 @@
         binary_path: "{{ helm_binary }}"
         name: "{{ chart_release_name }}"
         chart_ref: "{{ chart_source }}"
-        chart_version: "{{ chart_test_version }}"
+        chart_version: "{{ chart_source_version | default(omit) }}"
         namespace: "{{ helm_namespace }}"
         values_files:
           - "{{ role_path }}/files/values.yaml"
@@ -330,7 +324,7 @@
         binary_path: "{{ helm_binary }}"
         name: "{{ chart_release_name }}"
         chart_ref: "{{ chart_source }}"
-        chart_version: "{{ chart_test_version }}"
+        chart_version: "{{ chart_source_version | default(omit) }}"
         namespace: "{{ helm_namespace }}"
         values_files:
           - "{{ role_path }}/files/values.yaml"
@@ -352,7 +346,7 @@
       helm_template:
         binary_path: "{{ helm_binary }}"
         chart_ref: "{{ chart_source }}"
-        chart_version: "{{ chart_test_version }}"
+        chart_version: "{{ chart_source_version | default(omit) }}"
         output_dir: "{{ temp_dir }}"
         values_files:
           - "{{ role_path }}/files/values.yaml"
@@ -378,7 +372,7 @@
       helm_template:
         binary_path: "{{ helm_binary }}"
         chart_ref: "{{ chart_source }}"
-        chart_version: "{{ chart_test_version }}"
+        chart_version: "{{ chart_source_version | default(omit) }}"
         disable_hook: True
         release_name: "myrelease"
         release_namespace: "myreleasenamespace"
@@ -404,7 +398,7 @@
         binary_path: "{{ helm_binary }}"
         name: "{{ chart_release_name }}"
         chart_ref: "{{ chart_source }}"
-        chart_version: "{{ chart_test_version }}"
+        chart_version: "{{ chart_source_version | default(omit) }}"
         namespace: "{{ helm_namespace }}"
         create_namespace: true
         context: does-not-exist
@@ -423,7 +417,6 @@
         state: absent
         path: "{{ temp_dir }}"
       ignore_errors: true
-      when: temp_dir is defined
 
     - name: Remove helm namespace
       k8s:

@@ -1,0 +1,33 @@
+---
+# Default variables for nonlocalusers integration tests
+# Override these in tests/integration/integration_config.yml
+
+# VAST system connection details
+# Leave empty to skip tests gracefully
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+# LDAP configuration these must point to a real LDAP directory accessible from the VAST system
+test_ldap_domain: ""
+test_ldap_searchbase: ""
+test_ldap_binddn: ""
+test_ldap_bindpw: ""
+test_ldap_urls: []
+test_ldap_port: 389
+test_ldap_method: "simple"
+test_ldap_use_tls: false
+
+# Test nonlocal user to query via LDAP this must be a valid user that exists in the configured LDAP directory
+# Leave empty to skip nonlocal user lookup tests
+test_nonlocal_username: "vast_ansible_user"
+test_nonlocal_uid: 4288448012
+test_nonlocal_password: "Vastdata1!"
+
+# Reusable connection dict — reference as ``vms: "{{ vms_auth }}"`` in tasks
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true

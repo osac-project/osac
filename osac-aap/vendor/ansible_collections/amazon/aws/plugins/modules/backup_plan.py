@@ -129,6 +129,7 @@ options:
         description:
           - This is the timezone in which the schedule expression is set.
           - By default, ScheduleExpressions are in UTC. You can modify this to a specified timezone.
+          - This option requires botocore >= 1.31.36.
         type: str
         default: "Etc/UTC"
         required: false
@@ -232,7 +233,7 @@ version_id:
   description: Version ID of the backup plan.
   returned: always
   type: str
-  sample: 01234567-89ab-cdef-0123-456789abcdef
+  sample: ODM3MjVjNjItYWFkOC00NjExLWIwZTYtZDNiNGI5M2I0ZTY1
 backup_plan:
   description: Backup plan details.
   returned: on create/update
@@ -326,8 +327,9 @@ backup_plan:
         schedule_expression_timezone:
           description:
             - This is the timezone in which the schedule expression is set.
+            - This information is returned for botocore versions >= 1.31.36.
           type: str
-          returned: when configured
+          returned: when botocore >= 1.31.36
           sample: "Etc/UTC"
           version_added: 7.3.0
     advanced_backup_settings:
@@ -664,6 +666,14 @@ def main():
             scrub_none_parameters(setting) for setting in module.params["advanced_backup_settings"] or []
         ],
     }
+
+    if module.params["rules"]:
+        for each in plan["rules"]:
+            if not module.botocore_at_least("1.31.36"):
+                module.warn(
+                    "schedule_expression_timezone requires botocore >= 1.31.36. schedule_expression_timezone will be ignored."
+                )
+                each.pop("schedule_expression_timezone")
 
     tags = module.params["tags"]
 

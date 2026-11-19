@@ -26,6 +26,7 @@ var _ = Describe("Public role bindings server", func() {
 
 	BeforeEach(func() {
 		var err error
+		seedRoleBindingTestReferences()
 
 		roleBindingsServer, err = NewRoleBindingsServer().
 			SetLogger(logger).

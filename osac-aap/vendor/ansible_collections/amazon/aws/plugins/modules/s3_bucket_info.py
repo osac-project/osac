@@ -4,8 +4,6 @@
 # Copyright (c) 2017 Ansible Project
 # GNU General Public License v3.0+ (see COPYING or https://www.gnu.org/licenses/gpl-3.0.txt)
 
-from __future__ import annotations
-
 DOCUMENTATION = r"""
 ---
 module: s3_bucket_info
@@ -518,39 +516,19 @@ buckets:
       version_added: 7.2.0
 """
 
-import typing
-
-if typing.TYPE_CHECKING:
-    from typing import Dict
-    from typing import List
-
-    from ansible_collections.amazon.aws.plugins.module_utils.botocore import ClientType
+try:
+    import botocore
+except ImportError:
+    pass  # Handled by AnsibleAWSModule
 
 from ansible.module_utils.common.dict_transformations import camel_dict_to_snake_dict
 
 from ansible_collections.amazon.aws.plugins.module_utils.modules import AnsibleAWSModule
 from ansible_collections.amazon.aws.plugins.module_utils.retries import AWSRetry
-from ansible_collections.amazon.aws.plugins.module_utils.s3 import AnsibleS3Error
-from ansible_collections.amazon.aws.plugins.module_utils.s3 import S3ErrorHandler
-from ansible_collections.amazon.aws.plugins.module_utils.s3 import get_bucket_location
-from ansible_collections.amazon.aws.plugins.module_utils.s3 import get_s3_bucket_accelerate_configuration
-from ansible_collections.amazon.aws.plugins.module_utils.s3 import get_s3_bucket_acl
-from ansible_collections.amazon.aws.plugins.module_utils.s3 import get_s3_bucket_encryption
-from ansible_collections.amazon.aws.plugins.module_utils.s3 import get_s3_bucket_ownership_controls
-from ansible_collections.amazon.aws.plugins.module_utils.s3 import get_s3_bucket_policy
-from ansible_collections.amazon.aws.plugins.module_utils.s3 import get_s3_bucket_public_access_block
-from ansible_collections.amazon.aws.plugins.module_utils.s3 import get_s3_bucket_request_payment
-from ansible_collections.amazon.aws.plugins.module_utils.s3 import get_s3_bucket_tagging
-from ansible_collections.amazon.aws.plugins.module_utils.s3 import get_s3_bucket_versioning
-from ansible_collections.amazon.aws.plugins.module_utils.s3 import list_s3_buckets
+from ansible_collections.amazon.aws.plugins.module_utils.tagging import boto3_tag_list_to_ansible_dict
 
 
-def get_bucket_list(
-    module: AnsibleAWSModule,
-    connection: ClientType,
-    name: str = "",
-    name_filter: str = "",
-) -> List[Dict]:
+def get_bucket_list(module, connection, name="", name_filter=""):
     """
     Return result of list_buckets json encoded
     Filter only buckets matching 'name' or name_filter if defined
@@ -563,9 +541,10 @@ def get_bucket_list(
     final_buckets = []
 
     # Get all buckets
-    # camel_dict_to_snake_dict doesn't support being passed a list,
-    # so we wrap the bucket list in a dictionary temporarily
-    buckets = camel_dict_to_snake_dict({"Buckets": list_s3_buckets(connection)})["buckets"]
+    try:
+        buckets = camel_dict_to_snake_dict(connection.list_buckets())["buckets"]
+    except (botocore.exceptions.ClientError, botocore.exceptions.BotoCoreError) as err_code:
+        module.fail_json_aws(err_code, msg="Failed to list buckets")
 
     # Filter buckets if requested
     if name_filter:
@@ -585,9 +564,7 @@ def get_bucket_list(
     return final_buckets
 
 
-def get_buckets_facts(
-    connection: ClientType, buckets: List[Dict], requested_facts: Dict, transform_location: bool
-) -> List[Dict]:
+def get_buckets_facts(connection, buckets, requested_facts, transform_location):
     """
     Retrieve additional information about S3 buckets
     """
@@ -600,54 +577,76 @@ def get_buckets_facts(
     return full_bucket_list
 
 
-def get_bucket_details(connection: ClientType, name: str, requested_facts: Dict, transform_location: bool) -> Dict:
+def get_bucket_details(connection, name, requested_facts, transform_location):
     """
-    Execute all enabled S3API get calls for selected bucket using module_utils functions.
+    Execute all enabled S3API get calls for selected bucket
     """
-    # Map bucket_facts keys to module_utils functions
-    bucket_function_map = {
-        "bucket_accelerate_configuration": get_s3_bucket_accelerate_configuration,
-        "bucket_acl": get_s3_bucket_acl,
-        "bucket_encryption": get_s3_bucket_encryption,
-        "bucket_ownership_controls": get_s3_bucket_ownership_controls,
-        "bucket_policy": get_s3_bucket_policy,
-        "public_access_block": get_s3_bucket_public_access_block,
-        "bucket_request_payment": get_s3_bucket_request_payment,
-        "bucket_tagging": get_s3_bucket_tagging,
-        "bucket_versioning": get_s3_bucket_versioning,
-    }
-
     all_facts = {}
 
     for key in requested_facts:
-        if not requested_facts[key]:
-            continue
-
-        all_facts[key] = {}
-        try:
+        if requested_facts[key]:
             if key == "bucket_location":
-                # Special handling for bucket_location with transform_location parameter
-                location_data = get_bucket_location(connection, name)
-                # Transform 'None' LocationConstraint to 'us-east-1' if requested
-                if transform_location and location_data.get("LocationConstraint") is None:
-                    location_data["LocationConstraint"] = "us-east-1"
-                all_facts[key] = location_data
-            elif key in bucket_function_map:
-                # Use module_utils function
-                all_facts[key] = bucket_function_map[key](connection, name)
+                all_facts[key] = {}
+                try:
+                    all_facts[key] = get_bucket_location(name, connection, transform_location)
+                # we just pass on error - error means that resources is undefined
+                except botocore.exceptions.ClientError:
+                    pass
+            elif key == "bucket_tagging":
+                all_facts[key] = {}
+                try:
+                    all_facts[key] = get_bucket_tagging(name, connection)
+                # we just pass on error - error means that resources is undefined
+                except botocore.exceptions.ClientError:
+                    pass
             else:
-                # For properties not in module_utils, use dynamic call
-                all_facts[key] = get_bucket_property(name, connection, key)
-        except AnsibleS3Error:
-            # Silent failure for missing/inaccessible bucket properties (backward compatibility)
-            pass
+                all_facts[key] = {}
+                try:
+                    all_facts[key] = get_bucket_property(name, connection, key)
+                # we just pass on error - error means that resources is undefined
+                except botocore.exceptions.ClientError:
+                    pass
 
     return all_facts
 
 
-@S3ErrorHandler.list_error_handler("get bucket property", {})
 @AWSRetry.jittered_backoff(max_delay=120, catch_extra_error_codes=["NoSuchBucket", "OperationAborted"])
-def get_bucket_property(name: str, connection: ClientType, get_api_name: str) -> Dict:
+def get_bucket_location(name, connection, transform_location=False):
+    """
+    Get bucket location and optionally transform 'null' to 'us-east-1'
+    """
+    data = connection.get_bucket_location(Bucket=name)
+
+    # Replace 'null' with 'us-east-1'?
+    if transform_location:
+        try:
+            if not data["LocationConstraint"]:
+                data["LocationConstraint"] = "us-east-1"
+        except KeyError:
+            pass
+    # Strip response metadata (not needed)
+    data.pop("ResponseMetadata", None)
+    return data
+
+
+@AWSRetry.jittered_backoff(max_delay=120, catch_extra_error_codes=["NoSuchBucket", "OperationAborted"])
+def get_bucket_tagging(name, connection):
+    """
+    Get bucket tags and transform them using `boto3_tag_list_to_ansible_dict` function
+    """
+    data = connection.get_bucket_tagging(Bucket=name)
+
+    try:
+        bucket_tags = boto3_tag_list_to_ansible_dict(data["TagSet"])
+        return bucket_tags
+    except KeyError:
+        # Strip response metadata (not needed)
+        data.pop("ResponseMetadata", None)
+        return data
+
+
+@AWSRetry.jittered_backoff(max_delay=120, catch_extra_error_codes=["NoSuchBucket", "OperationAborted"])
+def get_bucket_property(name, connection, get_api_name):
     """
     Get bucket property
     """
@@ -660,7 +659,7 @@ def get_bucket_property(name: str, connection: ClientType, get_api_name: str) ->
     return data
 
 
-def main() -> None:
+def main():
     """
     Get list of S3 buckets
     :return:
@@ -712,10 +711,14 @@ def main() -> None:
     name = module.params.get("name")
     name_filter = module.params.get("name_filter")
     requested_facts = module.params.get("bucket_facts")
-    transform_location = module.params.get("transform_location")
+    transform_location = module.params.get("bucket_facts")
 
     # Set up connection
-    connection = module.client("s3")
+    connection = {}
+    try:
+        connection = module.client("s3")
+    except (connection.exceptions.ClientError, botocore.exceptions.BotoCoreError) as err_code:
+        module.fail_json_aws(err_code, msg="Failed to connect to AWS")
 
     # Get basic bucket list (name + creation date)
     bucket_list = get_bucket_list(module, connection, name, name_filter)

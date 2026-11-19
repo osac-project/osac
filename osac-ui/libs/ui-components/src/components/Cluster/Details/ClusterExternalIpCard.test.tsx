@@ -1,5 +1,5 @@
 import { create } from '@bufbuild/protobuf';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -7,6 +7,7 @@ import {
   ClusterSchema,
   ClusterState,
   ExternalIPAttachmentEndpoint,
+  ExternalIPAttachmentSchema,
   ExternalIPAttachmentState,
   ExternalIPAttachments,
 } from '@osac/types';
@@ -111,8 +112,10 @@ describe('ClusterExternalIpCard', () => {
       <ClusterExternalIpCard cluster={makeCluster()} onAttach={onAttach} onDetach={onDetach} />,
     );
 
-    expect(screen.getByText('External IP endpoints')).toBeInTheDocument();
-    expect(container.querySelector('.pf-v6-c-card.pf-m-secondary')).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'External IP endpoints' }),
+    ).toBeInTheDocument();
+    expect(container.querySelector('.pf-v6-c-card')).toHaveClass('pf-m-secondary');
     expect(screen.getByText('api.example.com')).toBeInTheDocument();
     expect(screen.getByText('apps.example.com')).toBeInTheDocument();
     expect(screen.queryByText('Not attached')).not.toBeInTheDocument();
@@ -154,13 +157,75 @@ describe('ClusterExternalIpCard', () => {
 
     expect(screen.getByText('api.example.com')).toBeInTheDocument();
     expect(screen.getByText('Attached')).toBeInTheDocument();
-    expect(screen.queryByText('203.0.113.10')).not.toBeInTheDocument();
+    expect(screen.getByText('203.0.113.10')).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'Detach External IP from API endpoint' }),
     ).toBeInTheDocument();
     expect(screen.queryByText('Not attached')).not.toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Attach External IP' })).toHaveLength(1);
   });
+
+  it('displays each numeric address only under its matching endpoint', () => {
+    mockUseAttachmentList([
+      makeAttachment(
+        ExternalIPAttachmentEndpoint.EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS,
+        '198.51.100.20',
+      ),
+      makeAttachment(
+        ExternalIPAttachmentEndpoint.EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
+        ' 203.0.113.10 ',
+      ),
+    ]);
+    render(<ClusterExternalIpCard cluster={makeCluster()} onAttach={vi.fn()} onDetach={vi.fn()} />);
+
+    const api = screen.getByText('API endpoint').closest('.pf-v6-c-description-list__group');
+    const ingress = screen
+      .getByText('Ingress endpoint')
+      .closest('.pf-v6-c-description-list__group');
+    expect(api).toContainElement(screen.getByText('203.0.113.10'));
+    expect(api).not.toContainElement(screen.getByText('198.51.100.20'));
+    expect(ingress).toContainElement(screen.getByText('198.51.100.20'));
+    expect(ingress).not.toContainElement(screen.getByText('203.0.113.10'));
+  });
+
+  it.each([undefined, '', '   '])(
+    'uses an address fallback without exposing IDs (address: %s)',
+    (address) => {
+      const attachment = create(ExternalIPAttachmentSchema, {
+        id: 'opaque-attachment',
+        spec: {
+          externalIp: { id: 'opaque-external-ip' },
+          targetEndpoint: ExternalIPAttachmentEndpoint.EXTERNAL_IP_ATTACHMENT_ENDPOINT_API,
+        },
+        status:
+          address === undefined
+            ? undefined
+            : {
+                externalIpAddress: address,
+                state: ExternalIPAttachmentState.EXTERNAL_IP_ATTACHMENT_STATE_PENDING,
+              },
+      });
+      mockUseAttachmentList([attachment]);
+      render(
+        <ClusterExternalIpCard cluster={makeCluster()} onAttach={vi.fn()} onDetach={vi.fn()} />,
+      );
+
+      const api = screen.getByText('API endpoint').closest('div.pf-v6-c-description-list__group');
+      expect(api).toContainElement(screen.getByText('—'));
+      expect(screen.queryByText('opaque-attachment')).not.toBeInTheDocument();
+      expect(screen.queryByText('opaque-external-ip')).not.toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: 'Detach External IP from API endpoint' }),
+      ).toBeDisabled();
+      const ingress = screen
+        .getByText('Ingress endpoint')
+        .closest('div.pf-v6-c-description-list__group');
+      if (!(ingress instanceof HTMLElement)) {
+        throw new Error('The ingress endpoint group must exist');
+      }
+      expect(within(ingress).queryByText('External IP:')).not.toBeInTheDocument();
+    },
+  );
 
   it('disables detach while an attachment is still being provisioned', () => {
     const attachment = makeAttachment(
@@ -284,7 +349,7 @@ describe('ClusterExternalIpCard', () => {
     expect(screen.getByText('Auto attaching in progress')).toBeInTheDocument();
   });
 
-  it('sends the endpoint-specific action to the details tab', async () => {
+  it('sends the endpoint-specific action to the networking section', async () => {
     const onAttach = vi.fn();
     const onDetach = vi.fn();
     const user = userEvent.setup();

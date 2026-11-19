@@ -75,6 +75,25 @@ def unique_name(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex[:8]}"
 
 
+def fulfillment_users_for_username(
+    grpc: GRPCClient, *, username: str, limit: int | None = None
+) -> list[dict[str, Any]]:
+    """List Fulfillment users matching an exact username."""
+    data: dict[str, Any] = {"filter": f"this.spec.username == {json.dumps(username)}"}
+    if limit is not None:
+        data["limit"] = limit
+    response = grpc.call(service=f"{PRIVATE_API}.Users/List", data=data)
+    users = []
+    for item in response.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        user = item.get("object", item)
+        spec = user.get("spec") if isinstance(user, dict) else None
+        if isinstance(spec, dict) and spec.get("username") == username:
+            users.append(user)
+    return users
+
+
 def get_bmi_instance_type_from_template(grpc: GRPCClient, *, template_name: str) -> str | None:
     response = grpc.call(
         service=f"{PRIVATE_API}.BareMetalInstanceTemplates/List",
@@ -556,6 +575,33 @@ def wait_for_external_ip_deletion(*, k8s: K8sClient, name: str) -> None:
         description=f"{name} ExternalIP deletion",
         resource_kind=WaitResourceKind.EXTERNAL_IP,
         resource_id=name,
+    )
+
+
+def wait_for_external_ip_grpc_removal(*, private_grpc: GRPCClient, external_ip_id: str) -> None:
+    """Wait until the saved ExternalIP ID returns the exact gRPC NotFound code."""
+
+    def _is_removed() -> bool:
+        try:
+            response = private_grpc.get_private_external_ip(external_ip_id=external_ip_id)
+        except subprocess.CalledProcessError as exc:
+            output = f"{exc.stdout or ''}\n{exc.stderr or ''}"
+            if re.search(r"(?m)^\s*Code:\s*NotFound\s*$", output):
+                return True
+            raise
+
+        actual_id = response.get("object", {}).get("id", "")
+        assert actual_id == external_ip_id, f"Private ExternalIP Get for {external_ip_id!r} returned ID {actual_id!r}"
+        return False
+
+    poll_until(
+        fn=_is_removed,
+        until=lambda v: v is True,
+        retries=120,
+        delay=5,
+        description=f"ExternalIP {external_ip_id} gRPC removal",
+        resource_kind=WaitResourceKind.EXTERNAL_IP,
+        resource_id=external_ip_id,
     )
 
 

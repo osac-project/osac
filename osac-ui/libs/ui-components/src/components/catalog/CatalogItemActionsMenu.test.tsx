@@ -90,8 +90,8 @@ const renderMenu = (
       />
       <Route path="/catalog/:kind/:id" element={<div>Catalog item details page</div>} />
       <Route path="/catalog/:kind/:id/edit" element={<div>Edit catalog item page</div>} />
-      <Route path="/clusters/create/:catalogItemId" element={<div>Create cluster page</div>} />
-      <Route path="/vms/create/:catalogItemId" element={<div>Create virtual machine page</div>} />
+      <Route path="/catalog/clusters/:id/launch" element={<div>Create cluster page</div>} />
+      <Route path="/catalog/vms/:id/launch" element={<div>Create virtual machine page</div>} />
     </Routes>,
     { routerEntries: ['/'], transportOverrides },
   );

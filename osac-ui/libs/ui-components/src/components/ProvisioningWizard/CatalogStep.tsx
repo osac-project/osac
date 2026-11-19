@@ -36,14 +36,12 @@ const isCatalogItemList = <T extends CatalogItem>(value: unknown): value is { it
 
 interface Props<T extends CatalogItem, V extends CatalogFormValues> {
   catalogService: ResourceService<'list', DescMessage, DescMessage>;
-  isInitializing?: boolean;
   getInitialFormValues: (item: T) => V;
   onCatalogItemSelected?: (item: T) => void;
 }
 
 export const CatalogStep = <T extends CatalogItem, V extends CatalogFormValues>({
   catalogService,
-  isInitializing = false,
   getInitialFormValues,
   onCatalogItemSelected,
 }: Props<T, V>) => {
@@ -58,7 +56,7 @@ export const CatalogStep = <T extends CatalogItem, V extends CatalogFormValues>(
     catalogService,
     catalogFilter ? { filter: catalogFilter } : {},
   );
-  const loading = isInitializing || catalogQuery.isPending;
+  const loading = catalogQuery.isPending;
   const error = catalogQuery.isError;
   const retry = () => void catalogQuery.refetch();
 

@@ -39,6 +39,9 @@ linters:
           - lll
           - goconst
         path: internal/*
+      - linters:
+          - goconst
+        path: test/netboxmock/
     paths:
       - third_party$
       - builtin$

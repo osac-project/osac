@@ -288,6 +288,12 @@ for the current Windows admission rules.
 
 **Required key:** `userdata` (nonempty)
 
+**Availability:** Secret creation and retrieval are supported. Referencing this
+type from a ComputeInstance is not yet supported; that work is tracked in
+[OSAC-7713](https://redhat.atlassian.net/browse/OSAC-7713). Inline Windows XML
+remains supported; see the
+[ComputeInstance guide](developer/computeinstance-guide.md#user-data-inline-or-secret).
+
 **Format:** One well-formed XML 1.0 document encoded as UTF-8. The `userdata`
 value must be at most 65,536 bytes (64 KiB), including any byte-order mark
 (BOM), declaration, and whitespace. The limit applies to the raw XML bytes,

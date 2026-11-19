@@ -534,6 +534,11 @@ osac create secret \
   --from-file=userdata=/path/to/Unattend.xml
 ```
 
+Referencing a `windows-user-data` Secret from a ComputeInstance is not yet
+supported; that work is tracked in
+[OSAC-7713](https://redhat.atlassian.net/browse/OSAC-7713). Current
+`user_data_source.secret` references accept only `user-data` Secrets. For a
+Windows DiskImage, their contents are checked as XML during VM admission.
 For Windows Secret validation and lifecycle rules, see
 [Managing Secrets](../secrets-guide.md#windows-user-data-windows-user-data).
 

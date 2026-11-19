@@ -19,27 +19,18 @@ short_description: Get subscription list
 description:
     - Get subscriptions available to Automation Platform Controller. See
       U(https://www.ansible.com/tower) for an overview.
-    - The credentials you use will be stored for future use in retrieving renewal or expanded subscriptions
 options:
     username:
       description:
-        - Red Hat username to get available subscriptions.
-      required: False
+        - Red Hat or Red Hat Satellite username to get available subscriptions.
+        - The credentials you use will be stored for future use in retrieving renewal or expanded subscriptions
+      required: True
       type: str
     password:
       description:
-        - Red Hat password to get available subscriptions.
-      required: False
-      type: str
-    client_id:
-      description:
-        - Red Hat service account client ID to get available subscriptions.
-      required: False
-      type: str
-    client_secret:
-      description:
-        - Red Hat service account client secret to get available subscriptions.
-      required: False
+        - Red Hat or Red Hat Satellite password to get available subscriptions.
+        - The credentials you use will be stored for future use in retrieving renewal or expanded subscriptions
+      required: True
       type: str
     filters:
       description:
@@ -62,13 +53,13 @@ subscriptions:
 EXAMPLES = '''
 - name: Get subscriptions
   subscriptions:
-    client_id: "c6bd7594-d776-46e5-8156-6d17af147479"
-    client_secret: "replace-me"
+    username: "my_username"
+    password: "My Password"
 
 - name: Get subscriptions with a filter
   subscriptions:
-    client_id: "c6bd7594-d776-46e5-8156-6d17af147479"
-    client_secret: "replace-me"
+    username: "my_username"
+    password: "My Password"
     filters:
       product_name: "Red Hat Ansible Automation Platform"
       support_level: "Self-Support"
@@ -81,41 +72,19 @@ def main():
 
     module = ControllerAPIModule(
         argument_spec=dict(
-            username=dict(type='str', required=False),
-            password=dict(type='str', no_log=True, required=False),
-            client_id=dict(type='str', required=False),
-            client_secret=dict(type='str', no_log=True, required=False),
+            username=dict(type='str', required=True),
+            password=dict(type='str', no_log=True, required=True),
             filters=dict(type='dict', required=False, default={}),
         ),
-        mutually_exclusive=[
-            ['username', 'client_id']
-        ],
-        required_together=[
-            ['username', 'password'],
-            ['client_id', 'client_secret']
-        ],
-        required_one_of=[
-            ['username', 'client_id']
-        ],
     )
 
     json_output = {'changed': False}
-    username = module.params.get('username')
-    password = module.params.get('password')
-    client_id = module.params.get('client_id')
-    client_secret = module.params.get('client_secret')
 
-    if username and password:
-        post_data = {
-            'subscriptions_username': username,
-            'subscriptions_password': password,
-        }
-    else:
-        post_data = {
-            'subscriptions_client_id': client_id,
-            'subscriptions_client_secret': client_secret,
-        }
-
+    # Check if Tower is already licensed
+    post_data = {
+        'subscriptions_password': module.params.get('password'),
+        'subscriptions_username': module.params.get('username'),
+    }
     all_subscriptions = module.post_endpoint('config/subscriptions', data=post_data)['json']
     json_output['subscriptions'] = []
     for subscription in all_subscriptions:

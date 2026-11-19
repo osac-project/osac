@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Button,
   EmptyState,
@@ -26,7 +26,7 @@ import { type CatalogListFilterCriteria } from '@osac/ui-components/api/v1/catal
 import CatalogItemCard from '@osac/ui-components/components/catalog/CatalogItemCard';
 import {
   type CatalogItemKind,
-  isCatalogItemKind,
+  catalogItemListPathForKind,
   isCatalogPublishedFilter,
 } from '@osac/ui-components/components/catalog/catalogItemDisplay';
 import { useCatalogItemResourceLookups } from '@osac/ui-components/components/catalog/catalogItemResourceLookups';
@@ -131,8 +131,6 @@ const getPageDescription = (t: TFunction, enabledServices: ServiceTier[], role: 
   return t('Browse catalog items and launch them from published offerings.');
 };
 
-const TYPE_FILTER_PARAM = 'types';
-
 // Priority order for the default resource type when the URL has none selected.
 const CATALOG_SERVICE_TIER_PRIORITY: ServiceTier[] = [
   ServiceTier.BMAAS,
@@ -197,10 +195,15 @@ const serviceTierForFilter = (filter?: string): ServiceTier | undefined => {
 const PUBLISHED_FILTER_PARAM = 'published';
 const TENANT_FILTER_PARAM = 'tenant';
 
-const CatalogPage = () => {
+interface CatalogPageProps {
+  routeKind?: CatalogItemKind;
+}
+
+const CatalogPage = ({ routeKind }: CatalogPageProps) => {
   const { enabledServices, role } = useSession();
   const { t } = useTranslation();
-  const [typeFilterParam, setTypeFilterParam] = usePageFilter(TYPE_FILTER_PARAM);
+  const navigate = useNavigate();
+  const location = useLocation();
   const [, setSearchParams] = useSearchParams();
   const [publishedFilterParam, setPublishedFilterParam] = usePageFilter(PUBLISHED_FILTER_PARAM);
   const [tenantFilter, setTenantFilter] = usePageFilter(TENANT_FILTER_PARAM);
@@ -211,15 +214,6 @@ const CatalogPage = () => {
   const isFiltered = Boolean(publishedFilter || tenantFilter || searchFilter);
   const [viewType] = useViewType(CATALOG_ITEMS_VIEW_KEY);
 
-  const requestedKind = useMemo<CatalogItemKind | undefined>(() => {
-    if (!isCatalogItemKind(typeFilterParam)) {
-      return undefined;
-    }
-
-    const tier = serviceTierForFilter(typeFilterParam);
-    return tier && enabledServices.includes(tier) ? typeFilterParam : undefined;
-  }, [typeFilterParam, enabledServices]);
-
   const defaultKind = useMemo<CatalogItemKind | undefined>(() => {
     for (const tier of CATALOG_SERVICE_TIER_PRIORITY) {
       if (enabledServices.includes(tier)) {
@@ -229,7 +223,9 @@ const CatalogPage = () => {
     return undefined;
   }, [enabledServices]);
 
-  const selectedKind = requestedKind ?? defaultKind;
+  // Kind routes are wrapped in ServiceRoute, so routeKind is enabled by
+  // construction; defaultKind only picks enabled tiers.
+  const selectedKind = routeKind ?? defaultKind;
   const selectedServiceTier = selectedKind ? serviceTierForFilter(selectedKind) : undefined;
 
   const filterCriteria = useMemo<CatalogListFilterCriteria>(
@@ -283,7 +279,6 @@ const CatalogPage = () => {
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
-        next.delete(TYPE_FILTER_PARAM);
         next.delete(PUBLISHED_FILTER_PARAM);
         next.delete(TENANT_FILTER_PARAM);
         next.delete(SEARCH_PARAM);
@@ -332,7 +327,11 @@ const CatalogPage = () => {
                     onSelect={(tier) => {
                       const kind = catalogKindForServiceTier(tier);
                       if (kind) {
-                        setTypeFilterParam(kind);
+                        const nextSearch = new URLSearchParams(location.search);
+                        const search = nextSearch.toString();
+                        navigate(
+                          `${catalogItemListPathForKind(kind)}${search ? `?${search}` : ''}`,
+                        );
                       }
                     }}
                   />

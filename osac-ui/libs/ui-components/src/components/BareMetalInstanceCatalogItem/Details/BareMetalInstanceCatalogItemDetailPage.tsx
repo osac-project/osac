@@ -25,7 +25,7 @@ export const BareMetalInstanceCatalogItemDetailPage = () => {
       error={error}
       found={!!item}
       isLoading={isLoading}
-      parentTo="/catalog"
+      parentTo="/catalog/bare-metal"
       parentLabel={t('Catalog')}
       refetch={() => void refetch()}
       resourceLabel={t('bare metal catalog item')}
@@ -37,7 +37,7 @@ export const BareMetalInstanceCatalogItemDetailPage = () => {
             <BareMetalInstanceCatalogItemDeleteModal
               item={item}
               onClose={() => setDeleteOpen(false)}
-              onSuccess={() => navigate('/catalog')}
+              onSuccess={() => navigate('/catalog/bare-metal')}
             />
           ) : null}
           <CatalogItemDetails

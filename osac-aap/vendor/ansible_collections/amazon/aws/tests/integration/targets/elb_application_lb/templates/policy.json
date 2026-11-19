@@ -4,7 +4,7 @@
         {
             "Effect": "Allow",
             "Principal": {
-                "Service": "logdelivery.elasticloadbalancing.amazonaws.com"
+                "AWS": "arn:aws:iam::{{ elb_account_id}}:root"
             },
             "Action": "s3:PutObject",
             "Resource": "arn:aws:s3:::{{ s3_bucket_name }}/alb-logs/AWSLogs/{{ aws_account }}/*"

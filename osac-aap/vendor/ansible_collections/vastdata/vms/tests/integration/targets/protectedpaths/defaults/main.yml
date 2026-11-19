@@ -1,0 +1,32 @@
+---
+# Default variables for protectedpaths integration tests
+# Override these in tests/integration/integration_config.yml
+
+# VAST system connection details
+# Leave empty to skip tests gracefully
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true
+
+# Test protectedpath configuration
+test_protectedpath_name: "ansible-test-protectedpath"
+test_protectedpath_name_updated: "ansible-test-protectedpath-updated"
+
+# Source directory configuration
+test_source_dir: "/ansible-test-pp-source"
+test_target_exported_dir: "/ansible-test-pp-target"
+
+# View configuration for source directory
+test_view_path: "/ansible-test-pp-view"
+test_view_policy_id: 1
+
+# Protected path parameters
+test_capabilities: "ASYNC_REPLICATION"
+test_lease_expiry_time: 3600

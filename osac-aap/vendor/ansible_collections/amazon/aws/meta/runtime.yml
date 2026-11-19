@@ -1,5 +1,5 @@
 ---
-requires_ansible: ">=2.18.0"
+requires_ansible: ">=2.15.0"
 action_groups:
   aws:
     - autoscaling_instance
@@ -47,7 +47,6 @@ action_groups:
     - ec2_import_image_info
     - ec2_instance
     - ec2_instance_info
-    - ec2_instance_type_info
     - ec2_key
     - ec2_key_info
     - ec2_launch_template
@@ -137,6 +136,7 @@ action_groups:
     - rds_instance_snapshot
     - rds_option_group
     - rds_option_group_info
+    - rds_param_group
     - rds_snapshot_info
     - rds_subnet_group
     - route53
@@ -194,7 +194,8 @@ plugin_routing:
       # Deprecation for this alias should not *start* prior to 2024-09-01
       redirect: amazon.aws.lambda_execute
     rds_param_group:
-      tombstone:
+      redirect: amazon.aws.rds_instance_param_group
+      deprecation:
         removal_version: 10.0.0
         warning_text: >-
           rds_param_group has been renamed to rds_instance_param_group.

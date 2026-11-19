@@ -31,9 +31,9 @@ options:
           unlicensed or trial licensed.  When force=true, the license is always applied.
       type: bool
       default: 'False'
-    subscription_id:
+    pool_id:
       description:
-        - Red Hat or Red Hat Satellite subscription_id to attach to
+        - Red Hat or Red Hat Satellite pool_id to attach to
       required: False
       type: str
     state:
@@ -57,9 +57,9 @@ EXAMPLES = '''
     username: "my_satellite_username"
     password: "my_satellite_password"
 
-- name: Attach to a subscription (requires fetching subscriptions at least once before)
+- name: Attach to a pool (requires fetching subscriptions at least once before)
   license:
-    subscription_id: 123456
+    pool_id: 123456
 
 - name: Remove license
   license:
@@ -67,7 +67,6 @@ EXAMPLES = '''
 '''
 
 import base64
-
 from ..module_utils.controller_api import ControllerAPIModule
 
 
@@ -76,14 +75,14 @@ def main():
     module = ControllerAPIModule(
         argument_spec=dict(
             manifest=dict(type='str', required=False),
-            subscription_id=dict(type='str', required=False),
+            pool_id=dict(type='str', required=False),
             force=dict(type='bool', default=False),
             state=dict(choices=['present', 'absent'], default='present'),
         ),
         required_if=[
-            ['state', 'present', ['manifest', 'subscription_id'], True],
+            ['state', 'present', ['manifest', 'pool_id'], True],
         ],
-        mutually_exclusive=[("manifest", "subscription_id")],
+        mutually_exclusive=[("manifest", "pool_id")],
     )
 
     json_output = {'changed': False}
@@ -121,17 +120,11 @@ def main():
 
     # Do the actual install, if we need to
     if perform_install:
-        if module.params.get('manifest', None):
-            response = module.post_endpoint('config', data={'manifest': manifest.decode()})
-        else:
-            response = module.post_endpoint('config/attach', data={'subscription_id': module.params.get('subscription_id')})
-
-        # Check API response for errors (AAP-44277 fix)
-        if response and response.get('status_code') and response.get('status_code') != 200:
-            error_msg = response.get('json', {}).get('error', 'License operation failed')
-            module.fail_json(msg=error_msg)
-
         json_output['changed'] = True
+        if module.params.get('manifest', None):
+            module.post_endpoint('config', data={'manifest': manifest.decode()})
+        else:
+            module.post_endpoint('config/attach', data={'pool_id': module.params.get('pool_id')})
 
     module.exit_json(**json_output)
 

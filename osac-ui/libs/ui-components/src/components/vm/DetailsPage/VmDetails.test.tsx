@@ -1,7 +1,7 @@
 import { Code, ConnectError } from '@connectrpc/connect';
 import { screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { ComputeInstance, InstanceType } from '@osac/types';
 import { ComputeInstanceState } from '@osac/types';
@@ -9,10 +9,6 @@ import { ComputeInstanceState } from '@osac/types';
 import VmDetails from './VmDetails';
 import type { MockTransportOverrides } from '../../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
-
-vi.mock('../../../api/v1/disk-image', () => ({
-  useDiskImage: vi.fn(),
-}));
 
 vi.mock('./VmDetailsActionButtons', () => ({
   default: ({ onOpenConsole }: { onOpenConsole: VoidFunction }) => (
@@ -45,8 +41,6 @@ vi.mock('../../../VmStatusLabel', () => ({
   VmStatusLabel: () => <span>Running</span>,
 }));
 
-const { useDiskImage } = await import('../../../api/v1/disk-image');
-
 const vm = {
   id: 'vm-1',
   metadata: { name: 'web-01' },
@@ -59,21 +53,16 @@ const instanceType = {
   metadata: { name: 'Standard 4 vCPU / 8 GiB' },
 } as InstanceType;
 
-const renderDetails = (transportOverrides?: MockTransportOverrides) =>
-  renderWithProviders(<VmDetails vm={vm} />, {
+const renderDetails = (
+  transportOverrides?: MockTransportOverrides,
+  vmOverride: ComputeInstance = vm,
+) =>
+  renderWithProviders(<VmDetails vm={vmOverride} />, {
     apiFixtures: { instanceTypes: [instanceType] },
     transportOverrides,
   });
 
 describe('VmDetails', () => {
-  beforeEach(() => {
-    vi.mocked(useDiskImage).mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      error: null,
-    } as ReturnType<typeof useDiskImage>);
-  });
-
   it('renders the continuous VM details page without a tab strip', () => {
     renderDetails();
 
@@ -112,16 +101,25 @@ describe('VmDetails', () => {
     expect(screen.getByText('VM detail sections')).toBeInTheDocument();
   });
 
-  it('shows an alert and still renders the page when disk image lookup fails', () => {
-    vi.mocked(useDiskImage).mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      error: new Error('Disk image unavailable'),
-    } as ReturnType<typeof useDiskImage>);
+  it('shows an alert and still renders the page when disk image lookup fails', async () => {
+    const vmWithDiskImage = {
+      ...vm,
+      spec: {
+        ...vm.spec,
+        diskImage: { id: 'disk-rhel', name: 'RHEL 9.4' },
+      },
+    } as ComputeInstance;
 
-    renderDetails();
+    renderDetails(
+      {
+        onDiskImageGet: () => {
+          throw new ConnectError('Disk image unavailable', Code.Unavailable);
+        },
+      },
+      vmWithDiskImage,
+    );
 
-    expect(screen.getByText('Could not load disk image')).toBeInTheDocument();
+    expect(await screen.findByText('Could not load disk image')).toBeInTheDocument();
     expect(screen.getByText('Disk image unavailable')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'web-01' })).toBeInTheDocument();
     expect(screen.getByText('VM detail sections')).toBeInTheDocument();

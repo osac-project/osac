@@ -60,7 +60,7 @@ netbox:
   tokenSecretKey: "token"
   tokenValue: ""
   caCert: ""
-  allowInsecureHTTP: false
+  clientAllowInsecureHTTP: false
 
 bcm:
   enabled: false

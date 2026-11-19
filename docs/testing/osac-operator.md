@@ -24,6 +24,11 @@ The CI job runs the installer's Kind target with the operator suite
 | Contract | `test/contract/` | Helm RBAC templates vs permission contract | No deployed operator/provider. |
 | E2E | `../tests/e2e/` | Cross-component fulfillment journeys | Environment/provider-dependent. |
 
+Run `helm unittest charts/operator` when changing the metrics Service's labels
+or ports, the ServiceMonitor, or `serviceMonitor.*` values. It renders only:
+no Prometheus is scraped, and that a target is actually collected needs
+user-workload monitoring on a deployed cluster.
+
 ## Coverage boundaries
 
 The Kind operator leg disables provider networking and Fulfillment: it proves
@@ -33,10 +38,15 @@ registrations, not to run provider tasks. Inspect the deployed suite before a
 focused run.
 
 The networking suite and task engine use an in-memory AAP; shared wire goldens
-under `../tests/contract/network-task/` bind only covered create/apply/attach
-shapes at Unit/Envtest tier, not the deployed AAP boundary. Delete/detach,
-SecurityGroup, DHCP-lease, FabricDomain, cluster-ingress and physical-interface
-shapes remain unbound with no owning ticket.
+under `../tests/contract/network-task/` bind covered producer inputs and result
+parsers at Unit/Envtest tier, not the deployed AAP boundary. Physical
+NetworkAttachment apply, delete and query_dhcp_lease inputs are bound with the
+same fixtures as osac-aap; the DHCP lease result is parsed against the input
+MAC and Subnet IPAM. NetworkAttachment overlay delete/detach, other
+delete/detach tasks, SecurityGroup and FabricDomain shapes remain unbound.
+Cluster ingress reservation (`reserve_cluster_ingress_ip`) is bound by its
+shared input and result goldens. Cluster ingress release
+(`release_cluster_ingress_ip`) is unbound.
 
 ExternalIP Envtest specs verify that allocation sends the stable Fulfillment API
 ID separately from Kubernetes `metadata.uid`, and that a failed release retains

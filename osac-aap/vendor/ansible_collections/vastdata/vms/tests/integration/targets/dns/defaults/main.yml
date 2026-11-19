@@ -1,0 +1,16 @@
+---
+# Default variables for DNS integration tests
+# Override these in tests/integration/integration_config.yml
+
+# VAST system connection details
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+# Reusable connection dict — reference as ``vms: "{{ vms_auth }}"`` in tasks
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true

@@ -1,0 +1,759 @@
+---
+# Integration tests for user_key module
+# Tests S3 access key management for users
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials }}"
+
+- name: Get default tenant to obtain local_provider_id
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "default"
+    state: present
+  register: tenant_result
+  when: can_run_tests | bool
+
+- name: Set local_provider_id from default tenant
+  ansible.builtin.set_fact:
+    test_local_provider_id: "{{ tenant_result.tenants.local_provider_id }}"
+  when: can_run_tests | bool
+
+# ====================
+# Cleanup - Ensure clean state
+# ====================
+
+- name: Clean up - ensure test user doesn't exist before starting
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Create Test User
+# ====================
+
+- name: Create test user for access key tests
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    uid: "{{ test_user_uid }}"
+    gids: ["{{ test_user_gid }}"]
+    leading_gid: "{{ test_user_gid }}"
+    local_provider_id: "{{ test_local_provider_id }}"
+    state: present
+  register: user_result
+  when: can_run_tests | bool
+
+- name: Set test user ID
+  ansible.builtin.set_fact:
+    test_user_id: "{{ user_result.users.id }}"
+  when: can_run_tests | bool
+
+# ====================
+# Create Access Key Tests
+# ====================
+
+- name: Test creating access key for user
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ test_user_id }}"
+    tenant_id: "{{ test_tenant_id }}"
+    state: present
+  register: create_result
+  when: can_run_tests | bool
+
+- name: Verify access key was created
+  ansible.builtin.assert:
+    that:
+      - create_result is changed
+      - create_result.result is defined
+      - create_result.result.access_key is defined
+      - create_result.result.secret_key is defined
+  when: create_result is not skipped
+
+- name: Save access key for later tests
+  ansible.builtin.set_fact:
+    test_access_key: "{{ create_result.result.access_key }}"
+    test_secret_key: "{{ create_result.result.secret_key }}"
+  when: create_result is not skipped
+
+# ====================
+# Verify Backend State After Create
+# ====================
+
+- name: Query user to verify access key exists
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    state: present
+  register: user_after_create
+  when: can_run_tests | bool
+
+- name: Assert access_keys list is not empty
+  ansible.builtin.assert:
+    that:
+      - user_after_create.users.access_keys is defined
+      - user_after_create.users.access_keys | length > 0
+      - test_access_key in (user_after_create.users.access_keys | map(attribute='access_key') | list)
+    fail_msg: "Backend state: user must have the created access key"
+  when: user_after_create is not skipped
+
+# ====================
+# Create Second Access Key (Multiple Keys)
+# ====================
+
+- name: Create second access key for same user
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ test_user_id }}"
+    tenant_id: "{{ test_tenant_id }}"
+    state: present
+  register: create_result2
+  when: can_run_tests | bool
+
+- name: Verify second access key was created
+  ansible.builtin.assert:
+    that:
+      - create_result2 is changed
+      - create_result2.result is defined
+      - create_result2.result.access_key is defined
+      - create_result2.result.access_key != test_access_key
+    fail_msg: "Second access key should be different from the first"
+  when: create_result2 is not skipped
+
+- name: Save second access key
+  ansible.builtin.set_fact:
+    test_access_key2: "{{ create_result2.result.access_key }}"
+  when: create_result2 is not skipped
+
+# ====================
+# Update Existing Key
+# ====================
+
+- name: "Verify first key is enabled after creation"
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    state: present
+  register: user_before_disable
+  when: can_run_tests | bool
+
+- name: "Confirm first key is currently enabled"
+  ansible.builtin.assert:
+    that:
+      - user_before_disable.users.access_keys | selectattr('access_key', 'equalto', test_access_key) | map(attribute='enabled') | first
+    fail_msg: "First access key should be enabled before disable test"
+  when: user_before_disable is not skipped
+
+- name: "Disable existing access key"
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ test_user_id }}"
+    access_key: "{{ test_access_key }}"
+    tenant_id: "{{ test_tenant_id }}"
+    enabled: false
+    state: present
+  register: disable_key_result
+  when: can_run_tests | bool
+
+- name: "Verify disable operation succeeded and reported change"
+  ansible.builtin.assert:
+    that:
+      - disable_key_result is changed
+      - disable_key_result.result is defined
+      - disable_key_result.result.enabled == false
+      - disable_key_result.result.tenant_id == test_tenant_id
+  when: disable_key_result is not skipped
+
+- name: "Verify backend state - key should be disabled"
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    state: present
+  register: user_after_disable
+  when: can_run_tests | bool
+
+- name: "Confirm key is actually disabled in backend"
+  ansible.builtin.assert:
+    that:
+      - user_after_disable.users.access_keys | selectattr('access_key', 'equalto', test_access_key) | map(attribute='enabled') | first == false
+    fail_msg: "Backend verification failed: access key should be disabled"
+  when: user_after_disable is not skipped
+
+# ====================
+# Idempotency Tests - Disable
+# ====================
+
+- name: "IDEMPOTENCY: Disable same key again (should report no change)"
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ test_user_id }}"
+    access_key: "{{ test_access_key }}"
+    tenant_id: "{{ test_tenant_id }}"
+    enabled: false
+    state: present
+  register: disable_idempotent_result
+  when: can_run_tests | bool
+
+- name: "IDEMPOTENCY: Verify second disable reported no change"
+  ansible.builtin.assert:
+    that:
+      - disable_idempotent_result is not changed
+      - disable_idempotent_result.result.enabled == false
+    fail_msg: |
+      IDEMPOTENCY: Second disable operation reported changed=true.
+      This indicates the module is not properly detecting existing state.
+      Expected: changed=false
+      Actual: changed={{ disable_idempotent_result.changed }}
+    success_msg: "Idempotency verified: repeated disable correctly reported changed=false"
+  when: disable_idempotent_result is not skipped
+
+# ====================
+# Re-enable Tests (Toggle enabled state)
+# ====================
+
+- name: "Re-enable previously disabled key"
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ test_user_id }}"
+    access_key: "{{ test_access_key }}"
+    tenant_id: "{{ test_tenant_id }}"
+    enabled: true
+    state: present
+  register: enable_key_result
+  when: can_run_tests | bool
+
+- name: "Verify re-enable operation succeeded"
+  ansible.builtin.assert:
+    that:
+      - enable_key_result is changed
+      - enable_key_result.result is defined
+      - enable_key_result.result.enabled == true
+      - enable_key_result.result.tenant_id == test_tenant_id
+    fail_msg: "Re-enable operation failed or didn't report correct state"
+  when: enable_key_result is not skipped
+
+- name: "Verify backend state - key should be enabled"
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    state: present
+  register: user_after_enable
+  when: can_run_tests | bool
+
+- name: "Confirm key is actually enabled in backend"
+  ansible.builtin.assert:
+    that:
+      - user_after_enable.users.access_keys | selectattr('access_key', 'equalto', test_access_key) | map(attribute='enabled') | first == true
+    fail_msg: "Backend verification failed: access key should be enabled"
+  when: user_after_enable is not skipped
+
+# ====================
+# Idempotency Tests - Enable
+# ====================
+
+- name: "IDEMPOTENCY: Enable same key again (should report no change)"
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ test_user_id }}"
+    access_key: "{{ test_access_key }}"
+    tenant_id: "{{ test_tenant_id }}"
+    enabled: true
+    state: present
+  register: enable_idempotent_result
+  when: can_run_tests | bool
+
+- name: "IDEMPOTENCY: Verify second enable reported no change"
+  ansible.builtin.assert:
+    that:
+      - enable_idempotent_result is not changed
+      - enable_idempotent_result.result.enabled == true
+    fail_msg: |
+      IDEMPOTENCY: Second enable operation reported changed=true.
+      Expected: changed=false
+      Actual: changed={{ enable_idempotent_result.changed }}
+    success_msg: "Idempotency verified: repeated enable correctly reported changed=false"
+  when: enable_idempotent_result is not skipped
+
+# ====================
+# Check Mode Tests - Update (Disable/Enable)
+# ====================
+
+- name: "Test check mode - disable key (should report change but not modify)"
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ test_user_id }}"
+    access_key: "{{ test_access_key }}"
+    tenant_id: "{{ test_tenant_id }}"
+    enabled: false
+    state: present
+  check_mode: true
+  register: check_disable_result
+  when: can_run_tests | bool
+
+- name: "Verify check mode reported change for disable"
+  ansible.builtin.assert:
+    that:
+      - check_disable_result is changed
+      - check_disable_result.result is defined
+      - check_disable_result.diff is defined
+      - check_disable_result.diff.before.enabled == true
+      - check_disable_result.diff.after.enabled == false
+    fail_msg: "Check mode should report change with proper diff"
+  when: check_disable_result is not skipped
+
+- name: "Verify check mode didn't actually modify the key"
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    state: present
+  register: user_after_check_disable
+  when: can_run_tests | bool
+
+- name: "Confirm key is still enabled (check mode didn't change it)"
+  ansible.builtin.assert:
+    that:
+      - user_after_check_disable.users.access_keys | selectattr('access_key', 'equalto', test_access_key) | map(attribute='enabled') | first == true
+    fail_msg: "Check mode should not have modified the key, but it did"
+  when: user_after_check_disable is not skipped
+
+# ====================
+# Update Second Key Tests (Verify Multiple Keys Work)
+# ====================
+
+- name: "Disable second access key (verify fix works with multiple keys)"
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ test_user_id }}"
+    access_key: "{{ test_access_key2 }}"
+    tenant_id: "{{ test_tenant_id }}"
+    enabled: false
+    state: present
+  register: disable_key2_result
+  when: can_run_tests | bool
+
+- name: "Verify second key disable succeeded"
+  ansible.builtin.assert:
+    that:
+      - disable_key2_result is changed
+      - disable_key2_result.result.enabled == false
+      - disable_key2_result.result.tenant_id == test_tenant_id
+    fail_msg: "Disabling second key failed"
+  when: disable_key2_result is not skipped
+
+- name: "Verify both keys exist with correct states"
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    state: present
+  register: user_both_keys
+  when: can_run_tests | bool
+
+- name: "Confirm both keys exist with expected states"
+  ansible.builtin.assert:
+    that:
+      - user_both_keys.users.access_keys | length == 2
+      - user_both_keys.users.access_keys | selectattr('access_key', 'equalto', test_access_key) | map(attribute='enabled') | first == true
+      - user_both_keys.users.access_keys | selectattr('access_key', 'equalto', test_access_key2) | map(attribute='enabled') | first == false
+    fail_msg: "Both keys should exist with correct enabled states"
+  when: user_both_keys is not skipped
+
+# ====================
+# Identity Params Test (Verify tenant_id matching works)
+# ====================
+
+- name: "Test updating key without specifying tenant_id (should still work)"
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ test_user_id }}"
+    access_key: "{{ test_access_key2 }}"
+    enabled: true
+    state: present
+  register: update_without_tenant_result
+  when: can_run_tests | bool
+
+- name: "Verify update without tenant_id succeeded"
+  ansible.builtin.assert:
+    that:
+      - update_without_tenant_result is changed
+      - update_without_tenant_result.result.enabled == true
+    fail_msg: "Update should work even without specifying tenant_id"
+  when: update_without_tenant_result is not skipped
+
+# ====================
+# Check Mode Tests - Create
+# ====================
+
+- name: Test check mode - create access key (should report change)
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ test_user_id }}"
+    tenant_id: "{{ test_tenant_id }}"
+    state: present
+  check_mode: true
+  register: check_create_result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported changes
+  ansible.builtin.assert:
+    that:
+      - check_create_result is changed
+  when: check_create_result is not skipped
+
+# ====================
+# Delete Access Key Tests
+# ====================
+
+- name: Test deleting first access key
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ test_user_id }}"
+    access_key: "{{ test_access_key }}"
+    state: absent
+  register: delete_result
+  when: can_run_tests | bool
+
+- name: Verify access key was deleted
+  ansible.builtin.assert:
+    that:
+      - delete_result is changed
+      - delete_result.result is defined
+  when: delete_result is not skipped
+
+# ====================
+# Check Mode Tests - Delete
+# ====================
+
+- name: Create access key for check mode delete test
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ test_user_id }}"
+    tenant_id: "{{ test_tenant_id }}"
+    state: present
+  register: check_delete_key
+  when: can_run_tests | bool
+
+- name: Test check mode - delete
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ test_user_id }}"
+    state: absent
+  check_mode: true
+  register: check_delete_result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported deletion
+  ansible.builtin.assert:
+    that:
+      - check_delete_result is changed
+  when: check_delete_result is not skipped
+
+- name: Verify check mode didn't actually delete (query user)
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    state: present
+  register: user_after_check_delete
+  when: can_run_tests | bool
+
+- name: Check that access key still exists
+  ansible.builtin.assert:
+    that:
+      - user_after_check_delete.users.access_keys is defined
+      - user_after_check_delete.users.access_keys | length > 0
+  when: user_after_check_delete is not skipped
+
+# ====================
+# Error Handling Tests
+# ====================
+
+- name: Test with non-existent user_id (should fail gracefully)
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: 999999
+    tenant_id: "{{ test_tenant_id }}"
+    state: present
+  register: invalid_user_result
+  ignore_errors: true
+  when: can_run_tests | bool
+
+- name: Verify module fails with non-existent user
+  ansible.builtin.assert:
+    that:
+      - invalid_user_result is failed
+    fail_msg: "Module should fail when user_id doesn't exist"
+  when: invalid_user_result is not skipped
+
+# ============================================================
+# REGRESSION: cross-tenant key management
+# ============================================================
+
+- name: "REGRESSION setup: derive unique-per-run identifiers"
+  ansible.builtin.set_fact:
+    regression_run_id: "{{ ansible_date_time.epoch }}"
+    regression_tenant_name: "{{ test_regression_tenant_name }}-{{ ansible_date_time.epoch }}"
+    regression_user_name: "{{ test_regression_user_name }}-{{ ansible_date_time.epoch }}"
+    regression_user_uid: "{{ test_regression_user_uid + (ansible_date_time.epoch | int % 1000) }}"
+  when: can_run_tests | bool
+
+- name: "REGRESSION setup: create tenant"
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ regression_tenant_name }}"
+    state: present
+  register: regression_tenant
+  when: can_run_tests | bool
+
+- name: "REGRESSION setup: create user in the tenant's local provider"
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ regression_user_name }}"
+    uid: "{{ regression_user_uid }}"
+    local_provider_id: "{{ regression_tenant.tenants.local_provider_id }}"
+    state: present
+  register: regression_user
+  when: regression_tenant is not skipped
+
+- name: "REGRESSION setup: capture user/tenant ids"
+  ansible.builtin.set_fact:
+    regression_user_id: "{{ regression_user.users.id }}"
+    regression_tenant_id: "{{ regression_tenant.tenants.id }}"
+  when: regression_user is not skipped
+
+# ----- Step 1 (orion): create first access key -----
+
+- name: "REGRESSION step 1: create first access key"
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ regression_user_id }}"
+    tenant_id: "{{ regression_tenant_id }}"
+    state: present
+  register: regression_key1
+  when: can_run_tests | bool
+
+- name: "REGRESSION step 1: verify first key returned by module"
+  ansible.builtin.assert:
+    that:
+      - regression_key1 is changed
+      - regression_key1.result.access_key is defined
+      - regression_key1.result.secret_key is defined
+    fail_msg: "First key creation must return access_key and secret_key (orion step 1)"
+  when: regression_key1 is not skipped
+
+- name: "REGRESSION step 1: tenant-scoped query (after key #1)"
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    uid: "{{ regression_user_uid }}"
+    tenant_id: "{{ regression_tenant_id }}"
+    state: present
+  register: regression_query_after_create1
+  when: can_run_tests | bool
+
+- name: "REGRESSION step 1: verify key #1 is visible via nonlocal_user (tenant scope)"
+  ansible.builtin.assert:
+    that:
+      - regression_query_after_create1.nonlocal_user.access_keys | length == 1
+      - regression_key1.result.access_key in (regression_query_after_create1.nonlocal_user.access_keys | map(attribute='access_key') | list)
+    fail_msg: "Key #1 must be visible via nonlocal_user (users/query/) in the tenant scope"
+  when: regression_query_after_create1 is not skipped
+
+# ----- Step 2 (orion): create second access key -----
+
+- name: "REGRESSION step 2: create second access key"
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ regression_user_id }}"
+    tenant_id: "{{ regression_tenant_id }}"
+    state: present
+  register: regression_key2
+  when: can_run_tests | bool
+
+- name: "REGRESSION step 2: verify second key is new and distinct"
+  ansible.builtin.assert:
+    that:
+      - regression_key2 is changed
+      - regression_key2.result.access_key is defined
+      - regression_key2.result.access_key != regression_key1.result.access_key
+    fail_msg: "Second key must be created with a distinct access_key (orion step 2)"
+  when: regression_key2 is not skipped
+
+- name: "REGRESSION step 2: tenant-scoped query (after key #2)"
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    uid: "{{ regression_user_uid }}"
+    tenant_id: "{{ regression_tenant_id }}"
+    state: present
+  register: regression_query_after_create2
+  when: can_run_tests | bool
+
+- name: "REGRESSION step 2: verify both keys are visible via nonlocal_user"
+  ansible.builtin.assert:
+    that:
+      - regression_query_after_create2.nonlocal_user.access_keys | length == 2
+      - regression_key1.result.access_key in (regression_query_after_create2.nonlocal_user.access_keys | map(attribute='access_key') | list)
+      - regression_key2.result.access_key in (regression_query_after_create2.nonlocal_user.access_keys | map(attribute='access_key') | list)
+    fail_msg: "Both keys must be visible via nonlocal_user (users/query/) in the tenant scope"
+  when: regression_query_after_create2 is not skipped
+
+# ----- Extension (skipped in orion due to the bug — now covered): disable an existing key -----
+# This is the path that previously POSTed instead of PATCHed and hit
+# "No more than 2 keys per tenant is allowed."
+
+- name: "REGRESSION ext: disable key #1 via access_key + state=present (was the bug)"
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ regression_user_id }}"
+    tenant_id: "{{ regression_tenant_id }}"
+    access_key: "{{ regression_key1.result.access_key }}"
+    enabled: false
+    state: present
+  register: regression_disable
+  when: can_run_tests | bool
+
+- name: "REGRESSION ext: verify disable PATCHed the existing key (no 3rd POST)"
+  ansible.builtin.assert:
+    that:
+      - regression_disable is changed
+      - regression_disable.result.enabled == false
+      - regression_disable.result.tenant_id | int == regression_tenant_id | int
+  when: regression_disable is not skipped
+
+- name: "REGRESSION ext: tenant-scoped query (after disable)"
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    uid: "{{ regression_user_uid }}"
+    tenant_id: "{{ regression_tenant_id }}"
+    state: present
+  register: regression_query_after_disable
+  when: can_run_tests | bool
+
+- name: "REGRESSION ext: confirm exactly 2 keys, key #1 disabled, key #2 still enabled"
+  ansible.builtin.assert:
+    that:
+      - regression_query_after_disable.nonlocal_user.access_keys | length == 2
+      - regression_query_after_disable.nonlocal_user.access_keys | selectattr('access_key', 'equalto', regression_key1.result.access_key) |
+        map(attribute='enabled') | first == false
+      - regression_query_after_disable.nonlocal_user.access_keys | selectattr('access_key', 'equalto', regression_key2.result.access_key) |
+        map(attribute='enabled') | first == true
+    fail_msg: "After disable: expected 2 keys with key #1 disabled and key #2 enabled"
+  when: regression_query_after_disable is not skipped
+
+- name: "REGRESSION ext: repeat disable — must be idempotent (no change)"
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ regression_user_id }}"
+    tenant_id: "{{ regression_tenant_id }}"
+    access_key: "{{ regression_key1.result.access_key }}"
+    enabled: false
+    state: present
+  register: regression_disable_idempotent
+  when: can_run_tests | bool
+
+- name: "REGRESSION ext: verify repeated disable reported no change"
+  ansible.builtin.assert:
+    that:
+      - regression_disable_idempotent is not changed
+    fail_msg: "Cross-tenant disable must be idempotent — got changed=true on second call"
+  when: regression_disable_idempotent is not skipped
+
+# ----- Step 3 (orion): delete a specific key by access_key + state=absent -----
+
+- name: "REGRESSION step 3: delete key #1 by access_key + state=absent"
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ regression_user_id }}"
+    access_key: "{{ regression_key1.result.access_key }}"
+    state: absent
+  when: can_run_tests | bool
+
+- name: "REGRESSION step 3: tenant-scoped query (after delete)"
+  vastdata.vms.nonlocal_user:
+    vms: "{{ vms_auth }}"
+    uid: "{{ regression_user_uid }}"
+    tenant_id: "{{ regression_tenant_id }}"
+    state: present
+  register: regression_query_after_delete
+  when: can_run_tests | bool
+
+- name: "REGRESSION step 3: confirm key #1 is deleted and key #2 remains"
+  ansible.builtin.assert:
+    that:
+      - regression_query_after_delete.nonlocal_user.access_keys | length == 1
+      - regression_key1.result.access_key not in (regression_query_after_delete.nonlocal_user.access_keys | map(attribute='access_key') | list)
+      - regression_key2.result.access_key in (regression_query_after_delete.nonlocal_user.access_keys | map(attribute='access_key') | list)
+    fail_msg: "After delete: expected only key #2 to remain (orion step 3)"
+  when: regression_query_after_delete is not skipped
+
+# ----- Step 4 (orion): destroy — delete user (also removes remaining keys), delete tenant -----
+
+- name: "REGRESSION destroy: delete regression user (cascade-removes remaining keys)"
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ regression_user_name }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: "REGRESSION destroy: delete the non-default tenant"
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ regression_tenant_name }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: "REGRESSION destroy: delete the auto-created local provider"
+  vastdata.vms.localproviders:
+    vms: "{{ vms_auth }}"
+    name: "{{ regression_tenant_name }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - delete all remaining access keys
+  vastdata.vms.user_key:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ test_user_id }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove test user
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Skip Message
+# ====================
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping user_key integration tests - credentials not configured.
+
+      To enable integration tests, set credentials in:
+        tests/integration/integration_config.yml
+
+      Example:
+        vast_vms: "vast-vms.example.com"
+        vast_username: "admin"
+        vast_password: "password"
+
+      Then run: ansible-test integration user_key -v
+  when: not (can_run_tests | bool)

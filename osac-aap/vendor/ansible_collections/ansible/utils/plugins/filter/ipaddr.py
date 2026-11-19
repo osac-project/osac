@@ -76,8 +76,6 @@ DOCUMENTATION = """
             type: str
             description: type of filter. example ipaddr, ipv4, ipv6, ipwrap
     notes:
-    requirements:
-        - netaddr>=0.10.1
 """
 
 EXAMPLES = r"""

@@ -21,6 +21,11 @@ suite (repository-root `make -C osac-installer help`, `.github/workflows/`).
 | Contract | None dedicated | No real provider boundary | Static Metal3 CRDs, patched status and simulated transitions do not exercise a real contract; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) for qualifying coverage. |
 | E2E | Cross-component suites | Fulfillment-to-operator journeys where available | Real hardware and providers remain environment-dependent. |
 
+Run `helm unittest charts/operator` when changing the metrics Service's labels
+or ports, the ServiceMonitor, or `serviceMonitor.*` values. It renders only:
+no Prometheus is scraped, and that a target is actually collected needs
+user-workload monitoring on a deployed cluster.
+
 ## Coverage notes
 
 Cover success, no-match and provider-error paths for inventory, selection,

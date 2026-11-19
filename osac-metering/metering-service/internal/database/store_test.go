@@ -48,7 +48,7 @@ func TestStoreFactsAndProgressAreIdempotent(t *testing.T) {
 			t.Fatalf("begin: %v", err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		if err := database.InsertFacts(ctx, tx, "acme", facts, offset); err != nil {
+		if err := database.InsertFacts(ctx, tx, "acme", facts, offset, ""); err != nil {
 			t.Fatalf("insert facts: %v", err)
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -107,7 +107,7 @@ func TestInsertFactsLastValueWithinOneSecondWins(t *testing.T) {
 		if err != nil {
 			t.Fatalf("begin: %v", err)
 		}
-		if err := database.InsertFacts(ctx, tx, "acme", facts, int64(i+1)); err != nil {
+		if err := database.InsertFacts(ctx, tx, "acme", facts, int64(i+1), ""); err != nil {
 			t.Fatalf("insert facts %d: %v", i+1, err)
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -139,6 +139,64 @@ func TestInsertFactsLastValueWithinOneSecondWins(t *testing.T) {
 	}
 }
 
+// TestInsertFactsRepeatedKeyInOneCallKeepsLastValue checks that one event listing the same
+// history key twice still writes. The single insert keeps the last value, and the offset moves.
+func TestInsertFactsRepeatedKeyInOneCallKeepsLastValue(t *testing.T) {
+	ctx := context.Background()
+	_, pool := startDatabase(t)
+	store := database.NewStore(pool)
+	if err := store.EnsureProgress(ctx, "acme"); err != nil {
+		t.Fatalf("ensure progress: %v", err)
+	}
+
+	base := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
+	facts := []database.Fact{
+		{ResourceType: "ComputeInstance", ResourceID: "vm-7", Field: "spec.template",
+			Since: base, Value: "first"},
+		{ResourceType: "ComputeInstance", ResourceID: "vm-7", Field: "status.state",
+			Since: base, Value: "PROGRESSING"},
+		{ResourceType: "ComputeInstance", ResourceID: "vm-7", Field: "spec.template",
+			Since: base.In(time.FixedZone("UTC+2", 2*60*60)), Value: "kept"},
+	}
+	tx, err := store.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := database.InsertFacts(ctx, tx, "acme", facts, 4, ""); err != nil {
+		t.Fatalf("insert facts: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	got, err := database.ResourceFacts(ctx, pool, "acme", "ComputeInstance", "vm-7")
+	if err != nil {
+		t.Fatalf("read facts: %v", err)
+	}
+	want := []database.Fact{
+		{ResourceType: "ComputeInstance", ResourceID: "vm-7", Field: "spec.template",
+			Since: base, Value: "kept"},
+		{ResourceType: "ComputeInstance", ResourceID: "vm-7", Field: "status.state",
+			Since: base, Value: "PROGRESSING"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d facts, got %+v", len(want), got)
+	}
+	for i := range want {
+		if got[i].Field != want[i].Field || got[i].Value != want[i].Value ||
+			!got[i].Since.Equal(want[i].Since) {
+			t.Fatalf("fact %d: expected %+v, got %+v", i, want[i], got[i])
+		}
+	}
+	progress, err := database.GetProgress(ctx, pool, "acme")
+	if err != nil {
+		t.Fatalf("read progress: %v", err)
+	}
+	if progress.EventOffset != 4 {
+		t.Fatalf("event offset = %d, want 4", progress.EventOffset)
+	}
+}
+
 // TestLatestFactValuePrefersLaterEventOffset pins current billing identity to Kafka
 // order. An older event published later has a smaller since and a larger offset; the
 // query must return that later offset, not the later timestamp.
@@ -166,7 +224,7 @@ func TestLatestFactValuePrefersLaterEventOffset(t *testing.T) {
 			Since:        since,
 			Value:        value,
 		}}
-		if err := database.InsertFacts(ctx, tx, tenant, facts, offset); err != nil {
+		if err := database.InsertFacts(ctx, tx, tenant, facts, offset, ""); err != nil {
 			t.Fatalf("insert facts: %v", err)
 		}
 		if err := tx.Commit(ctx); err != nil {
@@ -228,10 +286,10 @@ func TestStoreLastRoundTime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	if err := database.SetLastRound(ctx, tx, "acme", earlier, 4); err != nil {
+	if err := database.SetLastRound(ctx, tx, "acme", earlier, 4, ""); err != nil {
 		t.Fatalf("setting acme's last round: %v", err)
 	}
-	if err := database.SetLastRound(ctx, tx, "globex", later, 7); err != nil {
+	if err := database.SetLastRound(ctx, tx, "globex", later, 7, ""); err != nil {
 		t.Fatalf("setting globex's last round: %v", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -372,7 +430,7 @@ func TestDeleteTenantRowsRollsBackOnFailure(t *testing.T) {
 		{ResourceType: "ComputeInstance", ResourceID: "vm-7", Field: "status.state",
 			Since: base, Value: "RUNNING"},
 	}
-	if err := database.InsertFacts(ctx, tx, "acme", facts, 10); err != nil {
+	if err := database.InsertFacts(ctx, tx, "acme", facts, 10, ""); err != nil {
 		t.Fatalf("insert facts: %v", err)
 	}
 	key := database.LedgerKey{
@@ -436,7 +494,7 @@ func TestStoreResourcesWithNewFacts(t *testing.T) {
 	err = database.InsertFacts(ctx, tx, "acme", []database.Fact{
 		{ResourceType: "ComputeInstance", ResourceID: "vm-7", Field: "status.state",
 			Since: base, Value: "RUNNING"},
-	}, 10)
+	}, 10, "")
 	if err != nil {
 		t.Fatalf("insert facts: %v", err)
 	}
@@ -445,7 +503,7 @@ func TestStoreResourcesWithNewFacts(t *testing.T) {
 	}
 
 	resources, err := database.ResourcesWithNewFacts(
-		ctx, pool, "acme", 9, base.Add(-time.Hour),
+		ctx, pool, "acme", 0, 9, base.Add(-time.Hour),
 	)
 	if err != nil {
 		t.Fatalf("scan new facts: %v", err)
@@ -458,7 +516,7 @@ func TestStoreResourcesWithNewFacts(t *testing.T) {
 	// offset, or dated exactly at its time, opens a span inside the next window, so
 	// the scan must still select it.
 	resources, err = database.ResourcesWithNewFacts(
-		ctx, pool, "acme", 10, base.Add(time.Hour),
+		ctx, pool, "acme", 0, 10, base.Add(time.Hour),
 	)
 	if err != nil {
 		t.Fatalf("scan new facts: %v", err)
@@ -467,7 +525,7 @@ func TestStoreResourcesWithNewFacts(t *testing.T) {
 		t.Fatalf("expected vm-7 with a fact at the offset boundary, got %+v", resources)
 	}
 	resources, err = database.ResourcesWithNewFacts(
-		ctx, pool, "acme", 11, base,
+		ctx, pool, "acme", 0, 11, base,
 	)
 	if err != nil {
 		t.Fatalf("scan new facts: %v", err)
@@ -476,13 +534,239 @@ func TestStoreResourcesWithNewFacts(t *testing.T) {
 		t.Fatalf("expected vm-7 with a fact at the time boundary, got %+v", resources)
 	}
 	resources, err = database.ResourcesWithNewFacts(
-		ctx, pool, "acme", 11, base.Add(time.Hour),
+		ctx, pool, "acme", 0, 11, base.Add(time.Hour),
 	)
 	if err != nil {
 		t.Fatalf("scan new facts: %v", err)
 	}
 	if len(resources) != 0 {
 		t.Fatalf("expected no resources with new facts, got %+v", resources)
+	}
+
+	// After a prefix change the old fact keeps its high offset on the previous
+	// generation. The new generation's cursor starts at zero, so that offset must
+	// not select the resource again. A fact dated at the time bound still does.
+	if err := store.NoteEventTopic(ctx, "acme", "custom.events.acme", "osac.events.acme"); err != nil {
+		t.Fatalf("change topic: %v", err)
+	}
+	resources, err = database.ResourcesWithNewFacts(
+		ctx, pool, "acme", 1, 0, base.Add(time.Hour),
+	)
+	if err != nil {
+		t.Fatalf("scan after the topic change: %v", err)
+	}
+	if len(resources) != 0 {
+		t.Fatalf("an old-topic offset must not select the resource, got %+v", resources)
+	}
+	resources, err = database.ResourcesWithNewFacts(
+		ctx, pool, "acme", 1, 0, base,
+	)
+	if err != nil {
+		t.Fatalf("scan the time bound after the topic change: %v", err)
+	}
+	if len(resources) != 1 || resources[0].ResourceID != "vm-7" {
+		t.Fatalf("the time bound must still select vm-7, got %+v", resources)
+	}
+}
+
+func TestNoteEventTopicResetsOffsetWhenTheTopicChanges(t *testing.T) {
+	ctx := context.Background()
+	_, pool := startDatabase(t)
+	store := database.NewStore(pool)
+
+	if err := store.EnsureProgress(ctx, "acme"); err != nil {
+		t.Fatalf("ensure progress: %v", err)
+	}
+	if err := store.EnsureProgress(ctx, "globex"); err != nil {
+		t.Fatalf("ensure progress: %v", err)
+	}
+	tx, err := store.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	for _, tenant := range []string{"acme", "globex"} {
+		if err := database.AdvanceEventOffset(ctx, tx, tenant, 12, ""); err != nil {
+			t.Fatalf("advance event offset: %v", err)
+		}
+		if err := database.AdvanceHeartbeatOffset(ctx, tx, tenant, 7); err != nil {
+			t.Fatalf("advance heartbeat offset: %v", err)
+		}
+		if err := database.SetLastRound(ctx, tx, tenant, time.Date(2026, 10, 5, 10, 4, 0, 0, time.UTC), 12, ""); err != nil {
+			t.Fatalf("set last round: %v", err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	if err := store.NoteEventTopic(ctx, "acme", "osac.events.acme", "osac.events.acme"); err != nil {
+		t.Fatalf("stamp topic: %v", err)
+	}
+	stamped, err := store.GetTenantProgress(ctx, "acme")
+	if err != nil {
+		t.Fatalf("read stamped progress: %v", err)
+	}
+	if stamped.EventTopic != "osac.events.acme" || stamped.EventOffset != 12 || stamped.LastRoundEventOffset != 12 || stamped.HeartbeatOffset != 7 || stamped.TopicGeneration != 0 {
+		t.Fatalf("stamping the legacy topic must keep offsets, got %+v", stamped)
+	}
+
+	if err := store.NoteEventTopic(ctx, "acme", "osac.events.acme", "osac.events.acme"); err != nil {
+		t.Fatalf("restamp topic: %v", err)
+	}
+	same, err := store.GetTenantProgress(ctx, "acme")
+	if err != nil {
+		t.Fatalf("read restamped progress: %v", err)
+	}
+	if same.EventOffset != 12 || same.EventTopic != "osac.events.acme" || same.TopicGeneration != 0 {
+		t.Fatalf("the same topic must keep the offset, got %+v", same)
+	}
+
+	if err := store.NoteEventTopic(ctx, "acme", "custom.events.acme", "osac.events.acme"); err != nil {
+		t.Fatalf("change topic: %v", err)
+	}
+	changed, err := store.GetTenantProgress(ctx, "acme")
+	if err != nil {
+		t.Fatalf("read changed progress: %v", err)
+	}
+	if changed.EventTopic != "custom.events.acme" || changed.EventOffset != 0 || changed.LastRoundEventOffset != 0 || changed.HeartbeatOffset != 7 || changed.TopicGeneration != 1 {
+		t.Fatalf("a new topic must rewind event offsets and keep the heartbeat offset, got %+v", changed)
+	}
+
+	// globex still has an empty topic, the shape of a database upgraded onto a new prefix.
+	if err := store.NoteEventTopic(ctx, "globex", "custom.events.globex", "osac.events.globex"); err != nil {
+		t.Fatalf("stamp upgraded topic: %v", err)
+	}
+	upgraded, err := store.GetTenantProgress(ctx, "globex")
+	if err != nil {
+		t.Fatalf("read upgraded progress: %v", err)
+	}
+	if upgraded.EventTopic != "custom.events.globex" || upgraded.EventOffset != 0 || upgraded.LastRoundEventOffset != 0 || upgraded.HeartbeatOffset != 7 || upgraded.TopicGeneration != 1 {
+		t.Fatalf("an unrecorded topic on a new prefix must rewind event offsets and keep the heartbeat offset, got %+v", upgraded)
+	}
+}
+
+func TestLatestFactValuePrefersTheNewTopicGeneration(t *testing.T) {
+	ctx := context.Background()
+	_, pool := startDatabase(t)
+	store := database.NewStore(pool)
+	if err := store.EnsureProgress(ctx, "acme"); err != nil {
+		t.Fatalf("ensure progress: %v", err)
+	}
+	base := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
+	write := func(value string, since time.Time, offset int64, topic string) {
+		t.Helper()
+		tx, err := store.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin: %v", err)
+		}
+		err = database.InsertFacts(ctx, tx, "acme", []database.Fact{{
+			ResourceType: database.BillingResourceType,
+			ResourceID:   "acme",
+			Field:        database.BillingField,
+			Since:        since,
+			Value:        value,
+		}}, offset, topic)
+		if err != nil {
+			t.Fatalf("insert %s: %v", value, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("commit %s: %v", value, err)
+		}
+	}
+	latest := func() string {
+		t.Helper()
+		value, ok, err := database.LatestFactValue(
+			ctx, pool, "acme", database.BillingResourceType, "acme", database.BillingField,
+		)
+		if err != nil {
+			t.Fatalf("latest billing id: %v", err)
+		}
+		if !ok {
+			t.Fatal("billing id missing")
+		}
+		return value
+	}
+
+	write("acct-old", base, 12, "")
+	write("acct-high", base.Add(-time.Hour), 50, "")
+	if got := latest(); got != "acct-high" {
+		t.Fatalf("billing id = %s, want acct-high", got)
+	}
+	if err := store.NoteEventTopic(ctx, "acme", "custom.events.acme", "osac.events.acme"); err != nil {
+		t.Fatalf("change topic: %v", err)
+	}
+	// Rewriting the high-offset key on the new topic, at a lower offset, beats the
+	// old-generation row that is still at offset 12.
+	write("acct-rewritten", base.Add(-time.Hour), 1, "custom.events.acme")
+	if got := latest(); got != "acct-rewritten" {
+		t.Fatalf("billing id = %s, want acct-rewritten", got)
+	}
+	// A new key on the new topic sorts ahead of the remaining old-topic row.
+	write("acct-new", base.Add(time.Minute), 1, "custom.events.acme")
+	if got := latest(); got != "acct-new" {
+		t.Fatalf("billing id = %s, want acct-new", got)
+	}
+}
+
+func TestStaleTopicWriteLeavesHistoryAndProgress(t *testing.T) {
+	ctx := context.Background()
+	_, pool := startDatabase(t)
+	store := database.NewStore(pool)
+	if err := store.EnsureProgress(ctx, "acme"); err != nil {
+		t.Fatalf("ensure progress: %v", err)
+	}
+	base := time.Date(2026, 10, 5, 10, 0, 0, 0, time.UTC)
+	tx, err := store.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := database.InsertFacts(ctx, tx, "acme", []database.Fact{{
+		ResourceType: "ComputeInstance", ResourceID: "vm-7", Field: "status.state",
+		Since: base, Value: "RUNNING",
+	}}, 4, ""); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if err := store.NoteEventTopic(ctx, "acme", "custom.events.acme", "osac.events.acme"); err != nil {
+		t.Fatalf("change topic: %v", err)
+	}
+
+	tx, err = store.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin stale write: %v", err)
+	}
+	err = database.InsertFacts(ctx, tx, "acme", []database.Fact{{
+		ResourceType: "ComputeInstance", ResourceID: "vm-7", Field: "status.state",
+		Since: base.Add(time.Minute), Value: "STOPPED",
+	}}, 80, "osac.events.acme")
+	if err == nil {
+		t.Fatal("a write for the previous topic must fail")
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatalf("rollback stale write: %v", err)
+	}
+	if err := database.AdvanceEventOffset(ctx, pool, "acme", 80, "osac.events.acme"); err == nil {
+		t.Fatal("an offset advance for the previous topic must fail")
+	}
+	if err := database.SetLastRound(ctx, pool, "acme", base, 80, "osac.events.acme"); err == nil {
+		t.Fatal("a round cursor advance for the previous topic must fail")
+	}
+
+	progress, err := database.GetProgress(ctx, pool, "acme")
+	if err != nil {
+		t.Fatalf("progress: %v", err)
+	}
+	if progress.EventOffset != 0 || progress.LastRoundEventOffset != 0 || progress.TopicGeneration != 1 || progress.EventTopic != "custom.events.acme" {
+		t.Fatalf("stale writes changed progress: %+v", progress)
+	}
+	facts, err := database.ResourceFacts(ctx, pool, "acme", "ComputeInstance", "vm-7")
+	if err != nil {
+		t.Fatalf("facts: %v", err)
+	}
+	if len(facts) != 1 || facts[0].Value != "RUNNING" {
+		t.Fatalf("stale write changed history: %+v", facts)
 	}
 }
 

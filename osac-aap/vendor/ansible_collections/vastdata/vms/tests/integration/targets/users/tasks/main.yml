@@ -1,0 +1,731 @@
+---
+# Integration tests for users module
+# These tests run against a real VAST system
+#
+# Configuration:
+# Set values in tests/integration/integration_config.yml
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials }}"
+
+- name: Get default tenant to obtain local_provider_id
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "default"
+    state: present
+  register: tenant_result
+  when: can_run_tests | bool
+
+- name: Set local_provider_id from default tenant
+  ansible.builtin.set_fact:
+    test_local_provider_id: "{{ tenant_result.tenants.local_provider_id }}"
+  when: can_run_tests | bool
+
+# ====================
+# Cleanup - Remove existing test user if present
+# ====================
+
+- name: Clean up - ensure test user doesn't exist before starting
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Create Tests
+# ====================
+
+- name: Test creating a user
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    uid: "{{ test_user_uid }}"
+    gids: ["{{ test_user_gid }}"]
+    leading_gid: "{{ test_user_gid }}"
+    local_provider_id: "{{ test_local_provider_id }}"
+    allow_create_bucket: false
+    allow_delete_bucket: false
+    s3_superuser: false
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify user was created
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.users is defined
+      - result.users.name == test_user_name
+      - result.users.uid == test_user_uid
+      - result.diff is defined
+      - result.diff.before == {}
+      - result.diff.after is defined
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Create
+# ====================
+
+- name: Test idempotency - create same user again
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    uid: "{{ test_user_uid }}"
+    gids: ["{{ test_user_gid }}"]
+    leading_gid: "{{ test_user_gid }}"
+    local_provider_id: "{{ test_local_provider_id }}"
+    allow_create_bucket: false
+    allow_delete_bucket: false
+    s3_superuser: false
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify idempotency (resource unchanged after second run)
+  ansible.builtin.assert:
+    that:
+      - result.users is defined
+      - result.users.name == test_user_name
+      - result.users.uid == test_user_uid
+  when: result is not skipped
+
+# ====================
+# Update Tests
+# ====================
+
+- name: Test updating user - add GID
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    uid: "{{ test_user_uid }}"
+    gids: ["{{ test_user_gid }}", 10000]
+    leading_gid: "{{ test_user_gid }}"
+    local_provider_id: "{{ test_local_provider_id }}"
+    allow_create_bucket: false
+    allow_delete_bucket: false
+    s3_superuser: false
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify user was updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.users is defined
+      - result.users.gids | length == 2
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after is defined
+  when: result is not skipped
+
+- name: Test update idempotency
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    uid: "{{ test_user_uid }}"
+    gids: ["{{ test_user_gid }}", 10000]
+    leading_gid: "{{ test_user_gid }}"
+    local_provider_id: "{{ test_local_provider_id }}"
+    allow_create_bucket: false
+    allow_delete_bucket: false
+    s3_superuser: false
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify update idempotency (resource unchanged after second update run)
+  ansible.builtin.assert:
+    that:
+      - result.users is defined
+      - result.users.name == test_user_name
+      - result.users.uid == test_user_uid
+      - result.users.gids | length == 2
+  when: result is not skipped
+
+# ====================
+# Update S3 Permissions Tests
+# ====================
+
+- name: Test updating S3 permissions
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    allow_create_bucket: true
+    s3_superuser: true
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify S3 permissions were updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.users is defined
+      - result.users.allow_create_bucket == true
+      - result.users.s3_superuser == true
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests
+# ====================
+
+- name: Test check mode - make a change
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    allow_delete_bucket: true
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported changes
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.users is defined
+  when: result is not skipped
+
+- name: Verify check mode didn't actually make changes
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Check that allow_delete_bucket is still false
+  ansible.builtin.assert:
+    that:
+      - result.users.allow_delete_bucket == false or result.users.allow_delete_bucket is not defined
+  when: result is not skipped
+
+# ====================
+# Special Operations Tests (via dedicated sub-endpoint modules)
+# ====================
+
+- name: Lookup user ID for sub-endpoint tests
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    state: present
+  register: user_lookup
+  when: can_run_tests | bool
+
+- name: Test tenant_data query via dedicated module
+  vastdata.vms.user_tenant_data:
+    vms: "{{ vms_auth }}"
+    user_id: "{{ user_lookup.users.id }}"
+  register: result
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Verify tenant_data query (may fail if not configured)
+  ansible.builtin.assert:
+    that:
+      - result is not changed or result is failed
+  when: result is not skipped
+
+# ====================
+# Delete Tests
+# ====================
+
+- name: Test deleting user
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify user was deleted
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after == {}
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Delete
+# ====================
+
+- name: Test delete idempotency - delete again
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify delete idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Check Mode Delete Test
+# ====================
+
+- name: Create user for check mode delete test
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-checkmode"
+    uid: 9998
+    gids: [9998]
+    local_provider_id: "{{ test_local_provider_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Test check mode - delete
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-checkmode"
+    state: absent
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported deletion
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually delete
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-checkmode"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Check that user still exists
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.users is defined
+  when: result is not skipped
+
+- name: Clean up check mode test user
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-checkmode"
+    state: absent
+  when: can_run_tests | bool
+
+# ====================
+# Password Field Tests
+# ====================
+
+- name: Clean up - ensure password test user doesn't exist before starting
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-password-test"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Test creating a user with password field
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-password-test"
+    uid: 19997
+    gids: ["{{ test_user_gid }}"]
+    leading_gid: "{{ test_user_gid }}"
+    local_provider_id: "{{ test_local_provider_id }}"
+    password: "InitialTestPassword123!"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify user with password was created
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.users is defined
+      - result.users.name == test_user_name + '-password-test'
+      - result.diff is defined
+      - result.diff.before == {}
+      - result.diff.after is defined
+  when: result is not skipped
+
+- name: Test idempotency with password field (should not change)
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-password-test"
+    password: "InitialTestPassword123!"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify idempotency with same password (ephemeral fields excluded from updates)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.users is defined
+    fail_msg: |
+      Idempotency check failed. Ephemeral fields like 'password' are excluded from
+      update operations to maintain idempotency. To change a password, delete and
+      recreate the user.
+  when: result is not skipped
+
+- name: Test that password field is marked as no_log (verify no password in logs)
+  ansible.builtin.debug:
+    msg: "Password field should be masked in logs - verify no password appears in output"
+  when: can_run_tests | bool
+
+- name: Clean up password test user
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-password-test"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Idempotency local_provider_id test
+# ====================
+
+- name: Clean up - ensure local_provider_id idempotency test user doesn't exist
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-lp-idempotency"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Create local provider for local_provider_id idempotency test
+  vastdata.vms.localproviders:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-lp"
+    state: present
+  register: lp_idempotency
+  when: can_run_tests | bool
+
+- name: Set local_provider_id from created local provider
+  ansible.builtin.set_fact:
+    lp_idempotency_provider_id: "{{ lp_idempotency.localproviders.id }}"
+  when: can_run_tests | bool
+
+- name: Create user with local_provider_id (first run - should change)
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-lp-idempotency"
+    uid: 99901
+    local_provider_id: "{{ lp_idempotency_provider_id }}"
+    state: present
+  register: lp_idempotency_result
+  when: can_run_tests | bool
+
+- name: Verify user was created (changed=1)
+  ansible.builtin.assert:
+    that:
+      - lp_idempotency_result is changed
+      - lp_idempotency_result.users is defined
+      - lp_idempotency_result.users.name == test_user_name + '-lp-idempotency'
+  when: lp_idempotency_result is not skipped
+
+- name: Run same create again - idempotency (second run - should NOT change)
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-lp-idempotency"
+    uid: 99901
+    local_provider_id: "{{ lp_idempotency_provider_id }}"
+    state: present
+  register: lp_idempotency_result2
+  when: can_run_tests | bool
+
+- name: Verify idempotency - second run must report changed=0
+  ansible.builtin.assert:
+    that:
+      - not lp_idempotency_result2.changed
+  when: lp_idempotency_result2 is not skipped
+
+- name: Clean up local_provider_id idempotency test user
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-lp-idempotency"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up local provider from idempotency test
+  vastdata.vms.localproviders:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-lp"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Test: Users with same name in different local providers
+# ====================
+
+- name: Clean up - ensure duplicate user test resources don't exist
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-duplicate-user"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - ensure test local provider 1 doesn't exist
+  vastdata.vms.localproviders:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-lp1"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - ensure test local provider 2 doesn't exist
+  vastdata.vms.localproviders:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-lp2"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Create local provider 1 for duplicate user test
+  vastdata.vms.localproviders:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-lp1"
+    state: present
+  register: lp1
+  when: can_run_tests | bool
+
+- name: Create local provider 2 for duplicate user test
+  vastdata.vms.localproviders:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-lp2"
+    state: present
+  register: lp2
+  when: can_run_tests | bool
+
+- name: Create user with duplicate name in local provider 1
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-duplicate-user"
+    uid: 99901
+    local_provider_id: "{{ lp1.localproviders.id }}"
+    state: present
+  register: user1
+  when: can_run_tests | bool
+
+- name: Verify first user was created
+  ansible.builtin.assert:
+    that:
+      - user1 is changed
+      - user1.users is defined
+      - user1.users.name == test_user_name + '-duplicate-user'
+      - user1.users.uid == 99901
+      - user1.diff is defined
+      - user1.diff.before == {}
+  when: user1 is not skipped
+
+- name: Create user with SAME name in local provider 2 (should create new user, not update)
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-duplicate-user"
+    uid: 99902
+    local_provider_id: "{{ lp2.localproviders.id }}"
+    state: present
+  register: user2
+  when: can_run_tests | bool
+
+- name: Verify second user with same name was created (not updated)
+  ansible.builtin.assert:
+    that:
+      - user2 is changed
+      - user2.users is defined
+      - user2.users.name == test_user_name + '-duplicate-user'
+      - user2.users.uid == 99902
+      - user2.diff is defined
+      - user2.diff.before == {}
+      - user2.diff.after is defined
+    fail_msg: |
+      Regression detected: Module failed to create user with same name in different local provider.
+      The module should support creating users with identical names across different local providers.
+  when: user2 is not skipped
+
+- name: Verify both users exist with different IDs
+  ansible.builtin.assert:
+    that:
+      - user1.users.id != user2.users.id
+    fail_msg: "Both users should have different IDs"
+  when: user1 is not skipped and user2 is not skipped
+
+- name: Test idempotency - recreate user1 in local provider 1
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-duplicate-user"
+    uid: 99901
+    local_provider_id: "{{ lp1.localproviders.id }}"
+    state: present
+  register: user1_idempotent
+  when: can_run_tests | bool
+
+- name: Verify idempotency for user in local provider 1
+  ansible.builtin.assert:
+    that:
+      - not user1_idempotent.changed
+      - user1_idempotent.users.id == user1.users.id
+  when: user1_idempotent is not skipped and user1 is not skipped
+
+- name: Test idempotency - recreate user2 in local provider 2
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-duplicate-user"
+    uid: 99902
+    local_provider_id: "{{ lp2.localproviders.id }}"
+    state: present
+  register: user2_idempotent
+  when: can_run_tests | bool
+
+- name: Verify idempotency for user in local provider 2
+  ansible.builtin.assert:
+    that:
+      - not user2_idempotent.changed
+      - user2_idempotent.users.id == user2.users.id
+  when: user2_idempotent is not skipped and user2 is not skipped
+
+- name: Clean up - delete user from local provider 1
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-duplicate-user"
+    local_provider_id: "{{ lp1.localproviders.id }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - delete user from local provider 2
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-duplicate-user"
+    local_provider_id: "{{ lp2.localproviders.id }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - delete local provider 1
+  vastdata.vms.localproviders:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-lp1"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - delete local provider 2
+  vastdata.vms.localproviders:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-lp2"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# s3_policies_ids Test
+# ====================
+
+- name: Create S3 policy for testing s3_policies_ids
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-s3-policy"
+    policy: |
+      {
+        "Version": "2012-10-17",
+        "Statement": [
+          {
+            "Effect": "Allow",
+            "Action": ["s3:GetObject"],
+            "Resource": ["*"]
+          }
+        ]
+      }
+    tenant_id: 1
+    state: present
+  register: s3_policy
+  when: can_run_tests | bool
+
+- name: Create user with s3_policies_ids
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-s3-user"
+    uid: 88888
+    local_provider_id: 1
+    s3_policies_ids:
+      - "{{ s3_policy.s3policies.id }}"
+    state: present
+  register: user_with_s3_policy
+  when: can_run_tests | bool
+
+- name: Verify user was created with s3_policies_ids
+  ansible.builtin.assert:
+    that:
+      - user_with_s3_policy is changed
+      - user_with_s3_policy.users is defined
+      - user_with_s3_policy.users.s3_policies_ids is defined
+      - s3_policy.s3policies.id in user_with_s3_policy.users.s3_policies_ids
+    fail_msg: "Failed to create user with s3_policies_ids"
+  when: user_with_s3_policy is not skipped and s3_policy is not skipped
+
+- name: Clean up - delete user with s3_policies_ids
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-s3-user"
+    local_provider_id: 1
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - delete S3 policy
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}-s3-policy"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Cleanup
+# ====================
+
+- name: Final cleanup - remove test user if it exists
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_user_name }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping users integration tests - credentials not configured.
+
+      To enable integration tests, set credentials in:
+        tests/integration/integration_config.yml
+
+      Example:
+        vast_vms: "vast-vms.example.com"
+        vast_username: "admin"
+        vast_password: "password"
+
+      Then run: ansible-test integration users -v
+  when: not (can_run_tests | bool)

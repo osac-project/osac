@@ -1,0 +1,29 @@
+---
+# Default variables for tenants integration tests
+# Override these in tests/integration/integration_config.yml
+
+# VAST system connection details
+# Leave empty to skip tests gracefully
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+# Tenant test configuration
+test_tenant_name: "ansible-test-tenant"
+test_tenant_name_updated_alias: "/ansible-test-alias"
+test_tenant_max_views: 10
+test_tenant_max_views_updated: 20
+test_tenant_smb_encryption_state: "OFF"
+test_tenant_smb_encryption_state_updated: "AVAILABLE"
+
+# Reusable connection dict — reference as ``vms: "{{ vms_auth }}"`` in tasks
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true
+
+test_tenant_name_forcedel: "ansible-test-tenant-forcedel"
+test_tenant_forcedel_view_path: "/ansible-test-tenant-forcedel-view"
+test_tenant_forcedel_policy_name: "ansible-test-tenant-forcedel-policy"

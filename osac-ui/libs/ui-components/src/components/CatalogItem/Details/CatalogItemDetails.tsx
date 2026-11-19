@@ -16,6 +16,7 @@ import { useTranslation } from '../../../hooks/useTranslation';
 import {
   type CatalogItem,
   catalogItemEditPath,
+  catalogItemListPath,
   getCatalogCreateActionPath,
 } from '../../catalog/catalogItemDisplay';
 import DeleteResourceButton from '../../Resource/DeleteResourceButton';
@@ -47,6 +48,7 @@ const CatalogItemDetails = ({
   const canManage = canManageCatalogItem(role, tenantId, item);
   const canLaunch = (role === 'tenant-admin' || role === 'tenant-user') && item.published;
   const resourceName = item.metadata?.name || '';
+  const catalogListPath = catalogItemListPath(item);
 
   return (
     <>
@@ -63,7 +65,7 @@ const CatalogItemDetails = ({
                 <ResourceDetailHeader
                   parents={[
                     {
-                      to: '/catalog',
+                      to: catalogListPath,
                       label: t('Catalog'),
                     },
                   ]}

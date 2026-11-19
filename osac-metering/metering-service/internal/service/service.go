@@ -38,6 +38,7 @@ import (
 	"github.com/osac-project/osac-metering/internal/relay"
 	"github.com/osac-project/osac-metering/internal/round"
 	"github.com/osac-project/osac-metering/internal/rules"
+	"github.com/osac-project/osac-metering/internal/topics"
 	"github.com/osac-project/osac-metering/internal/usage"
 )
 
@@ -77,6 +78,11 @@ type Config struct {
 	// it serves for the first time. The retention is the recovery window, because
 	// metering rebuilds its database from the topics.
 	TopicRetentionMS string
+
+	// EventTopicPrefix is the prefix fulfillment prepends to a tenant name to form
+	// that tenant's event topic. Discovery, the fold, and the round all use it.
+	// Empty means the default osac.events. prefix.
+	EventTopicPrefix string
 }
 
 // Service runs the per-tenant loops.
@@ -308,7 +314,7 @@ func (s *Service) Run(ctx context.Context) error {
 	ticker := time.NewTicker(DiscoverInterval)
 	defer ticker.Stop()
 	for {
-		tenants, err := kafkaconn.ListEventTenants(ctx, s.cfg.Kafka)
+		tenants, err := kafkaconn.ListEventTenants(ctx, s.cfg.Kafka, s.cfg.EventTopicPrefix)
 		if err != nil {
 			// A failed listing must not stop the service: the next pass lists again.
 			s.cfg.Logger.Error(err, "listing tenant event topics; retrying on the next pass")
@@ -485,14 +491,45 @@ func (s *Service) pruneDrained() {
 
 // stopGone stops the loops of a tenant whose event topic is gone and deletes its rows.
 // Only several missing passes in a row count, because one listing can be incomplete:
-// a pass that sees the tenant again resets its count.
+// a pass that sees the tenant again resets its count. A prefix change also drops the
+// old topic from the listing. That tenant's stored topic differs from the one the
+// current prefix names, which is a rename, not a deletion, so its rows stay.
 func (s *Service) stopGone(live map[string]bool) {
 	s.lock.Lock()
-	for tenant, loops := range s.tenants {
+	var absent []string
+	for tenant := range s.tenants {
 		if s.stopping {
 			continue
 		}
 		if live[tenant] {
+			delete(s.missing, tenant)
+			continue
+		}
+		absent = append(absent, tenant)
+	}
+	s.lock.Unlock()
+
+	// The progress read stays outside the service lock. A slow database must not
+	// stall the loops that take the same lock.
+	renamed := make(map[string]bool, len(absent))
+	for _, tenant := range absent {
+		renamed[tenant] = s.topicRenamed(tenant)
+	}
+
+	s.lock.Lock()
+	for _, tenant := range absent {
+		if s.stopping {
+			continue
+		}
+		loops, running := s.tenants[tenant]
+		if !running {
+			continue
+		}
+		if live[tenant] {
+			delete(s.missing, tenant)
+			continue
+		}
+		if renamed[tenant] {
 			delete(s.missing, tenant)
 			continue
 		}
@@ -513,6 +550,26 @@ func (s *Service) stopGone(live map[string]bool) {
 		}
 	}
 	s.lock.Unlock()
+}
+
+// topicRenamed reports whether the tenant's stored event topic is a different topic
+// from the one the current prefix names. Discovery lists only the current prefix, so
+// after a prefix change the tenant is missing from the list while its rows still
+// belong to the previous topic. An empty stored topic was written before topics were
+// recorded, so it is not a rename. A failed read is not proof of deletion either:
+// the tenant is kept until a later pass can read the row.
+func (s *Service) topicRenamed(tenant string) bool {
+	progress, err := s.cfg.Store.GetTenantProgress(context.Background(), tenant)
+	if err != nil {
+		// A failed read is not proof the tenant was deleted. Counting it would
+		// erase the billing rows once the database answers again.
+		s.cfg.Logger.Error(err, "reading the stored event topic; keeping the tenant")
+		return true
+	}
+	if progress.EventTopic == "" {
+		return false
+	}
+	return progress.EventTopic != topics.EventTopic(s.cfg.EventTopicPrefix, tenant)
 }
 
 // deleteRows waits for a gone tenant's loops to end, then deletes the tenant's rows.
@@ -538,7 +595,16 @@ func (s *Service) deleteRows(tenant string, loops *tenantLoops) {
 func (s *Service) runTenantLoops(ctx context.Context, tenant string, loops *tenantLoops) {
 	defer close(loops.stopped)
 
-	foldLoop, err := fold.New(s.cfg.Store, s.consumer, s.cfg.Logger.WithValues("loop", "fold"))
+	// Stamp the topic before the round reads the offset. The fold stamps it again.
+	if err := s.cfg.Store.NoteEventTopic(
+		ctx, tenant, topics.EventTopic(s.cfg.EventTopicPrefix, tenant), topics.EventTopic("", tenant),
+	); err != nil {
+		s.cfg.Logger.Error(err, "recording the event topic")
+		loops.fail()
+		return
+	}
+
+	foldLoop, err := fold.New(s.cfg.Store, s.consumer, s.cfg.Logger.WithValues("loop", "fold"), s.cfg.EventTopicPrefix)
 	if err != nil {
 		s.cfg.Logger.Error(err, "creating fold", "tenant", tenant)
 		loops.fail()
@@ -546,7 +612,7 @@ func (s *Service) runTenantLoops(ctx context.Context, tenant string, loops *tena
 	}
 	roundLoop, err := round.New(
 		s.cfg.Store, s.ruleset, s.client, s.consumer,
-		s.cfg.Logger.WithValues("loop", "round"), s.rulesGate,
+		s.cfg.Logger.WithValues("loop", "round"), s.rulesGate, s.cfg.EventTopicPrefix,
 	)
 	if err != nil {
 		s.cfg.Logger.Error(err, "creating round", "tenant", tenant)

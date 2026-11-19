@@ -85,7 +85,6 @@
     - ansible.builtin.assert:
         that:
           - original_dhcp_options_info.dhcp_options | length == 1
-          # dhcp_configurations contains raw AWS API keys (with hyphens), not the normalized underscore keys
           - original_config.keys() | list | sort == ['domain-name', 'domain-name-servers']
           - original_config['domain-name'][0]['value'] == aws_domain_name
           - original_config['domain-name-servers'][0]['value'] == 'AmazonProvidedDNS'
@@ -171,8 +170,7 @@
     - ansible.builtin.assert:
         that:
           - dhcp_options.changed
-          - dhcp_options.dhcp_config is defined
-          # dhcp_config uses hyphenated keys (deprecated, use dhcp_options instead)
+          - dhcp_options.dhcp_config
           - dhcp_options.dhcp_config.keys() | list | sort == ['domain-name', 'domain-name-servers', 'netbios-name-servers', 'netbios-node-type', 'ntp-servers']
           - dhcp_options.dhcp_config['ntp-servers'] | sort == ['10.0.0.2', '10.0.1.2']
           - dhcp_options.dhcp_config['netbios-name-servers'] | sort == ['10.0.0.1', '10.0.1.1']
@@ -180,7 +178,6 @@
           - dhcp_options.dhcp_config['domain-name'] == [aws_domain_name]
           - dhcp_options.dhcp_config['domain-name-servers'] == ['AmazonProvidedDNS']
           # We return the list of dicts that boto gives us, in addition to the user-friendly config dict
-          # dhcp_configurations contains raw AWS API keys (with hyphens)
           - dhcp_options_config['ntp-servers'] | map(attribute='value') | list | sort == ['10.0.0.2', '10.0.1.2']
           - dhcp_options_config['netbios-name-servers'] | map(attribute='value') | list | sort == ['10.0.0.1', '10.0.1.1']
           - dhcp_options_config['netbios-node-type'][0]['value'] == '2'
@@ -201,14 +198,13 @@
 
     - ansible.builtin.assert:
         that:
-          # dhcp_configurations contains raw AWS API keys (with hyphens)
           - new_config.keys() | list | sort == ['domain-name', 'domain-name-servers', 'netbios-name-servers', 'netbios-node-type', 'ntp-servers']
           - new_config['domain-name'][0]['value'] == aws_domain_name
           - new_config['domain-name-servers'][0]['value'] == 'AmazonProvidedDNS'
           - new_config['ntp-servers'] | map(attribute='value') | list | sort == ['10.0.0.2', '10.0.1.2']
           - new_config['netbios-name-servers'] | map(attribute='value') | list | sort == ['10.0.0.1', '10.0.1.1']
           - new_config['netbios-node-type'][0]['value'] == '2'
-          # dhcp_config uses hyphenated keys (deprecated, use dhcp_options instead)
+          # We return the list of dicts that boto gives us, in addition to the user-friendly config dict
           - new_dhcp_options.dhcp_config[0]['ntp-servers'] | sort == ['10.0.0.2', '10.0.1.2']
           - new_dhcp_options.dhcp_config[0]['netbios-name-servers'] | sort == ['10.0.0.1', '10.0.1.1']
           - new_dhcp_options.dhcp_config[0]['netbios-node-type'] == '2'
@@ -277,13 +273,16 @@
     - ansible.builtin.assert:
         that:
           - dhcp_options.changed
-          - dhcp_options.dhcp_config is defined
-          # dhcp_config uses hyphenated keys (deprecated, use dhcp_options instead)
+          - dhcp_options.dhcp_config
           - dhcp_options.dhcp_config.keys() | list | sort == ['netbios-name-servers', 'netbios-node-type', 'ntp-servers']
           - dhcp_options.dhcp_config['ntp-servers'] | sort == ['10.0.0.2', '10.0.1.2']
           - dhcp_options.dhcp_config['netbios-name-servers'] | sort == ['10.0.0.1', '10.0.1.1']
           - dhcp_options.dhcp_config['netbios-node-type'] == '2'
           - original_dhcp_options_id != dhcp_options.dhcp_options_id
+          # We return the list of dicts that boto gives us, in addition to the user-friendly config dict
+          - new_dhcp_options.dhcp_config[0]['ntp-servers'] | sort == ['10.0.0.2', '10.0.1.2']
+          - new_dhcp_options.dhcp_config[0]['netbios-name-servers'] | sort == ['10.0.0.1', '10.0.1.1']
+          - new_dhcp_options.dhcp_config[0]['netbios-node-type'] == '2'
 
     - ansible.builtin.set_fact:
         new_dhcp_options_id: "{{ dhcp_options.dhcp_options_id }}"
@@ -298,7 +297,6 @@
 
     - ansible.builtin.assert:
         that:
-          # dhcp_configurations contains raw AWS API keys (with hyphens)
           - new_config.keys() | list | sort == ['netbios-name-servers', 'netbios-node-type', 'ntp-servers']
           - new_config['ntp-servers'] | map(attribute='value') | list | sort == ['10.0.0.2', '10.0.1.2']
           - new_config['netbios-name-servers'] | map(attribute='value') | list | sort == ['10.0.0.1', '10.0.1.1']
@@ -356,8 +354,7 @@
     - ansible.builtin.assert:
         that:
           - dhcp_options.changed
-          - dhcp_options.dhcp_config is defined
-          # dhcp_config uses hyphenated keys (deprecated, use dhcp_options instead)
+          - dhcp_options.dhcp_config
           - dhcp_options.dhcp_config.keys() | list | sort == ['domain-name', 'domain-name-servers', 'netbios-name-servers', 'netbios-node-type', 'ntp-servers']
           - dhcp_options.dhcp_config['ntp-servers'] | sort == ['10.0.0.2', '10.0.1.2']
           - dhcp_options.dhcp_config['netbios-name-servers'] | sort == ['10.0.0.1', '10.0.1.1']
@@ -378,7 +375,6 @@
 
     - ansible.builtin.assert:
         that:
-          # dhcp_configurations contains raw AWS API keys (with hyphens)
           - new_config.keys() | list | sort == ['domain-name', 'domain-name-servers', 'netbios-name-servers', 'netbios-node-type', 'ntp-servers']
           - new_config['domain-name'][0]['value'] == aws_domain_name
           - new_config['ntp-servers'] | map(attribute='value') | list | sort == ['10.0.0.2', '10.0.1.2']
@@ -433,9 +429,8 @@
 
     - ansible.builtin.assert:
         that:
-          - dhcp_options.dhcp_config is defined
-          # dhcp_config uses hyphenated keys (deprecated, use dhcp_options instead)
-          - dhcp_options.dhcp_config.keys() | list | sort == ['domain-name', 'domain-name-servers']
+          - dhcp_options.dhcp_config
+          - dhcp_options.dhcp_config.keys() | list | sort is superset(['domain-name', 'domain-name-servers'])
           - dhcp_options.dhcp_config['domain-name'] == [aws_domain_name]
           - dhcp_options.dhcp_config['domain-name-servers'] == ['AmazonProvidedDNS']
           - original_dhcp_options_id != dhcp_options.dhcp_options_id
@@ -453,7 +448,6 @@
 
     - ansible.builtin.assert:
         that:
-          # dhcp_configurations contains raw AWS API keys (with hyphens)
           - new_config.keys() | list | sort == ['domain-name', 'domain-name-servers']
           - new_config['domain-name'][0]['value'] == aws_domain_name
           - new_config['domain-name-servers'][0]['value'] == 'AmazonProvidedDNS'
@@ -520,13 +514,11 @@
     - ansible.builtin.assert:
         that:
           - dhcp_options.changed
-          # dhcp_config uses hyphenated keys (deprecated, use dhcp_options instead)
-          - dhcp_options.dhcp_config.keys() | list | sort == ['netbios-name-servers', 'ntp-servers']
+          - dhcp_options.dhcp_config.keys() | list | sort is superset(['ntp-servers', 'netbios-name-servers'])
           - dhcp_options.dhcp_config['ntp-servers'] | sort == ['10.0.0.2', '10.0.1.2']
           - dhcp_options.dhcp_config['netbios-name-servers'] | sort == ['10.0.0.1', '10.0.1.1']
           - original_dhcp_options_id != dhcp_options.dhcp_options_id
           # We return the list of dicts that boto gives us, in addition to the user-friendly config dict
-          # dhcp_configurations contains raw AWS API keys (with hyphens)
           - dhcp_options_config['ntp-servers'] | map(attribute='value') | list | sort == ['10.0.0.2', '10.0.1.2']
           - dhcp_options_config['netbios-name-servers'] | map(attribute='value') | list | sort == ['10.0.0.1', '10.0.1.1']
           - dhcp_options.dhcp_options.tags.keys() | length == 2
@@ -569,7 +561,6 @@
     - ansible.builtin.assert:
         that:
           - not dhcp_options.changed
-          # dhcp_config uses hyphenated keys (deprecated, use dhcp_options instead)
           - dhcp_options.dhcp_config.keys() | list | sort == ['netbios-name-servers', 'ntp-servers']
           - dhcp_options.dhcp_config['netbios-name-servers'] | sort == ['10.0.0.1', '10.0.1.1']
           - dhcp_options.dhcp_config['ntp-servers'] | sort == ['10.0.0.2', '10.0.1.2']
@@ -599,7 +590,6 @@
     - ansible.builtin.assert:
         that:
           - not dhcp_options.changed
-          # dhcp_config uses hyphenated keys (deprecated, use dhcp_options instead)
           - dhcp_options.dhcp_config.keys() | list | sort == ['netbios-name-servers', 'ntp-servers']
           - dhcp_options.dhcp_config['netbios-name-servers'] | sort == ['10.0.0.1', '10.0.1.1']
           - dhcp_options.dhcp_config['ntp-servers'] | sort == ['10.0.0.2', '10.0.1.2']
@@ -631,8 +621,7 @@
     - ansible.builtin.assert:
         that:
           - not dhcp_options.changed
-          # dhcp_config uses hyphenated keys (deprecated, use dhcp_options instead)
-          - dhcp_options.dhcp_config.keys() | list | sort == ['netbios-name-servers', 'ntp-servers']
+          - dhcp_options.dhcp_config.keys() | list | sort is superset(['netbios-name-servers', 'ntp-servers'])
           - dhcp_options.dhcp_config['netbios-name-servers'] | sort == ['10.0.0.1', '10.0.1.1']
           - dhcp_options.dhcp_config['ntp-servers'] | sort == ['10.0.0.2', '10.0.1.2']
 
@@ -659,8 +648,7 @@
     - ansible.builtin.assert:
         that:
           - not dhcp_options.changed
-          # dhcp_config uses hyphenated keys (deprecated, use dhcp_options instead)
-          - dhcp_options.dhcp_config.keys() | list | sort == ['netbios-name-servers', 'ntp-servers']
+          - dhcp_options.dhcp_config.keys() | list | sort is superset(['netbios-name-servers', 'ntp-servers'])
           - dhcp_options.dhcp_config['netbios-name-servers'] | sort == ['10.0.0.1', '10.0.1.1']
           - dhcp_options.dhcp_config['ntp-servers'] | sort == ['10.0.0.2', '10.0.1.2']
           - new_dhcp_options_id == dhcp_options.dhcp_options_id
@@ -695,8 +683,7 @@
     - ansible.builtin.assert:
         that:
           - dhcp_options.changed
-          # dhcp_config uses hyphenated keys (deprecated, use dhcp_options instead)
-          - dhcp_options.dhcp_config.keys() | list | sort == ['netbios-name-servers', 'ntp-servers']
+          - dhcp_options.dhcp_config.keys() | list | sort is superset(['netbios-name-servers', 'ntp-servers'])
           - dhcp_options.dhcp_config['netbios-name-servers'] | sort == ['10.0.0.1', '10.0.1.1']
           - dhcp_options.dhcp_config['ntp-servers'] | sort == ['10.0.0.2', '10.0.1.2']
           - new_dhcp_options_id == dhcp_options.dhcp_options_id

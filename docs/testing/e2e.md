@@ -14,6 +14,7 @@ readiness only.
 |---|---|---|
 | CaaS sanity (`caas/sanity`) | Fulfillment/database, Kubernetes, operators, AAP, HyperShift/CAPI/CAP-Agent, Assisted Service, Kafka/metering | Virtual BMHs prove no physical hardware, guest LVMS, CSI mount or application I/O |
 | VMaaS/BMaaS/storage/reference | Deployed orchestration through Fulfillment, operators, AAP, providers | Need compatible templates, images, providers, credentials; storage E2Es prove orchestration/StorageClass setup, not a CSI PVC-to-mounted-workload path |
+| ExternalIP ownership (`networking/bmaas/test_external_ip_ownership.py`, [QE] [OSAC-6001](https://redhat.atlassian.net/browse/OSAC-6001)) | Deployed BMaaS/Netris E2E checks canonical eligible `ExternalIP.status.address`, matching Fulfillment API status, stored `status.taskInput.resource.id`, pool capacity change, same-resource retry with stable address/capacity, tenant metadata, and safe cleanup. It triggers another task attempt by changing the completed `status.jobs` entry to `Cancelled` with JSON Patch preconditions; the operator reuses the stored input. UID/generation only identify the unchanged Kubernetes snapshot; the Fabric ownership key is the Fulfillment API ID. JUnit records source-declared AAP collection versions, not deployed runtime versions. | Requires [OSAC-5977](https://redhat.atlassian.net/browse/OSAC-5977) deployed, compatible Fulfillment/operator/AAP/Netris, private API and hub access, and a free IPv4 `/30`; the E2E uses no mocks. It verifies OSAC pool accounting and status but cannot read Netris IPAM reservations; provider-side reservation visibility remains under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843). Exact AAP task-envelope/result validation and provider release/idempotency cases belong to OSAC-5977 contract/component coverage. See the [touched-area map](../../tests/e2e/AGENTS.md#touched-area-map). |
 | Service-account regression (`regression`, [QE] [OSAC-6557](https://redhat.atlassian.net/browse/OSAC-6557)) | Deployed Fulfillment and Keycloak: service-account journeys through the real APIs, rotation included | Requires the `full-ci` profile and Keycloak admin credentials; no provider-backed workloads are created |
 | Deployed disk identity (storage regression, [QE] [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614)) | Deployed provisioning through Fulfillment, operator, AAP, and CDI/KubeVirt, and eventual absence of the saved disk records after deletion | Needs compatible storage, tenant networking and private API auth. Does not establish AAP-pending record retention, an exact per-ID Delete request/response order, or pre-feature compatibility; those criteria remain gaps |
 | Metering (VMaaS sanity billing) | Deployed event-to-heartbeat path via API/Kafka/metering and the echo adapter (`METERING_ADAPTER_URL`) | ExternalIP billing lives in the networking billing suite |
@@ -84,3 +85,35 @@ OSAC/operator/installer/AAP revisions and image digests; AAP must resolve the
 tested revision, not mutable `main`/`latest`. Guest LVMS disk prerequisites
 are an unresolved infrastructure follow-up (no revision, owner or Jira URL).
 Do not wipe/reuse the guest OS disk.
+
+## Fulfillment trust enablement
+
+Use the [release trust prerequisites](osac-installer.md#osac-5343-deployed-enablement-coverage)
+and enable `OSAC_FULFILLMENT_TRUST_E2E=true` only in that trust-enabled
+environment. Trust assertions extend CaaS, CSI storage, VMaaS and BMaaS journeys.
+CaaS/CSI checks pass the HostedControlPlane kubeconfig Secret to `kubectl` via
+stdin, never disk. It grants tenant-admin access to compare tenant ConfigMap
+and CSI Deployment hashes with the management bundle; per-ClusterOrder
+observer credentials are not required.
+
+- Run `tests/e2e/enablement/test_installer_trust.py` against a full OSAC Helm
+  release, not an isolated component.
+- From the repository root, run `osac-installer/scripts/test-ui-gateway.sh`
+  against deployed dev-full. Set `OSAC_UI_URL` for a non-default listener host/port.
+- Run `tests/e2e/enablement/test_ca_rotation_gate.py` with
+  `OSAC_TRUST_ROTATION_PHASE=overlap` and candidate
+  `OSAC_TRUST_ROTATION_EXPECTED_HASH` before switching the leaf certificate.
+  Run `OSAC_TRUST_ROTATION_PHASE=post-switch` before removing the retired root,
+  then `OSAC_TRUST_ROTATION_PHASE=final` after removal. Each run requires deployed
+  operator/metering metrics and these leaf-check inputs:
+  - `OSAC_TRUST_OLD_ROOT_PEM_PATH`: path to the old root PEM file.
+  - `OSAC_TRUST_NEW_ROOT_PEM_PATH`: path to the new root PEM file.
+  - `OSAC_TRUST_LEAF_ENDPOINT`: leaf listener as `host:port`, without a URL scheme.
+
+Operator metrics collection runs `kubectl create token` before port-forwarding.
+The caller needs `create` permission on `serviceaccounts/token` for the
+operator deployment's service account in its namespace, in addition to the
+resource-read and port-forward permissions. This TokenRequest is distinct from
+certificate rotation: the gate never mutates CA or leaf certificates. An
+operator or administrator performs rotation between passing gates, following
+the linked release prerequisites.

@@ -289,10 +289,6 @@ nodes:
             description: The reason the node is marked as retired.
             returned: success
             type: str
-        shard:
-            description: The shard key for a node.
-            returned: success
-            type: str
         states:
             description: Links to the collection of states.
             returned: success

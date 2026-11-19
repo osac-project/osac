@@ -97,6 +97,12 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		correlationIDs []string
 	)
 
+	// The scenario lists the substring-only candidate before the exact match, so a resolver that keeps the first
+	// provider match fails instead of passing by accident.
+	accountScenario := func() billingfake.Scenario {
+		return billingfake.Scenario{Accounts: []billingfake.AccountSpec{accounts[1], accounts[0]}}
+	}
+
 	// expectCleanLog checks the grpc-server log of every current pod: the provider was configured, and neither the
 	// credential, the base URL nor the credential path leaked into it.
 	expectCleanLog := func(ctx context.Context) {
@@ -159,7 +165,7 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 			{ID: uuid.New(), Name: "billing-stub-second-" + suffix, ExternalID: "billing-correlation-" + suffix + "-other",
 				RawStatus: "Active", ApprovalStatus: "Approved"},
 		}
-		stub = billingstub.New(billingfake.Scenario{Accounts: accounts})
+		stub = billingstub.New(accountScenario())
 		configureBillingStub(ctx, stub, listen, stubURL)
 	})
 
@@ -169,7 +175,9 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		client := publicv1.NewBillingAccountsClient(tool.ExternalView().AdminConn())
 		var account *publicv1.BillingAccount
 		Eventually(ctx, func(g Gomega) {
-			response, err := client.List(ctx, publicv1.BillingAccountsListRequest_builder{
+			pollCtx, cancel := context.WithTimeout(ctx, billingPollRequestTimeout)
+			defer cancel()
+			response, err := client.List(pollCtx, publicv1.BillingAccountsListRequest_builder{
 				Filter: new(fmt.Sprintf("this.status.display_name == %q", name)),
 			}.Build())
 			g.Expect(err).ToNot(HaveOccurred())
@@ -301,7 +309,9 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		eventuallyStored := func(total int32) {
 			GinkgoHelper()
 			Eventually(ctx, func(g Gomega) {
-				response, err := client.List(ctx, publicv1.BillingAccountsListRequest_builder{
+				pollCtx, cancel := context.WithTimeout(ctx, billingPollRequestTimeout)
+				defer cancel()
+				response, err := client.List(pollCtx, publicv1.BillingAccountsListRequest_builder{
 					Filter: &filter, Limit: new(int32(37)),
 				}.Build())
 				g.Expect(err).ToNot(HaveOccurred())
@@ -374,9 +384,19 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		Expect(stub.Succeeded("ListAccounts")).To(Equal(50))
 		home := newBillingCLI(ctx, newTenant(ctx), false)
 		for _, format := range []string{"table", "json", "yaml"} {
-			stdout, stderr, code := tool.RunCLI(ctx, home, "get", "billingaccounts", "-o", format)
-			Expect(code).ToNot(Equal(0), "stderr: %s", stderr)
-			Expect(stdout).To(BeEmpty(), "failed discovery must not emit partial inventory in %s", format)
+			// The failed API call above opens the deployment's discovery-failure backoff. Poll until a fresh walk is
+			// admitted and prove the stub served that walk for this format instead of passing on UNAVAILABLE.
+			Eventually(ctx, func(g Gomega) {
+				before := stub.Succeeded("ListAccounts")
+				pollCtx, cancel := context.WithTimeout(ctx, billingPollRequestTimeout)
+				defer cancel()
+				stdout, stderr, code := tool.RunCLI(pollCtx, home, "get", "billingaccounts", "-o", format)
+				g.Expect(code).ToNot(Equal(0), "stderr: %s", stderr)
+				g.Expect(stdout).To(BeEmpty(), "failed discovery must not emit partial inventory in %s", format)
+				g.Expect(stderr).To(ContainSubstring("MALFORMED"), "stderr: %s", stderr)
+				g.Expect(stub.Succeeded("ListAccounts")).To(Equal(before+50),
+					"the %s request must serve a fresh oversized provider walk", format)
+			}, time.Minute, time.Second).Should(Succeed())
 		}
 		Expect(stub.Writes()).To(BeEmpty())
 	})
@@ -505,7 +525,7 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 
 	It("persists PENDING without a provider write and connects after external-admin remediation and Update", func(ctx context.Context) {
 		accounts[0].ExternalID = ""
-		stub.SetScenario(billingfake.Scenario{Accounts: accounts})
+		stub.SetScenario(accountScenario())
 		account := findAccount(ctx, accounts[0].Name)
 		Expect(account.GetStatus().GetExternalBillingAccountId()).To(BeEmpty())
 		tenant := newTenant(ctx)
@@ -565,7 +585,7 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		// Simulate the external provider admin, not an OSAC API write. Preserve every native ID, name and state;
 		// only this account's provider-side correlation changes. SetScenario keeps the HTTP request log intact.
 		accounts[0].ExternalID = account.GetStatus().GetExternalBillingAccountId()
-		stub.SetScenario(billingfake.Scenario{Accounts: accounts})
+		stub.SetScenario(accountScenario())
 		persisted, err = client.Get(ctx, publicv1.TenantBillingAssignmentsGetRequest_builder{Id: pending.GetId()}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(persisted.GetObject().GetStatus().GetConnectionState()).To(Equal(pending.GetStatus().GetConnectionState()),

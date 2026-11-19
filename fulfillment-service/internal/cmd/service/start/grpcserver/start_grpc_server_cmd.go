@@ -569,12 +569,24 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return fmt.Errorf("failed to create JIT provisioning interceptor: %w", err)
 	}
 
+	// Resolve the billing provider once; this makes no provider call. It is resolved before the
+	// interceptor chain so that billing availability can be reported ahead of request validation:
+	billingProvider := newBillingProvider(os.Getenv, os.ReadFile, c.logger)
+
 	// Prepare the reference validation interceptor:
 	c.logger.InfoContext(ctx, "Creating reference validation interceptor")
 	referenceValidator, err := newReferenceValidator(c.logger, tenancyLogic, metricsRegisterer)
 	if err != nil {
 		return err
 	}
+
+	// Fail provider-dependent billing methods with the stable availability error before reference
+	// resolution. A disabled deployment must report BILLING_NOT_CONFIGURED even when the request names
+	// an account that cannot be resolved.
+	billingAvailabilityInterceptor := servers.NewBillingAvailabilityInterceptor(
+		billingProvider,
+		billingAssignmentMethods()...,
+	)
 
 	// Prepare the transactions manager:
 	c.logger.InfoContext(ctx, "Creating transactions manager")
@@ -651,6 +663,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 			authnInterceptor.UnaryServer,
 			authzInterceptor.UnaryServer,
 			jitProvisioningInterceptor.UnaryServer,
+			billingAvailabilityInterceptor,
 			referenceValidator.UnaryServer,
 		),
 		grpc.ChainStreamInterceptor(
@@ -699,9 +712,6 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	if err != nil {
 		return fmt.Errorf("failed to create public attribution logic: %w", err)
 	}
-
-	// Resolve the billing provider once; this makes no provider call:
-	billingProvider := newBillingProvider(os.Getenv, os.ReadFile, c.logger)
 
 	// Create the billing provider statuses servers:
 	c.logger.InfoContext(ctx, "Creating billing provider statuses servers")

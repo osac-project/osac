@@ -246,17 +246,22 @@ var _ = Describe("Service-account tenant liveness at creation", func() {
 					_, err := tenants.Create(c, privatev1.TenantsCreateRequest_builder{
 						Object: privatev1.Tenant_builder{Metadata: privatev1.Metadata_builder{Name: tenant}.Build()}.Build(),
 					}.Build())
-					Expect(err).NotTo(HaveOccurred())
+					return nil, err
+				})
+				Expect(status.Code(err)).To(Equal(codes.FailedPrecondition),
+					"an unbilled finalized deletion permanently reserves the name")
+				Expect(status.Convert(err).Message()).To(Equal("tenant name is reserved by a previous deleted tenant"))
+				unchanged, err := database.WithNewTx(ctx, func(c context.Context) (database.DeletedTenantIdentity, error) {
 					unchanged, found, err := database.GetDeletedTenantIdentity(c, tenant)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(found).To(BeTrue())
-					Expect(unchanged).To(Equal(marker))
-					return createAccount(c, tenant)
+					return unchanged, err
 				})
-				Expect(err).NotTo(HaveOccurred(), "revocation is not a permanent unbilled name ban")
+				Expect(err).NotTo(HaveOccurred())
+				Expect(unchanged).To(Equal(marker), "the rejected create must not replace the marker")
 				liveNames, err = database.ResolveLiveTenantNames(ctx, []string{tenant})
 				Expect(err).NotTo(HaveOccurred())
-				Expect(liveNames).To(Equal([]string{tenant}))
+				Expect(liveNames).To(BeEmpty(), "the reserved name must not re-enter scope")
 			}
 		},
 		Entry("billed direct deletion", false, false, true),

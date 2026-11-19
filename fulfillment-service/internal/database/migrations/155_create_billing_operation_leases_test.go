@@ -23,7 +23,7 @@ import (
 
 var _ = DescribeMigration("Create billing operation leases", func() {
 	It("creates guarded unique digest keys", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 152)).To(Succeed())
+		Expect(tool.Migrate(ctx, 155)).To(Succeed())
 		key := strings.Repeat("a", 64)
 		_, err := conn.Exec(ctx, `insert into billing_operation_leases values ($1, 'owner', now())`, key)
 		Expect(err).ToNot(HaveOccurred())

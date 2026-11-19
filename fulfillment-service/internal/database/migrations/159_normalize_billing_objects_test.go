@@ -19,12 +19,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net/url"
 	"time"
 
+	migratedb "github.com/golang-migrate/migrate/v4/database"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 )
 
 var invalidBillingTimestamps = []string{
@@ -50,7 +55,7 @@ var _ = DescribeMigration("Normalize billing objects", func() {
 	BeforeEach(func(ctx context.Context) {
 		var version int
 		Expect(conn.QueryRow(ctx, `select version from schema_migrations`).Scan(&version)).To(Succeed())
-		Expect(version).To(Equal(156))
+		Expect(version).To(Equal(158))
 		_, err := conn.Exec(ctx, `
 			insert into tenants (id, name, tenant, data) values
 				('tenant', 'tenant', 'tenant', '{}'), ('other-tenant', 'other-tenant', 'other-tenant', '{}');
@@ -88,6 +93,28 @@ var _ = DescribeMigration("Normalize billing objects", func() {
 		Expect(conn.QueryRow(ctx, `select jsonb_agg(jsonb_build_array(id, name, tenant_id, billing_account_id,
 			effective_from, effective_to, connection_state, message, creation_timestamp, creator) order by id)::text
 			from tenant_billing_assignments`).Scan(&result)).To(Succeed())
+		return result
+	}
+	// Everything this migration could add: columns, constraints, indexes, projection functions and triggers.
+	schemaSnapshot := func(ctx context.Context) string {
+		GinkgoHelper()
+		var result string
+		Expect(conn.QueryRow(ctx, `select jsonb_build_array(
+			(select jsonb_agg(t order by table_name, ordinal_position) from information_schema.columns t
+			 where table_schema = 'public' and table_name in ('billing_accounts', 'tenant_billing_assignments')),
+			(select jsonb_agg(t order by conname) from pg_constraint t
+			 where connamespace = 'public'::regnamespace
+			 and conrelid in ('billing_accounts'::regclass, 'tenant_billing_assignments'::regclass)),
+			(select jsonb_agg(t order by indexname) from pg_indexes t
+			 where schemaname = 'public' and tablename in ('billing_accounts', 'tenant_billing_assignments')),
+			(select jsonb_agg(jsonb_build_array(proname, pg_get_function_identity_arguments(oid)) order by proname)
+			 from pg_proc where pronamespace = 'public'::regnamespace
+			 and proname in ('project_billing_account', 'project_tenant_billing_assignment',
+			   'project_billing_timestamp')),
+			(select jsonb_agg(jsonb_build_array(tgname, tgrelid::regclass::text) order by tgname, tgrelid::regclass::text)
+			 from pg_trigger where not tgisinternal
+			 and tgrelid in ('billing_accounts'::regclass, 'tenant_billing_assignments'::regclass))
+		)::text`).Scan(&result)).To(Succeed())
 		return result
 	}
 	// This deliberately writes the standard DAO column set, not the legacy business columns.
@@ -146,7 +173,7 @@ var _ = DescribeMigration("Normalize billing objects", func() {
 
 	It("preserves every predecessor value and backfills truthful canonical metadata and payloads", func(ctx context.Context) {
 		accounts, assignments := legacyAccounts(ctx), legacyAssignments(ctx)
-		Expect(tool.Migrate(ctx, 156)).To(Succeed())
+		Expect(tool.Migrate(ctx, 159)).To(Succeed())
 		Expect(legacyAccounts(ctx)).To(Equal(accounts))
 		Expect(legacyAssignments(ctx)).To(Equal(assignments))
 		var count int
@@ -182,7 +209,7 @@ var _ = DescribeMigration("Normalize billing objects", func() {
 	})
 
 	It("projects standard-column writes one way, preserves raw tokens and owns new creation defaults", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 156)).To(Succeed())
+		Expect(tool.Migrate(ctx, 159)).To(Succeed())
 		for _, id := range []string{"new", "é/immutable-id"} {
 			_, err := conn.Exec(ctx, insertAccount, id, accountName(id), accountData(id, nil))
 			Expect(err).ToNot(HaveOccurred())
@@ -209,7 +236,7 @@ var _ = DescribeMigration("Normalize billing objects", func() {
 	})
 
 	It("retains the legacy raw uniqueness constraint identity for every present token and permits multiple absent tokens", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 156)).To(Succeed())
+		Expect(tool.Migrate(ctx, 159)).To(Succeed())
 		for _, token := range []string{"ext-1", " ext-1 ", "", " \t "} {
 			reject(ctx, "23505", "billing_accounts_unique_correlation_id", insertAccount,
 				"duplicate", accountName("duplicate"), accountData("duplicate", &token))
@@ -230,7 +257,7 @@ var _ = DescribeMigration("Normalize billing objects", func() {
 	})
 
 	It("retains both current-interval indexes, account and live-history tenant foreign keys, and same-name history", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 156)).To(Succeed())
+		Expect(tool.Migrate(ctx, 159)).To(Succeed())
 		reject(ctx, "23505", "tenant_billing_assignments_unique_active_tenant", insertAssignment,
 			"duplicate-tenant", "tenant", assignmentData("tenant", "padded", ""))
 		reject(ctx, "23505", "tenant_billing_assignments_unique_active_account", insertAssignment,
@@ -265,7 +292,7 @@ var _ = DescribeMigration("Normalize billing objects", func() {
 	})
 
 	It("enforces canonical owner/reference tuples, valid intervals and immutable closed history", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 156)).To(Succeed())
+		Expect(tool.Migrate(ctx, 159)).To(Succeed())
 		reject(ctx, "23514", "", insertAssignment, "inverted", "other-tenant",
 			assignmentData("other-tenant", "padded", "2026-02-01T00:00:00Z"))
 		reject(ctx, "23514", "", insertAssignment, "wrong-owner", "other-tenant", assignmentData("tenant", "padded", ""))
@@ -285,7 +312,7 @@ var _ = DescribeMigration("Normalize billing objects", func() {
 	})
 
 	It("rejects historical deletion and noncanonical JSON field types without converting their values", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 156)).To(Succeed())
+		Expect(tool.Migrate(ctx, 159)).To(Succeed())
 		reject(ctx, "23514", "", `delete from tenant_billing_assignments where id = 'closed'`)
 		reject(ctx, "23514", "", `delete from tenant_billing_assignments where id = 'current'`)
 		for _, value := range []string{`1`, `"ACTIVE"`, `null`} {
@@ -299,7 +326,7 @@ var _ = DescribeMigration("Normalize billing objects", func() {
 	})
 
 	It("rejects noncanonical or inexact interval endpoints on insert and update", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 156)).To(Succeed())
+		Expect(tool.Migrate(ctx, 159)).To(Succeed())
 		const insert = `insert into tenant_billing_assignments (id, name, tenant, creator, annotations, data)
 			values ('timestamp-check', 'same-name', 'other-tenant', 'request-principal',
 				'{"osac.openshift.io/tenant":"other-tenant"}', jsonb_set($1::jsonb, $2::text[], to_jsonb($3::text)))`
@@ -325,7 +352,7 @@ var _ = DescribeMigration("Normalize billing objects", func() {
 	})
 
 	It("projects exactly representable interval endpoints without rewriting JSON", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 156)).To(Succeed())
+		Expect(tool.Migrate(ctx, 159)).To(Succeed())
 		_, err := conn.Exec(ctx, insertAssignment, "exact", "other-tenant", assignmentData("other-tenant", "padded", ""))
 		Expect(err).NotTo(HaveOccurred())
 		var open bool
@@ -345,7 +372,7 @@ var _ = DescribeMigration("Normalize billing objects", func() {
 	})
 
 	It("uses lifecycle-active companions including closed history, never interval-currentness", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 156)).To(Succeed())
+		Expect(tool.Migrate(ctx, 159)).To(Succeed())
 		var ids []string
 		Expect(conn.QueryRow(ctx, `select array_agg(id order by id) from active_tenant_billing_assignments`).Scan(&ids)).To(Succeed())
 		Expect(ids).To(Equal([]string{"closed", "current"}))
@@ -357,7 +384,7 @@ var _ = DescribeMigration("Normalize billing objects", func() {
 	})
 
 	It("keeps billing writes unpublished while an existing nonbilling enqueue trigger commits and rolls back", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 156)).To(Succeed())
+		Expect(tool.Migrate(ctx, 159)).To(Succeed())
 		var before, after int
 		Expect(conn.QueryRow(ctx, `select count(*) from changes`).Scan(&before)).To(Succeed())
 		_, err := conn.Exec(ctx, insertAccount, "unpublished", accountName("unpublished"), accountData("unpublished", nil))
@@ -390,10 +417,74 @@ var _ = DescribeMigration("Normalize billing objects", func() {
 		Expect(tool.CheckSchema(ctx)).To(Succeed())
 	})
 
+	It("bounds its lock wait, leaves the predecessor intact and retries after a confirmed reset", func(ctx context.Context) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		accounts, assignments, before := legacyAccounts(ctx), legacyAssignments(ctx), schemaSnapshot(ctx)
+
+		// Tool.Migrate opens its own connection and the driver doesn't use the caller's context.
+		// Bound it independently so a regression fails while the reader still holds its lock.
+		migrationURL, err := url.Parse(tool.URL())
+		Expect(err).NotTo(HaveOccurred())
+		params := migrationURL.Query()
+		params.Set("connect_timeout", "5")
+		params.Set("statement_timeout", "15000")
+		params.Set("x-statement-timeout", "20000")
+		migrationURL.RawQuery = params.Encode()
+		boundedTool, err := database.NewTool().SetLogger(logger).SetURL(migrationURL.String()).Build()
+		Expect(err).NotTo(HaveOccurred())
+
+		reader, err := conn.Begin(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func(ctx context.Context) {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if err := reader.Rollback(ctx); !errors.Is(err, pgx.ErrTxClosed) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
+		// ACCESS SHARE is enough to conflict with the ACCESS EXCLUSIVE lock the migration acquires first.
+		_, err = reader.Exec(ctx, `lock table tenant_billing_assignments in access share mode`)
+		Expect(err).NotTo(HaveOccurred())
+
+		err = boundedTool.Migrate(ctx, 159)
+		var migrationErr migratedb.Error
+		Expect(errors.As(err, &migrationErr)).To(BeTrue(), "expected a PostgreSQL migration error, got %v", err)
+		var pgErr *pgconn.PgError
+		Expect(errors.As(migrationErr.OrigErr, &pgErr)).To(BeTrue())
+		Expect(pgErr.Code).To(Equal("55P03"))
+		Expect(pgErr.Message).To(ContainSubstring("Drain readers and writers"))
+		Expect(pgErr.Detail).To(ContainSubstring("After confirming rollback"))
+		Expect(pgErr.Detail).To(ContainSubstring("reset the dirty migration version to 158"))
+		Expect(reader.Rollback(ctx)).To(Succeed())
+
+		var version int
+		var dirty, intact bool
+		Expect(conn.QueryRow(ctx, `select version, dirty from schema_migrations`).Scan(&version, &dirty)).To(Succeed())
+		Expect(version).To(Equal(159))
+		Expect(dirty).To(BeTrue())
+		Expect(conn.QueryRow(ctx, `select to_regclass('active_billing_accounts') is null
+			and to_regprocedure('project_billing_account()') is null`).Scan(&intact)).To(Succeed())
+		Expect(intact).To(BeTrue(), "the failed migration must not publish any partial object")
+		Expect(schemaSnapshot(ctx)).To(Equal(before))
+		Expect(legacyAccounts(ctx)).To(Equal(accounts))
+		Expect(legacyAssignments(ctx)).To(Equal(assignments))
+
+		// The diagnostic reset is only valid because the failed transaction rolled back; apply it and retry.
+		_, err = conn.Exec(ctx, `update schema_migrations set version = 158, dirty = false`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(tool.Migrate(ctx, 159)).To(Succeed())
+		Expect(conn.QueryRow(ctx, `select version, dirty from schema_migrations`).Scan(&version, &dirty)).To(Succeed())
+		Expect(version).To(Equal(159))
+		Expect(dirty).To(BeFalse())
+		Expect(legacyAccounts(ctx)).To(Equal(accounts))
+		Expect(legacyAssignments(ctx)).To(Equal(assignments))
+	})
+
 	DescribeTable("fails rather than fabricating unrepresentable predecessor data", func(ctx context.Context, query string) {
 		_, err := conn.Exec(ctx, query)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(tool.Migrate(ctx, 156)).ToNot(Succeed())
+		Expect(tool.Migrate(ctx, 159)).ToNot(Succeed())
 	},
 		Entry("unknown provider state", `update billing_accounts set state = 'RAW_PROVIDER_STATE' where id = 'absent'`),
 		Entry("empty OSAC identity", `update billing_accounts set id = '' where id = 'absent'`),

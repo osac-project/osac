@@ -186,6 +186,11 @@ func (s *TenantBillingAssignmentsServer) Create(ctx context.Context,
 		return nil, err
 	}
 	defer tx.ReportError(&err)
+	// Report billing availability before any caller-controlled validation, matching Update, so a disabled
+	// deployment returns the same reason for every provider-dependent request.
+	if _, err := requireAdapter(s.private.provider); err != nil {
+		return nil, err
+	}
 	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
 		return nil, err
 	}

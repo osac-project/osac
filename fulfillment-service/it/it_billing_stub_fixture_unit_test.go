@@ -29,6 +29,98 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
+// TestBillingStubSetupConflict separates a definite Kubernetes rejection of the setup update from an ambiguous
+// failure. A conflict did not commit the fixture, so it can be retried from a fresh read or cleaned up through the
+// normal reference-checked Secret deletion; a timeout may still commit and keeps the conservative retention covered
+// by TestBillingStubFixtureCleanup.
+func TestBillingStubSetupConflict(t *testing.T) {
+	const secretName = "billing-fixture-setup-conflict-secret"
+	for _, tc := range []struct {
+		name         string
+		conflicts    int
+		acknowledged bool
+		rejected     bool
+		setupUpdates int
+	}{
+		{
+			name: "retries a conflicting setup update from a fresh read", conflicts: 1,
+			acknowledged: true, setupUpdates: 2,
+		},
+		{
+			name: "cleans up after exhausted definite setup conflicts", conflicts: 100, rejected: true,
+			setupUpdates: minSetupUpdateAttempts,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := NewWithT(t)
+			ctx := t.Context()
+			key := billingDeploymentKey()
+			replicas := int32(1)
+			deployment := &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, UID: "deployment", Generation: 1},
+				Spec: appsv1.DeploymentSpec{Replicas: &replicas, Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: billingStubContainer, Image: "original"}}},
+				}},
+				Status: appsv1.DeploymentStatus{ObservedGeneration: 1, UpdatedReplicas: 1, Replicas: 1, AvailableReplicas: 1},
+			}
+			patch := &billingStubPatch{
+				owner:   "fixture-run",
+				volumes: []corev1.Volume{{Name: "stub", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: secretName}}}},
+				mounts:  []corev1.VolumeMount{{Name: "stub", MountPath: "/stub", ReadOnly: true}},
+				env:     []corev1.EnvVar{{Name: "OSAC_BILLING_PROVIDER", Value: "m360"}},
+			}
+			secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+				Name: secretName, Namespace: key.Namespace, UID: "secret", Annotations: map[string]string{billingStubOwner: patch.owner},
+			}}
+			base := fake.NewClientBuilder().WithObjects(deployment, secret).Build()
+			remaining, updates := tc.conflicts, 0
+			kube := interceptor.NewClient(base, interceptor.Funcs{
+				Update: func(ctx context.Context, c crclient.WithWatch, obj crclient.Object, opts ...crclient.UpdateOption) error {
+					if _, deployment := obj.(*appsv1.Deployment); !deployment {
+						return c.Update(ctx, obj, opts...)
+					}
+					updates++
+					if remaining == 0 {
+						return c.Update(ctx, obj, opts...)
+					}
+					remaining--
+					// A concurrent writer changes the Deployment before the API server rejects our stale update.
+					latest := &appsv1.Deployment{}
+					g.Expect(c.Get(ctx, key, latest)).To(Succeed())
+					latest.Spec.Template.Spec.Containers[0].Image = "updated-concurrently"
+					g.Expect(c.Update(ctx, latest)).To(Succeed())
+					return apierrors.NewConflict(appsv1.Resource("deployments"), key.Name, errors.New("conflict"))
+				},
+			})
+
+			current := &appsv1.Deployment{}
+			g.Expect(kube.Get(ctx, key, current)).To(Succeed())
+			g.Expect(patch.apply(current)).To(Succeed())
+			err := patch.updateDeployment(ctx, kube, current)
+			if tc.acknowledged {
+				g.Expect(err).ToNot(HaveOccurred())
+			} else {
+				g.Expect(apierrors.IsConflict(err)).To(BeTrue(), "setup update error: %v", err)
+			}
+			g.Expect(patch.deploymentUpdateAcknowledged).To(Equal(tc.acknowledged))
+			g.Expect(patch.deploymentSetupRejected).To(Equal(tc.rejected))
+			g.Expect(updates).To(Equal(tc.setupUpdates))
+
+			g.Expect(patch.cleanup(ctx, kube, []*corev1.Secret{secret.DeepCopy()})).To(Succeed())
+			latest := &appsv1.Deployment{}
+			g.Expect(base.Get(ctx, key, latest)).To(Succeed())
+			g.Expect(latest.Spec.Template.Annotations).NotTo(HaveKey(billingStubOwner))
+			g.Expect(latest.Spec.Template.Spec.Volumes).To(BeEmpty())
+			g.Expect(latest.Spec.Template.Spec.Containers[0].Image).To(Equal("updated-concurrently"),
+				"a concurrent writer's change must survive setup retry and cleanup")
+			g.Expect(apierrors.IsNotFound(base.Get(ctx, crclient.ObjectKeyFromObject(secret), &corev1.Secret{}))).To(BeTrue())
+		})
+	}
+}
+
+// minSetupUpdateAttempts is the number of times RetryOnConflict calls the setup update with the default retry.
+const minSetupUpdateAttempts = 5
+
 // This is a plain Go test so selecting it does not start the deployed Ginkgo suite.
 func TestBillingStubFixtureCleanup(t *testing.T) {
 	const secretName = "billing-fixture-test-secret"

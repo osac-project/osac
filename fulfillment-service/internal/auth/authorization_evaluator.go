@@ -86,9 +86,6 @@ type AuthContext struct {
 	Tenant string
 	// Name of the object requested by the incoming authorization request, currently only used for project operations.
 	Name string
-	// projectMembershipCreatePending indicates an eligibility check before placement.
-	// The public handler must authorize the final, locked tenant and project separately.
-	projectMembershipCreatePending bool
 
 	// Managed service-account candidate claims are signed JWT inputs. Authorization
 	// is granted only after resolving the client against current Fulfillment state.
@@ -115,9 +112,6 @@ func ContextExtensionToMap(authContext *AuthContext) map[string]any {
 	}
 	if authContext.Project != "" {
 		m["project"] = authContext.Project
-	}
-	if authContext.projectMembershipCreatePending {
-		m["project_membership_create_pending"] = true
 	}
 	return m
 }

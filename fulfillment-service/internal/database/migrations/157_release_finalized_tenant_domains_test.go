@@ -71,7 +71,7 @@ var _ = DescribeMigration("Release finalized tenant domains", func() {
 	It("repairs only completed tombstones and preserves tenant text and closed billing history", func(ctx context.Context) {
 		before := history(ctx)
 		Expect(owners(ctx)).To(HaveLen(3))
-		Expect(tool.Migrate(ctx, 154)).To(Succeed())
+		Expect(tool.Migrate(ctx, 157)).To(Succeed())
 		Expect(owners(ctx)).To(Equal([]string{"live.example.com:live", "pending.example.com:pending"}))
 		Expect(history(ctx)).To(Equal(before))
 	})
@@ -107,7 +107,7 @@ var _ = DescribeMigration("Release finalized tenant domains", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(tag.RowsAffected()).To(Equal(int64(1)))
 
-		err = boundedTool.Migrate(ctx, 154)
+		err = boundedTool.Migrate(ctx, 157)
 		var migrationErr migratedb.Error
 		Expect(errors.As(err, &migrationErr)).To(BeTrue(), "expected a PostgreSQL migration error, got %v", err)
 		var pgErr *pgconn.PgError
@@ -120,7 +120,7 @@ var _ = DescribeMigration("Release finalized tenant domains", func() {
 		var version int
 		var dirty bool
 		Expect(conn.QueryRow(ctx, `select version, dirty from schema_migrations`).Scan(&version, &dirty)).To(Succeed())
-		Expect(version).To(Equal(155))
+		Expect(version).To(Equal(157))
 		Expect(dirty).To(BeTrue())
 		Expect(function(ctx)).To(Equal(beforeFunction))
 		Expect(owners(ctx)).To(Equal(beforeOwners))
@@ -128,7 +128,7 @@ var _ = DescribeMigration("Release finalized tenant domains", func() {
 	})
 
 	It("holds reservations through cleanup, rolls back release, and never re-reserves a completed tombstone", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 154)).To(Succeed())
+		Expect(tool.Migrate(ctx, 157)).To(Succeed())
 		_, err := conn.Exec(ctx, `insert into tenants (id, name, tenant, data)
 			values ('collision', 'collision', 'collision', '{"spec":{"domains":["pending.example.com"]}}')`)
 		var pgErr *pgconn.PgError
@@ -137,7 +137,13 @@ var _ = DescribeMigration("Release finalized tenant domains", func() {
 
 		tx, err := conn.Begin(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func(ctx context.Context) { _ = tx.Rollback(ctx) })
+		DeferCleanup(func(ctx context.Context) {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if err := tx.Rollback(ctx); !errors.Is(err, pgx.ErrTxClosed) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
 		_, err = tx.Exec(ctx, `update tenants set finalizers = '{}' where id = 'pending'`)
 		Expect(err).ToNot(HaveOccurred())
 		var count int
@@ -161,7 +167,7 @@ var _ = DescribeMigration("Release finalized tenant domains", func() {
 	})
 
 	It("retains the forward materializer and never restores completed reservations", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 154)).To(Succeed())
+		Expect(tool.Migrate(ctx, 157)).To(Succeed())
 		beforeFunction, beforeOwners, beforeHistory := function(ctx), owners(ctx), history(ctx)
 		Expect(beforeFunction).To(ContainSubstring("cardinality(new.finalizers)"))
 		_, err := conn.Exec(ctx, `update tenants set data = data where id = 'complete'`)
@@ -172,14 +178,20 @@ var _ = DescribeMigration("Release finalized tenant domains", func() {
 	})
 
 	It("rolls back a failed reservation transaction after domain reuse without changing ownership, history or trigger", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 154)).To(Succeed())
+		Expect(tool.Migrate(ctx, 157)).To(Succeed())
 		_, err := conn.Exec(ctx, `insert into tenants (id, name, tenant, data)
 			values ('replacement', 'replacement', 'replacement', '{"spec":{"domains":["complete.example.com"]}}')`)
 		Expect(err).ToNot(HaveOccurred())
 		beforeFunction, beforeOwners, beforeHistory := function(ctx), owners(ctx), history(ctx)
 		tx, err := conn.Begin(ctx)
 		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(func(ctx context.Context) { _ = tx.Rollback(ctx) })
+		DeferCleanup(func(ctx context.Context) {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if err := tx.Rollback(ctx); !errors.Is(err, pgx.ErrTxClosed) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
 		_, err = tx.Exec(ctx, `update tenants set finalizers = '{}' where id = 'pending';
 			insert into tenants (id, name, tenant, data)
 			values ('blocked', 'blocked', 'blocked', '{"spec":{"domains":["live.example.com"]}}')`)

@@ -18,13 +18,11 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -46,7 +44,7 @@ type ProjectMembershipsServer struct {
 	publicv1.UnimplementedProjectMembershipsServer
 
 	logger    *slog.Logger
-	delegate  *PrivateProjectMembershipsServer
+	delegate  privatev1.ProjectMembershipsServer
 	inMapper  *GenericMapper[*publicv1.ProjectMembership, *privatev1.ProjectMembership]
 	outMapper *GenericMapper[*privatev1.ProjectMembership, *publicv1.ProjectMembership]
 }
@@ -222,9 +220,7 @@ func (s *ProjectMembershipsServer) Create(ctx context.Context,
 
 	privateRequest := &privatev1.ProjectMembershipsCreateRequest{}
 	privateRequest.SetObject(privateProjectMembership)
-	var privateResponse *privatev1.ProjectMembershipsCreateResponse
-	err = s.delegate.generic.CreateWithCandidatePreparation(withPublicAPIView(ctx), privateRequest, &privateResponse,
-		s.authorizeCreateCandidate)
+	privateResponse, err := s.delegate.Create(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
@@ -245,48 +241,6 @@ func (s *ProjectMembershipsServer) Create(ctx context.Context,
 	response = &publicv1.ProjectMembershipsCreateResponse{}
 	response.SetObject(createdPublicProjectMembership)
 	return
-}
-
-func (s *ProjectMembershipsServer) authorizeCreateCandidate(ctx context.Context, _, candidate *privatev1.ProjectMembership) error {
-	metadata := candidate.GetMetadata()
-	denied := grpcstatus.Error(grpccodes.PermissionDenied, "permission denied")
-	if metadata.GetTenant() == "" || metadata.GetProject() == "" {
-		return denied
-	}
-	tx, err := database.TxFromContext(ctx)
-	if err != nil {
-		return s.membershipTargetLookupError(ctx, err)
-	}
-	// Take the tenant row before the project row, matching the create path's tenant
-	// lock order. We never take the tenant identity key after JIT may have locked
-	// the row. SHARE conflicts with both deletion marking and physical removal;
-	// locking an absent tenant is unnecessary because no grant is possible then.
-	var live bool
-	err = tx.QueryRow(ctx, `select deletion_timestamp = 'epoch' from tenants where name = $1 for share`,
-		metadata.GetTenant()).Scan(&live)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !live) {
-		return denied
-	}
-	if err != nil {
-		return s.membershipTargetLookupError(ctx, err)
-	}
-
-	var project string
-	err = tx.QueryRow(ctx, `select name::text, deletion_timestamp = 'epoch' from projects
-		where tenant = $1 and name = $2::text::ltree for share`,
-		metadata.GetTenant(), metadata.GetProject()).Scan(&project, &live)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !live) {
-		return denied
-	}
-	if err != nil {
-		return s.membershipTargetLookupError(ctx, err)
-	}
-	return auth.AuthorizeProjectMembershipCreate(ctx, metadata.GetTenant(), project)
-}
-
-func (s *ProjectMembershipsServer) membershipTargetLookupError(ctx context.Context, err error) error {
-	s.logger.ErrorContext(ctx, "Failed to lock project membership target", slog.Any("error", err))
-	return grpcstatus.Error(grpccodes.Internal, "failed to authorize project membership target")
 }
 
 func (s *ProjectMembershipsServer) Update(ctx context.Context,

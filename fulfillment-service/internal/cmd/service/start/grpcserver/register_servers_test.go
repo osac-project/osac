@@ -412,6 +412,8 @@ var _ = Describe("Production request transaction boundary", func() {
 			Expect(err).ToNot(HaveOccurred())
 			refs, err := newReferenceValidator(logger, realTenancy, registry)
 			Expect(err).ToNot(HaveOccurred())
+			billingAvailability := servers.NewBillingAvailabilityInterceptor(provider,
+				billingAssignmentMethods()...)
 			tx, err := database.NewTxInterceptor().SetLogger(logger).SetManager(manager).Build()
 			Expect(err).ToNot(HaveOccurred())
 			panicInterceptor, err := recovery.NewGrpcPanicInterceptor().SetLogger(logger).Build()
@@ -425,7 +427,7 @@ var _ = Describe("Production request transaction boundary", func() {
 			server := itesting.NewServer(grpc.ChainUnaryInterceptor(
 				panicInterceptor.UnaryServer, metricsInterceptor.UnaryServer, loggingInterceptor.UnaryServer,
 				validationInterceptor.UnaryServer, tx.UnaryServer, authn.UnaryServer,
-				authz.UnaryServer, jit.UnaryServer, refs.UnaryServer,
+				authz.UnaryServer, jit.UnaryServer, billingAvailability, refs.UnaryServer,
 			))
 			DeferCleanup(server.Stop)
 			_, err = RegisterResourceServers(ctx, server.Registrar(), ResourceServerDeps{
@@ -546,11 +548,11 @@ var _ = Describe("Production request transaction boundary", func() {
 					id := "current"
 					state := privatev1.TenantBillingAssignmentStatus_builder{
 						ConnectionState:        privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED,
-						EffectiveFromTimestamp: timestamppb.New(time.Now().Add(-time.Hour)),
+						EffectiveFromTimestamp: timestamppb.New(time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)),
 					}.Build()
 					if historical {
 						id = "historical"
-						state.SetEffectiveToTimestamp(timestamppb.New(time.Now().Add(-time.Minute)))
+						state.SetEffectiveToTimestamp(timestamppb.New(time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)))
 					}
 					_, err = assignments.Create().SetObject(privatev1.TenantBillingAssignment_builder{Id: id,
 						Metadata: privatev1.Metadata_builder{Name: id, Tenant: foreignTenant, Creator: "fixture",
@@ -588,6 +590,31 @@ var _ = Describe("Production request transaction boundary", func() {
 			}.Build())
 			return err
 		}
+		create := func(identity context.Context, private bool, name, tenant, account, accountName string) error {
+			GinkgoHelper()
+			if private {
+				_, err := privatev1.NewTenantBillingAssignmentsClient(client).Create(identity, privatev1.TenantBillingAssignmentsCreateRequest_builder{
+					Object: privatev1.TenantBillingAssignment_builder{
+						Metadata: privatev1.Metadata_builder{Name: name, Tenant: tenant}.Build(),
+						Spec: privatev1.TenantBillingAssignmentSpec_builder{
+							Tenant:         privatev1.TenantReference_builder{Id: tenant}.Build(),
+							BillingAccount: privatev1.BillingAccountReference_builder{Id: account, Name: accountName}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build())
+				return err
+			}
+			_, err := publicv1.NewTenantBillingAssignmentsClient(client).Create(identity, publicv1.TenantBillingAssignmentsCreateRequest_builder{
+				Object: publicv1.TenantBillingAssignment_builder{
+					Metadata: publicv1.Metadata_builder{Name: name, Tenant: tenant}.Build(),
+					Spec: publicv1.TenantBillingAssignmentSpec_builder{
+						Tenant:         publicv1.TenantReference_builder{Id: tenant}.Build(),
+						BillingAccount: publicv1.BillingAccountReference_builder{Id: account, Name: accountName}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			return err
+		}
 		It("denies non-admins before references and characterizes admin validation before stored-target handling", func() {
 			for _, private := range []bool{false, true} {
 				for _, id := range []string{"missing", "current", "historical"} {
@@ -599,6 +626,10 @@ var _ = Describe("Production request transaction boundary", func() {
 				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 				for _, id := range []string{"missing", "current", "historical"} {
 					err = update(admin, private, id, foreignTenant, "missing-account", "", nil)
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+					Expect(err).To(MatchError(ContainSubstring("object.spec.billing_account")))
+					err = update(admin, private, id, foreignTenant, "missing-account", "",
+						&fieldmaskpb.FieldMask{Paths: []string{"spec.billing_account"}})
 					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 					Expect(err).To(MatchError(ContainSubstring("object.spec.billing_account")))
 					err = update(admin, private, id, foreignTenant, accountID, "contradictory-name", nil)
@@ -631,6 +662,74 @@ var _ = Describe("Production request transaction boundary", func() {
 			Expect(intervals).To(Equal(2), "same-account revalidation does not create history")
 		})
 
+		It("treats an explicit empty-mask Update as a no-op without resolving the body reference", func() {
+			for _, private := range []bool{false, true} {
+				// Neither stale selector exists, so resolving them would fail the request. The empty
+				// mask selects nothing and the handler answers the stored interval unchanged.
+				err := update(caller("billing-admin", true), private, "current", foreignTenant,
+					"missing-account", "stale-account", &fieldmaskpb.FieldMask{})
+				Expect(err).ToNot(HaveOccurred())
+			}
+			Expect(fake.Calls()).To(BeEmpty(), "no provider call")
+			var intervals int
+			Expect(observer.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&intervals)).To(Succeed())
+			Expect(intervals).To(Equal(2), "no interval is opened")
+			var account string
+			Expect(observer.QueryRow(ctx,
+				`select data->'spec'->'billing_account'->>'id' from tenant_billing_assignments where id = 'current'`).Scan(&account)).To(Succeed())
+			Expect(account).To(Equal(accountID), "stored selection is unchanged")
+		})
+
+		It("keeps validating a selected billing account on Create and Update", func() {
+			for _, private := range []bool{false, true} {
+				err := update(caller("billing-admin", true), private, "current", foreignTenant,
+					"missing-account", "", &fieldmaskpb.FieldMask{Paths: []string{"spec.billing_account"}})
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err).To(MatchError(ContainSubstring("object.spec.billing_account")))
+
+				err = create(caller("billing-admin", true), private, "missing-account-create",
+					foreignTenant, "missing-account", "")
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err).To(MatchError(ContainSubstring("object.spec.billing_account")))
+			}
+			Expect(fake.Calls()).To(BeEmpty())
+		})
+
+		It("reports BILLING_NOT_CONFIGURED before resolving an unknown billing account", func() {
+			client = newClient(billing.NewProvider("", nil, nil))
+			for _, private := range []bool{false, true} {
+				// Non-admins are still denied before billing availability.
+				denied := update(caller("tenant-admin", false), private, "current", foreignTenant,
+					"missing-account", "", nil)
+				Expect(grpcstatus.Code(denied)).To(Equal(grpccodes.PermissionDenied))
+
+				err := update(caller("billing-admin", true), private, "current", foreignTenant,
+					"missing-account", "stale-account", nil)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(fmt.Sprint(grpcstatus.Convert(err).Details())).To(ContainSubstring("BILLING_NOT_CONFIGURED"))
+
+				err = create(caller("billing-admin", true), private, "disabled", foreignTenant,
+					"missing-account", "stale-account")
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+				Expect(fmt.Sprint(grpcstatus.Convert(err).Details())).To(ContainSubstring("BILLING_NOT_CONFIGURED"))
+			}
+			var accounts, intervals int
+			Expect(observer.QueryRow(ctx, `select count(*) from billing_accounts`).Scan(&accounts)).To(Succeed())
+			Expect(accounts).To(Equal(2))
+			Expect(observer.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&intervals)).To(Succeed())
+			Expect(intervals).To(Equal(2))
+		})
+
+		It("keeps reference validation before a configured but unusable provider", func() {
+			client = newClient(billing.NewProvider(billing.KeyM360, nil, fmt.Errorf("unreadable credential")))
+			for _, private := range []bool{false, true} {
+				err := update(caller("billing-admin", true), private, "current", foreignTenant,
+					"missing-account", "", nil)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err).To(MatchError(ContainSubstring("object.spec.billing_account")))
+			}
+		})
+
 		It("rolls back assignment effects on provider failure through both registered APIs", func() {
 			for _, private := range []bool{false, true} {
 				failed := billingfake.New(billingfake.Scenario{Failures: map[string]billingfake.Failure{
@@ -640,6 +739,12 @@ var _ = Describe("Production request transaction boundary", func() {
 				err := update(caller("billing-admin", true), private, "current", foreignTenant, replacementID, stableName(replacementID), nil)
 				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Unavailable))
 				Expect(failed.Count("GetAccount")).To(Equal(1))
+				// Check the original row itself, independently of the counts below: a provider failure must
+				// not close the current interval and merely fail to open its replacement.
+				var open bool
+				Expect(observer.QueryRow(ctx,
+					`select effective_to is null from tenant_billing_assignments where id = 'current'`).Scan(&open)).To(Succeed())
+				Expect(open).To(BeTrue(), "the original interval must remain open after provider failure")
 			}
 			var intervals, tokens int
 			Expect(observer.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&intervals)).To(Succeed())

@@ -383,15 +383,19 @@ func pauseDeliveryController(ctx context.Context) func(context.Context) {
 	expectReplicas := func(ctx context.Context, replicas int32) {
 		GinkgoHelper()
 		Eventually(ctx, func(g Gomega) {
+			// A per-poll deadline lets Eventually interrupt a stuck Kubernetes read instead of waiting for the
+			// outer spec context.
+			pollCtx, cancel := context.WithTimeout(ctx, billingPollRequestTimeout)
+			defer cancel()
 			latest := &appsv1.Deployment{}
-			g.Expect(kube.Get(ctx, key, latest)).To(Succeed())
+			g.Expect(kube.Get(pollCtx, key, latest)).To(Succeed())
 			g.Expect(latest.Status.ObservedGeneration).To(BeNumerically(">=", latest.Generation))
 			g.Expect(latest.Status.Replicas).To(Equal(replicas))
 			g.Expect(latest.Status.ReadyReplicas).To(Equal(replicas))
 			if replicas == 0 {
 				pods := &corev1.PodList{}
 				// Include terminating pods: they can still process events until they exit.
-				g.Expect(kube.List(ctx, pods, crclient.InNamespace(key.Namespace),
+				g.Expect(kube.List(pollCtx, pods, crclient.InNamespace(key.Namespace),
 					crclient.MatchingLabelsSelector{Selector: selector})).To(Succeed())
 				g.Expect(pods.Items).To(BeEmpty(), "no terminating controller may race the deterministic fixture")
 			}

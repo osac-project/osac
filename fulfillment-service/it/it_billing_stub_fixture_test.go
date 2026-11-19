@@ -32,6 +32,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -54,6 +55,9 @@ const (
 	billingStubToken          = "stub-token"
 	billingStubOwner          = "osac.openshift.io/it-billing-stub"
 	billingStubRequestTimeout = 10 * time.Second
+	// billingPollRequestTimeout bounds each call made inside a polling loop, so Eventually can interrupt a stuck
+	// request instead of waiting for the outer spec context.
+	billingPollRequestTimeout = 30 * time.Second
 )
 
 // configureBillingStub starts the TLS stub and points the deployed grpc-server at it through the real M360 settings.
@@ -134,9 +138,12 @@ type billingStubPatch struct {
 	owner                        string
 	deploymentUID                types.UID
 	deploymentUpdateAcknowledged bool
-	volumes                      []corev1.Volume
-	mounts                       []corev1.VolumeMount
-	env                          []corev1.EnvVar
+	// deploymentSetupRejected reports that the setup update definitely did not commit (Kubernetes rejected it as a
+	// conflict), so cleanup can run the normal reference-checked Secret deletion instead of retaining the Secrets.
+	deploymentSetupRejected bool
+	volumes                 []corev1.Volume
+	mounts                  []corev1.VolumeMount
+	env                     []corev1.EnvVar
 }
 
 func billingDeploymentKey() crclient.ObjectKey {
@@ -145,8 +152,33 @@ func billingDeploymentKey() crclient.ObjectKey {
 
 func (p *billingStubPatch) updateDeployment(ctx context.Context, kube crclient.Client, deployment *appsv1.Deployment) error {
 	p.deploymentUID = deployment.UID
-	err := kube.Update(ctx, deployment)
+	// A conflict is a definite rejection: the API server did not commit the update, so it is safe to re-read the
+	// Deployment and reapply our entries without losing the concurrent writer's change. Any other error, including a
+	// timeout, is ambiguous because the write may have committed before the response was lost.
+	rejected := false
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		rejected = false
+		err := kube.Update(ctx, deployment)
+		if !apierrors.IsConflict(err) {
+			return err
+		}
+		rejected = true
+		current, readErr := readBillingDeployment(ctx, kube)
+		if readErr != nil {
+			return readErr
+		}
+		if current.UID != p.deploymentUID {
+			return errors.New("Deployment was replaced while setting up the billing stub")
+		}
+		*deployment = *current
+		if applyErr := p.apply(deployment); applyErr != nil {
+			return applyErr
+		}
+		// Return the conflict so RetryOnConflict runs the update again with the refreshed resourceVersion.
+		return err
+	})
 	p.deploymentUpdateAcknowledged = err == nil
+	p.deploymentSetupRejected = err != nil && rejected
 	return err
 }
 
@@ -233,9 +265,10 @@ func (p billingStubPatch) restore(ctx context.Context, kube crclient.Client) err
 			return err
 		}
 		if deployment.UID != p.deploymentUID || deployment.Spec.Template.Annotations[billingStubOwner] != p.owner {
-			if !p.deploymentUpdateAcknowledged {
+			if !p.deploymentUpdateAcknowledged && !p.deploymentSetupRejected {
 				// Reading a template without our marker does not prove that an unacknowledged
-				// setup update won't commit later and start referencing the Secrets.
+				// setup update won't commit later and start referencing the Secrets. A definite
+				// rejection cannot commit later, so the normal reference-checked cleanup may run.
 				return errors.New("setup Deployment update was not acknowledged and fixture changes could not be removed")
 			}
 			return nil

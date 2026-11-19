@@ -202,8 +202,8 @@ func (s *PrivateTenantsServer) Create(ctx context.Context,
 	// guard for direct callers and persists the post-key creation timestamp itself.
 	if err = database.CheckTenantIdentityReusable(ctx, name); err != nil {
 		if errors.Is(err, database.ErrTenantIdentityRetained) {
-			err = failedPreconditionWithReason("TENANT_BILLING_HISTORY_RETAINED",
-				"tenant name is retained by billing history")
+			err = failedPreconditionWithReason(tenantIdentityRetainedReason,
+				"tenant name is reserved by a previous deleted tenant")
 		} else {
 			err = grpcstatus.Error(grpccodes.Internal, "failed to check tenant identity")
 		}
@@ -318,7 +318,12 @@ func stripBreakGlassCredentials(tenant *privatev1.Tenant) {
 	}
 }
 
-const breakGlassCredentialsSecretName = "break-glass-credentials"
+const (
+	breakGlassCredentialsSecretName = "break-glass-credentials"
+	// tenantIdentityRetainedReason is the stable ErrorInfo reason for a reserved deleted tenant name,
+	// independent of whether the prior tenant retained billing history.
+	tenantIdentityRetainedReason = "TENANT_IDENTITY_RETAINED"
+)
 
 // breakGlassCredentialsSecretField is the update-mask path guarding break-glass
 // Secret reference validation on partial updates.

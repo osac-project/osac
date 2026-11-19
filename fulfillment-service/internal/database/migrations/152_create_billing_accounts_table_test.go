@@ -31,7 +31,7 @@ var _ = DescribeMigration("Create billing accounts table", func() {
 	}
 
 	It("defaults display_name, base_currency and state, and stamps status_observed_at", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 149)).To(Succeed())
+		Expect(tool.Migrate(ctx, 152)).To(Succeed())
 		Expect(insert(ctx, "ba-1", "m360", "acct-1", nil)).To(Succeed())
 		var displayName, baseCurrency, state string
 		var correlationID *string
@@ -49,7 +49,7 @@ var _ = DescribeMigration("Create billing accounts table", func() {
 	})
 
 	It("rejects a second account for the same provider_key and provider_account_reference", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 149)).To(Succeed())
+		Expect(tool.Migrate(ctx, 152)).To(Succeed())
 		Expect(insert(ctx, "ba-1", "m360", "acct-1", nil)).To(Succeed())
 		err := insert(ctx, "ba-2", "m360", "acct-1", nil)
 		var pgErr *pgconn.PgError
@@ -58,13 +58,13 @@ var _ = DescribeMigration("Create billing accounts table", func() {
 	})
 
 	It("allows the same provider_account_reference under a different provider_key", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 149)).To(Succeed())
+		Expect(tool.Migrate(ctx, 152)).To(Succeed())
 		Expect(insert(ctx, "ba-1", "m360", "acct-1", nil)).To(Succeed())
 		Expect(insert(ctx, "ba-2", "fake", "acct-1", nil)).To(Succeed())
 	})
 
 	It("rejects two accounts sharing one non-null correlation_id", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 149)).To(Succeed())
+		Expect(tool.Migrate(ctx, 152)).To(Succeed())
 		corr := "corr-1"
 		Expect(insert(ctx, "ba-1", "m360", "acct-1", &corr)).To(Succeed())
 		err := insert(ctx, "ba-2", "m360", "acct-2", &corr)
@@ -74,13 +74,13 @@ var _ = DescribeMigration("Create billing accounts table", func() {
 	})
 
 	It("allows more than one account with a null correlation_id", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 149)).To(Succeed())
+		Expect(tool.Migrate(ctx, 152)).To(Succeed())
 		Expect(insert(ctx, "ba-1", "m360", "acct-1", nil)).To(Succeed())
 		Expect(insert(ctx, "ba-2", "m360", "acct-2", nil)).To(Succeed())
 	})
 
 	It("rejects an empty provider_key or provider_account_reference", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 149)).To(Succeed())
+		Expect(tool.Migrate(ctx, 152)).To(Succeed())
 		Expect(insert(ctx, "ba-1", "", "acct-1", nil)).To(HaveOccurred())
 		Expect(insert(ctx, "ba-1", "m360", "", nil)).To(HaveOccurred())
 	})

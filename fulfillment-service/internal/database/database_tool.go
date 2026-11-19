@@ -462,6 +462,13 @@ func (t *tool) CheckSchema(ctx context.Context) error {
 	}
 	defer pool.Close()
 
+	// Version-dependent checks only apply once the migration that changes the schema has run. Read the version
+	// once, and fail if it can't be determined instead of silently skipping those checks:
+	version, err := t.schemaVersion(ctx, pool)
+	if err != nil {
+		return err
+	}
+
 	// Get the list of object and archive tables:
 	objectTables, err := t.listObjectTables(ctx, pool)
 	if err != nil {
@@ -475,7 +482,7 @@ func (t *tool) CheckSchema(ctx context.Context) error {
 	// Perform the per-table checks:
 	issues := 0
 	for _, table := range objectTables {
-		issues += t.checkObjectTable(ctx, pool, table)
+		issues += t.checkObjectTable(ctx, pool, table, version)
 	}
 	for _, table := range archiveTables {
 		issues += t.checkArchiveTable(ctx, pool, table)
@@ -587,8 +594,9 @@ func (t *tool) listArchiveTables(ctx context.Context, pool *pgxpool.Pool) (resul
 
 // checkObjectTable performs all consistency checks for a single object table: verifies that it has the expected columns
 // with the correct types, a primary key on 'id', a tenant foreign key, a corresponding archive table, and the
-// enqueue_change trigger. Returns the number of issues found.
-func (t *tool) checkObjectTable(ctx context.Context, pool *pgxpool.Pool, table string) int {
+// enqueue_change trigger. The schema version selects the checks that are valid for the applied state. Returns the
+// number of issues found.
+func (t *tool) checkObjectTable(ctx context.Context, pool *pgxpool.Pool, table string, version uint) int {
 	// Make a copy of the expected columns so that we can adjust it for special cases without interfering with the
 	// original map:
 	objectColumns := maps.Clone(toolObjectColumns)
@@ -617,11 +625,22 @@ func (t *tool) checkObjectTable(ctx context.Context, pool *pgxpool.Pool, table s
 	}
 
 	// These two objects intentionally do not publish changes. Do not install enqueue triggers merely to satisfy
-	// the ordinary object checks. Assignment history retains its existing tenant_id FK until the identity cutover;
-	// it must not gain a second live-tenant FK through metadata.tenant.
+	// the ordinary object checks. The normalization migration installs projection triggers that derive the
+	// predecessor columns from the authoritative JSON payload. Billing accounts keep their live tenant foreign
+	// key. Assignment history keeps its tenant as a plain text token with no foreign key to live tenants, so
+	// retained history cannot block or cascade tenant deletion; it must never regain such a link through
+	// tenant_id or metadata.tenant. The live key exists until the identity cutover migration drops it, so its
+	// absence is only required from that migration onwards.
 	if table == "billing_accounts" || table == "tenant_billing_assignments" {
+		if projection, ok := billingProjectionTriggers[table]; ok {
+			issues += t.checkTriggerFunction(
+				ctx, pool, table, projection.trigger, projection.function,
+			)
+		}
 		if table == "billing_accounts" {
 			issues += t.checkTenantForeignKey(ctx, pool, table)
+		} else if version >= migrationRetainDeletedTenantIdentities {
+			issues += t.checkNoTenantForeignKey(ctx, pool, table)
 		}
 		issues += t.checkTableExists(ctx, pool, "archived_"+table)
 		issues += t.checkTableExists(ctx, pool, "active_"+table)
@@ -898,6 +917,111 @@ func (t *tool) checkTriggerExists(ctx context.Context, pool *pgxpool.Pool, table
 	return 0
 }
 
+// checkTriggerFunction verifies that the given object table has a trigger with the given name and that the trigger
+// executes the expected function. Checking the function identity, not only the trigger name, prevents a same-named
+// trigger from silently replacing the intended contract. Returns the number of issues found.
+func (t *tool) checkTriggerFunction(ctx context.Context, pool *pgxpool.Pool, table, trigger, function string) int {
+	var count int
+	err := pool.QueryRow(
+		ctx,
+		`
+		select
+			count(*)
+		from
+			pg_catalog.pg_trigger t
+		join
+			pg_catalog.pg_class c on c.oid = t.tgrelid
+		join
+			pg_catalog.pg_namespace n on n.oid = c.relnamespace
+		join
+			pg_catalog.pg_proc p on p.oid = t.tgfoid
+		join
+			pg_catalog.pg_namespace pn on pn.oid = p.pronamespace
+		where
+			n.nspname = 'public' and
+			c.relname = $1 and
+			t.tgname = $2 and
+			pn.nspname = 'public' and
+			p.proname = $3 and
+			not t.tgisinternal
+		`,
+		table,
+		trigger,
+		function,
+	).Scan(&count)
+	if err != nil {
+		t.logger.ErrorContext(
+			ctx,
+			"Failed to check trigger function",
+			slog.String("table", table),
+			slog.String("trigger", trigger),
+			slog.String("function", function),
+			slog.Any("error", err),
+		)
+		return 1
+	}
+	if count != 1 {
+		t.logger.ErrorContext(
+			ctx,
+			"Object table trigger doesn't execute the required function",
+			slog.String("table", table),
+			slog.String("trigger", trigger),
+			slog.String("function", function),
+		)
+		return 1
+	}
+	return 0
+}
+
+// checkNoTenantForeignKey verifies that the given table has no foreign key constraint referencing the live 'tenants'
+// table. The constraint name is intentionally ignored: the identity cutover removes every such link from retained
+// assignment history, so any new key, whatever its name, is drift. Returns the number of issues found.
+func (t *tool) checkNoTenantForeignKey(ctx context.Context, pool *pgxpool.Pool, table string) int {
+	var count int
+	err := pool.QueryRow(
+		ctx,
+		`
+		select
+			count(*)
+		from
+			pg_catalog.pg_constraint con
+		join
+			pg_catalog.pg_class c on c.oid = con.conrelid
+		join
+			pg_catalog.pg_namespace n on n.oid = c.relnamespace
+		join
+			pg_catalog.pg_class fc on fc.oid = con.confrelid
+		join
+			pg_catalog.pg_namespace fn on fn.oid = fc.relnamespace
+		where
+			n.nspname = 'public' and
+			c.relname = $1 and
+			con.contype = 'f' and
+			fn.nspname = 'public' and
+			fc.relname = 'tenants'
+		`,
+		table,
+	).Scan(&count)
+	if err != nil {
+		t.logger.ErrorContext(
+			ctx,
+			"Failed to check absence of tenant foreign key for table",
+			slog.String("table", table),
+			slog.Any("error", err),
+		)
+		return 1
+	}
+	if count != 0 {
+		t.logger.ErrorContext(
+			ctx,
+			"Retained billing history must not reference live tenants",
+			slog.String("table", table),
+		)
+		return 1
+	}
+	return 0
+}
+
 // checkTenantForeignKey verifies that the given table has a foreign key constraint on the 'tenant' column referencing
 // the 'id' column of the 'tenants' table. Returns the number of issues found.
 func (t *tool) checkTenantForeignKey(ctx context.Context, pool *pgxpool.Pool, table string) int {
@@ -1004,6 +1128,20 @@ func (t *tool) fetchColumns(ctx context.Context, pool *pgxpool.Pool, table strin
 	return
 }
 
+// schemaVersion returns the schema version recorded by the migration library. An error is returned when the version
+// can't be determined, so that version-dependent checks fail instead of applying the wrong expectation.
+func (t *tool) schemaVersion(ctx context.Context, pool *pgxpool.Pool) (uint, error) {
+	var version int64
+	err := pool.QueryRow(ctx, `select version from schema_migrations`).Scan(&version)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get schema version: %w", err)
+	}
+	if version < 0 {
+		return 0, fmt.Errorf("schema version is negative: %d", version)
+	}
+	return uint(version), nil
+}
+
 // migrationsLogger is an adapter to implement the logging interface of the underlying migrations library using our
 // logging library.
 type migrationsLogger struct {
@@ -1045,6 +1183,33 @@ const (
 
 // meteringTriggerName is the trigger that enforces the metering source contract.
 const meteringTriggerName = "enforce_metering_fields"
+
+// migrationRetainDeletedTenantIdentities is the migration that drops the live tenant foreign key from retained
+// assignment history. Earlier intermediate states still have that key, so its absence is only required from this
+// version onwards.
+const migrationRetainDeletedTenantIdentities uint = 160
+
+// Names of the billing projection triggers and the functions they must execute. The normalization migration
+// installs them to derive predecessor columns from the authoritative metadata and private JSON payload.
+const (
+	billingAccountProjectionTrigger     = "project_billing_account"
+	billingAccountProjectionFunction    = "project_billing_account"
+	billingAssignmentProjectionTrigger  = "project_tenant_billing_assignment"
+	billingAssignmentProjectionFunction = "project_tenant_billing_assignment"
+)
+
+// billingProjectionTriggers maps each normalized billing object table to the projection trigger that it must have
+// and the function that trigger must execute.
+var billingProjectionTriggers = map[string]struct{ trigger, function string }{
+	"billing_accounts": {
+		trigger:  billingAccountProjectionTrigger,
+		function: billingAccountProjectionFunction,
+	},
+	"tenant_billing_assignments": {
+		trigger:  billingAssignmentProjectionTrigger,
+		function: billingAssignmentProjectionFunction,
+	},
+}
 
 // ownerReferences maps each object table that records an owner reference in its status to the
 // table holding the referenced resource. Extend together with the table and JSON-path mapping

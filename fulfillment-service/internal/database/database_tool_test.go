@@ -111,6 +111,15 @@ var _ = Describe("Database tool", func() {
 			Entry("assignment publication", `create trigger enqueue_change after insert on tenant_billing_assignments
 				for each row execute function enqueue_change()`),
 			Entry("nonbilling enqueue requirement", `drop trigger enqueue_change on tenants`),
+			Entry("account projection trigger", `drop trigger project_billing_account on billing_accounts`),
+			Entry("assignment projection trigger", `drop trigger project_tenant_billing_assignment
+				on tenant_billing_assignments`),
+			Entry("account projection trigger function", `alter function project_billing_account()
+				rename to project_billing_account_drift`),
+			Entry("assignment projection trigger function", `alter function project_tenant_billing_assignment()
+				rename to project_tenant_billing_assignment_drift`),
+			Entry("assignment live tenant foreign key", `alter table tenant_billing_assignments
+				add constraint assignment_tenant_drift_fk foreign key (tenant_id) references tenants (name)`),
 		)
 	})
 

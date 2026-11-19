@@ -310,8 +310,9 @@ type BillingAccountsListResponse_builder struct {
 	// Total number of items of the collection that match the search criteria, regardless of the number of results
 	// requested with the `limit` parameter.
 	Total int32
-	// Discovered billing accounts. An empty list means no accounts were discovered; it does not mean billing is
-	// disabled.
+	// Billing accounts in the requested page, selected by `offset` and `limit`. An empty list can mean either that no
+	// accounts match the filter or that `offset` is past the end of the matching collection; compare `total` with zero
+	// to tell these apart. An empty list does not mean billing is disabled.
 	Items []*BillingAccount
 }
 

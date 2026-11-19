@@ -686,38 +686,14 @@ legacy_allow if {
   grpc_method == "/osac.public.v1.ProjectMemberships/List"
 }
 
-# The pre-placement check can only establish eligibility, not grant. The public
-# handler must reevaluate with the exact locked tenant and project to persist.
+# Project managers can create memberships for their project.
+# For Create, only the project name is available from the request body (no DB lookup),
+# so we iterate over the user's tenants to find a matching manager group.
 legacy_allow if {
   grpc_method == "/osac.public.v1.ProjectMemberships/Create"
-  input.context.context_extensions.project_membership_create_pending == true
+  input.auth.identity.authnMethod == "jwt"
   project := input.context.context_extensions.project
   some tenant in subject_tenants
-  project_membership_manager(tenant, project)
-}
-
-legacy_allow if {
-  grpc_method == "/osac.public.v1.ProjectMemberships/Create"
-  not input.context.context_extensions.project_membership_create_pending
-  tenant := input.context.context_extensions.tenant
-  project := input.context.context_extensions.project
-  tenant in subject_tenants
-  project_membership_manager(tenant, project)
-}
-
-project_membership_manager(tenant, project) if {
-  input.auth.identity.authnMethod == "jwt"
-  is_object(input.auth.identity.organization)
-  some group in subject_org_groups[tenant].groups
-  group == sprintf("/%s/system:managers", [project])
-}
-
-# Top-level groups in the legacy array format do not identify a tenant when
-# multiple organizations are listed. Only a single organization is unambiguous.
-project_membership_manager(tenant, project) if {
-  input.auth.identity.authnMethod == "jwt"
-  is_array(input.auth.identity.organization)
-  count(subject_tenants) == 1
   some group in subject_org_groups[tenant].groups
   group == sprintf("/%s/system:managers", [project])
 }

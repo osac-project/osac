@@ -693,19 +693,20 @@ delivery. Deleted memberships are removed without a time-based cache; managed
 service-account credentials also require a live tenant. Other live memberships,
 shared visibility, and platform administrator/controller cleanup access remain.
 The durable deleted-identity marker prevents a removed tenant from being treated as a
-new JIT onboarding request, without coupling runtime authorization to generic archives.
-Migration backfill retains prior archive evidence; archives for unrelated objects remain.
+new JIT onboarding request and permanently reserves its name. Migration backfill reserves
+known pre-upgrade deletions from prior archive evidence and deletion-marked live rows;
+archives for unrelated objects remain, and deletions absent from both retained identity
+records and that evidence are not reconstructed.
 
 These checks apply at the authorization or delivery lookup, not by invalidating
 the JWT signature or generally serializing already-authorized in-flight operations
-against deletion. Public `ProjectMemberships/Create` is a grant operation: it
-checks the policy for the exact assigned tenant and project after locking those
-live rows in the request transaction. A manager group in another tenant cannot
-authorize that grant. Retained billing history currently prevents reusing the billed tenant's
-name. Explicit same-name recreation of an unbilled tenant remains a separate
-platform identity-policy gap: supported name-only claims cannot distinguish the
-old and new incarnations. This change introduces no token-epoch or permanent
-name-reservation policy and does not claim to resolve that gap.
+against deletion. A retained deleted-tenant identity permanently reserves the
+name whether or not the prior tenant had billing history; billing retention is only
+a fallback signal. Re-creation of a known deleted name fails with
+`FAILED_PRECONDITION` (`TENANT_IDENTITY_RETAINED`), while an extant live or deleting
+row keeps the ordinary duplicate error. This reservation is per recorded identity,
+not a global name policy or token epoch, and never-known names remain eligible for
+normal JIT onboarding.
 
 ### Authorization Levels
 

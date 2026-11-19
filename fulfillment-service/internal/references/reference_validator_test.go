@@ -381,6 +381,108 @@ var _ = Describe("Reference validator", func() {
 		})
 	})
 
+	Describe("Explicit empty-mask no-op updates", func() {
+		const assignmentUpdate = privatev1.TenantBillingAssignments_Update_FullMethodName
+		var lookedUp []string
+		var handlerCalled bool
+		var handler grpc.UnaryHandler
+		var request *privatev1.TenantBillingAssignmentsUpdateRequest
+
+		registerLookups := func(v *ReferenceValidator) {
+			GinkgoHelper()
+			for _, referenceType := range []protoreflect.FullName{
+				"osac.private.v1.BillingAccountReference",
+				"osac.private.v1.TenantReference",
+			} {
+				v.Register(referenceType,
+					func(ctx context.Context, tenant, project, id, name string) (*ResolvedRef, error) {
+						lookedUp = append(lookedUp, id+"|"+name)
+						return nil, &errRefNotFound{identifier: identifier(id, name)}
+					})
+			}
+		}
+
+		BeforeEach(func() {
+			lookedUp = nil
+			handlerCalled = false
+			handler = func(ctx context.Context, received any) (any, error) {
+				handlerCalled = true
+				Expect(received).To(BeIdenticalTo(request))
+				return "accepted", nil
+			}
+			request = privatev1.TenantBillingAssignmentsUpdateRequest_builder{
+				Object: privatev1.TenantBillingAssignment_builder{
+					Id:       "current",
+					Metadata: privatev1.Metadata_builder{Tenant: "tenant-a", Project: "project-a"}.Build(),
+					Spec: privatev1.TenantBillingAssignmentSpec_builder{
+						Tenant:         privatev1.TenantReference_builder{Id: "tenant-a"}.Build(),
+						BillingAccount: privatev1.BillingAccountReference_builder{Name: "stale-account"}.Build(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{},
+			}.Build()
+		})
+
+		It("skips reference resolution for a configured no-op method with an explicit empty mask", func() {
+			v, err := NewReferenceValidator().SetLogger(logger).
+				SetEmptyUpdateMaskNoOpMethods([]string{assignmentUpdate}).Build()
+			Expect(err).ToNot(HaveOccurred())
+			registerLookups(v)
+			response, err := v.UnaryServer(context.Background(), request,
+				&grpc.UnaryServerInfo{FullMethod: assignmentUpdate}, handler)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response).To(Equal("accepted"))
+			Expect(handlerCalled).To(BeTrue())
+			Expect(lookedUp).To(BeEmpty())
+		})
+
+		It("keeps validating an absent mask and a selected reference", func() {
+			v, err := NewReferenceValidator().SetLogger(logger).
+				SetEmptyUpdateMaskNoOpMethods([]string{assignmentUpdate}).Build()
+			Expect(err).ToNot(HaveOccurred())
+			registerLookups(v)
+			for _, mask := range []*fieldmaskpb.FieldMask{
+				nil,
+				{Paths: []string{"spec.billing_account"}},
+			} {
+				request.SetUpdateMask(mask)
+				_, err := v.UnaryServer(context.Background(), request,
+					&grpc.UnaryServerInfo{FullMethod: assignmentUpdate}, handler)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err).To(MatchError(ContainSubstring("object.spec.billing_account")))
+				Expect(handlerCalled).To(BeFalse())
+			}
+			Expect(lookedUp).To(ContainElement("|stale-account"))
+		})
+
+		It("does not apply to Create or to methods without the option", func() {
+			v, err := NewReferenceValidator().SetLogger(logger).
+				SetEmptyUpdateMaskNoOpMethods([]string{assignmentUpdate}).Build()
+			Expect(err).ToNot(HaveOccurred())
+			registerLookups(v)
+			create := privatev1.TenantBillingAssignmentsCreateRequest_builder{
+				Object: request.GetObject(),
+			}.Build()
+			_, err = v.UnaryServer(context.Background(), create,
+				&grpc.UnaryServerInfo{FullMethod: privatev1.TenantBillingAssignments_Create_FullMethodName},
+				handler)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(handlerCalled).To(BeFalse())
+			Expect(lookedUp).To(ContainElement("|stale-account"))
+
+			// The same explicit empty mask on an unconfigured Update method keeps the body selected.
+			unconfigured, err := NewReferenceValidator().SetLogger(logger).Build()
+			Expect(err).ToNot(HaveOccurred())
+			registerLookups(unconfigured)
+			lookedUp = nil
+			_, err = unconfigured.UnaryServer(context.Background(), request,
+				&grpc.UnaryServerInfo{FullMethod: privatev1.ComputeInstances_Update_FullMethodName}, handler)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(handlerCalled).To(BeFalse())
+			Expect(lookedUp).To(ContainElement("|stale-account"))
+		})
+	})
+
 	It("skips spec references and resolves local status references for cluster status-only updates", func() {
 		var err error
 		validator, err = NewReferenceValidator().SetLogger(logger).Build()

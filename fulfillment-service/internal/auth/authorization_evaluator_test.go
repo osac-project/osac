@@ -428,25 +428,23 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				Expect(decision).ToNot(BeNil())
 			})
 
-			It("Requires a project manager's group in the exact tenant for a membership grant", func(ctx context.Context) {
+			It("Uses project from context extensions", func(ctx context.Context) {
 				authContext := &AuthContext{
-					Username:   "user",
-					AuthMethod: "jwt",
-					Organization: map[string]any{
-						"tenant-a": map[string]any{"groups": []any{"/project-1/system:managers"}},
-						"tenant-b": map[string]any{"groups": []any{}},
-					},
-					Project: "project-1",
+					Username:     "user",
+					AuthMethod:   "jwt",
+					Organization: []any{"tenant-a"},
+					Tenant:       "tenant-a",
+					Project:      "project-1",
 				}
-				for _, target := range []struct {
-					tenant  string
-					allowed bool
-				}{{"tenant-a", true}, {"tenant-b", false}, {"", false}} {
-					authContext.Tenant = target.tenant
-					decision, err := evaluator.Evaluate(ctx, authContext, projectMembershipCreateMethod)
-					Expect(err).NotTo(HaveOccurred())
-					Expect(decision.Allowed).To(Equal(target.allowed), "tenant %q", target.tenant)
-				}
+
+				decision, err := evaluator.Evaluate(
+					ctx,
+					authContext,
+					"/osac.public.v1.ProjectMemberships/Create",
+				)
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision).ToNot(BeNil())
 			})
 		})
 

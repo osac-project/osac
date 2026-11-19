@@ -14,9 +14,11 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -250,6 +252,76 @@ var _ = Describe("Private billing accounts server", func() {
 		var count int
 		Expect(testPool.QueryRow(ctx, `select count(*) from billing_accounts`).Scan(&count)).To(Succeed())
 		return count
+	}
+	buildWithLogs := func(p *billing.Provider) (*PrivateBillingAccountsServer, *bytes.Buffer) {
+		logs := &bytes.Buffer{}
+		server, err := NewPrivateBillingAccountsServer().
+			SetLogger(slog.New(slog.NewJSONHandler(logs, nil))).SetProvider(p).Build()
+		Expect(err).ToNot(HaveOccurred())
+		return server, logs
+	}
+	// seedAssignedAccount commits an account that already carries an established assignment token.
+	seedAssignedAccount := func(server *PrivateBillingAccountsServer, id, ref, token string, at time.Time) string {
+		name, err := billingAccountName(id)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = database.WithNewTx(ctx, func(ctx context.Context) (struct{}, error) {
+			_, err := server.dao.Create().SetObject(privatev1.BillingAccount_builder{
+				Id: id,
+				Metadata: privatev1.Metadata_builder{
+					Name: name, Tenant: "system", Creator: "system",
+				}.Build(),
+				Status: privatev1.BillingAccountStatus_builder{
+					ProviderKey: billingfake.Key, ProviderAccountReference: ref,
+					ExternalBillingAccountId:  proto.String(token),
+					State:                     privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE,
+					StateObservationTimestamp: timestamppb.New(at),
+				}.Build(),
+			}.Build()).Do(ctx)
+			return struct{}{}, err
+		})
+		Expect(err).ToNot(HaveOccurred())
+		return id
+	}
+	// seedAssignmentInterval records one assignment row. A nil to leaves the interval open; a non-nil
+	// to records closed history that no longer holds the active-account index.
+	seedAssignmentInterval := func(id, accountID string, from time.Time, to *time.Time) {
+		const tenant = "drift-tenant"
+		_, err := testPool.Exec(ctx, `insert into tenants (id, name, tenant, creator, data)
+			values ($1, $1, $1, 'system', '{}') on conflict do nothing`, tenant)
+		Expect(err).ToNot(HaveOccurred())
+		name, err := billingAccountName(accountID)
+		Expect(err).ToNot(HaveOccurred())
+		status := privatev1.TenantBillingAssignmentStatus_builder{
+			ConnectionState:        privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED,
+			EffectiveFromTimestamp: timestamppb.New(from),
+		}.Build()
+		if to != nil {
+			status.SetEffectiveToTimestamp(timestamppb.New(*to))
+		}
+		_, err = database.WithNewTx(ctx, func(ctx context.Context) (struct{}, error) {
+			assignments, err := dao.NewGenericDAO[*privatev1.TenantBillingAssignment]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			if err != nil {
+				return struct{}{}, err
+			}
+			_, err = assignments.Create().SetObject(privatev1.TenantBillingAssignment_builder{
+				Id: id,
+				Metadata: privatev1.Metadata_builder{
+					Name: id, Tenant: tenant, Creator: "system",
+					Annotations: map[string]string{"osac.openshift.io/tenant": tenant},
+				}.Build(),
+				Spec: privatev1.TenantBillingAssignmentSpec_builder{
+					Tenant:         privatev1.TenantReference_builder{Id: tenant, Name: tenant}.Build(),
+					BillingAccount: privatev1.BillingAccountReference_builder{Id: accountID, Name: name}.Build(),
+				}.Build(),
+				Status: status,
+			}.Build()).Do(ctx)
+			return struct{}{}, err
+		})
+		Expect(err).ToNot(HaveOccurred())
+	}
+	seedAssignment := func(id, accountID string, at time.Time) {
+		seedAssignmentInterval(id, accountID, at, nil)
 	}
 
 	It("requires a logger and a provider", func() {
@@ -708,7 +780,14 @@ var _ = Describe("Private billing accounts server", func() {
 
 		blocker, err := testPool.Begin(ctx)
 		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { _ = blocker.Rollback(ctx) })
+		DeferCleanup(func() {
+			rollbackCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			err := blocker.Rollback(rollbackCtx)
+			if !errors.Is(err, pgx.ErrTxClosed) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
 		_, err = blocker.Exec(ctx, `select id from billing_accounts where provider_account_reference = 'locked' for no key update`)
 		Expect(err).NotTo(HaveOccurred())
 		server.discoverDeadline = time.Second
@@ -720,9 +799,11 @@ var _ = Describe("Private billing accounts server", func() {
 			_, err := billingRPC(caller, server.List, &privatev1.BillingAccountsListRequest{})
 			result <- err
 		}()
+		probeCtx, cancelProbe := context.WithTimeout(ctx, time.Second)
+		DeferCleanup(cancelProbe)
 		Eventually(func() (bool, error) {
 			var waiting bool
-			err := testPool.QueryRow(caller, `select exists (select 1 from pg_stat_activity
+			err := testPool.QueryRow(probeCtx, `select exists (select 1 from pg_stat_activity
 				where datname = current_database() and wait_event_type = 'Lock' and query like $1)`,
 				`%order by b.id for no key update of b%`).Scan(&waiting)
 			return waiting, err
@@ -818,6 +899,11 @@ var _ = Describe("Private billing accounts server", func() {
 	It("runs at most one discovery walk at a time, failing a concurrent stale List fast", func() {
 		adapter := &gatedDiscoveryAdapter{entered: make(chan struct{}), release: make(chan struct{})}
 		server := build(billing.NewProvider("m360", adapter, nil))
+		// Release the walk whatever happens below: a failed assertion while the provider is still gated must
+		// not leave the first discovery blocked for the rest of the suite.
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(adapter.release) }) }
+		DeferCleanup(release)
 
 		first := make(chan error, 1)
 		go func() {
@@ -827,14 +913,24 @@ var _ = Describe("Private billing accounts server", func() {
 		Eventually(adapter.entered, 5*time.Second).Should(BeClosed(), "the first List must start the walk")
 
 		// A second stale List while the walk is in flight fails fast as UNAVAILABLE, without starting a
-		// second walk and without stacking behind the first:
-		_, err := list(server, nil)
+		// second walk and without stacking behind the first. Bound it independently so a regression that
+		// stacks the request fails the test instead of hanging it:
+		secondCtx, cancelSecond := context.WithTimeout(ctx, 5*time.Second)
+		DeferCleanup(cancelSecond)
+		_, err := billingRPC(secondCtx, server.List, &privatev1.BillingAccountsListRequest{})
 		st, ok := status.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(st.Code()).To(Equal(codes.Unavailable))
+		Expect(st.Details()[0].(*errdetails.ErrorInfo).GetReason()).To(Equal(billingProviderUnavailableReason))
 		Expect(adapter.calls).To(Equal(1), "the concurrent List must not start a second walk")
+		select {
+		case returnedErr := <-first:
+			Fail(fmt.Sprintf("the first discovery must remain blocked until released, but returned: %v",
+				returnedErr))
+		default:
+		}
 
-		close(adapter.release)
+		release()
 		var firstErr error
 		Eventually(first, 5*time.Second).Should(Receive(&firstErr))
 		Expect(firstErr).ToNot(HaveOccurred())
@@ -942,10 +1038,16 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(err).NotTo(HaveOccurred())
 		ended := false
 		DeferCleanup(func() {
-			if !ended {
-				err := errors.New("test cleanup")
-				tx.ReportError(&err)
-				_ = tx.End(ctx)
+			if ended {
+				return
+			}
+			err := errors.New("test cleanup")
+			tx.ReportError(&err)
+			endCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			err = tx.End(endCtx)
+			if !errors.Is(err, pgx.ErrTxClosed) {
+				Expect(err).NotTo(HaveOccurred())
 			}
 		})
 		direct := database.TxIntoContext(context.Background(), tx)
@@ -1091,6 +1193,112 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(storedCount()).To(Equal(2))
 	})
 
+	It("warns about conflicting provider evidence without changing the committed assignment or attribution", func() {
+		server, logs := buildWithLogs(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		id := seedAssignedAccount(server, "osac-drift", "provider-account", "recorded-token", start)
+		seedAssignment("asg-drift", id, start)
+		err := billingStore(ctx, server, []billing.Account{{
+			Ref: billing.NewAccountRef("provider-account"), ExternalID: "observed-token", State: billing.AccountActive,
+		}}, start.Add(time.Second))
+		Expect(err).ToNot(HaveOccurred())
+		var token, observed string
+		Expect(testPool.QueryRow(ctx, `select external_billing_account_id,
+			data->'status'->>'provider_external_id' from billing_accounts where id = $1`, id).
+			Scan(&token, &observed)).To(Succeed())
+		Expect(token).To(Equal("recorded-token"), "discovery must not rewrite the established attribution")
+		Expect(observed).To(Equal("observed-token"))
+		var open int
+		Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments
+			where id = 'asg-drift' and connection_state = 'CONNECTED' and message = '' and effective_to is null`).
+			Scan(&open)).To(Succeed())
+		Expect(open).To(Equal(1), "discovery must not close or change the committed assignment")
+		Expect(logs.String()).To(ContainSubstring(
+			"Billing account provider external ID differs from recorded assignment"))
+		Expect(logs.String()).To(ContainSubstring(`"billing_account_id":"` + id + `"`))
+		for _, raw := range []string{"provider-account", "recorded-token", "observed-token"} {
+			Expect(logs.String()).ToNot(ContainSubstring(raw), "the warning carries only stable OSAC identity")
+		}
+		AddReportEntry("drift warning", logs.String())
+	})
+
+	It("does not warn when the observed provider external ID matches the recorded assignment", func() {
+		server, logs := buildWithLogs(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		id := seedAssignedAccount(server, "osac-match", "matching-native", "same-token", start)
+		err := billingStore(ctx, server, []billing.Account{{
+			Ref: billing.NewAccountRef("matching-native"), ExternalID: "same-token", State: billing.AccountActive,
+		}}, start.Add(time.Second))
+		Expect(err).ToNot(HaveOccurred())
+		var token string
+		Expect(testPool.QueryRow(ctx, `select external_billing_account_id from billing_accounts where id = $1`, id).
+			Scan(&token)).To(Succeed())
+		Expect(token).To(Equal("same-token"))
+		Expect(logs.String()).ToNot(ContainSubstring("differs from recorded assignment"))
+	})
+
+	It("does not warn about conflicting provider evidence when no assignment ever referenced the account", func() {
+		server, logs := buildWithLogs(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		// A nonblank token without any assignment row has no assignment to drift from; migration 162
+		// would have released such a discovery-only reservation.
+		id := seedAssignedAccount(server, "osac-unassigned", "unassigned-native", "unassigned-token", start)
+		err := billingStore(ctx, server, []billing.Account{{
+			Ref: billing.NewAccountRef("unassigned-native"), ExternalID: "mismatching-token", State: billing.AccountActive,
+		}}, start.Add(time.Second))
+		Expect(err).ToNot(HaveOccurred())
+		var token, observed string
+		Expect(testPool.QueryRow(ctx, `select external_billing_account_id,
+			data->'status'->>'provider_external_id' from billing_accounts where id = $1`, id).
+			Scan(&token, &observed)).To(Succeed())
+		Expect(token).To(Equal("unassigned-token"))
+		Expect(observed).To(Equal("mismatching-token"))
+		Expect(logs.String()).ToNot(ContainSubstring("differs from recorded assignment"))
+	})
+
+	It("warns about conflicting provider evidence when the only assignment is closed history", func() {
+		server, logs := buildWithLogs(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		id := seedAssignedAccount(server, "osac-historical", "historical-native", "recorded-token", start)
+		closed := start.Add(time.Minute)
+		seedAssignmentInterval("asg-historical", id, start, &closed)
+		err := billingStore(ctx, server, []billing.Account{{
+			Ref: billing.NewAccountRef("historical-native"), ExternalID: "observed-token", State: billing.AccountActive,
+		}}, start.Add(2*time.Minute))
+		Expect(err).ToNot(HaveOccurred())
+		var token string
+		Expect(testPool.QueryRow(ctx, `select external_billing_account_id from billing_accounts where id = $1`, id).
+			Scan(&token)).To(Succeed())
+		Expect(token).To(Equal("recorded-token"))
+		var untouched int
+		Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments
+			where id = 'asg-historical' and effective_to = $1`, closed).Scan(&untouched)).To(Succeed())
+		Expect(untouched).To(Equal(1), "discovery must not change closed assignment history")
+		Expect(logs.String()).To(ContainSubstring(
+			"Billing account provider external ID differs from recorded assignment"))
+		Expect(logs.String()).To(ContainSubstring(`"billing_account_id":"` + id + `"`))
+		for _, raw := range []string{"historical-native", "recorded-token", "observed-token"} {
+			Expect(logs.String()).ToNot(ContainSubstring(raw), "the warning carries only stable OSAC identity")
+		}
+		AddReportEntry("historical drift warning", logs.String())
+	})
+
+	It("does not treat an assigned account absent from an incomplete walk as a mismatch", func() {
+		server, logs := buildWithLogs(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		id := seedAssignedAccount(server, "osac-absent", "absent-native", "recorded-token", start)
+		err := billingStore(ctx, server, []billing.Account{{
+			Ref: billing.NewAccountRef("present-native"), ExternalID: "present-token", State: billing.AccountActive,
+		}}, start.Add(time.Second))
+
+		Expect(err).ToNot(HaveOccurred())
+		var token string
+		Expect(testPool.QueryRow(ctx, `select external_billing_account_id from billing_accounts where id = $1`, id).
+			Scan(&token)).To(Succeed())
+		Expect(token).To(Equal("recorded-token"))
+		Expect(logs.String()).ToNot(ContainSubstring("differs from recorded assignment"))
+	})
+
 	It("aborts the whole batch on an unexpected native-key conflict without a late-winner retry", func() {
 		server := build(billingfake.New(billingfake.Scenario{}).Provider())
 		start := time.Now().UTC().Truncate(time.Microsecond)
@@ -1111,10 +1319,13 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(status.Code(err)).To(Equal(codes.Aborted))
 		var state string
 		var version, attempts int
+		var called bool
 		Expect(testPool.QueryRow(ctx, `select state, version from billing_accounts`).Scan(&state, &version)).To(Succeed())
 		Expect(state).To(Equal("ACTIVE"))
 		Expect(version).To(BeZero())
-		Expect(testPool.QueryRow(ctx, `select last_value from native_insert_attempts`).Scan(&attempts)).To(Succeed())
+		Expect(testPool.QueryRow(ctx, `select last_value, is_called from native_insert_attempts`).
+			Scan(&attempts, &called)).To(Succeed())
+		Expect(called).To(BeTrue(), "the injected native-conflict trigger must have run")
 		Expect(attempts).To(Equal(1))
 		Expect(storedCount()).To(Equal(1))
 	})
@@ -1128,6 +1339,55 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(errors.As(err, &classified)).To(BeTrue())
 		Expect(classified.Reason).To(Equal(billing.ReasonMalformed))
 		Expect(storedCount()).To(BeZero())
+	})
+
+	DescribeTable("rejects provider bytes PostgreSQL cannot store before changing any row",
+		func(mutate func(*billingfake.AccountSpec)) {
+			invalid := billingfake.AccountSpec{
+				ID: "invalid-native", Name: "Invalid", ExternalID: "invalid-token", State: billing.AccountActive,
+			}
+			mutate(&invalid)
+			server := build(billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+				{ID: "valid-new", Name: "Valid", State: billing.AccountActive}, invalid,
+			}}).Provider())
+			start := time.Now().UTC().Truncate(time.Microsecond)
+			Expect(billingStore(ctx, server, []billing.Account{{Ref: billing.NewAccountRef("existing"),
+				ExternalID: "existing-token", State: billing.AccountActive}}, start)).To(Succeed())
+			var before string
+			Expect(testPool.QueryRow(ctx, `select to_jsonb(b)::text from billing_accounts b`).Scan(&before)).
+				To(Succeed())
+
+			_, err := list(server, nil)
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+			Expect(status.Convert(err).Details()[0].(*errdetails.ErrorInfo).GetReason()).To(Equal("MALFORMED"))
+
+			var after string
+			Expect(testPool.QueryRow(ctx, `select to_jsonb(b)::text from billing_accounts b`).Scan(&after)).
+				To(Succeed())
+			Expect(after).To(Equal(before), "a rejected walk stores neither the valid account nor a sweep")
+			Expect(storedCount()).To(Equal(1))
+		},
+		Entry("U+0000 in the native account reference", func(account *billingfake.AccountSpec) {
+			account.ID = "native\x00ref"
+		}),
+		Entry("U+0000 in the provider external ID", func(account *billingfake.AccountSpec) {
+			account.ExternalID = "token\x00bytes"
+		}),
+	)
+
+	It("stores representable provider bytes exactly through discovery", func() {
+		ref := "native-\u00e9\u007f\tref"
+		token := " token-\u00e9\u007f "
+		server := build(billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{
+			ID: ref, Name: "Representable", ExternalID: token, State: billing.AccountActive,
+		}}}).Provider())
+		_, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		var gotRef, gotToken string
+		Expect(testPool.QueryRow(ctx, `select data->'status'->>'provider_account_reference',
+			data->'status'->>'provider_external_id' from billing_accounts`).Scan(&gotRef, &gotToken)).To(Succeed())
+		Expect(gotRef).To(Equal(ref))
+		Expect(gotToken).To(Equal(token))
 	})
 
 	It("round trips NULL, present-empty, whitespace and raw tokens through GenericDAO and an unseen sweep", func() {
@@ -1256,11 +1516,13 @@ var _ = Describe("Private billing accounts server", func() {
 		DeferCleanup(cancel)
 		result := make(chan error, 1)
 		go func() { result <- billingStore(waitCtx, server, nil, start.Add(time.Second)) }()
-		Eventually(func() int {
+		probeCtx, cancelProbe := context.WithTimeout(ctx, 5*time.Second)
+		DeferCleanup(cancelProbe)
+		Eventually(func() (int, error) {
 			var count int
-			Expect(testPool.QueryRow(ctx, `select count(*) from pg_stat_activity
-				where datname = current_database() and $1 = any(pg_blocking_pids(pid))`, pid).Scan(&count)).To(Succeed())
-			return count
+			err := testPool.QueryRow(probeCtx, `select count(*) from pg_stat_activity
+				where datname = current_database() and $1 = any(pg_blocking_pids(pid))`, pid).Scan(&count)
+			return count, err
 		}, 5*time.Second, 10*time.Millisecond).Should(Equal(1))
 		var mutated bool
 		Expect(testPool.QueryRow(ctx, `select is_called from discovery_mutations`).Scan(&mutated)).To(Succeed())
@@ -1328,24 +1590,28 @@ var _ = Describe("Private billing accounts server", func() {
 			firstResult <- billingStore(waitCtx, first, []billing.Account{{Ref: billing.NewAccountRef("a"),
 				State: billing.AccountActive}}, start)
 		}()
-		Eventually(func() int {
+		firstProbeCtx, cancelFirstProbe := context.WithTimeout(ctx, 5*time.Second)
+		DeferCleanup(cancelFirstProbe)
+		Eventually(func() (int, error) {
 			var count int
-			Expect(testPool.QueryRow(ctx, `select count(*) from pg_locks where locktype = 'advisory'
+			err := testPool.QueryRow(firstProbeCtx, `select count(*) from pg_locks where locktype = 'advisory'
 				and not granted and objid = 216004 and database = (select oid from pg_database where datname = current_database())`).
-				Scan(&count)).To(Succeed())
-			return count
+				Scan(&count)
+			return count, err
 		}, 5*time.Second, 10*time.Millisecond).Should(Equal(1))
 		go func() {
 			result <- billingStore(waitCtx, second, []billing.Account{{Ref: billing.NewAccountRef(waitingRef),
 				State: billing.AccountActive}}, start.Add(waitingAge))
 		}()
-		Eventually(func() int {
+		secondProbeCtx, cancelSecondProbe := context.WithTimeout(ctx, 5*time.Second)
+		DeferCleanup(cancelSecondProbe)
+		Eventually(func() (int, error) {
 			var count int
-			Expect(testPool.QueryRow(ctx, `select count(*) from pg_locks
+			err := testPool.QueryRow(secondProbeCtx, `select count(*) from pg_locks
 				where locktype = 'advisory' and not granted and objid <> 216004
 				and database = (select oid from pg_database where datname = current_database())`).
-				Scan(&count)).To(Succeed())
-			return count
+				Scan(&count)
+			return count, err
 		}, 5*time.Second, 10*time.Millisecond).Should(Equal(1))
 		var rowLocks int
 		Expect(testPool.QueryRow(ctx, `select count(*) from pg_locks where locktype in ('tuple','relation')

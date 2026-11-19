@@ -40,6 +40,9 @@ var ctx = context.Background()
 const (
 	testCredential    = "tok"
 	testAuthorization = "Bearer sent"
+
+	// requestDeadline bounds one helper exchange so a wedged handler fails the spec instead of hanging it.
+	requestDeadline = 10 * time.Second
 )
 
 // fixture is the same JSON format billingfake.Load reads.
@@ -79,10 +82,13 @@ func load(data string) billingfake.Scenario {
 	return s
 }
 
-// requestJSON exercises the wire contract independently of the adapter's decoder.
+// requestJSON exercises the wire contract independently of the adapter's decoder. The request context carries a
+// deadline, so both the exchange and the response read return instead of blocking on a stalled handler.
 func requestJSON(stub *billingstub.Stub, method, path, body string) (int, map[string]any) {
 	GinkgoHelper()
-	request, err := http.NewRequest(method, stub.URL()+"/api/v2/external"+path, strings.NewReader(body))
+	requestCtx, cancel := context.WithTimeout(ctx, requestDeadline)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, method, stub.URL()+"/api/v2/external"+path, strings.NewReader(body))
 	Expect(err).ToNot(HaveOccurred())
 	request.Header.Set("Content-Type", "application/json")
 	response, err := http.DefaultClient.Do(request)

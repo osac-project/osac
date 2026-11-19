@@ -152,6 +152,8 @@ var _ = Describe("Watch command", func() {
 			ctx, cancel := context.WithCancel(context.Background())
 			DeferCleanup(cancel)
 			calls := 0
+			var sentFilters []string
+			received := false
 			connection, err := grpc.NewClient("passthrough:///p2-watch.invalid",
 				grpc.WithTransportCredentials(insecure.NewCredentials()),
 				grpc.WithStreamInterceptor(func(streamCtx context.Context, _ *grpc.StreamDesc, _ *grpc.ClientConn,
@@ -159,11 +161,14 @@ var _ = Describe("Watch command", func() {
 					Expect(method).To(Equal("/" + pkg + ".Events/Watch"))
 					return &recordingWatchStream{
 						send: func(request any) error {
+							Expect(received).To(BeFalse(), "Watch must send its request before receiving events")
 							message := request.(proto.Message).ProtoReflect()
-							Expect(message.Get(message.Descriptor().Fields().ByName("filter")).String()).To(Equal("has(event.cluster)"))
+							sentFilters = append(sentFilters, message.Get(message.Descriptor().Fields().ByName("filter")).String())
 							return nil
 						},
 						receive: func(any) error {
+							received = true
+							Expect(sentFilters).To(HaveLen(1), "Watch must send exactly one filtered request before its first receive")
 							calls++
 							switch termination {
 							case "EOF":
@@ -186,6 +191,7 @@ var _ = Describe("Watch command", func() {
 			runner := &runnerContext{conn: connection, logger: logger, console: console, objectHelper: helper.Lookup("cluster")}
 			err = runner.watch(ctx, nil)
 			Expect(calls).To(Equal(1))
+			Expect(sentFilters).To(Equal([]string{"has(event.cluster)"}), "Watch must send exactly one correctly filtered request")
 			switch termination {
 			case "EOF":
 				Expect(err).NotTo(HaveOccurred())

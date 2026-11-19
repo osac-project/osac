@@ -21,10 +21,10 @@ begin
 exception when lock_not_available then
   raise exception using
     errcode = '55P03',
-    message = 'Migration 158 timed out waiting for an ACCESS EXCLUSIVE lock. Drain readers and writers of'
+    message = 'Migration 160 timed out waiting for an ACCESS EXCLUSIVE lock. Drain readers and writers of'
       ' tenants, archived_tenants and tenant_billing_assignments before retrying the upgrade.',
     detail = 'Roll back the failed transaction if the migration session is still open. After confirming rollback,'
-      ' reset the dirty migration version to 157 before retrying.';
+      ' reset the dirty migration version to 159 before retrying.';
 end;
 $$;
 

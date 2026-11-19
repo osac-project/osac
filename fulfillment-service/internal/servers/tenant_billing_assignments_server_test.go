@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -118,16 +119,71 @@ var _ = Describe("Tenant billing assignments server", func() {
 		Expect(fake.Calls()).To(BeEmpty())
 	})
 
-	It("rejects reserved public metadata without converting the validation error to Internal", func() {
-		fake := billingfake.New(billingfake.Scenario{})
-		caller := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: auth.AllTenants})
-		_, err := billingRPC(caller, build(fake.Provider()).Create, publicv1.TenantBillingAssignmentsCreateRequest_builder{
-			Object: publicv1.TenantBillingAssignment_builder{Metadata: publicv1.Metadata_builder{
-				Name: "reserved", Labels: map[string]string{"admin.osac.openshift.io/private": "forbidden"},
-			}.Build()}.Build(),
-		}.Build())
-		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-		Expect(fake.Calls()).To(BeEmpty())
+	DescribeTable("resolves billing availability before reserved metadata validation on Create",
+		func(configured bool, expectedCode codes.Code, expectedReason string) {
+			fake := billingfake.New(billingfake.Scenario{})
+			provider := billing.NewProvider("", fake, nil)
+			if configured {
+				provider = fake.Provider()
+			}
+			caller := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: auth.AllTenants})
+			_, err := billingRPC(caller, build(provider).Create, publicv1.TenantBillingAssignmentsCreateRequest_builder{
+				Object: publicv1.TenantBillingAssignment_builder{Metadata: publicv1.Metadata_builder{
+					Name: "reserved", Labels: map[string]string{"admin.osac.openshift.io/private": "forbidden"},
+				}.Build()}.Build(),
+			}.Build())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(expectedCode))
+			if expectedReason == "" {
+				Expect(st.Message()).To(Equal(reservedMetadataError))
+			} else {
+				Expect(st.Details()).ToNot(BeEmpty())
+				Expect(st.Details()[0].(*errdetails.ErrorInfo).GetReason()).To(Equal(expectedReason))
+			}
+			Expect(fake.Calls()).To(BeEmpty(), "no Create request may reach the provider")
+		},
+		Entry("billing disabled reports the stable reason before validation", false,
+			codes.FailedPrecondition, billingNotConfiguredReason),
+		Entry("billing configured still rejects reserved metadata", true, codes.InvalidArgument, ""))
+
+	It("rejects a dry-run Create through the public delegate before provider calls or persistence", func() {
+		id := uuid.New()
+		seedAccounts(id)
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: id, ExternalID: "dry-run-external", State: billing.AccountActive},
+		}})
+		server := build(fake.Provider())
+		rows := func(table string) string {
+			var value string
+			// Table names are fixed by this fixture, never request input.
+			Expect(testPool.QueryRow(ctx, `select coalesce(jsonb_agg(to_jsonb(r) order by id),'[]'::jsonb)::text from `+table+` r`).Scan(&value)).To(Succeed())
+			return value
+		}
+		accountsBefore, intervalsBefore := rows("billing_accounts"), rows("tenant_billing_assignments")
+		request := publicv1.TenantBillingAssignmentsCreateRequest_builder{
+			Object: publicv1.TenantBillingAssignment_builder{
+				Metadata: publicv1.Metadata_builder{Name: "dry-run-public"}.Build(),
+				Spec: publicv1.TenantBillingAssignmentSpec_builder{
+					Tenant:         publicv1.TenantReference_builder{Id: testTenant}.Build(),
+					BillingAccount: publicv1.BillingAccountReference_builder{Id: id}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build()
+
+		caller := auth.ContextWithSubject(dryRunCtx(), &auth.Subject{User: "admin", Tenants: auth.AllTenants})
+		_, err := billingRPC(caller, server.Create, request)
+		Expect(status.Code(err)).To(Equal(codes.Unimplemented))
+		Expect(err.Error()).To(ContainSubstring("dry-run is not supported"))
+		Expect(fake.Calls()).To(BeEmpty(), "a dry-run must not call the provider")
+		Expect(rows("billing_accounts")).To(Equal(accountsBefore), "a dry-run must not change attribution")
+		Expect(rows("tenant_billing_assignments")).To(Equal(intervalsBefore), "a dry-run must not insert or close an interval")
+
+		created, err := billingRPC(auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: auth.AllTenants}),
+			server.Create, request)
+		Expect(err).NotTo(HaveOccurred(), "the same ordinary public request still assigns")
+		Expect(created.GetObject().GetStatus().GetConnectionState()).To(Equal(
+			publicv1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
 	})
 
 	DescribeTable("rolls private assignment writes back when the actual public output mapper fails", func(replace bool) {

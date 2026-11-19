@@ -40,7 +40,7 @@ var _ = DescribeMigration("Separate provider external ID", func() {
 				   'effective_from_timestamp','2026-01-01T00:00:00Z','effective_to_timestamp','2026-02-01T00:00:00Z'))
 				from billing_accounts where id = 'assigned';`)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(tool.Migrate(ctx, 159)).To(Succeed())
+		Expect(tool.Migrate(ctx, 162)).To(Succeed())
 		var token string
 		var released bool
 		Expect(conn.QueryRow(ctx, `select external_billing_account_id from billing_accounts where id = 'assigned'`).
@@ -57,7 +57,7 @@ var _ = DescribeMigration("Separate provider external ID", func() {
 	})
 
 	It("validates observation timestamps while preserving nanoseconds in JSON", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 159)).To(Succeed())
+		Expect(tool.Migrate(ctx, 162)).To(Succeed())
 		const insert = `insert into billing_accounts (id, name, tenant, data)
 			values ($1, 'ba-' || left(encode(sha256(convert_to($1, 'UTF8')), 'hex'), 60), 'system',
 				jsonb_build_object('status', jsonb_build_object('provider_key', 'm360', 'provider_account_reference', $1,

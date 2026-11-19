@@ -41,7 +41,7 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 	BeforeEach(func(ctx context.Context) {
 		var version int
 		Expect(conn.QueryRow(ctx, `select version from schema_migrations`).Scan(&version)).To(Succeed())
-		Expect(version).To(Equal(157))
+		Expect(version).To(Equal(159))
 		_, err := conn.Exec(ctx, `
 			insert into tenants (id, name, tenant, creation_timestamp, deletion_timestamp, finalizers, data) values
 			 ('pending', 'pending', 'pending', '2026-01-01Z', '2026-03-01Z', '{cleanup}', '{}'),
@@ -100,7 +100,7 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 		_, err := conn.Exec(ctx, `alter table tenant_billing_assignments add constraint extra_tenant_fk
 		 foreign key (tenant) references tenants(name)`)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(tool.Migrate(ctx, 157)).To(Succeed())
+		Expect(tool.Migrate(ctx, 160)).To(Succeed())
 		Expect(snapshot(ctx)).To(Equal(before))
 		Expect(foreignKeys(ctx)).To(BeZero())
 		var result string
@@ -116,6 +116,14 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 		 ["repeated","2025-01-01","2025-02-01",null,"2025-02-02",false],
 		 ["reused","2025-01-01","2025-02-01",null,"2025-02-02",false],
 		 ["reused-deleting","2026-03-01","2026-04-01",null,null,true]]`))
+		var goneMarker bool
+		Expect(conn.QueryRow(ctx, `select exists(select 1 from deleted_tenant_identities
+			where tenant_name = 'gone')`).Scan(&goneMarker)).To(Succeed())
+		Expect(goneMarker).To(BeTrue(), "a pre-upgrade archive-only deletion is reserved")
+		var reusedLive bool
+		Expect(conn.QueryRow(ctx, `select exists(select 1 from tenants
+			where name = 'reused' and deletion_timestamp = 'epoch')`).Scan(&reusedLive)).To(Succeed())
+		Expect(reusedLive).To(BeTrue(), "backfill must not replace a valid same-name live incarnation")
 		var indexes int
 		Expect(conn.QueryRow(ctx, `select count(*) from pg_index i join pg_class c on c.oid = i.indexrelid
 		 where i.indisvalid and c.relname in ('billing_accounts_unique_provider_account',
@@ -136,7 +144,7 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 		Expect(finalized).To(BeNil(), "empty finalizers do not prove physical removal")
 	})
 	It("allows closing retained history after physical removal without weakening the account foreign key", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 157)).To(Succeed())
+		Expect(tool.Migrate(ctx, 160)).To(Succeed())
 		_, err := conn.Exec(ctx, `delete from projects where tenant = 'pending';
 		 delete from tenants where name = 'pending';
 		 update tenant_billing_assignments set data = jsonb_set(data, '{status,effective_to_timestamp}',
@@ -179,7 +187,7 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 		_, err = reader.Exec(ctx, `lock table tenant_billing_assignments in access share mode`)
 		Expect(err).NotTo(HaveOccurred())
 
-		err = boundedTool.Migrate(ctx, 158)
+		err = boundedTool.Migrate(ctx, 160)
 		var migrationErr migratedb.Error
 		Expect(errors.As(err, &migrationErr)).To(BeTrue(), "expected a PostgreSQL migration error, got %v", err)
 		var pgErr *pgconn.PgError
@@ -187,13 +195,13 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 		Expect(pgErr.Code).To(Equal("55P03"))
 		Expect(pgErr.Message).To(ContainSubstring("Drain readers and writers"))
 		Expect(pgErr.Detail).To(ContainSubstring("After confirming rollback"))
-		Expect(pgErr.Detail).To(ContainSubstring("reset the dirty migration version to 157"))
+		Expect(pgErr.Detail).To(ContainSubstring("reset the dirty migration version to 159"))
 		Expect(reader.Rollback(ctx)).To(Succeed())
 
 		var version int
 		var dirty, absent bool
 		Expect(conn.QueryRow(ctx, `select version, dirty from schema_migrations`).Scan(&version, &dirty)).To(Succeed())
-		Expect(version).To(Equal(158))
+		Expect(version).To(Equal(160))
 		Expect(dirty).To(BeTrue())
 		Expect(conn.QueryRow(ctx, `select to_regclass('deleted_tenant_identities') is null`).Scan(&absent)).To(Succeed())
 		Expect(absent).To(BeTrue())
@@ -205,7 +213,7 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 		Expect(err).NotTo(HaveOccurred())
 		before := snapshot(ctx)
 		fks := foreignKeys(ctx)
-		Expect(tool.Migrate(ctx, 157)).NotTo(Succeed())
+		Expect(tool.Migrate(ctx, 160)).NotTo(Succeed())
 		Expect(snapshot(ctx)).To(Equal(before))
 		Expect(foreignKeys(ctx)).To(Equal(fks))
 		var absent bool

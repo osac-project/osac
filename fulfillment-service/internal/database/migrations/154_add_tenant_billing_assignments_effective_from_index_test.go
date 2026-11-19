@@ -22,11 +22,11 @@ import (
 
 var _ = DescribeMigration("Add tenant billing assignments effective_from index", func() {
 	BeforeEach(func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 150)).To(Succeed())
+		Expect(tool.Migrate(ctx, 153)).To(Succeed())
 	})
 
 	It("Creates the index backing the assignments List default order", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 151)).To(Succeed())
+		Expect(tool.Migrate(ctx, 154)).To(Succeed())
 
 		var indexDef string
 		err := conn.QueryRow(ctx, `

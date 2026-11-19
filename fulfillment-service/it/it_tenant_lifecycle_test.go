@@ -24,6 +24,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -1037,7 +1038,7 @@ var _ = Describe("Tenant edge cases and resilience", func() {
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 	})
 
-	It("Re-create after delete succeeds with same name", func(ctx context.Context) {
+	It("Re-create after delete is denied because the name remains reserved", func(ctx context.Context) {
 		name := fmt.Sprintf("test-%s", uuid.New())
 
 		By(fmt.Sprintf("Creating tenant %q", name))
@@ -1062,29 +1063,24 @@ var _ = Describe("Tenant edge cases and resilience", func() {
 			time.Second,
 		).Should(Succeed())
 
-		By("Re-creating tenant with the same name")
-		createResponse, err := tenantsClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
+		// The deleted identity is permanent: billing history is not required to reserve the name.
+		By("Attempting to re-create a tenant with the same name")
+		_, err := tenantsClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{
 				Metadata: privatev1.Metadata_builder{
 					Name: name,
 				}.Build(),
 			}.Build(),
 		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		newId := createResponse.GetObject().GetId()
-		DeferCleanup(func() {
-			_, _ = tenantsClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
-				Id: newId,
-			}.Build())
-			status, ok := grpcstatus.FromError(err)
-			if ok && status.Code() == grpccodes.NotFound {
-				return
-			}
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		By("Verifying the re-created tenant reaches SYNCED")
-		waitForTenantSynced(ctx, tenantsClient, newId)
+		Expect(err).To(HaveOccurred())
+		rejected, ok := grpcstatus.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(rejected.Code()).To(Equal(grpccodes.FailedPrecondition))
+		details := rejected.Details()
+		Expect(details).To(HaveLen(1))
+		info, ok := details[0].(*errdetails.ErrorInfo)
+		Expect(ok).To(BeTrue())
+		Expect(info.GetReason()).To(Equal("TENANT_IDENTITY_RETAINED"))
 	})
 
 	It("Delete during sync is handled gracefully", func(ctx context.Context) {

@@ -214,7 +214,7 @@ var _ = Describe("Deleted tenant identity store", Ordered, ContinueOnFailure, fu
 		Expect(errors.As(err, &duplicate)).To(BeTrue())
 		Expect(duplicate.Code).To(Equal("23505"), "ordinary INSERT owns duplicate classification")
 	})
-	It("does not apply an old marker's overflowing successor floor to a current live duplicate", func() {
+	It("does not apply an old marker's reservation to a current live duplicate", func() {
 		lockTenant()
 		finalized := stamp("9999-12-31T23:59:59.999999Z")
 		identity.FinalizedAt = &finalized
@@ -223,7 +223,7 @@ var _ = Describe("Deleted tenant identity store", Ordered, ContinueOnFailure, fu
 		Expect(err).NotTo(HaveOccurred())
 		Expect(created.Before(finalized)).To(BeTrue())
 	})
-	DescribeTable("denies absent retained or pending identities without reserving finalized unbilled names", func(mode string) {
+	DescribeTable("denies absent retained, unbilled or pending identities", func(mode string) {
 		switch mode {
 		case "billed":
 			identity.BillingRetained = true
@@ -236,15 +236,14 @@ var _ = Describe("Deleted tenant identity store", Ordered, ContinueOnFailure, fu
 			return CheckTenantIdentityReusable(sp, identity.TenantName)
 		})
 		switch mode {
-		case "billed":
-			Expect(errors.Is(err, ErrTenantIdentityRetained)).To(BeTrue())
 		case "pending":
 			Expect(err).To(HaveOccurred())
 			Expect(errors.Is(err, ErrTenantIdentityRetained)).To(BeFalse())
-		case "unbilled":
-			Expect(err).NotTo(HaveOccurred())
+		default:
+			Expect(errors.Is(err, ErrTenantIdentityRetained)).To(BeTrue())
 		}
-	}, Entry("billed", "billed"), Entry("pending is an audit error", "pending"), Entry("valid unbilled reuse", "unbilled"))
+	}, Entry("billed marker", "billed"), Entry("pending is an audit error", "pending"),
+		Entry("finalized unbilled marker", "unbilled"))
 	DescribeTable("checks actual retained history independently of marker billing", func(withMarker bool) {
 		_, err := tx.Exec(ctx, `insert into billing_accounts (id,name,tenant,data) values ('account',
 		 'ba-' || left(encode(sha256(convert_to('account','UTF8')), 'hex'),60), 'system',
@@ -287,38 +286,45 @@ var _ = Describe("Deleted tenant identity store", Ordered, ContinueOnFailure, fu
 		_, _, err = GetDeletedTenantIdentity(plain, "name")
 		Expect(err).To(HaveOccurred())
 	})
-	It("samples a microsecond database clock after the key and uses a strict finalized successor without replacing the marker", func() {
-		finalized := stamp("2099-12-31T23:59:59.999999Z")
-		identity.FinalizedAt = &finalized
-		seedMarker(identity)
-		created, err := TenantIdentityCreationTime(ctx, identity.TenantName)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(created).To(Equal(finalized.Add(time.Microsecond)))
-		got, _, err := GetDeletedTenantIdentity(ctx, identity.TenantName)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(got).To(Equal(identity))
-	})
-	It("rejects successor overflow before adding a microsecond", func() {
-		finalized := stamp("9999-12-31T23:59:59.999999Z")
-		identity.FinalizedAt = &finalized
+	DescribeTable("denies a finalized deleted identity without replacing the marker", func(finalized string) {
+		value := stamp(finalized)
+		identity.FinalizedAt = &value
 		seedMarker(identity)
 		Expect(tx.Savepoint(ctx, func(sp context.Context) error {
 			_, err := TenantIdentityCreationTime(sp, identity.TenantName)
 			return err
-		})).NotTo(Succeed())
-	})
+		})).To(MatchError(ErrTenantIdentityRetained))
+		got, found, err := GetDeletedTenantIdentity(ctx, identity.TenantName)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(found).To(BeTrue())
+		Expect(got).To(Equal(identity))
+	}, Entry("ordinary finalized marker", "2099-12-31T23:59:59.999999Z"),
+		Entry("marker at the protobuf upper bound", "9999-12-31T23:59:59.999999Z"))
 	It("allows reentrant keys and makes another connection wait until commit", func() {
 		Expect(LockTenantIdentity(ctx, "identity")).To(Succeed())
 		Expect(LockTenantIdentity(ctx, "identity")).To(Succeed())
 		other, err := tm.Begin(context.Background())
 		Expect(err).NotTo(HaveOccurred())
 		otherCtx, cancel := context.WithTimeout(TxIntoContext(context.Background(), other), 5*time.Second)
-		DeferCleanup(cancel)
 		DeferCleanup(func() { Expect(other.End(context.Background())).To(Succeed()) })
 		var pid int
 		Expect(other.QueryRow(otherCtx, `select pg_backend_pid()`).Scan(&pid)).To(Succeed())
 		done := make(chan error, 1)
-		go func() { done <- LockTenantIdentity(otherCtx, "identity") }()
+		workerDone := make(chan struct{})
+		workerStarted := false
+		DeferCleanup(func() {
+			cancel()
+			if workerStarted {
+				Eventually(workerDone, 3*time.Second).Should(BeClosed(),
+					"the lock worker must stop before the transaction ends")
+			}
+		})
+		go func() {
+			defer GinkgoRecover()
+			defer close(workerDone)
+			done <- LockTenantIdentity(otherCtx, "identity")
+		}()
+		workerStarted = true
 		Eventually(func() bool {
 			var waiting bool
 			Expect(pool.QueryRow(ctx, `select exists(select 1 from pg_locks

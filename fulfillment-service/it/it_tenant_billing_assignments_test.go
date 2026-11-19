@@ -20,7 +20,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 
@@ -35,7 +34,7 @@ var _ = Describe("Tenant billing assignments", Label("billing"), func() {
 		client := publicv1.NewTenantBillingAssignmentsClient(tool.ExternalView().AdminConn())
 		response, err := client.List(ctx, publicv1.TenantBillingAssignmentsListRequest_builder{}.Build())
 		Expect(response).To(BeNil())
-		Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+		expectBillingReason(err, "BILLING_NOT_CONFIGURED")
 		Expect(status.Convert(err).Message()).To(ContainSubstring("billing is not configured"))
 	})
 

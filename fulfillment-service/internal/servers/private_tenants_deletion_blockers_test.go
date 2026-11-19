@@ -266,10 +266,16 @@ var _ = Describe("Tenant archive dependency blockers", func() {
 			}
 			Expect(err).NotTo(HaveOccurred())
 			deleteCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			DeferCleanup(cancel)
 			result := make(chan error, 1)
+			workerDone := make(chan struct{})
+			DeferCleanup(func() {
+				cancel()
+				Eventually(workerDone, 10*time.Second).Should(BeClosed(),
+					"the deletion worker must stop before the creator fixture is released")
+			})
 			go func() {
 				defer GinkgoRecover()
+				defer close(workerDone)
 				_, err := database.WithNewTx(deleteCtx, func(ctx context.Context) (struct{}, error) {
 					return struct{}{}, completeDeletion(ctx, tenant, withFinalizer)
 				})
@@ -302,7 +308,7 @@ var _ = Describe("Tenant archive dependency blockers", func() {
 		tx, err := database.TxFromContext(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		_, err = tx.Exec(ctx, `create table extra_tenant_dependency (
-			owner text not null references tenants(name) on delete restrict)`)
+			owner text not null constraint extra_tenant_owner_fk references tenants(name) on delete restrict)`)
 		Expect(err).NotTo(HaveOccurred())
 		_, err = tx.Exec(ctx, `insert into extra_tenant_dependency(owner) values ($1)`, tenant)
 		Expect(err).NotTo(HaveOccurred())
@@ -311,6 +317,23 @@ var _ = Describe("Tenant archive dependency blockers", func() {
 			return completeDeletion(ctx, tenant, false)
 		})
 		Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+		// Removing only the added dependency proves it caused the rejection: the same deletion now succeeds.
+		Expect(inTx(func(ctx context.Context, tx database.Tx) error {
+			_, err := tx.Exec(ctx, `alter table extra_tenant_dependency drop constraint extra_tenant_owner_fk`)
+			return err
+		})).To(Succeed())
+		Expect(inTx(func(ctx context.Context, _ database.Tx) error {
+			return completeDeletion(ctx, tenant, false)
+		})).To(Succeed())
+		Expect(inTx(func(ctx context.Context, tx database.Tx) error {
+			var live, archived int
+			Expect(tx.QueryRow(ctx, `select count(*) from tenants where id = $1`, tenant).Scan(&live)).To(Succeed())
+			Expect(tx.QueryRow(ctx, `select count(*) from archived_tenants where id = $1`, tenant).
+				Scan(&archived)).To(Succeed())
+			Expect(live).To(BeZero())
+			Expect(archived).To(Equal(1))
+			return nil
+		})).To(Succeed())
 	})
 
 	It("inventories every tenant foreign key in the fully migrated PostgreSQL schema", func() {

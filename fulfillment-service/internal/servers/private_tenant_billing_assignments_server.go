@@ -303,6 +303,13 @@ func (s *PrivateTenantBillingAssignmentsServer) getAssignment(ctx context.Contex
 func (s *PrivateTenantBillingAssignmentsServer) Create(ctx context.Context,
 	request *privatev1.TenantBillingAssignmentsCreateRequest) (
 	response *privatev1.TenantBillingAssignmentsCreateResponse, err error) {
+	// Creation opens an interval from provider evidence in the same transaction. It has no safe preview
+	// contract, so reject the dry-run request before any provider call or database change. Public Create
+	// delegates here, and direct private callers take the same path.
+	if isDryRun(ctx) {
+		return nil, status.Error(codes.Unimplemented,
+			"dry-run is not supported for tenant billing assignment creation")
+	}
 	tx, err := database.TxFromContext(ctx)
 	if err != nil {
 		return nil, err
@@ -795,6 +802,11 @@ func (s *PrivateTenantBillingAssignmentsServer) finalizeAssignment(txCtx context
 	floor := latest.floor
 	if accountFloor.After(floor) {
 		floor = accountFloor
+	}
+	// The first interval cannot start before its owning tenant existed. This also covers a stored
+	// creation timestamp ahead of the database clock, which a clock sample alone would precede.
+	if created := latest.tenant.GetMetadata().GetCreationTimestamp(); created != nil && created.AsTime().After(floor) {
+		floor = created.AsTime()
 	}
 	at, err := dao.BillingFinalizationTime(txCtx, floor)
 	if err != nil {

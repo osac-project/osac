@@ -210,13 +210,17 @@ func tenantBillingPersistenceSpecs(fixture func() *billingPersistenceFixture) {
 			holder, err := f.tm.Begin(f.ctx)
 			Expect(err).NotTo(HaveOccurred())
 			holderEnded := false
+			var holderErr error
 			endHolder := func() {
 				if !holderEnded {
 					holderEnded = true
-					Expect(holder.End(context.Background())).To(Succeed())
+					holderErr = holder.End(context.Background())
 				}
 			}
-			DeferCleanup(endHolder)
+			DeferCleanup(func() {
+				endHolder()
+				Expect(holderErr).NotTo(HaveOccurred())
+			})
 			holderCtx := database.TxIntoContext(f.ctx, holder)
 			var holderPID int32
 			Expect(holder.QueryRow(holderCtx, `select pg_backend_pid()`).Scan(&holderPID)).To(Succeed())
@@ -236,9 +240,14 @@ func tenantBillingPersistenceSpecs(fixture func() *billingPersistenceFixture) {
 			waitCtx, cancel := context.WithTimeout(waiterCtx, 30*time.Second)
 			result := make(chan error, 1)
 			DeferCleanup(func() {
-				endHolder()
+				// Release the waiter before the holder cleanup reports so a
+				// failed holder end cannot strand this goroutine or connection.
 				cancel()
-				<-result
+				select {
+				case <-result:
+				case <-time.After(5 * time.Second):
+					Fail("the losing create did not return after its context was cancelled")
+				}
 				Expect(waiter.End(context.Background())).To(Succeed())
 			})
 			go func() {
@@ -247,9 +256,11 @@ func tenantBillingPersistenceSpecs(fixture func() *billingPersistenceFixture) {
 				result <- err
 				close(result)
 			}()
+			probeCtx, cancelProbe := context.WithTimeout(f.ctx, 10*time.Second)
+			DeferCleanup(cancelProbe)
 			Eventually(func() ([]int32, error) {
 				var blocked []int32
-				err := f.pool.QueryRow(f.ctx, `select pg_blocking_pids($1)`, waiterPID).Scan(&blocked)
+				err := f.pool.QueryRow(probeCtx, `select pg_blocking_pids($1)`, waiterPID).Scan(&blocked)
 				return blocked, err
 			}, 10*time.Second, 50*time.Millisecond).Should(ContainElement(holderPID))
 			endHolder()

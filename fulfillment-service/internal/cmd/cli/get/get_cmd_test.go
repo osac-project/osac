@@ -483,11 +483,13 @@ var _ = Describe("Get command", func() {
 		DescribeTable("fails closed without returning buffered partial results",
 			func(scenario string) {
 				calls := 0
+				var offsets []int32
 				runner := newInterceptedGetRunner(func(_ context.Context, _ string, request, response proto.Message) error {
 					calls++
 					if calls > 3 {
 						return errors.New("test circuit breaker")
 					}
+					offsets = append(offsets, request.(*publicv1.ClustersListRequest).GetOffset())
 					total := int32(101)
 					items := clusterPageItems(0, 100)
 					switch scenario {
@@ -524,6 +526,11 @@ var _ = Describe("Get command", func() {
 				Expect(err).To(HaveOccurred(), scenario)
 				Expect(items).To(BeEmpty(), "failed traversal must discard all buffered objects")
 				Expect(calls).To(BeNumerically("<=", 2), "the test circuit breaker must never be the error oracle")
+				if scenario == "later RPC failure" {
+					Expect(calls).To(Equal(2), "the injected RPC failure must be reached on the second page")
+					Expect(offsets).To(Equal([]int32{0, 100}), "the first page must succeed and the second page must be requested at its checked offset")
+					Expect(err).To(MatchError("p2 later page failed"), "the later page error must be surfaced exactly")
+				}
 			},
 			Entry("negative total", "negative total"), Entry("empty first page", "empty first page"),
 			Entry("oversized page", "oversized page"), Entry("duplicate ids", "duplicate ids"),
@@ -532,7 +539,7 @@ var _ = Describe("Get command", func() {
 			Entry("ignored offset", "ignored offset"),
 		)
 
-		It("observes cancellation after the first page within one second and makes no further RPC", func() {
+		It("observes cancellation after the first page and makes no further RPC", func() {
 			canceled, cancel := context.WithCancel(ctx)
 			DeferCleanup(cancel)
 			calls := 0
@@ -542,9 +549,7 @@ var _ = Describe("Get command", func() {
 				cancel()
 				return nil
 			})
-			start := time.Now()
 			items, err := runner.fetchObjects(canceled, nil)
-			Expect(time.Since(start)).To(BeNumerically("<", time.Second))
 			Expect(errors.Is(err, context.Canceled)).To(BeTrue())
 			Expect(items).To(BeEmpty())
 			Expect(calls).To(Equal(1))

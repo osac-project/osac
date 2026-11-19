@@ -25,7 +25,7 @@ var _ = DescribeMigration("Drop billing operation leases", func() {
 	BeforeEach(func(ctx context.Context) {
 		var version int
 		Expect(conn.QueryRow(ctx, `select version from schema_migrations`).Scan(&version)).To(Succeed())
-		Expect(version).To(Equal(158))
+		Expect(version).To(Equal(160))
 		_, err := conn.Exec(ctx, `
 			insert into billing_operation_leases (operation_key, owner, expires_at) values
 				($1, 'expired-owner', '2025-01-01Z'), ($2, 'stale-owner', '2099-01-01Z');
@@ -81,7 +81,7 @@ var _ = DescribeMigration("Drop billing operation leases", func() {
 		Expect(conn.QueryRow(ctx, `select count(*) from pg_indexes where tablename = 'billing_operation_leases'`).
 			Scan(&leaseIndexes)).To(Succeed())
 		Expect(leaseIndexes).To(Equal(1))
-		Expect(tool.Migrate(ctx, 158)).To(Succeed())
+		Expect(tool.Migrate(ctx, 161)).To(Succeed())
 		var absent bool
 		Expect(conn.QueryRow(ctx, `select to_regclass('billing_operation_leases') is null
 			and to_regclass('billing_operation_leases_pkey') is null`).Scan(&absent)).To(Succeed())
@@ -90,7 +90,7 @@ var _ = DescribeMigration("Drop billing operation leases", func() {
 		var version int
 		var dirty bool
 		Expect(conn.QueryRow(ctx, `select version, dirty from schema_migrations`).Scan(&version, &dirty)).To(Succeed())
-		Expect(version).To(Equal(159))
+		Expect(version).To(Equal(161))
 		Expect(dirty).To(BeFalse())
 		_, err := conn.Exec(ctx, `delete from billing_accounts where id = 'account'`)
 		Expect(err).To(HaveOccurred(), "the retained history account foreign key still restricts deletion")
@@ -104,7 +104,7 @@ var _ = DescribeMigration("Drop billing operation leases", func() {
 		_, err := conn.Exec(ctx, `create view lease_dependency as select owner from billing_operation_leases`)
 		Expect(err).NotTo(HaveOccurred())
 		before := snapshot(ctx)
-		Expect(tool.Migrate(ctx, 158)).NotTo(Succeed())
+		Expect(tool.Migrate(ctx, 161)).NotTo(Succeed())
 		Expect(snapshot(ctx)).To(Equal(before))
 		var count int
 		Expect(conn.QueryRow(ctx, `select count(*) from lease_dependency`).Scan(&count)).To(Succeed())

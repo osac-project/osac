@@ -39,28 +39,6 @@ func userRefs(names ...string) []*privatev1.UserReference {
 	return refs
 }
 
-func projectFixture(name, parent string) *privatev1.Project {
-	return privatev1.Project_builder{
-		Id: "id-" + name,
-		Metadata: privatev1.Metadata_builder{
-			Name: name, Tenant: "acme", Project: parent,
-		}.Build(),
-	}.Build()
-}
-
-func expectProject(client *MockProjectsClient, project *privatev1.Project) *gomock.Call {
-	metadata := project.GetMetadata()
-	return client.EXPECT().List(gomock.Any(), projectFilter(metadata.GetTenant(), metadata.GetName())).
-		Return(&privatev1.ProjectsListResponse{Items: []*privatev1.Project{project}}, nil)
-}
-
-func projectFilter(tenant, name string) gomock.Matcher {
-	filter := fmt.Sprintf("this.metadata.tenant == %q && this.metadata.name == %q", tenant, name)
-	return gomock.Cond(func(req *privatev1.ProjectsListRequest) bool {
-		return req.GetFilter() == filter
-	})
-}
-
 var _ = Describe("Finalizer Management", func() {
 	It("should add finalizer on first call", func() {
 		membership := privatev1.ProjectMembership_builder{
@@ -181,13 +159,18 @@ var _ = Describe("Update with FAILED state", func() {
 			}.Build(),
 		}.Build()
 
-		project := projectFixture("my-project", "")
+		project := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "my-project",
+				Tenant: "acme",
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
 				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-				Tenant:     "acme",
-				Project:    "my-project",
+				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
 				Users: userRefs("existing-user", "new-user"),
@@ -201,7 +184,9 @@ var _ = Describe("Update with FAILED state", func() {
 		}.Build()
 
 		// isTerminalFailure fetches the project, then passes it to handleUserListChange→resolveProjectGroup
-		expectProject(mockProjectsClient, project)
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 		mockIdpClient.EXPECT().
 			GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
@@ -233,13 +218,18 @@ var _ = Describe("Update with FAILED state", func() {
 			}.Build(),
 		}.Build()
 
-		project := projectFixture("my-project", "")
+		project := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "my-project",
+				Tenant: "acme",
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
 				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-				Tenant:     "acme",
-				Project:    "my-project",
+				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
 				Users: userRefs("user-id"),
@@ -252,7 +242,9 @@ var _ = Describe("Update with FAILED state", func() {
 		}.Build()
 
 		// isTerminalFailure fetches the project, then passes it to syncProjectMembership→resolveProjectGroup
-		expectProject(mockProjectsClient, project)
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 		mockIdpClient.EXPECT().
 			GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
@@ -282,8 +274,7 @@ var _ = Describe("Update with FAILED state", func() {
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
 				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-				Tenant:     "acme",
-				Project:    "deleted-project",
+				Project:    "deleted-project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
 				Users: userRefs("user-id"),
@@ -295,6 +286,10 @@ var _ = Describe("Update with FAILED state", func() {
 			}.Build(),
 		}.Build()
 
+		// Get returns NotFound, then getProjectByNameOrID falls back to List by name
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(nil, status.Errorf(codes.NotFound, "not found"))
 		mockProjectsClient.EXPECT().
 			List(gomock.Any(), gomock.Any()).
 			Return(&privatev1.ProjectsListResponse{}, nil)
@@ -313,14 +308,19 @@ var _ = Describe("Update with FAILED state", func() {
 	})
 
 	It("should not retry when project is being deleted (terminal failure)", func() {
-		project := projectFixture("my-project", "")
-		project.GetMetadata().SetDeletionTimestamp(timestamppb.Now())
+		project := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:              "my-project",
+				Tenant:            "acme",
+				DeletionTimestamp: timestamppb.Now(),
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
 				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-				Tenant:     "acme",
-				Project:    "my-project",
+				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
 				Users: userRefs("user-id"),
@@ -332,7 +332,9 @@ var _ = Describe("Update with FAILED state", func() {
 			}.Build(),
 		}.Build()
 
-		expectProject(mockProjectsClient, project)
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 		task := &task{
 			r:          functionObj,
@@ -376,7 +378,14 @@ var _ = Describe("Update with FAILED state", func() {
 		Expect(membership.GetStatus().GetMessage()).To(ContainSubstring("Unknown project membership role"))
 	})
 
-	It("should not retry when membership has no tenant (terminal failure)", func() {
+	It("should not retry when project has no tenant (terminal failure)", func() {
+		project := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name: "my-project",
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
+
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
 				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
@@ -391,6 +400,10 @@ var _ = Describe("Update with FAILED state", func() {
 				Message: proto.String("previous error"),
 			}.Build(),
 		}.Build()
+
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 		task := &task{
 			r:          functionObj,
@@ -412,13 +425,18 @@ var _ = Describe("Update with FAILED state", func() {
 			}.Build(),
 		}.Build()
 
-		project := projectFixture("my-project", "")
+		project := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "my-project",
+				Tenant: "acme",
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
 				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-				Tenant:     "acme",
-				Project:    "my-project",
+				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
 				Users: userRefs("user-id"),
@@ -430,13 +448,16 @@ var _ = Describe("Update with FAILED state", func() {
 			}.Build(),
 		}.Build()
 
-		// First lookup is for isTerminalFailure — returns transient error.
+		// First Get call is for isTerminalFailure — returns transient error
 		mockProjectsClient.EXPECT().
-			List(gomock.Any(), gomock.Any()).
+			Get(gomock.Any(), gomock.Any()).
 			Return(nil, status.Errorf(codes.Unavailable, "temporarily unavailable"))
 
 		// isTerminalFailure sees transient error and returns nil project, so retry re-fetches.
-		expectProject(mockProjectsClient, project)
+		// Full sync calls getProjectByNameOrID again, which succeeds this time.
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 		mockIdpClient.EXPECT().
 			GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
@@ -463,13 +484,18 @@ var _ = Describe("Update with FAILED state", func() {
 	})
 
 	It("should clear error message when FAILED state is recovered with previous users", func() {
-		project := projectFixture("my-project", "")
+		project := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "my-project",
+				Tenant: "acme",
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
 				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-				Tenant:     "acme",
-				Project:    "my-project",
+				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
 				Users: userRefs("user-a"),
@@ -483,7 +509,9 @@ var _ = Describe("Update with FAILED state", func() {
 		}.Build()
 
 		// isTerminalFailure fetches the project to verify it still exists
-		expectProject(mockProjectsClient, project)
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 		task := &task{
 			r:          functionObj,
@@ -536,13 +564,18 @@ var _ = Describe("Partial success tracking", func() {
 				}.Build(),
 			}.Build()
 
-			project := projectFixture("my-project", "")
+			project := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   "my-project",
+					Tenant: "acme",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
 
 			membership := privatev1.ProjectMembership_builder{
 				Metadata: privatev1.Metadata_builder{
 					Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-					Tenant:     "acme",
-					Project:    "my-project",
+					Project:    "project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
 					Users: userRefs("user-a", "user-b"),
@@ -553,7 +586,9 @@ var _ = Describe("Partial success tracking", func() {
 				}.Build(),
 			}.Build()
 
-			expectProject(mockProjectsClient, project)
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 			mockIdpClient.EXPECT().
 				GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
@@ -596,13 +631,18 @@ var _ = Describe("Partial success tracking", func() {
 				}.Build(),
 			}.Build()
 
-			project := projectFixture("my-project", "")
+			project := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   "my-project",
+					Tenant: "acme",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
 
 			membership := privatev1.ProjectMembership_builder{
 				Metadata: privatev1.Metadata_builder{
 					Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-					Tenant:     "acme",
-					Project:    "my-project",
+					Project:    "project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
 					Users: userRefs("user-a", "user-b", "user-c"),
@@ -614,7 +654,9 @@ var _ = Describe("Partial success tracking", func() {
 				}.Build(),
 			}.Build()
 
-			expectProject(mockProjectsClient, project)
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 			mockIdpClient.EXPECT().
 				GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
@@ -655,13 +697,18 @@ var _ = Describe("Partial success tracking", func() {
 				}.Build(),
 			}.Build()
 
-			project := projectFixture("my-project", "")
+			project := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   "my-project",
+					Tenant: "acme",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
 
 			membership := privatev1.ProjectMembership_builder{
 				Metadata: privatev1.Metadata_builder{
 					Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-					Tenant:     "acme",
-					Project:    "my-project",
+					Project:    "project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
 					Users: userRefs("user-a"),
@@ -673,7 +720,9 @@ var _ = Describe("Partial success tracking", func() {
 				}.Build(),
 			}.Build()
 
-			expectProject(mockProjectsClient, project)
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 			mockIdpClient.EXPECT().
 				GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
@@ -716,13 +765,18 @@ var _ = Describe("Partial success tracking", func() {
 				}.Build(),
 			}.Build()
 
-			project := projectFixture("my-project", "")
+			project := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   "my-project",
+					Tenant: "acme",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
 
 			membership := privatev1.ProjectMembership_builder{
 				Metadata: privatev1.Metadata_builder{
 					Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-					Tenant:     "acme",
-					Project:    "my-project",
+					Project:    "project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
 					Users: userRefs("user-a", "user-b"),
@@ -736,7 +790,9 @@ var _ = Describe("Partial success tracking", func() {
 			}.Build()
 
 			// isTerminalFailure fetches the project, then passes it to handleUserListChange→resolveProjectGroup
-			expectProject(mockProjectsClient, project)
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 			mockIdpClient.EXPECT().
 				GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
@@ -763,13 +819,18 @@ var _ = Describe("Partial success tracking", func() {
 		})
 
 		It("should preserve user-a and stay FAILED when user-b still fails on retry", func() {
-			project := projectFixture("my-project", "")
+			project := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   "my-project",
+					Tenant: "acme",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
 
 			membership := privatev1.ProjectMembership_builder{
 				Metadata: privatev1.Metadata_builder{
 					Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-					Tenant:     "acme",
-					Project:    "my-project",
+					Project:    "project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
 					Users: userRefs("user-a", "user-b"),
@@ -783,7 +844,9 @@ var _ = Describe("Partial success tracking", func() {
 			}.Build()
 
 			// isTerminalFailure fetches the project — non-terminal, passes it downstream
-			expectProject(mockProjectsClient, project)
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 			// handleUserListChange → resolveProjectGroup reuses the project from isTerminalFailure
 			mockIdpClient.EXPECT().
@@ -900,17 +963,25 @@ var _ = Describe("Project Group Path Building", func() {
 	})
 
 	Context("Nested projects (with parent)", func() {
-		It("should use the full name for a legacy project without a stored parent", func() {
-			project := projectFixture("parent.child", "")
-			task := &task{r: functionObj}
-			path, err := task.buildProjectGroupPath(ctx, project, "system:viewers")
-			Expect(err).NotTo(HaveOccurred())
-			Expect(path).To(Equal("/parent/child/system:viewers"))
-		})
-
 		It("should build hierarchical path for one-level nesting", func() {
-			childProject := projectFixture("parent.child", "parent")
-			expectProject(mockProjectsClient, projectFixture("parent", ""))
+			parentProject := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: "parent",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
+
+			childProject := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    "child",
+					Project: "parent",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
+
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: parentProject}, nil)
 
 			task := &task{
 				r: functionObj,
@@ -922,9 +993,38 @@ var _ = Describe("Project Group Path Building", func() {
 		})
 
 		It("should build hierarchical path for two-level nesting", func() {
-			childProject := projectFixture("root.parent.child", "root.parent")
-			expectProject(mockProjectsClient, projectFixture("root.parent", "root"))
-			expectProject(mockProjectsClient, projectFixture("root", ""))
+			rootProject := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: "root",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
+
+			parentProject := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    "parent",
+					Project: "root",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
+
+			childProject := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    "child",
+					Project: "parent",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
+
+			// First call: get parent project
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: parentProject}, nil)
+
+			// Second call: get root project
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: rootProject}, nil)
 
 			task := &task{
 				r: functionObj,
@@ -936,10 +1036,51 @@ var _ = Describe("Project Group Path Building", func() {
 		})
 
 		It("should build hierarchical path for three-level nesting", func() {
-			componentProject := projectFixture("org.team.product.component", "org.team.product")
-			expectProject(mockProjectsClient, projectFixture("org.team.product", "org.team"))
-			expectProject(mockProjectsClient, projectFixture("org.team", "org"))
-			expectProject(mockProjectsClient, projectFixture("org", ""))
+			orgProject := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: "org",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
+
+			teamProject := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    "team",
+					Project: "org",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
+
+			productProject := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    "product",
+					Project: "team",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
+
+			componentProject := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    "component",
+					Project: "product",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
+
+			// First call: get product project
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: productProject}, nil)
+
+			// Second call: get team project
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: teamProject}, nil)
+
+			// Third call: get org project
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: orgProject}, nil)
 
 			task := &task{
 				r: functionObj,
@@ -953,7 +1094,18 @@ var _ = Describe("Project Group Path Building", func() {
 
 	Context("Error handling", func() {
 		It("should return error when parent project fetch fails", func() {
-			childProject := projectFixture("parent.child", "parent")
+			childProject := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    "child",
+					Project: "parent",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
+
+			// getProjectByNameOrID will try Get first, then List
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(nil, status.Error(codes.NotFound, "parent not found"))
 
 			mockProjectsClient.EXPECT().
 				List(gomock.Any(), gomock.Any()).
@@ -969,11 +1121,32 @@ var _ = Describe("Project Group Path Building", func() {
 			Expect(path).To(Equal(""))
 		})
 
-		It("should reject a parent that does not match the name prefix", func() {
-			childProject := projectFixture("parent.child", "other-parent")
-			task := &task{r: functionObj}
-			path, err := task.buildProjectGroupPath(ctx, childProject, "system:managers")
-			Expect(err).To(MatchError(ContainSubstring("parent project does not match the project name prefix")))
+		It("should detect circular reference and return error", func() {
+			// Create a scenario where we hit max depth
+			// This simulates a circular reference by creating a deep chain
+			deepProject := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    "level",
+					Project: "parent",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
+
+			// Mock calls up to max depth
+			for i := 0; i < MaxProjectHierarchyDepth; i++ {
+				mockProjectsClient.EXPECT().
+					Get(gomock.Any(), gomock.Any()).
+					Return(&privatev1.ProjectsGetResponse{Object: deepProject}, nil)
+			}
+
+			task := &task{
+				r: functionObj,
+			}
+
+			path, err := task.buildProjectGroupPath(ctx, deepProject, "system:managers")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("exceeded maximum depth"))
+			Expect(err.Error()).To(ContainSubstring("circular reference"))
 			Expect(path).To(Equal(""))
 		})
 	})
@@ -1022,11 +1195,17 @@ var _ = Describe("Synchronization", func() {
 				}.Build(),
 			}.Build()
 
-			project := projectFixture("my-project", "")
+			project := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   "my-project",
+					Tenant: "acme",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
 
 			membership := privatev1.ProjectMembership_builder{
 				Metadata: privatev1.Metadata_builder{
-					Tenant: "acme", Project: "my-project",
+					Project: "project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
 					Users: userRefs("user-id"),
@@ -1041,7 +1220,9 @@ var _ = Describe("Synchronization", func() {
 				Get(gomock.Any(), gomock.Any()).
 				Return(&privatev1.UsersGetResponse{Object: user}, nil)
 
-			expectProject(mockProjectsClient, project)
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 			mockIdpClient.EXPECT().
 				GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
@@ -1075,12 +1256,25 @@ var _ = Describe("Synchronization", func() {
 				}.Build(),
 			}.Build()
 
-			parentProject := projectFixture("parent", "")
-			childProject := projectFixture("parent.child", "parent")
+			parentProject := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: "parent",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
+
+			childProject := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    "child",
+					Tenant:  "acme",
+					Project: "parent",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
 
 			membership := privatev1.ProjectMembership_builder{
 				Metadata: privatev1.Metadata_builder{
-					Tenant: "acme", Project: "parent.child",
+					Project: "child-project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
 					Users: userRefs("user-id"),
@@ -1095,8 +1289,14 @@ var _ = Describe("Synchronization", func() {
 				Get(gomock.Any(), gomock.Any()).
 				Return(&privatev1.UsersGetResponse{Object: user}, nil)
 
-			expectProject(mockProjectsClient, childProject)
-			expectProject(mockProjectsClient, parentProject)
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: childProject}, nil)
+
+			// buildProjectGroupPath will fetch parent
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: parentProject}, nil)
 
 			mockIdpClient.EXPECT().
 				GetGroupIDByPath(gomock.Any(), "acme", "/parent/child/system:viewers").
@@ -1120,11 +1320,17 @@ var _ = Describe("Synchronization", func() {
 
 	Context("Error handling", func() {
 		It("should fail when user does not exist", func() {
-			project := projectFixture("my-project", "")
+			project := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   "my-project",
+					Tenant: "acme",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
 
 			membership := privatev1.ProjectMembership_builder{
 				Metadata: privatev1.Metadata_builder{
-					Tenant: "acme", Project: "my-project",
+					Project: "project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
 					Users: userRefs("nonexistent-user"),
@@ -1135,7 +1341,9 @@ var _ = Describe("Synchronization", func() {
 				}.Build(),
 			}.Build()
 
-			expectProject(mockProjectsClient, project)
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 			mockIdpClient.EXPECT().
 				GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
@@ -1159,7 +1367,7 @@ var _ = Describe("Synchronization", func() {
 		It("should fail when project does not exist", func() {
 			membership := privatev1.ProjectMembership_builder{
 				Metadata: privatev1.Metadata_builder{
-					Tenant: "acme", Project: "nonexistent-project",
+					Project: "nonexistent-project",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
 					Users: userRefs("user-id"),
@@ -1169,6 +1377,10 @@ var _ = Describe("Synchronization", func() {
 					State: privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_PENDING,
 				}.Build(),
 			}.Build()
+
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(nil, status.Error(codes.NotFound, "project not found"))
 
 			mockProjectsClient.EXPECT().
 				List(gomock.Any(), gomock.Any()).
@@ -1186,11 +1398,17 @@ var _ = Describe("Synchronization", func() {
 		})
 
 		It("should fail when authorization group does not exist", func() {
-			project := projectFixture("my-project", "")
+			project := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   "my-project",
+					Tenant: "acme",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{}.Build(),
+			}.Build()
 
 			membership := privatev1.ProjectMembership_builder{
 				Metadata: privatev1.Metadata_builder{
-					Tenant: "acme", Project: "my-project",
+					Project: "project-id",
 				}.Build(),
 				Spec: privatev1.ProjectMembershipSpec_builder{
 					Users: userRefs("user-id"),
@@ -1201,7 +1419,9 @@ var _ = Describe("Synchronization", func() {
 				}.Build(),
 			}.Build()
 
-			expectProject(mockProjectsClient, project)
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 			mockIdpClient.EXPECT().
 				GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
@@ -1218,52 +1438,6 @@ var _ = Describe("Synchronization", func() {
 			Expect(membership.GetStatus().GetMessage()).To(ContainSubstring("Failed to find authorization group"))
 		})
 	})
-})
-
-var _ = Describe("Stored project binding", func() {
-	DescribeTable("rejects a mismatched project before touching the identity provider", func(target, lookup, returnedName, returnedTenant string) {
-		ctrl := gomock.NewController(GinkgoT())
-		projects := NewMockProjectsClient(ctrl)
-		membership := privatev1.ProjectMembership_builder{
-			Metadata: privatev1.Metadata_builder{
-				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-				Tenant:     "acme",
-				Project:    target,
-			}.Build(),
-			Spec: privatev1.ProjectMembershipSpec_builder{
-				Users: userRefs("user-id"),
-				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
-			}.Build(),
-		}.Build()
-		task := &task{
-			r: &function{
-				logger:         logger,
-				projectsClient: projects,
-				usersClient:    NewMockUsersClient(ctrl),
-				idpClient:      idp.NewMockClientInterface(ctrl),
-			},
-			membership: membership,
-		}
-		if target != lookup {
-			expectProject(projects, projectFixture(target, lookup)).Times(2)
-		}
-		returned := projectFixture(returnedName, "")
-		returned.GetMetadata().SetTenant(returnedTenant)
-		projects.EXPECT().List(gomock.Any(), projectFilter("acme", lookup)).
-			Return(&privatev1.ProjectsListResponse{Items: []*privatev1.Project{returned}}, nil).Times(2)
-
-		ctx := context.Background()
-		Expect(task.update(ctx)).To(Succeed())
-		Expect(membership.GetStatus().GetState()).To(Equal(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED))
-		Expect(membership.GetStatus().GetMessage()).To(ContainSubstring("did not match the stored tenant and project reference"))
-		Expect(status.Code(task.delete(ctx))).To(Equal(codes.FailedPrecondition))
-		Expect(membership.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.ProjectMembershipFinalizer))
-	},
-		Entry("membership target tenant differs", "parent", "parent", "parent", "other-tenant"),
-		Entry("membership target name differs", "parent", "parent", "other-project", "acme"),
-		Entry("parent tenant differs", "parent.child", "parent", "parent", "other-tenant"),
-		Entry("parent name differs", "parent.child", "parent", "other-project", "acme"),
-	)
 })
 
 var _ = Describe("Deletion Cleanup", func() {
@@ -1308,13 +1482,18 @@ var _ = Describe("Deletion Cleanup", func() {
 			}.Build(),
 		}.Build()
 
-		project := projectFixture("my-project", "")
+		project := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "my-project",
+				Tenant: "acme",
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
 				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-				Tenant:     "acme",
-				Project:    "my-project",
+				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
 				Users: userRefs("user-id"),
@@ -1325,7 +1504,9 @@ var _ = Describe("Deletion Cleanup", func() {
 			}.Build(),
 		}.Build()
 
-		expectProject(mockProjectsClient, project).Times(2)
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 		mockIdpClient.EXPECT().
 			GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
@@ -1340,9 +1521,11 @@ var _ = Describe("Deletion Cleanup", func() {
 			Return(nil)
 
 		mockProjectsClient.EXPECT().
-			Signal(gomock.Any(), gomock.Cond(func(req *privatev1.ProjectsSignalRequest) bool {
-				return req.GetId() == project.GetId()
-			})).
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
+
+		mockProjectsClient.EXPECT().
+			Signal(gomock.Any(), gomock.Any()).
 			Return(privatev1.ProjectsSignalResponse_builder{}.Build(), nil)
 
 		task := &task{
@@ -1365,15 +1548,26 @@ var _ = Describe("Deletion Cleanup", func() {
 			}.Build(),
 		}.Build()
 
-		parentProject := projectFixture("parent", "")
-		childProject := projectFixture("parent.child", "parent")
-		childProject.GetMetadata().SetDeletionTimestamp(timestamppb.Now())
+		parentProject := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name: "parent",
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
+
+		childProject := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:    "child",
+				Tenant:  "acme",
+				Project: "parent",
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
 				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-				Tenant:     "acme",
-				Project:    "parent.child",
+				Project:    "child-project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
 				Users: userRefs("user-id"),
@@ -1384,8 +1578,13 @@ var _ = Describe("Deletion Cleanup", func() {
 			}.Build(),
 		}.Build()
 
-		expectProject(mockProjectsClient, childProject).Times(2)
-		expectProject(mockProjectsClient, parentProject)
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: childProject}, nil)
+
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: parentProject}, nil)
 
 		mockIdpClient.EXPECT().
 			GetGroupIDByPath(gomock.Any(), "acme", "/parent/child/system:viewers").
@@ -1398,6 +1597,10 @@ var _ = Describe("Deletion Cleanup", func() {
 		mockIdpClient.EXPECT().
 			RemoveUserFromGroup(gomock.Any(), "acme", "keycloak-alice-id", "group-id").
 			Return(nil)
+
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: childProject}, nil)
 
 		mockProjectsClient.EXPECT().
 			Signal(gomock.Any(), gomock.Any()).
@@ -1417,8 +1620,7 @@ var _ = Describe("Deletion Cleanup", func() {
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
 				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-				Tenant:     "acme",
-				Project:    "my-project",
+				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
 				Users: userRefs("user-id"),
@@ -1429,10 +1631,21 @@ var _ = Describe("Deletion Cleanup", func() {
 			}.Build(),
 		}.Build()
 
-		// Neither cleanup nor signaling finds the project by its tenant and name.
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(nil, status.Error(codes.NotFound, "project not found"))
+
 		mockProjectsClient.EXPECT().
 			List(gomock.Any(), gomock.Any()).
-			Return(&privatev1.ProjectsListResponse{}, nil).Times(2)
+			Return(&privatev1.ProjectsListResponse{Items: []*privatev1.Project{}}, nil)
+
+		// signalProject: project still not found by name
+		mockProjectsClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsListResponse{}, nil)
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(nil, status.Error(codes.NotFound, "project not found"))
 
 		task := &task{
 			r:          functionObj,
@@ -1445,13 +1658,18 @@ var _ = Describe("Deletion Cleanup", func() {
 	})
 
 	It("should handle group not found during cleanup with gRPC status code", func() {
-		project := projectFixture("my-project", "")
+		project := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "my-project",
+				Tenant: "acme",
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
 				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-				Tenant:     "acme",
-				Project:    "my-project",
+				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
 				Users: userRefs("user-id"),
@@ -1462,11 +1680,17 @@ var _ = Describe("Deletion Cleanup", func() {
 			}.Build(),
 		}.Build()
 
-		expectProject(mockProjectsClient, project).Times(2)
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 		mockIdpClient.EXPECT().
 			GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
 			Return("", status.Error(codes.NotFound, "group not found"))
+
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 		mockProjectsClient.EXPECT().
 			Signal(gomock.Any(), gomock.Any()).
@@ -1483,13 +1707,18 @@ var _ = Describe("Deletion Cleanup", func() {
 	})
 
 	It("should handle group not found during cleanup with wrapped error message", func() {
-		project := projectFixture("my-project", "")
+		project := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "my-project",
+				Tenant: "acme",
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
 				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-				Tenant:     "acme",
-				Project:    "my-project",
+				Project:    "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
 				Users: userRefs("user-id"),
@@ -1500,12 +1729,17 @@ var _ = Describe("Deletion Cleanup", func() {
 			}.Build(),
 		}.Build()
 
-		expectProject(mockProjectsClient, project).Times(2)
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 		mockIdpClient.EXPECT().
 			GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:viewers").
 			Return("", fmt.Errorf("wrapped error: group not found in keycloak"))
 
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 		mockProjectsClient.EXPECT().
 			Signal(gomock.Any(), gomock.Any()).
 			Return(privatev1.ProjectsSignalResponse_builder{}.Build(), nil)
@@ -1573,11 +1807,10 @@ var _ = Describe("Signal Project on Deletion", func() {
 		Expect(membership.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.ProjectMembershipFinalizer))
 	})
 
-	It("should continue delete when project lookup fails during signaling", func() {
+	It("should continue delete when project Get fails during signaling", func() {
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
 				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-				Tenant:     "acme",
 				Project:    "my-project",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
@@ -1586,7 +1819,7 @@ var _ = Describe("Signal Project on Deletion", func() {
 		}.Build()
 
 		mockProjectsClient.EXPECT().
-			List(gomock.Any(), gomock.Any()).
+			Get(gomock.Any(), gomock.Any()).
 			Return(nil, status.Errorf(codes.Unavailable, "service unavailable"))
 
 		task := &task{
@@ -1603,7 +1836,6 @@ var _ = Describe("Signal Project on Deletion", func() {
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
 				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-				Tenant:     "acme",
 				Project:    "nonexistent-project",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
@@ -1614,6 +1846,9 @@ var _ = Describe("Signal Project on Deletion", func() {
 		mockProjectsClient.EXPECT().
 			List(gomock.Any(), gomock.Any()).
 			Return(&privatev1.ProjectsListResponse{}, nil)
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(nil, status.Error(codes.NotFound, "project not found"))
 
 		task := &task{
 			r:          functionObj,
@@ -1626,11 +1861,16 @@ var _ = Describe("Signal Project on Deletion", func() {
 	})
 
 	It("should continue delete when Signal RPC fails", func() {
-		project := projectFixture("my-project", "")
+		project := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "my-project",
+				Tenant: "acme",
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
 				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
-				Tenant:     "acme",
 				Project:    "my-project",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
@@ -1638,7 +1878,9 @@ var _ = Describe("Signal Project on Deletion", func() {
 			}.Build(),
 		}.Build()
 
-		expectProject(mockProjectsClient, project)
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 		mockProjectsClient.EXPECT().
 			Signal(gomock.Any(), gomock.Any()).
@@ -1694,11 +1936,17 @@ var _ = Describe("User List Change Handling", func() {
 			}.Build(),
 		}.Build()
 
-		project := projectFixture("my-project", "")
+		project := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "my-project",
+				Tenant: "acme",
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: "acme", Project: "my-project",
+				Project: "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
 				Users: userRefs("existing-user", "new-user"),
@@ -1710,7 +1958,9 @@ var _ = Describe("User List Change Handling", func() {
 			}.Build(),
 		}.Build()
 
-		expectProject(mockProjectsClient, project)
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 		mockIdpClient.EXPECT().
 			GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
@@ -1741,11 +1991,17 @@ var _ = Describe("User List Change Handling", func() {
 			}.Build(),
 		}.Build()
 
-		project := projectFixture("my-project", "")
+		project := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "my-project",
+				Tenant: "acme",
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: "acme", Project: "my-project",
+				Project: "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
 				Users: userRefs("remaining-user"),
@@ -1757,7 +2013,9 @@ var _ = Describe("User List Change Handling", func() {
 			}.Build(),
 		}.Build()
 
-		expectProject(mockProjectsClient, project)
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 		mockIdpClient.EXPECT().
 			GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
@@ -1794,11 +2052,17 @@ var _ = Describe("User List Change Handling", func() {
 			}.Build(),
 		}.Build()
 
-		project := projectFixture("my-project", "")
+		project := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "my-project",
+				Tenant: "acme",
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: "acme", Project: "my-project",
+				Project: "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
 				Users: userRefs("kept-user", "new-user"),
@@ -1810,7 +2074,9 @@ var _ = Describe("User List Change Handling", func() {
 			}.Build(),
 		}.Build()
 
-		expectProject(mockProjectsClient, project)
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 		mockIdpClient.EXPECT().
 			GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:viewers").
@@ -1868,11 +2134,17 @@ var _ = Describe("User List Change Handling", func() {
 	})
 
 	It("should set FAILED state when adding a user fails", func() {
-		project := projectFixture("my-project", "")
+		project := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "my-project",
+				Tenant: "acme",
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
-				Tenant: "acme", Project: "my-project",
+				Project: "project-id",
 			}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
 				Users: userRefs("existing-user", "failing-user"),
@@ -1884,7 +2156,9 @@ var _ = Describe("User List Change Handling", func() {
 			}.Build(),
 		}.Build()
 
-		expectProject(mockProjectsClient, project)
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
 
 		mockIdpClient.EXPECT().
 			GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").

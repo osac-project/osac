@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -393,21 +394,8 @@ var _ = Describe("Tenant identity lifecycle", func() {
 		})).To(Succeed())
 	}, Entry("direct bare context", false), Entry("legacy deleting row", true))
 
-	DescribeTable("stamps recreation after a key wait and preserves the previous marker until the next deletion", func(finalizer, futureFloor bool) {
+	DescribeTable("rejects a deleted-name creation after a key wait and preserves the previous marker", func(finalizer bool) {
 		Expect(inTx("", func(c context.Context, _ database.Tx) error {
-			if futureFloor {
-				tx, err := database.TxFromContext(c)
-				if err != nil {
-					return err
-				}
-				// A valid prior unbilled incarnation forces actual DAO Create/Delete beyond the
-				// wall clock. No production clock override or sleep is involved.
-				_, err = tx.Exec(c, `insert into deleted_tenant_identities values
-					('reusable', '2040-01-01Z', '2040-01-02Z', NULL, '2040-01-03Z', false)`)
-				if err != nil {
-					return err
-				}
-			}
 			input := object("reusable")
 			if finalizer {
 				input.GetMetadata().SetFinalizers([]string{"controller"})
@@ -449,18 +437,12 @@ var _ = Describe("Tenant identity lifecycle", func() {
 			}
 		}()
 		var createPID int32
-		var transactionNow time.Time
-		// Begin is lazy: force a real, old PostgreSQL transaction before waiting on the key.
-		Expect(creator.QueryRow(createCtx, `select pg_backend_pid(), now()`).Scan(&createPID, &transactionNow)).To(Succeed())
-		if futureFloor {
-			Expect(transactionNow).To(BeTemporally("<", *old.finalized))
-		}
-		result := make(chan *CreateResponse[*privatev1.Tenant], 1)
-		errors := make(chan error, 1)
+		// Begin is lazy: force a real transaction before waiting on the identity key.
+		Expect(creator.QueryRow(createCtx, `select pg_backend_pid()`).Scan(&createPID)).To(Succeed())
+		result := make(chan error, 1)
 		go func() {
-			response, err := create(createCtx, object("reusable"))
-			result <- response
-			errors <- err
+			_, err := create(createCtx, object("reusable"))
+			result <- err
 		}()
 		Eventually(func() (bool, error) {
 			var blocked bool
@@ -470,42 +452,27 @@ var _ = Describe("Tenant identity lifecycle", func() {
 		Expect(deleter.End(deleteCtx)).To(Succeed())
 		deleteEnded = true
 		var createErr error
-		Eventually(errors, 5*time.Second, 10*time.Millisecond).Should(Receive(&createErr))
-		Expect(createErr).NotTo(HaveOccurred())
-		var created *CreateResponse[*privatev1.Tenant]
-		Expect(result).To(Receive(&created))
-		creation := created.GetObject().GetMetadata().GetCreationTimestamp().AsTime()
-		Expect(creation).To(BeTemporally(">", *old.finalized))
-		Expect(creation).To(BeTemporally(">", transactionNow))
-		if futureFloor {
-			Expect(creation).To(BeTemporally("==", old.finalized.Add(time.Microsecond)))
-		}
-		var stored time.Time
-		Expect(creator.QueryRow(createCtx, `select creation_timestamp from tenants where name = 'reusable'`).Scan(&stored)).To(Succeed())
-		Expect(stored).To(BeTemporally("==", creation))
-		Expect(readIdentity(createCtx, creator, "reusable")).To(Equal(old))
+		Eventually(result, 5*time.Second, 10*time.Millisecond).Should(Receive(&createErr))
+		Expect(errors.Is(createErr, database.ErrTenantIdentityRetained)).To(BeTrue())
+		Expect(readIdentity(createCtx, creator, "reusable")).To(Equal(old), "the rejected create must not replace the marker")
+		var existing int
+		Expect(creator.QueryRow(createCtx, `select count(*) from tenants where name = 'reusable'`).Scan(&existing)).To(Succeed())
+		Expect(existing).To(BeZero())
 		Expect(creator.End(createCtx)).To(Succeed())
 		createEnded = true
-		Expect(inTx("second", func(c context.Context, tx database.Tx) error {
-			_, err := tenants.Delete().SetId("reusable").Do(c)
+
+		// A never-used name remains eligible, and its creation timestamp is sampled by the database.
+		Expect(inTx("", func(c context.Context, tx database.Tx) error {
+			created, err := create(c, object("never-used"))
 			if err != nil {
 				return err
 			}
-			second := readIdentity(c, tx, "reusable")
-			Expect(second.created).To(Equal(creation))
-			Expect(second.actor).To(Equal(new("second")))
-			Expect(second.deleted).To(BeTemporally(">=", creation))
-			Expect(second.finalized).NotTo(BeNil())
-			if futureFloor {
-				Expect(second.deleted).To(BeTemporally("==", creation))
-				Expect(*second.finalized).To(BeTemporally("==", second.deleted))
-			}
-			_, err = create(c, object("reusable"))
-			return err
+			var stored time.Time
+			Expect(tx.QueryRow(c, `select creation_timestamp from tenants where name = 'never-used'`).Scan(&stored)).To(Succeed())
+			Expect(stored).To(BeTemporally("==", created.GetObject().GetMetadata().GetCreationTimestamp().AsTime()))
+			return nil
 		})).To(Succeed())
-	}, Entry("immediate Delete", false, false), Entry("last-finalizer Update", true, false),
-		Entry("immediate Delete with future/tied boundaries", false, true),
-		Entry("last-finalizer Update with future/tied boundaries", true, true))
+	}, Entry("immediate Delete", false), Entry("last-finalizer Update", true))
 
 	DescribeTable("takes the tenant identity key before each supported row-lock surface", func(operation string) {
 		Expect(inTx("", func(c context.Context, _ database.Tx) error {
@@ -565,9 +532,21 @@ var _ = Describe("Tenant identity lifecycle", func() {
 		// The waiter has not taken even a SHARE lock on a tenant before asking for its key.
 		probe, err := pool.Begin(waitCtx)
 		Expect(err).NotTo(HaveOccurred())
+		probeEnded := false
+		DeferCleanup(func() {
+			if probeEnded {
+				return
+			}
+			rollbackCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := probe.Rollback(rollbackCtx); !errors.Is(err, pgx.ErrTxClosed) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
 		_, err = probe.Exec(waitCtx, `select id from tenants where id = 'ordered' for update nowait`)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(probe.Rollback(waitCtx)).To(Succeed())
+		probeEnded = true
 		Expect(gate.End(gateCtx)).To(Succeed())
 		gateEnded = true
 		var actual error
@@ -752,22 +731,25 @@ var _ = Describe("Tenant identity lifecycle", func() {
 	}, Entry("missing id", "", "canonical", "canonical"), Entry("missing name", "canonical", "", "canonical"),
 		Entry("mismatched id", "different", "canonical", "canonical"), Entry("mismatched self-tenant", "canonical", "canonical", "different"))
 
-	DescribeTable("fails actual DAO recreation for pending or overflowing absent identity evidence", func(finalized *time.Time) {
-		Expect(inTx("", func(c context.Context, tx database.Tx) error {
-			_, err := tx.Exec(c, `insert into deleted_tenant_identities values
-				('audit-stop', '2020-01-01Z', '2020-01-02Z', NULL, $1, false)`, finalized)
-			return err
-		})).To(Succeed())
-		err := inTx("", func(c context.Context, _ database.Tx) error {
-			_, err := tenants.Create().SetObject(object("audit-stop")).Do(c)
-			return err
-		})
-		Expect(err).To(HaveOccurred())
-		Expect(errors.Is(err, database.ErrTenantIdentityRetained)).To(BeFalse(), "audit failures are not permanent name policy")
-		var live int
-		Expect(pool.QueryRow(ctx, `select count(*) from tenants where name = 'audit-stop'`).Scan(&live)).To(Succeed())
-		Expect(live).To(BeZero())
-	}, Entry("unfinalized", nil), Entry("protobuf successor overflow", new(time.Date(9999, 12, 31, 23, 59, 59, 999999000, time.UTC))))
+	DescribeTable("fails actual DAO recreation for pending or retained absent identity evidence",
+		func(finalized *time.Time, retained bool) {
+			Expect(inTx("", func(c context.Context, tx database.Tx) error {
+				_, err := tx.Exec(c, `insert into deleted_tenant_identities values
+					('audit-stop', '2020-01-01Z', '2020-01-02Z', NULL, $1, false)`, finalized)
+				return err
+			})).To(Succeed())
+			err := inTx("", func(c context.Context, _ database.Tx) error {
+				_, err := tenants.Create().SetObject(object("audit-stop")).Do(c)
+				return err
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, database.ErrTenantIdentityRetained)).To(Equal(retained))
+			var live int
+			Expect(pool.QueryRow(ctx, `select count(*) from tenants where name = 'audit-stop'`).Scan(&live)).To(Succeed())
+			Expect(live).To(BeZero())
+		}, Entry("unfinalized is an audit error", nil, false),
+		Entry("finalized marker at the protobuf upper bound is retained",
+			new(time.Date(9999, 12, 31, 23, 59, 59, 999999000, time.UTC)), true))
 
 	DescribeTable("rolls back tenant, billing, identity and archive after an injected lifecycle failure", func(stage string, finalizer bool) {
 		var beforeTenant, beforeHistory, beforeMarker string

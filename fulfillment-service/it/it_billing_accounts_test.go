@@ -22,7 +22,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"sigs.k8s.io/yaml"
 
@@ -39,7 +38,7 @@ var _ = Describe("Billing accounts", Label("billing"), func() {
 		client := publicv1.NewBillingAccountsClient(tool.ExternalView().AdminConn())
 		response, err := client.List(ctx, publicv1.BillingAccountsListRequest_builder{}.Build())
 		Expect(response).To(BeNil())
-		Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+		expectBillingReason(err, "BILLING_NOT_CONFIGURED")
 		Expect(status.Convert(err).Message()).To(ContainSubstring("billing is not configured"))
 	})
 

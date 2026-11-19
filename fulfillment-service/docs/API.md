@@ -554,6 +554,9 @@ Accounts and assignments use the standard `id`, `metadata`, `spec`, `status` env
   current interval; closed intervals are immutable `[from, to)` history, including zero-length
   intervals. `status.connection_state` and `status.message` report validation/remediation.
 
+Billing assignments use standard OSAC resource envelopes and typed references rather than
+the scalar IDs shown in the design.
+
 For direct gRPC `TenantBillingAssignments.Update`, omit `update_mask` or specify the
 single path `spec.billing_account` to replace the entire reference. A present empty mask
 leaves the assignment unchanged without provider revalidation. Explicit child paths such
@@ -577,12 +580,12 @@ predicates use `timestamp("2026-01-01T00:00:00Z")`. Old flat account fields,
 `correlation_id`, scalar `tenant_id`/`billing_account_id`, and `effective_from`/`effective_to`
 are not aliases. REST and CLI structured output use the nested snake-case field names.
 
-Migration 155 is the historical SQL-column rename, preserving raw values and links; 156
-normalizes the object envelope, and 157 retains deleted tenant identities. The final envelope
+Migration 158 is the historical SQL-column rename, preserving raw values and links; 159
+normalizes the object envelope, and 160 retains deleted tenant identities. The final envelope
 and typed references are a breaking wire/JSON amendment, not merely a binary-compatible rename.
-Migration 158 drops only the retired lease table and its own indexes, including stale rows;
+Migration 161 drops only the retired lease table and its own indexes, including stale rows;
 it leaves account data, assignment history, identity markers and their constraints untouched.
-Migration 159 separates observed provider IDs from assignment tokens. It releases older
+Migration 162 separates observed provider IDs from assignment tokens. It releases older
 discovery-only token reservations and preserves tokens referenced by current or historical assignments.
 These migrations are forward-only, with no inverse scripts. Coordinate service/database
 cutover: old binaries require the old schema. Stable correlation-related reason codes and
@@ -635,19 +638,23 @@ boundaries, is used for both the old interval's end and its replacement's start.
 billing operation lease or separate eligibility transaction is used.
 
 Tenant deletion closes its active assignment at the same stored deletion boundary,
-releasing the account for another tenant. A durable deletion-identity record retains the
-stored creation/deletion times and first authenticated deleting actor (NULL when unknown).
-Pending finalizers retain the deletion-marked live row; after successful cleanup both public
-and private `Tenants.Get` return `NotFound`, with no live list entry. Billing history remains
-queryable and name reuse fails with `TENANT_BILLING_HISTORY_RETAINED` while that history is
-retained. Unbilled explicit recreation is allowed strictly after prior finalization; its live
-row takes precedence over the older marker until the next deletion. Existing live duplicates
-remain `AlreadyExists`. This does not define a purge schedule or global name reservation.
-Retaining billing history does not bypass other restrictive tenant dependencies. One durable
-`deleted_tenant_identities` store drives deletion liveness and the billing-only reuse guard;
-runtime billing retention and authorization do not consult `archived_tenants`. Generic archives
-for unrelated objects and historical tenant archive evidence remain; this is not a platform-wide
-removal of GenericArchive or a second assignment-history store.
+releasing the account for another tenant. A durable, credential-free deletion-identity record
+retains the stored creation/deletion times and first authenticated deleting actor (NULL when
+unknown). Pending finalizers retain the deletion-marked live row; after successful cleanup both
+public and private `Tenants.Get` return `NotFound`, with no live list entry. The name of a known
+deleted tenant is permanently reserved: re-creation fails with `FAILED_PRECONDITION` and
+ErrorInfo reason `TENANT_IDENTITY_RETAINED`, whether or not the prior tenant had billing history.
+Billing history remains queryable as a fallback reservation signal, not the source of the name
+policy. Existing live duplicates, including a tenant still being deleted, remain `AlreadyExists`,
+and a name with no retained identity remains eligible for normal onboarding. Migration backfill
+reserves known pre-upgrade deletions from tenant archive evidence and deletion-marked live rows;
+deletions absent from both retained identity records and that evidence are not reconstructed.
+This does not define a purge schedule or reserve never-known names. Retaining billing history does
+not bypass other restrictive tenant dependencies. One durable
+`deleted_tenant_identities` store drives deletion liveness and name reservation; runtime deletion
+liveness and authorization do not consult `archived_tenants`. Generic archives for unrelated
+objects and historical tenant archive evidence remain; this is not a platform-wide removal of
+GenericArchive or a second assignment-history store.
 Domain reservations remain while deletion cleanup has finalizers, and are released
 after successful cleanup completes, matching the physical-deletion baseline.
 Historical domain text in an archived tenant is not live ownership; finalized

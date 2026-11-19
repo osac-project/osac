@@ -15,6 +15,26 @@
 -- JSON are authoritative. The old business columns remain only as one-way projections for existing selectors,
 -- foreign keys and named unique indexes. In particular, never trim/canonicalize attribution tokens.
 -- No enqueue_change triggers: billing objects deliberately remain unpublished.
+--
+-- Serialize the normalization against concurrent readers and writers. The ALTER TABLE statements below and the
+-- tenant foreign key added at the end would otherwise each wait without bound for their own lock, so acquire them
+-- once, up front, with a bounded wait and fail with an actionable diagnostic instead of an unbounded upgrade stall.
+begin;
+set local lock_timeout = '5s';
+do $$
+begin
+  lock table billing_accounts, tenant_billing_assignments in access exclusive mode;
+  lock table tenants in share row exclusive mode;
+exception when lock_not_available then
+  raise exception using
+    errcode = '55P03',
+    message = 'Migration 159 timed out waiting for a bounded table lock. Drain readers and writers of'
+      ' billing_accounts, tenant_billing_assignments and tenants before retrying the upgrade.',
+    detail = 'Roll back the failed transaction if the migration session is still open. After confirming rollback,'
+      ' reset the dirty migration version to 158 before retrying.';
+end;
+$$;
+
 alter table billing_accounts
   add column name text not null default '',
   add column creation_timestamp timestamptz not null default 'epoch',
@@ -367,3 +387,4 @@ create table archived_tenant_billing_assignments (
   data jsonb not null,
   version integer not null default 0
 );
+commit;

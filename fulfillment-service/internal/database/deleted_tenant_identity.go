@@ -33,8 +33,9 @@ type DeletedTenantIdentity struct {
 	BillingRetained   bool
 }
 
-// ErrTenantIdentityRetained denies reuse of an absent tenant name whose billing attribution is retained.
-var ErrTenantIdentityRetained = errors.New("tenant identity retained for billing history")
+// ErrTenantIdentityRetained denies reuse of an absent tenant name whose deletion identity is retained. Billing
+// history is a fallback signal, not the source of the reservation.
+var ErrTenantIdentityRetained = errors.New("tenant identity retained")
 
 // LockTenantIdentity serializes an exact tenant name before any tenant row lock or mutation. It uses the ambient
 // transaction, permits reentrant acquisition, and lasts until that transaction ends. Sort names before locking several.
@@ -52,7 +53,8 @@ func LockTenantIdentity(ctx context.Context, name string) (err error) {
 }
 
 // CheckTenantIdentityReusable takes the identity key first. An extant tenant, including one being deleted, is left
-// to the ordinary INSERT duplicate path. Only an absent identity is subject to billing retention and marker auditing.
+// to the ordinary INSERT duplicate path. An absent identity is denied when billing history exists or a retained
+// deletion marker exists, whether or not that marker retained billing; pending or malformed markers remain audit errors.
 func CheckTenantIdentityReusable(ctx context.Context, name string) (err error) {
 	tx, err := TxFromContext(ctx)
 	if err != nil {
@@ -78,9 +80,8 @@ func TenantIdentityCreationTime(ctx context.Context, name string) (result time.T
 	if err = LockTenantIdentity(ctx, name); err != nil {
 		return
 	}
-	previous, found, live, err := tenantIdentityReuseState(ctx, tx, name)
-	if err != nil {
-		return result, err
+	if _, _, _, err = tenantIdentityReuseState(ctx, tx, name); err != nil {
+		return
 	}
 	if err = tx.QueryRow(ctx, `select clock_timestamp()`).Scan(&result); err != nil {
 		return
@@ -89,29 +90,13 @@ func TenantIdentityCreationTime(ctx context.Context, name string) (result time.T
 	if !tenantIdentityTimestampValid(result) {
 		return time.Time{}, errors.New("unrepresentable tenant identity database clock")
 	}
-	if live {
-		return
-	}
-	floor := time.Unix(0, 0).UTC().Add(time.Microsecond)
-	if found {
-		// Validate the successor BEFORE addition. time.Time can represent dates beyond protobuf's year 9999.
-		lastMicrosecond := time.Date(9999, time.December, 31, 23, 59, 59, 999999000, time.UTC)
-		if !previous.FinalizedAt.Before(lastMicrosecond) {
-			return time.Time{}, errors.New("tenant identity finalization has no representable microsecond successor")
-		}
-		if successor := previous.FinalizedAt.Add(time.Microsecond); successor.After(floor) {
-			floor = successor
-		}
-	}
-	if floor.After(result) {
-		result = floor
-	}
 	return
 }
 
 // tenantIdentityReuseState deliberately reads live existence without a row lock, AFTER acquiring the identity key.
-// All supported tenant lifecycle writers use that same key before their row locks. History remains a separate
-// defensive check, even when an absent identity has no marker or an old unbilled marker.
+// All supported tenant lifecycle writers use that same key before their row locks. An extant tenant keeps ordinary
+// duplicate precedence. History remains a defensive fallback, and any finalized deletion marker reserves the name
+// independently of billing. An absent marker with pending or malformed evidence remains an audit error.
 func tenantIdentityReuseState(ctx context.Context, tx Tx, name string) (previous DeletedTenantIdentity, found, live bool, err error) {
 	if err = tx.QueryRow(ctx, `select exists(select 1 from tenants where name = $1)`, name).Scan(&live); err != nil || live {
 		return
@@ -124,7 +109,7 @@ func tenantIdentityReuseState(ctx context.Context, tx Tx, name string) (previous
 	if err != nil {
 		return
 	}
-	if history || previous.BillingRetained {
+	if history || (found && previous.BillingRetained) {
 		err = ErrTenantIdentityRetained
 		return
 	}
@@ -134,7 +119,9 @@ func tenantIdentityReuseState(ctx context.Context, tx Tx, name string) (previous
 		}
 		if previous.FinalizedAt == nil {
 			err = errors.New("absent tenant identity has pending finalization; audit required")
+			return
 		}
+		err = ErrTenantIdentityRetained
 	}
 	return
 }

@@ -27,20 +27,37 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/servers"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
+
+// assignmentCreateDryRun reports the dry-run metadata the gateway derives from the X-Dry-Run header.
+func assignmentCreateDryRun(ctx context.Context) bool {
+	values := metadata.ValueFromIncomingContext(ctx, servers.DryRunMetadataKey)
+	for _, value := range values {
+		if strings.EqualFold(value, "true") {
+			return true
+		}
+	}
+	return false
+}
 
 type publicAssignmentCreateStub struct {
 	publicv1.UnimplementedTenantBillingAssignmentsServer
 }
 
-func (publicAssignmentCreateStub) Create(_ context.Context, req *publicv1.TenantBillingAssignmentsCreateRequest) (
+func (publicAssignmentCreateStub) Create(ctx context.Context, req *publicv1.TenantBillingAssignmentsCreateRequest) (
 	*publicv1.TenantBillingAssignmentsCreateResponse, error) {
+	if assignmentCreateDryRun(ctx) {
+		return nil, status.Error(codes.Unimplemented,
+			"dry-run is not supported for tenant billing assignment creation")
+	}
 	obj := req.GetObject()
 	spec := obj.GetSpec()
 	if spec.GetTenant() == nil || spec.GetBillingAccount() == nil {
@@ -61,8 +78,12 @@ type privateAssignmentCreateStub struct {
 	privatev1.UnimplementedTenantBillingAssignmentsServer
 }
 
-func (privateAssignmentCreateStub) Create(_ context.Context, req *privatev1.TenantBillingAssignmentsCreateRequest) (
+func (privateAssignmentCreateStub) Create(ctx context.Context, req *privatev1.TenantBillingAssignmentsCreateRequest) (
 	*privatev1.TenantBillingAssignmentsCreateResponse, error) {
+	if assignmentCreateDryRun(ctx) {
+		return nil, status.Error(codes.Unimplemented,
+			"dry-run is not supported for tenant billing assignment creation")
+	}
 	obj := req.GetObject()
 	spec := obj.GetSpec()
 	if spec.GetTenant() == nil || spec.GetBillingAccount() == nil {
@@ -100,9 +121,14 @@ var _ = Describe("Tenant billing assignment REST Create contract", func() {
 		}))
 		publicv1.RegisterTenantBillingAssignmentsServer(server, publicAssignmentCreateStub{})
 		privatev1.RegisterTenantBillingAssignmentsServer(server, privateAssignmentCreateStub{})
-		DeferCleanup(server.Stop)
+		serveErr := make(chan error, 1)
+		DeferCleanup(func() {
+			server.Stop()
+			Expect(<-serveErr).To(Or(Succeed(), MatchError(grpc.ErrServerStopped)),
+				"the gRPC server must stop cleanly")
+		})
 		go func() {
-			_ = server.Serve(listener)
+			serveErr <- server.Serve(listener)
 		}()
 
 		conn, err := grpc.NewClient("passthrough:///assignment-create", grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -120,7 +146,10 @@ var _ = Describe("Tenant billing assignment REST Create contract", func() {
 	for _, scope := range []string{"fulfillment", "private"} {
 		Describe("/api/"+scope+"/v1", func() {
 			post := func(ctx context.Context, body string) *httptest.ResponseRecorder {
-				request := httptest.NewRequestWithContext(ctx, http.MethodPost,
+				// Bound each fixture request so a wedged handler cannot stall the suite.
+				requestCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				defer cancel()
+				request := httptest.NewRequestWithContext(requestCtx, http.MethodPost,
 					"/api/"+scope+"/v1/billing/tenant_billing_assignments", strings.NewReader(body))
 				request.Header.Set("Content-Type", "application/json")
 				response := httptest.NewRecorder()
@@ -140,6 +169,19 @@ var _ = Describe("Tenant billing assignment REST Create contract", func() {
 						"effective_from_timestamp":"2026-01-01T12:00:00Z"
 					}
 				}`))
+			}, SpecTimeout(5*time.Second))
+
+			It("forwards X-Dry-Run to Create and returns Unimplemented", func(ctx SpecContext) {
+				request := httptest.NewRequestWithContext(ctx, http.MethodPost,
+					"/api/"+scope+"/v1/billing/tenant_billing_assignments",
+					strings.NewReader(`{"spec":{"tenant":{"id":"tenant-id"},"billing_account":{"id":"account-id"}}}`))
+				request.Header.Set("Content-Type", "application/json")
+				request.Header.Set(servers.DryRunHTTPHeader, "true")
+				response := httptest.NewRecorder()
+				gateway.ServeHTTP(response, request)
+				Expect(response.Code).To(Equal(http.StatusNotImplemented), response.Body.String())
+				Expect(calls.Load()).To(Equal(int32(1)), "the gateway must deliver the request to Create")
+				Expect(response.Body.String()).To(ContainSubstring("dry-run is not supported"))
 			}, SpecTimeout(5*time.Second))
 
 			DescribeTable("rejects legacy scalar fields before calling Create", func(ctx SpecContext, body, field string) {

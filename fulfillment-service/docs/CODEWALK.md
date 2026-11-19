@@ -97,14 +97,16 @@ Non-tenant Generic DAO creation checks the normalized owning tenant under a
 transaction-held `FOR SHARE` row lock and rechecks deletion state after waiting.
 Tenant lifecycle writers take the exact-name identity advisory key before tenant row
 locks; bulk locks acquire the complete sorted key set first. Tenant creation binds a
-post-key database timestamp strictly after any prior unbilled finalization. Deletion
+post-key database timestamp. Deletion
 locks tenant → affected accounts → intervals, then uses one clamped database sample
 for first acceptance and billing closure. The durable `deleted_tenant_identities`
 marker captures the original authenticated actor (NULL if unknown), not the creator
 or finalizer controller. Tenant finalization retains ordinary dependency checks and its atomic
 savepoint, physically removes finalized tenants, and captures a separate post-delete
 finalization timestamp in the same transaction. This one durable identity store supports
-runtime liveness and the billing-only name-reuse guard, without reading tenant archives.
+runtime liveness and permanent reservation of deleted tenant names, independently of
+billing history, without reading tenant archives at runtime. Pre-upgrade archive evidence
+is backfilled into that store; deletions absent from both are not reconstructed.
 Generic archival for unrelated objects and preexisting archive evidence are not removed.
 Billing history stays in the assignment object table without a live-tenant FK; its account
 FK and partial uniqueness indexes remain. Assignment-only finalization uses its tenant row lock without the
@@ -127,7 +129,8 @@ commit failure leaves both rows and freshness unchanged. Assignment Create, Upda
 read an unlocked snapshot, then gather bounded read-only provider evidence before any business locks.
 Finalization locks tenant → the complete original selected/previous account set in SQL id order →
 current interval, rereads material inputs and merges observations before token/interval writes. One
-database clock sample after I/O and locks, clamped to all history, closes and opens contiguous intervals.
+database clock sample after I/O and locks, clamped to all history and the current tenant's
+`creation_timestamp`, closes and opens contiguous intervals.
 There are no billing nested transactions, durable operation leases or remote account writes. A bounded
 provider read may occupy a pooled connection; cancellation releases admission and the request transaction.
 All public/private billing handlers report their final RPC error, including public mapping failures.
@@ -138,7 +141,7 @@ not a second writable model. Account Spec is empty and provider observations are
 assignments retain canonical typed tenant/account references and timestamped interval history.
 Billing deliberately has no generic change trigger or controller: discovery, assignment mutation and
 private Signal do not enqueue billing object events. Generic outbox behavior for other objects is
-unchanged. Historical migration 152 remains immutable; forward migration 158 removes its obsolete
+unchanged. Historical migration 155 remains immutable; forward migration 161 removes its obsolete
 lease table only after all runtime acquisition/reservation/fencing consumers have been retired.
 
 Streaming RPCs use `TxInterceptor.StreamServer`, which supplies a manager-only context and

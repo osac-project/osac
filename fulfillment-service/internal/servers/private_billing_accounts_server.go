@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -410,14 +411,30 @@ func (s *PrivateBillingAccountsServer) storeAccounts(
 		return errors.New("system tenant is being deleted")
 	}
 	at := observedAt.UTC().Format("2006-01-02T15:04:05.000000000Z")
-	var ids []string
-	if err := tx.QueryRow(ctx, billingDiscoveryInput+`
-		select array(select b.id from billing_accounts b
+	// Discovery records provider evidence separately from the immutable assignment token. A confirmed
+	// difference is an operator warning only: it never rewrites the assignment, changes connection state,
+	// calls the provider, or fails the walk. An account absent from this incomplete walk is not a mismatch.
+	// Only accounts that an assignment ever referenced carry a retained token; a token without any
+	// assignment row, including closed history, has no assignment to drift from.
+	var ids, drifted []string
+	if err := tx.QueryRow(ctx, billingDiscoveryInput+`, locked as (
+		select b.id from billing_accounts b
 		left join incoming i on i.ref = b.provider_account_reference
 		where b.provider_key = $1 and (`+billingDiscoveryStoredTime+` < $3 or
 			(`+billingDiscoveryStoredTime+` = $3 and
 			(i.ref is not null or b.state <> 'UNKNOWN' or b.data->'status' ? 'provider_external_id')))
-		order by b.id for no key update of b)`, providerKey, payload, at).Scan(&ids); err != nil {
+		order by b.id for no key update of b
+	), drift as (
+		select b.id from billing_accounts b
+		join incoming i on i.ref = b.provider_account_reference
+		where b.id = any(select id from locked)
+			and b.external_billing_account_id ~ '[^[:space:]]'
+			and exists (select 1 from tenant_billing_assignments t where t.billing_account_id = b.id)
+			and i.status->>'provider_external_id' is not null
+			and b.external_billing_account_id <> i.status->>'provider_external_id'
+	)
+	select array(select id from locked order by id), array(select id from drift order by id)`,
+		providerKey, payload, at).Scan(&ids, &drifted); err != nil {
 		return err
 	}
 	if len(ids) != 0 {
@@ -461,7 +478,18 @@ func (s *PrivateBillingAccountsServer) storeAccounts(
 		// Never acquire a late winner lock: an unguarded writer is a protocol violation.
 		return status.Error(codes.Aborted, "billing account inventory changed; retry the request")
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if len(drifted) != 0 {
+		tx.OnCommit(func() {
+			for _, accountID := range drifted {
+				s.logger.WarnContext(ctx, "Billing account provider external ID differs from recorded assignment",
+					slog.String("billing_account_id", accountID))
+			}
+		})
+	}
+	return nil
 }
 
 // billingAccountObservations prepares and validates the bounded inventory before any SQL lock is taken.
@@ -473,6 +501,12 @@ func billingAccountObservations(providerKey string, accounts []billing.Account,
 	observations := make(map[string]*privatev1.BillingAccountStatus, len(accounts))
 	for _, account := range accounts {
 		ref := account.Ref.ID()
+		// PostgreSQL stores neither field's bytes when they contain U+0000: jsonb rejects the escape and text
+		// rejects the byte, so the batch would fail after the walk as an internal error. Reject the walk as
+		// MALFORMED before any row is locked or changed, and never rewrite a representable byte.
+		if !representableProviderString(ref) || !representableProviderString(account.ExternalID) {
+			return nil, billing.NewError(billing.ReasonMalformed, "ListAccounts", false, 0)
+		}
 		if _, duplicate := observations[ref]; duplicate || ref == "" {
 			return nil, billing.NewError(billing.ReasonMalformed, "ListAccounts", false, 0)
 		}
@@ -488,6 +522,12 @@ func billingAccountObservations(providerKey string, accounts []billing.Account,
 		observations[ref] = observed
 	}
 	return observations, nil
+}
+
+// representableProviderString reports whether a provider-supplied value can be stored without rewriting it.
+// PostgreSQL jsonb and text both reject U+0000, and a protobuf string field requires valid UTF-8.
+func representableProviderString(value string) bool {
+	return utf8.ValidString(value) && !strings.ContainsRune(value, '\x00')
 }
 
 // billingAccountName never derives an identity from a mutable provider label/native reference.

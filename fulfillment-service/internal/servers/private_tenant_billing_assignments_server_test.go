@@ -505,6 +505,40 @@ var _ = Describe("Private tenant billing assignments server", func() {
 	)
 
 	Describe("Create", func() {
+		It("rejects a dry-run before provider calls or any database change and still allows an ordinary Create", func() {
+			var accounts []billingfake.AccountSpec
+			account := newAccount(&accounts, "dry-run-external", "dry-run-external", "ACTIVE")
+			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+			server := build(fake.Provider())
+
+			rows := func(table string) string {
+				var value string
+				// Table names are fixed by this fixture, never request input.
+				Expect(testPool.QueryRow(ctx, `select coalesce(jsonb_agg(to_jsonb(r) order by id),'[]'::jsonb)::text from `+table+` r`).Scan(&value)).To(Succeed())
+				return value
+			}
+			accountsBefore, intervalsBefore := rows("billing_accounts"), rows("tenant_billing_assignments")
+
+			dry := auth.ContextWithSubject(dryRunCtx(), &auth.Subject{User: "admin", Tenants: auth.AllTenants})
+			_, err := billingRPC(dry, server.Create, createRequest(testTenant, account, "dry-run-create"))
+			Expect(status.Code(err)).To(Equal(codes.Unimplemented))
+			Expect(err.Error()).To(ContainSubstring("dry-run is not supported"))
+			Expect(fake.Calls()).To(BeEmpty(), "a dry-run must not call the provider")
+			Expect(rows("billing_accounts")).To(Equal(accountsBefore),
+				"a dry-run must not change attribution, state or observation evidence")
+			Expect(rows("tenant_billing_assignments")).To(Equal(intervalsBefore),
+				"a dry-run must not insert an interval or close an existing one")
+
+			created, err := billingRPC(adminCtx(), server.Create, createRequest(testTenant, account, "ordinary-create"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(created.GetObject().GetStatus().GetConnectionState()).To(Equal(
+				privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
+			Expect(fake.Count("GetAccount")).To(Equal(1), "the ordinary control still reads provider evidence")
+			page, listErr := server.bindings.List().SetLimit(10).Do(ctx)
+			Expect(listErr).NotTo(HaveOccurred())
+			Expect(page.GetTotal()).To(Equal(int32(1)), "the ordinary control still persists one assignment")
+		})
+
 		It("shares one provider child deadline across state, value and the exact-carrier walk", func() {
 			var accounts []billingfake.AccountSpec
 			id := newAccount(&accounts, "exact", "exact", "ACTIVE")
@@ -597,6 +631,66 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			response, err := billingRPC(adminCtx(), build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider()).Create, createRequest(testTenant, id, "after-history"))
 			Expect(err).NotTo(HaveOccurred())
 			Expect(response.GetObject().GetStatus().GetEffectiveFromTimestamp().AsTime()).To(BeTemporally("==", floor))
+		})
+		It("starts the first interval at a tenant creation timestamp ahead of the clock", func() {
+			var accounts []billingfake.AccountSpec
+			account := newAccount(&accounts, "future-tenant", "future-tenant", "ACTIVE")
+			var clockBefore, tenantCreation time.Time
+			Expect(testPool.QueryRow(ctx, `select clock_timestamp()`).Scan(&clockBefore)).To(Succeed())
+			Expect(testPool.QueryRow(ctx, `select clock_timestamp() + interval '1 hour'`).Scan(&tenantCreation)).To(Succeed())
+			_, err := testPool.Exec(ctx, `update tenants set creation_timestamp = $1 where id = $2`, tenantCreation, testTenant)
+			Expect(err).NotTo(HaveOccurred())
+
+			created, err := billingRPC(adminCtx(), build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider()).Create,
+				createRequest(testTenant, account, "tenant-floor"))
+			Expect(err).NotTo(HaveOccurred())
+			start := created.GetObject().GetStatus().GetEffectiveFromTimestamp().AsTime()
+			var stored time.Time
+			Expect(testPool.QueryRow(ctx, `select effective_from from tenant_billing_assignments where id = $1`,
+				created.GetObject().GetId()).Scan(&stored)).To(Succeed())
+			Expect(stored).To(BeTemporally("==", start))
+			Expect(tenantCreation).To(BeTemporally(">", clockBefore), "the tenant must be ahead of the sampled clock")
+			Expect(start).To(BeTemporally(">=", tenantCreation), "the first interval must not predate its owning tenant")
+			Expect(start).To(BeTemporally("==", tenantCreation), "a tenant ahead of the clock wins the floor")
+		})
+		It("keeps the sampled clock for the first interval of an earlier tenant", func() {
+			var accounts []billingfake.AccountSpec
+			account := newAccount(&accounts, "past-tenant", "past-tenant", "ACTIVE")
+			var tenantCreation, clockBefore time.Time
+			Expect(testPool.QueryRow(ctx, `select clock_timestamp() - interval '1 hour'`).Scan(&tenantCreation)).To(Succeed())
+			_, err := testPool.Exec(ctx, `update tenants set creation_timestamp = $1 where id = $2`, tenantCreation, testTenant)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(testPool.QueryRow(ctx, `select clock_timestamp()`).Scan(&clockBefore)).To(Succeed())
+
+			created, err := billingRPC(adminCtx(), build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider()).Create,
+				createRequest(testTenant, account, "ordinary-floor"))
+			Expect(err).NotTo(HaveOccurred())
+			start := created.GetObject().GetStatus().GetEffectiveFromTimestamp().AsTime()
+			Expect(start).To(BeTemporally(">", tenantCreation), "an earlier tenant must not pull the start back")
+			Expect(start).To(BeTemporally(">=", clockBefore), "the sampled database clock still sets an ordinary start")
+		})
+		It("keeps replacement intervals contiguous at a tenant creation floor ahead of the clock", func() {
+			var accounts []billingfake.AccountSpec
+			first := newAccount(&accounts, "first", "first", "ACTIVE")
+			second := newAccount(&accounts, "second", "second", "ACTIVE")
+			var tenantCreation time.Time
+			Expect(testPool.QueryRow(ctx, `select clock_timestamp() + interval '1 hour'`).Scan(&tenantCreation)).To(Succeed())
+			_, err := testPool.Exec(ctx, `update tenants set creation_timestamp = $1 where id = $2`, tenantCreation, testTenant)
+			Expect(err).NotTo(HaveOccurred())
+			server := build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider())
+			created, err := billingRPC(adminCtx(), server.Create, createRequest(testTenant, first, "asg-1"))
+			Expect(err).NotTo(HaveOccurred())
+
+			replacement, err := billingRPC(adminCtx(), server.Update,
+				updateRequest(created.GetObject().GetId(), testTenant, second))
+			Expect(err).NotTo(HaveOccurred())
+			prior, err := server.bindings.Get().SetId(created.GetObject().GetId()).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			oldEnd := prior.GetObject().GetStatus().GetEffectiveToTimestamp().AsTime()
+			newStart := replacement.GetObject().GetStatus().GetEffectiveFromTimestamp().AsTime()
+			Expect(oldEnd).To(BeTemporally("==", newStart), "replacement intervals must stay contiguous")
+			Expect(oldEnd).To(BeTemporally(">=", tenantCreation))
+			Expect(newStart).To(BeTemporally("==", tenantCreation), "both boundaries share the clamped floor")
 		})
 		It("never invokes an advertised setter and retains PENDING until manual remediation", func() {
 			var accounts []billingfake.AccountSpec
@@ -1029,8 +1123,9 @@ var _ = Describe("Private tenant billing assignments server", func() {
 				})
 				Eventually(adapter.entered, 5*time.Second).Should(BeClosed())
 				// Commit a later discovery observation while the carrier walk is in flight, using the same
-				// real clock and upsert boundary as discovery, not a future timestamp.
-				concurrentAt := time.Now().UTC().Truncate(time.Microsecond)
+				// real clock and upsert boundary as discovery, not a future timestamp. Keep full precision:
+				// freshness compares nanoseconds, and only the SQL projection truncates.
+				concurrentAt := time.Now().UTC()
 				Expect(tm.Run(ctx, func(tx database.Tx) error {
 					c := database.TxIntoContext(ctx, tx)
 					r, err := server.accounts.Get().SetId(account).Do(c)
@@ -1059,7 +1154,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 					Scan(&state, &observedAt)).To(Succeed())
 				Expect(state).To(Equal(injectedState),
 					"the older assignment read must not overwrite the newer observation")
-				Expect(observedAt.Equal(concurrentAt)).To(BeTrue(),
+				Expect(observedAt.Equal(concurrentAt.Truncate(time.Microsecond))).To(BeTrue(),
 					"the observation time must never move backwards")
 				Expect(fake.Count("SetCorrelationValue")).To(BeZero())
 				var correlation string
@@ -2398,13 +2493,18 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(page.GetSize()).To(Equal(int32(100)))
 		})
 
-		It("reads stored canonical history without resolving a now-deleted live tenant", func() {
+		It("reads stored canonical history without a live tenant row", func() {
 			var accounts []billingfake.AccountSpec
 			id := newAccount(&accounts, "exact", "exact", "ACTIVE")
 			at := time.Now().UTC().Truncate(time.Microsecond)
 			seedHistoryInterval("retained-history", testTenant, id, at, &at)
-			_, err := testPool.Exec(ctx, `update tenants set deletion_timestamp = now() where name = $1`, testTenant)
+			_, err := testPool.Exec(ctx, `delete from projects where tenant = $1`, testTenant)
 			Expect(err).NotTo(HaveOccurred())
+			_, err = testPool.Exec(ctx, `delete from tenants where name = $1`, testTenant)
+			Expect(err).NotTo(HaveOccurred())
+			var live int
+			Expect(testPool.QueryRow(ctx, `select count(*) from tenants where name = $1`, testTenant).Scan(&live)).To(Succeed())
+			Expect(live).To(BeZero())
 			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
 			server := build(fake.Provider())
 			read := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: collections.NewSet(testTenant)})

@@ -21,6 +21,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -236,6 +237,18 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		}
 		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
 		Expect(err).NotTo(HaveOccurred())
+		// A live row that is still being deleted keeps the ordinary duplicate error.
+		tx, err := database.TxFromContext(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		err = tx.Savepoint(ctx, func(spCtx context.Context) error {
+			_, err := tenantsServer.Create(spCtx, privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: privatev1.Metadata_builder{Name: "barrier-tenant"}.Build(),
+				}.Build(),
+			}.Build())
+			return err
+		})
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.AlreadyExists))
 		deleting, err := tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		stale := proto.Clone(deleting.GetObject()).(*privatev1.Tenant)
@@ -255,6 +268,26 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		Expect(err).NotTo(HaveOccurred())
 		_, err = tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+		// The finalized unbilled deletion permanently reserves the name; billing history is not required.
+		err = tx.Savepoint(ctx, func(spCtx context.Context) error {
+			_, err := tenantsServer.Create(spCtx, privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: privatev1.Metadata_builder{Name: "barrier-tenant"}.Build(),
+				}.Build(),
+			}.Build())
+			return err
+		})
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+		Expect(grpcstatus.Convert(err).Message()).To(Equal("tenant name is reserved by a previous deleted tenant"))
+		Expect(grpcstatus.Convert(err).Details()[0].(*errdetails.ErrorInfo).GetReason()).
+			To(Equal("TENANT_IDENTITY_RETAINED"))
+		// A never-used name remains eligible for normal onboarding.
+		_, err = tenantsServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+			Object: privatev1.Tenant_builder{
+				Metadata: privatev1.Metadata_builder{Name: "never-used-tenant"}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	It("Updates a tenant", func() {
@@ -715,7 +748,10 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 			return err
 		})
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-		Expect(grpcstatus.Convert(err).Message()).To(Equal("tenant name is retained by billing history"))
+		Expect(grpcstatus.Convert(err).Message()).To(Equal("tenant name is reserved by a previous deleted tenant"))
+		details := grpcstatus.Convert(err).Details()
+		Expect(details).To(HaveLen(1))
+		Expect(details[0].(*errdetails.ErrorInfo).GetReason()).To(Equal("TENANT_IDENTITY_RETAINED"))
 	})
 
 	// insertBillingHistory gives the tenant one closed and one current billing assignment, so both a
@@ -806,10 +842,15 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		Expect(err).ToNot(HaveOccurred())
 		currentBefore, err := readTenantBillingInterval(ctx, current)
 		Expect(err).ToNot(HaveOccurred())
-		// Inject a database failure after generic.Delete has set the tenant deletion timestamp.
+		// Inject a database failure after generic.Delete has set the tenant deletion timestamp. The sequence
+		// survives the rollback, so it records whether the billing-close trigger actually ran.
 		_, err = tx.Exec(ctx, `
+			create sequence billing_close_attempts;
 			create function fail_billing_close() returns trigger language plpgsql as $$
-			begin raise exception 'injected billing close failure'; end $$;
+			begin
+				perform nextval('billing_close_attempts');
+				raise exception 'injected billing close failure';
+			end $$;
 			create trigger fail_billing_close before update on tenant_billing_assignments
 			for each row execute function fail_billing_close()`)
 		Expect(err).ToNot(HaveOccurred())
@@ -821,6 +862,14 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 			return tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
 		})
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Internal))
+		// The sequence is not transactional: if it advanced, the billing-close trigger really ran even
+		// though the deletion rolled back.
+		var attempts int
+		var called bool
+		Expect(testPool.QueryRow(ctx, `select last_value, is_called from billing_close_attempts`).
+			Scan(&attempts, &called)).To(Succeed())
+		Expect(called).To(BeTrue(), "the billing-close trigger must have run before the rollback")
+		Expect(attempts).To(Equal(1))
 		_, err = database.WithNewTx(ctx, func(ctx context.Context) (struct{}, error) {
 			retained, err := tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
 			if err != nil {
@@ -837,6 +886,25 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 				return struct{}{}, err
 			}
 			Expect(currentAfter).To(Equal(currentBefore), "the interval must remain open when deletion rolls back")
+			return struct{}{}, nil
+		})
+		Expect(err).ToNot(HaveOccurred())
+		// Removing only the injected trigger proves it caused the rejection: the same deletion now succeeds
+		// and closes the active interval.
+		_, err = testPool.Exec(ctx, `drop trigger fail_billing_close on tenant_billing_assignments;
+			drop function fail_billing_close(); drop sequence billing_close_attempts`)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = database.WithNewTx(ctx, func(ctx context.Context) (*privatev1.TenantsDeleteResponse, error) {
+			return tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
+		})
+		Expect(err).ToNot(HaveOccurred())
+		_, err = database.WithNewTx(ctx, func(ctx context.Context) (struct{}, error) {
+			currentAfter, err := readTenantBillingInterval(ctx, current)
+			if err != nil {
+				return struct{}{}, err
+			}
+			Expect(currentAfter.GetStatus().GetEffectiveToTimestamp()).ToNot(BeNil(),
+				"the same deletion must close the active interval")
 			return struct{}{}, nil
 		})
 		Expect(err).ToNot(HaveOccurred())
@@ -1055,6 +1123,10 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		tenant := createResponse.GetObject()
 
 		closed, current := insertBillingHistory("committed-tenant")
+		closedBefore, err := readTenantBillingInterval(ctx, closed)
+		Expect(err).ToNot(HaveOccurred())
+		currentBefore, err := readTenantBillingInterval(ctx, current)
+		Expect(err).ToNot(HaveOccurred())
 
 		// Commit the setup and release the suite transaction, following the pattern of the tenant
 		// billing assignments specs:
@@ -1093,12 +1165,13 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 			if err != nil {
 				return struct{}{}, err
 			}
-			Expect(closedRow.GetSpec().GetTenant().GetId()).To(Equal("committed-tenant"))
+			Expect(closedRow).To(Equal(closedBefore), "closed history must survive unchanged")
 			currentRow, err := readTenantBillingInterval(ctx, current)
 			if err != nil {
 				return struct{}{}, err
 			}
-			Expect(currentRow.GetSpec().GetTenant().GetId()).To(Equal("committed-tenant"))
+			Expect(currentRow).To(Equal(currentBefore),
+				"the rejected delete must leave the active interval fully unchanged")
 			var count int
 			err = tx.QueryRow(ctx,
 				"select count(*) from archived_tenants where name = 'committed-tenant'").Scan(&count)

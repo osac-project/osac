@@ -44,7 +44,7 @@ var _ = DescribeMigration("Create tenant billing assignments table", func() {
 	}
 
 	BeforeEach(func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 150)).To(Succeed())
+		Expect(tool.Migrate(ctx, 153)).To(Succeed())
 		createTenant(ctx, "tenant-a")
 		createTenant(ctx, "tenant-b")
 		createAccount(ctx, "ba-1")

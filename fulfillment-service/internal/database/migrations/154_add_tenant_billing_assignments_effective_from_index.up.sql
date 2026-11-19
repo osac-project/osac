@@ -13,9 +13,9 @@
 
 -- This migration adds the index backing the tenant billing assignments List default order.
 --
--- Migration 150 created tenant_billing_assignments as append-only history: reassignment closes the active row and
+-- Migration 153 created tenant_billing_assignments as append-only history: reassignment closes the active row and
 -- inserts a new one, and rows are never pruned. The List default order is effective_from desc, so without an index
--- every unfiltered List paid a sequential scan plus a top-N sort that degraded as history grew. 151 is immutable
+-- every unfiltered List paid a sequential scan plus a top-N sort that degraded as history grew. 154 is immutable
 -- once applied, so the index lands here.
 --
 

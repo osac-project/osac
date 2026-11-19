@@ -307,14 +307,23 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 		fallback := billingstub.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
 			activeAccount(nativeOne, "Private Account Payload", "foreign-private-correlation"),
 		}})
+		const foreignAccountPayload = `{"success":true,"errors":[],"data":{"Id":"m360-foreign-native",` +
+			`"Name":"Private Account Payload","ExternalId":"foreign-private-correlation",` +
+			`"Status__r":{"Name":"Active"},"ApprovalStatus__r":{"Name":"Approved"}}}`
+		// The fixture's write result reaches the spec, so a truncated payload cannot masquerade as the MALFORMED
+		// rejection this spec expects.
+		type fixtureWrite struct {
+			Written int
+			Err     error
+		}
 		requests := make(chan string, 10)
+		writes := make(chan fixtureWrite, 10)
 		endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			requests <- r.Method + " " + r.URL.Path
 			if r.Method == http.MethodGet && r.URL.Path == "/api/v1/external/accounts/"+nativeOne {
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(w, `{"success":true,"errors":[],"data":{"Id":"m360-foreign-native",
-					"Name":"Private Account Payload","ExternalId":"foreign-private-correlation",
-					"Status__r":{"Name":"Active"},"ApprovalStatus__r":{"Name":"Approved"}}}`)
+				written, err := io.WriteString(w, foreignAccountPayload)
+				writes <- fixtureWrite{Written: written, Err: err}
 				return
 			}
 			fallback.ServeHTTP(w, r)
@@ -338,6 +347,10 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 			Expect(err.Error()).NotTo(ContainSubstring(sensitive))
 			Expect(logs.String()).NotTo(ContainSubstring(sensitive))
 		}
+		Expect(writes).To(Receive(SatisfyAll(
+			HaveField("Written", len(foreignAccountPayload)),
+			HaveField("Err", BeNil()),
+		)), "the fixture must write its complete response before the adapter can classify it")
 		Expect(requests).To(Receive(Equal("GET /api/v1/external/accounts/" + nativeOne)))
 		Expect(requests).NotTo(Receive(), "reject before any correlation reads, scans or provider writes")
 		state, observedAt := storedObservation(accountID)

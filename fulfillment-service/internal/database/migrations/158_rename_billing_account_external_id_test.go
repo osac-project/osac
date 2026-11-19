@@ -29,7 +29,7 @@ var _ = DescribeMigration("Rename billing account external id", func() {
 		var version int
 		var dirty bool
 		Expect(conn.QueryRow(ctx, `select version, dirty from schema_migrations`).Scan(&version, &dirty)).To(Succeed())
-		Expect(version).To(Equal(155))
+		Expect(version).To(Equal(157))
 		Expect(dirty).To(BeFalse())
 		_, err := conn.Exec(ctx, `
 			insert into tenants (id, name, tenant, data) values
@@ -76,7 +76,7 @@ var _ = DescribeMigration("Rename billing account external id", func() {
 			"plain":"ext-1","padded":" ext-1 ","absent":null,"empty":"","whitespace":" \t "
 		}`))
 		beforeAssignments := assignments(ctx)
-		Expect(tool.Migrate(ctx, 155)).To(Succeed())
+		Expect(tool.Migrate(ctx, 158)).To(Succeed())
 
 		var afterAccounts, afterTokens string
 		Expect(conn.QueryRow(ctx, `select jsonb_agg(to_jsonb(b) - 'external_billing_account_id' order by id)::text,
@@ -142,7 +142,7 @@ var _ = DescribeMigration("Rename billing account external id", func() {
 			before := assignments(ctx)
 			var beforeTenants int
 			Expect(conn.QueryRow(ctx, `select count(*) from tenants`).Scan(&beforeTenants)).To(Succeed())
-			Expect(tool.Migrate(ctx, 155)).To(Succeed())
+			Expect(tool.Migrate(ctx, 158)).To(Succeed())
 			tx, err := conn.Begin(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(func(ctx context.Context) { _ = tx.Rollback(ctx) })
@@ -189,7 +189,7 @@ var _ = DescribeMigration("Rename billing account external id", func() {
 	)
 
 	It("retains named raw uniqueness, multiple NULLs and a usable outer transaction after savepoint conflicts", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 155)).To(Succeed())
+		Expect(tool.Migrate(ctx, 158)).To(Succeed())
 		tx, err := conn.Begin(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func(ctx context.Context) { _ = tx.Rollback(ctx) })
@@ -222,7 +222,7 @@ var _ = DescribeMigration("Rename billing account external id", func() {
 	})
 
 	It("keeps the account foreign key protecting both current and closed history", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 155)).To(Succeed())
+		Expect(tool.Migrate(ctx, 158)).To(Succeed())
 		before := assignments(ctx)
 		tx, err := conn.Begin(ctx)
 		Expect(err).ToNot(HaveOccurred())

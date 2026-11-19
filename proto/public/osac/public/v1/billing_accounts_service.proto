@@ -61,8 +61,9 @@ message BillingAccountsListResponse {
   // requested with the `limit` parameter.
   int32 total = 2;
 
-  // Discovered billing accounts. An empty list means no accounts were discovered; it does not mean billing is
-  // disabled.
+  // Billing accounts in the requested page, selected by `offset` and `limit`. An empty list can mean either that no
+  // accounts match the filter or that `offset` is past the end of the matching collection; compare `total` with zero
+  // to tell these apart. An empty list does not mean billing is disabled.
   repeated BillingAccount items = 3;
 }
 

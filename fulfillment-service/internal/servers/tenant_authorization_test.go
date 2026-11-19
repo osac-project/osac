@@ -313,7 +313,7 @@ var _ = Describe("Deleted tenant authorization", func() {
 		Expect(after).To(Equal(before), "UserProvisioner does not create or mutate Tenants")
 	})
 
-	It("revokes finalized unbilled scope until explicit recreation, then revokes the next incarnation", func() {
+	It("revokes finalized unbilled scope and permanently reserves the deleted name", func() {
 		const name = "fully-archived"
 		seedAuthorizationTenant(ctx, name)
 		token := humanToken(name)
@@ -389,46 +389,26 @@ var _ = Describe("Deleted tenant authorization", func() {
 			}
 		}
 		_, err = database.WithNewTx(managerCtx, func(c context.Context) (struct{}, error) {
-			created, err := tenants.Create(c, privatev1.TenantsCreateRequest_builder{
+			_, err := tenants.Create(c, privatev1.TenantsCreateRequest_builder{
 				Object: privatev1.Tenant_builder{Metadata: privatev1.Metadata_builder{
 					Name: name, Finalizers: []string{"hold-for-cleanup"},
 				}.Build()}.Build(),
 			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			Expect(created.GetObject().GetMetadata().GetCreationTimestamp().AsTime().After(*oldMarker.FinalizedAt)).To(BeTrue())
+			return struct{}{}, err
+		})
+		Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+		Expect(status.Convert(err).Message()).To(Equal("tenant name is reserved by a previous deleted tenant"))
+		_, err = database.WithNewTx(managerCtx, func(c context.Context) (struct{}, error) {
 			unchanged, found, err := database.GetDeletedTenantIdentity(c, name)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(found).To(BeTrue())
-			Expect(unchanged).To(Equal(oldMarker), "creation must not purge or replace the old marker")
+			Expect(unchanged).To(Equal(oldMarker), "a rejected create must not purge or replace the old marker")
 			return struct{}{}, err
 		})
 		Expect(err).ToNot(HaveOccurred())
 		names, err := database.ResolveLiveTenantNames(managerCtx, []string{name, "new-tenant", name})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(names).To(Equal([]string{name, "new-tenant", name}), "the new live incarnation wins the old marker")
-		_, err = txInterceptor.UnaryServer(auth.ContextWithToken(managerCtx, token), nil, info,
-			func(c context.Context, request any) (any, error) {
-				return interceptor.UnaryServer(c, request, info, func(c context.Context, _ any) (any, error) {
-					Expect(auth.SubjectFromContext(c).Tenants.Inclusions()).To(Equal([]string{name}))
-					return accounts.List(c, &publicv1.ServiceAccountsListRequest{})
-				})
-			})
-		Expect(err).ToNot(HaveOccurred())
-		_, err = database.WithNewTx(managerCtx, func(c context.Context) (struct{}, error) {
-			c = auth.ContextWithSubject(c, &auth.Subject{User: "second-deleter", Tenants: auth.AllTenants})
-			_, err := tenants.Delete(c, privatev1.TenantsDeleteRequest_builder{Id: name}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			completeDeletion(c, name)
-			marker, found, err := database.GetDeletedTenantIdentity(c, name)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(found).To(BeTrue())
-			Expect(marker.TenantCreatedAt.After(*oldMarker.FinalizedAt)).To(BeTrue())
-			Expect(marker.FinalizedAt).ToNot(BeNil())
-			Expect(marker.DeletedBy).ToNot(BeNil())
-			Expect(*marker.DeletedBy).To(Equal("second-deleter"))
-			return struct{}{}, err
-		})
-		Expect(err).ToNot(HaveOccurred())
+		Expect(names).To(Equal([]string{"new-tenant"}), "a reserved deleted name must not re-enter scope")
 		assertRevoked()
 	})
 

@@ -21,3 +21,11 @@
 # Shared proto module: every Containerfile now COPYs proto/ for the single
 # generated Go tree at proto/gen/ that all components import.
 !proto/
+
+# Standalone CaaS simulator: allow this module without other integration data.
+!tests/
+tests/*
+!tests/integration/
+tests/integration/*
+!tests/integration/caas/
+tests/integration/caas/go.work.sum

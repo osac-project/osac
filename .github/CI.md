@@ -110,7 +110,10 @@ change also runs `pre-commit` and `dependency-review`. `ci-tests.yml` and `filte
 | `osac-ui/` | generated TypeScript types, unit tests, lint (the UI and its Go proxy), typecheck |
 | `osac-csi-driver/` | Helm chart lint only (its Go tests are not run in CI yet) |
 | `proto/` | generated-code check, and the tests of the components that use it |
+| `tests/integration/caas/` | static and chart checks with internal unit tests, deployed CaaS Kind integration test |
 | `tests/e2e/` and the E2E workflows | the `E2E` suites the change affects (`e2e-policy.yml`) |
+
+The CaaS Kind integration test is separate from full-install `E2E`.
 
 A rule that a change must also add or change tests is not enforced: `CI` checks that the tests which exist pass.
 

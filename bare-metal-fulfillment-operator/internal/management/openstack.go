@@ -211,10 +211,10 @@ func (c *OpenStackClient) TriggerRestart(ctx context.Context, hostID, _ string) 
 	return nil
 }
 
-func (c *OpenStackClient) IsRestartSubmitted(_ context.Context, _, _ string) (bool, error) {
-	// Ironic exposes no durable request identity. Assume an owned request was
-	// submitted so a lost response does not cause a second reboot.
-	return true, nil
+func (c *OpenStackClient) IsRestartSubmitted(_ context.Context, _, _ string) (RestartSubmissionState, error) {
+	// Ironic exposes no durable request identity: the submission is unknown. Do
+	// not claim progress or re-submit; poll to completion instead.
+	return RestartSubmissionUnknown, nil
 }
 
 func (c *OpenStackClient) IsRestartComplete(ctx context.Context, hostID string) (bool, error) {

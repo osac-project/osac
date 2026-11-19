@@ -119,7 +119,7 @@ var _ = Describe("WorkloadCluster rendering", func() {
 			}.Build(),
 		}.Build()
 		output := &bytes.Buffer{}
-		renderWorkloadClusterList(output, []*privatev1.WorkloadCluster{object}, map[string]string{"hub-1": "ai-grid-hub"})
+		Expect(renderWorkloadClusterList(output, []*privatev1.WorkloadCluster{object}, map[string]string{"hub-1": "ai-grid-hub"})).To(Succeed())
 		Expect(output.String()).To(MatchRegexp(`wc-1\s+worker-1\s+ai-grid-hub\s+worker-1\s+True\s+True`))
 	})
 
@@ -130,7 +130,7 @@ var _ = Describe("WorkloadCluster rendering", func() {
 			Spec:     privatev1.WorkloadClusterSpec_builder{Maas: privatev1.MaasConfig_builder{SourceHubId: "hub-1"}.Build()}.Build(),
 		}.Build()
 		output := &bytes.Buffer{}
-		renderWorkloadClusterList(output, []*privatev1.WorkloadCluster{object}, nil)
+		Expect(renderWorkloadClusterList(output, []*privatev1.WorkloadCluster{object}, nil)).To(Succeed())
 		Expect(output.String()).To(MatchRegexp(`wc-1\s+worker-1\s+hub-1`))
 	})
 })

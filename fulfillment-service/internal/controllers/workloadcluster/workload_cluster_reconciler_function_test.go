@@ -92,6 +92,43 @@ func TestObserveMissingManagedCluster(t *testing.T) {
 	require.Equal(t, reasonManagedClusterNotFound, condition(status, availableCondition).GetReason())
 }
 
+func TestObserveMalformedClusterClaimsReturnsError(t *testing.T) {
+	managed := &unstructured.Unstructured{Object: map[string]interface{}{
+		"metadata": map[string]interface{}{"name": "worker-1"},
+		"status":   map[string]interface{}{"clusterClaims": "not-a-list"},
+	}}
+	managed.SetGroupVersionKind(managedClusterGVK)
+	hub := fake.NewClientBuilder().WithObjects(managed).Build()
+	object := &privatev1.WorkloadCluster{Spec: &privatev1.WorkloadClusterSpec{Maas: &privatev1.MaasConfig{ManagedClusterName: "worker-1"}}}
+	status := &privatev1.WorkloadClusterStatus{}
+
+	err := (&function{}).observe(context.Background(), hub, object, status)
+
+	require.EqualError(t, err, "managed cluster observation failed")
+	require.Equal(t, reasonManagedClusterUnavailable, condition(status, availableCondition).GetReason())
+	require.Equal(t, "True", condition(status, hubReachable).GetStatus())
+}
+
+func TestObserveMalformedConditionsReturnsError(t *testing.T) {
+	managed := &unstructured.Unstructured{Object: map[string]interface{}{
+		"metadata": map[string]interface{}{"name": "worker-1"},
+		"status": map[string]interface{}{
+			"clusterClaims": []interface{}{map[string]interface{}{"name": "id.k8s.io", "value": "uid-1"}},
+			"conditions":    "not-a-list",
+		},
+	}}
+	managed.SetGroupVersionKind(managedClusterGVK)
+	hub := fake.NewClientBuilder().WithObjects(managed).Build()
+	object := &privatev1.WorkloadCluster{Spec: &privatev1.WorkloadClusterSpec{Maas: &privatev1.MaasConfig{ManagedClusterName: "worker-1"}}}
+	status := &privatev1.WorkloadClusterStatus{}
+
+	err := (&function{}).observe(context.Background(), hub, object, status)
+
+	require.EqualError(t, err, "managed cluster observation failed")
+	require.Equal(t, reasonManagedClusterUnavailable, condition(status, availableCondition).GetReason())
+	require.Equal(t, "True", condition(status, hubReachable).GetStatus())
+}
+
 func TestSetUnavailableReportsUnreachableHub(t *testing.T) {
 	status := &privatev1.WorkloadClusterStatus{}
 

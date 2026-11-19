@@ -325,9 +325,11 @@ func (s *PrivateWorkloadClustersServer) validateSourceHub(ctx context.Context, i
 		if err := validateActiveWorkloadClusterHub(workloadClusters, activeHubIDs, id); err != nil {
 			return err
 		}
-		_, err = hubs.generic.dao.Get().SetId(id).SetShareLock(true).Do(ctx)
-		if err != nil {
-			err = ConvertDAOErrorToGRPC(err, "get", id)
+		hubResponse, getErr := hubs.generic.dao.Get().SetId(id).SetShareLock(true).Do(ctx)
+		if getErr != nil {
+			err = ConvertDAOErrorToGRPC(getErr, "get", id)
+		} else if hubResponse.GetObject().GetMetadata().HasDeletionTimestamp() {
+			return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.maas.source_hub_id' must reference an existing active Hub")
 		}
 	} else {
 		_, err = s.hubsServer.Get(ctx, privatev1.HubsGetRequest_builder{Id: id}.Build())

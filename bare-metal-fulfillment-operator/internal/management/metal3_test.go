@@ -129,6 +129,29 @@ var _ = Describe("Metal3 Management Backend", func() {
 			status, err := m.GetPowerState(ctx, metal3TestNamespace+"/host-error")
 			Expect(status).To(BeNil())
 			Expect(err).To(MatchError(ContainSubstring("has error status")))
+			Expect(errors.Is(err, management.ErrHostOperational)).To(BeTrue())
+		})
+
+		It("keeps a power-management error retryable", func() {
+			bmh := newBMHForManagement("host-power-error", true, true)
+			bmh.Status.OperationalStatus = metal3api.OperationalStatusError
+			bmh.Status.ErrorType = metal3api.PowerManagementError
+			bmh.Status.ErrorMessage = "BMC reset in progress"
+			m := newMetal3ManagementClient(bmh)
+
+			_, err := m.GetPowerState(ctx, metal3TestNamespace+"/host-power-error")
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, management.ErrHostOperational)).To(BeFalse())
+
+			// Once the host recovers, the read succeeds again.
+			bmh.Status.OperationalStatus = metal3api.OperationalStatusOK
+			bmh.Status.ErrorType = ""
+			bmh.Status.ErrorMessage = ""
+			Expect(m.TestClient().Status().Update(ctx, bmh)).To(Succeed())
+
+			status, err := m.GetPowerState(ctx, metal3TestNamespace+"/host-power-error")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(status.State).To(Equal(management.PowerOn))
 		})
 
 		It("returns error for missing host", func() {

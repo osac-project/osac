@@ -24,12 +24,12 @@ import {
   GuestOSFamily,
   type InstanceType,
 } from '@osac/types';
+import { guestOsFamilyLabels } from '@osac/ui-components/components/DiskImage/utils';
 
 import EditInstanceTypeModal from './EditInstanceTypeModal';
 import VmExternalIpSection from './VmExternalIpSection';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { VmStatusLabel } from '../../../VmStatusLabel';
-import { guestOsFamilyLabels } from '../../DiskImage/DiskImageTable';
 import { Timestamp } from '../../Primitives/Timestamp';
 import ResourceLink from '../../Resource/ResourceLink';
 import UserDataDetailValue from '../../UserData/UserDataDetailValue';

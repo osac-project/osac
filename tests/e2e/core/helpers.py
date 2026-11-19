@@ -1844,9 +1844,10 @@ class HostRef:
     """A provisioning host: the BMH the inventory handed over to metal3.
 
     On every inventory backend the BMI's externalHostID names the BMH once a
-    host is allocated (metal3: the pre-existing BMH; netbox: the operator
-    derives ``netbox-<device-id>`` and creates it), so provisioning
-    assertions below run identically on both.
+    host is allocated (metal3: the pre-existing BMH; netbox: the
+    bare-metal-fulfillment operator derives ``netbox-<device-id>`` and
+    creates it on the fly), so provisioning assertions below run
+    identically on both.
     """
 
     namespace: str

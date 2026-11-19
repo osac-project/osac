@@ -463,7 +463,7 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, tenant *v1alpha1.T
 	// Runs after VMaaS (Stage 2) because CaaS requires StorageBackendReady (Stage 1)
 	// to have completed during tenant onboarding before cluster-side resources can
 	// be installed.
-	caasResult, caasErr := r.handleCaaSUpdate(ctx, tenant)
+	caasResult, caasErr := r.handleCaaSUpdate(ctx, tenant, osacTiers)
 	if caasErr != nil || caasResult.RequeueAfter > 0 {
 		return caasResult, caasErr
 	}
@@ -509,7 +509,10 @@ func (r *StorageReconciler) canProvisionOSACStorage(ctx context.Context) bool {
 // handleCaaSUpdate provisions cluster-side storage on CaaS clusters belonging
 // to this tenant. For each Ready ClusterOrder without ClusterStorageReady=True,
 // it retrieves the kubeconfig and triggers the AAP provisioning job.
-func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, tenant *v1alpha1.Tenant) (ctrl.Result, error) {
+// ClusterStorageReady is set True only when every OSAC tier resolved to a
+// StorageClass on the CaaS cluster — a partial result keeps the condition
+// False so the ClusterOrder is retried until the tier set is complete.
+func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, tenant *v1alpha1.Tenant, osacTiers []provisioning.TierDefinition) (ctrl.Result, error) {
 	if !r.canProvisionOSACStorage(ctx) {
 		return ctrl.Result{}, nil
 	}
@@ -620,24 +623,15 @@ func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, tenant *v1alph
 			r.Recorder.Eventf(co, nil, corev1.EventTypeWarning, eventReasonDuplicateStorageClass, eventActionDetectDuplicate, "%s", msg)
 		}
 
-		if len(scResult.resolved) > 0 {
-			co.SetStatusCondition(
-				string(v1alpha1.ClusterOrderConditionClusterStorageReady),
-				metav1.ConditionTrue,
-				scResult.conditionMessage(),
-				v1alpha1.TenantReasonFound)
+		condStatus, condReason, condMsg := caasStorageCondition(osacTiers, scResult)
+		co.SetStatusCondition(
+			string(v1alpha1.ClusterOrderConditionClusterStorageReady),
+			condStatus,
+			condMsg,
+			condReason)
+		if condStatus == metav1.ConditionTrue {
 			r.Recorder.Eventf(co, nil, corev1.EventTypeNormal, "ClusterStorageProvisioned", "Provision",
 				"Storage provisioned on CaaS cluster %s", co.Name)
-		} else {
-			reason := v1alpha1.TenantReasonNotFound
-			if len(scResult.duplicateMessages) > 0 {
-				reason = v1alpha1.TenantReasonMultipleFound
-			}
-			co.SetStatusCondition(
-				string(v1alpha1.ClusterOrderConditionClusterStorageReady),
-				metav1.ConditionFalse,
-				scResult.conditionMessage(),
-				reason)
 		}
 
 		if err := r.patchClusterOrderStorageStatus(ctx, client.ObjectKeyFromObject(co), co.Status); err != nil {
@@ -648,6 +642,27 @@ func (r *StorageReconciler) handleCaaSUpdate(ctx context.Context, tenant *v1alph
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// caasStorageCondition computes the ClusterStorageReady condition verdict for
+// a CaaS cluster from the StorageClasses discovered on it. Ready requires
+// every OSAC tier to resolve to exactly one StorageClass; a partial or
+// ambiguous resolution keeps the condition False so the ClusterOrder keeps
+// being retried until the tier set is complete.
+func caasStorageCondition(osacTiers []provisioning.TierDefinition, scResult tierResolutionResult) (metav1.ConditionStatus, string, string) {
+	missing := missingTierNames(osacTiers, scResult.resolved, scResult.ambiguousTiers)
+	if len(scResult.resolved) > 0 && len(missing) == 0 && len(scResult.duplicateMessages) == 0 {
+		return metav1.ConditionTrue, v1alpha1.TenantReasonFound, scResult.conditionMessage()
+	}
+	reason := v1alpha1.TenantReasonNotFound
+	condMsg := scResult.conditionMessage()
+	if len(scResult.duplicateMessages) > 0 {
+		reason = v1alpha1.TenantReasonMultipleFound
+	}
+	if len(missing) > 0 {
+		condMsg = fmt.Sprintf("%s; missing tiers: %s", condMsg, strings.Join(missing, ", "))
+	}
+	return metav1.ConditionFalse, reason, condMsg
 }
 
 func (r *StorageReconciler) buildClientFromKubeconfig(kubeconfig []byte) (client.Client, error) {

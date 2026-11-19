@@ -18,12 +18,14 @@ package controller
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	"github.com/osac-project/osac/osac-operator/pkg/provisioning"
 )
 
 // TestUpdateTenantClusterStoragePreservesVMaaSEntry verifies CaaS status updates
@@ -94,6 +96,63 @@ func TestUpdateTenantClusterStorageSupportsMultipleCaaSClusters(t *testing.T) {
 	}
 	if !reflect.DeepEqual(tenant.Status.ClusterStorage, want) {
 		t.Fatalf("ClusterStorage = %#v, want %#v", tenant.Status.ClusterStorage, want)
+	}
+}
+
+// TestCaaSClusterStorageConditionRequiresAllTiers verifies the CaaS
+// ClusterStorageReady verdict stays False while any tier lacks a resolved
+// StorageClass. Regression test: a provision job that resolved only some of
+// the tenant's tiers used to flip the condition to True, permanently
+// excluding the ClusterOrder from further provisioning retries.
+func TestCaaSClusterStorageConditionRequiresAllTiers(t *testing.T) {
+	tiers := []provisioning.TierDefinition{
+		{Name: "bronze"}, {Name: "gold"},
+	}
+
+	// Partial resolution: only the bronze tier's StorageClass exists.
+	partial := tierResolutionResult{
+		resolved: []v1alpha1.ResolvedStorageClass{
+			{Name: "tenant-bronze", Tier: "bronze"},
+		},
+		resolvedMessages: []string{
+			`tier "bronze": StorageClass "tenant-bronze" (tenant-specific)`,
+		},
+	}
+	status, reason, msg := caasStorageCondition(tiers, partial)
+	if status != metav1.ConditionFalse {
+		t.Fatal("partial tier resolution must not set ClusterStorageReady")
+	}
+	if reason != v1alpha1.TenantReasonNotFound {
+		t.Fatalf("reason = %s, want NotFound", reason)
+	}
+	if !strings.Contains(msg, "gold") {
+		t.Fatalf("message must name the missing tier, got: %s", msg)
+	}
+
+	// Complete resolution: every tier resolved.
+	complete := partial
+	complete.resolved = append(complete.resolved, v1alpha1.ResolvedStorageClass{
+		Name: "tenant-gold", Tier: "gold",
+	})
+	complete.resolvedMessages = append(complete.resolvedMessages,
+		`tier "gold": StorageClass "tenant-gold" (tenant-specific)`)
+	if status, _, _ = caasStorageCondition(tiers, complete); status != metav1.ConditionTrue {
+		t.Fatal("complete tier resolution must set ClusterStorageReady")
+	}
+
+	// Ambiguous resolution: a tier matched multiple StorageClasses.
+	ambiguous := complete
+	ambiguous.duplicateMessages = []string{
+		`tier "bronze": multiple tenant StorageClasses [tenant-bronze, tenant-bronze-2]`,
+	}
+	status, reason, _ = caasStorageCondition(tiers, ambiguous)
+	if status != metav1.ConditionFalse || reason != v1alpha1.TenantReasonMultipleFound {
+		t.Fatal("ambiguous tier resolution must stay not-ready with MultipleFound")
+	}
+
+	// No resolution at all.
+	if status, _, _ = caasStorageCondition(tiers, tierResolutionResult{}); status != metav1.ConditionFalse {
+		t.Fatal("no resolution must stay not-ready")
 	}
 }
 

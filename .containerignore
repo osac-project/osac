@@ -21,3 +21,8 @@
 # Shared proto module: every Containerfile now COPYs proto/ for the single
 # generated Go tree at proto/gen/ that all components import.
 !proto/
+
+# Conformance suite image: setuptools reads the root build metadata and the
+# packaged tests. Both are excluded by the allowlist above.
+!pyproject.toml
+!tests/

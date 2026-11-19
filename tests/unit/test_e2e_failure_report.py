@@ -39,22 +39,54 @@ class TestSanitizeText:
             f"token {JWT} leaked",
             "password=hunter2 next",
             "client_secret=abc123",
+            "DB_PASSWORD=hunter2",
+            "AWS_SECRET_ACCESS_KEY=abc123",
+            "GITHUB_TOKEN=s3cr3t-value",
+            "MY_API_KEY=abc123",
             "run --token s3cr3t-value now",
+            'password: "correct horse battery staple"',
+            "password: 'correct horse battery staple'",
             '{"password": "hunter2"}',
             '{"token": "abc"}',
             '{"access_token": "abc"}',
+            '{"api_key": "abc123"}',
+            '{"password": "hunter2 token=abc"}',
         ],
     )
     def test_secret_shapes_are_redacted(self, text: str) -> None:
         cleaned = sanitize_text(text)
         assert "<redacted>" in cleaned
-        for secret in (JWT, "dXNlcjpwYXNz", "hunter2", "abc123", "s3cr3t-value", '"abc"'):
+        for secret in (
+            JWT,
+            "dXNlcjpwYXNz",
+            "hunter2",
+            "abc123",
+            "s3cr3t-value",
+            '"abc"',
+            "correct horse battery staple",
+        ):
             assert secret not in cleaned
 
     def test_plain_text_is_unchanged(self) -> None:
         assert sanitize_text("Code: FailedPrecondition\nMessage: pool is full") == (
             "Code: FailedPrecondition\nMessage: pool is full"
         )
+
+    def test_an_empty_value_does_not_consume_the_next_line(self) -> None:
+        text = "token:\nname: demo\npassword: "
+        assert sanitize_text(text) == text
+
+    def test_a_credential_suffix_inside_a_word_is_not_redacted(self) -> None:
+        assert sanitize_text("mytokenizer=abc") == "mytokenizer=abc"
+
+    def test_adjacent_quoted_parts_are_redacted_as_one_shell_word(self) -> None:
+        assert sanitize_text("DB_PASSWORD=\"first half\"'second half' command") == "DB_PASSWORD=<redacted> command"
+
+    def test_an_unterminated_quote_still_redacts_the_rest_of_the_word(self) -> None:
+        assert sanitize_text('token=abc"def next') == "token=<redacted> next"
+
+    def test_a_plain_value_stops_at_whitespace(self) -> None:
+        assert sanitize_text("password: plain end") == "password: <redacted> end"
 
 
 class TestSanitizeArgs:

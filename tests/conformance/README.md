@@ -43,19 +43,46 @@ python3 -m tests.conformance run
 python3 -m tests.conformance run --plan /results/conformance-plan.yaml
 ```
 
-The image builds from the repository root:
+The image builds from the repository root with either runtime:
 
 ```sh
 podman build -f tests/conformance/Containerfile -t osac-conformance:dev .
+# or
+docker build -f tests/conformance/Containerfile -t osac-conformance:dev .
 ```
 
-The image runs as UID 1001. The suite reads the runner's podman socket, so map
-the invoking user onto that UID and mount a results directory it can write:
+The image runs as UID 1001. It reports `suiteImageDigest` by inspecting its own
+container through a container runtime socket, so mount the socket of the
+runtime that started the container, plus a results directory that UID can
+write. Podman and Docker are both supported.
+
+Podman is agentless and does not listen on a socket until its service is
+started. For a rootless user:
 
 ```sh
+systemctl --user start podman.socket
+# or, without systemd: podman system service --time=0 &
 mkdir -p results
 podman run --rm --userns=keep-id:uid=1001,gid=1001 \
   -v "$XDG_RUNTIME_DIR/podman/podman.sock:/run/podman/podman.sock" \
   -v "$PWD/config:/config:ro" -v "$PWD/results:/results" \
   osac-conformance:dev run
 ```
+
+With Docker:
+
+```sh
+mkdir -p results
+docker run --rm --user 1001 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$PWD/config:/config:ro" -v "$PWD/results:/results" \
+  osac-conformance:dev run
+```
+
+The socket must be readable by the image UID. For Docker, add
+`--group-add "$(stat -c '%g' /var/run/docker.sock)"` (Linux) when the socket
+is group-owned by `docker`.
+
+Use `--runtime-socket PATH` when the socket lives somewhere else, or set
+`OSAC_CONFORMANCE_SUITE_IMAGE_DIGEST` to the image digest to skip the socket
+lookup entirely.

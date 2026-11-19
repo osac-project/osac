@@ -26,11 +26,12 @@ class DiagnosticsCollector:
         output = context.results_dir / "diagnostics"
         output.mkdir(parents=True, exist_ok=True)
         redactor = context.redactor or Redactor()
-        kubeconfig = (
-            context.config.target_kubeconfig if context.config is not None else Path("/config/target-hub.kubeconfig")
-        )
-        base = ("kubectl", "--kubeconfig", str(kubeconfig))
-        namespace = context.config.target_namespace if context.config is not None else "osac"
+        # ``RunContext.config`` is always a loaded Config. ``load_config``
+        # defaults ``target.namespace`` to "osac" and rejects an empty value,
+        # so a target that configures other keys still has a namespace here.
+        config = context.config
+        base = ("kubectl", "--kubeconfig", str(config.target_kubeconfig))
+        namespace = config.target_namespace
         files = {
             "osac-state.yaml": self._safe(*base, "get", "pods,deployments,events", "-n", namespace, "-o", "yaml"),
             "pod-logs.txt": self._safe(

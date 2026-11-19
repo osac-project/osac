@@ -31,8 +31,8 @@ import (
 // means "prefer HardwareData when it actually has usable NIC data". Gating on a
 // usable MAC (rather than NIC count) matters because NIC.MAC is
 // json:"mac,omitempty", so a NIC entry can exist with no MAC — callers
-// (metal3HostNICs, hardwareMACs) drop such entries, so treating them as
-// present here would strand the status fallback.
+// drop such entries (HardwareMACs skips empty MACs), so treating them
+// as present here would strand the status fallback.
 func ResolveHardwareDetails(hd *metal3api.HardwareData, bmh *metal3api.BareMetalHost) *metal3api.HardwareDetails {
 	if hd != nil && hd.Spec.HardwareDetails != nil && hasUsableNIC(hd.Spec.HardwareDetails) {
 		return hd.Spec.HardwareDetails

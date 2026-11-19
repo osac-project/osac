@@ -22,6 +22,7 @@ import { type SecurityGroup, SecurityGroupSchema, SecurityGroupState } from '@os
 import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import {
+  isDefaultNetworkingResource,
   resourceDisplayName,
   useDeleteSecurityGroup,
   useSecurityGroup,
@@ -35,6 +36,7 @@ import ListPage from '../../components/Page/ListPage';
 import ListPageBody from '../../components/Page/ListPageBody';
 import DeleteResourceModal from '../../components/Resource/DeleteResourceModal';
 import { useTranslation } from '../../hooks/useTranslation';
+import { defaultResourceDeleteReason } from '../../utils/networking';
 
 type RuleTarget = { direction: 'ingress' | 'egress'; ruleIndex?: number };
 
@@ -76,11 +78,23 @@ export const SecurityGroupDetailPage = () => {
   const vnId = sg?.spec?.virtualNetwork?.id ?? '';
   const vn = virtualNetworks.find((v) => v.id === vnId);
   const vnName = resourceDisplayName(vn?.metadata, vnId);
+  const isDefault = isDefaultNetworkingResource(sg);
+  const canDeleteSg = Boolean(sg) && !isDefault;
 
   return (
     <ListPage
       title={sgName}
-      actions={<DeleteResourceButton onClick={() => setShowDeleteSgModal(true)} />}
+      actions={
+        <DeleteResourceButton
+          canDelete={canDeleteSg}
+          disabledReason={isDefault ? defaultResourceDeleteReason(t) : undefined}
+          onClick={() => {
+            if (canDeleteSg) {
+              setShowDeleteSgModal(true);
+            }
+          }}
+        />
+      }
       breadcrumb={
         <Breadcrumb>
           <BreadcrumbItem>
@@ -213,7 +227,7 @@ export const SecurityGroupDetailPage = () => {
         />
       )}
 
-      {showDeleteSgModal && (
+      {showDeleteSgModal && canDeleteSg && (
         <DeleteResourceModal
           resourceName={sgName}
           label={t(

@@ -8,6 +8,9 @@ type CatalogLocator =
 export const CatalogMainPage = {
   pageTitle: ['heading', { name: 'Catalog', exact: true }],
   createVmCatalogItem: ['link', { name: 'Create VM catalog item', exact: true }],
+  // CatalogServiceTierFilter renders buttonId `catalog-type-filter-${ServiceTier}`;
+  // ServiceTier.VMAAS is 2. The tab label includes a count, so match by id.
+  vmTypeFilterTab: ['#catalog-type-filter-2'],
   catalogItemCards: ['.pf-v6-c-card'],
   catalogItemLabels: ['.pf-v6-c-card__header .pf-v6-c-label'],
   catalogItemResourceGroups: ['.pf-v6-c-description-list__group'],

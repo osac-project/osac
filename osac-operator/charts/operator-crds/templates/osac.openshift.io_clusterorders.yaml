@@ -590,24 +590,23 @@ spec:
                       type: string
                     upgradeObservation:
                       description: |-
-                        UpgradeObservation reports the observed version and state of this node set's
-                        current upgrade attempt.
+                        UpgradeObservation reports this node set's observed version and state in
+                        the current whole-cluster upgrade attempt.
                       properties:
                         attemptID:
-                          description: |-
-                            AttemptID links this observation to the selected control-plane or node-pool
-                            attempt.
+                          description: AttemptID links this observation to the current
+                            whole-cluster attempt.
                           type: string
                         baselineTransitionTime:
                           description: |-
                             BaselineTransitionTime is the NodePool UpdatingVersion transition before AAP
-                            stamped this attempt. It is compared only with another NodePool time and is
+                            stamped the attempt. It is compared only with another NodePool time and is
                             unused for control-plane observations.
                           format: date-time
                           type: string
                         message:
                           description: |-
-                            Message explains a failed component attempt without including provider
+                            Message explains a failed component's result without including provider
                             output.
                           type: string
                         readyAtVersion:
@@ -740,24 +739,23 @@ spec:
                 x-kubernetes-preserve-unknown-fields: true
               upgradeObservation:
                 description: |-
-                  UpgradeObservation reports the observed version and state of the control
-                  plane's current upgrade attempt.
+                  UpgradeObservation reports the control-plane component's observed version
+                  and state in the current whole-cluster upgrade attempt.
                 properties:
                   attemptID:
-                    description: |-
-                      AttemptID links this observation to the selected control-plane or node-pool
+                    description: AttemptID links this observation to the current whole-cluster
                       attempt.
                     type: string
                   baselineTransitionTime:
                     description: |-
                       BaselineTransitionTime is the NodePool UpdatingVersion transition before AAP
-                      stamped this attempt. It is compared only with another NodePool time and is
+                      stamped the attempt. It is compared only with another NodePool time and is
                       unused for control-plane observations.
                     format: date-time
                     type: string
                   message:
                     description: |-
-                      Message explains a failed component attempt without including provider
+                      Message explains a failed component's result without including provider
                       output.
                     type: string
                   readyAtVersion:

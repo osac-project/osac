@@ -7,6 +7,27 @@ PROBE_EXIT_SENTINEL = "__OSAC_PROBE_EXIT_STATUS__"
 _PROBE_EXIT_RE = re.compile(rf"(?m)^{PROBE_EXIT_SENTINEL}=(\d+)$")
 
 
+class ProbeTransportError(RuntimeError):
+    """The probe command never reported its exit status: the transport (SSH, exec) failed, not the network check."""
+
+
+def false_on_transport_error(probe: Callable[[], bool], log: Callable[[str], None]) -> Callable[[], bool]:
+    """Wrap a probe for a positive wait: a transport failure becomes False, so the wait retries instead of failing.
+
+    Only a wait that expects the probe to succeed may use it. A negative check must keep the raise, or a dead
+    transport would pass as blocked traffic.
+    """
+
+    def run() -> bool:
+        try:
+            return probe()
+        except ProbeTransportError as exc:
+            log(f"probe transport failed, retrying: {exc}")
+            return False
+
+    return run
+
+
 def probe_connectivity(
     source: str,
     command: str,
@@ -20,7 +41,7 @@ def probe_connectivity(
     output, transport_rc = run_unchecked(wrapped_command, timeout)
     matches = _PROBE_EXIT_RE.findall(output)
     if len(matches) != 1:
-        raise RuntimeError(
+        raise ProbeTransportError(
             f"{transport} connectivity probe from {source} did not complete "
             f"({transport.lower()}_rc={transport_rc}, output={output!r})"
         )

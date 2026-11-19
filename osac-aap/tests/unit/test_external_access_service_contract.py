@@ -45,51 +45,52 @@ def test_publish_and_clear_are_annotation_only_entry_points() -> None:
     assert "include_role" not in clear[0]
 
 
-def test_caas_entry_points_own_dns_lifecycle_without_network_dispatch() -> None:
-    create_path = EXTERNAL_ACCESS / "tasks" / "caas_create.yaml"
-    delete_path = EXTERNAL_ACCESS / "tasks" / "caas_delete.yaml"
-    dns_create = load_tasks(EXTERNAL_ACCESS / "tasks" / "caas_dns_create.yaml")
+def test_ci_entry_points_own_claim_and_dns_lifecycle_without_network_dispatch() -> None:
+    create_path = CI_EXTERNAL_ACCESS / "tasks" / "create.yaml"
+    delete_path = CI_EXTERNAL_ACCESS / "tasks" / "delete.yaml"
+    dns_create = load_tasks(EXTERNAL_ACCESS / "tasks" / "caas_dns_publish.yaml")
     dns_delete = load_tasks(EXTERNAL_ACCESS / "tasks" / "caas_dns_delete.yaml")
     create = load_tasks(create_path)
     delete = load_tasks(delete_path)
 
-    assert create[0]["ansible.builtin.include_tasks"] == "caas_dns_create.yaml"
-    assert delete[0]["ansible.builtin.include_tasks"] == "caas_dns_delete.yaml"
+    for task in (create[2], create[4], create[5], delete[0], delete[1]):
+        assert task["ansible.builtin.include_role"]["name"] == "osac.service.external_access"
+    assert create[4]["vars"]["external_access_metallb_ingress_ip"] == "{{ external_access_vip_claim.address }}"
+
+    assert "ansible.builtin.assert" in create[0]
+    assert "ansible.builtin.set_fact" in create[1]
+    assert create[2]["ansible.builtin.include_role"]["tasks_from"] == "caas_api_dns_create.yaml"
+    assert create[3]["ansible.builtin.include_tasks"] == "caas_vip_reserve.yaml"
+    assert create[4]["ansible.builtin.include_role"]["tasks_from"] == "caas_ingress_create.yaml"
+    assert delete[0]["ansible.builtin.include_role"]["tasks_from"] == "caas_dns_delete.yaml"
     assert any("Create DNS records" in task.get("name", "") for task in dns_create)
     assert any("Resolve authoritative nameserver" in task.get("name", "") for task in dns_create)
     assert any("Wait for DNS records" in task.get("name", "") for task in dns_create)
     assert any("Delete DNS records" in task.get("name", "") for task in dns_delete)
     assert "network_steps_collection" not in create_path.read_text()
     assert "network_steps_collection" not in delete_path.read_text()
-    assert create[1]["ansible.builtin.include_tasks"] == "publish.yaml"
-    assert delete[1]["ansible.builtin.include_tasks"] == "clear.yaml"
+    assert create[5]["ansible.builtin.include_role"]["tasks_from"] == "publish.yaml"
+    assert delete[1]["ansible.builtin.include_role"]["tasks_from"] == "clear.yaml"
     assert not any("retrieve_kubeconfig" in str(task) for task in create)
-    assert not any("wait_for_network_cluster_operator" in str(task) for task in create)
 
-    agent_lookup = next(task for task in dns_create if task.get("name") == "Get agents assigned to this cluster")
-    assert agent_lookup["kubernetes.core.k8s_info"]["label_selectors"] == [
-        "{{ cluster_order_label }}={{ external_access_name }}"
-    ]
-
-
-def test_legacy_ci_external_access_reuses_caas_dns_tasks() -> None:
-    create = load_tasks(CI_EXTERNAL_ACCESS / "tasks" / "create.yaml")
-    delete = load_tasks(CI_EXTERNAL_ACCESS / "tasks" / "delete.yaml")
-
-    assert create[0]["ansible.builtin.include_role"]["name"] == "osac.service.external_access"
-    assert create[0]["ansible.builtin.include_role"]["tasks_from"] == "caas_dns_create.yaml"
-    assert delete[0]["ansible.builtin.include_role"]["name"] == "osac.service.external_access"
-    assert delete[0]["ansible.builtin.include_role"]["tasks_from"] == "caas_dns_delete.yaml"
+    assert delete[2]["ansible.builtin.include_tasks"] == "caas_vip_release.yaml"
+    network_wait = create[-1]
+    assert network_wait["ansible.builtin.include_role"] == {
+        "name": "osac.service.wait_for",
+        "tasks_from": "wait_for_network_cluster_operator",
+    }
+    assert network_wait["when"] == "not (external_access_skip_network_operator_wait | default(false))"
+    assert not (EXTERNAL_ACCESS / "tasks" / "caas_dns_create.yaml").exists()
 
 
-def test_caas_template_uses_service_entry_points() -> None:
+def test_caas_template_uses_ci_entry_points() -> None:
     install = load_tasks(OCP_CI_SMALL / "tasks" / "install.yaml")
     delete = load_tasks(OCP_CI_SMALL / "tasks" / "delete.yaml")
     install_default = install[0]["ansible.builtin.set_fact"]["install_step_external_access_default"]
     delete_default = delete[0]["ansible.builtin.set_fact"]["delete_step_external_access_default"]
 
-    assert install_default == {"name": "osac.service.external_access", "tasks_from": "caas_create.yaml"}
-    assert delete_default == {"name": "osac.service.external_access", "tasks_from": "caas_delete.yaml"}
+    assert install_default == {"name": "ci.steps.external_access", "tasks_from": "create.yaml"}
+    assert delete_default == {"name": "ci.steps.external_access", "tasks_from": "delete.yaml"}
 
     install_defaults = install[0]["ansible.builtin.set_fact"]
     assert install_defaults["skip_cluster_operators_wait"] is True
@@ -97,6 +98,7 @@ def test_caas_template_uses_service_entry_points() -> None:
     assert hosted_cluster["vars"]["hosted_cluster_settings"]["ovn_kubernetes_mtu"] == 1400
     external_access = next(task for task in install if task.get("name") == "Step - Configure external access")
     assert "external_access_ingress_internal_network" not in external_access["vars"]
+    assert external_access["vars"]["external_access_skip_network_operator_wait"] is True
     assert "install_step_cluster_infra_default" not in install_defaults
     assert "install_step_wait_for_agents_default" not in install_defaults
     assert "delete_step_cluster_infra_default" not in delete[0]["ansible.builtin.set_fact"]
@@ -121,7 +123,14 @@ def test_external_access_argument_spec_covers_caas_inputs() -> None:
     assert "cluster_working_namespace" not in options
 
     for name in (
-        "external_access_agent_namespace",
+        "external_access_metallb_ingress_range",
+        "external_access_vip_registry_namespace",
+        "external_access_vip_registry_name",
+    ):
+        assert name not in options
+
+    for name in (
+        "external_access_metallb_ingress_ip",
         "external_access_resource_wait_retries",
         "external_access_resource_wait_delay",
         "external_access_dns_ttl",
@@ -324,7 +333,16 @@ module.exit_json(changed=True)
 
 
 def test_caas_does_not_publish_a_provider_specific_external_access_task_pair() -> None:
-    for task_name in ("main.yaml", "create.yaml", "delete.yaml", "resolve_fabric_manager.yaml"):
+    for task_name in (
+        "main.yaml",
+        "create.yaml",
+        "delete.yaml",
+        "resolve_fabric_manager.yaml",
+        "caas_create.yaml",
+        "caas_delete.yaml",
+        "caas_vip_reserve.yaml",
+        "caas_vip_release.yaml",
+    ):
         assert not (EXTERNAL_ACCESS / "tasks" / task_name).exists()
 
     for manager_name in ("netris", "agentless_net"):

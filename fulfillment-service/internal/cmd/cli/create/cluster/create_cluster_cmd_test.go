@@ -117,6 +117,8 @@ var _ = Describe("Parse cluster node set flag", func() {
 		Expect(name).To(Equal("workers"))
 		Expect(ns.GetSize()).To(Equal(int32(4)))
 		Expect(ns.GetBaremetalInstanceType().GetName()).To(Equal("ci-worker-bm"))
+		Expect(ns.GetBaremetalInstanceType().GetTenant()).To(Equal("shared"))
+		Expect(ns.GetBaremetalInstanceType().GetShared()).To(BeTrue())
 	})
 
 	It("should require an explicit node set name", func() {
@@ -583,6 +585,8 @@ var _ = Describe("Create cluster node sets", func() {
 		Expect(nodeSets).To(HaveKey("accelerator"))
 		Expect(nodeSets["compute"].GetSize()).To(Equal(int32(2)))
 		Expect(nodeSets["compute"].GetBaremetalInstanceType().GetName()).To(Equal("compute-bm"))
+		Expect(nodeSets["compute"].GetBaremetalInstanceType().GetTenant()).To(Equal("shared"))
+		Expect(nodeSets["compute"].GetBaremetalInstanceType().GetShared()).To(BeTrue())
 		Expect(nodeSets["accelerator"].GetSize()).To(Equal(int32(1)))
 		Expect(nodeSets["accelerator"].GetBaremetalInstanceType().GetName()).To(Equal("accelerator-bm"))
 	})

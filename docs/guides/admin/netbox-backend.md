@@ -41,6 +41,13 @@ setting `bmf.netbox.enabled: true`; it cannot be enabled alongside the BMF
 Metal3 or BCM inventory backend. Point `bmf.netbox.bmhNamespace` at the
 namespace where BMO watches OSAC-managed BMHs.
 
+The configured token must be a NetBox **v2** API token (`nbt_<key>.<token>`),
+the default token version since NetBox 4.5. BMF sends
+`Authorization: Bearer <token>`. Create the token for the service account in
+NetBox under **Admin > Authentication > API Tokens**, or with
+`POST /api/users/tokens/provision/`; NetBox shows the plaintext only once, at
+creation.
+
 ## Preparing the NetBox device pool
 
 Create these custom fields on NetBox `dcim.device` records. The operator reads these names directly; the `cf_` prefix below is used only in API filters.
@@ -82,15 +89,17 @@ bmf:
     tokenSecretKey: "token"
     tokenValue: ""
     caCert: "" # Optional NetBox CA PEM
-    allowInsecureHTTP: false
+    clientAllowInsecureHTTP: false
   secrets:
     netboxToken: "osac-netbox-token"
     netboxCA: "osac-netbox-ca"
 ```
 
-`bmf.netbox.url` must be an HTTP(S) origin only: do not append `/api`, a path, credentials, query, or fragment. HTTPS is the default and recommended transport. HTTP requires the explicit `allowInsecureHTTP: true` setting and should be limited to isolated development environments. If `caCert` is set, the chart mounts it through the `bmf.secrets.netboxCA` Secret (default `osac-netbox-ca`, key `ca.crt`); the client adds it to the system trust roots.
+`bmf.netbox.url` must be an HTTP(S) origin only: do not append `/api`, a path, credentials, query, or fragment. HTTPS is the default and recommended transport. HTTP requires the explicit `clientAllowInsecureHTTP: true` setting and should be limited to isolated development environments. If `caCert` is set, the chart mounts it through the `bmf.secrets.netboxCA` Secret (default `osac-netbox-ca`, key `ca.crt`); the client adds it to the system trust roots.
 
-Also configure `bmf.secretAPI.url` and `bmf.secretAPI.issuerUrl`. The Secret API URL must use HTTPS, and its issuer must match the rendered `service.auth.issuerUrl`. `bmf.secretAPI.caBundle` trusts the Secret API and is separate from the NetBox `caCert`. The NetBox API identity needs permission to list/read devices and interfaces and update device status and custom fields.
+Also configure `bmf.secretAPI.url` and `bmf.secretAPI.issuerUrl`. The Secret API URL must use HTTPS, and its issuer must match the rendered `service.auth.issuerUrl`. `bmf.secretAPI.caBundle` trusts the Secret API and is separate from the NetBox `caCert`.
+
+Use a dedicated NetBox service account for BMF rather than a superuser: the token needs `view` and `change` on `dcim.device` (device status and the `osac_*` custom fields), `view` on `dcim.interface`, and `view` on `extras.customfield` to read the custom-field definitions. The `bmaas-netbox-ci` profile provisions its token with the NetBox superuser; that pattern is specific to the disposable test deployment.
 
 The operator reads the token and NetBox CA when it starts. Restart the BMF operator after rotating either mounted Secret.
 

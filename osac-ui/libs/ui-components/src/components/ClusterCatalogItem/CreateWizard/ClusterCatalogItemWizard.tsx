@@ -67,10 +67,10 @@ const ClusterCatalogItemWizard = ({ item }: ClusterCatalogItemWizardProps) => {
     try {
       if (item) {
         await updateAsync(buildClusterCatalogItemUpdateRequest(item, values));
-        navigate(`/catalog/cluster/${item.id}`);
+        navigate(`/catalog/clusters/${item.id}`);
       } else {
         const resp = await createAsync({ object: buildClusterCatalogItemCreatePayload(values) });
-        navigate(resp.object?.id ? `/catalog/cluster/${resp.object.id}` : '/catalog');
+        navigate(resp.object?.id ? `/catalog/clusters/${resp.object.id}` : '/catalog/clusters');
       }
     } catch {
       // nothing to do, tanstack handles the error

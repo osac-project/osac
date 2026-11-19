@@ -1,5 +1,13 @@
 ---
-- name: Remove shared CaaS DNS records
+- name: Remove CaaS DNS records
   ansible.builtin.include_role:
     name: osac.service.external_access
     tasks_from: caas_dns_delete.yaml
+
+- name: Clear published CaaS endpoints from ClusterOrder
+  ansible.builtin.include_role:
+    name: osac.service.external_access
+    tasks_from: clear.yaml
+
+- name: Release the CI guest ingress VIP after verified teardown
+  ansible.builtin.include_tasks: caas_vip_release.yaml

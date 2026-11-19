@@ -230,6 +230,16 @@ as follows:
   address. A canceled AAP job can still finish a provider request after the
   Lease is released and write stale state; revision or ETag fencing is future
   hardening, not a current conformance requirement.
+- **EVPN DHCP:** `cudn_evpn` uses OVN-Kubernetes DHCP for VMs, which allocates
+  from `overlay_ipv4_cidrs`. Its `reservedSubnets` covers only the Subnet
+  outside the overlay. The gateway and management-port addresses lie inside
+  the overlay and belong only in `infrastructureSubnets`. Netris enables DHCP
+  over `physical_ipv4_cidrs` when it creates the Subnet's V-Net and that range
+  is non-empty, and repairs it on every rerun. A physical attachment also
+  repairs it before moving a port. The range stays enabled after the attachment
+  is removed. Netris cannot filter DHCP offers by MAC, so a physical-range
+  offer can reach VMs on the same segment; whether a VM accepts one remains
+  an open lab check.
 - **DNS:** OSAC has no per-resource DNS. VMs get the cluster DNS that
   OVN-Kubernetes DHCP gives on the primary UDN. Bare metal on Netris gets an
   installation-level resolver (default `8.8.8.8`) from the Netris default DHCP
@@ -327,13 +337,20 @@ restore it to make allocation-dependent tests run in a disabled profile.
   allocators; a read failure fails
   the case rather than supplying a default snapshot.
 - **Enabled [QE] E2E:** the complete ordered
-  `tests/e2e/networking/vmaas/test_vmaas_networking.py` module tests eight
-  pool/VirtualNetwork/ExternalIP ID/name NAT combinations and eight
-  pool/ExternalIP/ComputeInstance ID/name attachment combinations. Every row
+  `tests/e2e/networking/vmaas/test_vmaas_networking.py` module creates one
+  NATGateway and one ExternalIPAttachment, with every reference by ID. Each
   requires real API and CR allocation, canonical stored IDs, consumer readiness
-  and actual egress or SSH ingress with the intended guest's host key. Natural
-  release separates rows; the final row stays for subsequent lifecycle tests.
-  Netris, `cudn_evpn`, AAP, a routed pool and real KubeVirt guests are required.
+  and actual egress or SSH ingress with the intended guest's host key, and
+  stays for the lifecycle tests that follow. The API resolves a name to its ID
+  before anything is stored, so the provider path is the same for either form;
+  the E2E does not exercise name references. Netris, `cudn_evpn`, AAP, a routed
+  pool and real KubeVirt guests are required.
+- **Name references (gap):** names for the pool, VirtualNetwork and ExternalIP
+  last passed on a lab in osac-project/osac#2454 run 43740274491, with all
+  eight combinations. No integration test covers the name form now; it belongs
+  in fulfillment-service integration tests. A ComputeInstance attachment
+  target is refused by name: the API's `compute_instance.id != ''` validation
+  runs before name resolution. No ticket or owner is assigned.
 - **[DEV] helper units and Helm contracts:** exact-error parsing, request
   selection and cleanup sequencing use fakes; default rendering and manager
   registration checks do not prove provider allocation, routing or traffic.

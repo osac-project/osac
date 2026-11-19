@@ -70,25 +70,26 @@
           delay: "{{ bm_host_metal3_wait_delay }}"
 
         - name: Clear generated root device hint
+          # The fallback-root-device annotation marks a root device hint
+          # this role generated: its value is the hint serialized as JSON,
+          # or the bare device name the role wrote before hints carried an
+          # identity; its presence is the marker. The hint is cleared
+          # without decoding or comparing the annotation — the host returns
+          # to its pre-provisioning state even if the hint was changed
+          # after provisioning, and a hint without the marker belongs to
+          # whoever set it.
           vars:
-            generated_root_disk: >-
+            generated_root_hints_annotation: >-
               {{ bmh_deprovision_status.resources[0].metadata.annotations['osac.openshift.io/fallback-root-device'] | default('') }}
           when:
-            - generated_root_disk | length > 0
-            - "bmh_deprovision_status.resources[0].spec.rootDeviceHints | default({}) == {'deviceName': generated_root_disk}"
+            - generated_root_hints_annotation | length > 0
+            - bmh_deprovision_status.resources[0].spec.rootDeviceHints | default({}) | length > 0
           kubernetes.core.k8s_json_patch:
             api_version: metal3.io/v1alpha1
             kind: BareMetalHost
             namespace: "{{ bmh_namespace }}"
             name: "{{ bmh_name }}"
             patch:
-              - op: test
-                path: /metadata/annotations/osac.openshift.io~1fallback-root-device
-                value: "{{ generated_root_disk }}"
-              - op: test
-                path: /spec/rootDeviceHints
-                value:
-                  deviceName: "{{ generated_root_disk }}"
               - op: remove
                 path: /spec/rootDeviceHints
               - op: remove

@@ -25,7 +25,7 @@ export const ClusterCatalogItemDetailPage = () => {
       error={isError ? error : undefined}
       found={!!item}
       isLoading={isLoading}
-      parentTo="/catalog"
+      parentTo="/catalog/clusters"
       parentLabel={t('Catalog')}
       refetch={() => void refetch()}
       resourceLabel={t('cluster catalog item')}
@@ -37,7 +37,7 @@ export const ClusterCatalogItemDetailPage = () => {
             <ClusterCatalogItemDeleteModal
               item={item}
               onClose={() => setDeleteOpen(false)}
-              onSuccess={() => navigate('/catalog')}
+              onSuccess={() => navigate('/catalog/clusters')}
             />
           ) : null}
           <CatalogItemDetails

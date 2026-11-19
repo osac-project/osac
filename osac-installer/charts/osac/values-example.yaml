@@ -447,7 +447,7 @@ bmf:
     # [OPTIONAL] PEM CA certificate stored in a dedicated Secret and mounted read-only.
     caCert: ""
     # HTTP endpoints are disabled unless this explicit opt-in is true.
-    allowInsecureHTTP: false
+    clientAllowInsecureHTTP: false
 
 # ---------------------
 # BMF Secret API client

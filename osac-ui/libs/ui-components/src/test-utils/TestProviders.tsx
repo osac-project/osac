@@ -46,6 +46,7 @@ export type TestProvidersProps = {
   transportOverrides?: MockTransportOverrides;
   routerEntries?: string[];
   session?: TestSession;
+  queryClient?: QueryClient;
 };
 
 export const TestProviders = ({
@@ -55,15 +56,18 @@ export const TestProviders = ({
   transportOverrides,
   routerEntries,
   session = {},
+  queryClient: queryClientOverride,
 }: TestProvidersProps) => {
   const i18nInstance = createTestI18n();
   const transport =
     transportOverride ?? createMockConnectTransport(apiFixtures, transportOverrides);
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false, refetchOnWindowFocus: false, refetchInterval: false },
-    },
-  });
+  const queryClient =
+    queryClientOverride ??
+    new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, refetchOnWindowFocus: false, refetchInterval: false },
+      },
+    });
   // Keep the session's capabilities ready on the first render.
   queryClient.setQueryData([Capabilities.typeName, 'get', {}], {
     enabledServices: apiFixtures?.enabledServices ?? [
@@ -111,6 +115,7 @@ export type RenderWithProvidersOptions = Omit<RenderOptions, 'wrapper'> & {
   transportOverrides?: MockTransportOverrides;
   routerEntries?: string[];
   session?: TestSession;
+  queryClient?: QueryClient;
 };
 
 export type RenderWithProvidersResult = RenderResult & {
@@ -121,8 +126,15 @@ export const renderWithProviders = (
   ui: ReactElement,
   options: RenderWithProvidersOptions = {},
 ): RenderWithProvidersResult => {
-  const { apiFixtures, transport, transportOverrides, routerEntries, session, ...renderOptions } =
-    options;
+  const {
+    apiFixtures,
+    transport,
+    transportOverrides,
+    routerEntries,
+    session,
+    queryClient,
+    ...renderOptions
+  } = options;
 
   const view = render(ui, {
     wrapper: ({ children }) => (
@@ -132,6 +144,7 @@ export const renderWithProviders = (
         transportOverrides={transportOverrides}
         routerEntries={routerEntries}
         session={session}
+        queryClient={queryClient}
       >
         {children}
       </TestProviders>

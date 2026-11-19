@@ -21,6 +21,7 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
@@ -213,7 +214,9 @@ func (c *runnerContext) buildSpec(catalogItemID string, externalIPAttachmentSet 
 		spec.DiskImage = &publicv1.DiskImageReference{Name: c.args.diskImage}
 	}
 	if c.args.instanceType != "" {
-		spec.InstanceType = &publicv1.BareMetalInstanceTypeReference{Name: c.args.instanceType, Shared: true}
+		spec.InstanceType = &publicv1.BareMetalInstanceTypeReference{
+			Name: c.args.instanceType, Tenant: auth.SharedTenant, Shared: true,
+		}
 	}
 	if c.args.runStrategy != "" {
 		rs, err := fieldutil.ParseEnum(c.args.runStrategy, runStrategyMap, "run-strategy")

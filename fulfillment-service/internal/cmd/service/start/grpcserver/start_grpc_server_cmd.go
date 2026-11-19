@@ -1057,7 +1057,21 @@ func newDAOTierResolver(
 		if len(items) == 0 {
 			return nil, grpcstatus.Errorf(grpccodes.NotFound, "storage tier %q not found", tierName)
 		}
-		tier := items[0]
+		// Hold a shared tier lock through Volume insertion in the same request
+		// transaction. Concurrent creates can share it, while deletion must wait
+		// until their Volume references are committed or rolled back.
+		locked, err := tiersDAO.Get().SetId(items[0].GetId()).SetShareLock(true).Do(ctx)
+		if err != nil {
+			var notFound *dao.ErrNotFound
+			if errors.As(err, &notFound) {
+				return nil, grpcstatus.Errorf(grpccodes.NotFound, "storage tier %q not found", tierName)
+			}
+			return nil, fmt.Errorf("failed to lock storage tier %q: %w", tierName, err)
+		}
+		tier := locked.GetObject()
+		if tier.GetMetadata().GetDeletionTimestamp() != nil {
+			return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "storage tier %q is being deleted", tierName)
+		}
 
 		if tier.GetStatus().GetState() != privatev1.StorageTierState_STORAGE_TIER_STATE_ACTIVE {
 			return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition, "storage tier %q is not active", tierName)

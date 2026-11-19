@@ -9,7 +9,6 @@ export const BareMetalRoutes = () => (
   <Routes>
     <Route index element={<BareMetalListPage />} />
     <Route path="create" element={<BareMetalCreatePage />} />
-    <Route path="create/:catalogItemId" element={<BareMetalCreatePage />} />
     <Route path=":id" element={<BareMetalDetailsPage />} />
   </Routes>
 );

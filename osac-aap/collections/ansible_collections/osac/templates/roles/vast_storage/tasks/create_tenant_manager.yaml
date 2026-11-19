@@ -36,12 +36,19 @@
       _vast_tenant_result.tenants.id must be set before calling create_tenant_manager.yaml.
       The VAST tenant must be created first.
 
+# set_fact values are host-scoped and survive across dispatches, so a previous
+# backend's "already exists" verdict would otherwise suppress manager creation
+# for THIS backend. Reset it before deciding again.
+- name: Reset the per-dispatch tenant-manager idempotency verdict
+  ansible.builtin.set_fact:
+    _vast_tenant_manager_already_exists: false
+
 # Idempotency: check if hub Secret already has valid credentials. If so, skip.
 - name: Check if tenant manager credentials already exist in hub Secret
   kubernetes.core.k8s_info:
     api_version: v1
     kind: Secret
-    name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
+    name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}"
     namespace: "{{ vast_storage_config_namespace }}"
   register: _vast_tenant_secret_check
   no_log: true
@@ -72,7 +79,7 @@
   block:
     - name: Set tenant manager name
       ansible.builtin.set_fact:
-        _vast_tenant_manager_name: "osac-{{ tenant_name }}"
+        _vast_tenant_manager_name: "osac-{{ tenant_name }}-{{ _vast_backend_id }}"
 
     - name: Generate random password for tenant manager
       ansible.builtin.set_fact:
@@ -81,7 +88,7 @@
 
     - name: Set tenant manager username
       ansible.builtin.set_fact:
-        _vast_tenant_manager_username: "osac-{{ tenant_name }}"
+        _vast_tenant_manager_username: "osac-{{ tenant_name }}-{{ _vast_backend_id }}"
 
     - name: Authenticate to VAST VMS as admin
       ansible.builtin.uri:
@@ -101,7 +108,7 @@
 
     - name: Check if tenant CSI role already exists
       ansible.builtin.uri:
-        url: "https://{{ vast_endpoint }}/api/roles/?name=osac-csi-{{ tenant_name }}"
+        url: "https://{{ vast_endpoint }}/api/roles/?name=osac-csi-{{ tenant_name }}-{{ _vast_backend_id }}"
         method: GET
         headers:
           Authorization: "Bearer {{ _vast_admin_auth.json.access }}"
@@ -118,7 +125,7 @@
         method: POST
         body_format: json
         body:
-          name: "osac-csi-{{ tenant_name }}"
+          name: "osac-csi-{{ tenant_name }}-{{ _vast_backend_id }}"
           tenant_id: "{{ _vast_tenant_result.tenants.id | int }}"
           permissions_list:
             - create_logical
@@ -142,18 +149,18 @@
 
     - name: Fail if role ID is not available
       ansible.builtin.fail:
-        msg: "Failed to create or find CSI role 'osac-csi-{{ tenant_name }}'. Check VMS API permissions."
+        msg: "Failed to create or find CSI role 'osac-csi-{{ tenant_name }}-{{ _vast_backend_id }}'. Check VMS API permissions."
       when: _vast_tenant_role_id | string | length == 0
 
     - name: Log CSI role status
       ansible.builtin.debug:
-        msg: "CSI role 'osac-csi-{{ tenant_name }}' {{ 'created' if (_vast_role_check.json | length == 0) else 'already exists' }} (id: {{ _vast_tenant_role_id }})"
+        msg: "CSI role 'osac-csi-{{ tenant_name }}-{{ _vast_backend_id }}' {{ 'created' if (_vast_role_check.json | length == 0) else 'already exists' }} (id: {{ _vast_tenant_role_id }})"
 
     # --- Manager as TENANT_ADMIN ---
 
     - name: Check if tenant manager already exists in VMS
       ansible.builtin.uri:
-        url: "https://{{ vast_endpoint }}/api/managers/?username=osac-{{ tenant_name }}"
+        url: "https://{{ vast_endpoint }}/api/managers/?username=osac-{{ tenant_name }}-{{ _vast_backend_id }}"
         method: GET
         headers:
           Authorization: "Bearer {{ _vast_admin_auth.json.access }}"
@@ -163,6 +170,14 @@
       register: _vast_manager_check
       no_log: true
 
+    - name: Log VMS manager check result
+      ansible.builtin.debug:
+        msg: >-
+          VMS manager check for osac-{{ tenant_name }}-{{ _vast_backend_id }}:
+          {{ 'FOUND ' ~ _vast_manager_check.json | length ~ ' existing manager(s) - will skip creation'
+             if (_vast_manager_check.json | length > 0)
+             else 'NOT FOUND - will create new manager' }}
+
     - name: Create per-tenant manager as TENANT_ADMIN
       when: _vast_manager_check.json | length == 0
       ansible.builtin.uri:
@@ -170,7 +185,7 @@
         method: POST
         body_format: json
         body:
-          username: "osac-{{ tenant_name }}"
+          username: "{{ _vast_tenant_manager_username }}"
           password: "{{ _vast_tenant_manager_password }}"
           user_type: TENANT_ADMIN
           tenant_id: "{{ _vast_tenant_result.tenants.id | int }}"
@@ -195,14 +210,14 @@
 
     - name: Fail if manager ID is not available
       ansible.builtin.fail:
-        msg: "Failed to create or find manager 'osac-{{ tenant_name }}'. Check VMS API permissions."
+        msg: "Failed to create or find manager '{{ _vast_tenant_manager_name }}'. Check VMS API permissions."
       when: _vast_tenant_manager_id | string | length == 0
 
     - name: Fail if manager already exists but password is unknown
       when: _vast_manager_check.json | length > 0
       ansible.builtin.fail:
         msg: >-
-          Manager 'osac-{{ tenant_name }}' already exists in VMS but the hub Secret
+          Manager '{{ _vast_tenant_manager_name }}' already exists in VMS but the hub Secret
           does not contain its credentials. Delete the manager in VMS and re-run,
           or manually set the credentials in the hub Secret.
 
@@ -218,5 +233,5 @@
 
 - name: Log tenant manager creation outcome
   ansible.builtin.debug:
-    msg: "VMS manager 'osac-{{ tenant_name }}' created as TENANT_ADMIN with logical CRUD permissions"
+    msg: "VMS manager '{{ _vast_tenant_manager_name }}' created as TENANT_ADMIN with logical CRUD permissions"
   when: not (_vast_tenant_manager_already_exists | default(false))

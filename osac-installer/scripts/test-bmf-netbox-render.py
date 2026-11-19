@@ -34,7 +34,7 @@ netbox:
   tokenValue: render-test-netbox-token
   caCert: |
     TEST-CA-CERTIFICATE
-  allowInsecureHTTP: false
+  clientAllowInsecureHTTP: false
 metal3:
   enabled: false
 secretAPI:
@@ -203,7 +203,7 @@ def check_bmf_netbox(docs: list[dict[str, Any]]) -> None:
     assert netbox["url"] == "https://netbox.example.test"
     assert netbox["tokenFile"] == "/etc/osac/secrets/netbox/token"
     assert netbox["caFile"] == "/etc/osac/secrets/netbox-ca/ca.crt"
-    assert netbox["allowInsecureHTTP"] is False
+    assert netbox["clientAllowInsecureHTTP"] is False
     assert "render-test-netbox-token" not in str(inventory)
     assert "TEST-CA-CERTIFICATE" not in str(inventory)
 
@@ -447,10 +447,10 @@ def check_bmf_invalid_values(netbox_values: pathlib.Path) -> None:
         "--set-string",
         "netbox.url=http://netbox.example.test",
         "--set",
-        "netbox.allowInsecureHTTP=true",
+        "netbox.clientAllowInsecureHTTP=true",
     )
     inventory = embedded_config(allowed_http, "osac-inventory-config", "inventory.yaml")
-    assert inventory["options"]["netbox"]["allowInsecureHTTP"] is True
+    assert inventory["options"]["netbox"]["clientAllowInsecureHTTP"] is True
 
 
 def check_bmf_netbox_secret_lookup(netbox_values: pathlib.Path) -> None:

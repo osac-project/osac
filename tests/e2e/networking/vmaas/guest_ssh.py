@@ -12,7 +12,7 @@ import pytest
 
 from tests.e2e.core.failures import Kind, tagged
 from tests.e2e.core.runner import poll_until
-from tests.e2e.core.ssh_probe import probe_connectivity
+from tests.e2e.core.ssh_probe import ProbeTransportError, probe_connectivity
 from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.networking.vmaas import ssh_helper
 from tests.e2e.networking.vmaas.ssh_helper import HelperExecError, HelperPodError
@@ -80,19 +80,23 @@ def ssh_guest_unchecked(
 
 def _probe_connectivity(vm_namespace: str, vm_name: str, identity_file: str, command: str, timeout: int = 30) -> bool:
     source = f"{vm_namespace}/{vm_name}"
-    return probe_connectivity(
-        source,
-        command,
-        lambda wrapped, call_timeout: ssh_guest_unchecked(
-            vm_namespace=vm_namespace,
-            vm_name=vm_name,
-            identity_file=identity_file,
-            command=wrapped,
-            timeout=call_timeout,
-        ),
-        transport="SSH",
-        timeout=timeout,
-    )
+    try:
+        return probe_connectivity(
+            source,
+            command,
+            lambda wrapped, call_timeout: ssh_guest_unchecked(
+                vm_namespace=vm_namespace,
+                vm_name=vm_name,
+                identity_file=identity_file,
+                command=wrapped,
+                timeout=call_timeout,
+            ),
+            transport="SSH",
+            timeout=timeout,
+        )
+    except HelperExecError as exc:
+        # The exec into the helper Pod was lost: the probe never ran, the same as an SSH transport failure.
+        raise ProbeTransportError(f"SSH connectivity probe from {source} did not run: {exc}") from exc
 
 
 def _ipv4_target(target_ip: str) -> str:

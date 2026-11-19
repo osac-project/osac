@@ -1,4 +1,4 @@
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -15,7 +15,6 @@ import { useTranslation } from '../../../hooks/useTranslation';
 const ClusterCreatePage = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { catalogItemId } = useParams<{ catalogItemId?: string }>();
   const navigateToParent = () => navigate('/clusters');
 
   return (
@@ -38,7 +37,7 @@ const ClusterCreatePage = () => {
           </Content>
         </Stack>
       </PageSection>
-      <ClusterCreateWizard initialCatalogItemId={catalogItemId} onClosed={navigateToParent} />
+      <ClusterCreateWizard onClosed={navigateToParent} />
     </>
   );
 };

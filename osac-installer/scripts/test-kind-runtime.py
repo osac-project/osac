@@ -512,6 +512,55 @@ esac
                 self.assertIn("osac-dev/topolvm-lvmd:0.41.1-container-v2", self.storage_run_arguments())
                 self.assertIn("b 252:* rwm", self.storage_run_arguments())
 
+    def test_reusing_storage_reactivates_only_the_verified_volume_group(self):
+        self.configure_storage_stubs()
+        self.assert_success(self.run_shell("prepare_topolvm_storage"))
+        runtime_dir = self.directory / "runtime"
+        runtime_dir.mkdir()
+        disk = runtime_dir / "backing.img"
+        disk.write_text("existing disk contents")
+        setup_script = self.storage_run_arguments()[-1].replace(
+            "/runtime", shlex.quote(str(runtime_dir)),
+        )
+        activated = self.directory / "activated"
+        self.env["MOCK_ACTIVATED"] = str(activated)
+        self.env["TOPOLVM_BACKING_SIZE"] = "1G"
+        self.write_command("awk", 'exec /usr/bin/awk "$@"')
+        self.write_command("numfmt", "echo 1073741824")
+        self.write_command("stat", "echo 1073741824")
+        self.write_command("losetup", '[[ "$1" == -j ]]; echo "/dev/loop0: backing.img"')
+        self.write_command("vgs", "exit 0")
+        self.write_command("pvs", 'echo "$MOCK_STORAGE_PV"')
+        self.write_command("vgchange", '''
+[[ "$*" == '--activate y vg1' ]]
+if [[ "$MOCK_ACTIVATION_FAILURE" == 1 ]]; then
+  echo 'activation failed' >&2
+  exit 1
+fi
+touch "$MOCK_ACTIVATED"
+''')
+        for command in ("pvcreate", "vgcreate", "truncate"):
+            self.write_command(command, "exit 99")
+
+        for pv, failure in (("/dev/loop0", "0"), ("/dev/loop1", "0"), ("/dev/loop0", "1")):
+            with self.subTest(pv=pv, activation_failure=failure):
+                activated.unlink(missing_ok=True)
+                self.env["MOCK_STORAGE_PV"] = pv
+                self.env["MOCK_ACTIVATION_FAILURE"] = failure
+                result = subprocess.run(
+                    ["/bin/bash", "-euo", "pipefail", "-c", setup_script],
+                    env=self.env, text=True, capture_output=True, timeout=15,
+                )
+                if pv == "/dev/loop0" and failure == "0":
+                    self.assert_success(result)
+                    self.assertTrue(activated.exists())
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(activated.exists())
+                    expected_error = "activation failed" if failure == "1" else "not the dev-full backing device"
+                    self.assertIn(expected_error, result.stderr)
+                self.assertEqual(disk.read_text(), "existing disk contents")
+
     def run_create_cluster(self):
         kubeconfig = self.directory / "cluster.kubeconfig"
         return self.run_shell(f'''
@@ -1285,6 +1334,10 @@ exec /usr/bin/mktemp "$@"
         devstack_install = output.find("helm upgrade --install osac-devstack ")
         self.assertGreater(osac_install, max(build_positions), output)
         self.assertGreater(devstack_install, osac_install, output)
+        fedora_prepare = "bash scripts/dev-full/build-fedora-image.sh "
+        self.assertEqual(output.count(fedora_prepare), 1, output)
+        self.assertGreater(output.find(fedora_prepare), osac_install, output)
+        self.assertLess(output.find(fedora_prepare), devstack_install, output)
         self.assertIn("kind-build-load-images", output)
         self.assertIn("KIND_REQUIRE_UV=true", output)
         self.assertNotIn("container save quay.io/openshift/origin-cli:4.19", output)
@@ -1331,6 +1384,7 @@ exec /usr/bin/mktemp "$@"
         )
         self.assert_success(mixed_runtime_result)
         mixed_output = mixed_runtime_result.stdout
+        self.assertEqual(mixed_output.count(fedora_prepare), 1, mixed_output)
         copy_out = mixed_output.find("container save quay.io/openshift/origin-cli:4.19")
         copy_in = mixed_output.find("docker load -i")
         mixed_aap_build = mixed_output.find(

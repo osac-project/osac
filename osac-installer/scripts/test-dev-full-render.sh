@@ -33,6 +33,39 @@ profile_values=(
 )
 chart_render=$(helm template test charts/osac-devstack --namespace osac \
   "${profile_values[@]}" --set ui.enabled=true)
+cdi_rbac_render=$(helm template test charts/osac-devstack --namespace osac \
+  "${profile_values[@]}" --show-only templates/cdi-rbac.yaml)
+cdi_route_rules=$(awk '/^rules:/ { in_rules = 1; next }
+  in_rules && /^---$/ { exit }
+  in_rules { print }' <<<"$cdi_rbac_render")
+expected_cdi_route_rules='- apiGroups: ["route.openshift.io"]
+  resources: ["routes"]
+  verbs: ["get", "list", "watch"]'
+if [[ "$cdi_route_rules" != "$expected_cdi_route_rules" ]]; then
+  echo "dev-full CDI must have only read access to the placeholder Route API" >&2
+  exit 1
+fi
+cdi_route_binding=$(sed -n '/^roleRef:/,$p' <<<"$cdi_rbac_render")
+expected_cdi_route_binding='roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: test-osac-devstack-cdi-route-reader
+subjects:
+- kind: ServiceAccount
+  name: cdi-sa
+  namespace: cdi'
+if [[ "$cdi_route_binding" != "$expected_cdi_route_binding" ]]; then
+  echo "dev-full must grant Route read access only to the CDI controller account" >&2
+  exit 1
+fi
+for disabled_value in virt.enabled rbac.create; do
+  disabled_render=$(helm template test charts/osac-devstack --namespace osac \
+    "${profile_values[@]}" --set "$disabled_value=false")
+  if grep -Fq 'cdi-route-reader' <<<"$disabled_render"; then
+    echo "CDI Route permissions must be absent when $disabled_value is false" >&2
+    exit 1
+  fi
+done
 osac_render=$(helm template osac charts/osac --namespace osac \
   --values values/dev/kind-instance.yaml \
   --values values/dev/kind-instance-devfull.yaml \
@@ -76,7 +109,7 @@ if ! grep -Fq 'apiVersion: admissionregistration.k8s.io/v1' <<<"$arm64_compat_re
   || ! grep -Fq 'resources: ["virtualmachines"]' <<<"$arm64_compat_render" \
   || ! grep -Fq 'failurePolicy: Fail' <<<"$arm64_compat_render" \
   || ! grep -Fq 'operator: Exists' <<<"$arm64_compat_render" \
-  || ! grep -Fq 'key: osac.openshift.io/tenant' <<<"$arm64_compat_render" \
+  || ! grep -Fq 'key: osac.openshift.io/tenant-ref' <<<"$arm64_compat_render" \
   || ! grep -Fq '/spec/template/spec/domain/features/smm' <<<"$arm64_compat_render" \
   || ! grep -Fq '/spec/template/spec/domain/features/hyperv' <<<"$arm64_compat_render" \
   || ! grep -Fq '/spec/template/spec/domain/clock/timer/hyperv' <<<"$arm64_compat_render"; then
@@ -91,11 +124,31 @@ if ! grep -Fq -- '--set arm64VmCompatibility.enabled=true' <<<"$mac_arm_make_out
   echo "Apple Silicon dev-full must check node architecture and enable the compatibility policy" >&2
   exit 1
 fi
+if ! grep -Fq 'build-fedora-image.sh osac-dev localhost/osac-dev/fedora-arm64:pci-nomsi-v1' <<<"$mac_arm_make_output" \
+  || ! grep -Fq 'catalog.diskImages[0].name=fedora-mac-arm64' <<<"$mac_arm_make_output" \
+  || ! grep -Fq 'catalog.diskImages[0].sourceRef=localhost/osac-dev/fedora-arm64:pci-nomsi-v1' <<<"$mac_arm_make_output"; then
+  echo "Mac dev-full must prepare the Fedora disk and select it in the development catalog" >&2
+  exit 1
+fi
+mac_seed_render=$(helm template test charts/osac-devstack --namespace osac \
+  --set-string 'catalog.diskImages[0].name=fedora-mac-arm64' \
+  --set-string 'catalog.diskImages[0].sourceRef=localhost/osac-dev/fedora-arm64:pci-nomsi-v1' \
+  --set-json 'catalog.diskImages[0].architecture=["ARCHITECTURE_ARM64"]' \
+  --show-only templates/hooks/seed-catalog.yaml)
+if ! grep -Fq 'value: "fedora-mac-arm64"' <<<"$mac_seed_render" \
+  || ! grep -Fq 'value: "localhost/osac-dev/fedora-arm64:pci-nomsi-v1"' <<<"$mac_seed_render" \
+  || ! grep -Fq 'value: "[\"ARCHITECTURE_ARM64\"]"' <<<"$mac_seed_render" \
+  || ! grep -Fq 'value: "quay.io/containerdisks/fedora:latest"' <<<"$chart_render"; then
+  echo "catalog seeding must receive the selected disk source and truthful architectures" >&2
+  exit 1
+fi
 
 linux_make_output=$(make --no-print-directory --dry-run install-devstack \
   PLATFORM=kind PROFILE=dev-full NS=osac HOST_IS_MAC_ARM=false)
 if grep -Fq 'arm64VmCompatibility.enabled=true' <<<"$linux_make_output" \
-  || grep -Fq -- 'check-cluster-compatibility.sh' <<<"$linux_make_output"; then
+  || grep -Fq -- 'check-cluster-compatibility.sh' <<<"$linux_make_output" \
+  || grep -Fq 'build-fedora-image.sh' <<<"$linux_make_output" \
+  || grep -Fq 'fedora-mac-arm64' <<<"$linux_make_output"; then
   echo "Linux dev-full must not enable the ARM64 VM compatibility policy or run its compatibility check" >&2
   exit 1
 fi
@@ -103,7 +156,8 @@ fi
 dev_make_output=$(make --no-print-directory --dry-run install \
   PLATFORM=kind PROFILE=dev NS=osac HOST_IS_MAC_ARM=true)
 if grep -Fq 'osac-devstack' <<<"$dev_make_output" \
-  || grep -Fq 'arm64VmCompatibility.enabled=true' <<<"$dev_make_output"; then
+  || grep -Fq 'arm64VmCompatibility.enabled=true' <<<"$dev_make_output" \
+  || grep -Fq 'build-fedora-image.sh' <<<"$dev_make_output"; then
   echo "PROFILE=dev must not install the dev-full ARM64 VM compatibility policy" >&2
   exit 1
 fi

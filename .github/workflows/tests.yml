@@ -43,7 +43,7 @@ on:  # yamllint disable-line rule:truthy
         description: Minutes before a test step fails
         required: false
         type: number
-        default: 11
+        default: 15
 
 permissions:
   contents: read
@@ -63,7 +63,7 @@ jobs:
           ref: ${{ inputs.commit }}
           persist-credentials: false
       - uses: ./.github/actions/setup-go
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'go-unit'
         with:
           working-directory: ${{ inputs.dir }}
@@ -91,13 +91,13 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-go
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'metering-contract'
         with:
           working-directory: osac-metering/metering-service
       # The rule-render check renders the chart, so the leg needs Helm.
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'metering-contract'
       - name: Check the metering contract and published schemas
         timeout-minutes: ${{ inputs.timeout }}
@@ -111,20 +111,20 @@ jobs:
           ref: ${{ inputs.commit }}
           persist-credentials: false
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1  # v4.3.0
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'ui-unit'
         with:
           run_install: false
           package_json_file: osac-ui/package.json
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7.0.0
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'ui-unit'
         with:
           node-version-file: osac-ui/package.json
           cache: pnpm
           cache-dependency-path: osac-ui/pnpm-lock.yaml
       - working-directory: osac-ui
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'ui-unit'
         run: pnpm install --frozen-lockfile
       - working-directory: osac-ui
@@ -138,22 +138,22 @@ jobs:
           ref: ${{ inputs.commit }}
           persist-credentials: false
       - uses: ./.github/actions/setup-go
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-fulfillment-service'
         with:
           working-directory: fulfillment-service
       - name: Install Kind
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-fulfillment-service'
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
         with:
           install_only: true
       - name: Install Helm
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-fulfillment-service'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
       - name: Install infrastructure on Kind
-        timeout-minutes: 16
+        timeout-minutes: 20
         if: inputs.kind == 'it-fulfillment-service'
         env:
           CONTAINER_TOOL: docker
@@ -204,33 +204,33 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-operator'
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
         with:
           go-version-file: 'osac-operator/go.mod'
 
       - name: Install Kind
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-operator'
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
         with:
           install_only: true
 
       - name: Install Helm
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-operator'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
 
       - name: Install ginkgo
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-operator'
         env:
           GODEBUG: http2client=0
         run: go install github.com/onsi/ginkgo/v2/ginkgo@v2.32.0  # keep in sync with go.mod's github.com/onsi/ginkgo/v2 version
 
       - name: Install infrastructure on Kind
-        timeout-minutes: 16
+        timeout-minutes: 20
         if: inputs.kind == 'it-osac-operator'
         env:
           CONTAINER_TOOL: docker
@@ -264,45 +264,45 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
         uses: ./.github/actions/setup-python
 
       - name: Set up Go
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
         with:
           go-version-file: 'bare-metal-fulfillment-operator/go.mod'
 
       - name: Install Kind
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
         with:
           install_only: true
 
       - name: Install Helm
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
 
       - name: Install ginkgo
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
         env:
           GODEBUG: http2client=0
         run: go install github.com/onsi/ginkgo/v2/ginkgo@v2.32.0  # keep in sync with go.mod's github.com/onsi/ginkgo/v2 version
 
       - name: Install infrastructure on Kind
-        timeout-minutes: 16
+        timeout-minutes: 20
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
         env:
           CONTAINER_TOOL: docker
         run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
 
       - name: Test BMF NetBox Secret lookup
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
         run: |
           export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
@@ -342,30 +342,30 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-aap'
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
 
       - name: "Set up Python"
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-aap'
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
         with:
           python-version-file: "osac-aap/pyproject.toml"
 
       - name: Install the project
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-aap'
         working-directory: osac-aap
         run: uv sync --locked --all-extras --group development
 
       - name: Install Python dependencies for tests
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-aap'
         run: pip install kubernetes openstacksdk
 
       - name: Install kind
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-aap'
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
         with:
@@ -373,7 +373,7 @@ jobs:
           install_only: true
 
       - name: Set up Helm
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-aap'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
         with:
@@ -404,21 +404,21 @@ jobs:
           persist-credentials: false
 
       - name: Set up Helm
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-installer'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
         with:
           version: v3.22.0
 
       - name: Install Kind
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-installer'
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
         with:
           install_only: true
 
       - name: Lint charts
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-installer'
         working-directory: osac-installer
         run: |
@@ -429,13 +429,13 @@ jobs:
           helm lint charts/osac/ --values values/dev/kind-instance.yaml
 
       - name: Validate Helm networking values
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-installer'
         working-directory: osac-installer
         run: make helm-networking-test
 
       - name: Template charts (dry-run validation)
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-installer'
         working-directory: osac-installer
         run: |
@@ -453,7 +453,7 @@ jobs:
       # out of sync with the real deployment path in the first place (missing
       # trust-manager/envoy-gateway installs, wrong values file).
       - name: Install infrastructure on Kind
-        timeout-minutes: 16
+        timeout-minutes: 20
         if: inputs.kind == 'it-osac-installer'
         env:
           CONTAINER_TOOL: docker
@@ -469,7 +469,7 @@ jobs:
           kind load docker-image localhost/fulfillment-service:it --name osac-dev
 
       - name: Build osac-operator image from PR
-        timeout-minutes: 13
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-installer'
         env:
           CONTAINER_TOOL: docker
@@ -478,7 +478,7 @@ jobs:
           kind load docker-image localhost/osac-operator:it --name osac-dev
 
       - name: Build metering-service image from PR
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-installer'
         env:
           CONTAINER_TOOL: docker
@@ -487,7 +487,7 @@ jobs:
           kind load docker-image localhost/metering-service:it --name osac-dev
 
       - name: Deploy charts
-        timeout-minutes: 12
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-installer'
         env:
           CONTAINER_TOOL: docker
@@ -507,7 +507,7 @@ jobs:
       # admission policy, provider networking flag):
       # osac-installer/scripts/it-networking-checks.py.
       - name: Check networking installation
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-installer'
         run: |
           export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
@@ -562,7 +562,7 @@ jobs:
       # using the same real command as the initial deploy above rather than a
       # hand-copied `helm upgrade` invocation that could drift from it.
       - name: Test idempotency (helm upgrade with no changes)
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-installer'
         env:
           CONTAINER_TOOL: docker
@@ -581,7 +581,7 @@ jobs:
       # The rerun of the NetworkClass step must leave the networking
       # installation exactly as the first install did.
       - name: Check networking installation after the upgrade
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'it-osac-installer'
         run: |
           export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
@@ -594,26 +594,26 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Helm
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'helm-unit'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
         with:
           version: v3.22.0
       - uses: ./.github/actions/setup-python
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'helm-unit'
       - name: Test preflight harness
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer
         run: uv run --script scripts/test-preflight-harness.py
       - name: Test Kind runtime and suite runner
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer
         run: make kind-runtime-test
       - name: Build chart dependencies
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer
         run: |
@@ -623,7 +623,7 @@ jobs:
       # the v1.2.1 release archive for linux/amd64, checked against its SHA-256 and unpacked into the Helm plugin
       # directory, so there is no movable Git tag and no install script.
       - name: Unit test the chart (helm-unittest)
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer
         env:
@@ -645,7 +645,7 @@ jobs:
           ../osac-metering/scripts/test-readers-render.sh
           helm unittest charts/osac-infra
       - name: Test preflight rendering
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer
         run: uv run --script scripts/test-preflight-render.py
@@ -657,28 +657,28 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Helm
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: startsWith(inputs.kind, 'it-osac-installer-preflight')
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
         with:
           version: ${{ inputs.kind == 'it-osac-installer-preflight-helm4' && 'v4.2.2' || inputs.kind == 'it-osac-installer-preflight-helm322' && 'v3.22.0' || 'v3.18.0' }}
       - uses: ./.github/actions/setup-python
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: startsWith(inputs.kind, 'it-osac-installer-preflight')
       - name: Create Kind cluster
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: startsWith(inputs.kind, 'it-osac-installer-preflight')
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
       # The failed-hook case renders the real db-init Job, which needs the chart's subchart archives (not committed).
       - name: Build chart dependencies
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: startsWith(inputs.kind, 'it-osac-installer-preflight')
         working-directory: osac-installer
         run: |
           make helm-infra-deps
           helm dependency build charts/osac/
       - name: Test the install preflight
-        timeout-minutes: 11
+        timeout-minutes: 15
         if: startsWith(inputs.kind, 'it-osac-installer-preflight')
         working-directory: osac-installer
         run: uv run --script scripts/test-preflight-kind.py

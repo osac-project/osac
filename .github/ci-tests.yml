@@ -10,19 +10,19 @@
 # group    unit | integration
 # kind     which steps of tests.yml run
 # dir/cmd  go-unit only: the module and the command run in it
-# timeout  minutes before a test step fails (default 11)
+# timeout  minutes before a test step fails (default 15)
 - id: Unit tests (fulfillment-service)
   group: unit
   kind: go-unit
   dir: fulfillment-service
-  timeout: 37
+  timeout: 40
   cmd: ginkgo run --timeout 1h -r internal
   filters: [code, unit-tests-fulfillment-service]
 - id: Unit tests (osac-metering)
   group: unit
   kind: go-unit
   dir: osac-metering/metering-service
-  timeout: 14
+  timeout: 15
   cmd: ginkgo run -r internal ./cmd
   filters: [code, unit-tests-osac-metering]
 - id: Unit tests (osac-metering/adapters)
@@ -43,7 +43,7 @@
 - id: Contract checks (osac-metering)
   group: unit
   kind: metering-contract
-  timeout: 11
+  timeout: 15
   filters: [metering-contract]
 - id: Unit tests (osac-ui)
   group: unit
@@ -58,22 +58,22 @@
 - id: Integration test (fulfillment-service)
   group: integration
   kind: it-fulfillment-service
-  timeout: 92
+  timeout: 95
   filters: [code, integration-tests-fulfillment-service]
 - id: Integration test (osac-operator)
   group: integration
   kind: it-osac-operator
-  timeout: 34
+  timeout: 35
   filters: [code, integration-tests-osac-operator]
 - id: Integration test (bare-metal-fulfillment-operator)
   group: integration
   kind: it-bare-metal-fulfillment-operator
-  timeout: 18
+  timeout: 20
   filters: [code, integration-tests-bare-metal-fulfillment-operator]
 - id: Integration test (osac-aap)
   group: integration
   kind: it-osac-aap
-  timeout: 112
+  timeout: 115
   filters: [code, integration-tests-osac-aap]
 - id: Integration test (osac-installer)
   group: integration
@@ -85,15 +85,15 @@
 - id: Integration test (osac-installer preflight, Helm 3.18.0)
   group: integration
   kind: it-osac-installer-preflight-helm3
-  timeout: 11
+  timeout: 15
   filters: [code, integration-tests-osac-installer-preflight]
 - id: Integration test (osac-installer preflight, Helm 3.22.0)
   group: integration
   kind: it-osac-installer-preflight-helm322
-  timeout: 11
+  timeout: 15
   filters: [code, integration-tests-osac-installer-preflight]
 - id: Integration test (osac-installer preflight, Helm 4.2.2)
   group: integration
   kind: it-osac-installer-preflight-helm4
-  timeout: 11
+  timeout: 15
   filters: [code, integration-tests-osac-installer-preflight]

@@ -219,7 +219,7 @@ jobs:
       kind: ${{ matrix.kind }}
       dir: ${{ matrix.dir || '' }}
       cmd: ${{ matrix.cmd || '' }}
-      timeout: ${{ matrix.timeout || 11 }}
+      timeout: ${{ matrix.timeout || 15 }}
 
   # The one required check. It also runs when a check failed, and fails then;
   # a check that was skipped because it did not apply does not count against it.

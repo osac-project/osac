@@ -75,9 +75,14 @@ import {
   SelfSubjectAccessReviewsCreateResponseSchema,
   ServiceTier,
   Subnet,
+  SubnetsDeleteRequest,
+  SubnetsDeleteResponse,
   SubnetsGetRequest,
   User,
   VirtualNetwork,
+  VirtualNetworksDeleteRequest,
+  VirtualNetworksDeleteResponse,
+  VirtualNetworksGetRequest,
   Volume,
   VolumesCreateRequest,
   VolumesCreateResponse,
@@ -578,8 +583,17 @@ export type MockTransportOverrides = {
   onDiskImageCreate?: (req: DiskImagesCreateRequest) => DiskImagesCreateResponse;
   onDiskImageUpdate?: (req: DiskImagesUpdateRequest) => DiskImagesUpdateResponse;
   onDiskImageDelete?: (req: DiskImagesDeleteRequest) => DiskImagesDeleteResponse;
-  onSubnetGet?: (req: SubnetsGetRequest) => { object?: Subnet };
+  onSubnetGet?: (req: SubnetsGetRequest) => { object?: Subnet } | Promise<{ object?: Subnet }>;
   onSubnetList?: (req: unknown) => void;
+  onVirtualNetworkGet?: (
+    req: VirtualNetworksGetRequest,
+  ) => { object?: VirtualNetwork } | Promise<{ object?: VirtualNetwork }>;
+  onSubnetDelete?: (
+    req: SubnetsDeleteRequest,
+  ) => SubnetsDeleteResponse | Promise<SubnetsDeleteResponse>;
+  onVirtualNetworkDelete?: (
+    req: VirtualNetworksDeleteRequest,
+  ) => VirtualNetworksDeleteResponse | Promise<VirtualNetworksDeleteResponse>;
   onSecurityGroupList?: (req: unknown) => void;
   onNatGatewayList?: (req: NATGatewaysListRequest) => void;
   onNatGatewayCreate?: (
@@ -626,8 +640,8 @@ export const createMockConnectTransport = (
   const identityProviders = fixtures.identityProviders ?? [];
   const projects = fixtures.projects ?? [];
   const projectMemberships = fixtures.projectMemberships ?? [];
-  const virtualNetworks = fixtures.virtualNetworks ?? [];
-  const subnets = fixtures.subnets ?? [];
+  const virtualNetworks = [...(fixtures.virtualNetworks ?? [])];
+  const subnets = [...(fixtures.subnets ?? [])];
   const securityGroups = fixtures.securityGroups ?? [];
   const instanceTypes = fixtures.instanceTypes ?? [];
   const publicBaremetalInstanceTypes = fixtures.publicBaremetalInstanceTypes ?? [];
@@ -832,9 +846,24 @@ export const createMockConnectTransport = (
           }
           return { items, size: items.length, total };
         },
-        get: (req) => ({
-          object: virtualNetworks.find((i) => i.id === req.id),
-        }),
+        get: async (req) => {
+          if (overrides.onVirtualNetworkGet) {
+            return await overrides.onVirtualNetworkGet(req);
+          }
+          return {
+            object: virtualNetworks.find((i) => i.id === req.id),
+          };
+        },
+        delete: async (req) => {
+          if (overrides.onVirtualNetworkDelete) {
+            return overrides.onVirtualNetworkDelete(req);
+          }
+          const index = virtualNetworks.findIndex((item) => item.id === req.id);
+          if (index >= 0) {
+            virtualNetworks.splice(index, 1);
+          }
+          return {};
+        },
       });
 
       router.service(Subnets, {
@@ -847,13 +876,23 @@ export const createMockConnectTransport = (
           );
           return { items, size: items.length, total: items.length };
         },
-        get: (req) => {
+        get: async (req) => {
           if (overrides.onSubnetGet) {
-            return overrides.onSubnetGet(req);
+            return await overrides.onSubnetGet(req);
           }
           return {
             object: subnets.find((i) => i.id === req.id),
           };
+        },
+        delete: async (req) => {
+          if (overrides.onSubnetDelete) {
+            return overrides.onSubnetDelete(req);
+          }
+          const index = subnets.findIndex((item) => item.id === req.id);
+          if (index >= 0) {
+            subnets.splice(index, 1);
+          }
+          return {};
         },
       });
 

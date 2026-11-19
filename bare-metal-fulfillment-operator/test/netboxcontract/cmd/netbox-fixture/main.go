@@ -18,10 +18,10 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
-	"sync/atomic"
 	"time"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/test/netboxcontract/netboxtest"
@@ -54,24 +54,39 @@ func main() {
 		},
 	})
 
-	var rotatedRequests atomic.Uint64
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /fixture-state", func(w http.ResponseWriter, _ *http.Request) {
 		device, _ := mock.Device(deviceID)
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]any{
 			"deviceID": deviceID, "status": device.Status, "owner": device.CustomFields["osac_instance_id"],
-			"rotatedRequests": rotatedRequests.Load(),
+			"rotatedClaims": countRotatedClaims(mock.Requests(), deviceID),
 		}); err != nil {
 			log.Print(err)
 		}
 	})
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") == "Bearer "+rotated {
-			rotatedRequests.Add(1)
-		}
-		mock.ServeHTTP(w, r)
-	})
+	mux.Handle("/", mock)
 	server := &http.Server{Addr: ":8080", Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	log.Fatal(server.ListenAndServe())
+}
+
+// countRotatedClaims counts successful claim PATCHes authenticated with the
+// second token supplied to SetAuth.
+func countRotatedClaims(requests []netboxtest.Request, deviceID int) int {
+	const rotatedTokenIndex = 1
+	devicePath := fmt.Sprintf("/api/dcim/devices/%d/", deviceID)
+	count := 0
+	for _, request := range requests {
+		if request.TokenIndex != rotatedTokenIndex || request.Method != http.MethodPatch ||
+			request.Path != devicePath || request.StatusCode != http.StatusOK {
+			continue
+		}
+		var patch struct {
+			Status string `json:"status"`
+		}
+		if json.Unmarshal(request.Body, &patch) == nil && patch.Status == "active" {
+			count++
+		}
+	}
+	return count
 }

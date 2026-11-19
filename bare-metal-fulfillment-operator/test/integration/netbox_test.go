@@ -26,6 +26,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"slices"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
@@ -35,6 +36,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/oauth"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -48,15 +50,17 @@ import (
 
 const (
 	netboxFixture            = "bmf-netbox-fixture"
+	netboxBMFDeployment      = "bmf-operator-controller-manager"
+	netboxTokenVolume        = "netbox-token"
 	netboxTokenSecret        = "bmf-netbox-fixture-token"
 	netboxRotatedTokenSecret = "bmf-netbox-fixture-rotated-token"
 )
 
 type netboxFixtureState struct {
-	DeviceID        int
-	Status          string
-	Owner           string
-	RotatedRequests uint64
+	DeviceID      int
+	Status        string
+	Owner         string
+	RotatedClaims int
 }
 
 var _ = Describe("NetBox inventory", Label("bmf-netbox"), func() {
@@ -76,25 +80,37 @@ var _ = Describe("NetBox inventory", Label("bmf-netbox"), func() {
 		Expect(err).NotTo(HaveOccurred())
 		cluster, err := kubernetes.NewForConfig(kubeconfig)
 		Expect(err).NotTo(HaveOccurred())
-		fixture, err := getNetBoxFixtureState(ctx, cluster, ns)
+		deployment, err := cluster.AppsV1().Deployments(ns).Get(ctx, netboxBMFDeployment, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		volumes := deployment.Spec.Template.Spec.Volumes
+		volumeIndex := slices.IndexFunc(volumes, func(volume corev1.Volume) bool {
+			return volume.Name == netboxTokenVolume
+		})
+		Expect(volumeIndex).To(BeNumerically(">=", 0), "expected the chart to render the %s volume", netboxTokenVolume)
+		volume := volumes[volumeIndex]
+		Expect(volume.Secret).NotTo(BeNil(), "expected %s to reference a Secret", netboxTokenVolume)
+		Expect(volume.Secret.SecretName).To(Equal(netboxTokenSecret), "expected the bmf.secrets.netboxToken value")
+
+		fixture, err := getNetBoxFixtureState(ctx, cluster, ns, 0)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(fixture.DeviceID).To(BeNumerically(">", 0))
 		seedNetBoxBMCSecret(ctx, cluster, ns, httpsPort, fixture.DeviceID)
 
 		By("allocating and releasing a host with the installed operator")
 		runNetBoxAllocation(ctx, cluster, ns, fixture.DeviceID, fmt.Sprintf("netbox-it-%d", time.Now().UnixNano()))
-		beforeRotation, err := getNetBoxFixtureState(ctx, cluster, ns)
+		beforeRotation, err := getNetBoxFixtureState(ctx, cluster, ns, fixture.DeviceID)
 		Expect(err).NotTo(HaveOccurred())
 
 		By("changing the mounted token Secret and waiting for the Deployment to roll out")
-		DeferCleanup(patchNetBoxTokenVolume, ns, netboxTokenSecret)
-		patchNetBoxTokenVolume(ns, netboxRotatedTokenSecret)
+		DeferCleanup(patchNetBoxTokenVolume, ns, volumeIndex, netboxTokenSecret)
+		patchNetBoxTokenVolume(ctx, ns, volumeIndex, netboxRotatedTokenSecret)
 
 		By("allocating and releasing again and verifying the operator used the rotated token")
 		runNetBoxAllocation(ctx, cluster, ns, fixture.DeviceID, fmt.Sprintf("netbox-it-rotated-%d", time.Now().UnixNano()))
-		afterRotation, err := getNetBoxFixtureState(ctx, cluster, ns)
+		afterRotation, err := getNetBoxFixtureState(ctx, cluster, ns, fixture.DeviceID)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(afterRotation.RotatedRequests).To(BeNumerically(">", beforeRotation.RotatedRequests))
+		Expect(afterRotation.RotatedClaims).To(BeNumerically(">", beforeRotation.RotatedClaims),
+			"expected a successful claim PATCH using the rotated token")
 		for _, name := range []string{netboxTokenSecret, netboxRotatedTokenSecret, "fulfillment-controller-credentials"} {
 			_, err := cluster.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
 			Expect(err).NotTo(HaveOccurred(), "expected %s to remain after allocation and release", name)
@@ -168,13 +184,13 @@ func runNetBoxAllocation(ctx context.Context, cluster kubernetes.Interface, ns s
 	DeferCleanup(testhelpers.DeleteAndWaitForCleanup, ns, "BareMetalInstance", name)
 
 	Eventually(ctx, func(g Gomega) {
+		state, err := getNetBoxFixtureState(ctx, cluster, ns, deviceID)
+		g.Expect(err).NotTo(HaveOccurred())
 		instance, err := testhelpers.Get(ns, "BareMetalInstance", name)
 		g.Expect(err).NotTo(HaveOccurred())
 		host, _, err := unstructured.NestedString(instance.Object, "spec", "externalHostID")
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(host).To(Equal(ns + "/" + netboxHost))
-		state, err := getNetBoxFixtureState(ctx, cluster, ns)
-		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(state.Status).To(Equal("active"))
 		g.Expect(state.Owner).To(Equal(string(instance.GetUID())))
 		_, err = testhelpers.Get(ns, "BareMetalHost", netboxHost)
@@ -190,6 +206,8 @@ func runNetBoxAllocation(ctx context.Context, cluster kubernetes.Interface, ns s
 		"-n", ns, "--wait=false").CombinedOutput()
 	Expect(err).NotTo(HaveOccurred(), string(output))
 	Eventually(ctx, func(g Gomega) {
+		state, err := getNetBoxFixtureState(ctx, cluster, ns, deviceID)
+		g.Expect(err).NotTo(HaveOccurred())
 		instanceAbsent, err := testhelpers.Absent(ns, "BareMetalInstance", name)
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(instanceAbsent).To(BeTrue())
@@ -198,31 +216,41 @@ func runNetBoxAllocation(ctx context.Context, cluster kubernetes.Interface, ns s
 		g.Expect(hostAbsent).To(BeTrue())
 		_, err = cluster.CoreV1().Secrets(ns).Get(ctx, netboxRuntimeSecret, metav1.GetOptions{})
 		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "expected the BMC Secret to be deleted: %v", err)
-		state, err := getNetBoxFixtureState(ctx, cluster, ns)
-		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(state.Status).To(Equal("staged"))
 		g.Expect(state.Owner).To(BeEmpty())
 	}, 2*time.Minute, 2*time.Second).Should(Succeed())
 }
 
-func getNetBoxFixtureState(ctx context.Context, cluster kubernetes.Interface, ns string) (netboxFixtureState, error) {
+func getNetBoxFixtureState(
+	ctx context.Context, cluster kubernetes.Interface, ns string, deviceID int,
+) (netboxFixtureState, error) {
 	var state netboxFixtureState
 	data, err := cluster.CoreV1().Services(ns).ProxyGet("http", netboxFixture, "http", "fixture-state", nil).DoRaw(ctx)
 	if err != nil {
 		return state, err
 	}
-	err = json.Unmarshal(data, &state)
-	return state, err
+	if err := json.Unmarshal(data, &state); err != nil {
+		return state, err
+	}
+	if deviceID != 0 && state.DeviceID != deviceID {
+		return state, fmt.Errorf("NetBox fixture restarted during the test: device ID changed from %d to %d",
+			deviceID, state.DeviceID)
+	}
+	return state, nil
 }
 
-func patchNetBoxTokenVolume(ns, secretName string) {
-	patch := fmt.Sprintf(`{"spec":{"template":{"spec":{"volumes":[
-		{"name":"netbox-token","secret":{"secretName":%q}}
-	]}}}}`, secretName)
-	output, err := exec.Command("kubectl", "patch", "deployment/bmf-operator-controller-manager",
-		"-n", ns, "--type=strategic", "-p", patch).CombinedOutput()
+// The Helm chart renders bmf.secrets.netboxToken as the netbox-token volume.
+func patchNetBoxTokenVolume(ctx SpecContext, ns string, volumeIndex int, secretName string) {
+	volumePath := fmt.Sprintf("/spec/template/spec/volumes/%d", volumeIndex)
+	patch := fmt.Sprintf(`[
+		{"op":"test","path":%q,"value":%q},
+		{"op":"replace","path":%q,"value":%q}
+	]`, volumePath+"/name", netboxTokenVolume, volumePath+"/secret/secretName", secretName)
+	deployment := "deployment/" + netboxBMFDeployment
+	output, err := exec.CommandContext(ctx, "kubectl", "patch", deployment,
+		"-n", ns, "--type=json", "-p", patch).CombinedOutput()
 	Expect(err).NotTo(HaveOccurred(), string(output))
-	output, err = exec.Command("kubectl", "rollout", "status", "deployment/bmf-operator-controller-manager",
+	output, err = exec.CommandContext(ctx, "kubectl", "rollout", "status", deployment,
 		"-n", ns, "--timeout=3m").CombinedOutput()
 	Expect(err).NotTo(HaveOccurred(), string(output))
 }

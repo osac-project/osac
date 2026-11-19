@@ -25,6 +25,8 @@ The NetBox component suite runs from the repository root with
 `make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf-netbox`
 after provisioning the Kind infrastructure. It uses the OSAC Helm chart and
 asserts allocation, release, and use of a rotated token in `test/integration`.
+After a local run, the BMF release stays configured against the fixture
+Deployment, Service, and synthetic token Secrets in the test namespace.
 CI runs both BMF scenarios with shared images and CRDs. The Go contract suite
 runs as part of BMF's `make test`. To run it on its own from the repository
 root, use `make -C bare-metal-fulfillment-operator netbox-contract-test`.

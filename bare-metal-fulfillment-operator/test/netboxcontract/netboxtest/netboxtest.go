@@ -69,6 +69,8 @@ type Request struct {
 	IfMatch    string
 	Body       []byte
 	StatusCode int
+	// TokenIndex is the matched token's position in SetAuth, or -1.
+	TokenIndex int
 }
 
 // Server is a stateful NetBox HTTPS endpoint.
@@ -202,16 +204,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	w = recorder
 
+	headerScheme, token, _ := strings.Cut(r.Header.Get("Authorization"), " ")
 	s.mu.Lock()
+	requiresAuth := len(s.tokens) > 0
+	tokenIndex := -1
+	if headerScheme == s.tokenScheme {
+		tokenIndex = slices.Index(s.tokens, token)
+	}
 	requestIndex := len(s.requests)
 	s.requests = append(s.requests, Request{
-		Method:  r.Method,
-		Path:    r.URL.Path,
-		Query:   r.URL.Query(),
-		IfMatch: r.Header.Get("If-Match"),
-		Body:    body,
+		Method:     r.Method,
+		Path:       r.URL.Path,
+		Query:      r.URL.Query(),
+		IfMatch:    r.Header.Get("If-Match"),
+		Body:       body,
+		TokenIndex: tokenIndex,
 	})
-	tokens, scheme := s.tokens, s.tokenScheme
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
@@ -219,8 +227,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	}()
 
-	headerScheme, token, _ := strings.Cut(r.Header.Get("Authorization"), " ")
-	if len(tokens) > 0 && (headerScheme != scheme || !slices.Contains(tokens, token)) {
+	if requiresAuth && tokenIndex < 0 {
 		writeError(w, http.StatusUnauthorized, "Invalid token")
 		return
 	}

@@ -1,6 +1,8 @@
+# These synthetic NetBox v2 tokens are used by the Kind mock fixture.
 apiVersion: v1
 kind: Secret
 metadata:
+  # The installer selects this Secret with bmf.secrets.netboxToken.
   name: bmf-netbox-fixture-token
   annotations:
     osac.openshift.io/tenant: system

@@ -7,8 +7,15 @@ rules:
   - ""
   resources:
   - secrets
+  resourceNames:
+  - keycloak-database-password
   verbs:
   - get
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
   - create
 ---
 apiVersion: rbac.authorization.k8s.io/v1

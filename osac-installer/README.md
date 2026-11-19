@@ -145,6 +145,15 @@ Ensure your values directory contains the necessary secret files:
 
 - **AAP License:** Place `license.zip` in `values/<env>/`
 - **Pull Secret:** Place `pull-secret.json` in `values/<env>/`
+- **Keycloak admin password:** The `osac-infra` chart has no built-in admin
+  password for production installs. When `keycloak.devFixtures.enabled` is
+  enabled for Kind/CI, the chart generates random admin and test-user passwords
+  and reuses existing credentials on upgrades, rotating a legacy `admin`
+  default to a random password once. For production, supply a
+  protected local values overlay or
+  `KEYCLOAK_HELM_ARGS="--set-file keycloak.adminPassword=/path/to/password"`.
+  On upgrades, a changed admin password is applied to the existing Keycloak
+  master account before the canonical credential Secret is updated.
 
 ### Installation
 
@@ -169,6 +178,7 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC 
 | `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, or `full-ci` (required; `dev-full` is kind only) |
 | `NS` | Target namespace (required) |
 | `EXTRA_HELM_ARGS` | Extra `--set`/`--set-string` args for the OSAC chart only |
+| `KEYCLOAK_HELM_ARGS` | Extra Helm args for `osac-infra` only, such as `--set-file keycloak.adminPassword=/secure/path` |
 | `DRY_RUN=1` | Render all releases from `make install` with `helm template`; no cluster connections or cluster commands are used |
 | `DRY_RUN_CLUSTER_DOMAIN` | Cluster ingress domain required for an OpenShift dry run |
 | `DRY_RUN_OCP_VERSION` | OpenShift major.minor version required for an OpenShift dry run, e.g. `4.20` |
@@ -178,6 +188,12 @@ To preview the full Kind install without making cluster changes:
 ```bash
 make install PLATFORM=kind PROFILE=dev NS=osac DRY_RUN=1
 ```
+
+The Kind profile generates random Keycloak credentials for the render. All
+rendered manifests, including Secrets, are written to a temporary file with
+mode `0600`; the terminal prints only its path. Treat the file as
+sensitive and remove it when finished. For production values, pass the Keycloak
+password with `KEYCLOAK_HELM_ARGS="--set-file keycloak.adminPassword=/secure/path"`.
 
 For OpenShift, provide the cluster-specific values explicitly because dry-run
 mode does not query the cluster:
@@ -190,9 +206,11 @@ make install PLATFORM=openshift PROFILE=vmaas-ci NS=osac DRY_RUN=1 \
 `DRY_RUN=1` routes the composite target through `helm template` for every
 release. It skips Kind cluster creation, `oc`/`kubectl` operations, and the
 dev-full host setup script. Since `helm template` does not connect to a cluster,
-no Kubernetes resources are changed. The generated manifests are printed to
-the terminal; `EXTRA_HELM_ARGS` still applies to the OSAC chart. Do not include a
-Helm `--dry-run` flag in `EXTRA_HELM_ARGS`; rendering is intrinsic to this mode.
+no Kubernetes resources are changed. All rendered manifests are written to a
+mode-`0600` temporary file so Secret data is not printed; the terminal shows
+only the file path. Treat the file as sensitive and remove it when finished.
+`EXTRA_HELM_ARGS` still applies to the OSAC chart. Do not include a Helm
+`--dry-run` flag in `EXTRA_HELM_ARGS`; rendering is intrinsic to this mode.
 
 `EXTRA_HELM_ARGS` is parsed as a shell-word list without shell evaluation:
 whitespace separates arguments, and single quotes, double quotes and
@@ -819,12 +837,20 @@ make test          PLATFORM=... PROFILE=... NS=... SUITE=...  # Integration test
 make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage # API/operator disk handoff
 make validate-inputs PLATFORM=... PROFILE=... NS=... # Offline input validation (no cluster changes)
 make helm-lint                                       # Lint all charts
-make helm-template       # Dry-run render all templates
+make helm-template       # Render all templates to a protected temporary file
 make mce-render-test                                  # Verify disabled MCE defaults and CaaS enablement
 make input-validation-test                             # Test the upfront input-validation gate
 make helm-validate                                   # Lint + template (full validation)
 make sync-charts         # Rebuild chart dependencies (legacy alias; runs helm dependency build)
 ```
+
+`make helm-template` enables random development fixtures when no Keycloak
+password is supplied, writes all rendered manifests (including Secrets) to a
+mode-`0600` temporary file, and prints only its path. Pass any protected
+Keycloak password with
+`KEYCLOAK_HELM_ARGS="--set-file keycloak.adminPassword=/path/to/password"`;
+do not pass it as a literal `--set` value. Treat the render file as sensitive
+and remove it when finished.
 
 #### Input validation
 
@@ -838,12 +864,13 @@ and chart-specific overrides as the installation (`INFRA_HELM_ARGS`,
 same read-only OpenShift lookups for the cluster domain and version.
 Separate external releases installed on Kind (`cert-manager`, `trust-manager`,
 `envoy-gateway`, and `strimzi-cluster-operator`) are not rendered by this gate.
-(With `DRY_RUN=1`, `install` renders offline via
-`install-dry-run` and skips the gate — the dry run is itself an offline
-render. Because `install-dry-run` calls `helm template` directly rather
-than through the gate, it does not suppress Helm's message: a failing dry
-run prints Helm's raw error, which can echo the rejected value, to the
-terminal or CI log.) Invalid values — wrong types, negative numbers where only
+With `DRY_RUN=1`, `install` renders offline via `install-dry-run` and skips the
+gate because the dry run is itself an offline render. `install-dry-run`
+redirects all Helm output, including errors that may echo rejected values, to a
+mode-`0600` temporary file. It prints only a generic failure message and that
+file's path; treat the file as sensitive.
+
+Invalid values — wrong types, negative numbers where only
 zero-or-positive is allowed, unknown keys in schema-closed sections —
 fail the install before any namespace, secret, or release is created,
 and before any readiness wait. Unknown-key rejection depends on the

@@ -71,7 +71,8 @@ keycloak:
   extraEnv:
     - name: KC_SPI_CONNECTIONS_HTTP_CLIENT_DEFAULT_DISABLE_TRUST_MANAGER
       value: "true"
-  # Kind/IT only: seed known passwords for the realm's built-in test users.
+  # Kind/IT only: seed test users. The chart generates random credentials on
+  # first install and preserves them from the Secret on upgrades.
   devFixtures:
     enabled: true
     mcpResourceURL: "https://mcp.osac.localhost:8443/"

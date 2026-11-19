@@ -13,6 +13,7 @@ in `osac-aap/Makefile`.
 | Tier | Suite (by directory/role) | Real | Faked or omitted |
 |---|---|---|---|
 | Unit | `tests/unit/` | Filter and isolated plugin behavior | Kubernetes, AAP, cloud and storage services are mocked or fixture-driven |
+| Unit / Helm render | `tests/unit/test_aap_chart_security.py`; `uv run pytest tests/unit/test_aap_chart_security.py` | Real chart render checks the bootstrap security context and named admin-Secret read-only Role | No Kubernetes cluster or AAP API is contacted. |
 | Component integration | `make -C osac-aap test` (creates Kind, runs playbooks, tears it down) | Ansible roles/playbooks against real Kind APIs, a second isolated API for storage target routing, CRDs, leases, finalizers, test-runner pod | AAP, OpenStack, KubeVirt/RHACM and other providers are not generally real; the VMS storage target uses a mock server |
 | Component integration (focused) | Targets under `tests/integration/targets/` | The role workflow and its documented fixtures | Only the dependencies that target declares; inspect its setup before claiming a real boundary |
 | Contract | No dedicated suite; use the qualifying [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) task | Nothing | Kind API, mock VMS server and fixture-driven providers prove no AAP or provider contract |

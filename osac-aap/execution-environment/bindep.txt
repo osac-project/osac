@@ -13,3 +13,4 @@ python3.12-devel
 git-core
 bind-utils
 krb5-devel
+nss_wrapper

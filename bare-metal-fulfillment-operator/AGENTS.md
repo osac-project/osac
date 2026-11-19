@@ -40,6 +40,7 @@ See [suite boundaries and coverage gaps](../docs/INTEGRATION-TESTING.md#bare-met
 | Touched area | Required validation | Command / follow-up |
 |---|---|---|
 | Pure inventory, selection, validation, or client logic | Unit | `make test` |
+| BareMetalPool admin aggregate RBAC | Contract and Kind component integration | `test/contract/aggregate_roles_test.go` in `make test`; `test/integration/aggregate_rbac_test.go` in `make integration-tests` checks the deployed admin ClusterRole aggregation. The Kind test does not exercise providers or hardware. |
 | Reconciliation, finalizers, allocation, or status transitions | Envtest | `make test` |
 | Controller deployment, CRDs, pool flows, or Kubernetes wiring | Component integration | Deploy current image/manifests, then `make integration-tests`; [installer alternative](../docs/INTEGRATION-TESTING.md#bare-metal-fulfillment-operator) |
 | BareMetalInstance host teardown waits for OSAC networking cleanup, then leaves network resources untouched (NET-CLEAN-08) | Kind component integration — DEV | Isolated installer run and coverage boundary: [NET-CLEAN-08](../docs/INTEGRATION-TESTING.md#net-clean-08-deployed-bmf-ownership-boundary) |

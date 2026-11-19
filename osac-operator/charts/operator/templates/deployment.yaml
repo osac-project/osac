@@ -39,6 +39,10 @@ spec:
           - --fulfillment-ca-file=/etc/ca-bundle/bundle.pem
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - name: webhook
+          containerPort: 9443
+          protocol: TCP
         envFrom:
           - secretRef:
               name: {{ .Values.configSecret.name }}
@@ -135,6 +139,18 @@ spec:
             valueFrom:
               fieldRef:
                 fieldPath: metadata.namespace
+          - name: OSAC_OPERATOR_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: OSAC_OPERATOR_SERVICE_ACCOUNT
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.serviceAccountName
+          {{- if eq (include "osac-operator.controllerEnabled" (list . "clusterOrder" "caas")) "true" }}
+          - name: OSAC_WEBHOOK_CERT_DIR
+            value: /etc/webhook/tls
+          {{- end }}
           - name: OSAC_COMPUTE_INSTANCE_NAMESPACE
             valueFrom:
               fieldRef:
@@ -216,6 +232,11 @@ spec:
             mountPath: {{ dir .Values.remoteClusterKubeconfig | quote }}
             readOnly: true
         {{- end }}
+        {{- if eq (include "osac-operator.controllerEnabled" (list . "clusterOrder" "caas")) "true" }}
+          - name: clusterorder-webhook-tls
+            mountPath: /etc/webhook/tls
+            readOnly: true
+        {{- end }}
       volumes:
         - name: fulfillment-ca-bundle
           configMap:
@@ -231,6 +252,11 @@ spec:
             items:
               - key: {{ .Values.remoteClusterKubeconfigSecretKey | default "kubeconfig" | quote }}
                 path: {{ base .Values.remoteClusterKubeconfig | quote }}
+      {{- end }}
+      {{- if eq (include "osac-operator.controllerEnabled" (list . "clusterOrder" "caas")) "true" }}
+        - name: clusterorder-webhook-tls
+          secret:
+            secretName: {{ include "osac-operator.clusterOrderRBACWebhookName" . }}-tls
       {{- end }}
       serviceAccountName: {{ include "osac-operator.serviceAccountName" . }}
       terminationGracePeriodSeconds: 10

@@ -31,9 +31,10 @@ import (
 
 // policyRule mirrors rbac.authorization.k8s.io/v1.PolicyRule for YAML parsing.
 type policyRule struct {
-	APIGroups []string `yaml:"apiGroups"`
-	Resources []string `yaml:"resources"`
-	Verbs     []string `yaml:"verbs"`
+	APIGroups     []string `yaml:"apiGroups"`
+	Resources     []string `yaml:"resources"`
+	ResourceNames []string `yaml:"resourceNames"`
+	Verbs         []string `yaml:"verbs"`
 }
 
 // clusterRole is a minimal representation of a ClusterRole for YAML parsing.
@@ -44,9 +45,10 @@ type clusterRole struct {
 	Rules      []policyRule `yaml:"rules"`
 }
 
-// crMetadata captures the name field for identifying the right ClusterRole.
+// crMetadata captures the resource name and namespace for RBAC scope checks.
 type crMetadata struct {
-	Name string `yaml:"name"`
+	Name      string `yaml:"name"`
+	Namespace string `yaml:"namespace"`
 }
 
 // hubAccessTemplatePath is the path to the hub-access template relative to
@@ -235,25 +237,30 @@ func TestHubAccessClusterRoleVerbs(t *testing.T) {
 
 	for _, exp := range expectedHubAccessVerbs() {
 		t.Run(exp.name, func(t *testing.T) {
-			actualVerbs, ok := clusterRoleRuleVerbs(cr, exp.apiGroup, exp.resources)
-			if !ok {
-				t.Fatalf("rule group not found in ClusterRole: apiGroup=%q resources=%v",
-					exp.apiGroup, exp.resources)
-			}
+			for _, resource := range exp.resources {
+				resource := resource
+				t.Run(resource, func(t *testing.T) {
+					actualVerbs, ok := clusterRoleRuleVerbs(cr, exp.apiGroup, resource)
+					if !ok {
+						t.Fatalf("rule not found in ClusterRole: apiGroup=%q resource=%q",
+							exp.apiGroup, resource)
+					}
 
-			actualSet := toSet(actualVerbs)
-			var missing []string
-			for _, v := range exp.verbs {
-				if !actualSet[v] {
-					missing = append(missing, v)
-				}
-			}
-			if len(missing) > 0 {
-				t.Errorf("missing required verbs for %s (apiGroup=%q resources=%v): %v\n"+
-					"  have: %v\n"+
-					"  want: %v",
-					exp.name, exp.apiGroup, exp.resources, missing,
-					actualVerbs, exp.verbs)
+					actualSet := toSet(actualVerbs)
+					var missing []string
+					for _, v := range exp.verbs {
+						if !actualSet[v] {
+							missing = append(missing, v)
+						}
+					}
+					if len(missing) > 0 {
+						t.Errorf("missing required verbs for %s (apiGroup=%q resource=%q): %v\n"+
+							"  have: %v\n"+
+							"  want: %v",
+							exp.name, exp.apiGroup, resource, missing,
+							actualVerbs, exp.verbs)
+					}
+				})
 			}
 		})
 	}

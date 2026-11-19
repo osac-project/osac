@@ -22,6 +22,7 @@ dependencies:
     - git-core
     - bind-utils
     - krb5-devel
+    - nss_wrapper
 
 options:
   package_manager_path: /usr/bin/dnf

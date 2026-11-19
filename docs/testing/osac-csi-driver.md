@@ -25,6 +25,7 @@ Run `make help` for the current test targets.
 - **Fulfillment's private Volume API contract:** a fake generated client does not prove compatibility with the deployed service.
 - **Vendor attach, detach, mount, or storage lifecycle:** the fake vendor cannot satisfy a real storage-backend requirement.
 - **Helm/deployment changes:** build an image when container/deployment inputs change.
+- **CSI controller pod security context:** `make -C ../osac-installer csi-render-test` renders the controller Deployment and verifies the OSAC container enforces its image's non-root identity; this does not exercise a deployed CSI controller or storage vendor.
 
 ## Coverage gaps
 

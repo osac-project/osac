@@ -19,16 +19,20 @@ HOOK_SCRIPT = INFRA_CHART / "files/hooks/configure-evpn.sh"
 
 
 def render(release: str, chart: pathlib.Path, *args: str) -> list[dict[str, Any]]:
+    """Render an EVPN chart, enabling random Keycloak fixtures for infra."""
+    command = [
+        os.environ.get("HELM_BIN", "helm"),
+        "template",
+        release,
+        str(chart),
+        "--namespace",
+        "osac-infra",
+    ]
+    if chart.name == "osac-infra":
+        command.extend(["--set", "keycloak.devFixtures.enabled=true"])
+    command.extend(args)
     result = subprocess.run(
-        [
-            os.environ.get("HELM_BIN", "helm"),
-            "template",
-            release,
-            str(chart),
-            "--namespace",
-            "osac-infra",
-            *args,
-        ],
+        command,
         check=False,
         capture_output=True,
         text=True,
@@ -50,6 +54,7 @@ def expect_render_failure(chart: pathlib.Path, values_file: pathlib.Path) -> Non
 def render_failure_result(
     chart: pathlib.Path, values_file: pathlib.Path
 ) -> subprocess.CompletedProcess[str]:
+    """Return Helm's result for the supplied EVPN values without raising."""
     return subprocess.run(
         [
             os.environ.get("HELM_BIN", "helm"),
@@ -58,6 +63,8 @@ def render_failure_result(
             str(chart),
             "--namespace",
             "osac-infra",
+            "--set",
+            "keycloak.devFixtures.enabled=true",
             "--values",
             str(values_file),
         ],

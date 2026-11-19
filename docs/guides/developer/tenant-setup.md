@@ -402,13 +402,15 @@ Apply the CRDs before (re)starting the operator:
 oc apply -f config/crd/bases/
 ```
 
-Also update the operator's ClusterRole to include the new permissions:
+For a Helm-managed operator, upgrade the same Helm release so the ClusterRole
+and its admission webhook are updated together. For a legacy non-Helm operator,
+install the ClusterOrder admission webhook before updating the manager RBAC;
+follow the [legacy webhook upgrade steps](../../../osac-operator/config/webhook/README.md).
+Do not apply the generated manager Role by itself: it grants `bind` on the
+built-in `admin` ClusterRole.
 
-```bash
-oc apply -f config/rbac/role.yaml
-```
-
-After applying CRDs and RBAC, restart the operator:
+After applying the CRDs and completing the appropriate Helm or legacy upgrade,
+restart the operator if its deployment was not rolled by the upgrade:
 
 ```bash
 oc rollout restart deployment osac-operator-controller-manager -n osac-devel
@@ -538,10 +540,12 @@ Diagnose:
 oc logs -l control-plane=controller-manager -n osac-devel --tail=100 | grep -i "failed to watch\|forbidden"
 ```
 
-Fix by applying the updated RBAC and restarting:
+For a Helm-managed deployment, upgrade its operator chart. For a legacy
+non-Helm deployment, use the [staged webhook and RBAC procedure](../../../osac-operator/config/webhook/README.md)
+so the `bind admin` permission is not installed before admission is available.
+Then restart the operator if needed:
 
 ```bash
-oc apply -f config/rbac/role.yaml
 oc rollout restart deployment osac-operator-controller-manager -n osac-devel
 ```
 

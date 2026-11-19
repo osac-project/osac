@@ -4,9 +4,12 @@
 import json
 import os
 from pathlib import Path
+import re
+import secrets
 import shlex
 import shutil
 import socket
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -1136,7 +1139,164 @@ fi
                 self.assertFalse(self.archive.exists())
                 self.assertFalse(any("upgrade --install" in cmd for cmd in self.commands()))
 
-    def test_installer_helm_apply_flags_match_each_release(self):
+    def test_keycloak_passwords_use_profile_generation_or_explicit_input(self) -> None:
+        """Keep development profiles on generated credentials and production inputs file-backed."""
+        installer = self.prepare_helm_dependencies()
+        self.write_command("oc", 'echo 4.20.1')
+        cases = [
+            ("kind", "dev", "values/dev/kind-infra.yaml", None),
+            ("kind", "dev-full", "values/dev/kind-infra.yaml", None),
+            ("openshift", "caas-ci", "values/caas-ci/infra.yaml", None),
+            (
+                "openshift",
+                "dev",
+                "values/dev/infra.yaml",
+                "--set-file keycloak.adminPassword=/secure/keycloak-admin-password",
+            ),
+        ]
+        for platform, profile, infra_values, keycloak_args in cases:
+            with self.subTest(platform=platform, profile=profile):
+                command = [
+                    "make",
+                    "--no-print-directory",
+                    "--dry-run",
+                    "-C",
+                    str(installer),
+                    "install-infra",
+                    f"PLATFORM={platform}",
+                    f"PROFILE={profile}",
+                    "NS=osac",
+                    "CONTAINER_TOOL=podman",
+                ]
+                if keycloak_args:
+                    command.append(f"KEYCLOAK_HELM_ARGS={keycloak_args}")
+                result = subprocess.run(
+                    command,
+                    env=self.env,
+                    text=True,
+                    capture_output=True,
+                    timeout=15,
+                )
+                self.assert_success(result)
+                self.assertIn(infra_values, result.stdout)
+                self.assertNotIn("keycloak-ci-fixtures.yaml", result.stdout)
+                if keycloak_args:
+                    self.assertIn(keycloak_args, result.stdout)
+
+    def test_render_targets_keep_secret_manifests_out_of_terminal_output(self) -> None:
+        """Protect Secret keys and values in successful and failed Helm renders."""
+        installer = self.prepare_helm_dependencies()
+        secret_data = {
+            key: secrets.token_urlsafe(24)
+            for key in ("admin-password", "default-user-password", "access-token")
+        }
+        for key, value in secret_data.items():
+            env_key = key.upper().replace("-", "_")
+            self.env[f"MOCK_HELM_{env_key}"] = value
+        self.write_command("helm", """
+printf 'helm %s\\n' "$*" >> "$MOCK_LOG"
+if [[ "${1:-}" == template ]]; then
+  printf 'apiVersion: v1\\nkind: Secret\\nmetadata:\\n  name: keycloak-admin-credentials\\nstringData:\\n  admin-password: %s\\n  default-user-password: %s\\n  access-token: %s\\n' \\
+    "$MOCK_HELM_ADMIN_PASSWORD" "$MOCK_HELM_DEFAULT_USER_PASSWORD" "$MOCK_HELM_ACCESS_TOKEN"
+fi
+""")
+
+        cases = [
+            (
+                "Kind",
+                ["install-dry-run", "PLATFORM=kind", "PROFILE=dev", "NS=osac",
+                 "KEYCLOAK_HELM_ARGS=--set-file keycloak.adminPassword=/secure/keycloak-password"],
+                ("helm-deps", "validate-osac-chart-oci-ref"),
+            ),
+            (
+                "OpenShift",
+                ["install-dry-run", "PLATFORM=openshift", "PROFILE=caas-ci", "NS=osac",
+                 "DRY_RUN_CLUSTER_DOMAIN=apps.example.com", "DRY_RUN_OCP_VERSION=4.20",
+                 "KEYCLOAK_HELM_ARGS=--set-file keycloak.adminPassword=/secure/keycloak-password"],
+                ("helm-deps", "validate-osac-chart-oci-ref"),
+            ),
+            ("helm-template", ["helm-template"], ("helm-infra-deps",)),
+        ]
+
+        for name, target_args, old_targets in cases:
+            with self.subTest(target=name):
+                command = ["make", "--no-print-directory"]
+                for old_target in old_targets:
+                    command.extend(["-o", old_target])
+                command.extend(["-C", str(installer), *target_args])
+                result = subprocess.run(
+                    command,
+                    env=self.env,
+                    text=True,
+                    capture_output=True,
+                    timeout=30,
+                )
+                self.assert_success(result)
+                terminal_output = result.stdout + result.stderr
+                for key, value in secret_data.items():
+                    self.assertNotIn(key, terminal_output)
+                    self.assertNotIn(value, terminal_output)
+                match = re.search(r"Rendered manifests \(including Secrets\) to (.+)", result.stdout)
+                self.assertIsNotNone(match, result.stdout)
+                render_file = Path(match.group(1))
+                try:
+                    self.assertEqual(stat.S_IMODE(render_file.stat().st_mode), 0o600)
+                    rendered = render_file.read_text(encoding="utf-8")
+                    for key, value in secret_data.items():
+                        self.assertIn(key, rendered)
+                        self.assertIn(value, rendered)
+                finally:
+                    render_file.unlink(missing_ok=True)
+
+        self.assertTrue(
+            any(
+                command.startswith("helm template osac-infra ")
+                and "keycloak.devFixtures.enabled=true" in command
+                for command in self.commands()
+            ),
+            "helm-template must render with generated development credentials by default",
+        )
+
+        self.write_command("helm", """
+printf 'helm %s\\n' "$*" >> "$MOCK_LOG"
+if [[ "${1:-}" == template ]]; then
+  printf 'render failed while processing Secret data: admin-password=%s default-user-password=%s access-token=%s\\n' \\
+    "$MOCK_HELM_ADMIN_PASSWORD" "$MOCK_HELM_DEFAULT_USER_PASSWORD" "$MOCK_HELM_ACCESS_TOKEN" >&2
+  exit 1
+fi
+""")
+        for name, target_args, old_targets in cases:
+            with self.subTest(target=f"{name} failure"):
+                command = ["make", "--no-print-directory"]
+                for old_target in old_targets:
+                    command.extend(["-o", old_target])
+                command.extend(["-C", str(installer), *target_args])
+                result = subprocess.run(
+                    command,
+                    env=self.env,
+                    text=True,
+                    capture_output=True,
+                    timeout=30,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                terminal_output = result.stdout + result.stderr
+                for key, value in secret_data.items():
+                    self.assertNotIn(key, terminal_output)
+                    self.assertNotIn(value, terminal_output)
+                match = re.search(r"protected diagnostics are at (.+)", result.stderr)
+                self.assertIsNotNone(match, result.stderr)
+                diagnostics_file = Path(match.group(1))
+                try:
+                    self.assertEqual(stat.S_IMODE(diagnostics_file.stat().st_mode), 0o600)
+                    diagnostics = diagnostics_file.read_text(encoding="utf-8")
+                    for key, value in secret_data.items():
+                        self.assertIn(key, diagnostics)
+                        self.assertIn(value, diagnostics)
+                finally:
+                    diagnostics_file.unlink(missing_ok=True)
+
+    def test_installer_helm_apply_flags_match_each_release(self) -> None:
+        """Scope Helm 3 and Helm 4 server-side flags to their intended releases."""
         for version in ("v3.19.0", "v4.2.2"):
             self.write_command("helm", f"echo {version}")
             for target, release in (("install-devstack", "osac-devstack"), ("install-osac", "osac")):
@@ -1149,8 +1309,11 @@ fi
                     )
                     self.assert_success(result)
                     command_text = result.stdout.replace("\\\n", " ")
-                    commands = [shlex.split("helm upgrade --install " + line)
-                                for line in command_text.split("helm upgrade --install ")[1:]]
+                    commands = []
+                    for line in command_text.splitlines():
+                        marker = "helm upgrade --install "
+                        if marker in line:
+                            commands.append(shlex.split(line[line.index(marker) :]))
                     self.assertEqual(len(commands), 1, result.stdout)
                     args = commands[0]
                     self.assertEqual(args[3], release)

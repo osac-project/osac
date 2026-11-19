@@ -400,10 +400,13 @@ jobs:
         if: inputs.kind == 'it-osac-installer'
         working-directory: osac-installer
         run: |
-          helm template osac-deps charts/osac-deps/ --values values/dev/infra.yaml
-          helm template osac-infra charts/osac-infra/ --values values/dev/infra.yaml \
-            --set trustManager.upstream.enabled=true
-          helm template osac charts/osac/ --values values/dev/kind-instance.yaml \
+          # Keep rendered Secrets and value-bearing Helm errors out of CI logs.
+          source scripts/lib.sh
+          render_chart_offline osac-deps charts/osac-deps/ --values values/dev/infra.yaml
+          render_chart_offline osac-infra charts/osac-infra/ --values values/dev/infra.yaml \
+            --set trustManager.upstream.enabled=true \
+            --set keycloak.devFixtures.enabled=true
+          render_chart_offline osac charts/osac/ --values values/dev/kind-instance.yaml \
             --set-string global.osacDeploymentId=ci/osac
 
       # Same real command (and cluster: `make install-infra` creates its own

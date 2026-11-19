@@ -22,7 +22,6 @@ rules:
   - ""
   resources:
   - namespaces
-  - serviceaccounts
   verbs:
   - create
   - delete
@@ -39,6 +38,17 @@ rules:
   - create
   - get
   - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - agent-install.openshift.io
@@ -139,21 +149,8 @@ rules:
   - osac.openshift.io
   resources:
   - clusterorders
-  - computeinstances
-  - externalipattachments
-  - externalippools
-  - externalips
-  - fabricdomains
-  - natgateways
-  - networkattachments
-  - securitygroups
-  - subnets
-  - tenants
-  - virtualnetworks
-  - volumes
+  - networkclasses
   verbs:
-  - create
-  - delete
   - get
   - list
   - patch
@@ -183,8 +180,21 @@ rules:
 - apiGroups:
   - osac.openshift.io
   resources:
-  - networkclasses
+  - computeinstances
+  - externalipattachments
+  - externalippools
+  - externalips
+  - fabricdomains
+  - natgateways
+  - networkattachments
+  - securitygroups
+  - subnets
+  - tenants
+  - virtualnetworks
+  - volumes
   verbs:
+  - create
+  - delete
   - get
   - list
   - patch
@@ -192,11 +202,18 @@ rules:
   - watch
 - apiGroups:
   - rbac.authorization.k8s.io
+  resourceNames:
+  - admin
+  resources:
+  - clusterroles
+  verbs:
+  - bind
+- apiGroups:
+  - rbac.authorization.k8s.io
   resources:
   - rolebindings
   verbs:
   - create
-  - delete
   - get
   - list
   - patch

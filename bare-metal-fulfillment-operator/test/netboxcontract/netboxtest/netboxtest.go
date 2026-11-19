@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package netboxtest provides a stateful HTTPS mock for the contract suite.
+// Package netboxtest provides the stateful mock API used by NetBox tests.
 package netboxtest
 
 import (
@@ -43,8 +43,6 @@ type Field struct {
 	Type        string
 	FilterLogic string
 	ObjectTypes []string
-	// Empty Status is omitted from the response.
-	Status string
 }
 
 // Device is one dcim.device as the server stores it.
@@ -81,25 +79,24 @@ type Server struct {
 	fields   map[string]*Field
 	requests []Request
 
-	token       string
+	tokens      []string
 	tokenScheme string
-	apiVersion  string
-	pageLimit   int
 	beforePatch func(deviceID int)
 }
 
 // New starts a mock NetBox HTTPS server with no devices and no custom fields.
 func New() *Server {
-	s := &Server{
-		devices:     map[int]*Device{},
-		fields:      map[string]*Field{},
-		token:       "fixture-netbox-token",
-		tokenScheme: "Token",
-		apiVersion:  "4.6",
-		pageLimit:   100,
-	}
-	s.server = httptest.NewTLSServer(http.HandlerFunc(s.handle))
+	s := NewHandler()
+	s.server = httptest.NewTLSServer(s)
 	return s
+}
+
+// NewHandler creates an unstarted mock for a caller-owned HTTP listener.
+func NewHandler() *Server {
+	return &Server{
+		devices: map[int]*Device{},
+		fields:  map[string]*Field{},
+	}
 }
 
 // Stop shuts the server down.
@@ -111,26 +108,11 @@ func (s *Server) URL() string { return s.server.URL }
 // Certificate returns the TLS certificate so a client can trust the server.
 func (s *Server) Certificate() *x509.Certificate { return s.server.Certificate() }
 
-// SetAuth configures the accepted Authorization header. An empty token
-// disables the check.
-func (s *Server) SetAuth(scheme, token string) {
+// SetAuth configures the authorization scheme and accepted fixture tokens.
+func (s *Server) SetAuth(scheme string, tokens ...string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.tokenScheme, s.token = scheme, token
-}
-
-// SetAPIVersion sets the API-Version header returned by GET /api/.
-func (s *Server) SetAPIVersion(version string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.apiVersion = version
-}
-
-// SetPageLimit sets the maximum page size, so a suite can force pagination.
-func (s *Server) SetPageLimit(limit int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.pageLimit = limit
+	s.tokenScheme, s.tokens = scheme, slices.Clone(tokens)
 }
 
 // SetBeforePatchHook injects a write between the adapter's read and PATCH.
@@ -213,13 +195,15 @@ func (s *Server) Requests() []Request {
 	return append([]Request(nil), s.requests...)
 }
 
-func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
+// ServeHTTP handles the fixture endpoints.
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	body := readBody(r)
 
 	recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	w = recorder
 
 	s.mu.Lock()
+	requestIndex := len(s.requests)
 	s.requests = append(s.requests, Request{
 		Method:  r.Method,
 		Path:    r.URL.Path,
@@ -227,17 +211,23 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 		IfMatch: r.Header.Get("If-Match"),
 		Body:    body,
 	})
-	token, scheme := s.token, s.tokenScheme
+	tokens, scheme := s.tokens, s.tokenScheme
 	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		s.requests[requestIndex].StatusCode = recorder.status
+		s.mu.Unlock()
+	}()
 
-	if token != "" && r.Header.Get("Authorization") != scheme+" "+token {
+	headerScheme, token, _ := strings.Cut(r.Header.Get("Authorization"), " ")
+	if len(tokens) > 0 && (headerScheme != scheme || !slices.Contains(tokens, token)) {
 		writeError(w, http.StatusUnauthorized, "Invalid token")
 		return
 	}
 
 	switch {
-	case r.Method == http.MethodGet && strings.TrimSuffix(r.URL.Path, "/") == "/api":
-		s.apiRoot(w)
+	case r.Method == http.MethodGet && strings.TrimSuffix(r.URL.Path, "/") == "/api/dcim/interfaces":
+		writeJSON(w, map[string]any{"count": 0, "next": nil, "previous": nil, "results": []any{}})
 	case r.Method == http.MethodGet && strings.TrimSuffix(r.URL.Path, "/") == "/api/dcim/devices":
 		s.listDevices(w, r)
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/dcim/devices/"):
@@ -249,10 +239,6 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "Unsupported fixture route")
 	}
-
-	s.mu.Lock()
-	s.requests[len(s.requests)-1].StatusCode = recorder.status
-	s.mu.Unlock()
 }
 
 // statusRecorder captures the status code a handler wrote.
@@ -264,14 +250,6 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(status int) {
 	r.status = status
 	r.ResponseWriter.WriteHeader(status)
-}
-
-func (s *Server) apiRoot(w http.ResponseWriter) {
-	s.mu.Lock()
-	version := s.apiVersion
-	s.mu.Unlock()
-	w.Header().Set("API-Version", version)
-	writeJSON(w, map[string]any{"dcim": "/api/dcim/", "extras": "/api/extras/"})
 }
 
 // listDevices applies the adapter's filters: exact status, exact cf_<field>
@@ -302,29 +280,10 @@ func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 	for _, device := range matches {
 		results = append(results, devicePayload(device))
 	}
-	pageLimit := s.pageLimit
 	s.mu.Unlock()
 
-	offset, err := strconv.Atoi(query.Get("offset"))
-	if err != nil || offset < 0 {
-		offset = 0
-	}
-	limit := pageLimit
-	if requested, err := strconv.Atoi(query.Get("limit")); err == nil && requested > 0 {
-		limit = requested
-	}
-	if pageLimit > 0 && pageLimit < limit {
-		limit = pageLimit
-	}
 	total := len(results)
-	end := offset + limit
-	if offset > total {
-		offset = total
-	}
-	if end > total {
-		end = total
-	}
-
+	offset, end := pageBounds(query, total)
 	var next any
 	if end < total {
 		nextURL := url.URL{Path: "/api/dcim/devices/"}
@@ -518,7 +477,6 @@ func (s *Server) listFields(w http.ResponseWriter, r *http.Request) {
 		}
 		matched = append(matched, *field)
 	}
-	pageLimit := s.pageLimit
 	s.mu.Unlock()
 
 	sort.Slice(matched, func(i, j int) bool { return matched[i].Name < matched[j].Name })
@@ -528,19 +486,8 @@ func (s *Server) listFields(w http.ResponseWriter, r *http.Request) {
 		payloads = append(payloads, fieldPayload(field))
 	}
 
-	offset, _ := strconv.Atoi(query.Get("offset"))
-	limit := pageLimit
-	if requested, err := strconv.Atoi(query.Get("limit")); err == nil && requested > 0 {
-		limit = requested
-	}
-	if pageLimit > 0 && pageLimit < limit {
-		limit = pageLimit
-	}
 	total := len(payloads)
-	end := offset + limit
-	if end > total {
-		end = total
-	}
+	offset, end := pageBounds(query, total)
 	var next any
 	if end < total {
 		nextQuery := url.Values{}
@@ -557,8 +504,18 @@ func (s *Server) listFields(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func pageBounds(query url.Values, total int) (offset, end int) {
+	offset, _ = strconv.Atoi(query.Get("offset"))
+	offset = min(max(0, offset), total)
+	limit := 100
+	if requested, err := strconv.Atoi(query.Get("limit")); err == nil && requested > 0 {
+		limit = min(requested, limit)
+	}
+	return offset, min(offset+limit, total)
+}
+
 func fieldPayload(field Field) map[string]any {
-	payload := map[string]any{
+	return map[string]any{
 		"id":           fieldID(field.Name),
 		"url":          "/api/extras/custom-fields/" + strconv.Itoa(fieldID(field.Name)) + "/",
 		"display":      field.Label,
@@ -571,10 +528,6 @@ func fieldPayload(field Field) map[string]any {
 		// The SDK models filter_logic as a choice object, not an enum string.
 		"filter_logic": map[string]any{"value": field.FilterLogic, "label": titleCase(field.FilterLogic)},
 	}
-	if field.Status != "" {
-		payload["status"] = map[string]any{"value": field.Status, "label": titleCase(field.Status)}
-	}
-	return payload
 }
 
 func devicePayload(device *Device) map[string]any {

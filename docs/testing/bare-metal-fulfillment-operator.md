@@ -21,6 +21,13 @@ suite (repository-root `make -C osac-installer help`, `.github/workflows/`).
 | Component integration (Kind) | Installer BMF NetBox test target | Deployed BMF controller, Kubernetes API, Metal3 CRDs, Fulfillment Secret API | NetBox HTTP API is mocked in-cluster; Metal3/Ironic/BMC hardware remains absent. See [OSAC-7519](https://redhat.atlassian.net/browse/OSAC-7519). |
 | E2E | Cross-component suites | Fulfillment-to-operator journeys where available | Real hardware and providers remain environment-dependent. |
 
+The NetBox component suite runs from the repository root with
+`make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf-netbox`
+after provisioning the Kind infrastructure. It uses the OSAC Helm chart and
+asserts allocation, release, and use of a rotated token in `test/integration`.
+CI runs both BMF scenarios with shared images and CRDs. The Go contract suite
+runs as part of BMF's `make test`.
+
 ## Coverage notes
 
 Cover success, no-match and provider-error paths for inventory, selection,

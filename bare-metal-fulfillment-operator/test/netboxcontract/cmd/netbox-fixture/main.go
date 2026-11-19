@@ -1,0 +1,77 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package main
+
+import (
+	"encoding/json"
+	"log"
+	"net/http"
+	"os"
+	"sync/atomic"
+	"time"
+
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/test/netboxcontract/netboxtest"
+)
+
+func main() {
+	deviceID := int(time.Now().UnixMilli()%1_000_000_000 + 1)
+	first := os.Getenv("NETBOX_TOKEN")
+	rotated := os.Getenv("NETBOX_ROTATED_TOKEN")
+	if first == "" || rotated == "" || first == rotated {
+		log.Fatal("the NetBox test fixture requires two distinct tokens")
+	}
+	mock := netboxtest.NewHandler()
+	mock.SetAuth("Bearer", first, rotated)
+	for name, fieldType := range map[string]string{
+		"osac_managed": "boolean", "osac_instance_id": "text", "fixture": "text",
+	} {
+		mock.AddField(netboxtest.Field{
+			Name: name, Type: fieldType, FilterLogic: netboxtest.FilterExact,
+			ObjectTypes: []string{"dcim.device"},
+		})
+	}
+	mock.AddDevice(netboxtest.Device{
+		ID: deviceID, Name: "Kind fixture", Status: "staged",
+		CustomFields: map[string]any{
+			"osac_managed":     true,
+			"osac_bmc_address": "redfish-virtualmedia+https://192.0.2.42/redfish/v1/Systems/1",
+			"osac_boot_mac":    "aa:bb:cc:dd:ee:42",
+			"fixture":          "kind",
+		},
+	})
+
+	var rotatedRequests atomic.Uint64
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /fixture-state", func(w http.ResponseWriter, _ *http.Request) {
+		device, _ := mock.Device(deviceID)
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"deviceID": deviceID, "status": device.Status, "owner": device.CustomFields["osac_instance_id"],
+			"rotatedRequests": rotatedRequests.Load(),
+		}); err != nil {
+			log.Print(err)
+		}
+	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer "+rotated {
+			rotatedRequests.Add(1)
+		}
+		mock.ServeHTTP(w, r)
+	})
+	server := &http.Server{Addr: ":8080", Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	log.Fatal(server.ListenAndServe())
+}

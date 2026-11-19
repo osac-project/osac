@@ -456,11 +456,14 @@ var _ = Describe("NetBox client", func() {
 					"results":  results,
 				})
 			case "100":
+				field := customFieldResult(101, "field-101")
+				// NetBox 4.7 custom-field responses may include lifecycle state.
+				field["status"] = map[string]string{"value": "active", "label": "Active"}
 				writeJSON(w, http.StatusOK, map[string]any{
 					"count":    101,
 					"next":     nil,
 					"previous": "https://netbox.example.test/api/extras/custom-fields/?limit=100&offset=0",
-					"results":  []any{customFieldResult(101, "field-101")},
+					"results":  []any{field},
 				})
 			default:
 				Fail(fmt.Sprintf("offset = %q, want 0 or 100", r.URL.Query().Get("offset")))

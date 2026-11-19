@@ -1286,27 +1286,31 @@ ifeq ($(SUITE),operator)
 		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.fulfillment.serverAddress= --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.provisioningEnabled=true --set global.networking.fabricManager=netris --set global.networking.k8sManager=cudn_evpn $(METERING_IT_IMAGE_ARGS)"
 	cd ../osac-operator && ginkgo run --timeout 15m -v --label-filter 'networkclass' test/integration
 endif
-ifeq ($(SUITE),bmf)
+ifneq ($(filter $(SUITE),bmf bmf-netbox),)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/bmf-operator:it -f ../bare-metal-fulfillment-operator/Containerfile ..)
 	$(call kind-load-image,localhost/bmf-operator:it)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
 	$(call kind-load-image,$(METERING_IT_IMAGE))
 	kubectl apply --server-side --force-conflicts -f ../bare-metal-fulfillment-operator/test/crds/
+endif
+ifeq ($(SUITE),bmf)
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set global.services.bmaas.enabled=true --set bmf.replicaCount=1 --set bmf.image.repository=localhost/bmf-operator --set bmf.image.tag=it --set bmf.image.pullPolicy=Never --set bmf.secretAPI.url= --set operator.enabled=false --set operator.networkManagers.enabled=true --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.networking.provisioningEnabled=true $(METERING_IT_IMAGE_ARGS)"
-	cd ../bare-metal-fulfillment-operator && ginkgo run --timeout 30m -v test/integration
+	cd ../bare-metal-fulfillment-operator && ginkgo run --timeout 30m -v --label-filter '!bmf-netbox' test/integration
 endif
-ifeq ($(SUITE),bmf-netbox)
+# CI runs both BMF scenarios without rebuilding their shared images or CRDs.
+ifneq ($(or $(filter bmf-netbox,$(SUITE)),$(and $(filter bmf,$(SUITE)),$(filter true,$(BMF_NETBOX_TEST)))),)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
 	$(call kind-load-image,localhost/fulfillment-service:it)
-	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/bmf-operator:it -f ../bare-metal-fulfillment-operator/Containerfile ..)
-	$(call kind-load-image,localhost/bmf-operator:it)
-	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
-	$(call kind-load-image,$(METERING_IT_IMAGE))
-	kubectl apply --server-side --force-conflicts -f ../bare-metal-fulfillment-operator/test/crds/
+	$(call kind-container-build,-t localhost/bmf-netbox-fixture:it -f ../bare-metal-fulfillment-operator/test/netboxcontract/cmd/netbox-fixture/Containerfile ../bare-metal-fulfillment-operator)
+	$(call kind-load-image,localhost/bmf-netbox-fixture:it)
+	# Recreate the mock so a failed run cannot carry a claimed device into the next run.
+	kubectl delete -n $(NS) deployment/bmf-netbox-fixture --ignore-not-found
+	kubectl apply -n $(NS) -f ../bare-metal-fulfillment-operator/test/integration/testdata/netbox.yaml
+	kubectl rollout status -n $(NS) deployment/bmf-netbox-fixture --timeout=3m
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set bmf.replicaCount=0 --set operator.enabled=false --set global.services.bmaas.enabled=true --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
-	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=bmf-netbox ginkgo run --timeout 30m -v --label-filter 'bmf-netbox' it
+		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set service.internalHostname=fulfillment-internal-api.$(NS).svc.cluster.local --set bmf.replicaCount=1 --set bmf.image.repository=localhost/bmf-operator --set bmf.image.tag=it --set bmf.image.pullPolicy=Never --set bmf.testBackend.metal3.enabled=false --set bmf.secrets.inventoryConfig=osac-inventory-config --set bmf.secrets.managementConfig=osac-management-config --set bmf.secrets.netboxToken=bmf-netbox-fixture-token --set bmf.netbox.enabled=true --set bmf.netbox.bmhNamespace=$(NS) --set bmf.netbox.url=http://bmf-netbox-fixture.$(NS).svc.cluster.local:8080 --set bmf.netbox.allowInsecureHTTP=true --set-string bmf.netbox.tokenValue=offline-render-placeholder --set bmf.secretAPI.url=https://fulfillment-internal-api.$(NS).svc.cluster.local:8001 --set operator.enabled=false --set operator.networkManagers.enabled=false --set global.services.bmaas.enabled=true --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
+	cd ../bare-metal-fulfillment-operator && BMF_NETBOX_IT_NAMESPACE="$(NS)" BMF_NETBOX_IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" ginkgo run --timeout 30m -v --label-filter bmf-netbox test/integration
 endif
 
 ##@ Charts

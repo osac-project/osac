@@ -1,0 +1,12 @@
+# Build context is bare-metal-fulfillment-operator/.
+FROM registry.access.redhat.com/ubi10/go-toolset:1.26.10-1793622842 AS builder
+WORKDIR /opt/app-root/src
+COPY --chown=1001:0 go.mod .
+COPY --chown=1001:0 test/netboxcontract/netboxtest/ test/netboxcontract/netboxtest/
+COPY --chown=1001:0 test/netboxcontract/cmd/netbox-fixture/ test/netboxcontract/cmd/netbox-fixture/
+RUN GOWORK=off CGO_ENABLED=0 go build -o /tmp/netbox-fixture ./test/netboxcontract/cmd/netbox-fixture
+
+FROM scratch
+COPY --from=builder /tmp/netbox-fixture /netbox-fixture
+USER 1001:0
+ENTRYPOINT ["/netbox-fixture"]

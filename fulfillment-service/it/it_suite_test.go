@@ -93,9 +93,6 @@ var _ = BeforeSuite(func() {
 		err := tool.Cleanup(ctx)
 		Expect(err).ToNot(HaveOccurred())
 	})
-	if config.TestSuite == "bmf-netbox" {
-		return
-	}
 
 	// The system default is used by bare-metal cluster tests, so it must reference a
 	// DiskImage. Leave both fixtures in place to support reruns against a live cluster.

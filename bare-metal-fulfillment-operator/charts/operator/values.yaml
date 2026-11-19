@@ -60,8 +60,7 @@ netbox:
   tokenSecretKey: "token"
   tokenValue: ""
   caCert: ""
-  # NetBox API transport only: permits an http:// bmf.netbox.url for the
-  # connection to the NetBox API.
+  # Permits an http:// bmf.netbox.url; applies to the NetBox API transport.
   allowInsecureHTTP: false
   # Verify the BMC's TLS certificate on the BareMetalHosts this backend creates.
   # Leave true unless the BMCs use untrusted certificates; a single device can

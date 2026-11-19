@@ -58,22 +58,17 @@ type CreateParams struct {
 	Labels                         map[string]string
 }
 
-// CreateOptions holds optional settings for a BareMetalHost created by the
-// operator.
+// CreateOptions holds optional settings for a BareMetalHost.
 type CreateOptions struct {
-	// DisableCertificateVerification sets spec.bmc.disableCertificateVerification
-	// so BMO/Ironic skip TLS verification of the BMC certificate. The zero value
-	// keeps verification enabled, so a caller that omits the option verifies the
-	// BMC. BMO propagates this into Ironic's driver_info.redfish_verify_ca when
-	// it enrolls the node, so it applies at creation time.
+	// DisableCertificateVerification makes BMO/Ironic skip TLS verification of
+	// the BMC certificate; the zero value verifies. BMO applies it when it
+	// enrolls the node, so it must be set at creation time.
 	DisableCertificateVerification bool
 }
 
 // NewCreateParams builds the creation parameters for a BareMetalHost claimed by
-// an OSAC BareMetalInstance. Namespace is intentionally omitted from ConsumerRef:
-// the consumer is identified by an opaque ID, not a resolvable namespace/name —
-// matching the Metal3 adapter's documented convention, which is sufficient for
-// BMO's claim mechanism.
+// an OSAC BareMetalInstance. ConsumerRef carries the instance's opaque ID and no
+// namespace, matching the Metal3 adapter convention.
 func NewCreateParams(name, bmcAddress, bootMAC, bareMetalInstanceID string, opts CreateOptions) CreateParams {
 	return CreateParams{
 		Name:                           name,

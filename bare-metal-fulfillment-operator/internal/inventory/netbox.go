@@ -82,16 +82,14 @@ type NetBoxClientConfig struct {
 	TokenFile         string `json:"tokenFile"`
 	CAFile            string `json:"caFile"`
 	AllowInsecureHTTP bool   `json:"allowInsecureHTTP"`
-	// EnableBMCCertificateVerification is the default for BMC certificate
-	// verification on the BareMetalHosts this backend creates. It is a pointer
-	// so an absent key resolves to enabled. The per-device
-	// osac_bmc_certificate_verification NetBox field overrides it.
+	// EnableBMCCertificateVerification defaults BMC certificate verification for
+	// created BareMetalHosts. A nil pointer resolves to enabled; the per-device
+	// osac_bmc_certificate_verification field overrides it.
 	EnableBMCCertificateVerification *bool `json:"enableBMCCertificateVerification"`
 }
 
-// BMCVerificationEnabled resolves the inventory-wide default. An absent setting
-// resolves to enabled, which keeps TLS verification on for an inventory config
-// rendered before this field existed.
+// BMCVerificationEnabled resolves the inventory-wide default; an absent setting
+// resolves to enabled.
 func (c *NetBoxClientConfig) BMCVerificationEnabled() bool {
 	if c == nil || c.EnableBMCCertificateVerification == nil {
 		return true
@@ -367,9 +365,8 @@ func (c *NetBoxClient) prepareMetal3Host(ctx context.Context, host *Host, connec
 	return host, nil
 }
 
-// metal3HostCreateParams resolves the per-host BareMetalHost settings and builds
-// the creation parameters. It logs every host whose BMC certificate verification
-// is disabled, naming the layer that decided it.
+// metal3HostCreateParams builds the creation parameters and logs every host
+// whose BMC certificate verification is disabled, naming the deciding layer.
 func (c *NetBoxClient) metal3HostCreateParams(
 	ctx context.Context,
 	host *Host,
@@ -398,8 +395,7 @@ const (
 )
 
 // bmcCertificateVerification resolves whether BMC certificate verification is
-// enabled: a per-device NetBox value wins, otherwise the inventory-wide default
-// applies. The second result names the deciding layer for the claim log line.
+// enabled: a per-device NetBox value wins, else the inventory default applies.
 func (c *NetBoxClient) bmcCertificateVerification(connection *netBoxConnectionData) (enabled bool, source string) {
 	if connection != nil && connection.EnableCertificateVerification != nil {
 		return *connection.EnableCertificateVerification, netBoxCertVerificationSourceDevice
@@ -809,9 +805,8 @@ func netBoxBootMAC(customFields map[string]interface{}) (string, error) {
 	return strings.ToLower(parsedMAC.String()), nil
 }
 
-// netBoxCertificateVerification reads the per-device override of BMC
-// certificate verification. A nil result means the field is unset (NetBox
-// returns null for unset custom fields) and the inventory-wide default applies.
+// netBoxCertificateVerification reads the per-device BMC verification override.
+// A nil result means the field is unset and the inventory-wide default applies.
 func netBoxCertificateVerification(customFields map[string]interface{}) (*bool, error) {
 	raw, ok := customFields[netBoxCertificateVerificationField]
 	if !ok || raw == nil {

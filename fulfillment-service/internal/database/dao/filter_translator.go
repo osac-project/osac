@@ -54,9 +54,13 @@ type FilterTranslator struct {
 	isProject bool
 	isPublic  bool
 	celEnv    *cel.Env
+}
 
-	// Translation-local state, populated only on a copy in Translate. DAOs share
-	// translators, so iterator bindings must never mutate the original instance.
+// filterTranslation holds state for one translation; FilterTranslator is shared by requests.
+type filterTranslation struct {
+	*FilterTranslator
+	baseArgs    int
+	args        []any
 	sourceInfo  *ast.SourceInfo
 	variables   map[string]filterTranslatorResult
 	existsDepth int
@@ -273,8 +277,8 @@ func (b *FilterTranslatorBuilder) createCelEnv() (result *cel.Env, err error) {
 	return
 }
 
-// Translate translate the given filter expression into a SQL where statement.
-func (t *FilterTranslator) Translate(ctx context.Context, filter string) (sql string, err error) {
+// Translate converts a filter to SQL and bound arguments, starting after baseArgs existing arguments.
+func (t *FilterTranslator) Translate(ctx context.Context, filter string, baseArgs int) (sql string, args []any, err error) {
 	tree, issues := t.celEnv.Compile(filter)
 	if issues != nil {
 		err = issues.Err()
@@ -287,17 +291,17 @@ func (t *FilterTranslator) Translate(ctx context.Context, filter string) (sql st
 		err = errors.New("filter references reserved metadata key")
 		return
 	}
-	translation := *t
-	translation.sourceInfo = tree.NativeRep().SourceInfo()
+	translation := &filterTranslation{FilterTranslator: t, baseArgs: baseArgs, sourceInfo: tree.NativeRep().SourceInfo()}
 	result, err := translation.translate(expr)
 	if err != nil {
 		return
 	}
 	sql = result.sql
+	args = translation.args
 	return
 }
 
-func (t *FilterTranslator) translate(expr ast.Expr) (result filterTranslatorResult, err error) {
+func (t *filterTranslation) translate(expr ast.Expr) (result filterTranslatorResult, err error) {
 	switch expr.Kind() {
 	case ast.CallKind:
 		result, err = t.translateCall(expr.AsCall())
@@ -319,7 +323,7 @@ func (t *FilterTranslator) translate(expr ast.Expr) (result filterTranslatorResu
 // translateExists handles only CEL's standard exists macro, not arbitrary folds.
 // Read the predicate from the checked expansion: macro source arguments can
 // contain placeholders for nested macros rather than their expanded expressions.
-func (t *FilterTranslator) translateExists(expr ast.Expr) (filterTranslatorResult, error) {
+func (t *filterTranslation) translateExists(expr ast.Expr) (filterTranslatorResult, error) {
 	macro, ok := t.sourceInfo.GetMacroCall(expr.ID())
 	if !ok || macro.Kind() != ast.CallKind || macro.AsCall().FunctionName() != "exists" {
 		return filterTranslatorResult{}, errors.New("only the exists comprehension is supported")
@@ -353,6 +357,7 @@ func (t *FilterTranslator) translateExists(expr ast.Expr) (filterTranslatorResul
 	if err != nil {
 		return filterTranslatorResult{}, err
 	}
+	t.args = scope.args
 	return filterTranslatorResult{
 		sql: fmt.Sprintf("exists (select 1 from jsonb_array_elements(%s) as %s(value) where %s)",
 			array.sql, alias, predicate.sql),
@@ -361,7 +366,7 @@ func (t *FilterTranslator) translateExists(expr ast.Expr) (filterTranslatorResul
 	}, nil
 }
 
-func (t *FilterTranslator) translateCall(expr ast.CallExpr) (result filterTranslatorResult, err error) {
+func (t *filterTranslation) translateCall(expr ast.CallExpr) (result filterTranslatorResult, err error) {
 	funcName := expr.FunctionName()
 	funcArgs := expr.Args()
 	switch funcName {
@@ -446,7 +451,7 @@ func (t *FilterTranslator) translateCall(expr ast.CallExpr) (result filterTransl
 	return
 }
 
-func (t *FilterTranslator) translateBinary(name string, left, right ast.Expr) (result filterTranslatorResult, err error) {
+func (t *filterTranslation) translateBinary(name string, left, right ast.Expr) (result filterTranslatorResult, err error) {
 	leftTr, err := t.translate(left)
 	if err != nil {
 		return
@@ -572,7 +577,7 @@ func assembleBinarySQL(leftTr, rightTr filterTranslatorResult, operatorSQL strin
 	}
 }
 
-func (t *FilterTranslator) translateNot(value ast.Expr) (result filterTranslatorResult, err error) {
+func (t *filterTranslation) translateNot(value ast.Expr) (result filterTranslatorResult, err error) {
 	valueTr, err := t.translate(value)
 	if err != nil {
 		return
@@ -592,7 +597,7 @@ func (t *FilterTranslator) translateNot(value ast.Expr) (result filterTranslator
 	return
 }
 
-func (t *FilterTranslator) translateIdent(name string) (result filterTranslatorResult, err error) {
+func (t *filterTranslation) translateIdent(name string) (result filterTranslatorResult, err error) {
 	if variable, ok := t.variables[name]; ok {
 		return variable, nil
 	}
@@ -675,7 +680,7 @@ func (t *FilterTranslator) translateString(value, special string) (text string, 
 	return
 }
 
-func (t *FilterTranslator) translateIn(args []ast.Expr) (result filterTranslatorResult, err error) {
+func (t *filterTranslation) translateIn(args []ast.Expr) (result filterTranslatorResult, err error) {
 	key := args[0]
 	values := args[1]
 	switch values.Kind() {
@@ -690,7 +695,7 @@ func (t *FilterTranslator) translateIn(args []ast.Expr) (result filterTranslator
 	return
 }
 
-func (t *FilterTranslator) translateIndex(args []ast.Expr) (result filterTranslatorResult, err error) {
+func (t *filterTranslation) translateIndex(args []ast.Expr) (result filterTranslatorResult, err error) {
 	if len(args) != 2 {
 		err = fmt.Errorf("expected exactly two arguments for index but got %d", len(args))
 		return
@@ -838,7 +843,7 @@ func (t *FilterTranslator) extractEnumComparison(leftTr, rightTr filterTranslato
 	return nil, 0, "", false
 }
 
-func (t *FilterTranslator) translateInList(key ast.Expr, list ast.ListExpr) (result filterTranslatorResult, err error) {
+func (t *filterTranslation) translateInList(key ast.Expr, list ast.ListExpr) (result filterTranslatorResult, err error) {
 	values := list.Elements()
 	if len(values) == 0 {
 		result.sql = "false"
@@ -898,11 +903,12 @@ func (t *FilterTranslator) translateInList(key ast.Expr, list ast.ListExpr) (res
 	}
 	buffer.WriteString(")")
 	result.sql = buffer.String()
+	result.kind = filterTranslatorBooleanKind
 	result.precedence = filterTranslatorInPrecedence
 	return
 }
 
-func (t *FilterTranslator) translateInField(key ast.Expr, value ast.SelectExpr) (result filterTranslatorResult, err error) {
+func (t *filterTranslation) translateInField(key ast.Expr, value ast.SelectExpr) (result filterTranslatorResult, err error) {
 	keyTr, err := t.translate(key)
 	if err != nil {
 		return
@@ -933,6 +939,24 @@ func (t *FilterTranslator) translateInField(key ast.Expr, value ast.SelectExpr) 
 		}
 		result.precedence = filterTranslatorOtherPrecedence
 	case filterTranslatorJsonArrayKind:
+		// Repeated enums are stored as names, while CEL uses integer values.
+		if valueTr.enumDesc != nil {
+			if !keyTr.hasIntValue {
+				err = fmt.Errorf("membership of enum '%s' requires a literal integer value", valueTr.enumDesc.FullName())
+				return
+			}
+			if keyTr.intValue == 0 {
+				err = fmt.Errorf("membership of enum '%s' does not support zero values stored as null", valueTr.enumDesc.FullName())
+				return
+			}
+			name, found := t.resolveEnumName(valueTr.enumDesc, keyTr.intValue)
+			if !found {
+				err = fmt.Errorf("unknown enum value %d for %s", keyTr.intValue, valueTr.enumDesc.FullName())
+				return
+			}
+			t.args = append(t.args, name)
+			keyTr.sql = fmt.Sprintf("$%d::text", t.baseArgs+len(t.args))
+		}
 		buffer.WriteString(valueTr.sql)
 		buffer.WriteString(" @> jsonb_build_array(")
 		buffer.WriteString(keyTr.sql)
@@ -943,10 +967,11 @@ func (t *FilterTranslator) translateInField(key ast.Expr, value ast.SelectExpr) 
 		return
 	}
 	result.sql = buffer.String()
+	result.kind = filterTranslatorBooleanKind
 	return
 }
 
-func (t *FilterTranslator) translateToLike(funcName string, target ast.Expr, pattern ast.Expr,
+func (t *filterTranslation) translateToLike(funcName string, target ast.Expr, pattern ast.Expr,
 	patternPrefix, patternSuffix string) (result filterTranslatorResult,
 	err error) {
 	var buffer bytes.Buffer
@@ -991,7 +1016,7 @@ func (t *FilterTranslator) translateToLike(funcName string, target ast.Expr, pat
 	return
 }
 
-func (t *FilterTranslator) translateSelectField(expr ast.SelectExpr) (result filterTranslatorResult, err error) {
+func (t *filterTranslation) translateSelectField(expr ast.SelectExpr) (result filterTranslatorResult, err error) {
 	operandTr, err := t.translate(expr.Operand())
 	if err != nil {
 		return
@@ -1208,6 +1233,9 @@ func (t *FilterTranslator) translateSelectJsonField(operandSql string, msgDesc p
 		result.sql = fmt.Sprintf("%s->%s", operandSql, fieldSql)
 		result.kind = filterTranslatorJsonArrayKind
 		result.desc = fieldDesc.Message()
+		if fieldDesc.Kind() == protoreflect.EnumKind {
+			result.enumDesc = fieldDesc.Enum()
+		}
 		result.precedence = filterTranslatorMaxPrecedence
 		return
 	}

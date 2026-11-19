@@ -47,12 +47,12 @@ var _ = Describe("Filter translator metadata keys", func() {
 
 	DescribeTable("rejects reserved metadata keys in public filters",
 		func(ctx context.Context, filter string) {
-			_, err := publicTranslator.Translate(ctx, filter)
+			_, _, err := publicTranslator.Translate(ctx, filter, 0)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).NotTo(ContainSubstring("owner-reference"))
 			Expect(err.Error()).NotTo(ContainSubstring("provider-id"))
 
-			_, err = privateTranslator.Translate(ctx, filter)
+			_, _, err = privateTranslator.Translate(ctx, filter, 0)
 			Expect(err).ToNot(HaveOccurred())
 		},
 		Entry("reserved label index", `this.metadata.labels['admin.osac.openshift.io/owner-reference'] == 'stored-value'`),
@@ -61,7 +61,7 @@ var _ = Describe("Filter translator metadata keys", func() {
 	)
 
 	It("allows ordinary public metadata keys", func(ctx context.Context) {
-		_, err := publicTranslator.Translate(ctx, `this.metadata.labels['example.com/app'] == 'web'`)
+		_, _, err := publicTranslator.Translate(ctx, `this.metadata.labels['example.com/app'] == 'web'`, 0)
 		Expect(err).ToNot(HaveOccurred())
 	})
 })

@@ -90,6 +90,21 @@ var _ = Describe("DiskImage API", Label("disk-images"), func() {
 		Entry("tenant user registers an own-tenant image", "tenant user"),
 	)
 
+	It("filters disk images by architecture", func(ctx context.Context) {
+		client := publicv1.NewDiskImagesClient(tool.ExternalView().AdminConn())
+		image := createPublicDiskImageFixture(ctx, client, "shared")
+		filter := fmt.Sprintf("this.id == %q && 1 in this.spec.architecture", image.GetId())
+		listed, err := client.List(ctx, publicv1.DiskImagesListRequest_builder{Filter: new(filter)}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listed.GetItems()).To(HaveLen(1))
+		Expect(listed.GetItems()[0].GetId()).To(Equal(image.GetId()))
+
+		filter = fmt.Sprintf("this.id == %q && 2 in this.spec.architecture", image.GetId())
+		listed, err = client.List(ctx, publicv1.DiskImagesListRequest_builder{Filter: new(filter)}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listed.GetItems()).To(BeEmpty())
+	})
+
 	It("deprecates, hides obsolete images, filters explicitly, and reactivates", func(ctx context.Context) {
 		client := publicv1.NewDiskImagesClient(tool.ExternalView().AdminConn())
 		available := createPublicDiskImageFixture(ctx, client, "shared")

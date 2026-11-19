@@ -82,7 +82,10 @@ appears in that list. For example, `this.id in ['abc', 'def']` returns `true` wh
 identifier is either `abc` or `def`. Note that the list must contain only literal values.
 
 When the right-hand side is an array field, the expression checks whether the left-hand value is
-contained in that array.
+contained in that array. For repeated enum fields, the left-hand value must be a defined, nonzero
+integer literal; for example, `1 in this.spec.architecture` matches AMD64 disk images. Zero is
+rejected because the JSON encoder stores zero-valued enum elements as `null`. As with other
+filters, membership in an empty list folds to `false` without translating the left operand.
 
 When the right-hand side is a map field such as `this.metadata.labels`, the expression checks
 whether the left-hand value exists as a key in the map. For example,

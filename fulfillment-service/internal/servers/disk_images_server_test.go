@@ -18,6 +18,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -137,6 +139,42 @@ var _ = Describe("Disk images server", func() {
 			createWithLifecycle("image-deprecated", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED)
 			createWithLifecycle("image-obsolete", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE)
 		})
+
+		It("Filters by architecture", func() {
+			baseline, err := server.List(ctx, publicv1.DiskImagesListRequest_builder{}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(baseline.GetItems()).To(HaveLen(2))
+
+			matching := publicv1.DiskImagesListRequest_builder{}.Build()
+			matching.SetFilter("1 in this.spec.architecture")
+			matchingResponse, err := server.List(ctx, matching)
+			Expect(err).ToNot(HaveOccurred())
+
+			nonmatching := publicv1.DiskImagesListRequest_builder{}.Build()
+			nonmatching.SetFilter("2 in this.spec.architecture")
+			nonmatchingResponse, err := server.List(ctx, nonmatching)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(nonmatchingResponse.GetItems()).To(BeEmpty())
+
+			names := make([]string, len(matchingResponse.GetItems()))
+			for i, item := range matchingResponse.GetItems() {
+				names[i] = item.GetMetadata().GetName()
+			}
+			Expect(names).To(ConsistOf("image-available", "image-deprecated"))
+		})
+
+		DescribeTable("Rejects invalid architecture filters", func(filter, message string) {
+			request := publicv1.DiskImagesListRequest_builder{}.Build()
+			request.SetFilter(filter)
+			_, err := server.List(ctx, request)
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring(message))
+		},
+			Entry("zero enum", `0 in this.spec.architecture`, "does not support zero values stored as null"),
+			Entry("unknown enum", `99 in this.spec.architecture`, "unknown enum value 99"),
+			Entry("wrong type", `'ARCHITECTURE_AMD64' in this.spec.architecture`, "no matching overload"),
+			Entry("nonliteral", `(1 + 1) in this.spec.architecture`, "requires a literal integer value"),
+		)
 
 		It("Excludes OBSOLETE from default list", func() {
 			response, err := server.List(ctx, publicv1.DiskImagesListRequest_builder{}.Build())

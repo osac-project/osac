@@ -78,6 +78,12 @@ const externalIpPoolRow = (page: Page, name: string) =>
 const rowActionsToggle = (page: Page, name: string) =>
   page.getByRole('button', { name: `Actions for ${name}`, exact: true });
 
+/**
+ * The provider's own wording for the one refusal that is a documented outcome:
+ * the pool still has an allocated address. Any other delete error must fail.
+ */
+const allocatedAddressRefusal = /active ExternalIP resource\(s\) still reference it/i;
+
 /** Open the External IPs list page through the Networking navigation group. */
 export const openExternalIpListPage = async (page: Page): Promise<void> => {
   await openExternalIpsPage(page);
@@ -173,6 +179,14 @@ const waitForExternalIpRow = async (
     await expect(externalIpRow(page, name)).toHaveCount(1, { timeout });
     return true;
   } catch {
+    // A refetch can fail during the poll and replace the table with the error
+    // state, which is not evidence of absence.
+    if ((await readExternalIpListState(page)) === 'error') {
+      throw new Error(
+        `The External IP list failed while checking for "${name}". Nothing was ` +
+          'deleted; re-run once the list request succeeds.',
+      );
+    }
     return false;
   }
 };
@@ -501,22 +515,37 @@ export const deleteExternalIpPoolIfPresent = async (page: Page, name: string): P
   ]).catch(() => 'timeout' as const);
 
   if (outcome !== 'deleted') {
+    // The dialog shows the same alert for every mutation error, so the
+    // diagnostic read is bounded and the retention path needs the provider's
+    // own wording; anything else must fail the step.
     const alert = page
       .locator('[class*="c-alert"]')
       .filter({ hasText: ExternalIpPoolsPage.deleteError[0] })
       .first();
-    const detail = (await alert.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
-    logProgress(
-      'external-ip-pool-delete',
-      `Pool "${name}" was retained${detail ? ` (${detail})` : ''}. ` +
-        'A tenant holding one of its addresses keeps it alive; delete that tenant ' +
-        'first, or delete the pool by hand.',
-    );
+    const detail = (await alert.innerText({ timeout: 3_000 }).catch(() => ''))
+      .replace(/\s+/g, ' ')
+      .trim();
+
     await page
       .getByRole('button', { name: 'Cancel', exact: true })
       .click()
       .catch(() => {});
-    return false;
+
+    if (allocatedAddressRefusal.test(detail)) {
+      logProgress(
+        'external-ip-pool-delete',
+        `Pool "${name}" was retained (${detail}). ` +
+          'A tenant holding one of its addresses keeps it alive; delete that tenant ' +
+          'first, or delete the pool by hand.',
+      );
+      return false;
+    }
+
+    throw new Error(
+      `Deleting pool "${name}" failed: ` +
+        `${detail || 'the delete did not settle within 60 seconds'}. ` +
+        'Only an allocated-address refusal is a documented retained outcome.',
+    );
   }
 
   await expect(row).toHaveCount(0, { timeout: 300_000 });

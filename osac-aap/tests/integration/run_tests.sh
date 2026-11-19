@@ -82,6 +82,7 @@ ROLE_TESTS=(
   "netris_fabric"
   "cudn_evpn"
   "network_task_playbook"
+  "pure_storage_setup"
 )
 
 ROLE_SCENARIO_TESTS=(

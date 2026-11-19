@@ -74,11 +74,40 @@ var kindsByName = sync.OnceValues(func() (map[string]*Kind, error) {
 	return byName, nil
 })
 
+// A PriceOption adjusts what the price counts.
+type PriceOption func(*priceOptions)
+
+// priceOptions holds the adjustments a caller makes to a price.
+type priceOptions struct {
+	// uncreated names the kinds the installation never creates for a request, so their
+	// planned creates and dimensions count toward no limit.
+	uncreated map[string]bool
+}
+
+// WithoutCreatesOf names kinds the installation will not create for any request, such as
+// the automatic addresses an installation with provider networking disabled never
+// creates. Their planned creates and dimensions count toward no limit, so a check the
+// price feeds refuses nothing the system will not actually create.
+func WithoutCreatesOf(kinds ...string) PriceOption {
+	return func(options *priceOptions) {
+		for _, kind := range kinds {
+			if options.uncreated == nil {
+				options.uncreated = map[string]bool{}
+			}
+			options.uncreated[kind] = true
+		}
+	}
+}
+
 // Price computes the price of one request message: the dimensions and amounts it uses,
 // including what OSAC will create for it. A kind without annotations prices nothing. Each
 // through reference is resolved with the lookup, and a reference the lookup doesn't know
 // is an error: a price that silently skipped a resource's type would undercount it.
-func Price(message protoreflect.Message, types TypeLookup) (Quote, error) {
+func Price(message protoreflect.Message, types TypeLookup, opts ...PriceOption) (Quote, error) {
+	options := priceOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
 	byName, err := kindsByName()
 	if err != nil {
 		return Quote{}, err
@@ -87,7 +116,7 @@ func Price(message protoreflect.Message, types TypeLookup) (Quote, error) {
 	if kind == nil {
 		return Quote{}, nil
 	}
-	dimensions, creates, err := priceOf(message, kind, types, byName)
+	dimensions, creates, err := priceOf(message, kind, types, byName, options.uncreated)
 	if err != nil {
 		return Quote{}, err
 	}
@@ -101,6 +130,7 @@ func priceOf(
 	kind *Kind,
 	types TypeLookup,
 	byName map[string]*Kind,
+	uncreated map[string]bool,
 ) (map[string]int64, []PlannedCreate, error) {
 	dimensions := map[string]int64{}
 	var creates []PlannedCreate
@@ -119,10 +149,10 @@ func priceOf(
 		case field.Dimension != "":
 			err = addFieldDimension(dimensions, message, field)
 		case field.Through != "":
-			err = addThrough(dimensions, message, field, types, byName)
+			err = addThrough(dimensions, message, field, types, byName, uncreated)
 		case field.Creates != nil:
 			var fieldCreates []PlannedCreate
-			fieldCreates, err = addCreates(dimensions, message, field, types, byName)
+			fieldCreates, err = addCreates(dimensions, message, field, types, byName, uncreated)
 			creates = append(creates, fieldCreates...)
 		}
 		if err != nil {
@@ -156,6 +186,7 @@ func addThrough(
 	field Field,
 	types TypeLookup,
 	byName map[string]*Kind,
+	uncreated map[string]bool,
 ) error {
 	asked, _, ok, err := navigate(message, field.Path)
 	if err != nil {
@@ -164,7 +195,7 @@ func addThrough(
 	if !ok {
 		return fmt.Errorf("field '%s' resolves through a type but isn't set", field.Path)
 	}
-	askedDimensions, err := throughDimensions(asked.Message(), field, types, byName)
+	askedDimensions, err := throughDimensions(asked.Message(), field, types, byName, uncreated)
 	if err != nil {
 		return err
 	}
@@ -175,7 +206,7 @@ func addThrough(
 			return err
 		}
 		if ok {
-			runningDimensions, err = throughDimensions(running.Message(), field, types, byName)
+			runningDimensions, err = throughDimensions(running.Message(), field, types, byName, uncreated)
 			if err != nil {
 				return err
 			}
@@ -191,6 +222,7 @@ func throughDimensions(
 	field Field,
 	types TypeLookup,
 	byName map[string]*Kind,
+	uncreated map[string]bool,
 ) (map[string]int64, error) {
 	key, err := referenceKey(reference)
 	if err != nil {
@@ -206,7 +238,7 @@ func throughDimensions(
 			field.Path, typed.Descriptor().FullName(), field.Through,
 		)
 	}
-	dimensions, _, err := priceOf(typed, byName[field.Through], types, byName)
+	dimensions, _, err := priceOf(typed, byName[field.Through], types, byName, uncreated)
 	if err != nil {
 		return nil, err
 	}
@@ -221,12 +253,19 @@ func addCreates(
 	field Field,
 	types TypeLookup,
 	byName map[string]*Kind,
+	uncreated map[string]bool,
 ) ([]PlannedCreate, error) {
+	creates := field.Creates
+	// A kind the installation never creates counts toward no limit, the same way its
+	// writer creates nothing for it: provider networking disabled means no automatic
+	// addresses, so a request that asks for them adds nothing.
+	if uncreated[creates.Kind] {
+		return nil, nil
+	}
 	value, descriptor, ok, err := navigate(message, field.Path)
 	if err != nil || !ok {
 		return nil, err
 	}
-	creates := field.Creates
 
 	var items []protoreflect.Value
 	if descriptor.Kind() == protoreflect.BoolKind {
@@ -255,11 +294,11 @@ func addCreates(
 		// all: a count such as a node set's size has no upper bound, and materializing
 		// a message per resource would spend the request's memory and time before any
 		// limit applies.
-		create, plannedMessage, err := plannedCreate(creates, item, types, byName)
+		create, plannedMessage, err := plannedCreate(creates, item, types, byName, uncreated)
 		if err != nil {
 			return nil, err
 		}
-		createdDimensions, _, err := priceOf(plannedMessage, byName[creates.Kind], types, byName)
+		createdDimensions, _, err := priceOf(plannedMessage, byName[creates.Kind], types, byName, uncreated)
 		if err != nil {
 			return nil, err
 		}
@@ -340,6 +379,7 @@ func createCount(creates *Creates, item protoreflect.Value) (int, error) {
 // walks.
 func plannedCreate(
 	creates *Creates, item protoreflect.Value, types TypeLookup, byName map[string]*Kind,
+	uncreated map[string]bool,
 ) (PlannedCreate, protoreflect.Message, error) {
 	kind := byName[creates.Kind]
 	descriptor, err := protoregistry.GlobalFiles.FindDescriptorByName(kind.Message)
@@ -357,6 +397,10 @@ func plannedCreate(
 		if !ok {
 			// The path can read the name of a reference given by id only: the created
 			// resource stores the referenced row's name, so the price looks the row up.
+			// A reference that also names a row needs no lookup: the servers resolve
+			// references before the check runs and store the row's id and name, so the
+			// supplied name already is the resolved row's name. Resolving the id again
+			// would also fail for rows no quota kind maps, such as a storage tier.
 			var resolved bool
 			value, source, resolved, err = referencedName(item.Message(), creates.Set[target], types)
 			if err != nil {
@@ -522,7 +566,8 @@ func referenceKey(reference protoreflect.Message) (string, error) {
 // referencedName resolves the value of a set path that reads the name of a reference
 // given by id only: the created resource stores the referenced row's name, such as a
 // volume's storage tier, so the price looks the row up through the type lookup and
-// copies its name. ok is false when the path reads no such reference.
+// copies its name. ok is false when the path reads no such reference or the reference
+// carries no id.
 func referencedName(
 	item protoreflect.Message, path string, types TypeLookup,
 ) (value protoreflect.Value, field protoreflect.FieldDescriptor, ok bool, err error) {

@@ -505,12 +505,14 @@ func newField(
 			return nil, fmt.Errorf("%s resolves through a type but isn't a reference", where)
 		}
 		// A through reference resolves by id or name, with id winning, the way RefKeyStr
-		// reads references everywhere else in the service: both fields must exist.
+		// reads references everywhere else in the service: both fields must exist, each
+		// as a single string.
 		for _, name := range []string{"id", "name"} {
 			referenceField := annotated.descriptor.Message().Fields().ByName(protoreflect.Name(name))
-			if referenceField == nil || referenceField.Kind() != protoreflect.StringKind {
+			if referenceField == nil || referenceField.Kind() != protoreflect.StringKind ||
+				referenceField.IsList() || referenceField.IsMap() {
 				return nil, fmt.Errorf(
-					"%s resolves through '%s', whose reference has no %s field",
+					"%s resolves through '%s', whose reference has no single %s field",
 					where, options.GetThrough(), name,
 				)
 			}
@@ -526,7 +528,8 @@ func newField(
 			if err != nil {
 				return nil, fmt.Errorf("%s has an invalid larger_of path: %w", where, err)
 			}
-			if largerField.Kind() != protoreflect.MessageKind ||
+			if largerField.IsList() || largerField.IsMap() ||
+				largerField.Kind() != protoreflect.MessageKind ||
 				largerField.Message().FullName() != annotated.descriptor.Message().FullName() {
 				return nil, fmt.Errorf("%s has a larger_of path that isn't the same kind of reference", where)
 			}
@@ -560,9 +563,9 @@ func newField(
 		// child-create check read the id subfield, such as a host's
 		// status.cluster.id, so the reference must carry one.
 		id := annotated.descriptor.Message().Fields().ByName("id")
-		if id == nil || id.Kind() != protoreflect.StringKind {
+		if id == nil || id.Kind() != protoreflect.StringKind || id.IsList() || id.IsMap() {
 			return nil, fmt.Errorf(
-				"%s holds a link through '%s', which has no id field",
+				"%s holds a link through '%s', which has no single id field",
 				where, annotated.descriptor.Message().FullName(),
 			)
 		}
@@ -615,6 +618,9 @@ func newCreates(
 	var item protoreflect.MessageDescriptor
 	switch {
 	case field.Kind() == protoreflect.BoolKind:
+		if field.IsList() || field.IsMap() {
+			return nil, fmt.Errorf("%s is a bool, so it can't be a repeated field", where)
+		}
 		if creates.Each != "" || creates.CountField != "" || len(creates.Set) > 0 {
 			return nil, fmt.Errorf(
 				"%s is a bool, so its creates can name no items, count field or set fields", where,

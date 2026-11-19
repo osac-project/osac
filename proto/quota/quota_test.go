@@ -346,6 +346,20 @@ func TestPriceCluster(t *testing.T) {
 	if len(addresses) != 1 || addresses[0].Count != 2 {
 		t.Fatalf("expected 1 planned address entry standing for 2 addresses, got %#v", addresses)
 	}
+
+	// An installation with provider networking disabled never creates the automatic
+	// addresses, so the option drops them from the quote:
+	quote, err = Price(cluster.ProtoReflect(), types, WithoutCreatesOf("ExternalIP"))
+	if err != nil {
+		t.Fatalf("failed to price the cluster without its automatic addresses: %v", err)
+	}
+	assertDimensions(t, quote, map[string]int64{
+		"caas.control_planes":            1,
+		"bare_metal.instances.metal-1tb": 3,
+	})
+	if addresses := plannedOf(quote, "ExternalIP"); len(addresses) != 0 {
+		t.Fatalf("expected no planned address, got %#v", addresses)
+	}
 }
 
 // TestPriceBareMetalInstance prices a standalone host: one of its host type's dimension,
@@ -615,6 +629,37 @@ func TestPriceReferencesById(t *testing.T) {
 			t.Fatalf("the planned volume carries the tier's name, got %#v", volumes)
 		}
 	})
+
+	t.Run("a storage tier that sets both an id and a name prices the supplied name", func(t *testing.T) {
+		// The servers resolve a disk's tier before the quota check runs and store the
+		// row's id and name on the reference, so a reference that carries both is
+		// already consistent and the supplied name is the row's name. Resolving the id
+		// again would also fail for rows no quota kind maps, such as a storage tier:
+		// the type lookup only knows quota kinds.
+		instance := &privatev1.ComputeInstance{
+			Spec: &privatev1.ComputeInstanceSpec{
+				BootDisk: &privatev1.ComputeInstanceDisk{
+					SizeGib:     proto.Int32(100),
+					StorageTier: &privatev1.StorageTierReference{Id: "tier-id", Name: "fast"},
+				},
+				InstanceType: &privatev1.InstanceTypeReference{Id: "it-id"},
+			},
+		}
+		quote, err := Price(instance.ProtoReflect(), types)
+		if err != nil {
+			t.Fatalf("failed to price the compute instance: %v", err)
+		}
+		assertDimensions(t, quote, map[string]int64{
+			"compute.vcpus":      8,
+			"compute.memory_gib": 32,
+			"storage.volumes":    1,
+			"storage.fast.gib":   100,
+		})
+		volumes := plannedOf(quote, "Volume")
+		if len(volumes) != 1 || volumes[0].Fields["spec.storage_tier"].String() != "fast" {
+			t.Fatalf("the planned volume carries the supplied tier name, got %#v", volumes)
+		}
+	})
 }
 
 // TestPriceLargeNodeSet checks that a huge count prices one planned message times the
@@ -783,8 +828,10 @@ func quotaField(options *privatev1.QuotaFieldOptions) *descriptorpb.FieldOptions
 // created_for with both or neither link shape, a larger_of outside a through reference,
 // an unsigned or repeated dimension field, a brace path or set path over a repeated
 // field, a negative creates count, a field link to a message without an id, a field
-// link that carries a name prefix or labels, a bool creates that sets fields, a creates
-// that counts fields of items that aren't messages, and creates that cycle.
+// link that carries a name prefix or labels, a bool creates that sets fields, a
+// repeated bool field that creates, a through reference or field link whose reference
+// carries a repeated id, a larger_of path over a repeated reference, a creates that
+// counts fields of items that aren't messages, and creates that cycle.
 func TestKindsRejectsInvalidAnnotations(t *testing.T) {
 	withMessageOptions := func(
 		messages []*descriptorpb.DescriptorProto, options *privatev1.QuotaMessageOptions,
@@ -964,6 +1011,68 @@ func TestKindsRejectsInvalidAnnotations(t *testing.T) {
 			contains: "repeated field",
 		},
 		{
+			name: "a repeated bool field that creates",
+			messages: ratedResource("RatedResource",
+				repeatedFieldDesc("flags", 1, descriptorpb.FieldDescriptorProto_TYPE_BOOL, "",
+					quotaField(&privatev1.QuotaFieldOptions{
+						Creates: &privatev1.QuotaCreatesOptions{Kind: "RatedResource"},
+					}))),
+			contains: "is a bool, so it can't be a repeated field",
+		},
+		{
+			name: "a through reference with a repeated id",
+			messages: append(append(ratedResource("RatedResource",
+				fieldDesc("type", 1, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+					".osac.private.v1.RatedTypeRef",
+					quotaField(&privatev1.QuotaFieldOptions{Through: "RatedType"}))),
+				ratedResource("RatedType")...),
+				&descriptorpb.DescriptorProto{
+					Name: proto.String("RatedTypeRef"),
+					Field: []*descriptorpb.FieldDescriptorProto{
+						repeatedFieldDesc("id", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
+						fieldDesc("name", 2, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
+					},
+				}),
+			contains: "no single id field",
+		},
+		{
+			name: "a larger_of path over a repeated reference",
+			messages: append(append(ratedResource("RatedResource",
+				fieldDesc("type", 1, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+					".osac.private.v1.RatedTypeRef",
+					quotaField(&privatev1.QuotaFieldOptions{
+						Through:  "RatedType",
+						LargerOf: "spec.others",
+					})),
+				repeatedFieldDesc("others", 2, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+					".osac.private.v1.RatedTypeRef", nil)),
+				ratedResource("RatedType")...),
+				&descriptorpb.DescriptorProto{
+					Name: proto.String("RatedTypeRef"),
+					Field: []*descriptorpb.FieldDescriptorProto{
+						fieldDesc("id", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
+						fieldDesc("name", 2, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
+					},
+				}),
+			contains: "isn't the same kind of reference",
+		},
+		{
+			name: "a field link through a reference with a repeated id",
+			messages: append(ratedResource("RatedResource",
+				fieldDesc("parent", 1, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+					".osac.private.v1.RatedResourceParent",
+					quotaField(&privatev1.QuotaFieldOptions{
+						CreatedFor: &privatev1.QuotaCreatedForOptions{Parent: "RatedResource"},
+					}))),
+				&descriptorpb.DescriptorProto{
+					Name: proto.String("RatedResourceParent"),
+					Field: []*descriptorpb.FieldDescriptorProto{
+						repeatedFieldDesc("id", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
+					},
+				}),
+			contains: "no single id field",
+		},
+		{
 			name: "a dimension brace path over a repeated string field",
 			messages: ratedResource("RatedResource",
 				fieldDesc("count", 1, descriptorpb.FieldDescriptorProto_TYPE_INT32, "",
@@ -985,7 +1094,7 @@ func TestKindsRejectsInvalidAnnotations(t *testing.T) {
 						fieldDesc("name", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
 					},
 				}),
-			contains: "no id field",
+			contains: "no single id field",
 		},
 		{
 			name: "a field link that carries a name prefix",

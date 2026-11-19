@@ -19,6 +19,8 @@ package integration
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -94,10 +96,13 @@ var _ = Describe("NetBox inventory", Label("bmf-netbox"), func() {
 		fixture, err := getNetBoxFixtureState(ctx, cluster, ns, 0)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(fixture.DeviceID).To(BeNumerically(">", 0))
-		seedNetBoxBMCSecret(ctx, cluster, ns, httpsPort, fixture.DeviceID)
+		fixturePassword := rand.Text()
+		seedNetBoxBMCSecret(ctx, cluster, ns, httpsPort, fixture.DeviceID, fixturePassword)
 
 		By("allocating and releasing a host with the installed operator")
-		runNetBoxAllocation(ctx, cluster, ns, fixture.DeviceID, fmt.Sprintf("netbox-it-%d", time.Now().UnixNano()))
+		runNetBoxAllocation(
+			ctx, cluster, ns, fixture.DeviceID, fmt.Sprintf("netbox-it-%d", time.Now().UnixNano()), fixturePassword,
+		)
 		beforeRotation, err := getNetBoxFixtureState(ctx, cluster, ns, fixture.DeviceID)
 		Expect(err).NotTo(HaveOccurred())
 
@@ -106,7 +111,9 @@ var _ = Describe("NetBox inventory", Label("bmf-netbox"), func() {
 		patchNetBoxTokenVolume(ctx, ns, volumeIndex, netboxRotatedTokenSecret)
 
 		By("allocating and releasing again and verifying the operator used the rotated token")
-		runNetBoxAllocation(ctx, cluster, ns, fixture.DeviceID, fmt.Sprintf("netbox-it-rotated-%d", time.Now().UnixNano()))
+		runNetBoxAllocation(
+			ctx, cluster, ns, fixture.DeviceID, fmt.Sprintf("netbox-it-rotated-%d", time.Now().UnixNano()), fixturePassword,
+		)
 		afterRotation, err := getNetBoxFixtureState(ctx, cluster, ns, fixture.DeviceID)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(afterRotation.RotatedClaims).To(BeNumerically(">", beforeRotation.RotatedClaims),
@@ -118,7 +125,9 @@ var _ = Describe("NetBox inventory", Label("bmf-netbox"), func() {
 	})
 })
 
-func seedNetBoxBMCSecret(ctx context.Context, cluster kubernetes.Interface, ns, port string, deviceID int) {
+func seedNetBoxBMCSecret(
+	ctx context.Context, cluster kubernetes.Interface, ns, port string, deviceID int, fixturePassword string,
+) {
 	bundle, err := cluster.CoreV1().ConfigMaps(ns).Get(ctx, "ca-bundle", metav1.GetOptions{})
 	Expect(err).NotTo(HaveOccurred())
 	pool := x509.NewCertPool()
@@ -153,7 +162,7 @@ func seedNetBoxBMCSecret(ctx context.Context, cluster kubernetes.Interface, ns, 
 			}.Build(),
 			Data: map[string][]byte{
 				"username": []byte("fixture-user"),
-				"password": []byte("fixture-password"),
+				"password": []byte(fixturePassword),
 			},
 		}.Build(),
 	}.Build())
@@ -164,7 +173,9 @@ func seedNetBoxBMCSecret(ctx context.Context, cluster kubernetes.Interface, ns, 
 	}, NodeTimeout(30*time.Second))
 }
 
-func runNetBoxAllocation(ctx context.Context, cluster kubernetes.Interface, ns string, deviceID int, name string) {
+func runNetBoxAllocation(
+	ctx context.Context, cluster kubernetes.Interface, ns string, deviceID int, name, fixturePassword string,
+) {
 	netboxHost := fmt.Sprintf("netbox-%d", deviceID)
 	netboxRuntimeSecret := netboxHost + "-bmc-secret"
 	request, err := json.Marshal(bmfv1alpha1.BareMetalInstance{
@@ -198,7 +209,7 @@ func runNetBoxAllocation(ctx context.Context, cluster kubernetes.Interface, ns s
 		secret, err := cluster.CoreV1().Secrets(ns).Get(ctx, netboxRuntimeSecret, metav1.GetOptions{})
 		g.Expect(err).NotTo(HaveOccurred())
 		matchesFixture := string(secret.Data["username"]) == "fixture-user" &&
-			string(secret.Data["password"]) == "fixture-password"
+			subtle.ConstantTimeCompare(secret.Data["password"], []byte(fixturePassword)) == 1
 		g.Expect(matchesFixture).To(BeTrue(), "expected the fixture BMC credentials")
 	}, 2*time.Minute, 2*time.Second).Should(Succeed())
 

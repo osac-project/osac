@@ -1,4 +1,4 @@
-# These synthetic NetBox v2 tokens are used by the Kind mock fixture.
+# The installer test target fills in the mock tokens before applying this fixture.
 apiVersion: v1
 kind: Secret
 metadata:
@@ -8,7 +8,7 @@ metadata:
     osac.openshift.io/tenant: system
     osac.openshift.io/owner-reference: bmf-netbox-integration
 stringData:
-  token: nbt_fixtureinitial.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  token: "@NETBOX_TOKEN@"
 ---
 apiVersion: v1
 kind: Secret
@@ -18,7 +18,7 @@ metadata:
     osac.openshift.io/tenant: system
     osac.openshift.io/owner-reference: bmf-netbox-integration
 stringData:
-  token: nbt_fixturerotated.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  token: "@NETBOX_ROTATED_TOKEN@"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -45,6 +45,13 @@ spec:
         - name: netbox
           image: localhost/bmf-netbox-fixture:it
           imagePullPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           ports:
             - name: http
               containerPort: 8080

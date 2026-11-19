@@ -18,6 +18,7 @@ package inventory
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -1478,8 +1479,6 @@ var _ = Describe("NetBox HTTP contract", Label("netbox-contract"), func() {
 	const (
 		metal3Namespace = "metal3-system"
 		caseFieldName   = "contract_case"
-		// A synthetic v2 token exercises the production Bearer authentication.
-		testToken = "nbt_aaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	)
 	var (
 		ctx       context.Context
@@ -1588,6 +1587,7 @@ var _ = Describe("NetBox HTTP contract", Label("netbox-contract"), func() {
 
 		server = netboxmock.New()
 		DeferCleanup(server.Stop)
+		testToken := rand.Text()
 		server.SetAuth("Bearer", testToken)
 		for _, field := range contractFields {
 			server.AddField(field)

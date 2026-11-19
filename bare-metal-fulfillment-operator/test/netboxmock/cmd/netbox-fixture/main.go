@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -31,7 +32,7 @@ func main() {
 	deviceID := int(time.Now().UnixMilli()%1_000_000_000 + 1)
 	first := os.Getenv("NETBOX_TOKEN")
 	rotated := os.Getenv("NETBOX_ROTATED_TOKEN")
-	if first == "" || rotated == "" || first == rotated {
+	if first == "" || rotated == "" || subtle.ConstantTimeCompare([]byte(first), []byte(rotated)) == 1 {
 		log.Fatal("the NetBox test fixture requires two distinct tokens")
 	}
 	mock := netboxmock.NewHandler()

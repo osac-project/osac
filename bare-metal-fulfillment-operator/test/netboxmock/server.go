@@ -18,6 +18,7 @@ limitations under the License.
 package netboxmock
 
 import (
+	"crypto/subtle"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
@@ -193,7 +194,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requiresAuth := len(s.tokens) > 0
 	tokenIndex := -1
 	if headerScheme == s.tokenScheme {
-		tokenIndex = slices.Index(s.tokens, token)
+		for index, candidate := range s.tokens {
+			if subtle.ConstantTimeCompare([]byte(token), []byte(candidate)) == 1 && tokenIndex < 0 {
+				tokenIndex = index
+			}
+		}
 	}
 	requestIndex := len(s.requests)
 	s.requests = append(s.requests, Request{
@@ -350,7 +355,7 @@ func exactMatch(stored any, fieldType, value string) bool {
 	switch fieldType {
 	case "boolean":
 		boolean, ok := stored.(bool)
-		return ok && (value == "true") == boolean
+		return ok && strconv.FormatBool(boolean) == value
 	case "integer":
 		switch number := stored.(type) {
 		case int:

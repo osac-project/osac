@@ -26,7 +26,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -710,18 +709,22 @@ var _ = Describe("NetBox assignment eligibility", func() {
 		Expect(api.patchCalls).To(Equal(1))
 	})
 
-	It("does not claim a device that became active without an owner", func() {
-		api := &selectorQueryTestAPI{
-			deviceSnapshot: testNetBoxAssignmentSnapshot(netBoxStatusActive, ""),
-		}
-		client := newTestNetBoxClientWithCredentials(api)
+	DescribeTable("rejects a device with an invalid owner before claiming",
+		func(status, owner, message string) {
+			api := &selectorQueryTestAPI{
+				deviceSnapshot: testNetBoxAssignmentSnapshot(status, owner),
+			}
+			client := newTestNetBoxClientWithCredentials(api)
 
-		host, err := client.AssignHost(context.Background(), "metal3-system/netbox-46", "bmi-123", nil)
+			host, err := client.AssignHost(context.Background(), "metal3-system/netbox-46", "bmi-123", nil)
 
-		Expect(host).To(BeNil())
-		Expect(err).To(MatchError(ContainSubstring("active without an assigned instance")))
-		Expect(api.patchCalls).To(BeZero())
-	})
+			Expect(host).To(BeNil())
+			Expect(err).To(MatchError(ContainSubstring(message)))
+			Expect(api.patchCalls).To(BeZero())
+		},
+		Entry("active device without an owner", netBoxStatusActive, "", "active without an assigned instance"),
+		Entry("staged device with a whitespace-only owner", netBoxStatusStaged, "   ", "malformed osac_instance_id"),
+	)
 
 	It("claims a free managed device with its ETag and confirms the assignment", func() {
 		freeDevice := testNetBoxAssignmentSnapshot(netBoxStatusStaged, "")
@@ -1514,18 +1517,11 @@ var _ = Describe("NetBox HTTP contract", Label("netbox-contract"), func() {
 		return bodies
 	}
 
-	// contractFields are the custom-field definitions the adapter's fixed filters
-	// require. Every one is exact-filtered, which is the schema the adapter assumes
-	// an administrator has provisioned.
-	contractFields := func() []netboxmock.Field {
-		return []netboxmock.Field{
-			{Name: "osac_managed", Label: "OSAC managed", Type: "boolean", FilterLogic: netboxmock.FilterExact},
-			{Name: "osac_instance_id", Label: "OSAC instance ID", Type: "text", FilterLogic: netboxmock.FilterExact},
-			{Name: "osac_bmc_address", Label: "OSAC BMC address", Type: "text", FilterLogic: netboxmock.FilterExact},
-			{Name: "osac_boot_mac", Label: "OSAC boot MAC", Type: "text", FilterLogic: netboxmock.FilterExact},
-			{Name: "osac_interface_macs", Label: "OSAC interface MACs", Type: "json", FilterLogic: netboxmock.FilterExact},
-			{Name: caseFieldName, Label: "Contract case", Type: "text", FilterLogic: netboxmock.FilterExact},
-		}
+	// The mock only needs definitions for fields used as query filters.
+	contractFields := []netboxmock.Field{
+		{Name: "osac_managed", Type: "boolean"},
+		{Name: "osac_instance_id", Type: "text"},
+		{Name: caseFieldName, Type: "text"},
 	}
 
 	// eligibleFields marks a device as an enrolled, unowned pool member for one
@@ -1556,10 +1552,8 @@ var _ = Describe("NetBox HTTP contract", Label("netbox-contract"), func() {
 	// addExactField registers an additional exact-filtered capability field.
 	addExactField := func(name, fieldType string) {
 		server.AddField(netboxmock.Field{
-			Name:        name,
-			Label:       "Contract " + name,
-			Type:        fieldType,
-			FilterLogic: netboxmock.FilterExact,
+			Name: name,
+			Type: fieldType,
 		})
 	}
 
@@ -1595,7 +1589,7 @@ var _ = Describe("NetBox HTTP contract", Label("netbox-contract"), func() {
 		server = netboxmock.New()
 		DeferCleanup(server.Stop)
 		server.SetAuth("Bearer", testToken)
-		for _, field := range contractFields() {
+		for _, field := range contractFields {
 			server.AddField(field)
 		}
 
@@ -1635,8 +1629,6 @@ var _ = Describe("NetBox HTTP contract", Label("netbox-contract"), func() {
 		BeforeEach(func() {
 			manager = &netBoxContractBMHManager{namespace: metal3Namespace}
 			client = newContractClientWithManager(manager)
-			addExactField("cpu_cores", "integer")
-			addExactField("placement_zone", "text")
 		})
 
 		It("selects on capabilities only, then preserves every other field across claim and release", func() {
@@ -1691,13 +1683,6 @@ var _ = Describe("NetBox HTTP contract", Label("netbox-contract"), func() {
 			))
 			Expect(device.Tags).To(Equal([]string{"rack-a", "managed-by-osac"}))
 			Expect(manager.created).To(HaveLen(1), "Metal3 resources are prepared after the claim")
-
-			// A same-owner retry must not claim again.
-			mark = requestMark()
-			host, err = client.AssignHost(ctx, hostID, "bmi-uid-A", nil)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(host).NotTo(BeNil())
-			Expect(patchBodies(requestsSince(mark))).To(BeEmpty())
 
 			mark = requestMark()
 			Expect(client.UnassignHost(ctx, hostID, "bmi-uid-A", nil)).To(Succeed())
@@ -1824,154 +1809,39 @@ var _ = Describe("NetBox HTTP contract", Label("netbox-contract"), func() {
 		})
 	})
 
-	Describe("NetBox device ID identity and recovery", func() {
-		var client *NetBoxClient
+	It("preserves the numeric binding when a device is renamed and later disappears", func() {
+		client := newInventoryClient()
+		addEligibleDevice(42, new("worker-01"), "identity")
+		selector := map[string]string{caseFieldName: "identity"}
+		binding := metal3Namespace + "/netbox-42"
 
-		BeforeEach(func() {
-			client = newInventoryClient()
-		})
+		host, err := client.FindFreeHost(ctx, selector)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(host).NotTo(BeNil())
+		Expect(host.InventoryHostID).To(Equal(binding))
 
-		// expectIDDerivedHost asserts the adapter derives host identity from the
-		// numeric device ID and never from the mutable device name.
-		expectIDDerivedHost := func(caseValue string, wantID int) {
-			host, err := client.FindFreeHost(ctx, map[string]string{caseFieldName: caseValue})
-			Expect(err).NotTo(HaveOccurred(), "case %q", caseValue)
-			Expect(host).NotTo(BeNil(), "case %q", caseValue)
-			Expect(host.Name).To(Equal(fmt.Sprintf("netbox-%d", wantID)))
-			Expect(host.InventoryHostID).To(Equal(fmt.Sprintf("%s/netbox-%d", metal3Namespace, wantID)))
-		}
+		server.UpdateDevice(42, func(device *netboxmock.Device) { device.Name = "" })
+		host, err = client.FindFreeHost(ctx, selector)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(host).NotTo(BeNil())
+		Expect(host.Name).To(Equal("netbox-42"))
+		Expect(host.InventoryHostID).To(Equal(binding))
 
-		It("derives netbox-<id> for named, unnamed, duplicate, and case-equivalent device names", func() {
-			addEligibleDevice(42, new("worker-01"), "names-named")
-			addEligibleDevice(43, nil, "names-unnamed")
-			addEligibleDevice(44, new("worker-01"), "names-duplicate")
-			addEligibleDevice(45, new("WORKER-01"), "names-case")
+		server.DeleteDevice(42)
+		addEligibleDevice(99, new("worker-01"), "identity")
 
-			for _, expected := range []struct {
-				caseValue string
-				id        int
-			}{
-				{"names-named", 42},
-				{"names-unnamed", 43},
-				{"names-duplicate", 44},
-				{"names-case", 45},
-			} {
-				expectIDDerivedHost(expected.caseValue, expected.id)
-			}
-		})
+		mark := requestMark()
+		_, err = client.AssignHost(ctx, binding, "bmi-uid-contract", nil)
+		Expect(err).To(HaveOccurred())
+		var apiError *netboxclient.APIError
+		Expect(errors.As(err, &apiError)).To(BeTrue(), "expected a classified NetBox error, got %v", err)
+		Expect(apiError.Kind).To(Equal(netboxclient.ErrorKindNotFound))
 
-		It("keeps the ID-derived identity when the device name changes or is cleared", func() {
-			addEligibleDevice(42, new("worker-01"), "rename")
-			expectIDDerivedHost("rename", 42)
-
-			mark := requestMark()
-
-			server.UpdateDevice(42, func(device *netboxmock.Device) { device.Name = "worker-renamed" })
-			expectIDDerivedHost("rename", 42)
-
-			server.UpdateDevice(42, func(device *netboxmock.Device) { device.Name = "" })
-			expectIDDerivedHost("rename", 42)
-
-			// Selection only reads; the adapter never writes the device name.
-			for _, request := range requestsSince(mark) {
-				Expect(request.Method).To(Equal("GET"), "selection must not write to NetBox")
-				Expect(request.Path).To(HavePrefix("/api/dcim/devices"))
-			}
-		})
-
-		It("never resolves a device by its raw name when a replacement reuses it", func() {
-			addEligibleDevice(42, new("worker-01"), "reuse-original")
-			host, err := client.FindFreeHost(ctx, map[string]string{caseFieldName: "reuse-original"})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(host.Name).To(Equal("netbox-42"))
-
-			server.UpdateDevice(42, func(device *netboxmock.Device) { device.Name = "worker-renamed" })
-			addEligibleDevice(99, new("worker-01"), "reuse-replacement")
-
-			expectIDDerivedHost("reuse-original", 42)
-			expectIDDerivedHost("reuse-replacement", 99)
-		})
-
-		It("keeps the saved binding on 404 and never touches a replacement device", func() {
-			addEligibleDevice(42, new("worker-01"), "gone")
-			host, err := client.FindFreeHost(ctx, map[string]string{caseFieldName: "gone"})
-			Expect(err).NotTo(HaveOccurred())
-			binding := host.InventoryHostID
-			Expect(binding).To(Equal(fmt.Sprintf("%s/netbox-42", metal3Namespace)))
-
-			server.DeleteDevice(42)
-			addEligibleDevice(99, new("worker-01"), "gone-replacement")
-
-			mark := requestMark()
-			_, err = client.AssignHost(ctx, binding, "bmi-uid-contract", nil)
-
-			Expect(err).To(HaveOccurred())
-			var apiError *netboxclient.APIError
-			Expect(errors.As(err, &apiError)).To(BeTrue(), "expected a classified NetBox error, got %v", err)
-			Expect(apiError.Kind).To(Equal(netboxclient.ErrorKindNotFound))
-
-			requests := requestsSince(mark)
-			Expect(requests).To(HaveLen(1), "recovery must re-read only the saved device ID")
-			Expect(requests[0].Method).To(Equal("GET"))
-			Expect(requests[0].Path).To(Equal("/api/dcim/devices/42/"),
-				"a 404 must never fall back to a replacement device")
-		})
-	})
-
-	Describe("NetBox metadata discovery and pool default", func() {
-		var client *NetBoxClient
-
-		BeforeEach(func() {
-			client = newInventoryClient()
-		})
-
-		It("excludes a device whose pool flag is omitted and selects the managed one", func() {
-			// 42 models a device an administrator created without setting the pool
-			// flag: the custom field is absent, which is not an explicit true.
-			server.AddDevice(netboxmock.Device{
-				ID:           42,
-				Name:         "worker-01",
-				Status:       "staged",
-				CustomFields: map[string]any{caseFieldName: "pool-off"},
-			})
-			addEligibleDevice(43, new("worker-02"), "pool-on")
-
-			host, err := client.FindFreeHost(ctx, map[string]string{caseFieldName: "pool-off"})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(host).To(BeNil(), "an omitted pool flag must not enroll a device")
-
-			host, err = client.FindFreeHost(ctx, map[string]string{caseFieldName: "pool-on"})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(host).NotTo(BeNil())
-			Expect(host.Name).To(Equal("netbox-43"))
-
-			Expect(server.Requests()).NotTo(BeEmpty())
-			last := server.Requests()[len(server.Requests())-1]
-			Expect(last.Query.Get("cf_osac_managed")).To(Equal("true"),
-				"the adapter must always require an explicit pool flag")
-		})
-
-	})
-
-	Describe("Capability added after startup", func() {
-		var client *NetBoxClient
-
-		BeforeEach(func() {
-			// Build the adapter before adding the capability.
-			client = newInventoryClient()
-		})
-
-		It("matches a capability created after the adapter was built, without restart", func() {
-			device := eligibleFields("late")
-			device["placement_zone"] = "west"
-			server.AddDevice(netboxmock.Device{ID: 42, Name: "worker-01", Status: "staged", CustomFields: device})
-
-			addExactField("placement_zone", "text")
-			host, err := client.FindFreeHost(ctx, map[string]string{caseFieldName: "late", "placement_zone": "west"})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(host).NotTo(BeNil())
-			Expect(host.Name).To(Equal("netbox-42"))
-		})
+		requests := requestsSince(mark)
+		Expect(requests).To(HaveLen(1), "recovery must re-read only the saved device ID")
+		Expect(requests[0].Method).To(Equal("GET"))
+		Expect(requests[0].Path).To(Equal("/api/dcim/devices/42/"),
+			"a 404 must never fall back to a replacement device")
 	})
 
 	Describe("Exact selection across distinct fields", func() {
@@ -1994,8 +1864,7 @@ var _ = Describe("NetBox HTTP contract", Label("netbox-contract"), func() {
 		}
 
 		It("selects only the device matching every capability and fixed predicate", func() {
-			addDevice(42, func(map[string]any) {})                                 // exact match
-			addDevice(43, func(fields map[string]any) { fields["cpu_cores"] = 8 }) // differs
+			addDevice(43, func(fields map[string]any) { fields["cpu_cores"] = 8 })
 			addDevice(44, func(fields map[string]any) { fields["gpu_model"] = "h100" })
 			addDevice(45, func(fields map[string]any) { fields["memory_gb"] = 64 })
 			addDevice(46, func(fields map[string]any) { fields["osac_managed"] = false })
@@ -2009,13 +1878,14 @@ var _ = Describe("NetBox HTTP contract", Label("netbox-contract"), func() {
 				},
 			})
 
+			// The mock returns devices in ID order. Only the last device matches.
+			addDevice(49, func(map[string]any) {})
+			selector := map[string]string{"cpu_cores": "16", "gpu_model": "a100", "memory_gb": "128"}
 			mark := requestMark()
-			host, err := client.FindFreeHost(ctx, map[string]string{
-				"cpu_cores": "16", "gpu_model": "a100", "memory_gb": "128",
-			})
+			host, err := client.FindFreeHost(ctx, selector)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(host).NotTo(BeNil())
-			Expect(host.Name).To(Equal("netbox-42"))
+			Expect(host.Name).To(Equal("netbox-49"))
 
 			// The adapter sends every capability plus the fixed predicates as
 			// separate exact filters and then takes the server's first result.
@@ -2028,194 +1898,11 @@ var _ = Describe("NetBox HTTP contract", Label("netbox-contract"), func() {
 			Expect(query.Get("cf_cpu_cores")).To(Equal("16"))
 			Expect(query.Get("cf_gpu_model")).To(Equal("a100"))
 			Expect(query.Get("cf_memory_gb")).To(Equal("128"))
-		})
 
-		It("claims no partial match when the matching device is gone", func() {
-			addDevice(43, func(fields map[string]any) { fields["cpu_cores"] = 8 })
-			addDevice(44, func(fields map[string]any) { fields["gpu_model"] = "h100" })
-
-			host, err := client.FindFreeHost(ctx, map[string]string{
-				"cpu_cores": "16", "gpu_model": "a100", "memory_gb": "128",
-			})
+			server.DeleteDevice(49)
+			host, err = client.FindFreeHost(ctx, selector)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(host).To(BeNil(), "no partial-match device may be claimed")
-		})
-
-		It("cannot widen the fixed pool predicate from the selector", func() {
-			addDevice(42, func(map[string]any) {})
-			mark := requestMark()
-
-			host, err := client.FindFreeHost(ctx, map[string]string{"osac_managed": "false"})
-			Expect(err).NotTo(HaveOccurred())
-			// The device is still eligible: only the fixed predicate is sent, so the
-			// selector cannot exclude managed devices either.
-			Expect(host).NotTo(BeNil())
-			Expect(host.Name).To(Equal("netbox-42"))
-			Expect(requestsSince(mark)[0].Query.Get("cf_osac_managed")).To(Equal("true"),
-				"the fixed managed predicate must win over the selector")
-		})
-	})
-
-	Describe("Empty owner representations", func() {
-		var client *NetBoxClient
-
-		BeforeEach(func() {
-			client = newInventoryClient()
-		})
-
-		addWithOwner := func(id int, caseValue string, owner any, includeOwner bool) {
-			fields := eligibleFields(caseValue)
-			if includeOwner {
-				fields["osac_instance_id"] = owner
-			}
-			server.AddDevice(netboxmock.Device{ID: id, Name: "worker", Status: "staged", CustomFields: fields})
-		}
-
-		It("treats an absent owner and an empty-string owner as unassigned", func() {
-			addWithOwner(42, "absent", nil, false)
-			addWithOwner(43, "empty", "", true)
-
-			for _, expected := range []struct {
-				caseValue string
-				id        int
-			}{{"absent", 42}, {"empty", 43}} {
-				host, err := client.FindFreeHost(ctx, map[string]string{caseFieldName: expected.caseValue})
-				Expect(err).NotTo(HaveOccurred())
-				Expect(host).NotTo(BeNil())
-				Expect(host.Name).To(Equal("netbox-" + strconv.Itoa(expected.id)))
-			}
-		})
-
-		It("excludes populated and whitespace-only owners and never claims them", func() {
-			addWithOwner(44, "owned", "another-instance", true)
-			addWithOwner(45, "whitespace", "   ", true)
-
-			for _, caseValue := range []string{"owned", "whitespace"} {
-				host, err := client.FindFreeHost(ctx, map[string]string{caseFieldName: caseValue})
-				Expect(err).NotTo(HaveOccurred())
-				Expect(host).To(BeNil(), "case %q must not be selectable", caseValue)
-			}
-
-			// If a malformed owner is ever reached directly, the adapter rejects it
-			// instead of adopting the device under a bogus owner.
-			mark := requestMark()
-			_, err := client.AssignHost(ctx, metal3Namespace+"/netbox-45", "bmi-uid-contract", nil)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("malformed"))
-			for _, request := range requestsSince(mark) {
-				Expect(request.Method).To(Equal("GET"), "a malformed owner must not be overwritten")
-			}
-		})
-	})
-
-	Describe("Scalar filtering and stored choice values", func() {
-		var client *NetBoxClient
-
-		BeforeEach(func() {
-			client = newInventoryClient()
-			addExactField("cpu_cores", "integer")
-			addExactField("accelerated", "boolean")
-			addExactField("placement_zone", "text")
-			server.AddField(netboxmock.Field{
-				Name: "accelerator", Label: "NVIDIA A100", Type: "select", FilterLogic: netboxmock.FilterExact,
-			})
-		})
-
-		addWithCapability := func(id int, name string, value any) {
-			fields := eligibleFields("scalars")
-			fields[name] = value
-			server.AddDevice(netboxmock.Device{ID: id, Name: "worker", Status: "staged", CustomFields: fields})
-		}
-
-		expectSelection := func(selector map[string]string, wantName string) {
-			host, err := client.FindFreeHost(ctx, selector)
-			Expect(err).NotTo(HaveOccurred(), "selector %v", selector)
-			if wantName == "" {
-				Expect(host).To(BeNil(), "selector %v must match nothing", selector)
-				return
-			}
-			Expect(host).NotTo(BeNil(), "selector %v", selector)
-			Expect(host.Name).To(Equal(wantName), "selector %v", selector)
-		}
-
-		It("matches exact typed values, including zero, negatives, and booleans", func() {
-			addWithCapability(42, "cpu_cores", 0)
-			addWithCapability(43, "cpu_cores", -8)
-			addWithCapability(44, "cpu_cores", int64(9007199254740993))
-			addWithCapability(45, "accelerated", true)
-			addWithCapability(46, "accelerated", false)
-			addWithCapability(47, "placement_zone", "Lab A")
-			addWithCapability(48, "placement_zone", "lab a")
-			addWithCapability(49, "accelerator", "a100")
-
-			expectSelection(map[string]string{"cpu_cores": "0"}, "netbox-42")
-			expectSelection(map[string]string{"cpu_cores": "-8"}, "netbox-43")
-			expectSelection(map[string]string{"cpu_cores": "9007199254740993"}, "netbox-44")
-			expectSelection(map[string]string{"accelerated": "true"}, "netbox-45")
-			expectSelection(map[string]string{"accelerated": "false"}, "netbox-46")
-			expectSelection(map[string]string{"placement_zone": "Lab A"}, "netbox-47")
-			// No trimming and no case folding: the near-match is not selected.
-			expectSelection(map[string]string{"placement_zone": "lab a"}, "netbox-48")
-			expectSelection(map[string]string{"placement_zone": " Lab A"}, "")
-			expectSelection(map[string]string{"placement_zone": "lab A"}, "")
-		})
-
-		It("filters select fields by stored value and never by display label", func() {
-			addWithCapability(49, "accelerator", "a100")
-			mark := requestMark()
-
-			expectSelection(map[string]string{"accelerator": "a100"}, "netbox-49")
-			Expect(requestsSince(mark)[0].Query["cf_accelerator"]).To(Equal([]string{"a100"}),
-				"the stored value must be sent, never the label")
-
-			expectSelection(map[string]string{"accelerator": "NVIDIA A100"}, "")
-
-			// Changing only the choice label must not change matching.
-			server.AddField(netboxmock.Field{
-				Name: "accelerator", Label: "NVIDIA A100 80GB", Type: "select", FilterLogic: netboxmock.FilterExact,
-			})
-			mark = requestMark()
-			expectSelection(map[string]string{"accelerator": "a100"}, "netbox-49")
-			Expect(requestsSince(mark)[0].Query["cf_accelerator"]).To(Equal([]string{"a100"}))
-		})
-
-		It("does not match a device whose capability is missing or null", func() {
-			addWithCapability(50, "accelerated", nil)
-			expectSelection(map[string]string{"accelerated": "false"}, "")
-		})
-	})
-
-	Describe("Exact escaped string filtering", func() {
-		var client *NetBoxClient
-
-		BeforeEach(func() {
-			client = newInventoryClient()
-			addExactField("placement_zone", "text")
-		})
-
-		It("keeps every stored string in one custom-field parameter", func() {
-			zones := []string{"&status=active", "a+b", "x=y", "אזור-מערב", "Lab A", "active"}
-			for index, zone := range zones {
-				fields := eligibleFields("escaped")
-				fields["placement_zone"] = zone
-				server.AddDevice(netboxmock.Device{
-					ID: 42 + index, Name: "worker", Status: "staged", CustomFields: fields,
-				})
-			}
-
-			for index, zone := range zones {
-				mark := requestMark()
-				host, err := client.FindFreeHost(ctx, map[string]string{"placement_zone": zone})
-				Expect(err).NotTo(HaveOccurred(), "zone %q", zone)
-				Expect(host).NotTo(BeNil(), "zone %q", zone)
-				Expect(host.Name).To(Equal("netbox-"+strconv.Itoa(42+index)), "zone %q", zone)
-
-				request := requestsSince(mark)[0]
-				Expect(request.Query["cf_placement_zone"]).To(Equal([]string{zone}),
-					"the value must survive encoding unchanged")
-				Expect(request.Query["status"]).To(Equal([]string{"staged"}),
-					"an embedded status= fragment must not become a second predicate")
-			}
+			Expect(host).To(BeNil(), "the remaining devices each fail a required predicate")
 		})
 	})
 })

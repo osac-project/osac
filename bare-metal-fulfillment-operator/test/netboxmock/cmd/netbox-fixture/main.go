@@ -39,10 +39,7 @@ func main() {
 	for name, fieldType := range map[string]string{
 		"osac_managed": "boolean", "osac_instance_id": "text", "fixture": "text",
 	} {
-		mock.AddField(netboxmock.Field{
-			Name: name, Type: fieldType, FilterLogic: netboxmock.FilterExact,
-			ObjectTypes: []string{"dcim.device"},
-		})
+		mock.AddField(netboxmock.Field{Name: name, Type: fieldType})
 	}
 	mock.AddDevice(netboxmock.Device{
 		ID: deviceID, Name: "Kind fixture", Status: "staged",

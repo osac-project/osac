@@ -33,16 +33,10 @@ import (
 	"time"
 )
 
-// FilterExact is the filter logic used by contract field definitions.
-const FilterExact = "exact"
-
-// Field is one custom-field definition attached to dcim.device.
+// Field describes how to match a custom-field filter against fixture data.
 type Field struct {
-	Name        string
-	Label       string
-	Type        string
-	FilterLogic string
-	ObjectTypes []string
+	Name string
+	Type string
 }
 
 // Device is one dcim.device as the server stores it.
@@ -78,7 +72,7 @@ type Server struct {
 	mu       sync.Mutex
 	server   *httptest.Server
 	devices  map[int]*Device
-	fields   map[string]*Field
+	fields   map[string]Field
 	requests []Request
 
 	tokens      []string
@@ -97,7 +91,7 @@ func New() *Server {
 func NewHandler() *Server {
 	return &Server{
 		devices: map[int]*Device{},
-		fields:  map[string]*Field{},
+		fields:  map[string]Field{},
 	}
 }
 
@@ -128,17 +122,7 @@ func (s *Server) SetBeforePatchHook(hook func(deviceID int)) {
 func (s *Server) AddField(field Field) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(field.ObjectTypes) == 0 {
-		field.ObjectTypes = []string{"dcim.device"}
-	}
-	if field.FilterLogic == "" {
-		field.FilterLogic = FilterExact
-	}
-	if field.Label == "" {
-		field.Label = field.Name
-	}
-	copied := field
-	s.fields[field.Name] = &copied
+	s.fields[field.Name] = field
 }
 
 // AddDevice registers a device fixture.
@@ -241,8 +225,6 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.getDevice(w, r)
 	case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/dcim/devices/"):
 		s.patchDevice(w, r, body)
-	case r.Method == http.MethodGet && strings.TrimSuffix(r.URL.Path, "/") == "/api/extras/custom-fields":
-		s.listFields(w, r)
 	default:
 		writeError(w, http.StatusMethodNotAllowed, "Unsupported fixture route")
 	}
@@ -259,20 +241,14 @@ func (r *statusRecorder) WriteHeader(status int) {
 	r.ResponseWriter.WriteHeader(status)
 }
 
-// listDevices applies the adapter's filters: exact status, exact cf_<field>
-// values, and the cf_<field>__empty lookup. An unknown or filter-disabled
-// custom field is rejected the way NetBox rejects an invalid filter.
+// listDevices applies exact status and custom-field filters, including the empty-owner lookup.
 func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 
 	s.mu.Lock()
-	fields := make(map[string]Field, len(s.fields))
-	for name, field := range s.fields {
-		fields[name] = *field
-	}
 	matches := make([]*Device, 0, len(s.devices))
 	for _, device := range s.devices {
-		matched, ok := deviceMatchesQuery(device, query, fields)
+		matched, ok := deviceMatchesQuery(device, query, s.fields)
 		if !ok {
 			s.mu.Unlock()
 			writeError(w, http.StatusBadRequest, "Invalid filter for device query")
@@ -349,7 +325,7 @@ func deviceMatchesQuery(device *Device, query url.Values, fields map[string]Fiel
 			lookup = "empty"
 		}
 		field, known := fields[name]
-		if !known || !slices.Contains(field.ObjectTypes, "dcim.device") {
+		if !known {
 			return false, false
 		}
 		if lookup == "empty" {
@@ -470,47 +446,6 @@ func (s *Server) patchDevice(w http.ResponseWriter, r *http.Request, body []byte
 	writeJSON(w, devicePayload(device))
 }
 
-// listFields returns custom-field definitions for one object type, paginated the
-// way NetBox paginates extras/custom-fields.
-func (s *Server) listFields(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query()
-	objectType := query.Get("object_type")
-
-	s.mu.Lock()
-	matched := make([]Field, 0, len(s.fields))
-	for _, field := range s.fields {
-		if objectType != "" && !slices.Contains(field.ObjectTypes, objectType) {
-			continue
-		}
-		matched = append(matched, *field)
-	}
-	s.mu.Unlock()
-
-	sort.Slice(matched, func(i, j int) bool { return matched[i].Name < matched[j].Name })
-
-	payloads := make([]map[string]any, 0, len(matched))
-	for _, field := range matched {
-		payloads = append(payloads, fieldPayload(field))
-	}
-
-	total := len(payloads)
-	offset, end := pageBounds(query, total)
-	var next any
-	if end < total {
-		nextQuery := url.Values{}
-		nextQuery.Set("object_type", objectType)
-		nextQuery.Set("offset", strconv.Itoa(end))
-		next = "/api/extras/custom-fields/?" + nextQuery.Encode()
-	}
-
-	writeJSON(w, map[string]any{
-		"count":    total,
-		"next":     next,
-		"previous": nil,
-		"results":  payloads[offset:end],
-	})
-}
-
 func pageBounds(query url.Values, total int) (offset, end int) {
 	offset, _ = strconv.Atoi(query.Get("offset"))
 	offset = min(max(0, offset), total)
@@ -519,22 +454,6 @@ func pageBounds(query url.Values, total int) (offset, end int) {
 		limit = min(requested, limit)
 	}
 	return offset, min(offset+limit, total)
-}
-
-func fieldPayload(field Field) map[string]any {
-	return map[string]any{
-		"id":           fieldID(field.Name),
-		"url":          "/api/extras/custom-fields/" + strconv.Itoa(fieldID(field.Name)) + "/",
-		"display":      field.Label,
-		"object_types": append([]string(nil), field.ObjectTypes...),
-		"type":         map[string]any{"value": field.Type, "label": typeLabel(field.Type)},
-		"data_type":    field.Type,
-		"name":         field.Name,
-		"label":        field.Label,
-		"required":     false,
-		// The SDK models filter_logic as a choice object, not an enum string.
-		"filter_logic": map[string]any{"value": field.FilterLogic, "label": titleCase(field.FilterLogic)},
-	}
 }
 
 func devicePayload(device *Device) map[string]any {
@@ -650,26 +569,6 @@ func fieldID(name string) int {
 	hasher := fnv.New32a()
 	_, _ = hasher.Write([]byte(name))
 	return int(hasher.Sum32()%100000) + 1
-}
-
-// typeLabel uses labels accepted by the generated SDK.
-func typeLabel(fieldType string) string {
-	switch fieldType {
-	case "text":
-		return "Text"
-	case "integer":
-		return "Integer"
-	case "boolean":
-		return "Boolean (true/false)"
-	case "json":
-		return "JSON"
-	case "select":
-		return "Selection"
-	case "multiselect":
-		return "Multiple selection"
-	default:
-		return titleCase(fieldType)
-	}
 }
 
 func titleCase(value string) string {

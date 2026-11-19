@@ -16,7 +16,8 @@ isolated browser with simulated responses.
 ```text
 apps/e2e-tests/
 ├── src/
-│   └── vmaas/                  current VMaaS flows and VMaaS test data
+│   ├── vmaas/                  VMaaS flows and VMaaS test data
+│   └── networking/             External IP flows and networking test data
 ├── tests/                      isolated helper regression tests
 ├── run_scripts/
 │   ├── prepare-setup-for-ui-run.sh  install and validate prerequisites
@@ -35,12 +36,12 @@ libs/
 └── osac-cli/                   OSAC CLI helpers used by UI flows
 ```
 
-The only committed suite currently under `src/` is `vmaas/`. For a new
+Two suites are committed under `src/`: `vmaas/` and `networking/`. For a further
 non-VMaaS journey, add a feature directory directly under `src/`, for example
-`src/projects/`, `src/tenants/`, or `src/networking/`. Do not put unrelated
-tests in `src/vmaas/` and do not put committed tests in
-`apps/playwright/scratch/`; `scratch/` is gitignored and reserved for
-throwaway manual verification.
+`src/projects/`, `src/tenants/`, or `src/clusters/`. Do not put unrelated tests in
+an existing feature directory, and do not put committed tests in
+`apps/playwright/scratch/`; `scratch/` is gitignored and reserved for throwaway
+manual verification.
 
 Use one `.spec.ts` file per focused journey. Keep reusable flow code beside
 the feature when it is feature-specific; move genuinely shared behavior to
@@ -119,6 +120,131 @@ nearest existing page helper and locator for the feature being tested.
 - Keep test data in the feature directory. `extravars.yaml` and the
   `run-ui-e2e.sh` flow tags are currently VMaaS-specific; a non-VMaaS suite
   should normally use its own safe environment variables or fixtures instead.
+
+## External IP (networking) suite
+
+`src/networking/` covers the tenant External IP management UI: list columns,
+create wizard validation, create and delete, tenant scoping, cross-tenant denial
+(when a second tenant admin is configured), and the list error state. Its inputs
+are environment variables, not `extravars.yaml`, so it can never pick up a VMaaS
+value by accident.
+
+| Variable                                                              | Required          | Description                                                                       |
+| --------------------------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------- |
+| `OSAC_UI_BASE_URL`                                                    | yes               | URL of the deployed `osac-ui` instance                                            |
+| `OSAC_ADMIN_USERNAME` / `OSAC_ADMIN_PASSWORD`                         | yes               | Provider admin used for the External IP pool                                      |
+| `OSAC_E2E_TENANT_NAME`                                                | yes\*             | Tenant created by the VMaaS tenant flow, used to read its break-glass credentials |
+| `OSAC_TENANT_ADMIN_USERNAME` / `OSAC_TENANT_ADMIN_PASSWORD`           | alternative to \* | Tenant-admin credentials supplied directly                                        |
+| `OSAC_EXT_IP_CIDR`                                                    | one of            | CIDR the suite uses to create and later delete its own `/24` or larger pool       |
+| `OSAC_EXT_IP_POOL`                                                    | one of            | Name of an existing pool the suite reuses instead of creating one                 |
+| `OSAC_EXT_IP_PROJECT`                                                 | no                | Project for the created External IP; empty uses the tenant default project        |
+| `OSAC_E2E_SECOND_TENANT_USERNAME` / `OSAC_E2E_SECOND_TENANT_PASSWORD` | no                | Second tenant's admin; enables the cross-tenant denial assertion                  |
+| `OSAC_E2E_POOL_CLEANUP`                                               | no                | Set to `1` to let the standalone pool-cleanup project delete the suite-owned pool |
+| `OSAC_E2E_INSTANCE`                                                   | no                | Run index appended to resource names; defaults to `1`                             |
+
+Pick the pool CIDR from an address range the target cluster can actually
+allocate from — the pytest networking suite allocates `172.27.<n>.0/24`
+subnets for the same purpose. If allocation cannot succeed, the flow fails with
+the observed row text instead of a bare timeout.
+
+**The deployment must enable provider networking.** With
+`global.networking.provisioningEnabled: false` the fulfillment service rejects
+every External IP create with `FailedPrecondition: provider networking is
+disabled` (`private_external_ips_server.go`), so only the list and error-state
+checks can pass. The stock `osac-installer/values/dev/kind-instance.yaml` dev
+profile sets `false`, so a default kind instance is **not** enough for this
+suite; point it at an installation with provider networking enabled. See
+[Installing with provider networking](../../../docs/guides/installation/customer-install-guide.md#44-installing-with-provider-networking).
+
+**On a fresh install, create the pool before onboarding the tenant.** Tenant
+onboarding waits for a `READY` pool (its `default-nat` address comes from one),
+so run `--project=external-ip-pool` before the VMaaS tenant flow; a tenant
+onboarded without a pool reports `DefaultNetworkingReady=False` and the
+tenant-admin flows then run against a degraded tenant.
+
+Onboard the tenant in create mode (`run-ui-e2e.sh --tag=create_tenant`, or
+`OSAC_VM_FLOW_MODE=create` for a direct Playwright run): the `tenant` project
+defaults to `full`, whose teardown deletes the tenant and the RoleBinding that
+hold the credentials this suite reads.
+
+The pool project refuses to recreate a pool that already exists, so after that
+bootstrap run set `OSAC_EXT_IP_POOL` to the pool it created and leave
+`OSAC_EXT_IP_CIDR` unset before running the full suite.
+
+Run the whole suite. `external-ip` depends on `external-ip-pool`, and its
+teardown (`external-ip-delete`) removes the External IP and, when the suite
+created it, the pool:
+
+```bash
+cd osac-ui
+export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
+export OSAC_ADMIN_USERNAME=<keycloak-admin>
+export OSAC_E2E_TENANT_NAME=<tenant-name>
+# Fresh install: create the pool from this CIDR.
+export OSAC_EXT_IP_CIDR=172.27.9.0/24
+# Reusing a bootstrap pool instead: export OSAC_EXT_IP_POOL=<pool-name> and
+# leave OSAC_EXT_IP_CIDR unset.
+read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD
+
+pnpm --filter @osac/playwright exec playwright test \
+  --project=external-ip --reporter=line
+```
+
+Playwright runs `external-ip-pool`, then `external-ip` (`create`, `isolation`,
+`list` in that order), then `external-ip-delete`, which deletes the External IP
+as the tenant and, when the suite owns the pool, the pool as the provider admin.
+Pool cleanup happens only when the suite owns it: `OSAC_EXT_IP_CIDR` is set and
+`OSAC_EXT_IP_POOL` is not. Otherwise the teardown logs why it leaves the pool
+alone.
+
+If the suite created the pool and a tenant was onboarded afterwards, that
+tenant's `default-nat` address comes from the same pool. The provider refuses to
+delete a pool that still has allocated addresses, so the teardown reports the
+pool as **retained** with the reason instead of failing the run. Delete the
+tenant that holds the address first, or remove the pool by hand.
+
+Run the pool alone, or keep the resources for inspection:
+
+```bash
+# Provision the pool only; no teardown runs, so it stays for a later run.
+pnpm --filter @osac/playwright exec playwright test --project=external-ip-pool
+
+# Delete only, against resources a previous run created. Re-export the same
+# OSAC_E2E_INSTANCE the original run used, or these target another run's names.
+export OSAC_E2E_INSTANCE=1
+pnpm --filter @osac/playwright exec playwright test --project=external-ip-delete
+
+# The standalone pool cleanup only runs when this project is selected
+# explicitly, so an unfiltered run can never delete a pool that is in use. It
+# also needs the opt-in flag and provider-admin credentials; no OSAC_EXT_IP_CIDR.
+OSAC_E2E_POOL_CLEANUP=1 \
+  pnpm --filter @osac/playwright exec playwright test --project=external-ip-pool-delete
+
+# Discovery without a browser run.
+pnpm --filter @osac/playwright exec playwright test \
+  --project=external-ip --list
+```
+
+Iterating on one spec: `--project=external-ip` pulls in the pool project as a
+dependency and the delete project as a teardown, so a single-file run still
+touches three projects. Add `--no-deps` to run only that file. The list and
+error specs stand alone; the create, isolation and delete specs need the
+resource they act on:
+
+```bash
+# Read-only checks, no dependency or teardown projects.
+pnpm --filter @osac/playwright exec playwright test list.external_ip.spec.ts \
+  --project=external-ip --no-deps --headed --reporter=line
+```
+
+Reusing an existing pool instead of provisioning one:
+
+```bash
+export OSAC_EXT_IP_POOL=<existing-pool-name>
+pnpm --filter @osac/playwright exec playwright test --project=external-ip
+```
+
+Both pool projects then skip, and the teardown leaves the pool in place.
 
 ## Prepare and run
 

@@ -1,0 +1,579 @@
+import { type Page, expect } from '@playwright/test';
+
+import { selectOption } from './general/form_controls';
+import { logProgress } from './general/test_progress';
+import { openExternalIpPoolsPage, openExternalIpsPage } from './main.page';
+import {
+  ExternalIpCreatePage,
+  ExternalIpDeleteDialog,
+  ExternalIpPoolCreatePage,
+  ExternalIpPoolsPage,
+  ExternalIpsPage,
+} from '../../locators/external_ips';
+
+export interface ExternalIpCreateParams {
+  name: string;
+  poolName: string;
+  project?: string;
+}
+
+export interface ExternalIpPoolCreateParams {
+  name: string;
+  cidr: string;
+}
+
+const externalIpTableColumns = [
+  'Name',
+  'Status',
+  'Project',
+  'Attached to',
+  'Address',
+  'IP pool',
+  'Created',
+] as const;
+
+/**
+ * The External IPs list is a Connect call to the ExternalIPs service (the
+ * public one for a tenant session). Matching the service segment keeps
+ * session, project and pool lookups untouched so only the list request fails.
+ */
+const externalIpListRoute = /\/api\/fulfillment\/[\w.]*\.ExternalIPs\//;
+
+const externalIpTable = (page: Page) => page.getByRole(...ExternalIpsPage.externalIpsTable);
+
+const externalIpPoolTable = (page: Page) => page.getByRole(...ExternalIpPoolsPage.poolsTable);
+
+/**
+ * Both list pages default to card view, which renders no table or cells. Table
+ * assertions switch to list view; a page in an error state has no switcher, so
+ * a missing toggle is not an error.
+ */
+const selectListView = async (page: Page, buttonId: string): Promise<void> => {
+  const toggle = page.locator(`#${buttonId}`);
+  if ((await toggle.count()) === 0) {
+    return;
+  }
+  if ((await toggle.getAttribute('aria-pressed')) === 'true') {
+    return;
+  }
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+};
+
+/** Switch the External IPs page to list view so its table and cells exist. */
+export const selectExternalIpListView = (page: Page): Promise<void> =>
+  selectListView(page, 'list-view');
+
+const externalIpRow = (page: Page, name: string) =>
+  externalIpTable(page)
+    .getByRole('row')
+    // The table renders role="grid", so its <td> elements are gridcell, not cell.
+    .filter({ has: page.getByRole('gridcell', { name, exact: true }) });
+
+const externalIpPoolRow = (page: Page, name: string) =>
+  externalIpPoolTable(page)
+    .getByRole('row')
+    .filter({ has: page.getByRole('link', { name, exact: true }) });
+
+const rowActionsToggle = (page: Page, name: string) =>
+  page.getByRole('button', { name: `Actions for ${name}`, exact: true });
+
+/**
+ * The provider's own wording for the one refusal that is a documented outcome:
+ * the pool still has an allocated address. Any other delete error must fail.
+ */
+const allocatedAddressRefusal = /active ExternalIP resource\(s\) still reference it/i;
+
+/** Open the External IPs list page through the Networking navigation group. */
+export const openExternalIpListPage = async (page: Page): Promise<void> => {
+  await openExternalIpsPage(page);
+  await expect(page.getByRole(...ExternalIpsPage.pageTitle)).toBeVisible();
+};
+
+/** Open the admin External IP pools page through the Infrastructure group. */
+export const openExternalIpPoolListPage = async (page: Page): Promise<void> => {
+  await openExternalIpPoolsPage(page);
+  await expect(page.getByRole(...ExternalIpPoolsPage.pageTitle)).toBeVisible();
+};
+
+type ExternalIpListState = 'empty' | 'error' | 'table';
+
+const readExternalIpListState = async (page: Page): Promise<ExternalIpListState | 'loading'> => {
+  if ((await page.getByRole(...ExternalIpsPage.loadErrorTitle).count()) > 0) {
+    return 'error';
+  }
+  if ((await externalIpTable(page).count()) > 0) {
+    return 'table';
+  }
+  if ((await page.getByText(...ExternalIpsPage.emptyStateTitle).count()) > 0) {
+    return 'empty';
+  }
+  return 'loading';
+};
+
+/**
+ * Wait until the list settles on rows, an empty state, or an error, and report
+ * which. Callers that need "this resource is absent" must reject the error
+ * state: a failed list is not evidence of absence.
+ */
+export const waitForExternalIpList = async (page: Page): Promise<ExternalIpListState> => {
+  await selectExternalIpListView(page);
+  let settled: ExternalIpListState | 'loading' = 'loading';
+  await expect
+    .poll(
+      async () => {
+        settled = await readExternalIpListState(page);
+        return settled;
+      },
+      { timeout: 30_000, message: 'The External IP list did not finish loading.' },
+    )
+    .not.toBe('loading');
+  return settled === 'loading' ? 'empty' : settled;
+};
+
+/** Verify the list renders the documented columns. */
+export const expectExternalIpListColumns = async (page: Page): Promise<void> => {
+  await waitForExternalIpList(page);
+  if ((await externalIpTable(page).count()) === 0) {
+    throw new Error('The External IP list is empty, so its columns cannot be verified.');
+  }
+  for (const column of externalIpTableColumns) {
+    await expect(
+      externalIpTable(page).getByRole('columnheader', { name: column, exact: true }),
+    ).toBeVisible();
+  }
+};
+
+/** Verify an External IP row exists and, when supplied, its Project cell. */
+export const expectExternalIpListed = async (
+  page: Page,
+  name: string,
+  projectLabel?: string,
+): Promise<void> => {
+  await waitForExternalIpList(page);
+  const row = externalIpRow(page, name);
+  await expect(row).toHaveCount(1, { timeout: 30_000 });
+  if (projectLabel) {
+    await expect(row.locator('td[data-label="Project"]')).toHaveText(projectLabel);
+  }
+};
+
+/**
+ * Wait, bounded, for a named row to exist. The list response can lag a just
+ * created resource, so a single immediate count is not a reliable absence
+ * signal.
+ */
+const waitForExternalIpRow = async (
+  page: Page,
+  name: string,
+  timeout = 15_000,
+): Promise<boolean> => {
+  const row = externalIpRow(page, name);
+  const settledState = await waitForExternalIpList(page);
+  if (settledState === 'error') {
+    throw new Error(
+      `The External IP list failed to load, so the presence of "${name}" cannot be ` +
+        'verified. Nothing was deleted; re-run once the list request succeeds.',
+    );
+  }
+  try {
+    await expect(row).toHaveCount(1, { timeout });
+    return true;
+  } catch (error) {
+    // The list can fail or still be refreshing when the row poll expires. Wait
+    // for it to settle before concluding anything about the row.
+    const state = await waitForExternalIpList(page).catch(() => 'unsettled' as const);
+    if (state === 'error') {
+      throw new Error(
+        `The External IP list failed while checking for "${name}". Nothing was ` +
+          'deleted; re-run once the list request succeeds.',
+      );
+    }
+    if (state === 'unsettled') {
+      throw new Error(
+        `The External IP list did not settle while checking for "${name}". ` +
+          'Nothing was deleted.',
+      );
+    }
+    const matches = await row.count();
+    if (matches === 0) {
+      return false;
+    }
+    if (matches === 1) {
+      return true;
+    }
+    // More than one match is not absence; keep the original assertion failure.
+    throw error;
+  }
+};
+
+/** Verify an External IP is absent, failing with a duplicate-resource message. */
+export const expectExternalIpNotListed = async (page: Page, name: string): Promise<void> => {
+  await waitForExternalIpList(page);
+  const row = externalIpRow(page, name);
+  const matchingRows = await row.count();
+  if (matchingRows > 0) {
+    throw new Error(
+      `External IP "${name}" already exists (${matchingRows} matching rows). ` +
+        'Delete it, or run with a different OSAC_E2E_INSTANCE.',
+    );
+  }
+};
+
+/** Verify the search filter reports no match for the supplied term. */
+export const expectExternalIpSearchHasNoMatch = async (page: Page, term: string): Promise<void> => {
+  await page.getByRole(...ExternalIpsPage.searchInput).fill(term);
+  await expect(page.getByText(...ExternalIpsPage.filteredEmptyStateTitle)).toBeVisible();
+};
+
+/** Read the Project cell of a listed External IP, for scoping assertions. */
+export const readExternalIpProjectLabel = async (page: Page, name: string): Promise<string> => {
+  await expectExternalIpListed(page, name);
+  const projectCell = externalIpRow(page, name).locator('td[data-label="Project"]');
+  await expect(projectCell).toHaveCount(1);
+  const label = (await projectCell.innerText()).trim();
+  if (!label) {
+    throw new Error(`External IP "${name}" has an empty Project cell.`);
+  }
+  return label;
+};
+
+/** Verify every listed External IP belongs to the expected project. */
+export const expectExternalIpListScopedToProject = async (
+  page: Page,
+  projectLabel: string,
+): Promise<void> => {
+  await waitForExternalIpList(page);
+  const projectCells = externalIpTable(page).locator('td[data-label="Project"]');
+  const count = await projectCells.count();
+  if (count === 0) {
+    throw new Error('The External IP list has no rows, so tenant scoping cannot be verified.');
+  }
+  for (let index = 0; index < count; index += 1) {
+    const project = (await projectCells.nth(index).innerText()).trim();
+    if (project !== projectLabel) {
+      throw new Error(
+        `Tenant isolation is broken: the list shows an External IP in project "${project}" ` +
+          `while the tenant-admin session expects "${projectLabel}".`,
+      );
+    }
+  }
+};
+
+/** Fail every External IP list request until the route is removed. */
+export const failExternalIpListRequests = async (page: Page): Promise<void> => {
+  await page.route(externalIpListRoute, (route) =>
+    route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 'internal', message: 'Injected E2E list failure' }),
+    }),
+  );
+};
+
+/** Remove the injected list failure. */
+export const restoreExternalIpListRequests = async (page: Page): Promise<void> => {
+  await page.unroute(externalIpListRoute);
+};
+
+/**
+ * Fail the list request and verify the page renders its error state. Install
+ * the route before the first list load: a query already in the TanStack cache
+ * is not re-issued, so intercepting after a successful load proves nothing.
+ */
+export const expectExternalIpListLoadError = async (page: Page): Promise<void> => {
+  await failExternalIpListRequests(page);
+  try {
+    await openExternalIpListPage(page);
+    await expect(page.getByRole(...ExternalIpsPage.loadErrorTitle)).toBeVisible({
+      timeout: 30_000,
+    });
+  } finally {
+    await restoreExternalIpListRequests(page);
+  }
+};
+
+/** Verify status reaches the expected value, reporting the observed row on timeout. */
+export const expectExternalIpStatus = async (
+  page: Page,
+  name: string,
+  status: string,
+  timeout = 180_000,
+): Promise<void> => {
+  const row = externalIpRow(page, name);
+  try {
+    await expect(row.getByText(status, { exact: true })).toBeVisible({ timeout });
+  } catch {
+    const observed = (
+      await row
+        .first()
+        .innerText()
+        .catch(() => '')
+    )
+      .replace(/\s+/g, ' ')
+      .trim();
+    throw new Error(
+      `External IP "${name}" did not reach status "${status}" within ${timeout / 1_000} seconds. ` +
+        `The row currently reads: "${observed || 'unknown'}".`,
+    );
+  }
+};
+
+/** Open the creation wizard from the list page. */
+export const openCreateExternalIpPage = async (page: Page): Promise<void> => {
+  const createLink = page.getByRole(...ExternalIpsPage.createExternalIp);
+  await expect(createLink).toBeVisible();
+  await createLink.click();
+  await expect(page.getByRole(...ExternalIpCreatePage.pageTitle)).toBeVisible();
+};
+
+/** Press Next on the current wizard step. */
+const goToNextWizardStep = async (page: Page): Promise<void> => {
+  await page.getByRole(...ExternalIpCreatePage.next).click();
+};
+
+/** Continue past the General step after entering the requested name and project. */
+const submitGeneralStep = async (page: Page, params: ExternalIpCreateParams): Promise<void> => {
+  await expect(page.getByRole(...ExternalIpCreatePage.generalStepTitle)).toBeVisible();
+  await page.locator(...ExternalIpCreatePage.name).fill(params.name);
+  if (params.project) {
+    await selectOption(page, ExternalIpCreatePage.project, params.project, 0, true);
+  }
+  await goToNextWizardStep(page);
+  await expect(page.getByRole(...ExternalIpCreatePage.configurationStepTitle)).toBeVisible();
+};
+
+/** Select the external IP pool, unless auto-selection already did. */
+const submitConfigurationStep = async (page: Page, poolName: string): Promise<void> => {
+  const toggle = page.locator(...ExternalIpCreatePage.pool);
+  const selectedPool = (await toggle.innerText()).trim();
+  if (selectedPool !== poolName) {
+    await selectOption(page, ExternalIpCreatePage.pool, poolName, 0, true);
+  }
+  await goToNextWizardStep(page);
+  await expect(page.getByRole(...ExternalIpCreatePage.reviewStepTitle)).toBeVisible();
+};
+
+/** Create an External IP through the wizard and land back on the list page. */
+export const createExternalIp = async (
+  page: Page,
+  params: ExternalIpCreateParams,
+): Promise<void> => {
+  logProgress('external-ip-create', `Creating external IP "${params.name}".`);
+  await submitGeneralStep(page, params);
+  await submitConfigurationStep(page, params.poolName);
+
+  const review = page.locator(...ExternalIpCreatePage.reviewDetails);
+  await expect(review).toContainText(params.name);
+  await expect(review).toContainText(params.poolName);
+
+  await page.getByRole(...ExternalIpCreatePage.submit).click();
+
+  // Surface the wizard's own failure instead of a bare navigation timeout: a
+  // deployment without provider networking rejects the create with
+  // FailedPrecondition, and a pool the cluster cannot serve fails allocation.
+  const listTitle = page.getByRole(...ExternalIpsPage.pageTitle);
+  const submitError = page.getByText(...ExternalIpCreatePage.submitError);
+  await expect(listTitle.or(submitError)).toBeVisible({ timeout: 60_000 });
+  if ((await submitError.count()) > 0) {
+    const alert = page
+      .locator('[class*="c-alert"]')
+      .filter({ hasText: ExternalIpCreatePage.submitError[0] })
+      .first();
+    const detail = (await alert.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+    throw new Error(
+      `Creating external IP "${params.name}" failed: ${detail || 'the wizard reported an error'}. ` +
+        'Check that the deployment enables provider networking ' +
+        '(global.networking.provisioningEnabled) and that the pool can allocate.',
+    );
+  }
+};
+
+/** Press Next on an untouched form and verify the wizard blocks with an alert. */
+export const expectExternalIpCreateValidation = async (page: Page): Promise<void> => {
+  await goToNextWizardStep(page);
+  await expect(page.getByText(...ExternalIpCreatePage.validationAlert)).toBeVisible();
+  await expect(page.getByRole(...ExternalIpCreatePage.generalStepTitle)).toBeVisible();
+};
+
+/** Verify the row actions menu offers deletion only, with no edit affordance. */
+export const expectExternalIpHasNoEditAction = async (page: Page, name: string): Promise<void> => {
+  await rowActionsToggle(page, name).click();
+  const menuItems = page.getByRole('menu').getByRole('menuitem');
+  await expect(menuItems).toHaveCount(1);
+  await expect(page.getByRole(...ExternalIpDeleteDialog.deleteMenuItem)).toBeVisible();
+  await expect(page.getByRole('menuitem', { name: /edit/i })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+};
+
+/** Delete an External IP from its list row and wait for the row to disappear. */
+export const deleteExternalIpIfPresent = async (page: Page, name: string): Promise<boolean> => {
+  await waitForExternalIpList(page);
+  if (!(await waitForExternalIpRow(page, name))) {
+    logProgress('external-ip-delete', `External IP "${name}" is already absent.`);
+    return false;
+  }
+
+  logProgress('external-ip-delete', `Deleting external IP "${name}".`);
+  await rowActionsToggle(page, name).click();
+  await page.getByRole(...ExternalIpDeleteDialog.deleteMenuItem).click();
+
+  const dialog = page.locator(...ExternalIpDeleteDialog.dialog);
+  await expect(dialog).toBeVisible();
+  await expect(page.locator(...ExternalIpDeleteDialog.title)).toContainText(`Delete ${name}?`);
+  await expect(page.getByText(...ExternalIpDeleteDialog.warning)).toBeVisible();
+  await page.getByRole(...ExternalIpDeleteDialog.confirmDelete).click();
+  await expect(dialog).toBeHidden({ timeout: 60_000 });
+  await expect(externalIpRow(page, name)).toHaveCount(0, { timeout: 180_000 });
+  return true;
+};
+
+/** Wait until the pool list settles on rows or an empty state. */
+export const waitForExternalIpPoolList = async (page: Page): Promise<void> => {
+  await selectListView(page, 'list-view');
+  await expect
+    .poll(
+      async () => {
+        if ((await externalIpPoolTable(page).count()) > 0) {
+          return 'table';
+        }
+        if ((await page.getByText(...ExternalIpPoolsPage.emptyStateTitle).count()) > 0) {
+          return 'empty';
+        }
+        return 'loading';
+      },
+      { timeout: 30_000, message: 'The External IP pool list did not finish loading.' },
+    )
+    .not.toBe('loading');
+};
+
+/** Create an admin-only External IP pool through the Infrastructure wizard. */
+export const createExternalIpPool = async (
+  page: Page,
+  params: ExternalIpPoolCreateParams,
+): Promise<void> => {
+  logProgress('external-ip-pool-create', `Creating external IP pool "${params.name}".`);
+  const createLink = page.getByRole(...ExternalIpPoolsPage.createPool);
+  await expect(createLink).toBeVisible();
+  await createLink.click();
+  await expect(page.getByRole(...ExternalIpPoolCreatePage.pageTitle)).toBeVisible();
+
+  await page.locator(...ExternalIpPoolCreatePage.name).fill(params.name);
+  await page.locator(...ExternalIpPoolCreatePage.cidr).fill(params.cidr);
+  await page.getByRole(...ExternalIpPoolCreatePage.next).click();
+  await expect(page.getByRole(...ExternalIpPoolCreatePage.submit)).toBeVisible();
+  await page.getByRole(...ExternalIpPoolCreatePage.submit).click();
+  // The wizard lands on the new pool's details page; return to the list so the
+  // caller can assert the row.
+  await expect(page.getByRole(...ExternalIpPoolCreatePage.pageTitle)).toBeHidden({
+    timeout: 60_000,
+  });
+  await openExternalIpPoolListPage(page);
+  await waitForExternalIpPoolList(page);
+};
+
+/** Wait for a pool status, reporting what the row shows on timeout. */
+export const expectExternalIpPoolStatus = async (
+  page: Page,
+  name: string,
+  status: string,
+  timeout = 300_000,
+): Promise<void> => {
+  const row = externalIpPoolRow(page, name);
+  try {
+    await expect(row.getByText(status, { exact: true })).toBeVisible({ timeout });
+  } catch {
+    const observed = (
+      await row
+        .first()
+        .innerText()
+        .catch(() => '')
+    )
+      .replace(/\s+/g, ' ')
+      .trim();
+    throw new Error(
+      `External IP pool "${name}" did not reach status "${status}" within ${timeout / 1_000} seconds. ` +
+        `The row currently reads: "${observed || 'unknown'}".`,
+    );
+  }
+};
+
+/** Verify an External IP pool is absent, failing with a duplicate-pool message. */
+export const expectExternalIpPoolNotListed = async (page: Page, name: string): Promise<void> => {
+  await waitForExternalIpPoolList(page);
+  const row = externalIpPoolRow(page, name);
+  const matchingRows = await row.count();
+  if (matchingRows > 0) {
+    throw new Error(
+      `External IP pool "${name}" already exists (${matchingRows} matching rows). ` +
+        'Delete it, or run with a different OSAC_E2E_INSTANCE.',
+    );
+  }
+};
+
+/**
+ * Delete an External IP pool row when it exists; a missing pool is not an error.
+ * A pool that the provider refuses to delete (for example because a tenant's
+ * `default-nat` address still references it) is reported and retained rather
+ * than failing the run.
+ */
+export const deleteExternalIpPoolIfPresent = async (page: Page, name: string): Promise<boolean> => {
+  await openExternalIpPoolListPage(page);
+  await waitForExternalIpPoolList(page);
+  const row = externalIpPoolRow(page, name);
+  if ((await row.count()) === 0) {
+    logProgress('external-ip-pool-delete', `Pool "${name}" is already absent.`);
+    return false;
+  }
+
+  await rowActionsToggle(page, name).click();
+  await page.getByRole(...ExternalIpPoolsPage.deleteMenuItem).click();
+  const dialog = page.locator(...ExternalIpDeleteDialog.dialog);
+  await expect(dialog).toBeVisible();
+  await expect(page.locator(...ExternalIpDeleteDialog.title)).toContainText(`Delete ${name}?`);
+  await expect(page.getByText(...ExternalIpPoolsPage.deleteWarning)).toBeVisible();
+  await page.getByRole(...ExternalIpPoolsPage.confirmDelete).click();
+
+  const refused = page.getByText(...ExternalIpPoolsPage.deleteError);
+  const outcome = await Promise.race([
+    dialog.waitFor({ state: 'hidden', timeout: 60_000 }).then(() => 'deleted' as const),
+    refused.waitFor({ state: 'visible', timeout: 60_000 }).then(() => 'refused' as const),
+  ]).catch(() => 'timeout' as const);
+
+  if (outcome !== 'deleted') {
+    // The dialog shows the same alert for every mutation error, so the
+    // diagnostic read is bounded and the retention path needs the provider's
+    // own wording; anything else must fail the step.
+    const alert = page
+      .locator('[class*="c-alert"]')
+      .filter({ hasText: ExternalIpPoolsPage.deleteError[0] })
+      .first();
+    const detail = (await alert.innerText({ timeout: 3_000 }).catch(() => ''))
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    await page
+      .getByRole('button', { name: 'Cancel', exact: true })
+      .click({ timeout: 5_000 })
+      .catch(() => {});
+
+    if (allocatedAddressRefusal.test(detail)) {
+      logProgress(
+        'external-ip-pool-delete',
+        `Pool "${name}" was retained (${detail}). ` +
+          'A tenant holding one of its addresses keeps it alive; delete that tenant ' +
+          'first, or delete the pool by hand.',
+      );
+      return false;
+    }
+
+    throw new Error(
+      `Deleting pool "${name}" failed: ` +
+        `${detail || 'the delete did not settle within 60 seconds'}. ` +
+        'Only an allocated-address refusal is a documented retained outcome.',
+    );
+  }
+
+  await expect(row).toHaveCount(0, { timeout: 300_000 });
+  return true;
+};

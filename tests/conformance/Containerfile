@@ -1,5 +1,6 @@
 # Build context: the osac repository root.
 #   podman build -f tests/conformance/Containerfile -t osac-conformance:dev .
+#   docker build -f tests/conformance/Containerfile -t osac-conformance:dev .
 
 FROM registry.k8s.io/kubectl:v1.32.1@sha256:6ae337221866ae69380cfa08e2b38fa113fd5044cfb5b7a7662f5b0028be23b6 AS kubectl
 
@@ -21,12 +22,15 @@ RUN python3 -m pip install --no-cache-dir --prefix=/runtime .
 # The runtime is the minimal UBI 9 Python base, not a builder image.
 FROM registry.access.redhat.com/ubi9/python-312-minimal:latest
 
-# The suite reaches the runner's podman socket, which is owned by the invoking
-# user. Map that user onto the image UID at run time, and mount a results
-# directory that UID can write, for example:
+# The suite reads its own image digest from the container runtime socket. Any
+# runtime that serves the Podman or Docker unix API works; mount the socket and
+# a results directory the image UID can write, for example:
 #   podman run --rm --userns=keep-id:uid=1001,gid=1001 \
 #     -v "$XDG_RUNTIME_DIR/podman/podman.sock:/run/podman/podman.sock" \
 #     -v "$PWD/results:/results" osac-conformance:dev
+#   docker run --rm --user 1001 -v /var/run/docker.sock:/var/run/docker.sock \
+#     -v "$PWD/results:/results" osac-conformance:dev
+# Set OSAC_CONFORMANCE_SUITE_IMAGE_DIGEST to skip the socket lookup entirely.
 # Run as root only to install; the entrypoint runs as UID 1001.
 USER 0
 

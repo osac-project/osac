@@ -53,7 +53,8 @@ def _parser() -> argparse.ArgumentParser:
     parent.add_argument("--results", default="/results")
     parent.add_argument("--catalog", default=str(_DEFAULT_CATALOG))
     parent.add_argument("--tree", default="tests")
-    parent.add_argument("--podman-socket", default="/run/podman/podman.sock")
+    # Omit the flag to discover the Podman or Docker unix socket.
+    parent.add_argument("--runtime-socket", default=None)
 
     parser = _Parser(prog="osac-conformance", add_help=True)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -176,7 +177,7 @@ def _build_runtime(args: argparse.Namespace) -> Runtime:
         results=results,
         redactor=redactor,
         output=OutputSink(results, redactor),
-        suite_image_digest=suite_image_digest(Path(args.podman_socket)),
+        suite_image_digest=suite_image_digest(Path(args.runtime_socket) if args.runtime_socket is not None else None),
     )
 
 

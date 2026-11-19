@@ -15,6 +15,7 @@ from tests.conformance.model import Classification, Result, RunContext, Selector
 from tests.conformance.output import OutputSink
 from tests.conformance.redact import Redactor
 from tests.conformance.selection import compute_plan
+from tests.conformance.testing import make_config
 from tests.conformance.testtree import PytestTestTree
 
 _REDACTION_MARKER_C = "redaction-marker-c"
@@ -89,7 +90,7 @@ def test_collect_reads_markers_into_identities(tmp_path: Path) -> None:
 def test_run_maps_pytest_outcomes_to_conformance_results(tmp_path: Path) -> None:
     tree = PytestTestTree(root=_tree(tmp_path), python=sys.executable)
     plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
-    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=make_config(tmp_path))
 
     outcomes = tree.run(plan, context, keep=False)
 
@@ -107,7 +108,7 @@ def test_captured_test_output_is_redacted_in_evidence(tmp_path: Path) -> None:
     context = RunContext(
         run_id="abcdefgh",
         results_dir=results,
-        config=None,  # type: ignore[arg-type]
+        config=make_config(tmp_path),
         redactor=redactor,
         output=OutputSink(results, redactor),
     )
@@ -150,7 +151,7 @@ def test_teardown_failure_is_reported(tmp_path: Path) -> None:
     )
     tree = PytestTestTree(root=tree_dir, python=sys.executable)
     plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
-    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=make_config(tmp_path))
 
     outcomes = tree.run(plan, context, keep=False)
 
@@ -173,7 +174,7 @@ def test_teardown_skip_is_reported(tmp_path: Path) -> None:
     )
     tree = PytestTestTree(root=tree_dir, python=sys.executable)
     plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
-    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=make_config(tmp_path))
 
     outcomes = tree.run(plan, context, keep=False)
 
@@ -211,7 +212,7 @@ def _one_test_tree(tmp_path: Path) -> PytestTestTree:
 def test_pytest_interrupt_return_code_keeps_completed_outcomes(tmp_path: Path) -> None:
     tree = _one_test_tree(tmp_path)
     plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
-    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=make_config(tmp_path))
     gate = InterruptGate()
     # What the gate does when the operator's first signal reaches the child.
     gate.first = True
@@ -254,7 +255,7 @@ class _SignalingFakeProcess(_FakeProcess):
 def test_signal_during_child_registration_reaches_the_child(tmp_path: Path) -> None:
     tree = _one_test_tree(tmp_path)
     plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
-    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=make_config(tmp_path))
     gate = InterruptGate()
     entry = {"nodeid": "test_ok.py::test_ok", "outcome": "passed", "duration": 0.1, "stdout": "", "stderr": ""}
     process = _SignalingFakeProcess(gate, 0, entries=[entry])
@@ -270,7 +271,7 @@ def test_signal_during_child_registration_reaches_the_child(tmp_path: Path) -> N
 def test_two_signals_during_child_registration_kill_and_reap_the_child(tmp_path: Path) -> None:
     tree = _one_test_tree(tmp_path)
     plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
-    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=make_config(tmp_path))
     gate = InterruptGate()
     process = _SignalingFakeProcess(gate, 0, signal_count=2)
     tree.popen = process  # type: ignore[assignment]
@@ -288,7 +289,7 @@ def test_two_signals_during_child_registration_kill_and_reap_the_child(tmp_path:
 def test_signal_after_pytest_exits_keeps_completed_outcomes(tmp_path: Path) -> None:
     tree = _one_test_tree(tmp_path)
     plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
-    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=make_config(tmp_path))
     gate = InterruptGate()
     entry = {"nodeid": "test_ok.py::test_ok", "outcome": "passed", "duration": 0.1, "stdout": "", "stderr": ""}
     process = _FakeProcess(0, entries=[entry])
@@ -312,7 +313,7 @@ def test_signal_after_pytest_exits_keeps_completed_outcomes(tmp_path: Path) -> N
 def test_pytest_process_errors_are_config_errors(tmp_path: Path, returncode: int) -> None:
     tree = _one_test_tree(tmp_path)
     plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
-    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=make_config(tmp_path))
     tree.popen = _FakeProcess(returncode, stderr="boom")  # type: ignore[assignment]
 
     with pytest.raises(ConfigError, match=f"pytest exited {returncode}"):
@@ -322,7 +323,7 @@ def test_pytest_process_errors_are_config_errors(tmp_path: Path, returncode: int
 def test_execution_side_collection_error_is_a_config_error(tmp_path: Path) -> None:
     tree = _one_test_tree(tmp_path)
     plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
-    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=make_config(tmp_path))
     # pytest exits 2 for a module that fails to import during execution, which is
     # a configuration error, not user cancellation.
     tree.popen = _FakeProcess(2, stderr="ImportError while importing test module")  # type: ignore[assignment]
@@ -337,7 +338,7 @@ def test_execution_side_collection_error_is_a_config_error(tmp_path: Path) -> No
 def test_a_child_killed_by_the_forwarded_signal_is_an_interrupt(tmp_path: Path) -> None:
     tree = _one_test_tree(tmp_path)
     plan = compute_plan(tree.collect(), [Selector("generic", "marker", ("conformance_generic",))])
-    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=None)  # type: ignore[arg-type]
+    context = RunContext(run_id="abcdefgh", results_dir=tmp_path / "results", config=make_config(tmp_path))
     gate = InterruptGate()
     gate.first = True
     # pytest died from SIGINT before it could install its own handler.
@@ -366,7 +367,7 @@ def test_captured_logging_reaches_the_redacted_evidence_log(tmp_path: Path) -> N
     context = RunContext(
         run_id="abcdefgh",
         results_dir=results,
-        config=None,  # type: ignore[arg-type]
+        config=make_config(tmp_path),
         redactor=redactor,
         output=OutputSink(results, redactor),
     )

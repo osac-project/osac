@@ -7,6 +7,7 @@ from pathlib import Path
 from tests.conformance.diagnostics import DiagnosticsCollector
 from tests.conformance.model import RunContext
 from tests.conformance.redact import Redactor
+from tests.conformance.testing import make_config
 
 _REDACTION_MARKER = "redaction-marker"
 _REDACTION_MARKER_B = "redaction-marker-b"
@@ -45,7 +46,7 @@ def test_diagnostics_writes_redacted_control_plane_state(tmp_path: Path) -> None
     context = RunContext(
         run_id="abcdefgh",
         results_dir=tmp_path,
-        config=None,  # type: ignore[arg-type]
+        config=make_config(tmp_path),
         tenant="osac-conformance-abcdefgh",
         redactor=Redactor(secrets=(_REDACTION_MARKER,)),
     )
@@ -73,7 +74,7 @@ def test_a_failed_diagnostics_command_is_redacted(tmp_path: Path) -> None:
     context = RunContext(
         run_id="abcdefgh",
         results_dir=tmp_path,
-        config=None,  # type: ignore[arg-type]
+        config=make_config(tmp_path),
         redactor=Redactor(secrets=(_REDACTION_MARKER,)),
     )
 
@@ -83,3 +84,23 @@ def test_a_failed_diagnostics_command_is_redacted(tmp_path: Path) -> None:
         content = (path / name).read_text()
         assert _REDACTION_MARKER not in content
         assert "diagnostics command failed" in content
+
+
+def test_diagnostics_use_the_configured_namespace(tmp_path: Path) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(*args: str, timeout: int = 300) -> str:
+        calls.append(args)
+        return ""
+
+    context = RunContext(
+        run_id="abcdefgh",
+        results_dir=tmp_path,
+        config=make_config(tmp_path, namespace="osac-e2e-ci"),
+        redactor=Redactor(),
+    )
+
+    DiagnosticsCollector(run_command=fake_run).collect(context, None)
+
+    namespaces = [call[call.index("-n") + 1] for call in calls if "-n" in call]
+    assert namespaces == ["osac-e2e-ci", "osac-e2e-ci"]

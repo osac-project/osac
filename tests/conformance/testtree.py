@@ -66,8 +66,7 @@ class PytestTestTree:
         env = self._env("OSAC_CONFORMANCE_RESULTS", results_path)
         env["OSAC_CONFORMANCE_RUN_ID"] = context.run_id
         env["OSAC_CONFORMANCE_RESULTS_DIR"] = str(context.results_dir)
-        if context.config is not None:
-            env["OSAC_CONFORMANCE_CONFIG"] = str(context.config.path)
+        env["OSAC_CONFORMANCE_CONFIG"] = str(context.config.path)
         if context.tenant:
             env["OSAC_CONFORMANCE_TENANT"] = context.tenant
         return env

@@ -370,6 +370,10 @@ aap:
       secret: {}
       # secret:
       #   NETRIS_PASSWORD: ""
+    storageFulfillment:
+      enabled: false
+      # Applies to TLS validation in storage-workflow Ansible clients only.
+      enable_certificate_validation: true
     publishTemplates:
       enabled: true
       config:

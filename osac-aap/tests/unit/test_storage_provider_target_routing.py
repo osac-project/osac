@@ -135,7 +135,12 @@ def run_native_csi_dispatch(tmp_path: Path) -> list[dict[str, object]]:
                             "vars": {
                                 "storage_provider_action": "ensure_csi_driver",
                                 "storage_provider_tiers": [
-                                    {"name": "fast-block", "protocol": "block", "provider": "netapp"}
+                                    {
+                                        "name": "fast-block",
+                                        "protocol": "block",
+                                        "provider": "netapp",
+                                        "backend_id": "netapp-backend",
+                                    }
                                 ],
                                 "storage_provider_target_kubeconfig": "/fixture/workload.kubeconfig",
                                 "storage_provider_target_kubeconfig_insecure": False,
@@ -208,7 +213,12 @@ def run_dispatches(tmp_path, targets, remote_env="", provider="lvms", module_opt
                 "vars": {
                     "storage_provider_action": "ensure_storage_class",
                     "storage_provider_tiers": [
-                        {"name": "fast", "protocol": "block", "provider": provider, "backend_id": f"{provider}-backend-1"}
+                        {
+                            "name": "fast",
+                            "protocol": "block",
+                            "provider": provider,
+                            "backend_id": f"{provider}-backend-1",
+                        }
                     ],
                     **target,
                 },

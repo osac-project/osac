@@ -109,7 +109,7 @@ def collect_jobs(
 def summarize_suite(group: str, name: str, jobs: list[dict[str, Any]], expected: int | None) -> dict[str, Any]:
     counts = Counter(job["conclusion"] for job in jobs)
     passed, failed = counts["success"], counts["failure"]
-    other = len(jobs) - passed - failed
+    other = len(jobs) - passed - failed - counts["cancelled"]
     missing = None
     if expected is not None:
         observed_iterations = {job["iteration"] for job in jobs if job["iteration"] <= expected}
@@ -163,7 +163,7 @@ def aggregate(
     elif (
         expected
         and run["conclusion"] == "failure"
-        and not any(suite["failed"] or suite["incomplete"] for suite in suites)
+        and not any(suite["failed"] or suite["outcomes"].get("cancelled") or suite["incomplete"] for suite in suites)
     ):
         issues.append("Campaign failed although every expected component job passed.")
     if issues or any(suite["other"] or suite["missing"] for suite in suites):
@@ -192,10 +192,14 @@ def result_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     missing = None
     if rows and all(row["missing"] is not None for row in rows):
         missing = sum(row["missing"] for row in rows)
-    other_outcomes = {outcome: count for outcome, count in outcomes.items() if outcome not in ("success", "failure")}
+    other_outcomes = {
+        outcome: count for outcome, count in outcomes.items() if outcome not in ("success", "failure", "cancelled")
+    }
     return {
         "executions": executions,
+        "completed": outcomes["success"] + outcomes["failure"],
         "failed": outcomes["failure"],
+        "cancelled": outcomes["cancelled"],
         "affected": sum(bool(row["failed"] or row["other"] or row["missing"]) for row in rows),
         "missing": missing,
         "other_outcomes": other_outcomes,
@@ -205,23 +209,29 @@ def result_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def format_overall_failure_risk(report: dict[str, Any]) -> str:
     """Combine complete suite failure rates, assuming independent outcomes."""
-    if report["status"] == "incomplete" or not result_summary(report["suites"])["complete"]:
+    if (
+        report["status"] == "incomplete"
+        or not result_summary(report["suites"])["complete"]
+        or any(not (suite["passed"] + suite["failed"]) for suite in report["suites"])
+    ):
         return "Unavailable"
     risk = 1 - math.prod(1 - suite["failed"] / (suite["passed"] + suite["failed"]) for suite in report["suites"])
     return f"{risk:.1%}"
 
 
 def format_failure_rate(summary: dict[str, Any], *, compact: bool = False) -> str:
-    if not summary["executions"]:
+    if not summary["completed"]:
         return "unknown"
     if not summary["failed"]:
         return "0%"
-    percentage = summary["failed"] / summary["executions"] * 100
+    percentage = summary["failed"] / summary["completed"] * 100
     return f"{round(percentage, 1):g}%" if compact else f"{percentage:.1f}%"
 
 
 def format_result_notes(summary: dict[str, Any]) -> str:
     notes = [f"{count} {outcome.replace('_', ' ')}" for outcome, count in sorted(summary["other_outcomes"].items())]
+    if summary["cancelled"]:
+        notes.insert(0, f"{summary['cancelled']} cancelled")
     missing = summary["missing"]
     if missing != 0:
         notes.append(f"missing {missing if missing is not None else 'unknown'}")
@@ -262,7 +272,7 @@ def report_status(report: dict[str, Any]) -> str:
 
 
 def report_header(report: dict[str, Any]) -> str:
-    failed = any(suite["failed"] for suite in report["suites"])
+    failed = any(suite["failed"] or suite["outcomes"].get("cancelled") for suite in report["suites"])
     icon = status_icon(failed, report["status"] == "incomplete")
     return f"{icon} *OSAC Weekly Test Stability* | {campaign_date(report['run'])}"
 
@@ -314,17 +324,17 @@ def render_suite_table(report: dict[str, Any]) -> list[str]:
         "Percentages are calculated per suite.",
     ]
     for title, suites in grouped_suites(report):
-        lines.extend(["", f"### {title}", "", "| Suite | Failed / Recorded | Failure rate |", "|---|---:|---:|"])
+        lines.extend(["", f"### {title}", "", "| Suite | Failed / Completed | Failure rate |", "|---|---:|---:|"])
         for suite in suites:
             summary = result_summary([suite])
-            icon = status_icon(bool(summary["failed"]), not summary["complete"])
+            icon = status_icon(bool(summary["failed"] or summary["cancelled"]), not summary["complete"])
             rate = format_failure_rate(summary)
             if suite["failed"]:
                 rate = f"**{rate}**"
             notes = format_result_notes(summary)
             extra = f" · {notes}" if notes else ""
             lines.append(
-                f"| {icon} {suite_name(suite)} | {suite['failed']:,} / {summary['executions']:,} | {rate}{extra} |"
+                f"| {icon} {suite_name(suite)} | {suite['failed']:,} / {summary['completed']:,} | {rate}{extra} |"
             )
     return lines
 
@@ -332,6 +342,7 @@ def render_suite_table(report: dict[str, Any]) -> list[str]:
 def render_execution_tables(report: dict[str, Any]) -> list[str]:
     failed_rows = []
     incomplete_rows = []
+    cancelled_rows = []
     failed_suites = set()
     for _, suites in grouped_suites(report):
         for suite in suites:
@@ -353,6 +364,8 @@ def render_execution_tables(report: dict[str, Any]) -> list[str]:
                 if failed:
                     failed_rows.append(row)
                     failed_suites.add((suite["group"], suite["suite"]))
+                elif execution["conclusion"] == "cancelled":
+                    cancelled_rows.append(row)
                 else:
                     incomplete_rows.append(row)
     lines = ["## Failed executions", ""]
@@ -371,6 +384,17 @@ def render_execution_tables(report: dict[str, Any]) -> list[str]:
         )
     else:
         lines.append("No failed executions recorded.")
+    if cancelled_rows:
+        lines.extend(
+            [
+                "",
+                "## Cancelled executions",
+                "",
+                "| Suite | Execution | Job and outcome | Artifacts |",
+                "|---|---:|---|---|",
+                *cancelled_rows,
+            ]
+        )
     if incomplete_rows:
         lines.extend(
             [
@@ -388,7 +412,7 @@ def render_execution_tables(report: dict[str, Any]) -> list[str]:
 def render_markdown(report: dict[str, Any]) -> str:
     run = report["run"]
     overall = result_summary(report["suites"])
-    icon = status_icon(bool(overall["failed"]), report["status"] == "incomplete")
+    icon = status_icon(bool(overall["failed"] or overall["cancelled"]), report["status"] == "incomplete")
     lines = [
         "# Weekly Test Stability Report",
         "",
@@ -408,6 +432,8 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "Overall failure risk is calculated from observed suite failure rates using "
         "`1 - product(1 - suite failure rate)`, assuming independent suite outcomes. "
+        "Failure rates use completed executions (success + failure), excluding cancellations. "
+        "Risk is unavailable if any suite has no completed executions. "
         "Zero observed failures do not establish zero future risk.",
     ]
     if report["issues"]:
@@ -422,7 +448,7 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 def slack_group_summary(title: str, suites: list[dict[str, Any]]) -> str:
     summary = result_summary(suites)
-    if summary["complete"] and not summary["failed"]:
+    if summary["complete"] and not (summary["failed"] or summary["cancelled"]):
         noun = "suite" if len(suites) == 1 else "suites"
         return f"*{title}* - {PASSED_ICON} All {len(suites)} {noun} passed"
 
@@ -430,17 +456,20 @@ def slack_group_summary(title: str, suites: list[dict[str, Any]]) -> str:
     clean_count = 0
     for suite in suites:
         result = result_summary([suite])
-        if result["complete"] and not result["failed"]:
+        if result["complete"] and not (result["failed"] or result["cancelled"]):
             clean_count += 1
             continue
-        icon = status_icon(bool(result["failed"]), not result["complete"])
+        icon = status_icon(bool(result["failed"] or result["cancelled"]), not result["complete"])
         rate = format_failure_rate(result, compact=True)
-        notes = format_result_notes(result)
+        notes = format_result_notes(result | {"cancelled": 0})
         extra = f" · {notes}" if notes else ""
-        lines.append(
-            f"- {icon} {suite_name(suite, slack=True)}: "
-            f"{result['failed']:,}/{result['executions']:,} executions failed ({rate}){extra}"
-        )
+        if result["cancelled"] and not result["failed"]:
+            outcome = f"{result['cancelled']:,}/{result['executions']:,} executions cancelled."
+        else:
+            outcome = f"{result['failed']:,}/{result['completed']:,} executions failed ({rate})"
+            if result["cancelled"]:
+                outcome += f", {result['cancelled']:,} cancelled."
+        lines.append(f"- {icon} {suite_name(suite, slack=True)}: {outcome}{extra}")
     if clean_count:
         noun = "suite" if clean_count == 1 else "suites"
         lines.append(f"- {PASSED_ICON} All other {clean_count} {noun} passed")

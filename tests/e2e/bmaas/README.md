@@ -35,8 +35,8 @@ single cluster can be tested against either backend. The abstraction covers
 the inventory layer only (free-host counts, the claim and
 release of inventory hosts): once the inventory allocates a host, the
 operator hands over to BMH/metal3 in every mode — the BMI's externalHostID
-names the BMH (on netbox the operator derives `netbox-<device-id>` and
-creates it). All provisioning assertions (provisioned state, image URL,
+names the BMH (on netbox the bare-metal-fulfillment operator derives
+`netbox-<device-id>` and creates it on the fly). All provisioning assertions (provisioned state, image URL,
 consumerRef, online, power on/off, inspected NICs) therefore run against the
 BMH exactly as on a metal3-only cluster. The networking regression is
 metal3-specific and does not route.

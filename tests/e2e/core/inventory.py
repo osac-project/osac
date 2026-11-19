@@ -8,7 +8,8 @@ Two layers are kept apart:
   BareMetalHosts; netbox's is the pool of ``osac_managed`` dcim.device
   records.
 - **Provisioning** (shared, backend-agnostic): once the inventory allocates a
-  host, the operator hands over to BMH/metal3 in every mode — the BMI's
+  host, the bare-metal-fulfillment operator hands over to BMH/metal3 in every
+  mode — the BMI's
   ``spec.externalHostID`` is the namespace-qualified BMH name (on netbox the
   operator derives it from the device id as ``netbox-<id>`` and creates that
   BMH). All provisioning assertions (provisioned state, image URL,
@@ -72,8 +73,9 @@ class NetBoxSettings:
     # http://-scheme permission, not a TLS-verification switch (the operator's
     # netboxclient keeps certificate verification enabled either way).
     skip_tls_verify: bool
-    # Best-effort from osac-management-config: the namespace the operator
-    # places BMHs in (valid in metal3 and netbox mode). Empty when the Secret
+    # Best-effort from osac-management-config: the namespace the
+    # bare-metal-fulfillment operator places BMHs in (valid in metal3 and
+    # netbox mode). Empty when the Secret
     # is absent — used only to cross-check externalHostID, never required.
     bmh_namespace: str
 
@@ -101,8 +103,8 @@ class InventoryBackend(Protocol):
         """Return the host selector for the suite's auto-created instance type.
 
         metal3: keys match BMH labels (osac.openshift.io/host-type). netbox:
-        keys must be valid device custom-field names, since the operator
-        queries them as cf_<key>.
+        keys must be valid device custom-field names, since the
+        bare-metal-fulfillment operator queries them as cf_<key>.
         """
         ...
 
@@ -178,11 +180,11 @@ class NetBoxInventory:
     """netbox backend: OSAC-managed dcim.device records are the inventory.
 
     Claim: status ``active`` + ``osac_instance_id`` set (netbox-specific).
-    Handover: the operator derives ``netbox-<device-id>`` from the device id,
-    records it in the BMI's externalHostID and creates that BMH — so all
-    provisioning assertions use the shared BMH helpers.
-    Release: the operator deletes that BMH and restores the device to
-    ``staged``.
+    Handover: the bare-metal-fulfillment operator derives
+    ``netbox-<device-id>`` from the device id, records it in the BMI's
+    externalHostID and creates that BMH on the fly — so all provisioning
+    assertions use the shared BMH helpers.
+    Release: it deletes that BMH and restores the device to ``staged``.
     """
 
     def __init__(self, *, k8s: K8sClient, netbox: NetBoxClient, bmh_namespace: str = "") -> None:
@@ -231,7 +233,8 @@ class NetBoxInventory:
 
     def default_host_selector(self) -> dict[str, str]:
         # The netbox equivalent of the BMH host-type label: a capability
-        # custom field the operator queries as cf_host_type. The provider
+        # custom field the bare-metal-fulfillment operator queries as
+        # cf_host_type. The provider
         # reconcile stamps it on every staged device, the same way the infra
         # backend labels BMHs for metal3.
         return {"host_type": "default"}
@@ -391,8 +394,9 @@ def netbox_settings_from_bmf(*, k8s: K8sClient, namespace: str) -> NetBoxSetting
         ca_data = _optional_secret_data(k8s, namespace=namespace, name=_NETBOX_CA_SECRET)
         ca_pem = ca_data.get(_NETBOX_CA_KEY)
 
-    # Best-effort cross-check source: the namespace the operator places BMHs
-    # in (options.metal3.namespace, valid in metal3 and netbox mode). Absent
+    # Best-effort cross-check source: the namespace the
+    # bare-metal-fulfillment operator places BMHs in (options.metal3.namespace,
+    # valid in metal3 and netbox mode). Absent
     # just skips the externalHostID namespace check.
     bmh_namespace = ""
     management_data = _optional_secret_data(k8s, namespace=namespace, name=_MANAGEMENT_CONFIG_SECRET)

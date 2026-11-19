@@ -538,9 +538,9 @@ WantedBy=multi-user.target
 
 const workerNetworkConfigSystemdUnit = `[Unit]
 Description=OSAC CaaS worker tenant network configuration
-Wants=network-online.target
-After=network-online.target
-Before=osac-registry-probe.service
+Wants=NetworkManager.service
+After=NetworkManager.service
+Before=network-online.target osac-registry-probe.service
 
 [Service]
 Type=oneshot

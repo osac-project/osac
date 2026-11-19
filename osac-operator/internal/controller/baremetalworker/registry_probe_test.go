@@ -246,6 +246,8 @@ var _ = Describe("CaaS worker registry probe", func() {
 		networkUnit := units[0].(map[string]any)
 		Expect(networkUnit[jsonNameField]).To(Equal("osac-worker-network-config.service"))
 		Expect(networkUnit["contents"]).To(ContainSubstring("WantedBy=multi-user.target"))
+		Expect(networkUnit["contents"]).To(ContainSubstring("After=NetworkManager.service"))
+		Expect(networkUnit["contents"]).To(ContainSubstring("Before=network-online.target"))
 		unit := units[1].(map[string]any)
 		Expect(unit[jsonNameField]).To(Equal("osac-registry-probe.service"))
 		Expect(unit["contents"]).To(ContainSubstring("After=network-online.target osac-worker-network-config.service"))

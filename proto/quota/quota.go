@@ -419,6 +419,13 @@ func newKind(
 	where := fmt.Sprintf("kind '%s'", kind.Name)
 
 	if messageOptions != nil {
+		// An option that names no dimension and links no parent describes nothing: the
+		// kind would register, price zero and mislead a reader into thinking it rated.
+		if messageOptions.GetDimension() == "" && messageOptions.GetCreatedFor() == nil {
+			return nil, fmt.Errorf(
+				"%s sets a quota message option that names no dimension and links no parent", where,
+			)
+		}
 		if messageOptions.GetDimension() != "" {
 			if err := validateDimension(message, messageOptions.GetDimension(), where); err != nil {
 				return nil, err
@@ -728,6 +735,11 @@ func newCreatedFor(
 		if createdFor.Parent == "" {
 			return nil, fmt.Errorf("%s links by name but names no parent kind", where)
 		}
+		// A prefix without the parent's identifier names every child the same way, so
+		// the link cannot tell one parent's children from another's:
+		if !strings.Contains(createdFor.NamePrefix, "{parent}") {
+			return nil, fmt.Errorf("%s links by a name prefix that carries no {parent}", where)
+		}
 	case labelLink:
 		if createdFor.IDLabel == "" || createdFor.KindLabel == "" {
 			return nil, fmt.Errorf("%s links by labels but names only one of them", where)
@@ -749,11 +761,17 @@ func newCreatedFor(
 // checkCreatesCycles rejects annotations whose creates would recurse: a kind creating
 // resources of a kind that creates resources of the first kind again would price forever.
 func checkCreatesCycles(kinds []Kind) error {
-	creates := map[string][]string{}
+	// Pricing recurses over two kinds of edges: a creates field prices each planned
+	// child, and a through field prices the row the reference resolves to. A cycle over
+	// either mix recurses until the stack is exhausted, so the check walks both.
+	edges := map[string][]string{}
 	for _, kind := range kinds {
 		for _, field := range kind.Fields {
 			if field.Creates != nil {
-				creates[kind.Name] = append(creates[kind.Name], field.Creates.Kind)
+				edges[kind.Name] = append(edges[kind.Name], field.Creates.Kind)
+			}
+			if field.Through != "" {
+				edges[kind.Name] = append(edges[kind.Name], field.Through)
 			}
 		}
 	}
@@ -771,7 +789,7 @@ func checkCreatesCycles(kinds []Kind) error {
 			return fmt.Errorf("creates a cycle: %s", strings.Join(slices.Concat(path, []string{kind}), " -> "))
 		}
 		state[kind] = visiting
-		for _, next := range creates[kind] {
+		for _, next := range edges[kind] {
 			if err := visit(next, slices.Concat(path, []string{kind})); err != nil {
 				return err
 			}
@@ -779,7 +797,7 @@ func checkCreatesCycles(kinds []Kind) error {
 		state[kind] = done
 		return nil
 	}
-	for _, name := range sortedKeys(creates) {
+	for _, name := range sortedKeys(edges) {
 		if err := visit(name, nil); err != nil {
 			return err
 		}
@@ -880,6 +898,11 @@ func assignable(target, source protoreflect.FieldDescriptor) bool {
 	}
 	if target.Kind() == protoreflect.MessageKind {
 		return target.Message().FullName() == source.Message().FullName()
+	}
+	if target.Kind() == protoreflect.EnumKind {
+		// The copy moves the number, not the meaning: number 1 can be FAST in one enum
+		// and ARCHIVE in another, so the plan must not relabel it.
+		return target.Enum().FullName() == source.Enum().FullName()
 	}
 	return true
 }

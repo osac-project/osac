@@ -140,7 +140,9 @@ func priceOf(
 		if err != nil {
 			return nil, nil, fmt.Errorf("kind '%s': %w", kind.Name, err)
 		}
-		dimensions[dimension]++
+		if err := addDimension(dimensions, dimension, 1); err != nil {
+			return nil, nil, fmt.Errorf("kind '%s': %w", kind.Name, err)
+		}
 	}
 
 	for _, field := range kind.Fields {
@@ -162,6 +164,20 @@ func priceOf(
 	return dimensions, creates, nil
 }
 
+// addDimension adds amount to the dimension's total and fails the price when the sum
+// cannot fit in an int64: a wrapped negative amount would drop out of the check's added
+// map, which keeps only positive amounts, and let a request past its limit.
+func addDimension(dimensions map[string]int64, dimension string, amount int64) error {
+	sum := dimensions[dimension] + amount
+	if (amount > 0 && sum < dimensions[dimension]) || (amount < 0 && sum > dimensions[dimension]) {
+		return fmt.Errorf(
+			"dimension '%s' overflows: %d and %d don't fit", dimension, dimensions[dimension], amount,
+		)
+	}
+	dimensions[dimension] = sum
+	return nil
+}
+
 // addFieldDimension adds the value of an annotated field to its dimension.
 func addFieldDimension(dimensions map[string]int64, message protoreflect.Message, field Field) error {
 	value, _, ok, err := navigate(message, field.Path)
@@ -172,7 +188,9 @@ func addFieldDimension(dimensions map[string]int64, message protoreflect.Message
 	if err != nil {
 		return fmt.Errorf("field '%s': %w", field.Path, err)
 	}
-	dimensions[dimension] += value.Int()
+	if err := addDimension(dimensions, dimension, value.Int()); err != nil {
+		return fmt.Errorf("field '%s': %w", field.Path, err)
+	}
 	return nil
 }
 
@@ -303,7 +321,18 @@ func addCreates(
 			return nil, err
 		}
 		for dimension, amount := range createdDimensions {
-			dimensions[dimension] += amount * int64(count)
+			// A count such as a node set's size is caller-supplied and unbounded, so
+			// the product can overflow int64: a wrapped negative amount would drop out
+			// of the check's added map and let the request past its limit.
+			total := amount * int64(count)
+			if amount != 0 && total/amount != int64(count) {
+				return nil, fmt.Errorf(
+					"dimension '%s' overflows: %d resources of %d each", dimension, count, amount,
+				)
+			}
+			if err := addDimension(dimensions, dimension, total); err != nil {
+				return nil, err
+			}
 		}
 		create.Count = count
 		planned = append(planned, create)

@@ -14,6 +14,7 @@ specific language governing permissions and limitations under the License.
 package quota
 
 import (
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -556,6 +557,11 @@ func TestPriceUnknownType(t *testing.T) {
 // TestPriceReferencesById checks that a type reference given by id only prices: references
 // are id-or-name with id winning everywhere else in the service, and a create the servers
 // accept must not fail pricing because it names no type.
+// TestPriceReferencesById prices references that carry only an id. A set path that reads
+// such a reference's name resolves the row through the type lookup, which only knows
+// quota kinds: the fake below models one. Production storage tiers are no quota kind, so
+// no tier row resolves here; the servers' fill-in stores both the row's id and its name
+// on every disk tier reference before the check runs, which the next test pins.
 func TestPriceReferencesById(t *testing.T) {
 	types := fakeTypes{
 		"InstanceType/it-id": instanceType("gpu-2", 8, 32, nil).ProtoReflect(),
@@ -831,7 +837,23 @@ func quotaField(options *privatev1.QuotaFieldOptions) *descriptorpb.FieldOptions
 // link that carries a name prefix or labels, a bool creates that sets fields, a
 // repeated bool field that creates, a through reference or field link whose reference
 // carries a repeated id, a larger_of path over a repeated reference, a creates that
-// counts fields of items that aren't messages, and creates that cycle.
+// counts fields of items that aren't messages, creates that cycle directly or through a
+// through edge, an empty quota message option, a name link whose prefix carries no
+// parent, and a set mapping between different enums.
+// TestAddDimensionOverflow checks that a dimension total which cannot fit in an int64
+// fails the price instead of wrapping: a wrapped negative amount would drop out of the
+// check's added map, which keeps only positive amounts, and let a request past its limit.
+func TestAddDimensionOverflow(t *testing.T) {
+	dimensions := map[string]int64{"test.count": math.MaxInt64}
+	err := addDimension(dimensions, "test.count", 1)
+	if err == nil || !strings.Contains(err.Error(), "overflows") {
+		t.Fatalf("expected the overflowing addition to fail, got %v", err)
+	}
+	if dimensions["test.count"] != math.MaxInt64 {
+		t.Fatalf("the failed addition must leave the total unchanged, got %d", dimensions["test.count"])
+	}
+}
+
 func TestKindsRejectsInvalidAnnotations(t *testing.T) {
 	withMessageOptions := func(
 		messages []*descriptorpb.DescriptorProto, options *privatev1.QuotaMessageOptions,
@@ -845,6 +867,7 @@ func TestKindsRejectsInvalidAnnotations(t *testing.T) {
 	cases := []struct {
 		name     string
 		messages []*descriptorpb.DescriptorProto
+		enums    []*descriptorpb.EnumDescriptorProto
 		contains string
 	}{
 		{
@@ -1151,10 +1174,84 @@ func TestKindsRejectsInvalidAnnotations(t *testing.T) {
 						})))...),
 			contains: "creates a cycle",
 		},
+		{
+			name: "a creates and through cycle",
+			messages: append(append(ratedResource("FirstResource",
+				fieldDesc("makes_second", 1, descriptorpb.FieldDescriptorProto_TYPE_BOOL, "",
+					quotaField(&privatev1.QuotaFieldOptions{
+						Creates: &privatev1.QuotaCreatesOptions{Kind: "SecondResource", Count: 1},
+					}))),
+				ratedResource("SecondResource",
+					fieldDesc("first", 1, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+						".osac.private.v1.RatedResourceParent",
+						quotaField(&privatev1.QuotaFieldOptions{Through: "FirstResource"})))...),
+				&descriptorpb.DescriptorProto{
+					Name: proto.String("RatedResourceParent"),
+					Field: []*descriptorpb.FieldDescriptorProto{
+						fieldDesc("id", 1, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
+						fieldDesc("name", 2, descriptorpb.FieldDescriptorProto_TYPE_STRING, "", nil),
+					},
+				}),
+			contains: "creates a cycle",
+		},
+		{
+			name: "an empty quota message option",
+			messages: withMessageOptions(ratedResource("RatedResource"),
+				&privatev1.QuotaMessageOptions{}),
+			contains: "names no dimension and links no parent",
+		},
+		{
+			name: "a name link whose prefix carries no parent",
+			messages: withMessageOptions(ratedResource("RatedResource"),
+				&privatev1.QuotaMessageOptions{CreatedFor: &privatev1.QuotaCreatedForOptions{
+					Parent:     "RatedResource",
+					NamePrefix: "rr-",
+				}}),
+			contains: "no {parent}",
+		},
+		{
+			name: "a set mapping between different enums",
+			enums: []*descriptorpb.EnumDescriptorProto{
+				{
+					Name: proto.String("SourceEnum"),
+					Value: []*descriptorpb.EnumValueDescriptorProto{
+						{Name: proto.String("SOURCE_UNSET"), Number: proto.Int32(0)},
+						{Name: proto.String("FAST"), Number: proto.Int32(1)},
+					},
+				},
+				{
+					Name: proto.String("TargetEnum"),
+					Value: []*descriptorpb.EnumValueDescriptorProto{
+						{Name: proto.String("TARGET_UNSET"), Number: proto.Int32(0)},
+						{Name: proto.String("ARCHIVE"), Number: proto.Int32(1)},
+					},
+				},
+			},
+			messages: append(append(ratedResource("RatedResource",
+				fieldDesc("disk", 1, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+					".osac.private.v1.RatedDisk",
+					quotaField(&privatev1.QuotaFieldOptions{
+						Creates: &privatev1.QuotaCreatesOptions{
+							Kind: "OtherResource",
+							Set:  map[string]string{"spec.tier": "speed"},
+						},
+					}))),
+				&descriptorpb.DescriptorProto{
+					Name: proto.String("RatedDisk"),
+					Field: []*descriptorpb.FieldDescriptorProto{
+						fieldDesc("speed", 1, descriptorpb.FieldDescriptorProto_TYPE_ENUM,
+							".osac.private.v1.SourceEnum", nil),
+					},
+				}),
+				ratedResource("OtherResource",
+					fieldDesc("tier", 1, descriptorpb.FieldDescriptorProto_TYPE_ENUM,
+						".osac.private.v1.TargetEnum", nil))...),
+			contains: "doesn't fit",
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, _, err := kindsOf(syntheticRegistry(t, testCase.messages))
+			_, _, err := kindsOf(syntheticRegistryWithEnums(t, testCase.messages, testCase.enums))
 			if err == nil {
 				t.Fatal("the invalid annotation must fail validation")
 			}
@@ -1275,12 +1372,21 @@ func ratedResource(
 // syntheticRegistry builds a registry of one synthetic proto file of the private package,
 // so validation runs against annotations the real protos don't carry.
 func syntheticRegistry(t *testing.T, messages []*descriptorpb.DescriptorProto) *protoregistry.Files {
+	return syntheticRegistryWithEnums(t, messages, nil)
+}
+
+// syntheticRegistryWithEnums also places enum types in the synthetic proto file, for
+// cases whose fields read them.
+func syntheticRegistryWithEnums(
+	t *testing.T, messages []*descriptorpb.DescriptorProto, enums []*descriptorpb.EnumDescriptorProto,
+) *protoregistry.Files {
 	t.Helper()
 	file, err := protodesc.NewFile(&descriptorpb.FileDescriptorProto{
 		Name:        proto.String("osac/private/v1/synthetic_registry_test.proto"),
 		Package:     proto.String("osac.private.v1"),
 		Syntax:      proto.String("proto3"),
 		MessageType: messages,
+		EnumType:    enums,
 	}, nil)
 	if err != nil {
 		t.Fatalf("building the synthetic proto: %v", err)

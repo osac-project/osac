@@ -666,6 +666,28 @@ func TestPriceReferencesById(t *testing.T) {
 			t.Fatalf("the planned volume carries the supplied tier name, got %#v", volumes)
 		}
 	})
+
+	t.Run("a set path that resolves an id of a row no quota kind maps fails the price", func(t *testing.T) {
+		// A storage tier is no quota kind, so no type lookup can resolve its rows: an
+		// id-only reference, whose name the price would have to look up, fails. This
+		// pins why the both-set case must read the supplied name instead.
+		instance := &privatev1.ComputeInstance{
+			Spec: &privatev1.ComputeInstanceSpec{
+				BootDisk: &privatev1.ComputeInstanceDisk{
+					SizeGib:     proto.Int32(100),
+					StorageTier: &privatev1.StorageTierReference{Id: "tier-id"},
+				},
+				InstanceType: &privatev1.InstanceTypeReference{Id: "it-id"},
+			},
+		}
+		withoutTiers := fakeTypes{
+			"InstanceType/it-id": types["InstanceType/it-id"],
+		}
+		_, err := Price(instance.ProtoReflect(), withoutTiers)
+		if err == nil || !strings.Contains(err.Error(), "which the lookup doesn't know") {
+			t.Fatalf("expected the id-only tier reference to fail the price, got %v", err)
+		}
+	})
 }
 
 // TestPriceLargeNodeSet checks that a huge count prices one planned message times the

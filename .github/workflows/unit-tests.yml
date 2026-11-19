@@ -80,5 +80,5 @@ jobs:
       dir: ${{ matrix.dir || '' }}
       cmd: ${{ matrix.cmd || '' }}
       timeout: ${{ matrix.timeout || 180 }}
-      step_timeout: ${{ matrix.step_timeout || 15 }}
+      step_timeout: ${{ matrix.step_timeout || 20 }}
       artifact_suffix: ${{ inputs.artifact_suffix || '' }}

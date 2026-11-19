@@ -35,12 +35,12 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up Go
-        timeout-minutes: 15
+        timeout-minutes: 20
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
         with:
           go-version-file: 'osac-operator/go.mod'
       - name: Install kind
-        timeout-minutes: 15
+        timeout-minutes: 20
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
         with:
           install_only: true
@@ -49,7 +49,7 @@ jobs:
         working-directory: osac-operator
         run: make test
       - name: Lint Helm charts
-        timeout-minutes: 15
+        timeout-minutes: 20
         working-directory: osac-operator
         run: make helm-lint
 

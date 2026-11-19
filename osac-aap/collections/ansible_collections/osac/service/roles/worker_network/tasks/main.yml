@@ -35,6 +35,56 @@
         value:
           osac.openshift.io/clusterorder: "{{ worker_network_cluster_order.metadata.name }}"
 
+# Install the route-selection MachineConfig before waiting for BMaaS or
+# Assisted discovery.  The hosted-cluster workflow and BMI provisioning run
+# concurrently; waiting for an Agent before adding this config can leave the
+# Agent unable to reach Assisted after the fabric handoff and makes the
+# workflow depend on a manual rerun.
+- name: Wait for HostedCluster NodePools before adding worker network config
+  kubernetes.core.k8s_info:
+    api_version: hypershift.openshift.io/v1beta1
+    kind: NodePool
+    namespace: "{{ worker_network_hosted_cluster_namespace }}"
+    label_selectors:
+      - "osac.openshift.io/clusterorder={{ worker_network_cluster_order.metadata.name }}"
+  register: _worker_network_nodepools
+  until:
+    - >-
+      (_worker_network_nodepools.resources | length)
+      >= (worker_network_cluster_order.spec.nodeRequests | length)
+  retries: "{{ worker_network_poll_retries }}"
+  delay: "{{ worker_network_poll_delay }}"
+
+- name: Create worker network MachineConfig bundle
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: "{{ worker_network_cluster_order.metadata.name }}-worker-network-machine-config"
+        namespace: "{{ worker_network_hosted_cluster_namespace }}"
+        labels:
+          osac.openshift.io/clusterorder: "{{ worker_network_cluster_order.metadata.name }}"
+      data:
+        config: "{{ lookup('ansible.builtin.template', 'worker_network_machine_config.yaml.j2') }}"
+
+- name: Add worker network MachineConfig bundle to each NodePool
+  kubernetes.core.k8s_json_patch:
+    api_version: hypershift.openshift.io/v1beta1
+    kind: NodePool
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ worker_network_hosted_cluster_namespace }}"
+    patch:
+      - op: "{{ 'replace' if item.spec.config is defined else 'add' }}"
+        path: /spec/config
+        value:
+          - name: "{{ worker_network_cluster_order.metadata.name }}-worker-network-machine-config"
+  loop: "{{ _worker_network_nodepools.resources }}"
+  when: >-
+    item.spec.config is not defined or
+    item.spec.config != [{'name': worker_network_cluster_order.metadata.name + '-worker-network-machine-config'}]
+
 - name: Wait for worker BMIs to report accepted tenant interfaces
   kubernetes.core.k8s_info:
     api_version: osac.openshift.io/v1alpha1
@@ -137,48 +187,3 @@
   vars:
     nmstate_interfaces: "{{ item.interfaces }}"
   loop: "{{ _worker_network_mappings }}"
-
-- name: Wait for HostedCluster NodePools before adding worker network config
-  kubernetes.core.k8s_info:
-    api_version: hypershift.openshift.io/v1beta1
-    kind: NodePool
-    namespace: "{{ worker_network_hosted_cluster_namespace }}"
-    label_selectors:
-      - "osac.openshift.io/clusterorder={{ worker_network_cluster_order.metadata.name }}"
-  register: _worker_network_nodepools
-  until:
-    - >-
-      (_worker_network_nodepools.resources | length)
-      >= (worker_network_cluster_order.spec.nodeRequests | length)
-  retries: "{{ worker_network_poll_retries }}"
-  delay: "{{ worker_network_poll_delay }}"
-
-- name: Create worker network MachineConfig bundle
-  kubernetes.core.k8s:
-    state: present
-    definition:
-      apiVersion: v1
-      kind: ConfigMap
-      metadata:
-        name: "{{ worker_network_cluster_order.metadata.name }}-worker-network-machine-config"
-        namespace: "{{ worker_network_hosted_cluster_namespace }}"
-        labels:
-          osac.openshift.io/clusterorder: "{{ worker_network_cluster_order.metadata.name }}"
-      data:
-        config: "{{ lookup('ansible.builtin.template', 'worker_network_machine_config.yaml.j2') }}"
-
-- name: Add worker network MachineConfig bundle to each NodePool
-  kubernetes.core.k8s_json_patch:
-    api_version: hypershift.openshift.io/v1beta1
-    kind: NodePool
-    name: "{{ item.metadata.name }}"
-    namespace: "{{ worker_network_hosted_cluster_namespace }}"
-    patch:
-      - op: "{{ 'replace' if item.spec.config is defined else 'add' }}"
-        path: /spec/config
-        value:
-          - name: "{{ worker_network_cluster_order.metadata.name }}-worker-network-machine-config"
-  loop: "{{ _worker_network_nodepools.resources }}"
-  when: >-
-    item.spec.config is not defined or
-    item.spec.config != [{'name': worker_network_cluster_order.metadata.name + '-worker-network-machine-config'}]

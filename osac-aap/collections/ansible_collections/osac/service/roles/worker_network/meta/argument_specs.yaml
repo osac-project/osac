@@ -20,7 +20,7 @@ argument_specs:
       worker_network_poll_retries:
         type: int
         required: false
-        default: 90
+        default: 360
       worker_network_poll_delay:
         type: int
         required: false

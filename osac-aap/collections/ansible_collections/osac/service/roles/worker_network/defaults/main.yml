@@ -1,3 +1,7 @@
-worker_network_poll_retries: 90
+# BMaaS provisioning and Assisted discovery are asynchronous with respect to
+# the hosted-cluster workflow.  Keep this long enough for inspection,
+# provisioning, handoff, and agent registration to complete without a manual
+# rerun of the hosted-cluster job.
+worker_network_poll_retries: 360
 worker_network_poll_delay: 10
 worker_network_label: osac.openshift.io/clusterorder

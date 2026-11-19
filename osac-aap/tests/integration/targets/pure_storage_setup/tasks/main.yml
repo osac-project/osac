@@ -215,6 +215,7 @@
         method: GET
         return_content: true
       register: _ps_calls
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
 
     - name: Assert setup did NOT create filesystems
       vars:
@@ -226,6 +227,8 @@
           - _creates | length == 0
         fail_msg: "Setup created filesystems (should not): {{ _creates }}"
         success_msg: "Setup correctly did NOT create filesystems (CSI driver creates on-demand)"
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
+
 
     # AC-12: the mock redacts token-shaped headers, so a token reaching the
     # call log at all would mean it travelled somewhere it was not redacted.
@@ -235,6 +238,8 @@
           - "'PLACEHOLDER_DO_NOT_USE_realm_token' not in _ps_calls.content"
         fail_msg: "The Realm API token leaked into the mock call log"
         success_msg: "No token material in the call log"
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
+
 
 # ── Re-onboarding an already-provisioned tenant (AC-2) ──
 #
@@ -252,12 +257,15 @@
       ansible.builtin.meta: clear_facts
 
   tasks:
+    # A different tenant_uid than the first run: tenant_uid_hash stores its
+    # first eight characters, so a run that skips the Secret write keeps the
+    # old hash and the assertion below fails.
     - name: Run the setup dispatch for the already-onboarded tenant
       ansible.builtin.include_role:
         name: osac.service.storage_provider
       vars:
         tenant_name: ps-new
-        tenant_uid: test-uid-ps-new
+        tenant_uid: rerun-uid-ps-new
 
     - name: Read the hub Secret after the re-run
       kubernetes.core.k8s_info:
@@ -279,6 +287,7 @@
           - (_ps_secret_rerun.resources[0].data.realm_name | b64decode) == 'ps-realm'
           - (_ps_secret_rerun.resources[0].data.nfs_server | b64decode) == 'ps-realm::nfs-server'
           - (_ps_secret_rerun.resources[0].data.nfs_policy | b64decode) == 'ps-realm::nfs-export'
+          - (_ps_secret_rerun.resources[0].data.tenant_uid_hash | b64decode) == 'rerun-ui'
         fail_msg: >-
           Hub Secret after re-onboarding:
           {{ _ps_secret_rerun.resources[0].data | list | sort }}
@@ -528,6 +537,10 @@
             tenant_name: ps-existing
             tenant_uid: test-uid-ps-existing
 
+        - name: Fail the test if setup accepted the damaged allocation
+          ansible.builtin.fail:
+            msg: "Setup succeeded despite a damaged pre-existing allocation"
+
       rescue:
         - name: Assert the failure came from the reuse validation
           ansible.builtin.assert:
@@ -568,6 +581,7 @@
       loop:
         - servers
         - nfs-export-policies
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
 
     # Subscript, not dot: Jinja resolves .items to the dict method rather than
     # to the response's items key, and a method is not iterable.
@@ -580,6 +594,8 @@
             | selectattr('name', 'equalto', 'ps-realm::nfs-export') | list | length == 1
         fail_msg: "Setup incorrectly modified Realm-owned resources"
         success_msg: "Realm server and export policy remain untouched (pre-provisioned)"
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
+
 
 # ── Cleanup ──
 - name: "Pure Storage Setup - Cleanup"
@@ -607,6 +623,8 @@
         validate_certs: false
         method: GET
       failed_when: false
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
+
 
     - name: Leave a valid Realm pool for the next run
       kubernetes.core.k8s:

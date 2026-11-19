@@ -91,11 +91,13 @@ class MockFlashBladeHandler(BaseHTTPRequestHandler):
         return None
 
     def _get_resource_type(self, path):
-        """Extract resource type from API path."""
+        """Extract a known resource type from the API path, else None."""
         # /api/2.26/file-systems -> file-systems
         parts = path.split("/")
         if len(parts) >= 4 and parts[1] == "api":
-            return parts[3].split("?")[0]
+            resource = parts[3].split("?")[0]
+            if resource in _STORE:
+                return resource
         return None
 
     def _parse_query_params(self):
@@ -281,6 +283,10 @@ class MockFlashBladeHandler(BaseHTTPRequestHandler):
 
         resource = self._get_resource_type(self.path)
         query_params = self._parse_query_params()
+
+        if not resource:
+            self._send_json({"errors": [{"message": "Unknown endpoint"}]}, status=404)
+            return
 
         if "ids" in query_params:
             # Delete by ID (resource-accesses)

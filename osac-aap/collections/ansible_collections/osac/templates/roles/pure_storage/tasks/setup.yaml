@@ -45,6 +45,9 @@
         kind: Secret
         name: "{{ pure_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _pure_backend_id }}"
         namespace: "{{ pure_storage_config_namespace }}"
+      module_defaults:
+        kubernetes.core.k8s_info:
+          kubeconfig: "{{ none }}"
       register: _pure_existing_secret
       no_log: true
 
@@ -59,6 +62,9 @@
         kind: ConfigMap
         name: pure-realm-pool
         namespace: "{{ pure_storage_config_namespace }}"
+      module_defaults:
+        kubernetes.core.k8s_info:
+          kubeconfig: "{{ none }}"
       register: _pure_pool_cm
 
     - name: Fail when the Realm pool ConfigMap is missing
@@ -135,13 +141,16 @@
           register: _pure_claimed_secrets
           no_log: true
 
+        # Jinja splits map(attribute=...) on dots, so the dotted label key must
+        # be read as a literal dict key instead of an attribute path.
         - name: Extract claimed Realm names
           ansible.builtin.set_fact:
             _pure_claimed_realms: >-
-              {{ _pure_claimed_secrets.resources
-                 | map(attribute='metadata.labels')
-                 | map(attribute='osac.openshift.io/pure-realm')
-                 | list }}
+              {% set claimed = [] -%}
+              {% for resource in _pure_claimed_secrets.resources -%}
+              {% set _ = claimed.append(resource.metadata.labels['osac.openshift.io/pure-realm']) -%}
+              {% endfor -%}
+              {{ claimed }}
 
         - name: Find available (unclaimed) Realms
           ansible.builtin.set_fact:
@@ -240,6 +249,9 @@
             mgmt_endpoint: "{{ _pure_mgmt_endpoint }}"
             nfs_endpoint: "{{ _pure_nfs_endpoint }}"
             storage_provider_type: "pure"
+      module_defaults:
+        kubernetes.core.k8s:
+          kubeconfig: "{{ none }}"
       no_log: true
       register: _pure_hub_secret_created
 
@@ -256,6 +268,9 @@
         kind: Secret
         name: "{{ pure_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _pure_backend_id }}"
         namespace: "{{ pure_storage_config_namespace }}"
+      module_defaults:
+        kubernetes.core.k8s:
+          kubeconfig: "{{ none }}"
       ignore_errors: true  # noqa: ignore-errors
       no_log: true
 

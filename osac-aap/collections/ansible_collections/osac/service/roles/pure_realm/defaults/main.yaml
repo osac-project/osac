@@ -5,8 +5,12 @@
 # (API 2.26 is used because it doesn't accept dns in POST body for servers)
 pure_realm_api_version: "2.26"
 
-# TLS certificate validation
-pure_realm_validate_certs: false
+# TLS certificate validation. Verification is on by default: the login request
+# carries PUREFB_API to the management endpoint, so an unverified TLS session
+# would hand the array-admin token to an impersonated endpoint. Point
+# PURE_VALIDATE_CERTS (or this variable) at a trusted private CA when the array
+# uses a certificate the execution environment does not already trust.
+pure_realm_validate_certs: "{{ lookup('env', 'PURE_VALIDATE_CERTS') | default('true', true) | bool }}"
 
 # Hub Kubernetes namespace for Realm credential Secrets
 pure_realm_config_namespace: "{{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE') | default('osac-system', true) }}"

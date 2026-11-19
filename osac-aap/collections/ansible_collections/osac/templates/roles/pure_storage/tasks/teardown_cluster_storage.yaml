@@ -41,6 +41,10 @@
         label_selectors:
           - "osac.openshift.io/tenant={{ tenant_name }}"
           - "app.kubernetes.io/managed-by=osac-aap"
+          # Scope to this dispatch: a tenant can hold several Pure backends and
+          # classes from other providers share the tenant label.
+          - "osac.openshift.io/storage-provider=pure"
+          - "osac.openshift.io/storage-backend-id={{ _pure_backend_id }}"
       register: _pure_cleanup_sc_list
 
     - name: Delete tenant StorageClasses
@@ -59,7 +63,7 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: pure-csi-secret
+        name: "pure-csi-secret-{{ _pure_backend_id }}"
         namespace: "{{ tenant_namespace }}"
       ignore_errors: true  # noqa: ignore-errors
       no_log: true

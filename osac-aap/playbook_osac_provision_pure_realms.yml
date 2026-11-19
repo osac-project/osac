@@ -83,8 +83,12 @@
     # so they become available for tenant allocation.
     - name: Set facts for ConfigMap management
       ansible.builtin.set_fact:
-        _pure_realm_config_namespace: "{{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE') | default('osac-system', true) }}"
-        _pure_realm_secret_prefix: "pure-realm-"
+        # Honour the role's overrides so the published pool entry points at the
+        # Secret the role actually wrote.
+        _pure_realm_config_namespace: >-
+          {{ pure_realm_config_namespace | default(
+               lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE') | default('osac-system', true)) }}
+        _pure_realm_secret_prefix: "{{ pure_realm_secret_prefix | default('pure-realm-') }}"
 
     - name: Read existing pure-realm-pool ConfigMap
       kubernetes.core.k8s_info:

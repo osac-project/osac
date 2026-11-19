@@ -18,6 +18,7 @@ package osac.public.v1;
 import "google/api/field_behavior.proto";
 import "osac/public/v1/metadata_type.proto";
 import "osac/public/v1/role_type.proto";
+import "osac/public/v1/service_account_type.proto";
 import "osac/public/v1/user_type.proto";
 
 // Represents a binding between a role and a set of subjects.
@@ -53,15 +54,10 @@ message RoleBindingSpec {
 
   // References to the service accounts that are granted the permissions defined by the role.
   //
-  // To grant a role to a service account, create a RoleBinding with the desired role and include the service account's
-  // ID in this list. Service account grants are evaluated by Fulfillment and are not synchronized to Keycloak roles.
+  // To grant a role to a service account, create a RoleBinding with the desired role and reference the account by ID or
+  // name. The server resolves the reference before storing the binding. Grants are evaluated by Fulfillment and are not
+  // synchronized to Keycloak roles.
   repeated ServiceAccountReference service_accounts = 3;
-}
-
-// Reference to a tenant-owned service account.
-message ServiceAccountReference {
-  // Unique identifier assigned by the server.
-  string id = 1;
 }
 
 // Current observed state of a role binding, reflecting its synchronization with the underlying authorization system.

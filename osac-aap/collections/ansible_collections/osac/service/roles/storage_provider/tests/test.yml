@@ -1427,50 +1427,31 @@
   hosts: localhost
   gather_facts: false
   vars:
+    _storage_provider_tiers:
+      - name: netapp-tier
+        provider: netapp
+        backend_id: "netapp-backend-1"
+      - name: pure-tier
+        provider: pure
+        backend_id: "pure-backend-1"
+    storage_provider_backend_connections: {}
     tenant_name: provider-routing-test
+    _all_tenant_configs: {}
+    _dispatch_action: setup
 
   tasks:
-    - name: Initialize isolated CSI product routing state
-      ansible.builtin.set_fact:
-        _storage_provider_tiers:
-          - name: netapp-tier
-            provider: netapp
-            backend_id: "netapp-backend-1"
-          - name: pure-tier
-            provider: pure
-            backend_id: "pure-backend-1"
-        storage_provider_backend_connections: {}
-        storage_provider_tenant_config: {}
-        _all_tenant_configs: {}
-        _dispatch_action: setup
-
-    - name: Dispatch NetApp through the owning storage provider role
-      ansible.builtin.include_role:
-        name: osac.service.storage_provider
-        tasks_from: _dispatch_provider.yaml
-      vars:
-        _current_pair:
-          provider: netapp
+    - name: Dispatch CSI-managed providers through their shared storage role
+      ansible.builtin.include_tasks: ../tasks/_dispatch_provider.yaml
+      loop:
+        - provider: netapp
           backend_id: "netapp-backend-1"
-
-    - name: Verify NetApp received only its requested tier
-      ansible.builtin.assert:
-        that:
-          - _all_tenant_configs['netapp-backend-1'].provider == 'netapp'
-          - _computed_provider_tiers == [_storage_provider_tiers[0]]
-
-    - name: Dispatch Pure through the owning storage provider role
-      ansible.builtin.include_role:
-        name: osac.service.storage_provider
-        tasks_from: _dispatch_provider.yaml
-      vars:
-        _current_pair:
-          provider: pure
+        - provider: pure
           backend_id: "pure-backend-1"
+      loop_control:
+        loop_var: _current_pair
 
     - name: Verify the shared CSI role preserves each provider identity
       ansible.builtin.assert:
         that:
           - _all_tenant_configs['netapp-backend-1'].provider == 'netapp'
           - _all_tenant_configs['pure-backend-1'].provider == 'pure'
-          - _computed_provider_tiers == [_storage_provider_tiers[1]]

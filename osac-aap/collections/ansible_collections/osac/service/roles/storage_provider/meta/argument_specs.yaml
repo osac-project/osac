@@ -11,7 +11,7 @@ argument_specs:
         type: raw
         required: false
         description: >-
-          Opaque nonempty filesystem string for newly created block StorageClasses.
+          Opaque nonempty filesystem string for newly created native block StorageClasses.
           Defaults to OSAC_STORAGE_BLOCK_FSTYPE in the worker environment, or ext4
           when unset. An explicit variable takes precedence. Type and content are
           validated only when a new block class consumes this setting.

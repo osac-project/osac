@@ -35,7 +35,9 @@ aap:
         OSAC_STORAGE_BLOCK_FSTYPE: "ext4"
 ```
 
-The default is `ext4`. An empty Helm value is omitted, leaving the worker default
+The default for new native VAST, LVMS/TopoLVM, and direct Trident block classes
+is `ext4`; OSAC CSI File-policy classes do not consume this setting.
+An empty Helm value is omitted, leaving the worker default
 in effect. An explicitly empty worker environment value is rejected when a new
 block class consumes it. See the canonical
 [AAP filesystem configuration](../../osac-aap/docs/aap-configuration.md#block-storageclass-filesystem-type)

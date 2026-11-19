@@ -44,27 +44,6 @@
       {{ entries }}
 
 
-- name: Read existing OSAC CSI StorageClasses
-  kubernetes.core.k8s_info:
-    kubeconfig: "{{ _remote_kubeconfig }}"
-    validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
-    api_version: storage.k8s.io/v1
-    kind: StorageClass
-  register: _osac_csi_existing_classes
-
-- name: Determine missing OSAC CSI StorageClasses
-  ansible.builtin.set_fact:
-    _osac_csi_missing_sc_entries: >-
-      {{ _osac_csi_expected_sc_entries
-         | rejectattr('name', 'in', _osac_csi_existing_classes.resources | map(attribute='metadata.name') | list)
-         | list }}
-
-- name: Resolve filesystem type for missing OSAC CSI block StorageClasses
-  ansible.builtin.include_role:
-    name: osac.service.storage_provider
-    tasks_from: resolve_block_fstype
-  when: _osac_csi_missing_sc_entries | selectattr('protocol', 'equalto', 'block') | list | length > 0
-
 - name: Provision OSAC CSI driver and StorageClasses on guest cluster
   block:
 
@@ -141,19 +120,19 @@
               osac.openshift.io/storage-tier: "{{ item.tier }}"
               osac.openshift.io/storage-protocol: "{{ item.protocol }}"
           provisioner: "{{ osac_csi_driver_name }}"
-          parameters: >-
-            {{ {'tier': item.tier, 'tenant': tenant_name,
-                'osac.openshift.io/tenant': tenant_name,
-                'osac.openshift.io/storage-tier': item.tier}
-               | combine(_storage_provider_block_parameters if item.protocol == 'block' else {}) }}
+          parameters:
+            tier: "{{ item.tier }}"
+            tenant: "{{ tenant_name }}"
+            osac.openshift.io/tenant: "{{ tenant_name }}"
+            osac.openshift.io/storage-tier: "{{ item.tier }}"
           reclaimPolicy: "{{ osac_csi_driver_reclaim_policy }}"
           volumeBindingMode: "{{ osac_csi_driver_volume_binding_mode }}"
           allowVolumeExpansion: true
-      loop: "{{ _osac_csi_missing_sc_entries }}"
+      loop: "{{ _osac_csi_expected_sc_entries }}"
       loop_control:
         label: "{{ item.name }}"
       no_log: true
 
-- name: Set StorageClass names output
-  ansible.builtin.set_fact:
-    storage_provider_storage_class_names: "{{ _osac_csi_expected_sc_entries }}"
+    - name: Set StorageClass names output
+      ansible.builtin.set_fact:
+        storage_provider_storage_class_names: "{{ _osac_csi_expected_sc_entries }}"

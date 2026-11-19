@@ -2,7 +2,7 @@
 # of the repository a change touches. The `plan` job of workflows/ci.yml runs
 # dorny/paths-filter over it once per pull request and merge-queue entry, and
 # decides which checks and which E2E suites apply. Workflows that need other
-# questions answered (codeql, component-hooks-smoke, ...) read it the same way.
+# questions answered (codeql, ...) read it the same way.
 #
 # Do not hand-copy a pattern list anywhere else -- add or edit it here once.
 #
@@ -342,9 +342,8 @@ unit-tests-osac-metering-adapters:
   - '{osac-metering/adapters/**,osac-metering/schema/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 unit-tests-osac-metering-schema:
   - '{osac-metering/schema/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
-# The osac chart's unit tests, offline preflight rendering, and stubbed Kind runner tests, plus the metering
-# chart's reader-grant suites and the infra chart's Kafka exporter suites. Preflight rendering also covers the
-# osac-aap and osac-csi-driver hook Jobs.
+# Offline preflight and metering reader rendering, the preflight harness, and stubbed Kind runner checks.
+# Preflight rendering also covers the osac-aap and osac-csi-driver hook Jobs.
 unit-tests-osac-installer:
   - '{osac-installer/charts/**,osac-installer/Makefile,osac-installer/scripts/test-preflight-*.py,osac-installer/scripts/test-kind-runtime.py,osac-installer/scripts/dev-full/**,osac-installer/scripts/lib.sh,osac-aap/charts/**,osac-csi-driver/charts/**,osac-metering/charts/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
 unit-tests-caas-integration:
@@ -382,10 +381,3 @@ integration-tests-osac-aap:
 # The install preflight Kind test (a preflight-only copy of the osac chart, not the full stack).
 integration-tests-osac-installer-preflight:
   - '{osac-installer/charts/**,osac-installer/Makefile,osac-installer/scripts/test-preflight-kind.py,osac-aap/charts/**,osac-csi-driver/charts/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
-
-# Claude/Codex component-hook smoke coverage. Keep this scoped to the shared
-# component hooks, their registrations, the Codex adapter, and the smoke test
-# itself. The workflow and filter are included so edits to the CI wiring are
-# exercised too.
-component-hooks-smoke:
-  - '{.claude/settings.json,.claude/hooks/component-*.sh,.codex/hooks.json,.codex/hooks/**,tools/test/component-hooks-smoke.sh,.agentic-ci/**,tools/test/agentic-ci-validation-smoke.py,.github/actions/setup-python/**,.github/filters/ci-filters.yml,.github/workflows/component-hooks-smoke.yml}'

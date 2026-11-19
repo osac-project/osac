@@ -3,9 +3,8 @@
 ## Overview
 
 Multi-phase bugfix workflow for Ansible automation code. This repo uses
-`ansible-lint` as its primary validation gate -- there are no compiled
-artifacts or unit test frameworks. Integration tests exist but require a
-kind cluster and are heavy-weight.
+`ansible-lint` and existing unit/integration suites. Select relevant checks
+for the changed behavior; integration tests require a Kind cluster.
 
 ## Workflow
 
@@ -17,13 +16,12 @@ settings below.
 ```
 branch: stay on the current branch (already created by the orchestration system)
 lint_command: uv run ansible-lint
-max_retries: 3
 ```
 
 ### Artifact Paths
 
-All artifact paths (`.artifacts/bugfix/{issue}/`) should use `.ai-bot/`
-instead. Write the PR description to `.ai-bot/pr.md`.
+Create separate reports only when requested; preserve outputs required by the
+calling workflow at its specified paths and formats.
 
 ## Phase Details
 
@@ -41,7 +39,6 @@ instead. Write the PR description to `.ai-bot/pr.md`.
    implementation_strategy -> template role -> K8s resources
 4. Check `.claude/rules/playbook-patterns.md` and `.claude/rules/networking-cudn.md`
    for domain-specific patterns
-5. Write root cause analysis to `.ai-bot/root-cause.md`
 
 ### Phase 2: Fix
 
@@ -52,17 +49,14 @@ instead. Write the PR description to `.ai-bot/pr.md`.
    - Underscores in role names, `implementation_strategy`, and `fabric_manager`/`k8s_manager`
    - Include `osac.service.common` before remote K8s operations
 3. If adding a new template role, create `meta/osac.yaml`
-4. Write implementation notes to `.ai-bot/implementation-notes.md`
 
-**Test file exception**: This is an Ansible project without a traditional
-unit test framework. If the fix touches workflow logic that has integration
-test coverage (check `tests/integration/targets/`), update the relevant
-baseline or override test. If no matching integration test target exists,
-document why tests were not added in implementation notes.
+Add meaningful behavior or regression coverage where needed, reusing existing
+unit or integration suites. Do not require a new test for every change or a
+separate artifact explaining routine decisions.
 
 ### Phase 3: Validate
 
-Run in this order:
+Select relevant existing checks for the changed behavior:
 
 ```bash
 # 1. Lint (mandatory -- must pass)
@@ -72,21 +66,21 @@ uv run ansible-lint
 ansible-playbook --syntax-check playbook_osac_<modified>.yml
 
 # 3. Pre-commit hooks
-pre-commit run --all-files
+pre-commit run --files <changed-files>
 
 # 4. Helm lint (only if charts/ changed)
 helm lint charts/aap/
 ```
 
-If ansible-lint fails, fix the violations and re-run. Common issues:
+Fix attributable lint failures and report unrelated findings. Common issues:
 - Missing FQCN: use `ansible.builtin.<module>` not bare `<module>`
 - Missing task name: add `name:` to every task
 - Role name with hyphens: use underscores
 
 If the fix touches `collections/ansible_collections/osac/workflows/` or
-`collections/ansible_collections/osac/service/roles/`, also verify
-integration tests still pass conceptually by reviewing the relevant test
-targets in `tests/integration/targets/`.
+`collections/ansible_collections/osac/service/roles/`, inspect the relevant integration targets in
+`tests/integration/targets/`. Source review is not test execution; report
+unavailable runtime checks honestly.
 
 ### Phase 4: Self-Review
 
@@ -98,15 +92,9 @@ Review the diff against:
 - Cross-repo impact (does this change require coordinated changes in
   osac-operator or fulfillment-service?)
 
-Write review findings to `.ai-bot/review.md`.
 
 ### Phase 5: Document
 
-Write PR description to `.ai-bot/pr.md` including:
-- What changed and why
-- Which collections/roles were modified
-- Cross-repo dependencies (if any)
-- How to test (e.g., which integration test target exercises this code)
-- Checklist from CLAUDE.md PR Checklist section
-
-Write session context to `.ai-bot/session-context.md`.
+Summarize the changes, relevant checks and limitations concisely. Note affected
+component contracts when relevant. Separate reports are optional unless
+requested; preserve caller-required outputs at their specified paths and formats.

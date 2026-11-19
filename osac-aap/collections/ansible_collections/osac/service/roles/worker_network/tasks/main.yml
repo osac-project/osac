@@ -23,6 +23,18 @@
           matchLabels:
             osac.openshift.io/clusterorder: "{{ worker_network_cluster_order.metadata.name }}"
 
+- name: Normalize worker NMStateConfig selector on the InfraEnv
+  kubernetes.core.k8s_json_patch:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: InfraEnv
+    name: "{{ worker_network_infraenv_name }}"
+    namespace: "{{ worker_network_namespace }}"
+    patch:
+      - op: replace
+        path: /spec/nmStateConfigLabelSelector/matchLabels
+        value:
+          osac.openshift.io/clusterorder: "{{ worker_network_cluster_order.metadata.name }}"
+
 - name: Wait for worker BMIs to report accepted tenant interfaces
   kubernetes.core.k8s_info:
     api_version: osac.openshift.io/v1alpha1

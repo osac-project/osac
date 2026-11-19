@@ -141,14 +141,14 @@ var (
 )
 
 // NewNetBoxAPI constructs the secure NetBox API dependency from mounted
-// configuration and returns the parsed settings its consumers need.
-func NewNetBoxAPI(config *Config) (NetBoxAPI, *NetBoxClientConfig, error) {
+// configuration.
+func NewNetBoxAPI(config *Config) (NetBoxAPI, error) {
 	if config == nil {
-		return nil, nil, fmt.Errorf("netbox inventory config is required")
+		return nil, fmt.Errorf("netbox inventory config is required")
 	}
 	netBoxConfig, err := ParseNetBoxOptions(config.Options)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	api, err := netboxclient.New(netboxclient.Config{
@@ -158,9 +158,9 @@ func NewNetBoxAPI(config *Config) (NetBoxAPI, *NetBoxClientConfig, error) {
 		AllowInsecureHTTP: netBoxConfig.AllowInsecureHTTP,
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	return api, netBoxConfig, nil
+	return api, nil
 }
 
 // NewNetBoxClient creates a NetBox inventory client with injected dependencies.

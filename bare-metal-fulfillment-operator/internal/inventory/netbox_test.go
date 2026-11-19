@@ -135,13 +135,12 @@ var _ = Describe("NetBox inventory client", func() {
 			tokenFile := filepath.Join(GinkgoT().TempDir(), "token")
 			Expect(os.WriteFile(tokenFile, []byte("test-token\n"), 0o600)).To(Succeed())
 
-			api, config, err := NewNetBoxAPI(&Config{Options: map[string]any{"netbox": map[string]any{
+			api, err := NewNetBoxAPI(&Config{Options: map[string]any{"netbox": map[string]any{
 				"url":       "https://netbox.example.test/",
 				"tokenFile": tokenFile,
 			}}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(api).NotTo(BeNil())
-			Expect(config.URL).To(Equal("https://netbox.example.test/"))
 
 			ctrl := gomock.NewController(GinkgoT())
 			manager := newTestBMHManager("metal3-system")
@@ -162,7 +161,7 @@ var _ = Describe("NetBox inventory client", func() {
 	Describe("NewNetBoxAPI", func() {
 		DescribeTable("rejects invalid configuration",
 			func(config *Config, wantErr string) {
-				_, _, err := NewNetBoxAPI(config)
+				_, err := NewNetBoxAPI(config)
 				Expect(err).To(MatchError(ContainSubstring(wantErr)))
 			},
 			Entry("nil config", (*Config)(nil), "netbox inventory config is required"),
@@ -180,7 +179,7 @@ var _ = Describe("NetBox inventory client", func() {
 				"tokenFile": tokenFile,
 			}}}
 
-			_, _, err := NewNetBoxAPI(config)
+			_, err := NewNetBoxAPI(config)
 
 			Expect(err).To(MatchError(ContainSubstring("token file is missing or invalid")))
 		})

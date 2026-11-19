@@ -1,0 +1,10 @@
+images:
+  ee: ghcr.io/osac-project/osac-aap:latest
+  eePullPolicy: IfNotPresent
+imagePullSecrets: []
+project:
+  url: https://github.com/osac-project/osac.git
+  # The installer selects the checkout revision; direct Helm use requires a commit.
+  commit: ""
+bootstrap:
+  enabled: false

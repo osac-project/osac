@@ -291,7 +291,11 @@ func (r *function) observe(ctx context.Context, hubClient clnt.Client, object *p
 		setUnavailable(status, reasonManagedClusterUnavailable, "Failed to observe the managed cluster on the hub", false)
 		return errors.New("managed cluster observation failed")
 	}
-	claimValue := clusterIdentity(managed)
+	claimValue, extractionErr := clusterIdentity(managed)
+	if extractionErr != nil {
+		setUnavailable(status, reasonManagedClusterUnavailable, "Managed cluster status is malformed", true)
+		return errors.New("managed cluster observation failed")
+	}
 	if strings.TrimSpace(claimValue) == "" {
 		setUnavailable(status, reasonClusterIdentityMissing, "Managed cluster has no stable identity claim", true)
 		return nil
@@ -300,12 +304,21 @@ func (r *function) observe(ctx context.Context, hubClient clnt.Client, object *p
 		setUnavailable(status, reasonClusterIdentityMismatch, "Cluster identity changed; administrative action required", true)
 		return nil
 	}
-	accepted := conditionTrue(managed, "HubAcceptedManagedCluster")
+	accepted, extractionErr := conditionTrue(managed, "HubAcceptedManagedCluster")
+	if extractionErr != nil {
+		setUnavailable(status, reasonManagedClusterUnavailable, "Managed cluster status is malformed", true)
+		return errors.New("managed cluster observation failed")
+	}
 	if !accepted {
 		setUnavailable(status, reasonManagedClusterNotAccepted, "Referenced managed cluster exists but is not accepted by the hub", true)
 		return nil
 	}
-	if !conditionTrue(managed, "ManagedClusterConditionAvailable") {
+	available, extractionErr := conditionTrue(managed, "ManagedClusterConditionAvailable")
+	if extractionErr != nil {
+		setUnavailable(status, reasonManagedClusterUnavailable, "Managed cluster status is malformed", true)
+		return errors.New("managed cluster observation failed")
+	}
+	if !available {
 		setUnavailable(status, reasonManagedClusterUnavailable, "Referenced managed cluster is accepted but not available", true)
 		return nil
 	}
@@ -322,31 +335,54 @@ func (r *function) managedClusterInformer(hubID string) cache.SharedIndexInforme
 	return r.managedCaches[hubID]
 }
 
-func clusterIdentity(object *unstructured.Unstructured) string {
-	claims, _, _ := unstructured.NestedSlice(object.Object, "status", "clusterClaims")
+func clusterIdentity(object *unstructured.Unstructured) (string, error) {
+	claims, _, err := unstructured.NestedSlice(object.Object, "status", "clusterClaims")
+	if err != nil {
+		return "", errors.New("invalid cluster claims")
+	}
 	for _, raw := range claims {
 		claim, ok := raw.(map[string]interface{})
 		if !ok {
-			continue
+			return "", errors.New("invalid cluster claim")
 		}
-		name, _, _ := unstructured.NestedString(claim, "name")
+		name, _, err := unstructured.NestedString(claim, "name")
+		if err != nil {
+			return "", errors.New("invalid cluster claim name")
+		}
 		if name == "id.k8s.io" {
-			value, _, _ := unstructured.NestedString(claim, "value")
-			return value
+			value, _, err := unstructured.NestedString(claim, "value")
+			if err != nil {
+				return "", errors.New("invalid cluster identity claim")
+			}
+			return value, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
-func conditionTrue(object *unstructured.Unstructured, conditionType string) bool {
-	conditions, _, _ := unstructured.NestedSlice(object.Object, "status", "conditions")
+func conditionTrue(object *unstructured.Unstructured, conditionType string) (bool, error) {
+	conditions, _, err := unstructured.NestedSlice(object.Object, "status", "conditions")
+	if err != nil {
+		return false, errors.New("invalid managed cluster conditions")
+	}
 	for _, raw := range conditions {
 		condition, ok := raw.(map[string]interface{})
-		if ok && condition["type"] == conditionType && condition["status"] == "True" {
-			return true
+		if !ok {
+			return false, errors.New("invalid managed cluster condition")
+		}
+		typeValue, _, err := unstructured.NestedString(condition, "type")
+		if err != nil {
+			return false, errors.New("invalid managed cluster condition type")
+		}
+		statusValue, _, err := unstructured.NestedString(condition, "status")
+		if err != nil {
+			return false, errors.New("invalid managed cluster condition status")
+		}
+		if typeValue == conditionType && statusValue == "True" {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func setUnavailable(status *privatev1.WorkloadClusterStatus, reason, message string, reachable bool) {

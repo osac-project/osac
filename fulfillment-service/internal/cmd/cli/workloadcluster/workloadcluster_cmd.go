@@ -175,7 +175,9 @@ func listCmd() *cobra.Command {
 			}
 			hubs, err := hublistAll(ctx, privatev1.NewHubsClient(conn))
 			if err != nil {
-				fmt.Fprintln(cmd.ErrOrStderr(), "warning: Hub names are unavailable; displaying Hub IDs")
+				if _, writeErr := fmt.Fprintln(cmd.ErrOrStderr(), "warning: Hub names are unavailable; displaying Hub IDs"); writeErr != nil {
+					return writeErr
+				}
 				hubs = nil
 			}
 			hubNames := make(map[string]string, len(hubs))

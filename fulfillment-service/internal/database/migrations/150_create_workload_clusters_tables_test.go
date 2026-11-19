@@ -21,7 +21,7 @@ import (
 
 var _ = DescribeMigration("Create WorkloadCluster tables", func() {
 	BeforeEach(func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 149)).To(Succeed())
+		Expect(tool.Migrate(ctx, 150)).To(Succeed())
 	})
 
 	It("creates the provider-global schema and tenant foreign key", func(ctx context.Context) {

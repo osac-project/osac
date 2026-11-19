@@ -306,6 +306,10 @@ func (r *function) signalForHub(ctx context.Context, hubID, reason, severity str
 		if len(response.GetItems()) == 0 || int64(offset)+int64(len(response.GetItems())) >= int64(response.GetTotal()) {
 			break
 		}
+		if len(response.GetItems()) > 1<<31-1 {
+			r.logger.Warn("Too many workload clusters returned in one page", slog.String("component", "workload-cluster-controller"), slog.String("operation", "signal"), slog.String("reason", "ListTooLarge"))
+			return
+		}
 		offset += int32(len(response.GetItems()))
 	}
 

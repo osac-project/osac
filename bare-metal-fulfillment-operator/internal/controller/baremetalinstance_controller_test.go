@@ -1292,8 +1292,15 @@ var _ = Describe("BareMetalInstance Controller", func() {
 			})
 
 			It("should retry power-on after acknowledging a skipped restart", func() {
+				bareMetalInstance.Name = "retry-power-on-bmi"
 				bareMetalInstance.Spec.RestartTrigger = 1
 				bareMetalInstance.Status.RestartTrigger = 0
+				bareMetalInstance.Spec.TemplateID = shared.OsacNoopTemplate
+				Expect(k8sClient.Create(ctx, bareMetalInstance)).To(Succeed())
+				DeferCleanup(func() {
+					_ = k8sClient.Delete(ctx, bareMetalInstance)
+				})
+
 				reads := 0
 				mockMgmtClient.getPowerStateFunc = func(ctx context.Context, hostID string) (*management.PowerStatus, error) {
 					reads++
@@ -1318,8 +1325,16 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
 				Expect(bareMetalInstance.Status.RestartTrigger).To(Equal(int64(1)))
 
+				// Persist the acknowledgement and retry from a fresh read, as the
+				// outer Reconcile does.
+				Expect(reconciler.updateStatusWithRetry(ctx,
+					client.ObjectKeyFromObject(bareMetalInstance), bareMetalInstance.Status)).To(Succeed())
+				stored := &v1alpha1.BareMetalInstance{}
+				Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bareMetalInstance), stored)).To(Succeed())
+				Expect(stored.Status.RestartTrigger).To(Equal(int64(1)))
+
 				// Reconcile #2: the transient failure must not block power-on.
-				_, err = reconciler.reconcileManagement(ctx, bareMetalInstance)
+				_, err = reconciler.reconcileManagement(ctx, stored)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(powerOnRequested).To(BeTrue(), "a transient read error must not prevent the power-on retry")
 			})
@@ -2419,6 +2434,9 @@ var _ = Describe("BareMetalInstance Controller", func() {
 
 					Expect(err).NotTo(HaveOccurred())
 					Expect(triggerCalled).To(BeFalse())
+					// The rejected claim must not be left in the in-memory status for
+					// Reconcile to persist.
+					Expect(bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)).To(BeNil())
 				})
 
 				It("should resume polling instead of dispatching when another reconcile claimed the restart", func() {
@@ -2594,6 +2612,34 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					Expect(polled).To(BeTrue())
 					Expect(bareMetalInstance.Status.RestartTrigger).To(Equal(int64(0)))
 					Expect(bareMetalInstance.IsStatusConditionTrue(v1alpha1.HostConditionRestartInProgress)).To(BeTrue())
+				})
+
+				It("should promote a leftover pre-dispatch claim when polling", func() {
+					// A lost post-dispatch status write can leave the pending claim
+					// persisted. The poll must report the restart as initiated.
+					bareMetalInstance.SetStatusCondition(
+						v1alpha1.HostConditionRestartInProgress,
+						metav1.ConditionTrue,
+						v1alpha1.HostConditionReasonRestartSubmissionPending,
+						"Restart submission pending",
+					)
+					polled := false
+					mockMgmtClient.isRestartCompleteFunc = func(ctx context.Context, hostID string) (bool, error) {
+						polled = true
+						return false, nil
+					}
+					mockMgmtClient.getPowerStateFunc = func(ctx context.Context, hostID string) (*management.PowerStatus, error) {
+						return &management.PowerStatus{State: management.PowerOff, IsTransitioning: true}, nil
+					}
+
+					_, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+
+					Expect(err).NotTo(HaveOccurred())
+					Expect(polled).To(BeTrue())
+					cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
+					Expect(cond).NotTo(BeNil())
+					Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+					Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
 				})
 
 				It("should clear a stale marker when the host is off and not transitioning", func() {

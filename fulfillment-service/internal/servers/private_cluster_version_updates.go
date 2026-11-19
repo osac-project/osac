@@ -15,14 +15,16 @@ package servers
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -53,6 +55,7 @@ func (s *PrivateClustersServer) prepareClusterVersionChange(ctx context.Context,
 	// Comparing versions rather than image strings also handles tag and digest
 	// forms of the same release.
 	if source.GetSpec().GetVersion() == targetVersion {
+		retireClusterUpgradeAttemptForReferenceReplacement(candidate, targetVersion)
 		s.logger.InfoContext(ctx,
 			"Replaced ClusterVersion reference with the same semantic version; no upgrade attempt created",
 			slog.String("cluster_id", current.GetId()),
@@ -71,12 +74,7 @@ func (s *PrivateClustersServer) prepareClusterVersionChange(ctx context.Context,
 		return grpcstatus.Error(grpccodes.FailedPrecondition,
 			"cluster status observed_version is required before an upgrade")
 	}
-	if sourceVersion == targetVersion {
-		scheduleClusterNodeSetUpgradeBatch(current, candidate, targetVersion, attemptID, now)
-	} else {
-		appendClusterUpgradeAttempt(candidate, sourceVersion, targetVersion, attemptID, now)
-	}
-	candidate.GetStatus().SetUpgradeAttemptId(attemptID)
+	createClusterUpgradeAttempt(current, candidate, sourceVersion, targetVersion, attemptID, now)
 	return nil
 }
 
@@ -97,8 +95,7 @@ func retainRecentClusterUpgradeHistory(
 	return entries[:maxClusterUpgradeHistoryEntries]
 }
 
-// appendClusterUpgradeHistory prepends entries and applies the shared cap for
-// every upgrade component.
+// appendClusterUpgradeHistory prepends aggregate entries and applies the cap.
 func appendClusterUpgradeHistory(candidate *privatev1.Cluster,
 	entries []*privatev1.ClusterUpgradeHistoryEntry) {
 	if len(entries) == 0 {
@@ -113,34 +110,79 @@ func appendClusterUpgradeHistory(candidate *privatev1.Cluster,
 	candidate.GetStatus().SetUpgradeHistory(retainRecentClusterUpgradeHistory(history))
 }
 
-// appendClusterUpgradeAttempt records the accepted control-plane component
-// of a whole-cluster attempt.
-func appendClusterUpgradeAttempt(candidate *privatev1.Cluster,
-	sourceVersion, targetVersion, attemptID string, now *timestamppb.Timestamp) {
-	component := &privatev1.ClusterUpgradeComponent{}
-	component.SetControlPlane(&emptypb.Empty{})
-	entry := &privatev1.ClusterUpgradeHistoryEntry{}
-	entry.SetComponent(component)
-	entry.SetSourceVersion(sourceVersion)
-	entry.SetTargetVersion(targetVersion)
-	entry.SetAcceptedTime(now)
-	entry.SetStateTransitionTime(now)
-	entry.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING)
-	entry.SetAttemptId(attemptID)
-	appendClusterUpgradeHistory(candidate, []*privatev1.ClusterUpgradeHistoryEntry{entry})
-}
-
-// sortedClusterNodeSetUpgradeNames returns every participating node set in
-// deterministic order.
-func sortedClusterNodeSetUpgradeNames(nodeSets map[string]*privatev1.ClusterNodeSet) []string {
-	names := make([]string, 0, len(nodeSets))
-	for name, nodeSet := range nodeSets {
-		if nodeSet != nil {
-			names = append(names, name)
+// participatingClusterNodeSetNames freezes the existing node sets that still
+// need to reach the accepted target version.
+func participatingClusterNodeSetNames(current, candidate *privatev1.Cluster,
+	targetVersion string) []string {
+	names := make([]string, 0, len(current.GetSpec().GetNodeSets()))
+	for name := range current.GetSpec().GetNodeSets() {
+		if candidate.GetSpec().GetNodeSets()[name] == nil ||
+			current.GetStatus().GetNodeSets()[name].GetObservedVersion() == targetVersion {
+			continue
 		}
+		names = append(names, name)
 	}
 	sort.Strings(names)
 	return names
+}
+
+// createClusterUpgradeAttempt records one aggregate history entry and the
+// detailed state needed to finish the current attempt.
+func createClusterUpgradeAttempt(current, candidate *privatev1.Cluster,
+	sourceVersion, targetVersion, attemptID string, now *timestamppb.Timestamp) {
+	names := participatingClusterNodeSetNames(current, candidate, targetVersion)
+	controlPlaneSucceeded := sourceVersion == targetVersion
+	if controlPlaneSucceeded && len(names) == 0 {
+		return
+	}
+
+	controlPlaneState := privatev1.ClusterUpgradeControlPlaneState_builder{
+		AcceptedTime:        now,
+		StateTransitionTime: now,
+		State:               privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING,
+	}.Build()
+	if controlPlaneSucceeded {
+		controlPlaneState.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED)
+	}
+
+	nodeSets := make([]*privatev1.ClusterUpgradeNodeSetState, 0, len(names))
+	for _, name := range names {
+		nodeSets = append(nodeSets, privatev1.ClusterUpgradeNodeSetState_builder{
+			NodeSetId:           name,
+			TimeoutNodeCount:    max(int32(1), candidate.GetSpec().GetNodeSets()[name].GetSize()),
+			State:               privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING,
+			StateTransitionTime: now,
+		}.Build())
+	}
+
+	active := privatev1.ClusterUpgradeAttemptState_builder{
+		ControlPlane: controlPlaneState,
+		NodeSets:     nodeSets,
+	}.Build()
+	entryState := privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING
+	entryMessage := "Waiting for control plane upgrade"
+	if controlPlaneSucceeded {
+		active.SetNodeSetsScheduledTime(now)
+		entryState = privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING
+		entryMessage = "Node set upgrades in progress"
+	}
+
+	entry := privatev1.ClusterUpgradeHistoryEntry_builder{
+		AttemptId:           attemptID,
+		SourceVersion:       sourceVersion,
+		TargetVersion:       targetVersion,
+		AcceptedTime:        now,
+		StateTransitionTime: now,
+		State:               entryState,
+		Message:             entryMessage,
+	}.Build()
+
+	if controlPlaneSucceeded {
+		applyClusterNodeSetUpgradeTargets(candidate, names)
+	}
+	appendClusterUpgradeHistory(candidate, []*privatev1.ClusterUpgradeHistoryEntry{entry})
+	candidate.GetStatus().SetActiveUpgradeAttempt(active)
+	candidate.GetStatus().SetUpgradeAttemptId(attemptID)
 }
 
 // applyClusterNodeSetUpgradeTargets moves each participating node-set reference
@@ -168,115 +210,634 @@ func applyClusterNodeSetUpgradeTargets(candidate *privatev1.Cluster, names []str
 	}
 }
 
-// appendClusterNodeSetUpgradeHistory records one entry per participating node
-// set under the shared attempt ID.
-func appendClusterNodeSetUpgradeHistory(current, candidate *privatev1.Cluster,
-	names []string, targetVersion, attemptID string, now *timestamppb.Timestamp) {
-	entries := make([]*privatev1.ClusterUpgradeHistoryEntry, 0, len(names))
-	for _, name := range names {
-		nodeSet := candidate.GetSpec().GetNodeSets()[name]
-		sourceVersion := current.GetStatus().GetNodeSets()[name].GetObservedVersion()
-		isNewNodeSet := current.GetSpec().GetNodeSets()[name] == nil
-		if isNewNodeSet {
-			// A new node set is created with the candidate control-plane
-			// version; it does not participate in an upgrade from an older
-			// version
-			sourceVersion = targetVersion
-		}
-		component := &privatev1.ClusterUpgradeComponent{}
-		component.SetNodeSetId(name)
-		entry := &privatev1.ClusterUpgradeHistoryEntry{}
-		entry.SetComponent(component)
-		entry.SetSourceVersion(sourceVersion)
-		entry.SetTargetVersion(targetVersion)
-		entry.SetAcceptedTime(now)
-		entry.SetStateTransitionTime(now)
-		entry.SetAttemptId(attemptID)
-		entry.SetTimeoutNodeCount(max(int32(1), nodeSet.GetSize()))
-		if sourceVersion == targetVersion {
-			entry.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED)
-		} else {
-			entry.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING)
-		}
-		entries = append(entries, entry)
-	}
-	appendClusterUpgradeHistory(candidate, entries)
-}
+// mergeClusterUpgradeHistory preserves server-owned history and validates
+// feedback for the current attempt.
+func mergeClusterUpgradeHistory(current, candidate *privatev1.Cluster,
+	mask *fieldmaskpb.FieldMask, requestActive *privatev1.ClusterUpgradeAttemptState) {
+	attemptID := current.GetStatus().GetUpgradeAttemptId()
+	stored := current.GetStatus().GetUpgradeHistory()
+	result := slices.Clone(stored)
+	update := clusterUpgradeHistoryEntryByID(candidate.GetStatus().GetUpgradeHistory(), attemptID)
+	feedbackRequested := updateIncludesField(mask, "status.active_upgrade_attempt") ||
+		updateIncludesField(mask, "status.upgrade_history")
+	incomingAttemptID := clusterUpgradeFeedbackAttemptID(attemptID, candidate, mask)
 
-// scheduleClusterNodeSetUpgradeBatch moves every participating node-set
-// reference and history entry to one shared cluster attempt.
-func scheduleClusterNodeSetUpgradeBatch(current, candidate *privatev1.Cluster,
-	targetVersion, attemptID string, now *timestamppb.Timestamp) {
-	names := sortedClusterNodeSetUpgradeNames(candidate.GetSpec().GetNodeSets())
-	if len(names) == 0 {
+	if feedbackRequested && incomingAttemptID != attemptID {
+		if !candidate.HasStatus() {
+			candidate.SetStatus(&privatev1.ClusterStatus{})
+		}
+		candidate.GetStatus().SetUpgradeAttemptId(attemptID)
+		restoreClusterObservedVersions(current, candidate)
+		mergedActive, removedParticipants := removeDeletedClusterUpgradeParticipants(
+			current.GetStatus().GetActiveUpgradeAttempt(), candidate)
+		if entry := clusterUpgradeHistoryEntryByID(stored, attemptID); entry != nil {
+			applyClusterUpgradeOutcome(entry, mergedActive, candidate,
+				len(removedParticipants) > 0 || !proto.Equal(current.GetStatus().GetActiveUpgradeAttempt(), mergedActive),
+				removedParticipants, controllers.NowTruncated())
+		}
+		candidate.GetStatus().SetActiveUpgradeAttempt(mergedActive)
+		candidate.GetStatus().SetUpgradeHistory(stored)
 		return
 	}
-	applyClusterNodeSetUpgradeTargets(candidate, names)
-	appendClusterNodeSetUpgradeHistory(current, candidate, names, targetVersion, attemptID, now)
-	candidate.GetStatus().SetUpgradeAttemptId(attemptID)
-}
 
-// mergeClusterUpgradeHistory accepts private status transitions by attempt and
-// component while retaining the server's audit fields and newest-first order.
-func mergeClusterUpgradeHistory(current, candidate *privatev1.Cluster,
-	mask *fieldmaskpb.FieldMask) {
-	stored := current.GetStatus().GetUpgradeHistory()
-	var result []*privatev1.ClusterUpgradeHistoryEntry
+	if updateIncludesField(mask, "status.active_upgrade_attempt") && requestActive != nil {
+		restoreStaleUpgradeStatus(current, candidate, requestActive)
+	}
+
 	if updateIncludesField(mask, "status.upgrade_history") {
-		result = mergeClusterUpgradeStateChanges(stored, candidate.GetStatus().GetUpgradeHistory())
-	} else {
-		result = make([]*privatev1.ClusterUpgradeHistoryEntry, len(stored))
-		copy(result, stored)
+		for i, entry := range stored {
+			if entry.GetAttemptId() != attemptID {
+				continue
+			}
+			if update != nil {
+				result[i] = mergeClusterUpgradeHistoryEntry(entry, update)
+			}
+			break
+		}
 	}
 	if !candidate.HasStatus() {
 		candidate.SetStatus(&privatev1.ClusterStatus{})
 	}
-	candidate.GetStatus().SetUpgradeAttemptId(current.GetStatus().GetUpgradeAttemptId())
+	candidate.GetStatus().SetUpgradeAttemptId(attemptID)
+	var mergedActive *privatev1.ClusterUpgradeAttemptState
+	if updateIncludesField(mask, "status.active_upgrade_attempt") {
+		mergedActive = mergeClusterUpgradeAttemptState(current, candidate, attemptID, requestActive)
+	} else {
+		mergedActive = current.GetStatus().GetActiveUpgradeAttempt()
+	}
+	mergedActive, removedParticipants := removeDeletedClusterUpgradeParticipants(mergedActive, candidate)
+	if entry := clusterUpgradeHistoryEntryByID(result, attemptID); entry != nil {
+		applyClusterUpgradeOutcome(entry, mergedActive, candidate,
+			len(removedParticipants) > 0 || !proto.Equal(current.GetStatus().GetActiveUpgradeAttempt(), mergedActive),
+			removedParticipants, controllers.NowTruncated())
+	}
+	candidate.GetStatus().SetActiveUpgradeAttempt(mergedActive)
 	candidate.GetStatus().SetUpgradeHistory(result)
 }
 
-// mergeClusterUpgradeStateChanges merges only newer state
-// transitions into stored history.
-func mergeClusterUpgradeStateChanges(
-	stored, incoming []*privatev1.ClusterUpgradeHistoryEntry,
-) []*privatev1.ClusterUpgradeHistoryEntry {
-	byAttemptAndComponent := make(map[clusterUpgradeHistoryKey]*privatev1.ClusterUpgradeHistoryEntry, len(incoming))
-	for _, entry := range incoming {
-		if entry.GetAttemptId() != "" && entry.GetComponent() != nil {
-			byAttemptAndComponent[upgradeHistoryKey(entry)] = entry
-		}
+// restoreStaleUpgradeStatus applies the component-state freshness decision to
+// the observations in the same request. A stale active-state snapshot cannot
+// roll back observations or replace the status of a removed participant.
+// Observation-only requests carry no active state and are left unchanged.
+func restoreStaleUpgradeStatus(current, candidate *privatev1.Cluster,
+	requestActive *privatev1.ClusterUpgradeAttemptState) {
+	storedActive := current.GetStatus().GetActiveUpgradeAttempt()
+	if storedActive == nil {
+		restoreClusterObservedVersions(current, candidate)
+		return
 	}
-	result := make([]*privatev1.ClusterUpgradeHistoryEntry, len(stored))
-	for i, entry := range stored {
-		result[i] = entry
-		update := byAttemptAndComponent[upgradeHistoryKey(entry)]
-		if update == nil || update.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_UNSPECIFIED ||
-			update.GetState() == entry.GetState() || update.GetStateTransitionTime() == nil ||
-			!update.GetStateTransitionTime().AsTime().After(entry.GetStateTransitionTime().AsTime()) {
+
+	storedControlPlane := storedActive.GetControlPlane()
+	requestControlPlane := requestActive.GetControlPlane()
+	if requestControlPlane == nil || !newerClusterUpgradeTransition(
+		storedControlPlane.GetState(), requestControlPlane.GetState(),
+		storedControlPlane.GetStateTransitionTime(), requestControlPlane.GetStateTransitionTime()) {
+		candidate.GetStatus().SetObservedVersion(current.GetStatus().GetObservedVersion())
+	}
+
+	storedNodeSets := make(map[string]*privatev1.ClusterUpgradeNodeSetState,
+		len(storedActive.GetNodeSets()))
+	for _, nodeSet := range storedActive.GetNodeSets() {
+		storedNodeSets[nodeSet.GetNodeSetId()] = nodeSet
+	}
+	requestNodeSets := make(map[string]*privatev1.ClusterUpgradeNodeSetState,
+		len(requestActive.GetNodeSets()))
+	for _, nodeSet := range requestActive.GetNodeSets() {
+		requestNodeSets[nodeSet.GetNodeSetId()] = nodeSet
+	}
+	for name, storedNodeSet := range storedNodeSets {
+		requestNodeSet := requestNodeSets[name]
+		if requestNodeSet != nil && newerClusterUpgradeTransition(
+			storedNodeSet.GetState(), requestNodeSet.GetState(),
+			storedNodeSet.GetStateTransitionTime(), requestNodeSet.GetStateTransitionTime()) {
 			continue
 		}
-		changed := proto.Clone(entry).(*privatev1.ClusterUpgradeHistoryEntry)
-		changed.SetState(update.GetState())
-		changed.SetMessage(update.GetMessage())
-		changed.SetStateTransitionTime(update.GetStateTransitionTime())
-		result[i] = changed
+		restoreClusterNodeSetStatus(current, candidate, name)
 	}
-	return result
+	for name := range requestNodeSets {
+		if _, selected := storedNodeSets[name]; !selected {
+			restoreClusterNodeSetStatus(current, candidate, name)
+		}
+	}
 }
 
-type clusterUpgradeHistoryKey struct {
-	attemptID    string
-	nodeSetID    string
-	controlPlane bool
+// restoreClusterNodeSetStatus restores the complete status for one node set.
+// A replacement incarnation has no stored status until the operator reports it.
+func restoreClusterNodeSetStatus(current, candidate *privatev1.Cluster, name string) {
+	statuses := candidate.GetStatus().GetNodeSets()
+	if statuses == nil {
+		return
+	}
+	stored := current.GetStatus().GetNodeSets()[name]
+	if stored == nil {
+		delete(statuses, name)
+		return
+	}
+	statuses[name] = proto.Clone(stored).(*privatev1.ClusterNodeSetStatus)
 }
 
-// upgradeHistoryKey distinguishes components that share an attempt ID.
-func upgradeHistoryKey(entry *privatev1.ClusterUpgradeHistoryEntry) clusterUpgradeHistoryKey {
-	return clusterUpgradeHistoryKey{
-		attemptID:    entry.GetAttemptId(),
-		nodeSetID:    entry.GetComponent().GetNodeSetId(),
-		controlPlane: entry.GetComponent().GetControlPlane() != nil,
+// clusterUpgradeFeedbackAttemptID determines the attempt named by feedback. A
+// current attempt requires matching history; after retirement, only an explicitly
+// named history entry identifies superseded feedback. Omitted attempt feedback
+// leaves independent observations unaffected.
+func clusterUpgradeFeedbackAttemptID(attemptID string, candidate *privatev1.Cluster,
+	mask *fieldmaskpb.FieldMask) string {
+	if attemptID != "" {
+		requestAttemptID := candidate.GetStatus().GetUpgradeAttemptId()
+		if requestAttemptID != "" && requestAttemptID != attemptID {
+			return ""
+		}
+		if update := clusterUpgradeHistoryEntryByID(
+			candidate.GetStatus().GetUpgradeHistory(), attemptID); update != nil {
+			return attemptID
+		}
+		return ""
 	}
+	// After retirement, retained audit entries alone do not identify feedback.
+	// Require the request's attempt pointer to name an entry in the history
+	// payload; a complete status snapshot with no attempt pointer stays neutral.
+	namedAttemptID := candidate.GetStatus().GetUpgradeAttemptId()
+	if namedAttemptID == "" || !updateIncludesField(mask, "status.upgrade_history") {
+		return ""
+	}
+	if clusterUpgradeHistoryEntryByID(candidate.GetStatus().GetUpgradeHistory(),
+		namedAttemptID) == nil {
+		return ""
+	}
+	return namedAttemptID
+}
+
+// restoreClusterObservedVersions rejects observation changes that arrive with
+// superseded attempt feedback. Observation-only requests still merge normally.
+func restoreClusterObservedVersions(current, candidate *privatev1.Cluster) {
+	candidate.GetStatus().SetObservedVersion(current.GetStatus().GetObservedVersion())
+	storedStatuses := current.GetStatus().GetNodeSets()
+	statuses := make(map[string]*privatev1.ClusterNodeSetStatus, len(storedStatuses))
+	for name, status := range storedStatuses {
+		if status == nil {
+			continue
+		}
+		statuses[name] = proto.Clone(status).(*privatev1.ClusterNodeSetStatus)
+	}
+	candidate.GetStatus().SetNodeSets(statuses)
+}
+
+// clusterUpgradeHistoryEntryByID returns the first entry with the attempt ID.
+func clusterUpgradeHistoryEntryByID(entries []*privatev1.ClusterUpgradeHistoryEntry,
+	attemptID string) *privatev1.ClusterUpgradeHistoryEntry {
+	for _, entry := range entries {
+		if entry.GetAttemptId() == attemptID {
+			return entry
+		}
+	}
+	return nil
+}
+
+// mergeClusterUpgradeHistoryEntry applies a valid newer transition to the
+// stored aggregate entry while preserving its audit fields.
+func mergeClusterUpgradeHistoryEntry(stored, update *privatev1.ClusterUpgradeHistoryEntry,
+) *privatev1.ClusterUpgradeHistoryEntry {
+	// Terminal outcomes are derived from participant evidence after component
+	// state has been merged. A history-only status is not sufficient evidence.
+	if isTerminalClusterUpgradeState(update.GetState()) {
+		return stored
+	}
+	if !newerClusterUpgradeTransition(stored.GetState(), update.GetState(),
+		stored.GetStateTransitionTime(), update.GetStateTransitionTime()) {
+		return stored
+	}
+	if update.GetState() != stored.GetState() {
+		return stored
+	}
+	changed := proto.Clone(stored).(*privatev1.ClusterUpgradeHistoryEntry)
+	changed.SetMessage(update.GetMessage())
+	return changed
+}
+
+// retireClusterUpgradeAttemptForReferenceReplacement stops feedback for an
+// attempt whose target no longer matches the selected semantic version. The
+// history remains, but Fulfillment no longer owns an active attempt.
+func retireClusterUpgradeAttemptForReferenceReplacement(candidate *privatev1.Cluster,
+	targetVersion string) {
+	attemptID := candidate.GetStatus().GetUpgradeAttemptId()
+	if attemptID == "" || candidate.GetStatus().GetActiveUpgradeAttempt() == nil {
+		return
+	}
+	entry := clusterUpgradeHistoryEntryByID(
+		candidate.GetStatus().GetUpgradeHistory(), attemptID)
+	if entry.GetTargetVersion() == targetVersion {
+		return
+	}
+	candidate.GetStatus().SetUpgradeAttemptId("")
+	candidate.GetStatus().ClearActiveUpgradeAttempt()
+}
+
+// mergeClusterUpgradeAttemptState validates component feedback against the
+// frozen active attempt. A nil incoming value cannot clear a nonterminal
+// attempt.
+func mergeClusterUpgradeAttemptState(current, candidate *privatev1.Cluster,
+	attemptID string, requestActive *privatev1.ClusterUpgradeAttemptState) *privatev1.ClusterUpgradeAttemptState {
+	storedEntry := clusterUpgradeHistoryEntryByID(
+		current.GetStatus().GetUpgradeHistory(), attemptID)
+	if storedEntry != nil && isTerminalClusterUpgradeState(storedEntry.GetState()) {
+		return nil
+	}
+	incoming := candidate.GetStatus().GetActiveUpgradeAttempt()
+	if incoming == nil {
+		return current.GetStatus().GetActiveUpgradeAttempt()
+	}
+	stored := current.GetStatus().GetActiveUpgradeAttempt()
+	if stored == nil {
+		return nil
+	}
+	merged := proto.Clone(stored).(*privatev1.ClusterUpgradeAttemptState)
+	if controlPlane := merged.GetControlPlane(); controlPlane != nil {
+		mergeClusterUpgradeComponentState(controlPlane, incoming.GetControlPlane())
+	}
+	incomingNodeSets := make(map[string]*privatev1.ClusterUpgradeNodeSetState,
+		len(incoming.GetNodeSets()))
+	for _, nodeSet := range incoming.GetNodeSets() {
+		incomingNodeSets[nodeSet.GetNodeSetId()] = nodeSet
+	}
+	// Worker state is mutable only when the request itself carries the same
+	// release marker Fulfillment stored. The merged candidate cannot be used
+	// here because a partial field mask can inherit the stored marker.
+	workersScheduled := proto.Equal(merged.GetNodeSetsScheduledTime(),
+		requestActive.GetNodeSetsScheduledTime()) && merged.GetNodeSetsScheduledTime() != nil
+	for _, nodeSet := range merged.GetNodeSets() {
+		if !workersScheduled {
+			continue
+		}
+		mergeClusterUpgradeComponentState(nodeSet, incomingNodeSets[nodeSet.GetNodeSetId()])
+	}
+	return merged
+}
+
+// removeDeletedClusterUpgradeParticipants invalidates frozen membership when
+// a caller accepts a node-set removal. Re-adding the same name later creates a
+// new node set and does not restore the removed participant.
+func removeDeletedClusterUpgradeParticipants(active *privatev1.ClusterUpgradeAttemptState,
+	candidate *privatev1.Cluster) (*privatev1.ClusterUpgradeAttemptState, []string) {
+	if active == nil {
+		return nil, nil
+	}
+	merged := proto.Clone(active).(*privatev1.ClusterUpgradeAttemptState)
+	removed := []string{}
+	nodeSets := slices.DeleteFunc(merged.GetNodeSets(), func(nodeSet *privatev1.ClusterUpgradeNodeSetState) bool {
+		if candidate.GetSpec().GetNodeSets()[nodeSet.GetNodeSetId()] == nil {
+			removed = append(removed, nodeSet.GetNodeSetId())
+			return true
+		}
+		return false
+	})
+	merged.SetNodeSets(nodeSets)
+	return merged, removed
+}
+
+// applyClusterUpgradeOutcome records the aggregate state derived from merged
+// participant feedback and the current spec. It does not trust an aggregate
+// status supplied by the operator.
+func applyClusterUpgradeOutcome(entry *privatev1.ClusterUpgradeHistoryEntry,
+	active *privatev1.ClusterUpgradeAttemptState, candidate *privatev1.Cluster,
+	participantChanged bool, removedParticipants []string, now *timestamppb.Timestamp) {
+	if active == nil || active.GetControlPlane() == nil ||
+		isTerminalClusterUpgradeState(entry.GetState()) {
+		return
+	}
+	state, message, transitionTime := clusterUpgradeOutcome(clusterUpgradeOutcomeRequest{
+		previous:               entry.GetState(),
+		previousTransitionTime: entry.GetStateTransitionTime(),
+		active:                 active,
+		candidate:              candidate,
+		removedParticipants:    removedParticipants,
+		now:                    now,
+	})
+	if state == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED && message == "" &&
+		isClusterUpgradeRemovalMessage(entry.GetMessage()) {
+		message = entry.GetMessage()
+	}
+	if state == entry.GetState() && state != privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT &&
+		!participantChanged {
+		return
+	}
+	if state == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT {
+		if last := entry.GetStateTransitionTime(); last != nil &&
+			(transitionTime == nil || !transitionTime.AsTime().After(last.AsTime())) {
+			transitionTime = now
+		}
+	}
+	// A removal that lets every remaining participant complete the attempt records
+	// the accepted membership change, not an earlier participant transition.
+	if state == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED &&
+		len(removedParticipants) > 0 {
+		transitionTime = now
+	}
+	setClusterUpgradeHistoryState(entry, state, message, transitionTime)
+}
+
+// clusterUpgradeOutcome derives the aggregate state and message from
+// participants that remain selected by the candidate spec.
+type clusterUpgradeOutcomeRequest struct {
+	previous               privatev1.ClusterUpgradeState
+	previousTransitionTime *timestamppb.Timestamp
+	active                 *privatev1.ClusterUpgradeAttemptState
+	candidate              *privatev1.Cluster
+	removedParticipants    []string
+	now                    *timestamppb.Timestamp
+}
+
+func clusterUpgradeOutcome(request clusterUpgradeOutcomeRequest) (
+	privatev1.ClusterUpgradeState, string, *timestamppb.Timestamp) {
+	previous := request.previous
+	active := request.active
+	candidate := request.candidate
+	now := request.now
+	controlPlane := active.GetControlPlane()
+	if controlPlane.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED {
+		message := controlPlane.GetMessage()
+		if message == "" {
+			message = "Control plane upgrade failed"
+		}
+		return privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED, message,
+			controlPlane.GetStateTransitionTime()
+	}
+
+	evidence := newClusterUpgradeEvidence(active, previous,
+		request.previousTransitionTime, request.removedParticipants)
+	for _, nodeSet := range active.GetNodeSets() {
+		if candidate.GetSpec().GetNodeSets()[nodeSet.GetNodeSetId()] != nil {
+			evidence.observeNodeSet(nodeSet, previous)
+		}
+	}
+	return evidence.outcome(now)
+}
+
+const clusterUpgradeRemovalMessagePrefix = "Participating node sets removed: "
+
+// clusterUpgradeEvidence is the aggregate state machine's evidence accumulator.
+// Participant transitions are collected first; outcome precedence is selected
+// only after all selected participants have been observed.
+type clusterUpgradeEvidence struct {
+	allSucceeded            bool
+	anyTimedOut             bool
+	anyProgressing          bool
+	controlPlaneProgressing bool
+	controlPlaneSucceeded   bool
+	workersScheduled        bool
+	recovering              bool
+	removalRecovery         bool
+	removedNodeSets         []string
+	failedNodeSet           *privatev1.ClusterUpgradeNodeSetState
+	timeoutMessage          string
+	timeoutTime             *timestamppb.Timestamp
+	successTime             *timestamppb.Timestamp
+	recoveryTime            *timestamppb.Timestamp
+	recoveryFloor           *timestamppb.Timestamp
+}
+
+func newClusterUpgradeEvidence(active *privatev1.ClusterUpgradeAttemptState,
+	previous privatev1.ClusterUpgradeState, previousTransitionTime *timestamppb.Timestamp,
+	removedParticipants []string) clusterUpgradeEvidence {
+	controlPlane := active.GetControlPlane()
+	evidence := clusterUpgradeEvidence{
+		allSucceeded: controlPlane.GetState() ==
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED,
+		anyTimedOut: controlPlane.GetState() ==
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT,
+		controlPlaneProgressing: controlPlane.GetState() ==
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING,
+		controlPlaneSucceeded: controlPlane.GetState() ==
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED,
+		anyProgressing: controlPlane.GetState() ==
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING ||
+			(controlPlane.GetState() ==
+				privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED &&
+				len(active.GetNodeSets()) > 0),
+		workersScheduled: active.GetNodeSetsScheduledTime() != nil,
+		successTime:      controlPlane.GetStateTransitionTime(),
+	}
+	if evidence.successTime == nil {
+		evidence.successTime = controlPlane.GetAcceptedTime()
+	}
+	if evidence.anyTimedOut {
+		evidence.timeoutMessage = clusterUpgradeTimeoutReason(
+			"Control plane", controlPlane.GetMessage())
+		evidence.timeoutTime = controlPlane.GetStateTransitionTime()
+	}
+	evidence.recovering = previous ==
+		privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT
+	evidence.removedNodeSets = removedParticipants
+	evidence.removalRecovery = evidence.recovering && len(removedParticipants) > 0
+	if evidence.recovering {
+		evidence.recoveryFloor = previousTransitionTime
+	}
+	if evidence.recovering && (controlPlane.GetState() ==
+		privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING ||
+		controlPlane.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED) {
+		evidence.observeRecovery(controlPlane.GetStateTransitionTime())
+	}
+	return evidence
+}
+
+func (evidence *clusterUpgradeEvidence) observeNodeSet(
+	nodeSet *privatev1.ClusterUpgradeNodeSetState, previous privatev1.ClusterUpgradeState) {
+	switch nodeSet.GetState() {
+	case privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED:
+		if evidence.failedNodeSet == nil {
+			evidence.failedNodeSet = nodeSet
+		}
+		evidence.allSucceeded = false
+	case privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT:
+		evidence.anyTimedOut = true
+		evidence.allSucceeded = false
+		evidence.observeTimeout(nodeSet)
+	case privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING:
+		evidence.anyProgressing = true
+		evidence.allSucceeded = false
+		if previous == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT {
+			evidence.observeRecovery(nodeSet.GetStateTransitionTime())
+		}
+	case privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING:
+		evidence.allSucceeded = false
+	case privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED:
+		evidence.observeSuccess(nodeSet.GetStateTransitionTime())
+		if previous == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT {
+			evidence.observeRecovery(nodeSet.GetStateTransitionTime())
+		}
+	}
+}
+
+func (evidence *clusterUpgradeEvidence) observeTimeout(
+	nodeSet *privatev1.ClusterUpgradeNodeSetState) {
+	if evidence.timeoutMessage == "" {
+		evidence.timeoutMessage = clusterUpgradeTimeoutReason(
+			fmt.Sprintf("Node set %q", nodeSet.GetNodeSetId()), nodeSet.GetMessage())
+	}
+	if t := nodeSet.GetStateTransitionTime(); t != nil &&
+		(evidence.timeoutTime == nil || t.AsTime().Before(evidence.timeoutTime.AsTime())) {
+		evidence.timeoutTime = t
+	}
+}
+
+func (evidence *clusterUpgradeEvidence) observeSuccess(t *timestamppb.Timestamp) {
+	if t != nil && (evidence.successTime == nil || t.AsTime().After(evidence.successTime.AsTime())) {
+		evidence.successTime = t
+	}
+}
+
+func (evidence *clusterUpgradeEvidence) observeRecovery(t *timestamppb.Timestamp) {
+	if t == nil || (evidence.recoveryFloor != nil &&
+		!t.AsTime().After(evidence.recoveryFloor.AsTime())) {
+		return
+	}
+	if evidence.recoveryTime == nil || t.AsTime().After(evidence.recoveryTime.AsTime()) {
+		evidence.recoveryTime = t
+	}
+}
+
+func (evidence clusterUpgradeEvidence) stageMessage() string {
+	if message := evidence.removalMessage(); message != "" {
+		return message
+	}
+	if evidence.controlPlaneProgressing && !evidence.workersScheduled &&
+		!evidence.allSucceeded {
+		return "Control plane upgrade in progress"
+	}
+	if evidence.workersScheduled || evidence.controlPlaneSucceeded ||
+		evidence.anyProgressing {
+		return "Node set upgrades in progress"
+	}
+	return "Waiting for control plane upgrade"
+}
+
+func (evidence clusterUpgradeEvidence) removalMessage() string {
+	if len(evidence.removedNodeSets) == 0 {
+		return ""
+	}
+	return clusterUpgradeRemovalMessagePrefix + strings.Join(evidence.removedNodeSets, ", ")
+}
+
+func isClusterUpgradeRemovalMessage(message string) bool {
+	return strings.HasPrefix(message, clusterUpgradeRemovalMessagePrefix)
+}
+
+func (evidence clusterUpgradeEvidence) outcome(now *timestamppb.Timestamp) (
+	privatev1.ClusterUpgradeState, string, *timestamppb.Timestamp) {
+	switch {
+	case evidence.failedNodeSet != nil:
+		message := evidence.failedNodeSet.GetMessage()
+		if message == "" {
+			message = fmt.Sprintf("Node set %q upgrade failed",
+				evidence.failedNodeSet.GetNodeSetId())
+		}
+		return privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED, message,
+			evidence.failedNodeSet.GetStateTransitionTime()
+	case evidence.allSucceeded:
+		transitionTime := evidence.successTime
+		if evidence.removalRecovery {
+			transitionTime = now
+		}
+		message := ""
+		if len(evidence.removedNodeSets) > 0 {
+			message = evidence.removalMessage()
+		}
+		return privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED,
+			message, transitionTime
+	case evidence.anyTimedOut:
+		return privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT,
+			evidence.timeoutMessage, evidence.timeoutTime
+	case evidence.anyProgressing || evidence.workersScheduled:
+		transitionTime := evidence.successTime
+		if evidence.recovering {
+			transitionTime = evidence.recoveryTime
+			if evidence.removalRecovery || transitionTime == nil {
+				transitionTime = now
+			}
+		}
+		return privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING,
+			evidence.stageMessage(), transitionTime
+	default:
+		return privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING,
+			evidence.stageMessage(), evidence.successTime
+	}
+}
+
+// clusterUpgradeTimeoutReason preserves component-supplied detail and provides
+// a component-identified fallback when the operator omitted the reason.
+func clusterUpgradeTimeoutReason(component, message string) string {
+	if message != "" {
+		return message
+	}
+	return component + " upgrade timed out"
+}
+
+// clusterUpgradeComponentState is the mutable state shape shared by
+// control-plane and node-set upgrade participants.
+type clusterUpgradeComponentState interface {
+	GetState() privatev1.ClusterUpgradeState
+	SetState(privatev1.ClusterUpgradeState)
+	GetMessage() string
+	SetMessage(string)
+	GetStateTransitionTime() *timestamppb.Timestamp
+	SetStateTransitionTime(*timestamppb.Timestamp)
+}
+
+// mergeClusterUpgradeComponentState accepts only a valid newer transition and
+// preserves Fulfillment-owned identity, acceptance, and timeout data.
+func mergeClusterUpgradeComponentState[S any, P interface {
+	clusterUpgradeComponentState
+	*S
+}](stored, update P) {
+	if update == nil || !newerClusterUpgradeTransition(stored.GetState(),
+		update.GetState(), stored.GetStateTransitionTime(), update.GetStateTransitionTime()) {
+		return
+	}
+	if update.GetState() == stored.GetState() {
+		stored.SetMessage(update.GetMessage())
+		return
+	}
+	stored.SetState(update.GetState())
+	stored.SetMessage(update.GetMessage())
+	stored.SetStateTransitionTime(update.GetStateTransitionTime())
+}
+
+// newerClusterUpgradeTransition reports whether feedback supplies a valid,
+// strictly newer transition.
+func newerClusterUpgradeTransition(state, nextState privatev1.ClusterUpgradeState,
+	last, next *timestamppb.Timestamp) bool {
+	if isTerminalClusterUpgradeState(state) ||
+		nextState == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_UNSPECIFIED ||
+		next == nil || last == nil || !next.AsTime().After(last.AsTime()) {
+		return false
+	}
+	return nextState == state || validClusterUpgradeTransition(state, nextState)
+}
+
+// validClusterUpgradeTransition applies the aggregate state machine.
+func validClusterUpgradeTransition(from, to privatev1.ClusterUpgradeState) bool {
+	switch from {
+	case privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING:
+		return to == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING ||
+			to == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT ||
+			to == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED ||
+			to == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED
+	case privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING:
+		return to == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT ||
+			to == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED ||
+			to == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED
+	case privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT:
+		return to == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING ||
+			to == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED ||
+			to == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED
+	default:
+		return false
+	}
+}
+
+// isTerminalClusterUpgradeState reports whether an aggregate entry is immutable.
+func isTerminalClusterUpgradeState(state privatev1.ClusterUpgradeState) bool {
+	return state == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED ||
+		state == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED
 }
 
 // validateNodeSetVersionStatusUpdate rejects explicit attempts to address
@@ -387,31 +948,82 @@ func (s *PrivateClustersServer) validateVersionReferenceUpdate(ctx context.Conte
 	return selected, version, nil
 }
 
-// advanceClusterUpgradeAfterControlPlaneSuccess applies the server-owned
-// node-set batch when feedback completes the accepted control-plane component
-// of a whole-cluster attempt.
-func advanceClusterUpgradeAfterControlPlaneSuccess(current, candidate *privatev1.Cluster) {
+// advanceClusterUpgradeAfterControlPlaneSuccess schedules the frozen node-set
+// batch only after the active control-plane state has succeeded.
+func advanceClusterUpgradeAfterControlPlaneSuccess(candidate *privatev1.Cluster) {
 	attemptID := candidate.GetStatus().GetUpgradeAttemptId()
-	if attemptID == "" {
+	active := candidate.GetStatus().GetActiveUpgradeAttempt()
+	if attemptID == "" || active == nil || active.GetControlPlane() == nil {
 		return
 	}
-	targetVersion := ""
-	for _, entry := range candidate.GetStatus().GetUpgradeHistory() {
-		if entry.GetAttemptId() != attemptID || entry.GetComponent().GetControlPlane() == nil ||
-			entry.GetState() != privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED {
-			continue
-		}
-		targetVersion = entry.GetTargetVersion()
-		break
-	}
-	if targetVersion == "" {
+	entry := currentClusterUpgradeHistoryEntry(candidate, attemptID)
+	if entry == nil {
 		return
 	}
-	for _, entry := range candidate.GetStatus().GetUpgradeHistory() {
-		if entry.GetAttemptId() == attemptID && entry.GetComponent().GetNodeSetId() != "" {
-			return
+	now := controllers.NowTruncated()
+	switch active.GetControlPlane().GetState() {
+	case privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED:
+		if isTerminalClusterUpgradeState(entry.GetState()) {
+			break
 		}
+		selected := make([]string, 0, len(active.GetNodeSets()))
+		for _, nodeSet := range active.GetNodeSets() {
+			if candidate.GetSpec().GetNodeSets()[nodeSet.GetNodeSetId()] == nil {
+				continue
+			}
+			selected = append(selected, nodeSet.GetNodeSetId())
+		}
+		if len(selected) == 0 {
+			setClusterUpgradeHistoryState(entry,
+				privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED, "", now)
+			break
+		}
+		if active.GetNodeSetsScheduledTime() != nil {
+			break
+		}
+		active.SetNodeSetsScheduledTime(now)
+		for _, nodeSet := range active.GetNodeSets() {
+			if nodeSet.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_UNSPECIFIED {
+				nodeSet.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING)
+			}
+		}
+		applyClusterNodeSetUpgradeTargets(candidate, selected)
+		setClusterUpgradeHistoryState(entry,
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING,
+			entry.GetMessage(), now)
+	case privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED:
+		message := active.GetControlPlane().GetMessage()
+		if message == "" {
+			message = "Control plane upgrade failed"
+		}
+		setClusterUpgradeHistoryState(entry,
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED, message, now)
 	}
-	scheduleClusterNodeSetUpgradeBatch(
-		current, candidate, targetVersion, attemptID, controllers.NowTruncated())
+	if isTerminalClusterUpgradeState(entry.GetState()) {
+		candidate.GetStatus().ClearActiveUpgradeAttempt()
+	}
+}
+
+// currentClusterUpgradeHistoryEntry returns the entry owned by the active
+// attempt pointer.
+func currentClusterUpgradeHistoryEntry(candidate *privatev1.Cluster,
+	attemptID string) *privatev1.ClusterUpgradeHistoryEntry {
+	return clusterUpgradeHistoryEntryByID(candidate.GetStatus().GetUpgradeHistory(), attemptID)
+}
+
+// setClusterUpgradeHistoryState records a monotonic OSAC-owned transition.
+func setClusterUpgradeHistoryState(entry *privatev1.ClusterUpgradeHistoryEntry,
+	state privatev1.ClusterUpgradeState, message string, now *timestamppb.Timestamp) {
+	if entry.GetState() == state {
+		if message != "" {
+			entry.SetMessage(message)
+		}
+		return
+	}
+	if last := entry.GetStateTransitionTime(); last != nil && !now.AsTime().After(last.AsTime()) {
+		now = timestamppb.New(last.AsTime().Add(time.Nanosecond))
+	}
+	entry.SetState(state)
+	entry.SetMessage(message)
+	entry.SetStateTransitionTime(now)
 }

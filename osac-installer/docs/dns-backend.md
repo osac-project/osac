@@ -68,7 +68,7 @@ unchanged values sends no update; a changed address or TTL replaces the record.
 | `DNS_RFC2136_PORT` | `53` | Server port |
 | `DNS_RFC2136_PROTOCOL` | `tcp` | `tcp` or `udp` |
 | `DNS_RFC2136_KEY_NAME` | — (required) | Name of the TSIG key |
-| `DNS_RFC2136_KEY_ALGORITHM` | `hmac-sha256` | `hmac-md5`, `hmac-sha1`, `hmac-sha224`, `hmac-sha256`, `hmac-sha384` or `hmac-sha512` |
+| `DNS_RFC2136_KEY_ALGORITHM` | `hmac-sha256` | `hmac-sha224`, `hmac-sha256`, `hmac-sha384` or `hmac-sha512`. HMAC-MD5 and HMAC-SHA1 keys are not accepted |
 | `DNS_SERVER` | — | Optional resolver for the readiness wait after the records are created, queried with `dig` over UDP port 53. Set it when the zone is not delegated from the resolvers the execution environment uses; point it at the update server only if that server answers queries on UDP port 53 |
 
 ### Secret Variables
@@ -165,7 +165,7 @@ The driver's failure messages name the setting to check:
 | `RFC 2136 DNS update failed: DNS_RFC2136_KEY_SECRET is not a valid base64 TSIG secret` | Copy the `secret` value from the BIND key file exactly |
 | `… the server rejected the TSIG signature` | The key name, algorithm or secret does not match a key the server knows |
 | `… no answer from the server` | Check the server address, port and protocol, and that the AAP job pods can reach the server |
-| `… the server refused a query for the existing record` | The key may update the zone but not query it. Allow the key in the zone's `allow-query` |
+| `… the query for the existing record failed` | On a rerun the driver queries the existing record. Check that the key is allowed in the zone's `allow-query`, then the server logs for errors such as `SERVFAIL` |
 | `RFC 2136 DNS update failed (REFUSED)` | The key may not change these records. Check the zone's `update-policy` (or `allow-update`) for this key |
 | `RFC 2136 DNS update failed (NOTAUTH)` | The server is not the primary for `DNS_ZONE`, or it did not accept the key |
 | `RFC 2136 DNS update failed (NOTZONE)` | The record is outside the zone configured on the server; check `DNS_ZONE` |

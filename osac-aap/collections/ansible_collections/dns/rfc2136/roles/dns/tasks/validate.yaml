@@ -39,8 +39,8 @@
     that:
       - dns_rfc2136_key_algorithm in dns_rfc2136_key_algorithms
     fail_msg: >-
-      DNS_RFC2136_KEY_ALGORITHM must be one of hmac-md5, hmac-sha1,
-      hmac-sha224, hmac-sha256, hmac-sha384 or hmac-sha512.
+      DNS_RFC2136_KEY_ALGORITHM must be one of hmac-sha224, hmac-sha256,
+      hmac-sha384 or hmac-sha512.
     quiet: true
 
 - name: Check DNS_RFC2136_KEY_SECRET

@@ -43,9 +43,9 @@ class ServerState:
     # Refuse every UPDATE, including prerequisite-only checks, like BIND when
     # the key may not update the zone at all.
     refuse_all_updates: bool = False
-    # Refuse queries but accept updates, like a BIND allow-query that does not
-    # cover the update key.
-    refuse_queries: bool = False
+    # Answer queries with this response code (for example REFUSED, like a BIND
+    # allow-query that does not cover the key, or SERVFAIL) but accept updates.
+    query_rcode: int | None = None
     # (owner name, rdtype) -> (ttl, set of rdata text)
     records: dict = field(default_factory=dict)
     # Every UPDATE that reached the update section, after TSIG and zone checks.
@@ -99,7 +99,10 @@ class _Handler:
     def _query(self, message, response) -> None:
         question = message.question[0]
         name, rdtype = question.name, question.rdtype
-        if self.state.refuse_queries or not name.is_subdomain(self.state.zone):
+        if self.state.query_rcode is not None:
+            response.set_rcode(self.state.query_rcode)
+            return
+        if not name.is_subdomain(self.state.zone):
             response.set_rcode(dns.rcode.REFUSED)
             return
         if name == self.state.zone and rdtype == dns.rdatatype.SOA:

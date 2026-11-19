@@ -16,9 +16,8 @@ dns_rfc2136_key_secret: "{{ lookup('env', 'DNS_RFC2136_KEY_SECRET') | trim }}"
 dns_rfc2136_protocols:
   - tcp
   - udp
+# SHA-2 only: HMAC-MD5 and HMAC-SHA1 are weak and not accepted.
 dns_rfc2136_key_algorithms:
-  - hmac-md5
-  - hmac-sha1
   - hmac-sha224
   - hmac-sha256
   - hmac-sha384

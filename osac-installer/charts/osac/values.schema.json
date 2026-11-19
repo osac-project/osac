@@ -1478,8 +1478,6 @@
                       "description": "dns.rfc2136.dns: TSIG key algorithm (empty uses hmac-sha256)",
                       "enum": [
                         "",
-                        "hmac-md5",
-                        "hmac-sha1",
                         "hmac-sha224",
                         "hmac-sha256",
                         "hmac-sha384",

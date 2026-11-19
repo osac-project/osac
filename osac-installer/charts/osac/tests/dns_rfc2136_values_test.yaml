@@ -95,6 +95,29 @@ tests:
       - failedTemplate:
           errorPattern: "DNS_RFC2136_KEY_ALGORITHM"
 
+  - it: rejects the weak HMAC-MD5 algorithm
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_KEY_ALGORITHM: hmac-md5
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_KEY_ALGORITHM"
+
+  - it: rejects the weak HMAC-SHA1 algorithm
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_KEY_ALGORITHM: hmac-sha1
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_KEY_ALGORITHM"
+
+  - it: accepts the SHA-2 algorithms
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_KEY_ALGORITHM: hmac-sha224
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: data.DNS_RFC2136_KEY_ALGORITHM
+          value: hmac-sha224
+
   - it: rejects a non-numeric port
     set:
       aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_PORT: domain

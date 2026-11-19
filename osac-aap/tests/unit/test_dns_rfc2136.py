@@ -15,6 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import dns.rcode
 import pytest
 import yaml
 
@@ -288,14 +289,20 @@ def test_refused_create_fails(tmp_path, server, secret):
     assert "update policy" in out
 
 
-def test_refused_query_on_rerun_fails_with_clear_message(tmp_path, server, secret):
-    """nsupdate queries an existing record to compare its TTL on a rerun."""
+@pytest.mark.parametrize("rcode", ["REFUSED", "SERVFAIL"])
+def test_failed_query_on_rerun_fails_with_neutral_message(tmp_path, server, secret, rcode):
+    """nsupdate queries an existing record to compare its TTL on a rerun.
+
+    It reports any non-NOERROR answer with the same message and no response
+    code, so the driver must not claim a refusal.
+    """
     env = driver_env(server, secret)
     assert run(tmp_path, "create", env)[0] == 0
-    server.state.refuse_queries = True
+    server.state.query_rcode = dns.rcode.from_text(rcode)
     rc, out = run(tmp_path, "create", env)
     assert rc != 0
-    assert "refused a query for the existing record" in out
+    assert "the query for the existing record failed" in out
+    assert "refused it or returned an error" in out
     assert server.records() == caas_records_on(server)
     assert_no_leaks(out, secret)
 
@@ -339,6 +346,9 @@ def test_unreachable_server_fails(tmp_path, secret):
         ({"DNS_RFC2136_PROTOCOL": "tls"}, "DNS_RFC2136_PROTOCOL must be"),
         ({"DNS_RFC2136_KEY_NAME": None}, "DNS_RFC2136_KEY_NAME must"),
         ({"DNS_RFC2136_KEY_ALGORITHM": "hmac-sha3"}, "DNS_RFC2136_KEY_ALGORITHM must be"),
+        # Weak HMAC algorithms are rejected even though nsupdate supports them.
+        ({"DNS_RFC2136_KEY_ALGORITHM": "hmac-md5"}, "DNS_RFC2136_KEY_ALGORITHM must be"),
+        ({"DNS_RFC2136_KEY_ALGORITHM": "hmac-sha1"}, "DNS_RFC2136_KEY_ALGORITHM must be"),
         ({"DNS_RFC2136_KEY_SECRET": None}, "DNS_RFC2136_KEY_SECRET must"),
     ],
 )

@@ -263,10 +263,21 @@ var _ = Describe("Metal3 Management Backend", func() {
 		})
 
 		It("returns ErrTransitioning for a host that is powering off", func() {
-			bmh := newBMHForManagement("host-powering-off", true, false)
+			// Desired off, still on: the host has not settled.
+			bmh := newBMHForManagement("host-powering-off", false, true)
 			m := newMetal3ManagementClient(bmh)
 
 			err := m.TriggerRestart(ctx, metal3TestNamespace+"/host-powering-off", "req-1")
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, management.ErrTransitioning)).To(BeTrue())
+		})
+
+		It("returns ErrTransitioning for a host that is powering on", func() {
+			// Desired on, still off: the host has not settled.
+			bmh := newBMHForManagement("host-powering-on", true, false)
+			m := newMetal3ManagementClient(bmh)
+
+			err := m.TriggerRestart(ctx, metal3TestNamespace+"/host-powering-on", "req-1")
 			Expect(err).To(HaveOccurred())
 			Expect(errors.Is(err, management.ErrTransitioning)).To(BeTrue())
 		})

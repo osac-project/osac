@@ -99,6 +99,9 @@
     _worker_network_ready_agents: >-
       {{ _worker_network_agents.resources
          | osac.service.agents_matching_selected_macs(_worker_network_selected_macs) }}
+
+- name: Build MAC-driven Agent network mappings
+  ansible.builtin.set_fact:
     _worker_network_mappings: >-
       {{ (_worker_network_mappings | default([])) + [{
         'agent': item,

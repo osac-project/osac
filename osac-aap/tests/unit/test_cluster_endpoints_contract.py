@@ -134,6 +134,7 @@ def test_metallb_wait_retries_transient_api_errors_and_any_running_agent() -> No
     assert wait["failed_when"] is False
     assert wait["retries"] == 60
     assert wait["delay"] == 10
+    assert ".get('resources', [])" in str(wait["until"])
     assert "selectattr('status.phase', 'equalto', 'Running')" in str(wait["until"])
     assert "resources[0]" not in str(wait["until"])
     assert module["label_selectors"] == ["app=konnectivity-agent"]

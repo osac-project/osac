@@ -17,7 +17,7 @@
   failed_when: false
   until:
     - >-
-      _konnectivity_check.resources | default([])
+      (_konnectivity_check | default({})).get('resources', [])
       | selectattr('status.phase', 'equalto', 'Running') | list | length > 0
   retries: 60
   delay: 10

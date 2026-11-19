@@ -286,6 +286,16 @@ func kindsOf(files *protoregistry.Files) (result []Kind, universe map[string]pro
 		}
 	}
 
+	// The walk follows singular paths only, so an annotated field of a message that just
+	// a repeated field holds never enters a root and the check above cannot see it. Scan
+	// every field declaration too, so such an annotation fails loudly instead of pricing
+	// nothing: silent undercount would let requests past their limits.
+	for _, r := range roots {
+		if err := checkUnreachedFieldOptions(r.message, covered); err != nil {
+			return nil, nil, err
+		}
+	}
+
 	// A through or creates annotation must name a kind that carries annotations: one
 	// that uses nothing would price zero, silently.
 	annotated := map[string]bool{}
@@ -402,6 +412,50 @@ func checkNestedMessageOptions(message protoreflect.MessageDescriptor) error {
 			)
 		}
 		if err := checkNestedMessageOptions(nested); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkUnreachedFieldOptions rejects a quota field annotation that no singular path
+// covers: the walk follows singular fields only, so a field of a message that just a
+// repeated field holds prices nothing, and the missing count would let requests past
+// their limits. covered holds the fields the walk reached.
+func checkUnreachedFieldOptions(
+	message protoreflect.MessageDescriptor, covered map[protoreflect.FullName]bool,
+) error {
+	// Repeated fields can hold the message that declares them, so the scan tracks what
+	// it already visited instead of relying on a finite depth:
+	return checkUnreachedField(message, covered, map[protoreflect.FullName]bool{})
+}
+
+func checkUnreachedField(
+	message protoreflect.MessageDescriptor,
+	covered map[protoreflect.FullName]bool,
+	visited map[protoreflect.FullName]bool,
+) error {
+	if visited[message.FullName()] {
+		return nil
+	}
+	visited[message.FullName()] = true
+	fields := message.Fields()
+	for i := range fields.Len() {
+		field := fields.Get(i)
+		if proto.HasExtension(field.Options(), privatev1.E_Quota) && !covered[field.FullName()] {
+			return fmt.Errorf(
+				"field '%s' has a quota annotation that no singular path reaches", field.FullName(),
+			)
+		}
+		if field.Kind() == protoreflect.MessageKind {
+			if err := checkUnreachedField(field.Message(), covered, visited); err != nil {
+				return err
+			}
+		}
+	}
+	messages := message.Messages()
+	for i := range messages.Len() {
+		if err := checkUnreachedField(messages.Get(i), covered, visited); err != nil {
 			return err
 		}
 	}

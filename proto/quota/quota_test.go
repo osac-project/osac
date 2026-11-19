@@ -839,7 +839,8 @@ func quotaField(options *privatev1.QuotaFieldOptions) *descriptorpb.FieldOptions
 // carries a repeated id, a larger_of path over a repeated reference, a creates that
 // counts fields of items that aren't messages, creates that cycle directly or through a
 // through edge, an empty quota message option, a name link whose prefix carries no
-// parent, and a set mapping between different enums.
+// parent, a set mapping between different enums, and an annotated field no singular
+// path reaches.
 // TestAddDimensionOverflow checks that a dimension total which cannot fit in an int64
 // fails the price instead of wrapping: a wrapped negative amount would drop out of the
 // check's added map, which keeps only positive amounts, and let a request past its limit.
@@ -1208,6 +1209,25 @@ func TestKindsRejectsInvalidAnnotations(t *testing.T) {
 					NamePrefix: "rr-",
 				}}),
 			contains: "no {parent}",
+		},
+		{
+			name: "an annotated field no singular path reaches",
+			messages: func() []*descriptorpb.DescriptorProto {
+				messages := ratedResource("RatedResource",
+					repeatedFieldDesc("things", 1, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE,
+						".osac.private.v1.RatedResource.RatedThing", nil))
+				messages[0].NestedType = []*descriptorpb.DescriptorProto{
+					{
+						Name: proto.String("RatedThing"),
+						Field: []*descriptorpb.FieldDescriptorProto{
+							fieldDesc("count", 1, descriptorpb.FieldDescriptorProto_TYPE_INT32, "",
+								quotaField(&privatev1.QuotaFieldOptions{Dimension: "test.count"})),
+						},
+					},
+				}
+				return messages
+			}(),
+			contains: "no singular path reaches",
 		},
 		{
 			name: "a set mapping between different enums",

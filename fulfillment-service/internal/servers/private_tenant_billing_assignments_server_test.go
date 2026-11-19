@@ -747,18 +747,17 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			_, err = billingRPC(adminCtx(), server.Create, createRequest("dead-tenant", account2, "asg-2"))
 			st, ok := status.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(st.Code()).To(Equal(codes.InvalidArgument))
+			Expect(st.Code()).To(Equal(codes.InvalidArgument), "%v", err)
 			Expect(st.Message()).To(ContainSubstring("spec.tenant does not reference an existing tenant"))
 
-			// Update runs through the same shared tail, so reassigning a tenant that was deleted after its
-			// assignment exists is rejected the same way:
+			// Tenant deletion closes the active interval; a later update must reject that historical interval.
 			_, err = testPool.Exec(ctx, `update tenants set deletion_timestamp = now() where name = $1`, testTenant)
 			Expect(err).ToNot(HaveOccurred())
 			_, err = billingRPC(adminCtx(), server.Update, updateRequest(created.GetObject().GetId(), testTenant, account2))
 			st, ok = status.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(st.Code()).To(Equal(codes.InvalidArgument))
-			Expect(st.Message()).To(ContainSubstring("spec.tenant does not reference an existing tenant"))
+			Expect(st.Code()).To(Equal(codes.FailedPrecondition), "%v", err)
+			Expect(st.Message()).To(ContainSubstring("is no longer the current interval"))
 		})
 
 		It("generates a correlation id and stays PENDING with the stable manual-remediation reason", func() {
@@ -1276,7 +1275,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			reads := fake.Count("GetAccount")
 			_, err = billingRPC(adminCtx(), server.Update, updateRequest(created.GetObject().GetId(), testTenant, account))
-			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition), "%v", err)
 			Expect(fake.Count("GetAccount")).To(Equal(reads))
 		})
 
@@ -2447,7 +2446,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 
 	// Method authorization remains admin-only; universal administrators retain deployment-wide reads.
 	Describe("List and Get", func() {
-		It("uses the billing zero-limit default, maximum page size, and latest-first descriptor order", func() {
+		It("uses the billing zero-limit default and maximum page size", func() {
 			var accounts []billingfake.AccountSpec
 			id := newAccount(&accounts, "exact", "exact", "ACTIVE")
 			server := build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider())
@@ -2480,13 +2479,12 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(page.GetTotal()).To(Equal(int32(1002)))
 			Expect(page.GetSize()).To(Equal(int32(100)))
-			Expect(page.GetItems()[0].GetId()).To(Equal("page-1001"))
 			page, err = billingRPC(read, server.List, privatev1.TenantBillingAssignmentsListRequest_builder{Limit: new(int32(1500))}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(page.GetTotal()).To(Equal(int32(1002)))
 			Expect(page.GetSize()).To(Equal(int32(1000)))
 			page, err = billingRPC(read, server.List, privatev1.TenantBillingAssignmentsListRequest_builder{
-				Filter: new(`this.status.connection_state == 2`), Order: new("status.message asc,spec.billing_account.name desc"),
+				Filter: new(`this.status.connection_state == 2`),
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(page.GetTotal()).To(Equal(int32(1002)))

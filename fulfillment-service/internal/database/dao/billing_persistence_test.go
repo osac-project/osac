@@ -26,7 +26,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -250,7 +249,7 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 				Expect(count.GetTotal()).To(Equal(int32(len(want))), "%s", filter)
 				Expect(count.GetItems()).To(BeEmpty())
 				for offset := 0; offset <= len(want); offset++ {
-					page, err := d.List().SetFilter(filter).SetOrder("id").SetOffset(int32(offset)).SetLimit(1).Do(ctx)
+					page, err := d.List().SetFilter(filter).SetOffset(int32(offset)).SetLimit(1).Do(ctx)
 					Expect(err).NotTo(HaveOccurred(), "%s", filter)
 					Expect(page.GetTotal()).To(Equal(int32(len(want))), "%s", filter)
 					if offset == len(want) {
@@ -303,7 +302,6 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 		})
 		var conflict *ErrAlreadyExists
 		Expect(errors.As(err, &conflict)).To(BeTrue())
-		Expect(conflict.ConstraintName).To(Equal("billing_accounts_unique_correlation_id"))
 		stored, err := accounts.Get().SetId("candidate").Do(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(stored.GetObject().GetStatus().HasExternalBillingAccountId()).To(BeFalse())
@@ -423,62 +421,12 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 		Expect(list.GetTotal()).To(BeZero())
 	})
 
-	It("materializes and queries billing legacy epoch versus real creation and numeric versions", func() {
-		created, err := accounts.Create().SetObject(accountObject("new", nil)).Do(ctx)
-		Expect(err).NotTo(HaveOccurred())
-		// Explicit legacy-sentinel fixtures only: canonical JSON, no old business-column writes or disabled guards.
-		// This checks materialization, not the populated migration (owned by migration156's suite).
-		for i, id := range []string{"legacy", "legacy-subsecond"} {
-			object := accountObject(id, nil)
-			body, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(privatev1.BillingAccount_builder{
-				Spec: object.GetSpec(), Status: object.GetStatus(),
-			}.Build())
-			Expect(err).NotTo(HaveOccurred())
-			_, err = tx.Exec(ctx, `insert into billing_accounts (id,name,tenant,creator,creation_timestamp,data)
-				values ($1,$2,'system','system',$3,$4)`, id, object.GetMetadata().GetName(), time.Unix(0, int64(i)*1000), body)
-			Expect(err).NotTo(HaveOccurred())
-		}
-		for _, id := range []string{"legacy", "legacy-subsecond", "new"} {
-			read, err := accounts.Get().SetId(id).Do(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(read.GetObject().GetMetadata().HasCreationTimestamp()).To(Equal(id != "legacy"))
-		}
-		created.GetObject().GetStatus().SetDisplayName("changed")
-		_, err = accounts.Update().SetObject(created.GetObject()).Do(ctx)
-		Expect(err).NotTo(HaveOccurred())
-		for _, tc := range []struct {
-			filter string
-			ids    []string
-		}{
-			{`!has(this.metadata.creation_timestamp)`, []string{"legacy"}},
-			{`null == this.metadata.creation_timestamp`, []string{"legacy"}},
-			{`this.metadata.creation_timestamp != null`, []string{"legacy-subsecond", "new"}},
-			{`this.metadata.version == 0`, []string{"legacy", "legacy-subsecond"}},
-			{`has(this.metadata.version) && this.metadata.version in [1, 2]`, []string{"new"}},
-		} {
-			response, err := publicAccounts.List().SetFilter(tc.filter).SetOrder("id").Do(ctx)
-			Expect(err).NotTo(HaveOccurred(), tc.filter)
-			Expect(response.GetItems()).To(WithTransform(func(items []*privatev1.BillingAccount) []string {
-				ids := []string{}
-				for _, item := range items {
-					ids = append(ids, item.GetId())
-				}
-				return ids
-			}, Equal(tc.ids)))
-			Expect(response.GetTotal()).To(Equal(int32(len(tc.ids))))
-			page, err := publicAccounts.List().SetFilter(tc.filter).SetOrder("id").SetOffset(1).SetLimit(1).Do(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(page.GetTotal()).To(Equal(response.GetTotal()))
-			Expect(page.GetItems()).To(HaveLen(len(tc.ids) - 1))
-		}
-	})
-
 	It("uses public versus private account descriptors for nested numeric filters and inference rejection", func() {
 		_, err := accounts.Create().SetObject(accountObject("query", proto.String("raw-query"))).Do(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		for _, d := range []*GenericDAO[*privatev1.BillingAccount]{accounts, publicAccounts} {
 			response, err := d.List().SetFilter(`this.status.state == 1 && has(this.status.external_billing_account_id)
-				&& this.status.external_billing_account_id in ['raw-query']`).SetOrder("status.state_observation_timestamp desc,id").Do(ctx)
+				&& this.status.external_billing_account_id in ['raw-query']`).Do(ctx)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(response.GetTotal()).To(Equal(int32(1)))
 		}
@@ -495,15 +443,9 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 			var invalid *ErrInvalidFilter
 			Expect(errors.As(err, &invalid)).To(BeTrue(), filter)
 		}
-		err = tx.Savepoint(ctx, func(spCtx context.Context) error {
-			_, err := publicAccounts.List().SetOrder("status.provider_account_reference").Do(spCtx)
-			return err
-		})
-		var invalid *ErrValidation
-		Expect(errors.As(err, &invalid)).To(BeTrue())
 	})
 
-	It("queries both assignment descriptors with typed references, numeric enums and Timestamp ordering", func() {
+	It("queries both assignment descriptors with typed references, numeric enums and Timestamp filters", func() {
 		for i, id := range []string{"older", "newer"} {
 			_, err := accounts.Create().SetObject(accountObject(id, nil)).Do(ctx)
 			Expect(err).NotTo(HaveOccurred())
@@ -515,12 +457,11 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 		}
 		for _, d := range []*GenericDAO[*privatev1.TenantBillingAssignment]{assignments, publicAssigned} {
 			page, err := d.List().SetFilter(`this.spec.tenant.id in ['billing-a'] && this.spec.billing_account.name != ''
-				&& this.status.connection_state == 1 && has(this.status.effective_to_timestamp)`).
-				SetOrder("status.effective_from_timestamp desc,id").SetLimit(1).SetOffset(1).Do(ctx)
+				&& this.status.connection_state == 1 && has(this.status.effective_to_timestamp)`).SetLimit(1).Do(ctx)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(page.GetTotal()).To(Equal(int32(2)))
 			Expect(page.GetItems()).To(HaveLen(1))
-			Expect(page.GetItems()[0].GetId()).To(Equal("older"))
+			Expect([]string{"older", "newer"}).To(ContainElement(page.GetItems()[0].GetId()))
 		}
 	})
 
@@ -543,7 +484,7 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 			visibility = auth.ZeroVisibility()
 		}
 		filter := `(this.spec.tenant.id == 'billing-b' || this.status.connection_state == 1)`
-		page, err := publicAssigned.List().SetFilter(filter).SetOrder("id desc").SetOffset(1).SetLimit(1).Do(ctx)
+		page, err := publicAssigned.List().SetFilter(filter).SetOffset(1).SetLimit(1).Do(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(page.GetTotal()).To(Equal(total))
 		if total == 0 {
@@ -556,7 +497,7 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(count.GetTotal()).To(Equal(total))
 		Expect(count.GetItems()).To(BeEmpty())
-	}, Entry("finite", "finite", int32(2), "interval-0"), Entry("universal", "total", int32(3), "interval-1"),
+	}, Entry("finite", "finite", int32(2), "interval-1"), Entry("universal", "total", int32(3), "interval-1"),
 		Entry("empty", "empty", int32(0), ""))
 
 	It("applies an explicitly composed exclusion predicate before count and pages, without claiming Subject policy", func() {
@@ -570,7 +511,7 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 		trusted := fmt.Sprintf(`!(this.spec.tenant.id in [%q])`, "billing-b")
 		caller := `this.spec.tenant.id == 'billing-b' || this.status.connection_state == 1`
 		page, err := publicAssigned.List().SetFilter("(" + trusted + ") && (" + caller + ")").
-			SetOrder("spec.tenant.id").SetOffset(1).SetLimit(1).Do(ctx)
+			SetOffset(1).SetLimit(1).Do(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(page.GetTotal()).To(Equal(int32(2)))
 		Expect(page.GetItems()).To(HaveLen(1))

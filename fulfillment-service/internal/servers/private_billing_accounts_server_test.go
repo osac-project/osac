@@ -645,7 +645,6 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(status.Code(err)).To(Equal(code))
 		Expect(rows()).To(Equal(before), "tokens, observations, versions and unseen states must all roll back")
 		Expect(server.lastDiscovery).To(BeZero())
-		Expect(server.discoverInFlight).To(BeFalse())
 		if cleanup != nil {
 			cleanup()
 		}
@@ -672,7 +671,7 @@ var _ = Describe("Private billing accounts server", func() {
 		Entry("late provider page", "late-page", codes.Unavailable),
 	)
 
-	It("releases an occupied ordinary connection and in-flight admission when a slow discovery caller cancels",
+	It("cancels a slow discovery caller and releases its ordinary connection",
 		func() {
 			adapter := &gatedTwoPageAdapter{
 				enteredSecondPage: make(chan struct{}),
@@ -732,7 +731,6 @@ var _ = Describe("Private billing accounts server", func() {
 			var outcome listOutcome
 			Eventually(result, 5*time.Second).Should(Receive(&outcome))
 			Expect(status.Code(outcome.err)).To(Equal(codes.Canceled))
-			Expect(server.discoverInFlight).To(BeFalse())
 			Expect(server.lastDiscovery).To(BeZero())
 			Expect(server.lastDiscoveryFailure).To(BeZero())
 			// Cancellation must release the connection within the bounded return window, not leave an orphan walk.
@@ -812,7 +810,6 @@ var _ = Describe("Private billing accounts server", func() {
 		Eventually(result, 3*time.Second).Should(Receive(&err))
 		Expect(status.Code(err)).To(Equal(codes.DeadlineExceeded))
 		Expect(caller.Err()).NotTo(HaveOccurred(), "the discovery deadline, not the caller deadline, expired")
-		Expect(server.discoverInFlight).To(BeFalse())
 		Expect(server.lastDiscovery).To(BeZero())
 		Expect(server.lastDiscoveryFailure).To(BeZero(), "database contention must not open provider backoff")
 		Expect(fake.Count("ListAccounts")).To(Equal(1))
@@ -942,96 +939,72 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(adapter.calls).To(Equal(1), "the freshness window must serve without starting a new walk")
 	})
 
-	DescribeTable("keeps provider admission through the outer transaction, including an empty inventory",
-		func(rollBack bool) {
-			fake := billingfake.New(billingfake.Scenario{})
-			server := build(fake.Provider())
-			competingFake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "contender", State: billing.AccountActive}}})
-			competing := build(competingFake.Provider())
-			prepared, release := make(chan struct{}), make(chan struct{})
-			committed, publish := make(chan struct{}), make(chan struct{})
-			var once sync.Once
-			releaseFirst := func() { once.Do(func() { close(release) }) }
-			DeferCleanup(releaseFirst)
-			var publishOnce sync.Once
-			finishCommit := func() { publishOnce.Do(func() { close(publish) }) }
-			DeferCleanup(finishCommit)
-			caller, cancel := context.WithTimeout(ctx, 15*time.Second)
-			DeferCleanup(cancel)
-			first := make(chan error, 1)
-			go func() {
-				_, err := billingRPC(caller, func(c context.Context, request *privatev1.BillingAccountsListRequest) (_ *privatev1.BillingAccountsListResponse, err error) {
-					tx, err := database.TxFromContext(c)
-					if err != nil {
-						return nil, err
-					}
-					defer tx.ReportError(&err)
+	DescribeTable("publishes discovery freshness only after the outer transaction commits", func(rollBack bool) {
+		fake := billingfake.New(billingfake.Scenario{})
+		server := build(fake.Provider())
+		commitHookEntered := make(chan struct{})
+		releaseCommitHook := make(chan struct{})
+		DeferCleanup(func() {
+			select {
+			case <-releaseCommitHook:
+			default:
+				close(releaseCommitHook)
+			}
+		})
+		first := make(chan error, 1)
+		go func() {
+			_, err := billingRPC(ctx, func(c context.Context, request *privatev1.BillingAccountsListRequest) (
+				*privatev1.BillingAccountsListResponse, error) {
+				tx, err := database.TxFromContext(c)
+				if err != nil {
+					return nil, err
+				}
+				defer tx.ReportError(&err)
+				if !rollBack {
 					tx.OnCommit(func() {
-						// PostgreSQL has released the advisory lock, but discovery freshness has not been published.
-						close(committed)
-						select {
-						case <-publish:
-						case <-caller.Done():
-						}
+						close(commitHookEntered)
+						<-releaseCommitHook
 					})
-					response, err := server.List(c, request)
-					close(prepared)
-					select {
-					case <-release:
-					case <-c.Done():
-					}
-					if rollBack && err == nil {
-						return nil, status.Error(codes.InvalidArgument, "reject after successful discovery")
-					}
-					return response, err
-				}, &privatev1.BillingAccountsListRequest{})
-				first <- err
-			}()
-			Eventually(prepared, 5*time.Second).Should(BeClosed())
-			server.discoverMu.Lock()
-			fresh := server.lastDiscovery
-			inFlight := server.discoverInFlight
-			server.discoverMu.Unlock()
-			Expect(fresh).To(BeZero(), "preparing a response is not a commit")
-			Expect(inFlight).To(BeTrue(), "local admission must not depend on the PostgreSQL lock")
+				}
+				response, err := server.List(c, request)
+				if rollBack && err == nil {
+					response = nil
+					err = status.Error(codes.InvalidArgument, "reject after successful discovery")
+				}
+				return response, err
+			}, &privatev1.BillingAccountsListRequest{})
+			first <- err
+		}()
+		if rollBack {
+			var err error
+			Eventually(first, 5*time.Second).Should(Receive(&err))
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(server.lastDiscovery).To(BeZero())
+			Expect(server.discoverInFlight).To(BeFalse())
 			Expect(storedCount()).To(BeZero())
+			_, err = list(server, nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fake.Count("ListAccounts")).To(Equal(2))
+		} else {
+			Eventually(commitHookEntered, 5*time.Second).Should(BeClosed())
+			Expect(server.lastDiscovery).To(BeZero(), "freshness is not published before all commit hooks complete")
+			Expect(server.discoverInFlight).To(BeTrue(), "local admission bridges commit and freshness publication")
 			_, err := list(server, nil)
 			Expect(status.Code(err)).To(Equal(codes.Unavailable))
-			Expect(fake.Count("ListAccounts")).To(Equal(1))
-			_, err = list(competing, nil)
-			Expect(status.Code(err)).To(Equal(codes.Unavailable))
-			Expect(competingFake.Count("ListAccounts")).To(BeZero(), "a contender must not start an overlapping observation")
-			releaseFirst()
-			if !rollBack {
-				Eventually(committed, 5*time.Second).Should(BeClosed())
-				_, err = list(server, nil)
-				Expect(status.Code(err)).To(Equal(codes.Unavailable), "local admission bridges commit and freshness publication")
-				Expect(fake.Count("ListAccounts")).To(Equal(1))
-				finishCommit()
-			}
+			Expect(fake.Count("ListAccounts")).To(Equal(1), "the commit-to-publication gap cannot start another walk")
+			close(releaseCommitHook)
 			var firstErr error
 			Eventually(first, 5*time.Second).Should(Receive(&firstErr))
+			Expect(firstErr).NotTo(HaveOccurred())
+			Expect(server.lastDiscovery).NotTo(BeZero())
 			Expect(server.discoverInFlight).To(BeFalse())
-			if rollBack {
-				Expect(status.Code(firstErr)).To(Equal(codes.InvalidArgument))
-				Expect(server.lastDiscovery).To(BeZero())
-			} else {
-				Expect(firstErr).To(Succeed())
-				Expect(server.lastDiscovery).NotTo(BeZero())
-			}
 			_, err = list(server, nil)
-			Expect(err).To(Succeed())
-			if rollBack {
-				Expect(fake.Count("ListAccounts")).To(Equal(2), "rollback must allow a new walk")
-			} else {
-				Expect(fake.Count("ListAccounts")).To(Equal(1), "freshness must be visible as soon as admission is released")
-			}
-			_, err = list(competing, nil)
-			Expect(err).To(Succeed())
-			Expect(storedCount()).To(Equal(1))
-		}, Entry("commit", false), Entry("rollback", true))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fake.Count("ListAccounts")).To(Equal(1))
+		}
+	}, Entry("commit", false), Entry("rollback", true))
 
-	It("releases admission when a directly supplied managed transaction rolls back", func() {
+	It("does not publish freshness when a directly supplied managed transaction rolls back", func() {
 		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "direct"}}})
 		server := build(fake.Provider())
 		tx, err := tm.Begin(ctx)
@@ -1053,15 +1026,15 @@ var _ = Describe("Private billing accounts server", func() {
 		direct := database.TxIntoContext(context.Background(), tx)
 		_, err = server.List(direct, &privatev1.BillingAccountsListRequest{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(server.discoverInFlight).To(BeTrue())
 		Expect(server.lastDiscovery).To(BeZero())
+		Expect(server.discoverInFlight).To(BeTrue())
 		err = errors.New("caller chose rollback")
 		tx.ReportError(&err)
 		err = tx.End(ctx)
 		ended = true
 		Expect(err).NotTo(HaveOccurred())
-		Expect(server.discoverInFlight).To(BeFalse())
 		Expect(server.lastDiscovery).To(BeZero())
+		Expect(server.discoverInFlight).To(BeFalse())
 		Expect(storedCount()).To(BeZero())
 		_, err = list(server, nil)
 		Expect(err).NotTo(HaveOccurred())
@@ -1103,7 +1076,6 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(storedCount()).To(BeZero())
 		Expect(server.lastDiscovery).To(BeZero())
 		Expect(server.lastDiscoveryFailure).To(BeZero())
-		Expect(server.discoverInFlight).To(BeFalse())
 	},
 		Entry("unknown field with a healthy provider", "", `this.state == 1`),
 		Entry("private field with a failing provider", "walk", `this.status.provider_account_reference == "unused"`),

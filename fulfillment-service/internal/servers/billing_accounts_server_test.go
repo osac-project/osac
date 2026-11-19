@@ -66,7 +66,6 @@ var _ = Describe("Billing accounts server", func() {
 		Expect(testPool.QueryRow(ctx, `select count(*) from billing_accounts`).Scan(&count)).To(Succeed())
 		Expect(count).To(BeZero())
 		Expect(server.private.lastDiscovery).To(BeZero())
-		Expect(server.private.discoverInFlight).To(BeFalse())
 		server.outMapper.strict = false
 		response, err := billingRPC(ctx, server.List, &publicv1.BillingAccountsListRequest{})
 		Expect(err).NotTo(HaveOccurred())
@@ -136,7 +135,7 @@ var _ = Describe("Billing accounts server", func() {
 		var ids []string
 		for i := int32(0); i < 2; i++ {
 			req := publicv1.BillingAccountsListRequest_builder{
-				Limit: proto.Int32(1), Offset: proto.Int32(i), Order: proto.String("id"),
+				Limit: proto.Int32(1), Offset: proto.Int32(i),
 				Filter: proto.String(`this.status.provider_external_id == " shared "`),
 			}.Build()
 			response, err := billingRPC(ctx, server.List, req)
@@ -150,7 +149,7 @@ var _ = Describe("Billing accounts server", func() {
 		Expect(ids[0]).NotTo(Equal(ids[1]))
 	})
 
-	It("passes the shared list params (filter, order, limit, offset) through to the private request", func() {
+	It("filters and paginates discovered accounts", func() {
 		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
 			{ID: "a1", Name: "Beta", State: billing.AccountActive},
 			{ID: "a2", Name: "Alpha", State: billing.AccountInactive},
@@ -164,18 +163,11 @@ var _ = Describe("Billing accounts server", func() {
 		Expect(filtered.GetTotal()).To(Equal(int32(1)))
 		Expect(filtered.GetItems()[0].GetStatus().GetDisplayName()).To(Equal("Alpha"))
 
-		ordered, err := billingRPC(ctx, server.List, publicv1.BillingAccountsListRequest_builder{
-			Order: proto.String("status.display_name"),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-		Expect(ordered.GetItems()[0].GetStatus().GetDisplayName()).To(Equal("Alpha"))
-
 		paged, err := billingRPC(ctx, server.List, publicv1.BillingAccountsListRequest_builder{
-			Order: proto.String("status.display_name"), Offset: proto.Int32(1), Limit: proto.Int32(1),
+			Offset: proto.Int32(1), Limit: proto.Int32(1),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(paged.GetSize()).To(Equal(int32(1)))
-		Expect(paged.GetItems()[0].GetStatus().GetDisplayName()).To(Equal("Beta"))
 	})
 
 	It("propagates FAILED_PRECONDITION when billing is disabled", func() {
@@ -249,22 +241,6 @@ var _ = Describe("Billing accounts server", func() {
 		Expect(fake.Count("ListAccounts")).To(Equal(2), "a fresh instance has no freshness window yet")
 	})
 
-	DescribeTable("rejects unsupported public order paths",
-		func(order string) {
-			fake := billingfake.New(billingfake.Scenario{})
-			_, err := billingRPC(ctx, build(fake.Provider()).List, publicv1.BillingAccountsListRequest_builder{
-				Order: proto.String(order),
-			}.Build())
-			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-		},
-		Entry("private native identity", "status.provider_account_reference"),
-		Entry("legacy alias", "display_name"),
-		Entry("unsupported metadata scalar", "metadata.creator"),
-		Entry("finalizers", "metadata.finalizers"),
-		Entry("timestamp submember", "status.state_observation_timestamp.seconds"),
-		Entry("SQL", "id; select 1"),
-	)
-
 	It("keeps count independent of paging and uses the billing explicit-zero default", func() {
 		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
 			{ID: "a", Name: "Same", State: billing.AccountActive},
@@ -273,21 +249,19 @@ var _ = Describe("Billing accounts server", func() {
 		}})
 		server := build(fake.Provider())
 		request := publicv1.BillingAccountsListRequest_builder{
-			Filter: proto.String(`this.status.state == 1`), Order: proto.String("status.display_name desc"),
-			Limit: proto.Int32(0),
+			Filter: proto.String(`this.status.state == 1`),
+			Limit:  proto.Int32(0),
 		}.Build()
 		all, err := billingRPC(ctx, server.List, request)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(all.GetTotal()).To(Equal(int32(2)))
 		Expect(all.GetItems()).To(HaveLen(2))
-		Expect(all.GetItems()[0].GetId() < all.GetItems()[1].GetId()).To(BeTrue())
 		request.SetLimit(1)
 		request.SetOffset(1)
 		page, err := billingRPC(ctx, server.List, request)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(page.GetTotal()).To(Equal(int32(2)))
 		Expect(page.GetItems()).To(HaveLen(1))
-		Expect(page.GetItems()[0].GetId()).To(Equal(all.GetItems()[1].GetId()))
 		request.SetOffset(-1)
 		_, err = billingRPC(ctx, server.List, request)
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
@@ -352,7 +326,7 @@ var _ = Describe("Billing accounts server", func() {
 		keys := fmt.Sprintf(`this.id in [%q, %q] || this.metadata.name in [%q, %q]`, first.GetId(), second.GetMetadata().GetName(), first.GetId(), second.GetMetadata().GetName())
 		filter := "(" + keys + `) && (this.status.state == 1 && has(this.status.state_observation_timestamp) && this.status.state_observation_timestamp >= timestamp("2026-01-01T00:00:00Z") && this.metadata.labels["environment"] == "test" && ` + fmt.Sprintf(`this.status.display_name == %q`, first.GetStatus().GetDisplayName()) + ")"
 		page, err := billingRPC(caller, server.List, publicv1.BillingAccountsListRequest_builder{
-			Filter: &filter, Order: new("id"), Limit: new(int32(1)),
+			Filter: &filter, Limit: new(int32(1)),
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(page.GetTotal()).To(Equal(int32(1)))
@@ -428,7 +402,7 @@ var _ = Describe("Billing accounts server", func() {
 		for offset := int32(0); offset < int32(total); offset += 37 {
 			response, err := billingRPC(ctx, server.List, publicv1.BillingAccountsListRequest_builder{
 				Filter: new(`this.status.state in [1, 3] || this.status.display_name == "absent"`),
-				Order:  new("id"), Offset: &offset, Limit: new(int32(37)),
+				Offset: &offset, Limit: new(int32(37)),
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(response.GetTotal()).To(Equal(int32(total)))
@@ -457,7 +431,7 @@ var _ = Describe("Billing accounts server", func() {
 		}
 		end, err := billingRPC(ctx, server.List, publicv1.BillingAccountsListRequest_builder{
 			Filter: new(`this.status.state in [1, 3] || this.status.display_name == "absent"`),
-			Order:  new("id"), Offset: new(int32(total)), Limit: new(int32(37)),
+			Offset: new(int32(total)), Limit: new(int32(37)),
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(end.GetTotal()).To(Equal(int32(total)))

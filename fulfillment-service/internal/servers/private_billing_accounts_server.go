@@ -86,6 +86,7 @@ type PrivateBillingAccountsServer struct {
 	logger   *slog.Logger
 	provider *billing.Provider
 	dao      *dao.GenericDAO[*privatev1.BillingAccount]
+	filter   *dao.FilterTranslator
 	// discoverMu guards the discovery timestamps and in-flight flag, and serializes the decision to start a walk,
 	// so at most one walk runs at a time.
 	discoverMu sync.Mutex
@@ -93,7 +94,8 @@ type PrivateBillingAccountsServer struct {
 	lastDiscovery time.Time
 	// lastDiscoveryFailure is when the last failed walk ended; the failure backoff window runs from it.
 	lastDiscoveryFailure time.Time
-	// discoverInFlight is the fast local guard through the end of the discovery transaction.
+	// discoverInFlight bridges the database commit and freshness publication; the Tx finish callback releases it on
+	// both commit and rollback.
 	discoverInFlight bool
 	// discoverDeadline bounds one walk; discoverFailureBackoff is how long a failed walk suppresses the next
 	// attempt. Both are fields so the suite can shorten them.
@@ -137,9 +139,17 @@ func (b *PrivateBillingAccountsServerBuilder) Build() (result *PrivateBillingAcc
 	if err != nil {
 		return nil, err
 	}
+	filter, err := dao.NewFilterTranslator().
+		SetLogger(b.logger).
+		SetDescriptor((*publicv1.BillingAccount)(nil).ProtoReflect().Descriptor()).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create billing account filter translator: %w", err)
+	}
 	result = &PrivateBillingAccountsServer{
 		logger: b.logger, provider: b.provider, discoverDeadline: defaultDiscoverDeadline,
 		dao:                    accountsDAO,
+		filter:                 filter,
 		discoverFailureBackoff: defaultDiscoverFailureBackoff,
 	}
 	return
@@ -166,19 +176,16 @@ func (s *PrivateBillingAccountsServer) List(ctx context.Context,
 	if request.GetLimit() < 0 || request.GetOffset() < 0 {
 		return nil, status.Error(codes.InvalidArgument, "limit and offset must be non-negative")
 	}
-	if err = validateBillingAccountOrder(request.GetOrder()); err != nil {
-		return nil, err
-	}
-
 	// An unset limit serves the billing default; an explicit one is clamped to the DAO maximum.
 	limit := request.GetLimit()
 	if limit == 0 {
 		limit = 100
 	}
-	pageRequest := s.dao.List().SetOffset(request.GetOffset()).SetLimit(limit).
-		SetFilter(request.GetFilter()).SetOrder(request.GetOrder())
-	if err := pageRequest.ValidateFilter(ctx); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	pageRequest := s.dao.List().SetOffset(request.GetOffset()).SetLimit(limit).SetFilter(request.GetFilter())
+	if filter := request.GetFilter(); filter != "" {
+		if _, err := s.filter.Translate(ctx, filter); err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+		}
 	}
 	adapter, err := requireAdapter(s.provider)
 	if err != nil {
@@ -197,8 +204,8 @@ func (s *PrivateBillingAccountsServer) List(ctx context.Context,
 			s.discoverMu.Unlock()
 		}
 		if !database.OnTxFinish(tx, finish) {
-			// A direct caller with a custom Tx may not support finish callbacks. Don't leak admission
-			// or publish freshness without a known commit; the advisory lock still protects the store.
+			// A custom transaction may not support finish callbacks. Do not strand admission or publish
+			// freshness without a known commit; the database advisory lock still protects the store.
 			defer finish(false)
 		}
 		err = s.discoverFresh(ctx, adapter)
@@ -242,7 +249,8 @@ func (s *PrivateBillingAccountsServer) List(ctx context.Context,
 	return response, nil
 }
 
-// admitDiscovery claims local admission for a stale list; the caller releases it at transaction end.
+// admitDiscovery checks the process-local freshness and provider-failure backoff. The database transaction advisory
+// lock in discoverFresh owns concurrent admission; it remains held through the request commit without extra Tx hooks.
 func (s *PrivateBillingAccountsServer) admitDiscovery() (bool, error) {
 	s.discoverMu.Lock()
 	defer s.discoverMu.Unlock()
@@ -582,27 +590,6 @@ func (billingAccountsTenancy) DetermineDefaultTenant(context.Context) (string, e
 
 func (billingAccountsTenancy) DetermineVisibility(context.Context) (*auth.Visibility, error) {
 	return auth.NewVisibility().AddVisibleTenant(auth.SystemTenant).Build()
-}
-
-// The generic translator validates descriptor leaves/directions/term bounds. Billing further limits the
-// resource's approved sortable paths; metadata filtering remains supported independently of this order policy.
-func validateBillingAccountOrder(order string) error {
-	if strings.TrimSpace(order) == "" {
-		return nil
-	}
-	for _, term := range strings.Split(order, ",") {
-		words := strings.Fields(term)
-		if len(words) == 0 {
-			return status.Error(codes.InvalidArgument, "invalid billing account order")
-		}
-		switch words[0] {
-		case "id", "metadata.name", "status.provider_key", "status.display_name", "status.base_currency",
-			"status.state", "status.state_observation_timestamp", "status.external_billing_account_id":
-		default:
-			return status.Error(codes.InvalidArgument, "unsupported billing account order path")
-		}
-	}
-	return nil
 }
 
 // validCurrency returns code in uppercase when it is exactly three ASCII letters, and "" otherwise.

@@ -181,18 +181,11 @@ func (s *PrivateTenantBillingAssignmentsServer) List(ctx context.Context,
 	if request.GetOffset() < 0 || request.GetLimit() < 0 {
 		return nil, status.Error(codes.InvalidArgument, "limit and offset must be non-negative")
 	}
-	if err = validateBillingAssignmentOrder(request.GetOrder()); err != nil {
-		return nil, err
-	}
 	limit := request.GetLimit()
 	if limit == 0 {
 		limit = 100
 	}
-	order := request.GetOrder()
-	if strings.TrimSpace(order) == "" {
-		order = "status.effective_from_timestamp desc,id"
-	}
-	page, err := s.listAssignments(ctx, request.GetFilter(), order, request.GetOffset(), limit)
+	page, err := s.listAssignments(ctx, request.GetFilter(), request.GetOffset(), limit)
 	if err != nil {
 		var invalid *dao.ErrValidation
 		var invalidFilter *dao.ErrInvalidFilter
@@ -243,7 +236,7 @@ func (s *PrivateTenantBillingAssignmentsServer) Get(ctx context.Context,
 // expression so an OR can only narrow scope. Do not return a query builder that could replace this constraint.
 // Use retained assignment ownership, not live tenants: history outlives the tenant row.
 func (s *PrivateTenantBillingAssignmentsServer) listAssignments(ctx context.Context,
-	filter, order string, offset, limit int32,
+	filter string, offset, limit int32,
 ) (*dao.ListResponse[*privatev1.TenantBillingAssignment], error) {
 	set := auth.SubjectFromContext(ctx).Tenants
 	if !set.Finite() && !set.Universal() {
@@ -267,7 +260,7 @@ func (s *PrivateTenantBillingAssignmentsServer) listAssignments(ctx context.Cont
 			filter = fmt.Sprintf("(%s) && (\n%s\n)", trusted, filter)
 		}
 	}
-	return s.assignments.List().SetFilter(filter).SetOrder(order).SetOffset(offset).SetLimit(limit).Do(ctx)
+	return s.assignments.List().SetFilter(filter).SetOffset(offset).SetLimit(limit).Do(ctx)
 }
 
 // getAssignment is shared by Get and stored-target authorization for Update/Signal and their rereads.
@@ -288,7 +281,7 @@ func (s *PrivateTenantBillingAssignmentsServer) getAssignment(ctx context.Contex
 	if err != nil {
 		return nil, err
 	}
-	page, err := s.listAssignments(ctx, fmt.Sprintf("this.id == %s", literal), "", 0, 1)
+	page, err := s.listAssignments(ctx, fmt.Sprintf("this.id == %s", literal), 0, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -443,7 +436,7 @@ func (s *PrivateTenantBillingAssignmentsServer) assignmentSnapshot(
 			return snapshot, err
 		}
 	}
-	snapshot.floor, err = dao.TenantBillingHistoryFloor(ctx, in.TenantID)
+	snapshot.floor, err = database.TenantBillingHistoryFloor(ctx, in.TenantID)
 	return snapshot, err
 }
 
@@ -795,7 +788,7 @@ func (s *PrivateTenantBillingAssignmentsServer) finalizeAssignment(txCtx context
 		return result.GetObject(), nil
 	}
 	// The destination account is already locked, so its closed history cannot advance under us.
-	accountFloor, err := dao.BillingAccountHistoryFloor(txCtx, accountID)
+	accountFloor, err := database.BillingAccountHistoryFloor(txCtx, accountID)
 	if err != nil {
 		return nil, err
 	}
@@ -808,7 +801,7 @@ func (s *PrivateTenantBillingAssignmentsServer) finalizeAssignment(txCtx context
 	if created := latest.tenant.GetMetadata().GetCreationTimestamp(); created != nil && created.AsTime().After(floor) {
 		floor = created.AsTime()
 	}
-	at, err := dao.BillingFinalizationTime(txCtx, floor)
+	at, err := database.BillingFinalizationTime(txCtx, floor)
 	if err != nil {
 		return nil, err
 	}
@@ -1011,25 +1004,6 @@ func (t billingAssignmentTenancy) DetermineVisibility(ctx context.Context) (*aut
 	return auth.NewVisibility().AddVisibleTenants(set.Inclusions()...).Build()
 }
 
-func validateBillingAssignmentOrder(order string) error {
-	if strings.TrimSpace(order) == "" {
-		return nil
-	}
-	for _, term := range strings.Split(order, ",") {
-		words := strings.Fields(term)
-		if len(words) == 0 {
-			return status.Error(codes.InvalidArgument, "invalid assignment order")
-		}
-		switch words[0] {
-		case "id", "metadata.name", "spec.tenant.id", "spec.tenant.name", "spec.billing_account.id", "spec.billing_account.name",
-			"status.connection_state", "status.message", "status.effective_from_timestamp", "status.effective_to_timestamp":
-		default:
-			return status.Error(codes.InvalidArgument, "unsupported assignment order path")
-		}
-	}
-	return nil
-}
-
 // mapTenantBillingAssignmentConnectionState maps a connection_state value to its proto enum, returning
 // UNSPECIFIED otherwise.
 func mapTenantBillingAssignmentConnectionState(state string) privatev1.TenantBillingAssignmentConnectionState {
@@ -1103,6 +1077,12 @@ func (s *PrivateTenantBillingAssignmentsServer) mapTenantBillingAssignmentError(
 	constraint := ""
 	if errors.As(err, &conflict) {
 		constraint = conflict.ConstraintName
+		// GenericDAO intentionally keeps its ordinary error contract; it does not expose PostgreSQL constraint names.
+		// During assignment, the only unique billing-account UPDATE is adoption of the external correlation token.
+		if constraint == "" && conflict.Kind == "billing account" {
+			return failedPreconditionWithReason(billing.ReasonAccountCorrelationConflict,
+				"external billing account id is already in use by another account")
+		}
 	}
 	if errors.As(err, &pgErr) {
 		constraint = pgErr.ConstraintName

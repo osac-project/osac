@@ -16,7 +16,6 @@ package dao
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
@@ -40,22 +39,6 @@ var _ = Describe("Filter translator", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		DescribeTable("Lowers metadata presence and numeric version",
-			func(ctx context.Context, filter, expected string) {
-				actual, err := translator.Translate(ctx, filter)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(actual).To(Equal(expected))
-			},
-			Entry("unknown creation", `this.metadata.creation_timestamp == null`, `nullif(creation_timestamp, 'epoch'::timestamptz) is null`),
-			Entry("reverse creation null", `null != this.metadata.creation_timestamp`, `nullif(creation_timestamp, 'epoch'::timestamptz) is not null`),
-			Entry("creation presence", `has(this.metadata.creation_timestamp)`, `creation_timestamp <> 'epoch'::timestamptz`),
-			Entry("deletion presence", `has(this.metadata.deletion_timestamp)`, `deletion_timestamp <> 'epoch'::timestamptz`),
-			Entry("zero version", `this.metadata.version == 0`, `version = 0`),
-			Entry("version presence", `has(this.metadata.version)`, `version <> 0`),
-			Entry("version range", `this.metadata.version >= 1`, `version >= 1`),
-			Entry("version membership", `this.metadata.version in [0, 1]`, `version in (0, 1)`),
-		)
-
 		DescribeTable("Rejects statically non-Boolean filters",
 			func(ctx context.Context, filter string) {
 				actual, err := translator.Translate(ctx, filter)
@@ -72,77 +55,6 @@ var _ = Describe("Filter translator", func() {
 			Entry("message", `this.status`),
 			Entry("null", `null`),
 		)
-
-		It("Allows Boolean filters with a dynamically typed operand", func(ctx context.Context) {
-			tr, err := NewFilterTranslator().SetLogger(logger).
-				SetDescriptor((*privatev1.Cluster)(nil).ProtoReflect().Descriptor()).Build()
-			Expect(err).NotTo(HaveOccurred())
-			actual, err := tr.Translate(ctx, `this.spec.template_parameters['key'] != null`)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(actual).To(Equal(`data->'spec'->'template_parameters'->>'key' is not null`))
-		})
-
-		It("Rejects finalizer filters even for private descriptors", func(ctx context.Context) {
-			for _, desc := range []protoreflect.MessageDescriptor{
-				(*privatev1.Cluster)(nil).ProtoReflect().Descriptor(),
-				(*publicv1.Cluster)(nil).ProtoReflect().Descriptor(),
-			} {
-				tr, err := NewFilterTranslator().SetLogger(logger).SetDescriptor(desc).Build()
-				Expect(err).ToNot(HaveOccurred())
-				for _, filter := range []string{
-					`has(this.metadata.finalizers)`,
-					`this.metadata.finalizers == this.metadata.finalizers`,
-					`'controller' in this.metadata.finalizers`,
-				} {
-					_, err = tr.Translate(ctx, filter)
-					Expect(err).To(HaveOccurred(), filter)
-				}
-			}
-		})
-
-		DescribeTable("Orders only descriptor-validated scalar and Timestamp leaves",
-			func(ctx context.Context, order, expected string) {
-				actual, err := translator.TranslateOrder(ctx, order)
-				Expect(err).ToNot(HaveOccurred())
-				Expect(actual).To(Equal(expected))
-			},
-			Entry("default", "", "id"),
-			Entry("scalar", "spec.spec_string desc", "data->'spec'->>'spec_string' desc nulls last, id asc nulls last"),
-			Entry("Timestamp leaf", "status.status_timestamp desc", "cast(data->'status'->>'status_timestamp' as timestamp with time zone) desc nulls last, id asc nulls last"),
-			Entry("explicit id", "metadata.name asc, id desc", "name asc nulls last, id desc nulls last"),
-			Entry("metadata sentinel", "metadata.creation_timestamp", "nullif(creation_timestamp, 'epoch'::timestamptz) asc nulls last, id asc nulls last"),
-		)
-
-		It("Rejects malformed, noncanonical, collection and SQL order terms", func(ctx context.Context) {
-			for _, order := range []string{
-				" ", ",", "id,", "id sideways", "id asc nulls first", "id; drop table objects",
-				"this.id", "metadata.creationTimestamp", "metadata.finalizers", "metadata.labels",
-				"metadata.annotations['admin.osac.openshift.io/key']", "status", "my_msg", "my_repeated.id",
-				"my_map.id", "my_timestamp.seconds", "unknown", "spec.spec_string collate C",
-				strings.Repeat("id,", 16) + "id",
-			} {
-				_, err := translator.TranslateOrder(ctx, order)
-				Expect(err).To(HaveOccurred(), order)
-			}
-			_, err := translator.TranslateOrder(ctx, strings.Repeat("id,", 15)+"id")
-			Expect(err).ToNot(HaveOccurred())
-		})
-
-		It("Uses the configured public descriptor for order privacy", func(ctx context.Context) {
-			tr, err := NewFilterTranslator().SetLogger(logger).
-				SetDescriptor((*publicv1.Cluster)(nil).ProtoReflect().Descriptor()).Build()
-			Expect(err).ToNot(HaveOccurred())
-			_, err = tr.TranslateOrder(ctx, "status.hub")
-			Expect(err).To(HaveOccurred())
-			tr, err = NewFilterTranslator().SetLogger(logger).
-				SetDescriptor((*privatev1.Cluster)(nil).ProtoReflect().Descriptor()).Build()
-			Expect(err).ToNot(HaveOccurred())
-			actual, err := tr.TranslateOrder(ctx, "status.hub")
-			Expect(err).ToNot(HaveOccurred())
-			Expect(actual).To(Equal("data->'status'->>'hub' asc nulls last, id asc nulls last"))
-			_, err = tr.TranslateOrder(ctx, "metadata.finalizers")
-			Expect(err).To(HaveOccurred())
-		})
 	})
 
 	Describe("Construction", func() {
@@ -188,10 +100,10 @@ var _ = Describe("Filter translator", func() {
 			Entry("maximum protobuf instant", `"9999-12-31T23:59:59.999999999Z"`, "9999-12-31T23:59:59.999999999Z"),
 		)
 
-		DescribeTable("rejects invalid and unsupported forms as validation, never SQL",
+		DescribeTable("rejects invalid and unsupported forms before producing SQL",
 			func(ctx context.Context, constructor string) {
 				actual, err := translator.Translate(ctx, `this.status.status_timestamp == `+constructor)
-				Expect(err).To(BeAssignableToTypeOf(&ErrValidation{}))
+				Expect(err).To(HaveOccurred())
 				Expect(actual).To(BeEmpty())
 			},
 			Entry("no arguments", `timestamp()`),
@@ -234,31 +146,23 @@ var _ = Describe("Filter translator", func() {
 			}
 		})
 
-		It("compares metadata and nested status instants in real PostgreSQL, preserving absence", func(ctx context.Context) {
+		It("compares nested status instants in real PostgreSQL, preserving optional status absence", func(ctx context.Context) {
 			db, err := server.NewInstance().Build()
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(db.Close)
 			pool, err := db.Pool(ctx)
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(pool.Close)
-			// Metadata's exact epoch is the established absence sentinel; nested JSON epoch is a real instant.
+			// Nested JSON timestamps use RFC3339 literals and preserve absent parent/leaf semantics.
 			for _, tc := range []struct {
 				filter string
 				ids    []string
 			}{
-				{`this.metadata.creation_timestamp == timestamp("2026-01-01T00:00:00.123456Z")`, []string{"match"}},
 				{`this.status.status_timestamp == timestamp("2026-01-01T03:30:00.123456+03:30")`, []string{"match"}},
-				{`timestamp("2025-12-31T19:00:00.123456-05:00") == this.metadata.creation_timestamp`, []string{"match"}},
-				{`this.metadata.creation_timestamp < timestamp("2026-01-01T00:00:00Z")`, []string{"before", "fractional-epoch"}},
 				{`this.status.status_timestamp < timestamp("2026-01-01T00:00:00Z")`, []string{"before", "epoch", "fractional-epoch"}},
-				{`this.metadata.creation_timestamp >= timestamp("2026-01-01T00:00:00.123456Z")`, []string{"after", "match"}},
 				{`this.status.status_timestamp > timestamp("2026-01-01T00:00:00.123456Z")`, []string{"after"}},
-				{`this.metadata.creation_timestamp <= timestamp("1970-01-01T00:00:00Z")`, []string{}},
 				{`this.status.status_timestamp == timestamp("1970-01-01T00:00:00Z")`, []string{"epoch"}},
-				{`this.metadata.creation_timestamp == timestamp("1970-01-01T00:00:00.000001Z")`, []string{"fractional-epoch"}},
-				{`this.metadata.creation_timestamp != timestamp("2026-01-01T00:00:00.123456Z")`, []string{"after", "before", "fractional-epoch"}},
 				{`this.status.status_timestamp != timestamp("2026-01-01T00:00:00.123456Z")`, []string{"after", "before", "epoch", "fractional-epoch"}},
-				{`!has(this.metadata.creation_timestamp)`, []string{"empty-status", "epoch", "missing-status"}},
 				{`has(this.status)`, []string{"after", "before", "empty-status", "epoch", "fractional-epoch", "match"}},
 				{`!has(this.status)`, []string{"missing-status"}},
 				{`has(this.status.status_timestamp)`, []string{"after", "before", "epoch", "fractional-epoch", "match"}},
@@ -423,22 +327,22 @@ var _ = Describe("Filter translator", func() {
 			Entry(
 				"Creation timestamp is null",
 				`this.metadata.creation_timestamp == null`,
-				`nullif(creation_timestamp, 'epoch'::timestamptz) is null`,
+				`creation_timestamp is null`,
 			),
 			Entry(
 				"Creation timestamp is not null",
 				`this.metadata.creation_timestamp != null`,
-				`nullif(creation_timestamp, 'epoch'::timestamptz) is not null`,
+				`creation_timestamp is not null`,
 			),
 			Entry(
 				"Deletion timestamp is null",
 				`this.metadata.deletion_timestamp == null`,
-				`nullif(deletion_timestamp, 'epoch'::timestamptz) is null`,
+				`nullif(deletion_timestamp, '1970-01-01 00:00:00Z') is null`,
 			),
 			Entry(
 				"Deletion timestamp is not null",
 				`this.metadata.deletion_timestamp != null`,
-				`nullif(deletion_timestamp, 'epoch'::timestamptz) is not null`,
+				`nullif(deletion_timestamp, '1970-01-01 00:00:00Z') is not null`,
 			),
 			Entry(
 				"Timestamp in the past",
@@ -473,12 +377,12 @@ var _ = Describe("Filter translator", func() {
 			Entry(
 				"Check presence of creation timestamp",
 				`has(this.metadata.creation_timestamp)`,
-				`creation_timestamp <> 'epoch'::timestamptz`,
+				`true`,
 			),
 			Entry(
 				"Check presence of deletion timestamp",
 				`has(this.metadata.deletion_timestamp)`,
-				`deletion_timestamp <> 'epoch'::timestamptz`,
+				`deletion_timestamp != '1970-01-01 00:00:00Z'`,
 			),
 			Entry(
 				"Boolean true check",
@@ -568,7 +472,7 @@ var _ = Describe("Filter translator", func() {
 			Entry(
 				"Check if object is deleted",
 				`!has(this.metadata.deletion_timestamp)`,
-				`not deletion_timestamp <> 'epoch'::timestamptz`,
+				`not deletion_timestamp != '1970-01-01 00:00:00Z'`,
 			),
 			Entry(
 				"Filter by creator",

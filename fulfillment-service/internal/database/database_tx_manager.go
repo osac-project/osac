@@ -182,6 +182,7 @@ func (t *managedTx) OnCommit(fn func()) {
 	t.hooks = append(t.hooks, fn)
 }
 
+// OnFinish implements the optional finish-callback interface used by account discovery admission.
 func (t *managedTx) OnFinish(fn func(bool)) {
 	if fn == nil {
 		return
@@ -198,7 +199,9 @@ func (t *managedTx) runFinishHooks(ctx context.Context, committed bool) {
 		hooks := t.finish
 		t.finish = nil
 		for _, hook := range hooks {
-			t.runHook(ctx, "Function registered to run after transaction end panicked", func() { hook(committed) })
+			t.runHook(ctx, "Function registered to run after transaction end panicked", func() {
+				hook(committed)
+			})
 		}
 	}
 }
@@ -215,7 +218,7 @@ func (t *managedTx) runCommitHooks(ctx context.Context) {
 	}
 }
 
-// runHook runs a transaction callback, logging a panic.
+// runHook runs one transaction callback, logging a panic.
 func (t *managedTx) runHook(ctx context.Context, panicMessage string, hook func()) {
 	defer func() {
 		if fault := recover(); fault != nil {

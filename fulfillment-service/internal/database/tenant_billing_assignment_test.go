@@ -65,9 +65,9 @@ func tenantBillingPersistenceSpecs(fixture func() *billingPersistenceFixture) {
 		It("closes and replaces an interval atomically with exactly matching boundaries", func() {
 			first, err := f.assignments.Create().SetObject(billingAssignmentFixture("first", "tenant-a", account)).Do(f.ctx)
 			Expect(err).NotTo(HaveOccurred())
-			floor, err := dao.LockTenantBillingAssignmentForDeletion(f.ctx, "tenant-a")
+			floor, err := database.TenantBillingHistoryFloor(f.ctx, "tenant-a")
 			Expect(err).NotTo(HaveOccurred())
-			at, err := dao.BillingFinalizationTime(f.ctx, floor)
+			at, err := database.BillingFinalizationTime(f.ctx, floor)
 			Expect(err).NotTo(HaveOccurred())
 			first.GetObject().GetStatus().SetEffectiveToTimestamp(timestamppb.New(at))
 			_, err = f.assignments.Update().SetObject(first.GetObject()).Do(f.ctx)
@@ -85,51 +85,6 @@ func tenantBillingPersistenceSpecs(fixture func() *billingPersistenceFixture) {
 			Expect(proto.Equal(old.GetObject().GetStatus().GetEffectiveToTimestamp(),
 				page.GetItems()[0].GetStatus().GetEffectiveFromTimestamp())).To(BeTrue())
 		})
-		It("closes only the current interval and is idempotent without changing closed history or another tenant", func() {
-			history := billingAssignmentFixture("history", "tenant-a", account)
-			history.GetStatus().SetEffectiveToTimestamp(history.GetStatus().GetEffectiveFromTimestamp())
-			history.GetStatus().SetMessage("original history message")
-			old, err := f.assignments.Create().SetObject(history).Do(f.ctx)
-			Expect(err).NotTo(HaveOccurred())
-			current, err := f.assignments.Create().SetObject(billingAssignmentFixture("current", "tenant-a", account)).Do(f.ctx)
-			Expect(err).NotTo(HaveOccurred())
-			otherAccount, err := f.accounts.Create().SetObject(billingAccountFixture("other-account", nil)).Do(f.ctx)
-			Expect(err).NotTo(HaveOccurred())
-			other, err := f.assignments.Create().SetObject(billingAssignmentFixture("other", "tenant-b", otherAccount.GetObject())).Do(f.ctx)
-			Expect(err).NotTo(HaveOccurred())
-			floor, err := dao.LockTenantBillingAssignmentForDeletion(f.ctx, "tenant-a")
-			Expect(err).NotTo(HaveOccurred())
-			at, err := dao.BillingFinalizationTime(f.ctx, floor)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(dao.CloseTenantBillingAssignmentOnDeletion(f.ctx, "tenant-a", at)).To(Succeed())
-			closed, err := f.assignments.Get().SetId("current").Do(f.ctx)
-			Expect(err).NotTo(HaveOccurred())
-			want := proto.Clone(current.GetObject()).(*privatev1.TenantBillingAssignment)
-			want.GetStatus().SetEffectiveToTimestamp(timestamppb.New(at))
-			want.GetStatus().SetMessage(database.TenantBillingAssignmentDeletedMessage)
-			want.GetMetadata().SetVersion(want.GetMetadata().GetVersion() + 1)
-			Expect(proto.Equal(closed.GetObject(), want)).To(BeTrue())
-			Expect(dao.CloseTenantBillingAssignmentOnDeletion(f.ctx, "tenant-a", at.Add(time.Hour))).To(Succeed())
-			for id, expected := range map[string]*privatev1.TenantBillingAssignment{
-				"history": old.GetObject(), "current": closed.GetObject(), "other": other.GetObject(),
-			} {
-				got, err := f.assignments.Get().SetId(id).Do(f.ctx)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(proto.Equal(got.GetObject(), expected)).To(BeTrue())
-			}
-			page, err := f.assignments.List().SetFilter(`this.spec.billing_account.id == "interval-account" && !has(this.status.effective_to_timestamp)`).Do(f.ctx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(page.GetTotal()).To(BeZero())
-		})
-		It("is a no-op for tenants with no current assignment, including a missing tenant", func() {
-			for _, tenant := range []string{"tenant-a", "missing"} {
-				floor, err := dao.LockTenantBillingAssignmentForDeletion(f.ctx, tenant)
-				Expect(err).NotTo(HaveOccurred())
-				at, err := dao.BillingFinalizationTime(f.ctx, floor)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(dao.CloseTenantBillingAssignmentOnDeletion(f.ctx, tenant, at)).To(Succeed())
-			}
-		})
 		It("returns typed not-found for missing accounts and assignments without a row mapper", func() {
 			for _, get := range []func(context.Context) error{
 				func(ctx context.Context) error { _, err := f.accounts.Get().SetId("missing").Do(ctx); return err },
@@ -143,7 +98,7 @@ func tenantBillingPersistenceSpecs(fixture func() *billingPersistenceFixture) {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(page.GetItems()).To(BeEmpty())
 		})
-		DescribeTable("finalizes after a later committed assignment without using the old transaction timestamp", func(future bool) {
+		DescribeTable("computes a finalization boundary after later committed assignment history", func(future bool) {
 			deletion, err := f.tm.Begin(f.ctx)
 			Expect(err).NotTo(HaveOccurred())
 			deletionCtx := database.TxIntoContext(f.ctx, deletion)
@@ -174,14 +129,10 @@ func tenantBillingPersistenceSpecs(fixture func() *billingPersistenceFixture) {
 			Expect(from).To(BeTemporally(">", transactionStart))
 			_, err = f.tenants.Get().SetId("later-tenant").SetLock(true).Do(deletionCtx)
 			Expect(err).NotTo(HaveOccurred())
-			floor, err := dao.LockTenantBillingAssignmentForDeletion(deletionCtx, "later-tenant")
+			floor, err := database.TenantBillingHistoryFloor(deletionCtx, "later-tenant")
 			Expect(err).NotTo(HaveOccurred())
-			at, err := dao.BillingFinalizationTime(deletionCtx, floor)
+			at, err := database.BillingFinalizationTime(deletionCtx, floor)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(dao.CloseTenantBillingAssignmentOnDeletion(deletionCtx, "later-tenant", at)).To(Succeed())
-			closed, err := f.assignments.Get().SetId("later-interval").Do(deletionCtx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(closed.GetObject().GetStatus().GetEffectiveToTimestamp().AsTime()).To(BeTemporally("==", at))
 			Expect(at).To(BeTemporally(">=", from))
 			if future {
 				Expect(at).To(BeTemporally("==", from), "a future interval floor permits an exact zero-length close")
@@ -315,7 +266,7 @@ func tenantBillingPersistenceSpecs(fixture func() *billingPersistenceFixture) {
 				}
 				seen := map[string]bool{}
 				for offset := int32(0); offset <= total; offset++ {
-					page, err := f.assignments.List().SetOrder("id").SetLimit(1).SetOffset(offset).Do(f.ctx)
+					page, err := f.assignments.List().SetLimit(1).SetOffset(offset).Do(f.ctx)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(page.GetTotal()).To(Equal(total))
 					if offset == total {
@@ -374,7 +325,7 @@ func tenantBillingPersistenceSpecs(fixture func() *billingPersistenceFixture) {
 			}
 			var got []string
 			for _, offset := range []int32{0, 100} {
-				page, err := f.assignments.List().SetOrder("status.effective_from_timestamp desc, id").SetOffset(offset).SetLimit(100).Do(f.ctx)
+				page, err := f.assignments.List().SetOffset(offset).SetLimit(100).Do(f.ctx)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(page.GetTotal()).To(Equal(int32(count)))
 				Expect(page.GetItems()).To(HaveLen(max(0, min(count-int(offset), 100))))

@@ -23,7 +23,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgerrcode"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
@@ -61,7 +60,7 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 
 	// Generate an identifier if needed:
 	id := r.object.GetId()
-	if id == "" && r.dao.table != "tenants" {
+	if id == "" {
 		id = uuid.New()
 	}
 
@@ -91,43 +90,6 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 		return
 	}
 
-	var tenantCreationTs time.Time
-	if r.dao.table == "tenants" {
-		// The private server normalizes tenant identity; direct DAO callers must already be
-		// canonical. Never generate or derive a different identity at this layer.
-		if name == "" || id != name || tenant != name {
-			return nil, errors.New("tenant id, name and self-tenant must be nonempty and equal")
-		}
-		if err = database.CheckTenantIdentityReusable(ctx, name); err != nil {
-			return
-		}
-		tenantCreationTs, err = database.TenantIdentityCreationTime(ctx, name)
-		if err != nil {
-			return
-		}
-	}
-
-	// Tenants bootstrap their own FK target. Every other create must lock and check the normalized
-	// tenant in this transaction: an FK alone also accepts a deletion-marked row awaiting finalizers.
-	// SHARE permits concurrent creates but conflicts with both deletion-marking UPDATEs and archival's
-	// FOR UPDATE lock. After waiting behind deletion, READ COMMITTED returns the updated deletion state.
-	if r.dao.table != "tenants" {
-		var deleting bool
-		err = r.queryRow(ctx, getOpType,
-			`select deletion_timestamp <> 'epoch' from tenants where name = $1 for share`, tenant,
-		).Scan(&deleting)
-		if errors.Is(err, pgx.ErrNoRows) {
-			err = &ErrReference{Reason: fmt.Sprintf("tenant '%s' doesn't exist", tenant)}
-		} else if err != nil {
-			err = r.translateError(ctx, id, tenant, project, name, err)
-		} else if deleting {
-			err = &ErrReference{Reason: fmt.Sprintf("tenant '%s' is being deleted", tenant)}
-		}
-		if err != nil {
-			return
-		}
-	}
-
 	// Save the object:
 	data, err := r.marshalData(r.object)
 	if err != nil {
@@ -141,10 +103,6 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 	if err != nil {
 		return
 	}
-	creationColumn, creationValue := "", ""
-	if r.dao.table == "tenants" {
-		creationColumn, creationValue = ", creation_timestamp", ", $10"
-	}
 	sql := fmt.Sprintf(
 		`
 		insert into %s (
@@ -156,7 +114,7 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 			project,
 			labels,
 			annotations,
-			data%s
+			data
 		) values (
 		 	$1,
 		 	$2,
@@ -166,7 +124,7 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 			$6,
 			$7,
 			$8,
-			$9%s
+			$9
 		)
 		returning
 			creation_timestamp,
@@ -174,8 +132,6 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 			version
 		`,
 		r.dao.table,
-		creationColumn,
-		creationValue,
 	)
 	var (
 		creationTs time.Time
@@ -184,15 +140,19 @@ func (r *CreateRequest[O]) do(ctx context.Context) (response *CreateResponse[O],
 	)
 	err = func() (err error) {
 		start := time.Now()
-		args := []any{id, name, finalizers, creator, tenant, project, labelsData, annotationsData, data}
-		if r.dao.table == "tenants" {
-			args = append(args, tenantCreationTs)
-		}
 		row := r.queryRow(
 			ctx,
 			createOpType,
 			sql,
-			args...,
+			id,
+			name,
+			finalizers,
+			creator,
+			tenant,
+			project,
+			labelsData,
+			annotationsData,
+			data,
 		)
 		defer func() {
 			r.recordOpDuration(createOpType, start, err)

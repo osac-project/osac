@@ -299,7 +299,6 @@ var _ = Describe("Tenant billing assignments server", func() {
 		listed, err := billingRPC(adminCtx, server.List, &publicv1.TenantBillingAssignmentsListRequest{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(listed.GetTotal()).To(Equal(int32(2)), "the closed interval and the new one are both listed")
-		Expect(listed.GetItems()[0].GetId()).To(Equal(updated.GetObject().GetId()), "default order is latest interval first")
 		current := 0
 		for _, item := range listed.GetItems() {
 			if item.GetStatus().GetEffectiveToTimestamp() == nil {
@@ -310,19 +309,18 @@ var _ = Describe("Tenant billing assignments server", func() {
 		Expect(current).To(Equal(1), "exactly one current interval remains after the reassignment")
 	}, Entry("universal", auth.AllTenants), Entry("finite", collections.NewSet(testTenant)))
 
-	DescribeTable("constrains public query paths and pagination", func(filter, order string, offset, limit int32) {
+	DescribeTable("constrains public query paths and pagination", func(filter string, offset, limit int32) {
 		fake := billingfake.New(billingfake.Scenario{})
 		caller := auth.ContextWithSubject(ctx, &auth.Subject{User: "admin", Tenants: auth.AllTenants})
 		_, err := billingRPC(caller, build(fake.Provider()).List, publicv1.TenantBillingAssignmentsListRequest_builder{
-			Filter: &filter, Order: &order, Offset: &offset, Limit: &limit,
+			Filter: &filter, Offset: &offset, Limit: &limit,
 		}.Build())
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		Expect(fake.Calls()).To(BeEmpty())
-	}, Entry("old scalar filter", `this.spec.tenant_id == "x"`, "", int32(0), int32(0)),
-		Entry("status object order", "", "status", int32(0), int32(0)),
-		Entry("private finalizers", "", "metadata.finalizers", int32(0), int32(0)),
-		Entry("negative offset", "", "", int32(-1), int32(0)),
-		Entry("negative limit", "", "", int32(0), int32(-1)))
+	}, Entry("old scalar filter", `this.spec.tenant_id == "x"`, int32(0), int32(0)),
+		Entry("private finalizers", "this.metadata.finalizers == []", int32(0), int32(0)),
+		Entry("negative offset", "", int32(-1), int32(0)),
+		Entry("negative limit", "", int32(0), int32(-1)))
 
 	Describe("trusted tenant scope through the public delegate", func() {
 		// Subject doubles exercise trusted server/SQL mechanics, not JWT/OPA grants. Production billing

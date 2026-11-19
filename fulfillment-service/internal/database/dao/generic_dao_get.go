@@ -71,11 +71,6 @@ func (r *GetRequest[O]) do(ctx context.Context) (response *GetResponse[O], err e
 		err = errors.New("object identifier is mandatory")
 		return
 	}
-	if r.dao.table == "tenants" && (r.lock || r.shareLock) {
-		if err = database.LockTenantIdentity(ctx, r.id); err != nil {
-			return
-		}
-	}
 
 	// Check visibility:
 	ok, err := r.addVisibilityFilter(ctx)

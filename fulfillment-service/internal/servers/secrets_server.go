@@ -174,7 +174,6 @@ func (s *SecretsServer) List(ctx context.Context,
 		privateRequest.SetLimit(request.GetLimit())
 	}
 	privateRequest.SetFilter(request.GetFilter())
-	privateRequest.SetOrder(request.GetOrder())
 
 	privateResponse, err := s.private.List(ctx, privateRequest)
 	if err != nil {

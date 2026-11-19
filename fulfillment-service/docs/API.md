@@ -572,11 +572,12 @@ uses exactly that path; explicit child paths are not normalized. With no body
 or mask query, the gateway infers an empty mask. Neither an empty JSON object
 (`{}`) nor an empty `update_mask` query value requests an empty mask.
 
-Billing filters and ordering use nested descriptor paths, such as `this.status.state == 1`
-(ACTIVE), `this.status.connection_state == 2` (CONNECTED),
-`!has(this.status.effective_to_timestamp)`, and `status.external_billing_account_id`.
-Enum comparisons are numeric, not the type-prefixed names used by JSON responses. Timestamp
-predicates use `timestamp("2026-01-01T00:00:00Z")`. Old flat account fields,
+Billing filters use nested descriptor paths, such as `this.status.state == 1` (ACTIVE),
+`this.status.connection_state == 2` (CONNECTED), `!has(this.status.effective_to_timestamp)`,
+and `status.external_billing_account_id`. Enum comparisons are numeric, not the type-prefixed
+names used by JSON responses. Timestamp predicates use `timestamp("2026-01-01T00:00:00Z")`.
+List ordering remains unimplemented, as for other Fulfillment object types; the request field is
+ignored and callers must not rely on result order. Old flat account fields,
 `correlation_id`, scalar `tenant_id`/`billing_account_id`, and `effective_from`/`effective_to`
 are not aliases. REST and CLI structured output use the nested snake-case field names.
 

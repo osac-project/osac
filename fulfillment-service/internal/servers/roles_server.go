@@ -147,7 +147,6 @@ func (s *RolesServer) List(ctx context.Context,
 	}
 
 	privateRequest.SetFilter(filter)
-	privateRequest.SetOrder(request.GetOrder())
 
 	privateResponse, err := s.delegate.List(ctx, privateRequest)
 	if err != nil {

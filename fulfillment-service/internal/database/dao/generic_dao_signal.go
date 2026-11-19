@@ -54,11 +54,6 @@ func (r *SignalRequest[O]) do(ctx context.Context) (response *SignalResponse, er
 		err = errors.New("object identifier is mandatory")
 		return
 	}
-	if r.dao.table == "tenants" {
-		if err = database.LockTenantIdentity(ctx, r.id); err != nil {
-			return
-		}
-	}
 
 	// Check visibility:
 	ok, err := r.addVisibilityFilter(ctx)

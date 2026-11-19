@@ -111,9 +111,6 @@ func (s *FabricDomainsServer) List(ctx context.Context, request *publicv1.Fabric
 		privateRequest.SetLimit(request.GetLimit())
 	}
 	privateRequest.SetFilter(filter)
-	if request.HasOrder() {
-		privateRequest.SetOrder(request.GetOrder())
-	}
 	privateResponse, err := s.delegate.List(ctx, privateRequest)
 	if err != nil {
 		return nil, err

@@ -68,31 +68,6 @@ func CheckTenantIdentityReusable(ctx context.Context, name string) (err error) {
 	return
 }
 
-// TenantIdentityCreationTime rechecks reuse under the identity key and samples the database clock once AFTER the
-// key wait. The caller must bind this value into its tenant INSERT. It never replaces/purges the previous marker.
-// An extant tenant gets only a disposable clock sample so the ordinary duplicate error retains precedence.
-func TenantIdentityCreationTime(ctx context.Context, name string) (result time.Time, err error) {
-	tx, err := TxFromContext(ctx)
-	if err != nil {
-		return
-	}
-	defer tx.ReportError(&err)
-	if err = LockTenantIdentity(ctx, name); err != nil {
-		return
-	}
-	if _, _, _, err = tenantIdentityReuseState(ctx, tx, name); err != nil {
-		return
-	}
-	if err = tx.QueryRow(ctx, `select clock_timestamp()`).Scan(&result); err != nil {
-		return
-	}
-	result = result.UTC()
-	if !tenantIdentityTimestampValid(result) {
-		return time.Time{}, errors.New("unrepresentable tenant identity database clock")
-	}
-	return
-}
-
 // tenantIdentityReuseState deliberately reads live existence without a row lock, AFTER acquiring the identity key.
 // All supported tenant lifecycle writers use that same key before their row locks. An extant tenant keeps ordinary
 // duplicate precedence. History remains a defensive fallback, and any finalized deletion marker reserves the name
@@ -123,55 +98,6 @@ func tenantIdentityReuseState(ctx context.Context, tx Tx, name string) (previous
 		}
 		err = ErrTenantIdentityRetained
 	}
-	return
-}
-
-// CaptureDeletedTenantIdentity records authoritative metadata supplied by the lifecycle writer. The caller MUST
-// already hold the identity key and the ORIGINAL tenant row lock, acquired in that order before any mutation;
-// the row lock stays held after DELETE. Taking a late key here would invert the lifecycle lock order.
-// Same-incarnation evidence is monotonic. Only a strictly ordered successor of a finalized, unbilled incarnation
-// can replace the previous marker; creating a live tenant does not replace it.
-func CaptureDeletedTenantIdentity(ctx context.Context, in DeletedTenantIdentity) (err error) {
-	tx, err := TxFromContext(ctx)
-	if err != nil {
-		return
-	}
-	defer tx.ReportError(&err)
-	if err = validateDeletedTenantIdentity(in); err != nil {
-		return
-	}
-	previous, found, err := GetDeletedTenantIdentity(ctx, in.TenantName)
-	if err != nil {
-		return err
-	}
-	if found {
-		if err = validateDeletedTenantIdentity(previous); err != nil {
-			return
-		}
-		if in.TenantCreatedAt.Equal(previous.TenantCreatedAt) {
-			if in.DeletionTimestamp.Before(previous.DeletionTimestamp) ||
-				(previous.FinalizedAt != nil && in.DeletionTimestamp.After(*previous.FinalizedAt)) {
-				return errors.New("conflicting same-incarnation tenant deletion chronology")
-			}
-			in.DeletionTimestamp = previous.DeletionTimestamp
-			if previous.DeletedBy != nil {
-				in.DeletedBy = previous.DeletedBy
-			}
-			if previous.FinalizedAt != nil {
-				in.FinalizedAt = previous.FinalizedAt
-			}
-			in.BillingRetained = in.BillingRetained || previous.BillingRetained
-		} else if previous.BillingRetained || previous.FinalizedAt == nil ||
-			!in.TenantCreatedAt.After(*previous.FinalizedAt) {
-			return errors.New("stale, retained or overlapping tenant identity capture")
-		}
-	}
-	_, err = tx.Exec(ctx, `insert into deleted_tenant_identities
-		(tenant_name, tenant_created_at, deletion_timestamp, deleted_by, finalized_at, billing_retained)
-		values ($1,$2,$3,$4,$5,$6) on conflict (tenant_name) do update set
-		tenant_created_at = excluded.tenant_created_at, deletion_timestamp = excluded.deletion_timestamp,
-		deleted_by = excluded.deleted_by, finalized_at = excluded.finalized_at, billing_retained = excluded.billing_retained`,
-		in.TenantName, in.TenantCreatedAt, in.DeletionTimestamp, in.DeletedBy, in.FinalizedAt, in.BillingRetained)
 	return
 }
 

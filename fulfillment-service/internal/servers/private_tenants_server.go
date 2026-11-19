@@ -198,8 +198,8 @@ func (s *PrivateTenantsServer) Create(ctx context.Context,
 	if tenant == "" {
 		metadata.SetTenant(name)
 	}
-	// Reuse is serialized before validation or any tenant mutation. The DAO repeats this
-	// guard for direct callers and persists the post-key creation timestamp itself.
+	// Reuse is serialized before validation or any tenant mutation. The lock remains held by
+	// this request transaction through the tenant INSERT.
 	if err = database.CheckTenantIdentityReusable(ctx, name); err != nil {
 		if errors.Is(err, database.ErrTenantIdentityRetained) {
 			err = failedPreconditionWithReason(tenantIdentityRetainedReason,
@@ -299,6 +299,12 @@ func (s *PrivateTenantsServer) Delete(ctx context.Context,
 			return
 		}
 	}
+	if subject, ok := auth.LookupSubject(ctx); ok && subject.User != "" {
+		var actor string
+		if err = tx.QueryRow(ctx, `select set_config('osac.tenant_deletion_actor', $1, true)`, subject.User).Scan(&actor); err != nil {
+			return
+		}
+	}
 	err = s.generic.Delete(ctx, request, &response)
 	if err != nil {
 		return
@@ -308,6 +314,11 @@ func (s *PrivateTenantsServer) Delete(ctx context.Context,
 
 func (s *PrivateTenantsServer) Signal(ctx context.Context,
 	request *privatev1.TenantsSignalRequest) (response *privatev1.TenantsSignalResponse, err error) {
+	if request.GetId() != "" {
+		if err = database.LockTenantIdentity(ctx, request.GetId()); err != nil {
+			return
+		}
+	}
 	err = s.generic.Signal(ctx, request, &response)
 	return
 }

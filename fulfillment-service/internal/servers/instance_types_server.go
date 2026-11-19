@@ -153,7 +153,6 @@ func (s *InstanceTypesServer) List(ctx context.Context,
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "%v", err)
 	}
 	privateRequest.SetFilter(composedFilter)
-	privateRequest.SetOrder(request.GetOrder())
 
 	// Delegate to private server:
 	privateResponse, err := s.delegate.List(ctx, privateRequest)

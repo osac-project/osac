@@ -59,11 +59,6 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		err = errors.New("object identifier is mandatory")
 		return
 	}
-	if r.dao.table == "tenants" {
-		if err = database.LockTenantIdentity(ctx, id); err != nil {
-			return
-		}
-	}
 
 	// Check visibility:
 	ok, err := r.addVisibilityFilter(ctx)
@@ -85,11 +80,6 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 		r.sql.filter.WriteString(` and`)
 	}
 	fmt.Fprintf(&r.sql.filter, ` id = $%d`, len(r.sql.params))
-	if r.dao.table == "tenants" {
-		if _, err = r.lockTenantLifecycle(ctx, id); err != nil {
-			return
-		}
-	}
 
 	// Get the requested finalizers, name, labels, annotations and tenant:
 	metadata := r.getMetadata(r.object)
@@ -199,7 +189,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 	r.setMetadata(object, metadata)
 
 	// If the object has been deleted and there are no finalizers we can now archive the object:
-	if !deletionTs.Equal(time.Unix(0, 0)) && len(finalizers) == 0 {
+	if deletionTs.Unix() != 0 && len(finalizers) == 0 {
 		err = r.archive(ctx, archiveArgs{
 			id:              id,
 			creationTs:      creationTs,
@@ -235,16 +225,14 @@ func (r *UpdateRequest[O]) translateError(ctx context.Context, id, name, tenant 
 	case pgerrcode.UniqueViolation:
 		if strings.Contains(pgErr.ConstraintName, "_unique_name") {
 			return &ErrAlreadyExists{
-				ID:             id,
-				Name:           name,
-				Kind:           r.dao.kind,
-				ConstraintName: pgErr.ConstraintName,
+				ID:   id,
+				Name: name,
+				Kind: r.dao.kind,
 			}
 		}
 		return &ErrAlreadyExists{
-			ID:             id,
-			Kind:           r.dao.kind,
-			ConstraintName: pgErr.ConstraintName,
+			ID:   id,
+			Kind: r.dao.kind,
 		}
 	case pgerrcode.ForeignKeyViolation:
 		switch {

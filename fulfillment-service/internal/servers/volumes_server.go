@@ -170,7 +170,6 @@ func (s *VolumesServer) List(ctx context.Context,
 		privateRequest.SetLimit(request.GetLimit())
 	}
 	privateRequest.SetFilter(request.GetFilter())
-	privateRequest.SetOrder(request.GetOrder())
 
 	privateResponse, err := s.delegate.List(ctx, privateRequest)
 	if err != nil {

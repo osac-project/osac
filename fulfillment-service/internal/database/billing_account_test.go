@@ -108,13 +108,6 @@ var _ = Describe("Canonical billing database contracts", Ordered, ContinueOnFail
 			Expect(page.GetItems()).To(HaveLen(1))
 			Expect(page.GetItems()[0].GetStatus().GetDisplayName()).To(Equal("Alpha"))
 		})
-		DescribeTable("orders and pages nested labels with an explicit unique tie breaker", func(direction, want string) {
-			page, err := f.accounts.List().SetOrder("status.display_name " + direction + ", id").SetOffset(1).SetLimit(1).Do(f.ctx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(page.GetTotal()).To(Equal(int32(2)))
-			Expect(page.GetItems()).To(HaveLen(1))
-			Expect(page.GetItems()[0].GetStatus().GetDisplayName()).To(Equal(want))
-		}, Entry("ascending", "asc", "Beta"), Entry("descending", "desc", "Alpha"))
 		DescribeTable("rejects private, unknown and retired filter paths", func(filter string) {
 			err := f.tx.Savepoint(f.ctx, func(ctx context.Context) error {
 				_, err := f.accounts.List().SetFilter(filter).Do(ctx)
@@ -124,15 +117,6 @@ var _ = Describe("Canonical billing database contracts", Ordered, ContinueOnFail
 			Expect(errors.As(err, &invalid)).To(BeTrue())
 		}, Entry("private", `this.status.provider_account_reference == "query-1"`),
 			Entry("old flat", `this.state == "ACTIVE"`), Entry("old token", `this.status.correlation_id == "x"`))
-		DescribeTable("rejects private and retired order paths", func(order string) {
-			err := f.tx.Savepoint(f.ctx, func(ctx context.Context) error {
-				_, err := f.accounts.List().SetOrder(order).Do(ctx)
-				return err
-			})
-			var invalid *dao.ErrValidation
-			Expect(errors.As(err, &invalid)).To(BeTrue())
-		}, Entry("private", "status.provider_account_reference"), Entry("old flat", "display_name"),
-			Entry("old token", "correlation_id desc"))
 		It("rejects negative limits before SQL", func() {
 			err := f.tx.Savepoint(f.ctx, func(ctx context.Context) error {
 				_, err := f.accounts.List().SetLimit(-1).Do(ctx)
@@ -162,23 +146,9 @@ var _ = Describe("Canonical billing database contracts", Ordered, ContinueOnFail
 			Expect(page.GetItems()[0].GetId()).To(Equal(id))
 		}, Entry("empty", "", "token-empty"), Entry("whitespace", " \t ", "token-space"),
 			Entry("plain", "ext-1", "token-plain"), Entry("padded", " ext-1 ", "token-padded"))
-		DescribeTable("orders actual SQL pages by raw token, not label or id", func(direction, first, second string) {
-			for id, token := range map[string]string{"order-a": "zulu", "order-z": "alpha"} {
-				_, err := f.accounts.Create().SetObject(billingAccountFixture(id, &token)).Do(f.ctx)
-				Expect(err).NotTo(HaveOccurred())
-			}
-			for offset, id := range []string{first, second} {
-				page, err := f.accounts.List().SetFilter(`this.id.startsWith("order-")`).
-					SetOrder("status.external_billing_account_id " + direction + ", id").SetOffset(int32(offset)).SetLimit(1).Do(f.ctx)
-				Expect(err).NotTo(HaveOccurred())
-				Expect(page.GetTotal()).To(Equal(int32(2)))
-				Expect(page.GetItems()).To(HaveLen(1))
-				Expect(page.GetItems()[0].GetId()).To(Equal(id))
-			}
-		}, Entry("ascending", "asc", "order-z", "order-a"), Entry("descending", "desc", "order-a", "order-z"))
 	})
 
-	DescribeTable("paginates accounts at the old boundary without overlap or loss", func(count int, order string) {
+	DescribeTable("paginates accounts at the old boundary without overlap or loss", func(count int) {
 		ids := make([]string, count)
 		for i := range count {
 			ids[i] = fmt.Sprintf("seed-%03d", i)
@@ -189,7 +159,7 @@ var _ = Describe("Canonical billing database contracts", Ordered, ContinueOnFail
 		}
 		var got []string
 		for _, offset := range []int32{0, 100} {
-			page, err := f.accounts.List().SetOrder(order).SetOffset(offset).SetLimit(100).Do(f.ctx)
+			page, err := f.accounts.List().SetOffset(offset).SetLimit(100).Do(f.ctx)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(page.GetTotal()).To(Equal(int32(count)))
 			Expect(page.GetItems()).To(HaveLen(max(0, min(count-int(offset), 100))))
@@ -198,8 +168,7 @@ var _ = Describe("Canonical billing database contracts", Ordered, ContinueOnFail
 			}
 		}
 		Expect(got).To(Equal(ids))
-	}, Entry("105 accounts", 105, "id"), Entry("exactly 100", 100, "id"),
-		Entry("nonunique label ties", 105, "status.display_name, id"))
+	}, Entry("105 accounts", 105), Entry("exactly 100", 100))
 	It("returns an empty account collection with total zero", func() {
 		page, err := f.accounts.List().Do(f.ctx)
 		Expect(err).NotTo(HaveOccurred())

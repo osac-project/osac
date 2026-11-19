@@ -132,7 +132,6 @@ func (s *SubnetsServer) List(ctx context.Context,
 		privateRequest.SetLimit(request.GetLimit())
 	}
 	privateRequest.SetFilter(request.GetFilter())
-	privateRequest.SetOrder(request.GetOrder())
 
 	// Delegate to private server:
 	privateResponse, err := s.delegate.List(ctx, privateRequest)

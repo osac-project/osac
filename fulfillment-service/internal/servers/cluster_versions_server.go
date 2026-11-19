@@ -149,7 +149,6 @@ func (s *ClusterVersionsServer) List(ctx context.Context,
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "%v", err)
 	}
 	privateRequest.SetFilter(composedFilter)
-	privateRequest.SetOrder(request.GetOrder())
 
 	privateResponse, err := s.delegate.List(ctx, privateRequest)
 	if err != nil {

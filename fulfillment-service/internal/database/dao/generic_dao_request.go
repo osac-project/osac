@@ -22,6 +22,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
@@ -58,8 +59,6 @@ type archiveArgs struct {
 	annotationsData []byte
 	version         int32
 	data            []byte
-	// Delete has already closed history and captured acceptance using its stored RETURNING state.
-	tenantDeletionCaptured bool
 }
 
 type storedObject struct {
@@ -107,183 +106,63 @@ func (r *request[O]) objectFromRow(row storedObject) (O, error) {
 	return object, nil
 }
 
-// lockTenantLifecycle reads authoritative lifecycle columns under the tenant row lock. The caller
-// must first acquire the identity key and construct its visibility/id filter.
-func (r *request[O]) lockTenantLifecycle(ctx context.Context, id string) (database.DeletedTenantIdentity, error) {
-	var identity database.DeletedTenantIdentity
-	err := r.queryRow(ctx, getOpType, `select name, creation_timestamp, deletion_timestamp from tenants where `+
-		r.sql.filter.String()+` for update`, r.sql.params...).Scan(
-		&identity.TenantName, &identity.TenantCreatedAt, &identity.DeletionTimestamp,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return identity, &ErrNotFound{IDs: []string{id}}
-	}
-	return identity, err
-}
-
-// tenantDeletionTime locks the complete affected account set before interval rows. Only first
-// acceptance samples the clock; retries must not move the stored billing close boundary.
-func tenantDeletionTime(ctx context.Context, identity database.DeletedTenantIdentity) (time.Time, error) {
-	floor, err := LockTenantBillingAssignmentForDeletion(ctx, identity.TenantName)
-	if err != nil {
-		return time.Time{}, err
-	}
-	if !identity.DeletionTimestamp.Equal(time.Unix(0, 0)) {
-		return identity.DeletionTimestamp, nil
-	}
-	floor = tenantLifecycleFloor(identity, floor)
-	return BillingFinalizationTime(ctx, floor)
-}
-
-func tenantLifecycleFloor(identity database.DeletedTenantIdentity, floor time.Time) time.Time {
-	if identity.TenantCreatedAt.After(floor) {
-		floor = identity.TenantCreatedAt
-	}
-	if !identity.DeletionTimestamp.Equal(time.Unix(0, 0)) && identity.DeletionTimestamp.After(floor) {
-		floor = identity.DeletionTimestamp
-	}
-	return floor
-}
-
-func captureTenantDeletion(ctx context.Context, identity database.DeletedTenantIdentity) error {
-	if err := CloseTenantBillingAssignmentOnDeletion(ctx, identity.TenantName, identity.DeletionTimestamp); err != nil {
-		return err
-	}
-	tx, err := database.TxFromContext(ctx)
-	if err != nil {
-		return err
-	}
-	if err = tx.QueryRow(ctx, `select exists(select 1 from tenant_billing_assignments where tenant_id = $1)`,
-		identity.TenantName).Scan(&identity.BillingRetained); err != nil {
-		return err
-	}
-	return database.CaptureDeletedTenantIdentity(ctx, identity)
-}
-
-// archive moves a deleted object to the archived table and physically removes it atomically in a
-// savepoint. Tenant callers MUST already hold the identity key before any tenant row lock.
+// archive moves a deleted object to the archived table and removes it from the main table.
 func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
-	identity := database.DeletedTenantIdentity{}
-	if r.dao.table == "tenants" {
-		// Keep this row lock outside the archive savepoint. Re-read all authoritative SQL state:
-		// a last-finalizer caller cannot spoof lifecycle columns through its protobuf metadata.
-		if err := r.queryRow(ctx, getOpType, `select name, creation_timestamp, deletion_timestamp,
-			creator, tenant, project, labels, annotations, version, data from tenants where id = $1 for update`, args.id).
-			Scan(&args.name, &args.creationTs, &args.deletionTs, &args.creator, &args.tenant, &args.project,
-				&args.labelsData, &args.annotationsData, &args.version, &args.data); err != nil {
-			return r.translateArchiveError(ctx, args.tenant, err)
-		}
-		identity = database.DeletedTenantIdentity{
-			TenantName: args.name, TenantCreatedAt: args.creationTs, DeletionTimestamp: args.deletionTs,
-		}
-		if !args.tenantDeletionCaptured {
-			if _, err := LockTenantBillingAssignmentForDeletion(ctx, identity.TenantName); err != nil {
-				return err
-			}
-			// A legacy deleting row without a marker has no provable original actor.
-			if err := captureTenantDeletion(ctx, identity); err != nil {
-				return err
-			}
-		}
-	}
-	outerTx := r.tx
-	err := outerTx.Savepoint(ctx, func(spCtx context.Context) error {
-		spTx, err := database.TxFromContext(spCtx)
-		if err != nil {
-			return err
-		}
-		// Run the archive statements against the savepoint through r.exec, keeping the usual logging and metrics.
-		r.tx = spTx
-		defer func() { r.tx = outerTx }()
-
-		remove := func() error {
-			deleteSQL := fmt.Sprintf(`delete from %s where id = $1`, r.dao.table)
-			tag, err := r.exec(spCtx, deleteOpType, deleteSQL, args.id)
-			if err != nil {
-				return err
-			}
-			if tag.RowsAffected() != 1 {
-				return errors.New("archive did not remove exactly one object")
-			}
-			return nil
-		}
-		if r.dao.table == "tenants" {
-			if err := remove(); err != nil {
-				return err
-			}
-			floor, err := TenantBillingHistoryFloor(spCtx, args.name)
-			if err != nil {
-				return err
-			}
-			at, err := BillingFinalizationTime(spCtx, tenantLifecycleFloor(identity, floor))
-			if err != nil {
-				return err
-			}
-			// Persist the same post-delete time in both the archive and the identity marker.
-			identity.FinalizedAt = &at
-		}
-
-		insertSQL := fmt.Sprintf(
-			`
-			insert into archived_%s (
-				id,
-				name,
-				creation_timestamp,
-				deletion_timestamp,
-				archival_timestamp,
-				creator,
-				tenant,
-				project,
-				labels,
-				annotations,
-				version,
-				data
-			) values (
-			 	$1,
-				$2,
-				$3,
-				$4,
-				coalesce($12::timestamptz, clock_timestamp()),
-				$5,
-				$6,
-				$7,
-				$8,
-				$9,
-				$10,
-				$11
-			)
-			`,
-			r.dao.table,
+	sql := fmt.Sprintf(
+		`
+		insert into archived_%s (
+			id,
+			name,
+			creation_timestamp,
+			deletion_timestamp,
+			creator,
+			tenant,
+			project,
+			labels,
+			annotations,
+			version,
+			data
+		) values (
+		 	$1,
+			$2,
+			$3,
+			$4,
+			$5,
+			$6,
+			$7,
+			$8,
+			$9,
+			$10,
+			$11
 		)
-		if _, err := r.exec(
-			spCtx,
-			archiveOpType,
-			insertSQL,
-			args.id,
-			args.name,
-			args.creationTs,
-			args.deletionTs,
-			args.creator,
-			args.tenant,
-			args.project,
-			args.labelsData,
-			args.annotationsData,
-			args.version,
-			args.data,
-			identity.FinalizedAt,
-		); err != nil {
-			return err
-		}
-		if r.dao.table == "tenants" {
-			// spCtx is essential: ambient helpers must use the same savepoint as r.tx.
-			return database.CaptureDeletedTenantIdentity(spCtx, identity)
-		}
-		return remove()
-	})
-	if err == nil {
-		return nil
+		`,
+		r.dao.table,
+	)
+	_, err := r.exec(
+		ctx,
+		archiveOpType,
+		sql,
+		args.id,
+		args.name,
+		args.creationTs,
+		args.deletionTs,
+		args.creator,
+		args.tenant,
+		args.project,
+		args.labelsData,
+		args.annotationsData,
+		args.version,
+		args.data,
+	)
+	if err != nil {
+		return r.translateArchiveError(ctx, args.tenant, err)
 	}
-	return r.translateArchiveError(ctx, args.tenant, err)
+	sql = fmt.Sprintf(`delete from %s where id = $1`, r.dao.table)
+	_, err = r.exec(ctx, deleteOpType, sql, args.id)
+	if err != nil {
+		return r.translateArchiveError(ctx, args.tenant, err)
+	}
+	return nil
 }
 
 // translateArchiveError translates a raw PostgreSQL error from either statement of archive() into
@@ -302,7 +181,7 @@ func (r *request[O]) translateArchiveError(ctx context.Context, tenant string, e
 		return &ErrInUse{
 			Reason: pgErr.Message,
 		}
-	case pgerrcode.ForeignKeyViolation, pgerrcode.RestrictViolation:
+	case pgerrcode.ForeignKeyViolation:
 		switch pgErr.ConstraintName {
 		case "projects_tenant_fk":
 			return &ErrInUse{
@@ -479,10 +358,10 @@ type makeMetadataArgs struct {
 func (r *request[O]) makeMetadata(args makeMetadataArgs) metadataIface {
 	result := r.dao.metadataTemplate.New().Interface().(metadataIface)
 	result.SetName(args.name)
-	if !args.creationTs.Equal(time.Unix(0, 0)) {
+	if args.creationTs.Unix() != 0 {
 		result.SetCreationTimestamp(timestamppb.New(args.creationTs))
 	}
-	if !args.deletionTs.Equal(time.Unix(0, 0)) {
+	if args.deletionTs.Unix() != 0 {
 		result.SetDeletionTimestamp(timestamppb.New(args.deletionTs))
 	}
 	result.SetFinalizers(args.finalizers)
@@ -571,28 +450,30 @@ func (r *request[O]) unmarshalMap(data []byte) (result map[string]string, err er
 	return
 }
 
-// queryRow executes a SQL query expected to return a single row. It logs operation metadata, never SQL or values.
+// queryRow executes a SQL query expected to return a single row. It logs the SQL statement before delegating to the
+// underlying transaction.
 func (r *request[O]) queryRow(ctx context.Context, op opType, sql string, args ...any) pgx.Row {
 	if r.dao.logger.Enabled(ctx, slog.LevelDebug) {
 		r.dao.logger.DebugContext(
 			ctx,
 			"Running SQL operation",
 			slog.String("type", string(op)),
-			slog.String("table", r.dao.table),
+			slog.String("sql", r.cleanSQL(sql)),
 			slog.Int("parameter_count", len(args)),
 		)
 	}
 	return r.tx.QueryRow(ctx, sql, args...)
 }
 
-// query executes a SQL query expected to return multiple rows. It logs operation metadata, never SQL or values.
+// query executes a SQL query expected to return multiple rows. It logs the SQL statement before delegating to the
+// underlying transaction.
 func (r *request[O]) query(ctx context.Context, op opType, sql string, args ...any) (rows pgx.Rows, err error) {
 	if r.dao.logger.Enabled(ctx, slog.LevelDebug) {
 		r.dao.logger.DebugContext(
 			ctx,
 			"Running SQL operation",
 			slog.String("type", string(op)),
-			slog.String("table", r.dao.table),
+			slog.String("sql", r.cleanSQL(sql)),
 			slog.Int("parameter_count", len(args)),
 		)
 	}
@@ -600,14 +481,15 @@ func (r *request[O]) query(ctx context.Context, op opType, sql string, args ...a
 	return
 }
 
-// exec executes a SQL statement that doesn't return rows. It logs operation metadata, never SQL or values.
+// exec executes a SQL statement that doesn't return rows. It logs the SQL statement before delegating to the
+// underlying transaction.
 func (r *request[O]) exec(ctx context.Context, op opType, sql string, args ...any) (pgconn.CommandTag, error) {
 	if r.dao.logger.Enabled(ctx, slog.LevelDebug) {
 		r.dao.logger.DebugContext(
 			ctx,
 			"Running SQL operation",
 			slog.String("type", string(op)),
-			slog.String("table", r.dao.table),
+			slog.String("sql", r.cleanSQL(sql)),
 			slog.Int("parameter_count", len(args)),
 		)
 	}
@@ -635,4 +517,28 @@ func (r *request[O]) recordOpDuration(op opType, start time.Time, err error) {
 			typeMetricLabel:  string(op),
 		}).Observe(time.Since(start).Seconds())
 	}
+}
+
+// cleanSQL collapses all sequences of whitespace in the given SQL string into a single space, producing a
+// compact single-line representation suitable for logging.
+func (r *request[O]) cleanSQL(sql string) string {
+	var buf strings.Builder
+	buf.Grow(len(sql))
+	space := true
+	for _, c := range sql {
+		if unicode.IsSpace(c) {
+			if !space {
+				buf.WriteRune(' ')
+				space = true
+			}
+		} else {
+			buf.WriteRune(c)
+			space = false
+		}
+	}
+	result := buf.String()
+	if space && len(result) > 0 {
+		result = result[:len(result)-1]
+	}
+	return result
 }

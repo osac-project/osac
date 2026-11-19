@@ -93,25 +93,35 @@ mitigate this here:
   Event emission is therefore atomic with the request: an event is never published for a change
   that rolls back.
 
-Non-tenant Generic DAO creation checks the normalized owning tenant under a
-transaction-held `FOR SHARE` row lock and rechecks deletion state after waiting.
-Tenant lifecycle writers take the exact-name identity advisory key before tenant row
-locks; bulk locks acquire the complete sorted key set first. Tenant creation binds a
-post-key database timestamp. Deletion
-locks tenant → affected accounts → intervals, then uses one clamped database sample
-for first acceptance and billing closure. The durable `deleted_tenant_identities`
-marker captures the original authenticated actor (NULL if unknown), not the creator
-or finalizer controller. Tenant finalization retains ordinary dependency checks and its atomic
-savepoint, physically removes finalized tenants, and captures a separate post-delete
-finalization timestamp in the same transaction. This one durable identity store supports
-runtime liveness and permanent reservation of deleted tenant names, independently of
-billing history, without reading tenant archives at runtime. Pre-upgrade archive evidence
-is backfilled into that store; deletions absent from both are not reconstructed.
-Generic archival for unrelated objects and preexisting archive evidence are not removed.
-Billing history stays in the assignment object table without a live-tenant FK; its account
-FK and partial uniqueness indexes remain. Assignment-only finalization uses its tenant row lock without the
-identity key. Existing non-lifecycle create guards and controller cleanup remain;
-direct SQL or mixed transactions bypassing this lock order are not supported.
+Migration 163 installs a database trigger on generic object tables whose tenant
+foreign key points to `tenants.name`. A new row (or a tenant reassignment) takes a
+transaction-held `FOR SHARE` lock and rejects a missing or deletion-marked tenant.
+An update that retains its tenant remains available for controller/finalizer cleanup.
+This keeps the lifecycle rule at the database boundary without changing GenericDAO.
+
+Tenant create, update, delete and signal handlers acquire the exact-name advisory key
+before tenant row locks. The tenant insert trigger also takes the key, enforces the
+canonical `id`/`metadata.name`/`metadata.tenant` identity, and rejects a retained name.
+Tenant creation uses the existing database timestamp default. On the first live-to-
+deleting transition, a tenant-table trigger locks current billing accounts by ID and
+then assignment intervals by ID, samples the database clock after those locks, clamps
+it to creation and all assignment history, and uses that one value for both the stored
+deletion boundary and active-interval closure. In the same transaction it records the
+first authenticated deleter (NULL if unknown) in the credential-free
+`deleted_tenant_identities` table. The private tenant handler supplies that actor via a
+transaction-local database setting; no actor or billing data is stored in GenericDAO.
+
+The deletion-marked row remains present while finalizers run. Before physical removal,
+the tenant trigger also closes legacy active history at its already accepted boundary;
+after removal, another trigger records a separate post-delete `finalized_at`. The normal
+request transaction makes archival, trigger effects, and outbox changes atomic. Runtime
+liveness and permanent deleted-name reservation use the identity table, not tenant
+archives; migration 160 backfills known archive evidence, and deletions absent from
+both retained markers and that evidence are not reconstructed. Generic archival for
+unrelated objects remains. Billing history stays in the assignment object table without
+a live-tenant FK; its account FK and partial uniqueness indexes remain. Assignment-only
+finalization uses its tenant row lock without the identity key. Direct SQL lifecycle
+writes that bypass the tenant service's advisory-key order are unsupported.
 
 Known footgun: rollback is driven by `Tx.ReportError(&err)`
 ([`internal/database/database_tx.go`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/database/database_tx.go)),
@@ -125,7 +135,9 @@ never runs after a rollback or a failed commit.
 **Provider-backed billing RPCs use that same ordinary transaction.** Account discovery
 (`BillingAccounts.List`) includes its full inventory, unseen sweep, requested page and public mapping
 before the outer commit. `Tx.OnCommit` opens freshness only after that commit; a page, mapping or
-commit failure leaves both rows and freshness unchanged. Assignment Create, Update and private Signal
+commit failure leaves both rows and freshness unchanged. A transaction-finish callback keeps the local
+discovery admission held across the commit-to-publication gap and releases it on either outcome; this
+is the only production consumer of `OnTxFinish`. Assignment Create, Update and private Signal
 read an unlocked snapshot, then gather bounded read-only provider evidence before any business locks.
 Finalization locks tenant → the complete original selected/previous account set in SQL id order →
 current interval, rereads material inputs and merges observations before token/interval writes. One

@@ -126,6 +126,83 @@
       Worker BMIs did not report one selected tenant interface MAC each;
       refusing to install with ambiguous network identity.
 
+# The Assisted Agent is discovered on the host before the Agent-specific
+# NMStateConfig can exist.  Metal3 already has the inspected MAC-to-name
+# inventory, so create a bootstrap config from that source first.  This lets
+# discovery use the tenant route and pass API/NTP/DNS validation without
+# depending on Agent inventory as a prerequisite.
+- name: Read inspected Metal3 hosts for bootstrap NMStateConfig
+  kubernetes.core.k8s_info:
+    api_version: metal3.io/v1alpha1
+    kind: BareMetalHost
+    namespace: host-inventory
+  register: _worker_network_bmhs
+  until:
+    - >-
+      (_worker_network_bmhs.resources
+       | selectattr('status.hardware.nics', 'defined') | list | length)
+      >= worker_network_expected_workers | int
+    - >-
+      (_worker_network_bmhs.resources
+       | selectattr('status.hardware.nics', 'defined') | list
+       | map(attribute='metadata.name') | list
+       | intersect(_worker_network_bmis | map(attribute='spec.externalHostName') | list)
+       | length) >= worker_network_expected_workers | int
+  retries: "{{ worker_network_poll_retries }}"
+  delay: "{{ worker_network_poll_delay }}"
+
+- name: Match BMIs to inspected Metal3 hosts
+  ansible.builtin.set_fact:
+    _worker_network_bootstrap_mappings: >-
+      {{ (_worker_network_bootstrap_mappings | default([])) + [{
+        'bmi': item,
+        'bmh': (_worker_network_bmhs.resources
+                | selectattr('metadata.name', 'equalto', item.spec.externalHostName)
+                | list | first)
+      }] }}
+  loop: "{{ _worker_network_bmis }}"
+
+- name: Build bootstrap NMStateConfig interface mappings
+  ansible.builtin.set_fact:
+    _worker_network_bootstrap_interfaces: >-
+      {{ (_worker_network_bootstrap_interfaces | default([])) + [{
+        'bmi': item.bmi,
+        'bmh': item.bmh,
+        'interfaces': item.bmh | osac.service.bmh_nmstate_interfaces(_worker_network_selected_macs)
+      }] }}
+  loop: "{{ _worker_network_bootstrap_mappings }}"
+
+- name: Validate bootstrap host interface mappings
+  ansible.builtin.assert:
+    that:
+      - item.bmh is defined
+      - item.interfaces | selectattr('selected', 'equalto', true) | list | length == 1
+      - item.interfaces | length > 0
+    fail_msg: >-
+      Metal3 host {{ item.bmi.spec.externalHostName | default('unknown') }}
+      does not have exactly one inspected interface matching the selected
+      tenant MAC.
+  loop: "{{ _worker_network_bootstrap_interfaces }}"
+
+- name: Create bootstrap NMStateConfig before Assisted Agent validation
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: agent-install.openshift.io/v1beta1
+      kind: NMStateConfig
+      metadata:
+        name: "{{ worker_network_cluster_order.metadata.name }}-{{ item.bmi.metadata.name }}-bootstrap-network"
+        namespace: "{{ worker_network_namespace }}"
+        labels:
+          osac.openshift.io/clusterorder: "{{ worker_network_cluster_order.metadata.name }}"
+          infraenvs.agent-install.openshift.io: "{{ worker_network_infraenv_name }}"
+      spec:
+        interfaces: "{{ item.interfaces }}"
+        config: "{{ lookup('ansible.builtin.template', 'nmstate.yaml.j2') | from_yaml }}"
+  vars:
+    nmstate_interfaces: "{{ item.interfaces }}"
+  loop: "{{ _worker_network_bootstrap_interfaces }}"
+
 - name: Wait for Agents with complete interface inventory
   kubernetes.core.k8s_info:
     api_version: agent-install.openshift.io/v1beta1
@@ -158,6 +235,15 @@
         'interfaces': item | osac.service.agent_network_interfaces(_worker_network_selected_macs)
       }] }}
   loop: "{{ _worker_network_ready_agents }}"
+
+- name: Remove bootstrap NMStateConfigs after Agent inventory is available
+  kubernetes.core.k8s:
+    api_version: agent-install.openshift.io/v1beta1
+    kind: NMStateConfig
+    namespace: "{{ worker_network_namespace }}"
+    name: "{{ worker_network_cluster_order.metadata.name }}-{{ item.bmi.metadata.name }}-bootstrap-network"
+    state: absent
+  loop: "{{ _worker_network_bootstrap_interfaces }}"
 
 - name: Validate every Agent has exactly one selected fabric interface
   ansible.builtin.assert:

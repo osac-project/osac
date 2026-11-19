@@ -87,6 +87,30 @@ def agent_nmstate_interfaces(agent, selected_macs):
     ]
 
 
+def bmh_nmstate_interfaces(bmh, selected_macs):
+    """Return NMState interface selectors from Metal3 hardware inventory.
+
+    This is used before an Assisted Agent exists.  Metal3 exposes the same
+    provider MAC-to-OS-name mapping in ``status.hardware.nics`` after host
+    inspection, allowing the discovery NMStateConfig to be created before the
+    Agent's first validation pass.
+    """
+    interfaces = bmh.get("status", {}).get("hardware", {}).get("nics", [])
+    normalized = {str(mac).lower().replace("-", ":") for mac in selected_macs}
+    result = []
+    for interface in interfaces:
+        name = interface.get("name")
+        mac = interface.get("mac") or interface.get("macAddress")
+        if not name or not mac:
+            continue
+        result.append({
+            "name": name,
+            "macAddress": mac,
+            "selected": str(mac).lower().replace("-", ":") in normalized,
+        })
+    return result
+
+
 def baremetal_instances_for_cluster(instances, cluster_id):
     """Select BMI objects owned by a ClusterOrder API ID.
 
@@ -116,5 +140,6 @@ class FilterModule:
             "agent_network_interfaces": agent_network_interfaces,
             "agents_matching_selected_macs": agents_matching_selected_macs,
             "agent_nmstate_interfaces": agent_nmstate_interfaces,
+            "bmh_nmstate_interfaces": bmh_nmstate_interfaces,
             "baremetal_instances_for_cluster": baremetal_instances_for_cluster,
         }

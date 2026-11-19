@@ -69,6 +69,24 @@ def test_agent_nmstate_interfaces_preserves_all_mac_selectors():
     ]
 
 
+def test_bmh_nmstate_interfaces_maps_inspected_nics_before_agent_exists():
+    bmh = {
+        "status": {
+            "hardware": {
+                "nics": [
+                    {"name": "ens4", "mac": "52:54:09:00:00:03"},
+                    {"name": "ens6", "mac": "52:29:B0:BC:EC:E1"},
+                ]
+            }
+        }
+    }
+
+    assert agents.bmh_nmstate_interfaces(bmh, ["52-29-b0-bc-ec-e1"]) == [
+        {"name": "ens4", "macAddress": "52:54:09:00:00:03", "selected": False},
+        {"name": "ens6", "macAddress": "52:29:B0:BC:EC:E1", "selected": True},
+    ]
+
+
 def test_agents_matching_selected_macs_ignores_stale_disconnected_agents():
     current = {
         "metadata": {"name": "current"},

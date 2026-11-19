@@ -181,7 +181,10 @@ podman run ... \
 
 The flows use the committed
 [`extravars.yaml`](../extravars.yaml). To use other values, mount a file and
-pass `--extravars=PATH`:
+pass `--extravars=PATH`. If it contains `tenant_password`, keep it private and
+outside the repository; do not commit it.
+
+For example, with a non-secret local configuration:
 
 ```bash
 podman run ... \
@@ -296,8 +299,12 @@ the first attempt left behind.
 - **Artifacts:** `playwright-report/` (open `index.html`) and `test-results/`
   are copied to the results directory if generated, including after a failed
   run. An early failure can leave no report, so retain the container log too.
-  There is no JUnit output. Tracing and video are off because the flows type
-  the admin password.
+  There is no JUnit output. Tracing and video are off for the credentialed
+  flows, and Playwright failure snapshots are disabled because they can expose
+  passwords. Treat reports and logs as sensitive: they can still contain other
+  deployment or test data, and old reports are not retroactively sanitized.
+  Playwright debug logging and the inspector are rejected because they can
+  expose input values; unset `DEBUG=pw:...` and `PWDEBUG` before running.
 - **Log:** the container's standard output shows each step as
   `[flow] Starting/Completed/Failed: ...`.
 - **Cleanup:** `full_*` flows and `vmaas_full_happy_basic` include deletion

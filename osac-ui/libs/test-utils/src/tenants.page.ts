@@ -1,4 +1,5 @@
 import { type APIResponse, type Locator, type Page, type Response, expect } from '@playwright/test';
+import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rm, rmdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -55,9 +56,8 @@ const credentialFromFile = (contents: string, label: string): string => {
   return value;
 };
 
-// Filesystem errors include the credentials file path, which contains the
-// tenant name (possibly also the replacement password), and testStep logs
-// error messages verbatim. Rethrow them without the path.
+// Filesystem errors can include credential file paths; testStep logs errors
+// verbatim. Rethrow them without the path.
 const readCredentialsFile = async (credentialsFile: string): Promise<string> => {
   try {
     return await readFile(credentialsFile, 'utf8');
@@ -86,25 +86,21 @@ export const readTenantCredentials = async (
   };
 };
 
+/** Use a configured password or generate an unpredictable replacement. */
+export const tenantReplacementPassword = (password?: string): string =>
+  password?.trim() || `Aa1!${randomBytes(24).toString('base64url')}`;
+
 /** Replace a temporary tenant password after the first successful login. */
 export const updateTenantCredentialsPassword = async (
   credentialsFile: string,
-  password?: string,
+  password: string,
 ): Promise<void> => {
   logProgress('tenant-credentials', 'Updating the generated tenant credentials.');
   const contents = await readCredentialsFile(credentialsFile);
-  const tenantName = credentialFromFile(contents, 'Tenant');
-  const replacementPassword = password?.trim() || tenantName;
-  logProgress(
-    'tenant-credentials',
-    password?.trim()
-      ? 'Using the configured replacement password.'
-      : 'Using the tenant name as the replacement password.',
-  );
-  const updatedContents = contents.replace(
-    /^Password: .*$/m,
-    () => `Password: ${replacementPassword}`,
-  );
+  if (!password.trim()) {
+    throw new Error('Tenant replacement password is empty.');
+  }
+  const updatedContents = contents.replace(/^Password: .*$/m, () => `Password: ${password}`);
   if (updatedContents === contents) {
     throw new Error('Tenant credentials file is missing Password.');
   }

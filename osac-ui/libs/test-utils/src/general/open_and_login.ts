@@ -1,5 +1,6 @@
 import { type Page, expect } from '@playwright/test';
 
+import { fillPassword } from './fill_password';
 import { LoginPage } from '../../../locators/login_page';
 
 export type LoginUserType = 'admin' | 'tenant_type' | 'tenant_admin';
@@ -120,7 +121,7 @@ export const openAndLogin = async (
     }
   }
 
-  await passwordField.fill(password);
+  await fillPassword(passwordField, password);
   await page.getByRole(...LoginPage.signIn).click();
 
   const accountMenu = page.getByRole(...LoginPage.accountMenu);
@@ -135,8 +136,8 @@ export const openAndLogin = async (
       );
     }
 
-    await page.getByLabel(...LoginPage.newPassword).fill(newPassword);
-    await page.getByLabel(...LoginPage.confirmPassword).fill(newPassword);
+    await fillPassword(page.getByLabel(...LoginPage.newPassword), newPassword);
+    await fillPassword(page.getByLabel(...LoginPage.confirmPassword), newPassword);
     await page.getByRole(...LoginPage.passwordUpdateSubmit).click();
     passwordUpdated = true;
   }

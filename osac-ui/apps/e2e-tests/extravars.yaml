@@ -4,8 +4,8 @@
 # run-ui-e2e.sh accepts the deployment credentials as command-line parameters.
 
 tenant_name: 'tenant-item-e2e'
-# The break-glass password is replaced with tenant_password, or tenant_name
-# when tenant_password is not set.
+# The break-glass password is replaced with tenant_password, or a generated
+# password when tenant_password is not set.
 
 catalog:
   name: 'catalog-item-e2e'

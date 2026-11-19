@@ -9,6 +9,7 @@ import pytest
 from tests.e2e.core import helpers, runner
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.k8s_client import K8sClient
+from tests.e2e.core.runner import CommandFailed
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
 
@@ -216,3 +217,208 @@ def test_wait_for_tenant_default_networking_ready_does_not_swallow_grpc_errors()
 
     assert exc_info.value is error
     assert grpc.get_tenant_by_name.call_count == 1
+
+
+def test_wait_for_tenant_default_networking_ready_narrows_the_accepted_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    grpc = Mock(spec=GRPCClient)
+    grpc.get_tenant_by_name.return_value = {
+        "status": {
+            "conditions": [
+                {
+                    "type": "TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY",
+                    "status": "CONDITION_STATUS_TRUE",
+                    "reason": "AllResourcesReady",
+                    "message": "All defaults are ready",
+                }
+            ]
+        }
+    }
+    monkeypatch.setattr(runner.time, "sleep", lambda _: None)
+
+    with pytest.raises(TimeoutError, match=r"\['ProvisioningDisabled'\]"):
+        helpers.wait_for_tenant_default_networking_ready(
+            grpc=grpc, tenant_name="tenant1", expected_reasons={"ProvisioningDisabled"}
+        )
+
+
+@pytest.mark.parametrize("installed", [True, False])
+def test_read_installed_networking_mode_returns_the_stored_boolean(installed: bool) -> None:
+    grpc = Mock(spec=GRPCClient)
+    grpc.call.return_value = {"networkingProvisioningEnabled": installed}
+
+    assert helpers.read_installed_networking_mode(private_grpc=grpc) is installed
+    grpc.call.assert_called_once_with(service="osac.private.v1.InstallationSettings/Get", data={}, emit_defaults=True)
+
+
+def test_read_installed_networking_mode_rejects_a_non_object_response() -> None:
+    grpc = Mock(spec=GRPCClient)
+    grpc.call.return_value = []
+
+    with pytest.raises(RuntimeError, match="must return a JSON object"):
+        helpers.read_installed_networking_mode(private_grpc=grpc)
+
+
+def test_read_installed_networking_mode_rejects_a_missing_boolean() -> None:
+    grpc = Mock(spec=GRPCClient)
+    grpc.call.return_value = {}
+
+    with pytest.raises(RuntimeError, match="boolean networkingProvisioningEnabled"):
+        helpers.read_installed_networking_mode(private_grpc=grpc)
+
+
+def test_read_installed_networking_mode_rejects_malformed_json() -> None:
+    grpc = Mock(spec=GRPCClient)
+    grpc.call.side_effect = json.JSONDecodeError("not json", "", 0)
+
+    with pytest.raises(RuntimeError, match="malformed JSON"):
+        helpers.read_installed_networking_mode(private_grpc=grpc)
+
+
+def test_read_installed_networking_mode_propagates_transport_failure() -> None:
+    grpc = Mock(spec=GRPCClient)
+    error = subprocess.CalledProcessError(returncode=1, cmd="grpcurl", stderr="permission denied")
+    grpc.call.side_effect = error
+
+    with pytest.raises(subprocess.CalledProcessError) as exc_info:
+        helpers.read_installed_networking_mode(private_grpc=grpc)
+
+    assert exc_info.value is error
+
+
+def test_security_group_cr_rule_matches_the_crd_shape() -> None:
+    cr_spec = {
+        "ingressRules": [{"protocol": "tcp", "portFrom": 22, "portTo": 22, "sourceCidr": "0.0.0.0/0"}],
+        "egressRules": [],
+    }
+    assert helpers.security_group_cr_has_ingress_rule(cr_spec)
+
+    api_spec = {"ingress": [{"protocol": "PROTOCOL_TCP", "portFrom": 22, "portTo": 22, "ipv4Cidr": "0.0.0.0/0"}]}
+    assert not helpers.security_group_cr_has_ingress_rule(api_spec)
+    assert not helpers.security_group_cr_has_ingress_rule({"ingressRules": [{"protocol": "tcp", "portFrom": 8080}]})
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        'Error from server (NotFound): clusterorders "gone" not found',
+        'Error from server (NotFound): clusterorders.osac.openshift.io "gone" not found',
+    ],
+)
+def test_get_json_optional_treats_the_objects_not_found_as_absent(monkeypatch: pytest.MonkeyPatch, output: str) -> None:
+    k8s = K8sClient(namespace="osac")
+    monkeypatch.setattr(k8s, "_get", Mock(return_value=(output, 1)))
+
+    assert k8s.get_json_optional(resource="clusterorder", name="gone") is None
+
+
+def test_get_json_optional_reads_the_object(monkeypatch: pytest.MonkeyPatch) -> None:
+    k8s = K8sClient(namespace="osac")
+    monkeypatch.setattr(k8s, "_get", Mock(return_value=('{"metadata": {"name": "present"}}', 0)))
+
+    assert k8s.get_json_optional(resource="clusterorder", name="present") == {"metadata": {"name": "present"}}
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        # A transport failure whose text merely mentions "not found".
+        "Unable to connect to the server: getting credentials: exec: executable kubelogin not found",
+        # NotFound about another object must not mask the requested object's state.
+        'Error from server (NotFound): clusterorders "other" not found',
+        "Error from server (Forbidden): clusterorders is forbidden",
+    ],
+)
+def test_get_json_optional_propagates_other_failures(monkeypatch: pytest.MonkeyPatch, output: str) -> None:
+    k8s = K8sClient(namespace="osac")
+    monkeypatch.setattr(k8s, "_get", Mock(return_value=(output, 1)))
+
+    with pytest.raises(CommandFailed) as exc_info:
+        k8s.get_json_optional(resource="clusterorder", name="gone")
+
+    assert output in str(exc_info.value)
+
+
+def test_assert_no_network_jobs_fails_on_a_recorded_launch() -> None:
+    k8s = Mock(spec=K8sClient)
+    k8s.get_status_jobs.return_value = [{"id": "job-1"}]
+
+    with pytest.raises(AssertionError, match="no provider networking job"):
+        helpers.assert_no_network_jobs(k8s=k8s, resource="virtualnetwork", name="vn", context="test")
+
+    k8s.get_status_jobs.return_value = []
+    helpers.assert_no_network_jobs(k8s=k8s, resource="virtualnetwork", name="vn", context="test")
+
+
+def test_assert_no_network_attachment_matches_only_the_target() -> None:
+    k8s = Mock(spec=K8sClient)
+    k8s.list_json_all_namespaces.return_value = {
+        "items": [{"metadata": {"name": "na-other"}, "spec": {"target": {"kind": "ComputeInstance", "id": "other"}}}]
+    }
+    helpers.assert_no_network_attachment(k8s=k8s, target_kind="ComputeInstance", target_id="ci-1")
+
+    k8s.list_json_all_namespaces.return_value = {
+        "items": [{"metadata": {"name": "na-mine"}, "spec": {"target": {"kind": "ComputeInstance", "id": "ci-1"}}}]
+    }
+    with pytest.raises(AssertionError, match="na-mine"):
+        helpers.assert_no_network_attachment(k8s=k8s, target_kind="ComputeInstance", target_id="ci-1")
+
+
+def test_assert_no_default_external_access_rejects_reserved_names_for_the_tenant() -> None:
+    grpc = Mock(spec=GRPCClient)
+    grpc.call.return_value = {
+        "items": [
+            {"metadata": {"name": "default-nat", "tenant": "tenant1"}},
+            {"metadata": {"name": "tenant-owned-eip", "tenant": "tenant1"}},
+            {"metadata": {"name": "auto-eip-other", "tenant": "tenant2"}},
+        ]
+    }
+
+    with pytest.raises(AssertionError, match=r"tenant1 has default external access \['default-nat'\]"):
+        helpers.assert_no_default_external_access(private_grpc=grpc, tenant="tenant1")
+
+    # The reserved name is present, so the failing read is not retried.
+    assert grpc.call.call_count == 1
+
+    grpc.call.return_value = {"items": [{"metadata": {"name": "tenant-owned-eip", "tenant": "tenant1"}}]}
+    helpers.assert_no_default_external_access(private_grpc=grpc, tenant="tenant1")
+
+
+def test_assert_no_default_external_access_retries_a_transient_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runner.time, "sleep", lambda _: None)
+    grpc = Mock(spec=GRPCClient)
+    grpc.call.side_effect = [
+        subprocess.CalledProcessError(returncode=1, cmd="grpcurl", stderr="Unavailable"),
+        {"items": [{"metadata": {"name": "default-nat", "tenant": "tenant1"}}]},
+    ]
+
+    with pytest.raises(AssertionError, match="default-nat"):
+        helpers.assert_no_default_external_access(private_grpc=grpc, tenant="tenant1")
+
+    assert grpc.call.call_count == 2
+
+
+def test_assert_no_default_external_access_gives_up_after_the_retry_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runner.time, "sleep", lambda _: None)
+    grpc = Mock(spec=GRPCClient)
+    grpc.call.side_effect = subprocess.CalledProcessError(returncode=1, cmd="grpcurl", stderr="Unavailable")
+
+    with pytest.raises(runner.StuckState, match="ExternalIP list of tenant tenant1"):
+        helpers.assert_no_default_external_access(private_grpc=grpc, tenant="tenant1")
+
+    assert grpc.call.call_count == 6
+
+
+def test_k8s_client_reads_condition_and_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    k8s = K8sClient(namespace="osac")
+    payload = {
+        "status": {
+            "conditions": [{"type": "Ready", "status": "True", "reason": "ProvisioningDisabled"}],
+            "jobs": [{"id": "job-1"}],
+        }
+    }
+    monkeypatch.setattr(k8s, "get_json", Mock(return_value=payload))
+
+    condition = k8s.get_condition(resource="virtualnetwork", name="vn", condition_type="Ready")
+    assert condition["reason"] == "ProvisioningDisabled"
+    assert k8s.get_condition(resource="virtualnetwork", name="vn", condition_type="Other") == {}
+    assert k8s.get_status_jobs(resource="virtualnetwork", name="vn") == [{"id": "job-1"}]

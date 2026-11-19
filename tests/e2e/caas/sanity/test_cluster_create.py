@@ -26,6 +26,8 @@ from tests.e2e.core.failure_report import capture_failure, capture_snapshot
 from tests.e2e.core.fulfillment_trust import assert_cluster_trust, assert_management_tls
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import (
+    assert_no_network_attachment,
+    assert_no_network_jobs,
     unique_name,
     wait_for_cluster_deleting,
     wait_for_cluster_deletion_without_cleanup,
@@ -379,6 +381,28 @@ def _assert_worker_provisioning(
     return cluster_tenant, candidate_bmis
 
 
+def _assert_disabled_networking_cluster(*, k8s: K8sClient, co_name: str, automatic_endpoints: bool) -> None:
+    """Disabled mode: no provider networking work, and no claimed endpoints.
+
+    Endpoint conditions only exist for templates that declare the automatic CaaS
+    endpoint capability; the legacy flow never sets EndpointsReady and publishes
+    its own ingress.
+    """
+    if automatic_endpoints:
+        endpoints = k8s.get_condition(resource="clusterorder", name=co_name, condition_type="EndpointsReady")
+        assert endpoints.get("status") == "True", f"ClusterOrder {co_name} EndpointsReady must be True: {endpoints}"
+        assert endpoints.get("reason") == "ProvisioningDisabled", (
+            f"ClusterOrder {co_name} EndpointsReady reason {endpoints.get('reason')!r}, "
+            f"expected 'ProvisioningDisabled': {endpoints}"
+        )
+        assert k8s.get_cluster_order_status(name=co_name).get("ingressEndpoint", "") == "", (
+            f"ClusterOrder {co_name} must not claim a tenant ingress address while provider networking is disabled"
+        )
+    assert_no_network_jobs(
+        k8s=k8s, resource="clusterorder", name=co_name, context=f"ClusterOrder {co_name} disabled mode"
+    )
+
+
 def assert_cluster_available(
     *,
     grpc: GRPCClient,
@@ -386,6 +410,7 @@ def assert_cluster_available(
     metering: MeteringCollector,
     uuid: str,
     version_name: str,
+    networking_provisioning_enabled: bool,
     expected_ssh_key: str = "",
 ) -> _AvailableCluster:
     """Verify provisioning, version propagation, guest readiness, and worker ownership."""
@@ -405,6 +430,9 @@ def assert_cluster_available(
     # ClusterVersion success and all NodePools ready), so wait for the phase
     # the billing gate actually keys on before expecting the heartbeat.
     wait_for_cluster_ready(k8s=k8s, name=co_name)
+    if not networking_provisioning_enabled:
+        automatic_endpoints = k8s.get_cluster_order_spec(name=co_name).get("supportsAutomaticCaaSEndpoints") is True
+        _assert_disabled_networking_cluster(k8s=k8s, co_name=co_name, automatic_endpoints=automatic_endpoints)
     metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=300, resource_kind=WaitResourceKind.CLUSTER_ORDER)
     metering.verify()
 
@@ -440,6 +468,9 @@ def assert_cluster_available(
         instance_types={worker_instance_type},
         ssh_key_id=ssh_key_id,
     )
+    if not networking_provisioning_enabled:
+        for bmi_id in owned_bmi_ids:
+            assert_no_network_attachment(k8s=k8s, target_kind="BareMetalInstance", target_id=bmi_id)
     infra_env_name = _wait_for_cluster_infra_env_name(k8s=k8s, co_name=co_name)
     if expected_ssh_key:
         # The operator materializes the registered Secret's public key into the
@@ -655,6 +686,7 @@ def test_cluster_create(
     ssh_key_secret: str,
     ssh_public_key_path: str,
     metering: MeteringCollector,
+    networking_provisioning_enabled: bool,
 ) -> None:
     """Verify the full CaaS cluster lifecycle through a catalog item: author a published
     ClusterCatalogItem, create a cluster from it, provision to Ready, version and
@@ -717,6 +749,7 @@ def test_cluster_create(
             metering=metering,
             uuid=uuid,
             version_name=version["name"],
+            networking_provisioning_enabled=networking_provisioning_enabled,
             expected_ssh_key=Path(ssh_public_key_path).read_text().strip(),
         )
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":

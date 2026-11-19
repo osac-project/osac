@@ -53,6 +53,7 @@ def test_light_deletion_create_supplies_backed_version(monkeypatch: pytest.Monke
         pull_secret_name="test-pull-secret",
         ssh_key_secret="test-ssh-key-secret",
         metering=Mock(),
+        networking_provisioning_enabled=True,
     )
     scenario = deletion.test_cluster_delete_reports_deleting_state_without_provisioning
     if "caas_disk_image_version" in inspect.signature(scenario).parameters:

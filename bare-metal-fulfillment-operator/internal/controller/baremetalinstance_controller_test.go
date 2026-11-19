@@ -1789,9 +1789,17 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					"Cancelled",
 					"",
 				)
+				bareMetalInstance.SetStatusCondition(
+					v1alpha1.HostConditionPowerSynced,
+					metav1.ConditionFalse,
+					v1alpha1.HostConditionReasonProgressing,
+					"node power state is transitioning",
+				)
+				bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced).LastTransitionTime =
+					metav1.NewTime(time.Now().Add(-time.Hour))
 			})
 
-			It("clears the cancelled marker when it submits the stop", func() {
+			It("clears the cancelled marker and starts a fresh stop interval", func() {
 				called := false
 				mockMgmtClient.setPowerStateFunc = func(_ context.Context, _ string, target management.PowerState) error {
 					Expect(target).To(Equal(management.PowerOff))
@@ -1807,6 +1815,11 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
 				Expect(cond).NotTo(BeNil())
 				Expect(cond.Reason).To(Equal("Completed"))
+
+				power := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
+				Expect(power).NotTo(BeNil())
+				Expect(power.Message).To(Equal("powering off node"))
+				Expect(power.LastTransitionTime.Time.After(time.Now().Add(-time.Minute))).To(BeTrue())
 			})
 		})
 
@@ -2596,7 +2609,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
 				})
 
-				It("should keep a pending claim unclaimed when submission is unknown", func() {
+				It("should not re-submit an unconfirmed in-flight submission", func() {
 					bareMetalInstance.Status.RestartRequestID = "uid:1"
 					bareMetalInstance.SetStatusCondition(
 						v1alpha1.HostConditionRestartInProgress,
@@ -2627,7 +2640,35 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					Expect(triggered).To(BeFalse(), "an unknown submission must not be re-submitted")
 					Expect(polled).To(BeTrue())
 					cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
-					Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonRestartSubmissionPending))
+					Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
+				})
+
+				It("should mark an unconfirmed settled submission as unknown", func() {
+					bareMetalInstance.Status.RestartRequestID = "uid:1"
+					bareMetalInstance.SetStatusCondition(
+						v1alpha1.HostConditionRestartInProgress,
+						metav1.ConditionTrue,
+						v1alpha1.HostConditionReasonRestartSubmissionPending,
+						"Restart submission pending",
+					)
+					mockMgmtClient.isRestartSubmittedFunc = func(ctx context.Context, hostID, requestID string) (management.RestartSubmissionState, error) {
+						return management.RestartSubmissionUnknown, nil
+					}
+					mockMgmtClient.isRestartCompleteFunc = func(ctx context.Context, hostID string) (bool, error) {
+						return true, nil
+					}
+
+					result, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+
+					Expect(err).NotTo(HaveOccurred())
+					Expect(result.RequeueAfter).To(Equal(reconciler.ManagementRecheckIntervalDuration))
+					// Never acknowledge a restart that may not have been dispatched.
+					Expect(bareMetalInstance.Status.RestartTrigger).To(Equal(int64(0)))
+					marker := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
+					Expect(marker.Status).To(Equal(metav1.ConditionFalse))
+					Expect(marker.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncFailed))
+					power := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
+					Expect(power.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncRequired))
 				})
 
 				It("generates distinct request IDs for each claim", func() {
@@ -2638,6 +2679,38 @@ var _ = Describe("BareMetalInstance Controller", func() {
 						Expect(seen).NotTo(HaveKey(id))
 						seen[id] = struct{}{}
 					}
+				})
+
+				It("issues a new request ID when an earlier trigger value is reused", func() {
+					var ids []string
+					mockMgmtClient.triggerRestartIDFunc = func(ctx context.Context, hostID, requestID string) error {
+						ids = append(ids, requestID)
+						return nil
+					}
+
+					// First dispatch.
+					_, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+					Expect(err).NotTo(HaveOccurred())
+					firstID := bareMetalInstance.Status.RestartRequestID
+					Expect(firstID).NotTo(BeEmpty())
+
+					// Simulate an acknowledged request followed by skipped requests
+					// that returned the acknowledged trigger to 0.
+					current := &v1alpha1.BareMetalInstance{}
+					Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bareMetalInstance), current)).To(Succeed())
+					current.Status.RestartTrigger = 0
+					current.Status.RestartRequestID = firstID
+					removeStatusCondition(current, v1alpha1.HostConditionRestartInProgress)
+					Expect(k8sClient.Status().Update(ctx, current)).To(Succeed())
+
+					// Re-issue trigger 1; the retained Metal3 annotation must not
+					// suppress a new reboot.
+					current.Spec.RestartTrigger = 1
+					_, err = reconciler.reconcileRestartTrigger(ctx, current)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(current.Status.RestartRequestID).NotTo(Equal(firstID))
+					Expect(ids).To(HaveLen(2))
+					Expect(ids[1]).NotTo(Equal(ids[0]))
 				})
 
 				It("does not erase a newer restart claim from a stale snapshot", func() {

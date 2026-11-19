@@ -659,6 +659,14 @@ func (r *BareMetalInstanceReconciler) reconcilePower(ctx context.Context, bareMe
 		// A submitted stop supersedes the cancelled-restart observation, so
 		// callers can report the stop with its own transition time.
 		clearCancelledRestart(bareMetalInstance)
+		// Start the stop interval now: the previous observation may belong to a
+		// restart and carry its timestamp.
+		bareMetalInstance.SetStatusCondition(
+			v1alpha1.HostConditionPowerSynced,
+			metav1.ConditionFalse,
+			v1alpha1.HostConditionReasonProgressing,
+			"powering off node",
+		)
 	}
 
 	return true, nil
@@ -1277,8 +1285,38 @@ func (r *BareMetalInstanceReconciler) reconcileRestartTrigger(ctx context.Contex
 			return ctrl.Result{}, err
 		}
 		if completed {
+			// A pending submission means the backend could not confirm dispatch
+			// (OpenStack). Do not acknowledge a restart that may never have run.
+			if cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress); cond != nil &&
+				cond.Reason == v1alpha1.HostConditionReasonRestartSubmissionPending {
+				log.Info("Restart completion is unconfirmed; not acknowledging", "hostID", bareMetalInstance.Spec.ExternalHostID)
+				bareMetalInstance.SetStatusCondition(
+					v1alpha1.HostConditionRestartInProgress,
+					metav1.ConditionFalse,
+					v1alpha1.HostConditionReasonPowerSyncFailed,
+					"Restart submission unconfirmed",
+				)
+				bareMetalInstance.SetStatusCondition(
+					v1alpha1.HostConditionPowerSynced,
+					metav1.ConditionFalse,
+					v1alpha1.HostConditionReasonPowerSyncRequired,
+					"restart submission unconfirmed; re-issue the request if needed",
+				)
+				return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+			}
 			log.Info("Restart completed successfully", "hostID", bareMetalInstance.Spec.ExternalHostID)
 			return completeRestartTrigger(bareMetalInstance, "Restart trigger updated")
+		}
+		// A not-complete poll while the submission is still pending proves the host
+		// is transitioning: promote the request to in-progress.
+		if cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress); cond != nil &&
+			cond.Reason == v1alpha1.HostConditionReasonRestartSubmissionPending {
+			bareMetalInstance.SetStatusCondition(
+				v1alpha1.HostConditionRestartInProgress,
+				metav1.ConditionTrue,
+				v1alpha1.HostConditionReasonProgressing,
+				"Restart operation initiated",
+			)
 		}
 		powerStatus, err := r.ManagementClient.GetPowerState(ctx, bareMetalInstance.Spec.ExternalHostID)
 		if err != nil {

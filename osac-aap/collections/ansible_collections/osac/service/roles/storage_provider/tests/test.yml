@@ -1425,7 +1425,7 @@
         fail_msg: "Unexpected CSI backend vendor mapping: {{ _this_tenant_vendors }}"
         success_msg: "Product routing keys resolve to their CSI backend vendor names"
 
-- name: Test storage_provider -- CSI products dispatch to the shared CSI storage role
+- name: Test storage_provider -- CSI-managed provider uses the shared storage role
   hosts: localhost
   gather_facts: false
   vars:
@@ -1433,41 +1433,33 @@
       - name: netapp-tier
         provider: netapp
         backend_id: "netapp-backend-1"
-      - name: pure-tier
-        provider: pure
-        backend_id: "pure-backend-1"
     storage_provider_backend_connections: {}
     tenant_name: provider-routing-test
     _all_tenant_configs: {}
     _dispatch_action: setup
 
   tasks:
-    - name: Dispatch CSI-managed providers through their shared storage role
+    - name: Dispatch the CSI-managed provider through the shared storage role
       ansible.builtin.include_tasks: ../tasks/_dispatch_provider.yaml
       loop:
         - provider: netapp
           backend_id: "netapp-backend-1"
-        - provider: pure
-          backend_id: "pure-backend-1"
       loop_control:
         loop_var: _current_pair
 
-    - name: Verify the shared CSI role preserves each provider identity
+    - name: Verify the shared CSI role preserves the provider identity
       ansible.builtin.assert:
         that:
           - _all_tenant_configs['netapp-backend-1'].provider == 'netapp'
-          - _all_tenant_configs['pure-backend-1'].provider == 'pure'
 
 # ──────────────────────────────────────────────────────────────
 # Test 31: provider "pure" dispatches to osac.templates.pure_storage (OSAC-5016)
-# Expected: the dispatcher resolves the new template role by name with no
-#   dispatcher change, runs its setup placeholder, and that placeholder refuses
-#   with its "not yet implemented" message. Landing in the rescue is what proves
-#   resolution -- a missing or misnamed role raises a runner-level ERROR! that
-#   aborts the process rather than becoming a rescuable failure (see Test 5).
-#   The placeholder must not report success: an empty tenant config would pass
-#   setup.yaml's output-fact validation and record the tenant as provisioned
-#   with no FlashBlade resources behind it.
+# Expected: the dispatcher resolves the template role by name with no dispatcher
+#   change and runs its setup. The role rejects an invalid tenant name before
+#   any Kubernetes call, so this stays cluster-free while a pure_storage-specific
+#   failure -- rather than a runner-level ERROR! for a missing role -- proves
+#   resolution (see Test 5). Realm checkout itself is covered end to end by
+#   tests/integration/targets/pure_storage_setup.
 #   Kept last in the file so it runs in the second invocation and does not shift
 #   the --start-at-task boundary.
 # ──────────────────────────────────────────────────────────────
@@ -1496,32 +1488,29 @@
             # Keeps the play self-contained; run_tests.sh also passes this as an
             # extra var for every invocation of this file.
             storage_provider_csi_backends_enabled: false
-            tenant_name: "tenant-acme"
+            tenant_name: "INVALID_TENANT"
             tenant_namespace: "osac-tenants"
 
-        - name: Fail because the pure_storage setup placeholder reported success
+        - name: Fail because the invalid tenant name did not reach pure_storage
           ansible.builtin.fail:
             msg: >-
               provider 'pure' reached osac.templates.pure_storage setup but it
-              did not fail. The placeholder must refuse until OSAC-5017
-              implements it -- an empty tenant config satisfies setup.yaml's
-              output-fact validation, so the run would record a pure tier as
-              provisioned with no FlashBlade resources behind it.
+              did not reject the invalid tenant name.
               Accumulated configs: {{ storage_provider_tenant_configs | default('unset') }}
 
       rescue:
-        - name: Verify the dispatch reached the placeholder and it refused
+        - name: Verify the dispatch reached pure_storage and it validated the tenant
           ansible.builtin.assert:
             that:
-              - "'not yet implemented' in (ansible_failed_result.msg | default(''))"
-              - "'OSAC-5017' in (ansible_failed_result.msg | default(''))"
+              - "'not a valid DNS label' in (ansible_failed_result.msg | default(''))"
+              - "'tenant_name' in (ansible_failed_result.msg | default(''))"
             fail_msg: >-
               Dispatching provider 'pure' failed for an unexpected reason -- the
               dispatcher may no longer resolve osac.templates.pure_storage:
               {{ ansible_failed_result.msg | default('unknown error') }}
             success_msg: >-
-              provider 'pure' resolved to osac.templates.pure_storage, which
-              correctly refuses until OSAC-5017 implements it
+              provider 'pure' resolved to osac.templates.pure_storage and ran
+              its tenant-name validation
 
 # ──────────────────────────────────────────────────────────────
 # Test 32: dispatch clears stale per-provider output facts (OSAC-5016)

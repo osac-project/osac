@@ -1,0 +1,51 @@
+---
+# Resolves the single backend_id this role invocation is scoped to, from the
+# dispatched tier subset, and publishes it as `_pure_backend_id`.
+#
+# EVERY entry point of this role (setup, ensure_storage_class, teardown_backend,
+# teardown_cluster_storage) MUST include this file before using
+# `_pure_backend_id`, because `_pure_backend_id` is a set_fact and set_facts are
+# host-scoped: a stale value left behind by an earlier dispatch in the same play
+# would otherwise be silently reused.
+#
+# Requires:
+#   _provider_tiers — dispatched tier subset, every tier carrying backend_id
+#
+# Sets:
+#   _pure_backend_ids — unique backend_id values seen in _provider_tiers
+#   _pure_backend_id  — the single resolved backend_id
+
+- name: Assert _provider_tiers is available for backend_id resolution
+  ansible.builtin.assert:
+    that:
+      - _provider_tiers is defined
+      - _provider_tiers | length > 0
+    fail_msg: >-
+      _provider_tiers must be provided before the Pure backend_id can be
+      resolved.
+
+- name: Fail if any dispatched tier is missing backend_id
+  ansible.builtin.fail:
+    msg: >-
+      Tier '{{ item.name }}' has no backend_id. Every tier dispatched to the Pure
+      provider must reference the backend_id its connection details are keyed by.
+  loop: "{{ _provider_tiers }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.backend_id is not defined or item.backend_id is none or item.backend_id | string | length == 0
+
+- name: Extract unique backend_id values from the dispatched tier subset
+  ansible.builtin.set_fact:
+    _pure_backend_ids: "{{ _provider_tiers | map(attribute='backend_id') | unique | list }}"
+
+- name: Validate the dispatched tiers reference exactly one backend_id
+  ansible.builtin.fail:
+    msg: >-
+      Expected exactly one backend_id across the dispatched Pure tiers, got
+      {{ _pure_backend_ids | length }}: {{ _pure_backend_ids | to_json }}.
+      This is a dispatcher contract violation.
+  when: _pure_backend_ids | length != 1
+
+- name: Set the resolved backend_id
+  ansible.builtin.set_fact:
+    _pure_backend_id: "{{ _pure_backend_ids[0] }}"

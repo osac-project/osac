@@ -1,8 +1,9 @@
 ---
 # Pure-specific defaults — all use pure_storage_ prefix.
 
-# CSI provisioner name — OSAC CSI driver (vendor controllers run on hub)
-pure_storage_csi_provisioner: "osac.csi.openshift.io"
+# CSI provisioner name — native Portworx Pure CSI driver for POC
+# (upstream PSO, not the OSAC shim)
+pure_storage_csi_provisioner: "pure-csi"
 
 # Hub Secret prefix for per-tenant Pure config
 pure_storage_tenant_config_secret_prefix: "pure-tenant-config-"
@@ -14,8 +15,10 @@ pure_storage_config_namespace: "{{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE'
 pure_storage_csi_backends_namespace: "osac-csi-backends"
 pure_storage_csi_credential_secret_name: "pure-csi-credentials"
 
-# Realm NFS server and policy names are read from the hub Secret at runtime
-# (configured during Realm setup, not defaulted here)
+# Realm-scoped resource naming conventions
+# Format: {{ realm_name }}::{{ suffix }}
+pure_storage_nfs_server_suffix: "nfs-server"
+pure_storage_export_policy_suffix: "nfs-export"
 
 # Default NFS version for mount options
 pure_storage_nfs_version: "nfsvers=4.1"

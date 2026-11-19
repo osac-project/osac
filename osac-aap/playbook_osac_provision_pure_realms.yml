@@ -1,0 +1,148 @@
+---
+# Provisions Pure Storage FlashBlade Realms from the Realm configuration
+# mounted into the AAP execution environment, then adds them to the
+# pure-realm-pool ConfigMap for tenant allocation.
+#
+# Operator-initiated through the osac-provision-pure-realms job template, not
+# part of any tenant workflow: it authenticates with the array-wide admin
+# token in PUREFB_API, which the tenant-facing roles deliberately never hold.
+#
+# For each Realm:
+#   1. Creates Realm infrastructure on FlashBlade (NFS server, subnet, VIP, etc.)
+#   2. Writes hub Secret: pure-realm-<realm> with realm-scoped credentials
+#   3. Adds Realm to pure-realm-pool ConfigMap for tenant checkout
+#
+# The configuration supplies fb_url and a realms list. Both can also be passed
+# with -e for a local run; see samples/pure_realms_extra_vars.yml.
+
+- name: Provision Pure Storage FlashBlade Realms
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    pure_realms_config_path: "/var/config/pure-realms/realms.yml"
+    # Play vars sit below both include_vars and extra vars, so this is only
+    # the fallback when the configuration names no endpoint.
+    fb_url: "{{ lookup('env', 'PUREFB_URL') }}"
+
+  tasks:
+    - name: Verify the Realm configuration file exists
+      ansible.builtin.stat:
+        path: "{{ pure_realms_config_path }}"
+      register: _pure_realms_file
+      when: realms is not defined
+
+    - name: Fail if the Realm configuration file is missing
+      ansible.builtin.fail:
+        msg: >-
+          Realm configuration not found at {{ pure_realms_config_path }}.
+          Ensure the pure-realms-config ConfigMap is created and mounted, or
+          pass fb_url and realms directly with -e.
+      when:
+        - realms is not defined
+        - not _pure_realms_file.stat.exists
+
+    - name: Load the Realm configuration
+      ansible.builtin.include_vars:
+        file: "{{ pure_realms_config_path }}"
+      when: realms is not defined
+
+    - name: Fail if the Realm configuration lists no Realms
+      ansible.builtin.fail:
+        msg: >-
+          The Realm configuration contains no realms entries. Add the Realms
+          to provision to {{ pure_realms_config_path }}.
+      when: realms | default([]) | length == 0
+
+    - name: Fail if no FlashBlade endpoint is configured
+      ansible.builtin.fail:
+        msg: >-
+          No FlashBlade management endpoint configured. Set fb_url in
+          {{ pure_realms_config_path }} or the PUREFB_URL environment variable
+          on the job template.
+      when: fb_url | length == 0
+
+    - name: Show the Realms to provision
+      ansible.builtin.debug:
+        msg: "{{ realms | map(attribute='name') | list }}"
+
+    # One Realm at a time. The role resets its per-Realm facts on entry and
+    # clears the token it generated on exit, so a Realm that fails part way
+    # leaves the ones before it provisioned and carries nothing forward.
+    - name: Provision each Realm
+      ansible.builtin.include_role:
+        name: osac.service.pure_realm
+      vars:
+        realm: "{{ item }}"
+        pure_realm_fb_url: "{{ fb_url }}"
+      loop: "{{ realms }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # After all Realms are provisioned, add them to the pure-realm-pool ConfigMap
+    # so they become available for tenant allocation.
+    - name: Set facts for ConfigMap management
+      ansible.builtin.set_fact:
+        _pure_realm_config_namespace: "{{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE') | default('osac-system', true) }}"
+        _pure_realm_secret_prefix: "pure-realm-"
+
+    - name: Read existing pure-realm-pool ConfigMap
+      kubernetes.core.k8s_info:
+        kind: ConfigMap
+        namespace: "{{ _pure_realm_config_namespace }}"
+        name: pure-realm-pool
+      register: _existing_pool_cm
+
+    - name: Parse existing PURE_REALM_POOL entries
+      ansible.builtin.set_fact:
+        _existing_pool_entries: >-
+          {{
+            (_existing_pool_cm.resources[0].data.PURE_REALM_POOL | from_json)
+            if (_existing_pool_cm.resources | length > 0 and
+                _existing_pool_cm.resources[0].data.PURE_REALM_POOL is defined)
+            else []
+          }}
+
+    - name: Build pool entries for newly provisioned Realms
+      ansible.builtin.set_fact:
+        _new_pool_entries: []
+
+    - name: Add each provisioned Realm to the pool entries list
+      ansible.builtin.set_fact:
+        _new_pool_entries: >-
+          {{
+            _new_pool_entries + [{
+              'realm_name': item.name,
+              'secret_name': _pure_realm_secret_prefix ~ item.name
+            }]
+          }}
+      loop: "{{ realms }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Merge existing and new pool entries (deduplicate by realm_name)
+      ansible.builtin.set_fact:
+        _merged_pool_entries: >-
+          {{
+            (_existing_pool_entries + _new_pool_entries)
+            | unique(attribute='realm_name')
+            | list
+          }}
+
+    - name: Show the final pool configuration
+      ansible.builtin.debug:
+        msg: "PURE_REALM_POOL will contain {{ _merged_pool_entries | length }} Realm(s): {{ _merged_pool_entries | map(attribute='realm_name') | list }}"
+
+    - name: Create or update pure-realm-pool ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: pure-realm-pool
+            namespace: "{{ _pure_realm_config_namespace }}"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+          data:
+            PURE_REALM_POOL: "{{ _merged_pool_entries | to_json }}"

@@ -44,7 +44,8 @@ func (h *BareMetalInstance) SetStatusCondition(conditionType BareMetalInstanceCo
 	}
 
 	changed := apimeta.SetStatusCondition(&h.Status.Conditions, condition)
-	if conditionType == HostConditionPowerSynced && hadPrev && prevReason != reason {
+	if conditionType == HostConditionPowerSynced && hadPrev && prevReason != reason &&
+		prevReason != HostConditionReasonPoweringOff && reason != HostConditionReasonPoweringOff {
 		if cond := h.GetStatusCondition(conditionType); cond != nil {
 			cond.LastTransitionTime = metav1.Now()
 		}

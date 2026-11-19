@@ -2619,6 +2619,30 @@ var _ = Describe("syncStatus", func() {
 		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(stopTime))
 	})
 
+	It("should record STOPPING for a PoweringOff observation", func() {
+		t := newTask(0)
+		stopTime := time.Date(2026, time.January, 1, 12, 15, 0, 0, time.UTC)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{RunStrategy: bmfov1alpha1.RunStrategyHalted},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Conditions: []metav1.Condition{
+					{
+						Type:               string(bmfov1alpha1.HostConditionPowerSynced),
+						Status:             metav1.ConditionFalse,
+						Reason:             bmfov1alpha1.HostConditionReasonPoweringOff,
+						LastTransitionTime: metav1.NewTime(stopTime),
+					},
+				},
+			},
+		}
+
+		t.syncStatus(object)
+
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPING))
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(stopTime))
+	})
+
 	It("should preserve state on a read failure and use the later stop timestamp", func() {
 		t := newTask(0)
 		running := time.Date(2026, time.January, 1, 0, 0, 10, 0, time.UTC)

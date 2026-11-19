@@ -22,7 +22,6 @@ import {
 import { TenantSchema, Tenants } from '@osac/types/private';
 
 import { ApiProvider, connectErrorInterceptor } from './api-context';
-import { createNetworkingImmutabilityInterceptor } from './networking-immutability';
 import {
   useCreateResource,
   useDeleteResource,
@@ -290,15 +289,13 @@ describe('resource mutations', () => {
     expect(onSuccess).toHaveBeenCalled();
   });
 
-  it('keeps authentication conversion with the networking interceptor in the chain', async () => {
+  it('converts an unauthenticated response to UnauthorizedError', async () => {
     const terminal = vi.fn(() =>
       Promise.reject(new ConnectError('session expired', Code.Unauthenticated)),
     );
-    const networking = createNetworkingImmutabilityInterceptor(i18n.t.bind(i18n));
-    const withNetworking = networking(terminal as unknown as Parameters<Interceptor>[0]);
-    const chained = connectErrorInterceptor(withNetworking) as unknown as (
-      request: unknown,
-    ) => Promise<unknown>;
+    const chained = connectErrorInterceptor(
+      terminal as unknown as Parameters<Interceptor>[0],
+    ) as unknown as (request: unknown) => Promise<unknown>;
 
     await expect(
       chained({
@@ -306,40 +303,6 @@ describe('resource mutations', () => {
         method: { name: 'Update' },
       }),
     ).rejects.toBeInstanceOf(UnauthorizedError);
-  });
-
-  it('decorates immutable workload errors through the full interceptor chain', async () => {
-    const transport = createRouterTransport(
-      (router) => {
-        router.service(ComputeInstances, {
-          update: () => {
-            throw new ConnectError('networkAttachments is immutable', Code.InvalidArgument);
-          },
-        });
-      },
-      {
-        transport: {
-          interceptors: [
-            connectErrorInterceptor,
-            createNetworkingImmutabilityInterceptor(i18n.t.bind(i18n)),
-          ],
-        },
-      },
-    );
-    const { wrapper } = makeWrapper(transport);
-    const { result } = renderHook(() => useUpdateResource(ComputeInstances), { wrapper });
-
-    try {
-      await result.current.mutateAsync({
-        object: { id: 'vm-1', spec: { instanceType: { id: 'standard-4-8' } } },
-      });
-      expect.fail('expected the update to reject');
-    } catch (error) {
-      expect(error).toBeInstanceOf(ConnectError);
-      expect((error as ConnectError).rawMessage).toContain(
-        'Delete and recreate the workload to change its network attachment.',
-      );
-    }
   });
 
   it('calls create, update, and delete and invalidates every query for the service', async () => {

@@ -1,7 +1,6 @@
 import { toJson } from '@bufbuild/protobuf';
 import { Code, ConnectError, createRouterTransport } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
-import type { TFunction } from 'i18next';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -16,10 +15,7 @@ import {
 
 import EditInstanceTypeModal from './EditInstanceTypeModal';
 import { connectErrorInterceptor } from '../../../api/api-context';
-import { createNetworkingImmutabilityInterceptor } from '../../../api/networking-immutability';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
-
-const tIdentity = ((key: string) => key) as unknown as TFunction;
 
 const cpu = {
   id: 'cpu-1',
@@ -69,7 +65,6 @@ const renderWrapper = ({
   onList,
   rejectUpdate = false,
   immutableNetworkError = false,
-  useMiddleware = false,
 }: {
   instance?: ComputeInstance;
   types?: InstanceType[];
@@ -79,7 +74,6 @@ const renderWrapper = ({
   onList?: (request: { filter?: string }) => void;
   rejectUpdate?: boolean;
   immutableNetworkError?: boolean;
-  useMiddleware?: boolean;
 } = {}) => {
   let getCalls = 0;
   const transport = createRouterTransport(
@@ -119,16 +113,7 @@ const renderWrapper = ({
         },
       });
     },
-    useMiddleware
-      ? {
-          transport: {
-            interceptors: [
-              connectErrorInterceptor,
-              createNetworkingImmutabilityInterceptor(tIdentity),
-            ],
-          },
-        }
-      : undefined,
+    { transport: { interceptors: [connectErrorInterceptor] } },
   );
 
   const onClose = vi.fn();
@@ -227,7 +212,6 @@ describe('EditInstanceTypeModal wrapper', () => {
     const { user } = renderWrapper({
       instance: vm(ComputeInstanceState.RUNNING, 'cpu-1'),
       rejectUpdate: true,
-      useMiddleware: true,
     });
 
     await user.click(await screen.findByRole('combobox'));
@@ -240,11 +224,10 @@ describe('EditInstanceTypeModal wrapper', () => {
     expect(screen.getByRole('dialog', { name: 'Edit instance type' })).toBeInTheDocument();
   });
 
-  it('shows workload replacement guidance decorated by the middleware', async () => {
+  it('displays the immutable networking error exactly as returned by the server', async () => {
     const { user } = renderWrapper({
       instance: vm(ComputeInstanceState.RUNNING, 'cpu-1'),
       immutableNetworkError: true,
-      useMiddleware: true,
     });
 
     await user.click(await screen.findByRole('combobox'));
@@ -252,19 +235,9 @@ describe('EditInstanceTypeModal wrapper', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(await screen.findByText('Failed to update the instance type')).toBeInTheDocument();
-    const alert = screen
-      .getByRole('heading', { name: 'Danger alert: Failed to update the instance type' })
-      .closest('.pf-v6-c-alert');
-    expect(alert).not.toBeNull();
-    expect(alert).toHaveTextContent('spec.network_attachments is immutable after creation');
-    expect(alert).toHaveTextContent(
-      'Delete and recreate the workload to change its network attachment.',
-    );
     expect(
-      alert?.textContent?.match(
-        /Delete and recreate the workload to change its network attachment\./g,
-      ),
-    ).toHaveLength(1);
+      screen.getByText('spec.network_attachments is immutable after creation', { exact: true }),
+    ).toBeInTheDocument();
   });
 
   it('updates with the explicit instance type mask', async () => {

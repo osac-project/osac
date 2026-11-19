@@ -131,12 +131,9 @@ configuration error before any test runs.
 
 ## Running the image
 
-Build the image once from the repository root. The `-t` argument sets the image
-reference, `<name>:<tag>`, and the commands below use `osac-conformance:dev`:
-
-```sh
-podman build -f tests/conformance/Containerfile -t osac-conformance:dev .
-```
+The operator pulls the suite image; it does not build it. The image reference is
+`ghcr.io/osac-project/osac-conformance:<release>`, and the release matches the
+`osacRelease` in the configuration.
 
 ### Step 1: Create the run directory
 
@@ -169,10 +166,11 @@ kubectl create token <service-account> -n osac-e2e-ci --duration=12h > config/ad
 cp <ca-bundle>.pem config/api-ca.pem
 ```
 
-### Step 3: Run the image
+### Step 3: Pull and run the image
 
 ```sh
-IMAGE=osac-conformance:dev
+IMAGE=ghcr.io/osac-project/osac-conformance:0.0.1
+podman pull "$IMAGE"
 digest=$(podman image inspect --format '{{.Digest}}' "$IMAGE")
 
 podman run --rm --userns=keep-id:uid=1001,gid=1001 \
@@ -181,17 +179,15 @@ podman run --rm --userns=keep-id:uid=1001,gid=1001 \
   "$IMAGE" run
 ```
 
-Passing the digest explicitly means no container runtime socket is needed. For
-a registry image, pull it and set `IMAGE` to its reference; the rest of the
-command is unchanged.
+Passing the digest explicitly means no container runtime socket is needed.
 
 Notes:
 
 - Rootful podman: drop `--userns=keep-id:uid=1001,gid=1001` and run
   `chown -R 1001:0 results` first.
 - SELinux: append `:Z` to both `-v` mounts.
-- Docker: resolve the digest with
-  `docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE"` and pass
+- Docker: `docker pull "$IMAGE"` and resolve the digest with
+  `docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE"`, passing
   the part after `@`.
 
 ### Step 4: Read the results
@@ -211,6 +207,17 @@ less results/conformance.log
 
 Exit codes: `0` conformant, `1` in progress, `2` configuration error before any
 test ran.
+
+### Building from source (developers only)
+
+Operators do not build the image. To exercise a local change, build and tag it
+with `-t <name>:<tag>`, then use that reference as `IMAGE` in Step 3 without
+pulling:
+
+```sh
+podman build -f tests/conformance/Containerfile -t osac-conformance:dev .
+IMAGE=osac-conformance:dev
+```
 
 ## Report shape
 

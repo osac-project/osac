@@ -262,6 +262,21 @@ var _ = Describe("Metal3 Management Backend", func() {
 			Expect(updated.Annotations).To(HaveKeyWithValue(management.RestartRequestAnnotation, "req-1"))
 		})
 
+		It("reports a submitted request by its durable ID", func() {
+			bmh := newBMHForManagement("host-submitted", true, true)
+			m := newMetal3ManagementClient(bmh)
+
+			submitted, err := m.IsRestartSubmitted(ctx, metal3TestNamespace+"/host-submitted", "req-1")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(submitted).To(BeFalse())
+
+			Expect(m.TriggerRestart(ctx, metal3TestNamespace+"/host-submitted", "req-1")).To(Succeed())
+
+			submitted, err = m.IsRestartSubmitted(ctx, metal3TestNamespace+"/host-submitted", "req-1")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(submitted).To(BeTrue())
+		})
+
 		It("returns ErrTransitioning for a host that is powering off", func() {
 			// Desired off, still on: the host has not settled.
 			bmh := newBMHForManagement("host-powering-off", false, true)

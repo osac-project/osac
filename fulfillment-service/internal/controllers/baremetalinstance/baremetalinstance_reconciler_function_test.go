@@ -2648,6 +2648,70 @@ var _ = Describe("syncStatus", func() {
 		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(stored))
 	})
 
+	It("should wait for a stop observation after a halted restart is acknowledged", func() {
+		t := newTask(42)
+		stored := time.Date(2026, time.January, 1, 0, 0, 10, 0, time.UTC)
+		status := t.bareMetalInstance.GetStatus()
+		status.SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING)
+		status.SetStateTransitionTime(timestamppb.New(stored))
+
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{
+				RunStrategy:    bmfov1alpha1.RunStrategyHalted,
+				RestartTrigger: 42,
+			},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				RestartTrigger: 42,
+				Conditions: []metav1.Condition{
+					{
+						Type:   string(bmfov1alpha1.HostConditionRestartInProgress),
+						Status: metav1.ConditionFalse,
+						Reason: "Cancelled",
+					},
+					{
+						Type:               string(bmfov1alpha1.HostConditionPowerSynced),
+						Status:             metav1.ConditionFalse,
+						Reason:             bmfov1alpha1.HostConditionReasonProgressing,
+						LastTransitionTime: metav1.NewTime(time.Now()),
+					},
+				},
+			},
+		}
+
+		t.syncStatus(object)
+
+		// The host is still transitioning from the restart; no stop observed yet.
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING))
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(stored))
+	})
+
+	It("should use the later operator timestamp for a stop after a read failure", func() {
+		t := newTask(0)
+		stopTime := time.Date(2026, time.January, 1, 12, 15, 0, 0, time.UTC)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{
+				RunStrategy: bmfov1alpha1.RunStrategyHalted,
+			},
+			Status: bmfov1alpha1.BareMetalInstanceStatus{
+				Conditions: []metav1.Condition{
+					{
+						Type:               string(bmfov1alpha1.HostConditionPowerSynced),
+						Status:             metav1.ConditionFalse,
+						Reason:             bmfov1alpha1.HostConditionReasonProgressing,
+						LastTransitionTime: metav1.NewTime(stopTime),
+					},
+				},
+			},
+		}
+
+		t.syncStatus(object)
+
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPING))
+		Expect(t.bareMetalInstance.GetStatus().GetStateTransitionTime().AsTime()).To(Equal(stopTime))
+	})
+
 	It("should keep the last state for a withdrawn restart with a read failure", func() {
 		t := newTask(42)
 		stored := time.Date(2026, time.January, 1, 0, 0, 10, 0, time.UTC)

@@ -91,11 +91,12 @@ func (m *mockInventoryClient) GetHostLogicalPortMACs(ctx context.Context, invent
 
 // mockManagementClient implements management.Client for testing
 type mockManagementClient struct {
-	getPowerStateFunc     func(ctx context.Context, hostID string) (*management.PowerStatus, error)
-	setPowerStateFunc     func(ctx context.Context, hostID string, target management.PowerState) error
-	triggerRestartFunc    func(ctx context.Context, hostID string) error
-	triggerRestartIDFunc  func(ctx context.Context, hostID, requestID string) error
-	isRestartCompleteFunc func(ctx context.Context, hostID string) (bool, error)
+	getPowerStateFunc      func(ctx context.Context, hostID string) (*management.PowerStatus, error)
+	setPowerStateFunc      func(ctx context.Context, hostID string, target management.PowerState) error
+	triggerRestartFunc     func(ctx context.Context, hostID string) error
+	triggerRestartIDFunc   func(ctx context.Context, hostID, requestID string) error
+	isRestartSubmittedFunc func(ctx context.Context, hostID, requestID string) (bool, error)
+	isRestartCompleteFunc  func(ctx context.Context, hostID string) (bool, error)
 }
 
 func (m *mockManagementClient) GetPowerState(ctx context.Context, hostID string) (*management.PowerStatus, error) {
@@ -120,6 +121,13 @@ func (m *mockManagementClient) TriggerRestart(ctx context.Context, hostID, reque
 		return m.triggerRestartFunc(ctx, hostID)
 	}
 	return nil
+}
+
+func (m *mockManagementClient) IsRestartSubmitted(ctx context.Context, hostID, requestID string) (bool, error) {
+	if m.isRestartSubmittedFunc != nil {
+		return m.isRestartSubmittedFunc(ctx, hostID, requestID)
+	}
+	return true, nil
 }
 
 func (m *mockManagementClient) IsRestartComplete(ctx context.Context, hostID string) (bool, error) {
@@ -2378,12 +2386,13 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					Expect(condition.Status).To(Equal(metav1.ConditionFalse))
 					Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncRequired))
 
-					// The durable claim must be released so the trigger is retried
-					// instead of being polled as if the reboot had been submitted.
+					// The claim is kept with its request ID so the next reconcile can
+					// confirm whether the backend accepted it or re-submit safely.
 					marker := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
 					Expect(marker).NotTo(BeNil())
-					Expect(marker.Status).To(Equal(metav1.ConditionFalse))
-					Expect(marker.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncRequired))
+					Expect(marker.Status).To(Equal(metav1.ConditionTrue))
+					Expect(marker.Reason).To(Equal(v1alpha1.HostConditionReasonRestartSubmissionPending))
+					Expect(bareMetalInstance.Status.RestartRequestID).NotTo(BeEmpty())
 				})
 
 				It("should not dispatch when the durable claim cannot be persisted", func() {
@@ -2504,6 +2513,9 @@ var _ = Describe("BareMetalInstance Controller", func() {
 						reboots++
 						return errors.New("connection reset after the backend accepted the patch")
 					}
+					mockMgmtClient.isRestartSubmittedFunc = func(ctx context.Context, hostID, requestID string) (bool, error) {
+						return accepted[requestID], nil
+					}
 
 					// Reconcile #1: the backend accepts, the response is lost.
 					_, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
@@ -2511,10 +2523,50 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					Expect(reconciler.updateStatusWithRetry(ctx,
 						client.ObjectKeyFromObject(bareMetalInstance), bareMetalInstance.Status)).To(Succeed())
 
-					// Reconcile #2: same trigger, same request ID; the backend deduplicates.
-					_, err = reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+					// Reconcile #2: fresh read, same request ID; the backend evidence
+					// shows the request was accepted, so it is not re-dispatched.
+					stored := &v1alpha1.BareMetalInstance{}
+					Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bareMetalInstance), stored)).To(Succeed())
+					_, err = reconciler.reconcileRestartTrigger(ctx, stored)
 					Expect(err).NotTo(HaveOccurred())
 					Expect(reboots).To(Equal(1), "an accepted request must not be rebooted twice")
+				})
+
+				It("should re-submit a claim that was never submitted", func() {
+					// Simulates a crash between persisting the claim and dispatch.
+					bareMetalInstance.Status.RestartRequestID = "uid:1"
+					bareMetalInstance.SetStatusCondition(
+						v1alpha1.HostConditionRestartInProgress,
+						metav1.ConditionTrue,
+						v1alpha1.HostConditionReasonRestartSubmissionPending,
+						"Restart submission pending",
+					)
+					Expect(reconciler.updateStatusWithRetry(ctx,
+						client.ObjectKeyFromObject(bareMetalInstance), bareMetalInstance.Status)).To(Succeed())
+
+					mockMgmtClient.isRestartSubmittedFunc = func(ctx context.Context, hostID, requestID string) (bool, error) {
+						Expect(requestID).To(Equal("uid:1"), "the retry must reuse the persisted request ID")
+						return false, nil
+					}
+					triggered := false
+					mockMgmtClient.triggerRestartFunc = func(ctx context.Context, hostID string) error {
+						triggered = true
+						return nil
+					}
+
+					_, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+
+					Expect(err).NotTo(HaveOccurred())
+					Expect(triggered).To(BeTrue(), "an unsubmitted claim must be submitted")
+					cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
+					Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProgressing))
+				})
+
+				It("generates a distinct request ID for each claim", func() {
+					first := newRestartRequestID(bareMetalInstance)
+					second := newRestartRequestID(bareMetalInstance)
+					Expect(first).NotTo(Equal(second))
+					Expect(first).NotTo(BeEmpty())
 				})
 
 				It("should fail terminally when the backend reports a host error", func() {

@@ -991,6 +991,21 @@ func networkReadyReasonMessage(conditionType bmfov1alpha1.BareMetalInstanceCondi
 	return "NetworkSetupFailed", messageNetworkSetupFailed
 }
 
+// powerObservation is the metering-relevant interpretation of the operator's
+// PowerSynced condition.
+type powerObservation int
+
+const (
+	observationNone powerObservation = iota
+	observationPowerOn
+	observationPowerOff
+	observationTransitioning
+	observationReadFailed
+	observationRetrying
+	observationFailed
+	observationProvisioning
+)
+
 func (t *task) syncState(object *bmfov1alpha1.BareMetalInstance, powerSynced *metav1.Condition) {
 	if object.Status.Phase == bmfov1alpha1.BareMetalInstancePhaseDeleting || object.GetDeletionTimestamp() != nil {
 		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING, nil)
@@ -1000,10 +1015,50 @@ func (t *task) syncState(object *bmfov1alpha1.BareMetalInstance, powerSynced *me
 		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED, nil)
 		return
 	}
-
 	if powerSynced == nil {
 		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING, nil)
 		return
+	}
+
+	switch classifyPowerSynced(object, powerSynced) {
+	case observationNone:
+		// No confirmed observation: keep the last state and transition time.
+	case observationPowerOn:
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING, &powerSynced.LastTransitionTime)
+	case observationPowerOff:
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPED, &powerSynced.LastTransitionTime)
+	case observationTransitioning:
+		// Ordinary power transition: keep the operator's backend timestamp, which
+		// is the authoritative interval boundary for metering.
+		t.setTransitional(object, &powerSynced.LastTransitionTime)
+	case observationReadFailed:
+		// A read-only failure during an owned restart has no backend timestamp.
+		t.setTransitional(object, nil)
+	case observationRetrying:
+		// Retry or withdrawn restart: no applicable backend transition time.
+		t.setTransitional(object, nil)
+	case observationFailed:
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED, &powerSynced.LastTransitionTime)
+	default:
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING, &powerSynced.LastTransitionTime)
+	}
+}
+
+// classifyPowerSynced maps PowerSynced to the state/interval the lifecycle should
+// report. It returns observationNone when the last confirmed state must be kept.
+func classifyPowerSynced(object *bmfov1alpha1.BareMetalInstance, powerSynced *metav1.Condition) powerObservation {
+	if powerSynced.Status == metav1.ConditionTrue {
+		switch powerSynced.Reason {
+		case bmfov1alpha1.HostConditionReasonPowerOn:
+			return observationPowerOn
+		case bmfov1alpha1.HostConditionReasonPowerOff:
+			return observationPowerOff
+		default:
+			return observationProvisioning
+		}
+	}
+	if powerSynced.Status != metav1.ConditionFalse {
+		return observationProvisioning
 	}
 
 	restartCond := object.GetStatusCondition(bmfov1alpha1.HostConditionRestartInProgress)
@@ -1015,52 +1070,45 @@ func (t *task) syncState(object *bmfov1alpha1.BareMetalInstance, powerSynced *me
 		restartCond.Status == metav1.ConditionFalse &&
 		restartCond.Reason == bmfov1alpha1.HostConditionReasonPowerSyncFailed &&
 		powerSynced.Reason == bmfov1alpha1.HostConditionReasonPowerSyncFailed
+	// A halted request cancelled an owned restart. Until the operator observes the
+	// stop, a Progressing observation still belongs to the restart.
+	restartCancelled := !restartPending && restartCond != nil &&
+		restartCond.Status == metav1.ConditionFalse &&
+		restartCond.Reason == "Cancelled" &&
+		object.Spec.RunStrategy == bmfov1alpha1.RunStrategyHalted
 	restartInitRetrying := powerSynced.Reason == bmfov1alpha1.HostConditionReasonPowerSyncFailed &&
 		restartPending &&
 		object.Status.Phase == bmfov1alpha1.BareMetalInstancePhaseProgressing &&
 		restartCond != nil && restartCond.Status == metav1.ConditionFalse &&
 		restartCond.Reason == powerSynced.Reason
 
-	transitional := func(transitionTime *metav1.Time) {
-		if object.Spec.RunStrategy == bmfov1alpha1.RunStrategyHalted {
-			t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPING, transitionTime)
-		} else {
-			t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STARTING, transitionTime)
-		}
-	}
-
-	switch {
-	case powerSynced.Status == metav1.ConditionTrue && powerSynced.Reason == bmfov1alpha1.HostConditionReasonPowerOn:
-		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING, &powerSynced.LastTransitionTime)
-	case powerSynced.Status == metav1.ConditionTrue && powerSynced.Reason == bmfov1alpha1.HostConditionReasonPowerOff:
-		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPED, &powerSynced.LastTransitionTime)
-	case powerSynced.Status == metav1.ConditionFalse && powerSynced.Reason == bmfov1alpha1.HostConditionReasonProgressing:
-		if restartOwned && object.Spec.RunStrategy == bmfov1alpha1.RunStrategyHalted {
+	switch powerSynced.Reason {
+	case bmfov1alpha1.HostConditionReasonProgressing:
+		if (restartOwned || restartCancelled) && object.Spec.RunStrategy == bmfov1alpha1.RunStrategyHalted {
 			// The observation belongs to a restart, not to the requested stop. Wait
 			// for a stop observation instead of backdating the STOPPING timestamp.
-			return
+			return observationNone
 		}
-		// Ordinary power transition: keep the operator's backend timestamp, which
-		// is the authoritative interval boundary for metering.
-		transitional(&powerSynced.LastTransitionTime)
-	case powerSynced.Status == metav1.ConditionFalse && powerSynced.Reason == bmfov1alpha1.HostConditionReasonPowerReadFailed:
+		return observationTransitioning
+	case bmfov1alpha1.HostConditionReasonPowerReadFailed:
 		if !restartOwned {
-			// A read-only failure does not prove a power transition; keep the last
-			// confirmed state and its transition time.
-			return
+			return observationNone
 		}
-		transitional(nil)
-	case powerSynced.Status == metav1.ConditionFalse &&
-		(powerSynced.Reason == bmfov1alpha1.HostConditionReasonPowerSyncRequired ||
-			restartInitRetrying ||
-			restartWithdrawn ||
-			restartOwned):
-		// Retry or withdrawn restart: no applicable backend transition time.
-		transitional(nil)
-	case powerSynced.Status == metav1.ConditionFalse:
-		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_FAILED, &powerSynced.LastTransitionTime)
-	default:
-		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING, &powerSynced.LastTransitionTime)
+		return observationReadFailed
+	case bmfov1alpha1.HostConditionReasonPowerSyncRequired:
+		return observationRetrying
+	}
+	if restartInitRetrying || restartWithdrawn || restartOwned {
+		return observationRetrying
+	}
+	return observationFailed
+}
+
+func (t *task) setTransitional(object *bmfov1alpha1.BareMetalInstance, transitionTime *metav1.Time) {
+	if object.Spec.RunStrategy == bmfov1alpha1.RunStrategyHalted {
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPING, transitionTime)
+	} else {
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STARTING, transitionTime)
 	}
 }
 
@@ -1075,7 +1123,7 @@ func (t *task) setState(state privatev1.BareMetalInstanceState, transitionTime *
 
 	candidate := controllers.NowTruncated()
 	if transitionTime != nil && !transitionTime.IsZero() {
-		candidate = timestamppb.New(transitionTime.Time.Truncate(time.Second))
+		candidate = timestamppb.New(transitionTime.Truncate(time.Second))
 	}
 	if stored := status.GetStateTransitionTime(); stored != nil &&
 		candidate.AsTime().Before(stored.AsTime()) {

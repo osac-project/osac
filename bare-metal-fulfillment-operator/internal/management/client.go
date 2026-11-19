@@ -39,6 +39,7 @@ type Client interface {
 	GetPowerState(ctx context.Context, hostID string) (*PowerStatus, error)
 	SetPowerState(ctx context.Context, hostID string, target PowerState) error
 	TriggerRestart(ctx context.Context, hostID, requestID string) error
+	IsRestartSubmitted(ctx context.Context, hostID, requestID string) (bool, error)
 	IsRestartComplete(ctx context.Context, hostID string) (bool, error)
 }
 

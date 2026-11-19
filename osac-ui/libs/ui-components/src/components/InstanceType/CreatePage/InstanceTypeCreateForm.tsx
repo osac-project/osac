@@ -76,10 +76,7 @@ const InstanceTypeCreateForm = () => {
             <StackItem>
               <OsacForm>
                 <NameField fieldId={instanceTypeFieldIds.name} />
-                <DescriptionField
-                  name="spec.description"
-                  fieldId={instanceTypeFieldIds.description}
-                />
+                <DescriptionField name="spec.description" />
                 <IntegerField
                   name="spec.vcpus"
                   label={t('vCPUs')}

@@ -29,7 +29,7 @@ const IdpGeneralStep = ({ isEdit }: IdpGeneralStepProps) => {
             helperText={t('Human-friendly short title for this IdP')}
             fieldId="idp-title"
           />
-          <DescriptionField name="spec.description" fieldId="idp-description" />
+          <DescriptionField name="spec.description" />
         </OsacForm>
       </StackItem>
     </Stack>

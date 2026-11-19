@@ -138,7 +138,7 @@ const CatalogGeneralStep = ({
             <ProjectField isDisabled={isEdit} />
           )}
           <NameField isDisabled={isEdit} />
-          <DescriptionField fieldId="catalog-item-description" />
+          <DescriptionField name="description" />
           <ResourceSelectField
             name="template"
             label={t('Provisioning template')}

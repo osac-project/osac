@@ -8,7 +8,7 @@ describe('DescriptionField', () => {
   it('renders a three-row textarea labelled Description', () => {
     render(
       <Formik initialValues={{ description: '' }} onSubmit={() => undefined}>
-        <DescriptionField />
+        <DescriptionField name="description" />
       </Formik>,
     );
 
@@ -16,16 +16,16 @@ describe('DescriptionField', () => {
     expect(input).toHaveAttribute('rows', '3');
   });
 
-  it('honours custom name and fieldId', () => {
+  it('uses name as the field id', () => {
     render(
       <Formik initialValues={{ 'spec.description': '' }} onSubmit={() => undefined}>
-        <DescriptionField name="spec.description" fieldId="custom-description" />
+        <DescriptionField name="spec.description" />
       </Formik>,
     );
 
     expect(screen.getByRole('textbox', { name: 'Description' })).toHaveAttribute(
       'id',
-      'custom-description',
+      'spec.description',
     );
   });
 });

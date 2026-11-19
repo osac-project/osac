@@ -240,7 +240,8 @@ func DeriveProvisioningProgress(conds []metav1.Condition, restartPending bool) P
 		if ct == HostConditionPowerSynced && restartSnapshot &&
 			(cond.Reason == HostConditionReasonProgressing ||
 				cond.Reason == HostConditionReasonPowerSyncFailed ||
-				cond.Reason == HostConditionReasonPowerSyncRequired) {
+				cond.Reason == HostConditionReasonPowerSyncRequired ||
+				cond.Reason == HostConditionReasonPowerReadFailed) {
 			restartRetrying = true
 			continue
 		}
@@ -251,6 +252,7 @@ func DeriveProvisioningProgress(conds []metav1.Condition, restartPending bool) P
 		if cond.Reason == HostConditionReasonProgressing ||
 			IsProvisionRetrying(cond) ||
 			cond.Reason == HostConditionReasonPowerSyncRequired ||
+			cond.Reason == HostConditionReasonPowerReadFailed ||
 			cond.Reason == "" ||
 			isPendingNetworkConditionReason(ct, cond.Reason) {
 			continue

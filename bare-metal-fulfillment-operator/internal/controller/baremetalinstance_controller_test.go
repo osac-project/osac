@@ -94,6 +94,7 @@ type mockManagementClient struct {
 	getPowerStateFunc     func(ctx context.Context, hostID string) (*management.PowerStatus, error)
 	setPowerStateFunc     func(ctx context.Context, hostID string, target management.PowerState) error
 	triggerRestartFunc    func(ctx context.Context, hostID string) error
+	triggerRestartIDFunc  func(ctx context.Context, hostID, requestID string) error
 	isRestartCompleteFunc func(ctx context.Context, hostID string) (bool, error)
 }
 
@@ -111,7 +112,10 @@ func (m *mockManagementClient) SetPowerState(ctx context.Context, hostID string,
 	return nil
 }
 
-func (m *mockManagementClient) TriggerRestart(ctx context.Context, hostID string) error {
+func (m *mockManagementClient) TriggerRestart(ctx context.Context, hostID, requestID string) error {
+	if m.triggerRestartIDFunc != nil {
+		return m.triggerRestartIDFunc(ctx, hostID, requestID)
+	}
 	if m.triggerRestartFunc != nil {
 		return m.triggerRestartFunc(ctx, hostID)
 	}
@@ -1229,7 +1233,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				condition := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
 				Expect(condition).NotTo(BeNil())
 				Expect(condition.Status).To(Equal(metav1.ConditionFalse))
-				Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncRequired))
+				Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerReadFailed))
 			})
 
 			It("should mark the instance Failed on a terminal host error", func() {
@@ -1261,6 +1265,63 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				// shared power-status handler further down.
 				condition := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
 				Expect(condition.Message).To(Equal("failed to get power state before restart"))
+			})
+
+			It("should keep a terminal restart failure terminal across network reconciliation", func() {
+				// A successful network pass rewrites Phase to Progressing; the terminal
+				// restart conditions must still stop the unacknowledged trigger.
+				bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+				bareMetalInstance.SetStatusCondition(
+					v1alpha1.HostConditionPowerSynced,
+					metav1.ConditionFalse,
+					v1alpha1.HostConditionReasonIronicAPIFailure,
+					"failed to get power state before restart",
+				)
+				bareMetalInstance.SetStatusCondition(
+					v1alpha1.HostConditionRestartInProgress,
+					metav1.ConditionFalse,
+					v1alpha1.HostConditionReasonPowerSyncFailed,
+					"Restart failed",
+				)
+
+				result, err := reconciler.reconcileManagement(ctx, bareMetalInstance)
+
+				Expect(err).NotTo(HaveOccurred())
+				Expect(result).To(Equal(ctrl.Result{}))
+				Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseFailed))
+			})
+
+			It("should retry power-on after acknowledging a skipped restart", func() {
+				bareMetalInstance.Spec.RestartTrigger = 1
+				bareMetalInstance.Status.RestartTrigger = 0
+				reads := 0
+				mockMgmtClient.getPowerStateFunc = func(ctx context.Context, hostID string) (*management.PowerStatus, error) {
+					reads++
+					if reads == 2 {
+						// The eligibility read succeeded (read 1, skip + ack); this
+						// ordinary power read fails once.
+						return nil, errors.New("transient timeout")
+					}
+					return &management.PowerStatus{State: management.PowerOff}, nil
+				}
+				powerOnRequested := false
+				mockMgmtClient.setPowerStateFunc = func(ctx context.Context, hostID string, target management.PowerState) error {
+					if target == management.PowerOn {
+						powerOnRequested = true
+					}
+					return nil
+				}
+
+				// Reconcile #1: acknowledge the skipped restart, then fail the read.
+				_, err := reconciler.reconcileManagement(ctx, bareMetalInstance)
+				Expect(err).To(HaveOccurred())
+				Expect(bareMetalInstance.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
+				Expect(bareMetalInstance.Status.RestartTrigger).To(Equal(int64(1)))
+
+				// Reconcile #2: the transient failure must not block power-on.
+				_, err = reconciler.reconcileManagement(ctx, bareMetalInstance)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(powerOnRequested).To(BeTrue(), "a transient read error must not prevent the power-on retry")
 			})
 		})
 
@@ -2105,6 +2166,14 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					triggerRestartCalled = true
 					return nil
 				}
+				// A skipped restart must not rewrite the power condition (that would
+				// reset an ongoing transition's timestamp).
+				bareMetalInstance.SetStatusCondition(
+					v1alpha1.HostConditionPowerSynced,
+					metav1.ConditionTrue,
+					v1alpha1.HostConditionReasonPowerOff,
+					"",
+				)
 
 				result, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
 
@@ -2112,11 +2181,13 @@ var _ = Describe("BareMetalInstance Controller", func() {
 				Expect(result).To(Equal(ctrl.Result{}))
 				Expect(triggerRestartCalled).To(BeFalse())
 				Expect(bareMetalInstance.Status.RestartTrigger).To(Equal(int64(1)))
+				Expect(bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress).Status).
+					To(Equal(metav1.ConditionFalse))
 
 				condition := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
 				Expect(condition).NotTo(BeNil())
 				Expect(condition.Status).To(Equal(metav1.ConditionTrue))
-				Expect(condition.Reason).To(Equal("Completed"))
+				Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerOff))
 			},
 			Entry("spec run strategy is halted", v1alpha1.RunStrategyHalted, management.PowerOn, false),
 			Entry("host is off while starting", v1alpha1.RunStrategyAlways, management.PowerOff, false),
@@ -2137,7 +2208,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 			Expect(bareMetalInstance.Status.RestartTrigger).To(Equal(int64(0)))
 		})
 
-		It("should mark a pending power transition when the preflight read fails", func() {
+		It("should report a read failure when the preflight read fails", func() {
 			bareMetalInstance.Spec.RunStrategy = v1alpha1.RunStrategyAlways
 			bareMetalInstance.Status.RunStrategy = v1alpha1.RunStrategyHalted
 			mockMgmtClient.getPowerStateFunc = func(ctx context.Context, hostID string) (*management.PowerStatus, error) {
@@ -2151,7 +2222,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 			condition := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
 			Expect(condition).NotTo(BeNil())
 			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
-			Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncRequired))
+			Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerReadFailed))
 			Expect(bareMetalInstance.Status.RestartTrigger).To(Equal(int64(0)))
 		})
 
@@ -2343,6 +2414,91 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					Expect(triggerCalls).To(Equal(1), "the same trigger must not be dispatched twice")
 				})
 
+				It("should persist the claim with the submission-pending reason before dispatch", func() {
+					var claimedReason string
+					mockMgmtClient.triggerRestartIDFunc = func(ctx context.Context, hostID, requestID string) error {
+						stored := &v1alpha1.BareMetalInstance{}
+						Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bareMetalInstance), stored)).To(Succeed())
+						if cond := stored.GetStatusCondition(v1alpha1.HostConditionRestartInProgress); cond != nil {
+							claimedReason = cond.Reason
+						}
+						return nil
+					}
+
+					_, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+
+					Expect(err).NotTo(HaveOccurred())
+					Expect(claimedReason).To(Equal(v1alpha1.HostConditionReasonRestartSubmissionPending))
+				})
+
+				It("should not dispatch when the request changed before the claim", func() {
+					// A halt (or a withdrawal) racing the preflight read must not be
+					// overwritten by the claim or followed by a reboot.
+					current := &v1alpha1.BareMetalInstance{}
+					Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bareMetalInstance), current)).To(Succeed())
+					current.Spec.RunStrategy = v1alpha1.RunStrategyHalted
+					Expect(k8sClient.Update(ctx, current)).To(Succeed())
+
+					triggerCalled := false
+					mockMgmtClient.triggerRestartFunc = func(ctx context.Context, hostID string) error {
+						triggerCalled = true
+						return nil
+					}
+
+					_, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+
+					Expect(err).NotTo(HaveOccurred())
+					Expect(triggerCalled).To(BeFalse())
+				})
+
+				It("should resume polling instead of dispatching when another reconcile claimed the restart", func() {
+					current := &v1alpha1.BareMetalInstance{}
+					Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(bareMetalInstance), current)).To(Succeed())
+					current.SetStatusCondition(
+						v1alpha1.HostConditionRestartInProgress,
+						metav1.ConditionTrue,
+						v1alpha1.HostConditionReasonProgressing,
+						"Restart operation initiated",
+					)
+					Expect(k8sClient.Status().Update(ctx, current)).To(Succeed())
+
+					triggerCalled := false
+					mockMgmtClient.triggerRestartFunc = func(ctx context.Context, hostID string) error {
+						triggerCalled = true
+						return nil
+					}
+
+					result, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+
+					Expect(err).NotTo(HaveOccurred())
+					Expect(result.RequeueAfter).To(Equal(reconciler.ManagementRecheckIntervalDuration))
+					Expect(triggerCalled).To(BeFalse())
+				})
+
+				It("should not dispatch the same accepted request after a lost response", func() {
+					reboots := 0
+					accepted := map[string]bool{}
+					mockMgmtClient.triggerRestartIDFunc = func(ctx context.Context, hostID, requestID string) error {
+						if accepted[requestID] {
+							return nil // the backend already accepted this request
+						}
+						accepted[requestID] = true
+						reboots++
+						return errors.New("connection reset after the backend accepted the patch")
+					}
+
+					// Reconcile #1: the backend accepts, the response is lost.
+					_, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+					Expect(err).To(HaveOccurred())
+					Expect(reconciler.updateStatusWithRetry(ctx,
+						client.ObjectKeyFromObject(bareMetalInstance), bareMetalInstance.Status)).To(Succeed())
+
+					// Reconcile #2: same trigger, same request ID; the backend deduplicates.
+					_, err = reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(reboots).To(Equal(1), "an accepted request must not be rebooted twice")
+				})
+
 				It("should fail terminally when the backend reports a host error", func() {
 					mockMgmtClient.triggerRestartFunc = func(ctx context.Context, hostID string) error {
 						return management.ErrHostOperational
@@ -2413,6 +2569,10 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					Expect(err).NotTo(HaveOccurred())
 					Expect(bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced).Reason).
 						To(Equal(v1alpha1.HostConditionReasonPowerSyncRequired))
+					// The blocked marker is persisted by the status write at the end of
+					// the outer Reconcile; mirror that before the next direct call.
+					Expect(reconciler.updateStatusWithRetry(ctx,
+						client.ObjectKeyFromObject(bareMetalInstance), bareMetalInstance.Status)).To(Succeed())
 
 					// Reconcile #2: must re-trigger (not poll for completion).
 					result, err := reconciler.reconcileRestartTrigger(ctx, bareMetalInstance)
@@ -2557,7 +2717,7 @@ var _ = Describe("BareMetalInstance Controller", func() {
 					Expect(bareMetalInstance.IsStatusConditionTrue(v1alpha1.HostConditionRestartInProgress)).To(BeTrue())
 					condition := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
 					Expect(condition).NotTo(BeNil())
-					Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerSyncRequired))
+					Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerReadFailed))
 				})
 
 				It("should release ownership when the completion check reports a host error", func() {

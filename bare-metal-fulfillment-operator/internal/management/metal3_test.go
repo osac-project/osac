@@ -223,7 +223,7 @@ var _ = Describe("Metal3 Management Backend", func() {
 			bmh := newBMHForManagement("host-1", true, true)
 			m := newMetal3ManagementClient(bmh)
 
-			err := m.TriggerRestart(ctx, metal3TestNamespace+"/host-1")
+			err := m.TriggerRestart(ctx, metal3TestNamespace+"/host-1", "req-1")
 			Expect(err).NotTo(HaveOccurred())
 
 			updated := &metal3api.BareMetalHost{}
@@ -241,7 +241,32 @@ var _ = Describe("Metal3 Management Backend", func() {
 			bmh := newBMHWithAnnotations("host-restarting", true, true, annotations)
 			m := newMetal3ManagementClient(bmh)
 
-			err := m.TriggerRestart(ctx, metal3TestNamespace+"/host-restarting")
+			err := m.TriggerRestart(ctx, metal3TestNamespace+"/host-restarting", "req-1")
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, management.ErrTransitioning)).To(BeTrue())
+		})
+
+		It("treats a repeated request ID as already accepted", func() {
+			bmh := newBMHForManagement("host-retry", true, true)
+			m := newMetal3ManagementClient(bmh)
+
+			Expect(m.TriggerRestart(ctx, metal3TestNamespace+"/host-retry", "req-1")).To(Succeed())
+			// A retry after a lost response must not submit a second reboot.
+			Expect(m.TriggerRestart(ctx, metal3TestNamespace+"/host-retry", "req-1")).To(Succeed())
+
+			updated := &metal3api.BareMetalHost{}
+			Expect(m.TestClient().Get(ctx, client.ObjectKey{
+				Namespace: metal3TestNamespace,
+				Name:      "host-retry",
+			}, updated)).To(Succeed())
+			Expect(updated.Annotations).To(HaveKeyWithValue(management.RestartRequestAnnotation, "req-1"))
+		})
+
+		It("returns ErrTransitioning for a host that is powering off", func() {
+			bmh := newBMHForManagement("host-powering-off", true, false)
+			m := newMetal3ManagementClient(bmh)
+
+			err := m.TriggerRestart(ctx, metal3TestNamespace+"/host-powering-off", "req-1")
 			Expect(err).To(HaveOccurred())
 			Expect(errors.Is(err, management.ErrTransitioning)).To(BeTrue())
 		})
@@ -249,14 +274,14 @@ var _ = Describe("Metal3 Management Backend", func() {
 		It("returns error for missing host", func() {
 			m := newMetal3ManagementClient()
 
-			err := m.TriggerRestart(ctx, metal3TestNamespace+"/nonexistent")
+			err := m.TriggerRestart(ctx, metal3TestNamespace+"/nonexistent", "req-1")
 			Expect(err).To(HaveOccurred())
 		})
 
 		It("returns error for invalid host ID format", func() {
 			m := newMetal3ManagementClient()
 
-			err := m.TriggerRestart(ctx, "bad-id")
+			err := m.TriggerRestart(ctx, "bad-id", "req-1")
 			Expect(err).To(HaveOccurred())
 		})
 	})

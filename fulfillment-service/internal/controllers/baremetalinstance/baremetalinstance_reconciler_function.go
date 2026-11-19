@@ -839,7 +839,8 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 // failure; a withdrawn request is not a failure.
 func (t *task) syncRestartStatus(restartCond *metav1.Condition, object *bmfov1alpha1.BareMetalInstance) {
 	withdrawn := object.Spec.RestartTrigger == object.Status.RestartTrigger
-	inProgress := restartCond.Status == metav1.ConditionTrue && !withdrawn
+	inProgress := restartCond.Status == metav1.ConditionTrue && !withdrawn &&
+		restartCond.Reason != bmfov1alpha1.HostConditionReasonRestartSubmissionPending
 	failed := restartCond.Status == metav1.ConditionFalse && !withdrawn &&
 		restartCond.Reason == bmfov1alpha1.HostConditionReasonPowerSyncFailed
 
@@ -1007,6 +1008,7 @@ func (t *task) syncState(object *bmfov1alpha1.BareMetalInstance, powerSynced *me
 
 	restartCond := object.GetStatusCondition(bmfov1alpha1.HostConditionRestartInProgress)
 	restartPending := object.Spec.RestartTrigger != object.Status.RestartTrigger
+	restartOwned := restartPending && object.IsStatusConditionTrue(bmfov1alpha1.HostConditionRestartInProgress)
 	// A withdrawn request: the triggers match, so the operator no longer owns a
 	// restart even if a stale initiation error is still recorded.
 	restartWithdrawn := !restartPending && restartCond != nil &&
@@ -1033,14 +1035,26 @@ func (t *task) syncState(object *bmfov1alpha1.BareMetalInstance, powerSynced *me
 	case powerSynced.Status == metav1.ConditionTrue && powerSynced.Reason == bmfov1alpha1.HostConditionReasonPowerOff:
 		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_STOPPED, &powerSynced.LastTransitionTime)
 	case powerSynced.Status == metav1.ConditionFalse && powerSynced.Reason == bmfov1alpha1.HostConditionReasonProgressing:
+		if restartOwned && object.Spec.RunStrategy == bmfov1alpha1.RunStrategyHalted {
+			// The observation belongs to a restart, not to the requested stop. Wait
+			// for a stop observation instead of backdating the STOPPING timestamp.
+			return
+		}
 		// Ordinary power transition: keep the operator's backend timestamp, which
 		// is the authoritative interval boundary for metering.
 		transitional(&powerSynced.LastTransitionTime)
+	case powerSynced.Status == metav1.ConditionFalse && powerSynced.Reason == bmfov1alpha1.HostConditionReasonPowerReadFailed:
+		if !restartOwned {
+			// A read-only failure does not prove a power transition; keep the last
+			// confirmed state and its transition time.
+			return
+		}
+		transitional(nil)
 	case powerSynced.Status == metav1.ConditionFalse &&
 		(powerSynced.Reason == bmfov1alpha1.HostConditionReasonPowerSyncRequired ||
 			restartInitRetrying ||
 			restartWithdrawn ||
-			(restartPending && object.IsStatusConditionTrue(bmfov1alpha1.HostConditionRestartInProgress))):
+			restartOwned):
 		// Retry or withdrawn restart: no applicable backend transition time.
 		transitional(nil)
 	case powerSynced.Status == metav1.ConditionFalse:

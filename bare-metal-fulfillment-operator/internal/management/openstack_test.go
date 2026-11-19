@@ -84,7 +84,7 @@ var _ = Describe("OpenStack Management Backend", func() {
 
 			client := newMockOpenStackClient(server)
 
-			err := client.TriggerRestart(ctx, testNodeID)
+			err := client.TriggerRestart(ctx, testNodeID, "req-1")
 			Expect(err).NotTo(HaveOccurred())
 
 			// Verify the API call was made correctly
@@ -104,7 +104,7 @@ var _ = Describe("OpenStack Management Backend", func() {
 
 			client := newMockOpenStackClient(server)
 
-			err := client.TriggerRestart(ctx, testNodeID)
+			err := client.TriggerRestart(ctx, testNodeID, "req-1")
 			Expect(err).To(HaveOccurred())
 			Expect(errors.Is(err, management.ErrTransitioning)).To(BeTrue())
 		})
@@ -129,7 +129,7 @@ var _ = Describe("OpenStack Management Backend", func() {
 
 			client := newMockOpenStackClient(server)
 
-			err := client.TriggerRestart(ctx, testNodeID)
+			err := client.TriggerRestart(ctx, testNodeID, "req-1")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(callCount).To(Equal(2))
 		})
@@ -144,7 +144,7 @@ var _ = Describe("OpenStack Management Backend", func() {
 
 			client := newMockOpenStackClient(server)
 
-			err := client.TriggerRestart(ctx, testNodeID)
+			err := client.TriggerRestart(ctx, testNodeID, "req-1")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("failed to trigger restart on node"))
 		})
@@ -163,7 +163,7 @@ var _ = Describe("OpenStack Management Backend", func() {
 				return nil, fmt.Errorf("keystone unavailable")
 			})
 
-			err := client.TriggerRestart(ctx, testNodeID)
+			err := client.TriggerRestart(ctx, testNodeID, "req-1")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("reconnect failed"))
 			Expect(err.Error()).To(ContainSubstring("keystone unavailable"))
@@ -189,7 +189,7 @@ var _ = Describe("OpenStack Management Backend", func() {
 
 			client := newMockOpenStackClient(server)
 
-			err := client.TriggerRestart(ctx, testNodeID)
+			err := client.TriggerRestart(ctx, testNodeID, "req-1")
 			Expect(err).To(HaveOccurred())
 			Expect(errors.Is(err, management.ErrTransitioning)).To(BeTrue())
 			Expect(callCount).To(Equal(2))

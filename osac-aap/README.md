@@ -299,8 +299,9 @@ legacy storage path.
 
 This flag creates StorageClasses; it does not install the driver.
 `csi_driver_install_enabled` separately controls the AAP Helm installation and
-also defaults to `false`. Standard OSAC installations deploy the driver through
-the installer. The infrastructure LVMS settings are described in the
+also defaults to `false`. The role installs the driver only when a supported
+provider (`vast`, `netapp`, or `pure`) is dispatched; an LVMS-only dispatch does
+not install it. The infrastructure LVMS settings are described in the
 [Helm deployment guide](../docs/guides/installation/helm-deployment-guide.md#storage-class).
 
 The selector does not migrate existing classes or volumes. If a same-name

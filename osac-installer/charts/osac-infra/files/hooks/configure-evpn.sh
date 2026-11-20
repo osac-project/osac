@@ -5,6 +5,7 @@ set -euo pipefail
 CONFIG_DIR="${CONFIG_DIR:-/config}"
 # shellcheck disable=SC1091
 source "${CONFIG_DIR}/settings.env"
+WAIT_FOR_BFD="${WAIT_FOR_BFD:-false}"
 
 wait_until() {
     local timeout_seconds="$1"
@@ -91,15 +92,20 @@ vtep_allocated() {
 bgp_session_established() {
     local node="$1"
     local peer="$2"
-    local sessions status
+    local require_bfd="$3"
+    local sessions status bfd_status
     sessions="$(oc get bgpsessionstates.frrk8s.metallb.io \
         -n openshift-frr-k8s \
         -l "frrk8s.metallb.io/peer=${peer},frrk8s.metallb.io/node=${node}" \
-        -o jsonpath='{range .items[*]}{.status.bgpStatus}{"\n"}{end}')"
-    while read -r status; do
-        if [[ "${status}" == "Established" ]]; then
-            return 0
+        -o jsonpath='{range .items[*]}{.status.bgpStatus}{" "}{.status.bfdStatus}{"\n"}{end}')"
+    while read -r status bfd_status; do
+        if [[ "${status}" != "Established" ]]; then
+            continue
         fi
+        if [[ "${require_bfd}" == "true" && "${bfd_status}" != "Up" ]]; then
+            continue
+        fi
+        return 0
     done <<< "${sessions}"
     return 1
 }
@@ -154,12 +160,14 @@ if [[ "${network_type}" != "OVNKubernetes" ]]; then
     exit 1
 fi
 
+node_index=0
 while IFS= read -r node_name || [[ -n "${node_name:-}" ]]; do
     if [[ -z "${node_name}" ]]; then
         continue
     fi
+    node_index=$((node_index + 1))
     if ! oc get node "${node_name}" >/dev/null 2>&1; then
-        echo "ERROR: configured EVPN node '${node_name}' does not exist" >&2
+        echo "ERROR: nodes.txt entry ${node_index} does not match an existing cluster node" >&2
         echo "No cluster configuration was changed" >&2
         exit 1
     fi
@@ -195,12 +203,16 @@ oc wait --for=condition=Established \
 
 echo "Applying per-node EVPN network policies"
 oc apply -f "${CONFIG_DIR}/nncp.yaml"
+node_index=0
 while IFS= read -r node_name || [[ -n "${node_name:-}" ]]; do
     [[ -z "${node_name}" ]] && continue
+    node_index=$((node_index + 1))
     if ! oc wait "nncp/osac-evpn-${node_name}" \
-        --for=condition=Available --timeout=900s; then
-        echo "NNCP readiness failed; current NNCP and NNCE state:" >&2
-        oc get nncp,nnce || true
+        --for=condition=Available --timeout=900s >/dev/null 2>&1; then
+        echo "nodes.txt entry ${node_index}: NNCP readiness failed; conditions:" >&2
+        oc get "nncp/osac-evpn-${node_name}" \
+            -o jsonpath='{range .status.conditions[*]}{.type}={.status}/{.reason}{"\n"}{end}' \
+            2>/dev/null || true
         exit 1
     fi
 done < "${CONFIG_DIR}/nodes.txt"
@@ -226,14 +238,21 @@ prune_evpn_resources frrconfigurations openshift-frr-k8s \
     "FRRConfiguration" "${desired_frr_names[@]}"
 
 if [[ "${WAIT_FOR_ESTABLISHED}" == "true" ]]; then
+    peer_entry=0
     while read -r node_name peer_address \
         || [[ -n "${node_name:-}${peer_address:-}" ]]; do
         [[ -z "${node_name:-}" || -z "${peer_address:-}" ]] && continue
+        peer_entry=$((peer_entry + 1))
         if ! wait_until "${BGP_TIMEOUT_SECONDS}" \
-            "BGP session from ${node_name} to ${peer_address}" \
-            bgp_session_established "${node_name}" "${peer_address}"; then
-            oc get bgpsessionstates.frrk8s.metallb.io -A -o wide || true
-            echo "node ${node_name}: BGP session to ${peer_address} not Established; check the fabric side and the evpn values" >&2
+            "BGP session for peers.txt entry ${peer_entry}" \
+            bgp_session_established "${node_name}" "${peer_address}" "${WAIT_FOR_BFD}"; then
+            echo "peers.txt entry ${peer_entry}: BGP/BFD session did not converge; statuses:" >&2
+            oc get bgpsessionstates.frrk8s.metallb.io \
+                -n openshift-frr-k8s \
+                -l "frrk8s.metallb.io/peer=${peer_address},frrk8s.metallb.io/node=${node_name}" \
+                -o jsonpath='{range .items[*]}BGP={.status.bgpStatus} BFD={.status.bfdStatus}{"\n"}{end}' \
+                || true
+            echo "Check the fabric side and the evpn values." >&2
             exit 1
         fi
     done < "${CONFIG_DIR}/peers.txt"

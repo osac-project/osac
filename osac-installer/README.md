@@ -441,6 +441,8 @@ evpn:
     asn: 4209999999
     acceptPrefixes:
       - 10.200.0.0/16
+    activeActive: false
+    activeBackup: false
     waitForEstablished: true
     timeoutSeconds: 900
   nodes:
@@ -452,6 +454,107 @@ evpn:
           peerAddress: 169.254.133.3
           peerASN: 4200300002
 ```
+
+Set `evpn.bgp.activeActive: true` to enable FRR's `as-path multipath-relax`
+and `maximum-paths 16` for IPv4 unicast. For numbered uplinks, also set each
+`address` to the interface's static CIDR. The chart installs a route for each
+connected subnet with metric `100`, so FRR resolves those peers at equal IGP
+cost. Unnumbered peers use IPv6 link-local next hops and retain the node's
+route costs. The default `false` leaves these settings unchanged. FRR still
+installs only paths that meet its other multipath eligibility checks.
+
+For active/backup forwarding, set `evpn.bgp.activeBackup: true` instead; it is
+mutually exclusive with `activeActive`. Set `role: active` or `role: backup`
+on every node uplink; each node needs exactly one active neighbor and at least
+one backup. frr-k8s attaches its own per-neighbor `<peer>-in` and `<peer>-out`
+route-maps in `address-family ipv4 unicast` and applies them after the chart's
+raw block, so the chart adds a `permit 1` entry to those generated maps instead
+of attaching route-maps of its own: the inbound entry matches remote fabric VTEP
+`/32` routes from `acceptPrefixes` and sets local preference to 200 on active
+neighbors or 100 on backups, and the backup outbound entry prepends the node ASN
+three times. L2VPN EVPN route-maps apply the same preferences without prefix
+matching so they cover every EVPN route, and the active peer gets an explicit
+outbound map as well. The L2VPN EVPN address family also activates the EVPN
+neighbors and advertises VNIs.
+
+frr-k8s treats interface-based unnumbered neighbors as dual-stack and generates
+IPv6 deny prefix-lists for them. Those lists filter IPv6 unicast routes only:
+RFC 5549 IPv4 routes are accepted through the IPv4 unicast `<peer>-in` map, and
+IPv6 link-local next hops are resolved independently of the route-map policy.
+The chart does not add or modify any IPv6 prefix-list.
+
+```yaml
+evpn:
+  enabled: true
+  vtepCIDR: 10.200.255.0/24
+  bgp:
+    asn: 4209999999
+    acceptPrefixes: [10.200.0.0/16]
+    activeBackup: true
+  nodes:
+    - name: worker-0
+      vtepIP: 10.200.255.1
+      uplinks:
+        - interface: ens5f0
+          peerAddress: 169.254.133.1
+          peerASN: 4200300002
+          role: active
+        - interface: ens5f1
+          peerAddress: 169.254.133.3
+          peerASN: 4200300003
+          role: backup
+```
+
+Active-backup policy covers both address families: the merged IPv4 unicast
+`<peer>-in` entry prefers the active neighbor for remote VTEP `/32` routes, and
+`EVPN-ACTIVE-IN`/`EVPN-BACKUP-IN` do the same for L2VPN EVPN routes. The backup
+prepends the node ASN on both outbound paths.
+
+Unnumbered peers accept the same policy. The ACLs are `EVPN-REMOTE-VTEPS`
+(chart-owned, built from `acceptPrefixes`) and the frr-k8s generated
+`<interface>-inpl-ipv4` and `<interface>-allowed-ipv4` lists:
+
+```yaml
+evpn:
+  enabled: true
+  vtepCIDR: 10.200.255.0/24
+  bgp:
+    asn: 4209999999
+    acceptPrefixes: [10.200.0.0/16]
+    activeBackup: true
+    bfdProfile: evpn-underlay
+  nodes:
+    - name: worker-0
+      vtepIP: 10.200.255.1
+      uplinks:
+        - interface: ens5f0
+          role: active
+          unnumbered: true
+          peerASN: 4200300002
+        - interface: ens5f1
+          role: backup
+          unnumbered: true
+          peerASN: 4200300003
+```
+
+BFD is opt-in. Set `evpn.bgp.bfdProfile` (and optionally the timer values) to
+attach a profile to every uplink peer:
+
+```yaml
+evpn:
+  bgp:
+    bfdProfile: evpn-underlay
+    bfdReceiveInterval: 300
+    bfdTransmitInterval: 300
+    bfdDetectMultiplier: 3
+```
+
+The chart does not set `ebgp-multihop` on numbered underlay peers, so FRR uses
+single-hop BFD (UDP 3784) on those directly connected links and on unnumbered
+IPv6 link-local links. Configure the fabric side for single-hop BFD as well.
+When a BFD profile is set and `evpn.bgp.waitForEstablished` is true (the
+default), the configure-EVPN hook waits for `bfdStatus: Up` in addition to
+`bgpStatus: Established`.
 
 The Netris fabric side stays external: the fabric admin configures the links,
 VTEP range, and switch-side node ASN. VMs use the cluster DNS that

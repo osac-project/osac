@@ -30,7 +30,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -1263,33 +1262,39 @@ var _ = Describe("whole-cluster node-set scheduling", func() {
 		DeferCleanup(ctrl.Finish)
 	})
 
-	newSucceededControlPlane := func(attemptID, targetVersion string) *privatev1.ClusterUpgradeHistoryEntry {
-		component := &privatev1.ClusterUpgradeComponent{}
-		component.SetControlPlane(&emptypb.Empty{})
-		entry := &privatev1.ClusterUpgradeHistoryEntry{}
-		entry.SetAttemptId(attemptID)
-		entry.SetComponent(component)
-		entry.SetSourceVersion("4.17.0")
-		entry.SetTargetVersion(targetVersion)
-		entry.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED)
-		entry.SetAcceptedTime(timestamppb.New(time.Unix(1000, 0)))
-		entry.SetStateTransitionTime(timestamppb.New(time.Unix(1100, 0)))
-		return entry
+	newAggregateEntry := func(state privatev1.ClusterUpgradeState) *privatev1.ClusterUpgradeHistoryEntry {
+		return privatev1.ClusterUpgradeHistoryEntry_builder{
+			AttemptId:           "shared-id",
+			SourceVersion:       "4.17.0",
+			TargetVersion:       "4.18.0",
+			AcceptedTime:        timestamppb.New(time.Unix(1000, 0)),
+			StateTransitionTime: timestamppb.New(time.Unix(1100, 0)),
+			State:               state,
+		}.Build()
 	}
 
-	newScheduledNodeSetEntry := func(name string, state privatev1.ClusterUpgradeState) *privatev1.ClusterUpgradeHistoryEntry {
-		component := &privatev1.ClusterUpgradeComponent{}
-		component.SetNodeSetId(name)
-		entry := &privatev1.ClusterUpgradeHistoryEntry{}
-		entry.SetAttemptId("shared-id")
-		entry.SetComponent(component)
-		entry.SetSourceVersion("4.17.0")
-		entry.SetTargetVersion("4.18.0")
-		entry.SetAcceptedTime(timestamppb.New(time.Unix(1200, 0)))
-		entry.SetStateTransitionTime(timestamppb.New(time.Unix(1200, 0)))
-		entry.SetState(state)
-		entry.SetTimeoutNodeCount(2)
-		return entry
+	newNodeSetState := func(name string, state privatev1.ClusterUpgradeState) *privatev1.ClusterUpgradeNodeSetState {
+		return privatev1.ClusterUpgradeNodeSetState_builder{
+			NodeSetId:           name,
+			TimeoutNodeCount:    3,
+			State:               state,
+			StateTransitionTime: timestamppb.New(time.Unix(1200, 0)),
+		}.Build()
+	}
+
+	newActiveUpgradeAttempt := func() *privatev1.ClusterUpgradeAttemptState {
+		return privatev1.ClusterUpgradeAttemptState_builder{
+			ControlPlane: privatev1.ClusterUpgradeControlPlaneState_builder{
+				State:               privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED,
+				AcceptedTime:        timestamppb.New(time.Unix(1000, 0)),
+				StateTransitionTime: timestamppb.New(time.Unix(1100, 0)),
+			}.Build(),
+			NodeSets: []*privatev1.ClusterUpgradeNodeSetState{
+				newNodeSetState("compute", privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING),
+				newNodeSetState("gpu", privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED),
+			},
+			NodeSetsScheduledTime: timestamppb.New(time.Unix(1200, 0)),
+		}.Build()
 	}
 
 	newUpgradeCluster := func() *privatev1.Cluster {
@@ -1325,10 +1330,9 @@ var _ = Describe("whole-cluster node-set scheduling", func() {
 						ObservedVersion: "4.18.0", Version: &privatev1.ClusterVersionReference{Id: "version-id-4-18", Name: "4-18-0"},
 					}.Build(),
 				},
+				ActiveUpgradeAttempt: newActiveUpgradeAttempt(),
 				UpgradeHistory: []*privatev1.ClusterUpgradeHistoryEntry{
-					newScheduledNodeSetEntry("compute", privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING),
-					newScheduledNodeSetEntry("gpu", privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED),
-					newSucceededControlPlane("shared-id", "4.18.0"),
+					newAggregateEntry(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING),
 				},
 			}.Build(),
 		}.Build()
@@ -1408,22 +1412,21 @@ var _ = Describe("whole-cluster node-set scheduling", func() {
 		}
 		Expect(cluster.GetStatus().GetNodeSets()["compute"].GetVersion().GetName()).To(Equal("4-18-0"))
 		Expect(cluster.GetStatus().GetNodeSets()["gpu"].GetVersion().GetName()).To(Equal("4-18-0"))
-		history := cluster.GetStatus().GetUpgradeHistory()
-		Expect(history).To(HaveLen(3))
-		Expect(history[0].GetComponent().GetNodeSetId()).To(Equal("compute"))
-		Expect(history[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
-		Expect(history[1].GetComponent().GetNodeSetId()).To(Equal("gpu"))
-		Expect(history[1].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED))
-		Expect(history[2].GetComponent().GetControlPlane()).NotTo(BeNil())
-		for _, entry := range history {
-			Expect(entry.GetAttemptId()).To(Equal("shared-id"))
-		}
+		active := cluster.GetStatus().GetActiveUpgradeAttempt()
+		Expect(cluster.GetStatus().GetUpgradeHistory()).To(HaveLen(1))
+		Expect(cluster.GetStatus().GetUpgradeHistory()[0].GetAttemptId()).To(Equal("shared-id"))
+		Expect(active.GetControlPlane().GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED))
+		Expect(active.GetNodeSets()).To(HaveLen(2))
+		Expect(active.GetNodeSets()[0].GetNodeSetId()).To(Equal("compute"))
+		Expect(active.GetNodeSets()[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+		Expect(active.GetNodeSets()[1].GetNodeSetId()).To(Equal("gpu"))
+		Expect(active.GetNodeSets()[1].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED))
 
 		specAfterFirstUpdate := updated.Spec
 		Expect(t.update(ctx)).To(Succeed())
 		Expect(fakeClient.Get(ctx, clnt.ObjectKeyFromObject(order), updated)).To(Succeed())
 		Expect(updated.Spec).To(Equal(specAfterFirstUpdate))
-		Expect(cluster.GetStatus().GetUpgradeHistory()).To(HaveLen(3))
+		Expect(cluster.GetStatus().GetUpgradeHistory()).To(HaveLen(1))
 	})
 
 	It("keeps scheduled state while image resolution fails and retries after recovery", func() {
@@ -1455,10 +1458,14 @@ var _ = Describe("whole-cluster node-set scheduling", func() {
 			clusterVersionsClient: emptyVersionClient,
 			maskCalculator:        masks.NewCalculator().Build(),
 		}
+		originalActive := proto.Clone(cluster.GetStatus().GetActiveUpgradeAttempt()).(*privatev1.ClusterUpgradeAttemptState)
 
 		Expect(f.run(ctx, cluster)).To(Succeed())
 		Expect(persisted).NotTo(BeNil())
-		Expect(persisted.GetStatus().GetUpgradeHistory()).To(HaveLen(3))
+		Expect(proto.Equal(persisted.GetStatus().GetActiveUpgradeAttempt(), originalActive)).To(BeTrue())
+		Expect(persisted.GetStatus().GetUpgradeHistory()).To(HaveLen(1))
+		Expect(persisted.GetStatus().GetUpgradeHistory()[0].GetAttemptId()).To(Equal("shared-id"))
+		Expect(persisted.GetStatus().GetUpgradeHistory()[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
 		Expect(persisted.GetStatus().GetNodeSets()["compute"].GetVersion().GetName()).To(Equal("4-18-0"))
 		Expect(persisted.GetStatus().GetNodeSets()["gpu"].GetVersion().GetName()).To(Equal("4-18-0"))
 		unchanged := &osacv1alpha1.ClusterOrder{}
@@ -1478,7 +1485,10 @@ var _ = Describe("whole-cluster node-set scheduling", func() {
 		Expect(fakeClient.Get(ctx, clnt.ObjectKeyFromObject(order), recovered)).To(Succeed())
 		Expect(recovered.Spec.NodeRequests[0].ReleaseImage).To(Equal("quay.io/ocp/release:4.18.0"))
 		Expect(recovered.Spec.NodeRequests[1].ReleaseImage).To(Equal("quay.io/ocp/release:4.18.0"))
-		Expect(persisted.GetStatus().GetUpgradeHistory()).To(HaveLen(3))
+		Expect(proto.Equal(persisted.GetStatus().GetActiveUpgradeAttempt(), originalActive)).To(BeTrue())
+		Expect(persisted.GetStatus().GetUpgradeHistory()).To(HaveLen(1))
+		Expect(persisted.GetStatus().GetUpgradeHistory()[0].GetAttemptId()).To(Equal("shared-id"))
+		Expect(persisted.GetStatus().GetUpgradeHistory()[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
 	})
 })
 

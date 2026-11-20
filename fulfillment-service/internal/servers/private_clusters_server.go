@@ -543,13 +543,15 @@ func (s *PrivateClustersServer) prepareUpdatedCluster(ctx context.Context, curre
 	if err := s.prepareUpdatedClusterNodeSets(ctx, current, candidate, mask, sizeOnlyNodeSets); err != nil {
 		return err
 	}
-	mergeClusterUpgradeHistory(current, candidate, mask)
+	mergeClusterUpgradeHistory(current, candidate, mask,
+		request.GetObject().GetStatus().GetUpgradeAttemptId(),
+		request.GetObject().GetStatus().GetActiveUpgradeAttempt(), resolvedTarget)
 	preserveNodeSetVersions(current, candidate)
 	initializeAddedNodeSetVersions(current, candidate)
 	if err := s.prepareClusterVersionChange(ctx, current, candidate, mask, resolvedTarget); err != nil {
 		return err
 	}
-	advanceClusterUpgradeAfterControlPlaneSuccess(current, candidate)
+	advanceClusterUpgradeAfterControlPlaneSuccess(candidate)
 	if err := s.validateUpdatedClusterSpec(ctx, current, candidate, mask); err != nil {
 		return err
 	}
@@ -589,6 +591,7 @@ func initializeAddedNodeSetVersions(current, candidate *privatev1.Cluster) {
 			statuses[name] = status
 		}
 		status.SetVersion(cloneMessage(selectedVersion))
+		status.SetObservedVersion("")
 	}
 }
 

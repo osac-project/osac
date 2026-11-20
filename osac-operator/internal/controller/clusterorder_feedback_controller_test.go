@@ -875,14 +875,10 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			Expect(mockClient.getCount).To(Equal(2))
 		})
 
-		It("sends only the current aggregate entry and active attempt", func() {
+		It("sends active attempt feedback without updating server-owned history", func() {
 			current := privatev1.ClusterUpgradeHistoryEntry_builder{
 				AttemptId: "current-id", SourceVersion: "4.17.0", TargetVersion: "4.18.0",
 				AcceptedTime: timestamppb.Now(), State: privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING,
-			}.Build()
-			older := privatev1.ClusterUpgradeHistoryEntry_builder{
-				AttemptId: "older-id", SourceVersion: "4.16.0", TargetVersion: "4.17.0",
-				AcceptedTime: timestamppb.New(time.Unix(900, 0)), State: privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED,
 			}.Build()
 			active := privatev1.ClusterUpgradeAttemptState_builder{
 				ControlPlane: privatev1.ClusterUpgradeControlPlaneState_builder{
@@ -891,7 +887,7 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			}.Build()
 			remote := mockClient.getResponse.GetObject()
 			remote.GetStatus().SetUpgradeAttemptId("current-id")
-			remote.GetStatus().SetUpgradeHistory([]*privatev1.ClusterUpgradeHistoryEntry{older, current})
+			remote.GetStatus().SetUpgradeHistory([]*privatev1.ClusterUpgradeHistoryEntry{current})
 			remote.GetStatus().SetActiveUpgradeAttempt(active)
 			clusterOrder := &osacv1alpha1.ClusterOrder{}
 			Expect(k8sClient.Get(testCtx, typeNamespacedName, clusterOrder)).To(Succeed())
@@ -901,11 +897,11 @@ var _ = Describe("ClusterOrder FeedbackReconciler", func() {
 			_, err := reconciler.Reconcile(testCtx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
 
-			Expect(mockClient.lastUpdate.GetStatus().GetUpgradeHistory()).To(HaveLen(1))
-			Expect(mockClient.lastUpdate.GetStatus().GetUpgradeHistory()[0].GetAttemptId()).To(Equal("current-id"))
+			Expect(mockClient.lastUpdate.GetStatus().GetUpgradeAttemptId()).To(Equal("current-id"))
 			Expect(mockClient.lastUpdate.GetStatus().GetActiveUpgradeAttempt()).NotTo(BeNil())
 			Expect(mockClient.lastUpdateMask.GetPaths()).To(ContainElements(
-				"status.active_upgrade_attempt", "status.upgrade_history"))
+				"status.active_upgrade_attempt", "status.upgrade_attempt_id"))
+			Expect(mockClient.lastUpdateMask.GetPaths()).NotTo(ContainElement("status.upgrade_history"))
 		})
 
 		It("should sync Progressing phase", func() {

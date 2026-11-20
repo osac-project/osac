@@ -150,20 +150,13 @@ func newClusterOrderFeedbackBridge(hubClient clnt.Client, clustersClient private
 			return cluster, nil
 		},
 		Save: func(ctx context.Context, remote *privatev1.Cluster) error {
-			feedback := proto.Clone(remote).(*privatev1.Cluster)
-			attemptID := remote.GetStatus().GetUpgradeAttemptId()
-			history := []*privatev1.ClusterUpgradeHistoryEntry{}
-			if entry := currentClusterUpgradeEntry(remote, attemptID); entry != nil {
-				history = append(history, entry)
-			}
-			feedback.GetStatus().SetUpgradeHistory(history)
 			_, err := clustersClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
-				Object: feedback,
+				Object: remote,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
 					feedbackStatusConditionsPath, feedbackStatusStatePath, "status.api_url", "status.console_url", "status.api_endpoint",
 					"status.ingress_endpoint", feedbackStatusStateTransitionTimePath, "status.kubeconfig_secret", "status.password_secret", "status.hub",
 					"status.node_sets", "status.observed_version", "status.add_on_operators", "status.active_upgrade_attempt",
-					"status.upgrade_attempt_id", "status.upgrade_history",
+					"status.upgrade_attempt_id",
 				}},
 			}.Build())
 			return err
@@ -248,7 +241,7 @@ func newUpgradeObservationContext(remote *privatev1.Cluster) upgradeObservationC
 }
 
 // syncClusterOrderUpgradeObservationsAt applies attempt observations at a
-// fixed OSAC time. A success also publishes its version once to live status.
+// fixed OSAC time. Fulfillment publishes versions when it accepts success.
 func syncClusterOrderUpgradeObservationsAt(order *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster,
 	now time.Time, timeouts ...ClusterUpgradeTimeouts) {
 	config := DefaultClusterUpgradeTimeouts()
@@ -256,17 +249,16 @@ func syncClusterOrderUpgradeObservationsAt(order *ckv1alpha1.ClusterOrder, remot
 		config = timeouts[0].withDefaults()
 	}
 	observationContext := newUpgradeObservationContext(remote)
-	syncControlPlaneUpgradeObservationAt(observationContext, order.Status.UpgradeObservation, remote, now)
+	syncControlPlaneUpgradeObservationAt(observationContext, order.Status.UpgradeObservation, now)
 	for _, request := range order.Status.NodeRequests {
 		syncNodeSetUpgradeObservationAt(observationContext, request, remote, now)
 	}
 	applyUpgradeTimeouts(remote, now, config)
 }
 
-// syncControlPlaneUpgradeObservationAt applies an accepted control-plane
-// observation and publishes the version on its first success.
+// syncControlPlaneUpgradeObservationAt applies a control-plane observation.
 func syncControlPlaneUpgradeObservationAt(observationContext upgradeObservationContext,
-	observation *ckv1alpha1.UpgradeObservation, remote *privatev1.Cluster, now time.Time) {
+	observation *ckv1alpha1.UpgradeObservation, now time.Time) {
 	if observation == nil || observation.AttemptID == "" || observation.AttemptID != observationContext.attemptID ||
 		observationContext.active == nil || observationContext.targetVersion == "" {
 		return
@@ -275,14 +267,12 @@ func syncControlPlaneUpgradeObservationAt(observationContext upgradeObservationC
 	if controlPlane == nil {
 		return
 	}
-	if applyUpgradeObservation(controlPlane, observation, observationContext.targetVersion, now,
-		observation.Version == observationContext.targetVersion) {
-		remote.GetStatus().SetObservedVersion(observation.Version)
-	}
+	applyUpgradeObservation(controlPlane, observation, observationContext.targetVersion, now,
+		observation.Version == observationContext.targetVersion)
 }
 
 // syncNodeSetUpgradeObservationAt applies an accepted NodePool observation to
-// the matching frozen participant and publishes the version on first success.
+// the matching frozen participant.
 func syncNodeSetUpgradeObservationAt(observationContext upgradeObservationContext,
 	request ckv1alpha1.NodeRequestStatus, remote *privatev1.Cluster, now time.Time) {
 	observation := request.UpgradeObservation
@@ -295,19 +285,7 @@ func syncNodeSetUpgradeObservationAt(observationContext upgradeObservationContex
 	if nodeSet == nil || observationContext.active.GetNodeSetsScheduledTime() == nil {
 		return
 	}
-	if applyUpgradeObservation(nodeSet, observation, observationContext.targetVersion, now, true) {
-		statuses := remote.GetStatus().GetNodeSets()
-		if statuses == nil {
-			statuses = make(map[string]*privatev1.ClusterNodeSetStatus)
-			remote.GetStatus().SetNodeSets(statuses)
-		}
-		status := statuses[request.NodeSet]
-		if status == nil {
-			status = &privatev1.ClusterNodeSetStatus{}
-			statuses[request.NodeSet] = status
-		}
-		status.SetObservedVersion(observation.Version)
-	}
+	applyUpgradeObservation(nodeSet, observation, observationContext.targetVersion, now, true)
 }
 
 // currentClusterUpgradeTargetVersion returns the target owned by the current
@@ -318,12 +296,11 @@ func currentClusterUpgradeTargetVersion(remote *privatev1.Cluster, attemptID str
 
 // applyUpgradeObservation advances the component phase. A new phase clears any
 // timeout warning; repeated observations leave the warning and clock intact.
-// It reports a new success so its caller can publish the observed version once.
 func applyUpgradeObservation(state upgradeComponentState,
 	observation *ckv1alpha1.UpgradeObservation, targetVersion string,
-	now time.Time, progressAllowed bool) bool {
+	now time.Time, progressAllowed bool) {
 	if isTerminalUpgradeState(state.GetState()) {
-		return false
+		return
 	}
 	next := state.GetState()
 	message := state.GetMessage()
@@ -344,9 +321,7 @@ func applyUpgradeObservation(state upgradeComponentState,
 		state.SetMessage(message)
 		state.SetStateTransitionTime(monotonicTransitionTime(state.GetStateTransitionTime(), now))
 		state.ClearTimeoutTime()
-		return next == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED
 	}
-	return false
 }
 
 // isTerminalUpgradeState reports whether component feedback must no longer

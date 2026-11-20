@@ -107,7 +107,10 @@ const (
 	ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT ClusterUpgradeState = 3
 	// HyperShift completed the upgrade and the whole cluster reached the requested version.
 	ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED ClusterUpgradeState = 4
-	// Reserved for an unambiguous terminal upgrade failure signal.
+	// At least one participating component reported terminal upgrade failure.
+	// No HostedCluster, HostedControlPlane, or NodePool condition currently has
+	// a proven terminal-failure mapping, so OSAC does not infer this state from
+	// those HyperShift conditions yet.
 	ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED ClusterUpgradeState = 5
 )
 

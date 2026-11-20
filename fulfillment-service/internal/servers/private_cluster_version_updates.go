@@ -194,32 +194,51 @@ func applyClusterNodeSetUpgradeTargets(candidate *privatev1.Cluster, names []str
 // mergeClusterUpgradeHistory preserves server-owned history and validates
 // feedback for the current attempt.
 func mergeClusterUpgradeHistory(current, candidate *privatev1.Cluster,
-	mask *fieldmaskpb.FieldMask, requestActive *privatev1.ClusterUpgradeAttemptState,
+	mask *fieldmaskpb.FieldMask, requestAttemptID string,
+	requestActive *privatev1.ClusterUpgradeAttemptState,
 	resolvedTarget *privatev1.ClusterVersion) {
 	attemptID := current.GetStatus().GetUpgradeAttemptId()
 	stored := current.GetStatus().GetUpgradeHistory()
 	result := slices.Clone(stored)
-	feedbackMatches := currentClusterUpgradeFeedbackMatches(attemptID, candidate)
 	if !candidate.HasStatus() {
 		candidate.SetStatus(&privatev1.ClusterStatus{})
 	}
 	candidate.GetStatus().SetUpgradeAttemptId(attemptID)
 	// A new target retires this attempt at its last observed outcome. A
 	// same-version reference replacement can still update its membership.
-	if updateIncludesField(mask, "spec.version") &&
-		current.GetSpec().GetVersion().GetId() != candidate.GetSpec().GetVersion().GetId() &&
-		clusterUpgradeHistoryEntryByID(stored, attemptID).GetTargetVersion() !=
-			resolvedTarget.GetSpec().GetVersion() {
+	if selectsDifferentClusterUpgradeTarget(current, candidate, mask, resolvedTarget) {
 		candidate.GetStatus().SetActiveUpgradeAttempt(current.GetStatus().GetActiveUpgradeAttempt())
 		candidate.GetStatus().SetUpgradeHistory(stored)
 		return
 	}
+	mergedActive := mergeCurrentClusterUpgradeAttempt(current, candidate, mask, requestAttemptID, requestActive)
+	updateCurrentClusterUpgradeHistory(result, attemptID, mergedActive)
+	candidate.GetStatus().SetActiveUpgradeAttempt(mergedActive)
+	candidate.GetStatus().SetUpgradeHistory(result)
+}
+
+func selectsDifferentClusterUpgradeTarget(current, candidate *privatev1.Cluster,
+	mask *fieldmaskpb.FieldMask, resolvedTarget *privatev1.ClusterVersion) bool {
+	return updateIncludesField(mask, "spec.version") &&
+		current.GetSpec().GetVersion().GetId() != candidate.GetSpec().GetVersion().GetId() &&
+		clusterUpgradeHistoryEntryByID(current.GetStatus().GetUpgradeHistory(),
+			current.GetStatus().GetUpgradeAttemptId()).GetTargetVersion() != resolvedTarget.GetSpec().GetVersion()
+}
+
+func mergeCurrentClusterUpgradeAttempt(current, candidate *privatev1.Cluster,
+	mask *fieldmaskpb.FieldMask, requestAttemptID string,
+	requestActive *privatev1.ClusterUpgradeAttemptState) *privatev1.ClusterUpgradeAttemptState {
+	attemptID := current.GetStatus().GetUpgradeAttemptId()
 	mergedActive := current.GetStatus().GetActiveUpgradeAttempt()
 	if updateIncludesField(mask, "status.active_upgrade_attempt") &&
-		feedbackMatches {
+		attemptID != "" && requestAttemptID == attemptID {
 		mergedActive = mergeClusterUpgradeAttemptState(current, candidate, attemptID, requestActive)
 	}
-	mergedActive = removeDeletedClusterUpgradeParticipants(mergedActive, candidate)
+	return removeDeletedClusterUpgradeParticipants(mergedActive, candidate)
+}
+
+func updateCurrentClusterUpgradeHistory(result []*privatev1.ClusterUpgradeHistoryEntry,
+	attemptID string, mergedActive *privatev1.ClusterUpgradeAttemptState) {
 	for i, entry := range result {
 		if attemptID != "" && entry.GetAttemptId() == attemptID {
 			result[i] = proto.Clone(entry).(*privatev1.ClusterUpgradeHistoryEntry)
@@ -227,19 +246,6 @@ func mergeClusterUpgradeHistory(current, candidate *privatev1.Cluster,
 			break
 		}
 	}
-	candidate.GetStatus().SetActiveUpgradeAttempt(mergedActive)
-	candidate.GetStatus().SetUpgradeHistory(result)
-}
-
-// currentClusterUpgradeFeedbackMatches accepts detailed feedback only for
-// the attempt Fulfillment is still tracking. Live status is merged separately.
-func currentClusterUpgradeFeedbackMatches(attemptID string, candidate *privatev1.Cluster) bool {
-	if attemptID == "" {
-		return false
-	}
-	requestAttemptID := candidate.GetStatus().GetUpgradeAttemptId()
-	return (requestAttemptID == "" || requestAttemptID == attemptID) &&
-		clusterUpgradeHistoryEntryByID(candidate.GetStatus().GetUpgradeHistory(), attemptID) != nil
 }
 
 // clusterUpgradeHistoryEntryByID returns the first entry with the attempt ID.
@@ -272,8 +278,8 @@ func retireClusterUpgradeAttemptForReferenceReplacement(candidate *privatev1.Clu
 }
 
 // mergeClusterUpgradeAttemptState validates component feedback against the
-// frozen active attempt. A nil incoming value cannot clear a nonterminal
-// attempt.
+// frozen active attempt and publishes each accepted success version once.
+// A nil incoming value cannot clear a nonterminal attempt.
 func mergeClusterUpgradeAttemptState(current, candidate *privatev1.Cluster,
 	attemptID string, requestActive *privatev1.ClusterUpgradeAttemptState) *privatev1.ClusterUpgradeAttemptState {
 	storedEntry := clusterUpgradeHistoryEntryByID(
@@ -290,26 +296,63 @@ func mergeClusterUpgradeAttemptState(current, candidate *privatev1.Cluster,
 		return nil
 	}
 	merged := proto.Clone(stored).(*privatev1.ClusterUpgradeAttemptState)
-	if controlPlane := merged.GetControlPlane(); controlPlane != nil {
-		mergeClusterUpgradeComponentState(controlPlane, incoming.GetControlPlane())
+	targetVersion := storedEntry.GetTargetVersion()
+	mergeClusterUpgradeControlPlane(candidate, stored, incoming, merged, targetVersion)
+	// NodePool state is mutable only when the request itself carries the same
+	// release marker Fulfillment stored. The merged candidate cannot be used
+	// here because a partial field mask can inherit the stored marker.
+	if merged.GetNodeSetsScheduledTime() != nil && proto.Equal(merged.GetNodeSetsScheduledTime(),
+		requestActive.GetNodeSetsScheduledTime()) {
+		mergeClusterUpgradeNodePools(candidate, stored, incoming, merged, targetVersion)
 	}
+	return merged
+}
+
+func mergeClusterUpgradeControlPlane(candidate *privatev1.Cluster,
+	stored, incoming, merged *privatev1.ClusterUpgradeAttemptState, targetVersion string) {
+	controlPlane := merged.GetControlPlane()
+	if controlPlane == nil {
+		return
+	}
+	mergeClusterUpgradeComponentState(controlPlane, incoming.GetControlPlane())
+	if newlySucceededUpgradeComponent(stored.GetControlPlane(), controlPlane) {
+		candidate.GetStatus().SetObservedVersion(targetVersion)
+	}
+}
+
+func mergeClusterUpgradeNodePools(candidate *privatev1.Cluster,
+	stored, incoming, merged *privatev1.ClusterUpgradeAttemptState, targetVersion string) {
 	incomingNodeSets := make(map[string]*privatev1.ClusterUpgradeNodeSetState,
 		len(incoming.GetNodeSets()))
 	for _, nodeSet := range incoming.GetNodeSets() {
 		incomingNodeSets[nodeSet.GetNodeSetId()] = nodeSet
 	}
-	// NodePool state is mutable only when the request itself carries the same
-	// release marker Fulfillment stored. The merged candidate cannot be used
-	// here because a partial field mask can inherit the stored marker.
-	nodePoolsScheduled := proto.Equal(merged.GetNodeSetsScheduledTime(),
-		requestActive.GetNodeSetsScheduledTime()) && merged.GetNodeSetsScheduledTime() != nil
-	for _, nodeSet := range merged.GetNodeSets() {
-		if !nodePoolsScheduled {
-			continue
-		}
+	for i, nodeSet := range merged.GetNodeSets() {
 		mergeClusterUpgradeComponentState(nodeSet, incomingNodeSets[nodeSet.GetNodeSetId()])
+		if newlySucceededUpgradeComponent(stored.GetNodeSets()[i], nodeSet) &&
+			candidate.GetSpec().GetNodeSets()[nodeSet.GetNodeSetId()] != nil {
+			publishClusterNodePoolObservedVersion(candidate, nodeSet.GetNodeSetId(), targetVersion)
+		}
 	}
-	return merged
+}
+
+func newlySucceededUpgradeComponent(stored, merged clusterUpgradeComponentState) bool {
+	return stored.GetState() != privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED &&
+		merged.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED
+}
+
+func publishClusterNodePoolObservedVersion(candidate *privatev1.Cluster, nodeSetID, targetVersion string) {
+	statuses := candidate.GetStatus().GetNodeSets()
+	if statuses == nil {
+		statuses = make(map[string]*privatev1.ClusterNodeSetStatus)
+		candidate.GetStatus().SetNodeSets(statuses)
+	}
+	status := statuses[nodeSetID]
+	if status == nil {
+		status = &privatev1.ClusterNodeSetStatus{}
+		statuses[nodeSetID] = status
+	}
+	status.SetObservedVersion(targetVersion)
 }
 
 // removeDeletedClusterUpgradeParticipants invalidates frozen membership when
@@ -347,41 +390,52 @@ func clusterUpgradeOutcome(active *privatev1.ClusterUpgradeAttemptState) (
 		return privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED,
 			clusterUpgradeFailureReason("Control plane", controlPlane.GetMessage())
 	}
-
-	allSucceeded := controlPlane.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED
-	anyProgressing := controlPlane.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING
-	timeoutMessage := ""
-	if controlPlane.GetTimeoutTime() != nil {
-		timeoutMessage = clusterUpgradeTimeoutReason("Control plane", controlPlane.GetMessage())
-	}
-	for _, nodePool := range active.GetNodeSets() {
-		component := fmt.Sprintf("NodePool %q", nodePool.GetNodeSetId())
-		if nodePool.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED {
-			return privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED,
-				clusterUpgradeFailureReason(component, nodePool.GetMessage())
-		}
-		if nodePool.GetState() != privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED {
-			allSucceeded = false
-		}
-		if nodePool.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING {
-			anyProgressing = true
-		}
-		if timeoutMessage == "" && nodePool.GetTimeoutTime() != nil {
-			timeoutMessage = clusterUpgradeTimeoutReason(component, nodePool.GetMessage())
-		}
+	nodePoolState, nodePoolMessage := clusterNodePoolUpgradeState(active.GetNodeSets())
+	if nodePoolState == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED {
+		return nodePoolState, nodePoolMessage
 	}
 	switch {
-	case allSucceeded:
+	case controlPlane.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED &&
+		nodePoolState == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED:
 		return privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED, ""
-	case timeoutMessage != "":
-		return privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT, timeoutMessage
+	case controlPlane.GetTimeoutTime() != nil:
+		return privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT,
+			clusterUpgradeTimeoutReason("Control plane", controlPlane.GetMessage())
+	case nodePoolMessage != "":
+		return privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT, nodePoolMessage
 	case controlPlane.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED:
 		return privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING, "NodePool upgrades in progress"
-	case anyProgressing:
+	case controlPlane.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING ||
+		nodePoolState == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING:
 		return privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING, "Control plane upgrade in progress"
 	default:
 		return privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING, "Waiting for control plane upgrade"
 	}
+}
+
+// clusterNodePoolUpgradeState returns the combined NodePool phase and its
+// first failure or timeout message, preserving failure precedence.
+func clusterNodePoolUpgradeState(nodePools []*privatev1.ClusterUpgradeNodeSetState) (
+	privatev1.ClusterUpgradeState, string) {
+	state := privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED
+	timeoutMessage := ""
+	for _, nodePool := range nodePools {
+		if nodePool.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED {
+			return privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED,
+				clusterUpgradeFailureReason(fmt.Sprintf("NodePool %q", nodePool.GetNodeSetId()), nodePool.GetMessage())
+		}
+		if nodePool.GetState() == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING {
+			state = privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING
+		} else if nodePool.GetState() != privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED &&
+			state == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED {
+			state = privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING
+		}
+		if timeoutMessage == "" && nodePool.GetTimeoutTime() != nil {
+			timeoutMessage = clusterUpgradeTimeoutReason(
+				fmt.Sprintf("NodePool %q", nodePool.GetNodeSetId()), nodePool.GetMessage())
+		}
+	}
+	return state, timeoutMessage
 }
 
 func clusterUpgradeFailureReason(component, message string) string {

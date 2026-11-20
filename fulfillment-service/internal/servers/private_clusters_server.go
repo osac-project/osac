@@ -544,6 +544,7 @@ func (s *PrivateClustersServer) prepareUpdatedCluster(ctx context.Context, curre
 		return err
 	}
 	mergeClusterUpgradeHistory(current, candidate, mask,
+		request.GetObject().GetStatus().GetUpgradeAttemptId(),
 		request.GetObject().GetStatus().GetActiveUpgradeAttempt(), resolvedTarget)
 	preserveNodeSetVersions(current, candidate)
 	initializeAddedNodeSetVersions(current, candidate)

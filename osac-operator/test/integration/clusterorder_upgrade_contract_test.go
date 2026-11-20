@@ -33,7 +33,17 @@ import (
 var _ = Describe("ClusterOrder upgrade deployment contract", func() {
 	It("admits only supported upgrade observation states through the installed CRD", func(ctx SpecContext) {
 		name := fmt.Sprintf("upgrade-admission-%d", time.Now().UnixNano())
-		cmd := exec.Command("kubectl", "create", "-f", "-")
+		DeferCleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(cleanupCtx, "kubectl", "delete", "clusterorder", name, "-n", operatorNamespace,
+				"--wait=false", "--ignore-not-found")
+			output, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), string(output))
+		})
+		createCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(createCtx, "kubectl", "create", "-f", "-")
 		cmd.Stdin = strings.NewReader(fmt.Sprintf(`apiVersion: osac.openshift.io/v1alpha1
 kind: ClusterOrder
 metadata:
@@ -48,12 +58,6 @@ spec:
 `, name, operatorNamespace))
 		output, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), string(output))
-		DeferCleanup(func() {
-			removeFinalizers("clusterorder", name, operatorNamespace)
-			cmd := exec.Command("kubectl", "delete", "clusterorder", name, "-n", operatorNamespace,
-				"--wait=false", "--ignore-not-found")
-			_, _ = utils.Run(cmd)
-		})
 
 		patchStatus := func(ctx context.Context, status string) ([]byte, error) {
 			cmdCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -76,14 +80,16 @@ spec:
 		Expect(err).NotTo(HaveOccurred())
 		Expect(readState(ctx, "{.status.upgradeObservation.state}")).To(Equal("Progressing"))
 
-		_, err = patchStatus(ctx, `{"status":{"upgradeObservation":{"attemptID":"cp-id",`+
+		_, err = patchStatus(ctx, `{"status":{"upgradeObservation":{"attemptID":"cp-pruned-id",`+
 			`"state":"Progressing","baselineTransitionTime":"2026-11-18T00:00:00Z"}}}`)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(readState(ctx, "{.status.upgradeObservation.attemptID}")).To(Equal("cp-id"))
+		Expect(readState(ctx, "{.status.upgradeObservation.attemptID}")).To(Equal("cp-pruned-id"))
 		Expect(readState(ctx, "{.status.upgradeObservation.baselineTransitionTime}")).To(BeEmpty())
 
-		_, err = patchStatus(ctx, `{"status":{"upgradeObservation":{"state":"Unknown"}}}`)
+		output, err = patchStatus(ctx, `{"status":{"upgradeObservation":{"state":"Unknown"}}}`)
 		Expect(err).To(HaveOccurred())
+		Expect(string(output)).To(ContainSubstring("status.upgradeObservation.state"))
+		Expect(string(output)).To(ContainSubstring("Unsupported value: \"Unknown\""))
 		Expect(readState(ctx, "{.status.upgradeObservation.state}")).To(Equal("Progressing"))
 
 		_, err = patchStatus(ctx, `{"status":{"nodeRequests":[{"nodeSet":"workers","numberOfNodes":1,`+
@@ -92,15 +98,17 @@ spec:
 		Expect(readState(ctx, "{.status.nodeRequests[0].upgradeObservation.state}")).To(Equal("Succeeded"))
 
 		_, err = patchStatus(ctx, `{"status":{"nodeRequests":[{"nodeSet":"workers","numberOfNodes":1,`+
-			`"bareMetal":{"instanceType":"test"},"upgradeObservation":{"attemptID":"np-id",`+
+			`"bareMetal":{"instanceType":"test"},"upgradeObservation":{"attemptID":"np-pruned-id",`+
 			`"state":"Succeeded","baselineTransitionTime":"2026-11-18T00:00:00Z"}}]}}`)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(readState(ctx, "{.status.nodeRequests[0].upgradeObservation.attemptID}")).To(Equal("np-id"))
+		Expect(readState(ctx, "{.status.nodeRequests[0].upgradeObservation.attemptID}")).To(Equal("np-pruned-id"))
 		Expect(readState(ctx, "{.status.nodeRequests[0].upgradeObservation.baselineTransitionTime}")).To(BeEmpty())
 
-		_, err = patchStatus(ctx, `{"status":{"nodeRequests":[{"nodeSet":"workers","numberOfNodes":1,`+
+		output, err = patchStatus(ctx, `{"status":{"nodeRequests":[{"nodeSet":"workers","numberOfNodes":1,`+
 			`"bareMetal":{"instanceType":"test"},"upgradeObservation":{"attemptID":"np-id","state":"Unknown"}}]}}`)
 		Expect(err).To(HaveOccurred())
+		Expect(string(output)).To(ContainSubstring("status.nodeRequests[0].upgradeObservation.state"))
+		Expect(string(output)).To(ContainSubstring("Unsupported value: \"Unknown\""))
 		Expect(readState(ctx, "{.status.nodeRequests[0].upgradeObservation.state}")).To(Equal("Succeeded"))
 
 		_, err = patchStatus(ctx, `{"status":{"observedVersion":"4.22.1","nodeRequests":[{`+

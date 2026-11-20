@@ -137,6 +137,7 @@ e2e-code:
   - '!**/fixtures/**'
   - '!osac-ui/**'
   - '!tools/pr-notify/**'
+  - '!tools/coverage-report/**'
 e2e-suite:
   - 'tests/e2e/**'
 
@@ -197,6 +198,7 @@ vmaas-outside-known-safe:
   - '!tests/e2e/networking/**'
   - '!tests/e2e/references/test_cluster_baremetal_references.py'
   - '!tools/pr-notify/**'
+  - '!tools/coverage-report/**'
 caas-outside-known-safe:
   - '**'
   - '!**/*.md'
@@ -212,6 +214,7 @@ caas-outside-known-safe:
   - '!tests/e2e/bmaas/**'
   - '!tests/e2e/networking/**'
   - '!tools/pr-notify/**'
+  - '!tools/coverage-report/**'
 bmaas-outside-known-safe:
   - '**'
   - '!**/*.md'
@@ -227,6 +230,7 @@ bmaas-outside-known-safe:
   - '!tests/e2e/caas/**'
   - '!tests/e2e/networking/**'
   - '!tools/pr-notify/**'
+  - '!tools/coverage-report/**'
 
 # --- Every other cheap-check category ------------------------------------
 # One filter (or a few) per check that ci.yml runs: the unit and integration
@@ -252,6 +256,7 @@ code:
   - '!.pre-commit-config.yaml'
   - '!osac-ui/**'
   - '!tools/pr-notify/**'
+  - '!tools/coverage-report/**'
 
 # unit-tests.yml's own `ui` filter -- gates run-osac-ui-tests, which `code`
 # above deliberately excludes.

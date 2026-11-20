@@ -129,7 +129,7 @@ message ProjectMembershipsDeleteRequest {
 }
 
 // Response message for deleting a project membership.
-message ProjectMembershipsDeleteResponse {}
+message ProjectMembershipsDeleteResponse { ProjectMembership object = 1; }
 
 // Service for managing project memberships.
 //
@@ -169,6 +169,6 @@ service ProjectMemberships {
 
   // Deletes a project membership.
   rpc Delete(ProjectMembershipsDeleteRequest) returns (ProjectMembershipsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/project_memberships/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/project_memberships/{id}" response_body: "object"};
   }
 }

@@ -102,7 +102,7 @@ message InstanceTypesDeleteRequest {
   string id = 1;
 }
 
-message InstanceTypesDeleteResponse {}
+message InstanceTypesDeleteResponse { InstanceType object = 1; }
 
 service InstanceTypes {
   // Retrieves the list of instance types.
@@ -144,6 +144,6 @@ service InstanceTypes {
   //
   // This method isn't allowed for regular users, only for the system itself.
   rpc Delete(InstanceTypesDeleteRequest) returns (InstanceTypesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/instance_types/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/instance_types/{id}" response_body: "object"};
   }
 }

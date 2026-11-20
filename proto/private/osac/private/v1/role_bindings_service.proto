@@ -125,7 +125,7 @@ message RoleBindingsDeleteRequest {
 }
 
 // Response message for deleting a role binding.
-message RoleBindingsDeleteResponse {}
+message RoleBindingsDeleteResponse { RoleBinding object = 1; }
 
 // Request message for signaling a role binding.
 message RoleBindingsSignalRequest {
@@ -177,7 +177,7 @@ service RoleBindings {
 
   // Deletes a role binding. This operation is only available to administrators.
   rpc Delete(RoleBindingsDeleteRequest) returns (RoleBindingsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/role_bindings/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/role_bindings/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

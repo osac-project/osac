@@ -95,7 +95,7 @@ message IdentityProvidersDeleteRequest {
 }
 
 // Response for delete operation.
-message IdentityProvidersDeleteResponse {}
+message IdentityProvidersDeleteResponse { IdentityProvider object = 1; }
 
 // IdentityProviders service provides operations for managing tenant identity providers.
 // Users can only access identity providers for their tenant.
@@ -138,6 +138,7 @@ service IdentityProviders {
   rpc Delete(IdentityProvidersDeleteRequest) returns (IdentityProvidersDeleteResponse) {
     option (google.api.http) = {
       delete: "/api/fulfillment/v1/identity_providers/{id}"
+      response_body: "object"
     };
   }
 }

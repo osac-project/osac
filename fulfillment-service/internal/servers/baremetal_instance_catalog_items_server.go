@@ -282,11 +282,21 @@ func (s *BareMetalInstanceCatalogItemsServer) Delete(ctx context.Context,
 	privateRequest := &privatev1.BareMetalInstanceCatalogItemsDeleteRequest{}
 	privateRequest.SetId(request.GetId())
 
-	_, err = s.delegate.Delete(ctx, privateRequest)
+	privateResponse, err := s.delegate.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	publicCatalogItem := &publicv1.BareMetalInstanceCatalogItem{}
+	err = s.outMapper.Copy(ctx, privateResponse.GetObject(), publicCatalogItem)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to map private bare metal instance catalog item to public",
+			slog.Any("error", err))
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process bare metal instance catalog item")
+	}
+
+	// Create the public response:
 	response = &publicv1.BareMetalInstanceCatalogItemsDeleteResponse{}
+	response.SetObject(publicCatalogItem)
 	return
 }

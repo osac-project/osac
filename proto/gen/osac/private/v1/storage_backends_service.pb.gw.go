@@ -345,7 +345,7 @@ func RegisterStorageBackendsHandlerServer(ctx context.Context, mux *runtime.Serv
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_StorageBackends_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_StorageBackends_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_StorageBackends_Delete_0{resp.(*StorageBackendsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterStorageBackendsHandlerClient(ctx context.Context, mux *runtime.Serv
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_StorageBackends_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_StorageBackends_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_StorageBackends_Delete_0{resp.(*StorageBackendsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_StorageBackends_Update_0 struct {
 }
 
 func (m response_StorageBackends_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_StorageBackends_Delete_0 struct {
+	*StorageBackendsDeleteResponse
+}
+
+func (m response_StorageBackends_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

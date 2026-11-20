@@ -630,14 +630,21 @@ where that resource supports the path.
 
 ### Delete
 
-The request contains only the `id`. The response is empty.
+The request contains only the `id`. The response contains the deleted object, as it was when the
+deletion was requested. The `metadata.deletion_timestamp` of the returned object is always set:
+it means deletion was requested, not that it completed. When the object has finalizers the
+deletion completes asynchronously — the object still exists with its deletion timestamp set and
+the pending finalizers visible in `metadata.finalizers` (private API only) — and a subsequent
+`Get` returns `NotFound` once the finalizers have finished and the object is actually removed.
 
 ```protobuf
 message ThingsDeleteRequest {
   string id = 1;
 }
 
-message ThingsDeleteResponse {}
+message ThingsDeleteResponse {
+  Thing object = 1;
+}
 ```
 
 `Delete` sets `metadata.deletion_timestamp`. If the object has no finalizers, it is archived before
@@ -809,10 +816,10 @@ the filter capability with a CEL expression like `this.spec.virtual_network.name
 | `Get`    | `GET`     | `/api/.../things/{id}`             | --              | `object`      |
 | `Create` | `POST`    | `/api/.../things`                  | `object`        | `object`      |
 | `Update` | `PATCH`   | `/api/.../things/{object.id}`      | `object`        | `object`      |
-| `Delete` | `DELETE`  | `/api/.../things/{id}`             | --              | --            |
+| `Delete` | `DELETE`  | `/api/.../things/{id}`             | --              | `object`      |
 
-For `Get`, `Create`, and `Update`, the `response_body` option is set to `"object"` so the REST
-gateway unwraps the response and returns the object directly. For `List`, the full response
+For `Get`, `Create`, `Update`, and `Delete`, the `response_body` option is set to `"object"` so the
+REST gateway unwraps the response and returns the object directly. For `List`, the full response
 (including `size`, `total`, and `items`) is returned as-is.
 
 ## Enums

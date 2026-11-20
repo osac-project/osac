@@ -68,7 +68,7 @@ message BareMetalInstanceTemplatesDeleteRequest {
   string id = 1;
 }
 
-message BareMetalInstanceTemplatesDeleteResponse {}
+message BareMetalInstanceTemplatesDeleteResponse { BareMetalInstanceTemplate object = 1; }
 
 service BareMetalInstanceTemplates {
   rpc List(BareMetalInstanceTemplatesListRequest) returns (BareMetalInstanceTemplatesListResponse) {
@@ -95,6 +95,6 @@ service BareMetalInstanceTemplates {
     };
   }
   rpc Delete(BareMetalInstanceTemplatesDeleteRequest) returns (BareMetalInstanceTemplatesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/baremetal_instance_templates/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/baremetal_instance_templates/{id}" response_body: "object"};
   }
 }

@@ -106,7 +106,7 @@ message InstanceTypesDeleteRequest {
   string id = 1;
 }
 
-message InstanceTypesDeleteResponse {}
+message InstanceTypesDeleteResponse { InstanceType object = 1; }
 
 message InstanceTypesSignalRequest {
   option (cleanapi.message).private = true;
@@ -157,7 +157,7 @@ service InstanceTypes {
   //
   // This method isn't allowed for regular users, only for the system itself.
   rpc Delete(InstanceTypesDeleteRequest) returns (InstanceTypesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/instance_types/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/instance_types/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

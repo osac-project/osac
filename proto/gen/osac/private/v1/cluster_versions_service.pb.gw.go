@@ -345,7 +345,7 @@ func RegisterClusterVersionsHandlerServer(ctx context.Context, mux *runtime.Serv
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ClusterVersions_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ClusterVersions_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ClusterVersions_Delete_0{resp.(*ClusterVersionsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -470,7 +470,7 @@ func RegisterClusterVersionsHandlerClient(ctx context.Context, mux *runtime.Serv
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ClusterVersions_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ClusterVersions_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ClusterVersions_Delete_0{resp.(*ClusterVersionsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -496,6 +496,14 @@ type response_ClusterVersions_Update_0 struct {
 }
 
 func (m response_ClusterVersions_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_ClusterVersions_Delete_0 struct {
+	*ClusterVersionsDeleteResponse
+}
+
+func (m response_ClusterVersions_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

@@ -99,7 +99,7 @@ message IdentityProvidersDeleteRequest {
 }
 
 // Response for delete operation.
-message IdentityProvidersDeleteResponse {}
+message IdentityProvidersDeleteResponse { IdentityProvider object = 1; }
 
 // Request to signal that an identity provider needs reconciliation.
 message IdentityProvidersSignalRequest {
@@ -153,6 +153,7 @@ service IdentityProviders {
   rpc Delete(IdentityProvidersDeleteRequest) returns (IdentityProvidersDeleteResponse) {
     option (google.api.http) = {
       delete: "/api/private/v1/identity_providers/{id}"
+      response_body: "object"
     };
   }
 

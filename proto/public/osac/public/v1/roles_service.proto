@@ -121,7 +121,7 @@ message RolesDeleteRequest {
 }
 
 // Response message for deleting a role.
-message RolesDeleteResponse {}
+message RolesDeleteResponse { Role object = 1; }
 
 // Service for managing roles.
 //
@@ -162,6 +162,6 @@ service Roles {
 
   // Deletes a role. This operation is only available to administrators.
   rpc Delete(RolesDeleteRequest) returns (RolesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/roles/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/roles/{id}" response_body: "object"};
   }
 }

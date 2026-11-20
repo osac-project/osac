@@ -264,7 +264,11 @@ func (s *PrivateIdentityProvidersServer) Update(ctx context.Context,
 
 func (s *PrivateIdentityProvidersServer) Delete(ctx context.Context,
 	request *privatev1.IdentityProvidersDeleteRequest) (response *privatev1.IdentityProvidersDeleteResponse, err error) {
-	err = s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.IdentityProvidersDeleteResponse{Object: object}
 	return
 }
 

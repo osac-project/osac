@@ -256,7 +256,11 @@ func (s *PrivateAddOnOperatorsServer) Delete(ctx context.Context,
 		err = dependentErr
 		return
 	}
-	err = s.generic.Delete(ctx, request, &response)
+	object, err := s.generic.deleteObject(ctx, request)
+	if err != nil {
+		return
+	}
+	response = &privatev1.AddOnOperatorsDeleteResponse{Object: object}
 	return
 }
 

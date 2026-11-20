@@ -387,7 +387,7 @@ func RegisterServiceAccountsHandlerServer(ctx context.Context, mux *runtime.Serv
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ServiceAccounts_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ServiceAccounts_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ServiceAccounts_Delete_0{resp.(*ServiceAccountsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodPost, pattern_ServiceAccounts_RegenerateSecret_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -532,7 +532,7 @@ func RegisterServiceAccountsHandlerClient(ctx context.Context, mux *runtime.Serv
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ServiceAccounts_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ServiceAccounts_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ServiceAccounts_Delete_0{resp.(*ServiceAccountsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodPost, pattern_ServiceAccounts_RegenerateSecret_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -567,6 +567,14 @@ type response_ServiceAccounts_Update_0 struct {
 }
 
 func (m response_ServiceAccounts_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_ServiceAccounts_Delete_0 struct {
+	*ServiceAccountsDeleteResponse
+}
+
+func (m response_ServiceAccounts_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

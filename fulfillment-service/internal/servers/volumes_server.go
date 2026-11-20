@@ -418,12 +418,25 @@ func (s *VolumesServer) Delete(ctx context.Context,
 	// Delegate to the private server:
 	privateRequest := &privatev1.VolumesDeleteRequest{}
 	privateRequest.SetId(id)
-	_, err = s.delegate.Delete(ctx, privateRequest)
+	privateResponse, err := s.delegate.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	privateVolume := privateResponse.GetObject()
+	publicVolume := &publicv1.Volume{}
+	err = s.outMapper.Copy(ctx, privateVolume, publicVolume)
+	if err != nil {
+		s.logger.ErrorContext(
+			ctx,
+			"Failed to map private volume to public",
+			slog.Any("error", err),
+		)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process volume")
+	}
+
 	// Create the public response:
 	response = &publicv1.VolumesDeleteResponse{}
+	response.SetObject(publicVolume)
 	return
 }

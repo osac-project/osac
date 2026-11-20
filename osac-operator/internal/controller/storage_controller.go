@@ -415,6 +415,11 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, tenant *v1alpha1.T
 		r.Recorder.Eventf(tenant, nil, corev1.EventTypeWarning, eventReasonDuplicateStorageClass, eventActionDetectDuplicate, "%s", msg)
 	}
 
+	var vmaasResult ctrl.Result
+	var vmaasErr error
+	vmaasHandled := false
+	var hasMissingTiers bool
+
 	if len(scResult.resolved) == 0 {
 		reason := v1alpha1.TenantReasonNotFound
 		if len(scResult.duplicateMessages) > 0 {
@@ -427,43 +432,48 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, tenant *v1alpha1.T
 			condMsg)
 		tenant.Status.StorageClasses = mergeResolvedStorageClasses(cspResolved, nil)
 		r.updateTenantVMaaSStorage(tenant, clusterName, false, reason)
+		vmaasHandled = true
 		if len(scResult.duplicateMessages) == 0 && r.ClusterStorageProvider != nil {
-			return r.handleClusterStorageProvisioning(ctx, tenant, hubSecretReady)
+			vmaasResult, vmaasErr = r.handleClusterStorageProvisioning(ctx, tenant, hubSecretReady)
 		}
-		return ctrl.Result{}, nil
+	} else {
+		condMsg := r.appendMissingTierWarnings(tenant, osacTiers, scResult.resolved, scResult.ambiguousTiers, scResult.conditionMessage())
+
+		// hasMissingTiers drives the Stage 4 retry
+		// (handleClusterStorageProvisioning) and sets the Tenant's VMaaS
+		// ClusterStorageReady condition and its VMaaS entry in
+		// status.clusterStorage. handleCaaSUpdate does not read it; each
+		// ClusterOrder's ClusterStorageReady is set there independently.
+		missing := missingTierNames(osacTiers, scResult.resolved, scResult.ambiguousTiers)
+		hasMissingTiers = len(missing) > 0
+
+		condStatus := metav1.ConditionTrue
+		vmaasReason := v1alpha1.TenantReasonFound
+		if hasMissingTiers {
+			condStatus = metav1.ConditionFalse
+			vmaasReason = v1alpha1.TenantReasonNotFound
+		}
+		tenant.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady, condStatus, vmaasReason, condMsg)
+		tenant.Status.StorageClasses = mergeResolvedStorageClasses(cspResolved, scResult.resolved)
+		r.updateTenantVMaaSStorage(tenant, clusterName, !hasMissingTiers, vmaasReason)
 	}
-
-	condMsg := r.appendMissingTierWarnings(tenant, osacTiers, scResult.resolved, scResult.ambiguousTiers, scResult.conditionMessage())
-
-	// Detect tiers that still lack a StorageClass. The hasMissingTiers
-	// flag drives the Stage 4 retry (handleClusterStorageProvisioning).
-	// When tiers are still missing, ClusterStorageReady stays False so
-	// handleCaaSUpdate (Stage 3) does not attempt to provision
-	// cluster-side storage with an incomplete tier set. This is safe
-	// because handleCaaSDelete runs BEFORE this point (line ~339),
-	// so finalizer removal on deleting ClusterOrders is never blocked.
-	missing := missingTierNames(osacTiers, scResult.resolved, scResult.ambiguousTiers)
-	hasMissingTiers := len(missing) > 0
-
-	condStatus := metav1.ConditionTrue
-	vmaasReason := v1alpha1.TenantReasonFound
-	if hasMissingTiers {
-		condStatus = metav1.ConditionFalse
-		vmaasReason = v1alpha1.TenantReasonNotFound
-	}
-	tenant.SetStatusCondition(v1alpha1.TenantConditionClusterStorageReady, condStatus, vmaasReason, condMsg)
-	tenant.Status.StorageClasses = mergeResolvedStorageClasses(cspResolved, scResult.resolved)
-	r.updateTenantVMaaSStorage(tenant, clusterName, !hasMissingTiers, vmaasReason)
 
 	if r.ClusterStorageProvider == nil {
-		return ctrl.Result{}, nil
+		return vmaasResult, vmaasErr
 	}
 
 	// Stage 3: provision cluster-side storage on CaaS clusters owned by this tenant.
-	// Runs after VMaaS (Stage 2) because CaaS requires StorageBackendReady (Stage 1)
-	// to have completed during tenant onboarding before cluster-side resources can
-	// be installed.
+	// With a ClusterStorageProvider configured, this stage runs when a VMaaS
+	// StorageClass resolved, or when Stage 1 reports the storage backends ready
+	// (hubSecretReady). The Tenant's ClusterStorageReady (VMaaS) and each
+	// ClusterOrder's ClusterStorageReady are independent of each other.
+	if vmaasHandled && !hubSecretReady {
+		return vmaasResult, vmaasErr
+	}
 	caasResult, caasErr := r.handleCaaSUpdate(ctx, tenant)
+	if vmaasHandled {
+		return combineStageResults(vmaasResult, vmaasErr, caasResult, caasErr)
+	}
 	if caasErr != nil || caasResult.RequeueAfter > 0 {
 		return caasResult, caasErr
 	}
@@ -485,6 +495,21 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, tenant *v1alpha1.T
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// combineStageResults merges the results of the VMaaS and CaaS stages when both
+// ran in one reconcile. A VMaaS error is returned with the VMaaS result;
+// otherwise a CaaS error is returned with the CaaS result; otherwise
+// RequeueAfter is the smaller positive value of the two, or zero when neither
+// is positive.
+func combineStageResults(vmaasResult ctrl.Result, vmaasErr error, caasResult ctrl.Result, caasErr error) (ctrl.Result, error) {
+	if vmaasErr != nil {
+		return vmaasResult, vmaasErr
+	}
+	if caasErr != nil {
+		return caasResult, caasErr
+	}
+	return mergeReconcileResult(mergeReconcileResult(ctrl.Result{}, vmaasResult), caasResult), nil
 }
 
 // clearOSACManagedStorageStatus clears OSAC-managed storage backend status and

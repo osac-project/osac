@@ -195,7 +195,11 @@ func (r *ExternalIPAttachmentReconciler) resolveTarget(ctx context.Context, eipa
 			if co.Spec.NetworkAttachment == nil {
 				return target, nil
 			}
-			return r.tenantDestination(ctx, eipa.Namespace, target, co.Status.IngressEndpoint, co.Spec.NetworkAttachment.SubnetRef)
+			// Fulfillment reserves the guest MetalLB address in the immutable
+			// ClusterOrder spec. Use it before a guest node exists; status.
+			// ingressEndpoint is populated only after the guest service is
+			// observed and would deadlock bootstrap DNS/Assisted installation.
+			return r.tenantDestination(ctx, eipa.Namespace, target, co.Spec.IngressAllocatedAddress, co.Spec.NetworkAttachment.SubnetRef)
 		}
 		return target, nil
 	}

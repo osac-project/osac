@@ -119,9 +119,10 @@ def bmh_nmstate_interfaces(bmh, selected_macs):
 def baremetal_instances_for_cluster(instances, cluster_id):
     """Select BMI objects owned by a ClusterOrder API ID.
 
-    Older BMF objects used the cluster-order UUID label while newer objects
-    carry the private Cluster API ID annotation. Accept both forms so the
-    worker-network step is compatible across provider revisions.
+    The operator's established BMI contract uses the cluster-order label;
+    newer BMF objects carry the cluster-order UUID label or private Cluster
+    API ID annotation. Accept all forms so the worker-network step remains
+    compatible across provider revisions.
     """
     selected = []
     for instance in instances or []:
@@ -129,7 +130,8 @@ def baremetal_instances_for_cluster(instances, cluster_id):
         labels = metadata.get("labels", {}) or {}
         annotations = metadata.get("annotations", {}) or {}
         if (
-            labels.get("osac.openshift.io/clusterorder-uuid") == cluster_id
+            labels.get("osac.openshift.io/cluster-order") == cluster_id
+            or labels.get("osac.openshift.io/clusterorder-uuid") == cluster_id
             or annotations.get("osac.openshift.io/cluster-api-id") == cluster_id
         ):
             selected.append(instance)

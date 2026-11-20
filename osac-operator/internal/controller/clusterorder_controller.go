@@ -1484,8 +1484,13 @@ func (r *ClusterOrderReconciler) reconcileAutomaticExternalIPAttachmentsWithLook
 		tenant:    cluster.GetMetadata().GetTenant(),
 		endpoints: []string{autoCreatedEndpointAPI, autoCreatedEndpointIngress},
 		availableEndpoints: map[string]bool{
-			autoCreatedEndpointAPI:     clusterAPIEndpointAvailableForAttachment(instance),
-			autoCreatedEndpointIngress: instance.Status.IngressEndpoint != "",
+			autoCreatedEndpointAPI: clusterAPIEndpointAvailableForAttachment(instance),
+			// Fulfillment assigns the guest MetalLB address in the immutable
+			// Cluster spec before the worker joins. The ingress service status
+			// is intentionally unavailable at this point: bootstrap DNS must
+			// publish the reserved external address before Assisted installs
+			// the first worker.
+			autoCreatedEndpointIngress: cluster.GetSpec().GetIngressAllocatedAddress() != "",
 		},
 	}
 	return reconcileAutomaticExternalIPAttachments(ctx, r.Client, r.NetworkingNamespace,

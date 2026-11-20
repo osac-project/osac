@@ -119,7 +119,12 @@ def test_baremetal_instances_accepts_current_and_legacy_cluster_identity():
                 "labels": {"osac.openshift.io/clusterorder-uuid": "cluster-a"}
             }
         },
+        {
+            "metadata": {
+                "labels": {"osac.openshift.io/cluster-order": "cluster-a"}
+            }
+        },
         {"metadata": {"annotations": {"osac.openshift.io/cluster-api-id": "other"}}},
     ]
 
-    assert agents.baremetal_instances_for_cluster(instances, "cluster-a") == instances[:2]
+    assert agents.baremetal_instances_for_cluster(instances, "cluster-a") == instances[:3]

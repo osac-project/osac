@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -710,6 +711,34 @@ var _ = Describe("forwardAPIToken", func() {
 		md, ok := metadata.FromOutgoingContext(result)
 		Expect(ok).To(BeTrue())
 		Expect(md.Get("authorization")).To(Equal([]string{"Bearer api-bearer-value"}))
+	})
+
+	It("logs a safe exchange failure reason correlated with the tool error", func() {
+		var output bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&output, nil))
+		exchanger := withTokenExchangeLogging(&expiringTestTokenExchanger{
+			responses: []expiringTestTokenExchangeResponse{{err: errOAuthTokenExchangeCallerPermissionsChanged}},
+		}, logger)
+		req := &mcp.CallToolRequest{
+			Extra: &mcp.RequestExtra{
+				TokenInfo: &sdkauth.TokenInfo{
+					Extra: map[string]any{
+						exchangeTokenExtraKey: apiTokenSource(func(ctx context.Context) (string, error) {
+							return exchanger.Exchange(ctx, "sensitive-subject-token", nil)
+						}),
+					},
+				},
+			},
+		}
+
+		_, err := forwardAPIToken(context.Background(), req)
+		Expect(err).To(HaveOccurred())
+		envelope := decodeToolError(err)
+		Expect(envelope.Message).To(Equal("MCP authentication failed. Sign in again and retry."))
+		Expect(output.String()).To(ContainSubstring(`"request_id":"` + envelope.RequestID + `"`))
+		Expect(output.String()).To(ContainSubstring(`"reason_category":"caller_permissions_mismatch"`))
+		Expect(output.String()).NotTo(ContainSubstring("sensitive-subject-token"))
+		Expect(output.String()).NotTo(ContainSubstring("OAuth token exchange changed the caller permissions"))
 	})
 
 	It("Fails closed when the request has no Extra", func() {

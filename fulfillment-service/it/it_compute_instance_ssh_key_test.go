@@ -139,7 +139,13 @@ func grantComputeInstanceSSHKeyProjectAccess(ctx context.Context, tenant, projec
 	deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
 		_, err := client.Delete(ctx, privatev1.ProjectMembershipsDeleteRequest_builder{Id: id}.Build())
 		return err
-	}, nil)
+	}, func(ctx context.Context) (bool, error) {
+		_, err := client.Get(ctx, privatev1.ProjectMembershipsGetRequest_builder{Id: id}.Build())
+		if status.Code(err) == codes.NotFound {
+			return true, nil
+		}
+		return false, err
+	})
 	Eventually(func(g Gomega) {
 		membership, getErr := client.Get(ctx, privatev1.ProjectMembershipsGetRequest_builder{Id: id}.Build())
 		g.Expect(getErr).NotTo(HaveOccurred())

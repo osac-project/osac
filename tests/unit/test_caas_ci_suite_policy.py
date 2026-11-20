@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -144,3 +145,60 @@ def test_pr_selector_has_no_label_override() -> None:
     workflow = _workflow(_infra_root(), "e2e-caas-full-install-caller.yml")
     expression = workflow["jobs"]["e2e-caas-full-install"]["with"]["test-suite"]
     assert not re.search(r"labels.*(e2e-serial|e2e-regression)", expression)
+
+
+# -- Build-context contracts ------------------------------------------------
+
+
+_ECHO_ADAPTER_CF = "osac-metering/adapters/Containerfile.echo-adapter"
+
+# Callers that build the echo adapter; BMaaS does not.
+_ECHO_ADAPTER_CALLERS = (
+    "e2e-caas-full-install.yml",
+    "e2e-vmaas-full-install.yml",
+)
+
+
+def _parse_components(workflow: dict) -> list[dict]:
+    """Parse the components JSON from a caller workflow.
+
+    GitHub Actions ``${{ }}`` expressions are replaced with a
+    placeholder so the surrounding JSON structure can be loaded.
+    """
+    job = next(iter(workflow["jobs"].values()))
+    raw: str = job["with"]["components"]
+    sanitized = re.sub(r"\$\{\{[^}]+\}\}", "_", raw)
+    return json.loads(sanitized)
+
+
+@pytest.mark.parametrize("workflow_file", _ECHO_ADAPTER_CALLERS)
+def test_echo_adapter_uses_repo_root_context(
+    workflow_file: str,
+) -> None:
+    """Containerfile.echo-adapter COPYs go.work from the repo root,
+    so every caller must set context to ``"."`` (not a subdirectory).
+
+    Regression guard for osac-project/osac-test-infra#470.
+    """
+    # Confirm the Containerfile still requires repo-root context.
+    containerfile = (ROOT / _ECHO_ADAPTER_CF).read_text()
+    assert re.search(
+        r"COPY\b.*\bgo\.work\b", containerfile
+    ), f"{_ECHO_ADAPTER_CF} must COPY go.work"
+
+    components = _parse_components(_workflow(ROOT, workflow_file))
+    echo = [
+        c
+        for c in components
+        if c.get("containerfile", "").endswith(
+            "Containerfile.echo-adapter"
+        )
+    ]
+    assert len(echo) == 1, (
+        f"expected one echo-adapter component in {workflow_file}"
+    )
+    assert echo[0]["context"] == ".", (
+        f"{workflow_file}: echo-adapter needs repo-root context"
+        f" '.', got {echo[0]['context']!r}"
+        " (osac-project/osac-test-infra#470)"
+    )

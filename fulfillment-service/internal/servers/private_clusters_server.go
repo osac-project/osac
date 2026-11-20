@@ -1200,6 +1200,18 @@ func clusterSecurityGroupsMissing(att *privatev1.ClusterNetworkAttachment) bool 
 	return att == nil || len(att.GetSecurityGroups()) == 0
 }
 
+func hasNameOnlySecurityGroup(att *privatev1.ClusterNetworkAttachment) bool {
+	if att == nil {
+		return false
+	}
+	for _, ref := range att.GetSecurityGroups() {
+		if ref != nil && ref.GetId() == "" && refKey(ref) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // applyDefaultNetworkAttachment completes singular network_attachment at Create time.
 // Missing fields come from tenant defaults, while supplied fields are preserved.
 func (s *PrivateClustersServer) applyDefaultNetworkAttachment(ctx context.Context,
@@ -1221,8 +1233,49 @@ func (s *PrivateClustersServer) applyDefaultNetworkAttachment(ctx context.Contex
 	spec := cluster.GetSpec()
 	project := cluster.GetMetadata().GetProject()
 	attachment := spec.GetNetworkAttachment()
-	if attachment != nil && refKey(attachment.GetSubnet()) != "" && !clusterSecurityGroupsMissing(attachment) {
-		return nil
+	if attachment != nil && refKey(attachment.GetSubnet()) != "" {
+		// Catalog/template defaults and older clients may supply local names
+		// even when the reference is otherwise complete. Resolve every supplied
+		// name and persist the immutable API IDs so the ClusterOrder projection
+		// can find the corresponding Kubernetes Subnet by its stable label.
+		if attachment.GetSubnet().GetId() == "" || hasNameOnlySecurityGroup(attachment) {
+			resolvedSubnet, resolveErr := resolveNetworkingReference(ctx, s.subnetsDao,
+				cluster.GetMetadata(), attachment.GetSubnet(), "subnet", grpccodes.NotFound, false)
+			if resolveErr != nil {
+				if grpcstatus.Code(resolveErr) == grpccodes.NotFound {
+					return grpcstatus.Errorf(grpccodes.InvalidArgument,
+						"spec.network_attachment: subnet '%s' does not exist", refKey(attachment.GetSubnet()))
+				}
+				return resolveErr
+			}
+			if err := validateResolvedSubnetReady(resolvedSubnet, refKey(attachment.GetSubnet()), " in spec.network_attachment"); err != nil {
+				return err
+			}
+			attachment.SetSubnet(privatev1.SubnetLocalReference_builder{Id: resolvedSubnet.GetId()}.Build())
+			virtualNetworkID := refKey(resolvedSubnet.GetSpec().GetVirtualNetwork())
+			for i, sgRef := range attachment.GetSecurityGroups() {
+				if sgRef.GetId() != "" {
+					continue
+				}
+				sg, resolveErr := resolveNetworkingReference(ctx, s.securityGroupsDao,
+					cluster.GetMetadata(), sgRef, "security group", grpccodes.NotFound, true)
+				if resolveErr != nil {
+					if grpcstatus.Code(resolveErr) == grpccodes.NotFound {
+						return grpcstatus.Errorf(grpccodes.InvalidArgument,
+							"spec.network_attachment.security_groups[%d]: security group '%s' does not exist", i, refKey(sgRef))
+					}
+					return resolveErr
+				}
+				if err := validateResolvedSecurityGroup(sg, refKey(sgRef),
+					fmt.Sprintf(" in spec.network_attachment.security_groups[%d]", i), virtualNetworkID); err != nil {
+					return err
+				}
+				attachment.GetSecurityGroups()[i] = privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build()
+			}
+		}
+		if !clusterSecurityGroupsMissing(attachment) {
+			return nil
+		}
 	}
 	if attachment == nil {
 		attachment = privatev1.ClusterNetworkAttachment_builder{}.Build()

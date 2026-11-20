@@ -21,7 +21,6 @@ import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/private/v1/condition_status_type.proto";
 import "osac/private/v1/metadata_type.proto";
-import "osac/private/v1/break_glass_credentials_type.proto";
 import "osac/private/v1/secret_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
@@ -104,11 +103,8 @@ message TenantSpec {
 // based on the reconciliation with the identity provider.
 message TenantStatus {
   option (cleanapi.message).private = true;
-  // Break-glass account credentials.
-  // Only populated on successful creation. These credentials must be stored securely.
-  // This field is not persisted; Get and List responses omit it. The durable copy is the
-  // Secret referenced by spec.break_glass_credentials_secret.
-  BreakGlassCredentials break_glass_credentials = 1;
+  reserved 1;
+  reserved "break_glass_credentials";
 
   // Current lifecycle state of the tenant's IDP synchronization.
   TenantState state = 2;

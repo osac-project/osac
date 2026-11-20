@@ -652,16 +652,9 @@ func createCatalogItemTenantAdminIdentityFixture(ctx context.Context) metadataTe
 	publicConn, err := tool.makeGrpcConn(externalServiceAddr, token)
 	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(publicConn.Close)
-	credentials := tenant.GetObject().GetStatus().GetBreakGlassCredentials()
 	username, password := "", ""
-	if credentials != nil {
-		username = credentials.GetUsername()
-		password = credentials.GetPassword()
-	}
-	if password == "" {
-		username = fmt.Sprintf("%s-osac-break-glass", name)
-		password = "test-break-glass-pass-123!"
-	}
+	username = fmt.Sprintf("%s-osac-break-glass", name)
+	password = "test-break-glass-pass-123!"
 	httpClient := tool.makeHttpClient(externalServiceAddr, token)
 	DeferCleanup(func() { httpClient.CloseIdleConnections() })
 	return metadataTestIdentity{

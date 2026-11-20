@@ -403,11 +403,6 @@ func loginAsBreakGlass(
 			)
 			g.Expect(status.GetBreakGlassUserId()).ToNot(BeEmpty())
 			breakGlassUserId = status.GetBreakGlassUserId()
-			creds := status.GetBreakGlassCredentials()
-			if creds != nil {
-				breakGlassUsername = creds.GetUsername()
-				breakGlassPassword = creds.GetPassword()
-			}
 		},
 		time.Minute,
 		time.Second,
@@ -712,7 +707,6 @@ var _ = Describe("Tenant lifecycle", func() {
 		Expect(ref.GetName()).To(Equal(breakGlassSecretName))
 
 		By("Verifying inline break-glass credentials are not present in status")
-		Expect(object.GetStatus().GetBreakGlassCredentials()).To(BeNil())
 		Expect(object.GetStatus().GetBreakGlassUserId()).ToNot(BeEmpty())
 
 		By("Fetching the referenced secret and verifying it contains the password")

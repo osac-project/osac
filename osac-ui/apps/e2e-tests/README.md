@@ -284,7 +284,7 @@ Chromium browser and run from `osac-ui/`:
 
 ```bash
 pnpm --filter @osac/e2e-tests exec playwright install chromium
-pnpm --filter @osac/e2e-tests run test:browser
+pnpm --filter @osac/e2e-tests run test:helpers
 ```
 
 These tests do not replace the deployed UI journeys below.

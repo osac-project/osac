@@ -21,7 +21,10 @@ apps/e2e-tests/
 │   ├── shared/                 resource configuration and run state used by both suites
 │   └── vmaas/                  VM creation, deletion, resize, and power actions
 ├── helper-tests/               isolated helper regression tests
+├── container/
+│   └── unit_tests/             container script tests
 ├── run_scripts/
+│   ├── unit_tests/             runner script and report tests
 │   ├── prepare-setup-for-ui-run.sh  install and validate prerequisites
 │   └── run-ui-e2e.sh                run the configured VMaaS flow tags
 ├── extravars.yaml               VMaaS flow configuration
@@ -285,6 +288,15 @@ pnpm --filter @osac/e2e-tests run test:browser
 ```
 
 These tests do not replace the deployed UI journeys below.
+
+Run the container and runner support tests from `osac-ui/` without a cluster:
+
+```bash
+python3 -m unittest discover -s apps/e2e-tests/container/unit_tests -p 'test_*.py'
+python3 -m unittest discover -s apps/e2e-tests/run_scripts/unit_tests -p 'test_*.py'
+```
+
+The report tests also need the workspace dependencies and Playwright Chromium.
 
 Run from the `osac-ui/` workspace root:
 

@@ -274,9 +274,10 @@ var _ = Describe("Client conflict handling", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			config := &TenantConfig{
-				Name:               "shared",
-				Enabled:            new(true),
-				BreakGlassPassword: "temp-password",
+				Name:                    "shared",
+				Enabled:                 new(true),
+				CreateBreakGlassAccount: true,
+				BreakGlassPassword:      "temp-password",
 			}
 
 			credentials, err := tenantManager.CreateTenant(ctx, config)

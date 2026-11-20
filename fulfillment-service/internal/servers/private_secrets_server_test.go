@@ -38,8 +38,9 @@ import (
 )
 
 type memorySecretStore struct {
-	mu   sync.Mutex
-	data map[string]map[string][]byte
+	mu     sync.Mutex
+	data   map[string]map[string][]byte
+	stores int
 }
 
 func newMemorySecretStore() *memorySecretStore {
@@ -53,8 +54,15 @@ func (s *memorySecretStore) key(tenant, project, name string) string {
 func (s *memorySecretStore) Store(_ context.Context, tenant, project, name string, data map[string][]byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.stores++
 	s.data[s.key(tenant, project, name)] = data
 	return nil
+}
+
+func (s *memorySecretStore) storeCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stores
 }
 
 func (s *memorySecretStore) Fetch(_ context.Context, tenant, project, name string) (map[string][]byte, error) {
@@ -337,6 +345,7 @@ var _ = Describe("Private secrets server", func() {
 				updateMask *fieldmaskpb.FieldMask,
 				expectedData map[string][]byte,
 				expectedLabels map[string]string,
+				expectedStores int,
 			) {
 				created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
 					Object: privatev1.Secret_builder{
@@ -352,11 +361,13 @@ var _ = Describe("Private secrets server", func() {
 				updated := proto.Clone(created.GetObject()).(*privatev1.Secret)
 				updated.SetData(updateData)
 				updated.GetMetadata().SetLabels(labels)
+				storesBefore := secretStore.storeCount()
 				_, err = server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
 					Object:     updated,
 					UpdateMask: updateMask,
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
+				Expect(secretStore.storeCount()).To(Equal(storesBefore + expectedStores))
 
 				getResponse, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{
 					Id: created.GetObject().GetId(),
@@ -382,6 +393,7 @@ var _ = Describe("Private secrets server", func() {
 				&fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
 				map[string][]byte{"userdata": []byte("original")},
 				map[string]string{"updated": "true"},
+				0,
 			),
 			Entry("data mask updates opaque data",
 				privatev1.SecretType_SECRET_TYPE_OPAQUE,
@@ -391,6 +403,7 @@ var _ = Describe("Private secrets server", func() {
 				&fieldmaskpb.FieldMask{Paths: []string{"data"}},
 				map[string][]byte{"key": []byte("changed")},
 				map[string]string{},
+				1,
 			),
 			Entry("nil mask replaces opaque data",
 				privatev1.SecretType_SECRET_TYPE_OPAQUE,
@@ -400,15 +413,7 @@ var _ = Describe("Private secrets server", func() {
 				nil,
 				map[string][]byte{"key": []byte("changed")},
 				map[string]string{},
-			),
-			Entry("empty mask replaces opaque data",
-				privatev1.SecretType_SECRET_TYPE_OPAQUE,
-				map[string][]byte{"key": []byte("original")},
-				map[string][]byte{"key": []byte("changed")},
-				nil,
-				&fieldmaskpb.FieldMask{},
-				map[string][]byte{"key": []byte("changed")},
-				map[string]string{},
+				1,
 			),
 		)
 

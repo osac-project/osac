@@ -424,7 +424,9 @@ var _ = Describe("typed finalizer updates", func() {
 					service := services.Get(i)
 					name := string(service.Name())
 					switch {
-					case service.Methods().ByName("Update") == nil || covered[name]:
+					// Models updates write to the AI Grid Git catalog and do not use
+					// Fulfillment's generic finalizer persistence path.
+					case service.Methods().ByName("Update") == nil || covered[name] || name == "Models":
 					case unimplemented[name] != nil:
 						Expect(status.Code(unimplemented[name]())).To(Equal(codes.Unimplemented),
 							"the public %s server implements Update now, so it needs a case", name)

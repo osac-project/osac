@@ -1,0 +1,250 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "buf/validate/validate.proto";
+import "google/api/field_behavior.proto";
+import "osac/public/v1/metadata_type.proto";
+
+// Model is a catalog entry managed by a Cloud Provider Admin. Its immutable
+// name is the model identifier used for inference and deployment placement.
+message Model {
+  option (buf.validate.message).cel = {
+    id: "model.id_matches_metadata_name"
+    message: "id must match metadata.name"
+    expression: "this.id == this.metadata.name"
+  };
+
+  // Unique model identifier. It must match metadata.name and cannot be changed
+  // after creation.
+  string id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+  // Name and metadata for this model. metadata.name must match id.
+  Metadata metadata = 2 [(buf.validate.field).required = true];
+
+  // Desired model configuration.
+  ModelSpec spec = 3 [(buf.validate.field).required = true];
+
+  // Observed deployment and MaaS publication state. This field is read-only.
+  ModelStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Desired settings for a model in the catalog. Source, serving profile, and
+// inference name are immutable. A model may have no placements while it remains
+// in the catalog; adding or removing placements creates or removes deployments.
+message ModelSpec {
+  // URI identifying the model source, such as a Hugging Face model URI.
+  string source_uri = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 2048
+  }];
+
+  // Name of the serving profile used to configure the model runtime.
+  string serving_profile = 2 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 253
+    pattern: "^\\S+$"
+  }];
+
+  // Runtime selected by the serving profile. This field is read-only.
+  string runtime = 3 [(google.api.field_behavior) = OUTPUT_ONLY];
+
+  // Static replica count. Mutually exclusive with autoscaling.
+  // The count applies to each selected inference cluster.
+  optional int32 replicas = 4 [(buf.validate.field).int32 = {gte: 0, lte: 99}];
+
+  // Per-replica CPU, memory, and accelerator requests and limits.
+  ModelComputeResources compute_resources = 5;
+
+  // Inference clusters selected for this model. An empty list means the model
+  // remains in the catalog without any deployments.
+  ModelPlacement placement = 6 [(buf.validate.field).required = true];
+
+  // Autoscaling settings. Mutually exclusive with replicas.
+  ModelScaling scaling = 7;
+}
+
+// CPU, memory, and accelerator resource requests and limits for each replica.
+message ModelComputeResources {
+  // Requested resource quantities keyed by Kubernetes resource name, such as
+  // cpu, memory, or an accelerator resource.
+  map<string, string> requests = 1 [(buf.validate.field).map = {
+    keys: {string: {min_len: 1}}
+    values: {string: {min_len: 1}}
+  }];
+
+  // Maximum resource quantities keyed by Kubernetes resource name.
+  map<string, string> limits = 2 [(buf.validate.field).map = {
+    keys: {string: {min_len: 1}}
+    values: {string: {min_len: 1}}
+  }];
+}
+
+// Autoscaling configuration for a model.
+message ModelScaling {
+  // Minimum number of replicas maintained by the autoscaler.
+  int32 min_replicas = 1 [(buf.validate.field).int32.gte = 0];
+
+  // Maximum number of replicas the autoscaler may create.
+  int32 max_replicas = 2 [(buf.validate.field).int32 = {gte: 1, lte: 99}];
+
+  // Whether KEDA-based autoscaling is enabled.
+  bool keda = 3;
+
+  // KEDA triggers used to determine when to scale the model.
+  repeated ModelScalingTrigger triggers = 4;
+}
+
+// One KEDA autoscaling trigger.
+message ModelScalingTrigger {
+  // Trigger type recognized by KEDA.
+  string type = 1 [(buf.validate.field).string.min_len = 1];
+
+  // Trigger-specific configuration values.
+  map<string, string> metadata = 2;
+}
+
+// Inference cluster placement for a model.
+message ModelPlacement {
+  // Names of the inference clusters where the model should be deployed.
+  // An empty list leaves the model in the catalog without deployments.
+  repeated string clusters = 1 [(buf.validate.field).repeated = {
+    unique: true
+    items: {string: {min_len: 1, max_len: 63}}
+  }];
+}
+
+// Overall observed state of a model and its deployments.
+enum ModelPhase {
+  // The phase has not been reported.
+  MODEL_PHASE_UNSPECIFIED = 0;
+
+  // No inference clusters are selected, or deployment status is not yet ready
+  // or available.
+  MODEL_PHASE_PENDING = 1;
+
+  // All selected deployments and configured MaaS ingress are ready.
+  MODEL_PHASE_READY = 2;
+
+  // At least one, but not all, selected inference deployments are ready, and
+  // all configured MaaS ingress is ready.
+  MODEL_PHASE_PARTIAL = 3;
+
+  // At least one selected deployment or configured MaaS ingress has failed.
+  MODEL_PHASE_FAILED = 4;
+}
+
+// Observed state of a model deployment on one inference cluster.
+enum ModelDeploymentPhase {
+  // The phase has not been reported.
+  MODEL_DEPLOYMENT_PHASE_UNSPECIFIED = 0;
+
+  // The deployment has not completed or is still progressing.
+  MODEL_DEPLOYMENT_PHASE_PENDING = 1;
+
+  // The model is ready on the cluster.
+  MODEL_DEPLOYMENT_PHASE_READY = 2;
+
+  // The deployment failed.
+  MODEL_DEPLOYMENT_PHASE_FAILED = 3;
+
+  // The model is intentionally stopped on the cluster.
+  MODEL_DEPLOYMENT_PHASE_STOPPED = 4;
+}
+
+// Observed state of a model's MaaS publication on one ingress cluster.
+enum ModelMaasPhase {
+  // The phase has not been reported.
+  MODEL_MAAS_PHASE_UNSPECIFIED = 0;
+
+  // MaaS publication is still progressing or its status has not been reported.
+  MODEL_MAAS_PHASE_PENDING = 1;
+
+  // The model is published and available to subscribed consumers.
+  MODEL_MAAS_PHASE_READY = 2;
+
+  // MaaS publication failed.
+  MODEL_MAAS_PHASE_FAILED = 3;
+
+  // The model is not currently available through MaaS.
+  MODEL_MAAS_PHASE_UNAVAILABLE = 4;
+
+  // The backend is ready, but no subscription currently grants access.
+  MODEL_MAAS_PHASE_AWAITING_SUBSCRIPTION = 5;
+}
+
+// Observed inference deployment and MaaS publication state.
+message ModelStatus {
+  // Summary phase derived from deployment and ingress status.
+  ModelPhase phase = 1 [(buf.validate.field).enum.defined_only = true];
+
+  // Short reason for the current phase, when available.
+  string reason = 2;
+
+  // Human-readable details about the current phase, when available.
+  string message = 3;
+
+  // Deployment status for each selected inference cluster.
+  repeated ModelDeploymentStatus deployments = 4;
+
+  // MaaS publication status for each configured ingress cluster.
+  repeated ModelIngressStatus ingress = 5;
+}
+
+// Observed model deployment state on an inference cluster.
+message ModelDeploymentStatus {
+  // Name of the inference cluster.
+  string cluster = 1;
+
+  // Current deployment phase on the cluster.
+  ModelDeploymentPhase phase = 2 [(buf.validate.field).enum.defined_only = true];
+
+  // Short reason for the current phase, when available.
+  string reason = 3;
+
+  // Human-readable details about the deployment state, when available.
+  string message = 4;
+}
+
+// Observed MaaS publication state on an ingress cluster.
+message ModelIngressStatus {
+  // Name of the ingress cluster.
+  string cluster = 1;
+
+  // Current MaaS publication phase on the cluster.
+  ModelMaasPhase phase = 2 [(buf.validate.field).enum.defined_only = true];
+
+  // Short reason for the current phase, when available.
+  string reason = 3;
+
+  // Human-readable details about the MaaS publication state, when available.
+  string message = 4;
+}
+
+// Inference cluster that can currently be selected for model placement.
+message ModelPlacementCluster {
+  // Name of the cluster used in ModelPlacement.
+  string name = 1;
+
+  // Optional location label for display. Location does not affect placement.
+  string location = 2;
+}

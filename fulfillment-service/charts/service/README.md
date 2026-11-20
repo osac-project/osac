@@ -44,6 +44,11 @@ The following table lists the configurable parameters of the chart and their def
 | `images.envoy.pullPolicy`  | Envoy proxy image pull policy                                                      | `IfNotPresent`                                                 |
 | `eventPublisher.enabled`   | Deploy the Kafka-backed event publisher                                           | `true`                                                         |
 | `eventPublisher.topicRetention` | How long a tenant's event topic keeps records: `-1s` indefinitely, or a duration like `168h` | `-1s`                                         |
+| `aiGrid.git.url`           | Git repository containing the AI Grid model catalog                             | Empty (Models API unavailable until configured)                |
+| `aiGrid.git.branch`        | Catalog branch read and updated by OSAC                                           | `main`                                                         |
+| `aiGrid.git.readMaxAge`    | Maximum age of the last repository fetch before another fetch                    | `10s`                                                          |
+| `aiGrid.git.token.secretName` | Existing Secret in the release namespace containing the Git token             | Empty (public repository)                                      |
+| `aiGrid.git.token.secretKey`  | Key in that Secret containing the token                                         | `token`                                                        |
 | `database.connection`      | List of sources for database connection parameters (see below)                    | `[]` (must be configured)                                      |
 | `kafka.connection`         | List of sources for Kafka connection parameters (see below)                       | `[]` (must be configured when the event publisher is enabled)  |
 | `global.networking.provisioningEnabled` | Provider networking (ExternalIPs, NATGateways, automatic external access); fixed at installation | `true` |
@@ -68,6 +73,14 @@ include OSAC's identity claims (`username`, `groups`, `organization`, and
 `roles`) and the `osac-api` audience. Put only its client secret in the
 configured Kubernetes Secret under the `client-secret` key. The MCP deployment
 uses the issuer's Keycloak token endpoint over the configured CA trust bundle.
+
+The Models API stores desired state in a GitOps catalog. Configure
+`aiGrid.git.url` and, for a private HTTPS repository, create a Secret in the
+release namespace and set `aiGrid.git.token.secretName` to its name. The
+Secret's configured key (default `token`) is mounted into the gRPC server;
+the token itself must not be placed in a Helm values file. OSAC needs read and
+write access to the catalog branch. The registered AI Grid Hub remains the
+source for workload-cluster placement and Argo CD rollout status.
 
 **Note on hostnames:** Both `externalHostname` and `internalHostname` are required because TLS
 certificates must be generated with the correct host names.

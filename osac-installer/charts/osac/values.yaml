@@ -205,6 +205,16 @@ operator:
 service:
   enabled: true
   variant: openshift
+  aiGrid:
+    git:
+      # Set the catalog URL when enabling Models API writes. Create the token
+      # Secret separately in the OSAC namespace for private HTTPS repositories.
+      url: ""
+      branch: main
+      readMaxAge: 10s
+      token:
+        secretName: ""
+        secretKey: token
   controller:
     # Enable full synchronization in fulfillment controllers.
     sync: true

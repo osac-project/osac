@@ -2249,6 +2249,76 @@ var _ = Describe("Generic DAO", func() {
 			Expect(items[0].GetMetadata().GetName()).To(Equal("good"))
 		})
 
+		It("Escapes backslash in prefix", func() {
+			var err error
+			_, err = objectsDao.Create().
+				SetObject(
+					testsv1.Object_builder{
+						Metadata: testsv1.Metadata_builder{
+							Tenant: "my-tenant",
+							Name:   "good",
+						}.Build(),
+						MyString: "my\\ value",
+					}.Build(),
+				).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = objectsDao.Create().
+				SetObject(
+					testsv1.Object_builder{
+						Metadata: testsv1.Metadata_builder{
+							Tenant: "my-tenant",
+							Name:   "bad",
+						}.Build(),
+						MyString: "my value",
+					}.Build(),
+				).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			response, err := objectsDao.List().
+				SetFilter(`this.my_string.startsWith('my\\')`).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			items := response.GetItems()
+			Expect(items).To(HaveLen(1))
+			Expect(items[0].GetMetadata().GetName()).To(Equal("good"))
+		})
+
+		It("Escapes percent after a literal backslash", func() {
+			var err error
+			_, err = objectsDao.Create().
+				SetObject(
+					testsv1.Object_builder{
+						Metadata: testsv1.Metadata_builder{
+							Tenant: "my-tenant",
+							Name:   "good",
+						}.Build(),
+						MyString: "my\\% value",
+					}.Build(),
+				).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = objectsDao.Create().
+				SetObject(
+					testsv1.Object_builder{
+						Metadata: testsv1.Metadata_builder{
+							Tenant: "my-tenant",
+							Name:   "bad",
+						}.Build(),
+						MyString: "my\\x value",
+					}.Build(),
+				).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			response, err := objectsDao.List().
+				SetFilter(`this.my_string.startsWith('my\\%')`).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			items := response.GetItems()
+			Expect(items).To(HaveLen(1))
+			Expect(items[0].GetMetadata().GetName()).To(Equal("good"))
+		})
+
 		It("Filters by tenant", func() {
 			// Create objects with 'my-tenant' set in metadata:
 			_, err := objectsDao.Create().

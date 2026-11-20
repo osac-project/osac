@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
@@ -259,6 +260,7 @@ func newTaskForDelete(bmiID, hubID string, hubCache controllers.HubCache) *task 
 	bmi := privatev1.BareMetalInstance_builder{
 		Id: bmiID,
 		Metadata: privatev1.Metadata_builder{
+			Tenant:     "tenant-a",
 			Finalizers: []string{finalizers.Controller},
 		}.Build(),
 		Status: privatev1.BareMetalInstanceStatus_builder{
@@ -283,11 +285,15 @@ type fakeWorkloadNetworkingCleanup struct {
 	calls      int
 	workloadID string
 	err        error
+	onCleanup  func()
 }
 
 func (f *fakeWorkloadNetworkingCleanup) Cleanup(_ context.Context, workloadID string) (bool, error) {
 	f.calls++
 	f.workloadID = workloadID
+	if f.onCleanup != nil {
+		f.onCleanup()
+	}
 	return f.complete, f.err
 }
 
@@ -1429,7 +1435,7 @@ var _ = Describe("delete", func() {
 		DeferCleanup(ctrl.Finish)
 	})
 
-	It("should remove finalizer when K8s object doesn't exist", func() {
+	It("should keep the finalizer when the missing operator object has an unknown host", func() {
 		scheme := newFakeScheme()
 		fakeClient := fake.NewClientBuilder().
 			WithScheme(scheme).
@@ -1447,37 +1453,80 @@ var _ = Describe("delete", func() {
 		Expect(hasFinalizer(t.bareMetalInstance)).To(BeTrue())
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(hasFinalizer(t.bareMetalInstance)).To(BeFalse())
+		Expect(err).To(MatchError(ContainSubstring("host assignment to be confirmed")))
+		var retryable interface{ RequeueAfter() time.Duration }
+		Expect(errors.As(err, &retryable)).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(time.Second))
+		Expect(hasFinalizer(t.bareMetalInstance)).To(BeTrue())
+		Expect(t.r.networkingCleanup.(*fakeWorkloadNetworkingCleanup).calls).To(Equal(0))
 	})
 
-	It("should retain the finalizer while automatic networking resources are terminating", func() {
+	It("should keep the BMI live until networking cleanup completes without its cleanup finalizer", func() {
+		cr := newBareMetalInstanceCR(bmiID, hubNamespace, crName, nil)
+		cr.SetFinalizers(nil)
 		scheme := newFakeScheme()
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr).Build()
 		hubCache := controllers.NewMockHubCache(ctrl)
 		hubCache.EXPECT().Get(gomock.Any(), hubID).Return(&controllers.HubEntry{
-			Namespace: hubNamespace, Client: fake.NewClientBuilder().WithScheme(scheme).Build(),
-		}, nil)
+			Namespace: hubNamespace, Client: fakeClient,
+		}, nil).Times(2)
 		t := newTaskForDelete(bmiID, hubID, hubCache)
-		cleanup := &fakeWorkloadNetworkingCleanup{}
+		cleanup := &fakeWorkloadNetworkingCleanup{complete: false}
 		t.r.networkingCleanup = cleanup
 
+		Expect(t.delete(ctx)).To(MatchError(ContainSubstring("persisting validated operator host state")))
 		Expect(t.delete(ctx)).To(MatchError(ContainSubstring("automatic workload networking resources are still terminating")))
 		Expect(cleanup.calls).To(Equal(1))
 		Expect(cleanup.workloadID).To(Equal(bmiID))
 		Expect(hasFinalizer(t.bareMetalInstance)).To(BeTrue())
+		current := &bmfov1alpha1.BareMetalInstance{}
+		Expect(fakeClient.Get(ctx, clnt.ObjectKeyFromObject(cr), current)).To(Succeed())
+		Expect(current.DeletionTimestamp).To(BeNil(), "networking must finish before DELETE marks the BMI")
 	})
 
-	It("should wait for automatic networking cleanup before deleting the workload CR", func() {
+	It("should revalidate the assigned host after networking cleanup", func() {
+		cr := newBareMetalInstanceCR(bmiID, hubNamespace, crName, nil)
+		fakeClient := fake.NewClientBuilder().WithScheme(newFakeScheme()).WithObjects(cr).Build()
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().Get(gomock.Any(), hubID).Return(&controllers.HubEntry{
+			Namespace: hubNamespace, Client: fakeClient,
+		}, nil).Times(2)
+		domains := NewMockFabricDomainsClient(ctrl)
+		domains.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.FabricDomainsListResponse_builder{
+				Items: []*privatev1.FabricDomain{privatev1.FabricDomain_builder{Id: "domain-a"}.Build()},
+			}.Build(), nil)
+		cleanup := &fakeWorkloadNetworkingCleanup{complete: true, onCleanup: func() {
+			latest := &bmfov1alpha1.BareMetalInstance{}
+			Expect(fakeClient.Get(ctx, clnt.ObjectKeyFromObject(cr), latest)).To(Succeed())
+			latest.Spec.ExternalHostName = "host-a"
+			Expect(fakeClient.Update(ctx, latest)).To(Succeed())
+		}}
+
+		t := newTaskForDelete(bmiID, hubID, hubCache)
+		t.r.networkingCleanup = cleanup
+		t.r.fabricDomainsClient = domains
+		Expect(t.delete(ctx)).To(MatchError(ContainSubstring("persisting validated operator host state")))
+		Expect(t.delete(ctx)).To(MatchError(ContainSubstring("domain-a")))
+		Expect(cleanup.calls).To(Equal(1))
+		Expect(hasFinalizer(t.bareMetalInstance)).To(BeTrue())
+	})
+
+	It("should finish networking cleanup before a resource-version-fenced delete fails", func() {
 		cr := newBareMetalInstanceCR(bmiID, hubNamespace, crName, nil)
 		scheme := newFakeScheme()
 		deleteCalled := false
+		deleteBeforeCleanup := false
+		cleanup := &fakeWorkloadNetworkingCleanup{complete: true}
+		deleteErr := errors.New("resource version precondition failed")
 		fakeClient := fake.NewClientBuilder().
 			WithScheme(scheme).
 			WithObjects(cr).
 			WithInterceptorFuncs(interceptor.Funcs{
 				Delete: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.DeleteOption) error {
 					deleteCalled = true
-					return nil
+					deleteBeforeCleanup = cleanup.calls == 0
+					return deleteErr
 				},
 			}).
 			Build()
@@ -1485,32 +1534,38 @@ var _ = Describe("delete", func() {
 		hubCache := controllers.NewMockHubCache(ctrl)
 		hubCache.EXPECT().Get(gomock.Any(), hubID).Return(&controllers.HubEntry{
 			Namespace: hubNamespace, Client: fakeClient,
-		}, nil)
+		}, nil).Times(2)
 
 		t := newTaskForDelete(bmiID, hubID, hubCache)
-		cleanup := &fakeWorkloadNetworkingCleanup{}
 		t.r.networkingCleanup = cleanup
 
+		Expect(t.delete(ctx)).To(MatchError(ContainSubstring("persisting validated operator host state")))
 		err := t.delete(ctx)
-		Expect(err).To(MatchError(ContainSubstring("automatic workload networking resources are still terminating")))
+		Expect(err).To(MatchError(deleteErr))
+		Expect(deleteCalled).To(BeTrue())
+		Expect(deleteBeforeCleanup).To(BeFalse())
 		Expect(cleanup.calls).To(Equal(1))
-		Expect(cleanup.workloadID).To(Equal(bmiID))
-		Expect(deleteCalled).To(BeFalse())
 		Expect(hasFinalizer(t.bareMetalInstance)).To(BeTrue())
 	})
 
 	It("should call hubClient.Delete when K8s object exists without DeletionTimestamp", func() {
 		cr := newBareMetalInstanceCR(bmiID, hubNamespace, crName, nil)
+		cr.SetResourceVersion("7")
 
 		scheme := newFakeScheme()
 
 		deleteCalled := false
+		var deletePreconditions *metav1.Preconditions
+		cleanup := &fakeWorkloadNetworkingCleanup{complete: true}
 		fakeClient := fake.NewClientBuilder().
 			WithScheme(scheme).
 			WithObjects(cr).
 			WithInterceptorFuncs(interceptor.Funcs{
 				Delete: func(ctx context.Context, client clnt.WithWatch, obj clnt.Object, opts ...clnt.DeleteOption) error {
 					deleteCalled = true
+					Expect(cleanup.calls).To(BeNumerically(">", 0), "networking cleanup must precede BMI DELETE")
+					deleteOptions := (&clnt.DeleteOptions{}).ApplyOptions(opts)
+					deletePreconditions = deleteOptions.Preconditions
 					return nil
 				},
 			}).
@@ -1522,17 +1577,66 @@ var _ = Describe("delete", func() {
 			Return(&controllers.HubEntry{
 				Namespace: hubNamespace,
 				Client:    fakeClient,
-			}, nil)
+			}, nil).Times(2)
 
 		t := newTaskForDelete(bmiID, hubID, hubCache)
+		t.r.networkingCleanup = cleanup
 
 		err := t.delete(ctx)
+		Expect(err).To(MatchError(ContainSubstring("persisting validated operator host state")))
+		Expect(deleteCalled).To(BeFalse())
+		ready := findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY)
+		Expect(ready.GetReason()).To(Equal(operatorHostValidatedForDeleteReason))
+
+		err = t.delete(ctx)
 		Expect(err).To(MatchError("kubernetes bare metal instance deletion is still in progress"))
 		var retryable interface{ RequeueAfter() time.Duration }
 		Expect(errors.As(err, &retryable)).To(BeTrue())
 		Expect(retryable.RequeueAfter()).To(Equal(time.Second))
 		Expect(deleteCalled).To(BeTrue())
+		Expect(deletePreconditions).ToNot(BeNil())
+		Expect(deletePreconditions.ResourceVersion).ToNot(BeNil())
+		Expect(*deletePreconditions.ResourceVersion).To(Equal("7"))
+		Expect(cleanup.calls).To(Equal(1))
 		Expect(hasFinalizer(t.bareMetalInstance)).To(BeTrue())
+	})
+
+	It("should keep the operator object while a FabricDomain references its live host", func() {
+		cr := newBareMetalInstanceCR(bmiID, hubNamespace, crName, nil)
+		cr.Spec.ExternalHostName = "host-a"
+
+		fakeClient := fake.NewClientBuilder().
+			WithScheme(newFakeScheme()).
+			WithObjects(cr).
+			Build()
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), hubID).
+			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: fakeClient}, nil)
+		domains := NewMockFabricDomainsClient(ctrl)
+		var filter string
+		var requestedLimit int32
+		domains.EXPECT().List(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, request *privatev1.FabricDomainsListRequest,
+				_ ...grpc.CallOption) (*privatev1.FabricDomainsListResponse, error) {
+				filter = request.GetFilter()
+				requestedLimit = request.GetLimit()
+				return privatev1.FabricDomainsListResponse_builder{
+					Size: 1,
+					Items: []*privatev1.FabricDomain{
+						privatev1.FabricDomain_builder{Id: "domain-a"}.Build(),
+					},
+				}.Build(), nil
+			},
+		)
+
+		t := newTaskForDelete(bmiID, hubID, hubCache)
+		t.r.fabricDomainsClient = domains
+		Expect(t.delete(ctx)).To(MatchError(ContainSubstring("domain-a")))
+		Expect(filter).To(Equal(`this.metadata.tenant == "tenant-a" && "host-a" in this.spec.servers`))
+		Expect(requestedLimit).To(Equal(int32(1)))
+		Expect(t.r.networkingCleanup.(*fakeWorkloadNetworkingCleanup).calls).To(Equal(0))
 	})
 
 	It("should not call hubClient.Delete when K8s object has DeletionTimestamp", func() {
@@ -1559,11 +1663,13 @@ var _ = Describe("delete", func() {
 			Return(&controllers.HubEntry{
 				Namespace: hubNamespace,
 				Client:    fakeClient,
-			}, nil)
+			}, nil).Times(2)
 
 		t := newTaskForDelete(bmiID, hubID, hubCache)
 
 		err := t.delete(ctx)
+		Expect(err).To(MatchError(ContainSubstring("persisting validated operator host state")))
+		err = t.delete(ctx)
 		Expect(err).To(MatchError("kubernetes bare metal instance deletion is still in progress"))
 		var retryable interface{ RequeueAfter() time.Duration }
 		Expect(errors.As(err, &retryable)).To(BeTrue())
@@ -1593,6 +1699,11 @@ var _ = Describe("delete", func() {
 			Return(nil, controllers.ErrHubNotFound)
 
 		t := newTaskForDelete(bmiID, hubID, hubCache)
+		t.bareMetalInstance.GetStatus().SetExternalHostName("host-a")
+		domains := NewMockFabricDomainsClient(ctrl)
+		domains.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+			privatev1.FabricDomainsListResponse_builder{}.Build(), nil)
+		t.r.fabricDomainsClient = domains
 		Expect(hasFinalizer(t.bareMetalInstance)).To(BeTrue())
 
 		err := t.delete(ctx)
@@ -1600,9 +1711,11 @@ var _ = Describe("delete", func() {
 		Expect(hasFinalizer(t.bareMetalInstance)).To(BeFalse())
 	})
 
-	It("should set state to DELETING and READY to False on delete", func() {
+	DescribeTable("should finish after the validated operator delete", func(liveHost string) {
 		scheme := newFakeScheme()
-		fakeClient := fake.NewClientBuilder().WithScheme(scheme).Build()
+		cr := newBareMetalInstanceCR(bmiID, hubNamespace, crName, nil)
+		cr.Spec.ExternalHostName = liveHost
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cr).Build()
 
 		hubCache := controllers.NewMockHubCache(ctrl)
 		hubCache.EXPECT().
@@ -1610,20 +1723,45 @@ var _ = Describe("delete", func() {
 			Return(&controllers.HubEntry{
 				Namespace: hubNamespace,
 				Client:    fakeClient,
-			}, nil)
+			}, nil).Times(3)
 
 		t := newTaskForDelete(bmiID, hubID, hubCache)
 		t.bareMetalInstance.GetStatus().SetState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING)
+		if liveHost != "" {
+			domains := NewMockFabricDomainsClient(ctrl)
+			domains.EXPECT().List(gomock.Any(), gomock.Any()).Return(
+				privatev1.FabricDomainsListResponse_builder{}.Build(), nil).Times(4)
+			t.r.fabricDomainsClient = domains
+		}
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		Expect(err).To(MatchError(ContainSubstring("persisting validated operator host state")))
 		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
 			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING))
 		ready := findProtoCondition(t.bareMetalInstance,
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY)
 		Expect(ready).ToNot(BeNil())
 		Expect(ready.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))
-	})
+		Expect(ready.GetReason()).To(Equal(operatorHostValidatedForDeleteReason))
+		// Keep the state the database would have after this reconcile. The next
+		// successful Kubernetes delete updates only the in-memory BMI in this test.
+		persistedBeforeDelete := proto.Clone(t.bareMetalInstance).(*privatev1.BareMetalInstance)
+
+		err = t.delete(ctx)
+		Expect(err).To(MatchError("kubernetes bare metal instance deletion is still in progress"))
+		ready = findProtoCondition(t.bareMetalInstance,
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY)
+		Expect(ready.GetReason()).To(Equal(operatorDeleteValidatedReason))
+
+		// Simulate a failed BMI status write after the operator delete: restart
+		// with the persisted checkpoint, not the in-memory success condition.
+		restarted := newTaskForDelete(bmiID, hubID, hubCache)
+		restarted.bareMetalInstance = persistedBeforeDelete
+		restarted.r.fabricDomainsClient = t.r.fabricDomainsClient
+		err = restarted.delete(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(hasFinalizer(restarted.bareMetalInstance)).To(BeFalse())
+	}, Entry("unassigned host", ""), Entry("assigned host before projection", "host-a"))
 
 	It("should project the BMF network cleanup condition during delete", func() {
 		cr := newBareMetalInstanceCR(bmiID, hubNamespace, crName, nil)
@@ -1640,9 +1778,10 @@ var _ = Describe("delete", func() {
 		hubCache := controllers.NewMockHubCache(ctrl)
 		hubCache.EXPECT().Get(gomock.Any(), hubID).Return(&controllers.HubEntry{
 			Namespace: hubNamespace, Client: fakeClient,
-		}, nil)
+		}, nil).Times(2)
 
 		t := newTaskForDelete(bmiID, hubID, hubCache)
+		Expect(t.delete(ctx)).To(MatchError(ContainSubstring("persisting validated operator host state")))
 		Expect(t.delete(ctx)).To(MatchError("kubernetes bare metal instance deletion is still in progress"))
 
 		condition := findProtoCondition(t.bareMetalInstance,
@@ -2147,6 +2286,21 @@ var _ = Describe("syncStatus", func() {
 			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING))
 	})
 
+	It("should synchronize assigned host names without treating an empty host as final", func() {
+		t := newTask(0)
+		object := &bmfov1alpha1.BareMetalInstance{
+			Spec: bmfov1alpha1.BareMetalInstanceSpec{ExternalHostName: "host-a"},
+		}
+		t.syncStatus(object)
+		Expect(t.bareMetalInstance.GetStatus().GetExternalHostName()).To(Equal("host-a"))
+		Expect(t.bareMetalInstance.GetStatus().GetExternalHostNameSynchronized()).To(BeTrue())
+
+		object.Spec.ExternalHostName = ""
+		t.syncStatus(object)
+		Expect(t.bareMetalInstance.GetStatus().GetExternalHostName()).To(Equal("host-a"))
+		Expect(t.bareMetalInstance.GetStatus().GetExternalHostNameSynchronized()).To(BeFalse())
+	})
+
 	It("should not change state when phase is empty", func() {
 		t := newTask(0)
 		object := &bmfov1alpha1.BareMetalInstance{}
@@ -2165,6 +2319,7 @@ var _ = Describe("syncStatus", func() {
 		t.syncStatus(object)
 		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
 			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_PROVISIONING))
+		Expect(t.bareMetalInstance.GetStatus().GetExternalHostNameSynchronized()).To(BeFalse())
 	})
 
 	It("should map Progressing phase to PROVISIONING state", func() {

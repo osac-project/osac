@@ -464,13 +464,12 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, tenant *v1alpha1.T
 
 	// Stage 3: provision cluster-side storage on CaaS clusters owned by this tenant.
 	// With a ClusterStorageProvider configured, this stage runs when a VMaaS
-	// StorageClass resolved. When none resolved, it runs only when tier
-	// definitions resolved for every OSAC tier and Stage 1 reports the storage
-	// backends ready (hubSecretReady). A failed StorageClass lookup on the VMaaS
-	// target returns before this point, so it still blocks this stage. The
-	// Tenant's ClusterStorageReady (VMaaS) and each ClusterOrder's
-	// ClusterStorageReady are independent of each other.
-	if vmaasHandled && (!hubSecretReady || len(osacTiers) == 0 || skippedOSACTiers) {
+	// StorageClass resolved. When none resolved, caasBlockedWithoutVMaaSClass
+	// decides whether it runs. A failed StorageClass lookup on the VMaaS target
+	// returns before this point, so it still blocks this stage. The Tenant's
+	// ClusterStorageReady (VMaaS) and each ClusterOrder's ClusterStorageReady
+	// are independent of each other.
+	if vmaasHandled && r.caasBlockedWithoutVMaaSClass(ctx, tenant, tenantName, hubSecretReady, osacTiers, skippedOSACTiers) {
 		return vmaasResult, vmaasErr
 	}
 	caasResult, caasErr := r.handleCaaSUpdate(ctx, tenant)
@@ -498,6 +497,29 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, tenant *v1alpha1.T
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// caasBlockedWithoutVMaaSClass reports whether the CaaS stage must not run when
+// no VMaaS StorageClass resolved. The stage runs only when at least one OSAC
+// tier definition resolved, no catalog tier was skipped during resolution, and
+// Stage 1 reports the storage backends ready (hubSecretReady). When it is held
+// back only by a skipped tier, it logs the tenant and emits a StorageTiersSkipped
+// Warning event.
+func (r *StorageReconciler) caasBlockedWithoutVMaaSClass(
+	ctx context.Context,
+	tenant *v1alpha1.Tenant,
+	tenantName string,
+	hubSecretReady bool,
+	osacTiers []provisioning.TierDefinition,
+	skippedOSACTiers bool,
+) bool {
+	if hubSecretReady && len(osacTiers) > 0 && skippedOSACTiers {
+		ctrllog.FromContext(ctx).Info("CaaS cluster storage is waiting: a catalog storage tier was skipped during resolution",
+			"tenant", tenantName)
+		r.Recorder.Eventf(tenant, nil, corev1.EventTypeWarning, "StorageTiersSkipped", "Provision",
+			"%s", "CaaS cluster storage is waiting: one or more storage tiers in the catalog could not be resolved; the operator log names the tier and backend")
+	}
+	return !hubSecretReady || len(osacTiers) == 0 || skippedOSACTiers
 }
 
 // combineStageResults merges the results of the VMaaS and CaaS stages when both

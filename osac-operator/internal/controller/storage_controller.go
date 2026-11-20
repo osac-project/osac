@@ -464,10 +464,11 @@ func (r *StorageReconciler) handleUpdate(ctx context.Context, tenant *v1alpha1.T
 
 	// Stage 3: provision cluster-side storage on CaaS clusters owned by this tenant.
 	// With a ClusterStorageProvider configured, this stage runs when a VMaaS
-	// StorageClass resolved, or when Stage 1 reports the storage backends ready
-	// (hubSecretReady). The Tenant's ClusterStorageReady (VMaaS) and each
-	// ClusterOrder's ClusterStorageReady are independent of each other.
-	if vmaasHandled && !hubSecretReady {
+	// StorageClass resolved, or when tier definitions resolved and Stage 1
+	// reports the storage backends ready (hubSecretReady). The Tenant's
+	// ClusterStorageReady (VMaaS) and each ClusterOrder's ClusterStorageReady
+	// are independent of each other.
+	if vmaasHandled && (!hubSecretReady || len(osacTiers) == 0) {
 		return vmaasResult, vmaasErr
 	}
 	caasResult, caasErr := r.handleCaaSUpdate(ctx, tenant)

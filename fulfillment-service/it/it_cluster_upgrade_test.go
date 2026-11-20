@@ -18,13 +18,11 @@ import (
 	"fmt"
 	"time"
 
-	ginkgo "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	kubeerrors "k8s.io/apimachinery/pkg/api/errors"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
@@ -430,103 +428,5 @@ var _ = Describe("Cluster upgrade", func() {
 		Expect(recoveredActive.GetControlPlane().GetTimeoutTime()).To(BeNil())
 		Expect(recoveredActive.GetNodeSetsScheduledTime()).NotTo(BeNil())
 	})
-	It("persists operator feedback through Fulfillment", ginkgo.Label(computeStorageLabel), func() {
-		Expect(config.TestSuite).To(Equal(computeStorageLabel),
-			"run with the installer compute-storage phase and its real operator")
-		cluster := createCluster(twoNodeSets())
-		order := waitForClusterOrder(cluster)
-		kubeClient := tool.KubeClient()
-		DeferCleanup(func() {
-			// This contract supplies no HostedCluster or AAP job. Remove the
-			// controlled order after requesting cluster deletion so the normal
-			// fixture cleanup can observe archival without provider teardown.
-			_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: cluster.GetId()}.Build())
-			Expect(err).NotTo(HaveOccurred())
-			Eventually(func(g Gomega) {
-				current := &osacv1alpha1.ClusterOrder{}
-				err := kubeClient.Get(ctx, crclient.ObjectKeyFromObject(order), current)
-				if kubeerrors.IsNotFound(err) {
-					return
-				}
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(kubeClient.Delete(ctx, current)).To(Succeed())
-				current.Finalizers = nil
-				g.Expect(kubeClient.Update(ctx, current)).To(Succeed())
-			}, time.Minute, time.Second).Should(Succeed())
-		})
-		Eventually(func(g Gomega) {
-			updated := &osacv1alpha1.ClusterOrder{}
-			g.Expect(kubeClient.Get(ctx, crclient.ObjectKeyFromObject(order), updated)).To(Succeed())
-			if updated.Annotations == nil {
-				updated.Annotations = map[string]string{}
-			}
-			// Keep the primary reconciler from replacing the controlled status.
-			updated.Annotations["osac.openshift.io/management-state"] = "unmanaged"
-			g.Expect(kubeClient.Update(ctx, updated)).To(Succeed())
-		}, time.Minute, time.Second).Should(Succeed())
 
-		seedObservedVersions(cluster)
-		updateTargetVersion(cluster)
-		waitForOrderReleaseImage(order, targetImage)
-		stored := getPrivateCluster(cluster)
-		attemptID := stored.GetStatus().GetUpgradeAttemptId()
-		Expect(attemptID).NotTo(BeEmpty())
-
-		Eventually(func(g Gomega) {
-			updated := &osacv1alpha1.ClusterOrder{}
-			g.Expect(kubeClient.Get(ctx, crclient.ObjectKeyFromObject(order), updated)).To(Succeed())
-			updated.Status.UpgradeObservation = &osacv1alpha1.UpgradeObservation{
-				AttemptID: attemptID,
-				Version:   targetSemver,
-				State:     osacv1alpha1.UpgradeObservationSucceeded,
-			}
-			g.Expect(kubeClient.Status().Update(ctx, updated)).To(Succeed())
-		}, time.Minute, time.Second).Should(Succeed())
-
-		Eventually(func(g Gomega) {
-			response, err := privateClusters.Get(ctx, privatev1.ClustersGetRequest_builder{Id: cluster.GetId()}.Build())
-			g.Expect(err).NotTo(HaveOccurred())
-			current := response.GetObject()
-			g.Expect(current.GetStatus().GetObservedVersion()).To(Equal(targetSemver))
-			g.Expect(current.GetStatus().GetActiveUpgradeAttempt().GetControlPlane().GetState()).To(
-				Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED))
-			g.Expect(current.GetStatus().GetActiveUpgradeAttempt().GetNodeSetsScheduledTime()).NotTo(BeNil())
-			g.Expect(current.GetStatus().GetUpgradeHistory()).To(HaveLen(1))
-			g.Expect(current.GetStatus().GetUpgradeHistory()[0].GetState()).To(
-				Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
-		}, time.Minute, time.Second).Should(Succeed())
-
-		Eventually(func(g Gomega) {
-			updated := &osacv1alpha1.ClusterOrder{}
-			g.Expect(kubeClient.Get(ctx, crclient.ObjectKeyFromObject(order), updated)).To(Succeed())
-			updated.Status.NodeRequests = nil
-			for _, request := range updated.Spec.NodeRequests {
-				updated.Status.NodeRequests = append(updated.Status.NodeRequests, osacv1alpha1.NodeRequestStatus{
-					NodeSet:       request.NodeSet,
-					NumberOfNodes: request.NumberOfNodes,
-					BareMetal:     request.BareMetal,
-					UpgradeObservation: &osacv1alpha1.UpgradeObservation{
-						AttemptID:      attemptID,
-						Version:        targetSemver,
-						State:          osacv1alpha1.UpgradeObservationSucceeded,
-						ReadyAtVersion: true,
-					},
-				})
-			}
-			g.Expect(kubeClient.Status().Update(ctx, updated)).To(Succeed())
-		}, time.Minute, time.Second).Should(Succeed())
-
-		Eventually(func(g Gomega) {
-			response, err := privateClusters.Get(ctx, privatev1.ClustersGetRequest_builder{Id: cluster.GetId()}.Build())
-			g.Expect(err).NotTo(HaveOccurred())
-			current := response.GetObject()
-			g.Expect(current.GetStatus().GetUpgradeHistory()).To(HaveLen(1))
-			g.Expect(current.GetStatus().GetUpgradeHistory()[0].GetState()).To(
-				Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED))
-			g.Expect(current.GetStatus().GetNodeSets()).To(HaveLen(2))
-			for _, nodeSet := range current.GetStatus().GetNodeSets() {
-				g.Expect(nodeSet.GetObservedVersion()).To(Equal(targetSemver))
-			}
-		}, time.Minute, time.Second).Should(Succeed())
-	})
 })

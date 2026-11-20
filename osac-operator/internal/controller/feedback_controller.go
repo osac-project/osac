@@ -150,20 +150,13 @@ func newClusterOrderFeedbackBridge(hubClient clnt.Client, clustersClient private
 			return cluster, nil
 		},
 		Save: func(ctx context.Context, remote *privatev1.Cluster) error {
-			feedback := proto.Clone(remote).(*privatev1.Cluster)
-			attemptID := remote.GetStatus().GetUpgradeAttemptId()
-			history := []*privatev1.ClusterUpgradeHistoryEntry{}
-			if entry := currentClusterUpgradeEntry(remote, attemptID); entry != nil {
-				history = append(history, entry)
-			}
-			feedback.GetStatus().SetUpgradeHistory(history)
 			_, err := clustersClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
-				Object: feedback,
+				Object: remote,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
 					feedbackStatusConditionsPath, feedbackStatusStatePath, "status.api_url", "status.console_url", "status.api_endpoint",
 					"status.ingress_endpoint", feedbackStatusStateTransitionTimePath, "status.kubeconfig_secret", "status.password_secret", "status.hub",
 					"status.node_sets", "status.observed_version", "status.add_on_operators", "status.active_upgrade_attempt",
-					"status.upgrade_attempt_id", "status.upgrade_history",
+					"status.upgrade_attempt_id",
 				}},
 			}.Build())
 			return err

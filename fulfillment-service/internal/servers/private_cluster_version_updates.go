@@ -194,12 +194,12 @@ func applyClusterNodeSetUpgradeTargets(candidate *privatev1.Cluster, names []str
 // mergeClusterUpgradeHistory preserves server-owned history and validates
 // feedback for the current attempt.
 func mergeClusterUpgradeHistory(current, candidate *privatev1.Cluster,
-	mask *fieldmaskpb.FieldMask, requestActive *privatev1.ClusterUpgradeAttemptState,
+	mask *fieldmaskpb.FieldMask, requestAttemptID string,
+	requestActive *privatev1.ClusterUpgradeAttemptState,
 	resolvedTarget *privatev1.ClusterVersion) {
 	attemptID := current.GetStatus().GetUpgradeAttemptId()
 	stored := current.GetStatus().GetUpgradeHistory()
 	result := slices.Clone(stored)
-	feedbackMatches := currentClusterUpgradeFeedbackMatches(attemptID, candidate)
 	if !candidate.HasStatus() {
 		candidate.SetStatus(&privatev1.ClusterStatus{})
 	}
@@ -216,7 +216,7 @@ func mergeClusterUpgradeHistory(current, candidate *privatev1.Cluster,
 	}
 	mergedActive := current.GetStatus().GetActiveUpgradeAttempt()
 	if updateIncludesField(mask, "status.active_upgrade_attempt") &&
-		feedbackMatches {
+		attemptID != "" && requestAttemptID == attemptID {
 		mergedActive = mergeClusterUpgradeAttemptState(current, candidate, attemptID, requestActive)
 	}
 	mergedActive = removeDeletedClusterUpgradeParticipants(mergedActive, candidate)
@@ -229,17 +229,6 @@ func mergeClusterUpgradeHistory(current, candidate *privatev1.Cluster,
 	}
 	candidate.GetStatus().SetActiveUpgradeAttempt(mergedActive)
 	candidate.GetStatus().SetUpgradeHistory(result)
-}
-
-// currentClusterUpgradeFeedbackMatches accepts detailed feedback only for
-// the attempt Fulfillment is still tracking. Live status is merged separately.
-func currentClusterUpgradeFeedbackMatches(attemptID string, candidate *privatev1.Cluster) bool {
-	if attemptID == "" {
-		return false
-	}
-	requestAttemptID := candidate.GetStatus().GetUpgradeAttemptId()
-	return (requestAttemptID == "" || requestAttemptID == attemptID) &&
-		clusterUpgradeHistoryEntryByID(candidate.GetStatus().GetUpgradeHistory(), attemptID) != nil
 }
 
 // clusterUpgradeHistoryEntryByID returns the first entry with the attempt ID.

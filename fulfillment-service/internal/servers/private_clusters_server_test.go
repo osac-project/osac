@@ -5589,10 +5589,10 @@ var _ = Describe("Private clusters server", func() {
 				Expect(merged[0].GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
 			})
 
-			It("rejects a mismatched request attempt pointer", func() {
+			It("rejects feedback without a request attempt ID", func() {
 				updated := updateTarget("4-18-0")
 				candidate := proto.Clone(updated).(*privatev1.Cluster)
-				candidate.GetStatus().SetUpgradeAttemptId("old-attempt")
+				candidate.GetStatus().SetUpgradeAttemptId("")
 				candidate.GetStatus().GetActiveUpgradeAttempt().GetControlPlane().SetState(
 					privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED)
 				candidate.GetStatus().GetActiveUpgradeAttempt().GetControlPlane().SetStateTransitionTime(

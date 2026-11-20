@@ -1269,25 +1269,18 @@ ifeq ($(SUITE),fulfillment)
 # No operator runs in this phase: the specs report networking and tenant status
 # through the private API as the operator's feedback controllers would, so a
 # running operator would race them. The networking-operator phase covers it.
-	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_MCP_DEPLOYED_URL="$(MCP_TEST_URL)" ginkgo run $(call fulfillment-json-report,service-only) --timeout 1h15m -v --skip 'Networking with operator|ComputeInstance storage handoff|persists operator feedback through Fulfillment' $(FULFILLMENT_GINKGO_ARGS) it
-
-endif
-ifneq ($(filter $(SUITE),fulfillment compute-storage),)
-ifeq ($(SUITE),compute-storage)
-	kubectl apply --server-side --field-manager=helm --force-conflicts \
-		-f ../fulfillment-service/it/crds/hostedclusters.hypershift.openshift.io.yaml
-endif
-	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.controllers.tenant=false --set operator.controllers.storage=true --set operator.controllers.volume=false --set operator.controllers.networking=false --set operator.controllers.computeInstance=true --set operator.controllers.clusterOrder=true --set operator.networkManagers.enabled=false --set-string operator.aap.url=http://compute-storage-aap.$(NS).svc.cluster.local:8080/api --set operator.aap.statusPollInterval=1s --set global.services.bmaas.enabled=true --set global.services.maas.enabled=false --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
-	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=compute-storage ginkgo run $(call fulfillment-json-report,compute-storage) --timeout 30m -v --label-filter 'compute-storage' it
-endif
-ifeq ($(SUITE),fulfillment)
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_MCP_DEPLOYED_URL="$(MCP_TEST_URL)" ginkgo run $(call fulfillment-json-report,service-only) --timeout 1h15m -v --skip 'Networking with operator|ComputeInstance storage handoff' $(FULFILLMENT_GINKGO_ARGS) it
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.controllers.tenant=false --set operator.controllers.storage=false --set operator.controllers.volume=false --set operator.controllers.networking=true --set operator.controllers.computeInstance=false --set operator.controllers.clusterOrder=false --set operator.networkManagers.enabled=false --set global.services.bmaas.enabled=false --set global.services.maas.enabled=false --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
 	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" ginkgo run $(call fulfillment-json-report,networking-operator) --timeout 30m -v --label-filter 'networking-operator' it
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set global.services.bmaas.enabled=false --set operator.enabled=false --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
 	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=bmaas-disabled ginkgo run $(call fulfillment-json-report,bmaas-disabled) --timeout 1h -v --focus 'Service enablement' it
+endif
+ifneq ($(filter $(SUITE),fulfillment compute-storage),)
+	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
+		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.controllers.tenant=false --set operator.controllers.storage=true --set operator.controllers.volume=false --set operator.controllers.networking=false --set operator.controllers.computeInstance=true --set operator.controllers.clusterOrder=false --set operator.networkManagers.enabled=false --set-string operator.aap.url=http://compute-storage-aap.$(NS).svc.cluster.local:8080/api --set operator.aap.statusPollInterval=1s --set global.services.bmaas.enabled=false --set global.services.maas.enabled=false --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=compute-storage ginkgo run $(call fulfillment-json-report,compute-storage) --timeout 30m -v --label-filter 'compute-storage' it
 endif
 ifeq ($(SUITE),operator)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)

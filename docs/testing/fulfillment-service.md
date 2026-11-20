@@ -29,9 +29,6 @@ storage and ComputeInstance controllers, and Kind StorageClass lookup. AAP is
 a recording double; no provider, CSI, or VM execution. The operator-side
 boundary is in the [osac-operator guide](osac-operator.md); deployed disk
 identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
-This phase also enables the BMaaS API from the first Fulfillment deployment
-for Cluster fixtures and runs controlled ClusterOrder upgrade feedback through
-the real operator and PostgreSQL; it does not provision a HostedCluster or NodePool.
 
 ## Selecting coverage
 

@@ -495,16 +495,6 @@ var _ = Describe("IDP Sync", func() {
 			}).
 			Times(1)
 
-		mockClient.EXPECT().
-			CreateUser(gomock.Any(), auth.SharedTenant, gomock.Any()).
-			Return(&idp.User{ID: "user-shared"}, nil).
-			Times(1)
-
-		mockClient.EXPECT().
-			AssignIdpManagerPermissions(gomock.Any(), "user-shared").
-			Return(nil).
-			Times(1)
-
 		task := &task{
 			r:      reconciler,
 			tenant: tenant,
@@ -513,6 +503,8 @@ var _ = Describe("IDP Sync", func() {
 		err := task.update(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(tenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
+		Expect(tenant.GetStatus().GetBreakGlassUserId()).To(BeEmpty())
+		Expect(tenant.GetSpec().GetBreakGlassCredentialsSecret()).To(BeNil())
 	})
 
 	It("should create system tenant as disabled", func() {

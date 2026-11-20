@@ -348,20 +348,23 @@ func (t *task) syncToIDP(ctx context.Context) error {
 			return controllers.RequeueAfter(errors.New("vault is not ready"), defaultRetryTimeout)
 		}
 		var err error
-		breakGlassPassword, err = t.ensureBreakGlassSecret(ctx)
-		if err != nil {
-			t.r.logger.ErrorContext(ctx, "Failed to create break-glass credentials secret",
-				slog.String("tenant_id", t.tenant.GetId()),
-				slog.Any("error", err),
-			)
-			t.tenant.GetStatus().SetState(privatev1.TenantState_TENANT_STATE_PENDING)
-			return controllers.RequeueAfter(err, defaultRetryTimeout)
+		if tenantName != auth.SharedTenant {
+			breakGlassPassword, err = t.ensureBreakGlassSecret(ctx)
+			if err != nil {
+				t.r.logger.ErrorContext(ctx, "Failed to create break-glass credentials secret",
+					slog.String("tenant_id", t.tenant.GetId()),
+					slog.Any("error", err),
+				)
+				t.tenant.GetStatus().SetState(privatev1.TenantState_TENANT_STATE_PENDING)
+				return controllers.RequeueAfter(err, defaultRetryTimeout)
+			}
 		}
 		config := &idp.TenantConfig{
-			Name:               tenantName,
-			Enabled:            new(!t.isBuiltin()),
-			Domains:            t.tenant.GetSpec().GetDomains(),
-			BreakGlassPassword: breakGlassPassword,
+			Name:                    tenantName,
+			Enabled:                 new(!t.isBuiltin()),
+			CreateBreakGlassAccount: tenantName != auth.SharedTenant,
+			Domains:                 t.tenant.GetSpec().GetDomains(),
+			BreakGlassPassword:      breakGlassPassword,
 		}
 
 		credentials, err := t.r.idpManager.CreateTenant(ctx, config)
@@ -373,7 +376,9 @@ func (t *task) syncToIDP(ctx context.Context) error {
 
 		// Record the IdP identity after the tenant and break-glass account exist.
 		t.tenant.GetStatus().SetIdpTenantName(config.Name)
-		t.tenant.GetStatus().SetBreakGlassUserId(credentials.UserID)
+		if credentials != nil {
+			t.tenant.GetStatus().SetBreakGlassUserId(credentials.UserID)
+		}
 	}
 
 	t.tenant.GetStatus().SetState(privatev1.TenantState_TENANT_STATE_SYNCED)

@@ -313,12 +313,17 @@ var _ = Describe("Filter translator", func() {
 			Entry(
 				"Escape percent in like pattern",
 				`this.my_string.startsWith("my%")`,
-				`data->>'my_string' like 'my\%%'`,
+				`data->>'my_string' like e'my\\%%'`,
 			),
 			Entry(
 				"Escape underscore in like pattern",
 				`this.my_string.startsWith("my_")`,
-				`data->>'my_string' like 'my\_%'`,
+				`data->>'my_string' like e'my\\_%'`,
+			),
+			Entry(
+				"Escape backslash in like pattern",
+				`this.my_string.startsWith("my\\")`,
+				`data->>'my_string' like e'my\\\\%'`,
 			),
 			Entry(
 				"Check if object is deleted",
@@ -403,7 +408,7 @@ var _ = Describe("Filter translator", func() {
 			Entry(
 				"Double-quoted string with backslash from %q",
 				`this.id == "path\\to\\thing"`,
-				`id = 'path\\to\\thing'`,
+				`id = e'path\\to\\thing'`,
 			),
 			Entry(
 				"Double-quoted string with CEL injection attempt from %q",
@@ -458,12 +463,12 @@ var _ = Describe("Filter translator", func() {
 			Entry(
 				"Project starts with string",
 				`this.metadata.project.startsWith('my_project.')`,
-				`cast(project as text) like 'my\_project.%'`,
+				`cast(project as text) like e'my\\_project.%'`,
 			),
 			Entry(
 				"Project ends with string",
 				`this.metadata.project.endsWith('.my_project')`,
-				`cast(project as text) like '%.my\_project'`,
+				`cast(project as text) like e'%.my\\_project'`,
 			),
 			Entry(
 				"Project contains string",
@@ -573,12 +578,12 @@ var _ = Describe("Filter translator", func() {
 					Entry(
 						"Name starts with string",
 						`this.metadata.name.startsWith('my_project.')`,
-						`cast(name as text) like 'my\_project.%'`,
+						`cast(name as text) like e'my\\_project.%'`,
 					),
 					Entry(
 						"Name ends with string",
 						`this.metadata.name.endsWith('.my_project')`,
-						`cast(name as text) like '%.my\_project'`,
+						`cast(name as text) like e'%.my\\_project'`,
 					),
 					Entry(
 						"Name contains string",

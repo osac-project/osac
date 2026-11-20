@@ -2230,7 +2230,7 @@ var _ = Describe("Private bare metal instances server", func() {
 
 		})
 
-		It("leaves automatic attachment creation to the ready BareMetalInstance reconciler and cleans up an unattached ExternalIP", func() {
+		It("leaves automatic attachment creation and deletion cleanup to the BMI controller", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("deferred-%s", uuid.NewString()[:8])}.Build(),
@@ -2265,7 +2265,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			eipList, err = eipDao.List().SetFilter(filter).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(eipList.GetItems()).To(BeEmpty())
+			Expect(eipList.GetItems()).To(HaveLen(1))
 		})
 
 		It("Rejects PATCH that changes auto_external_ip_attachment", func() {

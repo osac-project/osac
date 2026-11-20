@@ -86,7 +86,30 @@ superseded or extended design explicitly.
     ready at creation. Internal/default/auto-provisioning flows observe the same
     readiness gates and create dependencies in order. Delete is allowed only
     when no active resource references the target, subject to the accepted
-    auto-created resource cleanup rules.
+    auto-created resource cleanup rules. For BMaaS, a BMI's assigned host name
+    is carried into private Fulfillment status. A FabricDomain can list only a
+    same-tenant BMI host that is not being deleted; BMI deletion is rejected
+    while any same-tenant FabricDomain record lists that host, including a
+    FabricDomain already being deleted. The dependency ends when the
+    FabricDomain record is removed, so tenants delete the FabricDomain first.
+    Fulfillment locks the BMI row during both FabricDomain create and BMI
+    delete so the two operations cannot both succeed. A private synchronization
+    marker keeps legacy BMI records from creating FabricDomains until Fulfillment
+    has read a concrete host assignment. When a BMI has no projected host yet,
+    the delete reconciler checks the live operator object and uses its Kubernetes
+    resource version as a delete precondition. This lets a delete cancel an
+    unassigned instance while fencing a host assignment that races with the
+    dependency check. The last known host remains protected while assignment is
+    pending; if the operator object is missing and the host is unknown, deletion
+    stays blocked unless a prior reconcile persisted a host-validation checkpoint
+    before the resource-version-fenced delete, or recorded that delete as
+    successful. On absence, Fulfillment checks the saved host against current
+    FabricDomain references; a checkpoint with no saved host is accepted as
+    unassigned.
+    Unexplained absence stays blocked. This guard replaces the retired
+    inventory repair-mark path; do not add its backend
+    marks or support procedure. See the [merged BMaaS networking design update,
+    PR #471](https://github.com/osac-project/enhancement-proposals/pull/471).
 
 ## EVPN handoff implementation status
 

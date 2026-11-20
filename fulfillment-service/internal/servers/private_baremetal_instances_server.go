@@ -79,6 +79,7 @@ type PrivateBareMetalInstancesServer struct {
 	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
 	externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
 	secretsDao              *dao.GenericDAO[*privatev1.Secret]
+	fabricDomainsDao        *dao.GenericDAO[*privatev1.FabricDomain]
 	secretStore             vault.SecretStore
 	settings                NetworkingSettings
 	lifecycle               *externalIPLifecycle
@@ -256,6 +257,10 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 	if err != nil {
 		return
 	}
+	fabricDomainsDao, err := newGuardDAO[*privatev1.FabricDomain](b.logger)
+	if err != nil {
+		return
+	}
 
 	result = &PrivateBareMetalInstancesServer{
 		logger:                  b.logger,
@@ -273,6 +278,7 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		externalIPDao:           externalIPDao,
 		externalIPAttachmentDao: externalIPAttachmentDao,
 		secretsDao:              secretsDao,
+		fabricDomainsDao:        fabricDomainsDao,
 		secretStore:             b.secretStore,
 		settings:                resolveNetworkingSettings(b.networkingSettings),
 	}
@@ -524,60 +530,44 @@ func (s *PrivateBareMetalInstancesServer) Delete(ctx context.Context,
 	if err = s.lifecycle.rejectManualAttachmentDelete(ctx, "BareMetalInstance", id, instance.GetMetadata()); err != nil {
 		return
 	}
-	if instance.GetSpec().GetAutoExternalIpAttachment() {
-		s.logger.InfoContext(ctx, "BMI has auto_external_ip_attachment, running cascade cleanup",
-			slog.String("bmi_id", id))
-		err = s.autoCleanupExternalIP(ctx, id)
-		if err != nil {
-			s.logger.ErrorContext(ctx, "Auto-EIP cascade cleanup failed",
-				slog.String("bmi_id", id), slog.Any("error", err))
-			return
-		}
+	if err = s.rejectDeleteIfFabricDomainReferencesHost(ctx, instance); err != nil {
+		return
 	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
 }
 
-func (s *PrivateBareMetalInstancesServer) autoCleanupExternalIP(ctx context.Context, bmiID string) error {
-	filter := autoCreatedExternalIPAttachmentFilter(bmiID)
-	s.logger.InfoContext(ctx, "Auto-EIP cleanup: listing attachments",
-		slog.String("bmi_id", bmiID), slog.String("filter", filter))
-
-	listResp, err := s.externalIPAttachmentDao.List().SetFilter(filter).Do(ctx)
+// rejectDeleteIfFabricDomainReferencesHost prevents deletion while the last known assigned host is referenced by a
+// same-tenant FabricDomain. If no host has been projected yet, the delete controller checks the live operator object
+// and uses a Kubernetes resourceVersion precondition to stop a concurrent host assignment before deleting it. If the
+// operator object is missing while a hub is known, the controller keeps the finalizer until the host can be confirmed.
+func (s *PrivateBareMetalInstancesServer) rejectDeleteIfFabricDomainReferencesHost(
+	ctx context.Context, instance *privatev1.BareMetalInstance,
+) error {
+	status := instance.GetStatus()
+	host := status.GetExternalHostName()
+	if host == "" {
+		return nil
+	}
+	filter := fmt.Sprintf("this.metadata.tenant == %q && %q in this.spec.servers",
+		instance.GetMetadata().GetTenant(), host)
+	count, firstID, err := countRecords(ctx, s.fabricDomainsDao, filter)
 	if err != nil {
-		return fmt.Errorf("auto_external_ip_attachment cleanup: failed to list attachments: %w", err)
+		s.logger.ErrorContext(ctx, "Failed to check FabricDomain host references",
+			slog.String("bmi_id", instance.GetId()), slog.Any("error", err))
+		return grpcstatus.Error(grpccodes.Internal, "failed to check FabricDomain references")
 	}
-
-	items := listResp.GetItems()
-	s.logger.InfoContext(ctx, "Auto-EIP cleanup: found attachments",
-		slog.String("bmi_id", bmiID), slog.Int("count", len(items)))
-
-	for _, attachment := range items {
-		attachmentID := attachment.GetId()
-		eipRef := attachment.GetSpec().GetExternalIp()
-		eipID := refKey(eipRef)
-		s.logger.InfoContext(ctx, "Auto-EIP cleanup: deleting attachment",
-			slog.String("attachment_id", attachmentID), slog.String("eip_id", eipID))
-
-		if eipID != "" {
-			err = s.lifecycle.deleteAttachmentAndExternalIP(ctx, attachmentID, eipID)
-			if err != nil {
-				return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
-			}
-			s.logger.InfoContext(ctx, "Auto-EIP cleanup: deleted attachment and EIP",
-				slog.String("attachment_id", attachmentID), slog.String("eip_id", eipID))
-		} else {
-			if err = s.lifecycle.deleteAttachment(ctx, attachmentID); err != nil {
-				return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
-			}
-		}
+	if count == 0 {
+		return nil
 	}
-
-	if err := s.lifecycle.deleteAutoCreatedExternalIPs(ctx, bmiID); err != nil {
-		return fmt.Errorf("auto_external_ip_attachment cleanup: %w", err)
+	parentName := fmt.Sprintf("'%s'", instance.GetId())
+	if metadata := instance.GetMetadata(); metadata != nil && metadata.GetName() != "" &&
+		metadata.GetName() != instance.GetId() {
+		parentName = fmt.Sprintf("'%s' (id '%s')", metadata.GetName(), instance.GetId())
 	}
-
-	return nil
+	return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		"cannot delete BareMetalInstance %s: %d active FabricDomain resource(s) still reference it (including '%s')",
+		parentName, count, firstID)
 }
 
 func (s *PrivateBareMetalInstancesServer) Signal(ctx context.Context,

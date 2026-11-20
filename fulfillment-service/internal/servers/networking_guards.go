@@ -17,8 +17,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"math"
 	"net/netip"
+	"strconv"
+	"strings"
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -192,51 +193,43 @@ func forEachRecord[O dao.Object](ctx context.Context, objectDao *dao.GenericDAO[
 var forEachRecordPageSize int32 = 1000
 
 // forEachMatchingRecord calls the function for every record of the DAO that matches the filter (all records when the
-// filter is empty), page by page, so no record is missed because of the DAO's default list limit.
+// filter is empty). It advances by ID rather than offset, so records archived between pages cannot shift later matches
+// behind an already-read offset.
 func forEachMatchingRecord[O dao.Object](ctx context.Context, objectDao *dao.GenericDAO[O], filter string,
 	fn func(O)) error {
-	return forEachDAOPage(ctx, forEachRecordPageSize, func(ctx context.Context, offset, pageSize int32) ([]O, error) {
-		request := objectDao.List().SetLimit(pageSize).SetOffset(offset)
+	pageSize := forEachRecordPageSize
+	if pageSize <= 0 {
+		return errors.New("DAO page size must be positive")
+	}
+	afterID := ""
+	for {
+		request := objectDao.List().SetLimit(pageSize)
+		filters := make([]string, 0, 2)
 		if filter != "" {
-			request.SetFilter(filter)
+			filters = append(filters, "("+filter+")")
+		}
+		if afterID != "" {
+			filters = append(filters, "this.id > "+strconv.Quote(afterID))
+		}
+		if len(filters) > 0 {
+			request.SetFilter(strings.Join(filters, " && "))
 		}
 		page, err := request.Do(ctx)
 		if err != nil {
-			return nil, err
-		}
-		return page.GetItems(), nil
-	}, fn)
-}
-
-// ErrDAOOffsetOverflow indicates that another full page would exceed the DAO's int32 offset range.
-var ErrDAOOffsetOverflow = errors.New("DAO pagination offset overflow")
-
-func nextDAOOffset(offset, pageSize int32) (int32, error) {
-	if offset > math.MaxInt32-pageSize {
-		return 0, ErrDAOOffsetOverflow
-	}
-	return offset + pageSize, nil
-}
-
-// forEachDAOPage visits records until a short page, preserving list errors and checking offset overflow before
-// advancing. Callers supply the DAO filter, a positive page size, and their own error translation.
-func forEachDAOPage[O any](ctx context.Context, pageSize int32,
-	list func(context.Context, int32, int32) ([]O, error), fn func(O)) error {
-	for offset := int32(0); ; {
-		items, err := list(ctx, offset, pageSize)
-		if err != nil {
 			return err
 		}
+		items := page.GetItems()
 		for _, item := range items {
 			fn(item)
 		}
 		if len(items) < int(pageSize) {
 			return nil
 		}
-		offset, err = nextDAOOffset(offset, pageSize)
-		if err != nil {
-			return err
+		nextID := items[len(items)-1].GetId()
+		if nextID == "" || nextID == afterID {
+			return errors.New("DAO keyset pagination did not advance")
 		}
+		afterID = nextID
 	}
 }
 

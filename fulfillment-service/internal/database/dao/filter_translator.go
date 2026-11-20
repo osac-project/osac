@@ -652,6 +652,7 @@ func (t *FilterTranslator) translateString(value, special string) (text string, 
 		if r == '\\' || strings.ContainsRune(special, r) {
 			buffer.WriteRune('\\')
 			buffer.WriteRune(r)
+			escaped = true
 		} else if r == '\'' {
 			buffer.WriteString("\\'")
 			escaped = true
@@ -976,14 +977,25 @@ func (t *FilterTranslator) translateToLike(funcName string, target ast.Expr, pat
 		err = fmt.Errorf("argument of the '%s' function must be a string literal", funcName)
 		return
 	}
-	patternText, patternEscaped := t.translateString(patternValue, "%_")
+	// Escape LIKE metacharacters in the pattern first, then escape the resulting
+	// backslashes for PostgreSQL's E-string parser. Combining these two layers
+	// loses the backslash before '%' and '_' because PostgreSQL consumes it as a
+	// string escape before LIKE sees the pattern.
+	var likePattern bytes.Buffer
+	likePattern.WriteString(patternPrefix)
+	for _, r := range patternValue {
+		if r == '\\' || r == '%' || r == '_' {
+			likePattern.WriteRune('\\')
+		}
+		likePattern.WriteRune(r)
+	}
+	likePattern.WriteString(patternSuffix)
+	patternText, patternEscaped := t.translateString(likePattern.String(), "")
 	if patternEscaped {
 		buffer.WriteString("e")
 	}
 	buffer.WriteString("'")
-	buffer.WriteString(patternPrefix)
 	buffer.WriteString(patternText)
-	buffer.WriteString(patternSuffix)
 	buffer.WriteString("'")
 	result.sql = buffer.String()
 	result.kind = filterTranslatorBooleanKind

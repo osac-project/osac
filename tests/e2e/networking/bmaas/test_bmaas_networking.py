@@ -7,7 +7,7 @@ from typing import Any, ClassVar
 
 import pytest
 
-from tests.e2e.core.grpc_client import GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import (
     wait_for_bmh_available,
     wait_for_bmi_cr,
@@ -296,6 +296,31 @@ class TestBmaasNetworking:
         _require(self.state, "bmi3")
         bmi3 = self.state["bmi3"]
 
+        def host_projection() -> tuple[str, bool]:
+            status = (
+                private_grpc.call(service=f"{PRIVATE_API}.BareMetalInstances/Get", data={"id": bmi3["id"]})
+                .get("object", {})
+                .get("status", {})
+            )
+            host_name = status.get("external_host_name", status.get("externalHostName", ""))
+            synchronized = status.get(
+                "external_host_name_synchronized", status.get("externalHostNameSynchronized", False)
+            )
+            return str(host_name), bool(synchronized)
+
+        projected_host, _ = poll_until(
+            fn=host_projection,
+            until=lambda value: value == (bmi3["bmh"], True),
+            retries=30,
+            delay=5,
+            description=f"Fulfillment host-name projection for BMI3 {bmi3['id']}",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi3["id"],
+        )
+        assert projected_host == bmi3["bmh"], (
+            f"Fulfillment projected host name {projected_host!r}, expected {bmi3['bmh']!r}"
+        )
+
         def find_auto_attachment() -> dict[str, Any] | None:
             attachments = grpc.call(service="osac.public.v1.ExternalIPAttachments/List")
             for item in attachments.get("items", []):
@@ -320,6 +345,8 @@ class TestBmaasNetworking:
         auto_eip_ref = attachment.get("spec", {}).get("externalIp", {}).get("id", "")
         assert auto_eip_ref, "Auto-created attachment has no ExternalIP reference"
 
+        auto_eip_cr = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=auto_eip_ref)
+
         eip_data = grpc.get_external_ip(external_ip_id=auto_eip_ref)
         auto_ext_addr = eip_data.get("object", {}).get("status", {}).get("address", "")
         assert auto_ext_addr, "Auto-created ExternalIP has no allocated address"
@@ -337,7 +364,11 @@ class TestBmaasNetworking:
         )
 
         self.__class__.state.update(
-            auto_attach_id=auto_attach_id, auto_eip_id=auto_eip_ref, auto_ext_addr=auto_ext_addr
+            auto_attach_id=auto_attach_id,
+            auto_attach_cr=auto_attach_cr,
+            auto_eip_id=auto_eip_ref,
+            auto_eip_cr=auto_eip_cr,
+            auto_ext_addr=auto_ext_addr,
         )
         print("BMI3 auto EIP and attachment resolved")
 
@@ -511,31 +542,6 @@ class TestBmaasNetworking:
             wait_for_bmi_grpc_removal(grpc=grpc, uuid=bmi["id"])
             wait_for_bmh_available(k8s=k8s_hub_client, name=bmi["bmh"], bmh_namespace=bmh_namespace)
             print("BMI deprovisioned, BMH available")
-
-    def test_14b_verify_auto_eip_garbage_collected(self, grpc: GRPCClient) -> None:
-        if "auto_attach_id" not in self.state:
-            pytest.skip("No auto EIP to verify")
-
-        poll_until(
-            fn=lambda: self.state["auto_attach_id"] not in grpc.list_external_ip_attachment_ids(),
-            until=lambda gone: gone is True,
-            retries=30,
-            delay=5,
-            description="auto-created ExternalIPAttachment garbage collection",
-            resource_kind=WaitResourceKind.EXTERNAL_IP_ATTACHMENT,
-            resource_id=self.state["auto_attach_id"],
-        )
-
-        poll_until(
-            fn=lambda: self.state["auto_eip_id"] not in grpc.list_external_ip_ids(),
-            until=lambda gone: gone is True,
-            retries=30,
-            delay=5,
-            description="auto-created ExternalIP garbage collection",
-            resource_kind=WaitResourceKind.EXTERNAL_IP,
-            resource_id=self.state["auto_eip_id"],
-        )
-        print("Auto EIP and attachment garbage collected after BMI3 deletion")
 
     def test_15_delete_nat_gateway(self, grpc: GRPCClient, k8s_hub_client: K8sClient) -> None:
         if "nat_id" not in self.state:

@@ -95,6 +95,9 @@ export const loginWithStagedTenantPassword = async (
   if (!password.trim()) {
     throw new Error('Tenant replacement password is empty.');
   }
+  if (/[\r\n\u2028\u2029]/.test(password)) {
+    throw new Error('Tenant replacement password must be a single line.');
+  }
   if (!/^Password: .*$/m.test(contents)) {
     throw new Error('Tenant credentials file is missing Password.');
   }

@@ -16,6 +16,7 @@ CLI = UI_DIR / 'apps/playwright/node_modules/@playwright/test/cli.js'
 CONFIG = UI_DIR / 'apps/e2e-tests/helper-tests/fixtures/password-report.config.ts'
 SYNTHETIC_PASSWORD = 'synthetic-password-report-check-2461'
 SYNTHETIC_REPLACEMENT = 'synthetic-replacement-report-check-2461'
+DEBUG_ENV_VARS = ('DEBUG', 'PWDEBUG', 'npm_config_pwdebug', 'npm_package_config_pwdebug')
 
 
 class PasswordReportTests(unittest.TestCase):
@@ -23,8 +24,8 @@ class PasswordReportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='osac-password-report-') as directory:
             root = Path(directory)
             env = os.environ.copy()
-            env.pop('DEBUG', None)
-            env.pop('PWDEBUG', None)
+            for variable in DEBUG_ENV_VARS:
+                env.pop(variable, None)
             env.update(
                 PASSWORD_TEST_SECRET=SYNTHETIC_PASSWORD,
                 PASSWORD_TEST_REPLACEMENT=SYNTHETIC_REPLACEMENT,
@@ -65,12 +66,21 @@ class PasswordReportTests(unittest.TestCase):
                     self.assertNotIn(SYNTHETIC_REPLACEMENT.encode(), path.read_bytes(), str(path))
 
     def test_rejects_playwright_debugging_before_running(self):
-        for variable, value in (('DEBUG', 'pw:api'), ('DEBUG', '*'), ('PWDEBUG', '1')):
-            with self.subTest(variable=variable, value=value):
+        for overrides in (
+            {'DEBUG': 'pw:api'},
+            # Avoid verbose channel output masking the guard error on process exit.
+            {'DEBUG': '*,-pw:channel'},
+            {'PWDEBUG': '1'},
+            {'npm_config_pwdebug': '1'},
+            {'npm_package_config_pwdebug': '1'},
+            {'npm_config_pwdebug': '1', 'npm_package_config_pwdebug': '0'},
+            {'PWDEBUG': '1', 'npm_config_pwdebug': '0'},
+        ):
+            with self.subTest(overrides=overrides):
                 env = os.environ.copy()
-                env.pop('DEBUG', None)
-                env.pop('PWDEBUG', None)
-                env[variable] = value
+                for variable in DEBUG_ENV_VARS:
+                    env.pop(variable, None)
+                env.update(overrides)
                 env['PASSWORD_TEST_SECRET'] = SYNTHETIC_PASSWORD
                 result = subprocess.run(
                     ['node', str(CLI), 'test', '--config', str(CONFIG), '--list'],
@@ -82,8 +92,34 @@ class PasswordReportTests(unittest.TestCase):
                 )
                 self.assertNotEqual(result.returncode, 0)
                 output = result.stdout + result.stderr
-                self.assertIn('Playwright debug logging and inspector must be disabled', output)
+                self.assertTrue(
+                    'Playwright debug logging and inspector must be disabled' in output,
+                    f'Guard message missing (exit {result.returncode}, output length {len(output)}).',
+                )
                 self.assertNotIn(SYNTHETIC_PASSWORD, output)
+
+    def test_disabled_playwright_debugging_respects_precedence(self):
+        for overrides in (
+            {},
+            {'PWDEBUG': '0', 'npm_config_pwdebug': '1'},
+            {'PWDEBUG': '', 'npm_config_pwdebug': '1'},
+            {'npm_config_pwdebug': '0', 'npm_package_config_pwdebug': '1'},
+            {'npm_config_pwdebug': '', 'npm_package_config_pwdebug': '1'},
+        ):
+            with self.subTest(overrides=overrides):
+                env = os.environ.copy()
+                for variable in DEBUG_ENV_VARS:
+                    env.pop(variable, None)
+                env.update(overrides)
+                result = subprocess.run(
+                    ['node', str(CLI), 'test', '--config', str(CONFIG), '--list'],
+                    cwd=UI_DIR,
+                    env=env,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
 
 
 if __name__ == '__main__':

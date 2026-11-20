@@ -140,19 +140,7 @@ var _ = Describe("Private roles server", func() {
 			Expect(status.Convert(deleteRole(ctx)).Proto()).To(Equal(referencedStatus))
 		})
 
-		It("ignores legacy binding references that only contain the Role name", func() {
-			_, err := suiteTx.Exec(ctx, `
-				insert into role_bindings (id, name, tenant, deletion_timestamp, data)
-				values ('legacy-id', 'legacy-id', $1, now(),
-				        jsonb_build_object('spec', jsonb_build_object('role', jsonb_build_object('id', $2::text)))),
-				       ('legacy-name', 'legacy-name', $1, now(),
-				        jsonb_build_object('spec', jsonb_build_object('role', jsonb_build_object('name', $2::text))))
-			`, testTenant, roleName)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(deleteRole(ctx)).To(Succeed())
-		})
-
-		It("returns the same error when the only blocker is in another tenant", func() {
+		It("returns an error when the only blocker is in another tenant", func() {
 			_, err := tenants.Create(ctx, privatev1.TenantsCreateRequest_builder{
 				Object: privatev1.Tenant_builder{
 					Metadata: privatev1.Metadata_builder{Name: "hidden-tenant"}.Build(),

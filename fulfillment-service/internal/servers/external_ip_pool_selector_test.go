@@ -257,7 +257,8 @@ var _ = Describe("ExternalIP pool selector", func() {
 			Expect(record).To(HaveKey("time"))
 			Expect(record).To(HaveKeyWithValue("level", "DEBUG"))
 			Expect(record).To(HaveKeyWithValue("msg", "Running SQL operation"))
-			Expect(record).To(HaveKeyWithValue("table", "external_ip_pools"))
+			// The DAO records the table only on error paths, so check the statement instead:
+			Expect(record).To(HaveKeyWithValue("sql", ContainSubstring("external_ip_pools")))
 			Expect(record).To(HaveKey("type"))
 			Expect(record).To(HaveKey("parameter_count"))
 			if record["type"] == "lock" {

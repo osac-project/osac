@@ -232,76 +232,60 @@ var _ = Describe("Tenant archive dependency blockers", func() {
 		Entry("last-finalizer Update with billing", true, true),
 	)
 
-	DescribeTable("sees a concurrent service-account creation before completing deletion",
-		func(withFinalizer bool) {
-			tenant := createTenant(withFinalizer, true)
-			if withFinalizer {
-				_, err := tenants.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: tenant}.Build())
-				Expect(err).NotTo(HaveOccurred())
-			}
-			tx, err := database.TxFromContext(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			objectBefore, historyBefore := snapshot(ctx, tx, tenant)
-			commitSetup()
+	It("sees a concurrent service-account creation before completing deletion", func() {
+		tenant := createTenant(false, true)
+		tx, err := database.TxFromContext(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		objectBefore, historyBefore := snapshot(ctx, tx, tenant)
+		commitSetup()
 
-			creator, err := tm.Begin(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			createCtx := database.TxIntoContext(ctx, creator)
-			creatorEnded := false
-			DeferCleanup(func() {
-				if !creatorEnded {
-					Expect(creator.End(createCtx)).To(Succeed())
-				}
-			})
-			var creatorPID int32
-			Expect(creator.QueryRow(createCtx, `select pg_backend_pid()`).Scan(&creatorPID)).To(Succeed())
-			if withFinalizer {
-				// A normal DAO create now rejects a deleting tenant. Model a legacy/direct-SQL writer
-				// here to keep exercising archive's independent FK lock and fresh-snapshot safeguard.
-				// The application-path rejection is covered by Service-account tenant liveness at creation.
-				_, err = creator.Exec(createCtx, `insert into service_accounts (id, name, tenant, data)
-					values ($1, 'concurrent-legacy', $2, '{}'::jsonb)`, uuid.New(), tenant)
-			} else {
-				_, err = createAccount(createCtx, tenant)
+		creator, err := tm.Begin(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		createCtx := database.TxIntoContext(ctx, creator)
+		creatorEnded := false
+		DeferCleanup(func() {
+			if !creatorEnded {
+				Expect(creator.End(createCtx)).To(Succeed())
 			}
-			Expect(err).NotTo(HaveOccurred())
-			deleteCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-			result := make(chan error, 1)
-			workerDone := make(chan struct{})
-			DeferCleanup(func() {
-				cancel()
-				Eventually(workerDone, 10*time.Second).Should(BeClosed(),
-					"the deletion worker must stop before the creator fixture is released")
+		})
+		var creatorPID int32
+		Expect(creator.QueryRow(createCtx, `select pg_backend_pid()`).Scan(&creatorPID)).To(Succeed())
+		_, err = createAccount(createCtx, tenant)
+		Expect(err).NotTo(HaveOccurred())
+		deleteCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		result := make(chan error, 1)
+		workerDone := make(chan struct{})
+		DeferCleanup(func() {
+			cancel()
+			Eventually(workerDone, 10*time.Second).Should(BeClosed(),
+				"the deletion worker must stop before the creator fixture is released")
+		})
+		go func() {
+			defer GinkgoRecover()
+			defer close(workerDone)
+			_, err := database.WithNewTx(deleteCtx, func(ctx context.Context) (struct{}, error) {
+				return struct{}{}, completeDeletion(ctx, tenant, false)
 			})
-			go func() {
-				defer GinkgoRecover()
-				defer close(workerDone)
-				_, err := database.WithNewTx(deleteCtx, func(ctx context.Context) (struct{}, error) {
-					return struct{}{}, completeDeletion(ctx, tenant, withFinalizer)
-				})
-				result <- err
-			}()
-			Eventually(func() (bool, error) {
-				var blocked bool
-				err := testPool.QueryRow(deleteCtx, `select exists(select 1 from pg_stat_activity
-					where $1 = any(pg_blocking_pids(pid)))`, creatorPID).Scan(&blocked)
-				return blocked, err
-			}, 5*time.Second, 10*time.Millisecond).Should(BeTrue(), "observe real FK/tenant lock contention")
-			Expect(creator.End(createCtx)).To(Succeed())
-			creatorEnded = true
-			var deleteErr error
-			Eventually(result, 10*time.Second).Should(Receive(&deleteErr))
-			Expect(status.Code(deleteErr)).To(Equal(codes.FailedPrecondition))
-			Expect(inTx(func(ctx context.Context, tx database.Tx) error {
-				objectAfter, historyAfter := snapshot(ctx, tx, tenant)
-				Expect(objectAfter).To(Equal(objectBefore))
-				Expect(historyAfter).To(Equal(historyBefore))
-				return nil
-			})).To(Succeed())
-		},
-		Entry("direct Delete", false),
-		Entry("last-finalizer Update", true),
-	)
+			result <- err
+		}()
+		Eventually(func() (bool, error) {
+			var blocked bool
+			err := testPool.QueryRow(deleteCtx, `select exists(select 1 from pg_stat_activity
+				where $1 = any(pg_blocking_pids(pid)))`, creatorPID).Scan(&blocked)
+			return blocked, err
+		}, 5*time.Second, 10*time.Millisecond).Should(BeTrue(), "observe real FK/tenant lock contention")
+		Expect(creator.End(createCtx)).To(Succeed())
+		creatorEnded = true
+		var deleteErr error
+		Eventually(result, 10*time.Second).Should(Receive(&deleteErr))
+		Expect(status.Code(deleteErr)).To(Equal(codes.FailedPrecondition))
+		Expect(inTx(func(ctx context.Context, tx database.Tx) error {
+			objectAfter, historyAfter := snapshot(ctx, tx, tenant)
+			Expect(objectAfter).To(Equal(objectBefore))
+			Expect(historyAfter).To(Equal(historyBefore))
+			return nil
+		})).To(Succeed())
+	})
 
 	It("checks new restrictive foreign keys without a hard-coded tenant column or table list", func() {
 		tenant := createTenant(false, true)

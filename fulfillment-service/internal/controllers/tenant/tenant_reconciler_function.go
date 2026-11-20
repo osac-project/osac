@@ -312,7 +312,12 @@ func (t *task) updateLifecycle(ctx context.Context) error {
 		if t.tenant.GetSpec().GetBreakGlassCredentialsSecret() != nil {
 			_, err := t.validateBreakGlassSecret(ctx)
 			if err != nil {
-				return err
+				if grpcstatus.Code(err) != grpccodes.NotFound {
+					return err
+				}
+				if err := t.repairBreakGlassAccount(ctx); err != nil {
+					return err
+				}
 			}
 		}
 		if err := t.ensureDefaultNetworking(ctx); err != nil {
@@ -355,7 +360,7 @@ func (t *task) syncToIDP(ctx context.Context) error {
 			BreakGlassPassword: breakGlassPassword,
 		}
 
-		credentials, err := t.r.idpManager.CreateTenant(ctx, config)
+		credentials, err := t.r.idpManager.CreateOrUpdateTenant(ctx, config)
 		if err != nil {
 			t.tenant.GetStatus().SetState(privatev1.TenantState_TENANT_STATE_PENDING)
 			t.tenant.GetStatus().SetMessage(fmt.Sprintf("Tenant creation in IDP failed: %v", err))
@@ -392,8 +397,7 @@ func (t *task) ensureBreakGlassSecret(ctx context.Context) (string, error) {
 		if err == nil {
 			return storedPassword, nil
 		}
-		if grpcstatus.Code(err) == grpccodes.NotFound &&
-			t.tenant.GetStatus().GetIdpTenantName() == "" {
+		if grpcstatus.Code(err) == grpccodes.NotFound {
 			t.clearBreakGlassSecretRef()
 		} else {
 			return "", err
@@ -410,6 +414,22 @@ func (t *task) ensureBreakGlassSecret(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("failed to store break-glass credentials secret: %w", err)
 	}
 	return breakGlassPassword, nil
+}
+
+func (t *task) repairBreakGlassAccount(ctx context.Context) error {
+	password, err := t.ensureBreakGlassSecret(ctx)
+	if err != nil {
+		return err
+	}
+	credentials, err := t.r.idpManager.EnsureBreakGlassAccount(ctx, &idp.TenantConfig{
+		Name:               t.tenant.GetMetadata().GetName(),
+		BreakGlassPassword: password,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to repair break-glass account: %w", err)
+	}
+	t.tenant.GetStatus().SetBreakGlassUserId(credentials.UserID)
+	return nil
 }
 
 func (t *task) getBreakGlassSecretPassword(ctx context.Context) (string, error) {

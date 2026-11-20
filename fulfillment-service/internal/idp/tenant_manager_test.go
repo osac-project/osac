@@ -35,6 +35,8 @@ type mockClient struct {
 	failTenantUpdate    bool                          // Trigger tenant update failure
 	returnNilTenant     bool                          // GetTenant returns nil without error
 	tenantUpdateCalled  bool                          // Track whether UpdateTenant was called
+	updatedPasswords    map[string]string
+	tenantAlreadyExists bool
 }
 
 func (m *mockClient) CreateTenant(ctx context.Context, tenant *Tenant) (*Tenant, error) {
@@ -49,6 +51,11 @@ func (m *mockClient) CreateTenant(ctx context.Context, tenant *Tenant) (*Tenant,
 	}
 	m.createdTenant = createdTenant
 	return createdTenant, nil
+}
+
+func (m *mockClient) CreateOrGetTenant(ctx context.Context, tenant *Tenant) (*Tenant, bool, error) {
+	created, err := m.CreateTenant(ctx, tenant)
+	return created, !m.tenantAlreadyExists, err
 }
 
 func (m *mockClient) GetTenant(ctx context.Context, name string) (*Tenant, error) {
@@ -121,6 +128,14 @@ func (m *mockClient) GetUser(ctx context.Context, tenantName, userID string) (*U
 		}
 	}
 	return nil, nil
+}
+
+func (m *mockClient) UpdateUserPassword(ctx context.Context, userID, password string) error {
+	if m.updatedPasswords == nil {
+		m.updatedPasswords = make(map[string]string)
+	}
+	m.updatedPasswords[userID] = password
+	return nil
 }
 
 func (m *mockClient) GetUserByUsername(ctx context.Context, tenantName, username string) (*User, error) {
@@ -343,6 +358,7 @@ var _ = Describe("TenantManager", func() {
 			Expect(credentials.Username).To(Equal("test-tenant-osac-break-glass"))
 			Expect(credentials.Email).To(Equal("break-glass@test-tenant.osac.local"))
 			Expect(credentials.Password).To(Equal("breakglass123"))
+			Expect(mock.updatedPasswords[breakGlassUser.ID]).To(Equal("breakglass123"))
 
 			// Verify password is temporary
 			Expect(breakGlassUser.Credentials).To(HaveLen(1))
@@ -511,6 +527,26 @@ var _ = Describe("TenantManager", func() {
 			// need to explicitly delete the user
 			Expect(failingMock.createdTenant).ToNot(BeNil())
 			Expect(failingMock.deletedTenant).To(Equal("test-tenant"))
+		})
+
+		It("does not delete a pre-existing tenant when reconciliation fails", func() {
+			failingMock := &mockClient{
+				failRoleAssignment:  true,
+				tenantAlreadyExists: true,
+			}
+
+			failingManager, err := NewTenantManager().
+				SetLogger(logger).
+				SetClient(failingMock).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = failingManager.CreateOrUpdateTenant(ctx, &TenantConfig{
+				Name:               "pre-existing-tenant",
+				BreakGlassPassword: "breakglass123",
+			})
+			Expect(err).To(HaveOccurred())
+			Expect(failingMock.deletedTenant).To(BeEmpty())
 		})
 
 		It("rolls back tenant even when original context is cancelled", func() {

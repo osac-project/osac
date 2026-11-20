@@ -179,6 +179,23 @@ var _ = Describe("Client conflict handling", func() {
 		})
 	})
 
+	Describe("UpdateUserPassword", func() {
+		It("updates the password and keeps it temporary", func() {
+			mux.HandleFunc("PUT /admin/realms/osac/users/user-456", func(w http.ResponseWriter, r *http.Request) {
+				var user keycloakUser
+				Expect(json.NewDecoder(r.Body).Decode(&user)).To(Succeed())
+				Expect(user.Credentials).To(HaveLen(1))
+				Expect(user.Credentials[0].Type).To(Equal("password"))
+				Expect(user.Credentials[0].Value).To(Equal("replacement-password"))
+				Expect(user.Credentials[0].Temporary).ToNot(BeNil())
+				Expect(*user.Credentials[0].Temporary).To(BeTrue())
+				w.WriteHeader(http.StatusNoContent)
+			})
+
+			Expect(client.UpdateUserPassword(ctx, "user-456", "replacement-password")).To(Succeed())
+		})
+	})
+
 	Describe("AddUserToGroup", func() {
 		It("succeeds on 409 conflict (user already member of group)", func() {
 			mux.HandleFunc("GET /admin/realms/osac/organizations", func(w http.ResponseWriter, r *http.Request) {
@@ -264,6 +281,9 @@ var _ = Describe("Client conflict handling", func() {
 				w.WriteHeader(http.StatusNotFound)
 			})
 			mux.HandleFunc("POST /admin/realms/osac/users/user-456/role-mappings/realm", func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			})
+			mux.HandleFunc("PUT /admin/realms/osac/users/user-456", func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusNoContent)
 			})
 

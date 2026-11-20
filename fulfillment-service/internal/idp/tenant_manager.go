@@ -30,6 +30,14 @@ type TenantManager struct {
 	client ClientInterface
 }
 
+type tenantCreationClient interface {
+	CreateOrGetTenant(ctx context.Context, tenant *Tenant) (*Tenant, bool, error)
+}
+
+type userPasswordClient interface {
+	UpdateUserPassword(ctx context.Context, userID, password string) error
+}
+
 // TenantManagerBuilder builds the manager.
 type TenantManagerBuilder struct {
 	logger *slog.Logger
@@ -126,6 +134,12 @@ type BreakGlassCredentials struct {
 // CreateTenant creates a complete IdP tenant setup with a break-glass account.
 // Returns the break-glass account credentials and error.
 func (m *TenantManager) CreateTenant(ctx context.Context, config *TenantConfig) (*BreakGlassCredentials, error) {
+	return m.CreateOrUpdateTenant(ctx, config)
+}
+
+// CreateOrUpdateTenant ensures the IdP tenant and its controller-owned
+// break-glass account exist and match the requested configuration.
+func (m *TenantManager) CreateOrUpdateTenant(ctx context.Context, config *TenantConfig) (*BreakGlassCredentials, error) {
 	if config == nil {
 		return nil, errors.New("TenantConfig is mandatory")
 	}
@@ -163,17 +177,35 @@ func (m *TenantManager) CreateTenant(ctx context.Context, config *TenantConfig) 
 		Enabled:     enabled,
 		Domains:     config.Domains,
 	}
-	createdTenant, err := m.client.CreateTenant(ctx, tenant)
+	var createdTenant *Tenant
+	if client, ok := m.client.(tenantCreationClient); ok {
+		createdTenant, tenantCreated, err = client.CreateOrGetTenant(ctx, tenant)
+	} else {
+		createdTenant, err = m.client.CreateTenant(ctx, tenant)
+		tenantCreated = err == nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create tenant in IdP: %w", err)
 	}
-	tenantCreated = true
+	if createdTenant == nil {
+		return nil, fmt.Errorf("tenant %q was not returned by IdP", config.Name)
+	}
+	currentDomains := slices.Clone(createdTenant.Domains)
+	desiredDomains := slices.Clone(config.Domains)
+	slices.Sort(currentDomains)
+	slices.Sort(desiredDomains)
+	if !slices.Equal(currentDomains, desiredDomains) {
+		createdTenant.Domains = config.Domains
+		if _, err := m.client.UpdateTenant(ctx, createdTenant); err != nil {
+			return nil, fmt.Errorf("failed to update tenant in IdP: %w", err)
+		}
+	}
 	m.logger.InfoContext(ctx, "Tenant created in IdP",
 		slog.String("tenant", createdTenant.Name),
 	)
 
 	// Step 2: Create break-glass account
-	credentials, err = m.createBreakGlassAccount(ctx, config)
+	credentials, err = m.ensureBreakGlassAccount(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create break-glass account: %w", err)
 	}
@@ -319,6 +351,32 @@ func (m *TenantManager) createBreakGlassAccount(ctx context.Context, config *Ten
 		slog.String("user_id", createdUser.ID),
 	)
 
+	return credentials, nil
+}
+
+// EnsureBreakGlassAccount ensures the controller-owned break-glass account
+// exists, has the supplied password, and belongs to the tenant organization.
+func (m *TenantManager) EnsureBreakGlassAccount(ctx context.Context, config *TenantConfig) (*BreakGlassCredentials, error) {
+	credentials, err := m.ensureBreakGlassAccount(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	if err := m.assignIdpManagerPermissions(ctx, credentials.UserID); err != nil {
+		return nil, err
+	}
+	return credentials, nil
+}
+
+func (m *TenantManager) ensureBreakGlassAccount(ctx context.Context, config *TenantConfig) (*BreakGlassCredentials, error) {
+	credentials, err := m.createBreakGlassAccount(ctx, config)
+	if err != nil {
+		return nil, err
+	}
+	if client, ok := m.client.(userPasswordClient); ok {
+		if err := client.UpdateUserPassword(ctx, credentials.UserID, credentials.Password); err != nil {
+			return nil, fmt.Errorf("failed to update break-glass password: %w", err)
+		}
+	}
 	return credentials, nil
 }
 

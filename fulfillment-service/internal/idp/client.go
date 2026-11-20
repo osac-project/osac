@@ -158,19 +158,29 @@ func isConflictError(err error) bool {
 // CreateTenant creates a new tenant (Keycloak organization in the configured realm).
 // Returns the created tenant with server-assigned ID and any server defaults.
 func (c *Client) CreateTenant(ctx context.Context, tenant *Tenant) (*Tenant, error) {
+	result, _, err := c.CreateOrGetTenant(ctx, tenant)
+	return result, err
+}
+
+// CreateOrGetTenant creates a tenant, or returns the existing tenant when the
+// create races with another creator. The boolean reports whether this call
+// created the tenant and is used to make rollback safe.
+func (c *Client) CreateOrGetTenant(ctx context.Context, tenant *Tenant) (*Tenant, bool, error) {
 	kcOrg := toKeycloakOrganization(tenant)
 	response, err := c.httpClient.DoRequest(ctx, http.MethodPost, fmt.Sprintf("/admin/realms/%s/organizations", c.realmName), kcOrg)
 	if err != nil {
 		if isConflictError(err) {
-			return c.GetTenant(ctx, tenant.Name)
+			existing, getErr := c.GetTenant(ctx, tenant.Name)
+			return existing, false, getErr
 		}
-		return nil, fmt.Errorf("failed to create organization: %w", err)
+		return nil, false, fmt.Errorf("failed to create organization: %w", err)
 	}
 	response.Body.Close()
 
 	// Keycloak's POST /admin/realms returns 201 with no body, so we fetch the created organization
 	// to get the server-assigned ID and verify the organization was actually created
-	return c.GetTenant(ctx, tenant.Name)
+	created, err := c.GetTenant(ctx, tenant.Name)
+	return created, true, err
 }
 
 // GetTenant retrieves a tenant (Keycloak organization in the configured realm) by name.
@@ -283,6 +293,32 @@ func (c *Client) CreateUserInRealm(ctx context.Context, user *User) (*User, erro
 	userID := parts[len(parts)-1]
 	kcUser.ID = userID
 	return fromKeycloakUser(kcUser), nil
+}
+
+// UpdateUserPassword replaces a user's password and preserves the temporary
+// password requirement used by controller-owned break-glass accounts.
+func (c *Client) UpdateUserPassword(ctx context.Context, userID, password string) error {
+	if userID == "" {
+		return errors.New("user ID is required")
+	}
+	if password == "" {
+		return errors.New("password is required")
+	}
+	temporary := true
+	user := &keycloakUser{
+		Credentials: []*keycloakCred{{
+			Type:      "password",
+			Value:     password,
+			Temporary: &temporary,
+		}},
+	}
+	response, err := c.httpClient.DoRequest(ctx, http.MethodPut,
+		fmt.Sprintf("/admin/realms/%s/users/%s", c.realmName, url.PathEscape(userID)), user)
+	if err != nil {
+		return fmt.Errorf("failed to update user password: %w", err)
+	}
+	response.Body.Close()
+	return nil
 }
 
 // CreateUser creates a new user in the OSAC realm and adds them to an organization.

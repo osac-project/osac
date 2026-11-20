@@ -1212,13 +1212,20 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 		Expect(tenant.GetSpec().GetBreakGlassCredentialsSecret().GetId()).To(Equal("replacement-secret"))
 	})
 
-	It("should retain a missing Secret reference for a synced tenant", func() {
+	It("should recreate a missing Secret and repair the synced break-glass account", func() {
+		var recreatedPassword string
 		reconciler = &function{
 			logger:     logger,
 			idpManager: idpManager,
 			secretsClient: &mockSecretsClient{
 				getFunc: func(context.Context, *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
 					return nil, grpcstatus.Error(grpccodes.NotFound, "secret not found")
+				},
+				createFunc: func(_ context.Context, req *privatev1.SecretsCreateRequest) (*privatev1.SecretsCreateResponse, error) {
+					secret := req.GetObject()
+					recreatedPassword = string(secret.GetData()["password"])
+					secret.SetId("replacement-secret")
+					return privatev1.SecretsCreateResponse_builder{Object: secret}.Build(), nil
 				},
 			},
 		}
@@ -1233,10 +1240,16 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 			}.Build(),
 		}.Build()
 		mockClient.EXPECT().GetTenant(gomock.Any(), "test-org").Return(&idp.Tenant{Name: "test-org"}, nil)
+		mockClient.EXPECT().CreateUser(gomock.Any(), "test-org", gomock.Any()).DoAndReturn(
+			func(_ context.Context, _ string, user *idp.User) (*idp.User, error) {
+				Expect(user.Credentials[0].Value).To(Equal(recreatedPassword))
+				return &idp.User{ID: "user-123"}, nil
+			})
+		mockClient.EXPECT().AssignIdpManagerPermissions(gomock.Any(), "user-123").Return(nil)
 		err := (&task{r: reconciler, tenant: tenant}).update(ctx)
-		Expect(err).To(HaveOccurred())
-		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
-		Expect(tenant.GetSpec().GetBreakGlassCredentialsSecret().GetId()).To(Equal("deleted-secret"))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(tenant.GetSpec().GetBreakGlassCredentialsSecret().GetId()).To(Equal("replacement-secret"))
+		Expect(recreatedPassword).To(HaveLen(password.Length))
 	})
 })
 

@@ -140,7 +140,8 @@ func (i *Interceptor) UnaryServer(ctx context.Context, request any, info *grpc.U
 	// Get the time before calling the handler so that we can later compute the duration of the call:
 	timeBefore := time.Now()
 	customerNetworkMethod := isCustomerNetworkMethod(info.FullMethod)
-	logBodies := i.bodies && !customerNetworkMethod
+	catalogMethod := isCatalogItemsMethod(info.FullMethod)
+	logBodies := i.bodies && !customerNetworkMethod && !catalogMethod
 
 	// Write the details of the request:
 	methodField := slog.String("method", info.FullMethod)
@@ -191,7 +192,7 @@ func (i *Interceptor) UnaryServer(ctx context.Context, request any, info *grpc.U
 			responseFields = append(responseFields, bodyField)
 		}
 	}
-	if err != nil && !customerNetworkMethod {
+	if err != nil && !customerNetworkMethod && !catalogMethod {
 		errField := slog.Any("error", err)
 		responseFields = append(responseFields, errField)
 	}
@@ -282,11 +283,16 @@ func (i *Interceptor) UnaryClient(ctx context.Context, method string, request, r
 	// Get the time before calling the invoker so that we can later compute the duration of the call:
 	timeBefore := time.Now()
 	customerNetworkMethod := isCustomerNetworkMethod(method)
-	logBodies := i.bodies && !customerNetworkMethod
+	catalogMethod := isCatalogItemsMethod(method)
+	logBodies := i.bodies && !customerNetworkMethod && !catalogMethod
 
 	// Write the details of the request:
 	methodField := slog.String("method", method)
-	targetField := slog.String("target", conn.Target())
+	target := conn.Target()
+	if i.redact {
+		target = redactMark
+	}
+	targetField := slog.String("target", target)
 	requestFields := []any{
 		methodField,
 		targetField,
@@ -324,7 +330,7 @@ func (i *Interceptor) UnaryClient(ctx context.Context, method string, request, r
 	if ok {
 		codeField := slog.String("code", status.Code().String())
 		responseFields = append(responseFields, codeField)
-		if !customerNetworkMethod {
+		if !customerNetworkMethod && !catalogMethod {
 			message := status.Message()
 			if message != "" {
 				messageField := slog.String("message", message)
@@ -336,10 +342,10 @@ func (i *Interceptor) UnaryClient(ctx context.Context, method string, request, r
 				responseFields = append(responseFields, detailsField)
 			}
 		}
-	} else if customerNetworkMethod && err != nil {
+	} else if customerNetworkMethod || catalogMethod {
 		codeField := slog.String("code", grpcstatus.Code(err).String())
 		responseFields = append(responseFields, codeField)
-	} else if !customerNetworkMethod {
+	} else {
 		errField := slog.Any("error", err)
 		responseFields = append(responseFields, errField)
 	}
@@ -352,6 +358,11 @@ func (i *Interceptor) UnaryClient(ctx context.Context, method string, request, r
 	i.logger.DebugContext(ctx, "Received unary response", responseFields...)
 
 	return err
+}
+
+// isCatalogItemsMethod reports whether a method belongs to a catalog API.
+func isCatalogItemsMethod(method string) bool {
+	return strings.Contains(method, "CatalogItems/")
 }
 
 // StreamClient is the stream client interceptor function.

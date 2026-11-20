@@ -15,7 +15,9 @@ package projectmembership
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -27,6 +29,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
+	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -164,6 +167,9 @@ var _ = Describe("Update with FAILED state", func() {
 				Name:   "my-project",
 				Tenant: "acme",
 			}.Build(),
+			Status: privatev1.ProjectStatus_builder{
+				State: privatev1.ProjectState_PROJECT_STATE_ACTIVE,
+			}.Build(),
 			Spec: privatev1.ProjectSpec_builder{}.Build(),
 		}.Build()
 
@@ -222,6 +228,9 @@ var _ = Describe("Update with FAILED state", func() {
 			Metadata: privatev1.Metadata_builder{
 				Name:   "my-project",
 				Tenant: "acme",
+			}.Build(),
+			Status: privatev1.ProjectStatus_builder{
+				State: privatev1.ProjectState_PROJECT_STATE_ACTIVE,
 			}.Build(),
 			Spec: privatev1.ProjectSpec_builder{}.Build(),
 		}.Build()
@@ -430,7 +439,8 @@ var _ = Describe("Update with FAILED state", func() {
 				Name:   "my-project",
 				Tenant: "acme",
 			}.Build(),
-			Spec: privatev1.ProjectSpec_builder{}.Build(),
+			Status: privatev1.ProjectStatus_builder{State: privatev1.ProjectState_PROJECT_STATE_ACTIVE}.Build(),
+			Spec:   privatev1.ProjectSpec_builder{}.Build(),
 		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{
@@ -569,6 +579,9 @@ var _ = Describe("Partial success tracking", func() {
 					Name:   "my-project",
 					Tenant: "acme",
 				}.Build(),
+				Status: privatev1.ProjectStatus_builder{
+					State: privatev1.ProjectState_PROJECT_STATE_ACTIVE,
+				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{}.Build(),
 			}.Build()
 
@@ -636,7 +649,8 @@ var _ = Describe("Partial success tracking", func() {
 					Name:   "my-project",
 					Tenant: "acme",
 				}.Build(),
-				Spec: privatev1.ProjectSpec_builder{}.Build(),
+				Status: privatev1.ProjectStatus_builder{State: privatev1.ProjectState_PROJECT_STATE_ACTIVE}.Build(),
+				Spec:   privatev1.ProjectSpec_builder{}.Build(),
 			}.Build()
 
 			membership := privatev1.ProjectMembership_builder{
@@ -702,7 +716,8 @@ var _ = Describe("Partial success tracking", func() {
 					Name:   "my-project",
 					Tenant: "acme",
 				}.Build(),
-				Spec: privatev1.ProjectSpec_builder{}.Build(),
+				Status: privatev1.ProjectStatus_builder{State: privatev1.ProjectState_PROJECT_STATE_ACTIVE}.Build(),
+				Spec:   privatev1.ProjectSpec_builder{}.Build(),
 			}.Build()
 
 			membership := privatev1.ProjectMembership_builder{
@@ -770,7 +785,8 @@ var _ = Describe("Partial success tracking", func() {
 					Name:   "my-project",
 					Tenant: "acme",
 				}.Build(),
-				Spec: privatev1.ProjectSpec_builder{}.Build(),
+				Status: privatev1.ProjectStatus_builder{State: privatev1.ProjectState_PROJECT_STATE_ACTIVE}.Build(),
+				Spec:   privatev1.ProjectSpec_builder{}.Build(),
 			}.Build()
 
 			membership := privatev1.ProjectMembership_builder{
@@ -824,7 +840,8 @@ var _ = Describe("Partial success tracking", func() {
 					Name:   "my-project",
 					Tenant: "acme",
 				}.Build(),
-				Spec: privatev1.ProjectSpec_builder{}.Build(),
+				Status: privatev1.ProjectStatus_builder{State: privatev1.ProjectState_PROJECT_STATE_ACTIVE}.Build(),
+				Spec:   privatev1.ProjectSpec_builder{}.Build(),
 			}.Build()
 
 			membership := privatev1.ProjectMembership_builder{
@@ -1200,6 +1217,9 @@ var _ = Describe("Synchronization", func() {
 					Name:   "my-project",
 					Tenant: "acme",
 				}.Build(),
+				Status: privatev1.ProjectStatus_builder{
+					State: privatev1.ProjectState_PROJECT_STATE_ACTIVE,
+				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{}.Build(),
 			}.Build()
 
@@ -1269,7 +1289,8 @@ var _ = Describe("Synchronization", func() {
 					Tenant:  "acme",
 					Project: "parent",
 				}.Build(),
-				Spec: privatev1.ProjectSpec_builder{}.Build(),
+				Status: privatev1.ProjectStatus_builder{State: privatev1.ProjectState_PROJECT_STATE_ACTIVE}.Build(),
+				Spec:   privatev1.ProjectSpec_builder{}.Build(),
 			}.Build()
 
 			membership := privatev1.ProjectMembership_builder{
@@ -1324,6 +1345,9 @@ var _ = Describe("Synchronization", func() {
 				Metadata: privatev1.Metadata_builder{
 					Name:   "my-project",
 					Tenant: "acme",
+				}.Build(),
+				Status: privatev1.ProjectStatus_builder{
+					State: privatev1.ProjectState_PROJECT_STATE_ACTIVE,
 				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{}.Build(),
 			}.Build()
@@ -1403,6 +1427,9 @@ var _ = Describe("Synchronization", func() {
 					Name:   "my-project",
 					Tenant: "acme",
 				}.Build(),
+				Status: privatev1.ProjectStatus_builder{
+					State: privatev1.ProjectState_PROJECT_STATE_ACTIVE,
+				}.Build(),
 				Spec: privatev1.ProjectSpec_builder{}.Build(),
 			}.Build()
 
@@ -1434,8 +1461,95 @@ var _ = Describe("Synchronization", func() {
 
 			err := task.syncProjectMembership(ctx, nil)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(membership.GetStatus().GetState()).To(Equal(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED))
-			Expect(membership.GetStatus().GetMessage()).To(ContainSubstring("Failed to find authorization group"))
+			Expect(membership.GetStatus().GetState()).To(Equal(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_PENDING))
+			Expect(membership.GetStatus().GetMessage()).To(ContainSubstring("Waiting for authorization group"))
+		})
+
+		It("should wait for a project to become active before resolving its group", func() {
+			project := privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   "my-project",
+					Tenant: "acme",
+				}.Build(),
+				Status: privatev1.ProjectStatus_builder{
+					State: privatev1.ProjectState_PROJECT_STATE_PENDING,
+				}.Build(),
+			}.Build()
+			membership := privatev1.ProjectMembership_builder{
+				Metadata: privatev1.Metadata_builder{Project: "project-id"}.Build(),
+				Spec: privatev1.ProjectMembershipSpec_builder{
+					Users: userRefs("user-id"),
+					Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
+				}.Build(),
+				Status: privatev1.ProjectMembershipStatus_builder{
+					State: privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_PENDING,
+				}.Build(),
+			}.Build()
+
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
+
+			task := &task{r: functionObj, membership: membership}
+			Expect(task.syncProjectMembership(ctx, nil)).ToNot(HaveOccurred())
+			Expect(membership.GetStatus().GetState()).To(Equal(
+				privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_PENDING))
+			Expect(membership.GetStatus().GetMessage()).To(ContainSubstring("become ACTIVE"))
+			var retryable interface{ RequeueAfter() time.Duration }
+			Expect(errors.As(task.retryErr, &retryable)).To(BeTrue())
+		})
+
+		It("should persist pending group lookup status before requesting a retry", func() {
+			project := privatev1.Project_builder{
+				Id: "project-id",
+				Metadata: privatev1.Metadata_builder{
+					Name:   "my-project",
+					Tenant: "acme",
+				}.Build(),
+				Status: privatev1.ProjectStatus_builder{
+					State: privatev1.ProjectState_PROJECT_STATE_ACTIVE,
+				}.Build(),
+			}.Build()
+			membership := privatev1.ProjectMembership_builder{
+				Metadata: privatev1.Metadata_builder{
+					Finalizers: []string{finalizers.ProjectMembershipFinalizer},
+					Project:    "project-id",
+				}.Build(),
+				Spec: privatev1.ProjectMembershipSpec_builder{
+					Users: userRefs("user-id"),
+					Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
+				}.Build(),
+				Status: privatev1.ProjectMembershipStatus_builder{
+					State: privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_PENDING,
+				}.Build(),
+			}.Build()
+
+			mockProjectsClient.EXPECT().
+				Get(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
+			mockIdpClient.EXPECT().
+				GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
+				Return("", status.Error(codes.Unavailable, "Keycloak unavailable"))
+			mockProjectsClient.EXPECT().
+				Signal(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsSignalResponse{}, nil)
+			mockProjectMembershipsClient.EXPECT().
+				Update(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, request *privatev1.ProjectMembershipsUpdateRequest,
+					_ ...interface{}) (*privatev1.ProjectMembershipsUpdateResponse, error) {
+					Expect(request.GetObject().GetStatus().GetState()).To(Equal(
+						privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_PENDING))
+					Expect(request.GetObject().GetStatus().GetMessage()).To(ContainSubstring(
+						"Waiting for authorization group"))
+					return privatev1.ProjectMembershipsUpdateResponse_builder{}.Build(), nil
+				})
+
+			functionObj.maskCalculator = masks.NewCalculator().Build()
+			err := functionObj.Run(ctx, membership)
+			Expect(err).To(HaveOccurred())
+			var retryable interface{ RequeueAfter() time.Duration }
+			Expect(errors.As(err, &retryable)).To(BeTrue())
+			Expect(retryable.RequeueAfter()).To(Equal(projectGroupRetryDelay))
 		})
 	})
 })
@@ -1941,7 +2055,8 @@ var _ = Describe("User List Change Handling", func() {
 				Name:   "my-project",
 				Tenant: "acme",
 			}.Build(),
-			Spec: privatev1.ProjectSpec_builder{}.Build(),
+			Status: privatev1.ProjectStatus_builder{State: privatev1.ProjectState_PROJECT_STATE_ACTIVE}.Build(),
+			Spec:   privatev1.ProjectSpec_builder{}.Build(),
 		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{
@@ -1996,7 +2111,8 @@ var _ = Describe("User List Change Handling", func() {
 				Name:   "my-project",
 				Tenant: "acme",
 			}.Build(),
-			Spec: privatev1.ProjectSpec_builder{}.Build(),
+			Status: privatev1.ProjectStatus_builder{State: privatev1.ProjectState_PROJECT_STATE_ACTIVE}.Build(),
+			Spec:   privatev1.ProjectSpec_builder{}.Build(),
 		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{
@@ -2057,7 +2173,8 @@ var _ = Describe("User List Change Handling", func() {
 				Name:   "my-project",
 				Tenant: "acme",
 			}.Build(),
-			Spec: privatev1.ProjectSpec_builder{}.Build(),
+			Status: privatev1.ProjectStatus_builder{State: privatev1.ProjectState_PROJECT_STATE_ACTIVE}.Build(),
+			Spec:   privatev1.ProjectSpec_builder{}.Build(),
 		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{
@@ -2108,7 +2225,21 @@ var _ = Describe("User List Change Handling", func() {
 		Expect(membership.GetStatus().GetUsers()).To(Equal(userRefs("kept-user", "new-user")))
 	})
 
-	It("should be a no-op when user lists are identical", func() {
+	It("should verify users when user lists are identical", func() {
+		project := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "my-project",
+				Tenant: "acme",
+			}.Build(),
+			Status: privatev1.ProjectStatus_builder{State: privatev1.ProjectState_PROJECT_STATE_ACTIVE}.Build(),
+			Spec:   privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
+		userA := privatev1.User_builder{
+			Status: privatev1.UserStatus_builder{KeycloakUserId: "keycloak-a"}.Build(),
+		}.Build()
+		userB := privatev1.User_builder{
+			Status: privatev1.UserStatus_builder{KeycloakUserId: "keycloak-b"}.Build(),
+		}.Build()
 		membership := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{
 				Project: "project-id",
@@ -2122,6 +2253,25 @@ var _ = Describe("User List Change Handling", func() {
 				Users: userRefs("user-a", "user-b"),
 			}.Build(),
 		}.Build()
+
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
+		mockIdpClient.EXPECT().
+			GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
+			Return("group-id", nil)
+		mockUsersClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.UsersGetResponse{Object: userA}, nil)
+		mockIdpClient.EXPECT().
+			AddUserToGroup(gomock.Any(), "acme", "keycloak-a", "group-id").
+			Return(nil)
+		mockUsersClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.UsersGetResponse{Object: userB}, nil)
+		mockIdpClient.EXPECT().
+			AddUserToGroup(gomock.Any(), "acme", "keycloak-b", "group-id").
+			Return(nil)
 
 		task := &task{
 			r:          functionObj,
@@ -2139,7 +2289,8 @@ var _ = Describe("User List Change Handling", func() {
 				Name:   "my-project",
 				Tenant: "acme",
 			}.Build(),
-			Spec: privatev1.ProjectSpec_builder{}.Build(),
+			Status: privatev1.ProjectStatus_builder{State: privatev1.ProjectState_PROJECT_STATE_ACTIVE}.Build(),
+			Spec:   privatev1.ProjectSpec_builder{}.Build(),
 		}.Build()
 
 		membership := privatev1.ProjectMembership_builder{

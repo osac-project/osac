@@ -24,6 +24,7 @@ import (
 	"log/slog"
 
 	"strings"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -36,6 +37,8 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+const projectGroupRetryDelay = 10 * time.Second
 
 // FunctionBuilder contains the data needed to build instances of the reconciler function.
 type FunctionBuilder struct {
@@ -131,6 +134,9 @@ func (r *function) Run(ctx context.Context, membership *privatev1.ProjectMembers
 		}.Build())
 	}
 
+	if err == nil && task.retryErr != nil {
+		return task.retryErr
+	}
 	return err
 }
 
@@ -138,6 +144,7 @@ func (r *function) Run(ctx context.Context, membership *privatev1.ProjectMembers
 type task struct {
 	r          *function
 	membership *privatev1.ProjectMembership
+	retryErr   error
 }
 
 func (t *task) update(ctx context.Context) error {
@@ -170,12 +177,14 @@ func (t *task) update(ctx context.Context) error {
 		}
 		existingProject = project
 		if len(t.membership.GetStatus().GetUsers()) > 0 {
-			t.membership.GetStatus().SetState(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_READY)
-			t.membership.GetStatus().SetMessage("")
 			return t.handleUserListChange(ctx, existingProject)
 		}
 		t.membership.GetStatus().SetState(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_PENDING)
 		t.membership.GetStatus().SetMessage("")
+	}
+
+	if len(t.membership.GetStatus().GetUsers()) > 0 {
+		return t.handleUserListChange(ctx, existingProject)
 	}
 
 	// Project membership is PENDING, perform initial synchronization
@@ -282,15 +291,15 @@ func (t *task) isTerminalFailure(ctx context.Context) (bool, string, *privatev1.
 
 func (t *task) syncProjectMembership(ctx context.Context, existingProject *privatev1.Project) error {
 	users := t.membership.GetSpec().GetUsers()
-	if len(users) == 0 {
+	if len(users) == 0 && len(t.membership.GetStatus().GetUsers()) == 0 {
 		t.membership.GetStatus().SetState(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_READY)
 		t.membership.GetStatus().SetUsers(nil)
 		t.membership.GetStatus().SetMessage("")
 		return nil
 	}
 
-	_, organizationName, groupID, err := t.resolveProjectGroup(ctx, existingProject)
-	if err != nil {
+	organizationName, groupID, err := t.resolveProjectGroup(ctx, existingProject)
+	if err != nil || t.retryErr != nil {
 		return nil
 	}
 
@@ -347,12 +356,13 @@ func (t *task) handleUserListChange(ctx context.Context, existingProject *privat
 		}
 	}
 
-	if len(usersToAdd) == 0 && len(usersToRemove) == 0 {
+	verifyUsers := len(usersToAdd) == 0 && len(usersToRemove) == 0
+	if verifyUsers && len(desiredUsers) == 0 {
 		return nil
 	}
 
-	_, organizationName, groupID, err := t.resolveProjectGroup(ctx, existingProject)
-	if err != nil {
+	organizationName, groupID, err := t.resolveProjectGroup(ctx, existingProject)
+	if err != nil || t.retryErr != nil {
 		return nil
 	}
 
@@ -374,7 +384,7 @@ func (t *task) handleUserListChange(ctx context.Context, existingProject *privat
 
 	for _, u := range desiredUsers {
 		key := controllers.RefKeyStr(u)
-		if !syncedSet[key] {
+		if verifyUsers || !syncedSet[key] {
 			if err := t.addUserToGroup(ctx, key, organizationName, groupID); err != nil {
 				syncErrors = append(syncErrors, fmt.Sprintf("add user %s: %v", key, err))
 			} else {
@@ -397,17 +407,23 @@ func (t *task) handleUserListChange(ctx context.Context, existingProject *privat
 	}
 
 	t.membership.GetStatus().SetUsers(desiredUsers)
-	t.membership.GetStatus().SetMessage(fmt.Sprintf(
-		"Synced: added %d user(s), removed %d user(s)", len(usersToAdd), len(usersToRemove),
-	))
+	if verifyUsers {
+		t.membership.GetStatus().SetMessage(fmt.Sprintf("Verified %d user(s) in authorization group", len(desiredUsers)))
+	} else {
+		t.membership.GetStatus().SetMessage(fmt.Sprintf(
+			"Synced: added %d user(s), removed %d user(s)", len(usersToAdd), len(usersToRemove),
+		))
+	}
+	t.membership.GetStatus().SetState(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_READY)
 	return nil
 }
 
-// resolveProjectGroup resolves the project, organization, and group ID for the membership.
-// On failure, it sets the membership status to FAILED and returns a non-nil error.
+// resolveProjectGroup resolves the organization and group ID for the membership.
+// On failure, it updates membership status and returns an error when reconciliation cannot proceed.
 func (t *task) resolveProjectGroup(ctx context.Context, existingProject *privatev1.Project) (
-	project *privatev1.Project, organizationName string, groupID string, err error,
+	organizationName string, groupID string, err error,
 ) {
+	var project *privatev1.Project
 	if existingProject != nil {
 		project = existingProject
 	} else {
@@ -444,6 +460,31 @@ func (t *task) resolveProjectGroup(ctx context.Context, existingProject *private
 		return
 	}
 
+	if project.GetMetadata().HasDeletionTimestamp() ||
+		project.GetStatus().GetState() == privatev1.ProjectState_PROJECT_STATE_DELETING ||
+		project.GetStatus().GetState() == privatev1.ProjectState_PROJECT_STATE_FAILED ||
+		project.GetStatus().GetState() == privatev1.ProjectState_PROJECT_STATE_DELETE_FAILED {
+		t.membership.GetStatus().SetState(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED)
+		t.membership.GetStatus().SetMessage(fmt.Sprintf(
+			"Project '%s' is not accepting memberships (state: %s)",
+			project.GetMetadata().GetName(), project.GetStatus().GetState()))
+		err = fmt.Errorf("project is not accepting memberships: %s", project.GetStatus().GetState())
+		return
+	}
+
+	projectState := project.GetStatus().GetState()
+	if projectState != privatev1.ProjectState_PROJECT_STATE_ACTIVE {
+		t.membership.GetStatus().SetState(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_PENDING)
+		t.membership.GetStatus().SetMessage(fmt.Sprintf(
+			"Waiting for project '%s' to become ACTIVE (current state: %s)",
+			project.GetMetadata().GetName(), projectState))
+		t.retryErr = controllers.RequeueAfter(
+			fmt.Errorf("project %q is not active (state: %s)", project.GetMetadata().GetName(), projectState),
+			projectGroupRetryDelay,
+		)
+		return
+	}
+
 	groupPath, pathErr := t.buildProjectGroupPath(ctx, project, groupSuffix)
 	if pathErr != nil {
 		t.membership.GetStatus().SetState(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED)
@@ -454,8 +495,22 @@ func (t *task) resolveProjectGroup(ctx context.Context, existingProject *private
 
 	groupID, err = t.r.idpClient.GetGroupIDByPath(ctx, organizationName, groupPath)
 	if err != nil {
-		t.membership.GetStatus().SetState(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED)
-		t.membership.GetStatus().SetMessage(fmt.Sprintf("Failed to find authorization group %s: %v", groupPath, err))
+		t.membership.GetStatus().SetState(privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_PENDING)
+		t.membership.GetStatus().SetMessage(fmt.Sprintf("Waiting for authorization group %s: %v", groupPath, err))
+		t.retryErr = controllers.RequeueAfter(
+			fmt.Errorf("failed to find authorization group %s: %w", groupPath, err),
+			projectGroupRetryDelay,
+		)
+		if project.GetId() != "" {
+			if _, signalErr := t.r.projectsClient.Signal(ctx, privatev1.ProjectsSignalRequest_builder{
+				Id: project.GetId(),
+			}.Build()); signalErr != nil {
+				t.r.logger.WarnContext(ctx, "Failed to signal project for Keycloak group recovery",
+					slog.String("project_id", project.GetId()),
+					slog.Any("error", signalErr),
+				)
+			}
+		}
 		return
 	}
 

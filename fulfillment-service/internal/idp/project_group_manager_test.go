@@ -234,11 +234,11 @@ var _ = Describe("ProjectGroupManager", func() {
 		It("should create hierarchical viewers and managers groups", func() {
 			mockClient.EXPECT().
 				CreateGroup(gomock.Any(), "test-org", "/test-project/system:viewers").
-				Return("viewers-group-id", nil)
+				Return("viewers-group-id", true, nil)
 
 			mockClient.EXPECT().
 				CreateGroup(gomock.Any(), "test-org", "/test-project/system:managers").
-				Return("managers-group-id", nil)
+				Return("managers-group-id", true, nil)
 
 			managersID, err := manager.CreateProjectGroups(ctx, "test-org", "test-project")
 			Expect(err).ToNot(HaveOccurred())
@@ -248,11 +248,11 @@ var _ = Describe("ProjectGroupManager", func() {
 		It("should rollback viewers group when managers group creation fails", func() {
 			mockClient.EXPECT().
 				CreateGroup(gomock.Any(), "test-org", "/test-project/system:viewers").
-				Return("viewers-group-id", nil)
+				Return("viewers-group-id", true, nil)
 
 			mockClient.EXPECT().
 				CreateGroup(gomock.Any(), "test-org", "/test-project/system:managers").
-				Return("", errors.New("keycloak error"))
+				Return("", false, errors.New("keycloak error"))
 
 			mockClient.EXPECT().
 				DeleteGroup(gomock.Any(), "test-org", "viewers-group-id").
@@ -264,10 +264,24 @@ var _ = Describe("ProjectGroupManager", func() {
 			Expect(managersID).To(BeEmpty())
 		})
 
+		It("should not delete a pre-existing viewers group during rollback", func() {
+			mockClient.EXPECT().
+				CreateGroup(gomock.Any(), "test-org", "/test-project/system:viewers").
+				Return("viewers-group-id", false, nil)
+
+			mockClient.EXPECT().
+				CreateGroup(gomock.Any(), "test-org", "/test-project/system:managers").
+				Return("", false, errors.New("keycloak error"))
+
+			managersID, err := manager.CreateProjectGroups(ctx, "test-org", "test-project")
+			Expect(err).To(HaveOccurred())
+			Expect(managersID).To(BeEmpty())
+		})
+
 		It("should return error when viewers group creation fails", func() {
 			mockClient.EXPECT().
 				CreateGroup(gomock.Any(), "test-org", "/test-project/system:viewers").
-				Return("", errors.New("keycloak error"))
+				Return("", false, errors.New("keycloak error"))
 
 			managersID, err := manager.CreateProjectGroups(ctx, "test-org", "test-project")
 			Expect(err).To(HaveOccurred())
@@ -294,11 +308,11 @@ var _ = Describe("ProjectGroupManager", func() {
 			// without double slashes (was "//system:viewers", should be "/system:viewers")
 			mockClient.EXPECT().
 				CreateGroup(gomock.Any(), "test-org", "/system:viewers").
-				Return("viewers-group-id", nil)
+				Return("viewers-group-id", true, nil)
 
 			mockClient.EXPECT().
 				CreateGroup(gomock.Any(), "test-org", "/system:managers").
-				Return("managers-group-id", nil)
+				Return("managers-group-id", true, nil)
 
 			managersID, err := manager.CreateProjectGroups(ctx, "test-org", "")
 			Expect(err).ToNot(HaveOccurred())
@@ -308,11 +322,11 @@ var _ = Describe("ProjectGroupManager", func() {
 		It("should add leading slash to project path if missing", func() {
 			mockClient.EXPECT().
 				CreateGroup(gomock.Any(), "test-org", "/test-project/system:viewers").
-				Return("viewers-group-id", nil)
+				Return("viewers-group-id", true, nil)
 
 			mockClient.EXPECT().
 				CreateGroup(gomock.Any(), "test-org", "/test-project/system:managers").
-				Return("managers-group-id", nil)
+				Return("managers-group-id", true, nil)
 
 			managersID, err := manager.CreateProjectGroups(ctx, "test-org", "test-project")
 			Expect(err).ToNot(HaveOccurred())

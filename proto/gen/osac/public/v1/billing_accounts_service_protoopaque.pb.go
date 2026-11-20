@@ -198,14 +198,8 @@ type BillingAccountsListRequest_builder struct {
 	Filter *string
 	// Order criteria.
 	//
-	// The syntax of this parameter is similar to the syntax of the _order by_ clause of a SQL statement, but using
-	// the names of the attributes of the billing account instead of the names of the columns of a table. For
-	// example, in order to sort accounts descending by display name the value should be:
-	//
-	//	status.display_name desc
-	//
-	// At most 16 scalar or supported Timestamp paths are accepted. Nulls sort last in either direction, with id
-	// ascending as a tie-breaker unless explicitly ordered. Defaults to `id asc`. Private identity is not public query data.
+	// List ordering is not implemented yet, as for other Fulfillment object types: the parameter value is ignored and
+	// callers must not rely on the order of the results.
 	Order *string
 }
 

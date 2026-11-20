@@ -45,6 +45,8 @@ import (
 // tenant-only SSH-key contract, validate key material, and store canonical
 // Secret references. Update exclusions also leave immutable-field handling to
 // the merged candidate rather than resolving a replacement in the interceptor.
+// Notification event/resource fields are producer-set opaque or typed wrappers
+// (not DAO id/name references); servers validate shape and resource visibility.
 // Other references continue through the interceptor's registered lookups.
 func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, registerer prometheus.Registerer) (*references.ReferenceValidator, error) {
 	validator, err := references.NewReferenceValidator().SetLogger(logger).SetMetricsRegisterer(registerer).
@@ -62,6 +64,7 @@ func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, regis
 		SetExcludedReferencePaths(bareMetalInstanceSSHKeyMethods(), "object.spec.ssh_key").
 		SetExcludedReferencePaths(clusterSshKeyMethods(), "object.spec.ssh_key").
 		SetExcludedReferencePaths(clusterTemplateSshKeyMethods(), "object.spec_defaults.ssh_key").
+		SetExcludedReferencePaths(notificationReferenceMethods(), "object.spec.event", "object.spec.resource").
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reference validator: %w", err)
@@ -204,5 +207,16 @@ func computeInstanceSSHKeyMethods() []string {
 		privatev1.ComputeInstances_Create_FullMethodName,
 		publicv1.ComputeInstances_Update_FullMethodName,
 		privatev1.ComputeInstances_Update_FullMethodName,
+	}
+}
+
+// notificationReferenceMethods covers opaque event identity and typed resource
+// wrappers on Notifications. These are not resolved as DAO references.
+func notificationReferenceMethods() []string {
+	return []string{
+		publicv1.Notifications_Create_FullMethodName,
+		privatev1.Notifications_Create_FullMethodName,
+		publicv1.Notifications_Update_FullMethodName,
+		privatev1.Notifications_Update_FullMethodName,
 	}
 }

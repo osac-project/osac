@@ -52,6 +52,7 @@ import "osac/private/v1/subnet_type.proto";
 import "osac/private/v1/user_type.proto";
 import "osac/private/v1/virtual_network_type.proto";
 import "osac/private/v1/volume_type.proto";
+import "osac/private/v1/workload_cluster_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
@@ -62,6 +63,12 @@ message Event {
 
   // Type of event.
   EventType type = 2;
+
+  // Stable reason identifying the state transition that generated the event.
+  string reason = 42;
+
+  // Event severity, such as Normal or Warning.
+  string severity = 43;
 
   // Time at which the event was generated.
   //
@@ -111,6 +118,7 @@ message Event {
     AddOnOperator add_on_operator = 37 [(cleanapi.field).private = true];
     FabricDomain fabric_domain = 38 [(cleanapi.field).private = true];
     ServiceAccount service_account = 39 [(cleanapi.field).private = true];
+    WorkloadCluster workload_cluster = 41;
   }
 
   reserved 10;

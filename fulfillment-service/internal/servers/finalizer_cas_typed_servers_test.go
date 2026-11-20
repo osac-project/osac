@@ -833,6 +833,19 @@ func publicFinalizerCases() []publicFinalizerCase {
 	return []publicFinalizerCase{
 		{privatev1.Volumes_ServiceDesc.ServiceName, newPublicVolumesOps},
 		{privatev1.Clusters_ServiceDesc.ServiceName, newPublicClustersOps},
+		{privatev1.WorkloadClusters_ServiceDesc.ServiceName, func() publicFinalizerOps {
+			GinkgoHelper()
+			server, err := NewWorkloadClustersServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				SetHubsServer(&mockHubServer{}).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			return newPublicFinalizerOps(
+				server.Get, server.Update, (*publicv1.WorkloadClustersGetResponse).GetObject,
+			)
+		}},
 		{privatev1.BareMetalInstances_ServiceDesc.ServiceName, func() publicFinalizerOps {
 			GinkgoHelper()
 			server, err := NewBareMetalInstancesServer().

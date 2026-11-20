@@ -28,12 +28,20 @@ import (
 // SignalRequest represents a request to signal an object by its identifier.
 type SignalRequest[O Object] struct {
 	request[O]
-	id string
+	id            string
+	eventReason   string
+	eventSeverity string
 }
 
 // SetId sets the identifier of the object to signal.
 func (r *SignalRequest[O]) SetId(value string) *SignalRequest[O] {
 	r.id = value
+	return r
+}
+
+func (r *SignalRequest[O]) SetEventMetadata(reason, severity string) *SignalRequest[O] {
+	r.eventReason = reason
+	r.eventSeverity = severity
 	return r
 }
 
@@ -80,6 +88,14 @@ func (r *SignalRequest[O]) do(ctx context.Context) (response *SignalResponse, er
 	if err != nil {
 		return
 	}
+	_, err = r.exec(ctx, signalOpType, "select set_config('osac.event_reason', $1, true)", r.eventReason)
+	if err != nil {
+		return
+	}
+	_, err = r.exec(ctx, signalOpType, "select set_config('osac.event_severity', $1, true)", r.eventSeverity)
+	if err != nil {
+		return
+	}
 
 	// Assign the version to itself to cause the change trigger to enqueue the signal event without changing the object.
 	var buffer strings.Builder
@@ -94,6 +110,10 @@ func (r *SignalRequest[O]) do(ctx context.Context) (response *SignalResponse, er
 		r.sql.filter.String(),
 	)
 	tag, updateErr := r.exec(ctx, signalOpType, buffer.String(), r.sql.params...)
+	// The event metadata settings are transaction-local, but they remain set
+	// for subsequent writes in this transaction unless explicitly cleared.
+	_, clearReasonErr := r.exec(ctx, signalOpType, "select set_config('osac.event_reason', '', true)")
+	_, clearSeverityErr := r.exec(ctx, signalOpType, "select set_config('osac.event_severity', '', true)")
 	_, clearErr := r.exec(ctx, signalOpType, "set local osac.signal = 'off'")
 	if updateErr == nil && tag.RowsAffected() == 0 {
 		err = &ErrNotFound{
@@ -103,7 +123,7 @@ func (r *SignalRequest[O]) do(ctx context.Context) (response *SignalResponse, er
 	}
 	err = updateErr
 	if err == nil {
-		err = clearErr
+		err = errors.Join(clearReasonErr, clearSeverityErr, clearErr)
 	}
 	if err != nil {
 		var pgErr *pgconn.PgError

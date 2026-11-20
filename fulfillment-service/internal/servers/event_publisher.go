@@ -126,6 +126,8 @@ type eventPublisherChange struct {
 	op        string
 	data      []byte
 	timestamp time.Time
+	reason    string
+	severity  string
 }
 
 // preparedChange is a change converted to an event once, so that the drain and the publish step use the same event.
@@ -529,7 +531,9 @@ func (b *EventPublisherBuilder) calculateFetchSQL(dbTable string) string {
 			"table",
 			"op",
 			"data",
-			"timestamp"
+			"timestamp",
+			coalesce("reason", ''),
+			coalesce("severity", '')
 		from
 			%s
 		where
@@ -768,6 +772,8 @@ func (p *EventPublisher) drain(ctx context.Context) (more bool, err error) {
 			&change.op,
 			&change.data,
 			&change.timestamp,
+			&change.reason,
+			&change.severity,
 		)
 		return
 	})
@@ -1145,8 +1151,31 @@ func (p *EventPublisher) convertChange(change *eventPublisherChange) (event *pri
 		Timestamp: timestamppb.New(change.timestamp),
 	}.Build()
 	event.ProtoReflect().Set(field, protoreflect.ValueOfMessage(object.ProtoReflect()))
+	if change.reason != "" {
+		event.SetReason(change.reason)
+	}
+	if change.severity != "" {
+		event.SetSeverity(change.severity)
+	}
+	p.decorateWorkloadClusterEvent(event, change.op)
 	p.redactEvent(event)
 	return
+}
+
+func (p *EventPublisher) decorateWorkloadClusterEvent(event *privatev1.Event, operation string) {
+	if !event.HasWorkloadCluster() {
+		return
+	}
+	if event.GetReason() != "" {
+		return
+	}
+	switch operation {
+	case eventPublisherOpInsert:
+		event.SetReason("Registered")
+		if event.GetSeverity() == "" {
+			event.SetSeverity("Normal")
+		}
+	}
 }
 
 // redactEvent removes from the event secrets that should not be written to Kafka.

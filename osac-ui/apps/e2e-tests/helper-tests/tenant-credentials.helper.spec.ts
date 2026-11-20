@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 
 import {
   loginWithStagedTenantPassword,
+  readTenantCredentials,
   removeTenantCredentials,
   tenantCredentialsFilePath,
   tenantReplacementPassword,
@@ -32,10 +33,43 @@ test('stages the replacement before login and promotes it after success', async 
     });
     const contents = await readFile(file, 'utf8');
     expect(contents.includes(`Password: ${replacement}\n`)).toBe(true);
+    await expect(readTenantCredentials(file)).resolves.toEqual({
+      username: 'test-user',
+      password: replacement,
+    });
+    const configured = tenantReplacementPassword('configured-password');
+    await loginWithStagedTenantPassword(file, configured, async () => true);
+    await expect(readTenantCredentials(file)).resolves.toEqual({
+      username: 'test-user',
+      password: configured,
+    });
     await expect(stat(`${file}.pending`)).rejects.toThrow();
     await expect(loginWithStagedTenantPassword(file, '', async () => true)).rejects.toThrow(
       'Tenant replacement password is empty.',
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('rejects multiline replacement passwords before staging or login', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'osac-tenant-password-test-'));
+  try {
+    const file = join(directory, 'credentials');
+    const original = 'Username: test-user\nPassword: old\n';
+    await writeFile(file, original);
+    for (const separator of ['\n', '\r', '\r\n', '\u2028', '\u2029']) {
+      let called = false;
+      await expect(
+        loginWithStagedTenantPassword(file, `first${separator}second`, async () => {
+          called = true;
+          return true;
+        }),
+      ).rejects.toThrow('Tenant replacement password must be a single line.');
+      expect(called).toBe(false);
+      expect(await readFile(file, 'utf8')).toBe(original);
+      await expect(stat(`${file}.pending`)).rejects.toThrow();
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

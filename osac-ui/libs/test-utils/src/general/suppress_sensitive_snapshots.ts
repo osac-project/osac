@@ -1,10 +1,8 @@
 // Playwright debug output can include DOM values and protocol arguments.
 const debug = process.env.DEBUG ?? '';
-if (
-  debug.includes('*') ||
-  /(^|[\s,])pw(?::|$)/i.test(debug) ||
-  (process.env.PWDEBUG && process.env.PWDEBUG !== '0')
-) {
+const pwDebug =
+  process.env.PWDEBUG ?? process.env.npm_config_pwdebug ?? process.env.npm_package_config_pwdebug;
+if (debug.includes('*') || /(^|[\s,])pw(?::|$)/i.test(debug) || (pwDebug && pwDebug !== '0')) {
   throw new Error(
     'Playwright debug logging and inspector must be disabled for credentialed tests.',
   );

@@ -56,7 +56,7 @@ available, for example on bare-metal hubs with a lab or corporate DNS server.
 For each cluster it creates `api.<cluster>.<base>`, `api-int.<cluster>.<base>`
 (the `kube-apiserver` LoadBalancer address) and `*.apps.<cluster>.<base>` (the
 ingress address), and deletes them when the cluster is deleted. A rerun with
-unchanged values sends no update; a changed address or TTL replaces the record.
+unchanged values sends no update, and a changed address or TTL replaces the record.
 
 ### ConfigMap Variables
 
@@ -69,7 +69,7 @@ unchanged values sends no update; a changed address or TTL replaces the record.
 | `DNS_RFC2136_PROTOCOL` | `tcp` | `tcp` or `udp` |
 | `DNS_RFC2136_KEY_NAME` | — (required) | Name of the TSIG key |
 | `DNS_RFC2136_KEY_ALGORITHM` | `hmac-sha256` | `hmac-sha224`, `hmac-sha256`, `hmac-sha384` or `hmac-sha512`. HMAC-MD5 and HMAC-SHA1 keys are not accepted |
-| `DNS_SERVER` | — | Optional resolver for the readiness wait after the records are created, queried with `dig` over UDP port 53. Set it when the zone is not delegated from the resolvers the execution environment uses; point it at the update server only if that server answers queries on UDP port 53 |
+| `DNS_SERVER` | — | Optional IPv4 address, IPv6 address or host name of the DNS server that the readiness wait queries with `dig` over UDP port 53 after the records are created. Set it when the zone is not delegated from the resolvers the execution environment uses. Point it at the update server only if that server answers queries on UDP port 53 |
 
 ### Secret Variables
 
@@ -93,6 +93,11 @@ aap:
         DNS_RFC2136_KEY_SECRET: "<base64 TSIG secret>"
 ```
 
+With `DNS_CLASS: dns.rfc2136.dns`, the chart rejects values that do not set
+`DNS_RFC2136_SERVER`, `DNS_RFC2136_KEY_NAME` and `DNS_RFC2136_KEY_SECRET`, and
+values that are not valid (for example a host name as `DNS_RFC2136_SERVER`, or
+an empty value). Omit an optional setting to use its default.
+
 The driver checks these settings before it contacts the server and fails with
 a message that names the variable to fix. It also fails when the server
 answers an update with an error (for example `REFUSED` or `NOTAUTH`), on
@@ -103,7 +108,7 @@ job output and messages do not include record names or addresses. Cluster
 failure events from the existing CaaS diagnostics can still name the
 affected record.
 
-The driver contacts only `DNS_RFC2136_SERVER`; managing the records needs no
+The driver contacts only `DNS_RFC2136_SERVER`. Managing the records needs no
 internet access or external DNS provider.
 
 ### DNS server requirements
@@ -160,7 +165,7 @@ The driver's failure messages name the setting to check:
 
 | Message | Fix |
 |---------|-----|
-| `DNS_RFC2136_<SETTING> must …` | The setting is missing or invalid. Correct it in the installation values; `DNS_RFC2136_SERVER` must be an IP address, not a host name |
+| `DNS_RFC2136_<SETTING> must …` | The setting is missing or invalid. Correct it in the installation values. `DNS_RFC2136_SERVER` must be an IP address, not a host name |
 | `The DNS record name is not inside DNS_ZONE` | Set `DNS_ZONE` to the zone configured on the server, and make sure it contains the cluster base domain |
 | `RFC 2136 DNS update failed: DNS_RFC2136_KEY_SECRET is not a valid base64 TSIG secret` | Copy the `secret` value from the BIND key file exactly |
 | `… the server rejected the TSIG signature` | The key name, algorithm or secret does not match a key the server knows |
@@ -168,7 +173,7 @@ The driver's failure messages name the setting to check:
 | `… the query for the existing record failed` | On a rerun the driver queries the existing record. Check that the key is allowed in the zone's `allow-query`, then the server logs for errors such as `SERVFAIL` |
 | `RFC 2136 DNS update failed (REFUSED)` | The key may not change these records. Check the zone's `update-policy` (or `allow-update`) for this key |
 | `RFC 2136 DNS update failed (NOTAUTH)` | The server is not the primary for `DNS_ZONE`, or it did not accept the key |
-| `RFC 2136 DNS update failed (NOTZONE)` | The record is outside the zone configured on the server; check `DNS_ZONE` |
+| `RFC 2136 DNS update failed (NOTZONE)` | The record is outside the zone configured on the server. Check `DNS_ZONE` |
 | `A DNS record already exists and dns_record_overwrite is false` | Only callers that disable overwriting see this (the CaaS callers always overwrite). Remove the conflicting record |
 | `… unexpected nsupdate result` | Check the DNS server logs for the update |
 

@@ -361,19 +361,12 @@ aap:
         HOSTED_CLUSTER_BASE_DOMAIN: ""
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: ""
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: ""
-        # Optional resolver for the DNS readiness wait after record creation.
-        DNS_SERVER: ""
-        # dns.rfc2136.dns settings. Empty values are not rendered, so the
-        # driver defaults apply (port 53, tcp, hmac-sha256).
-        DNS_RFC2136_SERVER: ""
-        DNS_RFC2136_PORT: ""
-        DNS_RFC2136_PROTOCOL: ""
-        DNS_RFC2136_KEY_NAME: ""
-        DNS_RFC2136_KEY_ALGORITHM: ""
+        # Optional, unset by default: DNS_SERVER and the dns.rfc2136.dns
+        # settings (DNS_RFC2136_* here, DNS_RFC2136_KEY_SECRET under secret).
+        # See values-example.yaml and docs/dns-backend.md.
       secret:
         AWS_ACCESS_KEY_ID: ""
         AWS_SECRET_ACCESS_KEY: ""
-        DNS_RFC2136_KEY_SECRET: ""
     # ConfigMap and Secret network-fulfillment-ig: network manager settings
     # and credentials, written verbatim. Keys start with the registration
     # name in upper case (for example NETRIS_CONTROLLER_URL). Required with

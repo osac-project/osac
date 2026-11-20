@@ -1446,38 +1446,48 @@
                     },
                     "DNS_SERVER": {
                       "type": "string",
-                      "description": "Recursive resolver used by the DNS readiness wait after records are created. Empty uses the execution environment's resolver."
+                      "maxLength": 253,
+                      "description": "IPv4 address, IPv6 address or host name of the DNS server that the readiness wait queries (dig over UDP port 53) after records are created. Omit it to use the execution environment's resolver.",
+                      "anyOf": [
+                        {"pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$"},
+                        {"pattern": "^[0-9A-Fa-f]{0,4}(:[0-9A-Fa-f]{0,4}){2,7}$"},
+                        {"pattern": "^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\\.?$"}
+                      ]
                     },
                     "DNS_RFC2136_SERVER": {
                       "type": "string",
-                      "description": "dns.rfc2136.dns: IPv4 or IPv6 address of the primary DNS server that accepts dynamic updates (required; host names are not supported)"
+                      "description": "dns.rfc2136.dns: IPv4 or IPv6 address of the primary DNS server that accepts dynamic updates. Host names are not supported. Required with dns.rfc2136.dns.",
+                      "anyOf": [
+                        {"pattern": "^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$"},
+                        {"pattern": "^[0-9A-Fa-f]{0,4}(:[0-9A-Fa-f]{0,4}){2,7}$"}
+                      ]
                     },
                     "DNS_RFC2136_PORT": {
                       "type": "string",
-                      "pattern": "^(|[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$",
+                      "pattern": "^([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$",
                       "default": "53",
-                      "description": "dns.rfc2136.dns: DNS server port, 1-65535 (empty uses 53)"
+                      "description": "dns.rfc2136.dns: DNS server port, 1-65535 (default 53 when omitted)"
                     },
                     "DNS_RFC2136_PROTOCOL": {
                       "type": "string",
                       "default": "tcp",
-                      "description": "dns.rfc2136.dns: transport for updates (empty uses tcp)",
+                      "description": "dns.rfc2136.dns: transport for updates (default tcp when omitted)",
                       "enum": [
-                        "",
                         "tcp",
                         "udp"
                       ]
                     },
                     "DNS_RFC2136_KEY_NAME": {
                       "type": "string",
-                      "description": "dns.rfc2136.dns: name of the TSIG key allowed to update the zone (required)"
+                      "maxLength": 253,
+                      "pattern": "^[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?(\\.[A-Za-z0-9_]([A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?)*\\.?$",
+                      "description": "dns.rfc2136.dns: name of the TSIG key allowed to update the zone, in DNS name form. Required with dns.rfc2136.dns."
                     },
                     "DNS_RFC2136_KEY_ALGORITHM": {
                       "type": "string",
                       "default": "hmac-sha256",
-                      "description": "dns.rfc2136.dns: TSIG key algorithm (empty uses hmac-sha256)",
+                      "description": "dns.rfc2136.dns: TSIG key algorithm (default hmac-sha256 when omitted)",
                       "enum": [
-                        "",
                         "hmac-sha224",
                         "hmac-sha256",
                         "hmac-sha384",
@@ -1559,7 +1569,8 @@
                     },
                     "DNS_RFC2136_KEY_SECRET": {
                       "type": "string",
-                      "description": "dns.rfc2136.dns: base64-encoded TSIG key secret (required)"
+                      "minLength": 1,
+                      "description": "dns.rfc2136.dns: base64-encoded TSIG key secret. Required with dns.rfc2136.dns."
                     },
                     "SERVER_SSH_KEY": {
                       "type": "string",
@@ -1573,6 +1584,26 @@
                   "additionalProperties": false
                 }
               },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "config": {
+                        "properties": {"DNS_CLASS": {"const": "dns.rfc2136.dns"}},
+                        "required": ["DNS_CLASS"]
+                      }
+                    },
+                    "required": ["config"]
+                  },
+                  "then": {
+                    "properties": {
+                      "config": {"required": ["DNS_RFC2136_SERVER", "DNS_RFC2136_KEY_NAME"]},
+                      "secret": {"required": ["DNS_RFC2136_KEY_SECRET"]}
+                    },
+                    "required": ["secret"]
+                  }
+                }
+              ],
               "additionalProperties": false
             },
             "networkFulfillment": {

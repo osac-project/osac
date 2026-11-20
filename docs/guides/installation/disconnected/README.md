@@ -225,8 +225,8 @@ Complete this checklist before entering `prereqs.md` §2 and the remaining Doc 2
 - [ ] Representative selected-image pulls from the populated mirror succeed in the approved administration-host mirror-read client context, using read-only mirror credentials and direct mirror references; these are not the later original-reference node pull or actual CDI import tests
 - [ ] ISC and workspace metadata are archived for incremental updates
 
-Only after every check passes, continue to
-[Disconnected Prerequisites and Configuration](prereqs.md).
+Only after every Doc 1 acceptance check passes, enter
+[`prereqs.md` §2 — Consume the mirror handoff](prereqs.md#2-consume-the-mirror-handoff) and follow the normal Doc 2a preparation sequence. The only earlier diagnostic call into `prereqs.md` is its unnumbered [Pre-handoff node transport checkpoint](prereqs.md#pre-handoff-node-transport-checkpoint) subsection under §1, "Execution and input contract", invoked from Category A Step 2c; this is not entry into its §2 or §3.
 
 See
 [mirroring-operators.md § Handoff Verification](mirroring-operators.md#handoff-verification-doc-1-gate)

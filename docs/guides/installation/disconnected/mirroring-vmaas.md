@@ -36,11 +36,11 @@ Machine as a Service) into a disconnected mirror registry using the
 | Category B inventory composed before adding Category C | Shared ISC `mirror.additionalImages` contains the selected core component images; applied IDMS/ITMS and populated mirrors are not prerequisites for inventory composition |
 | VMaaS is enabled in OSAC Helm values | `global.services.vmaas.enabled: true` in values file |
 
-<!-- Moved to prereqs.md §3 diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
+<!-- Shared node HTTP procedure: prereqs.md §1, unnumbered Pre-handoff node transport checkpoint subsection. -->
 
-Before mirroring, H6/H7 supply the approved mirror authority, CA/read-access binding and independently selected source inventory; they do not require a live OSAC instance or a future importer. After the full mirror, obtain the node-transport observation through Category A Step 2c's [shared checkpoint](prereqs.md#pre-handoff-node-transport-checkpoint). Generic Pod-network diagnostics remain in `prereqs.md` §3 after handoff; actual importer-network/client acceptance remains in `installation.md` after product/platform preparation. A bastion or node result alone does not establish importer-network access.
+Before mirroring, obtain the approved site inputs: the exact mirror authority, CA/read-access binding and independently selected source inventory. These inputs are not produced by running the later prerequisite diagnostics and do not require a live OSAC instance or a future importer. After the full mirror, use Category A Step 2c to invoke the unnumbered [Pre-handoff node transport checkpoint](prereqs.md#pre-handoff-node-transport-checkpoint) subsection under `prereqs.md` §1, "Execution and input contract". After the completed Doc 1 handoff, [`prereqs.md` §3.1](prereqs.md#31-node-transport-and-representative-image-diagnostic) reuses that procedure and performs the separate original-reference image pull; the generic Pod-network diagnostic remains in [`prereqs.md` §3.2](prereqs.md#32-approved-pod-network-diagnostic). Actual importer-network/client acceptance remains in `installation.md` after product/platform preparation. A bastion or node result alone does not establish importer-network access.
 
-<!-- Moved to prereqs.md §3 diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
+<!-- Post-handoff diagnostics: prereqs.md §3.1 and §3.2; actual importer-client acceptance: installation.md. -->
 
 ## Resources Required
 
@@ -232,7 +232,7 @@ separate acceptance gate, not a result of this IDMS/ITMS policy check.
 
 <!-- Moved to installation.md §CDI DataVolume import configuration. See docs/guides/installation/disconnected/installation.md -->
 
-<!-- Moved to prereqs.md §Registry trust configuration. See docs/guides/installation/disconnected/prereqs.md -->
+<!-- Trust/authentication guidance: prereqs.md §3.3, Trust and authentication correction — unresolved consumer mapping. -->
 
 <!-- Moved to installation.md §CDI registry configuration and concurrency. See docs/guides/installation/disconnected/installation.md -->
 
@@ -256,7 +256,7 @@ exact-tag review above. A name-pattern search for `containerdisk` or
 
 <!-- Moved to installation.md §VMaaS runtime troubleshooting. See docs/guides/installation/disconnected/installation.md -->
 <!-- Moved to installation.md §VMaaS runtime troubleshooting. See docs/guides/installation/disconnected/installation.md -->
-<!-- Moved to prereqs.md §Mirror-read credential diagnostics. See docs/guides/installation/disconnected/prereqs.md -->
+<!-- Mirror-read credential diagnosis: prereqs.md §3.3, final paragraph. -->
 
 ## Known Gaps / Limitations
 

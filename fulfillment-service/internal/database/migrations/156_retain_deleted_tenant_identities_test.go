@@ -41,7 +41,7 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 	BeforeEach(func(ctx context.Context) {
 		var version int
 		Expect(conn.QueryRow(ctx, `select version from schema_migrations`).Scan(&version)).To(Succeed())
-		Expect(version).To(Equal(159))
+		Expect(version).To(Equal(155))
 		_, err := conn.Exec(ctx, `
 			insert into tenants (id, name, tenant, creation_timestamp, deletion_timestamp, finalizers, data) values
 			 ('pending', 'pending', 'pending', '2026-01-01Z', '2026-03-01Z', '{cleanup}', '{}'),
@@ -96,13 +96,9 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 	}
 	It("backfills recorded archives and pending live deletions without changing history or raw tokens", func(ctx context.Context) {
 		before := snapshot(ctx)
-		// Catalog enumeration must remove more than the historical, fixed FK name.
-		_, err := conn.Exec(ctx, `alter table tenant_billing_assignments add constraint extra_tenant_fk
-		 foreign key (tenant) references tenants(name)`)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(tool.Migrate(ctx, 160)).To(Succeed())
+		Expect(tool.Migrate(ctx, 156)).To(Succeed())
 		Expect(snapshot(ctx)).To(Equal(before))
-		Expect(foreignKeys(ctx)).To(BeZero())
+		Expect(foreignKeys(ctx)).To(BeZero(), "retained history never carries a live tenant foreign key")
 		var result string
 		Expect(conn.QueryRow(ctx, `select jsonb_agg(jsonb_build_array(tenant_name,
 		 to_char(tenant_created_at at time zone 'UTC', 'YYYY-MM-DD'),
@@ -127,7 +123,7 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 		var indexes int
 		Expect(conn.QueryRow(ctx, `select count(*) from pg_index i join pg_class c on c.oid = i.indexrelid
 		 where i.indisvalid and c.relname in ('billing_accounts_unique_provider_account',
-		 'billing_accounts_unique_correlation_id', 'tenant_billing_assignments_unique_active_tenant',
+		 'billing_accounts_unique_external_billing_account_id', 'tenant_billing_assignments_unique_active_tenant',
 		 'tenant_billing_assignments_unique_active_account', 'tenant_billing_assignments_by_tenant',
 		 'tenant_billing_assignments_by_account', 'tenant_billing_assignments_by_effective_from')`).Scan(&indexes)).To(Succeed())
 		Expect(indexes).To(Equal(7))
@@ -144,7 +140,7 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 		Expect(finalized).To(BeNil(), "empty finalizers do not prove physical removal")
 	})
 	It("allows closing retained history after physical removal without weakening the account foreign key", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 160)).To(Succeed())
+		Expect(tool.Migrate(ctx, 156)).To(Succeed())
 		_, err := conn.Exec(ctx, `delete from projects where tenant = 'pending';
 		 delete from tenants where name = 'pending';
 		 update tenant_billing_assignments set data = jsonb_set(data, '{status,effective_to_timestamp}',
@@ -161,7 +157,7 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 		Expect(pgErr.Code).To(Equal("23503"), "foreign_key_violation, not an unrelated delete failure")
 		Expect(pgErr.ConstraintName).To(Equal("tenant_billing_assignments_billing_account_id_fkey"))
 	})
-	It("times out behind an assignment reader without changing the predecessor schema or rows", func(ctx context.Context) {
+	It("times out behind a tenant writer without changing the predecessor schema or rows", func(ctx context.Context) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		before, fks := snapshot(ctx), foreignKeys(ctx)
@@ -187,25 +183,26 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 				Expect(err).NotTo(HaveOccurred())
 			}
 		})
-		// Block the last lock in the list. ACCESS SHARE is enough to block ACCESS EXCLUSIVE.
-		_, err = reader.Exec(ctx, `lock table tenant_billing_assignments in access share mode`)
+		// ROW EXCLUSIVE is the lock a concurrent tenant writer holds; it conflicts with the migration's
+		// SHARE ROW EXCLUSIVE.
+		_, err = reader.Exec(ctx, `lock table tenants in row exclusive mode`)
 		Expect(err).NotTo(HaveOccurred())
 
-		err = boundedTool.Migrate(ctx, 160)
+		err = boundedTool.Migrate(ctx, 156)
 		var migrationErr migratedb.Error
 		Expect(errors.As(err, &migrationErr)).To(BeTrue(), "expected a PostgreSQL migration error, got %v", err)
 		var pgErr *pgconn.PgError
 		Expect(errors.As(migrationErr.OrigErr, &pgErr)).To(BeTrue())
 		Expect(pgErr.Code).To(Equal("55P03"))
-		Expect(pgErr.Message).To(ContainSubstring("Drain readers and writers"))
+		Expect(pgErr.Message).To(ContainSubstring("Drain tenant writers"))
 		Expect(pgErr.Detail).To(ContainSubstring("After confirming rollback"))
-		Expect(pgErr.Detail).To(ContainSubstring("reset the dirty migration version to 159"))
+		Expect(pgErr.Detail).To(ContainSubstring("reset the dirty migration version to 155"))
 		Expect(reader.Rollback(ctx)).To(Succeed())
 
 		var version int
 		var dirty, absent bool
 		Expect(conn.QueryRow(ctx, `select version, dirty from schema_migrations`).Scan(&version, &dirty)).To(Succeed())
-		Expect(version).To(Equal(160))
+		Expect(version).To(Equal(156))
 		Expect(dirty).To(BeTrue())
 		Expect(conn.QueryRow(ctx, `select to_regclass('deleted_tenant_identities') is null`).Scan(&absent)).To(Succeed())
 		Expect(absent).To(BeTrue())
@@ -217,7 +214,7 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 		Expect(err).NotTo(HaveOccurred())
 		before := snapshot(ctx)
 		fks := foreignKeys(ctx)
-		Expect(tool.Migrate(ctx, 160)).NotTo(Succeed())
+		Expect(tool.Migrate(ctx, 156)).NotTo(Succeed())
 		Expect(snapshot(ctx)).To(Equal(before))
 		Expect(foreignKeys(ctx)).To(Equal(fks))
 		var absent bool
@@ -237,17 +234,5 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 		Entry("live overlaps archive", `update archived_tenants set archival_timestamp = '2026-03-01Z' where name = 'reused'`),
 		Entry("inverted live deletion", `update tenants set deletion_timestamp = '2025-01-01Z' where name = 'pending'`),
 		Entry("infinite live creation", `update tenants set creation_timestamp = 'infinity' where name = 'active'`),
-		Entry("orphaned history after missing FK", `alter table tenant_billing_assignments
-		 drop constraint tenant_billing_assignments_tenant_id_fkey;
-		 insert into tenant_billing_assignments (id, name, tenant, annotations, data)
-		 select 'orphan', name, 'orphan', jsonb_build_object('osac.openshift.io/tenant', 'orphan'),
-		 jsonb_set(data, '{spec,tenant}', '{"id":"orphan","name":"orphan"}')
-		 from tenant_billing_assignments where id = 'pending'`),
-		Entry("unvalidated lineage", `alter table tenant_billing_assignments drop constraint tenant_billing_assignments_tenant_id_fkey;
-		 alter table tenant_billing_assignments add constraint tenant_billing_assignments_tenant_id_fkey
-		 foreign key (tenant_id) references tenants(name) not valid`),
-		Entry("cascading lineage", `alter table tenant_billing_assignments drop constraint tenant_billing_assignments_tenant_id_fkey;
-		 alter table tenant_billing_assignments add constraint tenant_billing_assignments_tenant_id_fkey
-		 foreign key (tenant_id) references tenants(name) on delete cascade`),
 	)
 })

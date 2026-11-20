@@ -43,7 +43,7 @@ var _ = DescribeMigration("Tenant lifecycle triggers", func() {
 				    'TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED',
 				    'effective_from_timestamp','2026-01-01T00:00:00Z')));`)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(tool.Migrate(ctx, 163)).To(Succeed())
+		Expect(tool.Migrate(ctx, 157)).To(Succeed())
 
 		tx, err := conn.Begin(ctx)
 		Expect(err).NotTo(HaveOccurred())
@@ -92,7 +92,7 @@ var _ = DescribeMigration("Tenant lifecycle triggers", func() {
 				('deleting', 'deleting', 'deleting', '2026-01-01Z', '{}'),
 				('racing', 'racing', 'racing', '2026-01-01Z', '{}');`)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(tool.Migrate(ctx, 163)).To(Succeed())
+		Expect(tool.Migrate(ctx, 157)).To(Succeed())
 
 		_, err = conn.Exec(ctx, `insert into objects (id, name, tenant, data) values ('live-object', 'live-object', 'live', '{}')`)
 		Expect(err).NotTo(HaveOccurred())
@@ -144,7 +144,7 @@ var _ = DescribeMigration("Tenant lifecycle triggers", func() {
 				    'TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED',
 				    'effective_from_timestamp','2026-01-01T00:00:00Z')));`)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(tool.Migrate(ctx, 163)).To(Succeed())
+		Expect(tool.Migrate(ctx, 157)).To(Succeed())
 
 		_, err = conn.Exec(ctx, `delete from projects where tenant = 'direct-delete';
 			delete from tenants where id = 'direct-delete'`)
@@ -203,7 +203,7 @@ var _ = DescribeMigration("Tenant lifecycle triggers", func() {
 				    'TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED',
 				    'effective_from_timestamp','2026-01-01T00:00:00Z')));`)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(tool.Migrate(ctx, 163)).To(Succeed())
+		Expect(tool.Migrate(ctx, 157)).To(Succeed())
 
 		var deletion, effectiveTo, effectiveToTimestamp *string
 		Expect(conn.QueryRow(ctx, `select t.deletion_timestamp::text, h.effective_to::text,

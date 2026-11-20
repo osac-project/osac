@@ -1096,7 +1096,7 @@ func (s *PrivateTenantBillingAssignmentsServer) mapTenantBillingAssignmentError(
 	}
 	if constraint != "" {
 		switch constraint {
-		case "billing_accounts_unique_correlation_id":
+		case "billing_accounts_unique_external_billing_account_id":
 			return failedPreconditionWithReason(billing.ReasonAccountCorrelationConflict, "external billing account id is already in use by another account")
 		case "tenant_billing_assignments_unique_active_tenant":
 			return failedPreconditionWithReason(tbaTenantAlreadyBoundReason,
@@ -1104,8 +1104,6 @@ func (s *PrivateTenantBillingAssignmentsServer) mapTenantBillingAssignmentError(
 		case "tenant_billing_assignments_unique_active_account":
 			return failedPreconditionWithReason(tbaAccountAlreadyBoundReason,
 				"billing account is already linked to a tenant")
-		case "tenant_billing_assignments_tenant_id_fkey":
-			return status.Errorf(codes.InvalidArgument, "spec.tenant does not reference an existing tenant")
 		}
 	}
 	var provErr *billing.Error

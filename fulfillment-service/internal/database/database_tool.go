@@ -512,7 +512,6 @@ func (t *tool) listObjectTables(ctx context.Context, pool *pgxpool.Pool) (result
 			c.relname not like 'active_%' and
 			c.relname not like 'archived_%' and
 			c.relname not in (
-				'billing_operation_leases',
 				'changes',
 				'deleted_tenant_identities',
 				'installation_settings',
@@ -625,11 +624,11 @@ func (t *tool) checkObjectTable(ctx context.Context, pool *pgxpool.Pool, table s
 	}
 
 	// These two objects intentionally do not publish changes. Do not install enqueue triggers merely to satisfy
-	// the ordinary object checks. The normalization migration installs projection triggers that derive the
-	// predecessor columns from the authoritative JSON payload. Billing accounts keep their live tenant foreign
-	// key. Assignment history keeps its tenant as a plain text token with no foreign key to live tenants, so
+	// the ordinary object checks. The billing migrations install projection triggers that derive the projected
+	// columns from the authoritative JSON payload. Billing accounts keep their live tenant foreign key.
+	// Assignment history keeps its tenant as a plain text token with no foreign key to live tenants, so
 	// retained history cannot block or cascade tenant deletion; it must never regain such a link through
-	// tenant_id or metadata.tenant. The live key exists until the identity cutover migration drops it, so its
+	// tenant_id or metadata.tenant. Fixtures applied before the identity store ships predate that rule, so its
 	// absence is only required from that migration onwards.
 	if table == "billing_accounts" || table == "tenant_billing_assignments" {
 		if projection, ok := billingProjectionTriggers[table]; ok {
@@ -1184,10 +1183,10 @@ const (
 // meteringTriggerName is the trigger that enforces the metering source contract.
 const meteringTriggerName = "enforce_metering_fields"
 
-// migrationRetainDeletedTenantIdentities is the migration that drops the live tenant foreign key from retained
-// assignment history. Earlier intermediate states still have that key, so its absence is only required from this
-// version onwards.
-const migrationRetainDeletedTenantIdentities uint = 160
+// migrationRetainDeletedTenantIdentities is the migration that introduces the deleted tenant identity store and
+// completes the billing history cutover. Retained assignment history never carries a live tenant foreign key, but
+// fixtures applied before this version predate the identity store, so the absence is only required from here onwards.
+const migrationRetainDeletedTenantIdentities uint = 156
 
 // Names of the billing projection triggers and the functions they must execute. The normalization migration
 // installs them to derive predecessor columns from the authoritative metadata and private JSON payload.

@@ -24,7 +24,7 @@ import (
 
 var _ = DescribeMigration("Add visibility lookup indexes", func() {
 	// Exercise the historical archive-based lookup this migration indexed. The current resolver requires
-	// the identity store introduced in migration 160, which does not exist in this version-specific fixture.
+	// the identity store introduced in migration 156, which does not exist in this version-specific fixture.
 	const livenessQuery = `
 		select claimed.name
 		from unnest($1::text[]) with ordinality as claimed(name, position)
@@ -108,7 +108,7 @@ var _ = DescribeMigration("Add visibility lookup indexes", func() {
 		}
 		originalIndexes, originalData := indexes(), data()
 		checkVisibility()
-		Expect(tool.Migrate(ctx, 156)).To(Succeed())
+		Expect(tool.Migrate(ctx, 154)).To(Succeed())
 		Expect(indexes()).To(ConsistOf(append(originalIndexes,
 			"CREATE INDEX archived_tenants_by_name ON public.archived_tenants USING btree (name)",
 			"CREATE INDEX project_membership_subjects_by_tenant_user ON public.project_membership_subjects "+
@@ -130,7 +130,7 @@ var _ = DescribeMigration("Add visibility lookup indexes", func() {
 				|| '["target-user"]'::jsonb)) where id = 'membership-a';
 		`)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(tool.Migrate(ctx, 156)).To(Succeed())
+		Expect(tool.Migrate(ctx, 154)).To(Succeed())
 		_, err = conn.Exec(ctx, `analyze tenants; analyze archived_tenants; analyze project_membership_subjects`)
 		Expect(err).ToNot(HaveOccurred())
 

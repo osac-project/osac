@@ -11,20 +11,21 @@
 -- specific language governing permissions and limitations under the License.
 --
 
--- Deploy all identity/capture/liveness writers together while writes are quiesced. Drain readers too: these
--- locks exclude both reads and writes throughout validation, backfill and FK removal.
+-- Create the credential-free store that reserves deleted tenant names and records who deleted them. Deploy it
+-- together with its writers while tenant writes are quiesced: the lock blocks writers on both source tables for the
+-- validation and backfill below.
 begin;
 set local lock_timeout = '5s';
 do $$
 begin
-  lock table tenants, archived_tenants, tenant_billing_assignments in access exclusive mode;
+  lock table tenants, archived_tenants in share row exclusive mode;
 exception when lock_not_available then
   raise exception using
     errcode = '55P03',
-    message = 'Migration 160 timed out waiting for an ACCESS EXCLUSIVE lock. Drain readers and writers of'
-      ' tenants, archived_tenants and tenant_billing_assignments before retrying the upgrade.',
+    message = 'Migration 156 timed out waiting for a SHARE ROW EXCLUSIVE lock. Drain tenant writers of'
+      ' tenants and archived_tenants before retrying the upgrade.',
     detail = 'Roll back the failed transaction if the migration session is still open. After confirming rollback,'
-      ' reset the dirty migration version to 159 before retrying.';
+      ' reset the dirty migration version to 155 before retrying.';
 end;
 $$;
 
@@ -43,32 +44,12 @@ create table deleted_tenant_identities (
     and (finalized_at is null or (finalized_at >= deletion_timestamp and finalized_at < '10000-01-01Z'::timestamptz)))
 );
 
+-- Refuse to backfill from evidence that cannot be represented faithfully, rather than inventing identities, dates
+-- or incarnations.
 do $$
 declare
   discrepancies bigint;
 begin
-  -- The enforced predecessor FK establishes that surviving history belongs to the current live incarnation.
-  -- Unvalidated/disabled/bypassed lineage cannot justify attributing history to an older textual archive.
-  if current_setting('session_replication_role') <> 'origin'
-    or not exists (select 1 from pg_constraint c where c.contype = 'f'
-      and c.conrelid = 'tenant_billing_assignments'::regclass and c.confrelid = 'tenants'::regclass
-      and c.convalidated and c.confdeltype in ('a', 'r')
-      and c.conkey = array[(select attnum from pg_attribute
-        where attrelid = c.conrelid and attname = 'tenant_id')]
-      and c.confkey = array[(select attnum from pg_attribute
-        where attrelid = c.confrelid and attname = 'name')])
-    or exists (select 1 from pg_constraint c where c.contype = 'f'
-      and c.conrelid = 'tenant_billing_assignments'::regclass and c.confrelid = 'tenants'::regclass
-      and (not c.convalidated or c.confdeltype not in ('a', 'r')))
-    or exists (select 1 from pg_trigger t join pg_constraint c on c.oid = t.tgconstraint
-      where c.contype = 'f' and c.conrelid = 'tenant_billing_assignments'::regclass
-        and c.confrelid = 'tenants'::regclass and t.tgenabled not in ('O', 'A'))
-    or exists (select 1 from tenant_billing_assignments h
-      where not exists (select 1 from tenants t where t.name = h.tenant_id))
-  then
-    raise exception 'unproven tenant billing history lineage; audit required' using errcode = '23514';
-  end if;
-
   if exists (select 1 from tenants where name = '' or id <> name or tenant <> name
       or creation_timestamp < '0001-01-01Z'::timestamptz or creation_timestamp >= '10000-01-01Z'::timestamptz
       or creation_timestamp = 'epoch'::timestamptz
@@ -123,17 +104,4 @@ on conflict (tenant_name) do update set
   finalized_at = excluded.finalized_at,
   billing_retained = excluded.billing_retained;
 
--- Drop EVERY restrictive history-to-live FK only after the complete store has been validated and populated.
--- Account FKs, history, raw tokens, indexes and the GenericDAO active-tenant FOR SHARE create guard are unchanged.
-do $$
-declare
-  r record;
-begin
-  for r in select conname from pg_constraint where contype = 'f'
-    and conrelid = 'tenant_billing_assignments'::regclass and confrelid = 'tenants'::regclass
-  loop
-    execute format('alter table tenant_billing_assignments drop constraint %I', r.conname);
-  end loop;
-end;
-$$;
 commit;

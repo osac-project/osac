@@ -19,8 +19,8 @@ begin
 exception when lock_not_available then
   raise exception using
     errcode = '55P03',
-    message = 'Migration 163 timed out waiting for tenant lifecycle tables. Drain tenant and billing writes before retrying.',
-    detail = 'Roll back the failed transaction if the migration session is still open. After confirming rollback, reset the dirty migration version to 162 before retrying.';
+    message = 'Migration 157 timed out waiting for tenant lifecycle tables. Drain tenant and billing writes before retrying.',
+    detail = 'Roll back the failed transaction if the migration session is still open. After confirming rollback, reset the dirty migration version to 156 before retrying.';
 end;
 $$;
 

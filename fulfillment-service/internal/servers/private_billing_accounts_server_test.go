@@ -1216,8 +1216,8 @@ var _ = Describe("Private billing accounts server", func() {
 	It("does not warn about conflicting provider evidence when no assignment ever referenced the account", func() {
 		server, logs := buildWithLogs(billingfake.New(billingfake.Scenario{}).Provider())
 		start := time.Now().UTC().Truncate(time.Microsecond)
-		// A nonblank token without any assignment row has no assignment to drift from; migration 162
-		// would have released such a discovery-only reservation.
+		// A nonblank token without any assignment row has no assignment to drift from, so there is no
+		// conflict to warn about and the stored token is kept.
 		id := seedAssignedAccount(server, "osac-unassigned", "unassigned-native", "unassigned-token", start)
 		err := billingStore(ctx, server, []billing.Account{{
 			Ref: billing.NewAccountRef("unassigned-native"), ExternalID: "mismatching-token", State: billing.AccountActive,

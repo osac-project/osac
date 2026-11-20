@@ -199,7 +199,7 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 		} else {
 			var duplicate *ErrAlreadyExists
 			Expect(errors.As(err, &duplicate)).To(BeTrue())
-			Expect(duplicate.ConstraintName).To(Equal("billing_accounts_unique_correlation_id"))
+			Expect(duplicate.ConstraintName).To(Equal("billing_accounts_unique_external_billing_account_id"))
 			other := *token + " "
 			_, err = accounts.Create().SetObject(accountObject("raw-distinct", &other)).Do(ctx)
 			Expect(err).NotTo(HaveOccurred(), "uniqueness uses bytes, not trimmed equality")

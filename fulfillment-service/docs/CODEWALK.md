@@ -93,7 +93,7 @@ mitigate this here:
   Event emission is therefore atomic with the request: an event is never published for a change
   that rolls back.
 
-Migration 163 installs a database trigger on generic object tables whose tenant
+Migration 157 installs a database trigger on generic object tables whose tenant
 foreign key points to `tenants.name`. A new row (or a tenant reassignment) takes a
 transaction-held `FOR SHARE` lock and rejects a missing or deletion-marked tenant.
 An update that retains its tenant remains available for controller/finalizer cleanup.
@@ -116,7 +116,7 @@ the tenant trigger also closes legacy active history at its already accepted bou
 after removal, another trigger records a separate post-delete `finalized_at`. The normal
 request transaction makes archival, trigger effects, and outbox changes atomic. Runtime
 liveness and permanent deleted-name reservation use the identity table, not tenant
-archives; migration 160 backfills known archive evidence, and deletions absent from
+archives; migration 156 backfills known archive evidence, and deletions absent from
 both retained markers and that evidence are not reconstructed. Generic archival for
 unrelated objects remains. Billing history stays in the assignment object table without
 a live-tenant FK; its account FK and partial uniqueness indexes remain. Assignment-only
@@ -148,13 +148,13 @@ provider read may occupy a pooled connection; cancellation releases admission an
 All public/private billing handlers report their final RPC error, including public mapping failures.
 
 The billing tables use the same metadata columns and private protobuf JSON body as other objects.
-Their old business columns are read-only projections for existing indexes, constraints and selectors,
-not a second writable model. Account Spec is empty and provider observations are nested in Status;
-assignments retain canonical typed tenant/account references and timestamped interval history.
-Billing deliberately has no generic change trigger or controller: discovery, assignment mutation and
-private Signal do not enqueue billing object events. Generic outbox behavior for other objects is
-unchanged. Historical migration 155 remains immutable; forward migration 161 removes its obsolete
-lease table only after all runtime acquisition/reservation/fencing consumers have been retired.
+Their provider-observation columns are read-only projections for existing indexes, constraints and
+selectors, not a second writable model. Account Spec is empty and provider observations are nested in
+Status; assignments retain canonical typed tenant/account references and timestamped interval
+history. Billing deliberately has no generic change trigger or controller: discovery, assignment
+mutation and private Signal do not enqueue billing object events. Generic outbox behavior for other
+objects is unchanged. Billing also keeps no durable operation-lease table: no runtime consumer
+acquires, reserves or fences a billing operation, so there is nothing to expire or reap.
 
 Streaming RPCs use `TxInterceptor.StreamServer`, which supplies a manager-only context and
 shadows any ambient transaction. Authorization, JIT, and each Watch visibility check can use

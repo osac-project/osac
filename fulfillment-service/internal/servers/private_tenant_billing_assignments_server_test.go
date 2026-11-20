@@ -2635,12 +2635,6 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(reason(err)).To(Equal("ACCOUNT_ALREADY_BOUND"))
 		})
 
-		It("maps a tenant_billing_assignments_tenant_id_fkey violation to INVALID_ARGUMENT", func() {
-			err := server.mapTenantBillingAssignmentError(ctx, &pgconn.PgError{ConstraintName: "tenant_billing_assignments_tenant_id_fkey"})
-			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-			Expect(err.Error()).To(ContainSubstring("spec.tenant"))
-		})
-
 		It("returns a fixed Internal message for an unmapped error, without echoing its detail", func() {
 			err := server.mapTenantBillingAssignmentError(ctx, errors.New("pq: constraint xyz on table t: secret detail"))
 			Expect(status.Code(err)).To(Equal(codes.Internal))

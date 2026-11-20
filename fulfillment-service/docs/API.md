@@ -583,15 +583,15 @@ are not aliases. The merged design's example request body predates this amendmen
 flat scalar fields and does not parse against this API. REST and CLI structured output use the
 nested snake-case field names.
 
-Migration 158 is the historical SQL-column rename, preserving raw values and links; 159
-normalizes the object envelope, and 160 retains deleted tenant identities. The final envelope
-and typed references are a breaking wire/JSON amendment, not merely a binary-compatible rename.
-Migration 161 drops only the retired lease table and its own indexes, including stale rows;
-it leaves account data, assignment history, identity markers and their constraints untouched.
-Migration 162 separates observed provider IDs from assignment tokens. It releases older
-discovery-only token reservations and preserves tokens referenced by current or historical assignments.
-These migrations are forward-only, with no inverse scripts. Coordinate service/database
-cutover: old binaries require the old schema. Stable correlation-related reason codes and
+The billing schema ships as one forward-only set: migration 152 creates `billing_accounts` with the
+final normalized envelope, projection trigger and uniqueness indexes; 153 creates
+`tenant_billing_assignments` with interval projection, current-interval uniqueness and no live-tenant
+foreign key; 154 adds the visibility lookup indexes; 155 releases finalized tenant domains; 156
+retains deleted tenant identities and backfills archive evidence; 157 installs the tenant lifecycle
+triggers. There is no separate SQL-column rename, envelope-normalization or lease-table migration to
+replay, because none of these tables had been applied upstream. These migrations are forward-only,
+with no inverse scripts. Coordinate service/database cutover: old binaries require the old schema,
+and binaries expecting these tables require the new one. Stable correlation-related reason codes and
 provider-native `externalId` remain unchanged. This does not add an assignment-to-metering bridge.
 
 Discovery refreshes a supplied, nonempty `base_currency` from a non-older provider observation;

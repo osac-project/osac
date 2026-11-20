@@ -67,20 +67,22 @@ var _ = Describe("Notifications API", Label("notifications"), func() {
 	})
 
 	It("denies tenant user Delete of announcements", func(ctx context.Context) {
-		_, adminConn := createCatalogItemTenantAdminFixture(ctx)
-		adminClient := publicv1.NewNotificationsClient(adminConn)
+		// Create in the same tenant as UserConn so Delete reaches server authz
+		// (cross-tenant Get would return NotFound before the role check).
 		userClient := publicv1.NewNotificationsClient(tool.ExternalView().UserConn())
+		privateClient := privatev1.NewNotificationsClient(tool.InternalView().AdminConn())
 
-		created, err := adminClient.Create(ctx, publicv1.NotificationsCreateRequest_builder{
-			Object: publicv1.Notification_builder{
-				Metadata: publicv1.Metadata_builder{
-					Name: fmt.Sprintf("ann-deny-%s", uuid.New()[:8]),
+		created, err := privateClient.Create(ctx, privatev1.NotificationsCreateRequest_builder{
+			Object: privatev1.Notification_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   fmt.Sprintf("ann-deny-%s", uuid.New()[:8]),
+					Tenant: usersGroup,
 				}.Build(),
-				Spec: publicv1.NotificationSpec_builder{
-					Kind:     publicv1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT,
-					Severity: publicv1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+				Spec: privatev1.NotificationSpec_builder{
+					Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT,
+					Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
 					Type:     "osac.notification.announcement",
-					Scope:    publicv1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
+					Scope:    privatev1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
 					Title:    "Admin owned",
 				}.Build(),
 			}.Build(),
@@ -88,7 +90,7 @@ var _ = Describe("Notifications API", Label("notifications"), func() {
 		Expect(err).ToNot(HaveOccurred())
 		id := created.GetObject().GetId()
 		DeferCleanup(func(ctx context.Context) {
-			_, _ = adminClient.Delete(ctx, publicv1.NotificationsDeleteRequest_builder{Id: id}.Build())
+			_, _ = privateClient.Delete(ctx, privatev1.NotificationsDeleteRequest_builder{Id: id}.Build())
 		})
 
 		_, err = userClient.Delete(ctx, publicv1.NotificationsDeleteRequest_builder{Id: id}.Build())

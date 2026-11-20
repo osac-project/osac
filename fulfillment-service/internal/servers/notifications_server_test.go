@@ -344,5 +344,42 @@ var _ = Describe("Notifications server", func() {
 			}.Build())
 			Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
 		})
+
+		It("Hides announcement Delete when resource access is denied", func() {
+			access := &stubNotificationResourceAccess{allow: map[string]bool{"cluster-denied": false}}
+			server, err := NewNotificationsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				SetResourceAccess(access).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			created, err := privateServer.Create(ctx, privatev1.NotificationsCreateRequest_builder{
+				Object: privatev1.Notification_builder{
+					Metadata: privatev1.Metadata_builder{Name: "ann-gated-del"}.Build(),
+					Spec: privatev1.NotificationSpec_builder{
+						Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT,
+						Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+						Type:     "osac.notification.announcement",
+						Scope:    privatev1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
+						Title:    "gated announcement",
+						Resource: privatev1.NotificationResourceReference_builder{
+							Cluster: privatev1.ClusterLocalReference_builder{Id: "cluster-denied"}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			adminCtx := auth.ContextWithSubject(ctx, &auth.Subject{
+				User:    "platform-admin",
+				Tenants: auth.AllTenants,
+			})
+			_, err = server.Delete(adminCtx, publicv1.NotificationsDeleteRequest_builder{
+				Id: created.GetObject().GetId(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.NotFound))
+		})
 	})
 })

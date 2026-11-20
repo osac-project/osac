@@ -25,7 +25,7 @@ import (
 
 var _ = DescribeMigration("Create Notification tables", func() {
 	BeforeEach(func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 152)).To(Succeed())
+		Expect(tool.Migrate(ctx, 153)).To(Succeed())
 		_, err := conn.Exec(ctx, `insert into tenants (id, name, tenant, creator, data)
             values ('notif-tenant-a', 'notif-tenant-a', 'notif-tenant-a', 'system', '{}'),
                    ('notif-tenant-b', 'notif-tenant-b', 'notif-tenant-b', 'system', '{}')`)

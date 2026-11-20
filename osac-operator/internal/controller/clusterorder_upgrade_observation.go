@@ -27,19 +27,21 @@ import (
 // stamped HyperShift resource.
 func recordUpgradeObservations(order *v1alpha1.ClusterOrder,
 	hc *hypershiftv1beta1.HostedCluster, pools []hypershiftv1beta1.NodePool) {
-	requestsByNodeSet := make(map[string]*v1alpha1.NodeRequestStatus, len(order.Status.NodeRequests))
-	for i := range order.Status.NodeRequests {
-		request := &order.Status.NodeRequests[i]
-		request.UpgradeObservation = nil
-		requestsByNodeSet[request.NodeSet] = request
-	}
-	id := order.Annotations[v1alpha1.UpgradeAttemptIDAnnotation]
-	order.Status.UpgradeObservation = controlPlaneUpgradeObservation(order, hc, id)
 	specRequests := make(map[string]*v1alpha1.NodeRequest, len(order.Spec.NodeRequests))
 	for i := range order.Spec.NodeRequests {
 		request := &order.Spec.NodeRequests[i]
 		specRequests[request.NodeSet] = request
 	}
+	requestsByNodeSet := make(map[string]*v1alpha1.NodeRequestStatus, len(order.Status.NodeRequests))
+	for i := range order.Status.NodeRequests {
+		request := &order.Status.NodeRequests[i]
+		request.UpgradeObservation = nil
+		if specRequests[request.NodeSet] != nil {
+			requestsByNodeSet[request.NodeSet] = request
+		}
+	}
+	id := order.Annotations[v1alpha1.UpgradeAttemptIDAnnotation]
+	order.Status.UpgradeObservation = controlPlaneUpgradeObservation(order, hc, id)
 	for i := range pools {
 		pool := &pools[i]
 		nodeSet, ok := nodePoolNodeSet(pool)
@@ -124,8 +126,7 @@ func nodePoolUpgradeObservation(pool *hypershiftv1beta1.NodePool,
 	if id == "" || pool.Annotations[v1alpha1.UpgradeAttemptIDAnnotation] != id {
 		return nil
 	}
-	if request != nil &&
-		(request.ReleaseImage == "" || pool.Spec.Release.Image != request.ReleaseImage) {
+	if request.ReleaseImage == "" || pool.Spec.Release.Image != request.ReleaseImage {
 		return nil
 	}
 	observation := &v1alpha1.UpgradeObservation{AttemptID: id, Version: pool.Status.Version}

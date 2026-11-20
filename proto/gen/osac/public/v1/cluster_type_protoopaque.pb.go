@@ -101,12 +101,12 @@ const (
 	ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING ClusterUpgradeState = 1
 	// HyperShift is working toward the requested version of the attempt.
 	ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING ClusterUpgradeState = 2
-	// The attempt did not reach a definitive result within the timeout. Observation
-	// continues and a later HyperShift result can update it to SUCCEEDED or FAILED.
+	// The current phase exceeded its expected duration. Observation continues;
+	// progress or success can replace this warning.
 	ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT ClusterUpgradeState = 3
 	// HyperShift completed the upgrade and the whole cluster reached the requested version.
 	ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED ClusterUpgradeState = 4
-	// HyperShift reported a terminal error and stopped working toward the requested version.
+	// Reserved for an unambiguous terminal upgrade failure signal.
 	ClusterUpgradeState_CLUSTER_UPGRADE_STATE_FAILED ClusterUpgradeState = 5
 )
 

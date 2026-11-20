@@ -259,9 +259,15 @@ var _ = Describe("Cluster upgrade", func() {
 		Expect(active).NotTo(BeNil())
 		controlPlane := active.GetControlPlane()
 		Expect(controlPlane).NotTo(BeNil())
-		controlPlane.SetState(componentState)
-		controlPlane.SetStateTransitionTime(timestamppb.New(
-			controlPlane.GetStateTransitionTime().AsTime().Add(time.Second)))
+		if aggregateState == privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT {
+			controlPlane.SetTimeoutTime(timestamppb.New(
+				controlPlane.GetStateTransitionTime().AsTime().Add(time.Second)))
+			controlPlane.SetMessage("Control plane upgrade progress was not observed")
+		} else {
+			controlPlane.SetState(componentState)
+			controlPlane.SetStateTransitionTime(timestamppb.New(
+				controlPlane.GetStateTransitionTime().AsTime().Add(time.Second)))
+		}
 		Expect(stored.GetStatus().GetUpgradeHistory()).To(HaveLen(1))
 		entry := stored.GetStatus().GetUpgradeHistory()[0]
 		Expect(entry.GetAttemptId()).To(Equal(stored.GetStatus().GetUpgradeAttemptId()))
@@ -396,7 +402,7 @@ var _ = Describe("Cluster upgrade", func() {
 		waitForOrderReleaseImage(order, targetImage)
 
 		applyControlPlaneState(cluster,
-			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT,
+			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING,
 			privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT)
 
 		timedOut := getPrivateCluster(cluster)
@@ -404,7 +410,8 @@ var _ = Describe("Cluster upgrade", func() {
 			To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT))
 		active := timedOut.GetStatus().GetActiveUpgradeAttempt()
 		Expect(active).NotTo(BeNil())
-		Expect(active.GetControlPlane().GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT))
+		Expect(active.GetControlPlane().GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
+		Expect(active.GetControlPlane().GetTimeoutTime()).NotTo(BeNil())
 		Expect(active.GetNodeSetsScheduledTime()).To(BeNil())
 
 		applyControlPlaneState(cluster,
@@ -418,6 +425,7 @@ var _ = Describe("Cluster upgrade", func() {
 			To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
 		recoveredActive := recovered.GetStatus().GetActiveUpgradeAttempt()
 		Expect(recoveredActive.GetControlPlane().GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED))
+		Expect(recoveredActive.GetControlPlane().GetTimeoutTime()).To(BeNil())
 		Expect(recoveredActive.GetNodeSetsScheduledTime()).NotTo(BeNil())
 	})
 })

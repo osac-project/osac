@@ -382,14 +382,14 @@ enum ClusterUpgradeState {
   // HyperShift is working toward the requested version of the attempt.
   CLUSTER_UPGRADE_STATE_PROGRESSING = 2;
 
-  // The attempt did not reach a definitive result within the timeout. Observation
-  // continues and a later HyperShift result can update it to SUCCEEDED or FAILED.
+  // The current phase exceeded its expected duration. Observation continues;
+  // progress or success can replace this warning.
   CLUSTER_UPGRADE_STATE_TIMED_OUT = 3;
 
   // HyperShift completed the upgrade and the whole cluster reached the requested version.
   CLUSTER_UPGRADE_STATE_SUCCEEDED = 4;
 
-  // HyperShift reported a terminal error and stopped working toward the requested version.
+  // Reserved for an unambiguous terminal upgrade failure signal.
   CLUSTER_UPGRADE_STATE_FAILED = 5;
 }
 
@@ -400,15 +400,16 @@ message ClusterUpgradeAttemptState {
   // State of the hosted control plane in the current attempt.
   ClusterUpgradeControlPlaneState control_plane = 1;
 
-  // State for each node set frozen into the current attempt.
+  // State for each existing NodePool retained in the accepted edit.
   repeated ClusterUpgradeNodeSetState node_sets = 2;
 
-  // Time the frozen node-set batch was released for upgrade. Its presence is
+  // Time the frozen NodePool batch was released for upgrade. Its presence is
   // the attempt-wide scheduling gate.
   google.protobuf.Timestamp node_sets_scheduled_time = 3;
 }
 
-// State of the hosted control plane in a cluster upgrade attempt.
+// Phase of the hosted control plane in a cluster upgrade attempt. A timeout is
+// a warning about this phase, not a phase transition.
 message ClusterUpgradeControlPlaneState {
   option (cleanapi.message).private = true;
 
@@ -416,9 +417,11 @@ message ClusterUpgradeControlPlaneState {
   string message = 2;
   google.protobuf.Timestamp accepted_time = 3;
   google.protobuf.Timestamp state_transition_time = 4;
+  google.protobuf.Timestamp timeout_time = 5;
 }
 
-// State of one node set in a cluster upgrade attempt.
+// Phase of one NodePool in a cluster upgrade attempt. A timeout is a warning
+// about this phase, not a phase transition.
 message ClusterUpgradeNodeSetState {
   option (cleanapi.message).private = true;
 
@@ -427,6 +430,7 @@ message ClusterUpgradeNodeSetState {
   ClusterUpgradeState state = 3;
   string message = 4;
   google.protobuf.Timestamp state_transition_time = 5;
+  google.protobuf.Timestamp timeout_time = 6;
 }
 
 // State and result of one whole-cluster upgrade attempt.

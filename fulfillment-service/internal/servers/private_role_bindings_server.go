@@ -280,8 +280,8 @@ func (s *PrivateRoleBindingsServer) resolveRoleReference(ctx context.Context,
 			ref.SetId(local.GetItems()[0].GetId())
 		}
 	}
-	role, err := resolveAndCanonicalizeReference(ctx, s.roles, candidate.GetMetadata(), ref,
-		"role", codes.InvalidArgument)
+	role, err := resolveAndCanonicalizeReferenceWithGet(ctx, s.roles, candidate.GetMetadata(), ref,
+		"role", codes.InvalidArgument, getShareLockedReferenceResource[*privatev1.Role])
 	if err != nil {
 		return nil, err
 	}

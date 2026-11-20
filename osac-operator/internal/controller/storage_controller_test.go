@@ -3912,15 +3912,10 @@ var _ = Describe("Storage Controller", func() {
 			)))
 		})
 
-		// One tier's backend resolves and has its hub Secret, but another tier's
-		// backend is not found, so that tier is skipped. The CaaS stage must not
-		// run on the no-StorageClass path while any tier is skipped.
-		It("should not trigger CaaS provisioning when some tier definitions are skipped", func() {
-			tenantName := "caas-nosc-tier-skipped"
-			createReadyTenantForStorage(ctx, tenantName, testNamespace)
-			createCaaSTierHubSecret(tenantName)
-			co := createReadyClusterOrderFor(tenantName, "caas-nosc-co-tier-skipped")
-
+		// newCaaSSkippedTierReconciler builds a CaaS reconciler with two OSAC
+		// tiers: "default" resolves on caasTierBackendID, while the backend of
+		// "missing" is not found, so that tier is skipped.
+		newCaaSSkippedTierReconciler := func() *StorageReconciler {
 			r := newCaaSTierReconciler(&mockProvisioningProvider{name: "caas-mock"})
 			r.TiersClient = &mockStorageTiersLister{
 				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
@@ -3941,6 +3936,36 @@ var _ = Describe("Storage Controller", func() {
 					return nil, status.Error(codes.NotFound, "not found")
 				},
 			}
+			return r
+		}
+
+		// Regression guard: the skipped-tier gate applies only when no VMaaS
+		// StorageClass resolves. With one resolved, the CaaS stage still runs.
+		It("should still trigger CaaS provisioning when a VMaaS StorageClass resolves and some tier definitions are skipped", func() {
+			tenantName := "caas-sc-tier-skipped"
+			createReadyTenantForStorage(ctx, tenantName, testNamespace)
+			createCaaSTierHubSecret(tenantName)
+			createLabeledStorageClass(ctx, tenantName+"-vmaas-sc", tenantName, "default")
+			co := createReadyClusterOrderFor(tenantName, "caas-sc-co-tier-skipped")
+
+			r := newCaaSSkippedTierReconciler()
+			nn := types.NamespacedName{Name: tenantName, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			expectCaaSTriggered(co)
+		})
+
+		// One tier's backend resolves and has its hub Secret, but another tier's
+		// backend is not found, so that tier is skipped. The CaaS stage must not
+		// run on the no-StorageClass path while any tier is skipped.
+		It("should not trigger CaaS provisioning when some tier definitions are skipped", func() {
+			tenantName := "caas-nosc-tier-skipped"
+			createReadyTenantForStorage(ctx, tenantName, testNamespace)
+			createCaaSTierHubSecret(tenantName)
+			co := createReadyClusterOrderFor(tenantName, "caas-nosc-co-tier-skipped")
+
+			r := newCaaSSkippedTierReconciler()
 
 			nn := types.NamespacedName{Name: tenantName, Namespace: testNamespace}
 			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))

@@ -168,6 +168,85 @@ var _ = DescribeMigration("Tenant lifecycle triggers", func() {
 		Expect(effectiveTo).To(Equal(deletion))
 		Expect(message).To(Equal("TENANT_DELETED: tenant deleted; assignment retained as billing history"))
 	})
+
+	It("closes billing history already left open by tenants deletion-marked before the upgrade", func(ctx context.Context) {
+		_, err := conn.Exec(ctx, `
+			insert into tenants (id, name, tenant, creation_timestamp, deletion_timestamp, data) values
+				('predeleted', 'predeleted', 'predeleted', '2026-01-01Z', '2026-01-02Z', '{}'),
+				('empty-deleted', 'empty-deleted', 'empty-deleted', '2026-01-01Z', '2026-01-02Z', '{}'),
+				('live', 'live', 'live', '2026-01-01Z', 'epoch', '{}'),
+				('reuse', 'reuse', 'reuse', '2026-01-01Z', 'epoch', '{}');
+			insert into billing_accounts (id, name, tenant, data) values
+				('released-account', 'ba-' || left(encode(sha256(convert_to('released-account', 'UTF8')), 'hex'), 60),
+				'system', '{"spec":{},"status":{"provider_key":"m360","provider_account_reference":"native-released",
+				"state":"BILLING_ACCOUNT_STATE_ACTIVE","state_observation_timestamp":"2026-01-01T00:00:00Z"}}'),
+				('live-account', 'ba-' || left(encode(sha256(convert_to('live-account', 'UTF8')), 'hex'), 60),
+				'system', '{"spec":{},"status":{"provider_key":"m360","provider_account_reference":"native-live",
+				"state":"BILLING_ACCOUNT_STATE_ACTIVE","state_observation_timestamp":"2026-01-01T00:00:00Z"}}');
+			insert into tenant_billing_assignments (id, name, tenant, annotations, data) values
+				('predeleted-interval', 'predeleted-assignment', 'predeleted',
+				'{"osac.openshift.io/tenant":"predeleted"}',
+				jsonb_build_object('spec', jsonb_build_object(
+				  'tenant', jsonb_build_object('id','predeleted','name','predeleted'),
+				  'billing_account', jsonb_build_object('id','released-account','name',
+				    'ba-' || left(encode(sha256(convert_to('released-account', 'UTF8')), 'hex'), 60))),
+				  'status', jsonb_build_object('connection_state',
+				    'TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED',
+				    'effective_from_timestamp','2026-01-01T00:00:00Z'))),
+				('live-interval', 'live-assignment', 'live',
+				'{"osac.openshift.io/tenant":"live"}',
+				jsonb_build_object('spec', jsonb_build_object(
+				  'tenant', jsonb_build_object('id','live','name','live'),
+				  'billing_account', jsonb_build_object('id','live-account','name',
+				    'ba-' || left(encode(sha256(convert_to('live-account', 'UTF8')), 'hex'), 60))),
+				  'status', jsonb_build_object('connection_state',
+				    'TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED',
+				    'effective_from_timestamp','2026-01-01T00:00:00Z')));`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(tool.Migrate(ctx, 163)).To(Succeed())
+
+		var deletion, effectiveTo, effectiveToTimestamp *string
+		Expect(conn.QueryRow(ctx, `select t.deletion_timestamp::text, h.effective_to::text,
+			h.data#>>'{status,effective_to_timestamp}'
+			from tenants t join tenant_billing_assignments h on h.tenant_id = t.name
+			where t.id = 'predeleted'`).
+			Scan(&deletion, &effectiveTo, &effectiveToTimestamp)).To(Succeed())
+		Expect(deletion).NotTo(BeNil())
+		Expect(effectiveTo).To(Equal(deletion), "the backfill must close the interval at the stored deletion boundary")
+		Expect(effectiveToTimestamp).To(Equal(ptr("2026-01-02T00:00:00.000000Z")),
+			"the status must report the same instant in the migration timestamp format")
+
+		var liveEffectiveTo, liveEffectiveToTimestamp *string
+		Expect(conn.QueryRow(ctx, `select h.effective_to::text, h.data#>>'{status,effective_to_timestamp}'
+			from tenant_billing_assignments h where h.id = 'live-interval'`).
+			Scan(&liveEffectiveTo, &liveEffectiveToTimestamp)).To(Succeed())
+		Expect(liveEffectiveTo).To(BeNil(), "the backfill must not close live tenant intervals")
+		Expect(liveEffectiveToTimestamp).To(BeNil())
+
+		var emptyIntervals, emptyTenants int
+		Expect(conn.QueryRow(ctx, `select count(*) from tenant_billing_assignments
+			where tenant_id = 'empty-deleted'`).Scan(&emptyIntervals)).To(Succeed())
+		Expect(emptyIntervals).To(BeZero(), "a tenant without intervals needs no backfill")
+		Expect(conn.QueryRow(ctx, `select count(*) from tenants where id = 'empty-deleted'`).
+			Scan(&emptyTenants)).To(Succeed())
+		Expect(emptyTenants).To(Equal(1))
+
+		// 'live' already owns an open interval, so reuse is proved on a live tenant that has none.
+		tx, err := conn.Begin(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = tx.Exec(ctx, `insert into tenant_billing_assignments (id, name, tenant, annotations, data)
+			values ('reuse-interval', 'reuse-assignment', 'reuse',
+			'{"osac.openshift.io/tenant":"reuse"}',
+			jsonb_build_object('spec', jsonb_build_object(
+			  'tenant', jsonb_build_object('id','reuse','name','reuse'),
+			  'billing_account', jsonb_build_object('id','released-account','name',
+			    'ba-' || left(encode(sha256(convert_to('released-account', 'UTF8')), 'hex'), 60))),
+			  'status', jsonb_build_object('connection_state',
+			    'TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED',
+			    'effective_from_timestamp','2026-01-03T00:00:00Z')));`)
+		Expect(err).NotTo(HaveOccurred(), "the released account must back a second active interval")
+		Expect(tx.Rollback(ctx)).To(Succeed())
+	})
 })
 
 func expectSQLState(err error, code string) {

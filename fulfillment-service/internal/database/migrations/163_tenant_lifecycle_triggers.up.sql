@@ -297,4 +297,10 @@ begin
 end;
 $$;
 
+-- Tenants already deletion-marked when this migration runs never pass through the triggers above. Close their
+-- active billing interval at the stored deletion boundary so the account is no longer bound.
+select osac_close_tenant_billing_history(t.name, t.creation_timestamp, t.deletion_timestamp)
+from tenants t
+where t.deletion_timestamp <> 'epoch'::timestamptz;
+
 commit;

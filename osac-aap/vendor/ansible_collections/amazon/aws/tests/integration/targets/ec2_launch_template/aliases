@@ -1,5 +1,3 @@
-time=3m
-
 cloud/aws
-
+time=3m
 ec2_launch_template_info

@@ -67,9 +67,6 @@ options:
     l7_policies:
         description: The maximum amount of L7 policies you can create.
         type: int
-    l7_rules:
-        description: The maximum amount of L7 rules you can create.
-        type: int
     listeners:
         description: The maximum number of listeners you can create.
         type: int
@@ -254,10 +251,6 @@ quotas:
                     description: The maximum amount of L7 policies you can
                        create.
                     type: int
-                l7_rules:
-                    description: The maximum amount of L7 rules you can
-                        create.
-                    type: int
                 listeners:
                     description: The maximum number of listeners you can create
                     type: int
@@ -371,7 +364,6 @@ quotas:
                 health_monitors: 10,
                 load_balancers: 10,
                 l7_policies: 10,
-                l7_rules: 10,
                 listeners: 10,
                 pools: 5,
                 members: 5,
@@ -403,7 +395,6 @@ class QuotaModule(OpenStackModule):
         instances=dict(type='int'),
         key_pairs=dict(type='int', no_log=False),
         l7_policies=dict(type='int'),
-        l7_rules=dict(type='int'),
         listeners=dict(type='int'),
         load_balancers=dict(type='int', aliases=['loadbalancer']),
         metadata_items=dict(type='int'),

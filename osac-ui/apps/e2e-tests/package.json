@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test:browser": "playwright test --config=playwright.unit.config.ts",
+    "test:browser": "playwright test --config=playwright.helpers.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

@@ -113,6 +113,31 @@ var _ = Describe("ComputeInstance storage handoff", Ordered, Label(computeStorag
 		fixture.expectClassesUnchanged(ctx)
 	})
 
+	It("resolves a visible shared StorageTier name for a tenant-scoped instance", func(ctx context.Context) {
+		fixture.addClass(ctx, 0)
+		fixture.addClass(ctx, 1)
+
+		tiers := publicv1.NewStorageTiersClient(tool.ExternalView().UserConn())
+		filter := fmt.Sprintf(`this.metadata.name == %q`, fixture.tierNames[0])
+		listed, err := tiers.List(ctx, publicv1.StorageTiersListRequest_builder{
+			Filter: &filter,
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listed.GetItems()).To(HaveLen(1), "the test user should see the shared tier")
+
+		fixture.spec.SetBootDisk(publicv1.ComputeInstanceDisk_builder{
+			SizeGib: new(int32(30)),
+			StorageTier: publicv1.StorageTierReference_builder{
+				Name: fixture.tierNames[0],
+			}.Build(),
+		}.Build())
+		instance := fixture.createInstanceInTenant(ctx, usersGroup)
+
+		resolvedTier := instance.GetSpec().GetBootDisk().GetStorageTier()
+		Expect(resolvedTier.GetId()).To(Equal(fixture.tierIDs[0]))
+		Expect(resolvedTier.GetName()).To(Equal(fixture.tierNames[0]))
+	})
+
 	DescribeTable("blocks the VM job until each disk tier has exactly one class", func(ctx context.Context, matches int) {
 		fixture.addClass(ctx, 0)
 		for range matches {

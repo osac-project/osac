@@ -1,16 +1,23 @@
 import React, { type ReactNode, createElement } from 'react';
-import { createRouterTransport } from '@connectrpc/connect';
+import { initReactI18next } from 'react-i18next';
+import { type MessageInitShape } from '@bufbuild/protobuf';
+import { Code, createRouterTransport } from '@connectrpc/connect';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import i18n from 'i18next';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   ExternalIPState,
   Protocol,
+  SecurityGroupSchema,
   SecurityGroupState,
   SecurityGroups,
+  type SecurityGroupsUpdateRequest,
   SubnetState,
+  Subnets,
   VirtualNetworkState,
+  VirtualNetworks,
 } from '@osac/types';
 
 import {
@@ -30,6 +37,14 @@ import {
 } from './networking';
 import { ApiProvider } from '../api-context';
 import { escapeCelStringLiteral } from '../cel';
+
+i18n.use(initReactI18next).init({
+  initImmediate: false,
+  lng: 'en',
+  fallbackLng: 'en',
+  resources: { en: { translation: {} } },
+  interpolation: { escapeValue: false },
+});
 
 describe('networking list filters', () => {
   it("finds only ready IPv4 tenant-default subnets in the tenant's default project", () => {
@@ -135,48 +150,59 @@ describe('networking list filters', () => {
 
 describe('networking query invalidation', () => {
   const asApiQueryClient = (qc: QueryClient) =>
-    qc as unknown as Parameters<typeof invalidateVirtualNetworksQueries>[0];
+    ({
+      invalidateQueries: (filters: { queryKey: readonly unknown[] }) =>
+        qc.invalidateQueries(filters),
+    }) as unknown as Parameters<typeof invalidateVirtualNetworksQueries>[0];
 
   it('invalidates both the list and by-id virtual network queries', async () => {
     const qc = new QueryClient();
     qc.setQueryData(['v1/virtual_networks'], { items: [] });
     qc.setQueryData(['v1/virtual_networks', ['vn-1']], { id: 'vn-1' });
+    qc.setQueryData([VirtualNetworks.typeName, 'list', {}], { items: [] });
 
     await invalidateVirtualNetworksQueries(asApiQueryClient(qc));
 
     expect(qc.getQueryState(['v1/virtual_networks'])?.isInvalidated).toBe(true);
     expect(qc.getQueryState(['v1/virtual_networks', ['vn-1']])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState([VirtualNetworks.typeName, 'list', {}])?.isInvalidated).toBe(true);
   });
 
   it('invalidates both the list and by-id subnet queries', async () => {
     const qc = new QueryClient();
     qc.setQueryData(['v1/subnets'], { items: [] });
     qc.setQueryData(['v1/subnets', ['subnet-1']], { id: 'subnet-1' });
+    qc.setQueryData([Subnets.typeName, 'list', {}], { items: [] });
 
     await invalidateSubnetsQueries(asApiQueryClient(qc));
 
     expect(qc.getQueryState(['v1/subnets'])?.isInvalidated).toBe(true);
     expect(qc.getQueryState(['v1/subnets', ['subnet-1']])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState([Subnets.typeName, 'list', {}])?.isInvalidated).toBe(true);
   });
 
   it('invalidates both the list and by-id security group queries', async () => {
     const qc = new QueryClient();
     qc.setQueryData(['v1/security_groups'], { items: [] });
     qc.setQueryData(['v1/security_groups', ['sg-1']], { id: 'sg-1' });
+    qc.setQueryData([SecurityGroups.typeName, 'list', {}], { items: [] });
 
     await invalidateSecurityGroupsQueries(asApiQueryClient(qc));
 
     expect(qc.getQueryState(['v1/security_groups'])?.isInvalidated).toBe(true);
     expect(qc.getQueryState(['v1/security_groups', ['sg-1']])?.isInvalidated).toBe(true);
+    expect(qc.getQueryState([SecurityGroups.typeName, 'list', {}])?.isInvalidated).toBe(true);
   });
 });
 
 describe('useUpdateSecurityGroup', () => {
-  it('sends rule updates through the public API', async () => {
-    let captured: { object?: unknown } | undefined;
+  const renderUpdateHook = () => {
+    const update = vi.fn();
+    let captured: SecurityGroupsUpdateRequest | undefined;
     const transport = createRouterTransport((router) => {
       router.service(SecurityGroups, {
         update: (request) => {
+          update(request);
           captured = request;
           return { object: request.object };
         },
@@ -192,6 +218,12 @@ describe('useUpdateSecurityGroup', () => {
         createElement(QueryClientProvider, { client: queryClient }, children),
       );
     const { result } = renderHook(() => useUpdateSecurityGroup(), { wrapper });
+
+    return { result, update, captured: () => captured };
+  };
+
+  it('sends only the id and both complete rule lists', async () => {
+    const { result, update, captured } = renderUpdateHook();
     const object = {
       id: 'sg-1',
       metadata: { name: 'sg-web' },
@@ -200,13 +232,60 @@ describe('useUpdateSecurityGroup', () => {
         ingress: [{ protocol: Protocol.TCP, portFrom: 443, portTo: 443 }],
         egress: [],
       },
+      status: { state: SecurityGroupState.READY },
     };
 
     await act(async () => {
       await result.current.mutateAsync({ object });
     });
 
-    expect(captured?.object).toMatchObject(object);
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(captured()?.object?.id).toBe('sg-1');
+    expect(captured()?.object).not.toHaveProperty('metadata');
+    expect(captured()?.object).not.toHaveProperty('status');
+    expect(captured()?.object?.spec).not.toHaveProperty('virtualNetwork');
+    expect(captured()?.object?.spec).toMatchObject({
+      ingress: [{ protocol: Protocol.TCP, portFrom: 443, portTo: 443 }],
+      egress: [],
+    });
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  });
+
+  it('preserves an explicit clear of one list while sending the other', async () => {
+    const { result, captured } = renderUpdateHook();
+
+    await act(async () => {
+      await result.current.mutateAsync({
+        object: {
+          id: 'sg-1',
+          spec: {
+            ingress: [],
+            egress: [{ protocol: Protocol.ALL }],
+          },
+        },
+      });
+    });
+
+    expect(captured()?.object?.spec).toMatchObject({
+      ingress: [],
+      egress: [{ protocol: Protocol.ALL }],
+    });
+  });
+
+  const invalidInputs: [string, MessageInitShape<typeof SecurityGroupSchema>][] = [
+    ['missing id', { spec: { ingress: [], egress: [] } }],
+    ['blank id', { id: '  ', spec: { ingress: [], egress: [] } }],
+    ['missing spec', { id: 'sg-1' }],
+    ['missing ingress', { id: 'sg-1', spec: { egress: [] } }],
+    ['missing egress', { id: 'sg-1', spec: { ingress: [] } }],
+  ];
+
+  it.each(invalidInputs)('rejects %s with zero Update calls', async (_label, object) => {
+    const { result, update } = renderUpdateHook();
+
+    await expect(result.current.mutateAsync({ object })).rejects.toMatchObject({
+      code: Code.FailedPrecondition,
+    });
+    expect(update).not.toHaveBeenCalled();
   });
 });

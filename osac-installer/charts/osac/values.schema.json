@@ -206,6 +206,36 @@
           "type": "string",
           "description": "Required stable identity for this OSAC/fulfillment-service deployment"
         },
+        "eventTopicPrefix": {
+          "type": "string",
+          "description": "Prefix fulfillment prepends to a tenant name to form that tenant's event topic. Metering discovery and the event-topic Kafka permissions use the same value. Include the trailing dot. Empty uses osac.events. A prefix of osac.metering. (such as osac. or osac.metering.) is rejected: those Kafka prefix permissions also cover metering's own topics. A tenant name is at most 63 characters and a Kafka topic name is at most 249, so this prefix is at most 186 characters. Changing this value stops metering from reading events that were not folded under the previous prefix. A metering pod that still uses the previous prefix deletes a tenant's folded history and progress after that tenant is absent from its topic listing. An ACL change that hides the previous topics from that pod makes the tenant absent. Coordinate that ACL change with removing the pod so those facts are preserved.",
+          "default": "osac.events.",
+          "anyOf": [
+            {
+              "enum": [""]
+            },
+            {
+              "allOf": [
+                {
+                  "maxLength": 186
+                },
+                {
+                  "pattern": "^[A-Za-z0-9._-]*\\.$"
+                },
+                {
+                  "not": {
+                    "enum": ["osac."]
+                  }
+                },
+                {
+                  "not": {
+                    "pattern": "^osac\\.metering\\."
+                  }
+                }
+              ]
+            }
+          ]
+        },
         "networking": {
           "$ref": "#/$defs/globalNetworking"
         }
@@ -1304,7 +1334,7 @@
               "properties": {
                 "hostname": {
                   "type": "string",
-                  "description": "AAP gateway route hostname"
+                  "description": "Unused; the bootstrap job derives the AAP gateway hostname from aap.aap.instance.name"
                 }
               },
               "additionalProperties": false
@@ -1314,7 +1344,7 @@
               "properties": {
                 "hostname": {
                   "type": "string",
-                  "description": "AAP automation controller route hostname"
+                  "description": "Unused; the bootstrap job derives the AAP controller hostname from aap.aap.instance.name"
                 }
               },
               "additionalProperties": false
@@ -2274,7 +2304,7 @@
               "description": "Optional PEM CA certificate for the NetBox endpoint, stored in a separate Kubernetes Secret.",
               "default": ""
             },
-            "allowInsecureHTTP": {
+            "clientAllowInsecureHTTP": {
               "type": "boolean",
               "description": "Allow NetBox endpoint URLs using HTTP.",
               "default": false

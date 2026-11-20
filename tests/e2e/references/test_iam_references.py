@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 
 from tests.e2e.core.grpc_client import PUBLIC_API, GRPCClient
-from tests.e2e.core.helpers import assert_grpc_field_violation
+from tests.e2e.core.helpers import assert_grpc_rejected, grpc_error_message
 from tests.e2e.core.osac_cli import OsacCLI
 
 logger = logging.getLogger(__name__)
@@ -92,10 +92,10 @@ class TestIAMReferences:
     def test_invalid_role_name_returns_error(self, grpc: GRPCClient):
         tag = uuid4().hex[:8]
         with pytest.raises(subprocess.CalledProcessError) as exc_info:
-            grpc.create_role_binding(
-                name=f"ref-bad-rb-{tag}", role_name="nonexistent-role", user_names=[TENANT_ADMIN_USER]
-            )
-        assert_grpc_field_violation(exc_info, field_path="role")
+            grpc.create_role_binding(name=f"ref-bad-rb-{tag}", role_name="nonexistent-role")
+        assert_grpc_rejected(exc_info, "InvalidArgument")
+        msg = grpc_error_message(exc_info.value)
+        assert msg == "role 'nonexistent-role' not found", f"Expected role-not-found rejection, got: {msg}"
 
     def test_role_binding_with_multiple_users_by_name(self, grpc: GRPCClient):
         tag = uuid4().hex[:8]

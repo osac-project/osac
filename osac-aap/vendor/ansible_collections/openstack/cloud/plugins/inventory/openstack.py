@@ -102,12 +102,6 @@ options:
       - Using I(only_ipv4) helps when running Ansible in a ipv4 only setup.
     type: bool
     default: false
-  server_filters:
-    description:
-      - A dictionary of server filter value pairs.
-      - Available parameters can be seen under https://docs.openstack.org/api-ref/compute/#list-servers
-    type: dict
-    default: {}
   show_all:
     description:
       - Whether all servers should be listed or not.
@@ -155,6 +149,9 @@ import sys
 
 from ansible.errors import AnsibleParserError
 from ansible.plugins.inventory import BaseInventoryPlugin, Constructable, Cacheable
+from ansible_collections.openstack.cloud.plugins.module_utils.openstack import (
+    ensure_compatibility
+)
 
 try:
     import openstack
@@ -175,6 +172,12 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
         if not HAS_SDK:
             raise AnsibleParserError(
                 'Could not import Python library openstacksdk')
+
+        try:
+            ensure_compatibility(openstack.version.__version__)
+        except ImportError as e:
+            raise AnsibleParserError(
+                'Incompatible openstacksdk library found: {0}'.format(e))
 
         # Redirect logging to stderr so it does not mix with output, in
         # particular JSON output of ansible-inventory.
@@ -276,7 +279,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
             clouds_yaml_path = self.get_option('clouds_yaml_path')
             config_files = openstack.config.loader.CONFIG_FILES
             if clouds_yaml_path:
-                config_files = clouds_yaml_path + config_files
+                config_files += clouds_yaml_path
 
             config = openstack.config.loader.OpenStackConfig(
                 config_files=config_files)
@@ -306,7 +309,6 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
 
             expand_hostvars = self.get_option('expand_hostvars')
             all_projects = self.get_option('all_projects')
-            server_filters = self.get_option('server_filters')
             servers = []
 
             def _expand_server(server, cloud, volumes):
@@ -353,8 +355,7 @@ class InventoryModule(BaseInventoryPlugin, Constructable, Cacheable):
                             all_projects=all_projects,
                             # details are required because 'addresses'
                             # attribute must be populated
-                            details=True,
-                            **server_filters)
+                            details=True)
                     ]:
                         servers.append(server)
                 except openstack.exceptions.OpenStackCloudException as e:

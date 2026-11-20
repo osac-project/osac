@@ -70,13 +70,13 @@ func NewSyncProducer(cfg ConnectionConfig) (sarama.SyncProducer, error) {
 	return sarama.NewSyncProducer(brokers, sc)
 }
 
-func VerifyTopicExists(cfg ConnectionConfig, topic string) error {
-	tenants, err := ListEventTenants(context.Background(), cfg)
+func VerifyTopicExists(cfg ConnectionConfig, topic, eventPrefix string) error {
+	tenants, err := ListEventTenants(context.Background(), cfg, eventPrefix)
 	if err != nil {
 		return err
 	}
 	for _, t := range tenants {
-		if topics.Events(t) == topic {
+		if topics.EventTopic(eventPrefix, t) == topic {
 			return nil
 		}
 	}
@@ -176,7 +176,8 @@ func retentionContract(retentionMS string) map[string]string {
 
 // ListEventTenants returns the tenants that have an event topic, sorted by name. Metering
 // discovers tenants this way: a tenant exists for metering when its event topic does.
-func ListEventTenants(ctx context.Context, cfg ConnectionConfig) ([]string, error) {
+// eventPrefix is the prefix fulfillment's publisher prepends; empty uses the default.
+func ListEventTenants(ctx context.Context, cfg ConnectionConfig, eventPrefix string) ([]string, error) {
 	brokers := SplitAndTrim(cfg.Brokers, ",")
 	sc, err := baseConfig(cfg)
 	if err != nil {
@@ -192,16 +193,21 @@ func ListEventTenants(ctx context.Context, cfg ConnectionConfig) ([]string, erro
 	if err != nil {
 		return nil, fmt.Errorf("listing topics: %w", err)
 	}
-	return EventTenantsOf(names), nil
+	return EventTenantsOf(names, eventPrefix), nil
 }
 
 // EventTenantsOf maps event topic names to the tenants metering serves, skipping the
 // built-in tenants. Fulfillment creates the system and shared tenants for platform use;
-// metering does not read them.
-func EventTenantsOf(names []string) []string {
+// metering does not read them. Heartbeat and dead-letter topics are metering's own,
+// so a broad event prefix such as osac. must not turn them into tenants. eventPrefix
+// selects which names are event topics; empty uses the default prefix.
+func EventTenantsOf(names []string, eventPrefix string) []string {
 	var tenants []string
 	for _, name := range names {
-		tenant, ok := topics.TenantOfEvents(name)
+		if strings.HasPrefix(name, topics.HeartbeatPrefix) || strings.HasPrefix(name, topics.DeadLetterPrefix) {
+			continue
+		}
+		tenant, ok := topics.TenantOfEventTopic(name, eventPrefix)
 		if !ok || !topics.Metered(tenant) {
 			continue
 		}

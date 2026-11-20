@@ -1,6 +1,7 @@
+import { Code, ConnectError } from '@connectrpc/connect';
 import { describe, expect, it } from 'vitest';
 
-import { parseHttpErrorBody } from './error';
+import { getErrorMessage, parseHttpErrorBody } from './error';
 
 describe('parseHttpErrorBody', () => {
   it('extracts message from gRPC-gateway JSON errors', () => {
@@ -13,5 +14,13 @@ describe('parseHttpErrorBody', () => {
 
   it('returns plain text bodies unchanged', () => {
     expect(parseHttpErrorBody('upstream unavailable')).toBe('upstream unavailable');
+  });
+});
+
+describe('getErrorMessage', () => {
+  it('leaves ordinary ConnectError raw messages unchanged', () => {
+    expect(
+      getErrorMessage(new ConnectError('cannot change GPU configuration', Code.FailedPrecondition)),
+    ).toBe('cannot change GPU configuration');
   });
 });

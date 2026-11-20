@@ -74,7 +74,7 @@ var _ = Describe("RegisterReferenceLookups", func() {
 			strings.Join(missing, "\n  "))
 	})
 
-	It("leaves RoleBinding service-account references for handler validation", func() {
+	It("leaves RoleBinding service-account reference types for handler validation", func() {
 		for _, name := range []protoreflect.FullName{
 			"osac.private.v1.ServiceAccountReference",
 			"osac.public.v1.ServiceAccountReference",
@@ -423,7 +423,7 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		Expect(called).To(BeTrue())
 	})
 
-	It("leaves RoleBinding service-account references for handler validation", func() {
+	It("leaves RoleBinding role and service-account paths for handler validation", func() {
 		logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 		tenancy, err := auth.NewGuestTenancyLogic().SetLogger(logger).Build()
 		Expect(err).ToNot(HaveOccurred())
@@ -443,8 +443,9 @@ var _ = Describe("RegisterReferenceLookups", func() {
 			requestType, err := protoregistry.GlobalTypes.FindMessageByName(method.request)
 			Expect(err).ToNot(HaveOccurred())
 			request := requestType.New().Interface()
-			const requestJSON = `{"object":{"spec":{"serviceAccounts":[{"id":"service-account-id"}]}}}`
+			const requestJSON = `{"object":{"spec":{"role":{"name":"shared-only"},"serviceAccounts":[{"id":"service-account-id"}]}}}`
 			Expect(protojson.Unmarshal([]byte(requestJSON), request)).To(Succeed())
+			original := proto.Clone(request)
 
 			called := false
 			_, err = v.UnaryServer(context.Background(), request,
@@ -452,7 +453,36 @@ var _ = Describe("RegisterReferenceLookups", func() {
 				func(context.Context, any) (any, error) { called = true; return nil, nil })
 			Expect(err).ToNot(HaveOccurred(), method.fullMethod)
 			Expect(called).To(BeTrue(), method.fullMethod)
+			Expect(proto.Equal(request, original)).To(BeTrue(), method.fullMethod)
 		}
+	})
+
+	It("validates scoped and role-less RoleBindings through the gRPC path", func() {
+		client := privatev1.NewRoleBindingsClient(conn)
+		create := func(name string, role *privatev1.RoleReference) (*privatev1.RoleBindingsCreateResponse, error) {
+			return client.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+				Object: privatev1.RoleBinding_builder{
+					Metadata: privatev1.Metadata_builder{Name: name, Tenant: auth.SystemTenant}.Build(),
+					Spec:     privatev1.RoleBindingSpec_builder{Role: role}.Build(),
+				}.Build(),
+			}.Build())
+		}
+		unqualified, err := create("grpc-unqualified-reader", privatev1.RoleReference_builder{Name: "tenant-reader"}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(unqualified.GetObject().GetSpec().GetRole().GetId()).ToNot(BeEmpty())
+		Expect(unqualified.GetObject().GetSpec().GetRole().GetTenant()).To(Equal(auth.SharedTenant))
+
+		response, err := create("grpc-explicit-reader", privatev1.RoleReference_builder{
+			Name: "tenant-reader", Tenant: auth.SharedTenant,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetObject().GetSpec().GetRole().GetId()).To(Equal(
+			unqualified.GetObject().GetSpec().GetRole().GetId()))
+		Expect(response.GetObject().GetSpec().GetRole().GetTenant()).To(Equal(auth.SharedTenant))
+
+		_, err = create("grpc-roleless-binding", nil)
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(grpcstatus.Convert(err).Message()).To(Equal("a role reference must specify an ID or name"))
 	})
 })
 

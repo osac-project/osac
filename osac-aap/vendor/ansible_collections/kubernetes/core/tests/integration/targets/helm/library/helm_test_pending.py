@@ -52,9 +52,7 @@ import json
 import subprocess
 import time
 
-from ansible_collections.kubernetes.core.plugins.module_utils.helm import (
-    AnsibleHelmModule,
-)
+from ansible.module_utils.basic import AnsibleModule
 
 
 class HelmReleaseNotFoundError(Exception):
@@ -62,9 +60,7 @@ class HelmReleaseNotFoundError(Exception):
         super().__init__(message)
 
 
-def create_pending_install_release(
-    module, helm_binary, chart_ref, chart_release, namespace
-):
+def create_pending_install_release(helm_binary, chart_ref, chart_release, namespace):
     # create pending-install release
     command = [
         helm_binary,
@@ -82,14 +78,13 @@ def create_pending_install_release(
     command = [
         helm_binary,
         "list",
+        "--all",
         "--output=json",
         "--namespace",
         namespace,
         "--filter",
         chart_release,
     ]
-    if not module.is_helm_v4():
-        command.append("--all")
     cmd = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     out, err = cmd.communicate()
 
@@ -97,11 +92,11 @@ def create_pending_install_release(
     if not data:
         error = "Release %s not found." % chart_release
         raise HelmReleaseNotFoundError(message=error)
-    return data[0]["status"] in ("pending-install", "failed"), data[0]["status"]
+    return data[0]["status"] == "pending-install", data[0]["status"]
 
 
 def main():
-    module = AnsibleHelmModule(
+    module = AnsibleModule(
         argument_spec=dict(
             binary_path=dict(type="path", required=True),
             chart_ref=dict(type="str", required=True),
@@ -111,7 +106,6 @@ def main():
     )
 
     params = dict(
-        module=module,
         helm_binary=module.params.get("binary_path"),
         chart_release=module.params.get("chart_release"),
         chart_ref=module.params.get("chart_ref"),
@@ -122,7 +116,7 @@ def main():
         result, status = create_pending_install_release(**params)
         if not result:
             module.fail_json(
-                msg="unable to create pending-install/failed release, current status is %s"
+                msg="unable to create pending-install release, current status is %s"
                 % status
             )
         module.exit_json(changed=True, msg="Release created with status '%s'" % status)

@@ -1,0 +1,268 @@
+---
+# Integration tests for s3_policy_attachment_group module (Pattern E).
+# When VAST credentials are available: create policy and optionally a local group, then attach/detach by gid or groupname.
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials }}"
+
+- name: Get default tenant for local_provider_id (when creating test group)
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "default"
+    state: present
+  register: _tenant_result
+  when: can_run_tests | bool
+
+- name: Create local group for s3_policy_attachment_group test (no target configured)
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_attachment_group_name }}"
+    gid: "{{ test_created_group_gid }}"
+    local_provider_id: "{{ _tenant_result.tenants.local_provider_id }}"
+    state: present
+  register: _create_group_result
+  when:
+    - can_run_tests | bool
+    - _tenant_result is not skipped
+
+- name: Set created-group flag and gid when we created the group
+  ansible.builtin.set_fact:
+    s3_attachment_we_created_group: true
+    test_attachment_group_gid: "{{ test_created_group_gid }}"
+  when:
+    - can_run_tests | bool
+    - _create_group_result is not skipped
+
+- name: Set attachment target facts for group tests
+  ansible.builtin.set_fact:
+    use_group_gid: >-
+      {{ (s3_attachment_we_created_group | default(false)) or
+      ((test_attachment_group_gid | default(none)) is not none) }}
+    use_groupname: >-
+      {{ (not (s3_attachment_we_created_group | default(false))) and
+      ((test_attachment_groupname | default('') or '') | length > 0) and
+      (test_attachment_group_gid | default(none)) is none }}
+  when: can_run_tests | bool
+
+# ====================
+# Ensure test S3 policy exists
+# ====================
+
+- name: Create or ensure S3 policy exists for attachment tests
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    policy: "{{ test_s3policy_document }}"
+    state: present
+  register: policy_result
+  when: can_run_tests | bool
+
+- name: Set policy ID for attachment tests
+  ansible.builtin.set_fact:
+    test_policy_id: "{{ policy_result.s3policies.id }}"
+  when:
+    - can_run_tests | bool
+    - policy_result is not skipped
+    - policy_result.s3policies is defined
+
+# ====================
+# Attach (group by gid or groupname)
+# ====================
+
+- name: Attach S3 policy to group (s3_policy_attachment_group by gid or groupname)
+  vastdata.vms.s3_policy_attachment_group:
+    vms: "{{ vms_auth }}"
+    s3_policy_id: "{{ test_policy_id }}"
+    gid: "{{ test_attachment_group_gid if use_group_gid | default(false) else omit }}"
+    groupname: "{{ test_attachment_groupname if use_groupname | default(false) else omit }}"
+    state: present
+  register: attach_group_result
+  when:
+    - can_run_tests | bool
+    - test_policy_id is defined
+    - use_group_gid | default(false) or use_groupname | default(false)
+
+- name: Verify attach to group (first attach must report changed and return summary)
+  ansible.builtin.assert:
+    that:
+      - attach_group_result is changed
+      - attach_group_result.s3_policy_attachment is defined
+      - attach_group_result.s3_policy_attachment.policy_id | int == test_policy_id | int
+      - attach_group_result.s3_policy_attachment.target_type == "group"
+    fail_msg: "First attach to group must report changed=true and return s3_policy_attachment summary"
+  when: attach_group_result is not skipped
+
+- name: Backend state - query group by gid (after attach)
+  ansible.builtin.uri:
+    url: "https://{{ vast_vms }}/api/latest/groups/query/?gid={{ test_attachment_group_gid }}"
+    method: GET
+    user: "{{ vast_username }}"
+    password: "{{ vast_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    return_content: true
+  register: _group_query_after_attach_gid
+  when:
+    - attach_group_result is not skipped
+    - use_group_gid | default(false) | bool
+
+# Swagger declares GET /groups/query/ returns a single object (GroupData).
+- name: Assert group query response is single object (per Swagger)
+  ansible.builtin.assert:
+    that: _group_query_after_attach_gid.json is mapping
+    fail_msg: "GET /groups/query/ must return a single object (GroupData). Check API/spec."
+  when: _group_query_after_attach_gid is not skipped
+
+- name: Set group entity from query response (after attach)
+  ansible.builtin.set_fact:
+    _group_entity: "{{ _group_query_after_attach_gid.json }}"
+  when: _group_query_after_attach_gid is not skipped
+
+- name: Assert group s3_policies_ids contains test policy after attach
+  ansible.builtin.assert:
+    that:
+      - test_policy_id | int in (_group_entity.s3_policies_ids | default([]) | map('int') | list)
+    fail_msg: >-
+      Backend state: group s3_policies_ids must contain policy {{ test_policy_id }} after attach.
+      Got {{ _group_entity.s3_policies_ids | default('missing') }}
+  when: _group_entity is defined
+
+# ====================
+# Idempotency - attach again (no change)
+# ====================
+
+- name: Idempotency - attach same policy to group again
+  vastdata.vms.s3_policy_attachment_group:
+    vms: "{{ vms_auth }}"
+    s3_policy_id: "{{ test_policy_id }}"
+    gid: "{{ test_attachment_group_gid if use_group_gid | default(false) else omit }}"
+    groupname: "{{ test_attachment_groupname if use_groupname | default(false) else omit }}"
+    state: present
+    ignore_present: true
+  register: idem_group_result
+  when:
+    - can_run_tests | bool
+    - test_policy_id is defined
+    - use_group_gid | default(false) or use_groupname | default(false)
+
+- name: Verify idempotency (no change on second attach)
+  ansible.builtin.assert:
+    that:
+      - idem_group_result is not changed
+      - idem_group_result.s3_policy_attachment is defined
+    fail_msg: "Second attach must report changed=false (idempotency)"
+  when: idem_group_result is not skipped
+
+# ====================
+# Detach
+# ====================
+
+- name: Detach S3 policy from group
+  vastdata.vms.s3_policy_attachment_group:
+    vms: "{{ vms_auth }}"
+    s3_policy_id: "{{ test_policy_id }}"
+    gid: "{{ test_attachment_group_gid if use_group_gid | default(false) else omit }}"
+    groupname: "{{ test_attachment_groupname if use_groupname | default(false) else omit }}"
+    state: absent
+  register: detach_group_result
+  when:
+    - can_run_tests | bool
+    - test_policy_id is defined
+    - use_group_gid | default(false) or use_groupname | default(false)
+
+- name: Verify detach (first detach must report changed)
+  ansible.builtin.assert:
+    that:
+      - detach_group_result is changed
+      - detach_group_result.s3_policy_attachment is defined
+    fail_msg: "First detach from group must report changed=true"
+  when: detach_group_result is not skipped
+
+- name: Backend state - query group by gid after detach
+  ansible.builtin.uri:
+    url: "https://{{ vast_vms }}/api/latest/groups/query/?gid={{ test_attachment_group_gid }}"
+    method: GET
+    user: "{{ vast_username }}"
+    password: "{{ vast_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    return_content: true
+  register: _group_query_after_detach_gid
+  when:
+    - detach_group_result is not skipped
+    - use_group_gid | default(false) | bool
+
+# Same as after attach: Swagger says single object.
+- name: Assert group query response is single object after detach (per Swagger)
+  ansible.builtin.assert:
+    that: _group_query_after_detach_gid.json is mapping
+    fail_msg: "GET /groups/query/ must return a single object (GroupData). Check API/spec."
+  when: _group_query_after_detach_gid is not skipped
+
+- name: Set group entity from query response (after detach)
+  ansible.builtin.set_fact:
+    _group_entity_detach: "{{ _group_query_after_detach_gid.json }}"
+  when: _group_query_after_detach_gid is not skipped
+
+- name: Assert group s3_policies_ids does not contain test policy after detach
+  ansible.builtin.assert:
+    that:
+      - test_policy_id | int not in (_group_entity_detach.s3_policies_ids | default([]) | map('int') | list)
+    fail_msg: >-
+      Backend state: group s3_policies_ids must not contain policy {{ test_policy_id }} after detach.
+      Got {{ _group_entity_detach.s3_policies_ids | default('missing') }}
+  when: _group_entity_detach is defined
+
+# ====================
+# Detach idempotency
+# ====================
+
+- name: Idempotency - detach again (no change)
+  vastdata.vms.s3_policy_attachment_group:
+    vms: "{{ vms_auth }}"
+    s3_policy_id: "{{ test_policy_id }}"
+    gid: "{{ test_attachment_group_gid if use_group_gid | default(false) else omit }}"
+    groupname: "{{ test_attachment_groupname if use_groupname | default(false) else omit }}"
+    state: absent
+  register: idem_detach_result
+  when:
+    - can_run_tests | bool
+    - test_policy_id is defined
+    - use_group_gid | default(false) or use_groupname | default(false)
+
+- name: Verify detach idempotency (no change on second detach)
+  ansible.builtin.assert:
+    that:
+      - idem_detach_result is not changed
+      - idem_detach_result.s3_policy_attachment is defined
+    fail_msg: "Second detach must report changed=false (idempotency)"
+  when: idem_detach_result is not skipped
+
+# ====================
+# Cleanup
+# ====================
+
+- name: Remove S3 policy created for s3_policy_attachment_group test
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Remove local group created for s3_policy_attachment_group test
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_attachment_group_name }}"
+    state: absent
+  when: s3_attachment_we_created_group | default(false) | bool

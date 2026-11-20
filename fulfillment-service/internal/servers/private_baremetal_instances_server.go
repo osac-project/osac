@@ -30,6 +30,8 @@ import (
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	k8svalidation "k8s.io/apimachinery/pkg/util/validation"
+
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
@@ -353,7 +355,7 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 		return
 	}
 	instanceType, err := resolveAndCanonicalizeLockedReference(ctx, s.instanceTypesDao, candidate.GetMetadata(), ref,
-		"bare metal instance type", grpccodes.NotFound)
+		"bare metal instance type", grpccodes.InvalidArgument)
 	if err != nil {
 		return
 	}
@@ -794,7 +796,7 @@ func (s *PrivateBareMetalInstancesServer) resolveDefaultInterface(instanceType *
 			return port.GetName(), nil
 		}
 	}
-	return "", grpcstatus.Errorf(grpccodes.FailedPrecondition,
+	return "", grpcstatus.Errorf(grpccodes.InvalidArgument,
 		"bare metal instance type '%s' has no fabric-role network port for default network attachment", instanceType.GetId())
 }
 
@@ -1076,21 +1078,25 @@ func validateBareMetalAttachmentsForInstanceType(
 
 	instanceTypeID := instanceType.GetId()
 	interfaceRoles := make(map[string]string)
-	validInterfaces := make(map[string]bool)
+	fabricInterfaces := make(map[string]bool)
 	for _, port := range instanceType.GetSpec().GetHardware().GetNetworkPorts() {
 		if port == nil {
 			continue
 		}
 		interfaceRoles[port.GetName()] = port.GetRole()
-		if !strings.EqualFold(port.GetRole(), "lifecycle") {
-			validInterfaces[port.GetName()] = true
+		if strings.EqualFold(port.GetRole(), "fabric") {
+			fabricInterfaces[port.GetName()] = true
 		}
 	}
+	if len(fabricInterfaces) == 0 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"%sinstance type '%s' has no fabric-role network port for tenant network attachment", prefix, instanceTypeID)
+	}
 
-	if len(attachments) > len(validInterfaces) {
+	if len(attachments) > len(fabricInterfaces) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"%snumber of network attachments (%d) exceeds available interfaces (%d) on instance type '%s'",
-			prefix, len(attachments), len(validInterfaces), instanceTypeID)
+			prefix, len(attachments), len(fabricInterfaces), instanceTypeID)
 	}
 
 	for i, attachment := range attachments {
@@ -1100,12 +1106,18 @@ func validateBareMetalAttachmentsForInstanceType(
 		}
 		role, found := interfaceRoles[iface]
 		switch {
-		case found && strings.EqualFold(role, "lifecycle"):
+		case found && !strings.EqualFold(role, "fabric"):
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"%snetwork_attachments[%d]: interface '%s' has role 'lifecycle' and cannot be used for tenant networking", prefix, i, iface)
-		case !validInterfaces[iface]:
+				"%snetwork_attachments[%d]: interface '%s' has role '%s' and cannot be used for tenant networking; interface must have role 'fabric'",
+				prefix, i, iface, role)
+		case !fabricInterfaces[iface]:
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"%snetwork_attachments[%d]: interface '%s' not found in instance type '%s'", prefix, i, iface, instanceTypeID)
+		}
+		if errs := k8svalidation.IsDNS1123Label(iface); len(errs) > 0 {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"%snetwork_attachments[%d]: interface '%s' is not a valid DNS label: %s",
+				prefix, i, iface, strings.Join(errs, ", "))
 		}
 	}
 

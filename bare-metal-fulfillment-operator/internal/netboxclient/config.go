@@ -29,7 +29,7 @@ const netBoxAuthorizationScheme = "Bearer "
 
 var (
 	errInvalidEndpoint        = errors.New("NetBox endpoint must be an HTTP or HTTPS origin")
-	errInsecureHTTPNotAllowed = errors.New("NetBox HTTP endpoints require AllowInsecureHTTP")
+	errInsecureHTTPNotAllowed = errors.New("NetBox HTTP endpoints require ClientAllowInsecureHTTP")
 	errInvalidToken           = errors.New("NetBox API token file is missing or invalid")
 	errInvalidCA              = errors.New("NetBox CA file is missing or invalid")
 )
@@ -39,11 +39,11 @@ type Config struct {
 	Endpoint  string
 	TokenFile string
 	CAFile    string
-	// AllowInsecureHTTP allows NetBox connections over unencrypted HTTP.
-	AllowInsecureHTTP bool
+	// ClientAllowInsecureHTTP allows NetBox connections over unencrypted HTTP.
+	ClientAllowInsecureHTTP bool
 }
 
-func normalizeEndpoint(endpoint string, allowInsecureHTTP bool) (string, error) {
+func normalizeEndpoint(endpoint string, clientAllowInsecureHTTP bool) (string, error) {
 	parsed, err := url.Parse(strings.TrimSpace(endpoint))
 	if err != nil ||
 		parsed == nil ||
@@ -57,7 +57,7 @@ func normalizeEndpoint(endpoint string, allowInsecureHTTP bool) (string, error) 
 		return "", errInvalidEndpoint
 	}
 
-	if err := validateEndpointTransport(parsed, allowInsecureHTTP); err != nil {
+	if err := validateEndpointTransport(parsed, clientAllowInsecureHTTP); err != nil {
 		return "", err
 	}
 
@@ -71,7 +71,7 @@ func normalizeEndpoint(endpoint string, allowInsecureHTTP bool) (string, error) 
 	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
-func validateEndpointTransport(endpoint *url.URL, allowInsecureHTTP bool) error {
+func validateEndpointTransport(endpoint *url.URL, clientAllowInsecureHTTP bool) error {
 	if endpoint == nil {
 		return errInvalidEndpoint
 	}
@@ -80,7 +80,7 @@ func validateEndpointTransport(endpoint *url.URL, allowInsecureHTTP bool) error 
 	case "https":
 		return nil
 	case "http":
-		if allowInsecureHTTP {
+		if clientAllowInsecureHTTP {
 			return nil
 		}
 		return errInsecureHTTPNotAllowed

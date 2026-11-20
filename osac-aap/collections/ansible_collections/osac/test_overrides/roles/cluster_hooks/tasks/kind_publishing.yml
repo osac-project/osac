@@ -1,0 +1,30 @@
+---
+- name: Require the Kind node address
+  ansible.builtin.assert:
+    that:
+      - cluster_hooks_nodeport_address | default('') | length > 0
+    fail_msg: Kind HostedCluster publishing requires a node address.
+    quiet: true
+
+- name: Start the Kind service publishing list
+  ansible.builtin.set_fact:
+    cluster_hooks_services: []
+
+- name: Select native service publishing for Kind
+  ansible.builtin.set_fact:
+    cluster_hooks_services: >-
+      {{ cluster_hooks_services + [item | combine({'servicePublishingStrategy': cluster_hooks_strategy})] }}
+  vars:
+    cluster_hooks_strategy: >-
+      {{ {'type': 'NodePort', 'nodePort': {'address': cluster_hooks_nodeport_address}}
+         if item.service in ['Ignition', 'OAuthServer', 'Konnectivity']
+         else {'type': 'None'} if item.service == 'OIDC'
+         else item.servicePublishingStrategy }}
+  loop: "{{ hosted_cluster_definition.spec.services }}"
+  loop_control:
+    label: "{{ item.service }}"
+
+- name: Apply Kind service publishing to the HostedCluster definition
+  ansible.builtin.set_fact:
+    hosted_cluster_definition: >-
+      {{ hosted_cluster_definition | combine({'spec': {'services': cluster_hooks_services}}, recursive=true) }}

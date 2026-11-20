@@ -107,6 +107,19 @@ describe('BareMetalInstanceCreateWizard', () => {
     mockNavigate.mockReset();
   });
 
+  it('starts on General without a catalog step for catalog launches', async () => {
+    renderWithProviders(
+      <BareMetalInstanceCreateWizard catalogItem={bareMetalCatalogItem} onClosed={vi.fn()} />,
+      {
+        apiFixtures: { bareMetalCatalogItems: [bareMetalCatalogItem] },
+        session: { role: 'tenant-user' },
+      },
+    );
+
+    expect(await screen.findByRole('textbox', { name: 'Name' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Catalog item' })).not.toBeInTheDocument();
+  });
+
   it('submits the catalog-governed payload and navigates to the new instance on success', async () => {
     const onBareMetalInstanceCreate = vi.fn(
       (req: { object?: { metadata?: unknown; spec?: unknown } }) => ({

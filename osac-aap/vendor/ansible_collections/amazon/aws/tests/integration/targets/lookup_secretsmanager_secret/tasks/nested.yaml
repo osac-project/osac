@@ -25,7 +25,7 @@
       ansible.builtin.assert:
         that:
           - on_missing_error is failed
-          - '"Successfully retrieved secret but there exists no key missing_err_secret in the secret" in on_missing_error.msg'
+          - on_missing_error.msg == "Successfully retrieved secret but there exists no key missing_err_secret in the secret"
           - missing_err_secret is undefined
 
     - name: Read missing secret variable using 'on_missing==error'
@@ -39,7 +39,7 @@
       ansible.builtin.assert:
         that:
           - nested_child is failed
-          - '"Successfully retrieved secret but there exists no key resource_prefix.child in the secret" in nested_child.msg'
+          - nested_child.msg == "Successfully retrieved secret but there exists no key resource_prefix.child in the secret"
           - resource_prefix_child is undefined
 
     - name: Read missing secret variable using 'on_missing==warn'

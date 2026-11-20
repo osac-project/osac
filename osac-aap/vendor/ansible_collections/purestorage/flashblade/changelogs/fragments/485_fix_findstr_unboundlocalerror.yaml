@@ -1,0 +1,4 @@
+bugfixes:
+  - purefb_tz - Fix UnboundLocalError when timezone string is not found
+  - purefb_policy - Fix UnboundLocalError when policy string is not found
+  - common - Consolidate duplicate _findstr implementations to prevent UnboundLocalError

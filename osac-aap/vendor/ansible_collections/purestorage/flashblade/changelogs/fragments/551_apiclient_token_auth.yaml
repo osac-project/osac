@@ -1,0 +1,2 @@
+minor_changes:
+  - purefb - Add API-client token authentication as an alternative to ``api_token``, via a pre-signed ``id_token`` or a ``private_key_file`` (with ``client_id``, ``key_id``, ``issuer``, ``username``).

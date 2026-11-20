@@ -201,11 +201,6 @@ class TrunkModule(OpenStackModule):
         if state == 'present' and not trunk:
             # create trunk
             trunk = self._create(name_or_id, port)
-
-            # add sub ports
-            update = self._build_update(trunk, sub_ports)
-            trunk = self._update(trunk, update)
-
             self.exit_json(changed=True,
                            trunk=trunk.to_dict(computed=False))
         elif state == 'present' and trunk:
@@ -237,7 +232,7 @@ class TrunkModule(OpenStackModule):
             if found is False:
                 psp = self.params['sub_ports'] or []
                 for k in psp:
-                    if sp['name'] == k['port'] or sp['id'] == k['port']:
+                    if sp['name'] == k['port']:
                         spobj = {
                             'port_id': sp['id'],
                             'segmentation_type': k['segmentation_type'],

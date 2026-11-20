@@ -79,13 +79,13 @@
       - "result is changed"
 
 - name: Use lookup to check that host was enabled
-  set_fact:
-    host_enabled_test: "{{ lookup('ansible.controller.controller_api', 'hosts/' + result.id | string + '/').enabled }}"
+  ansible.builtin.set_fact:
+    host_enabled_test: "lookup('ansible.controller.controller_api', 'hosts/{{result.id}}/').enabled"
 
 - name: Newly created host should have API default value for enabled
   assert:
     that:
-      - host_enabled_test is true
+      - host_enabled_test
 
 - name: Delete a Host
   host:
@@ -105,7 +105,7 @@
     inventory: test-non-existing-inventory
     state: present
   register: result
-  ignore_errors: yes
+  ignore_errors: true
 
 - assert:
     that:

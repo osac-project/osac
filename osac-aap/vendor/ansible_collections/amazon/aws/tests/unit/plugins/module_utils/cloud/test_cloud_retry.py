@@ -186,10 +186,12 @@ class TestCloudRetry:
 
     def test_only_base_exception(self):
         def _fail_index():
-            raise IndexError()
+            my_list = list()
+            return my_list[5]
 
         def _fail_key():
-            raise KeyError()
+            my_dict = dict()
+            return my_dict["invalid_key"]
 
         def _fail_exception():
             raise Exception("bang")

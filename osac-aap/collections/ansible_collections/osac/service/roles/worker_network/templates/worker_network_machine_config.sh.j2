@@ -3,7 +3,8 @@ set -u
 
 tenant_device=""
 tenant_source=""
-tenant_score=-1
+tenant_priority=-1
+tenant_metric=2147483647
 for attempt in $(seq 1 180); do
   while read -r route; do
     device="$(printf '%s\n' "$route" | awk '{for (i=1; i<=NF; i++) if ($i == "dev") {print $(i+1); exit}}')"
@@ -12,22 +13,29 @@ for attempt in $(seq 1 180); do
     [ -n "$device" ] || continue
     case "$device" in br-*|ovs-*|ovn-*|cni*|lo) continue ;; esac
     case "$metric_value" in ''|*[!0-9]*) metric_value=0 ;; esac
-    priority=0
-    case "$source" in
-      10.200.*) priority=100 ;;
-      10.*) priority=50 ;;
-    esac
-    score=$((priority * 1000000 + metric_value))
-    if [ "$score" -gt "$tenant_score" ]; then
+    connection="$(nmcli -g GENERAL.CONNECTION device show "$device" 2>/dev/null | head -n1)"
+    method=""
+    if [ -n "$connection" ]; then
+      method="$(nmcli -g ipv4.method connection show "$connection" 2>/dev/null | head -n1)"
+    fi
+    priority=1
+    [ "$method" = "auto" ] && priority=2
+    if [ "$priority" -gt "$tenant_priority" ] || {
+      [ "$priority" -eq "$tenant_priority" ] &&
+      [ "$metric_value" -lt "$tenant_metric" ]
+    }; then
       tenant_device="$device"
       tenant_source="$source"
-      tenant_score="$score"
+      tenant_priority="$priority"
+      tenant_metric="$metric_value"
     fi
   done < <(ip -4 route show default)
-  case "$tenant_source" in
-    10.200.*) break ;;
-    *) tenant_device=""; tenant_source=""; tenant_score=-1; sleep 1 ;;
-  esac
+  [ -n "$tenant_device" ] && break
+  tenant_device=""
+  tenant_source=""
+  tenant_priority=-1
+  tenant_metric=2147483647
+  sleep 1
 done
 
 [ -n "$tenant_device" ] || exit 1

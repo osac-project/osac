@@ -757,9 +757,13 @@ var _ = Describe("Private billing accounts server", func() {
 		server := build(billing.NewProvider("m360", &hangingDiscoveryAdapter{}, nil))
 		server.discoverDeadline = 50 * time.Millisecond
 
+		// The worker owns a cancellable context so a regressed deadline fails the assertion below instead of
+		// leaving the provider call blocked on the non-cancellable suite context during teardown.
+		workerCtx, cancel := context.WithCancel(ctx)
+		DeferCleanup(cancel)
 		result := make(chan error, 1)
 		go func() {
-			_, err := list(server, nil)
+			_, err := billingRPC(workerCtx, server.List, &privatev1.BillingAccountsListRequest{})
 			result <- err
 		}()
 		var err error
@@ -1259,6 +1263,10 @@ var _ = Describe("Private billing accounts server", func() {
 		server, logs := buildWithLogs(billingfake.New(billingfake.Scenario{}).Provider())
 		start := time.Now().UTC().Truncate(time.Microsecond)
 		id := seedAssignedAccount(server, "osac-absent", "absent-native", "recorded-token", start)
+		// Closed history is enough for the drift check: without an interval the spec could pass even if an
+		// absent assigned account wrongly triggered the warning.
+		closed := start.Add(time.Minute)
+		seedAssignmentInterval("asg-absent", id, start, &closed)
 		err := billingStore(ctx, server, []billing.Account{{
 			Ref: billing.NewAccountRef("present-native"), ExternalID: "present-token", State: billing.AccountActive,
 		}}, start.Add(time.Second))
@@ -1509,17 +1517,20 @@ var _ = Describe("Private billing accounts server", func() {
 
 	It("preserves billing default-100 and maximum-1000 limits with trusted count and offset", func() {
 		server := build(billingfake.New(billingfake.Scenario{}).Provider())
-		accounts := make([]billing.Account, 1000)
+		// One row past the maximum proves the 1000-row cap instead of matching an uncapped walk. One store
+		// batch is itself capped at 1000 rows, so the extra row arrives in a second batch.
+		accounts := make([]billing.Account, 1001)
 		for i := range accounts {
 			accounts[i] = billing.Account{Ref: billing.NewAccountRef(fmt.Sprintf("bounded-%04d", i)), State: billing.AccountActive}
 		}
-		Expect(billingStore(ctx, server, accounts, time.Now().UTC())).To(Succeed())
+		Expect(billingStore(ctx, server, accounts[:1000], time.Now().UTC())).To(Succeed())
+		Expect(billingStore(ctx, server, accounts[1000:], time.Now().UTC().Add(time.Second))).To(Succeed())
 		server.lastDiscovery = time.Now()
 		request := privatev1.BillingAccountsListRequest_builder{Limit: proto.Int32(0)}.Build()
 		response, err := list(server, request)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(response.GetSize()).To(Equal(int32(100)))
-		Expect(response.GetTotal()).To(Equal(int32(1000)))
+		Expect(response.GetTotal()).To(Equal(int32(1001)))
 		request.SetLimit(2000)
 		response, err = list(server, request)
 		Expect(err).ToNot(HaveOccurred())
@@ -1527,8 +1538,8 @@ var _ = Describe("Private billing accounts server", func() {
 		request.SetOffset(990)
 		response, err = list(server, request)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(response.GetSize()).To(Equal(int32(10)))
-		Expect(response.GetTotal()).To(Equal(int32(1000)))
+		Expect(response.GetSize()).To(Equal(int32(11)))
+		Expect(response.GetTotal()).To(Equal(int32(1001)))
 	})
 
 	DescribeTable("serializes independent batches before row locks and refreshes the complete provider union after waiting", func(waitingRef, expectedState string, expectedCount int, waitingAge time.Duration) {

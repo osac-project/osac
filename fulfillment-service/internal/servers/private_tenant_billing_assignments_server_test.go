@@ -92,11 +92,17 @@ type gatedAccountReadAdapter struct {
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
+	measure func()
 }
 
 func (a *gatedAccountReadAdapter) GetAccount(ctx context.Context, ref billing.AccountRef) (billing.Account, error) {
 	account, err := a.Fake.GetAccount(ctx, ref)
-	a.once.Do(func() { close(a.entered) })
+	a.once.Do(func() {
+		if a.measure != nil {
+			a.measure()
+		}
+		close(a.entered)
+	})
 	select {
 	case <-a.release:
 		return account, err
@@ -133,13 +139,19 @@ type gatedAccountScanAdapter struct {
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
+	measure func()
 }
 
 func (a *gatedAccountScanAdapter) ListAccounts(ctx context.Context, filter billing.AccountFilter,
 	page billing.Page,
 ) (billing.AccountPage, error) {
 	if filter.ExternalID != "" {
-		a.once.Do(func() { close(a.entered) })
+		a.once.Do(func() {
+			if a.measure != nil {
+				a.measure()
+			}
+			close(a.entered)
+		})
 		select {
 		case <-a.release:
 		case <-ctx.Done():
@@ -1998,12 +2010,17 @@ var _ = Describe("Private tenant billing assignments server", func() {
 				&auth.Subject{User: "admin", Tenants: auth.AllTenants})
 			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
 			entered, release := make(chan struct{}), make(chan struct{})
+			// Sample the pool from inside the provider call: the worker takes this measurement synchronously
+			// before it waits on release or the 250ms provider deadline, so the child timeout cannot release
+			// the connection first. Reading it here after `entered` closes is ordered by that close.
+			var acquiredConns int32
+			measure := func() { acquiredConns = pool.Stat().AcquiredConns() }
 			var adapter billing.Adapter
 			switch gate {
 			case "state-read":
-				adapter = &gatedAccountReadAdapter{Fake: fake, entered: entered, release: release}
+				adapter = &gatedAccountReadAdapter{Fake: fake, entered: entered, release: release, measure: measure}
 			case "scan":
-				adapter = &gatedAccountScanAdapter{Fake: fake, entered: entered, release: release}
+				adapter = &gatedAccountScanAdapter{Fake: fake, entered: entered, release: release, measure: measure}
 			default:
 				Fail("unknown provider cancellation gate: " + gate)
 			}
@@ -2031,7 +2048,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 				}
 			})
 			Eventually(entered, 5*time.Second).Should(BeClosed())
-			Expect(pool.Stat().AcquiredConns()).To(Equal(int32(1)), "ordinary preflight has checked out the connection")
+			Expect(acquiredConns).To(Equal(int32(1)), "ordinary preflight has checked out the connection")
 			// Provider reads must not hold tenant or account business locks, even though the connection is occupied.
 			Expect(tm.Run(ctx, func(tx database.Tx) error {
 				_, err := tx.Exec(ctx, `select id from tenants where id = $1 for update nowait`, testTenant)

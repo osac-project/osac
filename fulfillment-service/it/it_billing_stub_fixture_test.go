@@ -383,13 +383,19 @@ func newBillingTenant(ctx context.Context, domains, finalizers []string) *privat
 func cleanupBillingTenant(ctx context.Context, client privatev1.TenantsClient, id string) {
 	GinkgoHelper()
 	Eventually(ctx, func(g Gomega) {
-		_, err := client.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
+		// A stalled cleanup RPC must not hold a shared deployment's teardown open: bound it like the fixture's
+		// other cleanup calls.
+		callCtx, cancel := context.WithTimeout(ctx, billingStubRequestTimeout)
+		defer cancel()
+		_, err := client.Delete(callCtx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
 		if status.Code(err) != codes.NotFound {
 			g.Expect(err).ToNot(HaveOccurred())
 		}
 	}, time.Minute, time.Second).Should(Succeed())
 	Eventually(ctx, func(g Gomega) {
-		read, err := client.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+		callCtx, cancel := context.WithTimeout(ctx, billingStubRequestTimeout)
+		defer cancel()
+		read, err := client.Get(callCtx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
 		if status.Code(err) == codes.NotFound {
 			return
 		}

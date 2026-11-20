@@ -155,7 +155,11 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 		 where tenant_id = 'pending' and effective_to is not null`).Scan(&count)).To(Succeed())
 		Expect(count).To(Equal(2))
 		_, err = conn.Exec(ctx, `delete from billing_accounts where id = 'account'`)
-		Expect(err).To(HaveOccurred(), "retained history still references its original billing account")
+		var pgErr *pgconn.PgError
+		Expect(errors.As(err, &pgErr)).To(BeTrue(),
+			"retained history still references its original billing account, got %v", err)
+		Expect(pgErr.Code).To(Equal("23503"), "foreign_key_violation, not an unrelated delete failure")
+		Expect(pgErr.ConstraintName).To(Equal("tenant_billing_assignments_billing_account_id_fkey"))
 	})
 	It("times out behind an assignment reader without changing the predecessor schema or rows", func(ctx context.Context) {
 		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)

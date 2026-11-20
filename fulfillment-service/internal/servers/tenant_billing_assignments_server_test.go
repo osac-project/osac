@@ -381,8 +381,9 @@ var _ = Describe("Tenant billing assignments server", func() {
 			}
 		}
 		DescribeTable("preserves trusted scope and query totals across public pagination",
-			func(tenants collections.Set[string], expected int32) {
+			func(tenants collections.Set[string], expectedIDs []string) {
 				seedHistory()
+				expected := int32(len(expectedIDs))
 				seen := map[string]bool{}
 				for offset := int32(0); offset <= expected; offset++ {
 					response, err := billingRPC(callerCtx(tenants), server.List, publicv1.TenantBillingAssignmentsListRequest_builder{
@@ -397,6 +398,7 @@ var _ = Describe("Tenant billing assignments server", func() {
 					}
 					Expect(response.GetSize()).To(Equal(int32(1)))
 					item := response.GetItems()[0]
+					Expect(item.GetId()).To(Equal(expectedIDs[offset]), "page %d must carry the fixture interval", offset)
 					Expect(tenants.Contains(item.GetSpec().GetTenant().GetId())).To(BeTrue())
 					Expect(seen[item.GetId()]).To(BeFalse())
 					seen[item.GetId()] = true
@@ -404,14 +406,14 @@ var _ = Describe("Tenant billing assignments server", func() {
 				Expect(seen).To(HaveLen(int(expected)))
 				Expect(fake.Calls()).To(BeEmpty())
 			},
-			Entry("finite", collections.NewSet(testTenant), int32(2)),
-			Entry("finite multi-tenant", collections.NewSet(testTenant, foreignTenant), int32(4)),
-			Entry("universal", auth.AllTenants, int32(4)),
-			Entry("empty", collections.NewSet[string](), int32(0)),
-			Entry("exclusion set", auth.AllTenants.Difference(collections.NewSet(foreignTenant)), int32(2)),
-			Entry("multiple exclusions", auth.AllTenants.Difference(collections.NewSet(foreignTenant, "absent-tenant")), int32(2)),
-			Entry("all seeded tenants excluded", auth.AllTenants.Difference(collections.NewSet(foreignTenant, testTenant)), int32(0)),
-			Entry("unbounded without exclusions", auth.AllTenants.Difference(collections.NewSet[string]()), int32(4)),
+			Entry("finite", collections.NewSet(testTenant), []string{"b", "d"}),
+			Entry("finite multi-tenant", collections.NewSet(testTenant, foreignTenant), []string{"a", "b", "c", "d"}),
+			Entry("universal", auth.AllTenants, []string{"a", "b", "c", "d"}),
+			Entry("empty", collections.NewSet[string](), []string{}),
+			Entry("exclusion set", auth.AllTenants.Difference(collections.NewSet(foreignTenant)), []string{"b", "d"}),
+			Entry("multiple exclusions", auth.AllTenants.Difference(collections.NewSet(foreignTenant, "absent-tenant")), []string{"b", "d"}),
+			Entry("all seeded tenants excluded", auth.AllTenants.Difference(collections.NewSet(foreignTenant, testTenant)), []string{}),
+			Entry("unbounded without exclusions", auth.AllTenants.Difference(collections.NewSet[string]()), []string{"a", "b", "c", "d"}),
 		)
 
 		It("intersects an exclusion-set subject with a foreign OR before count and pages", func() {
@@ -428,6 +430,8 @@ var _ = Describe("Tenant billing assignments server", func() {
 					Expect(response.GetItems()).To(BeEmpty())
 				} else {
 					Expect(response.GetItems()).To(HaveLen(1))
+					Expect(response.GetItems()[0].GetId()).To(Equal([]string{"b", "d"}[offset]),
+						"the OR must page the exact in-scope fixture intervals, not any other tenant's row")
 					Expect(response.GetItems()[0].GetSpec().GetTenant().GetId()).To(Equal(testTenant))
 				}
 			}

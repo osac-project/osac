@@ -805,6 +805,8 @@ var _ = Describe("Get command", func() {
 					Expect(err).To(HaveOccurred())
 					if scenario == "RPC failure" {
 						Expect(err.Error()).To(ContainSubstring("p2 second page failed"))
+					} else {
+						Expect(err.Error()).To(ContainSubstring("list made no progress before reaching its total"))
 					}
 				},
 				Entry("RPC failure", "RPC failure"), Entry("no progress", "no progress"),

@@ -220,14 +220,16 @@ func (r *function) run(ctx context.Context, computeInstance *privatev1.ComputeIn
 	if reconcileErr != nil {
 		var secretErr *controllers.SSHKeyResolutionError
 		if errors.As(reconcileErr, &secretErr) {
-			if secretErr.Permanent {
+			if secretErr.Permanent() {
 				t.setReconciliationFailedWithReason(secretErr.Err, secretErr.Reason)
 			} else {
 				// Resolution failures are retried without changing API status or creating
 				// a Kubernetes object. Restore the input so defaults and hub selection do
-				// not turn a transient lookup failure into a persisted mutation.
+				// not turn a retryable lookup failure into a persisted mutation, and wrap
+				// the error so the shared reconciler schedules a bounded retry.
 				proto.Reset(computeInstance)
 				proto.Merge(computeInstance, oldComputeInstance)
+				reconcileErr = controllers.RequeueAfter(reconcileErr, controllers.SSHKeyResolutionRetryDelay)
 			}
 		} else if !errors.Is(reconcileErr, errTransientK8sError) &&
 			!errors.Is(reconcileErr, errDiskRegistrationRetry) && !controllers.IsRequeueable(reconcileErr) {

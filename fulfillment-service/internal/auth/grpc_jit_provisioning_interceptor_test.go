@@ -146,7 +146,7 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 	})
 
 	Describe("User provisioning", func() {
-		It("Provisions a new user on first authentication", func() {
+		It("Provisions a new user in the home tenant even when other tenants are visible", func() {
 			token := createKeycloakUserToken("tenant1", "alice", jwt.MapClaims{
 				"email":          "alice@example.com",
 				"email_verified": true,
@@ -154,10 +154,10 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 			})
 			ctx = ContextWithToken(ctx, token)
 
-			// Create subject with single tenant (provisioning should happen)
 			subject := &Subject{
 				User:    "alice",
-				Tenants: collections.NewSet("tenant1"),
+				Tenant:  "tenant1",
+				Tenants: collections.NewSet("tenant1", SharedTenant),
 			}
 			ctx = ContextWithSubject(ctx, subject)
 
@@ -185,6 +185,7 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 			ctx = ContextWithToken(ctx, token)
 			ctx = ContextWithSubject(ctx, &Subject{
 				User:                  "service-account-client",
+				Tenant:                "tenant1",
 				Tenants:               collections.NewSet("tenant1"),
 				ManagedServiceAccount: true,
 			})
@@ -205,7 +206,7 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 
 			token := createKeycloakUserToken("tenant1", "alice", nil)
 			ctx = ContextWithToken(ctx, token)
-			ctx = ContextWithSubject(ctx, &Subject{User: "alice", Tenants: collections.NewSet("tenant1")})
+			ctx = ContextWithSubject(ctx, &Subject{User: "alice", Tenant: "tenant1"})
 			ctx = database.TxManagerIntoContext(ctx, manager)
 			mockProvisioner.provisionFunc = func(ctx context.Context, _, _ string, _ jwt.MapClaims) error {
 				_, err := database.TxFromContext(ctx)
@@ -235,8 +236,8 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 			token := createKeycloakUserToken("tenant1", "bob", nil)
 			ctx = ContextWithToken(ctx, token)
 			subject := &Subject{
-				User:    "bob",
-				Tenants: collections.NewSet("tenant1"),
+				User:   "bob",
+				Tenant: "tenant1",
 			}
 			ctx = ContextWithSubject(ctx, subject)
 
@@ -252,12 +253,12 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 			Expect(handlerCalled).To(BeTrue())
 		})
 
-		It("Does not provision when subject has no tenants", func() {
+		It("Does not infer a home tenant from a single visible tenant", func() {
 			token := createKeycloakUserToken("tenant1", "david", nil)
 			ctx = ContextWithToken(ctx, token)
 			subject := &Subject{
 				User:    "david",
-				Tenants: collections.NewSet[string](), // Empty tenant set
+				Tenants: collections.NewSet("tenant1"),
 			}
 			ctx = ContextWithSubject(ctx, subject)
 
@@ -274,9 +275,9 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 			Expect(mockProvisioner.callCount).To(Equal(0))
 		})
 
-		It("Does not provision when subject has multiple tenants", func() {
+		It("Does not provision when multiple organizations leave the home tenant unknown", func() {
 			token := createKeycloakUserToken("tenant1", "eve", jwt.MapClaims{
-				"organizations": []any{"tenant2", "tenant3"},
+				"organization": []any{"tenant1", "tenant2", "tenant3"},
 			})
 			ctx = ContextWithToken(ctx, token)
 			subject := &Subject{
@@ -298,12 +299,13 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 			Expect(mockProvisioner.callCount).To(Equal(0))
 		})
 
-		It("Does not provision when subject has infinite tenants", func() {
+		It("Does not provision platform admins with universal visibility", func() {
 			token := createKeycloakUserToken("tenant1", "frank", nil)
 			ctx = ContextWithToken(ctx, token)
 			subject := &Subject{
 				User:    "frank",
-				Tenants: AllTenants, // Infinite tenant set
+				Tenant:  SystemTenant,
+				Tenants: AllTenants,
 			}
 			ctx = ContextWithSubject(ctx, subject)
 
@@ -324,8 +326,8 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 			token := createKeycloakUserToken(SystemTenant, "admin", nil)
 			ctx = ContextWithToken(ctx, token)
 			subject := &Subject{
-				User:    "admin",
-				Tenants: collections.NewSet(SystemTenant),
+				User:   "admin",
+				Tenant: SystemTenant,
 			}
 			ctx = ContextWithSubject(ctx, subject)
 
@@ -346,8 +348,8 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 			token := createKeycloakUserToken(SharedTenant, "shared-user", nil)
 			ctx = ContextWithToken(ctx, token)
 			subject := &Subject{
-				User:    "shared-user",
-				Tenants: collections.NewSet(SharedTenant),
+				User:   "shared-user",
+				Tenant: SharedTenant,
 			}
 			ctx = ContextWithSubject(ctx, subject)
 
@@ -367,8 +369,8 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 		It("Does not provision when token is not in context", func() {
 			// No token in context
 			subject := &Subject{
-				User:    "george",
-				Tenants: collections.NewSet("tenant1"),
+				User:   "george",
+				Tenant: "tenant1",
 			}
 			ctx = ContextWithSubject(ctx, subject)
 
@@ -394,8 +396,8 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 			}
 			ctx = ContextWithToken(ctx, token)
 			subject := &Subject{
-				User:    "harry",
-				Tenants: collections.NewSet("tenant1"),
+				User:   "harry",
+				Tenant: "tenant1",
 			}
 			ctx = ContextWithSubject(ctx, subject)
 
@@ -416,8 +418,8 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 			token := createKeycloakUserToken("tenant1", "iris", nil)
 			ctx = ContextWithToken(ctx, token)
 			subject := &Subject{
-				User:    "iris",
-				Tenants: collections.NewSet("tenant1"),
+				User:   "iris",
+				Tenant: "tenant1",
 			}
 			ctx = ContextWithSubject(ctx, subject)
 
@@ -452,8 +454,8 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 			})
 			ctx = ContextWithToken(ctx, token)
 			subject := &Subject{
-				User:    "judy",
-				Tenants: collections.NewSet("tenant1"),
+				User:   "judy",
+				Tenant: "tenant1",
 			}
 			ctx = ContextWithSubject(ctx, subject)
 
@@ -524,8 +526,8 @@ var _ = Describe("JIT Provisioning Interceptor", func() {
 				ctx = ContextWithToken(ctx, token)
 
 				subject := &Subject{
-					User:    "alice-stream",
-					Tenants: collections.NewSet("tenant1"),
+					User:   "alice-stream",
+					Tenant: "tenant1",
 				}
 				ctx = ContextWithSubject(ctx, subject)
 

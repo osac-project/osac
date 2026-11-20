@@ -11,4 +11,6 @@
 -- specific language governing permissions and limitations under the License.
 --
 
+-- The rename needs an ACCESS EXCLUSIVE lock, so bound the wait instead of stalling behind a rolling upgrade.
+set local lock_timeout = '5s';
 alter table billing_accounts rename column correlation_id to external_billing_account_id;

@@ -2,6 +2,8 @@
 -- Only a committed assignment could have used it for attribution. Keep tokens for all
 -- accounts referenced by any assignment interval (including history); release the
 -- discovery-only reservations. The first discovery reads the provider values afresh.
+-- The trigger disable holds a SHARE ROW EXCLUSIVE lock until the end of the file, so bound the wait.
+set local lock_timeout = '5s';
 alter table billing_accounts disable trigger project_billing_account;
 update billing_accounts a
   set data = a.data #- '{status,external_billing_account_id}',

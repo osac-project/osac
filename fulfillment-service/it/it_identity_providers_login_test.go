@@ -15,13 +15,16 @@ package it
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -292,5 +295,146 @@ var _ = Describe("Identity provider login flow", func() {
 		// Confirm a user can authenticate through the OSAC-reconciled IdP end-to-end.
 		token := provisionAndLogin(ctx, tenantName, idpAlias)
 		Expect(token).ToNot(BeEmpty())
+	})
+
+	It("keeps independent brokers while updating one provider and replacing its credentials", func() {
+		// The BeforeEach provider is backed by extRealm. Create a second real
+		// Keycloak realm so both brokers exercise the deployed Keycloak/PostgreSQL
+		// boundary independently.
+		secondRealm, err := tool.CreateExtRealm(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(func() {
+			Expect(tool.DeleteExtRealm(ctx, secondRealm)).To(Succeed())
+		})
+		secondName := fmt.Sprintf("second-%s", uuid.New())
+		secondAlias := fmt.Sprintf("%s-%s", tenantName, secondName)
+		secondSecret := createIdPClientSecret(ctx, secretsClient, tenantName, secondRealm.ClientSecret())
+		replacementSecret := createIdPClientSecret(ctx, secretsClient, tenantName, extRealm.ClientSecret())
+		secondResponse, err := client.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: secondName, Tenant: tenantName,
+				}.Build(),
+				Spec: privatev1.IdentityProviderSpec_builder{
+					Title: "Second real provider", Enabled: true,
+					Oidc: privatev1.OidcConfig_builder{
+						AuthorizationUrl:   secondRealm.AuthorizationURL(),
+						TokenUrl:           secondRealm.TokenURL(),
+						ClientId:           secondRealm.ClientID(),
+						ClientSecretSecret: secondSecret,
+						Issuer:             secondRealm.IssuerURL(),
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		secondID := secondResponse.GetObject().GetId()
+		DeferCleanup(func() {
+			_, _ = client.Delete(ctx, privatev1.IdentityProvidersDeleteRequest_builder{Id: secondID}.Build())
+		})
+
+		Eventually(func(g Gomega) {
+			response, getErr := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{Id: secondID}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			g.Expect(response.GetObject().GetStatus().GetPhase()).To(
+				Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY))
+		}, 2*time.Minute, time.Second).Should(Succeed())
+		Expect(tool.PatchKCIdPDisableTrustManager(ctx, secondAlias)).To(Succeed())
+
+		firstResponse, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{Id: osacIdpID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		firstReference := firstResponse.GetObject().GetSpec().GetOidc().GetClientSecretSecret().GetId()
+		Expect(firstReference).ToNot(BeEmpty())
+
+		By("verifying both independent Keycloak brokers and secret references")
+		for _, alias := range []string{idpAlias, secondAlias} {
+			code, _, requestErr := tool.KeycloakAdminRequest(ctx, http.MethodGet,
+				fmt.Sprintf("/identity-provider/instances/%s", alias), nil)
+			Expect(requestErr).ToNot(HaveOccurred())
+			Expect(code).To(Equal(http.StatusOK))
+		}
+		secondStored, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{Id: secondID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(secondStored.GetObject().GetSpec().GetOidc().GetClientSecretSecret().GetId()).To(Equal(secondSecret.GetId()))
+
+		By("preserving the first reference when an update omits it")
+		_, err = client.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Id:   osacIdpID,
+				Spec: privatev1.IdentityProviderSpec_builder{Title: "First provider renamed"}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.title"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		preserved, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{Id: osacIdpID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(preserved.GetObject().GetSpec().GetOidc().GetClientSecretSecret().GetId()).To(Equal(firstReference))
+
+		By("rejecting an invalid update without changing the stored candidate")
+		_, err = client.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Id: osacIdpID,
+				Spec: privatev1.IdentityProviderSpec_builder{Oidc: privatev1.OidcConfig_builder{
+					AuthorizationUrl: "not a URL",
+				}.Build()}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.oidc.authorization_url"}},
+		}.Build())
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		unchanged, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{Id: osacIdpID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(unchanged.GetObject().GetSpec().GetOidc().GetAuthorizationUrl()).To(Equal(extRealm.AuthorizationURL()))
+
+		By("replacing the first broker's secret reference")
+		_, err = client.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Id: osacIdpID,
+				Spec: privatev1.IdentityProviderSpec_builder{
+					Oidc: privatev1.OidcConfig_builder{
+						ClientSecretSecret: replacementSecret,
+					}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.oidc.client_secret_secret"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Eventually(func(g Gomega) {
+			response, getErr := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{Id: osacIdpID}.Build())
+			g.Expect(getErr).ToNot(HaveOccurred())
+			g.Expect(response.GetObject().GetStatus().GetPhase()).To(
+				Equal(privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY))
+		}, 2*time.Minute, time.Second).Should(Succeed())
+		Expect(tool.PatchKCIdPDisableTrustManager(ctx, idpAlias)).To(Succeed())
+
+		updated, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{Id: osacIdpID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(updated.GetObject().GetSpec().GetOidc().GetClientSecretSecret().GetId()).To(Equal(replacementSecret.GetId()))
+		code, body, err := tool.KeycloakAdminRequest(ctx, http.MethodGet,
+			fmt.Sprintf("/identity-provider/instances/%s", idpAlias), nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(code).To(Equal(http.StatusOK))
+		Expect(body).ToNot(ContainSubstring(extRealm.ClientSecret()), "Keycloak must redact broker secrets")
+		var broker map[string]any
+		Expect(json.Unmarshal(body, &broker)).To(Succeed())
+		Expect(broker["alias"]).To(Equal(idpAlias))
+
+		provisionAndLoginForRealm := func(realm *ExtRealmState, alias string) string {
+			username := fmt.Sprintf("replacement-user-%s", uuid.New())
+			password := uuid.New()
+			email := username + "@example.com"
+			subject, addErr := realm.AddUser(ctx, username, password, email)
+			ExpectWithOffset(1, addErr).ToNot(HaveOccurred())
+			_, provisionErr := tool.ProvisionOIDCUser(ctx, username, email, tenantName, alias, subject)
+			ExpectWithOffset(1, provisionErr).ToNot(HaveOccurred())
+			token, loginErr := tool.SimulateOIDCLogin(ctx, alias, username, password)
+			ExpectWithOffset(1, loginErr).ToNot(HaveOccurred())
+			return token
+		}
+
+		Expect(provisionAndLoginForRealm(extRealm, idpAlias)).ToNot(BeEmpty(),
+			"replacement broker must authenticate with its replacement credentials")
+		Expect(provisionAndLoginForRealm(secondRealm, secondAlias)).ToNot(BeEmpty(),
+			"the independent broker must remain usable")
 	})
 })

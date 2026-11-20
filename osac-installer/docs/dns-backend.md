@@ -160,16 +160,20 @@ cluster base domain, as shown in the cluster's API URL
 ```bash
 dig @192.0.2.53 api.<cluster>.<base> A +noall +comments +answer
 dig @192.0.2.53 api-int.<cluster>.<base> A +noall +comments +answer
-dig @192.0.2.53 console-openshift-console.apps.<cluster>.<base> A +noall +comments +answer
+dig @192.0.2.53 '*.apps.<cluster>.<base>' A +noall +comments +answer
 ```
 
 Check the `status:` in each response header. While the cluster exists, the
 status is `NOERROR` and the answer section shows the API address (first two
-queries) or the ingress address (third). After the cluster is deleted, the
-status is `NXDOMAIN`, or `NOERROR` with an empty answer section. `REFUSED`
-means that the server did not answer the query, not that the record is gone.
-In that case check the zone's `allow-query`, or sign the query with the key
-by adding `-k /etc/named/osac-update.key`.
+queries) or the ingress address (third). The third query asks for the wildcard
+record itself, quoted so the shell does not expand it, because an explicit
+record such as `console-openshift-console.apps.<cluster>.<base>` takes
+precedence over the wildcard and would hide a missing or leftover `*.apps`
+record. After the cluster is deleted, the status is `NXDOMAIN`, or `NOERROR`
+with an empty answer section. `REFUSED` means that the server did not answer
+the query, not that the record is gone. In that case check the zone's
+`allow-query`, or sign the query with the key by adding
+`-k /etc/named/osac-update.key`.
 If the server listens on a port other than 53 or answers only over TCP, add
 `-p <port>` and `+tcp` to match `DNS_RFC2136_PORT` and `DNS_RFC2136_PROTOCOL`.
 

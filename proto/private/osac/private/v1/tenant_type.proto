@@ -21,6 +21,7 @@ import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/private/v1/condition_status_type.proto";
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/role_type.proto";
 import "osac/private/v1/break_glass_credentials_type.proto";
 import "osac/private/v1/secret_type.proto";
 
@@ -96,6 +97,11 @@ message TenantSpec {
   optional string external_billing_id = 3
     [(cleanapi.field).private = true,
      (buf.validate.field).string.max_len = 256];
+
+  // Role selected for onboarding. It must belong to this tenant or to shared.
+  // An unset value on an ordinary tenant inherits the shared tenant's selection.
+  // An unset value on shared means there is no platform default.
+  RoleReference default_role = 4;
 }
 
 // Represents the current operational state of a Tenant.

@@ -1,0 +1,137 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "buf/validate/validate.proto";
+import "cleanapi/cleanapi.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "osac/private/v1/notification_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
+
+message NotificationsListRequest {
+  // Zero-based index of the first result.
+  optional int32 offset = 1;
+
+  // Maximum number of results.
+  optional int32 limit = 2;
+
+  // CEL expression selecting which notifications to return.
+  optional string filter = 3;
+
+  // Ordering of results.
+  optional string order = 4;
+}
+
+message NotificationsListResponse {
+  // Number of items returned.
+  int32 size = 1;
+
+  // Total matching items regardless of limit.
+  int32 total = 2;
+
+  // Result items.
+  repeated Notification items = 3;
+}
+
+message NotificationsGetRequest {
+  string id = 1;
+}
+
+message NotificationsGetResponse {
+  Notification object = 1;
+}
+
+message NotificationsCreateRequest {
+  Notification object = 1 [(buf.validate.field).required = true];
+}
+
+message NotificationsCreateResponse {
+  Notification object = 1;
+}
+
+message NotificationsUpdateRequest {
+  Notification object = 1;
+  google.protobuf.FieldMask update_mask = 2;
+
+  // Reject the update with ABORTED when metadata.version does not match the stored version.
+  bool lock = 3;
+}
+
+message NotificationsUpdateResponse {
+  Notification object = 1;
+}
+
+message NotificationsDeleteRequest {
+  string id = 1;
+}
+
+message NotificationsDeleteResponse {}
+
+message NotificationsSignalRequest {
+  option (cleanapi.message).private = true;
+  string id = 1;
+}
+
+message NotificationsSignalResponse {
+  option (cleanapi.message).private = true;
+}
+
+// Manages durable inbox notifications and announcements.
+service Notifications {
+  // Lists notifications visible to the caller.
+  rpc List(NotificationsListRequest) returns (NotificationsListResponse) {
+    option (google.api.http) = {get: "/api/private/v1/notifications"};
+  }
+
+  // Retrieves one notification by id.
+  rpc Get(NotificationsGetRequest) returns (NotificationsGetResponse) {
+    option (google.api.http) = {
+      get: "/api/private/v1/notifications/{id}"
+      response_body: "object"
+    };
+  }
+
+  // Creates a notification. Public callers create announcements; controllers create inbox rows.
+  rpc Create(NotificationsCreateRequest) returns (NotificationsCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/private/v1/notifications"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Updates an event-driven inbox item. Only spec.state is mutable.
+  rpc Update(NotificationsUpdateRequest) returns (NotificationsUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/private/v1/notifications/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Deletes the caller's inbox item or an announcement per role rules.
+  rpc Delete(NotificationsDeleteRequest) returns (NotificationsDeleteResponse) {
+    option (google.api.http) = {delete: "/api/private/v1/notifications/{id}"};
+  }
+
+  // Indicates that something changed that may require reconciling the object.
+  rpc Signal(NotificationsSignalRequest) returns (NotificationsSignalResponse) {
+    option (cleanapi.method).private = true;
+  }
+}

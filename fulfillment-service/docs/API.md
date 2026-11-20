@@ -579,7 +579,9 @@ names used by JSON responses. Timestamp predicates use `timestamp("2026-01-01T00
 List ordering remains unimplemented, as for other Fulfillment object types; the request field is
 ignored and callers must not rely on result order. Old flat account fields,
 `correlation_id`, scalar `tenant_id`/`billing_account_id`, and `effective_from`/`effective_to`
-are not aliases. REST and CLI structured output use the nested snake-case field names.
+are not aliases. The merged design's example request body predates this amendment; it used the
+flat scalar fields and does not parse against this API. REST and CLI structured output use the
+nested snake-case field names.
 
 Migration 158 is the historical SQL-column rename, preserving raw values and links; 159
 normalizes the object envelope, and 160 retains deleted tenant identities. The final envelope
@@ -608,9 +610,9 @@ interval. Foreign, multiple or inconsistent carriers fail with `ACCOUNT_AMBIGUOU
 Fix duplicate external IDs in the provider and retry; the next discovery refresh reflects the
 correction. A token already used by an assignment is not rotated by discovery.
 OSAC makes no provider account writes, regardless of vendor capabilities. `PENDING` requires
-manual provider-side remediation; gated publish/launch remain blocked with
-`BILLING_ACCOUNT_UNAVAILABLE` until successful revalidation. This is not a provider setter
-or write/readback workflow.
+manual provider-side remediation, and the gated publish/launch checks are not enforced yet;
+once enforced, they will fail with `BILLING_ACCOUNT_UNAVAILABLE` until successful revalidation.
+This is not a provider setter or write/readback workflow.
 
 Assignment creation, replacement, and same-account revalidation verify the identity of
 the selected provider account and take its state and external ID from that same read. The stored

@@ -43,8 +43,9 @@ type TenantBillingAssignmentConnectionState int32
 const (
 	// Unset. Never reported by the server.
 	TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_UNSPECIFIED TenantBillingAssignmentConnectionState = 0
-	// Assignment-time provider account-match validation is incomplete, so gated publish and launch fail with
-	// BILLING_ACCOUNT_UNAVAILABLE until it is remediated.
+	// Assignment-time provider account-match validation is incomplete and requires manual provider-side remediation.
+	// The gated publish and launch checks are not enforced yet; once enforced they will report
+	// BILLING_ACCOUNT_UNAVAILABLE until the state is remediated.
 	TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_PENDING TenantBillingAssignmentConnectionState = 1
 	// The required assignment-time provider match was validated: the selected account was the unique provider-side
 	// carrier of the attribution token, which requires exactly one account to carry the correlation value where the

@@ -526,7 +526,8 @@ assignments (use {{ bt }}has{{ bt }} instead of {{ bt }}!has{{ bt }} for closed 
 {{ bt 3 }}
 
 An assignment in {{ bt }}PENDING{{ bt }} still needs provider-side matching and may require manual remediation;
-gated publish and launch remain blocked with {{ bt }}BILLING_ACCOUNT_UNAVAILABLE{{ bt }}.
+the gated publish and launch checks are not enforced yet and will report
+{{ bt }}BILLING_ACCOUNT_UNAVAILABLE{{ bt }} once they are enforced.
 
 Billing provider status is a get-only singleton: exactly one empty Get request, independent of tenant/project.
 It accepts no keys, {{ bt }}--filter{{ bt }} or {{ bt }}--watch{{ bt }}, even explicitly empty/false flags.

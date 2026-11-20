@@ -3639,16 +3639,24 @@ var _ = Describe("Storage Controller", func() {
 		// newFailingProvider returns a cluster provider whose provision trigger
 		// fails with errMsg for resources matching failOn and delegates to the
 		// default mock otherwise.
-		newFailingProvider := func(failOn func(client.Object) bool, errMsg string) *mockProvisioningProvider {
+		newFailingProviderFor := func(errFor func(client.Object) error) *mockProvisioningProvider {
 			return &mockProvisioningProvider{
 				name: "caas-mock",
 				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
-					if failOn(resource) {
-						return nil, errors.New(errMsg)
+					if err := errFor(resource); err != nil {
+						return nil, err
 					}
 					return (&mockProvisioningProvider{}).TriggerProvision(ctx, resource)
 				},
 			}
+		}
+		newFailingProvider := func(failOn func(client.Object) bool, errMsg string) *mockProvisioningProvider {
+			return newFailingProviderFor(func(resource client.Object) error {
+				if failOn(resource) {
+					return errors.New(errMsg)
+				}
+				return nil
+			})
 		}
 
 		It("should trigger CaaS provisioning for Ready ClusterOrder with backend ready", func() {
@@ -3895,6 +3903,37 @@ var _ = Describe("Storage Controller", func() {
 			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
 			Expect(err).To(MatchError(ContainSubstring("caas launch failed")))
 
+			updatedCO := &v1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+			Expect(updatedCO.Status.Conditions).To(ContainElement(SatisfyAll(
+				HaveField("Type", string(v1alpha1.ClusterOrderConditionClusterStorageReady)),
+				HaveField("Status", metav1.ConditionFalse),
+				HaveField("Reason", "ProvisionFailed"),
+			)))
+		})
+
+		It("should return the VMaaS error when both the VMaaS and the CaaS launches fail", func() {
+			tenantName := "caas-nosc-bothfail"
+			createReadyTenantForStorage(ctx, tenantName, testNamespace)
+			createCaaSTierHubSecret(tenantName)
+			co := createReadyClusterOrderFor(tenantName, "caas-nosc-co-bothfail")
+			createCaaSKubeconfig(co, "bothfail")
+
+			r := newCaaSTierReconciler(newFailingProviderFor(func(resource client.Object) error {
+				switch resource.(type) {
+				case *v1alpha1.Tenant:
+					return errors.New("vmaas launch failed")
+				case *v1alpha1.ClusterOrder:
+					return errors.New("caas launch failed")
+				}
+				return nil
+			}))
+			nn := types.NamespacedName{Name: tenantName, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).To(MatchError(ContainSubstring("vmaas launch failed")))
+			Expect(err).NotTo(MatchError(ContainSubstring("caas launch failed")))
+
+			// The CaaS stage ran too.
 			updatedCO := &v1alpha1.ClusterOrder{}
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
 			Expect(updatedCO.Status.Conditions).To(ContainElement(SatisfyAll(

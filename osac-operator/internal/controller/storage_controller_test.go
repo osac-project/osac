@@ -3499,6 +3499,8 @@ var _ = Describe("Storage Controller", func() {
 			return co
 		}
 
+		const caasTierBackendID = "backend-caas"
+
 		// newCaaSReconciler builds a reconciler with both providers set.
 		newCaaSReconciler := func(clusterProvider *mockProvisioningProvider) *StorageReconciler {
 			return NewStorageReconciler(
@@ -3506,6 +3508,84 @@ var _ = Describe("Storage Controller", func() {
 				&mockProvisioningProvider{}, clusterProvider, pollInterval,
 				provisioning.DefaultMaxJobHistory,
 			)
+		}
+
+		// newCaaSTierReconciler builds a CaaS reconciler whose tier catalog
+		// resolves one OSAC-managed tier ("default") backed by one registered
+		// backend, so the CaaS stage may run without a VMaaS StorageClass.
+		newCaaSTierReconciler := func(clusterProvider *mockProvisioningProvider) *StorageReconciler {
+			r := newCaaSReconciler(clusterProvider)
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{newTestStorageTier("default", caasTierBackendID)},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				listFunc: registeredBackendsClient(1).listFunc,
+				getFunc: func(context.Context, *privatev1.StorageBackendsGetRequest, ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					return newTestStorageBackendGetResponse("lvms"), nil
+				},
+			}
+			return r
+		}
+
+		// createCaaSTierHubSecret creates the per-backend hub Secret that makes
+		// hubSecretReady true for the tier catalog in newCaaSTierReconciler.
+		createCaaSTierHubSecret := func(tenantName string) {
+			createHubSecretForBackend(ctx, tenantName, caasTierBackendID, "lvms", secretsNamespace)
+		}
+
+		// createCaaSKubeconfig gives the ClusterOrder a ClusterReference, a
+		// HostedControlPlane and its admin-kubeconfig Secret so that
+		// getClusterKubeconfig returns bytes. It waits until the cached client
+		// sees all three.
+		createCaaSKubeconfig := func(co *v1alpha1.ClusterOrder, suffix string) {
+			hcNamespace := "clusters-" + suffix
+			hcName := "hcp-" + suffix
+			hcpNamespace := hcNamespace + "-" + hcName
+
+			ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: hcpNamespace}}
+			if err := k8sClient.Create(ctx, ns); err != nil {
+				Expect(client.IgnoreAlreadyExists(err)).To(Succeed())
+			}
+
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: "admin-kubeconfig", Namespace: hcpNamespace},
+				Data:       map[string][]byte{"kubeconfig": []byte("apiVersion: v1\nclusters: []\n")},
+			}
+			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, secret) })
+
+			hcp := &hypershiftv1beta1.HostedControlPlane{
+				ObjectMeta: metav1.ObjectMeta{Name: hcName, Namespace: hcpNamespace},
+			}
+			Expect(k8sClient.Create(ctx, hcp)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, hcp) })
+			hcp.Status.KubeConfig = &hypershiftv1beta1.KubeconfigSecretRef{
+				Name: "admin-kubeconfig",
+				Key:  "kubeconfig",
+			}
+			Expect(k8sClient.Status().Update(ctx, hcp)).To(Succeed())
+
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), co)).To(Succeed())
+			co.Status.ClusterReference = &v1alpha1.ClusterOrderClusterReferenceType{
+				Namespace:         hcNamespace,
+				HostedClusterName: hcName,
+			}
+			Expect(k8sClient.Status().Update(ctx, co)).To(Succeed())
+
+			Eventually(func(g Gomega) {
+				cachedHCP := &hypershiftv1beta1.HostedControlPlane{}
+				g.Expect(indexedClient.Get(ctx, client.ObjectKeyFromObject(hcp), cachedHCP)).To(Succeed())
+				g.Expect(cachedHCP.Status.KubeConfig).NotTo(BeNil())
+				cachedSecret := &corev1.Secret{}
+				g.Expect(indexedClient.Get(ctx, client.ObjectKeyFromObject(secret), cachedSecret)).To(Succeed())
+				cachedCO := &v1alpha1.ClusterOrder{}
+				g.Expect(indexedClient.Get(ctx, client.ObjectKeyFromObject(co), cachedCO)).To(Succeed())
+				g.Expect(cachedCO.Status.ClusterReference).NotTo(BeNil())
+			}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
 		}
 
 		It("should trigger CaaS provisioning for Ready ClusterOrder with backend ready", func() {
@@ -3551,10 +3631,10 @@ var _ = Describe("Storage Controller", func() {
 		It("should trigger CaaS provisioning when no VMaaS StorageClass exists", func() {
 			tenantName := "caas-nosc-trigger"
 			createReadyTenantForStorage(ctx, tenantName, testNamespace)
-			createHubSecret(ctx, tenantName, secretsNamespace)
+			createCaaSTierHubSecret(tenantName)
 			co := createReadyClusterOrderFor(tenantName, "caas-nosc-co-trigger")
 
-			r := newCaaSReconciler(&mockProvisioningProvider{name: "caas-mock"})
+			r := newCaaSTierReconciler(&mockProvisioningProvider{name: "caas-mock"})
 			nn := types.NamespacedName{Name: tenantName, Namespace: testNamespace}
 			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
 			Expect(err).NotTo(HaveOccurred())
@@ -3569,12 +3649,12 @@ var _ = Describe("Storage Controller", func() {
 		It("should trigger CaaS provisioning when VMaaS StorageClasses are ambiguous", func() {
 			tenantName := "caas-nosc-ambiguous"
 			createReadyTenantForStorage(ctx, tenantName, testNamespace)
-			createHubSecret(ctx, tenantName, secretsNamespace)
+			createCaaSTierHubSecret(tenantName)
 			createLabeledStorageClass(ctx, tenantName+"-sc-1", tenantName, "default")
 			createLabeledStorageClass(ctx, tenantName+"-sc-2", tenantName, "default")
 			co := createReadyClusterOrderFor(tenantName, "caas-nosc-co-ambiguous")
 
-			r := newCaaSReconciler(&mockProvisioningProvider{name: "caas-mock"})
+			r := newCaaSTierReconciler(&mockProvisioningProvider{name: "caas-mock"})
 			nn := types.NamespacedName{Name: tenantName, Namespace: testNamespace}
 			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
 			Expect(err).NotTo(HaveOccurred())
@@ -3685,21 +3765,141 @@ var _ = Describe("Storage Controller", func() {
 				string(v1alpha1.ClusterOrderConditionClusterStorageReady))))
 		})
 
-		It("should keep the VMaaS requeue when CaaS provisioning also ran", func() {
-			tenantName := "caas-nosc-requeue"
+		// Regression guard: ambiguous VMaaS StorageClasses do not open the CaaS
+		// stage when no backend is ready.
+		It("should not trigger CaaS provisioning when VMaaS StorageClasses are ambiguous and no backend is ready", func() {
+			tenantName := "caas-nosc-ambig-noprov"
 			createReadyTenantForStorage(ctx, tenantName, testNamespace)
-			createHubSecret(ctx, tenantName, secretsNamespace)
-			co := createReadyClusterOrderFor(tenantName, "caas-nosc-co-requeue")
+			createLabeledStorageClass(ctx, tenantName+"-sc-1", tenantName, "default")
+			createLabeledStorageClass(ctx, tenantName+"-sc-2", tenantName, "default")
+			co := createReadyClusterOrderFor(tenantName, "caas-nosc-co-ambig-noprov")
 
 			r := newCaaSReconciler(&mockProvisioningProvider{name: "caas-mock"})
+			r.BackendsClient = registeredBackendsClient(0)
+
+			nn := types.NamespacedName{Name: tenantName, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			storageCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
+			Expect(storageCond).NotTo(BeNil())
+			Expect(storageCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(storageCond.Reason).To(Equal(v1alpha1.TenantReasonMultipleFound))
+			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(backendCond).NotTo(BeNil())
+			Expect(backendCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(backendCond.Reason).To(Equal(v1alpha1.TenantReasonNoProvider))
+
+			updatedCO := &v1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+			Expect(updatedCO.Finalizers).NotTo(ContainElement(clusterStorageFinalizer))
+			Expect(updatedCO.Status.Conditions).NotTo(ContainElement(HaveField("Type",
+				string(v1alpha1.ClusterOrderConditionClusterStorageReady))))
+		})
+
+		// The legacy fallback (no TiersClient, any tenant-labelled Secret counts
+		// as ready) does not open the CaaS stage without a VMaaS StorageClass.
+		It("should not trigger CaaS provisioning in legacy mode when no tier definitions resolve", func() {
+			tenantName := "caas-nosc-legacy-notiers"
+			createReadyTenantForStorage(ctx, tenantName, testNamespace)
+			createHubSecret(ctx, tenantName, secretsNamespace)
+			co := createReadyClusterOrderFor(tenantName, "caas-nosc-co-legacy-notiers")
+
+			r := newCaaSReconciler(&mockProvisioningProvider{name: "caas-mock"})
+			nn := types.NamespacedName{Name: tenantName, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			// The fallback reported the backends ready.
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(backendCond).NotTo(BeNil())
+			Expect(backendCond.Status).To(Equal(metav1.ConditionTrue))
+
+			updatedCO := &v1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+			Expect(updatedCO.Finalizers).NotTo(ContainElement(clusterStorageFinalizer))
+			Expect(updatedCO.Status.Conditions).NotTo(ContainElement(HaveField("Type",
+				string(v1alpha1.ClusterOrderConditionClusterStorageReady))))
+		})
+
+		It("should return the CaaS error when the CaaS launch fails and the VMaaS launch succeeds", func() {
+			tenantName := "caas-nosc-caasfail"
+			createReadyTenantForStorage(ctx, tenantName, testNamespace)
+			createCaaSTierHubSecret(tenantName)
+			co := createReadyClusterOrderFor(tenantName, "caas-nosc-co-caasfail")
+			createCaaSKubeconfig(co, "caasfail")
+
+			clusterProvider := &mockProvisioningProvider{
+				name: "caas-mock",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					if _, ok := resource.(*v1alpha1.ClusterOrder); ok {
+						return nil, errors.New("caas launch failed")
+					}
+					return (&mockProvisioningProvider{}).TriggerProvision(ctx, resource)
+				},
+			}
+			r := newCaaSTierReconciler(clusterProvider)
+			nn := types.NamespacedName{Name: tenantName, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).To(MatchError(ContainSubstring("caas launch failed")))
+
+			updatedCO := &v1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+			Expect(updatedCO.Status.Conditions).To(ContainElement(SatisfyAll(
+				HaveField("Type", string(v1alpha1.ClusterOrderConditionClusterStorageReady)),
+				HaveField("Status", metav1.ConditionFalse),
+				HaveField("Reason", "ProvisionFailed"),
+			)))
+		})
+
+		It("should trigger both the Tenant and the ClusterOrder jobs and requeue at the poll interval", func() {
+			tenantName := "caas-nosc-both-jobs"
+			createReadyTenantForStorage(ctx, tenantName, testNamespace)
+			createCaaSTierHubSecret(tenantName)
+			co := createReadyClusterOrderFor(tenantName, "caas-nosc-co-both-jobs")
+			createCaaSKubeconfig(co, "both-jobs")
+
+			var triggered []string
+			clusterProvider := &mockProvisioningProvider{
+				name: "caas-mock",
+				triggerProvisionFunc: func(ctx context.Context, resource client.Object) (*provisioning.ProvisionResult, error) {
+					switch resource.(type) {
+					case *v1alpha1.Tenant:
+						triggered = append(triggered, "Tenant")
+					case *v1alpha1.ClusterOrder:
+						triggered = append(triggered, "ClusterOrder")
+					}
+					return (&mockProvisioningProvider{}).TriggerProvision(ctx, resource)
+				},
+			}
+			r := newCaaSTierReconciler(clusterProvider)
 			nn := types.NamespacedName{Name: tenantName, Namespace: testNamespace}
 			result, err := r.Reconcile(ctx, storageReconcileRequest(nn))
 			Expect(err).NotTo(HaveOccurred())
 
-			// Holds today: the VMaaS cluster storage job was just launched.
+			Expect(triggered).To(ContainElements("Tenant", "ClusterOrder"))
+			Expect(result.RequeueAfter).To(Equal(pollInterval))
+		})
+
+		It("should keep the VMaaS requeue when CaaS provisioning also ran", func() {
+			tenantName := "caas-nosc-requeue"
+			createReadyTenantForStorage(ctx, tenantName, testNamespace)
+			createCaaSTierHubSecret(tenantName)
+			co := createReadyClusterOrderFor(tenantName, "caas-nosc-co-requeue")
+
+			r := newCaaSTierReconciler(&mockProvisioningProvider{name: "caas-mock"})
+			nn := types.NamespacedName{Name: tenantName, Namespace: testNamespace}
+			result, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			// The VMaaS cluster storage job was launched, so its requeue is kept.
 			Expect(result.RequeueAfter).To(BeNumerically(">", 0))
 
-			// RED: the ClusterOrder must be processed in the same reconcile.
+			// The ClusterOrder is processed in the same reconcile.
 			updatedCO := &v1alpha1.ClusterOrder{}
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
 			Expect(updatedCO.Finalizers).To(ContainElement(clusterStorageFinalizer))
@@ -3708,7 +3908,7 @@ var _ = Describe("Storage Controller", func() {
 		It("should run the CaaS stage when the VMaaS cluster storage job cannot be launched", func() {
 			tenantName := "caas-nosc-launchfail"
 			createReadyTenantForStorage(ctx, tenantName, testNamespace)
-			createHubSecret(ctx, tenantName, secretsNamespace)
+			createCaaSTierHubSecret(tenantName)
 			co := createReadyClusterOrderFor(tenantName, "caas-nosc-co-launchfail")
 
 			clusterProvider := &mockProvisioningProvider{
@@ -3720,15 +3920,15 @@ var _ = Describe("Storage Controller", func() {
 					return (&mockProvisioningProvider{}).TriggerProvision(ctx, resource)
 				},
 			}
-			r := newCaaSReconciler(clusterProvider)
+			r := newCaaSTierReconciler(clusterProvider)
 			nn := types.NamespacedName{Name: tenantName, Namespace: testNamespace}
 			result, err := r.Reconcile(ctx, storageReconcileRequest(nn))
 
-			// Pin today's VMaaS behaviour: an error and no requeue.
+			// The VMaaS launch failure is returned with no requeue.
 			Expect(err).To(MatchError(ContainSubstring("launch failed")))
 			Expect(result).To(Equal(ctrl.Result{}))
 
-			// RED: the CaaS stage still ran.
+			// The CaaS stage still runs.
 			updatedCO := &v1alpha1.ClusterOrder{}
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
 			Expect(updatedCO.Finalizers).To(ContainElement(clusterStorageFinalizer))

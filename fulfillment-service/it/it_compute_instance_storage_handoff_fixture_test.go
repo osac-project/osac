@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -38,8 +37,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/client-go/util/retry"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -150,22 +147,17 @@ func installComputeStorageRecorder(ctx context.Context) {
 	Expect(err).NotTo(HaveOccurred())
 	stageCtx, cancelStage := context.WithTimeout(ctx, time.Minute)
 	defer cancelStage()
-	restConfig, err := tool.kubeConfig.ClientConfig()
-	Expect(err).NotTo(HaveOccurred(), "load Kubernetes client configuration")
-	request := tool.KubeClientSet().CoreV1().RESTClient().Post().
-		Resource("pods").Namespace(hubNamespace).Name(computeStorageRecorderName).SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: "recorder",
-			Command: []string{"/bin/sh", "-c",
-				"cat > /work/recorder.tmp && chmod 0755 /work/recorder.tmp && mv /work/recorder.tmp /work/recorder"},
-			Stdin: true,
-		}, clientgoscheme.ParameterCodec)
-	executor, err := remotecommand.NewSPDYExecutor(restConfig, "POST", request.URL())
-	Expect(err).NotTo(HaveOccurred(), "prepare AAP recorder staging")
+	stage := exec.CommandContext(stageCtx, "kubectl", "exec", "-i", "-n", hubNamespace,
+		computeStorageRecorderName, "-c", "recorder", "--", "/bin/sh", "-c",
+		"cat > /work/recorder.tmp && chmod 0755 /work/recorder.tmp && mv /work/recorder.tmp /work/recorder")
+	if os.Getenv("KUBECONFIG") == "" {
+		// Match openKubernetes's default path when the environment is unset.
+		kubeconfigPath := filepath.Join(os.Getenv("HOME"), ".kube", tool.clusterName+"-kind.kubeconfig")
+		stage.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+	}
+	stage.Stdin = bytes.NewReader(binary)
 	// Discard exec output because connection errors may contain sensitive data.
-	err = executor.StreamWithContext(stageCtx, remotecommand.StreamOptions{
-		Stdin: bytes.NewReader(binary), Stdout: io.Discard, Stderr: io.Discard,
-	})
+	err = stage.Run()
 	Expect(err).NotTo(HaveOccurred(), "stage AAP recorder")
 	Eventually(func(g Gomega) {
 		_, err := tool.KubeClientSet().CoreV1().Services(hubNamespace).

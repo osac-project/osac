@@ -77,6 +77,55 @@ New tiers can be configured after a tenant is onboarded:
 - A workload requesting the new tier uses its current resolution at
   provisioning time.
 
+## VAST NFS preparation for CLaaS
+
+For the delegated VAST NFS path, the Cloud Provider Admin creates one OPAQUE
+bundle per OSAC tenant and VAST backend. Acme's Gold and Silver tiers can share
+one bundle when both select the registered backend named `vast-east`.
+
+Store an OPAQUE Secret in the default project of the `system` tenant. Its name
+uses the first 54 lowercase hex characters of SHA-256 over
+`<tenant name>/<backend name>`, prefixed with `vast-nfs-`. This gives every pair
+a fixed-length name, including when both registered names are 63 characters.
+
+In the CSP-admin private API context, create the Secret from the YAML file.
+
+```shell
+tenant_name=acme
+backend_name=vast-east
+pair_digest=$(printf '%s/%s' "$tenant_name" "$backend_name" | sha256sum | cut -c1-54)
+osac --tenant system --project '' create secret \
+  --name "vast-nfs-$pair_digest" --type opaque \
+  --from-file=config.yaml=./acme-vast-east.yaml
+```
+
+The YAML file holds the credentials for the prepared VAST tenant, its export
+root and view policy, and the NFS data address. Store the VAST management
+address in the registered StorageBackend's endpoint.
+
+```yaml
+schema_version: 1
+provider: vast
+storage_tenant: acme-on-vast
+credentials:
+  username: acme-storage-admin
+  password: "<delegated VAST password>"
+endpoints:
+  data: acme-nfs.example.com
+options:
+  root_export: /acme/claas
+  view_policy: acme-nfs
+```
+
+A named VIP pool uses `options.vip_pool_name` in place of `endpoints.data`.
+The Secret lookup uses the exact owner, default project and derived name.
+Labels can be used for organization.
+
+If the bundle is missing, check all three parts of the address. For an invalid
+bundle, verify the OPAQUE type, the `config.yaml` key and the required settings.
+Correct the preparation and let the affected operation retry. A lookup or
+validation failure stops that operation before it contacts VAST.
+
 ## Offboarding
 
 When a tenant is deleted:

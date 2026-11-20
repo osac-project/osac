@@ -3843,6 +3843,8 @@ var _ = Describe("Storage Controller", func() {
 			co := createReadyClusterOrderFor(tenantName, "caas-nosc-co-tiers-nobackend")
 
 			r := newCaaSTierReconciler(&mockProvisioningProvider{name: "caas-mock"})
+			fakeRecorder := events.NewFakeRecorder(100)
+			r.Recorder = fakeRecorder
 			// Zero registered backends, but the tier's backend still resolves.
 			r.BackendsClient = &mockStorageBackendsClient{
 				listFunc: registeredBackendsClient(0).listFunc,
@@ -3867,6 +3869,10 @@ var _ = Describe("Storage Controller", func() {
 			Expect(storageCond.Reason).To(Equal(v1alpha1.TenantReasonNotFound))
 
 			expectCaaSNotTriggered(co)
+
+			// The gate is shut because no backend is ready, not because a tier
+			// was skipped.
+			Expect(drainEvents(fakeRecorder)).NotTo(ContainElement(ContainSubstring("StorageTiersSkipped")))
 		})
 
 		// The legacy fallback (no TiersClient, any tenant-labelled Secret counts
@@ -3966,6 +3972,8 @@ var _ = Describe("Storage Controller", func() {
 			co := createReadyClusterOrderFor(tenantName, "caas-nosc-co-tier-skipped")
 
 			r := newCaaSSkippedTierReconciler()
+			fakeRecorder := events.NewFakeRecorder(100)
+			r.Recorder = fakeRecorder
 
 			nn := types.NamespacedName{Name: tenantName, Namespace: testNamespace}
 			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
@@ -3982,6 +3990,11 @@ var _ = Describe("Storage Controller", func() {
 			Expect(storageCond.Reason).To(Equal(v1alpha1.TenantReasonNotFound))
 
 			expectCaaSNotTriggered(co)
+
+			Expect(drainEvents(fakeRecorder)).To(ContainElement(SatisfyAll(
+				ContainSubstring(corev1.EventTypeWarning),
+				ContainSubstring("StorageTiersSkipped"),
+			)))
 		})
 
 		It("should return the VMaaS error when both the VMaaS and the CaaS launches fail", func() {

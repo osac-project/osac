@@ -1,119 +1,294 @@
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  Alert,
   Breadcrumb,
   BreadcrumbItem,
   Button,
-  Card,
-  CardBody,
-  CardHeader,
-  CardTitle,
   DescriptionList,
   DescriptionListDescription,
   DescriptionListGroup,
   DescriptionListTerm,
-  Grid,
-  GridItem,
+  Flex,
+  FlexItem,
   Stack,
+  StackItem,
+  Tab,
+  TabTitleText,
+  Tabs,
+  Timestamp,
+  Tooltip,
 } from '@patternfly/react-core';
-import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
-import {
-  type NATGateway,
-  SecurityGroups,
-  Subnets,
-  VirtualNetworkState,
-  VirtualNetworks,
-} from '@osac/types';
-import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
-import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
-import DeleteResourceModal from '@osac/ui-components/components/Resource/DeleteResourceModal';
-import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField.tsx';
+import { type NATGateway, NATGatewayState, SecurityGroups, Subnets } from '@osac/types';
 
-import { useApiQueryClient } from '../../api/use-api-query';
-import { useDeleteResource, useGetResource, useListResource } from '../../api/use-resource';
+import { useListAllResources } from '../../api/use-resource';
 import {
-  invalidateVirtualNetworksQueries,
-  isDefaultNetworkingResource,
+  useDeleteVirtualNetwork,
   useNatGateway,
+  useVirtualNetwork,
   virtualNetworkScopeFilter,
 } from '../../api/v1/networking';
+import { virtualNetworkDeleteBlockedReason } from '../../components/networking/deleteDisabledReasons';
 import { DetachNatGatewayModal } from '../../components/networking/DetachNatGatewayModal';
-import NatGatewayCard from '../../components/networking/NatGatewayCard';
+import { NatGatewayStatusLabel } from '../../components/networking/NatGatewayStatusLabel';
+import NetworkingProjectName from '../../components/networking/NetworkingProjectName';
+import {
+  protectedResourceReason,
+  resourceOrigin,
+} from '../../components/networking/resourceOrigin';
+import ResourceOriginBadge from '../../components/networking/ResourceOriginBadge';
 import { SecurityGroupCreateModal } from '../../components/networking/SecurityGroupCreateModal';
-import { SecurityGroupStatusLabel } from '../../components/networking/SecurityGroupStatusLabel';
+import SecurityGroupsTable from '../../components/networking/SecurityGroupsTable';
 import { SubnetCreateModal } from '../../components/networking/SubnetCreateModal';
-import { SubnetStatusLabel } from '../../components/networking/SubnetStatusLabel';
+import SubnetsTable from '../../components/networking/SubnetsTable';
+import {
+  isVirtualNetworkReady,
+  virtualNetworkNotReadyReason,
+} from '../../components/networking/virtualNetworkReadiness';
 import { VirtualNetworkStatusLabel } from '../../components/networking/VirtualNetworkStatusLabel';
 import ListPage from '../../components/Page/ListPage';
 import ListPageBody from '../../components/Page/ListPageBody';
+import CreateButton from '../../components/Primitives/CreateButton.tsx';
+import DeleteResourceModal from '../../components/Resource/DeleteResourceModal';
 import { SubtleContent } from '../../components/SubtleContent/SubtleContent';
+import { useToast } from '../../components/Toast/useToast';
 import { useTranslation } from '../../hooks/useTranslation';
-import { getErrorMessage } from '../../utils/error';
-import { defaultResourceDeleteReason } from '../../utils/networking';
+
+const TAB_PARAM = 'tab';
+const TAB_VALUES = ['overview', 'subnets', 'security-groups'] as const;
+type VirtualNetworkTab = (typeof TAB_VALUES)[number];
+
+const isVirtualNetworkTab = (value: string | null): value is VirtualNetworkTab =>
+  value !== null && (TAB_VALUES as readonly string[]).includes(value);
 
 export const VirtualNetworkDetailPage = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { id = '' } = useParams<{ id: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [isSubnetModalOpen, setIsSubnetModalOpen] = useState(false);
   const [isSecurityGroupModalOpen, setIsSecurityGroupModalOpen] = useState(false);
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [detachTarget, setDetachTarget] = useState<NATGateway>();
 
-  const queryClient = useApiQueryClient();
-  const { data: vnResponse, isLoading, error } = useGetResource(VirtualNetworks, { id });
-  const vn = vnResponse?.object;
-  const deleteVirtualNetwork = useDeleteResource(VirtualNetworks, {
-    onSuccess: () => {
-      void invalidateVirtualNetworksQueries(queryClient);
-    },
-  });
+  const { addToast } = useToast();
+  const remove = useDeleteVirtualNetwork();
+
+  const { data: vn, isLoading, error } = useVirtualNetwork(id);
   const {
-    data: subnetsResponse,
+    data: subnetsReply,
     isLoading: isLoadingSubnets,
     error: subnetsError,
-  } = useListResource(Subnets, {
-    filter: virtualNetworkScopeFilter(id),
-  });
-  const subnets = subnetsResponse?.items ?? [];
+  } = useListAllResources(Subnets, virtualNetworkScopeFilter(id));
+  const subnets = subnetsReply?.items ?? [];
   const {
-    data: securityGroupsResponse,
+    data: securityGroupsReply,
     isLoading: isLoadingSecurityGroups,
     error: securityGroupsError,
-  } = useListResource(SecurityGroups, {
-    filter: virtualNetworkScopeFilter(id),
-  });
-  const securityGroups = securityGroupsResponse?.items ?? [];
-  const {
-    natGateway,
-    natAddress,
-    isLoading: isLoadingNatGateway,
-    error: natGatewayError,
-  } = useNatGateway(id);
+  } = useListAllResources(SecurityGroups, virtualNetworkScopeFilter(id));
+  const securityGroups = securityGroupsReply?.items ?? [];
+  const { natGateway, natAddress, isGatewayLoading, gatewayError } = useNatGateway(id);
+
+  const tabParam = searchParams.get(TAB_PARAM);
+  const activeTab: VirtualNetworkTab = isVirtualNetworkTab(tabParam) ? tabParam : 'overview';
+  const setActiveTab = (tab: VirtualNetworkTab) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (tab === 'overview') {
+          next.delete(TAB_PARAM);
+        } else {
+          next.set(TAB_PARAM, tab);
+        }
+        return next;
+      },
+      { replace: true },
+    );
+  };
 
   const vnName = vn?.metadata?.name ?? id;
-  const isFailed = vn?.status?.state === VirtualNetworkState.FAILED;
-  const isDefault = isDefaultNetworkingResource(vn);
-  const canDelete = Boolean(vn) && !isDefault;
+  const isDefault = resourceOrigin(vn?.metadata?.labels) === 'default';
+  const ready = isVirtualNetworkReady(vn);
+  const notReadyReason = ready ? undefined : virtualNetworkNotReadyReason(t);
+  const natGatewayName = natGateway ? natGateway.metadata?.name || natGateway.id : undefined;
+
+  // The dependents the UI knows about. A loading or failed query leaves Delete
+  // enabled, so the server's guard decides rather than a partial view.
+  const dependentsKnown =
+    !isLoadingSubnets &&
+    !isLoadingSecurityGroups &&
+    !isGatewayLoading &&
+    !subnetsError &&
+    !securityGroupsError &&
+    !gatewayError;
+  const deleteBlockedReason =
+    protectedResourceReason(t, vn?.metadata?.labels) ??
+    (dependentsKnown
+      ? virtualNetworkDeleteBlockedReason(t, {
+          subnetCount: subnets.length,
+          securityGroupCount: securityGroups.length,
+          natGatewayName,
+        })
+      : undefined);
+
+  const natGatewayDeleting =
+    natGateway?.status?.state === NATGatewayState.NAT_GATEWAY_STATE_DELETING;
+  // Default and automatically created gateways cannot be deleted on their own.
+  const natGatewayProtectedReason = protectedResourceReason(t, natGateway?.metadata?.labels);
+  const natGatewayRow = natGateway ? (
+    <Flex
+      spaceItems={{ default: 'spaceItemsSm' }}
+      alignItems={{ default: 'alignItemsCenter' }}
+      flexWrap={{ default: 'wrap' }}
+    >
+      <FlexItem>
+        <span className="pf-v6-u-text-nowrap">
+          <strong>{natGatewayName}</strong>
+          {natAddress ? <span>{` (${natAddress})`}</span> : null}
+        </span>
+      </FlexItem>
+      <FlexItem>
+        <NatGatewayStatusLabel
+          state={natGateway.status?.state}
+          message={natGateway.status?.message}
+        />
+      </FlexItem>
+      <FlexItem>
+        <Tooltip
+          content={
+            natGatewayProtectedReason
+              ? natGatewayProtectedReason
+              : natGatewayDeleting
+                ? t('This NAT gateway is being deleted.')
+                : undefined
+          }
+        >
+          <Button
+            variant="link"
+            isInline
+            isAriaDisabled={natGatewayDeleting || Boolean(natGatewayProtectedReason)}
+            onClick={() => setDetachTarget(natGateway)}
+          >
+            {t('Delete')}
+          </Button>
+        </Tooltip>
+      </FlexItem>
+    </Flex>
+  ) : isGatewayLoading ? (
+    <SubtleContent component="p">{t('Loading NAT gateway...')}</SubtleContent>
+  ) : gatewayError ? (
+    <>—</>
+  ) : (
+    <Flex spaceItems={{ default: 'spaceItemsSm' }} alignItems={{ default: 'alignItemsCenter' }}>
+      <FlexItem>—</FlexItem>
+      {!isDefault && (
+        <FlexItem>
+          <Tooltip content={notReadyReason}>
+            <span>
+              <Button
+                variant="link"
+                isInline
+                isAriaDisabled={!ready}
+                onClick={() => navigate(`/networking/virtual-networks/${id}/nat-gateway/attach`)}
+              >
+                {t('Create NAT gateway')}
+              </Button>
+            </span>
+          </Tooltip>
+        </FlexItem>
+      )}
+    </Flex>
+  );
+
+  const overview = (
+    <DescriptionList aria-label={t('Virtual network details')}>
+      <DescriptionListGroup>
+        <DescriptionListTerm>{t('Name')}</DescriptionListTerm>
+        <DescriptionListDescription>
+          <Flex
+            spaceItems={{ default: 'spaceItemsSm' }}
+            alignItems={{ default: 'alignItemsCenter' }}
+          >
+            <FlexItem>{vnName}</FlexItem>
+            <FlexItem>
+              <ResourceOriginBadge labels={vn?.metadata?.labels} />
+            </FlexItem>
+          </Flex>
+        </DescriptionListDescription>
+      </DescriptionListGroup>
+      <DescriptionListGroup>
+        <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
+        <DescriptionListDescription>
+          <NetworkingProjectName project={vn?.metadata?.project} />
+        </DescriptionListDescription>
+      </DescriptionListGroup>
+      <DescriptionListGroup>
+        <DescriptionListTerm>{t('IPv4 CIDR')}</DescriptionListTerm>
+        <DescriptionListDescription>{vn?.spec?.ipv4Cidr ?? '—'}</DescriptionListDescription>
+      </DescriptionListGroup>
+      <DescriptionListGroup>
+        <DescriptionListTerm>{t('Subnets')}</DescriptionListTerm>
+        <DescriptionListDescription>
+          {isLoadingSubnets || subnetsError ? '—' : subnets.length}
+        </DescriptionListDescription>
+      </DescriptionListGroup>
+      <DescriptionListGroup>
+        <DescriptionListTerm>{t('Security groups')}</DescriptionListTerm>
+        <DescriptionListDescription>
+          {isLoadingSecurityGroups || securityGroupsError ? '—' : securityGroups.length}
+        </DescriptionListDescription>
+      </DescriptionListGroup>
+      <DescriptionListGroup>
+        <DescriptionListTerm>{t('NAT gateway')}</DescriptionListTerm>
+        <DescriptionListDescription>{natGatewayRow}</DescriptionListDescription>
+      </DescriptionListGroup>
+      <DescriptionListGroup>
+        <DescriptionListTerm>{t('Created')}</DescriptionListTerm>
+        <DescriptionListDescription>
+          {vn?.metadata?.creationTimestamp ? (
+            <Timestamp date={new Date(Number(vn.metadata.creationTimestamp.seconds) * 1000)} />
+          ) : (
+            '—'
+          )}
+        </DescriptionListDescription>
+      </DescriptionListGroup>
+    </DescriptionList>
+  );
+
+  const createSubnetButton = (
+    <Tooltip content={notReadyReason}>
+      <span>
+        <CreateButton
+          service={Subnets}
+          variant="secondary"
+          isDisabled={!ready}
+          onClick={() => setIsSubnetModalOpen(true)}
+        >
+          {t('Create subnet')}
+        </CreateButton>
+      </span>
+    </Tooltip>
+  );
+  const createSecurityGroupButton = (
+    <Tooltip content={notReadyReason}>
+      <span>
+        <CreateButton
+          service={SecurityGroups}
+          variant="secondary"
+          isDisabled={!ready}
+          onClick={() => setIsSecurityGroupModalOpen(true)}
+        >
+          {t('Create security group')}
+        </CreateButton>
+      </span>
+    </Tooltip>
+  );
 
   return (
     <>
       <ListPage
         title={vnName}
         description={t('View the virtual network configuration and related resources.')}
-        actions={
-          <DeleteResourceButton
-            canDelete={canDelete}
-            disabledReason={isDefault ? defaultResourceDeleteReason(t) : undefined}
-            onClick={() => {
-              if (canDelete) {
-                setIsDeleteModalOpen(true);
-              }
-            }}
-          />
-        }
         breadcrumb={
           <Breadcrumb>
             <BreadcrumbItem>
@@ -128,181 +303,99 @@ export const VirtualNetworkDetailPage = () => {
             <BreadcrumbItem isActive>{vnName}</BreadcrumbItem>
           </Breadcrumb>
         }
+        actions={
+          <Tooltip content={deleteBlockedReason}>
+            <span>
+              <Button
+                variant="danger"
+                isAriaDisabled={!vn || Boolean(deleteBlockedReason)}
+                onClick={() => setIsDeleteOpen(true)}
+              >
+                {t('Delete virtual network')}
+              </Button>
+            </span>
+          </Tooltip>
+        }
       >
         <ListPageBody isLoading={isLoading} error={error}>
-          {isFailed && vn?.status?.message && (
-            <Alert variant="danger" title={t('Provisioning failed')} isInline>
-              {vn.status.message}
-            </Alert>
-          )}
+          {vn ? (
+            <div className="pf-v6-u-mb-md">
+              <VirtualNetworkStatusLabel state={vn.status?.state} message={vn.status?.message} />
+            </div>
+          ) : null}
 
-          <Grid hasGutter>
-            <GridItem md={8}>
-              <Stack hasGutter>
-                <Card>
-                  <CardTitle>{t('Details')}</CardTitle>
-                  <CardBody>
-                    <DescriptionList isHorizontal>
-                      <DescriptionListGroup>
-                        <DescriptionListTerm>{t('IPv4 CIDR')}</DescriptionListTerm>
-                        <DescriptionListDescription>
-                          {vn?.spec?.ipv4Cidr ?? '—'}
-                        </DescriptionListDescription>
-                      </DescriptionListGroup>
-                      <DescriptionListGroup>
-                        <DescriptionListTerm>{t('Status')}</DescriptionListTerm>
-                        <DescriptionListDescription>
-                          <VirtualNetworkStatusLabel state={vn?.status?.state} />
-                        </DescriptionListDescription>
-                      </DescriptionListGroup>
-                      {vn?.status?.message && !isFailed && (
-                        <DescriptionListGroup>
-                          <DescriptionListTerm>{t('Message')}</DescriptionListTerm>
-                          <DescriptionListDescription>
-                            {vn.status.message}
-                          </DescriptionListDescription>
-                        </DescriptionListGroup>
-                      )}
-                    </DescriptionList>
-                  </CardBody>
-                </Card>
-
-                <Card>
-                  <CardHeader
-                    actions={{
-                      actions: (
-                        <CreateButton
-                          service={Subnets}
-                          variant="secondary"
-                          onClick={() => setIsSubnetModalOpen(true)}
-                        >
-                          {t('Create subnet')}
-                        </CreateButton>
-                      ),
-                    }}
-                  >
-                    <CardTitle>{t('Subnets')}</CardTitle>
-                  </CardHeader>
-                  <CardBody>
-                    {isLoadingSubnets ? (
-                      <SubtleContent component="p">{t('Loading subnets...')}</SubtleContent>
-                    ) : subnetsError ? (
-                      <Alert variant="danger" title={t('Failed to load subnets')} isInline>
-                        {getErrorMessage(subnetsError)}
-                      </Alert>
-                    ) : subnets.length === 0 ? (
-                      <SubtleContent component="p">
-                        {t('No subnets yet. Create one to get started.')}
-                      </SubtleContent>
-                    ) : (
-                      <Table aria-label={t('Subnets')} variant="compact" borders>
-                        <Thead>
-                          <Tr>
-                            <Th>{t('Name')}</Th>
-                            <Th>{t('Status')}</Th>
-                            <Th>{t('CIDR')}</Th>
-                          </Tr>
-                        </Thead>
-                        <Tbody>
-                          {subnets.map((subnet) => (
-                            <Tr key={subnet.id}>
-                              <Td dataLabel="Name">
-                                <ResourceNameField
-                                  resource={subnet}
-                                  detailsUrl={`/networking/subnets/${subnet.id}`}
-                                />
-                              </Td>
-                              <Td dataLabel="Status">
-                                <SubnetStatusLabel state={subnet.status?.state} />
-                              </Td>
-                              <Td dataLabel="CIDR">{subnet.spec?.ipv4Cidr ?? '—'}</Td>
-                            </Tr>
-                          ))}
-                        </Tbody>
-                      </Table>
-                    )}
-                  </CardBody>
-                </Card>
-
-                <Card>
-                  <CardHeader
-                    actions={{
-                      actions: (
-                        <CreateButton
-                          service={SecurityGroups}
-                          variant="secondary"
-                          onClick={() => setIsSecurityGroupModalOpen(true)}
-                        >
-                          {t('Create security group')}
-                        </CreateButton>
-                      ),
-                    }}
-                  >
-                    <CardTitle>{t('Security groups')}</CardTitle>
-                  </CardHeader>
-                  <CardBody>
-                    {isLoadingSecurityGroups ? (
-                      <SubtleContent component="p">{t('Loading security groups...')}</SubtleContent>
-                    ) : securityGroupsError ? (
-                      <Alert variant="danger" title={t('Failed to load security groups')} isInline>
-                        {getErrorMessage(securityGroupsError)}
-                      </Alert>
-                    ) : securityGroups.length === 0 ? (
-                      <SubtleContent component="p">
-                        {t('No security groups yet. Create one to get started.')}
-                      </SubtleContent>
-                    ) : (
-                      <Table aria-label={t('Security groups')} variant="compact" borders>
-                        <Thead>
-                          <Tr>
-                            <Th>{t('Name')}</Th>
-                            <Th>{t('Status')}</Th>
-                            <Th>{t('Inbound Rules')}</Th>
-                            <Th>{t('Outbound Rules')}</Th>
-                          </Tr>
-                        </Thead>
-                        <Tbody>
-                          {securityGroups.map((sg) => {
-                            const ingressCount = sg.spec?.ingress?.length ?? 0;
-                            const egressCount = sg.spec?.egress?.length ?? 0;
-
-                            return (
-                              <Tr key={sg.id}>
-                                <Td dataLabel={t('Name')}>
-                                  <ResourceNameField
-                                    resource={sg}
-                                    detailsUrl={`/networking/security-groups/${sg.id}`}
-                                  />
-                                </Td>
-                                <Td dataLabel={t('Status')}>
-                                  <SecurityGroupStatusLabel state={sg.status?.state} />
-                                </Td>
-                                <Td dataLabel={t('Inbound Rules')}>{ingressCount}</Td>
-                                <Td dataLabel={t('Outbound Rules')}>{egressCount}</Td>
-                              </Tr>
-                            );
-                          })}
-                        </Tbody>
-                      </Table>
-                    )}
-                  </CardBody>
-                </Card>
-              </Stack>
-            </GridItem>
-
-            <GridItem md={4}>
-              <NatGatewayCard
-                natAddress={natAddress}
-                natGateway={natGateway}
-                isLoading={isLoadingNatGateway}
-                error={natGatewayError}
-                onAttach={() => navigate(`/networking/virtual-networks/${id}/nat-gateway/attach`)}
-                onDetach={setDetachTarget}
-              />
-            </GridItem>
-          </Grid>
+          <Tabs
+            activeKey={activeTab}
+            onSelect={(_event, key) => setActiveTab(key as VirtualNetworkTab)}
+            aria-label={t('Virtual network details tabs')}
+          >
+            <Tab eventKey="overview" title={<TabTitleText>{t('Overview')}</TabTitleText>}>
+              <div className="pf-v6-u-mt-md">{overview}</div>
+            </Tab>
+            <Tab eventKey="subnets" title={<TabTitleText>{t('Subnets')}</TabTitleText>}>
+              <div className="pf-v6-u-mt-md">
+                <Stack hasGutter>
+                  <StackItem>
+                    <Flex justifyContent={{ default: 'justifyContentFlexEnd' }}>
+                      <FlexItem>{createSubnetButton}</FlexItem>
+                    </Flex>
+                  </StackItem>
+                  <StackItem>
+                    <SubnetsTable
+                      subnets={subnets}
+                      isLoading={isLoadingSubnets}
+                      error={subnetsError}
+                    />
+                  </StackItem>
+                </Stack>
+              </div>
+            </Tab>
+            <Tab
+              eventKey="security-groups"
+              title={<TabTitleText>{t('Security groups')}</TabTitleText>}
+            >
+              <div className="pf-v6-u-mt-md">
+                <Stack hasGutter>
+                  <StackItem>
+                    <Flex justifyContent={{ default: 'justifyContentFlexEnd' }}>
+                      <FlexItem>{createSecurityGroupButton}</FlexItem>
+                    </Flex>
+                  </StackItem>
+                  <StackItem>
+                    <SecurityGroupsTable
+                      securityGroups={securityGroups}
+                      isLoading={isLoadingSecurityGroups}
+                      error={securityGroupsError}
+                    />
+                  </StackItem>
+                </Stack>
+              </div>
+            </Tab>
+          </Tabs>
         </ListPageBody>
       </ListPage>
+
+      {isDeleteOpen && (
+        <DeleteResourceModal
+          resourceName={vnName}
+          label={t(
+            'Remove its subnets, security groups and NAT gateway first. A network that still has dependents cannot be deleted.',
+          )}
+          errorLabel={t('Failed to delete virtual network')}
+          mutation={remove}
+          variables={id}
+          disabledReason={deleteBlockedReason}
+          onClose={() => setIsDeleteOpen(false)}
+          onSuccess={() => {
+            setIsDeleteOpen(false);
+            addToast({
+              variant: 'success',
+              title: t('Virtual network {{name}} deleted', { name: vnName }),
+            });
+            navigate('/networking/virtual-networks');
+          }}
+        />
+      )}
 
       {isSecurityGroupModalOpen && (
         <SecurityGroupCreateModal
@@ -310,7 +403,6 @@ export const VirtualNetworkDetailPage = () => {
           virtualNetworkId={id}
         />
       )}
-
       {isSubnetModalOpen && vn && (
         <SubnetCreateModal
           onClose={() => setIsSubnetModalOpen(false)}
@@ -322,20 +414,6 @@ export const VirtualNetworkDetailPage = () => {
         <DetachNatGatewayModal
           natGateway={detachTarget}
           onClose={() => setDetachTarget(undefined)}
-        />
-      )}
-
-      {isDeleteModalOpen && canDelete && (
-        <DeleteResourceModal
-          resourceName={vnName}
-          label={t(
-            'This will permanently delete the virtual network. This action cannot be undone. Remove all dependent resources first.',
-          )}
-          errorLabel={t('Failed to delete virtual network')}
-          onClose={() => setIsDeleteModalOpen(false)}
-          onSuccess={() => navigate('/networking/virtual-networks')}
-          mutation={deleteVirtualNetwork}
-          variables={{ id }}
         />
       )}
     </>

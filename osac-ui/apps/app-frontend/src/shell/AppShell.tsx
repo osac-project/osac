@@ -25,6 +25,7 @@ import AttachNatGatewayWizardPage from '@osac/ui-components/pages/networking/Att
 import { SecurityGroupDetailPage } from '@osac/ui-components/pages/networking/SecurityGroupDetailPage';
 import { SecurityGroupsListPage } from '@osac/ui-components/pages/networking/SecurityGroupsListPage';
 import { SubnetDetailPage } from '@osac/ui-components/pages/networking/SubnetDetailPage';
+import { VirtualNetworkCreatePage } from '@osac/ui-components/pages/networking/VirtualNetworkCreatePage';
 import { VirtualNetworkDetailPage } from '@osac/ui-components/pages/networking/VirtualNetworkDetailPage';
 import { VirtualNetworksListPage } from '@osac/ui-components/pages/networking/VirtualNetworksListPage';
 import { BareMetalRoutes } from '@osac/ui-components/pages/tenant/BareMetalRoutes';
@@ -323,6 +324,14 @@ export const AppShell = ({ logout }: { logout: () => Promise<void> }) => {
           element={
             <ShellRoute>
               <VirtualNetworksListPage />
+            </ShellRoute>
+          }
+        />
+        <Route
+          path="/networking/virtual-networks/create"
+          element={
+            <ShellRoute>
+              <VirtualNetworkCreatePage />
             </ShellRoute>
           }
         />

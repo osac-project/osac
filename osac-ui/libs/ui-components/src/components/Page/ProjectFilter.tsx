@@ -28,6 +28,11 @@ const ProjectFilter = () => {
   );
 
   useEffect(() => {
+    // A failed options request is no longer loading; keep the selection and the
+    // URL until the project options actually arrive.
+    if (isLoading || error) {
+      return;
+    }
     if (projects !== undefined) {
       const serialized = serializePageFilter(projects);
       if (!serialized) {
@@ -51,7 +56,7 @@ const ProjectFilter = () => {
         { replace: true },
       );
     }
-  }, [searchParams, setSearchParams, projects]);
+  }, [searchParams, setSearchParams, projects, isLoading, error]);
 
   const selectedProjects: Project[] = [];
 
@@ -65,12 +70,14 @@ const ProjectFilter = () => {
   const hasAllProjects = projects.length === selectedProjects.length;
 
   useEffect(() => {
-    if (!isLoading && !hasAllProjects) {
+    // Without the options, every selection looks missing; keep it until a
+    // successful load can tell which projects still exist.
+    if (!isLoading && !error && !hasAllProjects) {
       setProjects(selectedProjects.map((p) => p.metadata?.name || ''));
     }
-    // trigger based on hasAllProjects + isLoading only
+    // trigger based on hasAllProjects, isLoading and error only
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasAllProjects, isLoading]);
+  }, [hasAllProjects, isLoading, error]);
 
   return (
     <ProjectSelect

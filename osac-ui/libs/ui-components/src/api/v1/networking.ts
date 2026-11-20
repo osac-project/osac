@@ -199,6 +199,11 @@ export const useNatGateway = (virtualNetworkId: string) => {
     natAddress,
     isLoading: natGatewaysQuery.isLoading || externalIpsQuery.isLoading,
     error: natGatewaysQuery.error ?? externalIpsQuery.error,
+    // The gateway's existence does not depend on the address join.
+    isGatewayLoading: natGatewaysQuery.isLoading,
+    gatewayError: natGatewaysQuery.error,
+    isAddressLoading: externalIpsQuery.isLoading,
+    addressError: externalIpsQuery.error,
   };
 };
 
@@ -341,7 +346,9 @@ export const useDeleteVirtualNetwork = () => {
   const qc = useApiQueryClient();
   return useMutation({
     mutationFn: (id: string) => client.delete({ id }),
-    onSuccess: () => invalidateVirtualNetworksQueries(qc),
+    onSuccess: () => {
+      void invalidateVirtualNetworksQueries(qc);
+    },
   });
 };
 

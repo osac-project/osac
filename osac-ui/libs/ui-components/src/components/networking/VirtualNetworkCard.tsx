@@ -6,6 +6,9 @@ import {
   DescriptionListGroup,
   DescriptionListTerm,
   Divider,
+  Flex,
+  FlexItem,
+  Timestamp,
 } from '@patternfly/react-core';
 import RhUiZoneIcon from '@patternfly/react-icons/dist/esm/icons/rh-ui-zone-icon';
 
@@ -17,6 +20,8 @@ import ListPageCard from '@osac/ui-components/components/Page/ListPageCard';
 import OsacCardFooterRow from '@osac/ui-components/components/Primitives/OsacCardFooterRow';
 
 import { CidrDisplay } from './CidrDisplay';
+import NetworkingProjectName from './NetworkingProjectName';
+import ResourceOriginBadge from './ResourceOriginBadge';
 import { getVirtualNetworkName } from './virtual-network-list-utils';
 import VirtualNetworkNatGatewayCell from './VirtualNetworkNatGatewayCell';
 import { VirtualNetworkStatusLabel } from './VirtualNetworkStatusLabel';
@@ -53,14 +58,26 @@ const VirtualNetworkCard = ({
   return (
     <ListPageCard
       title={
-        <ResourceNameField
-          resource={virtualNetwork}
-          title={getVirtualNetworkName(virtualNetwork)}
-          detailsUrl={`/networking/virtual-networks/${virtualNetwork.id}`}
-        />
+        <Flex spaceItems={{ default: 'spaceItemsSm' }} alignItems={{ default: 'alignItemsCenter' }}>
+          <FlexItem>
+            <ResourceNameField
+              resource={virtualNetwork}
+              title={getVirtualNetworkName(virtualNetwork)}
+              detailsUrl={`/networking/virtual-networks/${virtualNetwork.id}`}
+            />
+          </FlexItem>
+          <FlexItem>
+            <ResourceOriginBadge labels={virtualNetwork.metadata?.labels} />
+          </FlexItem>
+        </Flex>
       }
       icon={<RhUiZoneIcon />}
-      statusLabel={<VirtualNetworkStatusLabel state={virtualNetwork.status?.state} />}
+      statusLabel={
+        <VirtualNetworkStatusLabel
+          state={virtualNetwork.status?.state}
+          message={virtualNetwork.status?.message}
+        />
+      }
       actionMenu={<VirtualNetworkActionsMenu virtualNetwork={virtualNetwork} />}
     >
       <CardBody>
@@ -72,6 +89,12 @@ const VirtualNetworkCard = ({
             </DescriptionListDescription>
           </DescriptionListGroup>
           <Divider />
+          <DescriptionListGroup>
+            <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              <NetworkingProjectName project={virtualNetwork.metadata?.project} />
+            </DescriptionListDescription>
+          </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Subnets')}</DescriptionListTerm>
             <DescriptionListDescription>
@@ -100,6 +123,18 @@ const VirtualNetworkCard = ({
       </CardBody>
       <Divider />
       <CardFooter>
+        <OsacCardFooterRow
+          term={t('Created')}
+          description={
+            virtualNetwork.metadata?.creationTimestamp ? (
+              <Timestamp
+                date={new Date(Number(virtualNetwork.metadata.creationTimestamp.seconds) * 1000)}
+              />
+            ) : (
+              '—'
+            )
+          }
+        />
         <OsacCardFooterRow
           term={t('NAT gateway')}
           description={

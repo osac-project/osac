@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { Flex, FlexItem } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
 import type { VirtualNetwork } from '@osac/types';
@@ -7,6 +8,8 @@ import VirtualNetworkActionsMenu from '@osac/ui-components/components/networking
 import VirtualNetworkLoadedField from '@osac/ui-components/components/networking/VirtualNetworkLoadedField';
 
 import { CidrDisplay } from './CidrDisplay';
+import NetworkingProjectName from './NetworkingProjectName';
+import ResourceOriginBadge from './ResourceOriginBadge';
 import { getVirtualNetworkName } from './virtual-network-list-utils';
 import VirtualNetworkNatGatewayCell from './VirtualNetworkNatGatewayCell';
 import { VirtualNetworkStatusLabel } from './VirtualNetworkStatusLabel';
@@ -45,6 +48,7 @@ const VirtualNetworkTable = ({
       name: t('Name'),
       status: t('Status'),
       ipV4cidr: t('IPv4 CIDR'),
+      project: t('Project'),
       subnets: t('Subnets'),
       securityGroups: t('Security groups'),
       natGateway: t('NAT gateway'),
@@ -60,6 +64,7 @@ const VirtualNetworkTable = ({
           <Th>{columnLabels.name}</Th>
           <Th>{columnLabels.status}</Th>
           <Th>{columnLabels.ipV4cidr}</Th>
+          <Th>{columnLabels.project}</Th>
           <Th>{columnLabels.subnets}</Th>
           <Th>{columnLabels.securityGroups}</Th>
           <Th>{columnLabels.natGateway}</Th>
@@ -70,17 +75,30 @@ const VirtualNetworkTable = ({
         {virtualNetworks.map((vn) => (
           <Tr key={vn.id}>
             <Td dataLabel={columnLabels.name}>
-              <ResourceNameField
-                resource={vn}
-                title={getVirtualNetworkName(vn)}
-                detailsUrl={`/networking/virtual-networks/${vn.id}`}
-              />
+              <Flex
+                spaceItems={{ default: 'spaceItemsSm' }}
+                alignItems={{ default: 'alignItemsCenter' }}
+              >
+                <FlexItem>
+                  <ResourceNameField
+                    resource={vn}
+                    title={getVirtualNetworkName(vn)}
+                    detailsUrl={`/networking/virtual-networks/${vn.id}`}
+                  />
+                </FlexItem>
+                <FlexItem>
+                  <ResourceOriginBadge labels={vn.metadata?.labels} />
+                </FlexItem>
+              </Flex>
             </Td>
             <Td dataLabel={columnLabels.status}>
-              <VirtualNetworkStatusLabel state={vn.status?.state} />
+              <VirtualNetworkStatusLabel state={vn.status?.state} message={vn.status?.message} />
             </Td>
             <Td dataLabel={columnLabels.ipV4cidr}>
               <CidrDisplay ipv4Cidr={vn.spec?.ipv4Cidr} />
+            </Td>
+            <Td dataLabel={columnLabels.project}>
+              <NetworkingProjectName project={vn.metadata?.project} />
             </Td>
             <Td dataLabel={columnLabels.subnets}>
               <VirtualNetworkLoadedField

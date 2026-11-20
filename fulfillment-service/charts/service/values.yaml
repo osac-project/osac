@@ -149,6 +149,19 @@ log:
   # environments.
   bodies: false
 
+# Catalog pricing cache tuning, in seconds. Each value bounds how long the fulfillment service reuses
+# already-computed catalog data before reading it again. The caches also answer requests while no external pricing
+# provider is configured, so they apply to every deployment.
+#
+# Optional per-cache overrides: `inventorySeconds` (the metered catalog inventory behind
+# CatalogPricingInputs.List) and `rateCardSeconds` (provider rate card items) are deliberately not set here. An
+# unset key is absent from the values, so each cache inherits `defaultSeconds`. Set one only to give that cache an
+# interval different from the shared default.
+tuning:
+  cache:
+    # Shared refresh interval, and the fallback for every catalog-pricing cache without an override of its own.
+    defaultSeconds: 300
+
 # Additional CORS allowed origins for the REST gateway and console proxy. The externalHostname
 # (https://externalHostname) is always included by default. Add additional origins here when the UI or other
 # clients are hosted on different domains.

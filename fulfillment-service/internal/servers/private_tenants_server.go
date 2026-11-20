@@ -229,10 +229,6 @@ func (s *PrivateTenantsServer) Update(ctx context.Context,
 	if err != nil {
 		return
 	}
-	stripBreakGlassCredentials(response.GetObject())
-	if err = s.clearStaleBreakGlassCredentialsSecretRef(ctx, response.GetObject()); err != nil {
-		return
-	}
 	return
 }
 
@@ -261,12 +257,6 @@ func (s *PrivateTenantsServer) Signal(ctx context.Context,
 	request *privatev1.TenantsSignalRequest) (response *privatev1.TenantsSignalResponse, err error) {
 	err = s.generic.Signal(ctx, request, &response)
 	return
-}
-
-func stripBreakGlassCredentials(tenant *privatev1.Tenant) {
-	if tenant.HasStatus() && tenant.GetStatus().HasBreakGlassCredentials() {
-		tenant.GetStatus().ClearBreakGlassCredentials()
-	}
 }
 
 const breakGlassCredentialsSecretName = "break-glass-credentials"
@@ -334,27 +324,6 @@ func (s *PrivateTenantsServer) deleteSecretByID(ctx context.Context, tenant *pri
 			slog.String("secret_id", id),
 			slog.Any("error", err))
 	}
-}
-
-func (s *PrivateTenantsServer) clearStaleBreakGlassCredentialsSecretRef(ctx context.Context,
-	tenant *privatev1.Tenant) error {
-	ref := tenant.GetSpec().GetBreakGlassCredentialsSecret()
-	if ref == nil {
-		return nil
-	}
-	_, err := references.NewDAOLookupFunc(s.secretsDao)(ctx, "", "", ref.GetId(), ref.GetName())
-	if err == nil {
-		return nil
-	}
-	var nf interface{ IsNotFound() bool }
-	if !errors.As(err, &nf) || !nf.IsNotFound() {
-		return nil
-	}
-	if err = s.persistBreakGlassCredentialsSecretRefClear(ctx, tenant); err != nil {
-		return err
-	}
-	tenant.GetSpec().ClearBreakGlassCredentialsSecret()
-	return nil
 }
 
 func (s *PrivateTenantsServer) persistBreakGlassCredentialsSecretRefClear(ctx context.Context,

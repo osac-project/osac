@@ -66,6 +66,10 @@ func finalizerBearingServices() []string {
 		services := file.Services()
 		for i := range services.Len() {
 			service := services.Get(i)
+			// Models are stored in the AI Grid Git catalog, not through GenericServer.
+			if string(service.FullName()) == privatev1.Models_ServiceDesc.ServiceName {
+				continue
+			}
 			update := service.Methods().ByName("Update")
 			if update == nil {
 				continue

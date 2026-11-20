@@ -29,6 +29,17 @@ global:
     # ranges can't overlap them.
     excludedIpv4Cidrs: []
 
+# AI Grid model catalog configuration. Credentials are mounted from an
+# existing Secret and must not be placed in Helm values.
+aiGrid:
+  git:
+    url: ""
+    branch: main
+    readMaxAge: 10s
+    token:
+      secretName: ""
+      secretKey: token
+
 # Controller configuration:
 controller:
 

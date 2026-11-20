@@ -1,0 +1,159 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "cleanapi/cleanapi.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "osac/private/v1/model_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
+
+// Request for a page of models in the catalog.
+message ModelsListRequest {
+  // Zero-based index of the first model to return. Defaults to zero.
+  optional int32 offset = 1;
+
+  // Maximum number of models to return. When omitted, all models are returned.
+  // Set to zero to return no items while still receiving the total count.
+  optional int32 limit = 2;
+}
+
+// Page of models matching a list request.
+message ModelsListResponse {
+  // Number of models in this page.
+  int32 size = 1;
+
+  // Total number of models in the catalog, before applying offset and limit.
+  int32 total = 2;
+
+  // Models in this page, ordered by model ID.
+  repeated Model items = 3;
+}
+
+// Request for one model. The ID is the model's immutable name.
+message ModelsGetRequest {
+  // ID of the model to retrieve.
+  string id = 1;
+}
+
+// Response containing the requested model.
+message ModelsGetResponse {
+  // Requested model.
+  Model object = 1;
+}
+
+// Request to add a model to the catalog.
+message ModelsCreateRequest {
+  // Model definition to add. The ID must match metadata.name.
+  Model object = 1;
+}
+
+// Response containing the model added to the catalog.
+message ModelsCreateResponse {
+  // Created model, including its system-managed metadata and status.
+  Model object = 1;
+}
+
+// Request to update selected fields of an existing model.
+message ModelsUpdateRequest {
+  // Model data containing the values for the selected update paths.
+  Model object = 1;
+
+  // Fields to update. Supported paths are metadata.labels,
+  // metadata.annotations, spec.replicas, spec.compute_resources,
+  // spec.placement, and spec.scaling. Model identity, source, serving profile,
+  // and runtime are immutable.
+  google.protobuf.FieldMask update_mask = 2;
+
+  // If true, reject the update with Aborted when metadata.version does not
+  // match the current model version.
+  bool lock = 3;
+}
+
+// Response containing the updated model.
+message ModelsUpdateResponse {
+  // Updated model.
+  Model object = 1;
+}
+
+// Request to remove a model from the catalog.
+message ModelsDeleteRequest {
+  // ID of the model to remove. The ID is the model's immutable name.
+  string id = 1;
+}
+
+// Empty response returned after the model's desired state is removed.
+message ModelsDeleteResponse {}
+
+// Request to list current inference clusters eligible for model placement.
+message ModelsListPlacementClustersRequest {}
+
+// Response listing current inference clusters eligible for model placement.
+message ModelsListPlacementClustersResponse {
+  // Eligible clusters, ordered by cluster name.
+  repeated ModelPlacementCluster clusters = 1;
+}
+
+// Manages model catalog entries, their inference placements, and observed
+// deployment status.
+service Models {
+  // Lists models in the catalog, including models without any placement.
+  rpc List(ModelsListRequest) returns (ModelsListResponse) {
+    option (google.api.http) = {get: "/api/private/v1/models"};
+  }
+
+  // Retrieves one model by its ID.
+  rpc Get(ModelsGetRequest) returns (ModelsGetResponse) {
+    option (google.api.http) = {
+      get: "/api/private/v1/models/{id}"
+      response_body: "object"
+    };
+  }
+
+  // Adds a model to the catalog. The model may be created without a placement.
+  rpc Create(ModelsCreateRequest) returns (ModelsCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/private/v1/models"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Updates supported mutable fields of a model.
+  rpc Update(ModelsUpdateRequest) returns (ModelsUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/private/v1/models/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Removes a model from the catalog. GitOps removes its deployments
+  // asynchronously after the desired state is committed.
+  rpc Delete(ModelsDeleteRequest) returns (ModelsDeleteResponse) {
+    option (google.api.http) = {delete: "/api/private/v1/models/{id}"};
+  }
+
+  // Lists inference clusters that currently meet model placement requirements.
+  rpc ListPlacementClusters(ModelsListPlacementClustersRequest) returns (ModelsListPlacementClustersResponse) {
+    option (google.api.http) = {get: "/api/private/v1/models:listPlacementClusters"};
+  }
+}

@@ -309,7 +309,7 @@ func RegisterSecurityGroupsHandlerServer(ctx context.Context, mux *runtime.Serve
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_SecurityGroups_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_SecurityGroups_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_SecurityGroups_Delete_0{resp.(*SecurityGroupsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -434,7 +434,7 @@ func RegisterSecurityGroupsHandlerClient(ctx context.Context, mux *runtime.Serve
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_SecurityGroups_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_SecurityGroups_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_SecurityGroups_Delete_0{resp.(*SecurityGroupsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -460,6 +460,14 @@ type response_SecurityGroups_Update_0 struct {
 }
 
 func (m response_SecurityGroups_Update_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_SecurityGroups_Delete_0 struct {
+	*SecurityGroupsDeleteResponse
+}
+
+func (m response_SecurityGroups_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

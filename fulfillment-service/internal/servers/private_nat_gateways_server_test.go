@@ -513,7 +513,8 @@ var _ = Describe("Private NAT gateways server", func() {
 			Expect(matches).To(HaveLen(2))
 			Expect(matches[0].GetId()).To(Equal("consumer-a"))
 			Expect(matches[1].GetId()).To(Equal("consumer-z"))
-			Expect(grpcstatus.Code(natGatewaysServer.lifecycle.deleteExternalIP(ctx, parent.GetId()))).To(Equal(grpccodes.FailedPrecondition))
+			_, deleteErr := natGatewaysServer.lifecycle.deleteExternalIP(ctx, parent.GetId())
+			Expect(grpcstatus.Code(deleteErr)).To(Equal(grpccodes.FailedPrecondition))
 			fresh, err := externalIPDao.Get().SetId(parent.GetId()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(fresh.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
@@ -778,10 +779,12 @@ var _ = Describe("Private NAT gateways server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 
-			_, err = natGatewaysServer.Delete(ctx, privatev1.NATGatewaysDeleteRequest_builder{
+			deleteResponse, err := natGatewaysServer.Delete(ctx, privatev1.NATGatewaysDeleteRequest_builder{
 				Id: createResponse.GetObject().GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+			Expect(deleteResponse.GetObject().GetId()).To(Equal(createResponse.GetObject().GetId()))
+			Expect(deleteResponse.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
 
 			getResponse, err := natGatewaysServer.Get(ctx, privatev1.NATGatewaysGetRequest_builder{
 				Id: createResponse.GetObject().GetId(),
@@ -1146,6 +1149,40 @@ var _ = Describe("Private NAT gateways server", func() {
 			getResp, err := externalIPDao.Get().SetId(eip.GetId()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResp.GetObject().GetStatus().GetAttached()).To(BeFalse())
+		})
+
+		It("keeps a deleting NATGateway unchanged on a repeated delete", func() {
+			vnID := createVirtualNetwork()
+			eip := createAllocatedExternalIP()
+			createResponse, err := natGatewaysServer.Create(ctx, privatev1.NATGatewaysCreateRequest_builder{
+				Object: privatev1.NATGateway_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:       "repeat-nat-gateway",
+						Finalizers: []string{"test-finalizer"},
+						Tenant:     testTenant,
+					}.Build(),
+					Spec: privatev1.NATGatewaySpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: vnID}.Build(),
+						ExternalIp:     privatev1.ExternalIPLocalReference_builder{Id: eip.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			_, err = natGatewaysServer.Delete(ctx, privatev1.NATGatewaysDeleteRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			before, err := natGatewaysServer.Get(ctx, privatev1.NATGatewaysGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			second, err := natGatewaysServer.Delete(ctx, privatev1.NATGatewaysDeleteRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(second.GetObject().GetId()).To(Equal(id))
+			Expect(proto.Equal(before.GetObject(), second.GetObject())).To(BeTrue())
+
+			after, err := natGatewaysServer.Get(ctx, privatev1.NATGatewaysGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(proto.Equal(before.GetObject(), after.GetObject())).To(BeTrue())
 		})
 
 		It("clears attached flag on Delete", func() {

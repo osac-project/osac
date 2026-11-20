@@ -348,10 +348,12 @@ var _ = Describe("Private external IPs server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			object = updateResponse.GetObject()
 
-			_, err = externalIPsServer.Delete(ctx, privatev1.ExternalIPsDeleteRequest_builder{
+			deleteResponse, err := externalIPsServer.Delete(ctx, privatev1.ExternalIPsDeleteRequest_builder{
 				Id: object.GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+			Expect(deleteResponse.GetObject().GetId()).To(Equal(object.GetId()))
+			Expect(deleteResponse.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
 
 			getResponse, err := externalIPsServer.Get(ctx, privatev1.ExternalIPsGetRequest_builder{
 				Id: object.GetId(),
@@ -822,9 +824,12 @@ var _ = Describe("Private external IPs server", func() {
 			Expect(deletingAt).To(BeTemporally(">=", before.Truncate(time.Second)))
 			Expect(deletingAt).To(BeTemporally("<=", after))
 
-			By("a repeated delete changes nothing")
-			_, err = externalIPsServer.Delete(ctx, privatev1.ExternalIPsDeleteRequest_builder{Id: object.GetId()}.Build())
+			By("a repeated delete changes nothing and returns the current object")
+			repeated, err := externalIPsServer.Delete(ctx, privatev1.ExternalIPsDeleteRequest_builder{Id: object.GetId()}.Build())
 			Expect(err).ToNot(HaveOccurred())
+			Expect(repeated.GetObject().GetId()).To(Equal(object.GetId()))
+			Expect(repeated.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+			Expect(proto.Equal(first.GetObject().GetMetadata(), repeated.GetObject().GetMetadata())).To(BeTrue())
 			second, err := externalIPDao.Get().SetId(object.GetId()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(proto.Equal(first.GetObject().GetStatus(), second.GetObject().GetStatus())).To(BeTrue())

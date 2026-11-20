@@ -235,11 +235,25 @@ func (s *NATGatewaysServer) Delete(ctx context.Context,
 	privateRequest := &privatev1.NATGatewaysDeleteRequest{}
 	privateRequest.SetId(request.GetId())
 
-	_, err = s.delegate.Delete(ctx, privateRequest)
+	privateResponse, err := s.delegate.Delete(ctx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
 
+	privateNATGateway := privateResponse.GetObject()
+	publicNATGateway := &publicv1.NATGateway{}
+	err = s.outMapper.Copy(ctx, privateNATGateway, publicNATGateway)
+	if err != nil {
+		s.logger.ErrorContext(
+			ctx,
+			"Failed to map private NAT gateway to public",
+			slog.Any("error", err),
+		)
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process NAT gateway")
+	}
+
+	// Create the public response:
 	response = &publicv1.NATGatewaysDeleteResponse{}
+	response.SetObject(publicNATGateway)
 	return
 }

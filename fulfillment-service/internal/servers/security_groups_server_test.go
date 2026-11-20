@@ -647,6 +647,36 @@ var _ = Describe("SecurityGroups server", func() {
 			Expect(getResponse.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("osac.openshift.io/default", "true"))
 		})
 
+		It("keeps a deleting SecurityGroup unchanged on a repeated delete", func() {
+			created, err := privateServer.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
+				Object: privatev1.SecurityGroup_builder{
+					Metadata: privatev1.Metadata_builder{
+						Tenant: testTenant, Name: "group-repeat-delete", Finalizers: []string{"test/hold"},
+					}.Build(),
+					Spec: privatev1.SecurityGroupSpec_builder{
+						VirtualNetwork: privatev1.VirtualNetworkLocalReference_builder{Id: virtualNetworkID}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := created.GetObject().GetId()
+
+			first, err := privateServer.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			before, err := privateServer.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			second, err := privateServer.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(second.GetObject().GetId()).To(Equal(id))
+			Expect(second.GetObject().GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+			Expect(proto.Equal(first.GetObject(), second.GetObject())).To(BeTrue())
+
+			after, err := privateServer.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(proto.Equal(before.GetObject(), after.GetObject())).To(BeTrue())
+		})
+
 		It("rejects deletion while a referencing compute instance is being deleted", func() {
 			created, err := privateServer.Create(ctx, privatev1.SecurityGroupsCreateRequest_builder{
 				Object: privatev1.SecurityGroup_builder{

@@ -2,8 +2,23 @@
 -- Only a committed assignment could have used it for attribution. Keep tokens for all
 -- accounts referenced by any assignment interval (including history); release the
 -- discovery-only reservations. The first discovery reads the provider values afresh.
--- The trigger disable holds a SHARE ROW EXCLUSIVE lock until the end of the file, so bound the wait.
+-- The trigger change needs a SHARE ROW EXCLUSIVE lock held until the end of this transaction. Acquire it once, up
+-- front, so the bounded wait fails with an actionable diagnostic instead of stalling the upgrade without bound.
+begin;
 set local lock_timeout = '5s';
+do $$
+begin
+  lock table billing_accounts in share row exclusive mode;
+exception when lock_not_available then
+  raise exception using
+    errcode = '55P03',
+    message = 'Migration 162 timed out waiting for a SHARE ROW EXCLUSIVE lock on billing_accounts. Clear conflicting'
+      ' transactions, or wait for the sessions holding locks on billing_accounts to finish, before retrying the'
+      ' upgrade.',
+    detail = 'Roll back the failed transaction if the migration session is still open. After confirming the rollback'
+      ' left version 162 unapplied, reset the dirty migration version to 161 before retrying.';
+end;
+$$;
 alter table billing_accounts disable trigger project_billing_account;
 update billing_accounts a
   set data = a.data #- '{status,external_billing_account_id}',
@@ -98,3 +113,5 @@ begin
   return new;
 end;
 $$ language plpgsql;
+
+commit;

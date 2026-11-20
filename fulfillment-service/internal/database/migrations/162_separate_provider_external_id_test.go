@@ -16,10 +16,16 @@ package migrations
 import (
 	"context"
 	"errors"
+	"net/url"
+	"time"
 
+	migratedb "github.com/golang-migrate/migrate/v4/database"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 )
 
 var _ = DescribeMigration("Separate provider external ID", func() {
@@ -102,5 +108,84 @@ var _ = DescribeMigration("Separate provider external ID", func() {
 			Expect(err).NotTo(HaveOccurred())
 			check(stamp, "9999-12-31T23:59:59.999999Z")
 		}
+	})
+
+	It("bounds its lock wait, rolls back cleanly and retries after a confirmed dirty reset", func(ctx context.Context) {
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		_, err := conn.Exec(ctx, `
+			insert into billing_accounts (id, name, tenant, data)
+				values ('discovered', 'ba-' || left(encode(sha256(convert_to('discovered', 'UTF8')), 'hex'), 60),
+				 'system',
+				 jsonb_build_object('status', jsonb_build_object('provider_key','m360',
+				  'provider_account_reference','discovered','external_billing_account_id','discovered',
+				  'state_observation_timestamp','2026-01-01T00:00:00Z')));`)
+		Expect(err).NotTo(HaveOccurred())
+		snapshot := func(ctx context.Context) string {
+			GinkgoHelper()
+			var result string
+			Expect(conn.QueryRow(ctx, `select jsonb_build_array(
+				pg_get_functiondef('project_billing_account()'::regprocedure),
+				(select tgenabled from pg_trigger where tgname = 'project_billing_account'),
+				(select jsonb_agg(jsonb_build_array(id, external_billing_account_id, data->'status') order by id)
+				 from billing_accounts))::text`).Scan(&result)).To(Succeed())
+			return result
+		}
+		before := snapshot(ctx)
+
+		// Tool.Migrate opens its own connection and the driver doesn't use the caller's context.
+		// Bound it independently so a regression fails while the reader still holds its lock.
+		migrationURL, err := url.Parse(tool.URL())
+		Expect(err).NotTo(HaveOccurred())
+		params := migrationURL.Query()
+		params.Set("connect_timeout", "5")
+		params.Set("statement_timeout", "15000")
+		params.Set("x-statement-timeout", "20000")
+		migrationURL.RawQuery = params.Encode()
+		boundedTool, err := database.NewTool().SetLogger(logger).SetURL(migrationURL.String()).Build()
+		Expect(err).NotTo(HaveOccurred())
+
+		reader, err := conn.Begin(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func(ctx context.Context) {
+			ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			if err := reader.Rollback(ctx); !errors.Is(err, pgx.ErrTxClosed) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
+		// ROW EXCLUSIVE is the lock a concurrent writer holds; it conflicts with the migration's SHARE ROW EXCLUSIVE.
+		_, err = reader.Exec(ctx, `lock table billing_accounts in row exclusive mode`)
+		Expect(err).NotTo(HaveOccurred())
+
+		err = boundedTool.Migrate(ctx, 162)
+		var migrationErr migratedb.Error
+		Expect(errors.As(err, &migrationErr)).To(BeTrue(), "expected a PostgreSQL migration error, got %v", err)
+		var pgErr *pgconn.PgError
+		Expect(errors.As(migrationErr.OrigErr, &pgErr)).To(BeTrue())
+		Expect(pgErr.Code).To(Equal("55P03"))
+		Expect(pgErr.Message).To(ContainSubstring("Clear conflicting"))
+		Expect(pgErr.Detail).To(ContainSubstring("After confirming the rollback"))
+		Expect(pgErr.Detail).To(ContainSubstring("reset the dirty migration version to 161"))
+		Expect(reader.Rollback(ctx)).To(Succeed())
+
+		var version int
+		var dirty bool
+		Expect(conn.QueryRow(ctx, `select version, dirty from schema_migrations`).Scan(&version, &dirty)).To(Succeed())
+		Expect(version).To(Equal(162), "the failed migration must not record 162 as applied")
+		Expect(dirty).To(BeTrue())
+		Expect(snapshot(ctx)).To(Equal(before), "the failed migration must not publish any partial change")
+
+		// The diagnostic reset is only valid because the failed transaction rolled back; apply it and retry.
+		_, err = conn.Exec(ctx, `update schema_migrations set version = 161, dirty = false`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(tool.Migrate(ctx, 162)).To(Succeed())
+		Expect(conn.QueryRow(ctx, `select version, dirty from schema_migrations`).Scan(&version, &dirty)).To(Succeed())
+		Expect(version).To(Equal(162))
+		Expect(dirty).To(BeFalse())
+		var token *string
+		Expect(conn.QueryRow(ctx, `select external_billing_account_id from billing_accounts
+			where id = 'discovered'`).Scan(&token)).To(Succeed())
+		Expect(token).To(BeNil(), "the retry releases the discovery-only reservation")
 	})
 })

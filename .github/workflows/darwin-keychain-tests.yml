@@ -31,6 +31,7 @@ permissions:
 
 jobs:
   run-darwin-keychain-tests:
+    timeout-minutes: 180
     name: Run darwin keychain tests
     runs-on: macos-latest
     steps:
@@ -38,8 +39,10 @@ jobs:
       with:
         persist-credentials: false
     - uses: ./.github/actions/setup-go
+      timeout-minutes: 20
       with:
         working-directory: fulfillment-service
     - working-directory: fulfillment-service
+      timeout-minutes: 20
       run: |
         go test -run 'TestKeychainAvailable|TestSettingsSave_FallsBackToFileWithNoKeychain' -v ./internal/config/...

@@ -1184,6 +1184,58 @@ var _ = Describe("Private tenant billing assignments server", func() {
 	})
 
 	Describe("Update", func() {
+		It("rejects a dry-run before provider calls or any database change and still allows an ordinary Update", func() {
+			var accounts []billingfake.AccountSpec
+			first := newAccount(&accounts, "dry-run-first", "dry-run-first", "ACTIVE")
+			second := newAccount(&accounts, "dry-run-second", "dry-run-second", "ACTIVE")
+			fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+			server := build(fake.Provider())
+
+			// Open a real current interval so the dry-run has an assignment to read and replace.
+			created, err := billingRPC(adminCtx(), server.Create, createRequest(testTenant, first, "dry-run-update"))
+			Expect(err).NotTo(HaveOccurred())
+
+			rows := func(table string) string {
+				var value string
+				// Table names are fixed by this fixture, never request input.
+				Expect(testPool.QueryRow(ctx, `select coalesce(jsonb_agg(to_jsonb(r) order by id),'[]'::jsonb)::text from `+table+` r`).Scan(&value)).To(Succeed())
+				return value
+			}
+			accountsBefore, intervalsBefore := rows("billing_accounts"), rows("tenant_billing_assignments")
+			callsBefore := len(fake.Calls())
+
+			replacement := func() *privatev1.TenantBillingAssignmentsUpdateRequest {
+				return privatev1.TenantBillingAssignmentsUpdateRequest_builder{
+					Object: privatev1.TenantBillingAssignment_builder{
+						Id: created.GetObject().GetId(),
+						Spec: privatev1.TenantBillingAssignmentSpec_builder{
+							BillingAccount: privatev1.BillingAccountReference_builder{Id: second}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.billing_account"}},
+				}.Build()
+			}
+
+			dry := auth.ContextWithSubject(dryRunCtx(), &auth.Subject{User: "admin", Tenants: auth.AllTenants})
+			_, err = billingRPC(dry, server.Update, replacement())
+			Expect(status.Code(err)).To(Equal(codes.Unimplemented))
+			Expect(err.Error()).To(ContainSubstring("dry-run is not supported"))
+			Expect(fake.Calls()).To(HaveLen(callsBefore), "a dry-run must not call the provider")
+			Expect(rows("billing_accounts")).To(Equal(accountsBefore),
+				"a dry-run must not change attribution, state or observation evidence")
+			Expect(rows("tenant_billing_assignments")).To(Equal(intervalsBefore),
+				"a dry-run must not insert an interval or close an existing one")
+
+			updated, err := billingRPC(adminCtx(), server.Update, replacement())
+			Expect(err).NotTo(HaveOccurred(), "the same ordinary update still replaces the account")
+			Expect(updated.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(second),
+				"the ordinary control selects the replacement account")
+			Expect(len(fake.Calls())).To(BeNumerically(">", callsBefore),
+				"the ordinary control still reads provider evidence")
+			Expect(rows("tenant_billing_assignments")).NotTo(Equal(intervalsBefore),
+				"the ordinary control still persists the replacement")
+		})
+
 		It("validates a partial atomic account mask against stored state and attributes only the new interval", func() {
 			var accounts []billingfake.AccountSpec
 			first := newAccount(&accounts, "first", "first", "ACTIVE")

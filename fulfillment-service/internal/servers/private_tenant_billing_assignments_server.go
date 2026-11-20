@@ -445,6 +445,13 @@ func (s *PrivateTenantBillingAssignmentsServer) assignmentSnapshot(
 func (s *PrivateTenantBillingAssignmentsServer) Update(ctx context.Context,
 	request *privatev1.TenantBillingAssignmentsUpdateRequest) (
 	response *privatev1.TenantBillingAssignmentsUpdateResponse, err error) {
+	// An update reads provider evidence and writes account evidence plus a new interval in the same
+	// transaction. It has no safe preview contract, so reject the dry-run request before any provider call or
+	// database change. Public Update delegates here, and direct private callers take the same path.
+	if isDryRun(ctx) {
+		return nil, status.Error(codes.Unimplemented,
+			"dry-run is not supported for tenant billing assignment updates")
+	}
 	tx, err := database.TxFromContext(ctx)
 	if err != nil {
 		return nil, err

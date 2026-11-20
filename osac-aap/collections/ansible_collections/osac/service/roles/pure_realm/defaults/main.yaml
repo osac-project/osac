@@ -1,0 +1,43 @@
+---
+# Pure Storage FlashBlade Realm provisioning defaults
+#
+# API version - must match the FlashBlade version
+# (API 2.26 is used because it doesn't accept dns in POST body for servers)
+pure_realm_api_version: "2.26"
+
+# TLS certificate validation. Verification is on by default: the login request
+# carries PUREFB_API to the management endpoint, so an unverified TLS session
+# would hand the array-admin token to an impersonated endpoint. Point
+# PURE_VALIDATE_CERTS (or this variable) at a trusted private CA when the array
+# uses a certificate the execution environment does not already trust.
+pure_realm_validate_certs: "{{ lookup('env', 'PURE_VALIDATE_CERTS') | default('true', true) | bool }}"
+
+# Hub Kubernetes namespace for Realm credential Secrets
+pure_realm_config_namespace: "{{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE') | default('osac-system', true) }}"
+
+# Secret naming
+pure_realm_secret_prefix: "pure-realm-"
+
+# FlashBlade resource naming conventions
+# Format: {{ realm.name }}::{{ pure_realm_*_name }}
+pure_realm_server_name: "nfs-server"
+pure_realm_interface_name: "vip"
+pure_realm_dns_name: "dns"
+pure_realm_export_policy_name: "nfs-export"
+pure_realm_export_policy_tls_name: "nfs-export-tls"
+pure_realm_tls_policy_name: "tls"
+
+# Admin user naming
+# Format: {{ realm.name }}-{{ pure_realm_admin_user }}
+pure_realm_admin_user: "osac-admin"
+pure_realm_admin_policy_name: "mgmt-access"
+
+# Network configuration defaults
+pure_realm_subnet_mtu: 1500
+pure_realm_subnet_lag: "lag-01"  # LAG interface for data-plane connectivity
+
+# Certificate naming
+pure_realm_cert_name: "osac-realm-cert"
+
+# API token - must be provided via PUREFB_API env var or extra vars
+pure_realm_api_token: "{{ lookup('env', 'PUREFB_API') }}"

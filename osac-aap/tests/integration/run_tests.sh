@@ -336,6 +336,10 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
     "storage_provider_teardown_retry_state"
     "storage_provider_teardown_same_endpoint"
     "netapp_storage_provider"
+    # Pure FlashBlade setup target: runs tasks/main.yml (not the ROLE_TESTS
+    # baseline.yml entrypoint) and needs the mock FlashBlade server that
+    # setup_test_env.sh starts under this same STORAGE_TESTS_ENABLED gate.
+    "pure_storage_setup"
     # Playbook-level wiring tests for osac.service.csi_driver_install (stub the
     # real Helm install via csi_driver_install_override, run the real
     # storage_provider dispatch after it) -- share this gate/mock server since

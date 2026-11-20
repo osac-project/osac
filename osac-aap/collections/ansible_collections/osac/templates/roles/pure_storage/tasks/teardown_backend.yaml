@@ -1,0 +1,81 @@
+---
+# Pure Storage teardown_backend: release Realm allocation only.
+# Deletes the hub Secret for the backend this dispatch is scoped to
+# (<prefix><tenant>-<backend-id>), releasing the Realm back to the pool.
+#
+# Receives from the dispatcher:
+#   _provider_tiers                — tiers with provider: pure
+#   _provider_backend_connections  — connection details for backend_id
+#   tenant_name                    — tenant identifier
+#
+# Does NOT delete:
+#   - The Realm itself (part of the pool, reused by other tenants)
+#   - Realm credential Secret (pure-realm-<realm>)
+#   - Cluster-side K8s resources (StorageClasses, CSI Secret) — use teardown_cluster_storage
+
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: >-
+      tenant_name '{{ tenant_name }}' is not a valid DNS label.
+      Must be 1-63 lowercase alphanumeric characters or hyphens,
+      cannot start or end with a hyphen.
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
+- name: Resolve the backend_id this dispatch is scoped to
+  ansible.builtin.include_tasks: _resolve_backend_id.yaml
+
+- name: Read tenant config Secret from hub cluster
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ pure_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _pure_backend_id }}"
+    namespace: "{{ pure_storage_config_namespace }}"
+  module_defaults:
+    kubernetes.core.k8s_info:
+      kubeconfig: "{{ none }}"
+  register: _pure_teardown_config
+  no_log: true
+  failed_when: false
+
+- name: Extract Realm name from hub Secret (if available)
+  when:
+    - _pure_teardown_config.resources | length > 0
+    - _pure_teardown_config.resources[0].data.realm_name is defined
+  ansible.builtin.set_fact:
+    _pure_teardown_realm_name: "{{ _pure_teardown_config.resources[0].data.realm_name | b64decode }}"
+  no_log: true
+
+- name: Release Realm allocation
+  block:
+    - name: Set flag for whether Secret existed
+      ansible.builtin.set_fact:
+        _pure_secret_existed: "{{ _pure_teardown_config.resources | length > 0 }}"
+
+    - name: Delete tenant config Secret from hub cluster
+      when: _pure_secret_existed | bool
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ pure_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _pure_backend_id }}"
+        namespace: "{{ pure_storage_config_namespace }}"
+      module_defaults:
+        kubernetes.core.k8s:
+          kubeconfig: "{{ none }}"
+      no_log: true
+
+    - name: Report backend teardown summary
+      ansible.builtin.debug:
+        msg: >-
+          Backend teardown for tenant '{{ tenant_name }}' complete.
+          Hub Secret: {{ 'deleted' if (_pure_secret_existed | bool) else 'not found (already deleted)' }}.
+          Realm '{{ _pure_teardown_realm_name | default("N/A") }}' released back to pool.
+          Note: Filesystems created by CSI driver are NOT deleted (managed by PVC lifecycle).
+
+  always:
+    - name: Clear all credential facts from play scope
+      ansible.builtin.set_fact:
+        _pure_teardown_config: {}
+        _pure_teardown_realm_name: ""
+        _pure_secret_existed: false
+      no_log: true

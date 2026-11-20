@@ -1,6 +1,8 @@
 ---
 # Unit tests for osac.service.storage_provider dispatcher validation logic.
-# Tests verify validation ONLY; they do not dispatch to actual provider roles.
+# Tests verify validation logic. Most do not dispatch to a real provider role; the
+# exception is Test 29, which asserts the dispatcher resolves a provider name to its
+# osac.templates.<provider>_storage role.
 #
 # A single invocation halts after "Test storage_provider -- invalid provider (should fail)":
 # ansible-core raises a runner-level ERROR! when include_role targets a genuinely-missing role
@@ -1423,7 +1425,7 @@
         fail_msg: "Unexpected CSI backend vendor mapping: {{ _this_tenant_vendors }}"
         success_msg: "Product routing keys resolve to their CSI backend vendor names"
 
-- name: Test storage_provider -- CSI products dispatch to the shared CSI storage role
+- name: Test storage_provider -- CSI-managed provider uses the shared storage role
   hosts: localhost
   gather_facts: false
   vars:
@@ -1431,27 +1433,137 @@
       - name: netapp-tier
         provider: netapp
         backend_id: "netapp-backend-1"
-      - name: pure-tier
-        provider: pure
-        backend_id: "pure-backend-1"
     storage_provider_backend_connections: {}
     tenant_name: provider-routing-test
     _all_tenant_configs: {}
     _dispatch_action: setup
 
   tasks:
-    - name: Dispatch CSI-managed providers through their shared storage role
+    - name: Dispatch the CSI-managed provider through the shared storage role
       ansible.builtin.include_tasks: ../tasks/_dispatch_provider.yaml
       loop:
         - provider: netapp
           backend_id: "netapp-backend-1"
-        - provider: pure
-          backend_id: "pure-backend-1"
       loop_control:
         loop_var: _current_pair
 
-    - name: Verify the shared CSI role preserves each provider identity
+    - name: Verify the shared CSI role preserves the provider identity
       ansible.builtin.assert:
         that:
           - _all_tenant_configs['netapp-backend-1'].provider == 'netapp'
-          - _all_tenant_configs['pure-backend-1'].provider == 'pure'
+
+# ──────────────────────────────────────────────────────────────
+# Test 31: provider "pure" dispatches to osac.templates.pure_storage (OSAC-5016)
+# Expected: the dispatcher resolves the template role by name with no dispatcher
+#   change and runs its setup. The role rejects an invalid tenant name before
+#   any Kubernetes call, so this stays cluster-free while a pure_storage-specific
+#   failure -- rather than a runner-level ERROR! for a missing role -- proves
+#   resolution (see Test 5). Realm checkout itself is covered end to end by
+#   tests/integration/targets/pure_storage_setup.
+#   Kept last in the file so it runs in the second invocation and does not shift
+#   the --start-at-task boundary.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- provider "pure" dispatches to pure_storage (OSAC-5016)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run pure dispatch resolution test
+      block:
+        - name: Dispatch setup for a pure tier
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: pure-standard
+                protocol: nfs
+                provider: pure
+                backend_id: be-pure-test
+            storage_provider_backend_connections:
+              be-pure-test:
+                endpoint: "flashblade.example.com"
+                username: "admin"
+                password: "not-a-real-credential"
+            storage_provider_action: setup
+            # Keeps the play self-contained; run_tests.sh also passes this as an
+            # extra var for every invocation of this file.
+            storage_provider_csi_backends_enabled: false
+            tenant_name: "INVALID_TENANT"
+            tenant_namespace: "osac-tenants"
+
+        - name: Fail because the invalid tenant name did not reach pure_storage
+          ansible.builtin.fail:
+            msg: >-
+              provider 'pure' reached osac.templates.pure_storage setup but it
+              did not reject the invalid tenant name.
+              Accumulated configs: {{ storage_provider_tenant_configs | default('unset') }}
+
+      rescue:
+        - name: Verify the dispatch reached pure_storage and it validated the tenant
+          ansible.builtin.assert:
+            that:
+              - "'not a valid DNS label' in (ansible_failed_result.msg | default(''))"
+              - "'tenant_name' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Dispatching provider 'pure' failed for an unexpected reason -- the
+              dispatcher may no longer resolve osac.templates.pure_storage:
+              {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: >-
+              provider 'pure' resolved to osac.templates.pure_storage and ran
+              its tenant-name validation
+
+# ──────────────────────────────────────────────────────────────
+# Test 32: dispatch clears stale per-provider output facts (OSAC-5016)
+# Expected: _dispatch_provider.yaml resets storage_provider_tenant_config and
+#   storage_provider_storage_class_names before each include_role, so a provider
+#   that sets neither cannot inherit the previous loop iteration's values.
+#   Uses teardown_cluster_storage because that action's provider roles set no
+#   output facts, which isolates the reset from anything the role itself writes.
+#   Without the reset this play ends with the seeded values still in scope.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- dispatch clears stale provider output facts (OSAC-5016)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run stale-output-fact reset test
+      block:
+        - name: Seed output facts as if an earlier provider had set them
+          ansible.builtin.set_fact:
+            storage_provider_tenant_config:
+              leaked_from: "a-previous-provider"
+            storage_provider_storage_class_names:
+              - name: leaked-storage-class
+
+        - name: Dispatch an action whose provider role sets no output facts
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: pure-standard
+                protocol: nfs
+                provider: pure
+                backend_id: be-pure-test
+            storage_provider_action: teardown_cluster_storage
+            storage_provider_csi_backends_enabled: false
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: Verify both facts were cleared before the provider role ran
+          ansible.builtin.assert:
+            that:
+              - storage_provider_tenant_config is none
+              - storage_provider_storage_class_names == []
+            fail_msg: >-
+              _dispatch_provider.yaml did not reset per-provider output facts, so
+              a provider that sets none inherits the previous provider's values:
+              tenant_config={{ storage_provider_tenant_config | default('undefined') }}
+              sc_names={{ storage_provider_storage_class_names | default('undefined') }}
+            success_msg: "Stale provider output facts are cleared before each dispatch"
+
+      rescue:
+        - name: Fail the test with the dispatch error
+          ansible.builtin.fail:
+            msg: >-
+              teardown_cluster_storage dispatch for provider 'pure' failed:
+              {{ ansible_failed_result.msg | default('unknown error') }}

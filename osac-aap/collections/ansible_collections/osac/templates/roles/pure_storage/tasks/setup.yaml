@@ -1,0 +1,303 @@
+---
+# Pure Storage setup: Realm checkout and tenant config Secret creation.
+# Creates: hub Secret recording tenant-to-Realm allocation.
+# Does NOT create filesystems - those are created by ensure_storage_class.
+#
+# Receives from dispatcher:
+#   _provider_tiers                — tiers with provider: pure
+#   _provider_backend_connections  — connection details for backend_id
+#   tenant_name                    — tenant identifier
+#   tenant_uid                     — tenant unique ID
+
+- name: Assert _provider_tiers is defined and non-empty
+  ansible.builtin.assert:
+    that:
+      - _provider_tiers is defined
+      - _provider_tiers | length > 0
+    fail_msg: >-
+      _provider_tiers must be provided by the service role dispatcher.
+      This role should not be called directly — use osac.service.storage_provider.
+
+- name: Resolve the backend_id this dispatch is scoped to
+  ansible.builtin.include_tasks: _resolve_backend_id.yaml
+
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: >-
+      tenant_name '{{ tenant_name }}' is not a valid DNS label.
+      Must be 1-63 lowercase alphanumeric characters or hyphens,
+      cannot start or end with a hyphen.
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
+- name: Validate tier names are unique
+  ansible.builtin.assert:
+    that:
+      - (_provider_tiers | map(attribute='name') | list | unique | length) == (_provider_tiers | length)
+    fail_msg: "Tier names must be unique."
+    quiet: true
+
+- name: Provision Pure Storage Realm for tenant
+  block:
+    # ── Check for existing allocation (re-onboarding) ──
+    - name: Check if tenant already has a Pure Storage allocation
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "{{ pure_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _pure_backend_id }}"
+        namespace: "{{ pure_storage_config_namespace }}"
+      module_defaults:
+        kubernetes.core.k8s_info:
+          kubeconfig: "{{ none }}"
+      register: _pure_existing_secret
+      no_log: true
+
+    - name: Track whether this is a re-onboarding
+      ansible.builtin.set_fact:
+        _pure_secret_preexisting: "{{ _pure_existing_secret.resources | length > 0 }}"
+
+    # ── Realm pool validation ──
+    - name: Read the Realm pool ConfigMap
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: pure-realm-pool
+        namespace: "{{ pure_storage_config_namespace }}"
+      module_defaults:
+        kubernetes.core.k8s_info:
+          kubeconfig: "{{ none }}"
+      register: _pure_pool_cm
+
+    - name: Fail when the Realm pool ConfigMap is missing
+      ansible.builtin.fail:
+        msg: >-
+          ConfigMap 'pure-realm-pool' not found in {{ pure_storage_config_namespace }}.
+          Run the osac-provision-pure-realms job template to provision Realms
+          and populate the pool.
+      when: _pure_pool_cm.resources | length == 0
+
+    - name: Parse Realm pool entries
+      ansible.builtin.set_fact:
+        _pure_realm_pool: "{{ _pure_pool_cm.resources[0].data.PURE_REALM_POOL | from_json }}"
+
+    - name: Check each Realm pool entry has required fields
+      ansible.builtin.fail:
+        msg: >-
+          PURE_REALM_POOL entries are incomplete. Each entry must have
+          'realm_name' and 'secret_name' fields. Found: {{ _pure_realm_pool }}
+      when: >-
+        item.realm_name is not defined or item.realm_name is none or
+        item.secret_name is not defined or item.secret_name is none
+      loop: "{{ _pure_realm_pool }}"
+      loop_control:
+        label: "{{ item.realm_name | default('missing realm_name') }}"
+
+    # ── Select available Realm (or reuse existing) ──
+    - name: Extract existing Realm allocation if re-onboarding
+      when: _pure_secret_preexisting | bool
+      block:
+        - name: Read existing allocation from hub Secret
+          ansible.builtin.set_fact:
+            _pure_existing_config: >-
+              {{
+                {
+                  'realm_name': (_pure_existing_secret.resources[0].data.realm_name | default('') | b64decode),
+                  'nfs_server': (_pure_existing_secret.resources[0].data.nfs_server | default('') | b64decode),
+                  'nfs_policy': (_pure_existing_secret.resources[0].data.nfs_policy | default('') | b64decode),
+                  'api_token': (_pure_existing_secret.resources[0].data.api_token | default('') | b64decode),
+                  'mgmt_endpoint': (_pure_existing_secret.resources[0].data.mgmt_endpoint | default('') | b64decode),
+                  'nfs_endpoint': (_pure_existing_secret.resources[0].data.nfs_endpoint | default('') | b64decode)
+                }
+              }}
+          no_log: true
+
+        - name: Verify existing allocation has required fields
+          ansible.builtin.fail:
+            msg: >-
+              Existing hub Secret for {{ tenant_name }} is missing required fields.
+              Expected: realm_name, nfs_server, nfs_policy. Missing or empty:
+              {{ _pure_existing_config | dict2items
+                 | selectattr('value', 'equalto', '')
+                 | map(attribute='key') | list }}
+          when: >-
+            (_pure_existing_config.realm_name | length) == 0 or
+            (_pure_existing_config.nfs_server | length) == 0 or
+            (_pure_existing_config.nfs_policy | length) == 0
+
+        - name: Reuse existing Realm allocation
+          ansible.builtin.set_fact:
+            _pure_selected_realm_name: "{{ _pure_existing_config.realm_name }}"
+
+    - name: Select an available Realm from the pool
+      when: not (_pure_secret_preexisting | bool)
+      block:
+        # Find all Realms already claimed by other tenants
+        - name: List all hub Secrets with Realm claims
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            namespace: "{{ pure_storage_config_namespace }}"
+            label_selectors:
+              - "osac.openshift.io/pure-realm"
+          register: _pure_claimed_secrets
+          no_log: true
+
+        # Jinja splits map(attribute=...) on dots, so the dotted label key must
+        # be read as a literal dict key instead of an attribute path.
+        - name: Extract claimed Realm names
+          ansible.builtin.set_fact:
+            _pure_claimed_realms: >-
+              {% set claimed = [] -%}
+              {% for resource in _pure_claimed_secrets.resources -%}
+              {% set _ = claimed.append(resource.metadata.labels['osac.openshift.io/pure-realm']) -%}
+              {% endfor -%}
+              {{ claimed }}
+
+        - name: Find available (unclaimed) Realms
+          ansible.builtin.set_fact:
+            _pure_available_realms: >-
+              {{ _pure_realm_pool
+                 | rejectattr('realm_name', 'in', _pure_claimed_realms)
+                 | list }}
+
+        - name: Fail when no Realms are available
+          ansible.builtin.fail:
+            msg: >-
+              No available Realms in the pool. All {{ _pure_realm_pool | length }}
+              Realms are claimed. Claimed: {{ _pure_claimed_realms | join(', ') }}.
+              Provision more Realms or release unused allocations.
+          when: _pure_available_realms | length == 0
+
+        - name: Select the first available Realm
+          ansible.builtin.set_fact:
+            _pure_selected_realm_name: "{{ _pure_available_realms[0].realm_name }}"
+            _pure_selected_realm_secret: "{{ _pure_available_realms[0].secret_name }}"
+
+    # ── Read Realm credentials from pool Secret (new allocation) ──
+    - name: Read Realm credentials from pool for new allocation
+      when: not (_pure_secret_preexisting | bool)
+      block:
+        - name: Find the pool Secret for selected Realm
+          ansible.builtin.set_fact:
+            _pure_selected_realm_secret: >-
+              {{ (_pure_realm_pool
+                  | selectattr('realm_name', 'equalto', _pure_selected_realm_name)
+                  | list | first).secret_name }}
+
+        - name: Read Realm credential Secret from pool
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: "{{ _pure_selected_realm_secret }}"
+            namespace: "{{ pure_storage_config_namespace }}"
+          register: _pure_realm_secret
+          no_log: true
+
+        - name: Fail when Realm credential Secret is missing
+          ansible.builtin.fail:
+            msg: >-
+              Realm credential Secret '{{ _pure_selected_realm_secret }}' not found in
+              {{ pure_storage_config_namespace }}. The pool references it but it does
+              not exist.
+          when: _pure_realm_secret.resources | length == 0
+
+        - name: Extract Realm credentials and metadata from pool Secret
+          ansible.builtin.set_fact:
+            _pure_realm_name: "{{ _pure_realm_secret.resources[0].data.realm_name | b64decode }}"
+            _pure_api_token: "{{ _pure_realm_secret.resources[0].data.api_token | b64decode }}"
+            _pure_mgmt_endpoint: "{{ _pure_realm_secret.resources[0].data.mgmt_endpoint | b64decode }}"
+            _pure_nfs_endpoint: "{{ _pure_realm_secret.resources[0].data.nfs_endpoint | b64decode }}"
+          no_log: true
+
+    # ── Reuse Realm credentials from existing hub Secret (re-onboarding) ──
+    - name: Reuse Realm credentials from existing allocation
+      when: _pure_secret_preexisting | bool
+      ansible.builtin.set_fact:
+        _pure_realm_name: "{{ _pure_existing_config.realm_name }}"
+        _pure_api_token: "{{ _pure_existing_config.api_token }}"
+        _pure_mgmt_endpoint: "{{ _pure_existing_config.mgmt_endpoint }}"
+        _pure_nfs_endpoint: "{{ _pure_existing_config.nfs_endpoint }}"
+      no_log: true
+
+    - name: Derive Realm-scoped resource names by convention
+      ansible.builtin.set_fact:
+        _pure_nfs_server: "{{ _pure_realm_name }}::{{ pure_storage_nfs_server_suffix }}"
+        _pure_nfs_policy: "{{ _pure_realm_name }}::{{ pure_storage_export_policy_suffix }}"
+
+    # ── Create or update hub Secret with tenant allocation ──
+    - name: Create hub Secret recording tenant-to-Realm allocation
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ pure_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _pure_backend_id }}"
+            namespace: "{{ pure_storage_config_namespace }}"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/storage-provider: pure
+              osac.openshift.io/storage-backend-id: "{{ _pure_backend_id }}"
+              osac.openshift.io/tenant: "{{ tenant_name }}"
+              osac.openshift.io/pure-realm: "{{ _pure_realm_name }}"
+          type: Opaque
+          stringData:
+            tenant_uid_hash: "{{ tenant_uid[:8] }}"
+            realm_name: "{{ _pure_realm_name }}"
+            nfs_server: "{{ _pure_nfs_server }}"
+            nfs_policy: "{{ _pure_nfs_policy }}"
+            api_token: "{{ _pure_api_token }}"
+            mgmt_endpoint: "{{ _pure_mgmt_endpoint }}"
+            nfs_endpoint: "{{ _pure_nfs_endpoint }}"
+            storage_provider_type: "pure"
+      module_defaults:
+        kubernetes.core.k8s:
+          kubeconfig: "{{ none }}"
+      no_log: true
+      register: _pure_hub_secret_created
+
+  rescue:
+    # ── Rollback: delete hub Secret if newly created (not pre-existing) ──
+    - name: Rollback - delete hub Secret if it was created this run
+      when:
+        - not (_pure_secret_preexisting | default(false) | bool)
+        - _pure_hub_secret_created is defined
+        - _pure_hub_secret_created is not failed
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ pure_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _pure_backend_id }}"
+        namespace: "{{ pure_storage_config_namespace }}"
+      module_defaults:
+        kubernetes.core.k8s:
+          kubeconfig: "{{ none }}"
+      ignore_errors: true  # noqa: ignore-errors
+      no_log: true
+
+    - name: Report Pure Storage setup failure
+      ansible.builtin.fail:
+        msg: >-
+          Pure FlashBlade setup failed for tenant '{{ tenant_name }}'.
+          Failed task: {{ ansible_failed_task.name | default('unknown') }}.
+          Error: {{ ansible_failed_result.msg | default('see logs for details') }}.
+          Rollback attempted for hub Secret.
+
+  always:
+    # ── Clear all credential facts from play scope ──
+    - name: Clear all credential facts from play scope
+      ansible.builtin.set_fact:
+        _pure_api_token: ""
+        _pure_mgmt_endpoint: ""
+        _pure_nfs_endpoint: ""
+        _pure_existing_config: {}
+        _pure_realm_secret: {}
+        _pure_existing_secret: {}
+      no_log: true
+
+# ── Return output to dispatcher ──
+- name: Set storage_provider_tenant_config output fact
+  ansible.builtin.set_fact:
+    storage_provider_tenant_config:
+      realm_name: "{{ _pure_realm_name }}"
+      nfs_server: "{{ _pure_nfs_server }}"
+      nfs_policy: "{{ _pure_nfs_policy }}"

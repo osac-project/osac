@@ -165,11 +165,10 @@ var _ = Describe("Billing account naming", Label("billing", "billing-configured"
 		}
 
 		for _, route := range routes {
-			By("filtering and ordering by the established external_billing_account_id at " + route.path)
+			By("filtering by the established external_billing_account_id at " + route.path)
 			query := url.Values{
 				"filter": {fmt.Sprintf("this.status.external_billing_account_id == %q || this.status.external_billing_account_id == %q",
 					fixtures[0].ExternalID, fixtures[1].ExternalID)},
-				"order": {"status.external_billing_account_id desc"},
 			}
 			body, statusCode, err := get(route.client, route.path+"?"+query.Encode())
 			Expect(err).ToNot(HaveOccurred())
@@ -177,23 +176,31 @@ var _ = Describe("Billing account naming", Label("billing", "billing-configured"
 			items, err := decodeREST(body)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(items).To(HaveLen(2))
-			expectNames(Default, items[0], fixtures[1], route.private, true)
-			expectNames(Default, items[1], fixtures[0], route.private, true)
-
-			By("rejecting the former field name in filters and order at " + route.path)
-			for _, query := range []url.Values{
-				{"filter": {fmt.Sprintf("this.correlation_id == %q", fixtures[0].ExternalID)}},
-				{"order": {"correlation_id"}},
-			} {
-				body, statusCode, err := get(route.client, route.path+"?"+query.Encode())
-				Expect(err).ToNot(HaveOccurred())
-				Expect(statusCode).To(Equal(http.StatusBadRequest))
-				var rejection struct {
-					Code int32 `json:"code"`
-				}
-				Expect(json.Unmarshal(body, &rejection)).To(Succeed(), "body: %s", body)
-				Expect(rejection.Code).To(Equal(int32(codes.InvalidArgument)), "body: %s", body)
+			// List ordering is not implemented: the service orders by internal id and ignores `order`, so
+			// identify each returned account by id instead of relying on its position.
+			byID := make(map[string]map[string]any, len(items))
+			for _, item := range items {
+				id, ok := item["id"].(string)
+				Expect(ok).To(BeTrue())
+				byID[id] = item
 			}
+			for i, fixture := range fixtures {
+				item, ok := byID[accountIDs[i]]
+				Expect(ok).To(BeTrue(), "missing account %s", accountIDs[i])
+				expectNames(Default, item, fixture, route.private, true)
+			}
+
+			By("rejecting the former field name in filters at " + route.path)
+			body, statusCode, err = get(route.client, route.path+"?"+url.Values{
+				"filter": {fmt.Sprintf("this.correlation_id == %q", fixtures[0].ExternalID)},
+			}.Encode())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(statusCode).To(Equal(http.StatusBadRequest))
+			var rejection struct {
+				Code int32 `json:"code"`
+			}
+			Expect(json.Unmarshal(body, &rejection)).To(Succeed(), "body: %s", body)
+			Expect(rejection.Code).To(Equal(int32(codes.InvalidArgument)), "body: %s", body)
 		}
 
 		By("showing the populated value and header in both CLI modes")

@@ -266,7 +266,9 @@ func createMCPDiscoveryProject(
 		}.Build())
 		g.Expect(err).ToNot(HaveOccurred())
 		g.Expect(userResponse.GetSize()).To(Equal(int32(1)))
-		userID = userResponse.GetItems()[0].GetId()
+		user := userResponse.GetItems()[0]
+		g.Expect(user.GetStatus().GetKeycloakUserId()).ToNot(BeEmpty())
+		userID = user.GetId()
 	}, time.Minute, time.Second).Should(Succeed())
 
 	response, err := projects.Create(ctx, publicv1.ProjectsCreateRequest_builder{

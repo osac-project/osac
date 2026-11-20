@@ -125,12 +125,13 @@ func (mr *MockClientInterfaceMockRecorder) AssignTenantRolesToUser(ctx, tenantNa
 }
 
 // CreateGroup mocks base method.
-func (m *MockClientInterface) CreateGroup(ctx context.Context, tenantName, groupPath string) (string, error) {
+func (m *MockClientInterface) CreateGroup(ctx context.Context, tenantName, groupPath string) (string, bool, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "CreateGroup", ctx, tenantName, groupPath)
 	ret0, _ := ret[0].(string)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
 }
 
 // CreateGroup indicates an expected call of CreateGroup.

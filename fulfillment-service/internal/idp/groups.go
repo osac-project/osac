@@ -43,7 +43,7 @@ import (
 // Organization groups are scoped per organization, so paths can be simple and readable.
 // This method creates the full hierarchy if parent groups don't exist.
 // See https://www.keycloak.org/2026/04/org-groups for details.
-func (c *Client) CreateGroup(ctx context.Context, tenantName, groupPath string) (string, error) {
+func (c *Client) CreateGroup(ctx context.Context, tenantName, groupPath string) (string, bool, error) {
 	c.logger.DebugContext(ctx, "Creating tenant group",
 		slog.String("tenantName", tenantName),
 		slog.String("groupPath", groupPath),
@@ -52,7 +52,7 @@ func (c *Client) CreateGroup(ctx context.Context, tenantName, groupPath string) 
 	// Get the organization ID first
 	org, err := c.GetTenant(ctx, tenantName)
 	if err != nil {
-		return "", fmt.Errorf("failed to get organization: %w", err)
+		return "", false, fmt.Errorf("failed to get organization: %w", err)
 	}
 
 	// Parse the path to create parent groups if needed
@@ -60,9 +60,9 @@ func (c *Client) CreateGroup(ctx context.Context, tenantName, groupPath string) 
 	// We need to ensure /web-app exists, then create system:viewers under it
 	// Use a cache to avoid redundant API calls within the same operation
 	cache := make(map[string]string) // path -> groupID
-	err = c.ensureGroupHierarchyWithCache(ctx, org.ID, groupPath, cache)
+	created, err := c.ensureGroupHierarchyWithCache(ctx, org.ID, groupPath, cache)
 	if err != nil {
-		return "", fmt.Errorf("failed to ensure group hierarchy: %w", err)
+		return "", false, fmt.Errorf("failed to ensure group hierarchy: %w", err)
 	}
 
 	// Get the created group ID from the cache using the normalized path
@@ -71,7 +71,7 @@ func (c *Client) CreateGroup(ctx context.Context, tenantName, groupPath string) 
 	normalizedPath = strings.ReplaceAll(normalizedPath, "//", "/")
 	groupID, ok := cache[normalizedPath]
 	if !ok {
-		return "", fmt.Errorf("group was created but ID not found in cache: %s (normalized: %s)", groupPath, normalizedPath)
+		return "", false, fmt.Errorf("group was created but ID not found in cache: %s (normalized: %s)", groupPath, normalizedPath)
 	}
 
 	c.logger.DebugContext(ctx, "Created tenant group",
@@ -80,7 +80,7 @@ func (c *Client) CreateGroup(ctx context.Context, tenantName, groupPath string) 
 		slog.String("groupID", groupID),
 	)
 
-	return groupID, nil
+	return groupID, created, nil
 }
 
 // DeleteGroup deletes a Keycloak organization group by ID.
@@ -119,7 +119,7 @@ func (c *Client) DeleteGroup(ctx context.Context, tenantName, groupID string) er
 
 // Helper methods
 
-func (c *Client) ensureGroupHierarchyWithCache(ctx context.Context, orgID, groupPath string, cache map[string]string) error {
+func (c *Client) ensureGroupHierarchyWithCache(ctx context.Context, orgID, groupPath string, cache map[string]string) (bool, error) {
 	// Normalize the path: remove leading/trailing slashes and collapse multiple slashes
 	// "//system:viewers" -> "system:viewers"
 	// "/web-app/system:viewers" -> "web-app/system:viewers"
@@ -130,11 +130,12 @@ func (c *Client) ensureGroupHierarchyWithCache(ctx context.Context, orgID, group
 	// "web-app/system:viewers" -> ["web-app", "system:viewers"]
 	segments := strings.Split(normalizedPath, "/")
 	if len(segments) == 0 || (len(segments) == 1 && segments[0] == "") {
-		return fmt.Errorf("invalid group path: %s", groupPath)
+		return false, fmt.Errorf("invalid group path: %s", groupPath)
 	}
 
 	var currentPath string
 	var parentID string
+	var targetCreated bool
 
 	for _, segment := range segments {
 		// Build the current path
@@ -157,7 +158,7 @@ func (c *Client) ensureGroupHierarchyWithCache(ctx context.Context, orgID, group
 				// there is no parent) because the top-level list endpoint does not populate subGroups.
 				groupID, lookupErr := c.getGroupIDByName(ctx, orgID, parentID, segment)
 				if lookupErr != nil {
-					return fmt.Errorf(
+					return false, fmt.Errorf(
 						"group %s already exists but failed to look up ID: %w",
 						currentPath, lookupErr,
 					)
@@ -166,16 +167,19 @@ func (c *Client) ensureGroupHierarchyWithCache(ctx context.Context, orgID, group
 				parentID = groupID
 				continue
 			}
-			return fmt.Errorf("failed to create group %s: %w", currentPath, err)
+			return false, fmt.Errorf("failed to create group %s: %w", currentPath, err)
 		}
 
 		// Cache the created group
 		cache[currentPath] = groupID
+		if currentPath == "/"+normalizedPath {
+			targetCreated = true
+		}
 		// Use this group as parent for next iteration
 		parentID = groupID
 	}
 
-	return nil
+	return targetCreated, nil
 }
 
 // createOrganizationGroupWithParent creates a group under a specific parent.

@@ -230,9 +230,10 @@ func (t *task) update(ctx context.Context) error {
 	}
 
 	// For active projects, no re-validation needed (the parent project relationship, stored in
-	// metadata.project, is immutable).
+	// metadata.project, is immutable). The Keycloak groups are external state, so ensure they
+	// still exist in case they were removed after the project was activated.
 	if state == privatev1.ProjectState_PROJECT_STATE_ACTIVE {
-		return nil
+		return t.ensureKeycloakGroups(ctx)
 	}
 
 	// Project is PENDING or UNSPECIFIED, perform validation
@@ -262,49 +263,30 @@ func (t *task) validateAndActivate(ctx context.Context) error {
 		// Validate parent is in ACTIVE state
 		parentState := parentProject.GetStatus().GetState()
 		if parentState != privatev1.ProjectState_PROJECT_STATE_ACTIVE {
-			t.project.GetStatus().SetState(privatev1.ProjectState_PROJECT_STATE_FAILED)
+			if parentState == privatev1.ProjectState_PROJECT_STATE_FAILED ||
+				parentState == privatev1.ProjectState_PROJECT_STATE_DELETE_FAILED {
+				t.project.GetStatus().SetState(privatev1.ProjectState_PROJECT_STATE_FAILED)
+				t.project.GetStatus().SetMessage(fmt.Sprintf(
+					"Parent project '%s' is not in ACTIVE state (current state: %s)",
+					parentName, parentState,
+				))
+				return nil
+			}
+			t.project.GetStatus().SetState(privatev1.ProjectState_PROJECT_STATE_PENDING)
 			t.project.GetStatus().SetMessage(fmt.Sprintf(
-				"Parent project '%s' is not in ACTIVE state (current state: %s)",
+				"Waiting for parent project '%s' to become ACTIVE (current state: %s)",
 				parentName, parentState,
 			))
+			t.retryErr = controllers.RequeueAfter(
+				fmt.Errorf("parent project %q is not active (state: %s)", parentName, parentState),
+				projectGroupRetryDelay,
+			)
 			return nil
 		}
 	}
 
-	// Project names are dot-separated label sequences (for example 'parent.child') where an empty string represents
-	// the tenant's default project. Keycloak expects a hierarchical path, so we convert dots to slashes to
-	// produce the group path. For example, 'parent.child' becomes 'parent/child').
-	projectTenant := t.project.GetMetadata().GetTenant()
-	projectName := t.project.GetMetadata().GetName()
-	projectPath := strings.ReplaceAll(projectName, ".", "/")
-
-	// Create Keycloak groups for project authorization
-	_, err := t.r.projectGroupManager.CreateProjectGroups(ctx, projectTenant, projectPath)
-	if err != nil {
-		t.updateCondition(
-			privatev1.ProjectConditionType_PROJECT_CONDITION_TYPE_KEYCLOAK_SYNC,
-			privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
-			"GroupCreationFailed",
-			fmt.Sprintf("Failed to create Keycloak groups: %v", err),
-		)
-		// Persist the condition update before returning the error
-		updateMask := t.r.maskCalculator.Calculate(&privatev1.Project{}, t.project)
-		if len(updateMask.GetPaths()) > 0 {
-			if _, updateErr := t.r.projectsClient.Update(ctx, privatev1.ProjectsUpdateRequest_builder{
-				Object:     t.project,
-				UpdateMask: updateMask,
-			}.Build()); updateErr != nil {
-				// Log update error but return the original group creation error
-				t.r.logger.ErrorContext(ctx, "Failed to persist Keycloak sync condition",
-					slog.String("project", t.project.GetMetadata().GetName()),
-					slog.Any("update_error", updateErr),
-				)
-			}
-		}
-		return controllers.RequeueAfter(
-			fmt.Errorf("failed to create Keycloak groups: %w", err),
-			projectGroupRetryDelay,
-		)
+	if err := t.ensureKeycloakGroups(ctx); err != nil {
+		return err
 	}
 
 	// Create a ProjectMembership for the project creator with manager role.
@@ -334,6 +316,100 @@ func (t *task) validateAndActivate(ctx context.Context) error {
 	)
 
 	return nil
+}
+
+// ensureKeycloakGroups ensures that both authorization groups exist and records a
+// retryable pending status when Keycloak is unavailable or the groups cannot be restored.
+func (t *task) ensureKeycloakGroups(ctx context.Context) error {
+	wasActive := t.project.GetStatus().GetState() == privatev1.ProjectState_PROJECT_STATE_ACTIVE
+	projectTenant := t.project.GetMetadata().GetTenant()
+	projectName := t.project.GetMetadata().GetName()
+	projectPath := strings.ReplaceAll(projectName, ".", "/")
+
+	_, err := t.r.projectGroupManager.EnsureProjectGroups(ctx, projectTenant, projectPath)
+	if err != nil {
+		if !wasActive {
+			t.project.GetStatus().SetState(privatev1.ProjectState_PROJECT_STATE_PENDING)
+		}
+		t.project.GetStatus().SetMessage("Waiting for Keycloak authorization groups to be created")
+		t.updateCondition(
+			privatev1.ProjectConditionType_PROJECT_CONDITION_TYPE_KEYCLOAK_SYNC,
+			privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+			"GroupCreationFailed",
+			fmt.Sprintf("Failed to create Keycloak groups: %v", err),
+		)
+		// Persist the condition update before returning the error
+		updateMask := t.r.maskCalculator.Calculate(&privatev1.Project{}, t.project)
+		if len(updateMask.GetPaths()) > 0 {
+			if _, updateErr := t.r.projectsClient.Update(ctx, privatev1.ProjectsUpdateRequest_builder{
+				Object:     t.project,
+				UpdateMask: updateMask,
+			}.Build()); updateErr != nil {
+				// Log update error but return the original group creation error
+				t.r.logger.ErrorContext(ctx, "Failed to persist Keycloak sync condition",
+					slog.String("project", t.project.GetMetadata().GetName()),
+					slog.Any("update_error", updateErr),
+				)
+			}
+		}
+		return controllers.RequeueAfter(
+			fmt.Errorf("failed to create Keycloak groups: %w", err),
+			projectGroupRetryDelay,
+		)
+	}
+	if wasActive {
+		t.project.GetStatus().ClearMessage()
+		t.updateCondition(
+			privatev1.ProjectConditionType_PROJECT_CONDITION_TYPE_KEYCLOAK_SYNC,
+			privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+			"GroupsCreated",
+			"Keycloak groups created successfully",
+		)
+	}
+	if wasActive && t.r.projectMembershipsClient != nil {
+		if err := t.signalProjectMemberships(ctx); err != nil {
+			return controllers.RequeueAfter(err, projectGroupRetryDelay)
+		}
+	}
+	return nil
+}
+
+func (t *task) signalProjectMemberships(ctx context.Context) error {
+	const pageSize int32 = 1000
+	limit := pageSize
+
+	filter := fmt.Sprintf(
+		"this.metadata.tenant == %q && this.metadata.project == %q",
+		t.project.GetMetadata().GetTenant(), t.project.GetMetadata().GetName(),
+	)
+
+	for offset := int32(0); ; {
+		response, err := t.r.projectMembershipsClient.List(ctx, privatev1.ProjectMembershipsListRequest_builder{
+			Offset: &offset,
+			Limit:  &limit,
+			Filter: &filter,
+		}.Build())
+		if err != nil {
+			return fmt.Errorf("failed to list project memberships for Keycloak group repair: %w", err)
+		}
+
+		items := response.GetItems()
+		for _, membership := range items {
+			if _, err := t.r.projectMembershipsClient.Signal(ctx, privatev1.ProjectMembershipsSignalRequest_builder{
+				Id: membership.GetId(),
+			}.Build()); err != nil {
+				return fmt.Errorf("failed to signal project membership %s for Keycloak group repair: %w", membership.GetId(), err)
+			}
+		}
+
+		if len(items) == 0 {
+			return nil
+		}
+		offset += int32(len(items)) // #nosec G115 -- each page is limited to 1000 items
+		if offset >= response.GetTotal() {
+			return nil
+		}
+	}
 }
 
 // findProjectByName looks up a project by its metadata.name. Returns nil if not found.

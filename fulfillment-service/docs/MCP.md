@@ -9,12 +9,18 @@ authorization boundary.
 ## Supported resources
 
 `list_resources` supports the baseline compute and networking prerequisites,
-`project`, and `secret_reference`.
+`project`, `secret_reference`, catalog item summaries for ComputeInstance,
+Cluster, and BareMetalInstance offerings, and template summaries for all three
+offering families.
 
 `get_resource` accepts only:
 
 - `compute_instance_catalog_item`
+- `cluster_catalog_item`
+- `bare_metal_instance_catalog_item`
 - `compute_instance_template`
+- `cluster_template`
+- `bare_metal_instance_template`
 - `instance_type`
 - `disk_image`
 - `storage_tier`
@@ -118,3 +124,40 @@ or later updates to the same field use last-write-wins behavior. A Project
 manager or tenant administrator can update within the existing public API
 permissions; an ordinary member or caller from another tenant receives the
 safe authorization error.
+
+## Catalog offering write tools
+
+`create_catalog_offering` supports only the `compute_instance`, `cluster`, and
+`bare_metal_instance` offering families through their public Create APIs. It
+accepts the offering `kind`, DNS-safe `name`, optional `title`, optional
+`description`, and immutable `template_id`; Fulfillment assigns tenant and
+Project scope from the signed-in caller. New offerings are always unpublished
+so publication cannot be hidden inside Create.
+
+`update_catalog_offering` accepts only `title` and `description`. It sends an
+exact field mask with the caller-supplied current `metadata.version` and
+`lock=true`, so a stale version returns the safe conflict envelope. Templates,
+tenant scope, Project scope, field policies, and template-parameter policies
+are intentionally not editable through this tool.
+
+Use `list_resources` or `get_resource` to retrieve the current version of a
+catalog offering before retrying an update or publication after a stale-version
+conflict. These tools return only the offering ID, name, version, and
+publication state.
+
+Use `list_resources` or `get_resource` with `cluster_template` or
+`bare_metal_instance_template` to discover the immutable template ID required
+by the corresponding `create_catalog_offering` kind. These summaries return
+only the template ID, name, and version.
+
+`publish_catalog_offering` is a separate destructive-hinted tool. It sends only
+the `published` field with the current version and `lock=true`; Fulfillment
+rechecks catalog policy and dependencies before making the offering visible.
+`delete_catalog_offering` is also a separate destructive-hinted tool and sends
+only the selected kind and ID.
+
+All four tools forward the signed-in caller's exchanged API token. Existing
+public authorization and tenancy remain authoritative; policy, dependency,
+stale-version, and cross-tenant failures return bounded safe errors without
+upstream detail. Results expose only the offering family, ID, name, version,
+publication state, and public policy warnings.

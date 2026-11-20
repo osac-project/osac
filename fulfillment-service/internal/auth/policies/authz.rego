@@ -343,6 +343,10 @@ client_permission_methods := {
     "/osac.public.v1.NATGateways/Delete",
     "/osac.public.v1.NATGateways/Get",
     "/osac.public.v1.NATGateways/List",
+    "/osac.public.v1.Notifications/Delete",
+    "/osac.public.v1.Notifications/Get",
+    "/osac.public.v1.Notifications/List",
+    "/osac.public.v1.Notifications/Update",
     "/osac.public.v1.Roles/Get",
     "/osac.public.v1.Roles/List",
     "/osac.public.v1.RoleBindings/Get",
@@ -550,6 +554,16 @@ legacy_allow if {
     "/osac.public.v1.ServiceAccounts/Update",
     "/osac.public.v1.ServiceAccounts/Delete",
     "/osac.public.v1.ServiceAccounts/RegenerateSecret",
+  }
+}
+
+# Tenant admins create and delete tenant-scoped announcements. Scope enforcement
+# (tenant vs platform) is applied in the Notifications server.
+legacy_allow if {
+  is_tenant_admin
+  grpc_method in {
+    "/osac.public.v1.Notifications/Create",
+    "/osac.public.v1.Notifications/Delete",
   }
 }
 

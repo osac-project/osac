@@ -787,6 +787,30 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	privatev1.RegisterServiceAccountsServer(registrar, privateServiceAccountsServer)
 
+	deps.Logger.InfoContext(ctx, "Creating notifications server")
+	notificationsServer, err := servers.NewNotificationsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create notifications server: %w", err)
+	}
+	publicv1.RegisterNotificationsServer(registrar, notificationsServer)
+
+	deps.Logger.InfoContext(ctx, "Creating private notifications server")
+	privateNotificationsServer, err := servers.NewPrivateNotificationsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private notifications server: %w", err)
+	}
+	privatev1.RegisterNotificationsServer(registrar, privateNotificationsServer)
+
 	// Create the project memberships server:
 	deps.Logger.InfoContext(ctx, "Creating project memberships server")
 	projectMembershipsServer, err := servers.NewProjectMembershipsServer().

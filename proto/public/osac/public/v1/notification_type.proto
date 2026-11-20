@@ -1,0 +1,177 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "buf/validate/validate.proto";
+import "google/api/field_behavior.proto";
+import "osac/public/v1/baremetal_instance_type.proto";
+import "osac/public/v1/cluster_type.proto";
+import "osac/public/v1/compute_instance_type.proto";
+import "osac/public/v1/external_ip_type.proto";
+import "osac/public/v1/metadata_type.proto";
+import "osac/public/v1/subnet_type.proto";
+import "osac/public/v1/virtual_network_type.proto";
+
+// Kind of notification content.
+enum NotificationKind {
+  // The kind is unspecified.
+  NOTIFICATION_KIND_UNSPECIFIED = 0;
+
+  // An event-driven inbox notification.
+  NOTIFICATION_KIND_EVENT = 1;
+
+  // An announcement banner.
+  NOTIFICATION_KIND_ANNOUNCEMENT = 2;
+}
+
+// Severity of a notification.
+enum NotificationSeverity {
+  // The severity is unspecified.
+  NOTIFICATION_SEVERITY_UNSPECIFIED = 0;
+
+  // An informational notice.
+  NOTIFICATION_SEVERITY_INFO = 1;
+
+  // A warning notice.
+  NOTIFICATION_SEVERITY_WARNING = 2;
+
+  // A critical notice.
+  NOTIFICATION_SEVERITY_CRITICAL = 3;
+}
+
+// Audience scope for an announcement.
+enum NotificationScope {
+  // The scope is unspecified.
+  NOTIFICATION_SCOPE_UNSPECIFIED = 0;
+
+  // An announcement for one tenant.
+  NOTIFICATION_SCOPE_TENANT = 1;
+
+  // An announcement for the whole platform.
+  NOTIFICATION_SCOPE_PLATFORM = 2;
+}
+
+// Read state of an inbox notification.
+enum NotificationState {
+  // The state is unknown.
+  NOTIFICATION_STATE_UNSPECIFIED = 0;
+
+  // The inbox item is unread.
+  NOTIFICATION_STATE_UNREAD = 1;
+
+  // The inbox item is read.
+  NOTIFICATION_STATE_READ = 2;
+}
+
+// Identity of the producer event for an inbox notification.
+message NotificationEventReference {
+  // Identifier of the producer event.
+  string id = 1;
+
+  // Name of the producing source.
+  string source = 2;
+}
+
+// Optional reference to a related API object.
+message NotificationResourceReference {
+  oneof object {
+    // Related cluster.
+    ClusterLocalReference cluster = 1;
+
+    // Related compute instance.
+    ComputeInstanceLocalReference compute_instance = 2;
+
+    // Related bare metal instance.
+    BareMetalInstanceLocalReference bare_metal_instance = 3;
+
+    // Related subnet.
+    SubnetLocalReference subnet = 4;
+
+    // Related virtual network.
+    VirtualNetworkLocalReference virtual_network = 5;
+
+    // Related external IP.
+    ExternalIPLocalReference external_ip = 6;
+  }
+}
+
+// Desired configuration for a Notification.
+message NotificationSpec {
+  // Kind of the notification.
+  NotificationKind kind = 1 [
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+
+  // Severity of the notification.
+  NotificationSeverity severity = 2 [
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).enum = {
+      defined_only: true
+      not_in: [0]
+    }
+  ];
+
+  // Event type string. Example: osac.notification.event.resource_created.
+  string type = 3 [(google.api.field_behavior) = IMMUTABLE];
+
+  // Producer event for an inbox notification.
+  NotificationEventReference event = 4 [(google.api.field_behavior) = IMMUTABLE];
+
+  // Recipient of an inbox notification. Empty for announcements.
+  string recipient_id = 5 [(google.api.field_behavior) = IMMUTABLE];
+
+  // Scope of an announcement.
+  NotificationScope scope = 6 [
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).enum.defined_only = true
+  ];
+
+  // Title of the notification.
+  string title = 7 [
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).string.min_len = 1
+  ];
+
+  // Description of the notification.
+  string description = 8 [(google.api.field_behavior) = IMMUTABLE];
+
+  // Related API object.
+  NotificationResourceReference resource = 9 [(google.api.field_behavior) = IMMUTABLE];
+
+  // Additional key-value details.
+  map<string, string> details = 10 [(google.api.field_behavior) = IMMUTABLE];
+
+  // Read state of an inbox notification.
+  NotificationState state = 11 [(buf.validate.field).enum.defined_only = true];
+}
+
+// An inbox item or announcement.
+//
+// buf:lint:ignore OSAC_OBJECT_SHAPE
+message Notification {
+  // Unique identifier of the notification.
+  string id = 1;
+
+  // Metadata of the notification.
+  Metadata metadata = 2 [(buf.validate.field).required = true];
+
+  // Spec of the notification.
+  NotificationSpec spec = 3 [(buf.validate.field).required = true];
+}

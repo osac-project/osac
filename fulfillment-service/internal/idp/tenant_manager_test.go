@@ -366,6 +366,19 @@ var _ = Describe("TenantManager", func() {
 			Expect(mock.createdTenant.Enabled).To(BeFalse())
 		})
 
+		It("skips the break-glass account when disabled", func() {
+			config := &TenantConfig{
+				Name:                    "shared",
+				CreateBreakGlassAccount: false,
+			}
+
+			credentials, err := manager.CreateTenant(ctx, config)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(credentials).To(BeNil())
+			Expect(mock.createdTenant.Name).To(Equal("shared"))
+			Expect(mock.createdUsers).To(BeEmpty())
+		})
+
 		It("assigns IdP manager roles to break-glass account", func() {
 			config := &TenantConfig{
 				Name:               "test-tenant",

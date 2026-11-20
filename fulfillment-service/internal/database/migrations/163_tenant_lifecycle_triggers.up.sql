@@ -259,10 +259,10 @@ begin
   select t.deletion_timestamp = 'epoch'::timestamptz into tenant_is_live
     from tenants t where t.name = new.tenant for share;
   if not found then
-    raise exception 'tenant % does not exist', new.tenant using errcode = 'Z0002';
+    raise exception 'tenant ''%'' doesn''t exist', new.tenant using errcode = 'Z0002';
   end if;
   if not tenant_is_live then
-    raise exception 'tenant % is being deleted', new.tenant using errcode = 'Z0002';
+    raise exception 'tenant ''%'' is being deleted', new.tenant using errcode = 'Z0002';
   end if;
   return new;
 end;

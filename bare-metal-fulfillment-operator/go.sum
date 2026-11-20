@@ -101,8 +101,8 @@ github.com/google/pprof v0.0.0-20261008003335-7bae8d8c4c9e h1:e+e5v2rfqKrd4lDA2n
 github.com/google/pprof v0.0.0-20261008003335-7bae8d8c4c9e/go.mod h1:yUo1AMMpsPIDFGuwDK8nLcf8+vvAd5l2O6JDZ6hpwrM=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/gophercloud/gophercloud/v2 v2.15.0 h1:4zLiLYTFraZMlJ77FH1Kzq7itjfVP+BIbWcCurCrgic=
-github.com/gophercloud/gophercloud/v2 v2.15.0/go.mod h1:4fs5I9VH6Wg2LyocDL9xf0ASb8VD63tyLA8sgAX/69U=
+github.com/gophercloud/gophercloud/v2 v2.16.0 h1:qhQKoU5mNX8hp4YVN5eks8Y6zFFlBAMYCu55Fc+tGkc=
+github.com/gophercloud/gophercloud/v2 v2.16.0/go.mod h1:4fs5I9VH6Wg2LyocDL9xf0ASb8VD63tyLA8sgAX/69U=
 github.com/gophercloud/utils/v2 v2.0.0-20260824073324-42b9474d09d4 h1:VKbePn/0e1cg6HSvVB5CKeXpVcKmD2AuMk6WQhjexuI=
 github.com/gophercloud/utils/v2 v2.0.0-20260824073324-42b9474d09d4/go.mod h1:z+yO4g4N0u8rJuWNPVcjZHVAlzAFapFNnMOtFIpqddM=
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 h1:5VipnvEpbqr2gA2VbM+nYVbkIF28c5ZQfqCBQ5g2xfk=

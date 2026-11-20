@@ -10,7 +10,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
-from tests.e2e.core.runner import run, run_unchecked
+from tests.e2e.core.runner import CommandFailed, run, run_unchecked
 
 _CLUSTER_ORDER_NOT_FOUND_RE = re.compile(
     r'Error from server \(NotFound\): clusterorders(?:\.osac\.openshift\.io)? "(?P<name>[^"]+)" not found',
@@ -78,6 +78,10 @@ class K8sClient:
             args.extend(["-n", namespace])
         args.extend(["-o", "json"])
         return json.loads(run(*args))
+
+    def list_json_all_namespaces(self, *, resource: str) -> dict[str, Any]:
+        """List a resource across every namespace, for resources whose namespace is a setting."""
+        return json.loads(run(*self._base(), "get", resource, "-A", "-o", "json"))
 
     def get_operator_metrics(self) -> str:
         services = self.list_json(resource="services", namespace=self.namespace).get("items", [])
@@ -219,15 +223,21 @@ class K8sClient:
         output, rc = run_unchecked(*self._base(), *args)
         if rc == 0:
             return False
-        not_found = _RESOURCE_NOT_FOUND_RE.fullmatch(output.strip())
-        expected_resources = _RESOURCE_NOT_FOUND_ALIASES.get(resource, {resource})
-        if (
-            not_found is not None
-            and not_found.group("resource").lower() in expected_resources
-            and not_found.group("name") == name
-        ):
+        if self._is_not_found(output=output, resource=resource, name=name):
             return True
         raise subprocess.CalledProcessError(rc, [*self._base(), *args], output=output, stderr=output)
+
+    def _is_not_found(self, *, output: str, resource: str, name: str) -> bool:
+        """True only for kubectl's NotFound response about this exact object.
+
+        Kubectl reports canonical plural resource names, so the requested alias
+        is resolved before comparing; any other failure text is not absence.
+        """
+        match = _RESOURCE_NOT_FOUND_RE.fullmatch(output.strip())
+        if match is None:
+            return False
+        expected_resources = _RESOURCE_NOT_FOUND_ALIASES.get(resource, {resource})
+        return match.group("resource").lower() in expected_resources and match.group("name") == name
 
     def is_absent_by_label(self, *, resource: str, label: str) -> bool:
         """True only when a successful list matches nothing. A kubectl failure raises, so it is never read as gone."""
@@ -321,6 +331,33 @@ class K8sClient:
             checked=checked,
         )
         return output if rc == 0 else ""
+
+    def get_condition(self, *, resource: str, name: str, condition_type: str) -> dict[str, Any]:
+        """The status condition of one type, or an empty dict when it is not carried."""
+        conditions: list[dict[str, Any]] = (
+            self.get_json(resource=resource, name=name).get("status", {}).get("conditions", [])
+        )
+        return next((condition for condition in conditions if condition.get("type") == condition_type), {})
+
+    def get_json_optional(self, *, resource: str, name: str) -> dict[str, Any] | None:
+        """The object, or None when this exact object does not exist.
+
+        Absence is matched strictly, as ``is_absent`` does, so an unrelated
+        failure whose text mentions "not found" still raises. Other failures
+        carry the captured output instead of a second read.
+        """
+        args = ("get", resource, name, "-n", self.namespace, "-o", "json")
+        output, rc = self._get(*args, checked=False)
+        if rc == 0:
+            return json.loads(output)
+        if self._is_not_found(output=output, resource=resource, name=name):
+            return None
+        raise CommandFailed(rc, [*self._base(), *args], output, output)
+
+    def get_status_jobs(self, *, resource: str, name: str) -> list[dict[str, Any]]:
+        """The provider networking jobs the operator recorded on the resource, if any."""
+        jobs: list[dict[str, Any]] | None = self.get_json(resource=resource, name=name).get("status", {}).get("jobs")
+        return list(jobs or [])
 
     def get_virtual_network_name(self, *, uuid: str, checked: bool = True) -> str:
         output, rc = self._get(

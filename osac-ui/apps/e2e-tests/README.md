@@ -8,7 +8,7 @@ locators, and CLI helpers live in `libs/`.
 The tests under `src/` are UI journeys, not unit tests. Use the app's Vitest
 tests for isolated components. Use this package when the test must prove a real
 browser flow through the deployed UI, authentication, proxy, and fulfillment
-service. The separate `tests/` directory checks the shared helpers in an
+service. The separate `helper-tests/` directory checks the shared helpers in an
 isolated browser with simulated responses.
 
 ## Directory structure
@@ -17,13 +17,13 @@ isolated browser with simulated responses.
 apps/e2e-tests/
 ├── src/
 │   └── vmaas/                  current VMaaS flows and VMaaS test data
-├── tests/                      isolated helper regression tests
+├── helper-tests/               isolated helper regression tests
 ├── run_scripts/
 │   ├── prepare-setup-for-ui-run.sh  install and validate prerequisites
 │   └── run-ui-e2e.sh                run the configured VMaaS flow tags
 ├── extravars.yaml               VMaaS flow configuration
 ├── package.json                 package-local test and typecheck commands
-├── playwright.unit.config.ts    isolated helper test configuration
+├── playwright.helpers.config.ts isolated helper test configuration
 └── tsconfig.json                TypeScript configuration
 
 apps/playwright/

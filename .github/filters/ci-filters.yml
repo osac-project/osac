@@ -12,6 +12,9 @@
 # as separate alternatives: four disjoint full patterns as separate entries
 # would require a single file to satisfy all of them, which no real file does.
 
+root-unit-tests:
+  - '**'
+
 # CI wiring changes run all checks except proto-check, which needs its own match.
 ci-config:
   - '{.github/workflows/ci.yml,.github/filters/ci-filters.yml}'

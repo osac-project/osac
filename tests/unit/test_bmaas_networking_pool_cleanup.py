@@ -44,7 +44,9 @@ def _external_ip(*, name: str, default: bool) -> dict[str, Any]:
 
 
 def _set_pool_state(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(test_module.TestBmaasNetworking, "state", {"pool_id": "pool-1", "pool_cr": "pool-cr"})
+    monkeypatch.setattr(
+        test_module.TestBmaasNetworking, "state", {"pool_id": "pool-1", "pool_cr": "pool-cr", "pool_owned": True}
+    )
     monkeypatch.setattr(test_module, "wait_for_external_ip_pool_deletion", lambda **_kwargs: None)
 
 

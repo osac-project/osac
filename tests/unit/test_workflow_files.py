@@ -84,7 +84,9 @@ def test_a_suite_that_runs_as_a_run_of_its_own_follows_the_contract_of_the_decis
     inputs = wrapper[True]["workflow_dispatch"]["inputs"]
     assert {"repo", "sha", "pr-number", "fork-pr-author", "fork-pr-author-association"} <= set(inputs)
     assert wrapper["jobs"]["verify"]["uses"].startswith("osac-project/osac-ci/.github/workflows/suite-inputs.yml@")
-    assert wrapper["jobs"][suite]["needs"] == "verify", "the suite's job is named after the suite and needs verify"
+    needs = wrapper["jobs"][suite]["needs"]
+    prerequisites = [needs] if isinstance(needs, str) else needs
+    assert "verify" in prerequisites, "the suite's job must directly depend on trusted input verification"
     for given in ("fork-pr-author", "fork-pr-author-association"):
         assert "needs.verify.outputs" in wrapper["jobs"][suite]["with"][given], (
             "read from the pull request, not the input"

@@ -26,6 +26,8 @@ def _selection(expression: str, event: str, suite: str = "", marker: str = "", p
         "inputs.test-suite": suite,
         "inputs.test-marker": marker,
         "inputs.pr-number": pr,
+        "inputs.sha": "a" * 40 if event in {"pull_request", "merge_group"} else "",
+        "inputs.tier": "",
         "github.event.pull_request.labels.*.name": ["e2e-serial", "e2e-regression"],
     }
     code = expression.removeprefix("${{").removesuffix("}}").strip()

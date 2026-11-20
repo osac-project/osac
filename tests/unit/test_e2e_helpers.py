@@ -54,7 +54,7 @@ def test_compute_references_wait_for_deletion_before_releasing_dependencies(
                             "security_groups": [{"name": "sg", "id": "sg-id"}],
                         }
                     ],
-                    "user_data_secret": {"name": "ref-user-data-test-tag", "id": "secret-id"},
+                    "user_data_source": {"secret": {"name": "ref-user-data-test-tag", "id": "secret-id"}},
                 },
             }
         }

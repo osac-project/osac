@@ -105,7 +105,7 @@ class TestBmaasNetworking:
             cidr=external_ip_pool_cidr,
         )
         self.__class__.state.update(pool_id=pool["id"], pool_cr=pool["cr"], pool_owned=pool["owned"])
-        print(f"ExternalIPPool {pool['id']} (created by this suite: {pool['owned']})")
+        print("ExternalIPPool resolved")
 
     # ── Phase 1: Build the Network ──────────────────────────────────────
 

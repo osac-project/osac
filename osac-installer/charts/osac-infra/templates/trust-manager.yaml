@@ -244,7 +244,7 @@ spec:
       automountServiceAccountToken: true
       initContainers:
         - name: cert-manager-package-debian
-          image: "quay.io/jetstack/trust-pkg-debian-bookworm:20230311-deb12u1.1"
+          image: "quay.io/jetstack/trust-pkg-debian-bookworm:20250419-deb12u2.0"
           imagePullPolicy: IfNotPresent
           args:
             - "/copyandmaybepause"

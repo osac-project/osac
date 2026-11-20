@@ -81,7 +81,9 @@ func newDAONotificationResourceAccess(
 	}
 
 	if err := registerNotificationResourceDAO(add, "cluster",
-		func(r *privatev1.NotificationResourceReference) resourceIDGetter { return r.GetCluster() },
+		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.ClusterLocalReference {
+			return r.GetCluster()
+		}),
 		func() (*dao.GenericDAO[*privatev1.Cluster], error) {
 			return dao.NewGenericDAO[*privatev1.Cluster]().
 				SetLogger(logger).SetTenancyLogic(tenancy).SetMetricsRegisterer(metricsRegisterer).Build()
@@ -89,7 +91,9 @@ func newDAONotificationResourceAccess(
 		return nil, err
 	}
 	if err := registerNotificationResourceDAO(add, "compute_instance",
-		func(r *privatev1.NotificationResourceReference) resourceIDGetter { return r.GetComputeInstance() },
+		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.ComputeInstanceLocalReference {
+			return r.GetComputeInstance()
+		}),
 		func() (*dao.GenericDAO[*privatev1.ComputeInstance], error) {
 			return dao.NewGenericDAO[*privatev1.ComputeInstance]().
 				SetLogger(logger).SetTenancyLogic(tenancy).SetMetricsRegisterer(metricsRegisterer).Build()
@@ -97,7 +101,9 @@ func newDAONotificationResourceAccess(
 		return nil, err
 	}
 	if err := registerNotificationResourceDAO(add, "bare_metal_instance",
-		func(r *privatev1.NotificationResourceReference) resourceIDGetter { return r.GetBareMetalInstance() },
+		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.BareMetalInstanceLocalReference {
+			return r.GetBareMetalInstance()
+		}),
 		func() (*dao.GenericDAO[*privatev1.BareMetalInstance], error) {
 			return dao.NewGenericDAO[*privatev1.BareMetalInstance]().
 				SetLogger(logger).SetTenancyLogic(tenancy).SetMetricsRegisterer(metricsRegisterer).Build()
@@ -105,7 +111,9 @@ func newDAONotificationResourceAccess(
 		return nil, err
 	}
 	if err := registerNotificationResourceDAO(add, "subnet",
-		func(r *privatev1.NotificationResourceReference) resourceIDGetter { return r.GetSubnet() },
+		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.SubnetLocalReference {
+			return r.GetSubnet()
+		}),
 		func() (*dao.GenericDAO[*privatev1.Subnet], error) {
 			return dao.NewGenericDAO[*privatev1.Subnet]().
 				SetLogger(logger).SetTenancyLogic(tenancy).SetMetricsRegisterer(metricsRegisterer).Build()
@@ -113,7 +121,9 @@ func newDAONotificationResourceAccess(
 		return nil, err
 	}
 	if err := registerNotificationResourceDAO(add, "virtual_network",
-		func(r *privatev1.NotificationResourceReference) resourceIDGetter { return r.GetVirtualNetwork() },
+		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.VirtualNetworkLocalReference {
+			return r.GetVirtualNetwork()
+		}),
 		func() (*dao.GenericDAO[*privatev1.VirtualNetwork], error) {
 			return dao.NewGenericDAO[*privatev1.VirtualNetwork]().
 				SetLogger(logger).SetTenancyLogic(tenancy).SetMetricsRegisterer(metricsRegisterer).Build()
@@ -121,7 +131,9 @@ func newDAONotificationResourceAccess(
 		return nil, err
 	}
 	if err := registerNotificationResourceDAO(add, "external_ip",
-		func(r *privatev1.NotificationResourceReference) resourceIDGetter { return r.GetExternalIp() },
+		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.ExternalIPLocalReference {
+			return r.GetExternalIp()
+		}),
 		func() (*dao.GenericDAO[*privatev1.ExternalIP], error) {
 			return dao.NewGenericDAO[*privatev1.ExternalIP]().
 				SetLogger(logger).SetTenancyLogic(tenancy).SetMetricsRegisterer(metricsRegisterer).Build()
@@ -130,6 +142,22 @@ func newDAONotificationResourceAccess(
 	}
 
 	return access, nil
+}
+
+// notificationResourceID wraps a typed getter so an absent oneof arm returns a
+// nil interface instead of an interface holding a nil pointer.
+func notificationResourceID[T resourceIDGetter](
+	get func(*privatev1.NotificationResourceReference) T,
+) func(*privatev1.NotificationResourceReference) resourceIDGetter {
+	return func(r *privatev1.NotificationResourceReference) resourceIDGetter {
+		ref := get(r)
+		// Compare the concrete pointer before boxing into the interface.
+		var zero T
+		if any(ref) == any(zero) {
+			return nil
+		}
+		return ref
+	}
 }
 
 func registerNotificationResourceDAO[T dao.Object](
@@ -163,7 +191,7 @@ func registerNotificationResourceDAO[T dao.Object](
 			filter := fmt.Sprintf("this.id in [%s]", strings.Join(quoted, ", "))
 			response, err := objectDAO.List().
 				SetFilter(filter).
-				SetLimit(int32(len(ids))).
+				SetLimit(int32(len(ids))). // #nosec G115 -- bounded by page size
 				Do(ctx)
 			if err != nil {
 				return nil, err

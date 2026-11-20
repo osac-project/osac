@@ -368,6 +368,7 @@ func (s *NotificationsServer) Update(ctx context.Context,
 	privateRequest := &privatev1.NotificationsUpdateRequest{}
 	privateRequest.SetObject(privateNotification)
 	privateRequest.SetUpdateMask(updateMask)
+	privateRequest.SetLock(request.GetLock())
 	privateResponse, err := s.delegate.Update(ctx, privateRequest)
 	if err != nil {
 		return nil, err
@@ -456,7 +457,6 @@ func (s *NotificationsServer) authorizePublicDelete(ctx context.Context,
 		if !s.canManageAnnouncement(ctx, spec.GetScope()) {
 			return grpcstatus.Error(grpccodes.PermissionDenied, "announcement delete is not allowed")
 		}
-		return nil
 	}
 	return s.authorizePublicRead(ctx, notification)
 }

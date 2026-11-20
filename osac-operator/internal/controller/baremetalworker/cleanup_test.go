@@ -13,6 +13,7 @@ import (
 
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"google.golang.org/grpc/codes"
@@ -182,6 +183,56 @@ var _ = It("ends the invocation after a teardown mutation", func() {
 	Expect(stop).To(BeTrue(), "Agent mutation must end the invocation: stop=%v err=%v deletes=%d", stop, err, fc.deletes)
 	Expect(fc.deletes).To(Equal(0), "Agent mutation must end the invocation: stop=%v err=%v deletes=%d", stop, err, fc.deletes)
 })
+
+var _ = DescribeTable("Agent tenant metadata during cleanup",
+	func(ctx SpecContext, annotation string, foreignOrder bool, allowed bool) {
+		r, base, co := workerReadHarness()
+		fc := &teardownReadClient{workerReadClient: base}
+		r.fulfillment = fc
+		w := co.Status.Workers[0]
+		w.Phase = workerPhaseUnbinding
+		fc.returned = ownedBMIFixture(co, w.BareMetalInstance.Name, w.BareMetalInstance.ID)
+		agent := &unstructured.Unstructured{Object: map[string]interface{}{
+			"spec":   map[string]interface{}{},
+			"status": map[string]interface{}{"debugInfo": map[string]interface{}{"state": "known-unbound"}},
+		}}
+		agent.SetGroupVersionKind(agentGVK)
+		agent.SetNamespace(co.Namespace)
+		agent.SetName("worker-agent")
+		agent.SetUID("original-agent")
+		order := co.Name
+		if foreignOrder {
+			order = "foreign-order"
+		}
+		agent.SetLabels(map[string]string{workerNameLabel: w.Name, clusterOrderLabel: order})
+		if annotation != "" {
+			agent.SetAnnotations(map[string]string{tenantAnnotationKey: annotation})
+		}
+		Expect(r.Create(ctx, agent)).To(Succeed())
+		Expect(r.Get(ctx, client.ObjectKeyFromObject(agent), agent)).To(Succeed())
+		before := agent.DeepCopy()
+
+		gone, err := r.cleanupWorker(ctx, co, &w)
+		Expect(gone).To(BeFalse())
+		Expect(fc.deletes).To(BeZero(), "BMI deletion must await confirmed Agent absence")
+		current := &unstructured.Unstructured{}
+		current.SetGroupVersionKind(agentGVK)
+		getErr := r.Get(ctx, client.ObjectKeyFromObject(agent), current)
+		if allowed {
+			Expect(err).NotTo(HaveOccurred())
+			Expect(apierrors.IsNotFound(getErr)).To(BeTrue(), "the detached Agent must be deleted")
+		} else {
+			Expect(err).To(HaveOccurred())
+			Expect(getErr).NotTo(HaveOccurred())
+			Expect(current).To(Equal(before))
+		}
+	},
+	Entry("absent annotation", "", false, true),
+	Entry("matching annotation", "tenant", false, true),
+	Entry("conflicting annotation", "another-tenant", false, false),
+	Entry("absent annotation with a foreign order", "", true, false),
+	Entry("matching annotation with a foreign order", "tenant", true, false),
+)
 
 var _ = Describe("Agent cleanup before BMI deletion", func() {
 	for _, state := range []string{"bound", "unbinding-but-bound", "detached", "ambiguous", "malformed", "malformed-lookup", "malformed-lookup-entry", "foreign"} {

@@ -110,8 +110,9 @@ make install-osac PLATFORM=kind PROFILE=dev NS=osac
 make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
 ```
 
-- Supported suites are `all`, `fulfillment`, `compute-storage`, `operator` and
-  `bmf`. Select with `SUITE`; inspect profile-specific prerequisites and cleanup.
+- Supported suites are `all`, `fulfillment`, `compute-storage`, `operator`,
+  `bmf` and the opt-in `caas` suite (`PLATFORM=kind PROFILE=dev NS=osac`).
+  Select with `SUITE`; inspect profile-specific prerequisites and cleanup.
 - For combined disk handoff, run
   `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage`.
   This uses real Fulfillment/PostgreSQL/operator with a recording AAP double.

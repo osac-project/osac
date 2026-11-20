@@ -22,8 +22,26 @@ readiness only.
 | Networking billing (`networking/vmaas` billing) | ExternalIP/reattach/NATGateway billing through deployed metering and the echo adapter | Ordered cases inside the connectivity module, before the final cases: under `-x` an earlier failure hides billing and a billing failure hides them. Needs provider networking, a routed pool and the adapter; the module also needs the SSH helper, and cases that skip for a missing adapter carry no signal |
 | Netris BMaaS (`networking/bmaas`) | BMI networking on the deployed fabric | Needs BMH SSH and the BMI network interface. PR job omits slow cross-tenant cases; Netris `full` excludes the directory (`cudn_evpn` rejects its ICMP rules) |
 | Stretched (`networking/stretched`) | BMI/VM connectivity on one Subnet | Needs the stretched deploy suite, BMaaS SSH, VM template/helper, EVPN underlay; not in standard runs |
+| Provider networking disabled (`vmaas/sanity`, plus assertions in the VM, CaaS, and BMaaS journeys; [QE] [OSAC-6000](https://redhat.atlassian.net/browse/OSAC-6000)) | Deployed Fulfillment, operators, and hub CRs on a deployment whose stored mode is disabled: tenant defaults, networking resources, ExternalIP rejection, and the workload journeys | Skips when the installed mode is enabled; `status.jobs` is the absence evidence, so no AAP or provider work is claimed. No real hardware or power claim, and BMF condition reasons stay at the DEV tiers |
 
 - Networking references ([OSAC-6744](https://github.com/osac-project/osac/pull/2323)) distinguish disabled-mode rejection without storage/allocation/accounting changes from enabled-provider allocation and traffic. The disabled fixture requires private pool management and Kubernetes observation; enabled ID/name selectors run serially in the full ordered VMaaS module, retaining the final allocation for detach, automatic allocation, billing and teardown. Registration/default rendering and disabled component tests do not establish live Netris allocation, connectivity or release; missing deployed evidence remains unresolved.
+
+## Provider networking mode gate
+
+The provider networking mode is installation state, not a profile name, so the
+suites read it from Fulfillment's stored `InstallationSettings` through the
+private API (`networking_provisioning_enabled` session fixture) instead of
+guessing from the deployment. `provider_networking_disabled` skips tests that
+only exist for the disabled contract; assertions inside shared journeys are
+gated on the same value. The read uses `grpcurl -emit-defaults` because proto3
+omits a false boolean, which is exactly the disabled case, and it fails setup
+rather than skipping when the response is missing, malformed, or unreadable.
+Provider-work absence is limited to what the operator records: the tests
+require an empty `status.jobs` (and no `NetworkAttachment`), which shows that
+the operator launched no task. They do not read AAP job state, so they do not
+independently establish that no provider work occurred. The disabled reference
+fixture (`tests/e2e/references/test_networking_references.py`) uses the same
+two fixtures instead of reading the setting itself.
 
 ## Coverage gaps
 
@@ -31,10 +49,10 @@ The disabled reference fixture owns its shared pool; private API auth must allow
 pool create/read/delete and child ExternalIP List/delete, with Kubernetes
 observation for readiness and natural cleanup. No pre-existing pool is needed.
 Read failures remain failures; tenant-only credentials are insufficient.
-Its admin identity must also read private `InstallationSettings/Get`: the guard
-reads the stored mode with explicit JSON defaults before pool creation, skips
-only boolean enabled mode, and fails setup for missing/nonboolean mode or RPC
-errors. Disabled mode retains the full rejection contract; this guard does not
+Its admin identity must also read private `InstallationSettings/Get` through
+the shared `networking_provisioning_enabled` fixture, which reads the stored
+mode with `grpcurl -emit-defaults`, skips only boolean enabled mode, and fails
+setup for missing/nonboolean mode or RPC errors. Disabled mode retains the full rejection contract; this guard does not
 apply to enabled-provider suites. Hermetic diagnostic tests use synthetic
 subprocess failures, not live provider execution or evidence of real exposure.
 

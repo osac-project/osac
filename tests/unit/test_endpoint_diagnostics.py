@@ -458,6 +458,16 @@ def private_grpc(monkeypatch):
     return GRPCClient(address="private-api.synthetic.example.invalid:7443", token=fixture_token)
 
 @pytest.fixture
+def networking_provisioning_enabled(private_grpc):
+    """Register the shared mode fixture the reference guard depends on."""
+    from tests.e2e.core.helpers import read_installed_networking_mode
+
+    try:
+        return read_installed_networking_mode(private_grpc=private_grpc)
+    except RuntimeError as err:
+        pytest.fail(str(err), pytrace=False)
+
+@pytest.fixture
 def k8s_hub_client():
     """No Kubernetes access is possible before the private create fails."""
     return None

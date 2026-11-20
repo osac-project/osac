@@ -36,6 +36,7 @@ interface InstanceTypeReference {
 
 interface ComputeInstance {
   spec?: {
+    catalog_item?: { id?: string };
     instance_type?: InstanceTypeReference;
   };
   status?: {
@@ -86,6 +87,16 @@ const getComputeInstance = async (tenantName: string, name: string): Promise<Com
   ]);
   expectOsacCommandSucceeded(result, `Get compute instance '${name}'`);
   return parseResource<ComputeInstance>(result.stdout, `compute instance '${name}'`);
+};
+
+/** Verify the VM references the catalog item from which it was launched. */
+export const expectComputeInstanceCatalogItem = async (
+  tenantName: string,
+  name: string,
+  catalogItemId: string,
+): Promise<void> => {
+  const computeInstance = await getComputeInstance(tenantName, name);
+  expect(computeInstance.spec?.catalog_item?.id).toBe(catalogItemId);
 };
 
 /** Confirm deletion through the API, independently of the VM list in the UI. */

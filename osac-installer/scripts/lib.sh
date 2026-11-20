@@ -6,6 +6,15 @@
 # is ever sourced by a script that forgot to.
 set -euo pipefail
 
+# Keep Kind's automatic export and failure cleanup separate from the caller's config.
+create_kind_cluster() (
+    local cli="$1" name="$2" config="$3" directory
+    directory=$(mktemp -d "${TMPDIR:-/tmp}/osac-kind-create-XXXXXX") || return 1
+    trap 'rm -rf -- "${directory}"' EXIT
+    "${cli}" create cluster --name "${name}" --config "${config}" --wait 60s \
+        --kubeconfig "${directory}/config"
+)
+
 # Prepare only a verified local Linux engine host; never persist sysctl changes.
 ensure_inotify_instances() {
     local floor=512

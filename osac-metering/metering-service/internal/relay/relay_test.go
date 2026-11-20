@@ -236,7 +236,7 @@ func runRoundAt(t *testing.T, store *database.Store, tenant string, moment time.
 	}
 	roundLoop, err := round.New(
 		store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(),
-		&sync.RWMutex{},
+		&sync.RWMutex{}, "",
 	)
 	if err != nil {
 		t.Fatalf("creating round: %v", err)

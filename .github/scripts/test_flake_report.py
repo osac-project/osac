@@ -110,7 +110,7 @@ class ReportTests(unittest.TestCase):
         )
 
     def test_non_successful_job_outcomes_are_incomplete(self) -> None:
-        for outcome in ("cancelled", "timed_out", "skipped", None, "in_progress"):
+        for outcome in ("timed_out", "skipped", None, "in_progress"):
             with self.subTest(outcome=outcome):
                 observations = jobs()
                 observations[0]["conclusion"] = outcome
@@ -427,7 +427,7 @@ class ReportTests(unittest.TestCase):
         self.assertNotIn("25.0%", markdown)
         self.assertNotIn("16.7%", markdown)
         self.assertLess(markdown.index("### Integration tests"), markdown.index("### Unit tests"))
-        self.assertEqual(markdown.count("| Suite | Failed / Recorded | Failure rate |"), 2)
+        self.assertEqual(markdown.count("| Suite | Failed / Completed | Failure rate |"), 2)
         self.assertIn("not individual test cases", markdown)
         self.assertIn("| \U0001f534 fulfillment-service | 1 / 3 | **33.3%** |", markdown)
         self.assertIn("| \U0001f534 fulfillment-service | 2 / 3 | **66.7%** |", markdown)
@@ -460,6 +460,108 @@ class ReportTests(unittest.TestCase):
                 else:
                     self.assertIn("Further suite details in Report.", slack["text"])
                     self.assertIn(RUN["report_url"], slack["text"])
+
+    def test_cancelled_children_remain_separate_and_reportable(self) -> None:
+        for passed, failed, cancelled, risk, line in (
+            (89, 9, 2, "9.2%", "9/98 executions failed (9.2%), 2 cancelled."),
+            (90, 0, 10, "0.0%", "10/100 executions cancelled."),
+            (0, 0, 100, "Unavailable", "100/100 executions cancelled."),
+            (0, 9, 91, "100.0%", "9/9 executions failed (100%), 91 cancelled."),
+            (100, 0, 0, "0.0%", None),
+        ):
+            with (
+                self.subTest(passed=passed, failed=failed, cancelled=cancelled),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                working = Path(directory)
+                inputs = working / "input"
+                inputs.mkdir()
+                observations = jobs(100)
+                outcomes = ["success"] * passed + ["failure"] * failed + ["cancelled"] * cancelled
+                for observation, outcome in zip(observations[200:300], outcomes, strict=True):
+                    observation["conclusion"] = outcome
+                artifacts = [{"id": 1, "name": "logs-integration-100-attempt-1", "expired": False}]
+                for name, data in {
+                    "plan": plan(100),
+                    "jobs": [{"jobs": observations}],
+                    "artifacts": [{"artifacts": artifacts}],
+                }.items():
+                    (inputs / f"{name}.json").write_text(json.dumps(data))
+                github_output = working / "github-output"
+                conclusion = "failure" if failed or cancelled else "success"
+                result = run_cli(working, conclusion, github_output=github_output)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                report = json.loads((working / "report/results.json").read_text())
+                self.assertEqual(report["status"], "failures detected" if failed else "clean")
+                self.assertEqual(report["issues"], [])
+                suite = next(suite for suite in report["suites"] if suite["suite"] == SUITES[2]["id"])
+                self.assertEqual((suite["passed"], suite["failed"]), (passed, failed))
+                self.assertEqual((suite["other"], suite["missing"], suite["incomplete"]), (0, 0, 0))
+                self.assertEqual(suite["outcomes"].get("cancelled", 0), cancelled)
+                self.assertEqual([execution["conclusion"] for execution in suite["failures"]], outcomes[passed:])
+                markdown = (working / "report/summary.md").read_text()
+                payload = json.loads(github_output.read_text().removeprefix("slack_payload="))
+                self.assertEqual(payload, render_slack(report))
+                for text in (markdown, payload["text"]):
+                    self.assertIn(f"Overall failure risk: {risk}", text)
+                    self.assertNotIn("Incomplete", text)
+                if line:
+                    self.assertIn(f"- 🔴 fulfillment-service: {line}", payload["text"])
+                    self.assertIn("- 🟢 All other 1 suite passed", payload["text"])
+                else:
+                    self.assertIn("*Integration tests* - 🟢 All 2 suites passed", payload["text"])
+                if cancelled:
+                    self.assertIn(f" · {cancelled} cancelled", markdown)
+                    failed_section = markdown.split("## Failed executions", 1)[1].split("## Cancelled executions", 1)[0]
+                    self.assertNotIn("/job/2100", failed_section)
+                    cancelled_section = markdown.split("## Cancelled executions", 1)[1]
+                    self.assertIn(f"[View job]({RUN['url']}/job/2100) · cancelled", cancelled_section)
+                    self.assertIn(f"[Logs]({RUN['url']}/artifacts/1)", cancelled_section)
+                    execution = suite["failures"][-1]
+                    self.assertEqual(
+                        (execution["iteration"], execution["job_id"], execution["conclusion"]),
+                        (100, 2100, "cancelled"),
+                    )
+                else:
+                    self.assertNotIn("cancelled", payload["text"])
+                    self.assertNotIn("Cancelled executions", markdown)
+                if passed + failed == 0:
+                    self.assertIn("| 0 / 0 | unknown · 100 cancelled |", markdown)
+                elif failed:
+                    self.assertIn(f"| {failed} / {passed + failed} | **{failed / (passed + failed):.1%}**", markdown)
+                for invalid in ("missing", "unknown", "metadata", "cancelled campaign"):
+                    with self.subTest(invalid=invalid):
+                        altered = observations[:-1] if invalid == "missing" else observations
+                        if invalid == "unknown":
+                            altered = [*observations[:-1], observations[-1] | {"conclusion": None}]
+                        (inputs / "jobs.json").write_text(json.dumps([{"jobs": altered}]))
+                        (inputs / "plan.json").write_text(json.dumps(None if invalid == "metadata" else plan(100)))
+                        result = run_cli(working, "cancelled" if invalid == "cancelled campaign" else "failure")
+                        self.assertEqual(result.returncode, 1, result.stderr)
+                        report = json.loads((working / "report/results.json").read_text())
+                        self.assertEqual(report["status"], "incomplete")
+                        self.assertEqual(format_overall_failure_risk(report), "Unavailable")
+
+    def test_cancelled_only_suite_is_not_grouped_with_seven_clean_suites(self) -> None:
+        metadata = plan(100)
+        metadata["suites"] = [{"group": "unit", "id": f"Unit tests (component-{index})"} for index in range(8)]
+        observations = [
+            job(iteration=iteration) | {
+                "id": index * 1000 + iteration,
+                "name": f"Unit repetition {iteration} / {suite['id']} / Run",
+                "conclusion": "cancelled" if index == 0 and iteration > 90 else "success",
+            }
+            for index, suite in enumerate(metadata["suites"])
+            for iteration in range(1, 101)
+        ]
+        report = aggregate(metadata, [{"jobs": observations}], [], RUN | {"conclusion": "failure"}, [])
+        self.assertEqual(report["issues"], [])
+        self.assertEqual(report["status"], "clean")
+        slack = render_slack(report)["text"]
+        self.assertTrue(slack.startswith("🔴"))
+        self.assertIn("- 🔴 component-0: 10/100 executions cancelled.", slack)
+        self.assertIn("- 🟢 All other 7 suites passed", slack)
+        self.assertEqual(slack.count("cancelled"), 1)
 
     def test_cli_writes_reports_and_optional_slack_output(self) -> None:
         for conclusion in ("success", "failure", "cancelled"):

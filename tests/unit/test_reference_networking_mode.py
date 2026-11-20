@@ -98,6 +98,20 @@ def private_grpc(monkeypatch):
     return GRPCClient(address="fixture-mode.example.invalid:443", token=fixture_token)
 
 @pytest.fixture
+def networking_provisioning_enabled(private_grpc):
+    """Register the shared mode fixture the reference guard depends on.
+
+    The real fixture is session-scoped; this harness keeps it per test so the
+    synthetic transport is asserted once per parameter set.
+    """
+    from tests.e2e.core.helpers import read_installed_networking_mode
+
+    try:
+        return read_installed_networking_mode(private_grpc=private_grpc)
+    except RuntimeError as err:
+        pytest.fail(str(err), pytrace=False)
+
+@pytest.fixture
 def grpc(private_grpc):
     """Use the same synthetic transport for public rejection and private observation."""
     return private_grpc

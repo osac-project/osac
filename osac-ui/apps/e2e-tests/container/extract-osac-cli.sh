@@ -41,5 +41,5 @@ container=$(podman create --pull=never "$image_id")
 podman cp "$container:/usr/local/bin/osac" "$temporary"
 chmod 0755 "$temporary"
 # Fail instead of replacing an existing path, even if it appeared during copy.
-ln -- "$temporary" "$output"
+python3 -c 'import os, sys; os.link(sys.argv[1], sys.argv[2])' "$temporary" "$output"
 printf 'Extracted osac CLI from %s (local image ID %s)\n' "$image" "$image_id"

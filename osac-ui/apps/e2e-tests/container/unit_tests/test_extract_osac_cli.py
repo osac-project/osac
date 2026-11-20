@@ -30,14 +30,21 @@ class ExtractCliTests(unittest.TestCase):
             '  "image inspect") printf "%s\\n" "$IMAGE_ID" ;;\n'
             '  "pull "*) exit 0 ;;\n'
             '  "create "*) printf "container-id\\n" ;;\n'
-            '  "cp "*) [[ "$FAIL_COPY" != 1 ]] || exit 1; printf "test binary" > "$3" ;;\n'
+            '  "cp "*) [[ "$FAIL_COPY" != 1 ]] || exit 1; '
+            'printf "test binary" > "$3"; '
+            'case "$CREATE_OUTPUT_KIND" in '
+            'directory) mkdir "$OUTPUT_PATH" ;; '
+            'file) printf "existing" > "$OUTPUT_PATH" ;; '
+            'symlink) ln -s missing "$OUTPUT_PATH" ;; esac ;;\n'
             '  "rm "*) exit 0 ;;\n'
             '  *) exit 9 ;;\n'
             'esac\n'
         )
         podman.chmod(0o755)
 
-    def run_extract(self, image, *, local=True, fail_copy=False, image_id=IMAGE_ID):
+    def run_extract(
+        self, image, *, local=True, fail_copy=False, image_id=IMAGE_ID, create_output_kind=""
+    ):
         env = os.environ.copy()
         env.update(
             PATH=f"{self.bin}:{env['PATH']}",
@@ -45,6 +52,8 @@ class ExtractCliTests(unittest.TestCase):
             IMAGE_LOCAL="1" if local else "0",
             IMAGE_ID=image_id.removeprefix("sha256:"),
             FAIL_COPY="1" if fail_copy else "0",
+            CREATE_OUTPUT_KIND=create_output_kind,
+            OUTPUT_PATH=str(self.output),
         )
         return subprocess.run(
             ["bash", str(EXTRACT), image, str(self.output)],
@@ -86,6 +95,26 @@ class ExtractCliTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.output.read_text(), "existing")
         self.assertFalse(self.log.exists())
+
+    def test_directory_appearing_during_copy_is_not_used_as_output(self):
+        result = self.run_extract(DIGEST_IMAGE, create_output_kind="directory")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(self.output.is_dir())
+        self.assertEqual(list(self.output.iterdir()), [])
+        self.assertFalse(list(self.root.glob("osac.*")))
+        self.assertIn("rm container-id", self.log.read_text())
+
+    def test_file_appearing_during_copy_is_not_replaced(self):
+        result = self.run_extract(DIGEST_IMAGE, create_output_kind="file")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.output.read_text(), "existing")
+        self.assertFalse(list(self.root.glob("osac.*")))
+
+    def test_symlink_appearing_during_copy_is_not_replaced(self):
+        result = self.run_extract(DIGEST_IMAGE, create_output_kind="symlink")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(self.output.is_symlink())
+        self.assertFalse(list(self.root.glob("osac.*")))
 
     def test_invalid_image_id_is_rejected(self):
         result = self.run_extract(DIGEST_IMAGE, image_id="invalid")

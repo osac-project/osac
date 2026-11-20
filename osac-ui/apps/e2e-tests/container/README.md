@@ -16,7 +16,7 @@ The image is based on UBI 9 with Node.js
 system libraries, and `oc`. The matching `osac` CLI is mounted at runtime.
 UBI 9 repositories have no Xvfb,
 so the image runs headless only; `--headed` stops with `Xvfb is missing`. The
-host needs podman, git, tar, and oc for the examples below,
+host needs podman, git, tar, python3, and oc for the examples below,
 a kubeconfig that can read the `osac` namespace, and network access to the
 OSAC UI and Fulfillment API routes.
 
@@ -86,6 +86,7 @@ repository. Do not pass it on the command line.
 ```bash
 umask 077
 secret_dir=$(mktemp -d /tmp/osac-ui-e2e-secrets.XXXXXXXX)
+tenant_credentials_dir=$(mktemp -d /tmp/osac-ui-e2e-tenant.XXXXXXXX)
 cli_file="$secret_dir/osac"
 bash osac-ui/apps/e2e-tests/container/extract-osac-cli.sh "$service_image" "$cli_file"
 password_file="$secret_dir/admin-password"
@@ -105,6 +106,7 @@ else
     -v "$container_kubeconfig":/work/kubeconfig:ro,Z \
     -v "$password_file":/work/admin-password:ro,Z \
     -v "$cli_file":/work/osac-cli:ro,Z \
+    -v "$tenant_credentials_dir":/work/tenant-credentials:Z \
     -v ./test-output:/tmp/test-output:Z \
     -e KUBECONFIG=/work/kubeconfig \
     osac-ui-e2e \
@@ -127,6 +129,12 @@ fi
   authentication helpers or token files, if used, must still be available inside
   the container.
 - Remove the private files after the last run with `rm -rf -- "$secret_dir"`.
+- Keep the separate tenant credentials directory private. It must be mounted
+  for test execution so credentials survive container removal. After a failed
+  password update, the original file and its `.pending` sibling contain the
+  old and proposed credentials; either may be active. Recover or delete only
+  the test tenant before removing the directory. A successful tenant
+  deletion removes both files; remove the empty directory afterward.
 - `run-ui-e2e.sh` reads the `osac-ui` and `fulfillment-api` routes with the
   kubeconfig. To run without one, see
   [Without a kubeconfig](#without-a-kubeconfig).
@@ -156,6 +164,7 @@ podman run --rm \
   --user "$(id -u):0" \
   -v "$password_file":/work/admin-password:ro,Z \
   -v "$cli_file":/work/osac-cli:ro,Z \
+  -v "$tenant_credentials_dir":/work/tenant-credentials:Z \
   -v ./test-output:/tmp/test-output:Z \
   -e OSAC_UI_BASE_URL=https://osac-ui-osac.apps.<cluster-domain> \
   -e OSAC_API_BASE_URL=https://fulfillment-api-osac.apps.<cluster-domain> \
@@ -239,7 +248,7 @@ to untrusted pull request code.
 
 ### Runner prerequisites
 
-- **Rootless podman, git, and tar.** Docker is not tested. The runner user needs
+- **Rootless podman, git, tar, and python3.** Docker is not tested. The runner user needs
   subordinate UIDs and GIDs (`/etc/subuid`, `/etc/subgid`) for
   `--userns=keep-id`.
 - **Network access to the deployment:** the `osac-ui` and `fulfillment-api`
@@ -283,6 +292,7 @@ to untrusted pull request code.
 | Self-signed route certificates | `--ignore-tls`                                                                                                     |
 | Results directory              | a writable directory mounted at `/tmp/test-output`                                                                 |
 | `osac` CLI version             | mount the CLI extracted from the fulfillment-service image the deployment runs                                    |
+| Tenant credential recovery     | mount a private writable directory at `/work/tenant-credentials`; retain it on failure                           |
 
 Do not pass `-e CI=true`: with `CI` set, the Playwright configuration
 retries a failed test once, and a retried create step fails on the object
@@ -313,8 +323,8 @@ the first attempt left behind.
   Delete flows differ: `delete_instance_type` uses an indexed name and can
   operate in a new container, but may create the object if it is absent. Full
   VM-flow deletion relies on run-specific state in `/tmp` or the original run
-  IDs, and tenant deletion needs its credential file; `--rm` discards files
-  stored in the container. Inspect the specific flow and its dependencies before
+  IDs, and tenant deletion needs its credential file in the private mount.
+  `--rm` discards other files stored in the container. Inspect the specific flow and its dependencies before
   using a `delete_*` tag for cleanup. Otherwise, identify and delete only the
   leftover test resources using an authenticated CLI or API (see
   [Before a run](#before-a-run)).
@@ -392,17 +402,20 @@ jobs:
           password_file=$(mktemp "${RUNNER_TEMP}/osac-ui-e2e-password.XXXXXXXX")
           cli_dir=$(mktemp -d "${RUNNER_TEMP}/osac-ui-e2e-cli.XXXXXXXX")
           result_dir=$(mktemp -d "${RUNNER_TEMP}/osac-ui-e2e-results.XXXXXXXX")
+          tenant_credentials_dir=$(mktemp -d "${RUNNER_TEMP}/osac-ui-e2e-tenant.XXXXXXXX")
           trap 'rm -f -- "$password_file" "$cli_dir/osac"; rmdir -- "$cli_dir"' EXIT
           bash osac-ui/apps/e2e-tests/container/extract-osac-cli.sh \
             "$FULFILLMENT_SERVICE_IMAGE" "$cli_dir/osac"
           printf %s "$OSAC_ADMIN_PASSWORD" > "$password_file"
           printf 'Private results directory: %s\n' "$result_dir"
-          podman run --rm \
+          printf 'Private tenant credentials directory: %s\n' "$tenant_credentials_dir"
+          if podman run --rm \
             --network=host \
             --userns=keep-id \
             --user "$(id -u):0" \
             -v "$password_file":/work/admin-password:ro,Z \
             -v "$cli_dir/osac":/work/osac-cli:ro,Z \
+            -v "$tenant_credentials_dir":/work/tenant-credentials:Z \
             -v "$result_dir":/tmp/test-output:Z \
             -e OSAC_UI_BASE_URL="${{ vars.OSAC_UI_BASE_URL }}" \
             -e OSAC_API_BASE_URL="${{ vars.OSAC_API_BASE_URL }}" \
@@ -410,5 +423,12 @@ jobs:
             --tag=vmaas_full_happy_basic \
             --ignore-tls \
             --admin-password-file=/work/admin-password \
-            > "$result_dir/runner.log" 2>&1
+            > "$result_dir/runner.log" 2>&1; then
+            rmdir -- "$tenant_credentials_dir" ||
+              echo 'Tenant credentials retained for cleanup.'
+          else
+            rc=$?
+            echo 'Tenant credentials retained for recovery.' >&2
+            exit "$rc"
+          fi
 ```

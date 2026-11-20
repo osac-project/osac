@@ -7,6 +7,7 @@ set -uo pipefail
 
 ui_dir="${OSAC_UI_DIR:-/work/osac-ui}"
 output_dir="${OSAC_UI_E2E_OUTPUT:-/tmp/test-output}"
+export OSAC_E2E_CREDENTIALS_DIR="${OSAC_E2E_CREDENTIALS_DIR:-/work/tenant-credentials}"
 
 export_rc=0
 if [[ -d "${output_dir}" ]]; then
@@ -16,6 +17,27 @@ if [[ -d "${output_dir}" ]]; then
       export_rc=1
     fi
   done
+fi
+
+# Tenant recovery credentials must outlive a removed container. Listing and
+# help do not authenticate or create tenants, so they need no mount.
+needs_credentials_mount=true
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h|--list) needs_credentials_mount=false ;;
+  esac
+done
+if [[ "$needs_credentials_mount" == true ]]; then
+  if ! mountpoint -q -- "$OSAC_E2E_CREDENTIALS_DIR" ||
+    [[ ! -w "$OSAC_E2E_CREDENTIALS_DIR" ]]; then
+    echo 'Mount a private writable tenant credentials directory at /work/tenant-credentials.' >&2
+    exit 1
+  fi
+  mode=$(stat -c '%a' -- "$OSAC_E2E_CREDENTIALS_DIR") || exit 1
+  if [[ ! "$mode" =~ ^[0-7]{3,4}$ ]] || (( (8#$mode & 077) != 0 )); then
+    echo 'The tenant credentials directory must not be accessible by group or others.' >&2
+    exit 1
+  fi
 fi
 
 rc=0

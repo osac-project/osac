@@ -73,6 +73,7 @@ RUN chgrp -R 0 /work/osac-ui /ms-playwright \
 ENV HOME=/home/e2e \
     OSAC_CLI_PATH=/work/osac-cli \
     OSAC_UI_DIR=/work/osac-ui \
+    OSAC_E2E_CREDENTIALS_DIR=/work/tenant-credentials \
     OSAC_UI_E2E_OUTPUT=/tmp/test-output
 # run-ui-e2e.sh refuses credentialed runs as root. Group 0 gives the default
 # user the same checkout access as an arbitrary UID.

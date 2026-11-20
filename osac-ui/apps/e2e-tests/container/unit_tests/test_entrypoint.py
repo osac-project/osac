@@ -31,6 +31,8 @@ class EntrypointTests(unittest.TestCase):
             (source / "artifact.txt").write_text(name)
         self.output = root / "output"
         self.output.mkdir()
+        self.credentials = root / "credentials"
+        self.credentials.mkdir(mode=0o700)
         self.bin = root / "bin"
         self.bin.mkdir()
         cp = self.bin / "cp"
@@ -50,9 +52,15 @@ class EntrypointTests(unittest.TestCase):
             'exec /usr/bin/rm "$@"\n'
         )
         rm.chmod(0o755)
+        mountpoint = self.bin / "mountpoint"
+        mountpoint.write_text('#!/usr/bin/env bash\nexit "$MOUNT_EXIT"\n')
+        mountpoint.chmod(0o755)
         self.copy_log = root / "copies"
 
-    def run_entrypoint(self, runner_exit=0, fail_copy="", fail_clear="", check_cleared=False):
+    def run_entrypoint(
+        self, runner_exit=0, fail_copy="", fail_clear="", check_cleared=False,
+        credentials_dir=None, mount_exit=0, args=(),
+    ):
         env = os.environ.copy()
         env.update(
             PATH=f"{self.bin}:{env['PATH']}",
@@ -63,10 +71,46 @@ class EntrypointTests(unittest.TestCase):
             FAIL_CLEAR=fail_clear,
             CHECK_CLEARED="1" if check_cleared else "0",
             COPY_LOG=str(self.copy_log),
+            OSAC_E2E_CREDENTIALS_DIR=(str(self.credentials) if credentials_dir is None else credentials_dir),
+            MOUNT_EXIT=str(mount_exit),
         )
         return subprocess.run(
-            ["bash", str(ENTRYPOINT)], env=env, text=True, capture_output=True, check=False
+            ["bash", str(ENTRYPOINT), *args], env=env, text=True, capture_output=True, check=False
         )
+
+    def test_container_requires_a_credentials_mount_for_execution(self):
+        stale = self.output / "playwright-report"
+        stale.mkdir()
+        (stale / "stale.txt").write_text("old")
+        result = self.run_entrypoint(credentials_dir="/work/tenant-credentials", mount_exit=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Mount a private writable tenant credentials directory", result.stderr)
+        self.assertFalse(stale.exists())
+        self.assertFalse(self.copy_log.exists())
+
+    def test_empty_credentials_path_does_not_bypass_mount_check(self):
+        result = self.run_entrypoint(credentials_dir="", mount_exit=1)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Mount a private writable tenant credentials directory", result.stderr)
+
+    def test_container_allows_help_and_listing_without_credentials_mount(self):
+        for arg in ("--help", "--list"):
+            with self.subTest(arg=arg):
+                result = self.run_entrypoint(
+                    credentials_dir="/work/tenant-credentials", mount_exit=1, args=(arg,)
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_container_accepts_a_credentials_mount(self):
+        result = self.run_entrypoint(credentials_dir=str(self.credentials))
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_container_rejects_a_nonprivate_credentials_directory(self):
+        self.credentials.chmod(0o755)
+        result = self.run_entrypoint(credentials_dir=str(self.credentials))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must not be accessible by group or others", result.stderr)
+        self.assertFalse(self.copy_log.exists())
 
     def test_successful_copies_preserve_runner_status(self):
         for runner_exit in (0, 7):

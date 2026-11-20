@@ -12,10 +12,10 @@ import {
   expectTenantNotToExist,
   expectTenantToBeSynced,
   expectTenantToExist,
+  loginWithStagedTenantPassword,
   openCreateTenantPage,
   readTenantCredentials,
   tenantReplacementPassword,
-  updateTenantCredentialsPassword,
 } from '../../../../libs/test-utils/src/tenants.page';
 
 test('creates a tenant from the Administration tenants page', async ({ page }) => {
@@ -88,17 +88,16 @@ test('creates a tenant from the Administration tenants page', async ({ page }) =
         ? 'Using the configured replacement password for the tenant login.'
         : 'Using a generated replacement password for the tenant login.',
     );
-    const passwordUpdated = await openAndLogin(
-      page,
-      '/',
-      tenantCredentials.username,
-      tenantCredentials.password,
-      'tenant_type',
-      replacementPassword,
+    await loginWithStagedTenantPassword(credentialsFile, replacementPassword, () =>
+      openAndLogin(
+        page,
+        '/',
+        tenantCredentials.username,
+        tenantCredentials.password,
+        'tenant_type',
+        replacementPassword,
+      ),
     );
-    if (passwordUpdated) {
-      await updateTenantCredentialsPassword(credentialsFile, replacementPassword);
-    }
   });
 
   const tenantAdminCredentials = await testStep(

@@ -40,7 +40,7 @@ file and they are applied during `make install-osac`.
 | `HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY` | `HighlyAvailable` | Infrastructure HA policy |
 | `DNS_CLASS` | `dns.route53.dns` | DNS backend driver role (see [DNS Backend](dns-backend.md)) |
 | `DNS_ZONE` | `EXTERNAL_ACCESS_BASE_DOMAIN` | DNS zone for record management |
-| `DNS_SERVER` | — | Optional IPv4 address, IPv6 address or host name of the DNS server that the readiness waits query directly (UDP port 53). Omit it to use the execution environment's resolver |
+| `DNS_SERVER` | — | Optional IPv4 address, IPv6 address or host name of the DNS server that the readiness waits query directly (unsigned, UDP port 53). When it is omitted, the waits use the execution environment's resolver, or the zone's authoritative nameserver if `EXTERNAL_ACCESS_DNS_WAIT_USE_AUTHORITATIVE` is `true` |
 | `DNS_RFC2136_*` | — | Server and TSIG key settings for the `dns.rfc2136.dns` backend (see [DNS Backend](dns-backend.md#rfc-2136-configuration)) |
 
 ## Secret Variables

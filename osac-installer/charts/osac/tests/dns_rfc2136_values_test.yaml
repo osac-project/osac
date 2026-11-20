@@ -135,6 +135,45 @@ tests:
           path: data.DNS_RFC2136_SERVER
           value: "2001:db8::53"
 
+  - it: accepts an IPv6 DNS_RFC2136_SERVER with an embedded IPv4 address
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_SERVER: "2001:db8::192.0.2.53"
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: data.DNS_RFC2136_SERVER
+          value: "2001:db8::192.0.2.53"
+
+  - it: "rejects a malformed IPv6 DNS_RFC2136_SERVER without ::"
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_SERVER: "2001:db8:53"
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_SERVER"
+
+  - it: "rejects an IPv6 DNS_RFC2136_SERVER with two ::"
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_RFC2136_SERVER: "1::2::3"
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_RFC2136_SERVER"
+
+  - it: accepts an IPv6 DNS_SERVER with an embedded IPv4 address
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_SERVER: "2001:db8::192.0.2.53"
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: data.DNS_SERVER
+          value: "2001:db8::192.0.2.53"
+
+  - it: rejects a malformed IPv6 DNS_SERVER
+    set:
+      aap.instanceGroups.clusterFulfillment.config.DNS_SERVER: "2001:db8:53"
+    asserts:
+      - failedTemplate:
+          errorPattern: "DNS_SERVER"
+
   - it: accepts a host name as DNS_SERVER
     set:
       aap.instanceGroups.clusterFulfillment.config.DNS_SERVER: resolver.example.com

@@ -69,7 +69,7 @@ unchanged values sends no update, and a changed address or TTL replaces the reco
 | `DNS_RFC2136_PROTOCOL` | `tcp` | `tcp` or `udp` |
 | `DNS_RFC2136_KEY_NAME` | — (required) | Name of the TSIG key |
 | `DNS_RFC2136_KEY_ALGORITHM` | `hmac-sha256` | `hmac-sha224`, `hmac-sha256`, `hmac-sha384` or `hmac-sha512`. HMAC-MD5 and HMAC-SHA1 keys are not accepted |
-| `DNS_SERVER` | — | Optional IPv4 address, IPv6 address or host name of the DNS server that the readiness wait queries with `dig` over UDP port 53 after the records are created. Set it when the zone is not delegated from the resolvers the execution environment uses. Point it at the update server only if that server answers queries on UDP port 53 |
+| `DNS_SERVER` | — | Optional IPv4 address, IPv6 address or host name of the DNS server that the readiness wait queries with unsigned `dig` queries over UDP port 53 after the records are created. When it is omitted, the wait uses the execution environment's resolver, or the zone's authoritative nameserver if `EXTERNAL_ACCESS_DNS_WAIT_USE_AUTHORITATIVE` is `true`. If it points at the update server, that server must answer unsigned queries from the AAP job pods on UDP port 53 |
 
 ### Secret Variables
 
@@ -129,10 +129,19 @@ internet access or external DNS provider.
 
 - The AAP job pods on the hub can reach `DNS_RFC2136_SERVER` on the configured
   port and protocol.
-- The server also answers queries for names in the zone, signed with the same
-  key: on a rerun the driver queries an existing record to compare its TTL.
-  BIND's default `allow-query` permits this; if you restrict it, include the
-  key, for example `allow-query { key osac-update; };`.
+- The server answers queries for names in the zone from everything that
+  resolves them: the resolvers that clients and cluster nodes use, the hub,
+  and the readiness wait, which sends unsigned queries (see `DNS_SERVER`). The
+  driver also queries an existing record, signed with the key, to compare its
+  TTL on a rerun. BIND's default `allow-query` (any) covers all of these. If
+  you restrict it, keep those networks and add the key, for example:
+
+  ```text
+  allow-query { key osac-update; <hub-egress-network>; <resolver-networks>; };
+  ```
+
+  A key-only `allow-query` refuses the unsigned queries, so the provisioning
+  job fails while it waits for the records.
 - The managed clusters' workers, the hub, and the clients of the clusters
   resolve the zone: delegate it from the parent zone with NS records, or
   forward it to this server from the resolvers they use.
@@ -149,13 +158,18 @@ cluster base domain, as shown in the cluster's API URL
 (`https://api.<cluster>.<base>`):
 
 ```bash
-dig +short @192.0.2.53 api.<cluster>.<base> A
-dig +short @192.0.2.53 api-int.<cluster>.<base> A
-dig +short @192.0.2.53 console-openshift-console.apps.<cluster>.<base> A
+dig @192.0.2.53 api.<cluster>.<base> A +noall +comments +answer
+dig @192.0.2.53 api-int.<cluster>.<base> A +noall +comments +answer
+dig @192.0.2.53 console-openshift-console.apps.<cluster>.<base> A +noall +comments +answer
 ```
 
-While the cluster exists, the first two return the API address and the third
-the ingress address. After the cluster is deleted, all three return nothing.
+Check the `status:` in each response header. While the cluster exists, the
+status is `NOERROR` and the answer section shows the API address (first two
+queries) or the ingress address (third). After the cluster is deleted, the
+status is `NXDOMAIN`, or `NOERROR` with an empty answer section. `REFUSED`
+means that the server did not answer the query, not that the record is gone.
+In that case check the zone's `allow-query`, or sign the query with the key
+by adding `-k /etc/named/osac-update.key`.
 If the server listens on a port other than 53 or answers only over TCP, add
 `-p <port>` and `+tcp` to match `DNS_RFC2136_PORT` and `DNS_RFC2136_PROTOCOL`.
 

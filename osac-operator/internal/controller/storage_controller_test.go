@@ -3912,6 +3912,53 @@ var _ = Describe("Storage Controller", func() {
 			)))
 		})
 
+		// One tier's backend resolves and has its hub Secret, but another tier's
+		// backend is not found, so that tier is skipped. The CaaS stage must not
+		// run on the no-StorageClass path while any tier is skipped.
+		It("should not trigger CaaS provisioning when some tier definitions are skipped", func() {
+			tenantName := "caas-nosc-tier-skipped"
+			createReadyTenantForStorage(ctx, tenantName, testNamespace)
+			createCaaSTierHubSecret(tenantName)
+			co := createReadyClusterOrderFor(tenantName, "caas-nosc-co-tier-skipped")
+
+			r := newCaaSTierReconciler(&mockProvisioningProvider{name: "caas-mock"})
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("default", caasTierBackendID),
+							newTestStorageTier("missing", "backend-missing"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				listFunc: registeredBackendsClient(1).listFunc,
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					if in.GetId() == caasTierBackendID {
+						return newTestStorageBackendGetResponse("lvms"), nil
+					}
+					return nil, status.Error(codes.NotFound, "not found")
+				},
+			}
+
+			nn := types.NamespacedName{Name: tenantName, Namespace: testNamespace}
+			_, err := r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &v1alpha1.Tenant{}
+			Expect(k8sClient.Get(ctx, nn, tenant)).To(Succeed())
+			backendCond := tenant.GetStatusCondition(v1alpha1.TenantConditionStorageBackendReady)
+			Expect(backendCond).NotTo(BeNil())
+			Expect(backendCond.Status).To(Equal(metav1.ConditionTrue))
+			storageCond := tenant.GetStatusCondition(v1alpha1.TenantConditionClusterStorageReady)
+			Expect(storageCond).NotTo(BeNil())
+			Expect(storageCond.Status).To(Equal(metav1.ConditionFalse))
+			Expect(storageCond.Reason).To(Equal(v1alpha1.TenantReasonNotFound))
+
+			expectCaaSNotTriggered(co)
+		})
+
 		It("should return the VMaaS error when both the VMaaS and the CaaS launches fail", func() {
 			tenantName := "caas-nosc-bothfail"
 			createReadyTenantForStorage(ctx, tenantName, testNamespace)

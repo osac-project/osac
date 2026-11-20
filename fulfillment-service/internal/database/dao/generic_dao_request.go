@@ -181,7 +181,7 @@ func (r *request[O]) translateArchiveError(ctx context.Context, tenant string, e
 		return &ErrInUse{
 			Reason: pgErr.Message,
 		}
-	case pgerrcode.ForeignKeyViolation:
+	case pgerrcode.ForeignKeyViolation, pgerrcode.RestrictViolation:
 		switch pgErr.ConstraintName {
 		case "projects_tenant_fk":
 			return &ErrInUse{

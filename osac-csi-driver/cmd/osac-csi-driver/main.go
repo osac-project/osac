@@ -57,9 +57,10 @@ func main() {
 			"by StorageBackend provider (e.g. netapp=trident-csi-controller.osac-csi-backends.svc:50051). "+
 			"Use the value 'none' for node-local backends that need no attach (e.g. lvms=none)")
 	driverName := flag.String("driver-name", "csi.osac.openshift.io", "CSI driver name")
-	flag.String("node-state-dir", "",
-		"Directory where the node plugin keeps volume routes across restarts")
-	flag.Bool("node-only", false,
+	nodeStateDir := flag.String("node-state-dir", "",
+		"Directory where the node plugin keeps volume routes across restarts "+
+			"(created with mode 0700; routes are kept in memory if empty)")
+	nodeOnly := flag.Bool("node-only", false,
 		"Serve only the Identity and Node services, without a fulfillment connection")
 
 	flag.Parse()
@@ -87,7 +88,8 @@ func main() {
 	klog.Infof("Vendor sockets configured for %d backends", len(vendorSockets))
 	klog.Infof("Vendor controllers configured for %d backends", len(vendorControllers))
 
-	if err := validateFulfillmentFlags(
+	if err := validateFlags(
+		*nodeOnly,
 		*fulfillmentEndpoint,
 		*fulfillmentCAFile, *grpcInsecure,
 		*fulfillmentClientID, *fulfillmentClientSecretFile, *fulfillmentIssuerURL,
@@ -97,9 +99,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	var driverOpts []driver.DriverOption
+	if *nodeStateDir != "" {
+		if err := os.MkdirAll(*nodeStateDir, 0o700); err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating --node-state-dir %s: %v\n", *nodeStateDir, err)
+			os.Exit(1)
+		}
+		driverOpts = append(driverOpts, driver.WithNodeStateDir(*nodeStateDir))
+	} else {
+		klog.Warning("--node-state-dir is empty: node volume routes are kept in memory and lost on restart")
+	}
+
 	var volumeClient fulfillment.VolumeClient
 
-	if *fulfillmentEndpoint != "" {
+	if *nodeOnly {
+		klog.Info("Node-only mode: serving the Identity and Node services without a fulfillment connection")
+		driverOpts = append(driverOpts, driver.WithNodeOnly())
+	} else if *fulfillmentEndpoint != "" {
 		// Establish the gRPC connection to the fulfillment-service and back the
 		// real VolumeClient with it. The connection carries transport
 		// credentials and the per-RPC OAuth2 token (see dialFulfillment).
@@ -122,7 +138,7 @@ func main() {
 
 	d, err := driver.NewDriver(
 		*driverName, version, *csiEndpoint, *nodeID, *clusterID,
-		volumeClient, vendorSockets, vendorControllers,
+		volumeClient, vendorSockets, vendorControllers, driverOpts...,
 	)
 	if err != nil {
 		klog.Fatalf("Failed to create driver: %v", err)
@@ -134,11 +150,15 @@ func main() {
 }
 
 // validateFlags validates the fulfillment flags for the selected driver mode.
+// Node-only mode makes no fulfillment connection, so it skips them.
 func validateFlags(
 	nodeOnly bool,
 	endpoint, caFile string, grpcInsecure bool,
 	clientID, clientSecretFile, issuerURL string, allowStub bool,
 ) error {
+	if nodeOnly {
+		return nil
+	}
 	return validateFulfillmentFlags(endpoint, caFile, grpcInsecure,
 		clientID, clientSecretFile, issuerURL, allowStub)
 }

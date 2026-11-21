@@ -81,6 +81,23 @@ uses the chart fullname plus `-fulfillment-trust`; the fullname defaults to
 `fullnameOverride` is set. After deleting the webhook, upgrade or roll back the
 CSI release normally.
 
+## Troubleshooting
+
+### An NFS PVC never mounts
+
+Check the pod's events (`kubectl describe pod`) for the mount error.
+
+- An `Unavailable` error naming a VAST VIP pool ("VAST VIP pool `<fqdn>` is not
+  reachable on TCP 2049 from node `<node>`") means the worker node cannot reach
+  the VAST VIP on the NFS port. Check the tenant network's routing to the VIP
+  pool, and that DNS resolves the pool FQDN. When the volume uses a random FQDN
+  prefix, DNS must resolve the wildcard `*.<fqdn>`.
+- A vendor `target is busy` error from an older driver version has the same
+  cause. The vendor's mount timed out and it could not remove the placeholder
+  tmpfs it mounted first. On the worker node, look for a leftover tmpfs at the
+  pod's volume path (`findmnt -t tmpfs | grep <pod-uid>`) and fix the network
+  or DNS issue above.
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).

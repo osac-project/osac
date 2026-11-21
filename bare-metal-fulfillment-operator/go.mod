@@ -8,7 +8,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gophercloud/gophercloud/v2 v2.15.0
 	github.com/gophercloud/utils/v2 v2.0.0-20260824073324-42b9474d09d4
-	github.com/metal3-io/baremetal-operator/apis v0.14.2
+	github.com/metal3-io/baremetal-operator/apis v0.14.3
 	github.com/netbox-community/go-netbox/v4 v4.3.0
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0

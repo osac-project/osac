@@ -1600,6 +1600,9 @@
   hosts: localhost
   gather_facts: false
 
+  vars:
+    _guard_password: "{{ lookup('ansible.builtin.password', '/dev/null length=24 chars=ascii_letters,digits') }}"
+
   tasks:
     - name: Run password-without-username guard
       block:
@@ -1615,7 +1618,7 @@
             storage_provider_backend_connections:
               be-tco:
                 endpoint: "vast.invalid:443"
-                password: "not-a-real-credential"
+                password: "{{ _guard_password }}"
             storage_provider_action: setup
             tenant_name: "tenant-tco"
             tenant_namespace: "osac-tenants"
@@ -1849,7 +1852,7 @@
   gather_facts: false
 
   vars:
-    _admin_guard_secret: "mock-admin-password"
+    _admin_guard_secret: "{{ lookup('ansible.builtin.password', '/dev/null length=24 chars=ascii_letters,digits') }}"
 
   pre_tasks:
     - name: Clear any structured failure artifact from earlier scenarios

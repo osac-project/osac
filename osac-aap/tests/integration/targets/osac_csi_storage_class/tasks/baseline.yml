@@ -1,0 +1,429 @@
+---
+# Integration test for the osac_csi_storage role reached through the
+# osac.service.storage_provider dispatcher (provider osac-csi, the same call the
+# tenant cluster storage playbook makes for a ClusterOrder).
+#
+# Contract under test: on a guest cluster the role only creates and deletes
+# per-tier StorageClasses. It requires the CSI driver to be registered already
+# (a CSIDriver object), it never creates the driver namespace or any Secret in it,
+# and teardown leaves the driver namespace, its contents and other tenants'
+# StorageClasses alone.
+#
+# The "guest" cluster is this same Kind cluster, reached through a kubeconfig path
+# (as targets/tenant_cluster_storage_csi_driver_install_gate does). The CSIDriver
+# object is a fixture: no OSAC CSI driver, PVC provisioning or HCP guest cluster
+# runs here. Installing the driver on a guest is OSAC-7841.
+#
+# The driver name and namespace are isolated from the hub install test, which uses
+# namespace osac-csi and driver csi.osac.openshift.io on the same cluster.
+#
+# Plays: 0 guard, 1 clean slate, 2 driver not registered, 3 driver registered,
+# 4 idempotent, 5 teardown, 6 cleanup. Every play starts from a clean slate.
+
+# ── Play 0: refuse to run against anything but the Kind test cluster ──
+# This target creates and deletes cluster-scoped objects (CSIDriver, StorageClass,
+# Namespace). There is deliberately no fallback to ~/.kube/config.
+- name: "OSAC CSI StorageClass - Guard: run only against the Kind test cluster"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Assert KUBECONFIG points at the Kind test kubeconfig
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'KUBECONFIG') is regex('kubeconfig-osac-test$')
+        fail_msg: >-
+          KUBECONFIG must end with kubeconfig-osac-test (run through run_tests.sh or the
+          documented focused run). Got: '{{ lookup('env', 'KUBECONFIG') }}'
+        success_msg: "Running against the Kind test kubeconfig"
+
+# ── Play 1: clean slate ──
+- name: "OSAC CSI StorageClass - Clean slate"
+  hosts: localhost
+  gather_facts: false
+  vars: &csi_sc_vars
+    osac_csi_driver_name: csi.sc-test.osac.openshift.io
+    osac_csi_driver_namespace: osac-csi-sc-test
+    tenant_name: test-osac-csi-sc
+    tenant_namespace: openshift-osac-storage
+    _remote_kubeconfig: "{{ lookup('env', 'KUBECONFIG') }}"
+    _csi_sc_tiers:
+      - name: gold
+        protocol: nfs
+        provider: osac-csi
+        backend_id: be-sc-test
+
+  tasks:
+    - name: Delete the test CSIDriver
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.sc-test.osac.openshift.io
+        wait: true
+
+    - name: Delete the driver namespace
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: osac-csi-sc-test
+        wait: true
+
+    - name: Delete the tenant StorageClass
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-osac-csi-sc-gold
+        wait: true
+
+    - name: Delete the other tenant's StorageClass
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-other-tenant-gold
+        wait: true
+
+# ── Play 2: driver not registered ──
+- name: "OSAC CSI StorageClass - Driver not registered"
+  hosts: localhost
+  gather_facts: false
+  vars: *csi_sc_vars
+
+  tasks:
+    - name: Call ensure_storage_class with the driver absent
+      block:
+        - name: Run ensure_storage_class through the storage_provider dispatcher
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: ensure_storage_class
+            storage_provider_tiers: "{{ _csi_sc_tiers }}"
+            storage_provider_backend_connections: {}
+            storage_provider_target_kubeconfig: "{{ _remote_kubeconfig }}"
+            storage_provider_target_kubeconfig_insecure: false
+
+        - name: This should not be reached
+          ansible.builtin.fail:
+            msg: "ensure_storage_class should have failed: the CSI driver is not registered"
+
+      rescue:
+        - name: Assert the failure names the driver and says it is not registered
+          ansible.builtin.assert:
+            that:
+              - "'csi.sc-test.osac.openshift.io' in ansible_failed_result.msg"
+              - "'not registered' in ansible_failed_result.msg"
+            fail_msg: "Unexpected failure: {{ ansible_failed_result.msg | default('') }}"
+            success_msg: "ensure_storage_class refused an unregistered driver"
+
+    - name: Read the tenant StorageClass
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-osac-csi-sc-gold
+      register: _sc_unregistered
+
+    - name: Read the driver namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: osac-csi-sc-test
+      register: _ns_unregistered
+
+    - name: Read Secrets in the driver namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: osac-csi-sc-test
+      register: _secrets_unregistered
+
+    - name: Assert nothing was created
+      ansible.builtin.assert:
+        that:
+          - _sc_unregistered.resources | length == 0
+          - _ns_unregistered.resources | length == 0
+          - _secrets_unregistered.resources | length == 0
+        fail_msg: >-
+          A failed ensure_storage_class must leave no StorageClass, driver namespace or
+          Secret behind.
+        success_msg: "No StorageClass, driver namespace or Secret was created"
+
+# ── Play 3: driver registered ──
+- name: "OSAC CSI StorageClass - Driver registered"
+  hosts: localhost
+  gather_facts: false
+  vars: *csi_sc_vars
+
+  tasks:
+    - name: Register the CSIDriver fixture
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: CSIDriver
+          metadata:
+            name: csi.sc-test.osac.openshift.io
+          spec:
+            attachRequired: false
+
+    - name: Run ensure_storage_class through the storage_provider dispatcher
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_storage_class
+        storage_provider_tiers: "{{ _csi_sc_tiers }}"
+        storage_provider_backend_connections: {}
+        storage_provider_target_kubeconfig: "{{ _remote_kubeconfig }}"
+        storage_provider_target_kubeconfig_insecure: false
+
+    - name: Read the tenant StorageClass
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-osac-csi-sc-gold
+      register: _sc_registered
+
+    - name: Read the driver namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: osac-csi-sc-test
+      register: _ns_registered
+
+    - name: Read Secrets in the driver namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        namespace: osac-csi-sc-test
+      register: _secrets_registered
+
+    - name: Assert the StorageClass has the expected shape
+      ansible.builtin.assert:
+        that:
+          - _sc_registered.resources | length == 1
+          - _sc_registered.resources[0].provisioner == 'csi.sc-test.osac.openshift.io'
+          - _sc_registered.resources[0].parameters.tier == 'gold'
+          - _sc_registered.resources[0].parameters.tenant == 'test-osac-csi-sc'
+          - _sc_registered.resources[0].allowVolumeExpansion is defined
+          - _sc_registered.resources[0].allowVolumeExpansion is sameas false
+          - >-
+            _sc_registered.resources[0].parameters.keys()
+            | select('match', '^csi\.storage\.k8s\.io/') | list | length == 0
+          - >-
+            'osac-test-osac-csi-sc-gold' in
+            (storage_provider_storage_class_names | map(attribute='name') | list)
+        fail_msg: "Unexpected StorageClass: {{ _sc_registered.resources | to_json }}"
+        success_msg: "StorageClass created with the expected provisioner and parameters"
+
+    - name: Assert the role installed nothing into the driver namespace
+      ansible.builtin.assert:
+        that:
+          - _ns_registered.resources | length == 0
+          - _secrets_registered.resources | length == 0
+        fail_msg: >-
+          ensure_storage_class must not create the driver namespace or any Secret in it.
+        success_msg: "Driver namespace still absent and no Secret created"
+
+# ── Play 4: idempotent ──
+- name: "OSAC CSI StorageClass - Idempotent"
+  hosts: localhost
+  gather_facts: false
+  vars: *csi_sc_vars
+
+  tasks:
+    - name: Read the StorageClass before the second run
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-osac-csi-sc-gold
+      register: _sc_before
+
+    - name: Run ensure_storage_class a second time
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_storage_class
+        storage_provider_tiers: "{{ _csi_sc_tiers }}"
+        storage_provider_backend_connections: {}
+        storage_provider_target_kubeconfig: "{{ _remote_kubeconfig }}"
+        storage_provider_target_kubeconfig_insecure: false
+
+    - name: Read the StorageClass after the second run
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-osac-csi-sc-gold
+      register: _sc_after
+
+    - name: Assert the StorageClass was not recreated
+      ansible.builtin.assert:
+        that:
+          - _sc_before.resources | length == 1
+          - _sc_after.resources | length == 1
+          - _sc_after.resources[0].metadata.uid == _sc_before.resources[0].metadata.uid
+        fail_msg: "StorageClass uid changed between runs"
+        success_msg: "Second run left the StorageClass untouched"
+
+# ── Play 5: teardown leaves the install and other tenants alone ──
+- name: "OSAC CSI StorageClass - Teardown leaves the install and other tenants alone"
+  hosts: localhost
+  gather_facts: false
+  vars: *csi_sc_vars
+
+  tasks:
+    - name: Create the driver namespace as if the driver were installed
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: osac-csi-sc-test
+
+    - name: Create a ConfigMap owned by someone else in the driver namespace
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: owned-by-someone-else
+            namespace: osac-csi-sc-test
+          data:
+            owner: someone-else
+
+    - name: Create a pre-existing credentials Secret in the driver namespace
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: osac-csi-driver-credentials
+            namespace: osac-csi-sc-test
+          type: Opaque
+          stringData:
+            fixture: placeholder
+      no_log: true
+
+    - name: Create another tenant's StorageClass for the same driver
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: osac-test-other-tenant-gold
+            labels:
+              osac.openshift.io/managed-by: osac-csi-driver
+              osac.openshift.io/tenant: test-other-tenant
+          provisioner: csi.sc-test.osac.openshift.io
+
+    - name: Run teardown_cluster_storage through the storage_provider dispatcher
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: teardown_cluster_storage
+        storage_provider_tiers: "{{ _csi_sc_tiers }}"
+        storage_provider_backend_connections: {}
+        storage_provider_target_kubeconfig: "{{ _remote_kubeconfig }}"
+        storage_provider_target_kubeconfig_insecure: false
+
+    - name: Read the tenant StorageClass
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-osac-csi-sc-gold
+      register: _sc_torn_down
+
+    - name: Read the other tenant's StorageClass
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-other-tenant-gold
+      register: _sc_other_tenant
+
+    - name: Read the driver namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Namespace
+        name: osac-csi-sc-test
+      register: _ns_after_teardown
+
+    - name: Read the ConfigMap in the driver namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: owned-by-someone-else
+        namespace: osac-csi-sc-test
+      register: _cm_after_teardown
+
+    - name: Read the credentials Secret in the driver namespace
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: osac-csi-driver-credentials
+        namespace: osac-csi-sc-test
+      register: _secret_after_teardown
+      no_log: true
+
+    - name: Assert teardown removed only this tenant's StorageClass
+      ansible.builtin.assert:
+        that:
+          - _sc_torn_down.resources | length == 0
+          - _sc_other_tenant.resources | length == 1
+        fail_msg: >-
+          teardown_cluster_storage must delete this tenant's StorageClass and leave
+          other tenants' StorageClasses alone.
+        success_msg: "Only this tenant's StorageClass was deleted"
+
+    - name: Assert teardown left the driver namespace and its contents alone
+      ansible.builtin.assert:
+        that:
+          - _ns_after_teardown.resources | length == 1
+          - _cm_after_teardown.resources | length == 1
+          - _secret_after_teardown.resources | length == 1
+        fail_msg: >-
+          teardown_cluster_storage must not delete the driver namespace, its ConfigMap
+          or its credentials Secret.
+        success_msg: "Driver namespace, ConfigMap and credentials Secret survived teardown"
+
+# ── Play 6: cleanup ──
+- name: "OSAC CSI StorageClass - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete the test CSIDriver
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.sc-test.osac.openshift.io
+        wait: true
+
+    - name: Delete the driver namespace
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Namespace
+        name: osac-csi-sc-test
+        wait: true
+
+    - name: Delete the other tenant's StorageClass
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-other-tenant-gold
+        wait: true
+
+    - name: Delete any leftover tenant StorageClass
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-osac-csi-sc-gold
+        wait: true

@@ -16,6 +16,11 @@
 #
 #   Test 5 (StorageClass entry and vendor derivation):
 #     ansible-playbook ... -e test_sc_derivation=true
+#
+#   Test 6 (Helm values rendered for the driver install, with and without
+#   osac_csi_driver_extra_values; renders through the role's _render_driver_values
+#   task file and publishes the result in the fact _osac_csi_driver_helm_values):
+#     ansible-playbook ... -e test_install_driver_values=true
 
 # ──────────────────────────────────────────────────────────────
 # Test 1: Hub-cluster path is rejected (no _remote_kubeconfig)
@@ -276,3 +281,93 @@
                 'pure-flashblade=/var/lib/kubelet/plugins/pure.csi.com/csi.sock,' ~
                 'vast=/var/lib/kubelet/plugins/vast.csi.com/csi.sock'
             success_msg: "Vendor sockets derived correctly"
+
+# ──────────────────────────────────────────────────────────────
+# Test 6: Helm values rendered for the driver install
+#
+# Renders through the role's _render_driver_values task file, which the
+# install entry point includes before its Helm task, and reads the result from
+# the fact _osac_csi_driver_helm_values. Needs no cluster. Extra values are
+# passed only through include_role vars, the way a caller supplies them.
+# ──────────────────────────────────────────────────────────────
+- name: Test osac_csi_storage -- driver Helm values rendering
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _values_fulfillment_endpoint: fulfillment-api.test.example:443
+    _values_issuer_url: https://keycloak.test.example/realms/osac
+
+  tasks:
+    - name: Run driver Helm values tests
+      when: test_install_driver_values | default(false) | bool
+      block:
+        # Case A: no extra values. The rendered values are exactly what the role's
+        # Helm deployment used before extra values existed, with the role defaults.
+        - name: Render driver values with the default (empty) extra values
+          ansible.builtin.include_role:
+            name: osac.templates.osac_csi_storage
+            tasks_from: _render_driver_values
+          vars:
+            fulfillment_endpoint: "{{ _values_fulfillment_endpoint }}"
+            fulfillment_issuer_url: "{{ _values_issuer_url }}"
+
+        - name: Assert the default render equals the literal values dict
+          ansible.builtin.assert:
+            that:
+              - _osac_csi_driver_helm_values is mapping
+              - _osac_csi_driver_helm_values == _expected_default_values
+              - _osac_csi_driver_helm_values.controller.fulfillment.tls.insecureSkipVerify is sameas false
+            fail_msg: >-
+              Default render differs from the expected values.
+              Got: {{ _osac_csi_driver_helm_values | default('undefined') | to_json }}
+            success_msg: "Default render matches the literal values dict"
+          vars:
+            _expected_default_values:
+              driverName: csi.osac.openshift.io
+              namespace: osac-csi
+              controller:
+                fulfillment:
+                  endpoint: fulfillment-api.test.example:443
+                  issuerUrl: https://keycloak.test.example/realms/osac
+                  credentials:
+                    secretName: osac-csi-driver-credentials
+                    clientIdKey: client-id
+                    clientSecretKey: client-secret
+                  tls:
+                    insecureSkipVerify: false
+              node:
+                vendorSockets: >-
+                  netapp=/var/lib/kubelet/plugins/csi.trident.netapp.io/csi.sock,pure=/var/lib/kubelet/plugins/csi.pure.purestorage.com/csi.sock,vast=/var/lib/kubelet/plugins/csi.vast.vastdata.com/csi.sock
+
+        # Case B: nested extra values merge into the computed values; the siblings of
+        # the merged keys stay and the new keys appear.
+        - name: Render driver values with nested extra values
+          ansible.builtin.include_role:
+            name: osac.templates.osac_csi_storage
+            tasks_from: _render_driver_values
+          vars:
+            fulfillment_endpoint: "{{ _values_fulfillment_endpoint }}"
+            fulfillment_issuer_url: "{{ _values_issuer_url }}"
+            osac_csi_driver_extra_values:
+              controller:
+                fulfillment:
+                  tls:
+                    caSecretName: test-ca
+                replicas: 2
+
+        - name: Assert extra values merged without dropping siblings
+          ansible.builtin.assert:
+            that:
+              - _osac_csi_driver_helm_values.controller.fulfillment.tls.caSecretName == 'test-ca'
+              - _osac_csi_driver_helm_values.controller.fulfillment.tls.insecureSkipVerify is sameas false
+              - _osac_csi_driver_helm_values.controller.replicas == 2
+              - _osac_csi_driver_helm_values.controller.fulfillment.endpoint == _values_fulfillment_endpoint
+              - _osac_csi_driver_helm_values.controller.fulfillment.issuerUrl == _values_issuer_url
+              - _osac_csi_driver_helm_values.controller.fulfillment.credentials.secretName == 'osac-csi-driver-credentials'
+              - _osac_csi_driver_helm_values.driverName == 'csi.osac.openshift.io'
+              - _osac_csi_driver_helm_values.node.vendorSockets is search('^netapp=')
+            fail_msg: >-
+              Extra values were not merged as expected.
+              Got: {{ _osac_csi_driver_helm_values | default('undefined') | to_json }}
+            success_msg: "Nested extra values merged and siblings were preserved"

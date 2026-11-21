@@ -15,7 +15,7 @@
 # Exception: driverName, namespace, controller.fulfillment.credentials.secretName
 # and controller.fulfillment.tls.insecureSkipVerify must still equal what this role
 # computed from its own variables; extra values that change one fail the render.
-# Other keys under tls (for example caSecretName) merge normally.
+# Other keys under tls (for example caBundle.configMap and caBundle.key) merge normally.
 
 - name: Derive OSAC CSI driver vendor sockets configuration
   ansible.builtin.set_fact:

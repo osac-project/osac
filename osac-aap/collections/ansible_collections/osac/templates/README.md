@@ -412,8 +412,9 @@ role variables: `driverName` (`osac_csi_driver_name`), `namespace`
 `controller.fulfillment.tls.insecureSkipVerify`
 (`osac_csi_driver_fulfillment_tls_insecure`). Extra values that change one of them
 fail the render with a message naming the key path, not the value. Other `tls` keys
-merge normally: `controller.fulfillment.tls.caSecretName`, for example, may be set
-through the dict to choose a CA Secret.
+merge normally: `controller.fulfillment.tls.caBundle.configMap` and `.key`, for
+example, may be set through the dict to point the driver at a CA bundle (the chart
+mounts it when fulfillment trust is enabled).
 Nothing calls `install_driver` yet; a separate per-cluster install job will, see
 [OSAC-7841](https://redhat.atlassian.net/browse/OSAC-7841). `uninstall_driver` has
 no caller, and none is needed today: fulfillment-service refuses to delete a tenant

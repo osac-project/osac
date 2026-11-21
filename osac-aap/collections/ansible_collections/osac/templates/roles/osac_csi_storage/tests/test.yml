@@ -352,13 +352,16 @@
               controller:
                 fulfillment:
                   tls:
-                    caSecretName: test-ca
+                    caBundle:
+                      configMap: test-ca
+                      key: ca.crt
                 replicas: 2
 
         - name: Assert extra values merged without dropping siblings
           ansible.builtin.assert:
             that:
-              - _osac_csi_driver_helm_values.controller.fulfillment.tls.caSecretName == 'test-ca'
+              - _osac_csi_driver_helm_values.controller.fulfillment.tls.caBundle.configMap == 'test-ca'
+              - _osac_csi_driver_helm_values.controller.fulfillment.tls.caBundle.key == 'ca.crt'
               - _osac_csi_driver_helm_values.controller.fulfillment.tls.insecureSkipVerify is sameas false
               - _osac_csi_driver_helm_values.controller.replicas == 2
               - _osac_csi_driver_helm_values.controller.fulfillment.endpoint == _values_fulfillment_endpoint

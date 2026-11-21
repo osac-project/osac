@@ -47,10 +47,11 @@ var _ privatev1.RoleBindingsServer = (*PrivateRoleBindingsServer)(nil)
 type PrivateRoleBindingsServer struct {
 	privatev1.UnimplementedRoleBindingsServer
 
-	logger  *slog.Logger
-	generic *GenericServer[*privatev1.RoleBinding]
-	roles   *dao.GenericDAO[*privatev1.Role]
-	users   *dao.GenericDAO[*privatev1.User]
+	logger          *slog.Logger
+	generic         *GenericServer[*privatev1.RoleBinding]
+	roles           *dao.GenericDAO[*privatev1.Role]
+	users           *dao.GenericDAO[*privatev1.User]
+	serviceAccounts *dao.GenericDAO[*privatev1.ServiceAccount]
 }
 
 // NewPrivateRoleBindingsServer creates a new builder for the private role bindings server.
@@ -128,11 +129,19 @@ func (b *PrivateRoleBindingsServerBuilder) Build() (result *PrivateRoleBindingsS
 	if err != nil {
 		return
 	}
+	accounts, err := dao.NewGenericDAO[*privatev1.ServiceAccount]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		Build()
+	if err != nil {
+		return
+	}
 	result = &PrivateRoleBindingsServer{
-		logger:  b.logger,
-		generic: generic,
-		roles:   roles,
-		users:   users,
+		logger:          b.logger,
+		generic:         generic,
+		roles:           roles,
+		users:           users,
+		serviceAccounts: accounts,
 	}
 	return
 }
@@ -204,7 +213,7 @@ func (s *PrivateRoleBindingsServer) validateRoleBinding(ctx context.Context, cur
 	if err := validateServiceAccountRole(role, candidate.GetMetadata().GetTenant()); err != nil {
 		return err
 	}
-	return validateServiceAccountSubjects(ctx, serviceAccountRefs, candidate.GetMetadata().GetTenant())
+	return s.validateServiceAccountSubjects(ctx, serviceAccountRefs, candidate.GetMetadata().GetTenant())
 }
 
 // validateUserSubjects resolves input selectors after tenant assignment and update-mask merging.
@@ -239,23 +248,50 @@ func validateServiceAccountRole(role *privatev1.Role, bindingTenant string) erro
 	return nil
 }
 
-func validateServiceAccountSubjects(ctx context.Context, refs []*privatev1.ServiceAccountReference, tenant string) error {
+func (s *PrivateRoleBindingsServer) validateServiceAccountSubjects(
+	ctx context.Context, refs []*privatev1.ServiceAccountReference, tenant string,
+) error {
 	seen := make(map[string]struct{}, len(refs))
 	for _, ref := range refs {
-		id := ref.GetId()
-		if id == "" {
-			return status.Error(codes.InvalidArgument, "service account reference ID is required")
+		if ref.GetTenant() != "" && ref.GetTenant() != tenant {
+			return status.Error(codes.InvalidArgument, "service account reference must belong to the RoleBinding tenant")
 		}
+		if ref.GetProject() != "" {
+			return status.Error(codes.InvalidArgument, "service account reference project must be empty")
+		}
+		// Retain the existing ID-only error for missing or inactive accounts.
+		if ref.GetId() != "" {
+			if err := serviceaccounts.ValidateRoleBindingSubject(ctx, ref.GetId(), tenant); err != nil {
+				if errors.Is(err, serviceaccounts.ErrRoleBindingSubjectNotActive) {
+					return status.Error(codes.InvalidArgument,
+						"service account must be active and provisioned in the RoleBinding tenant")
+				}
+				return err
+			}
+		}
+		account, err := resolveResourceInScope(ctx, s.serviceAccounts, referenceScope{tenant: tenant},
+			ref.GetId(), ref.GetName(), "service account", "", codes.InvalidArgument)
+		if err != nil {
+			return err
+		}
+		id := account.GetId()
 		if _, exists := seen[id]; exists {
 			return status.Error(codes.InvalidArgument, "service account references must be unique")
 		}
 		seen[id] = struct{}{}
-		if err := serviceaccounts.ValidateRoleBindingSubject(ctx, id, tenant); err != nil {
+		if ref.GetId() == "" {
+			err = serviceaccounts.ValidateRoleBindingSubject(ctx, id, tenant)
+		}
+		if err != nil {
 			if errors.Is(err, serviceaccounts.ErrRoleBindingSubjectNotActive) {
 				return status.Error(codes.InvalidArgument, "service account must be active and provisioned in the RoleBinding tenant")
 			}
 			return err
 		}
+		ref.SetId(id)
+		ref.SetName(account.GetMetadata().GetName())
+		ref.SetProject(account.GetMetadata().GetProject())
+		ref.SetTenant(tenant)
 	}
 	return nil
 }

@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -409,6 +410,42 @@ var _ = Describe("Private role bindings server", func() {
 							privatev1.ServiceAccountReference_builder{
 								Id: "00000000-0000-4000-8000-000000000001",
 							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("service account must be active and provisioned"))
+		})
+
+		It("resolves a name-only service-account subject before checking readiness", func() {
+			accounts, err := dao.NewGenericDAO[*privatev1.ServiceAccount]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			accountID := uuid.NewString()
+			_, err = accounts.Create().SetObject(privatev1.ServiceAccount_builder{
+				Id: accountID,
+				Metadata: privatev1.Metadata_builder{
+					Name: "pending-robot", Tenant: testTenant,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			roles, err := dao.NewGenericDAO[*privatev1.Role]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			sharedRole, err := roles.List().
+				SetFilter("this.metadata.name == 'tenant-automation'").SetLimit(1).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(sharedRole.GetItems()).To(HaveLen(1))
+
+			_, err = roleBindingsServer.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+				Object: privatev1.RoleBinding_builder{
+					Metadata: privatev1.Metadata_builder{Name: "pending-name-binding"}.Build(),
+					Spec: privatev1.RoleBindingSpec_builder{
+						Role: privatev1.RoleReference_builder{Id: sharedRole.GetItems()[0].GetId()}.Build(),
+						ServiceAccounts: []*privatev1.ServiceAccountReference{
+							privatev1.ServiceAccountReference_builder{Name: "pending-robot"}.Build(),
 						},
 					}.Build(),
 				}.Build(),

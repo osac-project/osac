@@ -71,12 +71,17 @@ var _ = Describe("Managed service-account authorization", Serial, func() {
 				Spec: publicv1.RoleBindingSpec_builder{
 					Role: publicv1.RoleReference_builder{Id: roles["tenant-automation"]}.Build(),
 					ServiceAccounts: []*publicv1.ServiceAccountReference{
-						publicv1.ServiceAccountReference_builder{Id: accountID}.Build(),
+						publicv1.ServiceAccountReference_builder{Name: account.GetMetadata().GetName()}.Build(),
 					},
 				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		Expect(binding.GetObject().GetSpec().GetServiceAccounts()).To(HaveLen(1))
+		Expect(binding.GetObject().GetSpec().GetServiceAccounts()[0].GetId()).To(Equal(accountID))
+		Expect(binding.GetObject().GetSpec().GetServiceAccounts()[0].GetName()).
+			To(Equal(account.GetMetadata().GetName()))
+		Expect(binding.GetObject().GetSpec().GetServiceAccounts()[0].GetTenant()).To(Equal(tenant))
 		bindingID := binding.GetObject().GetId()
 		DeferCleanup(func(ctx context.Context) {
 			_, deleteErr := roleBindings.Delete(ctx, publicv1.RoleBindingsDeleteRequest_builder{Id: bindingID}.Build())
@@ -88,6 +93,17 @@ var _ = Describe("Managed service-account authorization", Serial, func() {
 		_, err = publicv1.NewUsersClient(serviceAccountConn).List(ctx, &publicv1.UsersListRequest{})
 		Expect(status.Code(err)).To(Equal(codes.PermissionDenied), "tenant-automation must not grant tenant-admin methods")
 		Expect(account.GetMetadata().GetTenant()).To(Equal(tenant))
+
+		updated, err := roleBindings.Update(ctx, publicv1.RoleBindingsUpdateRequest_builder{
+			Object: publicv1.RoleBinding_builder{Id: bindingID, Spec: publicv1.RoleBindingSpec_builder{
+				ServiceAccounts: []*publicv1.ServiceAccountReference{
+					publicv1.ServiceAccountReference_builder{Name: account.GetMetadata().GetName()}.Build(),
+				},
+			}.Build()}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.service_accounts"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(updated.GetObject().GetSpec().GetServiceAccounts()[0].GetId()).To(Equal(accountID))
 
 		_, err = roleBindings.Update(ctx, publicv1.RoleBindingsUpdateRequest_builder{
 			Object: publicv1.RoleBinding_builder{Id: bindingID, Spec: publicv1.RoleBindingSpec_builder{

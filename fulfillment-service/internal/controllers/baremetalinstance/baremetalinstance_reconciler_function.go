@@ -193,8 +193,10 @@ func (r *function) run(ctx context.Context, bareMetalInstance *privatev1.BareMet
 	var reconcileRetryErr error
 	var secretErr *controllers.SSHKeyResolutionError
 	if errors.As(err, &secretErr) {
-		if !secretErr.Permanent {
-			return err
+		if !secretErr.Permanent() {
+			// Retryable lookup failure: keep the prior status and wrap the error
+			// so the shared reconciler schedules a bounded retry with backoff.
+			return controllers.RequeueAfter(err, controllers.SSHKeyResolutionRetryDelay)
 		}
 		// Create validates the reference before persistence, but its data can
 		// become invalid before reconciliation. Do not persist partial changes

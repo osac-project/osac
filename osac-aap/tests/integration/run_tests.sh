@@ -20,6 +20,10 @@ export POD_UID="00000000-0000-0000-0000-000000000000"
 # provides one. This is test-only data and is never used outside the suite.
 export OSAC_CLUSTER_UPGRADE_PULL_SECRET="${OSAC_CLUSTER_UPGRADE_PULL_SECRET:-$(printf '{"auths":{"quay.io":{"auth":"%s"}}}' "$(printf '%s:%s' "$(openssl rand -hex 8)" "$(openssl rand -hex 8)" | base64)")}"
 
+# Test-only installer overrides are enabled in this local integration process.
+# Production AAP launches cannot select an arbitrary role/task through extra vars.
+export OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES=true
+
 # Suppress inventory parsing warnings
 export ANSIBLE_INVENTORY_UNPARSED_WARNING=False
 export ANSIBLE_LOCALHOST_WARNING=False
@@ -259,6 +263,18 @@ for scenario in test_empty test_populated test_no_items_key test_disabled test_n
 done
 echo "=== Running Storage Provider Dispatcher Unit Tests ==="
 echo ""
+
+# Verify that CSI namespace configuration is read from the AAP process environment.
+CSI_NAMESPACE_DEFAULTS_TEST="targets/storage_provider_csi_namespace_defaults/tasks/baseline.yml"
+if NETAPP_CSI_OPERATOR_NAMESPACE=trident-integration-test \
+  VAST_CSI_OPERATOR_NAMESPACE=vast-integration-test \
+  run_ansible_playbook "${CSI_NAMESPACE_DEFAULTS_TEST}"; then
+  echo "  ✓ CSI operator namespace environment overrides passed"
+  PASSED+=("storage_provider_namespace_defaults")
+else
+  echo "  ✗ CSI operator namespace environment overrides failed"
+  FAILED+=("storage_provider_namespace_defaults")
+fi
 
 # Validation-only tests for the storage_provider role's dispatcher logic -- no kind cluster
 # or mock VMS server required, so these run unconditionally (not gated behind

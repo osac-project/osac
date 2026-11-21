@@ -76,6 +76,15 @@ defaults):
 - `OSAC_CLUSTER_AAP_PROVISION_TEMPLATE` /
   `OSAC_CLUSTER_AAP_DEPROVISION_TEMPLATE` — override for ClusterOrder.
 
+**Per-ClusterOrder CSI install job** (optional):
+
+- `OSAC_CSI_INSTALL_ENABLED` — when `true`, launch one job per Ready
+  ClusterOrder that installs the OSAC CSI driver for that cluster, and report
+  its outcome in the ClusterOrder's `CSIDriverReady` condition (default:
+  `false`). The Helm value `csiInstall.enabled` sets it.
+- `OSAC_CSI_INSTALL_AAP_PROVISION_TEMPLATE` — template of that job (default:
+  `{prefix}-install-cluster-csi`).
+
 Networking controllers launch one job template per network manager task:
 `{prefix}-{task with dashes}` (e.g. `osac-create-subnet`,
 `osac-apply-network-attachment`), all running the generic playbook

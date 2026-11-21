@@ -493,21 +493,45 @@ func setupAddOnOperatorController(mgr mcmanager.Manager, maxJobHistory int) erro
 // csiInstallEnabled reports whether the operator launches a CSI install job
 // for each Ready ClusterOrder.
 func csiInstallEnabled() bool {
-	return false
+	return helpers.GetEnvWithDefault(envCSIInstallEnabled, false)
 }
 
-// csiInstallProvisionTemplate returns the AAP template of the CSI install job.
+// csiInstallProvisionTemplate returns the AAP template of the CSI install job:
+// OSAC_CSI_INSTALL_AAP_PROVISION_TEMPLATE, or <prefix>-install-cluster-csi.
 func csiInstallProvisionTemplate() string {
-	return ""
+	templatePrefix := helpers.GetEnvWithDefault(envAAPTemplatePrefix, "osac")
+	return helpers.GetEnvWithDefault(envCSIInstallProvisionTemplate,
+		fmt.Sprintf("%s-install-cluster-csi", templatePrefix))
 }
 
 // setupCSIInstallController registers the ClusterOrder CSI install controller.
+// It is registered even when launches are disabled, so install jobs started
+// before the flag was turned off are still cancelled on deletion.
 func setupCSIInstallController(mgr mcmanager.Manager, maxJobHistory int) error {
+	localMgr := mgr.GetLocalManager()
+	provider, pollInterval, err := createAAPProvider(
+		os.Getenv(envAAPURL), os.Getenv(envAAPToken),
+		csiInstallProvisionTemplate(), "", "",
+		helpers.GetEnvWithDefault(envAAPInsecureSkipVerify, false),
+	)
+	if err != nil {
+		return fmt.Errorf("create CSI install provider: %w", err)
+	}
+
+	reconciler := controller.NewCSIInstallReconciler(
+		localMgr.GetClient(), localMgr.GetAPIReader(),
+		os.Getenv(envClusterOrderNamespace), provider, pollInterval,
+		csiInstallEnabled(),
+	)
+	reconciler.MaxJobHistory = maxJobHistory
+	if err := reconciler.SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("CSI install controller: %w", err)
+	}
 	return nil
 }
 
-// setupClusterControllers registers the ClusterOrder and add-on operator controllers and,
-// when grpcConn is set, the cluster Feedback controller.
+// setupClusterControllers registers the ClusterOrder, add-on operator and CSI install
+// controllers and, when grpcConn is set, the cluster Feedback controller.
 func setupClusterControllers(
 	mgr mcmanager.Manager, grpcConn grpc.ClientConnInterface,
 	maxJobHistory int, engine *networktask.Engine,

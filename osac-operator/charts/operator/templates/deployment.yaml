@@ -161,6 +161,8 @@ spec:
                 fieldPath: metadata.namespace
           - name: OSAC_ENABLE_CLUSTER_CONTROLLER
             value: {{ include "osac-operator.controllerEnabled" (list . "clusterOrder" "caas") | quote }}
+          - name: OSAC_CSI_INSTALL_ENABLED
+            value: {{ .Values.csiInstall.enabled | default false | quote }}
           - name: OSAC_ENABLE_FULFILLMENT_TRUST_RECONCILER
             value: {{ .Values.global.fulfillmentTrust.enabled | default false | quote }}
           - name: OSAC_FULFILLMENT_TRUST_TENANT_NAMESPACE

@@ -455,13 +455,19 @@ func (r *AddOnOperatorReconciler) addOnProvisioningContext(ctx context.Context, 
 }
 
 func (r *AddOnOperatorReconciler) getClusterKubeconfig(ctx context.Context, clusterOrder *v1alpha1.ClusterOrder) ([]byte, error) {
+	return hostedClusterAdminKubeconfig(ctx, r.apiReader, clusterOrder)
+}
+
+// hostedClusterAdminKubeconfig returns the admin kubeconfig of the
+// ClusterOrder's hosted cluster, or nil while it is not yet published.
+func hostedClusterAdminKubeconfig(ctx context.Context, reader client.Reader, clusterOrder *v1alpha1.ClusterOrder) ([]byte, error) {
 	ref := clusterOrder.Status.ClusterReference
 	if ref == nil || ref.Namespace == "" || ref.HostedClusterName == "" {
 		return nil, nil
 	}
 	hcpNamespace := ref.Namespace + "-" + ref.HostedClusterName
 	hcp := &hypershiftv1beta1.HostedControlPlane{}
-	if err := r.apiReader.Get(ctx, types.NamespacedName{Namespace: hcpNamespace, Name: ref.HostedClusterName}, hcp); err != nil {
+	if err := reader.Get(ctx, types.NamespacedName{Namespace: hcpNamespace, Name: ref.HostedClusterName}, hcp); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nil
 		}
@@ -471,7 +477,7 @@ func (r *AddOnOperatorReconciler) getClusterKubeconfig(ctx context.Context, clus
 		return nil, nil
 	}
 	secret := &corev1.Secret{}
-	if err := r.apiReader.Get(ctx, types.NamespacedName{Namespace: hcpNamespace, Name: hcp.Status.KubeConfig.Name}, secret); err != nil {
+	if err := reader.Get(ctx, types.NamespacedName{Namespace: hcpNamespace, Name: hcp.Status.KubeConfig.Name}, secret); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nil
 		}

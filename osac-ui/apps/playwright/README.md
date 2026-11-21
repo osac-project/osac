@@ -63,7 +63,7 @@ bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
     --tag=vmaas_all \
     --instance=1 \
     --admin-user=admin \
-    --admin-password='YOUR_ADMIN_PASSWORD' \
+    --admin-password-file=/path/to/admin-password \
     --allow-root-e2e \
     --ignore-tls \
     --reporter=line 2>&1 | tee vmaas-flow-1.log
@@ -72,8 +72,8 @@ bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
 )
 ```
 
-Replace `YOUR_ADMIN_PASSWORD` before running; the command does not prompt for
-input. The live output is saved to `vmaas-flow-1.log`.
+Provide a readable file containing the admin password; the command does not
+prompt for input. The live output is saved to `vmaas-flow-1.log`.
 
 The default HTML reporter does not show the full live test log in the terminal.
 Add `--reporter=line` to the runner command for live progress and test output.
@@ -86,10 +86,11 @@ VMaaS capacity preflight. A capacity failure means the cluster needs more
 allocatable memory/CPU or the configured instance type must be reduced; the
 script never changes cluster sizing automatically. The runner accepts the flow
 tags listed below, validates the deployment and VMaaS prerequisites, and keeps
-run-time credentials outside the setup step. Pass the admin credentials with
-`--admin-user=USER` and `--admin-password=PASSWORD`; the username defaults to
-`admin`. The runner requires the password command-line option even when
-`OSAC_ADMIN_PASSWORD` is set in the environment, and never prompts for input.
+run-time credentials outside the setup step. Pass the admin user with
+`--admin-user=USER` and the password with `--admin-password-file=PATH`; the
+username defaults to `admin`. The runner also accepts `--admin-password=PASSWORD`,
+but its value is visible in process arguments. A password file cannot be used
+with that option or a non-empty `OSAC_ADMIN_PASSWORD` environment variable.
 A missing password stops the run with a fix instruction. For VMaaS flows, the
 runner also authenticates the OSAC CLI for the duration of the run using the
 same credentials; temporary CLI files are removed on exit.
@@ -105,6 +106,10 @@ bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
   --osac-ui-dir="$PWD" --osac-cli-version=<version>
 # or: --osac-cli=/path/to/osac
 ```
+
+To run the flows without preparing a host, use the container image that wraps
+both scripts. See
+[`apps/e2e-tests/container/README.md`](../e2e-tests/container/README.md).
 
 ## Running
 
@@ -160,8 +165,10 @@ has no specs, Playwright reports that no tests were found.
 The tenant specs read `tenant_name` and the optional break-glass replacement
 password from `apps/e2e-tests/extravars.yaml`.
 Set `tenant_password` to the password used after the generated break-glass user
-completes its first login. When it is omitted, the tenant name is used. The
-create flow logs in with the generated break-glass identity, which JIT-creates
+completes its first login. When it is omitted, a password is generated. If you
+set it, use a private file outside the repository with `--extravars=PATH`; do
+not commit credentials. The create flow logs in with the generated break-glass
+identity, which JIT-creates
 the OSAC User, then uses the private admin CLI to grant that user
 `tenant-admin` through a RoleBinding and waits for `READY`. The same credentials
 are reused for the VM and delete flows. The runner authenticates the OSAC CLI
@@ -209,7 +216,7 @@ The creation and VM portion of the full-flow journey runs in this order:
    storage-backend readiness, and tenant.
 2. Create and publish the catalog item using the resources from step 1.
 3. Log in with the generated tenant break-glass credentials, set the
-   replacement password from `tenant_password` (or the tenant name), grant
+   replacement password from `tenant_password` (or a generated password), grant
    the identity `tenant-admin` permissions through a private-API RoleBinding,
    log in again as the tenant admin, and create a tenant-scoped SSH public-key
    Secret in the Default project.

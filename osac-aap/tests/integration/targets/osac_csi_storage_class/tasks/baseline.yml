@@ -64,6 +64,12 @@
         protocol: nfs
         provider: osac-csi
         backend_id: be-sc-test
+      # netapp resolves to the same osac_csi_storage role through the dispatcher's
+      # CSI-managed provider list, so one run covers both provider spellings.
+      - name: silver
+        protocol: block
+        provider: netapp
+        backend_id: be-sc-netapp
 
   tasks:
     - name: Delete the test CSIDriver
@@ -84,23 +90,29 @@
         name: osac-csi-sc-test
         wait: true
 
-    - name: Delete the tenant StorageClass
+    - name: Delete the tenant StorageClasses
       kubernetes.core.k8s:
         kubeconfig: "{{ _remote_kubeconfig }}"
         state: absent
         api_version: storage.k8s.io/v1
         kind: StorageClass
-        name: osac-test-osac-csi-sc-gold
+        name: "{{ item }}"
         wait: true
+      loop:
+        - osac-test-osac-csi-sc-gold
+        - osac-test-osac-csi-sc-silver
 
-    - name: Delete the other tenant's StorageClass
+    - name: Delete the other tenant's StorageClasses
       kubernetes.core.k8s:
         kubeconfig: "{{ _remote_kubeconfig }}"
         state: absent
         api_version: storage.k8s.io/v1
         kind: StorageClass
-        name: osac-test-other-tenant-gold
+        name: "{{ item }}"
         wait: true
+      loop:
+        - osac-test-other-tenant-gold
+        - osac-test-other-tenant-silver
 
 # ── Play 2: driver not registered ──
 - name: "OSAC CSI StorageClass - Driver not registered"
@@ -162,19 +174,22 @@
             fail_msg: "Unexpected failure: {{ ansible_failed_result.msg | default('') }}"
             success_msg: "ensure_storage_class refused an unregistered driver"
 
+        # The dispatcher loops over (provider, backend_id) pairs sorted by provider
+        # (netapp before osac_csi) and the first dispatch fails the run, so the
+        # record describes the netapp pair only: the osac-csi pair is never reached.
         - name: Assert the structured failure record
           ansible.builtin.assert:
             that:
               - osac_storage_provider_failures is defined
               - osac_storage_provider_failures | length == 1
               - osac_storage_provider_failures[0].reason == 'csi_driver_not_registered'
-              - osac_storage_provider_failures[0].tiers == ['gold']
-              - osac_storage_provider_failures[0].backend_ids == ['be-sc-test']
+              - osac_storage_provider_failures[0].tiers == ['silver']
+              - osac_storage_provider_failures[0].backend_ids == ['be-sc-netapp']
               - "'not registered' in osac_storage_provider_failures[0].message"
             fail_msg: >-
               Unexpected osac_storage_provider_failures:
               {{ osac_storage_provider_failures | default('undefined') | to_json }}
-            success_msg: "csi_driver_not_registered recorded for tier gold and backend be-sc-test"
+            success_msg: "csi_driver_not_registered recorded for tier silver and backend be-sc-netapp"
 
     - name: List this tenant's labelled Secrets in all namespaces (unreg_after)
       kubernetes.core.k8s_info:
@@ -212,12 +227,13 @@
           New Secrets appeared: {{ _secret_names_unreg_after | difference(_secret_names_unreg_before) }}
         success_msg: "No tenant-labelled or tenant-namespace Secret was created"
 
-    - name: Read the tenant StorageClass
+    - name: Read the tenant StorageClasses
       kubernetes.core.k8s_info:
         kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: storage.k8s.io/v1
         kind: StorageClass
-        name: osac-test-osac-csi-sc-gold
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
       register: _sc_unregistered
 
     - name: Read the driver namespace
@@ -340,12 +356,13 @@
           New Secrets appeared: {{ _secret_names_reg_after | difference(_secret_names_reg_before) }}
         success_msg: "No tenant-labelled or tenant-namespace Secret was created"
 
-    - name: Read the tenant StorageClass
+    - name: Read the tenant StorageClasses
       kubernetes.core.k8s_info:
         kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: storage.k8s.io/v1
         kind: StorageClass
-        name: osac-test-osac-csi-sc-gold
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
       register: _sc_registered
 
     - name: Read the driver namespace
@@ -364,23 +381,43 @@
         namespace: osac-csi-sc-test
       register: _secrets_registered
 
-    - name: Assert the StorageClass has the expected shape
+    - name: Assert each tier's StorageClass has the expected shape
       ansible.builtin.assert:
         that:
-          - _sc_registered.resources | length == 1
-          - _sc_registered.resources[0].provisioner == 'csi.sc-test.osac.openshift.io'
-          - _sc_registered.resources[0].parameters.tier == 'gold'
-          - _sc_registered.resources[0].parameters.tenant == 'test-osac-csi-sc'
-          - _sc_registered.resources[0].allowVolumeExpansion is defined
-          - _sc_registered.resources[0].allowVolumeExpansion is sameas false
+          - _sc_registered.resources | length == 2
+          - _sc_by_tier | length == 2
+          - _sc_by_tier.keys() | sort | list == ['gold', 'silver']
+          - _sc_by_tier[item].metadata.name == 'osac-test-osac-csi-sc-' ~ item
+          - _sc_by_tier[item].provisioner == 'csi.sc-test.osac.openshift.io'
+          - _sc_by_tier[item].parameters.tier == item
+          - _sc_by_tier[item].parameters.tenant == 'test-osac-csi-sc'
+          - _sc_by_tier[item].allowVolumeExpansion is defined
+          - _sc_by_tier[item].allowVolumeExpansion is sameas false
           - >-
-            _sc_registered.resources[0].parameters.keys()
+            _sc_by_tier[item].parameters.keys()
             | select('match', '^csi\.storage\.k8s\.io/') | list | length == 0
           - >-
-            'osac-test-osac-csi-sc-gold' in
+            ('osac-test-osac-csi-sc-' ~ item) in
             (storage_provider_storage_class_names | map(attribute='name') | list)
-        fail_msg: "Unexpected StorageClass: {{ _sc_registered.resources | to_json }}"
-        success_msg: "StorageClass created with the expected provisioner and parameters"
+        fail_msg: "Unexpected StorageClass for tier {{ item }}: {{ _sc_registered.resources | to_json }}"
+        success_msg: "StorageClass for tier {{ item }} created with the expected provisioner and parameters"
+      loop:
+        - gold
+        - silver
+      vars:
+        _sc_by_tier: >-
+          {{ dict(_sc_registered.resources | map(attribute='parameters.tier') | zip(_sc_registered.resources)) }}
+
+    - name: Assert the accumulated StorageClass names cover both providers
+      ansible.builtin.assert:
+        that:
+          - >-
+            storage_provider_storage_class_names | map(attribute='name') | sort | list
+            == ['osac-test-osac-csi-sc-gold', 'osac-test-osac-csi-sc-silver']
+        fail_msg: >-
+          Unexpected storage_provider_storage_class_names:
+          {{ storage_provider_storage_class_names | default('undefined') | to_json }}
+        success_msg: "Both the osac-csi and the netapp tier produced a StorageClass name"
 
     - name: Assert the role installed nothing into the driver namespace
       ansible.builtin.assert:
@@ -398,12 +435,13 @@
   vars: *csi_sc_vars
 
   tasks:
-    - name: Read the StorageClass before the second run
+    - name: Read the StorageClasses before the second run
       kubernetes.core.k8s_info:
         kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: storage.k8s.io/v1
         kind: StorageClass
-        name: osac-test-osac-csi-sc-gold
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
       register: _sc_before
 
     - name: Run ensure_storage_class a second time
@@ -416,25 +454,37 @@
         storage_provider_target_kubeconfig: "{{ _remote_kubeconfig }}"
         storage_provider_target_kubeconfig_insecure: false
 
-    - name: Read the StorageClass after the second run
+    - name: Read the StorageClasses after the second run
       kubernetes.core.k8s_info:
         kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: storage.k8s.io/v1
         kind: StorageClass
-        name: osac-test-osac-csi-sc-gold
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
       register: _sc_after
 
-    - name: Assert the StorageClass was not recreated
+    - name: Assert neither StorageClass was recreated
       ansible.builtin.assert:
         that:
-          - _sc_before.resources | length == 1
-          - _sc_after.resources | length == 1
-          - _sc_after.resources[0].metadata.uid == _sc_before.resources[0].metadata.uid
-          - >-
-            _sc_after.resources[0].metadata.resourceVersion
-            == _sc_before.resources[0].metadata.resourceVersion
-        fail_msg: "StorageClass uid or resourceVersion changed between runs"
-        success_msg: "Second run left the StorageClass untouched"
+          - _sc_before.resources | length == 2
+          - _sc_after.resources | length == 2
+          - _before_versions | length == 2
+          - _before_versions == _after_versions
+        fail_msg: "A StorageClass uid or resourceVersion changed between runs"
+        success_msg: "Second run left both StorageClasses untouched"
+      vars:
+        _before_versions: >-
+          {% set ns = namespace(v=[]) -%}
+          {% for r in _sc_before.resources | sort(attribute='metadata.name') -%}
+          {% set ns.v = ns.v + [r.metadata.name ~ '/' ~ r.metadata.uid ~ '/' ~ r.metadata.resourceVersion] -%}
+          {% endfor -%}
+          {{ ns.v }}
+        _after_versions: >-
+          {% set ns = namespace(v=[]) -%}
+          {% for r in _sc_after.resources | sort(attribute='metadata.name') -%}
+          {% set ns.v = ns.v + [r.metadata.name ~ '/' ~ r.metadata.uid ~ '/' ~ r.metadata.resourceVersion] -%}
+          {% endfor -%}
+          {{ ns.v }}
 
 # ── Play 5: teardown leaves the install and other tenants alone ──
 - name: "OSAC CSI StorageClass - Teardown leaves the install and other tenants alone"
@@ -481,7 +531,7 @@
             fixture: placeholder
       no_log: true
 
-    - name: Create another tenant's StorageClass for the same driver
+    - name: Create another tenant's StorageClasses for the same driver (one per tier)
       kubernetes.core.k8s:
         kubeconfig: "{{ _remote_kubeconfig }}"
         state: present
@@ -489,11 +539,14 @@
           apiVersion: storage.k8s.io/v1
           kind: StorageClass
           metadata:
-            name: osac-test-other-tenant-gold
+            name: "osac-test-other-tenant-{{ item }}"
             labels:
               osac.openshift.io/managed-by: osac-csi-driver
               osac.openshift.io/tenant: test-other-tenant
           provisioner: csi.sc-test.osac.openshift.io
+      loop:
+        - gold
+        - silver
 
     - name: Run teardown_cluster_storage through the storage_provider dispatcher
       ansible.builtin.include_role:
@@ -505,20 +558,22 @@
         storage_provider_target_kubeconfig: "{{ _remote_kubeconfig }}"
         storage_provider_target_kubeconfig_insecure: false
 
-    - name: Read the tenant StorageClass
+    - name: Read the tenant StorageClasses
       kubernetes.core.k8s_info:
         kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: storage.k8s.io/v1
         kind: StorageClass
-        name: osac-test-osac-csi-sc-gold
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
       register: _sc_torn_down
 
-    - name: Read the other tenant's StorageClass
+    - name: Read the other tenant's StorageClasses
       kubernetes.core.k8s_info:
         kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: storage.k8s.io/v1
         kind: StorageClass
-        name: osac-test-other-tenant-gold
+        label_selectors:
+          - "osac.openshift.io/tenant=test-other-tenant"
       register: _sc_other_tenant
 
     - name: Read the CSIDriver
@@ -556,15 +611,17 @@
       register: _secret_after_teardown
       no_log: true
 
-    - name: Assert teardown removed only this tenant's StorageClass
+    - name: Assert teardown removed only this tenant's StorageClasses
       ansible.builtin.assert:
         that:
           - _sc_torn_down.resources | length == 0
-          - _sc_other_tenant.resources | length == 1
+          - >-
+            _sc_other_tenant.resources | map(attribute='metadata.name') | sort | list
+            == ['osac-test-other-tenant-gold', 'osac-test-other-tenant-silver']
         fail_msg: >-
-          teardown_cluster_storage must delete this tenant's StorageClass and leave
-          other tenants' StorageClasses alone.
-        success_msg: "Only this tenant's StorageClass was deleted"
+          teardown_cluster_storage must delete this tenant's StorageClasses (gold and
+          silver) and leave other tenants' StorageClasses alone.
+        success_msg: "Only this tenant's StorageClasses were deleted"
 
     - name: Assert teardown left the driver namespace and its contents alone
       ansible.builtin.assert:
@@ -603,20 +660,26 @@
         name: osac-csi-sc-test
         wait: true
 
-    - name: Delete the other tenant's StorageClass
+    - name: Delete the other tenant's StorageClasses
       kubernetes.core.k8s:
         kubeconfig: "{{ _remote_kubeconfig }}"
         state: absent
         api_version: storage.k8s.io/v1
         kind: StorageClass
-        name: osac-test-other-tenant-gold
+        name: "{{ item }}"
         wait: true
+      loop:
+        - osac-test-other-tenant-gold
+        - osac-test-other-tenant-silver
 
-    - name: Delete any leftover tenant StorageClass
+    - name: Delete any leftover tenant StorageClasses
       kubernetes.core.k8s:
         kubeconfig: "{{ _remote_kubeconfig }}"
         state: absent
         api_version: storage.k8s.io/v1
         kind: StorageClass
-        name: osac-test-osac-csi-sc-gold
+        name: "{{ item }}"
         wait: true
+      loop:
+        - osac-test-osac-csi-sc-gold
+        - osac-test-osac-csi-sc-silver

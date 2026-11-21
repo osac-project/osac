@@ -401,3 +401,68 @@
           vars:
             _case_c_fulfillment: >-
               {{ (_osac_csi_driver_helm_values.controller | default({})).fulfillment | default({}) }}
+
+        # Case D: extra values may not change the keys the role computes from its own
+        # variables (driverName, namespace, controller.fulfillment.tls and
+        # controller.fulfillment.credentials.secretName). The render fails with a
+        # message naming the key path and never the attempted value.
+        - name: Render driver values with extra values overriding driverName (expected to fail)
+          block:
+            - name: Include the render with a driverName override
+              ansible.builtin.include_role:
+                name: osac.templates.osac_csi_storage
+                tasks_from: _render_driver_values
+              vars:
+                fulfillment_endpoint: "{{ _values_fulfillment_endpoint }}"
+                fulfillment_issuer_url: "{{ _values_issuer_url }}"
+                osac_csi_driver_extra_values:
+                  driverName: other.example.io
+
+            - name: Fail the test when the override was accepted
+              ansible.builtin.fail:
+                msg: "Case D1 render should have failed but succeeded"
+          rescue:
+            - name: Capture the driver name override failure
+              ansible.builtin.set_fact:
+                _case_d1_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+        - name: Assert the driver name override was refused without echoing the value
+          ansible.builtin.assert:
+            that:
+              - _case_d1_msg is search('driverName')
+              - _case_d1_msg is not search('other.example.io')
+              - _case_d1_msg is not search('should have failed')
+            fail_msg: "Case D1 wrong failure message: {{ _case_d1_msg }}"
+            success_msg: "driverName override refused, value not echoed"
+
+        - name: Render driver values with extra values overriding the credentials Secret name (expected to fail)
+          block:
+            - name: Include the render with a credentials secretName override
+              ansible.builtin.include_role:
+                name: osac.templates.osac_csi_storage
+                tasks_from: _render_driver_values
+              vars:
+                fulfillment_endpoint: "{{ _values_fulfillment_endpoint }}"
+                fulfillment_issuer_url: "{{ _values_issuer_url }}"
+                osac_csi_driver_extra_values:
+                  controller:
+                    fulfillment:
+                      credentials:
+                        secretName: attacker-secret
+
+            - name: Fail the test when the override was accepted
+              ansible.builtin.fail:
+                msg: "Case D2 render should have failed but succeeded"
+          rescue:
+            - name: Capture the credentials override failure
+              ansible.builtin.set_fact:
+                _case_d2_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+        - name: Assert the credentials override was refused without echoing the value
+          ansible.builtin.assert:
+            that:
+              - _case_d2_msg is search('controller.fulfillment.credentials.secretName')
+              - _case_d2_msg is not search('attacker-secret')
+              - _case_d2_msg is not search('should have failed')
+            fail_msg: "Case D2 wrong failure message: {{ _case_d2_msg }}"
+            success_msg: "credentials.secretName override refused, value not echoed"

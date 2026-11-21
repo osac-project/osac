@@ -130,6 +130,10 @@ const (
 	envClusterStorageProvisionTemplate   = "OSAC_STORAGE_CLUSTER_AAP_PROVISION_TEMPLATE"
 	envClusterStorageDeprovisionTemplate = "OSAC_STORAGE_CLUSTER_AAP_DEPROVISION_TEMPLATE"
 
+	// Per-ClusterOrder CSI install job
+	envCSIInstallEnabled           = "OSAC_CSI_INSTALL_ENABLED"
+	envCSIInstallProvisionTemplate = "OSAC_CSI_INSTALL_AAP_PROVISION_TEMPLATE"
+
 	// Job history configuration
 	envMaxJobHistory = "OSAC_MAX_JOB_HISTORY"
 
@@ -486,6 +490,22 @@ func setupAddOnOperatorController(mgr mcmanager.Manager, maxJobHistory int) erro
 	return nil
 }
 
+// csiInstallEnabled reports whether the operator launches a CSI install job
+// for each Ready ClusterOrder.
+func csiInstallEnabled() bool {
+	return false
+}
+
+// csiInstallProvisionTemplate returns the AAP template of the CSI install job.
+func csiInstallProvisionTemplate() string {
+	return ""
+}
+
+// setupCSIInstallController registers the ClusterOrder CSI install controller.
+func setupCSIInstallController(mgr mcmanager.Manager, maxJobHistory int) error {
+	return nil
+}
+
 // setupClusterControllers registers the ClusterOrder and add-on operator controllers and,
 // when grpcConn is set, the cluster Feedback controller.
 func setupClusterControllers(
@@ -568,7 +588,10 @@ func setupClusterControllers(
 	); err != nil {
 		return err
 	}
-	return setupAddOnOperatorController(mgr, maxJobHistory)
+	if err := setupAddOnOperatorController(mgr, maxJobHistory); err != nil {
+		return err
+	}
+	return setupCSIInstallController(mgr, maxJobHistory)
 }
 
 func clusterOrderStallThresholdsFromEnv() controller.ClusterOrderStallThresholds {

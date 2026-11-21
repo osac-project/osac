@@ -1,0 +1,172 @@
+#cloud-config
+# Slurm Worker Node (Compute) cloud-init configuration
+#
+# This configures a bare metal instance as a Slurm compute node (slurmd).
+# Use with the 'slurm-node' catalog item.
+#
+# The provider renders this file with the head node's IP address (taken from its
+# status) and the work private key, so the head node must be created first (OpenTofu
+# does this automatically because of the reference).
+#
+# Two systemd units keep the node in sync with the head, since nobody can SSH in:
+#   - slurm-register: registers this node in the head's slurm.conf, under a lock on
+#     the head so concurrent registrations can't race.
+#   - slurm-conf-sync: downloads slurm.conf from the head and restarts slurmd when
+#     it changes. Until this node is registered, slurmd may fail to start; the sync
+#     unit restarts it once the head's configuration contains this node.
+
+package_update: true
+packages:
+  - slurm
+  - slurm-slurmd
+  - munge
+  - openssh-clients
+
+write_files:
+  - path: /root/.ssh/id_ed25519
+    owner: root:root
+    permissions: '0600'
+    content: |
+      ${indent(6, work_private_key)}
+
+  - path: /etc/slurm/slurm.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      # Initial configuration, replaced by the slurm-conf-sync unit with the one
+      # from the head node. Slurm requires an identical slurm.conf on all nodes.
+      ClusterName=osac-slurm
+      SlurmctldHost=${head_ip}
+
+      SchedulerType=sched/backfill
+      SelectType=select/cons_tres
+      SelectTypeParameters=CR_Core_Memory
+
+      SlurmctldLogFile=/var/log/slurm/slurmctld.log
+      SlurmdLogFile=/var/log/slurm/slurmd.log
+      SlurmctldDebug=info
+      SlurmdDebug=info
+
+      AuthType=auth/munge
+      CryptoType=crypto/munge
+
+      ProctrackType=proctrack/cgroup
+      TaskPlugin=task/affinity,task/cgroup
+
+      SlurmctldTimeout=300
+      SlurmdTimeout=300
+      InactiveLimit=0
+      MinJobAge=300
+      KillWait=30
+      Waittime=0
+
+  - path: /etc/slurm/cgroup.conf
+    owner: root:root
+    permissions: '0644'
+    content: |
+      CgroupAutomount=yes
+      ConstrainCores=yes
+      ConstrainRAMSpace=yes
+
+  - path: /usr/local/bin/slurm-register
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Registers this node in the head node's slurm.conf, over SSH. The head runs
+      # the check-and-append under a lock, so workers registering at the same time
+      # can't corrupt the file.
+      set -euo pipefail
+      HEAD_IP="${head_ip}"
+      SSH_USER="${ssh_user}"
+      NODE=$(hostname -s)
+      ADDR=$(hostname -I | awk '{print $1}')
+      CPUS=$(nproc)
+      MEM=$(awk '/MemTotal/ {printf "%d", $2 * 0.95 / 1024}' /proc/meminfo)
+      exec ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+          -i /root/.ssh/id_ed25519 "$SSH_USER@$HEAD_IP" \
+          sudo /usr/local/bin/slurm-register-node "$NODE" "$ADDR" "$CPUS" "$MEM"
+
+  - path: /usr/local/bin/slurm-conf-sync
+    owner: root:root
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Downloads slurm.conf from the head node and restarts slurmd when it changes.
+      set -euo pipefail
+      HEAD_IP="${head_ip}"
+      SSH_USER="${ssh_user}"
+      if ! scp -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
+          -i /root/.ssh/id_ed25519 \
+          "$SSH_USER@$HEAD_IP:/etc/slurm/slurm.conf" /etc/slurm/slurm.conf.new; then
+          # Head node not reachable yet; try again on the next tick.
+          exit 0
+      fi
+      if ! cmp -s /etc/slurm/slurm.conf.new /etc/slurm/slurm.conf; then
+          mv /etc/slurm/slurm.conf.new /etc/slurm/slurm.conf
+          systemctl restart slurmd
+      else
+          rm -f /etc/slurm/slurm.conf.new
+      fi
+
+  - path: /etc/systemd/system/slurm-register.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Register this Slurm worker node in the head node configuration
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/slurm-register
+
+  - path: /etc/systemd/system/slurm-register.timer
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Periodically check that this node is registered on the head node
+
+      [Timer]
+      OnBootSec=15s
+      OnUnitActiveSec=60s
+
+      [Install]
+      WantedBy=timers.target
+
+  - path: /etc/systemd/system/slurm-conf-sync.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Download slurm.conf from the Slurm head node
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/slurm-conf-sync
+
+  - path: /etc/systemd/system/slurm-conf-sync.timer
+    owner: root:root
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Periodically download slurm.conf from the head node
+
+      [Timer]
+      OnBootSec=30s
+      OnUnitActiveSec=30s
+
+      [Install]
+      WantedBy=timers.target
+
+runcmd:
+  - mkdir -p /var/log/slurm
+  - chown slurm:slurm /var/log/slurm
+  - chmod 0700 /root/.ssh
+  - systemctl daemon-reload
+  - systemctl enable --now slurm-register.timer
+  - systemctl enable --now slurm-conf-sync.timer
+  - systemctl enable munge
+  - systemctl start munge
+  - systemctl enable slurmd
+  - systemctl start slurmd || true

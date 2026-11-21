@@ -1,0 +1,14 @@
+provider:
+  name: osac
+data_sources:
+  bare_metal_instance_catalog_item:
+    read:
+      path: /api/fulfillment/v1/baremetal_instance_catalog_items/{id}
+      method: GET
+    schema:
+      ignores:
+        # The field policies repeat attribute names ('editable', 'locked') with
+        # different shapes, which the generator can't map to unique Go types,
+        # and the data source doesn't need them:
+        - fields
+        - template_parameters

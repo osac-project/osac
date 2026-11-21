@@ -1,0 +1,9 @@
+# Copy to terraform.tfvars and adjust. The key file variables are mandatory.
+
+tenant        = "tenant1"
+catalog_item  = "slurm-node"
+instance_type = "e2e-bmi-type-4eceda2c"
+# disk_image = ""
+
+ssh_public_key_file       = "~/.ssh/slurm-cluster.pub"
+ssh_work_public_key_file  = "~/.ssh/slurm-work.pub"

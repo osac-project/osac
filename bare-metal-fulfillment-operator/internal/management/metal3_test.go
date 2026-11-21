@@ -129,6 +129,29 @@ var _ = Describe("Metal3 Management Backend", func() {
 			status, err := m.GetPowerState(ctx, metal3TestNamespace+"/host-error")
 			Expect(status).To(BeNil())
 			Expect(err).To(MatchError(ContainSubstring("has error status")))
+			Expect(errors.Is(err, management.ErrHostOperational)).To(BeTrue())
+		})
+
+		It("keeps a power-management error retryable", func() {
+			bmh := newBMHForManagement("host-power-error", true, true)
+			bmh.Status.OperationalStatus = metal3api.OperationalStatusError
+			bmh.Status.ErrorType = metal3api.PowerManagementError
+			bmh.Status.ErrorMessage = "BMC reset in progress"
+			m := newMetal3ManagementClient(bmh)
+
+			_, err := m.GetPowerState(ctx, metal3TestNamespace+"/host-power-error")
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, management.ErrHostOperational)).To(BeFalse())
+
+			// Once the host recovers, the read succeeds again.
+			bmh.Status.OperationalStatus = metal3api.OperationalStatusOK
+			bmh.Status.ErrorType = ""
+			bmh.Status.ErrorMessage = ""
+			Expect(m.TestClient().Status().Update(ctx, bmh)).To(Succeed())
+
+			status, err := m.GetPowerState(ctx, metal3TestNamespace+"/host-power-error")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(status.State).To(Equal(management.PowerOn))
 		})
 
 		It("returns error for missing host", func() {
@@ -223,7 +246,7 @@ var _ = Describe("Metal3 Management Backend", func() {
 			bmh := newBMHForManagement("host-1", true, true)
 			m := newMetal3ManagementClient(bmh)
 
-			err := m.TriggerRestart(ctx, metal3TestNamespace+"/host-1")
+			err := m.TriggerRestart(ctx, metal3TestNamespace+"/host-1", "req-1")
 			Expect(err).NotTo(HaveOccurred())
 
 			updated := &metal3api.BareMetalHost{}
@@ -241,7 +264,58 @@ var _ = Describe("Metal3 Management Backend", func() {
 			bmh := newBMHWithAnnotations("host-restarting", true, true, annotations)
 			m := newMetal3ManagementClient(bmh)
 
-			err := m.TriggerRestart(ctx, metal3TestNamespace+"/host-restarting")
+			err := m.TriggerRestart(ctx, metal3TestNamespace+"/host-restarting", "req-1")
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, management.ErrTransitioning)).To(BeTrue())
+		})
+
+		It("treats a repeated request ID as already accepted", func() {
+			bmh := newBMHForManagement("host-retry", true, true)
+			m := newMetal3ManagementClient(bmh)
+
+			Expect(m.TriggerRestart(ctx, metal3TestNamespace+"/host-retry", "req-1")).To(Succeed())
+			// A retry after a lost response must not submit a second reboot.
+			Expect(m.TriggerRestart(ctx, metal3TestNamespace+"/host-retry", "req-1")).To(Succeed())
+
+			updated := &metal3api.BareMetalHost{}
+			Expect(m.TestClient().Get(ctx, client.ObjectKey{
+				Namespace: metal3TestNamespace,
+				Name:      "host-retry",
+			}, updated)).To(Succeed())
+			Expect(updated.Annotations).To(HaveKeyWithValue(management.RestartRequestAnnotation, "req-1"))
+		})
+
+		It("reports a submitted request by its durable ID", func() {
+			bmh := newBMHForManagement("host-submitted", true, true)
+			m := newMetal3ManagementClient(bmh)
+
+			submitted, err := m.IsRestartSubmitted(ctx, metal3TestNamespace+"/host-submitted", "req-1")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(submitted).To(Equal(management.RestartSubmissionNotSubmitted))
+
+			Expect(m.TriggerRestart(ctx, metal3TestNamespace+"/host-submitted", "req-1")).To(Succeed())
+
+			submitted, err = m.IsRestartSubmitted(ctx, metal3TestNamespace+"/host-submitted", "req-1")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(submitted).To(Equal(management.RestartSubmissionSubmitted))
+		})
+
+		It("returns ErrTransitioning for a host that is powering off", func() {
+			// Desired off, still on: the host has not settled.
+			bmh := newBMHForManagement("host-powering-off", false, true)
+			m := newMetal3ManagementClient(bmh)
+
+			err := m.TriggerRestart(ctx, metal3TestNamespace+"/host-powering-off", "req-1")
+			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, management.ErrTransitioning)).To(BeTrue())
+		})
+
+		It("returns ErrTransitioning for a host that is powering on", func() {
+			// Desired on, still off: the host has not settled.
+			bmh := newBMHForManagement("host-powering-on", true, false)
+			m := newMetal3ManagementClient(bmh)
+
+			err := m.TriggerRestart(ctx, metal3TestNamespace+"/host-powering-on", "req-1")
 			Expect(err).To(HaveOccurred())
 			Expect(errors.Is(err, management.ErrTransitioning)).To(BeTrue())
 		})
@@ -249,14 +323,14 @@ var _ = Describe("Metal3 Management Backend", func() {
 		It("returns error for missing host", func() {
 			m := newMetal3ManagementClient()
 
-			err := m.TriggerRestart(ctx, metal3TestNamespace+"/nonexistent")
+			err := m.TriggerRestart(ctx, metal3TestNamespace+"/nonexistent", "req-1")
 			Expect(err).To(HaveOccurred())
 		})
 
 		It("returns error for invalid host ID format", func() {
 			m := newMetal3ManagementClient()
 
-			err := m.TriggerRestart(ctx, "bad-id")
+			err := m.TriggerRestart(ctx, "bad-id", "req-1")
 			Expect(err).To(HaveOccurred())
 		})
 	})

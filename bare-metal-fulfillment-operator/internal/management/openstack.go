@@ -193,7 +193,7 @@ func (c *OpenStackClient) SetPowerState(ctx context.Context, hostID string, targ
 	return nil
 }
 
-func (c *OpenStackClient) TriggerRestart(ctx context.Context, hostID string) error {
+func (c *OpenStackClient) TriggerRestart(ctx context.Context, hostID, _ string) error {
 	err := c.withAuthRetry(ctx, func(client *gophercloud.ServiceClient) error {
 		// Use Ironic's reboot command which automatically cycles power off then on
 		res := nodes.ChangePowerState(ctx, client, hostID, nodes.PowerStateOpts{
@@ -209,6 +209,12 @@ func (c *OpenStackClient) TriggerRestart(ctx context.Context, hostID string) err
 		return fmt.Errorf("failed to trigger restart on node %s: %w", hostID, err)
 	}
 	return nil
+}
+
+func (c *OpenStackClient) IsRestartSubmitted(_ context.Context, _, _ string) (RestartSubmissionState, error) {
+	// Ironic exposes no durable request identity: the submission is unknown. Do
+	// not claim progress or re-submit; poll to completion instead.
+	return RestartSubmissionUnknown, nil
 }
 
 func (c *OpenStackClient) IsRestartComplete(ctx context.Context, hostID string) (bool, error) {

@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"maps"
@@ -200,7 +201,31 @@ func (r *BareMetalInstanceReconciler) updateStatusWithRetry(ctx context.Context,
 			// provider operation, but never publish its stale Ready/Progressing phase.
 			status.Phase = v1alpha1.BareMetalInstancePhaseDeleting
 		}
+
+		// Never let a stale snapshot erase a newer restart claim. A claim is
+		// monotonic across different requests, but the reconcile that owns the
+		// same request may intentionally clear it.
+		prevMarker := latest.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
+		var claimed *metav1.Condition
+		if prevMarker != nil && prevMarker.Status == metav1.ConditionTrue {
+			copied := *prevMarker
+			claimed = &copied
+		}
+		prevRequestID := latest.Status.RestartRequestID
+
 		latest.Status = status
+		if claimed != nil && status.RestartRequestID != prevRequestID {
+			latest.SetStatusCondition(
+				v1alpha1.HostConditionRestartInProgress,
+				claimed.Status,
+				claimed.Reason,
+				claimed.Message,
+			)
+			if cond := latest.GetStatusCondition(v1alpha1.HostConditionRestartInProgress); cond != nil {
+				cond.LastTransitionTime = claimed.LastTransitionTime
+			}
+			latest.Status.RestartRequestID = prevRequestID
+		}
 		return r.Status().Update(ctx, latest)
 	})
 }
@@ -469,6 +494,14 @@ func (r *BareMetalInstanceReconciler) reconcileManagement(ctx context.Context, b
 		return ctrl.Result{}, nil
 	}
 
+	// A terminal restart failure must stay terminal: network reconciliation can
+	// rewrite Phase to Progressing, which would let an unacknowledged trigger
+	// submit a reboot after the API already reported failure.
+	if isTerminalRestartFailure(bareMetalInstance) {
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		return ctrl.Result{}, nil
+	}
+
 	if result, err := r.reconcileNetworkProvisionAndDiscovery(ctx, bareMetalInstance); err != nil || !result.IsZero() {
 		return result, err
 	}
@@ -490,11 +523,12 @@ func (r *BareMetalInstanceReconciler) reconcileManagement(ctx context.Context, b
 	prevPowerSynced := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
 	powerWasPreviouslySynced := prevPowerSynced == nil || prevPowerSynced.Status == metav1.ConditionTrue
 
-	// Handle restart trigger right after provisioning
+	// Handle restart trigger right after provisioning. Restart errors are
+	// retryable: keep the instance Progressing so the next reconcile retries, and
+	// let the PowerSynced condition carry the failure detail. A terminal host
+	// error already set Failed, and the Failed check above must stay terminal.
 	if result, err := r.reconcileRestartTrigger(ctx, bareMetalInstance); err != nil || !result.IsZero() {
-		if err != nil {
-			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-		} else {
+		if bareMetalInstance.Status.Phase != v1alpha1.BareMetalInstancePhaseFailed {
 			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
 		}
 		return result, err
@@ -503,11 +537,11 @@ func (r *BareMetalInstanceReconciler) reconcileManagement(ctx context.Context, b
 	powerStatus, err := r.ManagementClient.GetPowerState(ctx, bareMetalInstance.Spec.ExternalHostID)
 	if err != nil {
 		log.Error(err, "failed to get power state", "nodeID", bareMetalInstance.Spec.ExternalHostID)
-		r.syncBareMetalInstanceStatus(bareMetalInstance, nil, err, log)
+		r.syncBareMetalInstanceStatus(bareMetalInstance, nil, fmt.Errorf("%w: %w", management.ErrPowerRead, err), log)
 		return ctrl.Result{}, err
 	}
 	if powerStatus == nil {
-		err := fmt.Errorf("management backend returned nil power status for host %s", bareMetalInstance.Spec.ExternalHostID)
+		err := fmt.Errorf("%w: management backend returned nil power status for host %s", management.ErrPowerRead, bareMetalInstance.Spec.ExternalHostID)
 		log.Error(err, "unexpected nil power status", "nodeID", bareMetalInstance.Spec.ExternalHostID)
 		r.syncBareMetalInstanceStatus(bareMetalInstance, nil, err, log)
 		return ctrl.Result{}, err
@@ -525,11 +559,11 @@ func (r *BareMetalInstanceReconciler) reconcileManagement(ctx context.Context, b
 		powerStatus, err = r.ManagementClient.GetPowerState(ctx, bareMetalInstance.Spec.ExternalHostID)
 		if err != nil {
 			log.Error(err, "failed to refresh power state after reconciliation", "nodeID", bareMetalInstance.Spec.ExternalHostID)
-			r.syncBareMetalInstanceStatus(bareMetalInstance, nil, err, log)
+			r.syncBareMetalInstanceStatus(bareMetalInstance, nil, fmt.Errorf("%w: %w", management.ErrPowerRead, err), log)
 			return ctrl.Result{}, err
 		}
 		if powerStatus == nil {
-			err := fmt.Errorf("management backend returned nil power status for host %s", bareMetalInstance.Spec.ExternalHostID)
+			err := fmt.Errorf("%w: management backend returned nil power status for host %s", management.ErrPowerRead, bareMetalInstance.Spec.ExternalHostID)
 			log.Error(err, "unexpected nil power status after reconciliation", "nodeID", bareMetalInstance.Spec.ExternalHostID)
 			r.syncBareMetalInstanceStatus(bareMetalInstance, nil, err, log)
 			return ctrl.Result{}, err
@@ -617,6 +651,24 @@ func (r *BareMetalInstanceReconciler) reconcilePower(ctx context.Context, bareMe
 		}
 		log.Error(err, "failed to power "+action+" node", "nodeID", bareMetalInstance.Spec.ExternalHostID)
 		return false, err
+	}
+	if targetState == management.PowerOff {
+		// A submitted stop supersedes the cancelled-restart observation, so
+		// callers can report the stop with its own transition time.
+		clearCancelledRestart(bareMetalInstance)
+		// Start the stop interval now: the previous observation may belong to a
+		// restart and carry its timestamp.
+		bareMetalInstance.SetStatusCondition(
+			v1alpha1.HostConditionPowerSynced,
+			metav1.ConditionFalse,
+			v1alpha1.HostConditionReasonPoweringOff,
+			"powering off node",
+		)
+		// Force a fresh interval boundary for the stop; the previous observation
+		// may belong to a restart.
+		if cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced); cond != nil {
+			cond.LastTransitionTime = metav1.Now()
+		}
 	}
 
 	return true, nil
@@ -1028,13 +1080,30 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkOffboardShutdown(
 
 func (r *BareMetalInstanceReconciler) syncBareMetalInstanceStatus(bareMetalInstance *v1alpha1.BareMetalInstance, powerStatus *management.PowerStatus, reconcileErr error, log logr.Logger) {
 	if reconcileErr != nil {
-		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-		bareMetalInstance.SetStatusCondition(
-			v1alpha1.HostConditionPowerSynced,
-			metav1.ConditionFalse,
-			v1alpha1.HostConditionReasonIronicAPIFailure,
-			"failed to sync power status",
-		)
+		if errors.Is(reconcileErr, management.ErrHostOperational) {
+			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+			bareMetalInstance.SetStatusCondition(
+				v1alpha1.HostConditionPowerSynced,
+				metav1.ConditionFalse,
+				v1alpha1.HostConditionReasonIronicAPIFailure,
+				"failed to sync power status",
+			)
+		} else {
+			bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
+			reason := v1alpha1.HostConditionReasonPowerSyncRequired
+			if errors.Is(reconcileErr, management.ErrPowerRead) {
+				// A read-only failure does not prove a power transition started;
+				// report it separately so callers keep the last confirmed state.
+				reason = v1alpha1.HostConditionReasonPowerReadFailed
+			}
+			// Bounded message: backend responses can exceed the CRD limit.
+			bareMetalInstance.SetStatusCondition(
+				v1alpha1.HostConditionPowerSynced,
+				metav1.ConditionFalse,
+				reason,
+				"failed to sync power status",
+			)
+		}
 		log.Error(reconcileErr, "Failed to sync BareMetalInstance power status", "phase", bareMetalInstance.Status.Phase, "condition", v1alpha1.HostConditionPowerSynced)
 		return
 	}
@@ -1050,11 +1119,18 @@ func (r *BareMetalInstanceReconciler) syncBareMetalInstanceStatus(bareMetalInsta
 		bareMetalInstance.Status.RunStrategy = v1alpha1.RunStrategyHalted
 	}
 
+	transitionReason := v1alpha1.HostConditionReasonProgressing
+	if bareMetalInstance.Spec.RunStrategy == v1alpha1.RunStrategyHalted {
+		// Keep a stable reason for the whole stop so its interval is not restarted
+		// by a transient read failure or a later observation.
+		transitionReason = v1alpha1.HostConditionReasonPoweringOff
+	}
+
 	if powerStatus.IsTransitioning {
 		bareMetalInstance.SetStatusCondition(
 			v1alpha1.HostConditionPowerSynced,
 			metav1.ConditionFalse,
-			v1alpha1.HostConditionReasonProgressing,
+			transitionReason,
 			"node power state is transitioning",
 		)
 		return
@@ -1064,7 +1140,7 @@ func (r *BareMetalInstanceReconciler) syncBareMetalInstanceStatus(bareMetalInsta
 		bareMetalInstance.SetStatusCondition(
 			v1alpha1.HostConditionPowerSynced,
 			metav1.ConditionFalse,
-			v1alpha1.HostConditionReasonProgressing,
+			transitionReason,
 			"waiting for node power state to converge",
 		)
 	} else if poweredOn {
@@ -1083,6 +1159,18 @@ func (r *BareMetalInstanceReconciler) reconcileRestartTrigger(ctx context.Contex
 
 	// Check if restart trigger has changed
 	if bareMetalInstance.Spec.RestartTrigger == bareMetalInstance.Status.RestartTrigger {
+		// Restoring the acknowledged trigger withdraws the request, so clear both
+		// an in-flight marker and a blocked-submission marker; a stale one would
+		// keep a later trigger pending past boot.
+		if bareMetalInstance.IsStatusConditionTrue(v1alpha1.HostConditionRestartInProgress) ||
+			restartBlocked(bareMetalInstance) {
+			bareMetalInstance.SetStatusCondition(
+				v1alpha1.HostConditionRestartInProgress,
+				metav1.ConditionFalse,
+				"Cancelled",
+				"",
+			)
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -1091,79 +1179,394 @@ func (r *BareMetalInstanceReconciler) reconcileRestartTrigger(ctx context.Contex
 		"status", bareMetalInstance.Status.RestartTrigger,
 		"hostID", bareMetalInstance.Spec.ExternalHostID)
 
-	// If run strategy is halted, just update the status without triggering restart.
-	// status.runStrategy echoes the host's actual power state, so this also covers
-	// starting a halted instance and bumping the restart trigger in the same update:
-	// spec.runStrategy is already Always while the host is still off. A restart
-	// cannot complete before the host is powered on, so acknowledge the trigger and
-	// let reconcilePower power the host on.
-	if bareMetalInstance.Spec.RunStrategy == v1alpha1.RunStrategyHalted ||
-		bareMetalInstance.Status.RunStrategy == v1alpha1.RunStrategyHalted {
-		log.Info("RunStrategy is halted, updating restart trigger without restart",
-			"trigger", bareMetalInstance.Spec.RestartTrigger,
-			"statusRunStrategy", bareMetalInstance.Status.RunStrategy)
-		bareMetalInstance.Status.RestartTrigger = bareMetalInstance.Spec.RestartTrigger
-		bareMetalInstance.SetStatusCondition(
-			v1alpha1.HostConditionPowerSynced,
-			metav1.ConditionTrue,
-			"Completed",
-			"Restart trigger updated (instance halted)",
-		)
-		return ctrl.Result{}, nil
+	// A halted spec means the host should be off; a restart is a no-op. This also
+	// cancels an in-flight restart if the user halts while it is running.
+	if bareMetalInstance.Spec.RunStrategy == v1alpha1.RunStrategyHalted {
+		return ackRestartTrigger(bareMetalInstance, "Cancelled")
 	}
 
-	// Check if restart is already in progress
-	restartCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
-	if restartCond != nil && restartCond.Status == metav1.ConditionFalse && restartCond.Reason == v1alpha1.HostConditionReasonProgressing {
-		// Check if restart has completed
-		if completed, err := r.ManagementClient.IsRestartComplete(ctx, bareMetalInstance.Spec.ExternalHostID); err != nil {
-			log.Error(err, "Failed to check restart completion", "hostID", bareMetalInstance.Spec.ExternalHostID)
-			bareMetalInstance.SetStatusCondition(
-				v1alpha1.HostConditionPowerSynced,
-				metav1.ConditionFalse,
-				v1alpha1.HostConditionReasonPowerSyncFailed,
-				fmt.Sprintf("Failed to check restart completion: %v", err),
-			)
-			return ctrl.Result{}, err
-		} else if completed {
-			log.Info("Restart completed successfully", "hostID", bareMetalInstance.Spec.ExternalHostID)
-			// Restart completed, update status and continue
-		} else {
-			// Still in progress, requeue
-			log.Info("Restart still in progress", "hostID", bareMetalInstance.Spec.ExternalHostID)
-			return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
-		}
-	} else {
-		// No restart in progress, trigger new restart
-		result, err := r.triggerRestart(ctx, bareMetalInstance)
-		if err != nil {
-			bareMetalInstance.SetStatusCondition(
-				v1alpha1.HostConditionPowerSynced,
-				metav1.ConditionFalse,
-				v1alpha1.HostConditionReasonPowerSyncFailed,
-				fmt.Sprintf("Failed to trigger restart: %v", err),
-			)
+	// Adopt a restart initiated before this version, which recorded it only as
+	// PowerSynced=False/Progressing, so it completes instead of rebooting twice.
+	adoptLegacyRestart(bareMetalInstance)
+
+	// A restart this controller initiated is polled to completion before the
+	// eligibility gate: while rebooting, the host is off or transitioning, which
+	// the gate would otherwise treat as a new request on a non-running host and
+	// acknowledge before the restart finishes.
+	if bareMetalInstance.IsStatusConditionTrue(v1alpha1.HostConditionRestartInProgress) {
+		// A persisted pre-dispatch claim may or may not have reached the backend.
+		// Ask for request-specific evidence before treating it as in progress; if
+		// it was never submitted, submit it idempotently with the same request ID.
+		if done, result, err := r.resubmitPendingClaim(ctx, bareMetalInstance); done {
 			return result, err
 		}
-		if !result.IsZero() {
-			return result, nil
+		completed, err := r.ManagementClient.IsRestartComplete(ctx, bareMetalInstance.Spec.ExternalHostID)
+		if err != nil {
+			log.Error(err, "Failed to check restart completion", "hostID", bareMetalInstance.Spec.ExternalHostID)
+			setRestartError(bareMetalInstance, err, "failed to check restart completion")
+			return ctrl.Result{}, err
 		}
+		if completed {
+			// A pending or unconfirmed submission means the backend could not
+			// confirm dispatch (OpenStack). Do not acknowledge a restart that may
+			// never have run, and preserve the unknown state across reconciles.
+			if cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionRestartInProgress); cond != nil &&
+				(cond.Reason == v1alpha1.HostConditionReasonRestartSubmissionPending ||
+					cond.Reason == v1alpha1.HostConditionReasonRestartSubmissionUnconfirmed) {
+				log.Info("Restart completion is unconfirmed; not acknowledging", "hostID", bareMetalInstance.Spec.ExternalHostID)
+				bareMetalInstance.SetStatusCondition(
+					v1alpha1.HostConditionRestartInProgress,
+					metav1.ConditionTrue,
+					v1alpha1.HostConditionReasonRestartSubmissionUnconfirmed,
+					"Restart submission unconfirmed",
+				)
+				bareMetalInstance.SetStatusCondition(
+					v1alpha1.HostConditionPowerSynced,
+					metav1.ConditionFalse,
+					v1alpha1.HostConditionReasonPowerSyncRequired,
+					"restart submission unconfirmed; re-issue the request if needed",
+				)
+				return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+			}
+			log.Info("Restart completed successfully", "hostID", bareMetalInstance.Spec.ExternalHostID)
+			return completeRestartTrigger(bareMetalInstance, "Restart trigger updated")
+		}
+		powerStatus, err := r.ManagementClient.GetPowerState(ctx, bareMetalInstance.Spec.ExternalHostID)
+		if err != nil {
+			log.Error(err, "Failed to get power state while checking restart", "hostID", bareMetalInstance.Spec.ExternalHostID)
+			setRestartError(bareMetalInstance, err, "failed to get power state while checking restart")
+			return ctrl.Result{}, err
+		}
+		if powerStatus == nil {
+			return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+		}
+		if !powerStatus.IsTransitioning && powerStatus.State != management.PowerOn {
+			// The host is settled off, so no restart can be in progress. Drop a
+			// marker persisted across a failed status update instead of letting it
+			// block power-on after a later start.
+			log.Info("Clearing restart marker; host is off", "hostID", bareMetalInstance.Spec.ExternalHostID)
+			return ackRestartTrigger(bareMetalInstance, "Completed")
+		}
+		log.Info("Restart still in progress", "hostID", bareMetalInstance.Spec.ExternalHostID)
+		bareMetalInstance.SetStatusCondition(
+			v1alpha1.HostConditionPowerSynced,
+			metav1.ConditionFalse,
+			v1alpha1.HostConditionReasonProgressing,
+			"Restart still in progress",
+		)
+		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
 	}
 
-	// Update status to match spec (indicating restart completion)
+	// New request: a restart only applies to a host that is already powered on.
+	// When it is off or transitioning, skip it and let reconcilePower handle the
+	// power transition.
+	powerStatus, err := r.ManagementClient.GetPowerState(ctx, bareMetalInstance.Spec.ExternalHostID)
+	if err != nil {
+		log.Error(err, "failed to get power state before restart", "hostID", bareMetalInstance.Spec.ExternalHostID)
+		setRestartError(bareMetalInstance, err, "failed to get power state before restart")
+		if bareMetalInstance.Status.Phase == v1alpha1.BareMetalInstancePhaseFailed {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+	}
+	if powerStatus == nil {
+		bareMetalInstance.SetStatusCondition(
+			v1alpha1.HostConditionPowerSynced,
+			metav1.ConditionFalse,
+			v1alpha1.HostConditionReasonPowerSyncRequired,
+			"waiting for a power state read to confirm the desired state",
+		)
+		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+	}
+	// A restart whose submission was blocked by an in-flight transition stays
+	// pending; a new request on a host that is off or powering on is skipped.
+	if powerStatus.IsTransitioning && restartBlocked(bareMetalInstance) {
+		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+	}
+	if powerStatus.IsTransitioning || powerStatus.State != management.PowerOn {
+		return ackRestartTrigger(bareMetalInstance, "Completed")
+	}
+
+	// Claim the restart durably before dispatching it. If the status write after
+	// a successful TriggerRestart is lost, the persisted marker lets the next
+	// reconcile resume the completion poll instead of submitting the same trigger
+	// again and rebooting the host twice.
+	proceed, err := r.claimRestartForDispatch(ctx, bareMetalInstance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !proceed {
+		// The request changed (halt, withdrawal, deletion, acknowledgement, or
+		// another reconcile claimed it) or the claim write failed: re-evaluate
+		// instead of dispatching a reboot from a stale snapshot.
+		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+	}
+
+	result, err := r.triggerRestart(ctx, bareMetalInstance)
+	if err != nil {
+		setRestartSubmitError(bareMetalInstance, err)
+		return result, err
+	}
+	return result, nil
+}
+
+// claimRestartForDispatch writes the durable claim and validates that the
+// request is still current. It restores the previous marker on any failure, so
+// Reconcile cannot persist a speculative restart that was never submitted.
+func (r *BareMetalInstanceReconciler) claimRestartForDispatch(ctx context.Context, bmi *v1alpha1.BareMetalInstance) (bool, error) {
+	prev := bmi.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
+	var prevStatus metav1.ConditionStatus
+	var prevReason, prevMessage string
+	if prev != nil {
+		prevStatus, prevReason, prevMessage = prev.Status, prev.Reason, prev.Message
+	}
+	prevRequestID := bmi.Status.RestartRequestID
+
+	bmi.Status.RestartRequestID = newRestartRequestID(bmi)
+	bmi.SetStatusCondition(
+		v1alpha1.HostConditionRestartInProgress,
+		metav1.ConditionTrue,
+		v1alpha1.HostConditionReasonRestartSubmissionPending,
+		"Restart submission pending",
+	)
+
+	latest, err := r.claimRestart(ctx, bmi)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, errRestartRequestChanged) && latest != nil {
+		// Keep the persisted status so Reconcile cannot overwrite a newer claim
+		// with the stale snapshot this reconcile started from.
+		latest.Status.DeepCopyInto(&bmi.Status)
+		return false, nil
+	}
+
+	bmi.Status.RestartRequestID = prevRequestID
+	if prev == nil {
+		removeStatusCondition(bmi, v1alpha1.HostConditionRestartInProgress)
+	} else {
+		bmi.SetStatusCondition(v1alpha1.HostConditionRestartInProgress, prevStatus, prevReason, prevMessage)
+	}
+	return false, err
+}
+
+var errRestartRequestChanged = errors.New("restart request changed before it could be claimed")
+
+// claimRestart persists the restart claim before the reboot is dispatched. Every
+// retry re-reads the current object (uncached when available) and aborts if the
+// claimed request no longer matches, or if another reconciliation already claimed
+// the restart.
+func (r *BareMetalInstanceReconciler) claimRestart(ctx context.Context, bmi *v1alpha1.BareMetalInstance) (*v1alpha1.BareMetalInstance, error) {
+	key := client.ObjectKeyFromObject(bmi)
+	uid := bmi.UID
+	trigger := bmi.Spec.RestartTrigger
+
+	var latest *v1alpha1.BareMetalInstance
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest = &v1alpha1.BareMetalInstance{}
+		if err := r.apiReaderOrClient().Get(ctx, key, latest); err != nil {
+			return err
+		}
+		if latest.UID != uid ||
+			!latest.DeletionTimestamp.IsZero() ||
+			latest.Spec.RestartTrigger != trigger ||
+			latest.Status.RestartTrigger == trigger ||
+			latest.Spec.RunStrategy == v1alpha1.RunStrategyHalted ||
+			latest.IsStatusConditionTrue(v1alpha1.HostConditionRestartInProgress) {
+			return errRestartRequestChanged
+		}
+		latest.Status.RestartRequestID = bmi.Status.RestartRequestID
+		latest.SetStatusCondition(
+			v1alpha1.HostConditionRestartInProgress,
+			metav1.ConditionTrue,
+			v1alpha1.HostConditionReasonRestartSubmissionPending,
+			"Restart submission pending",
+		)
+		return r.Status().Update(ctx, latest)
+	})
+	return latest, err
+}
+
+// isTerminalRestartFailure reports a restart failure that must stay terminal even
+// if a later reconciliation rewrites Phase.
+func isTerminalRestartFailure(bmi *v1alpha1.BareMetalInstance) bool {
+	power := bmi.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
+	restart := bmi.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
+	return power != nil && power.Status == metav1.ConditionFalse &&
+		power.Reason == v1alpha1.HostConditionReasonIronicAPIFailure &&
+		restart != nil && restart.Status == metav1.ConditionFalse &&
+		restart.Reason == v1alpha1.HostConditionReasonPowerSyncFailed
+}
+
+// setRestartError records a restart-path error while preserving restart
+// ownership. Only a terminal host operational error ends the lifecycle;
+// everything else stays retryable, and an owned restart keeps its marker so the
+// completion poll is retried instead of the reboot being re-dispatched. The
+// message stays bounded, so the detail belongs in the caller's log.
+func setRestartError(bmi *v1alpha1.BareMetalInstance, err error, message string) {
+	if errors.Is(err, management.ErrHostOperational) {
+		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		bmi.SetStatusCondition(v1alpha1.HostConditionPowerSynced,
+			metav1.ConditionFalse, v1alpha1.HostConditionReasonIronicAPIFailure, message)
+		bmi.SetStatusCondition(v1alpha1.HostConditionRestartInProgress,
+			metav1.ConditionFalse, v1alpha1.HostConditionReasonPowerSyncFailed, "Restart failed")
+		return
+	}
+	bmi.SetStatusCondition(v1alpha1.HostConditionPowerSynced,
+		metav1.ConditionFalse, v1alpha1.HostConditionReasonPowerReadFailed, message)
+}
+
+// setRestartSubmitError classifies a failed restart submission. The durable
+// claim has already been written, so the marker must be released explicitly:
+// terminal host errors report a failure, everything else leaves the trigger
+// pending for a retry.
+func setRestartSubmitError(bmi *v1alpha1.BareMetalInstance, err error) {
+	if errors.Is(err, management.ErrHostOperational) {
+		bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
+		bmi.SetStatusCondition(v1alpha1.HostConditionPowerSynced,
+			metav1.ConditionFalse, v1alpha1.HostConditionReasonIronicAPIFailure, "failed to trigger restart")
+		bmi.SetStatusCondition(v1alpha1.HostConditionRestartInProgress,
+			metav1.ConditionFalse, v1alpha1.HostConditionReasonPowerSyncFailed, "Restart failed")
+		return
+	}
+	bmi.SetStatusCondition(v1alpha1.HostConditionPowerSynced,
+		metav1.ConditionFalse, v1alpha1.HostConditionReasonPowerSyncRequired, "failed to trigger restart")
+	// Keep the pending claim and its request ID: the next reconcile uses backend
+	// evidence to decide whether to poll or re-submit idempotently.
+}
+
+// restartBlocked reports whether the last restart submission was rejected by an
+// in-flight transition and still has to be retried.
+func restartBlocked(bmi *v1alpha1.BareMetalInstance) bool {
+	cond := bmi.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
+	return cond != nil && cond.Status == metav1.ConditionFalse &&
+		cond.Reason == v1alpha1.HostConditionReasonPowerSyncRequired
+}
+
+// removeStatusCondition drops a condition from the status slice.
+func removeStatusCondition(bmi *v1alpha1.BareMetalInstance, ct v1alpha1.BareMetalInstanceConditionType) {
+	out := bmi.Status.Conditions[:0]
+	for _, c := range bmi.Status.Conditions {
+		if c.Type != string(ct) {
+			out = append(out, c)
+		}
+	}
+	bmi.Status.Conditions = out
+}
+
+// adoptLegacyRestart marks a restart recorded by a previous version (only as
+// PowerSynced=False/Progressing) as owned, so it completes instead of rebooting.
+func adoptLegacyRestart(bmi *v1alpha1.BareMetalInstance) {
+	if bmi.IsStatusConditionTrue(v1alpha1.HostConditionRestartInProgress) {
+		return
+	}
+	cond := bmi.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
+	if cond == nil || cond.Status != metav1.ConditionFalse ||
+		cond.Reason != v1alpha1.HostConditionReasonProgressing ||
+		cond.Message != "Restart operation initiated" {
+		return
+	}
+	bmi.SetStatusCondition(
+		v1alpha1.HostConditionRestartInProgress,
+		metav1.ConditionTrue,
+		v1alpha1.HostConditionReasonProgressing,
+		"Restart operation initiated",
+	)
+}
+
+// resubmitPendingClaim resolves a persisted pre-dispatch claim. It returns
+// done=true when the caller should return result/err.
+func (r *BareMetalInstanceReconciler) resubmitPendingClaim(ctx context.Context, bmi *v1alpha1.BareMetalInstance) (bool, ctrl.Result, error) {
+	cond := bmi.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
+	if cond == nil ||
+		(cond.Reason != v1alpha1.HostConditionReasonRestartSubmissionPending &&
+			cond.Reason != v1alpha1.HostConditionReasonRestartSubmissionUnconfirmed) {
+		return false, ctrl.Result{}, nil
+	}
+	state, err := r.ManagementClient.IsRestartSubmitted(ctx, bmi.Spec.ExternalHostID, bmi.Status.RestartRequestID)
+	if err != nil {
+		setRestartError(bmi, err, "failed to confirm restart submission")
+		return true, ctrl.Result{}, err
+	}
+	switch state {
+	case management.RestartSubmissionNotSubmitted:
+		result, err := r.triggerRestart(ctx, bmi)
+		if err != nil {
+			setRestartSubmitError(bmi, err)
+		}
+		return true, result, err
+	case management.RestartSubmissionSubmitted:
+		bmi.SetStatusCondition(
+			v1alpha1.HostConditionRestartInProgress,
+			metav1.ConditionTrue,
+			v1alpha1.HostConditionReasonProgressing,
+			"Restart operation initiated",
+		)
+		return false, ctrl.Result{}, nil
+	default:
+		// The backend exposes no request identity (OpenStack). Keep the pending
+		// marker so callers do not report a power cycle that may not have started,
+		// and poll to completion instead of re-submitting.
+		return false, ctrl.Result{}, nil
+	}
+}
+
+// clearCancelledRestart drops a restart marker left by a halt so a submitted stop
+// is reported as an ordinary power transition.
+func clearCancelledRestart(bmi *v1alpha1.BareMetalInstance) {
+	cond := bmi.GetStatusCondition(v1alpha1.HostConditionRestartInProgress)
+	if cond != nil && cond.Status == metav1.ConditionFalse && cond.Reason == "Cancelled" {
+		bmi.SetStatusCondition(
+			v1alpha1.HostConditionRestartInProgress,
+			metav1.ConditionFalse,
+			"Completed",
+			"",
+		)
+	}
+}
+
+// ackRestartTrigger echoes a skipped restart request and clears restart progress.
+// It deliberately leaves PowerSynced alone: no power transition was started, and
+// rewriting the condition would reset an ongoing transition's timestamp.
+func ackRestartTrigger(bareMetalInstance *v1alpha1.BareMetalInstance, reason string) (ctrl.Result, error) {
+	bareMetalInstance.SetStatusCondition(
+		v1alpha1.HostConditionRestartInProgress,
+		metav1.ConditionFalse,
+		reason,
+		"",
+	)
+	bareMetalInstance.Status.RestartTrigger = bareMetalInstance.Spec.RestartTrigger
+	return ctrl.Result{}, nil
+}
+
+// completeRestartTrigger echoes the requested trigger and clears restart progress.
+func completeRestartTrigger(bareMetalInstance *v1alpha1.BareMetalInstance, message string) (ctrl.Result, error) {
+	bareMetalInstance.SetStatusCondition(
+		v1alpha1.HostConditionRestartInProgress,
+		metav1.ConditionFalse,
+		"Completed",
+		"",
+	)
 	bareMetalInstance.Status.RestartTrigger = bareMetalInstance.Spec.RestartTrigger
 	bareMetalInstance.SetStatusCondition(
 		v1alpha1.HostConditionPowerSynced,
 		metav1.ConditionTrue,
 		"Completed",
-		"Restart trigger updated",
+		message,
 	)
-
-	log.Info("Restart trigger reconciled",
-		"trigger", bareMetalInstance.Spec.RestartTrigger,
-		"hostID", bareMetalInstance.Spec.ExternalHostID)
-
 	return ctrl.Result{}, nil
+}
+
+// newRestartRequestID returns a fresh, hard-to-collide identity for one restart
+// request. It is persisted in the claim so a retry reuses it, even when a later
+// request reuses an earlier trigger value.
+func newRestartRequestID(bmi *v1alpha1.BareMetalInstance) string {
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		// crypto/rand only fails in pathological environments; keep an identity.
+		return fmt.Sprintf("%s:%d", bmi.UID, time.Now().UnixNano())
+	}
+	return fmt.Sprintf("%s:%x", bmi.UID, random)
 }
 
 func (r *BareMetalInstanceReconciler) triggerRestart(ctx context.Context, bareMetalInstance *v1alpha1.BareMetalInstance) (ctrl.Result, error) {
@@ -1171,29 +1574,31 @@ func (r *BareMetalInstanceReconciler) triggerRestart(ctx context.Context, bareMe
 	hostID := bareMetalInstance.Spec.ExternalHostID
 
 	// Trigger restart through management backend
-	if err := r.ManagementClient.TriggerRestart(ctx, hostID); err != nil {
+	if bareMetalInstance.Status.RestartRequestID == "" {
+		bareMetalInstance.Status.RestartRequestID = newRestartRequestID(bareMetalInstance)
+	}
+	if err := r.ManagementClient.TriggerRestart(ctx, hostID, bareMetalInstance.Status.RestartRequestID); err != nil {
 		if errors.Is(err, management.ErrTransitioning) {
 			// The host is busy transitioning; the restart was NOT triggered. This is
-			// benign backpressure, not a failure — we swallow the error and requeue to
-			// retry once the host is idle. Two things must hold for the reason we stamp:
-			//   1. It must not be a hard-failure reason (PowerSyncFailed), which would be
-			//      surfaced to users as a power-sync failure while we are still retrying.
-			//   2. It must NOT be Progressing: reconcileRestartTrigger treats
-			//      PowerSynced=False/Progressing as "a restart I already triggered is in
-			//      flight — poll IsRestartComplete instead of re-triggering". Nothing was
-			//      triggered here, so using Progressing would make the next reconcile poll
-			//      for a completion that will never come from us, and on backends where
-			//      ErrTransitioning reflects an unrelated power transition it could adopt
-			//      that transition as "the restart" and report success with no reboot.
-			// PowerSyncRequired satisfies both: it is in the derivation's benign denylist
-			// (reported as non-failure) and leaves the in-progress guard false, so the
-			// next reconcile re-triggers until a real restart is actually initiated.
+			// benign backpressure, not a failure — swallow the error and requeue to
+			// retry once the host is idle. PowerSyncRequired keeps it out of the
+			// failure set and leaves the restart unowned (the RestartInProgress
+			// marker is only set after a real trigger), so the next reconcile
+			// re-evaluates instead of polling for a completion that never started.
 			log.Info("Host is already transitioning, will retry restart when host becomes idle", "hostID", hostID)
 			bareMetalInstance.SetStatusCondition(
 				v1alpha1.HostConditionPowerSynced,
 				metav1.ConditionFalse,
 				v1alpha1.HostConditionReasonPowerSyncRequired,
 				"Host is transitioning, will retry restart when host becomes idle",
+			)
+			// Marks a blocked submission, which keeps the trigger pending even if
+			// the host is seen powering on. A preflight read failure does not.
+			bareMetalInstance.SetStatusCondition(
+				v1alpha1.HostConditionRestartInProgress,
+				metav1.ConditionFalse,
+				v1alpha1.HostConditionReasonPowerSyncRequired,
+				"Restart not initiated: host is transitioning",
 			)
 			return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
 		}
@@ -1202,6 +1607,12 @@ func (r *BareMetalInstanceReconciler) triggerRestart(ctx context.Context, bareMe
 	}
 
 	log.Info("Successfully triggered restart", "hostID", hostID)
+	bareMetalInstance.SetStatusCondition(
+		v1alpha1.HostConditionRestartInProgress,
+		metav1.ConditionTrue,
+		v1alpha1.HostConditionReasonProgressing,
+		"Restart operation initiated",
+	)
 	bareMetalInstance.SetStatusCondition(
 		v1alpha1.HostConditionPowerSynced,
 		metav1.ConditionFalse,

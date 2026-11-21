@@ -63,12 +63,13 @@ var hostConditionsNotSurfaced = map[BareMetalInstanceConditionType]struct{}{
 	HostConditionAvailable:                   {},
 	HostConditionDeprovisionTemplateComplete: {},
 	HostConditionNetworkOffboardComplete:     {},
+	HostConditionRestartInProgress:           {},
 }
 
 var _ = Describe("DeriveProvisioningProgress", func() {
 	DescribeTable("maps conditions to the furthest-advanced progress",
 		func(conds []metav1.Condition, want ProvisioningProgress) {
-			Expect(DeriveProvisioningProgress(conds)).To(Equal(want))
+			Expect(DeriveProvisioningProgress(conds, false)).To(Equal(want))
 		},
 
 		// --- In-progress progression (PROVISIONED axis) ---
@@ -299,6 +300,42 @@ var _ = Describe("DeriveProvisioningProgress", func() {
 				condFalse(HostConditionPowerSynced, HostConditionReasonPowerSyncFailed),
 			},
 			ProvisioningProgress{State: StateFailed, Step: StepReadyPowerSync, Failure: FailureReadyTimeout}),
+		Entry("PowerSynced False+PowerSyncFailed while an owned restart retries -> ready in progress",
+			[]metav1.Condition{
+				condTrue(HostConditionNetworkAttachmentsReady),
+				condTrue(HostConditionNetworkHandoffComplete),
+				condTrue(HostConditionIPDiscoveryComplete),
+				condTrue(HostConditionRestartInProgress),
+				condFalse(HostConditionPowerSynced, HostConditionReasonPowerSyncFailed),
+			},
+			ProvisioningProgress{State: StateProvisioned, Step: StepReadyPowerSync}),
+		Entry("owned restart retry without network conditions stays provisioned",
+			[]metav1.Condition{
+				condTrue(HostConditionRestartInProgress),
+				condFalse(HostConditionPowerSynced, HostConditionReasonPowerSyncFailed),
+			},
+			ProvisioningProgress{State: StateProvisioned, Step: StepReadyPowerSync}),
+		Entry("owned restart poll progressing without network conditions stays provisioned",
+			[]metav1.Condition{
+				condTrue(HostConditionRestartInProgress),
+				condFalse(HostConditionPowerSynced, HostConditionReasonProgressing),
+			},
+			ProvisioningProgress{State: StateProvisioned, Step: StepReadyPowerSync}),
+		Entry("withdrawn restart initiation conflict is not the restart-specific provisioned result",
+			[]metav1.Condition{
+				condFalse(HostConditionRestartInProgress, HostConditionReasonPowerSyncRequired),
+				condFalse(HostConditionPowerSynced, HostConditionReasonPowerSyncRequired),
+			},
+			ProvisioningProgress{State: StateInProgress, Step: StepHostAllocation}),
+		Entry("withdrawn restart failure is not a ready timeout",
+			[]metav1.Condition{
+				condTrue(HostConditionNetworkAttachmentsReady),
+				condTrue(HostConditionNetworkHandoffComplete),
+				condTrue(HostConditionIPDiscoveryComplete),
+				condFalse(HostConditionRestartInProgress, HostConditionReasonPowerSyncFailed),
+				condFalse(HostConditionPowerSynced, HostConditionReasonPowerSyncFailed),
+			},
+			ProvisioningProgress{State: StateProvisioned, Step: StepReadyPowerSync}),
 
 		// --- Failure priority and tie-break ---
 		Entry("failure takes priority over the in-progress step",
@@ -324,11 +361,29 @@ var _ = Describe("DeriveProvisioningProgress", func() {
 			ProvisioningProgress{State: StateFailed, Step: StepNetworkSetupAttachment, Failure: FailureNetworkAttachment}),
 	)
 
+	DescribeTable("maps pending restart initiation retries",
+		func(conds []metav1.Condition, want ProvisioningProgress) {
+			Expect(DeriveProvisioningProgress(conds, true)).To(Equal(want))
+		},
+		Entry("initiation failure without network conditions stays provisioned",
+			[]metav1.Condition{
+				condFalse(HostConditionRestartInProgress, HostConditionReasonPowerSyncFailed),
+				condFalse(HostConditionPowerSynced, HostConditionReasonPowerSyncFailed),
+			},
+			ProvisioningProgress{State: StateProvisioned, Step: StepReadyPowerSync}),
+		Entry("initiation conflict without network conditions stays provisioned",
+			[]metav1.Condition{
+				condFalse(HostConditionRestartInProgress, HostConditionReasonPowerSyncRequired),
+				condFalse(HostConditionPowerSynced, HostConditionReasonPowerSyncRequired),
+			},
+			ProvisioningProgress{State: StateProvisioned, Step: StepReadyPowerSync}),
+	)
+
 	It("ignores unrecognized condition types", func() {
 		Expect(func() {
 			progress := DeriveProvisioningProgress([]metav1.Condition{
 				{Type: "SomethingCompletelyUnknown", Status: metav1.ConditionTrue, Reason: "Whatever"},
-			})
+			}, false)
 			Expect(progress).To(Equal(ProvisioningProgress{State: StateInProgress, Step: StepHostAllocation}))
 		}).NotTo(Panic())
 	})
@@ -414,6 +469,6 @@ var _ = Describe("HostCondition classification exhaustiveness", func() {
 	// classify the new constant. A pure compile-time enumeration of consts is not
 	// possible in Go, so this length gate plus review is the guard for AC-5.
 	It("enumerates every HostCondition* constant defined in the package", func() {
-		Expect(AllHostConditionTypes).To(HaveLen(9))
+		Expect(AllHostConditionTypes).To(HaveLen(10))
 	})
 })

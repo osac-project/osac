@@ -31,7 +31,26 @@ func (h *BareMetalInstance) SetStatusCondition(conditionType BareMetalInstanceCo
 	if h.Status.Conditions == nil {
 		h.Status.Conditions = []metav1.Condition{}
 	}
-	return apimeta.SetStatusCondition(&h.Status.Conditions, condition)
+
+	// PowerSynced drives metering interval boundaries. A new phase (reason)
+	// starts a new interval even when the status stays False, so do not let a
+	// read failure or a restart observation backdate the next real power
+	// transition. Message-only changes within the same phase (for example a stop
+	// moving from "powering off" to "transitioning") keep the phase timestamp.
+	var prevReason string
+	hadPrev := false
+	if prev := h.GetStatusCondition(conditionType); prev != nil {
+		hadPrev, prevReason = true, prev.Reason
+	}
+
+	changed := apimeta.SetStatusCondition(&h.Status.Conditions, condition)
+	if conditionType == HostConditionPowerSynced && hadPrev && prevReason != reason &&
+		prevReason != HostConditionReasonPoweringOff && reason != HostConditionReasonPoweringOff {
+		if cond := h.GetStatusCondition(conditionType); cond != nil {
+			cond.LastTransitionTime = metav1.Now()
+		}
+	}
+	return changed
 }
 
 func (h *BareMetalInstance) GetStatusCondition(conditionType BareMetalInstanceConditionType) *metav1.Condition {

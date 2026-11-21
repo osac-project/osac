@@ -236,12 +236,12 @@ var _ = Describe("Validation and Activation", func() {
 			// Expect viewers group creation
 			mockIdpClient.EXPECT().
 				CreateGroup(gomock.Any(), "acme", "/test-project/system:viewers").
-				Return("viewers-id", nil)
+				Return("viewers-id", true, nil)
 
 			// Expect managers group creation
 			mockIdpClient.EXPECT().
 				CreateGroup(gomock.Any(), "acme", "/test-project/system:managers").
-				Return("managers-id", nil)
+				Return("managers-id", true, nil)
 
 			task := &task{
 				r:       functionObj,
@@ -272,12 +272,12 @@ var _ = Describe("Validation and Activation", func() {
 			// Expect viewers group creation
 			mockIdpClient.EXPECT().
 				CreateGroup(gomock.Any(), "acme", "/test-project/system:viewers").
-				Return("viewers-id", nil)
+				Return("viewers-id", true, nil)
 
 			// Expect managers group creation
 			mockIdpClient.EXPECT().
 				CreateGroup(gomock.Any(), "acme", "/test-project/system:managers").
-				Return("managers-id", nil)
+				Return("managers-id", true, nil)
 
 			task := &task{
 				r:       functionObj,
@@ -323,13 +323,13 @@ var _ = Describe("Validation and Activation", func() {
 
 			mockIdpClient.EXPECT().
 				CreateGroup(gomock.Any(), "acme", "/system:viewers").
-				Return("", errors.New("organization not found"))
+				Return("", false, errors.New("organization not found"))
 			mockIdpClient.EXPECT().
 				CreateGroup(gomock.Any(), "acme", "/system:viewers").
-				Return("viewers-id", nil)
+				Return("viewers-id", true, nil)
 			mockIdpClient.EXPECT().
 				CreateGroup(gomock.Any(), "acme", "/system:managers").
-				Return("managers-id", nil)
+				Return("managers-id", true, nil)
 
 			mockClient.EXPECT().
 				Update(gomock.Any(), gomock.Any()).
@@ -413,12 +413,12 @@ var _ = Describe("Validation and Activation", func() {
 			// Expect viewers group creation
 			mockIdpClient.EXPECT().
 				CreateGroup(gomock.Any(), "acme", "/parent-project/child-project/system:viewers").
-				Return("viewers-id", nil)
+				Return("viewers-id", true, nil)
 
 			// Expect managers group creation
 			mockIdpClient.EXPECT().
 				CreateGroup(gomock.Any(), "acme", "/parent-project/child-project/system:managers").
-				Return("managers-id", nil)
+				Return("managers-id", true, nil)
 
 			task := &task{
 				r:       functionObj,
@@ -475,7 +475,7 @@ var _ = Describe("Validation and Activation", func() {
 					"acme",
 					"/parent/child/system:viewers",
 				).
-				Return("viewers-id", nil)
+				Return("viewers-id", true, nil)
 
 			// Expect managers group creation (new tenant groups API)
 			mockIdpClient.EXPECT().
@@ -484,7 +484,7 @@ var _ = Describe("Validation and Activation", func() {
 					"acme",
 					"/parent/child/system:managers",
 				).
-				Return("managers-id", nil)
+				Return("managers-id", true, nil)
 
 			task := &task{
 				r:       functionObj,
@@ -533,7 +533,7 @@ var _ = Describe("Validation and Activation", func() {
 	})
 
 	Context("Parent state validation", func() {
-		It("should fail when parent is in PENDING state", func() {
+		It("should wait when parent is in PENDING state", func() {
 			parentProject := privatev1.Project_builder{
 				Id: "parent-1",
 				Metadata: privatev1.Metadata_builder{
@@ -575,10 +575,12 @@ var _ = Describe("Validation and Activation", func() {
 
 			err := task.validateAndActivate(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(project.GetStatus().GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_FAILED))
+			Expect(project.GetStatus().GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_PENDING))
 			Expect(project.GetStatus().GetMessage()).To(ContainSubstring(
-				"Parent project 'my-parent' is not in ACTIVE state (current state: PROJECT_STATE_PENDING)",
+				"Waiting for parent project 'my-parent' to become ACTIVE",
 			))
+			var retryable interface{ RequeueAfter() time.Duration }
+			Expect(errors.As(task.retryErr, &retryable)).To(BeTrue())
 		})
 
 		It("should fail when parent is in FAILED state", func() {
@@ -631,10 +633,12 @@ var _ = Describe("Validation and Activation", func() {
 	})
 
 	Context("Update skips validation", func() {
-		It("should skip validation when project is already ACTIVE", func() {
+		It("should ensure Keycloak groups when project is already ACTIVE", func() {
 			project := privatev1.Project_builder{
 				Id: "project-1",
 				Metadata: privatev1.Metadata_builder{
+					Name:       "active-project",
+					Tenant:     "acme",
 					Finalizers: []string{finalizers.Controller},
 				}.Build(),
 				Status: privatev1.ProjectStatus_builder{
@@ -650,7 +654,13 @@ var _ = Describe("Validation and Activation", func() {
 				project: project,
 			}
 
-			// Should not call any client methods since validation is skipped
+			mockIdpClient.EXPECT().
+				CreateGroup(gomock.Any(), "acme", "/active-project/system:viewers").
+				Return("viewers-id", true, nil)
+			mockIdpClient.EXPECT().
+				CreateGroup(gomock.Any(), "acme", "/active-project/system:managers").
+				Return("managers-id", true, nil)
+
 			err := task.update(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(project.GetStatus().GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_ACTIVE))
@@ -983,11 +993,11 @@ var _ = Describe("ProjectMembership Creation During Activation", func() {
 		// Expect Keycloak group creation
 		mockIdpClient.EXPECT().
 			CreateGroup(gomock.Any(), "acme", "/test-project/system:viewers").
-			Return("viewers-id", nil)
+			Return("viewers-id", true, nil)
 
 		mockIdpClient.EXPECT().
 			CreateGroup(gomock.Any(), "acme", "/test-project/system:managers").
-			Return("managers-id", nil)
+			Return("managers-id", true, nil)
 
 		// Expect ProjectMembership creation
 		mockProjectMembershipsClient.EXPECT().
@@ -1028,11 +1038,11 @@ var _ = Describe("ProjectMembership Creation During Activation", func() {
 		// Expect Keycloak group creation
 		mockIdpClient.EXPECT().
 			CreateGroup(gomock.Any(), "acme", "/test-project/system:viewers").
-			Return("viewers-id", nil)
+			Return("viewers-id", true, nil)
 
 		mockIdpClient.EXPECT().
 			CreateGroup(gomock.Any(), "acme", "/test-project/system:managers").
-			Return("managers-id", nil)
+			Return("managers-id", true, nil)
 
 		// ProjectMembership creation fails
 		mockProjectMembershipsClient.EXPECT().
@@ -1069,11 +1079,11 @@ var _ = Describe("ProjectMembership Creation During Activation", func() {
 		// Expect Keycloak group creation
 		mockIdpClient.EXPECT().
 			CreateGroup(gomock.Any(), "acme", "/test-project/system:viewers").
-			Return("viewers-id", nil)
+			Return("viewers-id", true, nil)
 
 		mockIdpClient.EXPECT().
 			CreateGroup(gomock.Any(), "acme", "/test-project/system:managers").
-			Return("managers-id", nil)
+			Return("managers-id", true, nil)
 
 		// Should NOT call ProjectMembership Create
 

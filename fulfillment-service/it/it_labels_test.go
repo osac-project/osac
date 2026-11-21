@@ -86,7 +86,8 @@ var _ = Describe("Labels", func() {
 		templateId = newTemplateID("my_template")
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
-				Id: templateId,
+				SpecDefaults: testClusterSpecDefaults(ctx),
+				Id:           templateId,
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("my-template-%s", uuid.New()[24:32]),
 				}.Build(),

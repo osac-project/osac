@@ -94,6 +94,7 @@ var _ = Describe("Public clusters", func() {
 		templateId = newTemplateID("my_template")
 		_, err = templatesClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
+				SpecDefaults: testClusterSpecDefaults(ctx),
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("test-tmpl-%s", uuid.New()[24:32]),
 				}.Build(),
@@ -343,18 +344,29 @@ var _ = Describe("Public clusters", func() {
 		})
 
 		originalAttachment := proto.Clone(object.GetSpec().GetNetworkAttachment()).(*publicv1.ClusterNetworkAttachment)
-		candidate := proto.Clone(object).(*publicv1.Cluster)
+		candidate := publicv1.Cluster_builder{
+			Id: object.GetId(),
+			Spec: publicv1.ClusterSpec_builder{
+				NetworkAttachment: proto.Clone(originalAttachment).(*publicv1.ClusterNetworkAttachment),
+			}.Build(),
+		}.Build()
 		candidate.GetSpec().GetNetworkAttachment().SetSecurityGroups(nil)
 		mask := catalogItemUpdateMask("spec.network_attachment")
 		_, err = clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{Object: candidate, UpdateMask: mask}.Build())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("spec.network_attachment"))
 
 		persisted, err := clustersClient.Get(ctx, publicv1.ClustersGetRequest_builder{Id: object.GetId()}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(proto.Equal(persisted.GetObject().GetSpec().GetNetworkAttachment(), originalAttachment)).To(BeTrue())
 
 		_, err = clustersClient.Update(ctx, publicv1.ClustersUpdateRequest_builder{
-			Object:     persisted.GetObject(),
+			Object: publicv1.Cluster_builder{
+				Id: object.GetId(),
+				Spec: publicv1.ClusterSpec_builder{
+					NetworkAttachment: persisted.GetObject().GetSpec().GetNetworkAttachment(),
+				}.Build(),
+			}.Build(),
 			UpdateMask: mask,
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())

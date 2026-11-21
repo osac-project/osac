@@ -103,7 +103,8 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 		templateID = newTemplateID("template")
 		_, err = templateClient.Create(ctx, privatev1.ClusterTemplatesCreateRequest_builder{
 			Object: privatev1.ClusterTemplate_builder{
-				Id: templateID,
+				SpecDefaults: testClusterSpecDefaults(ctx),
+				Id:           templateID,
 				Metadata: privatev1.Metadata_builder{
 					Name: fmt.Sprintf("template-%s", uuid.New()[24:32]),
 				}.Build(),
@@ -112,6 +113,10 @@ var _ = Describe("SelfSubjectAccessReview", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+			_, err := templateClient.Delete(ctx, privatev1.ClusterTemplatesDeleteRequest_builder{Id: templateID}.Build())
+			return err
+		}, nil)
 	})
 
 	It("preserves ordinary metadata and rejects reserved metadata before review evaluation", func() {

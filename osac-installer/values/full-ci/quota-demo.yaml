@@ -1,0 +1,24 @@
+# Quota demo instance overlay -- layered after values/full-ci/instance.yaml.
+#
+# Deviations from the full-ci defaults, all intentional for the demo:
+#   - heartbeat 10s instead of 60s so metering events show up quickly
+#     (flagged capture-env deviation)
+#   - echoAdapter stays enabled (already the full-ci default) so the demo
+#     can read heartbeats through the echo adapter route
+#   - fulfillment-service runs the locally built quota image pushed to
+#     quay.io/rh-ee-ovishlit (unmerged OSAC-7614 branch code, commit
+#     9226bbfe4, digest sha256:e0cbed3537932f9dd1c5d69d832fe37bc116b242bceb38074bae2b1ddb74eaac)
+#   - m360Adapter stays disabled (M360 dropped from the demo; echo adapter
+#     is the verification surface)
+
+service:
+  images:
+    service:
+      repository: quay.io/rh-ee-ovishlit/fulfillment-service
+      tag: quota-demo
+
+metering:
+  heartbeat:
+    interval: "10s"
+  echoAdapter:
+    enabled: true

@@ -129,16 +129,25 @@ def get_bmi_instance_type_from_template(grpc: GRPCClient, *, template_name: str)
 
 
 def bmi_instance_type_for_tests(grpc: GRPCClient, *, template_name: str, configured: str) -> Iterator[str]:
+    """Yield a quotable BareMetalInstanceType name for BMaaS tests.
+
+    Every path sets the dimension's quota default: a BMI of the type counts
+    against bare_metal.instances.<name>, and quota is enforced in the request
+    path, so the tenant's first BMI of the type is refused without a default.
+    """
     if configured:
+        grpc.set_quota_default(dimension=f"bare_metal.instances.{configured}")
         yield configured
         return
 
     from_template = get_bmi_instance_type_from_template(grpc, template_name=template_name)
     if from_template:
+        grpc.set_quota_default(dimension=f"bare_metal.instances.{from_template}")
         yield from_template
         return
 
     name = unique_name("e2e-bmi-type")
+    # The created path sets its default inside create_baremetal_instance_type.
     type_id = grpc.create_baremetal_instance_type(name=name, fabric_port="data-0")
     try:
         yield name

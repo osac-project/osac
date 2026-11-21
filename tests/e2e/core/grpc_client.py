@@ -14,6 +14,12 @@ PUBLIC_API: str = "osac.public.v1"
 PRIVATE_API: str = "osac.private.v1"
 DEFAULT_HOST_LABEL_SELECTOR = {"osac.openshift.io/host-type": "default"}
 
+# A generous default limit for the quota dimensions the E2E suite touches.
+# Quota is enforced in the request path and a dimension with no default has
+# limit 0, so every type, tier or GPU resource this suite creates also sets
+# its dimension's default, or the tenant's first create with it is refused.
+QUOTA_DEFAULT_VALUE: int = 10_000
+
 
 def _metadata(*, name: str, tenant: str | None = None, project: str | None = None) -> dict[str, str]:
     meta: dict[str, str] = {"name": name}
@@ -181,6 +187,18 @@ class GRPCClient:
     ) -> tuple[str, int]:
         __tracebackhide__ = True
         return run_unchecked(*self._build_args(service=service, data=data), timeout=timeout)
+
+    def set_quota_default(self, *, dimension: str, value: int = QUOTA_DEFAULT_VALUE) -> None:
+        """Set the default limit of one quota dimension for every tenant.
+
+        Replaces the value when the dimension already has a default. Defaults
+        belong to no tenant, so this needs the private (cloud provider admin)
+        identity; journeys that prove refusals set their own tighter limits.
+        """
+        self.call(
+            service=f"{PRIVATE_API}.QuotaLimits/SetDefault",
+            data={"object": {"spec": {"dimension": dimension, "value": str(value)}}},
+        )
 
     # Cluster operations
 
@@ -507,6 +525,11 @@ class GRPCClient:
         response: dict[str, Any] = self.call(
             service=f"{PRIVATE_API}.InstanceTypes/Create", data={"object": {"metadata": {"name": name}, "spec": spec}}
         )
+        # A VM of a GPU type counts against compute.gpu.<resource>, a dimension
+        # named by the GPU resource, not by the type: vcpus and memory_gib are
+        # the type's only fixed dimensions.
+        if gpu is not None and gpu.get("resource_name"):
+            self.set_quota_default(dimension=f"compute.gpu.{gpu['resource_name']}")
         return response["object"]["id"]
 
     def get_instance_type(self, *, name: str) -> dict[str, Any]:
@@ -649,6 +672,10 @@ class GRPCClient:
         response: dict[str, Any] = self.call(
             service=f"{PRIVATE_API}.BareMetalInstanceTypes/Create", data={"object": obj}
         )
+        # A BMI of this type counts against bare_metal.instances.<name>, a
+        # dimension named by the type, so a type the suite creates must also
+        # make its dimension quotable.
+        self.set_quota_default(dimension=f"bare_metal.instances.{name}")
         return response["object"]["id"]
 
     def ensure_bare_metal_instance_type(
@@ -684,6 +711,9 @@ class GRPCClient:
         response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.BareMetalInstanceTypes/List")
         for item in response.get("items", []):
             if item.get("metadata", {}).get("name") == name:
+                # A type left behind by a prior run needs its dimension's
+                # default just the same; the create path set it already.
+                self.set_quota_default(dimension=f"bare_metal.instances.{name}")
                 return item["id"]
         raise RuntimeError(f"BareMetalInstanceType '{name}' reported AlreadyExists but not found in list")
 
@@ -793,6 +823,9 @@ class GRPCClient:
                 }
             },
         )
+        # A BMI of this type counts against bare_metal.instances.<name>, so a
+        # type the suite creates must also make its dimension quotable.
+        self.set_quota_default(dimension=f"bare_metal.instances.{name}")
         return response["object"]["id"]
 
     def delete_baremetal_instance_type(self, *, type_id: str) -> None:
@@ -1032,6 +1065,10 @@ class GRPCClient:
                 }
             },
         )
+        # A volume on this tier counts against storage.<name>.gib, a dimension
+        # named by the tier, so a tier the suite creates must also make its
+        # dimension quotable.
+        self.set_quota_default(dimension=f"storage.{name}.gib")
         return response["object"]["id"]
 
     def delete_storage_tier(self, *, tier_id: str) -> None:

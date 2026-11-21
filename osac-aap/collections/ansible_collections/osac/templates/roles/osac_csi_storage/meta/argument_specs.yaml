@@ -7,19 +7,32 @@ argument_specs:
       osac_csi_driver_extra_values:
         type: dict
         default: {}
+        no_log: true
         description:
           - Helm values merged over the values this role computes.
           - The merge is recursive and the caller's values win; a list here replaces the computed list.
           - The caller sets this only from playbook or operator job vars, never from tenant-controlled input, and never with a VAST credential.
+      tenant_name:
+        type: str
+        required: true
+        description:
+          - Tenant name; labels the driver namespace.
+      _remote_kubeconfig:
+        type: str
+        required: true
+        description:
+          - Path to the kubeconfig of the target cluster.
       fulfillment_endpoint:
         type: str
         required: false
         description:
           - Fulfillment-service endpoint the driver controller connects to.
-          - Required for the hub-controller install; omitted from the values when unset (guest node mode).
+          - Required when the driver talks to the hub fulfillment service (controller-enabled install); omitted from the values when unset (guest node mode).
+          - Callers map osac_job_vars.fulfillment_endpoint to this top-level var.
       fulfillment_issuer_url:
         type: str
         required: false
         description:
           - OAuth2 issuer URL the driver controller uses to authenticate.
-          - Required for the hub-controller install; omitted from the values when unset (guest node mode).
+          - Required when the driver talks to the hub fulfillment service (controller-enabled install); omitted from the values when unset (guest node mode).
+          - Callers map osac_job_vars.fulfillment_issuer_url to this top-level var.

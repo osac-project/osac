@@ -302,8 +302,7 @@
     - name: Run driver Helm values tests
       when: test_install_driver_values | default(false) | bool
       block:
-        # Case A: no extra values. The rendered values are exactly what the role's
-        # Helm deployment used before extra values existed, with the role defaults.
+        # Case A: no extra values; the render equals the computed defaults.
         - name: Render driver values with the default (empty) extra values
           ansible.builtin.include_role:
             name: osac.templates.osac_csi_storage

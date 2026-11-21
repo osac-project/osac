@@ -18,7 +18,8 @@
 # namespace osac-csi and driver csi.osac.openshift.io on the same cluster.
 #
 # Plays: 0 guard, 1 clean slate, 2 driver not registered, 3 driver registered,
-# 4 idempotent, 5 teardown, 6 cleanup. Every play starts from a clean slate.
+# 4 idempotent, 5 teardown, 6 cleanup. Play 1 establishes a clean slate; plays 3-5
+# build on each other.
 
 # ── Play 0: refuse to run against anything but the Kind test cluster ──
 # This target creates and deletes cluster-scoped objects (CSIDriver, StorageClass,
@@ -36,6 +37,17 @@
           KUBECONFIG must end with kubeconfig-osac-test (run through run_tests.sh or the
           documented focused run). Got: '{{ lookup('env', 'KUBECONFIG') }}'
         success_msg: "Running against the Kind test kubeconfig"
+
+    - name: Assert K8S_AUTH_KUBECONFIG cannot redirect the modules to another cluster
+      ansible.builtin.assert:
+        that:
+          - >-
+            lookup('env', 'K8S_AUTH_KUBECONFIG') | length == 0
+            or lookup('env', 'K8S_AUTH_KUBECONFIG') == lookup('env', 'KUBECONFIG')
+        fail_msg: >-
+          K8S_AUTH_KUBECONFIG must be unset or equal KUBECONFIG. Got:
+          '{{ lookup('env', 'K8S_AUTH_KUBECONFIG') }}'
+        success_msg: "K8S_AUTH_KUBECONFIG is unset or matches KUBECONFIG"
 
 # ── Play 1: clean slate ──
 - name: "OSAC CSI StorageClass - Clean slate"
@@ -56,6 +68,7 @@
   tasks:
     - name: Delete the test CSIDriver
       kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         state: absent
         api_version: storage.k8s.io/v1
         kind: CSIDriver
@@ -64,6 +77,7 @@
 
     - name: Delete the driver namespace
       kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         state: absent
         api_version: v1
         kind: Namespace
@@ -72,6 +86,7 @@
 
     - name: Delete the tenant StorageClass
       kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         state: absent
         api_version: storage.k8s.io/v1
         kind: StorageClass
@@ -80,6 +95,7 @@
 
     - name: Delete the other tenant's StorageClass
       kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         state: absent
         api_version: storage.k8s.io/v1
         kind: StorageClass
@@ -95,6 +111,34 @@
   tasks:
     - name: Call ensure_storage_class with the driver absent
       block:
+        - name: List this tenant's labelled Secrets in all namespaces (unreg_before)
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ _remote_kubeconfig }}"
+            api_version: v1
+            kind: Secret
+            label_selectors:
+              - "osac.openshift.io/tenant={{ tenant_name }}"
+          register: _tenant_secrets_unreg_before
+          no_log: true
+
+        - name: List Secrets in the tenant namespace (unreg_before)
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ _remote_kubeconfig }}"
+            api_version: v1
+            kind: Secret
+            namespace: "{{ tenant_namespace }}"
+          register: _tenant_ns_secrets_unreg_before
+          no_log: true
+
+        - name: Record Secret names (unreg_before)
+          ansible.builtin.set_fact:
+            _secret_names_unreg_before: >-
+              {% set ns = namespace(names=[]) -%}
+              {% for r in _tenant_secrets_unreg_before.resources + _tenant_ns_secrets_unreg_before.resources -%}
+              {% set ns.names = ns.names + [r.metadata.namespace ~ '/' ~ r.metadata.name] -%}
+              {% endfor -%}
+              {{ ns.names | unique | list }}
+
         - name: Run ensure_storage_class through the storage_provider dispatcher
           ansible.builtin.include_role:
             name: osac.service.storage_provider
@@ -118,8 +162,59 @@
             fail_msg: "Unexpected failure: {{ ansible_failed_result.msg | default('') }}"
             success_msg: "ensure_storage_class refused an unregistered driver"
 
+        - name: Assert the structured failure record
+          ansible.builtin.assert:
+            that:
+              - osac_storage_provider_failures is defined
+              - osac_storage_provider_failures | length == 1
+              - osac_storage_provider_failures[0].reason == 'csi_driver_not_registered'
+              - osac_storage_provider_failures[0].tiers == ['gold']
+              - osac_storage_provider_failures[0].backend_ids == ['be-sc-test']
+              - "'not registered' in osac_storage_provider_failures[0].message"
+            fail_msg: >-
+              Unexpected osac_storage_provider_failures:
+              {{ osac_storage_provider_failures | default('undefined') | to_json }}
+            success_msg: "csi_driver_not_registered recorded for tier gold and backend be-sc-test"
+
+    - name: List this tenant's labelled Secrets in all namespaces (unreg_after)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        api_version: v1
+        kind: Secret
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+      register: _tenant_secrets_unreg_after
+      no_log: true
+
+    - name: List Secrets in the tenant namespace (unreg_after)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        api_version: v1
+        kind: Secret
+        namespace: "{{ tenant_namespace }}"
+      register: _tenant_ns_secrets_unreg_after
+      no_log: true
+
+    - name: Record Secret names (unreg_after)
+      ansible.builtin.set_fact:
+        _secret_names_unreg_after: >-
+          {% set ns = namespace(names=[]) -%}
+          {% for r in _tenant_secrets_unreg_after.resources + _tenant_ns_secrets_unreg_after.resources -%}
+          {% set ns.names = ns.names + [r.metadata.namespace ~ '/' ~ r.metadata.name] -%}
+          {% endfor -%}
+          {{ ns.names | unique | list }}
+
+    - name: Assert no Secret appeared for the tenant (unreg_after)
+      ansible.builtin.assert:
+        that:
+          - _secret_names_unreg_after | difference(_secret_names_unreg_before) | length == 0
+        fail_msg: >-
+          New Secrets appeared: {{ _secret_names_unreg_after | difference(_secret_names_unreg_before) }}
+        success_msg: "No tenant-labelled or tenant-namespace Secret was created"
+
     - name: Read the tenant StorageClass
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: storage.k8s.io/v1
         kind: StorageClass
         name: osac-test-osac-csi-sc-gold
@@ -127,6 +222,7 @@
 
     - name: Read the driver namespace
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: v1
         kind: Namespace
         name: osac-csi-sc-test
@@ -134,6 +230,7 @@
 
     - name: Read Secrets in the driver namespace
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: v1
         kind: Secret
         namespace: osac-csi-sc-test
@@ -159,6 +256,7 @@
   tasks:
     - name: Register the CSIDriver fixture
       kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         state: present
         definition:
           apiVersion: storage.k8s.io/v1
@@ -167,6 +265,34 @@
             name: csi.sc-test.osac.openshift.io
           spec:
             attachRequired: false
+
+    - name: List this tenant's labelled Secrets in all namespaces (reg_before)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        api_version: v1
+        kind: Secret
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+      register: _tenant_secrets_reg_before
+      no_log: true
+
+    - name: List Secrets in the tenant namespace (reg_before)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        api_version: v1
+        kind: Secret
+        namespace: "{{ tenant_namespace }}"
+      register: _tenant_ns_secrets_reg_before
+      no_log: true
+
+    - name: Record Secret names (reg_before)
+      ansible.builtin.set_fact:
+        _secret_names_reg_before: >-
+          {% set ns = namespace(names=[]) -%}
+          {% for r in _tenant_secrets_reg_before.resources + _tenant_ns_secrets_reg_before.resources -%}
+          {% set ns.names = ns.names + [r.metadata.namespace ~ '/' ~ r.metadata.name] -%}
+          {% endfor -%}
+          {{ ns.names | unique | list }}
 
     - name: Run ensure_storage_class through the storage_provider dispatcher
       ansible.builtin.include_role:
@@ -178,8 +304,45 @@
         storage_provider_target_kubeconfig: "{{ _remote_kubeconfig }}"
         storage_provider_target_kubeconfig_insecure: false
 
+    - name: List this tenant's labelled Secrets in all namespaces (reg_after)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        api_version: v1
+        kind: Secret
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+      register: _tenant_secrets_reg_after
+      no_log: true
+
+    - name: List Secrets in the tenant namespace (reg_after)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        api_version: v1
+        kind: Secret
+        namespace: "{{ tenant_namespace }}"
+      register: _tenant_ns_secrets_reg_after
+      no_log: true
+
+    - name: Record Secret names (reg_after)
+      ansible.builtin.set_fact:
+        _secret_names_reg_after: >-
+          {% set ns = namespace(names=[]) -%}
+          {% for r in _tenant_secrets_reg_after.resources + _tenant_ns_secrets_reg_after.resources -%}
+          {% set ns.names = ns.names + [r.metadata.namespace ~ '/' ~ r.metadata.name] -%}
+          {% endfor -%}
+          {{ ns.names | unique | list }}
+
+    - name: Assert no Secret appeared for the tenant (reg_after)
+      ansible.builtin.assert:
+        that:
+          - _secret_names_reg_after | difference(_secret_names_reg_before) | length == 0
+        fail_msg: >-
+          New Secrets appeared: {{ _secret_names_reg_after | difference(_secret_names_reg_before) }}
+        success_msg: "No tenant-labelled or tenant-namespace Secret was created"
+
     - name: Read the tenant StorageClass
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: storage.k8s.io/v1
         kind: StorageClass
         name: osac-test-osac-csi-sc-gold
@@ -187,6 +350,7 @@
 
     - name: Read the driver namespace
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: v1
         kind: Namespace
         name: osac-csi-sc-test
@@ -194,6 +358,7 @@
 
     - name: Read Secrets in the driver namespace
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: v1
         kind: Secret
         namespace: osac-csi-sc-test
@@ -235,6 +400,7 @@
   tasks:
     - name: Read the StorageClass before the second run
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: storage.k8s.io/v1
         kind: StorageClass
         name: osac-test-osac-csi-sc-gold
@@ -252,6 +418,7 @@
 
     - name: Read the StorageClass after the second run
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: storage.k8s.io/v1
         kind: StorageClass
         name: osac-test-osac-csi-sc-gold
@@ -263,7 +430,10 @@
           - _sc_before.resources | length == 1
           - _sc_after.resources | length == 1
           - _sc_after.resources[0].metadata.uid == _sc_before.resources[0].metadata.uid
-        fail_msg: "StorageClass uid changed between runs"
+          - >-
+            _sc_after.resources[0].metadata.resourceVersion
+            == _sc_before.resources[0].metadata.resourceVersion
+        fail_msg: "StorageClass uid or resourceVersion changed between runs"
         success_msg: "Second run left the StorageClass untouched"
 
 # ── Play 5: teardown leaves the install and other tenants alone ──
@@ -275,6 +445,7 @@
   tasks:
     - name: Create the driver namespace as if the driver were installed
       kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         state: present
         definition:
           apiVersion: v1
@@ -284,6 +455,7 @@
 
     - name: Create a ConfigMap owned by someone else in the driver namespace
       kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         state: present
         definition:
           apiVersion: v1
@@ -296,6 +468,7 @@
 
     - name: Create a pre-existing credentials Secret in the driver namespace
       kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         state: present
         definition:
           apiVersion: v1
@@ -310,6 +483,7 @@
 
     - name: Create another tenant's StorageClass for the same driver
       kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         state: present
         definition:
           apiVersion: storage.k8s.io/v1
@@ -333,6 +507,7 @@
 
     - name: Read the tenant StorageClass
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: storage.k8s.io/v1
         kind: StorageClass
         name: osac-test-osac-csi-sc-gold
@@ -340,13 +515,23 @@
 
     - name: Read the other tenant's StorageClass
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: storage.k8s.io/v1
         kind: StorageClass
         name: osac-test-other-tenant-gold
       register: _sc_other_tenant
 
+    - name: Read the CSIDriver
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: csi.sc-test.osac.openshift.io
+      register: _csidriver_after_teardown
+
     - name: Read the driver namespace
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: v1
         kind: Namespace
         name: osac-csi-sc-test
@@ -354,6 +539,7 @@
 
     - name: Read the ConfigMap in the driver namespace
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: v1
         kind: ConfigMap
         name: owned-by-someone-else
@@ -362,6 +548,7 @@
 
     - name: Read the credentials Secret in the driver namespace
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         api_version: v1
         kind: Secret
         name: osac-csi-driver-credentials
@@ -382,22 +569,25 @@
     - name: Assert teardown left the driver namespace and its contents alone
       ansible.builtin.assert:
         that:
+          - _csidriver_after_teardown.resources | length == 1
           - _ns_after_teardown.resources | length == 1
           - _cm_after_teardown.resources | length == 1
           - _secret_after_teardown.resources | length == 1
         fail_msg: >-
-          teardown_cluster_storage must not delete the driver namespace, its ConfigMap
-          or its credentials Secret.
-        success_msg: "Driver namespace, ConfigMap and credentials Secret survived teardown"
+          teardown_cluster_storage must not delete the CSIDriver, the driver namespace, its
+          ConfigMap or its credentials Secret.
+        success_msg: "CSIDriver, driver namespace, ConfigMap and credentials Secret survived teardown"
 
 # ── Play 6: cleanup ──
 - name: "OSAC CSI StorageClass - Cleanup"
   hosts: localhost
   gather_facts: false
+  vars: *csi_sc_vars
 
   tasks:
     - name: Delete the test CSIDriver
       kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         state: absent
         api_version: storage.k8s.io/v1
         kind: CSIDriver
@@ -406,6 +596,7 @@
 
     - name: Delete the driver namespace
       kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         state: absent
         api_version: v1
         kind: Namespace
@@ -414,6 +605,7 @@
 
     - name: Delete the other tenant's StorageClass
       kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         state: absent
         api_version: storage.k8s.io/v1
         kind: StorageClass
@@ -422,6 +614,7 @@
 
     - name: Delete any leftover tenant StorageClass
       kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
         state: absent
         api_version: storage.k8s.io/v1
         kind: StorageClass

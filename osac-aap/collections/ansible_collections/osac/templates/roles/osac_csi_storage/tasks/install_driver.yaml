@@ -9,11 +9,13 @@
 #   _remote_kubeconfig_insecure       skip TLS verification of the target API (default false)
 #   tenant_name                       labels the driver namespace (required)
 #   fulfillment_endpoint              fulfillment-service endpoint for the controller
-#                                     (required for the hub-controller install;
+#                                     (required when the driver talks to the hub
+#                                     fulfillment service, controller-enabled install;
 #                                     omitted from the values when unset)
 #   fulfillment_issuer_url            OAuth2 issuer URL for the controller
-#                                     (required for the hub-controller install;
-#                                     omitted from the values when unset)
+#                                     (same requirement as fulfillment_endpoint)
+#   Callers map osac_job_vars.fulfillment_endpoint and
+#   osac_job_vars.fulfillment_issuer_url to these two top-level vars.
 #   osac_csi_driver_extra_values      dict merged over the computed Helm values
 #                                     (default {}); see _render_driver_values.yaml
 #
@@ -47,7 +49,6 @@
           osac.openshift.io/tenant: "{{ tenant_name }}"
           pod-security.kubernetes.io/enforce: privileged
           pod-security.kubernetes.io/warn: privileged
-  no_log: true
 
 - name: Render OSAC CSI driver Helm values
   ansible.builtin.include_tasks: _render_driver_values.yaml

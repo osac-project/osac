@@ -398,14 +398,18 @@ credentials on the cluster, and its StorageClasses do not allow volume expansion
 `teardown_cluster_storage` deletes only the tenant's StorageClasses. Installing the
 driver is a separate entry point, `tasks_from: install_driver`, with
 `uninstall_driver` as its counterpart; the StorageClass actions do not call either.
+Callers map `osac_job_vars.fulfillment_endpoint` and
+`osac_job_vars.fulfillment_issuer_url` to the top-level vars `fulfillment_endpoint`
+and `fulfillment_issuer_url` that `install_driver` reads.
 `install_driver` accepts `osac_csi_driver_extra_values`, a dict merged recursively
 over the computed Helm values. The caller's values win, and a list replaces the
 computed list instead of merging. The caller fills it only from playbook or operator
 job vars, never from tenant-controlled input and never with a VAST credential.
 
-**Block encryption:** When `spec.blockEncryptionPassphrase` is provided in the Tenant CR
+**Block encryption (`vast_storage` only; `osac_csi_storage` has no block-encryption
+handling):** When `spec.blockEncryptionPassphrase` is provided in the Tenant CR
 event payload, the passphrase is persisted to the hub Secret during `setup` and used by
-`ensure_storage_class` to populate the CSI Secret's `passphrase` field and set
+the `vast_storage` `ensure_storage_class` to populate the CSI Secret's `passphrase` field and set
 `hostEncryption: "true"` on block-protocol StorageClasses. On CSI Secret recreation,
 `ensure_storage_class` reads the passphrase from the hub Secret so it survives the
 original event. NFS encryption is managed at the VAST cluster level and is not

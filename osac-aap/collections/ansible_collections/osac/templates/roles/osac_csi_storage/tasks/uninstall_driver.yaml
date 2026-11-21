@@ -10,6 +10,8 @@
 # Best-effort: each step ignores its own failure so the later steps still run.
 # Uninstalls the Helm release, deletes the credentials Secret named by
 # osac_csi_driver_credentials_secret_name, then deletes the driver namespace.
+# The credentials Secret delete is cleanup of a Secret placed by the caller or by
+# installs made before this role stopped creating it.
 
 - name: Fail when called without a guest-cluster kubeconfig (hub path unsupported)
   ansible.builtin.fail:

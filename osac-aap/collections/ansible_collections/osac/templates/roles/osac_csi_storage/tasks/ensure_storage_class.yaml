@@ -13,7 +13,7 @@
 # error when called in a hub-cluster (VMaaS) context because the OSAC CSI driver
 # belongs on tenant clusters only — hub-side provisioning uses vendor-specific roles.
 #
-# Idempotent: existing StorageClasses are left untouched.
+# Idempotent: re-applying updates mutable fields (for example allowVolumeExpansion).
 
 - name: Assert _provider_tiers is defined and non-empty
   ansible.builtin.assert:
@@ -25,10 +25,10 @@
 - name: Fail when called without a guest-cluster kubeconfig (hub path unsupported)
   ansible.builtin.fail:
     msg: >-
-      osac_csi_driver ensure_storage_class requires a guest-cluster admin_kubeconfig
+      osac_csi_storage ensure_storage_class requires a guest-cluster admin_kubeconfig
       (_remote_kubeconfig must be set).  The OSAC CSI meta-driver is only deployed to
-      CaaS tenant clusters, not to the hub cluster.  Remove 'osac_csi_driver' from the
-      storage tiers for this Tenant if VMaaS-only storage is intended.
+      CaaS tenant clusters, not to the hub cluster.  Remove the netapp, pure and osac-csi
+      providers from the storage tiers for this Tenant if VMaaS-only storage is intended.
   when: _remote_kubeconfig is not defined or _remote_kubeconfig | length == 0
 
 - name: Validate tenant_name is a valid DNS label
@@ -53,7 +53,6 @@
     kind: CSIDriver
     name: "{{ osac_csi_driver_name }}"
   register: _osac_csi_driver_lookup
-  no_log: true
 
 - name: Require the OSAC CSI driver to be registered
   block:
@@ -111,7 +110,6 @@
   loop: "{{ _osac_csi_expected_sc_entries }}"
   loop_control:
     label: "{{ item.name }}"
-  no_log: true
 
 - name: Set StorageClass names output
   ansible.builtin.set_fact:

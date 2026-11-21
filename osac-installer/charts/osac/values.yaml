@@ -511,6 +511,10 @@ bmf:
     tokenValue: ""
     caCert: ""
     clientAllowInsecureHTTP: false
+    # Verify BMC TLS certificates on the BareMetalHosts the NetBox inventory
+    # backend creates. The NetBox device custom field
+    # osac_bmc_certificate_verification overrides it per device.
+    enableBMCCertificateVerification: true
   metal3:
     enabled: false
     # Namespace where Metal3 inventory reads BareMetalHost resources.

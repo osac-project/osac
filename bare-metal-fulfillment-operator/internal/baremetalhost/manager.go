@@ -35,6 +35,7 @@ import (
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/directclient"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 )
 
 // credentialsSecretSuffix is appended to the BareMetalHost name to name the
@@ -56,6 +57,34 @@ type CreateParams struct {
 	DisableCertificateVerification bool
 	ConsumerRef                    *corev1.ObjectReference
 	Labels                         map[string]string
+}
+
+// CreateOptions holds optional settings for a BareMetalHost.
+type CreateOptions struct {
+	// DisableCertificateVerification makes BMO/Ironic skip TLS verification of
+	// the BMC certificate; the zero value verifies. BMO applies it when it
+	// enrolls the node, so it must be set at creation time.
+	DisableCertificateVerification bool
+}
+
+// NewCreateParams builds the creation parameters for a BareMetalHost claimed by
+// an OSAC BareMetalInstance. ConsumerRef carries the instance's opaque ID and no
+// namespace, matching the Metal3 adapter convention.
+func NewCreateParams(name, bmcAddress, bootMAC, bareMetalInstanceID string, opts CreateOptions) CreateParams {
+	return CreateParams{
+		Name:                           name,
+		BMCAddress:                     bmcAddress,
+		BootMACAddress:                 bootMAC,
+		DisableCertificateVerification: opts.DisableCertificateVerification,
+		ConsumerRef: &corev1.ObjectReference{
+			APIVersion: "osac.openshift.io/v1alpha1",
+			Kind:       "BareMetalInstance",
+			Name:       bareMetalInstanceID,
+		},
+		Labels: map[string]string{
+			shared.OsacManagedByLabel: shared.OsacDefaultManagedByValue,
+		},
+	}
 }
 
 // Manager handles on-demand BareMetalHost CR creation, deletion, and

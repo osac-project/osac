@@ -15,6 +15,10 @@ spec:
     metadata:
       annotations:
         kubectl.kubernetes.io/default-container: manager
+        # The operator reads its inventory config at startup; this checksum
+        # rolls the pod when that configuration changes. The Secrets carry
+        # endpoints, paths, and flags only.
+        checksum/inventory-config: {{ printf "%s%s%s" (include (print $.Template.BasePath "/netbox-inventory-config.yaml") .) (include (print $.Template.BasePath "/bcm-inventory-config.yaml") .) (include (print $.Template.BasePath "/metal3-inventory-config.yaml") .) | sha256sum }}
       labels:
         {{- include "bare-metal-fulfillment-operator.selectorLabels" . | nindent 8 }}
     spec:

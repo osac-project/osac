@@ -35,15 +35,46 @@ type NodeServer struct {
 	volumeVendorIDs map[string]string // volumeID -> vendor volume ID
 }
 
+// reachabilityChecker reports whether a host:port can be reached.
+type reachabilityChecker func(ctx context.Context, hostPort string) error
+
+// mounter inspects and removes mounts on the node.
+type mounter interface {
+	IsTmpfsMount(path string) (bool, error)
+	Unmount(path string) error
+}
+
+// NodeOption configures a NodeServer.
+type NodeOption func(*NodeServer)
+
+// WithRouteStore sets the store that keeps volume routes.
+func WithRouteStore(s nodeRouteStore) NodeOption {
+	return func(n *NodeServer) {}
+}
+
+// withReachabilityChecker replaces the VIP reachability check.
+func withReachabilityChecker(c reachabilityChecker) NodeOption {
+	return func(n *NodeServer) {}
+}
+
+// withMounter replaces the mounter used to clean up after a failed publish.
+func withMounter(m mounter) NodeOption {
+	return func(n *NodeServer) {}
+}
+
 // NewNodeServer creates a new CSI node server.
-func NewNodeServer(nodeID string, proxyMgr *proxy.Manager, vendorSockets map[string]string) *NodeServer {
-	return &NodeServer{
+func NewNodeServer(nodeID string, proxyMgr *proxy.Manager, vendorSockets map[string]string, opts ...NodeOption) *NodeServer {
+	n := &NodeServer{
 		nodeID:          nodeID,
 		proxyMgr:        proxyMgr,
 		vendorSockets:   normalizeVendorSockets(vendorSockets),
 		volumeBackends:  make(map[string]string),
 		volumeVendorIDs: make(map[string]string),
 	}
+	for _, opt := range opts {
+		opt(n)
+	}
+	return n
 }
 
 // NodeStageVolume stages a volume at a staging path by proxying to the vendor CSI driver.

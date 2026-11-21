@@ -31,11 +31,30 @@ type Driver struct {
 	node       csi.NodeServer
 }
 
+type driverOptions struct {
+	nodeStateDir string
+	nodeOnly     bool
+}
+
+// DriverOption configures a Driver.
+type DriverOption func(*driverOptions)
+
+// WithNodeStateDir keeps node volume routes as files under dir.
+func WithNodeStateDir(dir string) DriverOption {
+	return func(o *driverOptions) { o.nodeStateDir = dir }
+}
+
+// WithNodeOnly serves only the Identity and Node services.
+func WithNodeOnly() DriverOption {
+	return func(o *driverOptions) { o.nodeOnly = true }
+}
+
 // NewDriver creates a new OSAC CSI driver instance. vendorSockets maps a
 // provider to the vendor node CSI socket (used by the node plugin), and
 // vendorControllers maps a provider to the vendor CSI controller endpoint
 // (used by the controller plugin for publish/unpublish).
-func NewDriver(name, version, endpoint, nodeID, clusterID string, vc fulfillment.VolumeClient, vendorSockets, vendorControllers map[string]string) (*Driver, error) {
+func NewDriver(name, version, endpoint, nodeID, clusterID string, vc fulfillment.VolumeClient,
+	vendorSockets, vendorControllers map[string]string, opts ...DriverOption) (*Driver, error) {
 	if name == "" {
 		return nil, fmt.Errorf("driver name is required")
 	}

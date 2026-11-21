@@ -57,6 +57,10 @@ func main() {
 			"by StorageBackend provider (e.g. netapp=trident-csi-controller.osac-csi-backends.svc:50051). "+
 			"Use the value 'none' for node-local backends that need no attach (e.g. lvms=none)")
 	driverName := flag.String("driver-name", "csi.osac.openshift.io", "CSI driver name")
+	flag.String("node-state-dir", "",
+		"Directory where the node plugin keeps volume routes across restarts")
+	flag.Bool("node-only", false,
+		"Serve only the Identity and Node services, without a fulfillment connection")
 
 	flag.Parse()
 
@@ -127,6 +131,16 @@ func main() {
 	if err := d.Run(); err != nil {
 		klog.Fatalf("Failed to run driver: %v", err)
 	}
+}
+
+// validateFlags validates the fulfillment flags for the selected driver mode.
+func validateFlags(
+	nodeOnly bool,
+	endpoint, caFile string, grpcInsecure bool,
+	clientID, clientSecretFile, issuerURL string, allowStub bool,
+) error {
+	return validateFulfillmentFlags(endpoint, caFile, grpcInsecure,
+		clientID, clientSecretFile, issuerURL, allowStub)
 }
 
 // validateFulfillmentFlags ensures the three credential flags are either all

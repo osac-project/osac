@@ -220,7 +220,7 @@
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
-    vast_storage_config_namespace: osac-system
+    storage_provider_config_namespace: osac-system
     tenant_name: "test-teardown"
     tenant_namespace: "osac-system"
     storage_provider_tiers:
@@ -642,7 +642,7 @@
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
-    vast_storage_config_namespace: osac-system
+    storage_provider_config_namespace: osac-system
     tenant_name: "test-td-2be"
     tenant_namespace: "osac-system"
     storage_provider_tiers:
@@ -816,7 +816,7 @@
 
   vars:
     _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
-    vast_storage_config_namespace: osac-system
+    storage_provider_config_namespace: osac-system
     tenant_name: "test-td-diffep"
     tenant_namespace: "osac-system"
     tenant_uid: "test-uid-diffep"
@@ -876,7 +876,7 @@
 
   vars:
     _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
-    vast_storage_config_namespace: osac-system
+    storage_provider_config_namespace: osac-system
     tenant_name: "test-td-diffep"
     tenant_namespace: "osac-system"
     tenant_uid: "test-uid-diffep"
@@ -1030,7 +1030,7 @@
                 username: "admin"
                 password: "{{ _mock_vast_password }}"
             vast_storage_validate_certs: false
-            vast_storage_config_namespace: osac-system
+            storage_provider_config_namespace: osac-system
       rescue:
         - name: Teardown failed but continuing cleanup
           ansible.builtin.debug:

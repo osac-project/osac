@@ -57,7 +57,7 @@
 
   vars:
     _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
-    vast_storage_config_namespace: osac-system
+    storage_provider_config_namespace: osac-system
     tenant_name: "test-onboard"
     tenant_namespace: "osac-system"
     tenant_uid: "test-uid-12345"
@@ -263,7 +263,7 @@
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
-    lvms_storage_config_namespace: osac-system
+    storage_provider_config_namespace: osac-system
     tenant_name: "test-lvms-onboard"
     tenant_namespace: "osac-system"
     tenant_uid: "test-lvms-uid-12345"
@@ -399,7 +399,7 @@
 
   vars:
     _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
-    vast_storage_config_namespace: osac-system
+    storage_provider_config_namespace: osac-system
     tenant_name: "test-obmulti"
     tenant_namespace: "osac-system"
     tenant_uid: "test-uid-obmulti"

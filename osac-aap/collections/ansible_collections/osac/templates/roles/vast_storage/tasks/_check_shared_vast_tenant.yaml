@@ -6,7 +6,7 @@
 #   tenant_name                       — tenant to check
 #   _vast_backend_id                  — current backend to exclude from check
 #   vast_endpoint                     — endpoint to match against
-#   vast_storage_config_namespace     — namespace where hub Secrets live
+#   storage_provider_config_namespace     — namespace where hub Secrets live
 #
 # OUTPUT:
 #   _vast_skip_tenant_delete: true    — Other backends share this tenant/endpoint, skip cleanup
@@ -29,7 +29,7 @@
   kubernetes.core.k8s_info:
     api_version: v1
     kind: Secret
-    namespace: "{{ vast_storage_config_namespace }}"
+    namespace: "{{ storage_provider_config_namespace }}"
     label_selectors:
       - "osac.openshift.io/tenant={{ tenant_name }}"
       - "osac.openshift.io/storage-provider=vast"

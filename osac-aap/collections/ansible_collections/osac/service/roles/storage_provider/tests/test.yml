@@ -32,6 +32,7 @@
                 provider: vast
                 backend_id: "test-backend"
             storage_provider_action: setup
+            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -157,6 +158,7 @@
                 provider: vast
                 backend_id: be-test
             storage_provider_action: setup
+            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -218,6 +220,7 @@
                 provider: lvms
                 backend_id: be-c
             storage_provider_action: setup
+            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -505,6 +508,43 @@
             success_msg: "Role correctly rejected invalid input"
 
 # ──────────────────────────────────────────────────────────────
+# Test 11b: Invalid DNS label tenant_name -- error path
+# Expected: role fails with tenant_name DNS label validation message
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- invalid DNS label tenant_name (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run invalid-dns-label-tenant-name failure test
+      block:
+        - name: Attempt with tenant_name containing uppercase and invalid characters (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-test
+            storage_provider_action: setup
+            tenant_name: "Invalid_Name!"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Dispatcher unexpectedly accepted invalid tenant input"
+
+      rescue:
+        - name: Verify role failed with expected tenant_name DNS label message
+          ansible.builtin.assert:
+            that:
+              - "'tenant_name' in ansible_failed_result.msg"
+              - "'not a valid DNS label' in ansible_failed_result.msg"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected invalid tenant_name DNS label"
+
+# ──────────────────────────────────────────────────────────────
 # Test 12: Missing tenant_namespace -- error path
 # Expected: role fails with tenant_namespace required message
 # ──────────────────────────────────────────────────────────────
@@ -538,6 +578,83 @@
               - "'non-empty string' in ansible_failed_result.msg"
             fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
             success_msg: "Role correctly rejected invalid input"
+
+# ──────────────────────────────────────────────────────────────
+# Test 12b: Empty storage_provider_config_namespace -- error path
+# Expected: role fails before dispatch when hub Secrets are required
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- empty storage_provider_config_namespace (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run empty-config-namespace failure test
+      block:
+        - name: Attempt setup with empty storage_provider_config_namespace (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-test
+            storage_provider_action: setup
+            storage_provider_config_namespace: ""
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Dispatcher unexpectedly accepted empty hub namespace"
+
+      rescue:
+        - name: Verify role failed with expected storage_provider_config_namespace message
+          ansible.builtin.assert:
+            that:
+              - "'storage_provider_config_namespace' in ansible_failed_result.msg"
+              - "'non-empty string' in ansible_failed_result.msg"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected empty storage_provider_config_namespace"
+
+# ──────────────────────────────────────────────────────────────
+# Test 12c: Explicit YAML null storage_provider_config_namespace -- error path
+# Expected: `is none` guard rejects explicit null before `| string` can coerce
+# it to the 4-char string "None".
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- null storage_provider_config_namespace (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run null-config-namespace failure test
+      block:
+        - name: Attempt setup with null storage_provider_config_namespace (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-test
+            storage_provider_action: setup
+            storage_provider_config_namespace: null
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Dispatcher unexpectedly accepted null hub namespace"
+
+      rescue:
+        - name: Verify role failed with expected storage_provider_config_namespace message for null
+          ansible.builtin.assert:
+            that:
+              - "'storage_provider_config_namespace' in ansible_failed_result.msg"
+              - "'non-empty string' in ansible_failed_result.msg"
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected null storage_provider_config_namespace"
 
 # ──────────────────────────────────────────────────────────────
 # Test 13: Tier name too long to safely derive a qos_policy -- error path
@@ -620,6 +737,7 @@
                     max_reads_bw_mbps: 100
                     max_writes_bw_mbps: 100
             storage_provider_action: setup
+            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -671,6 +789,7 @@
                 backend_id: "acme-backend"
                 qos_policy: "Invalid Policy!"
             storage_provider_action: setup
+            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -794,6 +913,7 @@
                 backend_id: be-999
             storage_provider_backend_connections: {}
             storage_provider_action: setup
+            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -856,6 +976,7 @@
                 username: admin
                 password: ""
             storage_provider_action: setup
+            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -918,6 +1039,7 @@
                 provider: vast
                 backend_id: be-001
             storage_provider_action: setup
+            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -1034,6 +1156,7 @@
                 provider: vast
                 backend_id: be-test
             storage_provider_action: ensure_storage_class
+            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -1141,6 +1264,7 @@
                 username: 12345
                 password: 123456
             storage_provider_action: setup
+            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -1192,6 +1316,7 @@
                 username: "admin"
                 password: "mock-admin-password"
             storage_provider_action: setup
+            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -1241,6 +1366,7 @@
                 username: "admin"
                 password: "not-a-real-credential"
             storage_provider_action: setup
+            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-null-ep"
             tenant_namespace: "osac-tenants"
 
@@ -1285,6 +1411,7 @@
                 username: null
                 password: "not-a-real-credential"
             storage_provider_action: setup
+            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-null-user"
             tenant_namespace: "osac-tenants"
 
@@ -1329,6 +1456,7 @@
                 username: "admin"
                 password: null
             storage_provider_action: setup
+            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-null-pw"
             tenant_namespace: "osac-tenants"
 

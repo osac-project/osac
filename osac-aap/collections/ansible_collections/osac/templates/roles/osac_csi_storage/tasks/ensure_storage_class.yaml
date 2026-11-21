@@ -1,9 +1,7 @@
 ---
 # OSAC CSI driver ensure_storage_class:
-#   1. Read tenant-scoped OAuth2 credentials from hub Secret (OSAC-4197).
-#   2. Deploy the OSAC CSI driver + NodePlugin to the tenant cluster via Helm.
-#   3. Propagate the OAuth2 credential Secret to the tenant cluster.
-#   4. Create per-tier opaque StorageClasses with provisioner csi.osac.openshift.io.
+#   1. Deploy the OSAC CSI driver + NodePlugin to the tenant cluster via Helm.
+#   2. Create per-tier opaque StorageClasses with provisioner csi.osac.openshift.io.
 #
 # This task file MUST only be called via _dispatch_provider.yaml when a CaaS
 # admin_kubeconfig is present (_remote_kubeconfig defined).  It raises an explicit
@@ -28,11 +26,6 @@
       CaaS tenant clusters, not to the hub cluster.  Remove 'osac_csi_driver' from the
       storage tiers for this Tenant if VMaaS-only storage is intended.
   when: _remote_kubeconfig is not defined or _remote_kubeconfig | length == 0
-
-- name: Validate tenant_name is a valid DNS label
-  ansible.builtin.fail:
-    msg: "tenant_name '{{ tenant_name }}' is not a valid DNS label."
-  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
 
 - name: Build expected StorageClass entries
   ansible.builtin.set_fact:

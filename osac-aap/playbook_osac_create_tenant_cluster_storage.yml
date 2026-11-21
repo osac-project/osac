@@ -187,6 +187,7 @@
             storage_provider_block_encryption_passphrase: "{{ osac_job_vars.resource.spec.blockEncryptionPassphrase | default('') }}"
             storage_provider_target_kubeconfig: "{{ _storage_target_kubeconfig | default(omit) }}"
             storage_provider_target_kubeconfig_insecure: "{{ _storage_target_kubeconfig_insecure | default(false) }}"
+            storage_provider_provisioning_target: "{{ 'caas' if osac_job_vars.resource.kind == 'ClusterOrder' else 'vmaas' }}"
       rescue:
         - name: Warn about StorageClass creation failure
           ansible.builtin.debug:
@@ -204,3 +205,4 @@
             storage_provider_block_encryption_passphrase: "{{ osac_job_vars.resource.spec.blockEncryptionPassphrase | default('') }}"
             storage_provider_target_kubeconfig: "{{ _storage_target_kubeconfig | default(omit) }}"
             storage_provider_target_kubeconfig_insecure: "{{ _storage_target_kubeconfig_insecure | default(false) }}"
+            storage_provider_provisioning_target: "{{ 'caas' if osac_job_vars.resource.kind == 'ClusterOrder' else 'vmaas' }}"

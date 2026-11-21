@@ -2,9 +2,10 @@
 # Input validation fires here, before any include_tasks dispatch.
 # This is the single point of validation — provider roles must never be called
 # directly via include_role from playbooks, bypassing this dispatcher.
-# Provider storage operations are discovered dynamically (the role must exist as
-# osac.templates.{provider}_storage), and protocols are validated by each provider
-# role via meta/osac.yaml. Native CSI driver setup uses explicit provider mappings.
+# Provider storage operations are discovered dynamically (_resolve_provider_role.yaml
+# chooses the osac.templates role for each provider and provisioning target), and
+# protocols are validated by each provider role via meta/osac.yaml. Native CSI driver
+# setup uses explicit provider mappings.
 
 - name: Validate storage_provider_tiers is a non-empty list
   ansible.builtin.fail:

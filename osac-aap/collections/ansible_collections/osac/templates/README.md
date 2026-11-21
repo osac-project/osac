@@ -194,9 +194,10 @@ extra_var, each tier declares its provider, and the service-layer dispatcher
 template role with the filtered tier subset.
 
 1. Create role structure. The role **MUST** be named `{provider}_storage` (e.g.,
-   `vast_storage`, `netapp_storage`). This naming convention is enforced by the
-   dispatcher at `osac.service.storage_provider`, which constructs the role name
-   dynamically: `osac.templates.{{ provider }}_storage`. Using a different naming
+   `vast_storage`, `lvms_storage`). The dispatcher at `osac.service.storage_provider`
+   resolves the role name in `tasks/_resolve_provider_role.yaml`, which falls back to
+   `osac.templates.{{ provider }}_storage` (see "Dispatcher pattern" for the full order,
+   including the `caas` target and the `netapp`/`pure` mapping). Using a different naming
    pattern will cause a runtime role-not-found error.
    ```bash
    mkdir -p roles/my_provider_storage/{tasks,defaults,meta}
@@ -242,13 +243,17 @@ template role with the filtered tier subset.
    env-var or K8s Secret fallback for admin credentials.
 
 5. **Provisioning targets:** Each provider declares only the targets it implements
-   via `meta/osac.yaml`. `caas` is currently supported by the `lvms_storage`
-   provider (installs LVMS on the guest cluster, creates per-tenant StorageClasses).
+   via `meta/osac.yaml`. On `caas`, `lvms_storage` installs LVMS on the guest cluster and
+   creates per-tenant StorageClasses; every other provider is served by `osac_csi_storage`
+   unless it is listed in `storage_provider_guest_native_providers` (see "Dispatcher
+   pattern"). A new provider that runs its own CSI driver on guest clusters must be added to
+   that list to keep its own role on `caas`.
    HCP-level targets (`hcp_control_plane`, `hcp_worker_root`, `hcp_data_plane`)
    are defined but not yet implemented by any provider.
 
-**CaaS provisioning targets:** `caas` is supported by the `lvms_storage` provider
-(OSAC-3234). `hcp_control_plane`, `hcp_worker_root`, and `hcp_data_plane` remain
+**CaaS provisioning targets:** `caas` is served by the `lvms_storage` provider
+(OSAC-3234) and, for all other providers, by `osac_csi_storage`.
+`hcp_control_plane`, `hcp_worker_root`, and `hcp_data_plane` remain
 unimplemented — they are defined in the provisioning target enum for future
 network-attached storage providers that serve HCP worker nodes directly.
 
@@ -286,8 +291,22 @@ enforcement.
 
 **Dispatcher pattern:** `osac.service.storage_provider` validates inputs (tier list,
 provider allowlist, protocol allowlist, provisioning target enum, max tier count) then
-dispatches to `osac.templates.{provider}_storage` via a `_dispatch_provider.yaml`
-wrapper (Ansible does not support `loop:` on `include_role`).
+dispatches each provider to the role chosen by `tasks/_resolve_provider_role.yaml`, via a
+`_dispatch_provider.yaml` wrapper (Ansible does not support `loop:` on `include_role`).
+
+The resolver reads the provider name (hyphens read as underscores) and the
+`storage_provider_provisioning_target` input (`vmaas` or `caas`, default `vmaas`; any other
+value is refused). It picks the role in this order:
+
+1. Target `caas` and the provider is not in `storage_provider_guest_native_providers`
+   (default `[lvms]`): `osac_csi_storage`.
+2. Provider `netapp` or `pure`: `osac_csi_storage`.
+3. Provider name already ends in `_storage`: that role.
+4. Otherwise: `{provider}_storage`.
+
+On `vmaas` only rules 2 to 4 apply, so existing VMaaS routing is unchanged. On `caas`, a block
+tier for a provider such as `vast` also routes to `osac_csi_storage`, so that provider's node
+plugin must exist on the guest cluster. This covers CLaaS (ClusterOrder) storage only.
 
 **VAST provider specifics:** The `vast_storage` role creates per-tenant VMS managers
 (TENANT_ADMIN user type) with random passwords via REST API (`POST /api/managers/`).
@@ -465,6 +484,14 @@ Templates integrate with OSAC through a well-defined interface:
 7. If absent, reads per-tenant creds from hub Secret, creates CSI Secret with tenant creds + per-tier StorageClasses
 8. On tenant deletion (`{{ aap_prefix }}-delete-org`), `teardown` reads stored config, deletes per-tier resources + per-tenant user
 9. Teardown validates provider type, handles legacy single-tier Secrets, gates hub Secret deletion on cleanup success
+
+The steps above describe the VAST provider on the hub (`vmaas`). For a ClusterOrder, the
+cluster-storage playbooks pass `storage_provider_provisioning_target: caas`, so the dispatcher
+resolves each tier's provider with the order in "Dispatcher pattern" above. A `vast` tier on a
+ClusterOrder is therefore served by `osac_csi_storage`: `ensure_storage_class` creates an OSAC CSI
+StorageClass on the guest cluster, reads no hub Secret and makes no VAST calls, and
+`teardown_cluster_storage` removes that StorageClass. The OSAC CSI driver must already be
+installed on the guest.
 
 ## Dependencies
 

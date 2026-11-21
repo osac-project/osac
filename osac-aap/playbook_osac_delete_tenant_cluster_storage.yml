@@ -104,3 +104,4 @@
         storage_provider_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
         storage_provider_target_kubeconfig: "{{ _storage_target_kubeconfig | default(omit) }}"
         storage_provider_target_kubeconfig_insecure: "{{ _storage_target_kubeconfig_insecure | default(false) }}"
+        storage_provider_provisioning_target: "{{ 'caas' if osac_job_vars.resource.kind == 'ClusterOrder' else 'vmaas' }}"

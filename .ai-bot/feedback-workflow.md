@@ -9,8 +9,8 @@ component using that component's validation commands.
 
 Read and execute `.ai-workflows/bugfix/skills/feedback.md`.
 
-All artifact paths (`.artifacts/bugfix/{issue}/`) should use `.ai-bot/`
-instead.
+Create separate reports only when requested; preserve outputs required by the
+calling workflow at its specified paths and formats. Keep response JSON concise.
 
 Review comments are already provided in the task above (use source 1: task
 file).
@@ -28,45 +28,28 @@ For each review comment:
 
 1. Read the comment carefully. Understand what is being asked.
 2. If the comment requests a code change, implement it.
-3. If the comment asks a question, answer it in `.ai-bot/comment-responses.json`
-   and make any related code changes.
-4. If you disagree with a suggestion, explain why in the comment response but
-   still implement it unless doing so would introduce a correctness bug.
+3. If the comment asks a question, answer it concisely; change code only when
+   warranted.
+4. If you disagree with a suggestion, explain the technical reason and seek
+   clarification rather than implementing a change you consider unnecessary.
 
 ### Validation After Changes
 
-After addressing all comments, run the full validation sequence (from
-`fulfillment-service/`):
-
-1. `gofmt -s -w .` then `git diff --exit-code` (formatting clean)
-2. `buf lint` (if any proto files changed)
-3. `ginkgo run -r internal` (unit tests pass)
-4. `go build ./cmd/fulfillment-service && go build ./cmd/osac` (both binaries compile)
-
-### Comment Responses
-
-Write a JSON file to `.ai-bot/comment-responses.json` mapping each comment ID
-to a short summary of what you did. The bot uses this to post descriptive
-replies on the PR instead of generic messages.
-
-### Iteration Cap
-
-Maximum 2 fix-test cycles per feedback round. If tests still fail after 2
-attempts, document the failure in the comment response and let the reviewer
-decide.
+Select relevant formatting, lint, build and focused test checks from
+`fulfillment-service/AGENTS.md`. Use full suites only when needed for the
+changed behavior. Reply with a concise summary of changes, checks and
+limitations. Report unrelated failures; no fixed iteration count is required.
+Session/review reports are optional unless required by the calling workflow,
+whose output paths and formats must be preserved.
 
 ## osac-operator
 
 You are addressing PR review feedback. Your scope is narrow: read the
-review comments, make targeted changes, verify correctness, and update
-session artifacts for the next round.
+review comments, make targeted changes and verify the changed behavior.
 
-Read and execute `.ai-workflows/bugfix/skills/feedback.md` with these
-settings:
-  - All artifact paths (`.artifacts/bugfix/{issue}/`) should use
-    `.ai-bot/` instead.
-  - Write comment response summaries to `.ai-bot/comment-responses.json`.
-  - Update `.ai-bot/session-context.md` with a new feedback round section.
+Use `.ai-workflows/bugfix/skills/feedback.md` for relevant feedback handling;
+create separate reports only when requested. Preserve caller-required outputs
+at their specified paths and formats, with concise PR text and response JSON.
 
 ### Verification
 
@@ -75,17 +58,16 @@ After making changes (from `osac-operator/`):
 1. If you touched `osac-operator/api/v1alpha1/*_types.go`, run
    `cd osac-operator && make manifests generate`.
 2. If you touched `osac-operator/go.mod`, run `cd osac-operator && go mod tidy`.
-3. Run `cd osac-operator && make test` — all tests must pass.
-4. Run `cd osac-operator && make lint` — fix all reported issues.
+3. Run relevant existing tests for the changed behavior; use the full
+   `make test` suite only when needed.
+4. Run applicable lint checks and report unrelated failures.
 
 ### Guidelines
 
-- Read `.ai-bot/session-context.md` and `.ai-bot/implementation-notes.md`
-  before making changes — understand the original design decisions.
+- Use existing task context when needed to understand earlier design decisions.
 - Do not revert intentional decisions without cause. If the original
   session rejected an approach for documented reasons, explain the
   rationale to the reviewer rather than blindly adopting their suggestion.
 - Keep changes focused. Address the review comments — do not refactor
   surrounding code or fix unrelated issues.
-- Record declined suggestions in the session context so the next round
-  does not re-evaluate the same trade-off.
+- Explain declined suggestions concisely in the review response.

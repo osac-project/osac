@@ -46,16 +46,120 @@ const RefreshVersion = () => {
 };
 
 describe('ClusterConfigurationCard', () => {
+  it('separates the card header and each subsection title from its content', () => {
+    const { container } = renderWithProviders(<ClusterConfigurationCard cluster={cluster} />);
+    const header = container.querySelector('.pf-v6-c-card__header');
+    expect(header?.nextElementSibling?.tagName).toBe('HR');
+    expect(container.querySelectorAll('hr')).toHaveLength(3);
+    const body = container.querySelector('.pf-v6-c-card__body');
+    expect(body?.querySelectorAll('hr')).toHaveLength(2);
+    const version = screen.getByLabelText('Cluster version', { selector: 'dl' });
+    expect(version).toHaveClass('pf-v6-c-description-list', 'pf-m-compact');
+    expect(within(version).getByRole('term')).toHaveTextContent('Current');
+    expect(
+      version.querySelector('[class*="pf-v6-u-font"], [class*="text-color"], strong, small'),
+    ).toBeNull();
+    for (const name of ['Node sets', 'Settings']) {
+      const heading = screen.getByRole('heading', { name });
+      expect(body).toContainElement(heading);
+      expect(heading.nextElementSibling?.tagName).toBe('HR');
+    }
+  });
+  it.each([false, true])(
+    'opens meaningful empty control-plane history (node-only: %s)',
+    async (nodeOnly) => {
+      const withoutHistory = clone(ClusterSchema, cluster);
+      if (nodeOnly && withoutHistory.status) {
+        withoutHistory.status.upgradeHistory = [
+          create(ClusterUpgradeHistoryEntrySchema, {
+            component: { target: { case: 'nodeSetId', value: 'workers' } },
+            state: ClusterUpgradeState.SUCCEEDED,
+            message: 'Worker-only history',
+          }),
+        ];
+      }
+      const { user } = renderWithProviders(<ClusterConfigurationCard cluster={withoutHistory} />);
+      const historyAction = screen.getByRole('button', { name: 'Upgrade history' });
+      expect(
+        screen.getByRole('heading', { name: 'Cluster version' }).closest('.pf-v6-c-card__header'),
+      ).toContainElement(historyAction);
+      expect(historyAction.closest('.pf-v6-c-card__actions')).not.toBeNull();
+      expect(screen.getByText('Current').closest('dt')).not.toContainElement(historyAction);
+      expect(screen.queryByText('Current version')).not.toBeInTheDocument();
+      await user.click(historyAction);
+      const dialog = screen.getByRole('dialog', { name: 'Upgrade history' });
+      expect(
+        within(dialog).getByText('No control plane upgrades have been recorded.'),
+      ).toBeInTheDocument();
+      expect(within(dialog).queryByRole('grid')).not.toBeInTheDocument();
+      expect(within(dialog).queryByText('Worker-only history')).not.toBeInTheDocument();
+      await user.click(within(dialog).getByRole('button', { name: 'Close' }));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(historyAction).toHaveFocus();
+    },
+  );
+
+  it('keeps the loading explanation but no action until a real target is available', async () => {
+    let resolveCatalog: (value: {
+      items: (typeof currentVersion)[];
+      size: number;
+      total: number;
+    }) => void = () => {};
+    const catalog = new Promise<{ items: (typeof currentVersion)[]; size: number; total: number }>(
+      (resolve) => {
+        resolveCatalog = resolve;
+      },
+    );
+    const transport = createRouterTransport((router) => {
+      router.service(ClusterVersions, {
+        get: () => ({ object: currentVersion }),
+        list: () => catalog,
+      });
+    });
+    renderWithProviders(<ClusterConfigurationCard cluster={cluster} />, { transport });
+    expect(screen.getByText('Checking upgrade options')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
+    resolveCatalog({ items: [currentVersion, targetVersion], size: 2, total: 2 });
+    expect(await screen.findByRole('button', { name: 'Upgrade cluster' })).toBeEnabled();
+    expect(screen.queryByText('Checking upgrade options')).not.toBeInTheDocument();
+  });
+
+  it('keeps the no-target reason without an unavailable action', async () => {
+    renderWithProviders(<ClusterConfigurationCard cluster={cluster} />, {
+      apiFixtures: { clusterVersions: [currentVersion] },
+    });
+    expect(await screen.findByText('No eligible upgrade target is available.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
+  });
+
+  it('keeps failed-upgrade context without offering recovery when observed version is missing', () => {
+    const failed = clone(ClusterSchema, cluster);
+    if (!failed.status) {
+      throw new Error('The cluster fixture needs status');
+    }
+    failed.status.observedVersion = '';
+    failed.status.upgradeHistory = [
+      create(ClusterUpgradeHistoryEntrySchema, {
+        component: { target: { case: 'controlPlane', value: {} } },
+        state: ClusterUpgradeState.FAILED,
+        message: 'The attempted upgrade failed',
+      }),
+    ];
+    renderWithProviders(<ClusterConfigurationCard cluster={failed} />);
+    expect(screen.getByText('Upgrade failed')).toBeInTheDocument();
+    expect(screen.getByText('The attempted upgrade failed')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
+  });
+
   it('shows configuration and an inline available upgrade beside the observed version', async () => {
     renderWithProviders(<ClusterConfigurationCard cluster={cluster} />, {
       apiFixtures: { clusterVersions: [currentVersion, targetVersion] },
     });
 
-    expect(screen.getByText('Cluster configuration')).toBeInTheDocument();
-    expect(screen.getByText('Standard')).toBeInTheDocument();
-    expect(screen.getByText('Creator')).toBeInTheDocument();
-    expect(screen.getByText('alice')).toBeInTheDocument();
-    expect(screen.getByText('Current version')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Cluster version' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 3, name: 'Node sets' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 3, name: 'Settings' })).toBeInTheDocument();
+    expect(screen.getByText('Current')).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeEnabled(),
     );
@@ -79,9 +183,8 @@ describe('ClusterConfigurationCard', () => {
     const unavailable = screen.getByText('No upgrade available');
     expect(unavailable.closest('dd')).toHaveTextContent('—');
     expect(unavailable.closest('.pf-v6-c-label')).not.toHaveClass('pf-m-orange');
-    const upgradeButton = screen.getByRole('button', { name: 'Upgrade cluster' });
-    expect(upgradeButton).toBeDisabled();
-    expect(upgradeButton).toHaveAccessibleDescription('Upgrade eligibility is unavailable.');
+    expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
+    expect(screen.getByText('Upgrade eligibility is unavailable.')).toBeInTheDocument();
   });
 
   it.each([ClusterUpgradeState.PENDING, ClusterUpgradeState.PROGRESSING])(
@@ -265,7 +368,10 @@ describe('ClusterConfigurationCard', () => {
     const { user } = renderWithProviders(<ClusterConfigurationCard cluster={upgrading} />);
 
     const historyButton = screen.getByRole('button', { name: 'Upgrade history' });
-    expect(screen.getByText('Current version').closest('dt')).toContainElement(historyButton);
+    expect(
+      screen.getByRole('heading', { name: 'Cluster version' }).closest('.pf-v6-c-card__header'),
+    ).toContainElement(historyButton);
+    expect(screen.getByText('Current').closest('dt')).not.toContainElement(historyButton);
     expect(screen.getByText('4.17.0 → 4.18.0').closest('dd')).not.toContainElement(historyButton);
     await user.click(historyButton);
     const history = screen.getByRole('dialog', { name: 'Upgrade history' });
@@ -297,9 +403,9 @@ describe('ClusterConfigurationCard', () => {
     ];
     renderWithProviders(<ClusterConfigurationCard cluster={failed} />);
 
-    expect(screen.getByText('Current version').closest('dt')).toContainElement(
-      screen.getByRole('button', { name: 'Upgrade history' }),
-    );
+    expect(
+      screen.getByRole('heading', { name: 'Cluster version' }).closest('.pf-v6-c-card__header'),
+    ).toContainElement(screen.getByRole('button', { name: 'Upgrade history' }));
     expect(screen.getByText('Upgrade failed')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
   });
@@ -371,12 +477,8 @@ describe('ClusterConfigurationCard', () => {
       expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeEnabled(),
     );
     await user.click(screen.getByRole('button', { name: 'Refresh version' }));
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toHaveAccessibleDescription(
-        'Could not load upgrade options.',
-      ),
-    );
-    expect(screen.getByRole('button', { name: 'Upgrade cluster' })).toBeDisabled();
+    expect(await screen.findByText('Could not load upgrade options.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Upgrade cluster' })).not.toBeInTheDocument();
   });
 
   it('closes an open upgrade dialog when the cluster identity changes', async () => {

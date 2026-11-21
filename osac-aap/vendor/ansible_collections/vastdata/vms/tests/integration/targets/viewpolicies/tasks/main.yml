@@ -1,0 +1,406 @@
+---
+# Integration tests for viewpolicies module
+# These tests run against a real VAST system
+#
+# Configuration:
+# Set values in tests/integration/integration_config.yml
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials | bool }}"
+
+# ====================
+# Cleanup - Ensure clean state
+# ====================
+
+- name: Clean up - ensure test view policy doesn't exist before starting
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}"
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Create Tests
+# ====================
+
+- name: Test creating a view policy
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}"
+    flavor: "{{ test_viewpolicy_flavor }}"
+    auth_source: "{{ test_viewpolicy_auth_source }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify view policy was created
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.viewpolicies is defined
+      - result.viewpolicies.name == test_viewpolicy_name
+      - result.viewpolicies.flavor == test_viewpolicy_flavor
+  when: can_run_tests | bool
+
+# ====================
+# Idempotency Tests
+# ====================
+
+- name: Test idempotency - create same view policy again
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}"
+    flavor: "{{ test_viewpolicy_flavor }}"
+    auth_source: "{{ test_viewpolicy_auth_source }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify idempotency (should not change)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: can_run_tests | bool
+
+# ====================
+# Update Tests
+# ====================
+
+- name: Test updating view policy - change auth_source
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}"
+    auth_source: "PROVIDERS"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify view policy was updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.viewpolicies.auth_source == "PROVIDERS"
+  when: can_run_tests | bool
+
+- name: Test update idempotency
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}"
+    auth_source: "PROVIDERS"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify update idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: can_run_tests | bool
+
+# ====================
+# Update NFS Settings
+# ====================
+
+- name: Test updating NFS read/write settings
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}"
+    nfs_read_write:
+      - "*"
+    nfs_no_squash:
+      - "*"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify NFS settings were updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: can_run_tests | bool
+
+# ====================
+# Update GID Inheritance
+# ====================
+
+- name: Test updating gid_inheritance
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}"
+    gid_inheritance: "BSD"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify gid_inheritance was updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.viewpolicies.gid_inheritance == "BSD"
+  when: can_run_tests | bool
+
+# ====================
+# Check Mode Tests
+# ====================
+
+- name: Set auth_source back for check mode baseline
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}"
+    auth_source: "PROVIDERS"
+    gid_inheritance: "BSD"
+    state: present
+  register: baseline_result
+  when: can_run_tests | bool
+
+- name: Test check mode - update auth_source
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}"
+    auth_source: "RPC_AND_PROVIDERS"
+    state: present
+  register: result
+  check_mode: true
+  when: can_run_tests | bool
+
+- name: Verify check mode reported change
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: can_run_tests | bool
+
+- name: Verify check mode didn't actually change
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}"
+    auth_source: "PROVIDERS"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Check that auth_source was not changed
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: can_run_tests | bool
+
+# ====================
+# Diff Mode Tests
+# ====================
+
+- name: Test diff mode - update gid_inheritance
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}"
+    gid_inheritance: "LINUX"
+    state: present
+  register: result
+  diff: true
+  when: can_run_tests | bool
+
+- name: Verify diff mode returned diff data
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after is defined
+  when: can_run_tests | bool
+
+# ====================
+# Delete Tests
+# ====================
+
+- name: Test deleting view policy
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify view policy was deleted
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: can_run_tests | bool
+
+# ====================
+# Delete Idempotency Test
+# ====================
+
+- name: Test delete idempotency - delete again
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify delete idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: can_run_tests | bool
+
+# ====================
+# Check Mode Delete Tests
+# ====================
+
+- name: Create view policy for check mode delete test
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}-delcheck"
+    flavor: "{{ test_viewpolicy_flavor }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Test check mode - delete
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}-delcheck"
+    state: absent
+  register: result
+  check_mode: true
+  when: can_run_tests | bool
+
+- name: Verify check mode reported deletion
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: can_run_tests | bool
+
+- name: Verify check mode didn't actually delete
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}-delcheck"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Check that view policy still exists
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: can_run_tests | bool
+
+- name: Clean up check mode delete test view policy
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}-delcheck"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# create viewpolicy with tenant_id
+# ====================
+
+- name: Create tenant
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "test-tenant"
+    client_ip_ranges: [["192.168.1.1", "192.168.1.2"]]
+    state: present
+  register: tenant_result
+
+- name: Test creating a view policy with tenant_id
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}-tenant"
+    tenant_id: "{{ tenant_result.tenants.id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify view policy was created with tenant_id
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.viewpolicies.tenant_id == tenant_result.tenants.id
+  when: can_run_tests | bool
+
+- name: Clean up test view policy with tenant_id
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}-tenant"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Error Handling Tests
+# ====================
+
+- name: Test error handling - invalid state
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}"
+    state: invalid
+  register: result
+  ignore_errors: true
+  when: can_run_tests | bool
+
+- name: Verify error was caught
+  ansible.builtin.assert:
+    that:
+      - result is failed
+      - "'invalid' in result.msg"
+  when: can_run_tests | bool
+
+# ====================
+# Final Cleanup
+# ====================
+
+- name: Final cleanup - remove test view policy if it exists
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove test view policy if it exists
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}-tenant"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove delcheck test view policy if it exists
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_viewpolicy_name }}-delcheck"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Skip Message
+# ====================
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping viewpolicies integration tests - missing credentials.
+
+      To enable integration tests, set the following in:
+        tests/integration/integration_config.yml
+
+      VAST credentials:
+        vast_vms: "vms.example.com"
+        vast_username: "admin"
+        vast_password: "password"
+
+      Then run: ansible-test integration viewpolicies -v
+  when: not (can_run_tests | bool)

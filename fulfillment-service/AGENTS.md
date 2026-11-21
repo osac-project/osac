@@ -3,12 +3,6 @@
 gRPC and REST APIs, persistence, authorization, resource lifecycle, and the
 `osac` CLI.
 
-This component is part of the OSAC monorepo, not an isolated project. Its APIs,
-generated artifacts, deployment configuration, and runtime behavior may affect
-other components. Apply the repository-wide rules in
-[`../AGENTS.md`](../AGENTS.md), consider downstream consumers before changing
-behavior, and follow the instructions for every affected component.
-
 ## Code style
 
 - Write clear, idiomatic Go consistent with the project's architecture, conventions, and surrounding code.
@@ -18,12 +12,9 @@ behavior, and follow the instructions for every affected component.
 
 ## Required context
 
-Before changing this component, identify the documents relevant to the change
-below, then read and follow them. These documents are authoritative for their
-respective areas.
+Read the applicable references before changing behavior:
 
 - API or proto work: [`docs/API.md`](docs/API.md) and [`docs/CLEANAPI.md`](docs/CLEANAPI.md)
-- Proto changes: [`../proto/AGENTS.md`](../proto/AGENTS.md)
 - API or CLI request input changes:
   [`docs/REQUEST_PATH_TRACING.md`](docs/REQUEST_PATH_TRACING.md). Trace the path
   from the user-facing entry point through routing, filtering, and
@@ -46,11 +37,14 @@ respective areas.
 
 ## Generated files
 
-Run from `fulfillment-service/` when applicable:
+Use the Go version in `go.mod` and the tools listed in [README.md](README.md):
+uv/Python for development tasks, Buf/protoc for protobuf generation, Ginkgo
+for unit suites, and Helm for chart checks.
+
+For schema changes, follow [shared proto generation](../proto/AGENTS.md).
+Run from `fulfillment-service/` for other generated files:
 
 ```bash
-make -C ../proto generate # After proto changes.
-make -C ../proto lint
 go generate ./... # After changes affecting mocks or other generated Go files.
 go mod tidy # After module dependency changes.
 ```
@@ -71,6 +65,10 @@ ginkgo run --timeout 10m internal/servers # Focused server unit tests.
 ginkgo run --timeout 20m -r internal # All unit suites. Slow, run only when necessary.
 ```
 
+For container-input changes, run `make image-build IMG=<registry>/fulfillment-service:<tag>`
+from `fulfillment-service/`. The Makefile supplies the monorepo root build
+context so sibling workspace modules are available.
+
 ### Integration tests
 
 Integration tests run in a local Kind Kubernetes cluster; the installer builds and deploys current images.
@@ -81,8 +79,6 @@ make -C ../osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
 make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
 ```
 
-If a fresh environment is needed, confirm that `osac-dev` is a disposable test cluster before deleting it with `kind delete cluster --name osac-dev`.
-
 If setup fails with `failed to lookup host '...'`, read [README.md — Running integration tests](README.md#running-integration-tests) for host entries.
 
 ## Writing tests
@@ -92,7 +88,3 @@ If setup fails with `failed to lookup host '...'`, read [README.md — Running i
 - Keep cases independent, register cleanup with `DeferCleanup`, and use bounded `Eventually` assertions for asynchronous behavior instead of sleeps.
 - Test observable behavior, including relevant error paths and tenant isolation where applicable. Deployed Fulfillment-only API/CLI workflows belong in `it/`; cross-component provisioning belongs in `tests/e2e/`.
 - Consult [Fulfillment test tiers and coverage](../docs/INTEGRATION-TESTING.md#fulfillment-service) when choosing coverage for a change.
-
-The deployed service-account CLI lifecycle, structured output, credential
-omission, RoleBinding grant/revoke, and client-credentials flow are covered by
-[`it/it_cli_service_accounts_test.go`](it/it_cli_service_accounts_test.go).

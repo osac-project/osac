@@ -1,0 +1,12 @@
+bugfixes:
+  - purefb_hardware - Fix unsafe res.errors[0].message access that could cause IndexError (#499)
+  - purefb_keytabs - Fix unsafe res.errors[0].message access that could cause IndexError (#499)
+  - purefb_kmip - Fix unsafe res.errors[0].message access that could cause IndexError (#499)
+  - purefb_lag - Fix unsafe res.errors[0].message access that could cause IndexError (#499)
+  - purefb_lifecycle - Fix unsafe res.errors[0].message access that could cause IndexError (#499)
+  - purefb_messages - Fix unsafe res.errors[0].message access that could cause IndexError (#499)
+  - purefb_network - Fix unsafe res.errors[0].message access that could cause IndexError (#499)
+  - purefb_ntp - Fix unsafe res.errors[0].message access that could cause IndexError (#499)
+  - purefb_phonehome - Fix unsafe res.errors[0].message access that could cause IndexError (#499)
+  - purefb_pingtrace - Fix unsafe res.errors[0].message access that could cause IndexError (#499)
+  - purefb_policy - Fix unsafe res.errors[0].message access that could cause IndexError (#499)

@@ -376,13 +376,17 @@ oc get secret osac-inventory-config osac-management-config -n osac
 ### Step 7: Create a BareMetalInstance and verify provisioning
 
 Use the `osac` CLI to create a bare metal instance. The `--catalog-item` flag
-is required and selects the instance type (hardware profile):
+is required and selects the instance type (hardware profile). The `--ssh-key`
+flag takes the name of a registered SSH public key Secret, not raw key
+material; see
+[the developer guide](../developer/baremetalinstance-guide.md#3-create-the-baremetalinstance-with-the-osac-cli)
+for how to register one:
 
 ```bash
 osac create baremetalinstance \
   --name my-instance \
   --catalog-item <catalog-item-name> \
-  --ssh-key "ssh-ed25519 AAAA..."
+  --ssh-key <ssh-key-name>
 ```
 
 Monitor the instance until it reaches the `Ready` state:

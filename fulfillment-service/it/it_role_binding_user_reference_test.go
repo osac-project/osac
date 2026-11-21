@@ -95,6 +95,7 @@ var _ = Describe("RoleBinding UserReference authorization", func() {
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		Expect(positiveBinding.GetObject().GetSpec().GetRole().GetTenant()).To(Equal("shared"))
 		positiveBindingID := positiveBinding.GetObject().GetId()
 		DeferCleanup(func(cleanupCtx context.Context) {
 			_, deleteErr := bindingsAdmin.Delete(cleanupCtx, privatev1.RoleBindingsDeleteRequest_builder{

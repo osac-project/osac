@@ -1,0 +1,21 @@
+---
+# Default variables for viewpolicies integration tests
+# Override these in tests/integration/integration_config.yml
+
+# VAST system connection details
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+# View Policy test configuration
+test_viewpolicy_name: "ansible-test-viewpolicy"
+test_viewpolicy_flavor: "NFS"
+test_viewpolicy_auth_source: "RPC"
+
+# Reusable connection dict — reference as ``vms: "{{ vms_auth }}"`` in tasks
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true

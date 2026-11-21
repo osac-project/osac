@@ -1,0 +1,2 @@
+minor_changes:
+ - purefb_fs - Added ``realm`` parameter to support creating filesystems in realms (requires Purity//FB 4.6.1+)

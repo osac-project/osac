@@ -1,0 +1,582 @@
+---
+# Integration tests for tenants module
+# These tests run against a real VAST system
+#
+# Configuration:
+# Set values in tests/integration/integration_config.yml
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: >-
+      {{ (vast_vms | default('') | length > 0)
+         and (vast_username | default('') | length > 0)
+         and (vast_password | default('') | length > 0) }}
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials | bool }}"
+
+- name: Get default tenant to obtain local_provider_id
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "default"
+    state: present
+  register: tenant_result
+  when: can_run_tests | bool
+
+- name: Set local_provider_id from default tenant
+  ansible.builtin.set_fact:
+    test_local_provider_id: "{{ tenant_result.tenants.local_provider_id }}"
+  when: can_run_tests | bool
+
+# ====================
+# Cleanup - Ensure clean state
+# ====================
+
+- name: Clean up - ensure test tenant doesn't exist before starting
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}"
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+# ============================================================
+#                     CREATE TESTS
+# ============================================================
+
+- name: Test creating a tenant
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}"
+    local_provider_id: "{{ test_local_provider_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify tenant was created
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.tenants is defined
+      - result.tenants.name == test_tenant_name
+      - result.diff is defined
+      - result.diff.before == {}
+      - result.diff.after is defined
+  when: can_run_tests | bool
+
+# ============================================================
+#                   IDEMPOTENCY TESTS - CREATE
+# ============================================================
+
+- name: Test idempotency - create same tenant again
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}"
+    local_provider_id: "{{ test_local_provider_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify idempotency (should not change)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.tenants is defined
+  when: can_run_tests | bool
+
+# ============================================================
+#                      UPDATE TESTS
+# ============================================================
+
+- name: Test updating tenant - change max_views
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}"
+    max_views: "{{ test_tenant_max_views }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify tenant was updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after is defined
+  when: can_run_tests | bool
+
+- name: Test update idempotency - same max_views again
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}"
+    max_views: "{{ test_tenant_max_views }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify update idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: can_run_tests | bool
+
+- name: Test updating tenant - change smb_encryption_state
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}"
+    smb_encryption_state: "{{ test_tenant_smb_encryption_state_updated }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify smb_encryption_state was updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: can_run_tests | bool
+
+- name: Test updating multiple fields at once
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}"
+    max_views: "{{ test_tenant_max_views_updated }}"
+    smb_encryption_state: "{{ test_tenant_smb_encryption_state }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify multi-field update
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+  when: can_run_tests | bool
+
+# ============================================================
+#                   CHECK MODE TESTS - UPDATE
+# ============================================================
+
+# Set a known baseline before check-mode tests
+- name: Set baseline for check mode test
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}"
+    max_views: "{{ test_tenant_max_views_updated }}"
+    smb_encryption_state: "{{ test_tenant_smb_encryption_state }}"
+    state: present
+  register: baseline_result
+  when: can_run_tests | bool
+
+- name: Test check mode - update max_views
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}"
+    max_views: 999
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported change
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.tenants is defined
+  when: can_run_tests | bool
+
+- name: Verify check mode didn't actually change anything
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}"
+    max_views: "{{ test_tenant_max_views_updated }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Confirm max_views was not changed by check mode
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: can_run_tests | bool
+
+# ============================================================
+#                   CHECK MODE TESTS - CREATE
+# ============================================================
+
+- name: Test check mode - create new tenant
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}-checkmode"
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode create reported change
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: can_run_tests | bool
+
+- name: Verify check mode didn't actually create the tenant
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}-checkmode"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Confirm tenant was never created
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: can_run_tests | bool
+
+# ============================================================
+#                     DIFF MODE TESTS
+# ============================================================
+
+- name: Test diff mode - update max_views
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}"
+    max_views: "{{ test_tenant_max_views }}"
+    state: present
+  diff: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify diff mode returned diff data
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after is defined
+  when: can_run_tests | bool
+
+# ============================================================
+#                     DELETE TESTS
+# ============================================================
+
+- name: Test deleting tenant
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify tenant was deleted
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after == {}
+  when: can_run_tests | bool
+
+# ============================================================
+#                 IDEMPOTENCY TESTS - DELETE
+# ============================================================
+
+- name: Test delete idempotency - delete again
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify delete idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: can_run_tests | bool
+
+# ============================================================
+#                 CHECK MODE TESTS - DELETE
+# ============================================================
+
+- name: Create tenant for check mode delete test
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}-delcheck"
+    local_provider_id: "{{ test_local_provider_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Test check mode - delete
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}-delcheck"
+    state: absent
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported deletion
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: can_run_tests | bool
+
+- name: Verify check mode didn't actually delete
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}-delcheck"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Confirm tenant still exists
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.tenants is defined
+  when: can_run_tests | bool
+
+- name: Clean up check mode delete test tenant
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}-delcheck"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ============================================================
+#                    FORCE_REMOVE TESTS
+# ============================================================
+- name: Force-remove pre-cleanup - delete leftover view (if any)
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_tenant_forcedel_view_path }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Force-remove pre-cleanup - delete leftover view policy (if any)
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_forcedel_policy_name }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Force-remove pre-cleanup - delete leftover tenant (if any)
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name_forcedel }}"
+    state: absent
+    force_remove: true
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Force-remove pre-cleanup - delete orphan local provider (if any)
+  vastdata.vms.localproviders:
+    vms: "{{ vms_auth }}"
+    name: "provider-{{ test_tenant_name_forcedel }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# --- Set up: tenant -> view policy -> view (makes the tenant non-empty) ---
+
+- name: Force-remove - create dedicated tenant (auto-creates local provider)
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name_forcedel }}"
+    state: present
+  register: forcedel_tenant
+  when: can_run_tests | bool
+
+- name: Force-remove - verify tenant was created
+  ansible.builtin.assert:
+    that:
+      - forcedel_tenant is changed
+      - forcedel_tenant.tenants is defined
+      - forcedel_tenant.tenants.id is defined
+  when: forcedel_tenant is not skipped
+
+- name: Force-remove - create view policy bound to the tenant
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_forcedel_policy_name }}"
+    flavor: "NFS"
+    tenant_id: "{{ forcedel_tenant.tenants.id }}"
+    state: present
+  register: forcedel_policy
+  when: can_run_tests | bool and forcedel_tenant is not skipped
+
+- name: Force-remove - create view inside the tenant (makes it non-empty)
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_tenant_forcedel_view_path }}"
+    policy_id: "{{ forcedel_policy.viewpolicies.id }}"
+    tenant_id: "{{ forcedel_tenant.tenants.id }}"
+    protocols: ["NFS"]
+    create_dir: true
+    state: present
+  when: can_run_tests | bool and forcedel_tenant is not skipped
+
+# --- Test 1: delete WITHOUT force_remove must fail ---
+
+- name: Force-remove - try to delete non-empty tenant WITHOUT force_remove
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name_forcedel }}"
+    state: absent
+  register: no_force_result
+  when: can_run_tests | bool and forcedel_tenant is not skipped
+  ignore_errors: true
+
+- name: Verify deletion without force_remove was rejected by VAST
+  ansible.builtin.assert:
+    that:
+      - no_force_result is failed
+      - "'DELETE ' in (no_force_result.msg | default(''))"
+      - "'/tenants/' in (no_force_result.msg | default(''))"
+      - "' -> 400: ' in (no_force_result.msg | default(''))"
+      - "'bad_request' in (no_force_result.msg | default('') | lower)"
+      - "'related objects' in (no_force_result.msg | default('') | lower)"
+  when: no_force_result is not skipped
+
+# --- Test 2: delete WITH force_remove must succeed ---
+
+- name: Force-remove - delete non-empty tenant WITH force_remove=true
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name_forcedel }}"
+    state: absent
+    force_remove: true
+  register: force_result
+  when: can_run_tests | bool and forcedel_tenant is not skipped
+
+- name: Verify deletion with force_remove=true succeeded
+  ansible.builtin.assert:
+    that:
+      - force_result is changed
+      - force_result.diff is defined
+      - force_result.diff.after == {}
+  when: force_result is not skipped
+
+# --- Test 3: confirm the tenant is truly absent afterwards ---
+
+- name: Force-remove - look up tenant after force_remove (check_mode)
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name_forcedel }}"
+    state: present
+  check_mode: true
+  register: forcedel_after
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Verify tenant is truly absent after force_remove
+  ansible.builtin.assert:
+    that:
+      - (forcedel_after is failed) or (forcedel_after.tenants is not defined) or (forcedel_after.tenants in [None, {}]) or (forcedel_after.tenants.id is not
+        defined)
+  when: forcedel_after is not skipped
+
+# --- Cleanup: drop the auto-created local provider so re-runs are clean ---
+
+- name: Force-remove - cleanup auto-created local provider
+  vastdata.vms.localproviders:
+    vms: "{{ vms_auth }}"
+    name: "provider-{{ test_tenant_name_forcedel }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ============================================================
+#                    FINAL CLEANUP
+# ============================================================
+
+- name: Final cleanup - remove test tenant if it exists
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove delcheck test tenant if it exists
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}-delcheck"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove checkmode test tenant if it exists
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name }}-checkmode"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# Safety-net cleanups for the force_remove test resources, in case the
+# test block itself failed mid-flight and left state behind. Order
+# matters: view -> view policy -> tenant (force_remove) -> local provider.
+- name: Final cleanup - remove force_remove test view if it exists
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_tenant_forcedel_view_path }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove force_remove test view policy if it exists
+  vastdata.vms.viewpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_forcedel_policy_name }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - force_remove test tenant if it exists
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_tenant_name_forcedel }}"
+    state: absent
+    force_remove: true
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove force_remove test tenant's auto-created local provider
+  vastdata.vms.localproviders:
+    vms: "{{ vms_auth }}"
+    name: "provider-{{ test_tenant_name_forcedel }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ============================================================
+#                      SKIP MESSAGE
+# ============================================================
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping tenants integration tests - missing credentials.
+
+      To enable integration tests, set the following in:
+        tests/integration/integration_config.yml
+
+      VAST credentials:
+        vast_vms: "vms.example.com"
+        vast_username: "admin"
+        vast_password: "password"
+
+      Then run: ansible-test integration tenants -v
+  when: not (can_run_tests | bool)

@@ -86,20 +86,20 @@ var _ = Describe("NetBox inventory client", func() {
 
 		It("parses valid options", func() {
 			options := map[string]any{"netbox": map[string]any{
-				"url":               "https://netbox.example.test/",
-				"tokenFile":         "/var/run/secrets/netbox/token",
-				"caFile":            "/var/run/secrets/netbox/ca.crt",
-				"allowInsecureHTTP": true,
+				"url":                     "https://netbox.example.test/",
+				"tokenFile":               "/var/run/secrets/netbox/token",
+				"caFile":                  "/var/run/secrets/netbox/ca.crt",
+				"clientAllowInsecureHTTP": true,
 			}}
 
 			got, err := ParseNetBoxOptions(options)
 
 			Expect(err).NotTo(HaveOccurred())
 			Expect(got).To(Equal(&NetBoxClientConfig{
-				URL:               "https://netbox.example.test/",
-				TokenFile:         "/var/run/secrets/netbox/token",
-				CAFile:            "/var/run/secrets/netbox/ca.crt",
-				AllowInsecureHTTP: true,
+				URL:                     "https://netbox.example.test/",
+				TokenFile:               "/var/run/secrets/netbox/token",
+				CAFile:                  "/var/run/secrets/netbox/ca.crt",
+				ClientAllowInsecureHTTP: true,
 			}))
 		})
 
@@ -148,7 +148,7 @@ var _ = Describe("NetBox inventory client", func() {
 			Entry("HTTP URL without opt-in", &Config{Options: map[string]any{"netbox": map[string]any{
 				"url":       "http://netbox.example.test",
 				"tokenFile": "/unused/token",
-			}}}, "NetBox HTTP endpoints require AllowInsecureHTTP"),
+			}}}, "NetBox HTTP endpoints require ClientAllowInsecureHTTP"),
 		)
 
 		It("rejects an unreadable token file", func() {

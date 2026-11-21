@@ -142,6 +142,7 @@ spec:
         - --metrics-listener-address=0.0.0.0:8002
         - --kafka-properties-file=/etc/fulfillment-event-publisher/kafka
         - --kafka-topic-retention={{ .Values.eventPublisher.topicRetention | default "-1s" }}
+        - --kafka-topic-prefix={{ .Values.global.eventTopicPrefix | default "osac.events." }}
         - --ca-file=/etc/ca-bundle/bundle.pem
         ports:
         - name: grpc

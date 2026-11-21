@@ -4,4 +4,3 @@
     - wait
     - api-server-caching
     - discovery
-    - metadata-only-fetches

@@ -93,30 +93,30 @@ export const isCatalogPublishedFilter = (value: string): value is CatalogPublish
 
 export const GLOBAL_TENANT_VALUE = 'shared';
 
-export const getCatalogCreateActionPath = (item: CatalogItem) => {
-  switch (item.$typeName) {
-    case 'osac.public.v1.ComputeInstanceCatalogItem':
-      return `/vms/create/${item.id}`;
-    case 'osac.public.v1.ClusterCatalogItem':
-      return `/clusters/create/${item.id}`;
-    case 'osac.public.v1.BareMetalInstanceCatalogItem':
-      return `/bare-metal/create/${item.id}`;
-    default:
-      return '#';
+export const catalogItemListPathForKind = (kind: CatalogItemKind): string => {
+  switch (kind) {
+    case 'vm':
+      return '/catalog/vms';
+    case 'cluster':
+      return '/catalog/clusters';
+    case 'bm':
+      return '/catalog/bare-metal';
   }
 };
 
+export const getCatalogCreateActionPath = (item: CatalogItem): string => {
+  const kind = getCatalogItemKind(item);
+  return kind ? `${catalogItemListPathForKind(kind)}/${item.id}/launch` : '#';
+};
+
+export const catalogItemListPath = (item: CatalogItem): string => {
+  const kind = getCatalogItemKind(item);
+  return kind ? catalogItemListPathForKind(kind) : '/catalog';
+};
+
 export const catalogItemDetailsPath = (item: CatalogItem): string => {
-  switch (item.$typeName) {
-    case 'osac.public.v1.ComputeInstanceCatalogItem':
-      return `/catalog/vm/${item.id}`;
-    case 'osac.public.v1.BareMetalInstanceCatalogItem':
-      return `/catalog/bm/${item.id}`;
-    case 'osac.public.v1.ClusterCatalogItem':
-      return `/catalog/cluster/${item.id}`;
-    default:
-      return '#';
-  }
+  const listPath = catalogItemListPath(item);
+  return listPath === '/catalog' ? '#' : `${listPath}/${item.id}`;
 };
 
 export const catalogItemEditPath = (item: CatalogItem): string => {

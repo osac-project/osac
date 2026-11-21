@@ -10,6 +10,7 @@ import {
   catalogItemDetailsPath,
   catalogItemEditPath,
   filterCatalogItemsBySearch,
+  getCatalogCreateActionPath,
   getCatalogItemKind,
 } from './catalogItemDisplay';
 describe('filterCatalogItemsBySearch', () => {
@@ -67,19 +68,42 @@ describe('catalogItemDetailsPath', () => {
         $typeName: 'osac.public.v1.ComputeInstanceCatalogItem',
         id: 'vm-1',
       } as ComputeInstanceCatalogItem),
-    ).toBe('/catalog/vm/vm-1');
+    ).toBe('/catalog/vms/vm-1');
     expect(
       catalogItemDetailsPath({
         $typeName: 'osac.public.v1.BareMetalInstanceCatalogItem',
         id: 'bm-1',
       } as BareMetalInstanceCatalogItem),
-    ).toBe('/catalog/bm/bm-1');
+    ).toBe('/catalog/bare-metal/bm-1');
     expect(
       catalogItemDetailsPath({
         $typeName: 'osac.public.v1.ClusterCatalogItem',
         id: 'cluster-1',
       } as ClusterCatalogItem),
-    ).toBe('/catalog/cluster/cluster-1');
+    ).toBe('/catalog/clusters/cluster-1');
+  });
+});
+
+describe('getCatalogCreateActionPath', () => {
+  it('builds the catalog launch path for each catalog item type', () => {
+    expect(
+      getCatalogCreateActionPath({
+        $typeName: 'osac.public.v1.ComputeInstanceCatalogItem',
+        id: 'vm-1',
+      } as ComputeInstanceCatalogItem),
+    ).toBe('/catalog/vms/vm-1/launch');
+    expect(
+      getCatalogCreateActionPath({
+        $typeName: 'osac.public.v1.BareMetalInstanceCatalogItem',
+        id: 'bm-1',
+      } as BareMetalInstanceCatalogItem),
+    ).toBe('/catalog/bare-metal/bm-1/launch');
+    expect(
+      getCatalogCreateActionPath({
+        $typeName: 'osac.public.v1.ClusterCatalogItem',
+        id: 'cluster-1',
+      } as ClusterCatalogItem),
+    ).toBe('/catalog/clusters/cluster-1/launch');
   });
 });
 

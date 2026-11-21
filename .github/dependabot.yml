@@ -18,22 +18,10 @@ updates:
         - "osac-project/osac-ci"
 
 - package-ecosystem: "gomod"
-  directory: "/fulfillment-service"
-  schedule:
-    # Check for updates to Go modules every week
-    interval: "weekly"
-    day: "friday"
-    time: "22:00"
-    timezone: "America/Los_Angeles"
-  groups:
-    fulfillment-service-go-dependencies:
-      patterns:
-        - "*"
-  commit-message:
-    prefix: "NO-ISSUE"
-
-- package-ecosystem: "gomod"
+  # These modules depend on each other (local directory replaces), so
+  # they must be updated together, in one PR.
   directories:
+    - "/fulfillment-service"
     - "/osac-operator"
     - "/osac-operator/api"
     - "/bare-metal-fulfillment-operator"
@@ -44,7 +32,7 @@ updates:
     time: "22:00"
     timezone: "America/Los_Angeles"
   groups:
-    osac-operator-go-dependencies:
+    osac-go-dependencies:
       patterns:
         - "*"
   commit-message:

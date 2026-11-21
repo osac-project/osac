@@ -16,14 +16,7 @@ export const ClusterDetailsPage = () => {
   );
 
   if (isLoading) {
-    return (
-      <ResourceDetailsPageLoading
-        parentTo="/clusters"
-        parentLabel="Clusters"
-        tabLabels={['Overview', 'Networking', 'Node sets']}
-        tabsId="cluster-detail-tabs"
-      />
-    );
+    return <ResourceDetailsPageLoading parentTo="/clusters" parentLabel="Clusters" />;
   }
 
   if (isError) {

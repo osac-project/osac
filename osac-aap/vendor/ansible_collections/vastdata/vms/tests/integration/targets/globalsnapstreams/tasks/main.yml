@@ -1,0 +1,528 @@
+---
+# Integration tests for globalsnapstreams module
+# These tests run against a real VAST system
+#
+# Configuration:
+# Set values in tests/integration/integration_config.yml
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials }}"
+
+- name: Generate unique test paths with timestamp
+  ansible.builtin.set_fact:
+    test_clone_destination_path: "/ansible-test-snapstream-clone-{{ ansible_date_time.epoch }}"
+    test_clone_destination_path_delcheck: "/ansible-test-snapstream-clone-delcheck-{{ ansible_date_time.epoch }}"
+  when: can_run_tests | bool
+
+# ====================
+# Setup - Create Prerequisites
+# ====================
+
+- name: Get default tenant for testing
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "default"
+    state: present
+  register: tenant_result
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Set default tenant ID from result
+  ansible.builtin.set_fact:
+    test_tenant_id: "{{ tenant_result.tenants.id }}"
+  when: can_run_tests | bool and tenant_result.tenants is defined
+
+- name: Create test view for snapshot source
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}"
+    policy_id: "{{ test_view_policy_id }}"
+    protocols: ["NFS"]
+    create_dir: true
+    state: present
+  register: test_view
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Get view ID for snapshot creation
+  ansible.builtin.set_fact:
+    test_view_id: "{{ test_view.views.id }}"
+  when: test_view is not skipped and test_view.views is defined
+
+- name: Clean up existing test snapshot if present
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name }}"
+    state: absent
+  when: can_run_tests | bool and test_view_id is defined
+  failed_when: false
+
+- name: Wait for snapshot deletion to complete
+  ansible.builtin.pause:
+    seconds: 3
+  when: can_run_tests | bool
+
+- name: Create test snapshot
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name }}"
+    path: "{{ test_view_path }}"
+    state: present
+  register: snapshot_result
+  when: can_run_tests | bool and test_view_id is defined
+  failed_when: false
+
+- name: Set snapshot ID for globalsnapstream tests
+  ansible.builtin.set_fact:
+    test_snapshot_id: "{{ snapshot_result.snapshots.id }}"
+  when: snapshot_result is not skipped and snapshot_result is not failed and snapshot_result.snapshots is defined and snapshot_result.snapshots.id is defined
+
+# ====================
+# Cleanup - Remove existing test globalsnapstreams if present
+# ====================
+
+- name: Clean up - ensure test globalsnapstreams don't exist before starting
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}"
+    remove_dir: true
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Create Tests
+# ====================
+
+- name: Test creating a globalsnapstream (local clone)
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}"
+    loanee_snapshot_id: "{{ test_snapshot_id }}"
+    loanee_root_path: "{{ test_clone_destination_path }}"
+    loanee_tenant_id: "{{ test_tenant_id }}"
+    enabled: true
+    state: present
+    wait: true
+    wait_timeout: 300
+  register: result
+  when: can_run_tests | bool and test_snapshot_id is defined
+
+- name: Verify globalsnapstream was created
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.globalsnapstreams is defined
+      - result.globalsnapstreams.name == test_globalsnapstream_name
+      - result.globalsnapstreams.id is defined
+      - result.diff is defined
+      - result.diff.before == {}
+      - result.diff.after is defined
+  when: result is not skipped
+
+- name: Save globalsnapstream ID for later tests
+  ansible.builtin.set_fact:
+    test_globalsnapstream_id: "{{ result.globalsnapstreams.id }}"
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Create
+# ====================
+
+- name: Test idempotency - create same globalsnapstream again
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}"
+    loanee_snapshot_id: "{{ test_snapshot_id }}"
+    loanee_root_path: "{{ test_clone_destination_path }}"
+    loanee_tenant_id: "{{ test_tenant_id }}"
+    enabled: true
+    state: present
+  register: result
+  when: can_run_tests | bool and test_globalsnapstream_id is defined
+
+- name: Verify idempotency (should not change)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Lookup by ID Tests
+# ====================
+
+- name: Test lookup by ID
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    id: "{{ test_globalsnapstream_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool and test_globalsnapstream_id is defined
+
+- name: Verify lookup by ID works
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.globalsnapstreams is defined
+      - result.globalsnapstreams.id == test_globalsnapstream_id
+      - result.globalsnapstreams.name == test_globalsnapstream_name
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests - Update
+# ====================
+
+- name: Test check mode - lookup existing resource
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}"
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool and test_globalsnapstream_id is defined
+
+- name: Verify check mode lookup works
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.globalsnapstreams is defined
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests - Create
+# ====================
+
+- name: Test check mode - create new globalsnapstream
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}-checkmode"
+    loanee_snapshot_id: "{{ test_snapshot_id }}"
+    loanee_root_path: "/ansible-test-snapstream-clone-checkmode"
+    loanee_tenant_id: "{{ test_tenant_id }}"
+    enabled: true
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool and test_snapshot_id is defined
+
+- name: Verify check mode create reported changes
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually create the globalsnapstream
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}-checkmode"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify globalsnapstream was never created
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Update Tests - Test enabled field can be toggled
+# ====================
+
+- name: Test update - disable enabled on existing globalsnapstream
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}"
+    loanee_snapshot_id: "{{ test_snapshot_id }}"
+    loanee_root_path: "{{ test_clone_destination_path }}"
+    loanee_tenant_id: "{{ test_tenant_id }}"
+    enabled: false
+    state: present
+  register: result
+  when: can_run_tests | bool and test_globalsnapstream_id is defined
+
+- name: Verify enabled was updated to false
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.globalsnapstreams is defined
+      - result.globalsnapstreams.enabled == false
+      - result.diff is defined
+      - result.diff.before.enabled == true
+      - result.diff.after.enabled == false
+  when: result is not skipped
+
+- name: Test update idempotency - set enabled=false again
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}"
+    loanee_snapshot_id: "{{ test_snapshot_id }}"
+    loanee_root_path: "{{ test_clone_destination_path }}"
+    loanee_tenant_id: "{{ test_tenant_id }}"
+    enabled: false
+    state: present
+  register: result
+  when: can_run_tests | bool and test_globalsnapstream_id is defined
+
+- name: Verify update idempotency (should not change)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+- name: Test update - re-enable globalsnapstream
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}"
+    loanee_snapshot_id: "{{ test_snapshot_id }}"
+    loanee_root_path: "{{ test_clone_destination_path }}"
+    loanee_tenant_id: "{{ test_tenant_id }}"
+    enabled: true
+    state: present
+  register: result
+  when: can_run_tests | bool and test_globalsnapstream_id is defined
+
+- name: Verify enabled was updated to true
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.globalsnapstreams is defined
+      - result.globalsnapstreams.enabled == true
+      - result.diff is defined
+      - result.diff.before.enabled == false
+      - result.diff.after.enabled == true
+  when: result is not skipped
+
+# ====================
+# Wait for Completion
+# ====================
+
+- name: Wait for globalsnapstream to reach Completed state
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    id: "{{ test_globalsnapstream_id }}"
+    state: present
+  register: wait_result
+  until: wait_result.globalsnapstreams.state == "Completed"
+  retries: 60
+  delay: 10
+  when: can_run_tests | bool and test_globalsnapstream_id is defined
+
+- name: Verify globalsnapstream reached Completed state
+  ansible.builtin.assert:
+    that:
+      - wait_result.globalsnapstreams.state == "Completed"
+  when: wait_result is not skipped
+
+# ====================
+# Delete Tests
+# ====================
+
+- name: Test deleting globalsnapstream
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}"
+    remove_dir: true
+    state: absent
+    wait: true
+    wait_timeout: 300
+  register: result
+  when: can_run_tests | bool and test_globalsnapstream_id is defined
+
+- name: Verify globalsnapstream was deleted
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after == {}
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Delete
+# ====================
+
+- name: Test delete idempotency - delete again
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify delete idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Check Mode Delete Test
+# ====================
+
+- name: Create globalsnapstream for check mode delete test
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}-delcheck"
+    loanee_snapshot_id: "{{ test_snapshot_id }}"
+    loanee_root_path: "{{ test_clone_destination_path_delcheck }}"
+    loanee_tenant_id: "{{ test_tenant_id }}"
+    enabled: false
+    state: present
+    wait: true
+  register: result
+  when: can_run_tests | bool and test_snapshot_id is defined
+
+- name: Test check mode - delete
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}-delcheck"
+    state: absent
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported deletion
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually delete
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}-delcheck"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Check that globalsnapstream still exists
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.globalsnapstreams is defined
+  when: result is not skipped
+
+- name: Clean up check mode delete test globalsnapstream
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}-delcheck"
+    remove_dir: true
+    state: absent
+    wait: true
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Error Handling Tests
+# ====================
+
+- name: Test error handling - neither name nor ID provided
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    loanee_snapshot_id: "{{ test_snapshot_id }}"
+    state: present
+  register: result
+  when: can_run_tests | bool and test_snapshot_id is defined
+  ignore_errors: true
+
+- name: Verify error was caught
+  ansible.builtin.assert:
+    that:
+      - result is failed
+      - "'name' in result.msg or 'id' in result.msg"
+  when: result is not skipped
+
+- name: Test error handling - invalid state
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}"
+    state: invalid
+  register: result
+  when: can_run_tests | bool
+  ignore_errors: true
+
+- name: Verify error was caught
+  ansible.builtin.assert:
+    that:
+      - result is failed
+  when: result is not skipped
+
+# ====================
+# Cleanup Prerequisites
+# ====================
+
+- name: Clean up test snapshot
+  vastdata.vms.snapshots:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_snapshot_name }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up test view
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ test_view_path }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - fallback delete local cloned destination directories as views
+  vastdata.vms.views:
+    vms: "{{ vms_auth }}"
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ test_clone_destination_path }}"
+    - "{{ test_clone_destination_path_delcheck }}"
+    - "/ansible-test-snapstream-clone-checkmode"
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Final Cleanup
+# ====================
+
+- name: Final cleanup - remove test globalsnapstream if it exists
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}"
+    remove_dir: true
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove delcheck test globalsnapstream if it exists
+  vastdata.vms.globalsnapstreams:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_globalsnapstream_name }}-delcheck"
+    remove_dir: true
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping globalsnapstreams integration tests - credentials not configured.
+
+      To enable integration tests, set credentials in:
+        tests/integration/integration_config.yml
+
+      Example:
+        vast_vms: "vast-vms.example.com"
+        vast_username: "admin"
+        vast_password: "password"
+
+      Then run: ansible-test integration globalsnapstream -v
+  when: not (can_run_tests | bool)

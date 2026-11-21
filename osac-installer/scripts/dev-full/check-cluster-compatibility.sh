@@ -4,10 +4,10 @@ set -euo pipefail
 minimum_major=1
 minimum_minor=36
 
-if ! server_version=$(kubectl version -o json 2>/dev/null \
+if ! server_version=$(kubectl "$@" version -o json 2>/dev/null \
   | jq -r '.serverVersion.gitVersion // empty') \
   || [[ -z "${server_version}" ]]; then
-  echo "ERROR: could not read the Kubernetes API server version. Ensure the dev-full Kind API server is ready and KUBECONFIG selects it." >&2
+  echo "ERROR: could not read the Kubernetes API server version. Ensure the selected dev-full Kind API server is ready." >&2
   exit 1
 fi
 
@@ -24,7 +24,7 @@ if (( server_major < minimum_major || (server_major == minimum_major && server_m
   exit 1
 fi
 
-if ! node_architectures=$(kubectl get nodes -o jsonpath='{range .items[*]}{.status.nodeInfo.architecture}{"\n"}{end}' 2>/dev/null) \
+if ! node_architectures=$(kubectl "$@" get nodes -o jsonpath='{range .items[*]}{.status.nodeInfo.architecture}{"\n"}{end}' 2>/dev/null) \
   || [[ -z "${node_architectures}" ]]; then
   echo "ERROR: could not read the Kind node architectures. Ensure the cluster is ready before installing the Apple Silicon dev-full compatibility policy." >&2
   exit 1

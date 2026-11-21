@@ -351,8 +351,8 @@ To skip a check: --set preflight.skip.<id>="<reason>"
 To only report, never block: --set preflight.mode=report
 {{- /*
 The JSON line is embedded in an error message. Tools that scan error text for
-file:line:column (helm-unittest does) would take the clock time for a source
-location, so the colons of the timestamp are written as the JSON escape \u003a.
+file:line:column would take the clock time for a source location, so the
+colons of the timestamp are written as the JSON escape \u003a.
 Every JSON parser decodes it back to the same string.
 */}}
 OSAC-PREFLIGHT-JSON v1: {{ $r | toJson | replace $r.generatedAt (replace ":" "\\u003a" $r.generatedAt) }}

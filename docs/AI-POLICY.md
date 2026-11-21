@@ -71,7 +71,7 @@ Every PR must meet the same quality bar:
 
 1. **Passes CI** - all linting, unit tests, integration tests, and end-to-end tests pass. QE-driven feature testing adds an additional layer of intent and side-effect validation.
 2. **Follows conventions** - naming, patterns, and architecture documented in AGENTS.md and its referenced project documentation
-3. **Has adequate test coverage** - new functionality includes tests; bug fixes include regression tests
+3. **Has meaningful test coverage** - add or extend behavior and regression tests where needed, reusing existing suites; trivial configuration or documentation edits do not automatically require new tests
 4. **Is reviewable** - reasonable PR size, clear commit messages, focused scope
 
 ### Additional expectations for AI-assisted contributions
@@ -125,7 +125,7 @@ When using AI tools:
 ### For contributors submitting AI-assisted PRs
 
 1. **Review your own code first** - read every line before submitting; you are the first reviewer
-2. **Test locally** - run the full test suite, not just the tests the AI wrote
+2. **Validate proportionately** - run relevant existing checks for the changed behavior; use full suites only when needed and report unavailable checks or unrelated failures
 3. **Simplify** - if the AI over-engineered something, simplify it before submitting
 4. **Disclose** - add the appropriate `Generated-By:` or `Assisted-By:` trailer
 5. **Be ready to explain** - understand why every line exists

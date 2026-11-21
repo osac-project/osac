@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/rand/v2"
 	"strings"
@@ -224,6 +225,33 @@ var _ = Describe("JWT token validation", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err).To(MatchError(fmt.Sprintf("there is no key 'junk' for issuer URL '%s'", goodIssuerUrl)))
 		Expect(token).To(BeNil())
+	})
+
+	It("Propagates ErrIssuerUnavailable when JWKS cache cannot reach the issuer", func(ctx context.Context) {
+		unavailableIssuer := "https://unavailable.example.com"
+		ctrl := gomock.NewController(GinkgoT())
+		defer ctrl.Finish()
+		mockCache := NewMockJwksCache(ctrl)
+		mockCache.EXPECT().
+			Get(gomock.Any(), unavailableIssuer, gomock.Any()).
+			Return(nil, fmt.Errorf(
+				"%w: connection refused",
+				ErrIssuerUnavailable,
+			)).
+			AnyTimes()
+		validator, err := NewJwtValidator().
+			SetLogger(logger).
+			SetJwksCache(mockCache).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		bearer := MakeTokenString(unavailableIssuer, "Bearer", time.Minute)
+		_, err = validator.Validate(ctx, bearer)
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, ErrIssuerUnavailable)).To(BeTrue(),
+			"validate must propagate ErrIssuerUnavailable")
+		Expect(err.Error()).To(ContainSubstring("temporarily unavailable"))
+		Expect(err.Error()).NotTo(ContainSubstring("connection refused"),
+			"internal detail must not leak")
 	})
 
 	It("Returns error for a 'typ' other than 'Bearer'", func(ctx context.Context) {

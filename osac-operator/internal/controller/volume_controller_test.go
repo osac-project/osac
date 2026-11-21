@@ -635,6 +635,84 @@ var _ = Describe("VolumeReconciler", func() {
 		Expect(req.Provider).To(Equal(provisioned.Status.Provider))
 		Expect(req.VendorVolumeID).To(Equal(provisioned.Status.VendorVolumeID))
 		Expect(req.VendorContext).To(Equal(provisioned.Status.VendorContext))
+		Expect(req.Protocol).To(Equal(osacv1alpha1.VolumeProtocolBlock))
+	})
+
+	reconcileVolume := func() error {
+		_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
+		}})
+		return err
+	}
+
+	vendorProvisionedCondition := func() *metav1.Condition {
+		current := &osacv1alpha1.Volume{}
+		ExpectWithOffset(1, k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, current)).To(Succeed())
+		return apimeta.FindStatusCondition(current.Status.Conditions, string(osacv1alpha1.VolumeConditionVendorProvisioned))
+	}
+
+	It("reports a fixed reason and keeps retrying when VAST refuses NFS delete", func() {
+		mockProv.UseCreateResponse = true
+		mockProv.CreateResponse = VendorCreateVolumeResponse{VendorVolumeID: "nfs-vol", Protocol: "NFS"}
+		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
+		stamped := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, stamped)).To(Succeed())
+		stamped.Status.Provider = "vast-primary"
+		stamped.Status.Protocol = osacv1alpha1.VolumeProtocolNFS
+		Expect(k8sClient.Status().Update(testCtx, stamped)).To(Succeed())
+		for range 3 {
+			Expect(reconcileVolume()).To(Succeed())
+		}
+
+		mockProv.DeleteErr = fmt.Errorf("vendor DeleteVolume for vendor-secret-marker: %w", ErrVendorNFSTrashDisabled)
+		Expect(k8sClient.Delete(testCtx, vol)).To(Succeed())
+		Expect(reconcileVolume()).To(Succeed())
+		Expect(reconcileVolume()).To(HaveOccurred())
+
+		Expect(mockProv.LastDeleteReq.Protocol).To(Equal(osacv1alpha1.VolumeProtocolNFS))
+		before := mockProv.DeleteCallCount()
+		Expect(before).To(BeNumerically(">=", 1))
+		still := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, still)).To(Succeed())
+		Expect(still.Finalizers).To(ContainElement(osacVolumeFinalizer))
+		Expect(still.Status.Phase).To(Equal(osacv1alpha1.VolumePhaseDeleting))
+		cond := vendorProvisionedCondition()
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal("VendorNFSTrashDisabled"))
+		Expect(cond.Message).To(Equal(vastNFSTrashDisabledMessage))
+		Expect(cond.Message).NotTo(ContainSubstring("vendor-secret-marker"))
+
+		mockProv.DeleteErr = nil
+		for range 4 {
+			_ = reconcileVolume()
+		}
+		gone := &osacv1alpha1.Volume{}
+		err := k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, gone)
+		Expect(errors.IsNotFound(err)).To(BeTrue(), "volume should be gone after the retried delete, got %v", err)
+		Expect(mockProv.DeleteCallCount()).To(BeNumerically(">", before))
+	})
+
+	It("reports a generic delete-failure reason without the vendor message", func() {
+		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
+		stampProviderProtocol(vol)
+		for range 3 {
+			Expect(reconcileVolume()).To(Succeed())
+		}
+
+		mockProv.DeleteErr = fmt.Errorf("storage array unavailable: vendor-secret-marker")
+		Expect(k8sClient.Delete(testCtx, vol)).To(Succeed())
+		Expect(reconcileVolume()).To(Succeed())
+		Expect(reconcileVolume()).To(HaveOccurred())
+
+		still := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, still)).To(Succeed())
+		Expect(still.Finalizers).To(ContainElement(osacVolumeFinalizer))
+		cond := vendorProvisionedCondition()
+		Expect(cond).NotTo(BeNil())
+		Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		Expect(cond.Reason).To(Equal("VendorDeleteFailed"))
+		Expect(cond.Message).To(Equal("Vendor volume deletion failed; see operator logs"))
 	})
 
 	It("dispatches by provider and does not call another registered provider", func() {

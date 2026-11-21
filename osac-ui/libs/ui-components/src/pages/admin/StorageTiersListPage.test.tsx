@@ -1,10 +1,11 @@
 import { Route, Routes } from 'react-router-dom';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { StorageBackend, StorageTier } from '@osac/types/private';
 import { StorageBackendState, StorageProtocol, StorageTierState } from '@osac/types/private';
+import { getViewTypePrefKey } from '@osac/ui-components/hooks/use-view-type';
 
 import { StorageTiersListPage } from './StorageTiersListPage';
 import { cel } from '../../api/cel';
@@ -56,13 +57,20 @@ const defaultBackends = [backendA, backendB, backendUnused];
 const renderPage = (
   tiers: StorageTier[] = defaultTiers,
   backends: StorageBackend[] = defaultBackends,
+  routerEntries?: string[],
 ) =>
   renderWithProviders(<StorageTiersListPage />, {
     apiFixtures: { storageTiers: tiers, storageBackends: backends },
+    routerEntries,
   });
 
 describe('StorageTiersListPage', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
   it('renders tier rows with name, resolved backend names, and protocols', async () => {
+    localStorage.setItem(getViewTypePrefKey('storage-tiers'), 'list');
     renderPage();
 
     await waitFor(() => {
@@ -70,9 +78,11 @@ describe('StorageTiersListPage', () => {
     });
     expect(screen.getByText('Fast NVMe')).toBeInTheDocument();
     expect(screen.getByText('NFS')).toBeInTheDocument();
+    expect(screen.getByText('2 storage tiers')).toBeInTheDocument();
   });
 
   it('renders comma-separated backend names for a tier with multiple backend associations, falling back to the raw id when a backend cannot be resolved', async () => {
+    localStorage.setItem(getViewTypePrefKey('storage-tiers'), 'list');
     renderPage();
 
     await waitFor(() => {
@@ -83,6 +93,7 @@ describe('StorageTiersListPage', () => {
   });
 
   it('renders the STATUS column via StorageTierStatusLabel', async () => {
+    localStorage.setItem(getViewTypePrefKey('storage-tiers'), 'list');
     renderPage();
 
     await waitFor(() => {
@@ -127,13 +138,14 @@ describe('StorageTiersListPage', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText('No storage tiers yet. Create one to get started.'),
+        screen.getByRole('heading', { name: 'No storage tiers found', level: 2 }),
       ).toBeInTheDocument();
     });
     expect(onStorageBackendList).not.toHaveBeenCalled();
   });
 
   it('shows a warning banner when the backend-name lookup fails, without breaking the per-row id fallback', async () => {
+    localStorage.setItem(getViewTypePrefKey('storage-tiers'), 'list');
     renderWithProviders(<StorageTiersListPage />, {
       apiFixtures: { storageTiers: defaultTiers, storageBackends: defaultBackends },
       transportOverrides: {
@@ -154,10 +166,46 @@ describe('StorageTiersListPage', () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText('No storage tiers yet. Create one to get started.'),
+        screen.getByRole('heading', { name: 'No storage tiers found', level: 2 }),
       ).toBeInTheDocument();
     });
+    expect(screen.getByText('No storage tiers are available yet.')).toBeInTheDocument();
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
+  });
+
+  it('shows a filter-specific empty state when a search filter has no results', async () => {
+    renderPage(defaultTiers, defaultBackends, [
+      '/admin/infrastructure/storage/tiers?search=missing',
+    ]);
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('heading', {
+          name: 'No storage tiers match your filters',
+          level: 2,
+        }),
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByText('Try a different search term.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Clear all filters' })).toBeInTheDocument();
+    expect(screen.queryByText('No storage tiers are available yet.')).not.toBeInTheDocument();
+  });
+
+  it('renders the search input', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Search storage tiers')).toBeInTheDocument();
+    });
+  });
+
+  it('renders the list and card view switcher', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Card view' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'List view' })).toBeInTheDocument();
+    });
   });
 
   it('navigates to the create route when Create tier is clicked', async () => {
@@ -186,7 +234,7 @@ describe('StorageTiersListPage', () => {
     });
   });
 
-  it('keeps the Create tier action available when the tier list fails to load', async () => {
+  it('hides the Create tier action when the tier list fails to load', async () => {
     renderWithProviders(<StorageTiersListPage />, {
       apiFixtures: { storageBackends: defaultBackends },
       transportOverrides: {
@@ -197,11 +245,12 @@ describe('StorageTiersListPage', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole('link', { name: 'Create tier' })).toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: 'Create tier' })).not.toBeInTheDocument();
     });
   });
 
   it('navigates to the details route when a tier name is clicked', async () => {
+    localStorage.setItem(getViewTypePrefKey('storage-tiers'), 'list');
     const { user } = renderWithProviders(
       <Routes>
         <Route path="/admin/infrastructure/storage/tiers" element={<StorageTiersListPage />} />
@@ -228,6 +277,7 @@ describe('StorageTiersListPage', () => {
   });
 
   it('navigates to the edit route when a row Edit action is clicked', async () => {
+    localStorage.setItem(getViewTypePrefKey('storage-tiers'), 'list');
     const { user } = renderWithProviders(
       <Routes>
         <Route path="/admin/infrastructure/storage/tiers" element={<StorageTiersListPage />} />
@@ -255,17 +305,8 @@ describe('StorageTiersListPage', () => {
   });
 
   it('removes the row from the table when delete succeeds', async () => {
-    let tiers = [...defaultTiers];
-    const { user } = renderWithProviders(<StorageTiersListPage />, {
-      apiFixtures: { storageBackends: defaultBackends },
-      transportOverrides: {
-        onStorageTierList: () => ({ items: tiers, size: tiers.length, total: tiers.length }),
-        onStorageTierDelete: (req) => {
-          tiers = tiers.filter((tier) => tier.id !== req.id);
-          return {};
-        },
-      },
-    });
+    localStorage.setItem(getViewTypePrefKey('storage-tiers'), 'list');
+    const { user } = renderPage();
 
     await waitFor(() => {
       expect(screen.getByText('fast')).toBeInTheDocument();

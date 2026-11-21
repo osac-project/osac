@@ -236,15 +236,20 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 		return
 	}
 
-	// Create the generic server:
-	generic, err := NewGenericServer[*privatev1.ComputeInstance]().
+	// Create the generic server. With provider networking disabled the writers create no
+	// automatic addresses, so the check must not count them either:
+	computeSettings := resolveNetworkingSettings(b.networkingSettings)
+	genericBuilder := NewGenericServer[*privatev1.ComputeInstance]().
 		SetLogger(b.logger).
 		SetService(privatev1.ComputeInstances_ServiceDesc.ServiceName).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
-		SetFilterDesc(b.filterDesc).
-		Build()
+		SetFilterDesc(b.filterDesc)
+	if !computeSettings.ProvisioningEnabled {
+		genericBuilder = genericBuilder.SetUncreatedQuotaKinds("ExternalIP")
+	}
+	generic, err := genericBuilder.Build()
 	if err != nil {
 		return
 	}
@@ -264,7 +269,7 @@ func (b *PrivateComputeInstancesServerBuilder) Build() (result *PrivateComputeIn
 	}
 	result = &PrivateComputeInstancesServer{
 		storageTiersDao:    storageTiersDao,
-		settings:           resolveNetworkingSettings(b.networkingSettings),
+		settings:           computeSettings,
 		guards:             guards,
 		logger:             b.logger,
 		tenancyLogic:       b.tenancyLogic,

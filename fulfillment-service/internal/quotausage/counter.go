@@ -44,9 +44,15 @@ import (
 	quota "github.com/osac-project/osac/proto/quota"
 )
 
-// tables maps the proto message of each quota-annotated kind to the table that stores it. Extend
-// together with the quota annotations when a new counted resource or type gets annotations;
+// Table returns the table that stores the kind with the given message name, such as
+// "osac.private.v1.InstanceType". Empty when the kind carries no quota annotations. Extend the
+// map together with the quota annotations when a new counted resource or type gets annotations;
 // Build fails a kind that has annotations but no table, and fails a mapped kind that carries none.
+func Table(message protoreflect.FullName) string {
+	return tables[message]
+}
+
+// tables maps the proto message of each quota-annotated kind to the table that stores it.
 var tables = map[protoreflect.FullName]string{
 	"osac.private.v1.BareMetalInstance":     "bare_metal_instances",
 	"osac.private.v1.BareMetalInstanceType": "bare_metal_instance_types",
@@ -64,6 +70,8 @@ var tables = map[protoreflect.FullName]string{
 type Counter struct {
 	logger          *slog.Logger
 	kinds           map[string]*quota.Kind
+	statements      map[string]string
+	rowStatements   map[string]string
 	stopsCountingIn map[string][]string
 }
 
@@ -137,6 +145,25 @@ func (b *CounterBuilder) Build() (result *Counter, err error) {
 	if err := checkCountingRules(result.kinds, rules); err != nil {
 		return nil, err
 	}
+	result.statements = map[string]string{}
+	result.rowStatements = map[string]string{}
+	for _, kind := range result.kinds {
+		if result.isType(kind.Name) {
+			continue
+		}
+		statement, err := result.kindStatement(kind, "")
+		if err != nil {
+			return nil, fmt.Errorf("failed to count the usage of '%s': %w", kind.Name, err)
+		}
+		result.statements[kind.Name] = statement
+		// The same statement filtered to one row reads that row's excess, so the quota
+		// check can read a single parent's reserved room:
+		rowStatement, err := result.kindStatement(kind, "and r.id = $2")
+		if err != nil {
+			return nil, fmt.Errorf("failed to count the usage of '%s': %w", kind.Name, err)
+		}
+		result.rowStatements[kind.Name] = rowStatement
+	}
 	return result, nil
 }
 
@@ -189,24 +216,20 @@ func (c *Counter) Count(ctx context.Context, tenant string) (map[string]map[stri
 	}
 	result := map[string]map[string]int64{}
 	for _, name := range sortedKindNames(c.kinds) {
-		kind := c.kinds[name]
-		if c.isType(name) {
+		statement, ok := c.statements[name]
+		if !ok {
 			continue
-		}
-		statement, err := c.kindStatement(kind)
-		if err != nil {
-			return nil, fmt.Errorf("failed to count the usage of '%s': %w", kind.Name, err)
 		}
 		rows, err := tx.Query(ctx, statement, tenant)
 		if err != nil {
-			return nil, fmt.Errorf("failed to count the usage of '%s': %w", kind.Name, err)
+			return nil, fmt.Errorf("failed to count the usage of '%s': %w", name, err)
 		}
 		for rows.Next() {
 			var project, dimension string
 			var amount int64
 			if err := rows.Scan(&project, &dimension, &amount); err != nil {
 				rows.Close()
-				return nil, fmt.Errorf("failed to count the usage of '%s': %w", kind.Name, err)
+				return nil, fmt.Errorf("failed to count the usage of '%s': %w", name, err)
 			}
 			if result[project] == nil {
 				result[project] = map[string]int64{}
@@ -215,7 +238,7 @@ func (c *Counter) Count(ctx context.Context, tenant string) (map[string]map[stri
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
-			return nil, fmt.Errorf("failed to count the usage of '%s': %w", kind.Name, err)
+			return nil, fmt.Errorf("failed to count the usage of '%s': %w", name, err)
 		}
 		rows.Close()
 	}
@@ -235,6 +258,39 @@ func (c *Counter) isType(name string) bool {
 	return false
 }
 
+// ParentExcess returns one parent row's reserved-but-uncreated room per dimension: the row's
+// excess, greatest(asked - linked, 0), computed by the same generated statement that counts the
+// tenant, filtered to that one row. A parent that doesn't exist, or whose kind's counting rules
+// stopped counting it, has no room. The room counts only the children the system created and
+// linked back to the parent, the way the tenant-wide statement does.
+func (c *Counter) ParentExcess(
+	ctx context.Context, tenant, parentKind, parentID string,
+) (map[string]int64, error) {
+	statement, ok := c.rowStatements[parentKind]
+	if !ok {
+		return nil, fmt.Errorf("no counted kind '%s'", parentKind)
+	}
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := tx.Query(ctx, statement, tenant, parentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count the usage of '%s': %w", parentKind, err)
+	}
+	defer rows.Close()
+	result := map[string]int64{}
+	for rows.Next() {
+		var project, dimension string
+		var amount int64
+		if err := rows.Scan(&project, &dimension, &amount); err != nil {
+			return nil, fmt.Errorf("failed to count the usage of '%s': %w", parentKind, err)
+		}
+		result[dimension] += amount
+	}
+	return result, rows.Err()
+}
+
 func sortedKindNames(kinds map[string]*quota.Kind) []string {
 	names := make([]string, 0, len(kinds))
 	for name := range kinds {
@@ -250,8 +306,10 @@ type pricePair struct {
 	amount    string
 }
 
-// kindStatement generates the statement of one counted kind.
-func (c *Counter) kindStatement(kind *quota.Kind) (string, error) {
+// kindStatement generates the statement of one counted kind. The row filter, when not empty,
+// is appended to the where clause and takes the row's identifier as $2, so the same statement
+// can count the whole tenant or one row of it.
+func (c *Counter) kindStatement(kind *quota.Kind, rowFilter string) (string, error) {
 	g := &statementGenerator{
 		counter:     c,
 		kind:        kind,
@@ -260,6 +318,7 @@ func (c *Counter) kindStatement(kind *quota.Kind) (string, error) {
 		rowJoins:    []string{},
 		exists:      []string{},
 		existsKinds: map[string]bool{},
+		rowFilter:   rowFilter,
 	}
 	return g.generate()
 }
@@ -276,8 +335,10 @@ type statementGenerator struct {
 	exists   []string
 	// existsKinds remembers the created kinds the exists side already scans.
 	existsKinds map[string]bool
-	item        string
-	aliases     int
+	// rowFilter narrows the statement to one row, identified by $2. Empty counts the tenant.
+	rowFilter string
+	item      string
+	aliases   int
 }
 
 func (g *statementGenerator) nextAlias(prefix string) string {
@@ -342,9 +403,10 @@ func (g *statementGenerator) generate() (string, error) {
 				and u.dimension is not null
 				and u.dimension <> ''
 				%s
+				%s
 			group by r.project, u.dimension
 			`,
-			g.table, joinClauses(g.rowJoins), union(g.asks), g.stopsCountingIn(g.kind.Name, "r"),
+			g.table, joinClauses(g.rowJoins), union(g.asks), g.stopsCountingIn(g.kind.Name, "r"), g.rowFilter,
 		), nil
 	}
 	return fmt.Sprintf(`
@@ -368,6 +430,7 @@ func (g *statementGenerator) generate() (string, error) {
 				and u.dimension is not null
 				and u.dimension <> ''
 				%s
+				%s
 			group by r.id, r.tenant, r.project, u.dimension
 		) p
 		left join lateral (
@@ -380,7 +443,8 @@ func (g *statementGenerator) generate() (string, error) {
 			group by ex.dimension
 		) e on e.dimension = p.dimension
 		`,
-		g.table, joinClauses(g.rowJoins), union(g.asks), g.stopsCountingIn(g.kind.Name, "r"), union(g.exists),
+		g.table, joinClauses(g.rowJoins), union(g.asks), g.stopsCountingIn(g.kind.Name, "r"), g.rowFilter,
+		union(g.exists),
 	), nil
 }
 

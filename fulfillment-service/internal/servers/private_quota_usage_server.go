@@ -159,8 +159,8 @@ func (s *PrivateQuotaUsageServer) buildReport(
 	}
 
 	// The tenant's usage is the sum over its projects. The report covers every dimension
-	// that has a default, an override or usage, so the dimensions with a limit and no
-	// usage enter the map at zero:
+	// that has a default, an override or usage, so the dimensions with a limit and no usage
+	// enter the map at zero:
 	tenantUsage := map[string]int64{}
 	for dimension := range defaults {
 		tenantUsage[dimension] = 0
@@ -181,9 +181,9 @@ func (s *PrivateQuotaUsageServer) buildReport(
 	}))
 	var projects []*privatev1.QuotaUsageProject
 	for _, project := range projectNames {
-		// Each project's entries cover every dimension that has a project limit or
-		// usage in the project, so the dimensions with a project limit and no usage
-		// enter at zero:
+		// Each project's entries cover every dimension that has a project limit or usage
+		// in the project, so the dimensions with a project limit and no usage enter at
+		// zero:
 		projectUsage := map[string]int64{}
 		for dimension := range projectLimits[project] {
 			projectUsage[dimension] = 0
@@ -194,10 +194,7 @@ func (s *PrivateQuotaUsageServer) buildReport(
 		projects = append(projects, privatev1.QuotaUsageProject_builder{
 			Project: project,
 			Dimensions: quotaUsageDimensions(projectUsage, func(dimension string) int64 {
-				if value, ok := projectLimits[project][dimension]; ok {
-					return value
-				}
-				return resolveQuotaLimit(limits, defaults, dimension)
+				return tightestProjectLimit(limits, defaults, projectLimits, project, dimension)
 			}),
 		}.Build())
 	}
@@ -304,4 +301,22 @@ func resolveQuotaLimit(overrides, defaults map[string]int64, dimension string) i
 		return value
 	}
 	return 0
+}
+
+// tightestProjectLimit resolves the limit a project's usage is bound by: the minimum of the
+// tenant's limit and the own limit of the project and each of its named ancestors.
+// Enforcement walks that chain and refuses at the first scope over its limit, so the
+// tightest bound is the limit that binds the project, not its own-or-tenant fallback.
+func tightestProjectLimit(
+	overrides, defaults map[string]int64,
+	projectLimits map[string]map[string]int64,
+	project, dimension string,
+) int64 {
+	limit := resolveQuotaLimit(overrides, defaults, dimension)
+	for _, scope := range quotaProjectChain(project) {
+		if value, ok := projectLimits[scope][dimension]; ok && value < limit {
+			limit = value
+		}
+	}
+	return limit
 }

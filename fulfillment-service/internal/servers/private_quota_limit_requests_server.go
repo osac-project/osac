@@ -26,6 +26,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -51,6 +52,7 @@ type PrivateQuotaLimitRequestsServer struct {
 	generic          *GenericServer[*privatev1.QuotaLimitRequest]
 	requestsDao      *dao.GenericDAO[*privatev1.QuotaLimitRequest]
 	limitsDao        *dao.GenericDAO[*privatev1.QuotaLimit]
+	quota            *quotaEnforcer
 }
 
 func NewPrivateQuotaLimitRequestsServer() *PrivateQuotaLimitRequestsServerBuilder {
@@ -131,6 +133,10 @@ func (b *PrivateQuotaLimitRequestsServerBuilder) Build() (result *PrivateQuotaLi
 		requestsDao:      requestsDao,
 		limitsDao:        limitsDao,
 	}
+	result.quota, err = newQuotaEnforcer(b.logger, b.metricsRegisterer)
+	if err != nil {
+		return
+	}
 	return
 }
 
@@ -205,6 +211,14 @@ func (s *PrivateQuotaLimitRequestsServer) Approve(ctx context.Context,
 	if err != nil {
 		return
 	}
+	// The tenant's effective limit before the approval tells the warning whether the change
+	// tightened it:
+	limits, limitsErr := s.quota.readLimits(ctx, limitRequest.GetMetadata().GetTenant())
+	if limitsErr != nil {
+		err = grpcstatus.Errorf(grpccodes.Internal, "failed to read the tenant's limits")
+		return
+	}
+	oldLimit := limits.limitOf("", limitRequest.GetSpec().GetDimension())
 	// The requested limit is set in the same transaction as the approval, so a client can never
 	// see an approved request whose limit didn't land:
 	if err = s.applyRequestedLimit(ctx, limitRequest); err != nil {
@@ -213,6 +227,17 @@ func (s *PrivateQuotaLimitRequestsServer) Approve(ctx context.Context,
 	limitRequest.GetStatus().SetState(privatev1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_APPROVED)
 	if _, err = s.requestsDao.Update().SetObject(limitRequest).Do(ctx); err != nil {
 		return nil, ConvertDAOErrorToGRPC(err, "update", request.GetId())
+	}
+	if warnErr := s.quota.warnScopeAtOrAbove(ctx, limitRequest.GetMetadata().GetTenant(), "",
+		limitRequest.GetSpec().GetDimension(), oldLimit); warnErr != nil {
+		s.logger.ErrorContext(ctx, "Failed to write the quota warnings of an approval",
+			slog.Any("error", warnErr))
+		// The approval and its limit roll back with the failed warning, so a client never
+		// sees an approved request whose warning didn't land:
+		if tx, txErr := database.TxFromContext(ctx); txErr == nil {
+			tx.ReportError(&warnErr)
+		}
+		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to write the quota warnings")
 	}
 	response = &privatev1.QuotaLimitRequestsApproveResponse{}
 	return

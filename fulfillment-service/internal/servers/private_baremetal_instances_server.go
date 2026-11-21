@@ -245,14 +245,20 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		return
 	}
 
-	generic, err := NewGenericServer[*privatev1.BareMetalInstance]().
+	// With provider networking disabled the writers create no automatic addresses, so the
+	// check must not count them either:
+	bmiSettings := resolveNetworkingSettings(b.networkingSettings)
+	genericBuilder := NewGenericServer[*privatev1.BareMetalInstance]().
 		SetLogger(b.logger).
 		SetService(privatev1.BareMetalInstances_ServiceDesc.ServiceName).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
-		SetFilterDesc(b.filterDesc).
-		Build()
+		SetFilterDesc(b.filterDesc)
+	if !bmiSettings.ProvisioningEnabled {
+		genericBuilder = genericBuilder.SetUncreatedQuotaKinds("ExternalIP")
+	}
+	generic, err := genericBuilder.Build()
 	if err != nil {
 		return
 	}
@@ -274,7 +280,7 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		externalIPAttachmentDao: externalIPAttachmentDao,
 		secretsDao:              secretsDao,
 		secretStore:             b.secretStore,
-		settings:                resolveNetworkingSettings(b.networkingSettings),
+		settings:                bmiSettings,
 	}
 	result.lifecycle = newExternalIPLifecycle(
 		externalIPDao,

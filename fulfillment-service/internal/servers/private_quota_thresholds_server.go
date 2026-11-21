@@ -49,6 +49,7 @@ type PrivateQuotaThresholdsServer struct {
 	logger    *slog.Logger
 	generic   *GenericServer[*privatev1.QuotaThreshold]
 	limitsDao *dao.GenericDAO[*privatev1.QuotaLimit]
+	quota     *quotaEnforcer
 }
 
 func NewPrivateQuotaThresholdsServer() *PrivateQuotaThresholdsServerBuilder {
@@ -119,6 +120,10 @@ func (b *PrivateQuotaThresholdsServerBuilder) Build() (result *PrivateQuotaThres
 		generic:   generic,
 		limitsDao: limitsDao,
 	}
+	result.quota, err = newQuotaEnforcer(b.logger, b.metricsRegisterer)
+	if err != nil {
+		return
+	}
 	return
 }
 
@@ -150,6 +155,10 @@ func (s *PrivateQuotaThresholdsServer) Create(ctx context.Context,
 		func(ctx context.Context, _, candidate *privatev1.QuotaThreshold) error {
 			return s.checkProjectLimit(ctx, candidate)
 		})
+	if err == nil {
+		created := response.GetObject()
+		err = s.warnThresholdChange(ctx, created, 0)
+	}
 	return
 }
 
@@ -160,8 +169,34 @@ func (s *PrivateQuotaThresholdsServer) Update(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
+	// Read the old value with the row locked, so a concurrent update can't change it between
+	// this read and the update below:
+	getResponse, err := s.generic.dao.Get().SetId(id).SetLock(true).Do(ctx)
+	if err != nil {
+		err = ConvertDAOErrorToGRPC(err, "get", id)
+		return
+	}
+	oldValue := getResponse.GetObject().GetSpec().GetValue()
 	err = s.generic.UpdateWithValidation(ctx, request, &response, s.validateThresholdUpdate)
+	if err == nil {
+		err = s.warnThresholdChange(ctx, response.GetObject(), oldValue)
+	}
 	return
+}
+
+// warnThresholdChange writes a warning when setting the threshold puts its project at or above
+// it: the usage reached the new value and was below the old one.
+func (s *PrivateQuotaThresholdsServer) warnThresholdChange(
+	ctx context.Context, threshold *privatev1.QuotaThreshold, oldValue int64) error {
+	metadata := threshold.GetMetadata()
+	warnErr := s.quota.warnThresholdChange(ctx, metadata.GetTenant(), metadata.GetProject(),
+		threshold.GetSpec().GetDimension(), oldValue, threshold.GetSpec().GetValue())
+	if warnErr != nil {
+		s.logger.ErrorContext(ctx, "Failed to write the quota warning of a threshold change",
+			slog.Any("error", warnErr))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to write the quota warning")
+	}
+	return nil
 }
 
 func (s *PrivateQuotaThresholdsServer) Delete(ctx context.Context,

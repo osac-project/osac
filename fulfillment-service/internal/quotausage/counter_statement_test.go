@@ -32,7 +32,7 @@ func statementOf(t *testing.T, counter *Counter, kind string) string {
 	if !ok {
 		t.Fatalf("the quota registry has no kind '%s'", kind)
 	}
-	statement, err := counter.kindStatement(annotated)
+	statement, err := counter.kindStatement(annotated, "")
 	if err != nil {
 		t.Fatalf("failed to generate the statement of '%s': %v", kind, err)
 	}

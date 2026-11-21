@@ -148,7 +148,10 @@ func createAutomaticExternalIPs(ctx context.Context, logger *slog.Logger, settin
 			Metadata: privatev1.Metadata_builder{
 				Name:   name,
 				Tenant: tenant,
-				Labels: labels,
+				// The address counts in the owner's project, so a project's external-IP
+				// limit binds it:
+				Project: owner.GetProject(),
+				Labels:  labels,
 				Annotations: map[string]string{
 					tenantAnnotation:         tenant,
 					ownerReferenceAnnotation: ownerID,

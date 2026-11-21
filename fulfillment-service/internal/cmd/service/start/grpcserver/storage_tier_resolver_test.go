@@ -57,10 +57,10 @@ var _ = Describe("Storage tier resolver", func() {
 		return database.TxIntoContext(testCtx, tx), tx
 	}
 
-	createNamedVolume := func(ctx context.Context, name string) error {
+	createNamedVolume := func(ctx context.Context, tenant, name string) error {
 		_, err := volumeServer.Create(ctx, privatev1.VolumesCreateRequest_builder{
 			Object: privatev1.Volume_builder{
-				Metadata: privatev1.Metadata_builder{Name: name, Tenant: "volume-tenant"}.Build(),
+				Metadata: privatev1.Metadata_builder{Name: name, Tenant: tenant}.Build(),
 				Spec: privatev1.VolumeSpec_builder{
 					StorageTier: "tier",
 					SizeGib:     1,
@@ -71,7 +71,7 @@ var _ = Describe("Storage tier resolver", func() {
 		return err
 	}
 	createVolume := func(ctx context.Context) error {
-		return createNamedVolume(ctx, "volume")
+		return createNamedVolume(ctx, "volume-tenant", "volume")
 	}
 
 	deleteTier := func(ctx context.Context) error {
@@ -105,6 +105,9 @@ var _ = Describe("Storage tier resolver", func() {
 		_, err = pool.Exec(testCtx, `insert into tenants (id, name, tenant, data)
 			values ('volume-tenant', 'volume-tenant', 'volume-tenant', '{}')`)
 		Expect(err).NotTo(HaveOccurred())
+		_, err = pool.Exec(testCtx, `insert into tenants (id, name, tenant, data)
+			values ('volume-tenant-2', 'volume-tenant-2', 'volume-tenant-2', '{}')`)
+		Expect(err).NotTo(HaveOccurred())
 		_, err = pool.Exec(testCtx, `insert into storage_backends (id, name, tenant, data)
 			values ('backend', 'backend', 'shared', '{"spec":{"provider":"vast"}}')`)
 		Expect(err).NotTo(HaveOccurred())
@@ -112,6 +115,16 @@ var _ = Describe("Storage tier resolver", func() {
 			values ('tier', 'tier', 'shared', '{"spec":{"protocol":"STORAGE_PROTOCOL_BLOCK",
 			"backends":[{"backend_id":"backend"}]},"status":{"state":"STORAGE_TIER_STATE_ACTIVE"}}')`)
 		Expect(err).NotTo(HaveOccurred())
+		// The quota check refuses a create of a dimension with no limit, and no limit
+		// means 0, so the volume creates need generous defaults:
+		for _, dimension := range []string{"storage.volumes", "storage.tier.gib"} {
+			_, err = pool.Exec(testCtx, `insert into quota_default_limits (id, name, creator, data)
+				values ($1, $1, 'system', $2::jsonb)`,
+				"default-"+dimension,
+				`{"spec":{"dimension":"`+dimension+`","value":1000}}`,
+			)
+			Expect(err).NotTo(HaveOccurred())
+		}
 	})
 
 	It("preserves provider and protocol resolution", func() {
@@ -172,10 +185,13 @@ var _ = Describe("Storage tier resolver", func() {
 
 	It("allows concurrent Volume creates on the same tier while blocking deletion", func() {
 		firstCtx, firstTx := begin()
-		Expect(createNamedVolume(firstCtx, "first")).To(Succeed())
+		Expect(createNamedVolume(firstCtx, "volume-tenant", "first")).To(Succeed())
 		secondCtx, secondTx := begin()
+		// The second volume sits in another tenant because the quota check locks the
+		// tenant's row for the whole request: two creates in one tenant serialize by
+		// design, and this spec is about the tier lock, not the tenant lock:
 		result := startRequest(secondCtx, func(ctx context.Context) error {
-			return createNamedVolume(ctx, "second")
+			return createNamedVolume(ctx, "volume-tenant-2", "second")
 		})
 		var createErr error
 		Eventually(result, 5*time.Second).Should(Receive(&createErr))

@@ -224,6 +224,23 @@ var _ = Describe("Usage counter", func() {
 		}))
 	})
 
+	It("reads one parent row's reserved-but-uncreated room", func(ctx context.Context) {
+		// The cluster asks for three hosts and has two, and asks for two addresses and has
+		// one, so its excess is one of each, plus the control plane nothing converts:
+		excess, err := counter.ParentExcess(db.ctx, "acme", "Cluster", "prod")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(excess).To(Equal(map[string]int64{
+			"caas.control_planes":            1,
+			"bare_metal.instances.metal-1tb": 1,
+			"network.external_ips":           1,
+		}))
+
+		// A parent that doesn't exist has no room:
+		missing, err := counter.ParentExcess(db.ctx, "acme", "Cluster", "no-such-cluster")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(missing).To(BeEmpty())
+	})
+
 	It("counts resources until they are archived, not until they are deleted", func(ctx context.Context) {
 		db.exec(`update volumes set deletion_timestamp = now() where id = 'data-vol'`)
 		usage, err := counter.Count(db.ctx, "acme")

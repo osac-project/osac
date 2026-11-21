@@ -657,31 +657,109 @@ var _ = Describe("Quota servers", func() {
 			Expect(team).ToNot(BeNil())
 			teamGateways := findDimension(team.GetDimensions(), "network.virtual_networks")
 			Expect(teamGateways).ToNot(BeNil())
-			// The project limit replaces the inherited tenant limit:
-			Expect(teamGateways.GetLimit()).To(Equal(int64(3)))
+			// The project shows the tightest bound: the tenant's default of 2 sits below
+			// the project's own limit of 3, so the tenant's is the limit that binds:
+			Expect(teamGateways.GetLimit()).To(Equal(int64(2)))
 			Expect(teamGateways.GetUsage()).To(Equal(int64(1)))
-			Expect(teamGateways.GetRoom()).To(Equal(int64(2)))
+			Expect(teamGateways.GetRoom()).To(Equal(int64(1)))
+		})
+
+		It("shows a nested project the binding ancestor's limit, not the tenant's", func() {
+			// Raise the tenant's override above the parent project's limit, so the two
+			// differ and the report must pick the tighter one:
+			list, err := limitsServer.List(ctx, publicv1.QuotaLimitsListRequest_builder{
+				Filter: new(`this.spec.dimension == "compute.vcpus" && this.metadata.project == ""`),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(list.GetItems()).To(HaveLen(1))
+			override := list.GetItems()[0]
+			_, err = limitsServer.Update(ctx, publicv1.QuotaLimitsUpdateRequest_builder{
+				Object: publicv1.QuotaLimit_builder{
+					Id:       override.GetId(),
+					Metadata: override.GetMetadata(),
+					Spec:     publicv1.QuotaLimitSpec_builder{Dimension: "compute.vcpus", Value: proto.Int64(10)}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			createLimit("team", "compute.vcpus", 4)
+
+			// A nested project holding a 1-vCPU VM:
+			projectsDao, err := dao.NewGenericDAO[*privatev1.Project]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = projectsDao.Create().
+				SetObject(privatev1.Project_builder{
+					Metadata: privatev1.Metadata_builder{Name: "team.web", Tenant: testTenant}.Build(),
+				}.Build()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			instanceTypesDao, err := dao.NewGenericDAO[*privatev1.InstanceType]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = instanceTypesDao.Create().
+				SetObject(privatev1.InstanceType_builder{
+					Metadata: privatev1.Metadata_builder{Name: "small", Tenant: "shared"}.Build(),
+					Spec:     privatev1.InstanceTypeSpec_builder{Vcpus: 1, MemoryGib: 2}.Build(),
+				}.Build()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			computeInstancesDao, err := dao.NewGenericDAO[*privatev1.ComputeInstance]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = computeInstancesDao.Create().
+				SetObject(privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{Name: "vm-web", Tenant: testTenant, Project: "team.web"}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						InstanceType: privatev1.InstanceTypeReference_builder{Name: "small"}.Build(),
+					}.Build(),
+				}.Build()).
+				Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			response, err := usageServer.Get(ctx, publicv1.QuotaUsageGetRequest_builder{
+				Tenant: testTenant,
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			report := response.GetReport()
+
+			// The tenant entry keeps the tenant's own limit:
+			vcpus := findDimension(report.GetDimensions(), "compute.vcpus")
+			Expect(vcpus.GetLimit()).To(Equal(int64(10)))
+			Expect(vcpus.GetUsage()).To(Equal(int64(7)))
+
+			var nested *publicv1.QuotaUsageProject
+			for _, project := range report.GetProjects() {
+				if project.GetProject() == "team.web" {
+					nested = project
+				}
+			}
+			Expect(nested).ToNot(BeNil())
+			nestedVcpus := findDimension(nested.GetDimensions(), "compute.vcpus")
+			Expect(nestedVcpus).ToNot(BeNil())
+			// Enforcement refuses at the parent's limit of 4, so that is the limit the
+			// report shows, with the room the parent leaves:
+			Expect(nestedVcpus.GetLimit()).To(Equal(int64(4)))
+			Expect(nestedVcpus.GetUsage()).To(Equal(int64(1)))
+			Expect(nestedVcpus.GetRoom()).To(Equal(int64(3)))
+			Expect(nestedVcpus.GetOverLimit()).To(BeFalse())
 		})
 
 		It("lists a dimension that has a limit and no usage", func() {
 			// The report covers every dimension with a default, an override or usage,
 			// so a dimension with a limit and nothing counted still appears:
-			_, err := limitsServer.SetDefault(ctx, publicv1.QuotaLimitsSetDefaultRequest_builder{
-				Object: publicv1.QuotaDefaultLimit_builder{
-					Spec: publicv1.QuotaDefaultLimitSpec_builder{
-						Dimension: "images.count",
-						Value:     proto.Int64(1000000),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
 			createLimit("team", "storage.fast.gib", 7)
 			response, err := usageServer.Get(ctx, publicv1.QuotaUsageGetRequest_builder{
 				Tenant: testTenant,
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 
-			// The tenant sees the default for a dimension nothing uses:
+			// The tenant sees the suite-seeded default for a dimension nothing uses:
 			images := findDimension(response.GetReport().GetDimensions(), "images.count")
 			Expect(images).ToNot(BeNil())
 			Expect(images.GetLimit()).To(Equal(int64(1000000)))

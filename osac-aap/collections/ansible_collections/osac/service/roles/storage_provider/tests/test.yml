@@ -1570,7 +1570,12 @@
         - {target: caas, provider: pure, expected: osac_csi_storage}
         - {target: caas, provider: osac_csi, expected: osac_csi_storage}
         - {target: caas, provider: lvms, expected: lvms_storage}
+        # a guest-native provider keeps its role whether the name carries the
+        # _storage suffix or uses a hyphen
+        - {target: caas, provider: lvms_storage, expected: lvms_storage}
+        - {target: caas, provider: lvms-storage, expected: lvms_storage}
         # regression guards (current behaviour)
+        - {target: vmaas, provider: lvms-storage, expected: lvms_storage}
         - {target: vmaas, provider: vast, expected: vast_storage}
         - {target: vmaas, provider: lvms, expected: lvms_storage}
         - {target: vmaas, provider: osac_csi_driver, expected: osac_csi_driver_storage}

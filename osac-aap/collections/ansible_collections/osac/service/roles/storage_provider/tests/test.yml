@@ -1784,6 +1784,118 @@
               {{ ansible_failed_result.msg | default('unknown error') }}
             success_msg: "Empty endpoint correctly rejected"
 
+# ensure_storage_class creates CSI resources and VMS objects that need admin
+# credentials, so in tenant-credentials-only mode it must refuse before any
+# Kubernetes read or VAST call. This play runs with no reachable cluster, so
+# reaching a hub read fails it with a different message.
+- name: Test storage_provider -- ensure_storage_class is unsupported without admin credentials
+  hosts: localhost
+  gather_facts: false
+
+  pre_tasks:
+    - name: Clear any structured failure artifact from earlier scenarios
+      ansible.builtin.set_fact:
+        osac_storage_provider_failures: []
+
+  tasks:
+    - name: Run ensure_storage_class tenant-credentials-only test
+      block:
+        - name: Attempt ensure_storage_class with an endpoint and no admin credentials
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-tco
+            storage_provider_backend_connections:
+              be-tco:
+                endpoint: "vast.invalid:443"
+            storage_provider_action: ensure_storage_class
+            tenant_name: "tenant-tco"
+            tenant_namespace: "osac-tenants"
+
+        - name: Fail test if ensure_storage_class was not refused
+          ansible.builtin.fail:
+            msg: "ensure_storage_class must be refused without admin credentials"
+
+      rescue:
+        - name: Verify the explicit unsupported message
+          ansible.builtin.assert:
+            that:
+              - "'not supported without admin credentials' in (ansible_failed_result.msg | default(''))"
+              - "'be-tco' in (ansible_failed_result.msg | default(''))"
+            fail_msg: "Unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "ensure_storage_class refused with the explicit message"
+
+        - name: Verify the structured failure artifact was emitted
+          ansible.builtin.assert:
+            that:
+              - osac_storage_provider_failures is defined
+              - osac_storage_provider_failures | length > 0
+              - osac_storage_provider_failures[0].reason == 'storage_class_unsupported_without_admin_credentials'
+              - "'default' in osac_storage_provider_failures[0].tiers"
+              - "'be-tco' in osac_storage_provider_failures[0].backend_ids"
+            fail_msg: >-
+              osac_storage_provider_failures was not set as expected:
+              {{ osac_storage_provider_failures | default('undefined') }}
+            success_msg: "Structured failure artifact recorded the unsupported StorageClass request"
+
+# Admin-mode guard: with full credentials ensure_storage_class still takes its
+# existing path and does not hit the new refusal. Where it fails afterwards
+# depends on whether a cluster is reachable, so only the refusal is excluded.
+- name: Test storage_provider -- ensure_storage_class with admin credentials keeps its existing path
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _admin_guard_secret: "mock-admin-password"
+
+  pre_tasks:
+    - name: Clear any structured failure artifact from earlier scenarios
+      ansible.builtin.set_fact:
+        osac_storage_provider_failures: []
+
+  tasks:
+    - name: Run ensure_storage_class admin-mode guard
+      block:
+        - name: Attempt ensure_storage_class with full admin credentials
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-admin
+            storage_provider_backend_connections:
+              be-admin:
+                endpoint: "vast.invalid:443"
+                username: "admin"
+                password: "{{ _admin_guard_secret }}"
+            storage_provider_action: ensure_storage_class
+            tenant_name: "tenant-admin"
+            tenant_namespace: "osac-tenants"
+
+        - name: Fail test if ensure_storage_class succeeded without a cluster
+          ansible.builtin.fail:
+            msg: "ensure_storage_class cannot succeed with no cluster and an unreachable VAST endpoint"
+
+      rescue:
+        - name: Verify the failure is not the new refusal
+          ansible.builtin.assert:
+            that:
+              - "'not supported without admin credentials' not in (ansible_failed_result.msg | default(''))"
+              - >-
+                osac_storage_provider_failures | default([])
+                | selectattr('reason', 'equalto', 'storage_class_unsupported_without_admin_credentials')
+                | list | length == 0
+            fail_msg: >-
+              Admin-mode ensure_storage_class hit the tenant-credentials-only refusal:
+              {{ ansible_failed_result.msg | default('unknown') }}
+            success_msg: "Admin-mode ensure_storage_class did not take the tenant-credentials-only refusal"
+
 # ──────────────────────────────────────────────────────────────
 # Tenant-credentials-only mode: setup must skip all VAST work when the
 # backend's connection entry has an endpoint and no username or password.

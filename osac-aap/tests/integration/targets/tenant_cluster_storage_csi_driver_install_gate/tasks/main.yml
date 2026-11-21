@@ -12,9 +12,12 @@
 # the real Helm install via csi_driver_install_override (same override mechanism
 # tenant_storage_backend_csi_driver_install_wiring already tests for the tenant storage backend call
 # site), then runs the rest of the playbook (the real osac.service.storage_provider
-# ensure_storage_class dispatch) for real against the mock VMS server for BOTH cases --
-# proving the gate is the only thing that differs, not that storage provisioning itself
-# is broken for one of the two kinds.
+# ensure_storage_class dispatch) for real in BOTH cases. The Tenant case dispatches to
+# vast_storage against the mock VMS server. The ClusterOrder case is a CaaS dispatch
+# (provisioning target caas): a vast tier is served by osac.templates.osac_csi_storage,
+# which needs no VMS call and no admin credential, only the CSIDriver object the OSAC CSI
+# driver registers (faked here with a fixture) and the StorageClass it creates. That case
+# then runs the delete playbook and asserts the StorageClass is removed.
 #
 # _cluster_name is pre-set for both cases to bypass vast_storage's OpenShift
 # Infrastructure-object discovery (this kind-based test cluster is vanilla Kubernetes,
@@ -501,16 +504,18 @@
         vast_storage_validate_certs: false
         csi_driver_install_enabled: true
         csi_driver_install_lvms_storage_class_enabled: true
+        # Isolates this case from the hub install test that owns csi.osac.openshift.io on
+        # the same cluster. The Tenant cases above run earlier and are unaffected.
+        osac_csi_driver_name: "csi.tcs-test.osac.openshift.io"
 
     - name: Delete any pre-existing test resources (clean slate)
       block:
-        - name: Delete hub Secret if exists
+        - name: Delete OSAC CSI StorageClass if exists
           kubernetes.core.k8s:
             state: absent
-            api_version: v1
-            kind: Secret
-            name: "vast-tenant-config-test-tcs-clusterorder-be-tcs-clusterorder"
-            namespace: "osac-system"
+            api_version: storage.k8s.io/v1
+            kind: StorageClass
+            name: "osac-test-tcs-clusterorder-default"
           failed_when: false
 
         - name: Delete CSI Secret if exists
@@ -530,27 +535,22 @@
             name: "vast-nfs-test-tcs-clusterorder-default"
           failed_when: false
 
-    - name: Create hub Secret fixture (simulates output from setup action)
+    - name: Register the OSAC CSI driver (CSIDriver fixture the driver install would create)
       kubernetes.core.k8s:
         state: present
         definition:
-          apiVersion: v1
-          kind: Secret
+          apiVersion: storage.k8s.io/v1
+          kind: CSIDriver
           metadata:
-            name: "vast-tenant-config-test-tcs-clusterorder-be-tcs-clusterorder"
-            namespace: "osac-system"
-            labels:
-              app.kubernetes.io/managed-by: osac-aap
-              osac.openshift.io/tenant: "test-tcs-clusterorder"
-          type: Opaque
-          stringData:
-            tenant_uid_hash: "c3d4e5f6"
-            vast_tenant_id: "333"
-            vip_pool_name: "osac-test-pool"
-            vast_endpoint: "127.0.0.1:18443"
-            tenant_manager_username: "osac-test-tcs-clusterorder"
-            tenant_manager_password: "{{ lookup('env', 'OSAC_TEST_TENANT_PASSWORD') }}"
-            view_policy_name: "osac-test-tcs-clusterorder-nfs"
+            name: "{{ osac_csi_driver_name }}"
+          spec:
+            attachRequired: false
+
+    - name: Reset the mock VMS call log
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_reset"
+        validate_certs: false
+        method: POST
 
     - name: Clear override log
       ansible.builtin.file:
@@ -605,7 +605,8 @@
           name: osac.test_overrides.csi_driver_install_hooks
           tasks_from: install.yaml
 
-    - name: Remove the setup VAST registration so legacy CaaS install is exercised
+    # Removed so a VAST CSI driver registered by this dispatch would be visible below.
+    - name: Remove the setup VAST NFS CSI driver registration
       kubernetes.core.k8s:
         state: absent
         api_version: storage.k8s.io/v1
@@ -639,49 +640,142 @@
           storage. Log: {{ _override_log_co }}
         success_msg: "csi_driver_install correctly skipped for the ClusterOrder (guest-cluster) dispatch"
 
-    - name: Assert legacy VAST CSI installation remains enabled for ClusterOrder
+    - name: Assert no VAST CSI operator install ran for the ClusterOrder dispatch
       ansible.builtin.assert:
         that:
-          - "'native_csi_driver_install' in _override_log_co"
-          - "'drivers=[\"csi.vastdata.com\"]' in _override_log_co"
-          - "'package=vast-csi-operator' in _override_log_co"
-          - "'providers=[\"vast\"]' in _override_log_co"
+          - "'native_csi_driver_install' not in _override_log_co"
+          - "'package=vast-csi-operator' not in _override_log_co"
         fail_msg: >-
-          The legacy CaaS VAST install must use the provider-native VAST installer
-          without invoking the generic Tenant/VMaaS csi_driver_install path.
-          Log: {{ _override_log_co }}
-        success_msg: "Legacy VAST CSI installation ran for the CaaS ClusterOrder guest cluster"
+          A ClusterOrder dispatch with a vast tier must not install the VAST CSI operator on
+          the guest cluster; the OSAC CSI path serves it. Log: {{ _override_log_co }}
+        success_msg: "No VAST CSI operator install ran for the ClusterOrder dispatch"
 
-    - name: Read the VAST NFS CSI driver created by the legacy installer override
+    - name: Read the VAST NFS CSI driver registration after the ClusterOrder dispatch
       kubernetes.core.k8s_info:
         api_version: storage.k8s.io/v1
         kind: CSIDriver
         name: csi.vastdata.com
       register: _co_vast_csi_driver
 
-    - name: Assert legacy VAST installation registered the CSI driver
+    - name: Assert the ClusterOrder dispatch registered no VAST CSI driver on the guest cluster
       ansible.builtin.assert:
         that:
-          - _co_vast_csi_driver.resources | length == 1
-        fail_msg: "The legacy CaaS VAST installer did not register csi.vastdata.com"
-        success_msg: "The legacy CaaS VAST CSI driver is registered on the guest cluster"
+          - _co_vast_csi_driver.resources | length == 0
+        fail_msg: "The ClusterOrder dispatch registered csi.vastdata.com on the guest cluster"
+        success_msg: "No VAST CSI driver was registered on the guest cluster"
 
-    - name: Read StorageClass created by the real storage_provider dispatch that still ran
+    - name: Read the OSAC CSI StorageClass created by the CaaS dispatch
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "osac-test-tcs-clusterorder-default"
+      register: _co_storage_class
+
+    - name: Assert the ClusterOrder dispatch created the StorageClass through the OSAC CSI path
+      ansible.builtin.assert:
+        that:
+          - _co_storage_class.resources | length == 1
+          - _co_storage_class.resources[0].provisioner == 'csi.tcs-test.osac.openshift.io'
+        fail_msg: >-
+          StorageClass 'osac-test-tcs-clusterorder-default' with provisioner
+          'csi.tcs-test.osac.openshift.io' was not created -- a ClusterOrder dispatch with a
+          vast tier must be served by osac_csi_storage. Found: {{ _co_storage_class.resources | to_json }}
+        success_msg: "The ClusterOrder dispatch created the OSAC CSI StorageClass"
+
+    - name: Read the vendor VAST StorageClass the old path created
       kubernetes.core.k8s_info:
         api_version: storage.k8s.io/v1
         kind: StorageClass
         name: "vast-nfs-test-tcs-clusterorder-default"
-      register: _co_storage_class
+      register: _co_vendor_storage_class
 
-    - name: Assert storage_provider still ran for real even though csi_driver_install correctly skipped
+    - name: Read the vendor VAST CSI Secret the old path created
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-csi-test-tcs-clusterorder-be-tcs-clusterorder"
+        namespace: "openshift-osac-storage"
+      register: _co_vendor_secret
+
+    - name: Read every Secret labelled with the tenant, in all namespaces
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        label_selectors:
+          - "osac.openshift.io/tenant=test-tcs-clusterorder"
+      register: _co_tenant_secrets
+      no_log: true
+
+    - name: Read the mock VMS call log
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _co_vms_calls
+
+    - name: Assert the OSAC CSI path used no vendor resources, no guest credential and no VMS call
       ansible.builtin.assert:
         that:
-          - _co_storage_class.resources | length == 1
+          - _co_vendor_storage_class.resources | length == 0
+          - _co_vendor_secret.resources | length == 0
+          - _co_tenant_secrets.resources | length == 0
+          - _co_vms_calls.json == []
         fail_msg: >-
-          StorageClass 'vast-nfs-test-tcs-clusterorder-default' was not created -- the gate
-          skipping csi_driver_install should not have any effect on the storage_provider
-          dispatch that follows it.
-        success_msg: "storage_provider's real ensure_storage_class dispatch succeeded for the ClusterOrder dispatch too"
+          The ClusterOrder dispatch must not use the vendor VAST path. Vendor StorageClasses:
+          {{ _co_vendor_storage_class.resources | length }}, vendor Secrets:
+          {{ _co_vendor_secret.resources | length }}, tenant-labelled Secrets:
+          {{ _co_tenant_secrets.resources | length }}, mock VMS calls: {{ _co_vms_calls.json | to_json }}
+        success_msg: "No vendor StorageClass, no credential Secret and no VMS call on the OSAC CSI path"
+
+# ── Teardown stage (ClusterOrder case): the delete playbook removes the StorageClass ──
+- name: "Tenant Cluster Storage CSI Driver Install Gate - Setup teardown (ClusterOrder case)"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Set test variables (ClusterOrder/CaaS teardown)
+      ansible.builtin.set_fact:
+        osac_job_vars:
+          resource:
+            apiVersion: osac.openshift.io/v1alpha1
+            kind: ClusterOrder
+            metadata:
+              name: test-tcs-clusterorder
+              namespace: osac-devel
+              uid: test-uid-tcs-clusterorder
+              annotations:
+                osac.openshift.io/tenant: test-tcs-clusterorder
+            spec: {}
+          storage_tier_definitions:
+            - name: default
+              protocol: nfs
+              provider: vast
+              backend_id: be-tcs-clusterorder
+          # Same reachable-kubeconfig requirement as the create case above.
+          admin_kubeconfig: "{{ lookup('file', lookup('env', 'KUBECONFIG') | default(lookup('env', 'HOME') + '/.kube/config', true)) }}"
+
+- name: Run tenant cluster storage delete playbook with a ClusterOrder dispatch
+  ansible.builtin.import_playbook: ../../../../../playbook_osac_delete_tenant_cluster_storage.yml
+
+- name: "Tenant Cluster Storage CSI Driver Install Gate - Verify teardown (ClusterOrder case)"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Read the OSAC CSI StorageClass after teardown
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "osac-test-tcs-clusterorder-default"
+      register: _co_storage_class_after_teardown
+
+    - name: Assert teardown removed the OSAC CSI StorageClass
+      ansible.builtin.assert:
+        that:
+          - _co_storage_class_after_teardown.resources | length == 0
+        fail_msg: "StorageClass 'osac-test-tcs-clusterorder-default' still exists after the ClusterOrder teardown"
+        success_msg: "ClusterOrder teardown removed the OSAC CSI StorageClass"
 
 # ── Cleanup (ClusterOrder case) ──
 - name: "Tenant Cluster Storage CSI Driver Install Gate - Cleanup (ClusterOrder case)"
@@ -689,7 +783,23 @@
   gather_facts: false
 
   tasks:
-    - name: Delete NFS StorageClass
+    - name: Delete CSIDriver fixture
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: CSIDriver
+        name: "csi.tcs-test.osac.openshift.io"
+      failed_when: false
+
+    - name: Delete OSAC CSI StorageClass
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "osac-test-tcs-clusterorder-default"
+      failed_when: false
+
+    - name: Delete vendor NFS StorageClass
       kubernetes.core.k8s:
         state: absent
         api_version: storage.k8s.io/v1

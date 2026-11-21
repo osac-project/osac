@@ -74,6 +74,10 @@ func (r *SignalRequest[O]) do(ctx context.Context) (response *SignalResponse, er
 	}
 	fmt.Fprintf(&r.sql.filter, ` id = $%d`, len(r.sql.params))
 
+	if err = r.setLocalVariables(ctx); err != nil {
+		return
+	}
+
 	// Mark the update as a signal for the change trigger. SET LOCAL limits the flag to the current transaction, and we
 	// clear it immediately after the update so that later operations in the same transaction remain regular updates.
 	_, err = r.exec(ctx, signalOpType, "set local osac.signal = 'on'")

@@ -126,6 +126,9 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 		version         int32
 		data            []byte
 	)
+	if err = r.setLocalVariables(ctx); err != nil {
+		return
+	}
 	err = func() (err error) {
 		start := time.Now()
 		row := r.queryRow(ctx, updateOpType, sql, r.sql.params...)

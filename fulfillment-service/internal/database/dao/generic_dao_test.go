@@ -143,6 +143,33 @@ var _ = Describe("Generic DAO", func() {
 		createProject(ctx, "my-tenant", "my-project")
 	})
 
+	It("sets and clears a local variable in the mutation's PostgreSQL transaction", func() {
+		var value any = "O'Reilly"
+		generic, err := NewGenericDAO[*testsv1.Object]().
+			SetLogger(logger).
+			SetTenancyLogic(tenancy).
+			AddLocalVariable("test", func(context.Context) (any, error) { return value, nil }).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		response, err := generic.Create().SetObject(testsv1.Object_builder{
+			Metadata: testsv1.Metadata_builder{Tenant: "my-tenant", Name: "my-object"}.Build(),
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		var stored string
+		readSetting := func() string {
+			Expect(tx.QueryRow(ctx, "select current_setting($1, true)", "osac.test").Scan(&stored)).To(Succeed())
+			return stored
+		}
+		Expect(readSetting()).To(Equal(`"O'Reilly"`))
+
+		value = nil
+		_, err = generic.Update().SetObject(response.GetObject()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(readSetting()).To(BeEmpty())
+	})
+
 	Describe("Creation", func() {
 		It("Can be built if all the required parameters are set", func() {
 			generic, err := NewGenericDAO[*testsv1.Object]().

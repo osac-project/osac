@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import suppress
 from uuid import uuid4
 
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
+    wait_for_grpc_virtual_network_ready,
     wait_for_security_group_deletion,
     wait_for_subnet_cr,
     wait_for_subnet_deletion,
@@ -22,9 +24,16 @@ def create_and_wait_for_virtual_network(
     grpc: GRPCClient, k8s_hub_client: K8sClient, name: str, ipv4_cidr: str
 ) -> tuple[str, str]:
     virtual_network_id = grpc.create_virtual_network(name=name, ipv4_cidr=ipv4_cidr)
-    virtual_network_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=virtual_network_id)
-    wait_for_virtual_network_ready(k8s=k8s_hub_client, name=virtual_network_cr_name)
-    return virtual_network_id, virtual_network_cr_name
+    virtual_network_cr_name: str | None = None
+    try:
+        virtual_network_cr_name = wait_for_virtual_network_cr(k8s=k8s_hub_client, uuid=virtual_network_id)
+        wait_for_virtual_network_ready(k8s=k8s_hub_client, name=virtual_network_cr_name)
+        wait_for_grpc_virtual_network_ready(grpc=grpc, vn_id=virtual_network_id)
+        return virtual_network_id, virtual_network_cr_name
+    except Exception:
+        with suppress(Exception):
+            delete_and_wait_for_virtual_network(grpc, k8s_hub_client, virtual_network_id, virtual_network_cr_name)
+        raise
 
 
 def create_and_wait_for_subnet(

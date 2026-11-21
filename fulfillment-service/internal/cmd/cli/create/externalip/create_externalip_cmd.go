@@ -104,7 +104,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	externalIP := publicv1.ExternalIP_builder{
 		Metadata: metautil.ForCreate(ctx, c.args.name).Build(),
 		Spec: publicv1.ExternalIPSpec_builder{
-			Pool: &publicv1.ExternalIPPoolReference{Id: pool.GetId()},
+			Pool: &publicv1.ExternalIPPoolReference{
+				Id: pool.GetId(), Tenant: pool.GetMetadata().GetTenant(),
+			},
 		}.Build(),
 	}.Build()
 

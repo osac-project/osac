@@ -4853,6 +4853,7 @@ var _ = Describe("Private compute instances server", func() {
 			Expect(eip.GetMetadata().GetLabels()[autoCreatedForLabel]).To(Equal(ciID))
 			Expect(eip.GetMetadata().GetLabels()[autoCreatedKindLabel]).To(Equal("compute_instance"))
 			Expect(eip.GetSpec().GetPool().GetId()).To(Equal("pool-1"))
+			Expect(eip.GetSpec().GetPool().GetTenant()).To(Equal(auth.SharedTenant))
 			Expect(eip.GetStatus().GetAttached()).To(BeFalse())
 
 			// The workload is still provisioning, so the attachment must be deferred.

@@ -2,8 +2,10 @@
 # Renders the Helm values for the OSAC CSI driver release. Included by
 # install_driver.yaml before its Helm task.
 #
-# Requires: fulfillment_endpoint, fulfillment_issuer_url, and the
-# osac_csi_driver_* defaults of this role.
+# Requires: the osac_csi_driver_* defaults of this role.
+# Optional: fulfillment_endpoint and fulfillment_issuer_url. They are required
+# for the hub-controller install; when unset or empty (guest node mode) they are
+# omitted from the values.
 #
 # Sets the fact _osac_csi_driver_helm_values: the computed values with
 # osac_csi_driver_extra_values merged over them. The merge is recursive and the
@@ -25,19 +27,23 @@
       {{ _osac_csi_driver_computed_values
          | combine(osac_csi_driver_extra_values | default({}), recursive=True) }}
   vars:
+    _osac_csi_driver_fulfillment_static:
+      credentials:
+        secretName: "{{ osac_csi_driver_credentials_secret_name }}"
+        clientIdKey: client-id
+        clientSecretKey: client-secret
+      tls:
+        insecureSkipVerify: "{{ osac_csi_driver_fulfillment_tls_insecure | bool }}"
     _osac_csi_driver_computed_values:
       driverName: "{{ osac_csi_driver_name }}"
       namespace: "{{ osac_csi_driver_namespace }}"
       controller:
-        fulfillment:
-          endpoint: "{{ fulfillment_endpoint }}"
-          issuerUrl: "{{ fulfillment_issuer_url }}"
-          credentials:
-            secretName: "{{ osac_csi_driver_credentials_secret_name }}"
-            clientIdKey: client-id
-            clientSecretKey: client-secret
-          tls:
-            insecureSkipVerify: "{{ osac_csi_driver_fulfillment_tls_insecure | bool }}"
+        fulfillment: >-
+          {{ ({'endpoint': fulfillment_endpoint}
+              if (fulfillment_endpoint | default('') | length > 0) else {})
+             | combine({'issuerUrl': fulfillment_issuer_url}
+                       if (fulfillment_issuer_url | default('') | length > 0) else {})
+             | combine(_osac_csi_driver_fulfillment_static) }}
       node:
         vendorSockets: "{{ _osac_csi_derived_vendor_sockets }}"
   no_log: true

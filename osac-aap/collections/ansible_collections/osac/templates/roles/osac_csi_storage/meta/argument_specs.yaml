@@ -16,10 +16,10 @@ argument_specs:
         required: false
         description:
           - Fulfillment-service endpoint the driver controller connects to.
-          - Needed by the mode of the chart that runs the controller; not required otherwise.
+          - Required for the hub-controller install; omitted from the values when unset (guest node mode).
       fulfillment_issuer_url:
         type: str
         required: false
         description:
           - OAuth2 issuer URL the driver controller uses to authenticate.
-          - Needed by the mode of the chart that runs the controller; not required otherwise.
+          - Required for the hub-controller install; omitted from the values when unset (guest node mode).

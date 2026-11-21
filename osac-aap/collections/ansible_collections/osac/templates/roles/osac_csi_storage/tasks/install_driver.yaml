@@ -9,7 +9,11 @@
 #   _remote_kubeconfig_insecure       skip TLS verification of the target API (default false)
 #   tenant_name                       labels the driver namespace (required)
 #   fulfillment_endpoint              fulfillment-service endpoint for the controller
+#                                     (required for the hub-controller install;
+#                                     omitted from the values when unset)
 #   fulfillment_issuer_url            OAuth2 issuer URL for the controller
+#                                     (required for the hub-controller install;
+#                                     omitted from the values when unset)
 #   osac_csi_driver_extra_values      dict merged over the computed Helm values
 #                                     (default {}); see _render_driver_values.yaml
 #

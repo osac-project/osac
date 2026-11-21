@@ -300,7 +300,7 @@ rotation requires teardown + re-provisioning.
 this mode only when its entry in `storage_backend_connections` is a mapping with a
 non-blank `endpoint` and a blank `username` and a blank `password`. Blank means missing,
 null or an empty string; there is no trimming, so whitespace counts as present. Any other
-shape, such as only one of the two credentials, a null or string entry, `{}` or a blank
+incomplete shape, such as only one of the two credentials, a null or string entry, `{}` or a blank
 endpoint, is not this mode and fails the "missing one or more of endpoint,
 username, password" validation. In this mode `setup` and `teardown_backend` make no VAST
 calls, do not run the OLM-based vendor CSI operator install (`ensure_csi_operator.yaml`)

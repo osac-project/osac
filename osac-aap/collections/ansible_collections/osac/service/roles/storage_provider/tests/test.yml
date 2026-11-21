@@ -1552,9 +1552,8 @@
 # ──────────────────────────────────────────────────────────────
 # Regression guards for the VAST credential-less (tenant-credentials-only)
 # mode. Each guard pairs a connection shape that must NOT select that mode
-# with today's validation failure. They pass before and after the mode is
-# implemented. Every guard fails with the same message: the existing
-# "missing one or more of endpoint, username, password" validation.
+# with the existing validation failure. Every guard fails with the same
+# message: "missing one or more of endpoint, username, password".
 # ──────────────────────────────────────────────────────────────
 
 # Regression guard (a): endpoint and username, no password key.
@@ -1786,8 +1785,8 @@
 
 # ensure_storage_class creates CSI resources and VMS objects that need admin
 # credentials, so in tenant-credentials-only mode it must refuse before any
-# Kubernetes read or VAST call. This play runs with no reachable cluster, so
-# reaching a hub read fails it with a different message.
+# Kubernetes read or VAST call. If the refusal is missing, the role fails
+# later (hub Secret read or credential validation) with a different message.
 - name: Test storage_provider -- ensure_storage_class is unsupported without admin credentials
   hosts: localhost
   gather_facts: false
@@ -1878,7 +1877,7 @@
             tenant_name: "tenant-admin"
             tenant_namespace: "osac-tenants"
 
-        - name: Fail test if ensure_storage_class succeeded without a cluster
+        - name: Fail test if ensure_storage_class succeeded against an unreachable VAST endpoint
           ansible.builtin.fail:
             msg: "ensure_storage_class cannot succeed with no cluster and an unreachable VAST endpoint"
 
@@ -1899,7 +1898,7 @@
 # ──────────────────────────────────────────────────────────────
 # Tenant-credentials-only mode: setup must skip all VAST work when the
 # backend's connection entry has an endpoint and no username or password.
-# No block/rescue: a role failure is the RED signal. vast.invalid does not
+# No block/rescue: a role failure fails the play. vast.invalid does not
 # resolve, so any VAST call would fail the play. The hub vendor CSI step
 # stays out of the run (storage_provider_csi_backends_enabled defaults to
 # false).
@@ -1936,7 +1935,7 @@
           - _vast_vms_conn is not defined or _vast_vms_conn | length == 0
         fail_msg: >-
           Setup without admin credentials must report tenant_credentials_only: true
-          and build no VMS connection.
+          and no vast_tenant_id.
         success_msg: "Credential-less entry handled in tenant-credentials-only mode"
 
 - name: Test storage_provider -- setup skips VAST work for null VAST credentials
@@ -1973,7 +1972,7 @@
           - _vast_vms_conn is not defined or _vast_vms_conn | length == 0
         fail_msg: >-
           Setup with null admin credentials must report tenant_credentials_only: true
-          and build no VMS connection.
+          and no vast_tenant_id.
         success_msg: "Null credentials handled in tenant-credentials-only mode"
 
 # ──────────────────────────────────────────────────────────────

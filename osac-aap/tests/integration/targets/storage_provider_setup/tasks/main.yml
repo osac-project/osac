@@ -333,7 +333,7 @@
 # ── Test: tenant-credentials-only setup makes no VAST calls ──
 # A connection entry with an endpoint and no username or password selects the
 # mode. The mock VMS call log must stay empty and no hub Secret may be written.
-# The run has no block/rescue: a role failure is the RED signal.
+# No block/rescue: a role failure fails the play.
 - name: "Storage Provider Setup - Tenant-credentials-only setup"
   hosts: localhost
   gather_facts: false

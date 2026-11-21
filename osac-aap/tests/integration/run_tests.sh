@@ -276,13 +276,13 @@ else
   FAILED+=("storage_provider_namespace_defaults")
 fi
 
-# Validation-only tests for the storage_provider role's dispatcher logic. They need no mock
-# VMS server and run unconditionally (not gated behind STORAGE_TESTS_ENABLED), but the
-# tenant-credentials-only setup plays read the hub Secret and need the Kind cluster. Requires two separate invocations: ansible-core raises a
-# runner-level ERROR! when include_role targets a genuinely-missing role name (the "invalid
-# provider" scenario), which aborts the whole process even though that scenario's own rescue
-# block already passed. The second invocation resumes at the next scenario to cover
-# everything after it.
+# Dispatcher tests for the storage_provider role. They need no mock VMS server and run
+# unconditionally (not gated behind STORAGE_TESTS_ENABLED); the tenant-credentials-only
+# setup plays read the hub Secret, so they need the Kind cluster. Requires two separate
+# invocations: ansible-core raises a runner-level ERROR! when include_role targets a
+# genuinely-missing role name (the "invalid provider" scenario), which aborts the whole
+# process even though that scenario's own rescue block already passed. The second
+# invocation resumes at the next scenario to cover everything after it.
 STORAGE_PROVIDER_UNIT_TEST="${SCRIPT_DIR}/../../collections/ansible_collections/osac/service/roles/storage_provider/tests/test.yml"
 
 if run_ansible_playbook "${STORAGE_PROVIDER_UNIT_TEST}" -v -e storage_provider_csi_backends_enabled=false; then

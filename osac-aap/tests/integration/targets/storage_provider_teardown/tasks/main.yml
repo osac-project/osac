@@ -1053,8 +1053,9 @@
 # mode. The dispatcher's ignore_errors on its looped include_tasks does not catch
 # failures raised inside included files (verified on ansible-core 2.18.5), so
 # cases A to C call the vast_storage role directly to observe the role's own
-# failure and message; case D runs through the dispatcher. Each case is its own play with its tenant and backend as play vars,
-# so a run started with --start-at-task at its clean slate has what it needs.
+# failure and message; case D runs through the dispatcher. Each case is its own
+# play with its tenant and backend as play vars, so a run started with
+# --start-at-task at its clean slate has what it needs.
 
 # Case A: nothing to clean up, so the role skips without error and no VAST calls.
 - name: "Storage Provider TCO Teardown - Case A, nothing to clean"

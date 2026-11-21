@@ -1,0 +1,25 @@
+---
+# Only the install_driver entry point declares arguments.
+argument_specs:
+  install_driver:
+    short_description: Install the OSAC CSI driver on a cluster with Helm
+    options:
+      osac_csi_driver_extra_values:
+        type: dict
+        default: {}
+        description:
+          - Helm values merged over the values this role computes.
+          - The merge is recursive and the caller's values win; a list here replaces the computed list.
+          - The caller sets this only from playbook or operator job vars, never from tenant-controlled input, and never with a VAST credential.
+      fulfillment_endpoint:
+        type: str
+        required: false
+        description:
+          - Fulfillment-service endpoint the driver controller connects to.
+          - Needed by the mode of the chart that runs the controller; not required otherwise.
+      fulfillment_issuer_url:
+        type: str
+        required: false
+        description:
+          - OAuth2 issuer URL the driver controller uses to authenticate.
+          - Needed by the mode of the chart that runs the controller; not required otherwise.

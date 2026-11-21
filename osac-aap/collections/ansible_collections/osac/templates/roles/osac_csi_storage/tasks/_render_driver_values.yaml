@@ -1,0 +1,43 @@
+---
+# Renders the Helm values for the OSAC CSI driver release. Included by
+# install_driver.yaml before its Helm task.
+#
+# Requires: fulfillment_endpoint, fulfillment_issuer_url, and the
+# osac_csi_driver_* defaults of this role.
+#
+# Sets the fact _osac_csi_driver_helm_values: the computed values with
+# osac_csi_driver_extra_values merged over them. The merge is recursive and the
+# caller's values win; a list in the extra values replaces the computed list.
+
+- name: Derive OSAC CSI driver vendor sockets configuration
+  ansible.builtin.set_fact:
+    _osac_csi_derived_vendor_sockets: >-
+      {% set _pairs = [] -%}
+      {% for _k, _v in osac_csi_driver_vendor_node_socket_paths.items() -%}
+      {% set _sock = _v if _v.endswith('.sock') else (_v ~ '/csi.sock') -%}
+      {% set _ = _pairs.append(_k ~ '=' ~ _sock) -%}
+      {% endfor -%}
+      {{ _pairs | sort | join(',') }}
+
+- name: Render OSAC CSI driver Helm values
+  ansible.builtin.set_fact:
+    _osac_csi_driver_helm_values: >-
+      {{ _osac_csi_driver_computed_values
+         | combine(osac_csi_driver_extra_values | default({}), recursive=True) }}
+  vars:
+    _osac_csi_driver_computed_values:
+      driverName: "{{ osac_csi_driver_name }}"
+      namespace: "{{ osac_csi_driver_namespace }}"
+      controller:
+        fulfillment:
+          endpoint: "{{ fulfillment_endpoint }}"
+          issuerUrl: "{{ fulfillment_issuer_url }}"
+          credentials:
+            secretName: "{{ osac_csi_driver_credentials_secret_name }}"
+            clientIdKey: client-id
+            clientSecretKey: client-secret
+          tls:
+            insecureSkipVerify: "{{ osac_csi_driver_fulfillment_tls_insecure | bool }}"
+      node:
+        vendorSockets: "{{ _osac_csi_derived_vendor_sockets }}"
+  no_log: true

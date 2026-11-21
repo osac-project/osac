@@ -44,6 +44,12 @@ osac_csi_driver_reclaim_policy: Delete
 # because the backend handles topology independently.
 osac_csi_driver_volume_binding_mode: Immediate
 
+# Extra Helm values for the install_driver entry point, merged recursively over the
+# computed values; the caller's values win and lists replace. The caller sets this
+# only from playbook or operator job vars, never from tenant-controlled input, and
+# never with a VAST credential.
+osac_csi_driver_extra_values: {}
+
 # Per-vendor node CSI socket paths for volume mounting on guest worker nodes,
 # matching csi_driver_install_vendor_node_socket_paths from OSAC-3290.
 osac_csi_driver_vendor_node_socket_paths:

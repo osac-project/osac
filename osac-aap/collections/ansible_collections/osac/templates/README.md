@@ -389,6 +389,20 @@ PersistentVolume or PersistentVolumeClaim still uses one of the tenant's
 StorageClasses. `teardown_backend` leaves the prepared SVM, accounts, and QoS policy
 groups untouched.
 
+**OSAC CSI provider specifics (`osac_csi_storage`):** The role creates and deletes
+per-tier StorageClasses on a CaaS tenant cluster and nothing else. It requires the
+OSAC CSI driver to be registered there already (a `CSIDriver` named
+`osac_csi_driver_name`); without it `ensure_storage_class` fails and records the
+reason `csi_driver_not_registered` in `osac_storage_provider_failures`. It places no
+credentials on the cluster, and its StorageClasses do not allow volume expansion.
+`teardown_cluster_storage` deletes only the tenant's StorageClasses. Installing the
+driver is a separate entry point, `tasks_from: install_driver`, with
+`uninstall_driver` as its counterpart; the StorageClass actions do not call either.
+`install_driver` accepts `osac_csi_driver_extra_values`, a dict merged recursively
+over the computed Helm values. The caller's values win, and a list replaces the
+computed list instead of merging. The caller fills it only from playbook or operator
+job vars, never from tenant-controlled input and never with a VAST credential.
+
 **Block encryption:** When `spec.blockEncryptionPassphrase` is provided in the Tenant CR
 event payload, the passphrase is persisted to the hub Secret during `setup` and used by
 `ensure_storage_class` to populate the CSI Secret's `passphrase` field and set

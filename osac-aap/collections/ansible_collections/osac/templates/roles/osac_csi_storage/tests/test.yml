@@ -372,31 +372,32 @@
             success_msg: "Nested extra values merged and siblings were preserved"
 
         # Case C: guest-node install. fulfillment_endpoint and fulfillment_issuer_url
-        # are unset (optional for install_driver); the render must succeed and leave
-        # both keys out of the values instead of failing on an undefined variable.
+        # are unset (optional for install_driver); the render must succeed and emit
+        # neither endpoint, issuerUrl, credentials nor tls: the chart fails to
+        # render when credentials are set without endpoint and issuer.
         - name: Render driver values with endpoint and issuer URL unset (guest node mode)
           ansible.builtin.include_role:
             name: osac.templates.osac_csi_storage
             tasks_from: _render_driver_values
           vars:
             osac_csi_driver_extra_values:
-              node:
-                mode: guestNode
+              mode: guestNode
 
-        - name: Assert the render omits endpoint and issuerUrl and keeps the rest
+        - name: Assert the render omits the fulfillment settings and keeps the rest
           ansible.builtin.assert:
             that:
               - _osac_csi_driver_helm_values is mapping
-              - _osac_csi_driver_helm_values.controller.fulfillment.endpoint is not defined
-              - _osac_csi_driver_helm_values.controller.fulfillment.issuerUrl is not defined
-              - _osac_csi_driver_helm_values.controller.fulfillment.credentials.secretName == 'osac-csi-driver-credentials'
-              - _osac_csi_driver_helm_values.controller.fulfillment.credentials.clientIdKey == 'client-id'
-              - _osac_csi_driver_helm_values.controller.fulfillment.credentials.clientSecretKey == 'client-secret'
-              - _osac_csi_driver_helm_values.controller.fulfillment.tls.insecureSkipVerify is sameas false
-              - _osac_csi_driver_helm_values.node.mode == 'guestNode'
+              - _osac_csi_driver_helm_values.mode == 'guestNode'
+              - _case_c_fulfillment.endpoint is not defined
+              - _case_c_fulfillment.issuerUrl is not defined
+              - _case_c_fulfillment.credentials is not defined
+              - _case_c_fulfillment.tls is not defined
               - _osac_csi_driver_helm_values.node.vendorSockets is search('^netapp=')
               - _osac_csi_driver_helm_values.driverName == 'csi.osac.openshift.io'
             fail_msg: >-
               Guest-node render is wrong.
               Got: {{ _osac_csi_driver_helm_values | default('undefined') | to_json }}
-            success_msg: "Render without endpoint and issuer URL omits both keys"
+            success_msg: "Render without endpoint and issuer URL omits credentials and tls"
+          vars:
+            _case_c_fulfillment: >-
+              {{ (_osac_csi_driver_helm_values.controller | default({})).fulfillment | default({}) }}

@@ -23,6 +23,9 @@ import (
 	"net/url"
 	"strings"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/osac-project/osac/fulfillment-service/internal/apiclient"
 )
 
@@ -429,6 +432,19 @@ func (c *Client) RemoveUserFromGroup(ctx context.Context, tenantName, idpUserID,
 
 	response, err := c.httpClient.DoRequest(ctx, http.MethodDelete, path, nil)
 	if err != nil {
+		// Map only Keycloak's confirmed missing-user response to NotFound.
+		var apiErr *apiclient.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			var body struct {
+				ErrorMessage string `json:"errorMessage"`
+			}
+			if json.Unmarshal([]byte(apiErr.Body), &body) == nil &&
+				body.ErrorMessage == "User does not exist" {
+				return status.Error(codes.NotFound, fmt.Sprintf(
+					"failed to remove user from organization group: %v", err,
+				))
+			}
+		}
 		return fmt.Errorf("failed to remove user from organization group: %w", err)
 	}
 	defer response.Body.Close()

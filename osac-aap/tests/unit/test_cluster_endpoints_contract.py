@@ -354,6 +354,46 @@ def test_actual_playbook_binds_controller_ingress_inputs_without_cluster_access(
         )
 
 
+def test_actual_playbook_replaces_the_service_api_port_without_duplication(tmp_path: Path) -> None:
+    address = "192.0.2.83"
+    fixture_token = secrets.token_urlsafe(32)
+    public_api = "https://api.hosted-order-a.rdu06.example.test:6443"
+    proc = _run_endpoint_playbook(
+        tmp_path,
+        "configure_guest_ingress",
+        {
+            "cluster_order": {
+                "metadata": {"name": "order-a", "namespace": "osac-system"},
+                "status": {
+                    "apiURL": public_api,
+                    "clusterReference": {
+                        "namespace": "cluster-a",
+                        "hostedClusterName": "hosted-order-a",
+                    },
+                },
+            },
+            "hosted_control_plane_namespace": "cluster-a-hcp",
+            "ingress_allocated_address": address,
+        },
+        {
+            "OSAC_TEST_HCP_NAMESPACE": "cluster-a-hcp",
+            "OSAC_TEST_INGRESS_ADDRESS": address,
+            "OSAC_TEST_KUBECONFIG_TOKEN": fixture_token,
+            "OSAC_TEST_EXPECTED_SERVER": public_api,
+        },
+    )
+
+    output = proc.stdout + proc.stderr
+    if fixture_token in output:
+        raise AssertionError("actual endpoint playbook output exposed the kubeconfig token")
+    if proc.returncode != 0:
+        safe_stdout = proc.stdout.replace(fixture_token, "[REDACTED]")
+        safe_stderr = proc.stderr.replace(fixture_token, "[REDACTED]")
+        raise AssertionError(
+            f"actual endpoint playbook failed:\n{safe_stdout}\n{safe_stderr}"
+        )
+
+
 def test_actual_playbook_reports_missing_service_network_kubeconfig(tmp_path: Path) -> None:
     proc = _run_endpoint_playbook(
         tmp_path,

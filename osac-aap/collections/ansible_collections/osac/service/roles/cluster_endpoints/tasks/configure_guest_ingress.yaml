@@ -29,10 +29,10 @@
       {{ _cluster_endpoint_kubeconfig_secret.resources[0].data.kubeconfig
          | b64decode
          | regex_replace(
-             'https://kube-apiserver(?=[:/]|$)',
+             'https://kube-apiserver(?::[0-9]+)?',
              hosted_cluster_api_url
              if hosted_cluster_api_url | default('') | length > 0
-             else 'https://kube-apiserver.' ~ hosted_control_plane_namespace ~ '.svc')
+             else 'https://kube-apiserver.' ~ hosted_control_plane_namespace ~ '.svc:6443')
          | from_yaml }}
   no_log: true
 

@@ -362,16 +362,11 @@ func (n *NodeServer) routeFromContext(volumeID string, volumeContext map[string]
 	if err != nil {
 		return "", nodeRoute{}, err
 	}
-	backend := volumeContext[backendContextKey]
-	vendorVolumeID, err := resolveVendorVolumeID(volumeID, backend, volumeContext)
-	if err != nil {
-		return "", nodeRoute{}, err
-	}
 	return socketPath, nodeRoute{
 		Version:        nodeRouteVersion,
-		Backend:        backend,
+		Backend:        volumeContext[backendContextKey],
 		Protocol:       strings.ToLower(volumeContext[protocolContextKey]),
-		VendorVolumeID: vendorVolumeID,
+		VendorVolumeID: resolveVendorVolumeID(volumeID, volumeContext),
 	}, nil
 }
 
@@ -404,20 +399,15 @@ func (n *NodeServer) saveRoute(volumeID string, route nodeRoute) error {
 }
 
 // resolveVendorVolumeID returns the vendor's volume ID from the volume
-// context. lvms volumes without one fall back to the CSI volume ID; every
-// other backend must carry "osac.volume-id".
-func resolveVendorVolumeID(volumeID, backend string, volumeContext map[string]string) (string, error) {
+// context, falling back to the CSI volume ID when none is recorded.
+func resolveVendorVolumeID(volumeID string, volumeContext map[string]string) string {
 	if vendorVolumeID := strings.TrimSpace(volumeContext[topolvmVolumeIDContextKey]); vendorVolumeID != "" {
-		return vendorVolumeID, nil
+		return vendorVolumeID
 	}
 	if vendorVolumeID := strings.TrimSpace(volumeContext[vendorVolumeIDContextKey]); vendorVolumeID != "" {
-		return vendorVolumeID, nil
+		return vendorVolumeID
 	}
-	if backend == lvmsProvider {
-		return volumeID, nil
-	}
-	return "", status.Errorf(codes.InvalidArgument,
-		"volume context missing required key %q for backend %q", vendorVolumeIDContextKey, backend)
+	return volumeID
 }
 
 // checkVIPReachable dials the VIP pool of an NFS volume on the NFS port

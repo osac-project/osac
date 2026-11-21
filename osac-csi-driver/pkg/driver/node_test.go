@@ -874,32 +874,15 @@ func TestNodeRoutesByProtocol(t *testing.T) {
 	}
 }
 
-func TestNodeRequiresVendorVolumeID(t *testing.T) {
-	for _, protocol := range []string{"nfs", "block"} {
-		t.Run(protocol, func(t *testing.T) {
-			nfsSock, nfsPlugin, nfsCleanup := startFakeNodePlugin(t)
-			defer nfsCleanup()
-			blockSock, blockPlugin, blockCleanup := startFakeNodePlugin(t)
-			defer blockCleanup()
-			ns := newNodeServerWithSockets(t, map[string]string{"vast/nfs": nfsSock, "vast/block": blockSock})
-			volumeContext := map[string]string{"osac.backend": "vast", "osac.protocol": protocol}
+func TestNodeWithoutVendorVolumeIDFallsBack(t *testing.T) {
+	sock, plugin, cleanup := startFakeNodePlugin(t)
+	defer cleanup()
+	ns := newNodeServerWithSockets(t, map[string]string{"netapp": sock})
 
-			_, err := ns.NodeStageVolume(context.Background(), &csi.NodeStageVolumeRequest{
-				VolumeId: "vol-n", StagingTargetPath: "/staging/vol-n",
-				VolumeCapability: blockCap(), VolumeContext: volumeContext,
-			})
-			assertGRPCCode(t, err, codes.InvalidArgument)
-
-			_, err = ns.NodePublishVolume(context.Background(), &csi.NodePublishVolumeRequest{
-				VolumeId: "vol-n", TargetPath: "/target/vol-n",
-				VolumeCapability: blockCap(), VolumeContext: volumeContext,
-			})
-			assertGRPCCode(t, err, codes.InvalidArgument)
-
-			if nfsPlugin.anyCalled() || blockPlugin.anyCalled() {
-				t.Error("vendor was called without osac.volume-id")
-			}
-		})
+	mustPublish(t, ns, "osac-volume", "/target/osac-volume",
+		map[string]string{"osac.backend": "netapp", "osac.protocol": "nfs"})
+	if !plugin.publishCalled || plugin.publishVolumeID != "osac-volume" {
+		t.Errorf("publish without a vendor volume ID did not fall back to the CSI volume ID: %+v", plugin)
 	}
 }
 

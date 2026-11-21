@@ -29,16 +29,16 @@ import (
 var _ = Describe("Creating and updating Catalog Items", Label("catalog-items"), func() {
 	DescribeTable("rejects invalid policies on Create and Update without persisting changes", func(ctx context.Context, name string, makePolicy func() *publicv1.TemplateParameterPolicy) {
 		policy := makePolicy()
-		template := createCatalogItemComputeInstanceTemplateFixture(ctx, nil, computeInstanceCatalogItemParameterDefinitions())
+		template := createComputeInstanceTemplateFixture(ctx, nil, computeInstanceCatalogItemParameterDefinitions())
 		client := publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn())
 		item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
-			Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+			Metadata: publicv1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 			Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
 		}.Build())
 		before, err := client.Get(ctx, publicv1.ComputeInstanceCatalogItemsGetRequest_builder{Id: item.GetId()}.Build())
 		Expect(err).NotTo(HaveOccurred())
 
-		createName := catalogItemFixtureName()
+		createName := resourceFixtureName()
 		_, err = client.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 			Object: publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata:           publicv1.Metadata_builder{Name: createName}.Build(),
@@ -89,19 +89,19 @@ var _ = Describe("Creating and updating Catalog Items", Label("catalog-items"), 
 	},
 		Entry("compute instance", func(ctx context.Context) error {
 			_, err := publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn()).Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
-				Object: publicv1.ComputeInstanceCatalogItem_builder{Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build()}.Build(),
+				Object: publicv1.ComputeInstanceCatalogItem_builder{Metadata: publicv1.Metadata_builder{Name: resourceFixtureName()}.Build()}.Build(),
 			}.Build())
 			return err
 		}),
 		Entry("cluster", func(ctx context.Context) error {
 			_, err := publicv1.NewClusterCatalogItemsClient(tool.ExternalView().AdminConn()).Create(ctx, publicv1.ClusterCatalogItemsCreateRequest_builder{
-				Object: publicv1.ClusterCatalogItem_builder{Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build()}.Build(),
+				Object: publicv1.ClusterCatalogItem_builder{Metadata: publicv1.Metadata_builder{Name: resourceFixtureName()}.Build()}.Build(),
 			}.Build())
 			return err
 		}),
 		Entry("bare metal instance", func(ctx context.Context) error {
 			_, err := publicv1.NewBareMetalInstanceCatalogItemsClient(tool.ExternalView().AdminConn()).Create(ctx, publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{
-				Object: publicv1.BareMetalInstanceCatalogItem_builder{Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build()}.Build(),
+				Object: publicv1.BareMetalInstanceCatalogItem_builder{Metadata: publicv1.Metadata_builder{Name: resourceFixtureName()}.Build()}.Build(),
 			}.Build())
 			return err
 		}),

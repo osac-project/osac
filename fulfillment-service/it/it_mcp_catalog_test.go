@@ -27,11 +27,11 @@ var _ = Describe("MCP catalog offering administration", func() {
 		session := connectMCPTokenSource(ctx, httpServer.URL, "tenant-admin", tokenSource)
 		DeferCleanup(func() { Expect(session.Close()).To(Succeed()) })
 
-		templateID := createCatalogItemComputeInstanceTemplateFixture(ctx, nil, nil)
+		templateID := createComputeInstanceTemplateFixture(ctx, nil, nil)
 		created, err := callMCPTool[mcpserver.CatalogOfferingOutput](
 			ctx, session, "create_catalog_offering", mcpserver.CreateCatalogOfferingInput{
 				Kind:        mcpserver.CatalogOfferingKindComputeInstance,
-				Name:        catalogItemFixtureName(),
+				Name:        resourceFixtureName(),
 				Title:       "Original offering",
 				Description: "Original description",
 				TemplateID:  templateID,
@@ -45,7 +45,7 @@ var _ = Describe("MCP catalog offering administration", func() {
 		Expect(created.Published).To(BeFalse())
 
 		adminOfferings := privatev1.NewComputeInstanceCatalogItemsClient(tool.InternalView().AdminConn())
-		deferCatalogItemFixtureDeletion(
+		deferResourceFixtureDeletion(
 			func(ctx context.Context) error {
 				_, err := adminOfferings.Delete(ctx, privatev1.ComputeInstanceCatalogItemsDeleteRequest_builder{
 					Id: created.ID,
@@ -166,7 +166,7 @@ var _ = Describe("MCP catalog offering administration", func() {
 	})
 
 	It("isolates ComputeInstance offering mutations between tenant admins", func(ctx context.Context) {
-		templateID := createCatalogItemComputeInstanceTemplateFixture(ctx, nil, nil)
+		templateID := createComputeInstanceTemplateFixture(ctx, nil, nil)
 		assertMcpCatalogOfferingTenantIsolation(
 			ctx, mcpserver.CatalogOfferingKindComputeInstance, templateID,
 		)
@@ -221,7 +221,7 @@ var _ = Describe("MCP catalog offering administration", func() {
 		))
 
 		clusterItem := createClusterCatalogItemFixture(ctx, publicConn, publicv1.ClusterCatalogItem_builder{
-			Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+			Metadata: publicv1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 			Template: publicv1.ClusterTemplateReference_builder{Id: clusterTemplateID}.Build(),
 			Title:    "Original cluster offering",
 		}.Build())
@@ -396,7 +396,7 @@ var _ = Describe("MCP catalog offering administration", func() {
 
 		bareMetalItem := createBareMetalInstanceCatalogItemFixture(
 			ctx, publicConn, publicv1.BareMetalInstanceCatalogItem_builder{
-				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+				Metadata: publicv1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 				Template: publicv1.BareMetalInstanceTemplateReference_builder{Id: bareMetalTemplateID}.Build(),
 				Title:    "Original bare metal offering",
 			}.Build(),
@@ -544,7 +544,7 @@ func assertMcpCatalogOfferingTenantIsolation(
 
 	createdA, err := callMCPTool[mcpserver.CatalogOfferingOutput](
 		ctx, sessionA, "create_catalog_offering", mcpserver.CreateCatalogOfferingInput{
-			Kind: kind, Name: catalogItemFixtureName(), Title: "Tenant A offering",
+			Kind: kind, Name: resourceFixtureName(), Title: "Tenant A offering",
 			Description: "Tenant A description", TemplateID: templateID,
 		},
 	)
@@ -552,7 +552,7 @@ func assertMcpCatalogOfferingTenantIsolation(
 	deferMcpCatalogOfferingDeletion(accessA, createdA.ID)
 	createdB, err := callMCPTool[mcpserver.CatalogOfferingOutput](
 		ctx, sessionB, "create_catalog_offering", mcpserver.CreateCatalogOfferingInput{
-			Kind: kind, Name: catalogItemFixtureName(), Title: "Tenant B offering",
+			Kind: kind, Name: resourceFixtureName(), Title: "Tenant B offering",
 			Description: "Tenant B description", TemplateID: templateID,
 		},
 	)
@@ -758,7 +758,7 @@ func mcpCatalogOfferingAccessFor(kind mcpserver.CatalogOfferingKind, conn *grpc.
 
 func deferMcpCatalogOfferingDeletion(access mcpCatalogOfferingAccess, id string) {
 	GinkgoHelper()
-	deferCatalogItemFixtureDeletion(
+	deferResourceFixtureDeletion(
 		func(ctx context.Context) error { return access.delete(ctx, id) },
 		func(ctx context.Context) (bool, error) {
 			_, err := access.get(ctx, id)

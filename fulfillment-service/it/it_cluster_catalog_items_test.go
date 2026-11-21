@@ -36,7 +36,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 	Context("Provisioning and field governance", func() {
 		It("resolves typed fields and atomic node maps from the request or catalog policy", func(ctx context.Context) {
 			By("authoring a tenant offering with network and node-set policies")
-			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+			network := createNetworkFixture(ctx, usersGroup, "")
 			secret := createCatalogItemPullSecretFixture(ctx, usersGroup)
 			sshKeySecret := createCatalogItemSSHKeySecretFixture(ctx, usersGroup)
 			bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
@@ -84,7 +84,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 
 			items := publicv1.NewClusterCatalogItemsClient(tool.ExternalView().AdminConn())
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
-				Metadata:           publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+				Metadata:           publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: usersGroup}.Build(),
 				Template:           publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 				Published:          true,
 				Fields:             fields,
@@ -268,7 +268,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				Version: privatev1.ClusterVersionReference_builder{Id: templateVersion}.Build(),
 			}.Build(), nil)
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
-				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+				Metadata:  publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: usersGroup}.Build(),
 				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 				Published: true,
 				Fields: publicv1.ClusterCatalogItemFields_builder{
@@ -279,7 +279,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 					}.Build(),
 				}.Build(),
 			}.Build())
-			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+			network := createNetworkFixture(ctx, usersGroup, "")
 			created, err := createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
 				CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
 				NetworkAttachment: network.clusterAttachment(),
@@ -311,7 +311,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				SshKey:  privatev1.SecretReference_builder{Id: sshKeySecret}.Build(),
 			}.Build(), nil, usersGroup)
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
-				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+				Metadata:  publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: usersGroup}.Build(),
 				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 				Published: true,
 				Fields: publicv1.ClusterCatalogItemFields_builder{
@@ -327,7 +327,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				}.Build(),
 			}.Build())
 			secret := createCatalogItemPullSecretFixture(ctx, usersGroup)
-			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+			network := createNetworkFixture(ctx, usersGroup, "")
 			client := publicv1.NewClustersClient(tool.ExternalView().UserConn())
 			networks := privatev1.NewVirtualNetworksClient(tool.InternalView().AdminConn())
 			subnets := privatev1.NewSubnetsClient(tool.InternalView().AdminConn())
@@ -336,7 +336,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			beforeSubnets, err := subnets.List(ctx, privatev1.SubnetsListRequest_builder{}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			dry := metadata.AppendToOutgoingContext(ctx, "x-dry-run", "true")
-			name := catalogItemFixtureName()
+			name := resourceFixtureName()
 			By("validating a dry-run cluster without storing network resources")
 			result, e := client.Create(dry, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
@@ -368,7 +368,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			By("rejecting a request that names both the catalog item and its Template")
 			_, e = client.Create(dry, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
-					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+					Metadata: publicv1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						Template:    publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 						CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
@@ -379,7 +379,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			By("rejecting creation without a Catalog Item or Template")
 			_, e = client.Create(dry, publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
-					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+					Metadata: publicv1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 					Spec:     publicv1.ClusterSpec_builder{}.Build(),
 				}.Build(),
 			}.Build())
@@ -412,10 +412,10 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 		It("validates caller compatibility and checks readiness again after policy materialization", func(ctx context.Context) {
 			bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 			template := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
-			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
-			other := createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", network.networkClassID)
+			network := createNetworkFixture(ctx, usersGroup, "")
+			other := createNetworkInClassFixture(ctx, usersGroup, "", network.networkClassID)
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
-				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+				Metadata:  publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: usersGroup}.Build(),
 				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 				Published: true,
 				Fields: publicv1.ClusterCatalogItemFields_builder{
@@ -431,7 +431,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			client := publicv1.NewClustersClient(tool.ExternalView().UserConn())
 			request := publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
-					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+					Metadata: publicv1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
 						NetworkAttachment: bad,
@@ -455,9 +455,9 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			By("publishing a cluster offering with a required editable parameter")
 			bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 			template := createCatalogItemClusterTemplateFixture(ctx, nil, clusterCatalogItemParameterDefinitions())
-			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+			network := createNetworkFixture(ctx, usersGroup, "")
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
-				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+				Metadata:  publicv1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 				Published: true,
 				TemplateParameters: map[string]*publicv1.TemplateParameterPolicy{
@@ -472,7 +472,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			client := publicv1.NewClustersClient(tool.ExternalView().UserConn())
 			request := publicv1.ClustersCreateRequest_builder{
 				Object: publicv1.Cluster_builder{
-					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+					Metadata: publicv1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
 						NetworkAttachment: network.clusterAttachment(),
@@ -536,7 +536,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			tenant, conn := createCatalogItemTenantAdminFixture(ctx)
 			items := publicv1.NewClusterCatalogItemsClient(conn)
 			owned := createClusterCatalogItemFixture(ctx, conn, publicv1.ClusterCatalogItem_builder{
-				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+				Metadata: publicv1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 				Template: publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 			}.Build())
 			Expect(owned.GetMetadata().GetTenant()).To(Equal(tenant), "catalog item should belong to the tenant admin's tenant")
@@ -561,7 +561,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(visible.GetObject().GetFields().GetAutoExternalIpAttachment().GetLocked()).To(BeFalse())
 
 			By("provisioning a cluster as a member with an editable override")
-			network := createCatalogItemNetworkFixture(ctx, tenant, "")
+			network := createNetworkFixture(ctx, tenant, "")
 			memberSSHKeySecret := createCatalogItemSSHKeySecretFixture(ctx, tenant)
 			spec := publicv1.ClusterSpec_builder{
 				CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: owned.GetId()}.Build(),
@@ -621,7 +621,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			items := publicv1.NewClusterCatalogItemsClient(conn)
 			user := publicv1.NewClusterCatalogItemsClient(tool.ExternalView().UserConn())
 			shared := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
-				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+				Metadata: publicv1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 				Template: publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 			}.Build())
 			Expect(shared.GetMetadata().GetTenant()).To(Equal("shared"))
@@ -650,7 +650,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 		})
 		It("updates a catalog item title and removes the item on deletion", func(ctx context.Context) {
 			template := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
-			name := catalogItemFixtureName()
+			name := resourceFixtureName()
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 				Template: publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
@@ -687,7 +687,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			sshKeySecret := createCatalogItemSSHKeySecretFixture(ctx, usersGroup)
 			replacementSSHKeySecret := createCatalogItemSSHKeySecretFixture(ctx, usersGroup)
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
-				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+				Metadata:  publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: usersGroup}.Build(),
 				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 				Published: true,
 				Fields: publicv1.ClusterCatalogItemFields_builder{
@@ -754,7 +754,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 			template := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
-				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+				Metadata:  publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: usersGroup}.Build(),
 				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 				Published: true,
 				Fields: publicv1.ClusterCatalogItemFields_builder{
@@ -835,7 +835,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				}.Build()
 			}
 			client := publicv1.NewClusterCatalogItemsClient(tool.ExternalView().AdminConn())
-			name := catalogItemFixtureName()
+			name := resourceFixtureName()
 			_, err := client.Create(ctx, publicv1.ClusterCatalogItemsCreateRequest_builder{
 				Object: publicv1.ClusterCatalogItem_builder{
 					Metadata: publicv1.Metadata_builder{Name: name, Tenant: catalogTenant}.Build(),
@@ -857,7 +857,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 		It("protects its immutable Template in a draft and releases it on catalog item deletion", func(ctx context.Context) {
 			template := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
-				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+				Metadata: publicv1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 				Template: publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 			}.Build())
 			templates := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
@@ -875,7 +875,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			items := publicv1.NewClusterCatalogItemsClient(tool.ExternalView().AdminConn())
 			dependencies := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
-				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+				Metadata:  publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: usersGroup}.Build(),
 				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 				Published: true,
 				Fields: publicv1.ClusterCatalogItemFields_builder{
@@ -925,7 +925,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			secret := createCatalogItemPullSecretFixture(ctx, usersGroup)
 			template := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
-				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+				Metadata: publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: usersGroup}.Build(),
 				Template: publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 				Fields: publicv1.ClusterCatalogItemFields_builder{
 					PullSecretSecret: publicv1.SecretReferenceFieldPolicy_builder{Locked: publicv1.SecretLocalReference_builder{Id: secret}.Build()}.Build(),
@@ -961,14 +961,14 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 	Context("Lifecycle independence", func() {
 		It("applies policy edits only to future clusters and permits ordinary version updates after catalog item deletion", func(ctx context.Context) {
 			By("creating a cluster from the original version policy")
-			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+			network := createNetworkFixture(ctx, usersGroup, "")
 			firstVersion := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
 			secondVersion := createCatalogItemClusterVersionFixture(ctx, "4.21.0")
 			bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 			template := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
 			items := publicv1.NewClusterCatalogItemsClient(tool.ExternalView().AdminConn())
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
-				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
+				Metadata:  publicv1.Metadata_builder{Name: resourceFixtureName()}.Build(),
 				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 				Published: true,
 				Fields: publicv1.ClusterCatalogItemFields_builder{
@@ -1133,12 +1133,12 @@ var _ = Describe("Cluster Catalog Item add-on operator policies", Label("catalog
 		// The catalog item sets no network attachment, so the Cluster resolves
 		// the tenant defaults, and Create requires them to be READY.
 		ensureTenantDefaultNetworkingFixture(ctx, usersGroup, "")
-		operator := createCatalogItemAddOnOperatorFixture(ctx, catalogItemFixtureName())
+		operator := createCatalogItemAddOnOperatorFixture(ctx, resourceFixtureName())
 		bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 		version := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
 		template := createCatalogItemClusterTemplateFixture(ctx, privatev1.ClusterTemplateSpecDefaults_builder{}.Build(), clusterCatalogItemParameterDefinitions())
 		item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
-			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
+			Metadata:  publicv1.Metadata_builder{Name: resourceFixtureName(), Tenant: usersGroup}.Build(),
 			Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
 			Published: true,
 			Fields: publicv1.ClusterCatalogItemFields_builder{

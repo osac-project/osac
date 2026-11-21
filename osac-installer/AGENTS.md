@@ -89,8 +89,8 @@ infra suite, not a live-exporter check.
 - Upfront input gate and schema rejection: `make input-validation-test`.
 - Preflight render/hook policy: `uv run --script scripts/test-preflight-render.py`.
 - Preflight harness restoration: `uv run --script scripts/test-preflight-harness.py`.
-- Disk-handoff AAP recording double:
-  `python3 -m unittest discover -s ../fulfillment-service/it/testdata -p test_compute_storage_aap.py`.
+- Disk-handoff AAP recording double: from `fulfillment-service/`, run
+  `go test -race ./it/testdata/computestorageaap`.
 
 ### Repository checks
 

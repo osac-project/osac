@@ -244,6 +244,29 @@ var _ = Describe("safeTokenExchangeError", func() {
 	})
 })
 
+var _ = Describe("tokenExchangeFailureCategory", func() {
+	It("returns a safe category without exposing exchange errors", func() {
+		cases := []struct {
+			err      error
+			category string
+		}{
+			{err: errOAuthTokenExchangeUnavailable, category: "exchange_unavailable"},
+			{err: errOAuthTokenExchangeCallerIdentityChanged, category: "caller_identity_mismatch"},
+			{err: errOAuthTokenExchangeCallerPermissionsChanged, category: "caller_permissions_mismatch"},
+			{err: errors.New("sensitive response body"), category: "exchange_rejected"},
+		}
+		for _, testCase := range cases {
+			Expect(tokenExchangeFailureCategory(testCase.err)).To(Equal(testCase.category))
+		}
+	})
+
+	It("preserves the expiring exchanger contract used by the token cache", func() {
+		exchanger := withTokenExchangeLogging(&expiringTestTokenExchanger{}, nil)
+		_, ok := exchanger.(expiringTokenExchanger)
+		Expect(ok).To(BeTrue())
+	})
+})
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) { return f(request) }
@@ -257,6 +280,7 @@ type expiringTestTokenExchanger struct {
 type expiringTestTokenExchangeResponse struct {
 	token      string
 	expiration time.Time
+	err        error
 }
 
 func (e *expiringTestTokenExchanger) ExchangeWithExpiration(
@@ -265,7 +289,7 @@ func (e *expiringTestTokenExchanger) ExchangeWithExpiration(
 	e.calls++
 	if len(e.responses) > 0 {
 		response := e.responses[e.calls-1]
-		return response.token, response.expiration, nil
+		return response.token, response.expiration, response.err
 	}
 	return "api-token", e.expiration, nil
 }

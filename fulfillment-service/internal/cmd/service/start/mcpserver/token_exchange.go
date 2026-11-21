@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -48,7 +49,53 @@ func (f TokenExchangerFunc) Exchange(ctx context.Context, subjectToken string, s
 	return f(ctx, subjectToken, subject)
 }
 
-var errOAuthTokenExchangeUnavailable = errors.New("OAuth token exchange is unavailable")
+var (
+	errOAuthTokenExchangeUnavailable              = errors.New("OAuth token exchange is unavailable")
+	errOAuthTokenExchangeCallerIdentityChanged    = errors.New("OAuth token exchange changed the caller identity")
+	errOAuthTokenExchangeCallerPermissionsChanged = errors.New("OAuth token exchange changed the caller permissions")
+)
+
+type loggingTokenExchanger struct {
+	delegate expiringTokenExchanger
+	logger   *slog.Logger
+}
+
+func withTokenExchangeLogging(delegate expiringTokenExchanger, logger *slog.Logger) TokenExchanger {
+	return &loggingTokenExchanger{delegate: delegate, logger: logger}
+}
+
+func (e *loggingTokenExchanger) Exchange(
+	ctx context.Context, subjectToken string, subject *jwt.Token,
+) (string, error) {
+	token, _, err := e.ExchangeWithExpiration(ctx, subjectToken, subject)
+	return token, err
+}
+
+func (e *loggingTokenExchanger) ExchangeWithExpiration(
+	ctx context.Context, subjectToken string, subject *jwt.Token,
+) (string, time.Time, error) {
+	token, expiration, err := e.delegate.ExchangeWithExpiration(ctx, subjectToken, subject)
+	if err != nil && e.logger != nil {
+		e.logger.WarnContext(ctx, "MCP token exchange failed",
+			slog.String("request_id", toolRequestIDFromContext(ctx)),
+			slog.String("reason_category", tokenExchangeFailureCategory(err)),
+		)
+	}
+	return token, expiration, err
+}
+
+func tokenExchangeFailureCategory(err error) string {
+	switch {
+	case errors.Is(err, errOAuthTokenExchangeUnavailable):
+		return "exchange_unavailable"
+	case errors.Is(err, errOAuthTokenExchangeCallerIdentityChanged):
+		return "caller_identity_mismatch"
+	case errors.Is(err, errOAuthTokenExchangeCallerPermissionsChanged):
+		return "caller_permissions_mismatch"
+	default:
+		return "exchange_rejected"
+	}
+}
 
 const (
 	apiTokenCacheTTL   = 30 * time.Second
@@ -263,12 +310,12 @@ func sameCaller(source, target *jwt.Token) error {
 	targetIssuer, targetIssuerErr := target.Claims.GetIssuer()
 	if sourceErr != nil || targetErr != nil || sourceSubject == "" || sourceSubject != targetSubject ||
 		sourceIssuerErr != nil || targetIssuerErr != nil || sourceIssuer == "" || sourceIssuer != targetIssuer {
-		return errors.New("OAuth token exchange changed the caller identity")
+		return errOAuthTokenExchangeCallerIdentityChanged
 	}
 	sourceContext, sourceErr := auth.ExtractAuthContext(source)
 	targetContext, targetErr := auth.ExtractAuthContext(target)
 	if sourceErr != nil || targetErr != nil || !reflect.DeepEqual(sourceContext, targetContext) {
-		return errors.New("OAuth token exchange changed the caller permissions")
+		return errOAuthTokenExchangeCallerPermissionsChanged
 	}
 	targetExpiry, err := target.Claims.GetExpirationTime()
 	if err != nil || targetExpiry == nil || !targetExpiry.After(time.Now()) {

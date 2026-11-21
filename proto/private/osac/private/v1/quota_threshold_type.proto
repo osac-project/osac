@@ -1,0 +1,63 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "buf/validate/validate.proto";
+import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
+import "osac/private/v1/metadata_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+
+// Represents a warning threshold of one quota dimension in one project.
+//
+// A threshold is an absolute usage value: when the project's usage of the dimension reaches the
+// threshold, a warning is sent to the tenant. A threshold requires a limit on the same dimension in
+// the same project, so a warning always has a limit to be measured against.
+//
+// Tenant Admins set thresholds. One threshold exists per dimension per project. The dimension is
+// immutable; the value can change. Clearing a threshold deletes it.
+message QuotaThreshold {
+  // Unique identifier of the threshold.
+  string id = 1;
+
+  // Metadata of the threshold. The tenant and a named project are required.
+  Metadata metadata = 2;
+
+  // Desired configuration of the threshold (user-specified).
+  QuotaThresholdSpec spec = 3;
+
+  // Current state of the threshold (system-provided, read-only).
+  QuotaThresholdStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Defines the desired configuration for a QuotaThreshold.
+message QuotaThresholdSpec {
+  // The quota dimension this threshold watches, such as `compute.vcpus`. Required and immutable
+  // after creation. Unique within the project.
+  string dimension = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).string = {min_len: 1, max_len: 256}
+  ];
+
+  // The usage value at or above which a warning is sent. When the `metadata.name` is omitted it
+  // is generated from the dimension.
+  int64 value = 2 [(buf.validate.field).int64.gt = 0];
+}
+
+// Represents the current state of a QuotaThreshold.
+message QuotaThresholdStatus {}

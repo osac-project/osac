@@ -144,7 +144,40 @@ def _apply_manifest(manifest: str) -> None:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def cluster_tenants(namespace: str, k8s_hub_client: K8sClient) -> None:
+def quota_defaults(private_grpc: GRPCClient, default_storage_tier: str) -> None:
+    """Set generous default quota limits before the suite creates anything.
+
+    Quota is enforced in the request path: a dimension with no default has
+    limit 0, so every create would be refused, and a fresh tenant could not
+    even provision its default networking. The defaults are generous on
+    purpose; journeys that prove refusals set their own tighter limits. Types,
+    tiers and GPU resources created with random names set their dimension's
+    default where they are created (the GRPCClient creation helpers,
+    bmi_instance_type_for_tests, the networking suite's bmi_instance_type).
+    """
+    for dimension in (
+        # The fixed dimensions every suite's creates add to.
+        "compute.vcpus",
+        "compute.memory_gib",
+        "storage.volumes",
+        "network.external_ips",
+        "network.nat_gateways",
+        "network.virtual_networks",
+        "images.count",
+        "caas.control_planes",
+        # The bare-metal worker types the CaaS and storage suites create.
+        "bare_metal.instances.ci-worker-bm",
+        "bare_metal.instances.ci-worker-bm-gpu",
+        # The installer-provided storage tier the VM suites place volumes on.
+        f"storage.{default_storage_tier}.gib",
+        # The GPU resource the VMaaS GPU tests attach to their VMs.
+        "compute.gpu.nvidia.com/gpu",
+    ):
+        private_grpc.set_quota_default(dimension=dimension)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def cluster_tenants(quota_defaults: None, namespace: str, k8s_hub_client: K8sClient) -> None:
     """Apply the install namespace's Tenant and the shared Tenant before tests.
 
     The E2E workflows apply these two CRs between install and test; doing it
@@ -271,7 +304,7 @@ def caas_disk_image_version(private_grpc: GRPCClient) -> str:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def ensure_tenants(private_grpc: GRPCClient) -> None:
+def ensure_tenants(quota_defaults: None, private_grpc: GRPCClient) -> None:
     for name in ("tenant1", "tenant2"):
         private_grpc.ensure_tenant(name=name)
 

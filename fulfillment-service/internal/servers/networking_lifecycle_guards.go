@@ -305,7 +305,9 @@ func clearMessagePath(message protoreflect.Message, path string) {
 }
 
 // lockTenantForCreate locks the Tenant record of a create, so a create and the Tenant delete never both succeed, and
-// rejects creates in a Tenant that is being deleted. Tenants without a record (system, shared) aren't locked.
+// rejects creates in a Tenant that is being deleted. Tenants without a record (system, shared) aren't locked. The lock
+// is FOR NO KEY UPDATE, the mode the quota check's tenant lock takes, so a create that already holds it through the
+// check never waits on itself.
 func lockTenantForCreate(ctx context.Context, tenant string) error {
 	if tenant == "" || tenant == auth.SystemTenant || tenant == auth.SharedTenant {
 		return nil
@@ -316,7 +318,7 @@ func lockTenantForCreate(ctx context.Context, tenant string) error {
 	}
 	var deleting bool
 	err = tx.QueryRow(ctx,
-		`select deletion_timestamp <> 'epoch' from tenants where id = $1 for update`, tenant,
+		`select deletion_timestamp <> 'epoch' from tenants where id = $1 for no key update`, tenant,
 	).Scan(&deleting)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil

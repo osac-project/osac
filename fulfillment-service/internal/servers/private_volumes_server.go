@@ -49,6 +49,9 @@ const (
 )
 
 // TierResolverFunc resolves a StorageTier name to a provider and protocol.
+// The server binary always sets it to the resolution that reads the
+// StorageTier and StorageBackend rows. Tests replace it with a stub, so a
+// spec that creates volumes needs no seeded tiers and backends.
 type TierResolverFunc func(ctx context.Context, tierName string) (*TierResolution, error)
 
 type PrivateVolumesServerBuilder struct {
@@ -118,8 +121,8 @@ func (b *PrivateVolumesServerBuilder) Build() (result *PrivateVolumesServer, err
 		err = errors.New("tenancy logic is mandatory")
 		return
 	}
-	// tierResolver is required only for the mutating Create path; the read-only public volumes
-	// server builds this delegate without one. Its absence is enforced in Create instead of here.
+	// The tier resolver serves only the mutating Create path, so it is optional here:
+	// List and Get need none, and Create refuses a server built without one.
 
 	generic, err := NewGenericServer[*privatev1.Volume]().
 		SetLogger(b.logger).

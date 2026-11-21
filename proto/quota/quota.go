@@ -66,6 +66,10 @@ var kindsThatUseNothing = []string{
 	"NetworkClass",
 	"Project",
 	"ProjectMembership",
+	"QuotaDefaultLimit",
+	"QuotaLimit",
+	"QuotaLimitRequest",
+	"QuotaThreshold",
 	"Role",
 	"RoleBinding",
 	"Secret",
@@ -862,7 +866,7 @@ func checkCreatesCycles(kinds []Kind) error {
 // validateDimension checks that every brace path of a dimension template names a string
 // field of the kind, so the price can fill the dimension's name.
 func validateDimension(kind protoreflect.MessageDescriptor, dimension, where string) error {
-	paths, err := bracePaths(dimension)
+	paths, err := BracePaths(dimension)
 	if err != nil {
 		return fmt.Errorf("%s: %w", where, err)
 	}
@@ -883,9 +887,9 @@ func validateDimension(kind protoreflect.MessageDescriptor, dimension, where str
 	return nil
 }
 
-// bracePaths returns the paths in the braces of a dimension template, such as
+// BracePaths returns the paths in the braces of a dimension template, such as
 // "spec.storage_tier" from "storage.{spec.storage_tier}.gib".
-func bracePaths(template string) ([]string, error) {
+func BracePaths(template string) ([]string, error) {
 	var paths []string
 	rest := template
 	for {
@@ -904,6 +908,38 @@ func bracePaths(template string) ([]string, error) {
 		paths = append(paths, path)
 		rest = rest[start+end+1:]
 	}
+}
+
+// Field resolves a field path against the kind's message and returns the field it
+// names, so a consumer needs no descriptor walk of its own.
+func (k *Kind) Field(path string) (protoreflect.FieldDescriptor, error) {
+	descriptor, err := protoregistry.GlobalFiles.FindDescriptorByName(k.Message)
+	if err != nil {
+		return nil, err
+	}
+	message, ok := descriptor.(protoreflect.MessageDescriptor)
+	if !ok {
+		return nil, fmt.Errorf("kind message '%s' isn't a message", k.Message)
+	}
+	return resolveField(message, path)
+}
+
+// LinkTo returns the link the kind declares to the parent kind: the kind's own link, or
+// the link of the field that names it. The field's path is empty for a kind-level link.
+// A label link applies to every parent kind, because the kind label names the child.
+func (k *Kind) LinkTo(parent string) (*CreatedFor, string, error) {
+	if k.CreatedFor != nil &&
+		(k.CreatedFor.Parent == parent || k.CreatedFor.IDLabel != "") {
+		return k.CreatedFor, "", nil
+	}
+	for _, field := range k.Fields {
+		if field.CreatedFor != nil && field.CreatedFor.Parent == parent {
+			return field.CreatedFor, field.Path, nil
+		}
+	}
+	return nil, "", fmt.Errorf(
+		"kind '%s' has no created_for link to parent kind '%s'", k.Name, parent,
+	)
 }
 
 // resolveField resolves a proto field path against a message and returns the field it

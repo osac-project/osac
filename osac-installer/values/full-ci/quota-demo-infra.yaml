@@ -1,0 +1,9 @@
+# Quota demo infra overlay -- layered after values/full-ci/infra.yaml.
+#
+# LVMS claims the node's real spare disk (/dev/sdb, 200G) instead of the
+# profile's /dev/vdb default (which exists only on stretched-Netris VMs).
+# The normal configuration path: no loop devices, no server-side patches.
+lvms:
+  deviceSelector:
+    optionalPaths:
+      - /dev/sdb

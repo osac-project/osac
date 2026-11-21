@@ -283,15 +283,20 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		return
 	}
 
-	// Create the generic server:
-	generic, err := NewGenericServer[*privatev1.Cluster]().
+	// Create the generic server. With provider networking disabled the writers create no
+	// automatic addresses, so the check must not count them either:
+	settings := resolveNetworkingSettings(b.networkingSettings)
+	genericBuilder := NewGenericServer[*privatev1.Cluster]().
 		SetLogger(b.logger).
 		SetService(privatev1.Clusters_ServiceDesc.ServiceName).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
-		SetFilterDesc(b.filterDesc).
-		Build()
+		SetFilterDesc(b.filterDesc)
+	if !settings.ProvisioningEnabled {
+		genericBuilder = genericBuilder.SetUncreatedQuotaKinds("ExternalIP")
+	}
+	generic, err := genericBuilder.Build()
 	if err != nil {
 		return
 	}
@@ -304,7 +309,7 @@ func (b *PrivateClustersServerBuilder) Build() (result *PrivateClustersServer, e
 		catalogItemsDao:           catalogItemsDao,
 		bareMetalInstanceTypesDao: bareMetalInstanceTypesDao,
 		tenantsDao:                tenantsDao,
-		settings:                  resolveNetworkingSettings(b.networkingSettings),
+		settings:                  settings,
 		clusterVersionsDao:        clusterVersionsDao,
 		networkClassesDao:         networkClassesDao,
 		virtualNetworksDao:        virtualNetworksDao,
@@ -475,6 +480,11 @@ func (s *PrivateClustersServer) Update(ctx context.Context,
 	if err = s.validateNoDuplicateConditions(request.GetObject()); err != nil {
 		return
 	}
+	// The tenant lock comes before the cluster's row lock below, so a checked update never
+	// waits for another request's locks in the opposite order:
+	if err = s.generic.LockTenantForCheckedUpdate(ctx, request); err != nil {
+		return
+	}
 	if err = s.validateClusterStateForSpecUpdate(ctx, request); err != nil {
 		return
 	}
@@ -542,6 +552,18 @@ func (s *PrivateClustersServer) prepareUpdatedCluster(ctx context.Context, curre
 	sizeOnlyNodeSets := len(mask.GetPaths()) > 0 && s.isUpdatingOnlySizes(mask)
 	if err := s.prepareUpdatedClusterNodeSets(ctx, current, candidate, mask, sizeOnlyNodeSets); err != nil {
 		return err
+	}
+	// The prepared candidate must never carry an incomplete node set: validateNodeSetsUpdate
+	// checks only map shape and immutability, while the quota walk reads every node set's
+	// size and hardware and fails as Internal when one is incomplete. The check runs
+	// whenever the update delivers a node-set map; the candidate's map is the stored,
+	// complete one whenever the update leaves node_sets alone, and a full-object update
+	// that omits node_sets keeps its legacy behavior. Create and catalog paths run the
+	// same check through resolveClusterNodeSets.
+	if len(candidate.GetSpec().GetNodeSets()) > 0 {
+		if err := validateClusterNodeSetMap(candidate.GetSpec().GetNodeSets()); err != nil {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument, "node_sets: %s", err)
+		}
 	}
 	mergeClusterUpgradeHistory(current, candidate, mask)
 	preserveNodeSetVersions(current, candidate)
@@ -1558,7 +1580,10 @@ func (s *PrivateClustersServer) autoProvisionExternalIPs(ctx context.Context, cl
 			Metadata: privatev1.Metadata_builder{
 				Name:   fmt.Sprintf("auto-eip-%s-%s", clusterID, endpoint.name),
 				Tenant: tenant,
-				Labels: eipLabels,
+				// The address counts in the cluster's project, so a project's external-IP
+				// limit binds it:
+				Project: cluster.GetMetadata().GetProject(),
+				Labels:  eipLabels,
 				Annotations: map[string]string{
 					tenantAnnotation:         tenant,
 					ownerReferenceAnnotation: clusterID,

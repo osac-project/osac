@@ -405,6 +405,19 @@ and `fulfillment_issuer_url` that `install_driver` reads.
 over the computed Helm values. The caller's values win, and a list replaces the
 computed list instead of merging. The caller fills it only from playbook or operator
 job vars, never from tenant-controlled input and never with a VAST credential.
+The caller's values win except for four keys, which change only through their own
+role variables: `driverName` (`osac_csi_driver_name`), `namespace`
+(`osac_csi_driver_namespace`), `controller.fulfillment.credentials.secretName`
+(`osac_csi_driver_credentials_secret_name`) and
+`controller.fulfillment.tls.insecureSkipVerify`
+(`osac_csi_driver_fulfillment_tls_insecure`). Extra values that change one of them
+fail the render with a message naming the key path, not the value.
+Nothing calls `install_driver` yet; a separate per-cluster install job will, see
+[OSAC-7841](https://redhat.atlassian.net/browse/OSAC-7841). `uninstall_driver` has
+no caller, and none is needed today: fulfillment-service refuses to delete a tenant
+while it still has clusters (`rejectDeleteWhileResourcesExist` in
+`fulfillment-service/internal/servers/private_tenants_server.go`), and deleting a
+cluster removes its guest cluster.
 
 **Block encryption (`vast_storage` only; `osac_csi_storage` has no block-encryption
 handling):** When `spec.blockEncryptionPassphrase` is provided in the Tenant CR

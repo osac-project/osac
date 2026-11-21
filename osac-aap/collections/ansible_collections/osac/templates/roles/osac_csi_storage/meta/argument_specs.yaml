@@ -11,6 +11,7 @@ argument_specs:
         description:
           - Helm values merged over the values this role computes.
           - The merge is recursive and the caller's values win; a list here replaces the computed list.
+          - Except that driverName, namespace, controller.fulfillment.credentials.secretName and controller.fulfillment.tls.insecureSkipVerify must keep the values the role computes; the render fails when these values change them. They change only through osac_csi_driver_name, osac_csi_driver_namespace, osac_csi_driver_credentials_secret_name and osac_csi_driver_fulfillment_tls_insecure.
           - The caller sets this only from playbook or operator job vars, never from tenant-controlled input, and never with a VAST credential.
       tenant_name:
         type: str

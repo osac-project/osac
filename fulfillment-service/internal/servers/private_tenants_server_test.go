@@ -27,6 +27,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/validation"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -695,6 +696,162 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(got.GetObject().GetSpec().GetExternalBillingId()).To(Equal("acct-1"))
 		})
+	})
+
+	It("Deletes the quota outbox with the accepted delete and archives the tenant after quota cleanup", func() {
+		limitsServer, err := NewPrivateQuotaLimitsServer().
+			SetLogger(logger).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		thresholdsServer, err := NewPrivateQuotaThresholdsServer().
+			SetLogger(logger).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		requestsServer, err := NewPrivateQuotaLimitRequestsServer().
+			SetLogger(logger).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		// The lifecycle finalizer keeps the accepted delete soft, like a live
+		// tenant whose reconciler still has to run:
+		createResponse, err := tenantsServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+			Object: privatev1.Tenant_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:       "quota-tenant",
+					Finalizers: []string{finalizers.TenantLifecycle},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		tenantID := createResponse.GetObject().GetId()
+
+		projectsDao, err := dao.NewGenericDAO[*privatev1.Project]().
+			SetLogger(logger).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		_, err = projectsDao.Create().SetObject(privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "team",
+				Tenant: "quota-tenant",
+			}.Build(),
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Quota rows in every scope: a tenant override, a project limit, a
+		// project threshold and a pending limit request:
+		override, err := limitsServer.Create(ctx, privatev1.QuotaLimitsCreateRequest_builder{
+			Object: privatev1.QuotaLimit_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: "quota-tenant"}.Build(),
+				Spec:     privatev1.QuotaLimitSpec_builder{Dimension: "compute.vcpus", Value: proto.Int64(10)}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		projectLimit, err := limitsServer.Create(ctx, privatev1.QuotaLimitsCreateRequest_builder{
+			Object: privatev1.QuotaLimit_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: "quota-tenant", Project: "team"}.Build(),
+				Spec:     privatev1.QuotaLimitSpec_builder{Dimension: "compute.vcpus", Value: proto.Int64(4)}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		threshold, err := thresholdsServer.Create(ctx, privatev1.QuotaThresholdsCreateRequest_builder{
+			Object: privatev1.QuotaThreshold_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: "quota-tenant", Project: "team"}.Build(),
+				Spec:     privatev1.QuotaThresholdSpec_builder{Dimension: "compute.vcpus", Value: 3}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		limitRequest, err := requestsServer.Create(ctx, privatev1.QuotaLimitRequestsCreateRequest_builder{
+			Object: privatev1.QuotaLimitRequest_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: "quota-tenant"}.Build(),
+				Spec:     privatev1.QuotaLimitRequestSpec_builder{Dimension: "compute.vcpus", RequestedValue: proto.Int64(20)}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// An unsent quota warning, which has no API of its own:
+		tx, err := database.TxFromContext(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = tx.Exec(ctx,
+			`insert into quota_outbox (tenant, project, dimension, data) values ($1, '', 'compute.vcpus', '{}')`,
+			"quota-tenant")
+		Expect(err).ToNot(HaveOccurred())
+
+		// Accept the tenant deletion:
+		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
+			Id: tenantID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// The unsent warnings are gone with the accepted delete:
+		var outboxCount int
+		err = tx.QueryRow(ctx,
+			`select count(*) from quota_outbox where tenant = $1`, "quota-tenant").Scan(&outboxCount)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(outboxCount).To(Equal(0))
+
+		// The tenant reconciler deletes the tenant's quota rows through the
+		// quota API before the projects are archived:
+		for _, limitID := range []string{override.GetObject().GetId(), projectLimit.GetObject().GetId()} {
+			_, err = limitsServer.Delete(ctx, privatev1.QuotaLimitsDeleteRequest_builder{Id: limitID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		}
+		_, err = thresholdsServer.Delete(ctx, privatev1.QuotaThresholdsDeleteRequest_builder{
+			Id: threshold.GetObject().GetId(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		_, err = requestsServer.Delete(ctx, privatev1.QuotaLimitRequestsDeleteRequest_builder{
+			Id: limitRequest.GetObject().GetId(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// With the quota rows gone the projects can be archived, child projects
+		// before the root project they reference, like the project reconciler
+		// orders them:
+		projects, err := projectsServer.List(ctx, privatev1.ProjectsListRequest_builder{
+			Filter: new("this.metadata.tenant == 'quota-tenant'"),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(projects.GetItems()).To(HaveLen(2))
+		for _, project := range projects.GetItems() {
+			if project.GetMetadata().GetName() == "" {
+				continue
+			}
+			_, err = projectsServer.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{
+				Id: project.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		}
+		for _, project := range projects.GetItems() {
+			if project.GetMetadata().GetName() != "" {
+				continue
+			}
+			_, err = projectsServer.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{
+				Id: project.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		}
+
+		// Clearing the finalizer archives the tenant, which the quota foreign
+		// keys used to block:
+		deleting, err := tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenantID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		clearing := proto.Clone(deleting.GetObject()).(*privatev1.Tenant)
+		clearing.GetMetadata().SetFinalizers(nil)
+		_, err = tenantsServer.Update(ctx, privatev1.TenantsUpdateRequest_builder{
+			Object:     clearing,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}},
+			Lock:       true,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		_, err = tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenantID}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 	})
 
 })

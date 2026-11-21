@@ -16,6 +16,9 @@ language governing permissions and limitations under the License.
 //go:generate mockgen -destination=users_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 UsersClient
 //go:generate mockgen -destination=project_memberships_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 ProjectMembershipsClient
 //go:generate mockgen -destination=secrets_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 SecretsClient
+//go:generate mockgen -destination=quota_limits_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 QuotaLimitsClient
+//go:generate mockgen -destination=quota_thresholds_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 QuotaThresholdsClient
+//go:generate mockgen -destination=quota_limit_requests_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 QuotaLimitRequestsClient
 
 package project
 
@@ -108,6 +111,9 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		tenantsClient:            privatev1.NewTenantsClient(b.connection),
 		projectMembershipsClient: privatev1.NewProjectMembershipsClient(b.connection),
 		secretsClient:            privatev1.NewSecretsClient(b.connection),
+		quotaLimitsClient:        privatev1.NewQuotaLimitsClient(b.connection),
+		quotaThresholdsClient:    privatev1.NewQuotaThresholdsClient(b.connection),
+		quotaLimitRequestsClient: privatev1.NewQuotaLimitRequestsClient(b.connection),
 		projectGroupManager:      b.projectGroupManager,
 		defaultNetwork:           b.defaultNetwork,
 		maskCalculator:           masks.NewCalculator().Build(),
@@ -122,6 +128,9 @@ type function struct {
 	tenantsClient            privatev1.TenantsClient
 	projectMembershipsClient privatev1.ProjectMembershipsClient
 	secretsClient            privatev1.SecretsClient
+	quotaLimitsClient        privatev1.QuotaLimitsClient
+	quotaThresholdsClient    privatev1.QuotaThresholdsClient
+	quotaLimitRequestsClient privatev1.QuotaLimitRequestsClient
 	projectGroupManager      *idp.ProjectGroupManager
 	defaultNetwork           defaultnetworking.Manager
 	maskCalculator           *masks.Calculator
@@ -525,6 +534,21 @@ func (t *task) delete(ctx context.Context) error {
 		}
 	}
 
+	// Quota limits, thresholds and limit requests are scoped to the project and
+	// reference it with a foreign key. Delete them before removing the project
+	// finalizer so they cannot prevent the project from being archived.
+	pendingQuota, err := t.deleteProjectQuota(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to delete project quota rows: %w", err)
+	}
+	if pendingQuota {
+		t.setPendingDeletion("Pending quota row deletion prior to project deletion", controllers.RequeueAtInterval(
+			errors.New("project quota rows are still pending deletion"),
+			projectChildDeleteRetryDelay,
+		))
+		return nil
+	}
+
 	// Default networking belongs to the tenant root project. The controller
 	// removes those resources through the authenticated controller identity;
 	// ordinary API callers remain blocked by the system-managed protection.
@@ -600,6 +624,96 @@ func (t *task) deleteProjectSecrets(ctx context.Context) (bool, error) {
 			return err
 		},
 	})
+}
+
+// deleteProjectQuota lists and deletes the quota limits, thresholds and limit
+// requests scoped to this project. The rows reference the project with a
+// foreign key, so they are removed before the project is archived. Each pass
+// deletes the rows it listed and reports them as pending; the next pass lists
+// the remainder, so deletion completes even when a pass lists more rows than
+// the page size.
+func (t *task) deleteProjectQuota(ctx context.Context) (bool, error) {
+	projectName := t.project.GetMetadata().GetName()
+	tenant := t.project.GetMetadata().GetTenant()
+	filter := fmt.Sprintf(
+		"this.metadata.tenant == %q && this.metadata.project == %q",
+		tenant, projectName,
+	)
+	pending := false
+
+	if t.r.quotaLimitsClient != nil {
+		listResp, err := t.r.quotaLimitsClient.List(ctx, privatev1.QuotaLimitsListRequest_builder{
+			Filter: new(filter),
+		}.Build())
+		if err != nil {
+			return false, fmt.Errorf("failed to query for project quota limits: %w", err)
+		}
+		deleted, err := controllers.CascadeDeleteItems(ctx, controllers.CascadeDeleteItemsOptions[*privatev1.QuotaLimit]{
+			Items: listResp.GetItems(),
+			Delete: func(ctx context.Context, id string) error {
+				_, err := t.r.quotaLimitsClient.Delete(ctx, privatev1.QuotaLimitsDeleteRequest_builder{Id: id}.Build())
+				return err
+			},
+			Signal: func(ctx context.Context, id string) error {
+				_, err := t.r.quotaLimitsClient.Signal(ctx, privatev1.QuotaLimitsSignalRequest_builder{Id: id}.Build())
+				return err
+			},
+		})
+		if err != nil {
+			return false, err
+		}
+		pending = pending || deleted
+	}
+
+	if t.r.quotaThresholdsClient != nil {
+		listResp, err := t.r.quotaThresholdsClient.List(ctx, privatev1.QuotaThresholdsListRequest_builder{
+			Filter: new(filter),
+		}.Build())
+		if err != nil {
+			return false, fmt.Errorf("failed to query for project quota thresholds: %w", err)
+		}
+		deleted, err := controllers.CascadeDeleteItems(ctx, controllers.CascadeDeleteItemsOptions[*privatev1.QuotaThreshold]{
+			Items: listResp.GetItems(),
+			Delete: func(ctx context.Context, id string) error {
+				_, err := t.r.quotaThresholdsClient.Delete(ctx, privatev1.QuotaThresholdsDeleteRequest_builder{Id: id}.Build())
+				return err
+			},
+			Signal: func(ctx context.Context, id string) error {
+				_, err := t.r.quotaThresholdsClient.Signal(ctx, privatev1.QuotaThresholdsSignalRequest_builder{Id: id}.Build())
+				return err
+			},
+		})
+		if err != nil {
+			return false, err
+		}
+		pending = pending || deleted
+	}
+
+	if t.r.quotaLimitRequestsClient != nil {
+		listResp, err := t.r.quotaLimitRequestsClient.List(ctx, privatev1.QuotaLimitRequestsListRequest_builder{
+			Filter: new(filter),
+		}.Build())
+		if err != nil {
+			return false, fmt.Errorf("failed to query for project quota limit requests: %w", err)
+		}
+		deleted, err := controllers.CascadeDeleteItems(ctx, controllers.CascadeDeleteItemsOptions[*privatev1.QuotaLimitRequest]{
+			Items: listResp.GetItems(),
+			Delete: func(ctx context.Context, id string) error {
+				_, err := t.r.quotaLimitRequestsClient.Delete(ctx, privatev1.QuotaLimitRequestsDeleteRequest_builder{Id: id}.Build())
+				return err
+			},
+			Signal: func(ctx context.Context, id string) error {
+				_, err := t.r.quotaLimitRequestsClient.Signal(ctx, privatev1.QuotaLimitRequestsSignalRequest_builder{Id: id}.Build())
+				return err
+			},
+		})
+		if err != nil {
+			return false, err
+		}
+		pending = pending || deleted
+	}
+
+	return pending, nil
 }
 
 // deleteProjectMemberships lists all ProjectMemberships scoped to this project, marks each for

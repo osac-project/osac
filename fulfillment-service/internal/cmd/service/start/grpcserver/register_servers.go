@@ -924,6 +924,108 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	privatev1.RegisterNATGatewaysServer(registrar, privateNATGatewaysServer)
 
+	// Create the public quota limits server:
+	deps.Logger.InfoContext(ctx, "Creating quota limits server")
+	quotaLimitsServer, err := servers.NewQuotaLimitsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create quota limits server: %w", err)
+	}
+	publicv1.RegisterQuotaLimitsServer(registrar, quotaLimitsServer)
+
+	// Create the private quota limits server:
+	deps.Logger.InfoContext(ctx, "Creating private quota limits server")
+	privateQuotaLimitsServer, err := servers.NewPrivateQuotaLimitsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private quota limits server: %w", err)
+	}
+	privatev1.RegisterQuotaLimitsServer(registrar, privateQuotaLimitsServer)
+
+	// Create the public quota thresholds server:
+	deps.Logger.InfoContext(ctx, "Creating quota thresholds server")
+	quotaThresholdsServer, err := servers.NewQuotaThresholdsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create quota thresholds server: %w", err)
+	}
+	publicv1.RegisterQuotaThresholdsServer(registrar, quotaThresholdsServer)
+
+	// Create the private quota thresholds server:
+	deps.Logger.InfoContext(ctx, "Creating private quota thresholds server")
+	privateQuotaThresholdsServer, err := servers.NewPrivateQuotaThresholdsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private quota thresholds server: %w", err)
+	}
+	privatev1.RegisterQuotaThresholdsServer(registrar, privateQuotaThresholdsServer)
+
+	// Create the public quota limit requests server:
+	deps.Logger.InfoContext(ctx, "Creating quota limit requests server")
+	quotaLimitRequestsServer, err := servers.NewQuotaLimitRequestsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create quota limit requests server: %w", err)
+	}
+	publicv1.RegisterQuotaLimitRequestsServer(registrar, quotaLimitRequestsServer)
+
+	// Create the private quota limit requests server:
+	deps.Logger.InfoContext(ctx, "Creating private quota limit requests server")
+	privateQuotaLimitRequestsServer, err := servers.NewPrivateQuotaLimitRequestsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private quota limit requests server: %w", err)
+	}
+	privatev1.RegisterQuotaLimitRequestsServer(registrar, privateQuotaLimitRequestsServer)
+
+	// Create the public quota usage server:
+	deps.Logger.InfoContext(ctx, "Creating quota usage server")
+	quotaUsageServer, err := servers.NewQuotaUsageServer().
+		SetLogger(deps.Logger).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create quota usage server: %w", err)
+	}
+	publicv1.RegisterQuotaUsageServer(registrar, quotaUsageServer)
+
+	// Create the private quota usage server:
+	deps.Logger.InfoContext(ctx, "Creating private quota usage server")
+	privateQuotaUsageServer, err := servers.NewPrivateQuotaUsageServer().
+		SetLogger(deps.Logger).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private quota usage server: %w", err)
+	}
+	privatev1.RegisterQuotaUsageServer(registrar, privateQuotaUsageServer)
+
 	// Create the public tenants server:
 	deps.Logger.InfoContext(ctx, "Creating public tenants server")
 	publicTenantsServer, err := servers.NewTenantsServer().

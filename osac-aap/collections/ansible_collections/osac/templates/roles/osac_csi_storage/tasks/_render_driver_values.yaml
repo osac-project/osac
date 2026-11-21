@@ -5,7 +5,9 @@
 # Requires: the osac_csi_driver_* defaults of this role.
 # Optional: fulfillment_endpoint and fulfillment_issuer_url. They are required
 # for the hub-controller install; when unset or empty (guest node mode) they are
-# omitted from the values.
+# omitted from the values. controller.fulfillment.credentials and .tls are
+# emitted only when both are set (the chart fails to render credentials without
+# them); when neither is set the controller key is omitted entirely.
 #
 # Sets the fact _osac_csi_driver_helm_values: the computed values with
 # osac_csi_driver_extra_values merged over them. The merge is recursive and the
@@ -34,16 +36,18 @@
         clientSecretKey: client-secret
       tls:
         insecureSkipVerify: "{{ osac_csi_driver_fulfillment_tls_insecure | bool }}"
-    _osac_csi_driver_computed_values:
-      driverName: "{{ osac_csi_driver_name }}"
-      namespace: "{{ osac_csi_driver_namespace }}"
-      controller:
-        fulfillment: >-
-          {{ ({'endpoint': fulfillment_endpoint}
-              if (fulfillment_endpoint | default('') | length > 0) else {})
-             | combine({'issuerUrl': fulfillment_issuer_url}
-                       if (fulfillment_issuer_url | default('') | length > 0) else {})
-             | combine(_osac_csi_driver_fulfillment_static) }}
-      node:
-        vendorSockets: "{{ _osac_csi_derived_vendor_sockets }}"
+    _osac_csi_driver_fulfillment: >-
+      {{ ({'endpoint': fulfillment_endpoint}
+          if (fulfillment_endpoint | default('') | length > 0) else {})
+         | combine({'issuerUrl': fulfillment_issuer_url}
+                   if (fulfillment_issuer_url | default('') | length > 0) else {})
+         | combine(_osac_csi_driver_fulfillment_static
+                   if ((fulfillment_endpoint | default('') | length > 0)
+                       and (fulfillment_issuer_url | default('') | length > 0)) else {}) }}
+    _osac_csi_driver_computed_values: >-
+      {{ {'driverName': osac_csi_driver_name,
+          'namespace': osac_csi_driver_namespace,
+          'node': {'vendorSockets': _osac_csi_derived_vendor_sockets}}
+         | combine({'controller': {'fulfillment': _osac_csi_driver_fulfillment}}
+                   if (_osac_csi_driver_fulfillment | length > 0) else {}) }}
   no_log: true

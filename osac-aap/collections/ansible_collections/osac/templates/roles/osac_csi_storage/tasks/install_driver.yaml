@@ -11,7 +11,9 @@
 #   fulfillment_endpoint              fulfillment-service endpoint for the controller
 #                                     (required when the driver talks to the hub
 #                                     fulfillment service, controller-enabled install;
-#                                     omitted from the values when unset)
+#                                     omitted from the values when unset; the controller
+#                                     credentials and tls are emitted only when both
+#                                     this and fulfillment_issuer_url are set)
 #   fulfillment_issuer_url            OAuth2 issuer URL for the controller
 #                                     (same requirement as fulfillment_endpoint)
 #   Callers map osac_job_vars.fulfillment_endpoint and

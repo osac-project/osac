@@ -28,6 +28,7 @@ argument_specs:
         description:
           - Fulfillment-service endpoint the driver controller connects to.
           - Required when the driver talks to the hub fulfillment service (controller-enabled install); omitted from the values when unset (guest node mode).
+          - The controller credentials and tls values are emitted only when both this and fulfillment_issuer_url are set.
           - Callers map osac_job_vars.fulfillment_endpoint to this top-level var.
       fulfillment_issuer_url:
         type: str

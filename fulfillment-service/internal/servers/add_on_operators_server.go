@@ -124,7 +124,7 @@ func (s *AddOnOperatorsServer) List(ctx context.Context,
 		privateRequest.SetLimit(request.GetLimit())
 	}
 	if request.GetFilter() != "" {
-		if _, err = s.filterValidator.Translate(ctx, request.GetFilter()); err != nil {
+		if _, _, err = s.filterValidator.Translate(ctx, request.GetFilter(), 0); err != nil {
 			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %v", err)
 		}
 	}

@@ -84,11 +84,13 @@ func (r *ListRequest[O]) do(ctx context.Context) (response *ListResponse[O], err
 	// Calculate the requested filter:
 	if r.filter != "" {
 		var filter string
-		filter, err = r.dao.filterTranslator.Translate(ctx, r.filter)
+		var filterArgs []any
+		filter, filterArgs, err = r.dao.filterTranslator.Translate(ctx, r.filter, len(r.sql.params))
 		if err != nil {
 			err = &ErrInvalidFilter{Reason: err.Error()}
 			return
 		}
+		r.sql.params = append(r.sql.params, filterArgs...)
 		if r.sql.filter.Len() > 0 {
 			r.sql.filter.WriteString(` and `)
 		}

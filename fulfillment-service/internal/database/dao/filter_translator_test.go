@@ -65,7 +65,7 @@ var _ = Describe("Filter translator", func() {
 
 		DescribeTable("Rejects explicit references to reserved metadata keys",
 			func(ctx context.Context, filter string) {
-				_, err := publicTranslator.Translate(ctx, filter)
+				_, _, err := publicTranslator.Translate(ctx, filter, 0)
 				Expect(err).To(MatchError(ContainSubstring("reserved metadata key")))
 			},
 			Entry("reserved label index", `this.metadata.labels['admin.osac.openshift.io/managed'] == 'system'`),
@@ -77,7 +77,7 @@ var _ = Describe("Filter translator", func() {
 
 		It("Keeps private metadata filtering and ordinary public keys available", func(ctx context.Context) {
 			filter := `this.metadata.labels['admin.osac.openshift.io/managed'] == 'system'`
-			translated, err := privateTranslator.Translate(ctx, filter)
+			translated, _, err := privateTranslator.Translate(ctx, filter, 0)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(translated).To(Equal(`labels @> '{"admin.osac.openshift.io/managed":"system"}'`))
 
@@ -87,7 +87,7 @@ var _ = Describe("Filter translator", func() {
 				`osac.openshift.io/tenant`,
 				`osac.openshift.io/owner-reference`,
 			} {
-				translated, err = publicTranslator.Translate(ctx, "this.metadata.labels['"+key+"'] == 'value'")
+				translated, _, err = publicTranslator.Translate(ctx, "this.metadata.labels['"+key+"'] == 'value'", 0)
 				Expect(err).ToNot(HaveOccurred(), "key %q should remain filterable", key)
 				Expect(translated).To(ContainSubstring(`labels @>`))
 			}
@@ -114,14 +114,14 @@ var _ = Describe("Filter translator", func() {
 				SetDescriptor((*testsv1.Status)(nil).ProtoReflect().Descriptor()).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
-			_, err = restricted.Translate(ctx, "this.my_bool")
+			_, _, err = restricted.Translate(ctx, "this.my_bool", 0)
 			Expect(err).To(HaveOccurred())
 		})
 
 		DescribeTable(
 			"Object translation",
 			func(ctx context.Context, filter, expected string) {
-				actual, err := translator.Translate(ctx, filter)
+				actual, _, err := translator.Translate(ctx, filter, 0)
 				Expect(err).ToNot(HaveOccurred())
 				Expect(actual).To(Equal(expected))
 			},
@@ -346,6 +346,11 @@ var _ = Describe("Filter translator", func() {
 				"false",
 			),
 			Entry(
+				"Translates list in empty list into false",
+				"[] in []",
+				"false",
+			),
+			Entry(
 				"Label equals value",
 				`this.metadata.labels['mylabel'] == 'myvalue'`,
 				`labels @> '{"mylabel":"myvalue"}'`,
@@ -485,7 +490,7 @@ var _ = Describe("Filter translator", func() {
 		DescribeTable(
 			"Enum translation errors",
 			func(ctx context.Context, filter string) {
-				_, err := translator.Translate(ctx, filter)
+				_, _, err := translator.Translate(ctx, filter, 0)
 				Expect(err).To(HaveOccurred())
 			},
 			Entry(
@@ -514,7 +519,7 @@ var _ = Describe("Filter translator", func() {
 		DescribeTable(
 			"'in' operator: unsupported target kind errors",
 			func(ctx context.Context, filter string) {
-				_, err := translator.Translate(ctx, filter)
+				_, _, err := translator.Translate(ctx, filter, 0)
 				Expect(err).To(HaveOccurred())
 			},
 			Entry(
@@ -528,7 +533,7 @@ var _ = Describe("Filter translator", func() {
 		)
 
 		It("Does not leak the JSON operand path in the unsupported-field-kind error", func(ctx context.Context) {
-			_, err := translator.Translate(ctx, `this.spec.spec_bytes == this.spec.spec_bytes`)
+			_, _, err := translator.Translate(ctx, `this.spec.spec_bytes == this.spec.spec_bytes`, 0)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(Equal(
 				"select of JSON field 'spec_bytes' of type 'osac.tests.v1.Spec' of kind 'bytes' isn't supported",
@@ -561,7 +566,7 @@ var _ = Describe("Filter translator", func() {
 				DescribeTable(
 					"Project translation",
 					func(ctx context.Context, filter, expected string) {
-						actual, err := translator.Translate(ctx, filter)
+						actual, _, err := translator.Translate(ctx, filter, 0)
 						Expect(err).ToNot(HaveOccurred())
 						Expect(actual).To(Equal(expected))
 					},

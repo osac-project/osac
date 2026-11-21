@@ -24,6 +24,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	testsv1 "github.com/osac-project/osac/proto/gen/osac/tests/v1"
 )
 
@@ -707,6 +708,91 @@ var _ = Describe("Generic DAO visibility", func() {
 			existsResponse, err := dao.Exists().SetId(namedID).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(existsResponse.GetExists()).To(BeFalse())
+		})
+
+		It("Binds repeated enum filters after visibility arguments and before pagination", func() {
+			allTenancy := auth.NewMockTenancyLogic(ctrl)
+			allTenancy.EXPECT().DetermineVisibility(gomock.Any()).Return(auth.TotalVisibility(), nil).AnyTimes()
+			seed, err := NewGenericDAO[*privatev1.DiskImage]().SetLogger(logger).SetTenancyLogic(allTenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			createImage := func(tenant, project, name string, architecture ...privatev1.Architecture) {
+				_, err := seed.Create().SetObject(privatev1.DiskImage_builder{
+					Metadata: privatev1.Metadata_builder{Tenant: tenant, Project: project, Name: name}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  "quay.io/test/image", Architecture: architecture,
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+			amd64 := privatev1.Architecture_ARCHITECTURE_AMD64
+			arm64 := privatev1.Architecture_ARCHITECTURE_ARM64
+			createImage("tenant-a", "", "default-amd64", amd64)
+			createImage("tenant-a", "p1", "multi-arch", amd64, arm64)
+			createImage("tenant-a", "p1", "arm64", arm64)
+			createImage("tenant-a", "p2", "hidden-project", amd64)
+			createImage("tenant-b", "", "hidden-tenant", amd64)
+			createImage("tenant-a", "p1", "legacy-zero", privatev1.Architecture_ARCHITECTURE_UNSPECIFIED)
+			var storedNull bool
+			err = tx.QueryRow(ctx, `select data->'spec'->'architecture'->0 = 'null'::jsonb from disk_images where name = $1`,
+				"legacy-zero").Scan(&storedNull)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(storedNull).To(BeTrue())
+
+			visibility, err := auth.NewVisibility().AddVisibleProject("tenant-a", "p1").Build()
+			Expect(err).ToNot(HaveOccurred())
+			tenancy := auth.NewMockTenancyLogic(ctrl)
+			tenancy.EXPECT().DetermineVisibility(gomock.Any()).Return(visibility, nil).AnyTimes()
+			images, err := NewGenericDAO[*privatev1.DiskImage]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			amd, err := images.List().SetFilter(`1 in this.spec.architecture`).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			names := make([]string, 0, len(amd.GetItems()))
+			for _, image := range amd.GetItems() {
+				names = append(names, image.GetMetadata().GetName())
+			}
+			Expect(names).To(ConsistOf("default-amd64", "multi-arch"))
+			arm, err := images.List().SetFilter(`2 in this.spec.architecture`).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			names = names[:0]
+			for _, image := range arm.GetItems() {
+				names = append(names, image.GetMetadata().GetName())
+			}
+			Expect(names).To(ConsistOf("multi-arch", "arm64"))
+
+			comparison, err := images.List().SetFilter(`(1 in this.spec.architecture) == true`).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			names = names[:0]
+			for _, image := range comparison.GetItems() {
+				names = append(names, image.GetMetadata().GetName())
+			}
+			Expect(names).To(ConsistOf("default-amd64", "multi-arch"))
+
+			folded, err := images.List().SetFilter(`(1 in this.spec.architecture) in [] || 2 in this.spec.architecture`).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			names = names[:0]
+			for _, image := range folded.GetItems() {
+				names = append(names, image.GetMetadata().GetName())
+			}
+			Expect(names).To(ConsistOf("multi-arch", "arm64"))
+
+			filter := `1 in this.spec.architecture || 2 in this.spec.architecture`
+			count, err := images.List().SetFilter(filter).SetLimit(0).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(count.GetTotal()).To(Equal(int32(3)))
+			Expect(count.GetItems()).To(BeEmpty())
+			all, err := images.List().SetFilter(filter).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(all.GetItems()).To(HaveLen(3))
+			page, err := images.List().SetFilter(filter).SetOffset(1).SetLimit(1).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(page.GetTotal()).To(Equal(int32(3)))
+			Expect(page.GetItems()).To(HaveLen(1))
+			Expect(page.GetItems()[0].GetId()).To(Equal(all.GetItems()[1].GetId()))
+
+			_, err = images.List().SetFilter(`0 in this.spec.architecture`).Do(ctx)
+			Expect(err).To(MatchError(ContainSubstring("does not support zero values stored as null")))
 		})
 
 		It("Includes granted named projects and their descendants", func() {

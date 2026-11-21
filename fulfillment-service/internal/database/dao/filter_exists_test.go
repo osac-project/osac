@@ -36,13 +36,13 @@ var _ = Describe("Repeated message exists translation", func() {
 	})
 
 	It("translates a nested field predicate", func(ctx context.Context) {
-		sql, err := translator.Translate(ctx, `this.my_repeated.exists(item, item.my_msg.my_string == 'target')`)
+		sql, _, err := translator.Translate(ctx, `this.my_repeated.exists(item, item.my_msg.my_string == 'target')`, 0)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(sql).To(Equal(`exists (select 1 from jsonb_array_elements(data->'my_repeated') as cel_element_0(value) where cel_element_0.value->'my_msg'->>'my_string' = 'target')`))
 	})
 
 	DescribeTable("rejects unsupported comprehensions and ranges", func(ctx context.Context, filter string) {
-		_, err := translator.Translate(ctx, filter)
+		_, _, err := translator.Translate(ctx, filter, 0)
 		Expect(err).To(HaveOccurred())
 	},
 		Entry("all", `this.my_repeated.all(x, x.my_string == 'target')`),
@@ -58,7 +58,7 @@ var _ = Describe("Repeated message exists translation", func() {
 		translator, err := NewFilterTranslator().SetLogger(logger).
 			SetDescriptor((*publicv1.RoleBinding)(nil).ProtoReflect().Descriptor()).Build()
 		Expect(err).ToNot(HaveOccurred())
-		sql, err := translator.Translate(ctx, filter)
+		sql, _, err := translator.Translate(ctx, filter, 0)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(sql).To(ContainSubstring("jsonb_array_elements"))
 	},
@@ -74,9 +74,36 @@ var _ = Describe("Repeated message exists translation", func() {
 			`this.spec.users.exists(u, this.status.users.size() > 0)`,
 			`this.spec.users.exists(u, this.metadata.labels['admin.osac.openshift.io/managed'] == 'true')`,
 		} {
-			_, err := translator.Translate(ctx, filter)
+			_, _, err := translator.Translate(ctx, filter, 0)
 			Expect(err).To(HaveOccurred())
 		}
+	})
+
+	It("binds enum membership across nested and sibling exists scopes", func(ctx context.Context) {
+		translator, err := NewFilterTranslator().SetLogger(logger).
+			SetDescriptor((*publicv1.DiskImagesListResponse)(nil).ProtoReflect().Descriptor()).Build()
+		Expect(err).ToNot(HaveOccurred())
+		filter := `this.items.exists(x, 1 in x.spec.architecture && this.items.exists(y, 2 in y.spec.architecture)) && this.items.exists(z, 3 in z.spec.architecture)`
+		sql, args, err := translator.Translate(ctx, filter, 2)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(sql).To(Equal(`exists (select 1 from jsonb_array_elements(data->'items') as cel_element_0(value) where ` +
+			`cel_element_0.value->'spec'->'architecture' @> jsonb_build_array($3::text) and ` +
+			`exists (select 1 from jsonb_array_elements(data->'items') as cel_element_1(value) where ` +
+			`cel_element_1.value->'spec'->'architecture' @> jsonb_build_array($4::text))) and ` +
+			`exists (select 1 from jsonb_array_elements(data->'items') as cel_element_0(value) where ` +
+			`cel_element_0.value->'spec'->'architecture' @> jsonb_build_array($5::text))`))
+		Expect(args).To(Equal([]any{"ARCHITECTURE_AMD64", "ARCHITECTURE_ARM64", "ARCHITECTURE_S390X"}))
+
+		filter = `this.items.exists(x, 1 in x.spec.architecture && this.items.exists(y, 0 in y.spec.architecture))`
+		sql, args, err = translator.Translate(ctx, filter, 2)
+		Expect(err).To(HaveOccurred())
+		Expect(sql).To(BeEmpty())
+		Expect(args).To(BeEmpty())
+
+		sql, args, err = translator.Translate(ctx, `this.items.exists(x, 2 in x.spec.architecture)`, 5)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(sql).To(ContainSubstring(`jsonb_build_array($6::text)`))
+		Expect(args).To(Equal([]any{"ARCHITECTURE_ARM64"}))
 	})
 
 	It("keeps concurrent and failed translations independent", func(ctx context.Context) {
@@ -86,12 +113,12 @@ var _ = Describe("Repeated message exists translation", func() {
 			wg.Go(func() {
 				defer GinkgoRecover()
 				for range 5 {
-					_, err := translator.Translate(ctx, `this.my_repeated.exists(x, x.my_bytes == b'invalid')`)
+					_, _, err := translator.Translate(ctx, `this.my_repeated.exists(x, x.my_bytes == b'invalid')`, 0)
 					Expect(err).To(HaveOccurred())
-					sql, err := translator.Translate(ctx, filter)
+					sql, _, err := translator.Translate(ctx, filter, 0)
 					Expect(err).ToNot(HaveOccurred())
 					Expect(sql).To(ContainSubstring(`jsonb_array_elements(cel_element_0.value->'my_repeated') as cel_element_1(value)`))
-					_, err = translator.Translate(ctx, `this.my_string == 'unchanged'`)
+					_, _, err = translator.Translate(ctx, `this.my_string == 'unchanged'`, 0)
 					Expect(err).ToNot(HaveOccurred())
 				}
 			})

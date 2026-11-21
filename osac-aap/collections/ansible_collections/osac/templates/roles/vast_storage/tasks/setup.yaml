@@ -77,73 +77,16 @@
   no_log: true
   failed_when: false
 
-- name: Reduce the hub Secret lookup to booleans and clear it
+- name: Refuse to continue without admin credentials unless the hub Secret is readable and absent
   when: _vast_tenant_credentials_only | bool
-  ansible.builtin.set_fact:
-    _vast_setup_hub_secret_unreadable: >-
-      {{ _vast_setup_hub_secret.resources is not defined
-         or (_vast_setup_hub_secret.api_found is defined and not _vast_setup_hub_secret.api_found) }}
-    _vast_setup_hub_secret_present: >-
-      {{ _vast_setup_hub_secret.resources is defined
-         and (_vast_setup_hub_secret.resources | length > 0) }}
-    _vast_setup_hub_secret: {}
-  no_log: true
-
-- name: Emit structured failure artifact for unreadable hub Secret
-  when:
-    - _vast_tenant_credentials_only | bool
-    - _vast_setup_hub_secret_unreadable | bool
-  ansible.builtin.set_stats:
-    data:
-      osac_storage_provider_failures:
-        - reason: hub_secret_unreadable
-          tiers: "{{ _provider_tiers | map(attribute='name') | list }}"
-          backend_ids:
-            - "{{ _vast_backend_id }}"
-          message: >-
-            Could not read hub Secret
-            '{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}'
-            for backend '{{ _vast_backend_id }}'.
-    aggregate: false
-
-- name: Fail when the hub Secret cannot be read without admin credentials
-  when:
-    - _vast_tenant_credentials_only | bool
-    - _vast_setup_hub_secret_unreadable | bool
-  ansible.builtin.fail:
-    msg: >-
-      Could not read hub Secret
-      '{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}';
+  ansible.builtin.include_tasks: _refuse_without_admin_credentials.yaml
+  vars:
+    _vast_hub_secret_var: _vast_setup_hub_secret
+    _vast_hub_secret_cleared: {}
+    _vast_refuse_unreadable_tail: >-
       refusing to report setup for backend '{{ _vast_backend_id }}' without knowing whether
       admin-flow resources exist.
-
-- name: Emit structured failure artifact for admin-flow leftovers
-  when:
-    - _vast_tenant_credentials_only | bool
-    - _vast_setup_hub_secret_present | bool
-  ansible.builtin.set_stats:
-    data:
-      osac_storage_provider_failures:
-        - reason: admin_flow_leftovers_without_credentials
-          tiers: "{{ _provider_tiers | map(attribute='name') | list }}"
-          backend_ids:
-            - "{{ _vast_backend_id }}"
-          message: >-
-            Hub Secret
-            '{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}'
-            exists but no admin credentials were supplied for backend '{{ _vast_backend_id }}'.
-    aggregate: false
-
-- name: Fail when admin-flow leftovers exist and no admin credentials were supplied
-  when:
-    - _vast_tenant_credentials_only | bool
-    - _vast_setup_hub_secret_present | bool
-  ansible.builtin.fail:
-    msg: >-
-      Hub Secret '{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}'
-      exists but no admin credentials were supplied for backend '{{ _vast_backend_id }}'.
-      The VAST objects it records were created with admin credentials and cannot be
-      managed without them.
+    _vast_refuse_present_tail: cannot be managed without them.
 
 - name: Report tenant-credentials-only mode in the tenant config
   when: _vast_tenant_credentials_only | bool

@@ -33,85 +33,25 @@
 - name: Decide whether this backend runs without VAST admin credentials
   ansible.builtin.include_tasks: _detect_credential_mode.yaml
 
-- name: Reduce the hub Secret lookup to booleans and clear it (tenant-credentials-only mode)
-  when: _vast_tenant_credentials_only | bool
-  ansible.builtin.set_fact:
-    _vast_teardown_hub_secret_unreadable: >-
-      {{ _vast_teardown_config.resources is not defined
-         or (_vast_teardown_config.api_found is defined and not _vast_teardown_config.api_found) }}
-    _vast_teardown_hub_secret_present: >-
-      {{ _vast_teardown_config.resources is defined
-         and (_vast_teardown_config.resources | length > 0) }}
-    # Empty `resources` list keeps the Extract task's condition evaluable and holds no data.
-    _vast_teardown_config:
-      resources: []
-  no_log: true
-
-- name: Emit structured failure artifact for unreadable hub Secret
-  when:
-    - _vast_tenant_credentials_only | bool
-    - _vast_teardown_hub_secret_unreadable | bool
-  ansible.builtin.set_stats:
-    data:
-      osac_storage_provider_failures:
-        - reason: hub_secret_unreadable
-          tiers: "{{ _provider_tiers | map(attribute='name') | list }}"
-          backend_ids:
-            - "{{ _vast_backend_id }}"
-          message: >-
-            Could not read hub Secret
-            '{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}'
-            for backend '{{ _vast_backend_id }}'.
-    aggregate: false
-
 # The dispatcher's ignore_errors on its looped include_tasks does NOT catch
 # failures raised inside included files (verified on ansible-core 2.18.5), so
-# the two refusals below fail the teardown job and stop that tenant's remaining
-# backends. They are not best-effort.
-- name: Fail when the hub Secret cannot be read without admin credentials
-  when:
-    - _vast_tenant_credentials_only | bool
-    - _vast_teardown_hub_secret_unreadable | bool
-  ansible.builtin.fail:
-    msg: >-
-      Could not read hub Secret
-      '{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}';
+# the two refusals in the include below fail the teardown job and stop that
+# tenant's remaining backends. They are not best-effort. The include resets
+# `_vast_teardown_config` to an empty `resources` list, which keeps the Extract
+# task's condition evaluable and holds no data.
+- name: Refuse to continue without admin credentials unless the hub Secret is readable and absent
+  when: _vast_tenant_credentials_only | bool
+  ansible.builtin.include_tasks: _refuse_without_admin_credentials.yaml
+  vars:
+    _vast_hub_secret_var: _vast_teardown_config
+    _vast_hub_secret_cleared:
+      resources: []
+    _vast_refuse_unreadable_tail: >-
       refusing to treat backend '{{ _vast_backend_id }}' as having nothing to clean up.
-
-- name: Emit structured failure artifact for admin-flow leftovers
-  when:
-    - _vast_tenant_credentials_only | bool
-    - _vast_teardown_hub_secret_present | bool
-  ansible.builtin.set_stats:
-    data:
-      osac_storage_provider_failures:
-        - reason: admin_flow_leftovers_without_credentials
-          tiers: "{{ _provider_tiers | map(attribute='name') | list }}"
-          backend_ids:
-            - "{{ _vast_backend_id }}"
-          message: >-
-            Hub Secret
-            '{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}'
-            exists but no admin credentials were supplied for backend '{{ _vast_backend_id }}'.
-    aggregate: false
-
-- name: Fail when admin-flow leftovers exist and no admin credentials were supplied
-  when:
-    - _vast_tenant_credentials_only | bool
-    - _vast_teardown_hub_secret_present | bool
-  ansible.builtin.fail:
-    msg: >-
-      Hub Secret '{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}'
-      exists but no admin credentials were supplied for backend '{{ _vast_backend_id }}'.
-      The VAST objects it records were created with admin credentials and cannot be
-      removed without them.
-
-- name: Record whether this teardown is skipped for lack of admin credentials
-  ansible.builtin.set_fact:
-    _vast_teardown_skip: "{{ _vast_tenant_credentials_only | bool }}"
+    _vast_refuse_present_tail: cannot be removed without them.
 
 - name: Log that there is nothing to remove
-  when: _vast_teardown_skip | bool
+  when: _vast_tenant_credentials_only | bool
   ansible.builtin.debug:
     msg: >-
       No admin credentials supplied for VAST backend '{{ _vast_backend_id }}' and no hub
@@ -128,7 +68,7 @@
   no_log: true
 
 - name: Cleanup VAST backend resources
-  when: not (_vast_teardown_skip | bool)
+  when: not (_vast_tenant_credentials_only | bool)
   block:
     - name: Resolve VAST admin credentials for VMS API cleanup
       ansible.builtin.include_tasks: read_credentials.yaml
@@ -354,7 +294,7 @@
       no_log: true
 
 - name: Report backend teardown summary
-  when: not (_vast_teardown_skip | bool)
+  when: not (_vast_tenant_credentials_only | bool)
   ansible.builtin.debug:
     msg: >-
       Backend teardown for tenant '{{ tenant_name }}' complete.
@@ -370,5 +310,5 @@
       Backend teardown for tenant '{{ tenant_name }}' did not fully succeed —
       one or more VAST resources could not be deleted. Re-run teardown to retry.
   when:
-    - not (_vast_teardown_skip | bool)
+    - not (_vast_tenant_credentials_only | bool)
     - not (_vast_teardown_clean | default(false) | bool)

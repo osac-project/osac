@@ -408,9 +408,10 @@
 # ── Test: credential-less setup refuses when admin-flow leftovers exist ──
 # The hub Secret of an earlier admin-credentials run records VAST objects that
 # only admin credentials can remove, so setup must fail rather than report
-# success. The dispatcher does not swallow setup failures (only teardown_backend
-# is included with ignore_errors), so the failure is observed through the
-# storage_provider role itself.
+# success. The failure is observed through the storage_provider role itself,
+# which surfaces the role's own failure and message. (The dispatcher's
+# ignore_errors on its looped include_tasks does not catch failures raised inside
+# included files, verified on ansible-core 2.18.5.)
 - name: "Storage Provider Setup - Tenant-credentials-only setup with leftovers"
   hosts: localhost
   gather_facts: false
@@ -504,6 +505,8 @@
               - "_tco_b_secret_name in (ansible_failed_result.msg | default(''))"
               - _tco_b_calls.json | length == 0
               - _tco_b_secret.resources | length == 1
+              - osac_storage_provider_failures[0].reason == 'admin_flow_leftovers_without_credentials'
+              - "'be-setup-tco-b' in osac_storage_provider_failures[0].backend_ids"
             fail_msg: >-
               Setup with leftovers must refuse naming the hub Secret, make no VAST calls
               and leave the Secret in place. Message: {{ ansible_failed_result.msg | default('unknown error') }}
@@ -552,15 +555,45 @@
         validate_certs: false
         method: POST
 
+    # A module_defaults host override does not reach the role (the dispatcher's
+    # nested module_defaults wins), so the unreachable hub API is a kubeconfig
+    # passed as storage_provider_target_kubeconfig. The user has no token: a token
+    # refresh would re-apply the real server.
+    - name: Create a temporary kubeconfig for the unreachable hub API
+      ansible.builtin.tempfile:
+        state: file
+        suffix: .kubeconfig
+      register: _tco_c_kubeconfig
+
+    - name: Write the unreachable-hub kubeconfig
+      ansible.builtin.copy:
+        dest: "{{ _tco_c_kubeconfig.path }}"
+        mode: "0600"
+        content: |
+          apiVersion: v1
+          kind: Config
+          clusters:
+            - name: unreachable
+              cluster:
+                server: https://127.0.0.1:9
+                insecure-skip-tls-verify: true
+          users:
+            - name: nobody
+              user: {}
+          contexts:
+            - name: unreachable
+              context:
+                cluster: unreachable
+                user: nobody
+          current-context: unreachable
+
     - name: Run setup with an unreachable hub API
-      module_defaults:
-        kubernetes.core.k8s_info:
-          host: "https://127.0.0.1:9"
-          validate_certs: false
       block:
         - name: Call storage_provider role with setup action
           ansible.builtin.include_role:
             name: osac.service.storage_provider
+          vars:
+            storage_provider_target_kubeconfig: "{{ _tco_c_kubeconfig.path }}"
 
         - name: Fail test if setup succeeded without reading the hub Secret
           ansible.builtin.fail:
@@ -580,10 +613,115 @@
             that:
               - "'could not read hub secret' in (ansible_failed_result.msg | default('') | lower)"
               - _tco_c_calls.json | length == 0
+              - osac_storage_provider_failures[0].reason == 'hub_secret_unreadable'
+              - "'be-setup-tco-c' in osac_storage_provider_failures[0].backend_ids"
             fail_msg: >-
               Setup with an unreadable hub Secret must refuse and make no VAST calls.
               Message: {{ ansible_failed_result.msg | default('unknown error') }}
             success_msg: "Setup refused to proceed with an unreadable hub Secret"
+
+      always:
+        - name: Delete the temporary kubeconfig
+          ansible.builtin.file:
+            path: "{{ _tco_c_kubeconfig.path }}"
+            state: absent
+
+# ── Test: one tenant, one admin backend and one tenant-credentials-only backend ──
+# The admin backend runs the full flow against the first mock (18443). The
+# credential-less backend must make no calls to the second mock (18445) and
+# write no hub Secret.
+- name: "Storage Provider Setup - Setup with mixed admin and tenant-credentials-only backends"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+    vast_storage_config_namespace: osac-system
+    tenant_name: "test-setup-mixed"
+    tenant_namespace: "osac-system"
+    tenant_uid: "test-uid-setup-mixed"
+    storage_provider_tiers:
+      - name: gold
+        protocol: nfs
+        provider: vast
+        backend_id: be-mixed-admin
+      - name: silver
+        protocol: nfs
+        provider: vast
+        backend_id: be-mixed-tco
+    storage_provider_backend_connections:
+      be-mixed-admin:
+        endpoint: "127.0.0.1:18443"
+        username: "admin"
+        password: "{{ _mock_vast_password }}"
+      be-mixed-tco:
+        endpoint: "127.0.0.1:18445"
+    storage_provider_action: setup
+    storage_provider_provisioning_target: vmaas
+    vast_storage_validate_certs: false
+
+  tasks:
+    - name: Clean slate for mixed-mode setup
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item }}"
+        namespace: "osac-system"
+      loop:
+        - "vast-tenant-config-test-setup-mixed-be-mixed-admin"
+        - "vast-tenant-config-test-setup-mixed-be-mixed-tco"
+
+    - name: Reset both mock VMS servers for mixed-mode setup
+      ansible.builtin.uri:
+        url: "https://{{ item }}/_reset"
+        validate_certs: false
+        method: POST
+      loop:
+        - "127.0.0.1:18443"
+        - "127.0.0.1:18445"
+
+    - name: Call storage_provider role with setup action for both backends
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+
+    - name: Get second mock server call log after mixed-mode setup
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18445/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _mixed_tco_calls
+
+    - name: Read hub Secrets after mixed-mode setup
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "{{ item }}"
+        namespace: "osac-system"
+      loop:
+        - "vast-tenant-config-test-setup-mixed-be-mixed-admin"
+        - "vast-tenant-config-test-setup-mixed-be-mixed-tco"
+      register: _mixed_secrets
+
+    - name: Assert each backend followed its own mode
+      ansible.builtin.assert:
+        that:
+          - storage_provider_tenant_configs['be-mixed-admin'].vast_tenant_id is defined
+          - storage_provider_tenant_configs['be-mixed-admin'].tenant_credentials_only is not defined
+          - storage_provider_tenant_configs['be-mixed-tco'].tenant_credentials_only is sameas true
+          - _mixed_tco_calls.json | length == 0
+          - _mixed_secrets.results[0].resources | length == 1
+          - _mixed_secrets.results[1].resources | length == 0
+        fail_msg: >-
+          The admin backend must run the full flow and write its hub Secret; the
+          credential-less backend must report tenant_credentials_only: true, make no
+          calls (saw {{ _mixed_tco_calls.json | length }}) and write no hub Secret.
+        success_msg: "Mixed-mode setup: admin backend provisioned, credential-less backend skipped"
 
 # ── Cleanup ──
 - name: "Storage Provider Setup - Cleanup"
@@ -603,4 +741,6 @@
         - "vast-tenant-config-test-setup-tco-be-setup-tco"
         - "vast-tenant-config-test-setup-tco-b-be-setup-tco-b"
         - "vast-tenant-config-test-setup-tco-c-be-setup-tco-c"
+        - "vast-tenant-config-test-setup-mixed-be-mixed-admin"
+        - "vast-tenant-config-test-setup-mixed-be-mixed-tco"
       failed_when: false

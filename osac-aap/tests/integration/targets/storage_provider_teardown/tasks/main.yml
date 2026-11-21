@@ -1050,9 +1050,10 @@
 
 # ── Tenant-credentials-only teardown cases ──
 # A connection entry with an endpoint and no username or password selects the
-# mode. The storage_provider dispatcher includes teardown_backend with
-# ignore_errors, so these cases call the vast_storage role directly to observe
-# failures. Each case is its own play with its tenant and backend as play vars,
+# mode. The dispatcher's ignore_errors on its looped include_tasks does not catch
+# failures raised inside included files (verified on ansible-core 2.18.5), so
+# cases A to C call the vast_storage role directly to observe the role's own
+# failure and message; case D runs through the dispatcher. Each case is its own play with its tenant and backend as play vars,
 # so a run started with --start-at-task at its clean slate has what it needs.
 
 # Case A: nothing to clean up, so the role skips without error and no VAST calls.
@@ -1201,6 +1202,8 @@
               - "_tco_secret_name in (ansible_failed_result.msg | default(''))"
               - _tco_b_calls.json | selectattr('method', 'equalto', 'DELETE') | list | length == 0
               - _tco_b_secret.resources | length == 1
+              - osac_storage_provider_failures[0].reason == 'admin_flow_leftovers_without_credentials'
+              - _tco_backend in osac_storage_provider_failures[0].backend_ids
             fail_msg: >-
               Case B must refuse naming the hub Secret, issue no DELETE and keep the Secret.
               Message: {{ ansible_failed_result.msg | default('unknown error') }}
@@ -1275,21 +1278,96 @@
             that:
               - "'could not read hub secret' in (ansible_failed_result.msg | default('') | lower)"
               - _tco_c_calls.json | length == 0
+              - osac_storage_provider_failures[0].reason == 'hub_secret_unreadable'
+              - _tco_backend in osac_storage_provider_failures[0].backend_ids
             fail_msg: >-
               Case C must refuse as an unreadable hub Secret and make no VAST calls.
               Message: {{ ansible_failed_result.msg | default('unknown error') }}
             success_msg: "Case C: refused to treat an unreadable hub Secret as absent"
+
+# Case D: the full dispatcher path with nothing to clean up. Succeeds, makes no
+# VAST calls and leaves no hub Secret.
+- name: "Storage Provider TCO Teardown - Case D, dispatcher with nothing to clean"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    vast_storage_config_namespace: osac-system
+    tenant_name: "test-td-tco-d"
+    tenant_namespace: "osac-system"
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        backend_id: be-td-tco-d
+    storage_provider_backend_connections:
+      be-td-tco-d:
+        endpoint: "127.0.0.1:18443"
+    storage_provider_provisioning_target: vmaas
+    vast_storage_validate_certs: false
+
+  tasks:
+    - name: Clean slate for teardown case D
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-td-tco-d-be-td-tco-d"
+        namespace: "osac-system"
+
+    - name: Reset mock VMS server for teardown case D
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_reset"
+        validate_certs: false
+        method: POST
+
+    - name: Call storage_provider role with teardown_backend action and no admin credentials
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: teardown_backend
+
+    - name: Get mock server call log after case D
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _tco_d_calls
+
+    - name: Read hub Secret after case D
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-td-tco-d-be-td-tco-d"
+        namespace: "osac-system"
+      register: _tco_d_secret
+
+    - name: Assert case D made no VAST calls and left no hub Secret
+      ansible.builtin.assert:
+        that:
+          - _tco_d_calls.json | length == 0
+          - _tco_d_secret.resources | length == 0
+        fail_msg: >-
+          Case D must make no VAST calls (saw {{ _tco_d_calls.json | length }}) and leave no hub Secret.
+        success_msg: "Case D: dispatcher teardown succeeded with nothing to clean"
 
 - name: "Storage Provider TCO Teardown - Cleanup"
   hosts: localhost
   gather_facts: false
 
   tasks:
-    - name: Delete case B hub Secret
+    - name: Delete case B and case D hub Secrets
       kubernetes.core.k8s:
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-tenant-config-test-td-tco-b-be-td-tco-b"
+        name: "{{ item }}"
         namespace: "osac-system"
+      loop:
+        - "vast-tenant-config-test-td-tco-b-be-td-tco-b"
+        - "vast-tenant-config-test-td-tco-d-be-td-tco-d"
       failed_when: false

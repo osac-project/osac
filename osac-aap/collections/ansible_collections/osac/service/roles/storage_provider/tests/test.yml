@@ -1812,12 +1812,14 @@
         storage_provider_action: setup
         tenant_name: "tenant-tco"
         tenant_namespace: "osac-tenants"
+        vast_storage_config_namespace: osac-system
 
     - name: Assert setup reported tenant-credentials-only mode and built no connection
       ansible.builtin.assert:
         that:
           - storage_provider_tenant_configs['be-tco'] is mapping
           - storage_provider_tenant_configs['be-tco'].tenant_credentials_only is sameas true
+          - storage_provider_tenant_configs['be-tco'].vast_tenant_id is not defined
           - vast_password | default('') | length == 0
           - _vast_vms_conn is not defined or _vast_vms_conn | length == 0
         fail_msg: >-
@@ -1847,12 +1849,14 @@
         storage_provider_action: setup
         tenant_name: "tenant-tco"
         tenant_namespace: "osac-tenants"
+        vast_storage_config_namespace: osac-system
 
     - name: Assert setup reported tenant-credentials-only mode and built no connection
       ansible.builtin.assert:
         that:
           - storage_provider_tenant_configs['be-tco'] is mapping
           - storage_provider_tenant_configs['be-tco'].tenant_credentials_only is sameas true
+          - storage_provider_tenant_configs['be-tco'].vast_tenant_id is not defined
           - vast_password | default('') | length == 0
           - _vast_vms_conn is not defined or _vast_vms_conn | length == 0
         fail_msg: >-

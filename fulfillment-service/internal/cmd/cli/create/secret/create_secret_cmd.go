@@ -150,20 +150,23 @@ func parseSecretType(value string) (publicv1.SecretType, error) {
 		return publicv1.SecretType_SECRET_TYPE_KUBECONFIG, nil
 	case "user-data":
 		return publicv1.SecretType_SECRET_TYPE_USER_DATA, nil
+	case "windows-user-data":
+		return publicv1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, nil
 	case "value":
 		return publicv1.SecretType_SECRET_TYPE_VALUE, nil
 	case "ssh-public-key":
 		return publicv1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY, nil
 	default:
 		return publicv1.SecretType_SECRET_TYPE_UNSPECIFIED, fmt.Errorf(
-			"invalid secret type %q: must be one of opaque, pull-secret, kubeconfig, user-data, value, or ssh-public-key",
+			"invalid secret type %q: must be one of opaque, pull-secret, kubeconfig, "+
+				"user-data, windows-user-data, value, or ssh-public-key",
 			value,
 		)
 	}
 }
 
 // parseFromFileSpec parses a single --from-file flag value into a key and path.
-// Formats: "key=path", "path" (key derived from filename), "-" (stdin, key="stdin").
+// Formats: "key=path", "path" (key derived from filename), "key=-" (stdin).
 func parseFromFileSpec(value string) (key, path string, err error) {
 	if value == "" {
 		return "", "", fmt.Errorf("--from-file value must not be empty")
@@ -290,6 +293,27 @@ To create a pull secret:
 {{ binary }} create secret --name registry-credentials --type=pull-secret \
   --from-file=.dockerconfigjson=/path/to/pull-secret.json
 {{ bt 3 }}
+
+To create a Windows user-data Secret:
+
+{{ bt 3 }}shell
+{{ binary }} create secret --name windows-unattend --type=windows-user-data \
+  --from-file=userdata=/path/to/Unattend.xml
+{{ bt 3 }}
+
+Use the explicit {{ bt }}userdata={{ bt }} key and supply the XML file directly,
+without base64 encoding. The server requires a nonempty UTF-8 XML 1.0 document
+of at most 65,536 bytes (64 KiB), including any BOM, declaration, and whitespace.
+An XML declaration is optional; a declared encoding must be UTF-8 (case-insensitive).
+DTDs and other declarations are prohibited, except comments and CDATA sections.
+
+Validation checks XML syntax, without enforcing namespace rules, Microsoft schemas,
+or Windows settings. Acceptance does not guarantee a usable Windows answer file.
+The original bytes, including a UTF-8 BOM, are preserved. Data and type cannot be
+changed after creation; create a new Secret to use different content.
+
+Validation errors omit submitted XML. Create output omits Secret data;
+{{ bt }}get secret NAME -o yaml{{ bt }} or {{ bt }}-o json{{ bt }} returns data as base64 strings.
 `
 
 const nameFlagHelp = `
@@ -308,6 +332,8 @@ _KEY=VALUE_ - Label to set on the secret. Can be specified multiple times.
 
 const typeFlagHelp = `
 _TYPE_ - Secret type. One of {{ bt }}opaque{{ bt }}, {{ bt }}pull-secret{{ bt }},
-{{ bt }}kubeconfig{{ bt }}, {{ bt }}user-data{{ bt }}, {{ bt }}value{{ bt }}, or
-{{ bt }}ssh-public-key{{ bt }}.
+{{ bt }}kubeconfig{{ bt }}, {{ bt }}user-data{{ bt }}, {{ bt }}windows-user-data{{ bt }},
+{{ bt }}value{{ bt }}, or {{ bt }}ssh-public-key{{ bt }}. Use {{ bt }}user-data{{ bt }}
+for Linux/cloud-init or shell-style data, or {{ bt }}windows-user-data{{ bt }} for
+Windows answer-file XML.
 `

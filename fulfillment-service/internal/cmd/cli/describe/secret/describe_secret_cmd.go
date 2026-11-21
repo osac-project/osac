@@ -162,6 +162,8 @@ func formatSecretType(value publicv1.SecretType) string {
 		return "Kubeconfig"
 	case publicv1.SecretType_SECRET_TYPE_USER_DATA:
 		return "User Data"
+	case publicv1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA:
+		return "Windows User Data"
 	case publicv1.SecretType_SECRET_TYPE_OPAQUE:
 		return "Opaque"
 	case publicv1.SecretType_SECRET_TYPE_VALUE:

@@ -14,6 +14,7 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"bytes"
 	"context"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -21,6 +22,7 @@ import (
 	"go.uber.org/mock/gomock"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
@@ -228,6 +230,80 @@ var _ = Describe("Secrets Server", func() {
 			Expect(resp.GetObject().GetId()).To(Equal("secret-1"))
 			Expect(resp.GetObject().GetData()).To(BeEmpty())
 		})
+
+		DescribeTable("maps user-data Secret types to the private contract",
+			func(publicType publicv1.SecretType, privateType privatev1.SecretType, userData []byte) {
+				var capturedRequest *privatev1.SecretsCreateRequest
+
+				mock := &mockPrivateSecretsServer{
+					createFunc: func(_ context.Context,
+						req *privatev1.SecretsCreateRequest) (*privatev1.SecretsCreateResponse, error) {
+						capturedRequest = req
+						resp := &privatev1.SecretsCreateResponse{}
+						resp.SetObject(privatev1.Secret_builder{
+							Id:      "secret-1",
+							Type:    privateType,
+							Data:    map[string][]byte{"userdata": bytes.Clone(userData)},
+							Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
+						}.Build())
+						return resp, nil
+					},
+				}
+
+				server := newTestSecretsServer(mock)
+				response, err := server.Create(ctx, publicv1.SecretsCreateRequest_builder{
+					Object: publicv1.Secret_builder{
+						Metadata: publicv1.Metadata_builder{
+							Name: "my-secret",
+						}.Build(),
+						Type: publicType,
+						Data: map[string][]byte{"userdata": bytes.Clone(userData)},
+					}.Build(),
+				}.Build())
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetType()).To(Equal(publicType))
+				Expect(response.GetObject().GetData()).To(BeEmpty())
+				Expect(capturedRequest).ToNot(BeNil())
+				Expect(capturedRequest.GetObject().GetType()).To(Equal(privateType))
+				Expect(capturedRequest.GetObject().GetBackend()).
+					To(Equal(privatev1.SecretBackend_SECRET_BACKEND_VAULT))
+				Expect(capturedRequest.GetObject().GetData()).
+					To(HaveKeyWithValue("userdata", userData))
+			},
+			Entry("generic user data",
+				publicv1.SecretType_SECRET_TYPE_USER_DATA,
+				privatev1.SecretType_SECRET_TYPE_USER_DATA, []byte("#cloud-config")),
+			Entry("Windows user data",
+				publicv1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+				privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, []byte("\xef\xbb\xbf<root/>")),
+		)
+
+		It("forwards private Windows user-data validation errors", func() {
+			const sentinel = "OSAC-7712-PUBLIC-SECRET-SENTINEL"
+			mock := &mockPrivateSecretsServer{
+				createFunc: func(_ context.Context,
+					_ *privatev1.SecretsCreateRequest) (*privatev1.SecretsCreateResponse, error) {
+					return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+						"secret type SECRET_TYPE_WINDOWS_USER_DATA data[\"userdata\"] is not well-formed XML")
+				},
+			}
+
+			server := newTestSecretsServer(mock)
+			_, err := server.Create(ctx, publicv1.SecretsCreateRequest_builder{
+				Object: publicv1.Secret_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "windows-secret",
+					}.Build(),
+					Type: publicv1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+					Data: map[string][]byte{"userdata": []byte("<root>" + sentinel)},
+				}.Build(),
+			}.Build())
+
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("not well-formed XML"))
+			Expect(err.Error()).NotTo(ContainSubstring(sentinel))
+		})
 	})
 
 	Describe("List", func() {
@@ -246,7 +322,8 @@ var _ = Describe("Secrets Server", func() {
 						}.Build(),
 						privatev1.Secret_builder{
 							Id:      "secret-2",
-							Data:    map[string][]byte{"key2": []byte("val2")},
+							Type:    privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+							Data:    map[string][]byte{"userdata": []byte("<root/>")},
 							Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
 						}.Build(),
 					})
@@ -259,6 +336,7 @@ var _ = Describe("Secrets Server", func() {
 
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resp.GetItems()).To(HaveLen(2))
+			Expect(resp.GetItems()[1].GetType()).To(Equal(publicv1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA))
 			for _, item := range resp.GetItems() {
 				Expect(item.GetData()).To(BeEmpty())
 			}
@@ -294,39 +372,96 @@ var _ = Describe("Secrets Server", func() {
 	})
 
 	Describe("Get", func() {
-		It("returns data in response", func() {
+		DescribeTable("returns the type and exact data in Get responses",
+			func(privateType privatev1.SecretType, publicType publicv1.SecretType, data map[string][]byte) {
+				mock := &mockPrivateSecretsServer{
+					getFunc: func(_ context.Context,
+						_ *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
+						responseData := make(map[string][]byte, len(data))
+						for key, value := range data {
+							responseData[key] = bytes.Clone(value)
+						}
+						resp := &privatev1.SecretsGetResponse{}
+						resp.SetObject(privatev1.Secret_builder{
+							Id: "secret-1",
+							Metadata: privatev1.Metadata_builder{
+								Name: "my-secret",
+							}.Build(),
+							Type:    privateType,
+							Data:    responseData,
+							Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
+						}.Build())
+						return resp, nil
+					},
+				}
+
+				server := newTestSecretsServer(mock)
+				resp, err := server.Get(ctx, publicv1.SecretsGetRequest_builder{
+					Id: "secret-1",
+				}.Build())
+
+				Expect(err).ToNot(HaveOccurred())
+				Expect(resp.GetObject().GetType()).To(Equal(publicType))
+				Expect(resp.GetObject().GetData()).To(Equal(data))
+			},
+			Entry("opaque TLS material", privatev1.SecretType_SECRET_TYPE_OPAQUE, publicv1.SecretType_SECRET_TYPE_OPAQUE,
+				map[string][]byte{"tls.crt": []byte("cert-data"), "tls.key": []byte("key-data")}),
+			Entry("Windows XML with a BOM", privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+				publicv1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+				map[string][]byte{"userdata": []byte("\xef\xbb\xbf<root/>")}),
+		)
+	})
+
+	Describe("Update", func() {
+		It("delegates Windows user-data data updates to the private server", func() {
+			var capturedRequest *privatev1.SecretsUpdateRequest
+
 			mock := &mockPrivateSecretsServer{
 				getFunc: func(_ context.Context,
 					_ *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
 					resp := &privatev1.SecretsGetResponse{}
 					resp.SetObject(privatev1.Secret_builder{
-						Id: "secret-1",
+						Id: "windows-secret",
 						Metadata: privatev1.Metadata_builder{
-							Name: "my-secret",
+							Name: "windows-secret",
 						}.Build(),
-						Data: map[string][]byte{
-							"tls.crt": []byte("cert-data"),
-							"tls.key": []byte("key-data"),
-						},
+						Type:    privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
 						Backend: privatev1.SecretBackend_SECRET_BACKEND_VAULT,
 					}.Build())
 					return resp, nil
 				},
+				updateFunc: func(_ context.Context,
+					req *privatev1.SecretsUpdateRequest) (*privatev1.SecretsUpdateResponse, error) {
+					capturedRequest = req
+					return nil, grpcstatus.Error(grpccodes.InvalidArgument,
+						"field 'data' is immutable for secrets of type SECRET_TYPE_WINDOWS_USER_DATA")
+				},
 			}
 
 			server := newTestSecretsServer(mock)
-			resp, err := server.Get(ctx, publicv1.SecretsGetRequest_builder{
-				Id: "secret-1",
+			_, err := server.Update(ctx, publicv1.SecretsUpdateRequest_builder{
+				Object: publicv1.Secret_builder{
+					Id:   "windows-secret",
+					Type: publicv1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+					Data: map[string][]byte{"userdata": []byte("<root>changed</root>")},
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data"}},
 			}.Build())
 
-			Expect(err).ToNot(HaveOccurred())
-			Expect(resp.GetObject().GetData()).To(HaveLen(2))
-			Expect(resp.GetObject().GetData()).To(HaveKeyWithValue("tls.crt", []byte("cert-data")))
-			Expect(resp.GetObject().GetData()).To(HaveKeyWithValue("tls.key", []byte("key-data")))
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("data"))
+			Expect(err.Error()).To(ContainSubstring("immutable"))
+			Expect(capturedRequest).ToNot(BeNil())
+			Expect(capturedRequest.GetObject().GetId()).To(Equal("windows-secret"))
+			Expect(capturedRequest.GetUpdateMask().GetPaths()).To(Equal([]string{"data"}))
+			Expect(capturedRequest.GetObject().GetType()).To(Equal(
+				privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA))
+			Expect(capturedRequest.GetObject().GetBackend()).To(Equal(
+				privatev1.SecretBackend_SECRET_BACKEND_VAULT))
+			Expect(capturedRequest.GetObject().GetData()).To(HaveKeyWithValue(
+				"userdata", []byte("<root>changed</root>")))
 		})
-	})
 
-	Describe("Update", func() {
 		It("returns FAILED_PRECONDITION for hub-backed secret with non-empty data", func() {
 			mock := &mockPrivateSecretsServer{
 				getFunc: func(_ context.Context,

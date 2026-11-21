@@ -258,6 +258,7 @@ class UmbrellaReleaseTests(unittest.TestCase):
             "IMAGE_BUILDS": "success",
             "IMAGE_RELEASE": "success",
             "IMAGE_SNAPSHOT": f"osac-release-v{self.version.replace('.', '-')}-attempt1",
+            "KONFLUX_IMAGES": '["osac-operator"]',
             "CHART_SNAPSHOT": f"osac-charts-release-v{self.version.replace('.', '-')}-attempt1",
             "CHART_TAG_PUSHED": "true",
             "CHART_RELEASE": "success",
@@ -361,6 +362,20 @@ class UmbrellaReleaseTests(unittest.TestCase):
                 self.assertTrue(header.startswith(":x:"))
                 self.assertIn("Konflux staging failed", header)
                 self.assertNotIn("Complete", header)
+
+    def test_image_snapshot_line_distinguishes_no_image_from_no_snapshot(self) -> None:
+        """Only a release that built no image may tell the operator to promote with "none"."""
+        cases = (
+            ({}, "`osac-release-v7-4-2-attempt1`"),
+            ({"KONFLUX_IMAGES": "[]", "IMAGE_SNAPSHOT": ""}, "`none` (this release built no image)"),
+            ({"IMAGE_SNAPSHOT": "", "IMAGE_BUILDS": "failure", "IMAGE_RELEASE": "skipped"}, "not available"),
+        )
+        for inputs, expected in cases:
+            with self.subTest(inputs=inputs):
+                result = self.run_notification("notify-konflux", **inputs)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                text = self.slack_payload()["blocks"][1]["text"]["text"]
+                self.assertIn(f"*Image Snapshot (for prod promotion):* {expected}\n", text)
 
     def test_konflux_skips_and_missing_outputs_report_incomplete(self) -> None:
         """A failed stamping step, skipped release, or timeout must never look complete."""

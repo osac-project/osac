@@ -205,7 +205,7 @@ func (n *NodeServer) NodePublishVolume(ctx context.Context, req *csi.NodePublish
 	if err != nil {
 		return nil, err
 	}
-	if err := n.checkVIPReachable(ctx, route.Protocol, req.GetVolumeContext()); err != nil {
+	if err := n.checkVIPReachable(ctx, req.GetVolumeId(), route.Protocol, req.GetVolumeContext()); err != nil {
 		return nil, err
 	}
 
@@ -422,8 +422,9 @@ func resolveVendorVolumeID(volumeID, backend string, volumeContext map[string]st
 
 // checkVIPReachable dials the VIP pool of an NFS volume on the NFS port
 // before the vendor mounts it. An unreachable VIP otherwise surfaces only as
-// a vendor mount timeout.
-func (n *NodeServer) checkVIPReachable(ctx context.Context, protocol string, volumeContext map[string]string) error {
+// a vendor mount timeout. The log line carries no host name or dial error;
+// the error returned to the caller names the pool.
+func (n *NodeServer) checkVIPReachable(ctx context.Context, volumeID, protocol string, volumeContext map[string]string) error {
 	fqdn := strings.TrimSpace(volumeContext[vipPoolFQDNContextKey])
 	if protocol != nfsProtocol || fqdn == "" {
 		return nil
@@ -439,7 +440,7 @@ func (n *NodeServer) checkVIPReachable(ctx context.Context, protocol string, vol
 	checkCtx, cancel := context.WithTimeout(ctx, vipReachabilityTimeout)
 	defer cancel()
 	if err := n.checkReachable(checkCtx, net.JoinHostPort(host, nfsPort)); err != nil {
-		klog.Errorf("VIP pool %s is not reachable on TCP %s via %s: %v", fqdn, nfsPort, host, err)
+		klog.Errorf("NFS VIP reachability check failed on TCP %s for volume %s", nfsPort, volumeID)
 		return status.Errorf(codes.Unavailable,
 			"VAST VIP pool %s is not reachable on TCP %s from node %s; check tenant network routing and DNS",
 			fqdn, nfsPort, n.nodeID)

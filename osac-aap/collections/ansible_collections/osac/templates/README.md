@@ -299,7 +299,9 @@ The resolver reads the provider name (hyphens read as underscores) and the
 value is refused). It picks the role in this order:
 
 1. Target `caas` and the provider is not in `storage_provider_guest_native_providers`
-   (default `[lvms]`): `osac_csi_storage`.
+   (default `[lvms]`): `osac_csi_storage`. The list is compared after hyphens are read as
+   underscores and a trailing `_storage` is removed, so `lvms`, `lvms_storage` and
+   `lvms-storage` all count as guest-native.
 2. Provider `netapp` or `pure`: `osac_csi_storage`.
 3. Provider name already ends in `_storage`: that role.
 4. Otherwise: `{provider}_storage`.

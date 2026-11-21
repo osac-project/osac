@@ -16,6 +16,10 @@
 #   3. provider already ends with _storage       -> the provider itself
 #   4. otherwise                                 -> <provider>_storage
 #
+# The guest-native check compares names with hyphens read as underscores and a
+# trailing _storage removed, so lvms, lvms_storage and lvms-storage all count as
+# guest-native (list entries are normalised the same way).
+#
 # The inline defaults keep callers that include this file directly, without the
 # role defaults loaded, working.
 
@@ -31,10 +35,11 @@
     _dispatch_role: >-
       {% filter trim -%}
       {% set _clean = _current_provider | replace('-', '_') -%}
+      {% set _base = _clean | regex_replace('_storage$', '') -%}
       {% set _native = (storage_provider_guest_native_providers | default(['lvms']))
-         | map('replace', '-', '_') | list -%}
+         | map('replace', '-', '_') | map('regex_replace', '_storage$', '') | list -%}
       {% if storage_provider_provisioning_target | default('vmaas') == 'caas'
-            and _clean not in _native -%}
+            and _base not in _native -%}
       osac_csi_storage
       {%- elif _clean in ['netapp', 'pure'] -%}
       osac_csi_storage

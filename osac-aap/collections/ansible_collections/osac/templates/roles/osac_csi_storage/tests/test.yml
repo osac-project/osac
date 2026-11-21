@@ -53,12 +53,18 @@
             fail_msg: "Expected failure about admin_kubeconfig, got: {{ ansible_failed_result.msg }}"
             success_msg: "Hub-path correctly rejected with actionable error"
 
+        # ignore_errors on include_role does not cover failures of the role's own tasks,
+        # so capture the expected failure with block/rescue instead.
         - name: Call teardown_cluster_storage without _remote_kubeconfig (expected to fail)
-          ansible.builtin.include_role:
-            name: osac.templates.osac_csi_driver
-            tasks_from: teardown_cluster_storage
-          ignore_errors: true
-          register: teardown_result
+          block:
+            - name: Include teardown_cluster_storage
+              ansible.builtin.include_role:
+                name: osac.templates.osac_csi_driver
+                tasks_from: teardown_cluster_storage
+          rescue:
+            - name: Capture the expected teardown failure
+              ansible.builtin.set_fact:
+                teardown_result: "{{ ansible_failed_result }}"
 
         - name: Verify teardown failure message mentions kubeconfig requirement
           ansible.builtin.assert:
@@ -82,28 +88,38 @@
     - name: Run input validation tests
       when: test_input_validation | default(false) | bool
       block:
+        # ignore_errors on include_role does not cover failures of the role's own tasks,
+        # so capture each expected failure with block/rescue instead.
         - name: Call ensure_storage_class with invalid tenant_name
-          ansible.builtin.include_role:
-            name: osac.templates.osac_csi_driver
-            tasks_from: ensure_storage_class
-          vars:
-            tenant_name: "Invalid_Name!"
-            _provider_tiers:
-              - name: default
-                protocol: nfs
-                provider: osac_csi_driver
-          ignore_errors: true
-          register: name_result
+          block:
+            - name: Include ensure_storage_class with invalid tenant_name
+              ansible.builtin.include_role:
+                name: osac.templates.osac_csi_driver
+                tasks_from: ensure_storage_class
+              vars:
+                tenant_name: "Invalid_Name!"
+                _provider_tiers:
+                  - name: default
+                    protocol: nfs
+                    provider: osac_csi_driver
+          rescue:
+            - name: Capture the expected invalid tenant_name failure
+              ansible.builtin.set_fact:
+                name_result: "{{ ansible_failed_result }}"
 
         - name: Call ensure_storage_class with empty _provider_tiers
-          ansible.builtin.include_role:
-            name: osac.templates.osac_csi_driver
-            tasks_from: ensure_storage_class
-          vars:
-            tenant_name: valid-name
-            _provider_tiers: []
-          ignore_errors: true
-          register: tiers_result
+          block:
+            - name: Include ensure_storage_class with empty _provider_tiers
+              ansible.builtin.include_role:
+                name: osac.templates.osac_csi_driver
+                tasks_from: ensure_storage_class
+              vars:
+                tenant_name: valid-name
+                _provider_tiers: []
+          rescue:
+            - name: Capture the expected empty _provider_tiers failure
+              ansible.builtin.set_fact:
+                tiers_result: "{{ ansible_failed_result }}"
 
         - name: Verify input validation failures
           ansible.builtin.assert:

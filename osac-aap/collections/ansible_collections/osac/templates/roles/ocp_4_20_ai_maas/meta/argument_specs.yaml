@@ -28,6 +28,14 @@ argument_specs:
         required: false
         default: true
         description: Deploy the RHOAI web console. False for headless clusters.
+      ocp_4_20_ai_maas_enable_acm_registration:
+        type: bool
+        required: false
+        default: true
+        description: >
+          INTERNAL — keep the cluster registered with the ACM hub (WorkloadCluster
+          import prerequisite, OSAC-6488). Not exposed in meta/osac.yaml parameters;
+          under AAP it always uses this default.
       ocp_4_20_ai_maas_run_verify:
         type: bool
         required: false

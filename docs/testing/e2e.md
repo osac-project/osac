@@ -104,6 +104,19 @@ tested revision, not mutable `main`/`latest`. Guest LVMS disk prerequisites
 are an unresolved infrastructure follow-up (no revision, owner or Jira URL).
 Do not wipe/reuse the guest OS disk.
 
+## CaaS ACM registration
+
+From the repository root, run `uv run pytest -n 0 tests/unit/test_caas_acm_registration.py`
+for helper tests with faked hub reads. The deployed single- and two-NodeSet
+lifecycles check the [hub import policy](../guides/installation/helm-deployment-guide.md#caas-acm-registration-policy)
+and the effective agent rollout when an agent is present. An agent that has not
+rolled out is rechecked up to 25 times, five seconds apart, with a five-second
+limit per read. The lifecycle tests observe ManagedCluster absence for regular
+templates (25 observations at five-second intervals) or wait for Joined and
+Available on the opted-in AI MaaS template.
+Default CI does not deploy AI MaaS; that coverage gap remains
+[OSAC-6488](https://redhat.atlassian.net/browse/OSAC-6488).
+
 ## Fulfillment trust enablement
 
 Use the [release trust prerequisites](osac-installer.md#osac-5343-deployed-enablement-coverage)

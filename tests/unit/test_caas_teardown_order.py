@@ -203,6 +203,7 @@ def test_stage_timeout_replaces_unsafe_message_without_chaining(monkeypatch: pyt
 def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, tmp_path: Path
 ) -> None:
+    """The focused CaaS scenario waits naturally and snapshots on a bounded budget."""
     key_file = tmp_path / "id.pub"
     key_file.write_text("ssh-ed25519 unit-test-key\n")
     cli, grpc, private = (Mock() for _ in range(3))
@@ -310,6 +311,7 @@ def test_focused_scenario_uses_natural_waits_and_throttled_best_effort_snapshots
         "wait_for_cluster_grpc_deleting_or_archived",
         "_assert_cluster_metering",
         "_assert_worker_metering",
+        "assert_acm_registration",
     ):
         monkeypatch.setattr(scenario, name, Mock())
     monkeypatch.setattr(scenario, "run", Mock(return_value="release-image"))

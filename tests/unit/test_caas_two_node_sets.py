@@ -15,6 +15,7 @@ from tests.e2e.core.metering import MeteringCollector
 
 @pytest.fixture
 def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
+    """Build the fake clients the two-node-set scenario needs."""
     # The metering mock needs the MeteringCollector spec: Python 3.14's Mock
     # denies assert*-prefixed attribute names on unspec'd mocks, and the
     # scenario calls metering.assert_no_events.
@@ -121,6 +122,9 @@ def two_node_set_clients(monkeypatch: pytest.MonkeyPatch) -> dict[str, Mock]:
         monkeypatch.setattr(scenario, name, Mock())
     monkeypatch.setattr(scenario, "snapshot_cluster_deletion", Mock(return_value=[]))
     monkeypatch.setattr(scenario, "wait_for_guest_cluster_health", Mock())
+    # ACM helper behavior has its own focused tests; keep this fixture scoped to
+    # the natural teardown/worker-ownership contract it is meant to exercise.
+    monkeypatch.setattr(scenario, "assert_acm_registration", Mock())
     monkeypatch.setattr(runner.time, "sleep", Mock())
     monkeypatch.setattr(
         helpers,

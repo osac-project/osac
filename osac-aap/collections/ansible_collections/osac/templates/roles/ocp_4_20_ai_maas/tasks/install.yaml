@@ -38,3 +38,6 @@
     install_step_post_install_hook_override:
       name: osac.templates.ocp_4_20_ai_maas
       tasks_from: post_install.yaml
+    # AI MaaS clusters stay ACM-registered on the hub (WorkloadCluster import
+    # prerequisite, OSAC-6488); regular clusters default to excluded (OSAC-6313).
+    ocp_small_enable_acm_registration: "{{ ocp_4_20_ai_maas_enable_acm_registration | bool }}"

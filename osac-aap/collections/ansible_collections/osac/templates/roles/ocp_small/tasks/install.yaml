@@ -40,6 +40,7 @@
       ssh_public_key: "{{ cluster_settings_ssh_public_key }}"
     hosted_cluster_node_requests: "{{ cluster_order.spec.nodeRequests }}"
     hosted_cluster_state: present
+    hosted_cluster_enable_acm_registration: "{{ ocp_small_enable_acm_registration | bool }}"
 
 - name: Step - Configure external access
   ansible.builtin.include_role:

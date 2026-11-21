@@ -15,7 +15,7 @@ Read the applicable references before changing behavior:
 
 ## Invariants
 
-- Vendor controller and node operations route on `osac.backend` plus `osac.protocol` through `pkg/driver/routing.go`: keys are `<provider>/<protocol>` with a bare `<provider>` fallback; node routes persist under `--node-state-dir`.
+- `osac.backend` plus `osac.protocol` is the routing key for vendor controller and node operations; preserve its meaning across both plugins.
 - Keep fulfillment-owned create/delete lifecycle separate from vendor-proxied attach, detach, and mount operations.
 - A vendor-controller endpoint of `none` means attach and detach are intentional no-ops.
 - Fulfillment OAuth client ID, secret file, and issuer URL are required together.

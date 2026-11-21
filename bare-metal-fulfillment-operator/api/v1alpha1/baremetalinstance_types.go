@@ -233,15 +233,49 @@ const (
 	// provide a valid MAC for the selected network interface.
 	HostConditionReasonSelectedPortMACUnavailable = "SelectedPortMACUnavailable"
 
+	// HostConditionReasonNetworkAttachmentMACRecorded indicates the selected
+	// interface MAC is persisted before the NetworkAttachment create intent.
+	HostConditionReasonNetworkAttachmentMACRecorded = "NetworkAttachmentMACRecorded"
+
+	// HostConditionReasonNetworkAttachmentCreateIntent indicates a create request
+	// is about to be sent and deletion must wait for the attachment to appear.
+	HostConditionReasonNetworkAttachmentCreateIntent = "NetworkAttachmentCreateIntent"
+	// HostConditionReasonNetworkAttachmentCreateUncertain indicates a create
+	// request returned an ambiguous error and may have succeeded.
+	HostConditionReasonNetworkAttachmentCreateUncertain = "NetworkAttachmentCreateUncertain"
+
+	// HostConditionReasonNetworkAttachmentCreateRejected indicates the API
+	// definitively rejected a create request with no earlier uncertain request.
+	HostConditionReasonNetworkAttachmentCreateRejected = "NetworkAttachmentCreateRejected"
+	// HostConditionReasonNetworkAttachmentCreateRejectedUncertain indicates a
+	// create retry was rejected after an earlier request may have succeeded.
+	HostConditionReasonNetworkAttachmentCreateRejectedUncertain = "NetworkAttachmentCreateRejectedUncertain"
+
+	// HostConditionReasonNetworkAttachmentAwaitingVisibility indicates a possibly
+	// created attachment has not appeared in the API yet.
+	HostConditionReasonNetworkAttachmentAwaitingVisibility = "NetworkAttachmentAwaitingVisibility"
+
 	// HostConditionReasonNetworkAttachmentFailed indicates the network attachment
 	// reached a final failed state.
 	HostConditionReasonNetworkAttachmentFailed = "NetworkAttachmentFailed"
+
+	// HostConditionReasonNetworkHandoffPowerOnIntent indicates the host is off
+	// and the handoff power-on request has not yet been sent.
+	HostConditionReasonNetworkHandoffPowerOnIntent = "NetworkHandoffPowerOnIntent"
+
+	// HostConditionReasonNetworkHandoffPowerOnUncertain indicates a power-on
+	// request may still complete after its caller observed an error or timeout.
+	HostConditionReasonNetworkHandoffPowerOnUncertain = "NetworkHandoffPowerOnUncertain"
 
 	HostConditionReasonPoweringOff          = "PoweringOff"
 	HostConditionReasonPoweringOn           = "PoweringOn"
 	HostConditionReasonNetworkHandoffFailed = "NetworkHandoffFailed"
 	HostConditionReasonLeasePending         = "LeasePending"
 	HostConditionReasonIPDiscoveryFailed    = "IPDiscoveryFailed"
+	HostConditionReasonOffboarding          = "Offboarding"
+	HostConditionReasonNetworkDetaching     = "NetworkDetaching"
+	HostConditionReasonPowerOffFailed       = "PowerOffFailed"
+	HostConditionReasonProvisioningDisabled = "ProvisioningDisabled"
 )
 
 // HostSelectorSpec defines host selection constraints.

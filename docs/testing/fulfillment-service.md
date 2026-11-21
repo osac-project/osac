@@ -21,6 +21,34 @@ For commands, see the
 run `make -C osac-installer help` from the repository root for the installer targets that drive the
 deployed suite.
 
+## Cached User identity deletion (OSAC-7594)
+
+This component-integration coverage belongs to
+[DEV OSAC-7594](https://redhat.atlassian.net/browse/OSAC-7594).
+
+| Tier | Boundary and cases | Command from `fulfillment-service/` |
+|---|---|---|
+| Component integration | `it/it_user_deletion_test.go` uses the existing `it/` harness, Keycloak helpers and account/tenant fixtures. Real Fulfillment APIs, PostgreSQL, the deployed User reconciler and Keycloak exercise initially present and already-absent cached IDs, a same-username replacement, and an unaffected second tenant. The test waits for the controller finalizer to be stored before requesting normal deletion, then verifies User Get returns NotFound and the other identities survive in both APIs. No persistence or IdP doubles are used. | Against a compatible deployed Kind environment, `go run github.com/onsi/ginkgo/v2/ginkgo run --timeout=10m --label-filter=user-deletion it`; the standard installer `SUITE=fulfillment` target includes these specs. |
+
+Use the standard Kind infrastructure and Fulfillment deployment described above.
+The integration cases reuse the harness's Keycloak address, realm and
+credentials; they need no additional URL or token-file environment variables.
+The installer currently configures Keycloak 26.6.4. Provider provisioning is
+disabled by the normal service-only integration profile; no physical
+infrastructure or workload is provisioned by these cases.
+
+HTTP 404 with Keycloak's JSON `error: "User not found"` or
+`error: "Realm not found."` confirms absence for the exact realm-user DELETE.
+OSAC uses the single `osac` realm, so its absence also means its users are gone.
+Unknown and malformed 404 responses remain errors. Changes in Keycloak's error
+contract fail closed. The deployed cases exercise account absence while the
+shared realm remains present; they do not delete that realm.
+
+The integration cases prove persisted User removal, but do not assert
+subsequent Project/Tenant cascade completion. That deployed cascade acceptance
+remains a QE gap under
+[OSAC-7594](https://redhat.atlassian.net/browse/OSAC-7594).
+
 ## ComputeInstance disk handoff (OSAC-6685)
 
 The `compute-storage` component-integration phase runs through the installer

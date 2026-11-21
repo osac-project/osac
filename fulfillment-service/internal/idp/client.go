@@ -390,6 +390,18 @@ func (c *Client) DeleteUserFromOrganization(ctx context.Context, tenantName, use
 func (c *Client) DeleteUserFromRealm(ctx context.Context, userID string) error {
 	response, err := c.httpClient.DoRequest(ctx, http.MethodDelete, fmt.Sprintf("/admin/realms/%s/users/%s", c.realmName, url.PathEscape(userID)), nil)
 	if err != nil {
+		// OSAC uses a single realm, so its absence also confirms that the
+		// account is gone. Unknown routes and proxy 404s remain errors.
+		var apiErr *apiclient.APIError
+		if errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusNotFound {
+			var body struct {
+				Error string `json:"error"`
+			}
+			if json.Unmarshal([]byte(apiErr.Body), &body) == nil &&
+				(body.Error == "User not found" || body.Error == "Realm not found.") {
+				return nil
+			}
+		}
 		return fmt.Errorf("failed to delete user %q from realm: %w", userID, err)
 	}
 	defer response.Body.Close()

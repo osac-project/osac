@@ -65,6 +65,10 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   host-driven stop behavior remain with
   [OSAC-5852](https://redhat.atlassian.net/browse/OSAC-5852). Provider
   provisioning is out of scope.
+- MCP network replacement is covered only at the DEV boundary in
+  [OSAC-5855](https://redhat.atlassian.net/browse/OSAC-5855); provider-backed
+  replacement and cleanup remain QE coverage in
+  [OSAC-5856](https://redhat.atlassian.net/browse/OSAC-5856).
 - FabricDomain setup and focused execution are documented in
   [the suite README](../../fulfillment-service/it/README.fabric-domain.md).
 - Deployed service-account journeys, secret rotation included, are the

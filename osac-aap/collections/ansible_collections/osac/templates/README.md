@@ -317,12 +317,12 @@ volume path uses.
 - The mode is selected by missing credentials, so credentials that resolve empty (or
   renamed keys) imitate it. Check what the operator passes if a backend unexpectedly
   skips VAST work.
-- Limitation: today the operator sends `{endpoint, username: "", password: ""}` for any
-  non-CSP backend registered without credentials. Such a backend, whether it was
-  registered without credentials by mistake or on purpose, now gets a successful backend
-  job and a Tenant that never becomes ready, where the job used to fail. This lasts until
-  the operator derives readiness for these backends from the per-tenant record instead of
-  the hub Secret (OSAC-7839).
+- Limitation: this mode is not reachable through the API today: fulfillment-service
+  refuses a non-CSP storage backend without admin credentials ("credentials are required
+  for OSAC-managed storage backends"). It stays dormant until the API accepts a non-CSP
+  backend without admin credentials, which is expected under OSAC-7839. When it becomes
+  reachable, readiness for these backends has to come from the per-tenant record, because
+  a backend in this mode writes no hub Secret.
 - `setup` and `teardown_backend` first read the hub Secret
   (`<prefix><tenant>-<backend_id>`) through the Kubernetes API, so the role needs hub
   access even without admin credentials. They refuse, and fail the job, when an

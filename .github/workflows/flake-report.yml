@@ -18,10 +18,11 @@ jobs:
       (github.event.workflow_run.event == 'workflow_dispatch' ||
       (github.event.workflow_run.event == 'schedule' && github.repository == 'osac-project/osac'))
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: read
       actions: read
+      checks: read
     outputs:
       slack_payload: ${{ steps.generate.outputs.slack_payload }}
     steps:
@@ -59,6 +60,7 @@ jobs:
             page_file="$pages_dir/page-$page.json"
 
             for attempt in 1 2 3 4 5; do
+              echo "Fetching jobs page $page for run $CAMPAIGN_ID, attempt $ATTEMPT (request $attempt/5)."
               if gh api \
                 "repos/${GITHUB_REPOSITORY}/actions/runs/${CAMPAIGN_ID}/attempts/${ATTEMPT}/jobs?per_page=${per_page}&page=${page}" \
                 > "$page_file"; then
@@ -91,6 +93,53 @@ jobs:
           ' "${pages[@]}" > "$pages_dir/jobs.json"
 
           mv "$pages_dir/jobs.json" flake-input/jobs.json
+
+          # Save annotation evidence for cancelled jobs in the reporter's input.
+          jq -r '
+            .[].jobs[] | select(.conclusion == "cancelled") | [.id, .check_run_url] | @tsv
+          ' flake-input/jobs.json > "$pages_dir/cancelled-jobs.tsv"
+          : > "$pages_dir/annotation-results.jsonl"
+          while IFS=$'\t' read -r job_id check_run_url; do
+            annotations_file="$pages_dir/annotations-$job_id.json"
+            result_file="$pages_dir/annotation-result-$job_id.json"
+            fetched=0
+            for attempt in 1 2 3 4 5; do
+              echo "Fetching annotations for cancelled job $job_id (request $attempt/5)."
+              if gh api --paginate --slurp \
+                "${check_run_url}/annotations?per_page=100" > "$annotations_file" &&
+                jq -ce --arg id "$job_id" '
+                  if type == "array" and length > 0 and all(.[];
+                    type == "array" and all(.[]; type == "object" and (.message | type == "string")))
+                  then
+                    [.[][] | .message] as $messages |
+                    ($messages | map(select(startswith("The job has exceeded the maximum execution time of"))) |
+                      first) as $message |
+                    {($id): {timeout_annotations: $messages, timeout: ($message != null), timeout_message: $message}}
+                  else error("Invalid annotation response") end
+                ' "$annotations_file" > "$result_file"; then
+                fetched=1
+                break
+              fi
+              if [[ "$attempt" != 5 ]]; then
+                echo "::warning::Annotations for job $job_id failed (attempt $attempt); retrying in 5 seconds."
+                sleep 5
+              fi
+            done
+            if [[ "$fetched" == 1 ]]; then
+              cat "$result_file" >> "$pages_dir/annotation-results.jsonl"
+            else
+              echo "::warning::Annotations for job $job_id unavailable after 5 attempts."
+              jq -cn --arg id "$job_id" \
+                '{($id): {timeout_annotation_error: "Annotation retrieval failed."}}' \
+                >> "$pages_dir/annotation-results.jsonl"
+            fi
+          done < "$pages_dir/cancelled-jobs.tsv"
+
+          jq -s 'add // {}' "$pages_dir/annotation-results.jsonl" > "$pages_dir/annotation-results.json"
+          jq --slurpfile annotations "$pages_dir/annotation-results.json" '
+            map(.jobs |= map(. + ($annotations[0][(.id | tostring)] // {})))
+          ' flake-input/jobs.json > "$pages_dir/jobs-with-annotations.json"
+          mv "$pages_dir/jobs-with-annotations.json" flake-input/jobs.json
       # List saved logs for links. The reporter filters expired files and other attempts.
       # Job results determine success or failure; the report leaves log contents unread.
       - name: Fetch diagnostic artifacts

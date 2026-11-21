@@ -1047,3 +1047,249 @@
         - "vast-tenant-config-test-td-diffep-be-a"
         - "vast-tenant-config-test-td-diffep-be-b"
       failed_when: false
+
+# ── Tenant-credentials-only teardown cases ──
+# A connection entry with an endpoint and no username or password selects the
+# mode. The storage_provider dispatcher includes teardown_backend with
+# ignore_errors, so these cases call the vast_storage role directly to observe
+# failures. Each case is its own play with its tenant and backend as play vars,
+# so a run started with --start-at-task at its clean slate has what it needs.
+
+# Case A: nothing to clean up, so the role skips without error and no VAST calls.
+- name: "Storage Provider TCO Teardown - Case A, nothing to clean"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    tenant_name: "test-td-tco-a"
+    tenant_namespace: "osac-system"
+    _tco_backend: "be-td-tco-a"
+    _tco_secret_name: "vast-tenant-config-test-td-tco-a-be-td-tco-a"
+
+  tasks:
+    - name: Clean slate for teardown case A
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ _tco_secret_name }}"
+        namespace: "osac-system"
+
+    - name: Reset mock VMS server for teardown case A
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_reset"
+        validate_certs: false
+        method: POST
+
+    - name: Run vast_storage teardown_backend without admin credentials
+      ansible.builtin.include_role:
+        name: osac.templates.vast_storage
+        tasks_from: teardown_backend
+      vars:
+        vast_storage_config_namespace: osac-system
+        vast_storage_validate_certs: false
+        _provider_tiers:
+          - name: default
+            protocol: nfs
+            provider: vast
+            backend_id: "{{ _tco_backend }}"
+        _provider_backend_connections:
+          be-td-tco-a:
+            endpoint: "127.0.0.1:18443"
+
+    - name: Get mock server call log after case A
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _tco_a_calls
+
+    - name: Assert case A made no VAST calls
+      ansible.builtin.assert:
+        that:
+          - _tco_a_calls.json | length == 0
+        fail_msg: "Teardown without admin credentials and without a hub Secret made {{ _tco_a_calls.json | length }} VAST calls"
+        success_msg: "Case A: nothing to clean, no VAST calls"
+
+# Case B: admin-flow leftovers exist, so the role must refuse rather than skip.
+- name: "Storage Provider TCO Teardown - Case B, admin-flow leftovers"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    tenant_name: "test-td-tco-b"
+    tenant_namespace: "osac-system"
+    _tco_backend: "be-td-tco-b"
+    _tco_secret_name: "vast-tenant-config-test-td-tco-b-be-td-tco-b"
+
+  tasks:
+    - name: Clean slate for teardown case B
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ _tco_secret_name }}"
+            namespace: "osac-system"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/storage-provider: vast
+              osac.openshift.io/tenant: "test-td-tco-b"
+              osac.openshift.io/storage-backend-id: "be-td-tco-b"
+          type: Opaque
+          stringData:
+            vast_tenant_id: "1"
+      no_log: true
+
+    - name: Reset mock VMS server for teardown case B
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_reset"
+        validate_certs: false
+        method: POST
+
+    - name: Run teardown_backend with leftovers and no admin credentials
+      block:
+        - name: Run vast_storage teardown_backend without admin credentials
+          ansible.builtin.include_role:
+            name: osac.templates.vast_storage
+            tasks_from: teardown_backend
+          vars:
+            vast_storage_config_namespace: osac-system
+            vast_storage_validate_certs: false
+            _provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: "{{ _tco_backend }}"
+            _provider_backend_connections:
+              be-td-tco-b:
+                endpoint: "127.0.0.1:18443"
+
+        - name: Fail test if teardown succeeded despite leftovers
+          ansible.builtin.fail:
+            msg: "Teardown must fail when a hub Secret exists and no admin credentials were supplied"
+
+      rescue:
+        - name: Get mock server call log after case B
+          ansible.builtin.uri:
+            url: "https://127.0.0.1:18443/_calls"
+            validate_certs: false
+            method: GET
+            return_content: true
+          register: _tco_b_calls
+
+        - name: Read hub Secret after case B
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: "{{ _tco_secret_name }}"
+            namespace: "osac-system"
+          register: _tco_b_secret
+
+        - name: Assert case B refused, issued no DELETE and kept the hub Secret
+          ansible.builtin.assert:
+            that:
+              - "'no admin credentials' in (ansible_failed_result.msg | default(''))"
+              - "_tco_secret_name in (ansible_failed_result.msg | default(''))"
+              - _tco_b_calls.json | selectattr('method', 'equalto', 'DELETE') | list | length == 0
+              - _tco_b_secret.resources | length == 1
+            fail_msg: >-
+              Case B must refuse naming the hub Secret, issue no DELETE and keep the Secret.
+              Message: {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Case B: refused to skip past admin-flow leftovers"
+
+# Case C: the hub Secret cannot be read, so the role must refuse, not assume absent.
+- name: "Storage Provider TCO Teardown - Case C, unreadable hub secret"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    tenant_name: "test-td-tco-c"
+    tenant_namespace: "osac-system"
+    _tco_backend: "be-td-tco-c"
+    _tco_secret_name: "vast-tenant-config-test-td-tco-c-be-td-tco-c"
+
+  tasks:
+    - name: Clean slate for teardown case C
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ _tco_secret_name }}"
+        namespace: "osac-system"
+
+    - name: Reset mock VMS server for teardown case C
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_reset"
+        validate_certs: false
+        method: POST
+
+    - name: Run teardown_backend with an unreachable hub API
+      module_defaults:
+        kubernetes.core.k8s_info:
+          host: "https://127.0.0.1:9"
+          validate_certs: false
+      block:
+        - name: Run vast_storage teardown_backend without admin credentials
+          ansible.builtin.include_role:
+            name: osac.templates.vast_storage
+            tasks_from: teardown_backend
+          vars:
+            vast_storage_config_namespace: osac-system
+            vast_storage_validate_certs: false
+            _provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: "{{ _tco_backend }}"
+            _provider_backend_connections:
+              be-td-tco-c:
+                endpoint: "127.0.0.1:18443"
+
+        - name: Fail test if teardown succeeded without reading the hub Secret
+          ansible.builtin.fail:
+            msg: "Teardown must fail when the hub Secret cannot be read"
+
+      rescue:
+        - name: Get mock server call log after case C
+          ansible.builtin.uri:
+            url: "https://127.0.0.1:18443/_calls"
+            validate_certs: false
+            method: GET
+            return_content: true
+          register: _tco_c_calls
+
+        - name: Assert case C refused as unreadable and made no VAST calls
+          ansible.builtin.assert:
+            that:
+              - "'could not read hub secret' in (ansible_failed_result.msg | default('') | lower)"
+              - _tco_c_calls.json | length == 0
+            fail_msg: >-
+              Case C must refuse as an unreadable hub Secret and make no VAST calls.
+              Message: {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Case C: refused to treat an unreadable hub Secret as absent"
+
+- name: "Storage Provider TCO Teardown - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete case B hub Secret
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-td-tco-b-be-td-tco-b"
+        namespace: "osac-system"
+      failed_when: false

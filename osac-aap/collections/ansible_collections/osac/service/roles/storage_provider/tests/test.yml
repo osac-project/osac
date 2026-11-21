@@ -1550,6 +1550,317 @@
           - _all_tenant_configs['pure-backend-1'].provider == 'pure'
 
 # ──────────────────────────────────────────────────────────────
+# Regression guards for the VAST credential-less (tenant-credentials-only)
+# mode. Each guard pairs a connection shape that must NOT select that mode
+# with today's validation failure. They pass before and after the mode is
+# implemented. Every guard fails with the same message: the existing
+# "missing one or more of endpoint, username, password" validation.
+# ──────────────────────────────────────────────────────────────
+
+# Regression guard (a): endpoint and username, no password key.
+- name: Test storage_provider -- regression guard, VAST entry with username but no password key
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run username-without-password guard
+      block:
+        - name: Attempt setup with endpoint and username but no password
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-tco
+            storage_provider_backend_connections:
+              be-tco:
+                endpoint: "vast.invalid:443"
+                username: "admin"
+            storage_provider_action: setup
+            tenant_name: "tenant-tco"
+            tenant_namespace: "osac-tenants"
+
+        - name: Fail test if the missing password was not rejected
+          ansible.builtin.fail:
+            msg: "An entry with a username and no password must be rejected"
+
+      rescue:
+        - name: Verify failure is from credential validation
+          ansible.builtin.assert:
+            that:
+              - "'missing one or more of endpoint, username, password' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Username without password was not rejected by credential validation:
+              {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Username without password correctly rejected"
+
+# Regression guard (b): endpoint and password, no username key.
+- name: Test storage_provider -- regression guard, VAST entry with password but no username key
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run password-without-username guard
+      block:
+        - name: Attempt setup with endpoint and password but no username
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-tco
+            storage_provider_backend_connections:
+              be-tco:
+                endpoint: "vast.invalid:443"
+                password: "not-a-real-credential"
+            storage_provider_action: setup
+            tenant_name: "tenant-tco"
+            tenant_namespace: "osac-tenants"
+
+        - name: Fail test if the missing username was not rejected
+          ansible.builtin.fail:
+            msg: "An entry with a password and no username must be rejected"
+
+      rescue:
+        - name: Verify failure is from credential validation
+          ansible.builtin.assert:
+            that:
+              - "'missing one or more of endpoint, username, password' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Password without username was not rejected by credential validation:
+              {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Password without username correctly rejected"
+
+# Regression guard (c): the entry for the backend is an explicit null.
+- name: Test storage_provider -- regression guard, VAST connection entry is null
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run null connection entry guard
+      block:
+        - name: Attempt setup with a null connection entry
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-tco
+            storage_provider_backend_connections:
+              be-tco: null
+            storage_provider_action: setup
+            tenant_name: "tenant-tco"
+            tenant_namespace: "osac-tenants"
+
+        - name: Fail test if the null entry was not rejected
+          ansible.builtin.fail:
+            msg: "A null connection entry must be rejected"
+
+      rescue:
+        - name: Verify failure is from credential validation
+          ansible.builtin.assert:
+            that:
+              - "'missing one or more of endpoint, username, password' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Null connection entry was not rejected by credential validation:
+              {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Null connection entry correctly rejected"
+
+# Regression guard (d): the entry for the backend is a bare string.
+- name: Test storage_provider -- regression guard, VAST connection entry is a string
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run string connection entry guard
+      block:
+        - name: Attempt setup with a string connection entry
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-tco
+            storage_provider_backend_connections:
+              be-tco: "vast.invalid:443"
+            storage_provider_action: setup
+            tenant_name: "tenant-tco"
+            tenant_namespace: "osac-tenants"
+
+        - name: Fail test if the string entry was not rejected
+          ansible.builtin.fail:
+            msg: "A string connection entry must be rejected"
+
+      rescue:
+        - name: Verify failure is from credential validation
+          ansible.builtin.assert:
+            that:
+              - "'missing one or more of endpoint, username, password' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              String connection entry was not rejected by credential validation:
+              {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "String connection entry correctly rejected"
+
+# Regression guard (e): the entry for the backend is an empty mapping.
+- name: Test storage_provider -- regression guard, VAST connection entry is an empty mapping
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run empty mapping connection entry guard
+      block:
+        - name: Attempt setup with an empty mapping connection entry
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-tco
+            storage_provider_backend_connections:
+              be-tco: {}
+            storage_provider_action: setup
+            tenant_name: "tenant-tco"
+            tenant_namespace: "osac-tenants"
+
+        - name: Fail test if the empty mapping was not rejected
+          ansible.builtin.fail:
+            msg: "An empty connection entry must be rejected"
+
+      rescue:
+        - name: Verify failure is from credential validation
+          ansible.builtin.assert:
+            that:
+              - "'missing one or more of endpoint, username, password' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Empty connection entry was not rejected by credential validation:
+              {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Empty connection entry correctly rejected"
+
+# Regression guard (f): endpoint is an empty string and no credentials.
+- name: Test storage_provider -- regression guard, VAST connection entry has an empty endpoint
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run empty endpoint connection entry guard
+      block:
+        - name: Attempt setup with an empty endpoint and no credentials
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: vast
+                backend_id: be-tco
+            storage_provider_backend_connections:
+              be-tco:
+                endpoint: ""
+            storage_provider_action: setup
+            tenant_name: "tenant-tco"
+            tenant_namespace: "osac-tenants"
+
+        - name: Fail test if the empty endpoint was not rejected
+          ansible.builtin.fail:
+            msg: "An entry with an empty endpoint must be rejected"
+
+      rescue:
+        - name: Verify failure is from credential validation
+          ansible.builtin.assert:
+            that:
+              - "'missing one or more of endpoint, username, password' in (ansible_failed_result.msg | default(''))"
+            fail_msg: >-
+              Empty endpoint was not rejected by credential validation:
+              {{ ansible_failed_result.msg | default('unknown error') }}
+            success_msg: "Empty endpoint correctly rejected"
+
+# ──────────────────────────────────────────────────────────────
+# Tenant-credentials-only mode: setup must skip all VAST work when the
+# backend's connection entry has an endpoint and no username or password.
+# No block/rescue: a role failure is the RED signal. vast.invalid does not
+# resolve, so any VAST call would fail the play. The hub vendor CSI step
+# stays out of the run (storage_provider_csi_backends_enabled defaults to
+# false).
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- setup skips VAST work for a credential-less connection entry
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run setup with a credential-less VAST connection entry
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_tiers:
+          - name: default
+            protocol: nfs
+            provider: vast
+            backend_id: be-tco
+        storage_provider_backend_connections:
+          be-tco:
+            endpoint: "vast.invalid:443"
+        storage_provider_action: setup
+        tenant_name: "tenant-tco"
+        tenant_namespace: "osac-tenants"
+
+    - name: Assert setup reported tenant-credentials-only mode and built no connection
+      ansible.builtin.assert:
+        that:
+          - storage_provider_tenant_configs['be-tco'] is mapping
+          - storage_provider_tenant_configs['be-tco'].tenant_credentials_only is sameas true
+          - vast_password | default('') | length == 0
+          - _vast_vms_conn is not defined or _vast_vms_conn | length == 0
+        fail_msg: >-
+          Setup without admin credentials must report tenant_credentials_only: true
+          and build no VMS connection.
+        success_msg: "Credential-less entry handled in tenant-credentials-only mode"
+
+- name: Test storage_provider -- setup skips VAST work for null VAST credentials
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run setup with null VAST credentials
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_tiers:
+          - name: default
+            protocol: nfs
+            provider: vast
+            backend_id: be-tco
+        storage_provider_backend_connections:
+          be-tco:
+            endpoint: "vast.invalid:443"
+            username: null
+            password: null
+        storage_provider_action: setup
+        tenant_name: "tenant-tco"
+        tenant_namespace: "osac-tenants"
+
+    - name: Assert setup reported tenant-credentials-only mode and built no connection
+      ansible.builtin.assert:
+        that:
+          - storage_provider_tenant_configs['be-tco'] is mapping
+          - storage_provider_tenant_configs['be-tco'].tenant_credentials_only is sameas true
+          - vast_password | default('') | length == 0
+          - _vast_vms_conn is not defined or _vast_vms_conn | length == 0
+        fail_msg: >-
+          Setup with null admin credentials must report tenant_credentials_only: true
+          and build no VMS connection.
+        success_msg: "Null credentials handled in tenant-credentials-only mode"
+
+# ──────────────────────────────────────────────────────────────
 # Regression: the legacy CaaS VAST path validates the native CSI matrix.
 # This lives last so run_tests.sh's second invocation exercises it after its
 # start-at-task split around the invalid-provider runner failure.

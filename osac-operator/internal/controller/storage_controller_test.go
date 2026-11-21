@@ -34,6 +34,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -3545,6 +3546,135 @@ var _ = Describe("Storage Controller", func() {
 			updatedCO := &v1alpha1.ClusterOrder{}
 			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
 			Expect(updatedCO.Finalizers).NotTo(ContainElement(clusterStorageFinalizer))
+		})
+	})
+
+	Context("CaaS: partial tier resolution", func() {
+		It("should keep ClusterStorageReady=False when a provision job resolves only some tiers", func() {
+			tenantName := "caas-partial-tiers"
+			createReadyTenantForStorage(ctx, tenantName, testNamespace)
+			createHubSecretForBackend(ctx, tenantName, "backend-lvms", "lvms", secretsNamespace)
+			createHubSecretForBackend(ctx, tenantName, "backend-vast", "vast", secretsNamespace)
+
+			// A real kubeconfig pointing at the envtest API server, so
+			// buildClientFromKubeconfig can list StorageClasses on the
+			// "CaaS cluster".
+			apiCfg := clientcmdapi.Config{
+				Clusters: map[string]*clientcmdapi.Cluster{
+					"caas": {
+						Server:                   cfg.Host,
+						CertificateAuthorityData: cfg.CAData,
+						CertificateAuthority:     cfg.CAFile,
+						InsecureSkipTLSVerify:    cfg.Insecure,
+					},
+				},
+				AuthInfos: map[string]*clientcmdapi.AuthInfo{
+					"caas-user": {
+						ClientCertificateData: cfg.CertData,
+						ClientCertificate:     cfg.CertFile,
+						ClientKeyData:         cfg.KeyData,
+						ClientKey:             cfg.KeyFile,
+						Token:                 cfg.BearerToken,
+					},
+				},
+				Contexts: map[string]*clientcmdapi.Context{
+					"caas": {Cluster: "caas", AuthInfo: "caas-user"},
+				},
+				CurrentContext: "caas",
+			}
+			kubeconfigData, err := clientcmd.Write(apiCfg)
+			Expect(err).NotTo(HaveOccurred())
+
+			const hcNamespace = "clusters-caas-partial"
+			const hcName = "partial-hcp"
+			hcpNamespace := hcNamespace + "-" + hcName
+			for _, nsName := range []string{hcNamespace, hcpNamespace} {
+				ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
+				if err := k8sClient.Create(ctx, ns); err != nil {
+					Expect(client.IgnoreAlreadyExists(err)).To(Succeed())
+				}
+			}
+
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: "admin-kubeconfig", Namespace: hcpNamespace},
+				Data:       map[string][]byte{"kubeconfig": kubeconfigData},
+			}
+			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, secret) })
+
+			hcp := &hypershiftv1beta1.HostedControlPlane{
+				ObjectMeta: metav1.ObjectMeta{Name: hcName, Namespace: hcpNamespace},
+			}
+			Expect(k8sClient.Create(ctx, hcp)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, hcp) })
+			hcp.Status.KubeConfig = &hypershiftv1beta1.KubeconfigSecretRef{
+				Name: "admin-kubeconfig",
+				Key:  "kubeconfig",
+			}
+			Expect(k8sClient.Status().Update(ctx, hcp)).To(Succeed())
+
+			co := newClusterOrder("caas-partial-co", testNamespace, map[string]string{
+				osacTenantKey: tenantName,
+			})
+			Expect(k8sClient.Create(ctx, co)).To(Succeed())
+			DeferCleanup(func() { _ = k8sClient.Delete(ctx, co) })
+			co.Status.Phase = v1alpha1.ClusterOrderPhaseReady
+			co.Status.ClusterReference = &v1alpha1.ClusterOrderClusterReferenceType{
+				Namespace:         hcNamespace,
+				HostedClusterName: hcName,
+			}
+			Expect(k8sClient.Status().Update(ctx, co)).To(Succeed())
+
+			clusterProvider := &mockProvisioningProvider{name: "caas-partial-mock"}
+			r := NewStorageReconciler(
+				testMcManager, testNamespace, mcmanager.LocalCluster,
+				nil, clusterProvider, pollInterval, provisioning.DefaultMaxJobHistory,
+			)
+			r.TiersClient = &mockStorageTiersLister{
+				listFunc: func(context.Context, *privatev1.StorageTiersListRequest, ...grpc.CallOption) (*privatev1.StorageTiersListResponse, error) {
+					return privatev1.StorageTiersListResponse_builder{
+						Items: []*privatev1.StorageTier{
+							newTestStorageTier("local", "backend-lvms"),
+							newTestStorageTier("block", "backend-vast"),
+						},
+					}.Build(), nil
+				},
+			}
+			r.BackendsClient = &mockStorageBackendsClient{
+				getFunc: func(_ context.Context, in *privatev1.StorageBackendsGetRequest, _ ...grpc.CallOption) (*privatev1.StorageBackendsGetResponse, error) {
+					switch in.GetId() {
+					case "backend-lvms":
+						return newTestStorageBackendGetResponse("lvms"), nil
+					case "backend-vast":
+						return newTestStorageBackendGetResponse("vast"), nil
+					}
+					return nil, status.Error(codes.NotFound, "backend not found")
+				},
+			}
+
+			// The provision job resolved only the local tier: its labeled
+			// StorageClass exists on the CaaS cluster, the block tier's does
+			// not.
+			createLabeledStorageClass(ctx, tenantName+"-local-sc", tenantName, "local")
+
+			// The first reconcile triggers the provision job; the mock
+			// reports it Succeeded, so a second reconcile runs StorageClass
+			// discovery on the CaaS cluster.
+			nn := types.NamespacedName{Name: tenantName, Namespace: testNamespace}
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+			_, err = r.Reconcile(ctx, storageReconcileRequest(nn))
+			Expect(err).NotTo(HaveOccurred())
+
+			updatedCO := &v1alpha1.ClusterOrder{}
+			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(co), updatedCO)).To(Succeed())
+			cond := apimeta.FindStatusCondition(updatedCO.Status.Conditions,
+				string(v1alpha1.ClusterOrderConditionClusterStorageReady))
+			Expect(cond).NotTo(BeNil())
+			Expect(cond.Status).To(Equal(metav1.ConditionFalse),
+				"partial tier resolution must not set ClusterStorageReady")
+			Expect(cond.Message).To(ContainSubstring("block"),
+				"message must name the missing tier")
 		})
 	})
 

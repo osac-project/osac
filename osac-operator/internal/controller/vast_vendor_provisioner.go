@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc"
@@ -28,6 +29,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
@@ -76,16 +78,19 @@ type vendorDialer func(ctx context.Context, endpoint string) (vendorCSIClient, f
 // references are read from the hub Secret "vast-tenant-config-<tenant>" created
 // during tenant onboarding.
 //
-// Only block volumes are implemented today. The exact CSI CreateVolume contract
-// is verified against the upstream VAST CSI driver at the tag this deployment
-// pins (docker.io/vastdataorg/csi:v2.6.5):
+// VAST runs one plugin type per controller process, so block and NFS volumes go
+// to separate controller instances. The CSI CreateVolume contract is verified
+// against the upstream VAST CSI driver at the tag this deployment pins
+// (docker.io/vastdataorg/csi:v2.6.8):
 //
-//	https://github.com/vast-data/vast-csi/blob/v2.6.5/vast_csi/builders/block.py
+//	https://github.com/vast-data/vast-csi/blob/v2.6.8/vast_csi/builders/block.py
+//	https://github.com/vast-data/vast-csi/blob/v2.6.8/vast_csi/builders/nfs.py
 //
 // The block builder requires the "subsystem" parameter (the VAST view, created
 // during onboarding and named "view-<tenant>-<uid_hash>-<tier>"), a VIP pool,
-// and username/password/endpoint in secrets. NFS uses a different parameter set
-// (root_export + view_policy) and is not implemented here yet.
+// and username/password/endpoint in secrets. The NFS builder requires
+// root_export and view_policy plus a VIP pool, which the caller supplies in
+// VendorCreateVolumeRequest.NFS.
 type VastVendorProvisioner struct {
 	// reader reads the per-tenant hub Secret. The operator already has
 	// cluster-wide secret read via its manager ClusterRole, so no extra RBAC is
@@ -94,10 +99,23 @@ type VastVendorProvisioner struct {
 	// configNamespace is where the hub "vast-tenant-config-<tenant>" Secrets
 	// live (OSAC_STORAGE_CONFIG_NAMESPACE).
 	configNamespace string
-	// endpoints maps a provider routing key to its vendor CSI controller gRPC
-	// endpoint (e.g. "vast" -> "vast-csi-controller.osac-csi-backends.svc:50051").
+	// endpoints maps a routing key to a vendor CSI controller gRPC endpoint.
+	// Keys are "<provider>/<protocol>" (e.g. "vast/nfs"); a bare "<provider>"
+	// key is accepted for block volumes.
 	endpoints map[string]string
 	dial      vendorDialer
+}
+
+// nfsVendorContextKeys lists the vendor volume_context keys the guest node
+// plugin needs to mount an NFS volume without calling VMS. Everything else the
+// vendor returns (view, quota and tenant identifiers, the view policy) stays on
+// the hub.
+var nfsVendorContextKeys = []string{
+	"root_export",
+	"vip_pool_fqdn",
+	"vip_pool_fqdn_random_prefix",
+	"mount_options",
+	"snapshot_base_path",
 }
 
 // NewVastVendorProvisioner constructs a VastVendorProvisioner and fails fast on
@@ -132,22 +150,29 @@ type tenantCreds struct {
 	uidHash      string
 }
 
-// CreateVolume provisions a block volume on the vendor array. It reads the
-// per-tenant credentials/config from the hub Secret, resolves the vendor
-// controller endpoint from the provider name, and issues a CSI CreateVolume with
-// the credentials in the secrets field. CSI CreateVolume is idempotent, so a
-// retried call for an existing volume returns that volume rather than erroring.
+// CreateVolume provisions a block or NFS volume on the vendor array. It reads
+// the per-tenant credentials from the hub Secret, resolves the vendor controller
+// endpoint for the provider and protocol, and issues a CSI CreateVolume with the
+// credentials in the secrets field. CSI CreateVolume is idempotent, so a retried
+// call for an existing volume returns that volume rather than erroring.
 func (p *VastVendorProvisioner) CreateVolume(ctx context.Context, req VendorCreateVolumeRequest) (VendorCreateVolumeResponse, error) {
-	if req.Protocol != v1alpha1.VolumeProtocolBlock {
-		return VendorCreateVolumeResponse{}, fmt.Errorf(
-			"vendor provisioner supports only block volumes; protocol %q is not yet implemented", req.Protocol)
+	switch req.Protocol {
+	case v1alpha1.VolumeProtocolBlock:
+		return p.createBlockVolume(ctx, req)
+	case v1alpha1.VolumeProtocolNFS:
+		return p.createNFSVolume(ctx, req)
+	default:
+		return VendorCreateVolumeResponse{}, fmt.Errorf("unsupported volume protocol %q", req.Protocol)
 	}
+}
 
-	endpoint, err := p.endpointFor(req.Provider)
+// createBlockVolume provisions a block volume in the tenant's NVMe subsystem view.
+func (p *VastVendorProvisioner) createBlockVolume(ctx context.Context, req VendorCreateVolumeRequest) (VendorCreateVolumeResponse, error) {
+	endpoint, err := p.endpointFor(req.Provider, req.Protocol)
 	if err != nil {
 		return VendorCreateVolumeResponse{}, err
 	}
-	creds, err := p.readTenantCreds(ctx, req.Tenant)
+	creds, err := p.readTenantCreds(ctx, req.Tenant, req.Protocol)
 	if err != nil {
 		return VendorCreateVolumeResponse{}, err
 	}
@@ -174,12 +199,7 @@ func (p *VastVendorProvisioner) CreateVolume(ctx context.Context, req VendorCrea
 			"subsystem":   subsystem,
 			"tenant_name": req.Tenant,
 		},
-		Secrets: map[string]string{
-			"username": creds.username,
-			"password": creds.password,
-			"endpoint": creds.vastEndpoint,
-			"tenant":   req.Tenant,
-		},
+		Secrets: creds.csiSecrets(req.Tenant),
 	}
 	creds.applyVipPool(csiReq.Parameters)
 
@@ -202,15 +222,94 @@ func (p *VastVendorProvisioner) CreateVolume(ctx context.Context, req VendorCrea
 	}, nil
 }
 
+// createNFSVolume provisions an NFS volume: a directory with its own view and
+// quota under the tier's root export. The returned VendorContext carries only
+// what the guest node plugin needs to mount the share.
+func (p *VastVendorProvisioner) createNFSVolume(ctx context.Context, req VendorCreateVolumeRequest) (VendorCreateVolumeResponse, error) {
+	if err := validateNFSParams(req.NFS); err != nil {
+		return VendorCreateVolumeResponse{}, fmt.Errorf("NFS volume %q: %w", req.Name, err)
+	}
+	endpoint, err := p.endpointFor(req.Provider, req.Protocol)
+	if err != nil {
+		return VendorCreateVolumeResponse{}, err
+	}
+	creds, err := p.readTenantCreds(ctx, req.Tenant, req.Protocol)
+	if err != nil {
+		return VendorCreateVolumeResponse{}, err
+	}
+
+	cli, closeConn, err := p.dial(ctx, endpoint)
+	if err != nil {
+		return VendorCreateVolumeResponse{}, fmt.Errorf("dial vendor controller %q: %w", endpoint, err)
+	}
+	defer func() { _ = closeConn() }()
+
+	params := map[string]string{
+		"root_export":   req.NFS.RootExport,
+		"view_policy":   req.NFS.ViewPolicy,
+		"vip_pool_fqdn": req.NFS.VipPoolFQDN,
+	}
+	if req.NFS.QoSPolicy != "" {
+		params["qos_policy"] = req.NFS.QoSPolicy
+	}
+
+	resp, err := cli.CreateVolume(ctx, &csi.CreateVolumeRequest{
+		Name:               req.Name,
+		CapacityRange:      &csi.CapacityRange{RequiredBytes: req.SizeGiB * bytesPerGiB},
+		VolumeCapabilities: []*csi.VolumeCapability{mountVolumeCapability(req.AccessMode)},
+		Parameters:         params,
+		Secrets:            creds.csiSecrets(req.Tenant),
+	})
+	if err != nil {
+		return VendorCreateVolumeResponse{}, fmt.Errorf("vendor CreateVolume for %q: %w", req.Name, err)
+	}
+	vol := resp.GetVolume()
+	if vol == nil || vol.GetVolumeId() == "" {
+		return VendorCreateVolumeResponse{}, fmt.Errorf("vendor CreateVolume for %q returned no volume id", req.Name)
+	}
+
+	vendorContext := make(map[string]string, len(nfsVendorContextKeys))
+	for _, key := range nfsVendorContextKeys {
+		if value, ok := vol.GetVolumeContext()[key]; ok {
+			vendorContext[key] = value
+		}
+	}
+	return VendorCreateVolumeResponse{
+		VendorVolumeID: vol.GetVolumeId(),
+		Protocol:       string(v1alpha1.VolumeProtocolNFS),
+		VendorContext:  vendorContext,
+	}, nil
+}
+
+// validateNFSParams checks that every required NFS input is present.
+func validateNFSParams(params *VendorNFSParams) error {
+	switch {
+	case params == nil:
+		return fmt.Errorf("NFS parameters are required")
+	case params.RootExport == "":
+		return fmt.Errorf("root_export is required")
+	case params.ViewPolicy == "":
+		return fmt.Errorf("view_policy is required")
+	case params.VipPoolFQDN == "":
+		return fmt.Errorf("vip_pool_fqdn is required")
+	}
+	return nil
+}
+
 // DeleteVolume deprovisions the vendor volume. CSI DeleteVolume is idempotent:
 // a NotFound response is treated as success so a retried delete of an
-// already-removed volume does not block finalizer removal.
+// already-removed volume does not block finalizer removal. An empty Protocol is
+// treated as block, for volumes recorded before the protocol was passed.
 func (p *VastVendorProvisioner) DeleteVolume(ctx context.Context, req VendorDeleteVolumeRequest) error {
-	endpoint, err := p.endpointFor(req.Provider)
+	protocol := req.Protocol
+	if protocol == "" {
+		protocol = v1alpha1.VolumeProtocolBlock
+	}
+	endpoint, err := p.endpointFor(req.Provider, protocol)
 	if err != nil {
 		return err
 	}
-	creds, err := p.readTenantCreds(ctx, req.Tenant)
+	creds, err := p.readTenantCreds(ctx, req.Tenant, protocol)
 	if err != nil {
 		return err
 	}
@@ -223,36 +322,56 @@ func (p *VastVendorProvisioner) DeleteVolume(ctx context.Context, req VendorDele
 
 	_, err = cli.DeleteVolume(ctx, &csi.DeleteVolumeRequest{
 		VolumeId: req.VendorVolumeID,
-		Secrets: map[string]string{
-			"username": creds.username,
-			"password": creds.password,
-			"endpoint": creds.vastEndpoint,
-			"tenant":   req.Tenant,
-		},
+		Secrets:  creds.csiSecrets(req.Tenant),
 	})
 	if err != nil {
 		if grpcstatus.Code(err) == codes.NotFound {
 			return nil
+		}
+		if protocol == v1alpha1.VolumeProtocolNFS && isVastTrashDisabled(err) {
+			// The vendor's message describes its local-mount fallback, not the
+			// cause, so it is logged here and replaced by a fixed message.
+			ctrllog.FromContext(ctx).Error(err, "VAST refused NFS volume deletion",
+				"vendorVolumeID", req.VendorVolumeID)
+			return ErrVendorNFSTrashDisabled
 		}
 		return fmt.Errorf("vendor DeleteVolume for %q: %w", req.VendorVolumeID, err)
 	}
 	return nil
 }
 
-// endpointFor resolves the vendor controller endpoint for a provider name.
-func (p *VastVendorProvisioner) endpointFor(provider string) (string, error) {
+// isVastTrashDisabled reports whether a vendor DeleteVolume error is the VAST
+// driver's response when trash folder access is disabled: it then tries a
+// local-mount deletion, fails its deletionViewPolicy assertion, and returns
+// that as an Unknown error (vast_csi/plugins/nfs.py _delete_data_from_storage).
+func isVastTrashDisabled(err error) bool {
+	st, ok := grpcstatus.FromError(err)
+	return ok && st.Code() == codes.Unknown && strings.Contains(st.Message(), "deletionViewPolicy")
+}
+
+// endpointFor resolves the vendor controller endpoint for a provider and
+// protocol. Block volumes fall back to the bare provider key.
+func (p *VastVendorProvisioner) endpointFor(provider string, protocol v1alpha1.VolumeProtocol) (string, error) {
 	if provider == "" {
 		return "", fmt.Errorf("volume has no resolved provider; cannot select a vendor controller")
 	}
-	endpoint, ok := p.endpoints[provider]
-	if !ok {
-		return "", fmt.Errorf("no vendor controller endpoint configured for provider %q", provider)
+	key := provider + "/" + strings.ToLower(string(protocol))
+	if endpoint, ok := p.endpoints[key]; ok {
+		return endpoint, nil
 	}
-	return endpoint, nil
+	if protocol == v1alpha1.VolumeProtocolBlock {
+		if endpoint, ok := p.endpoints[provider]; ok {
+			return endpoint, nil
+		}
+		return "", fmt.Errorf("no vendor controller endpoint configured for %q or %q", key, provider)
+	}
+	return "", fmt.Errorf("no vendor controller endpoint configured for %q", key)
 }
 
-// readTenantCreds reads and validates the per-tenant hub Secret.
-func (p *VastVendorProvisioner) readTenantCreds(ctx context.Context, tenant string) (tenantCreds, error) {
+// readTenantCreds reads and validates the per-tenant hub Secret. The tenant
+// UID hash and VIP pool are required for block volumes only: NFS volumes take
+// their VIP pool from the request.
+func (p *VastVendorProvisioner) readTenantCreds(ctx context.Context, tenant string, protocol v1alpha1.VolumeProtocol) (tenantCreds, error) {
 	if tenant == "" {
 		return tenantCreds{}, fmt.Errorf("volume has no tenant annotation; cannot select vendor credentials")
 	}
@@ -276,6 +395,9 @@ func (p *VastVendorProvisioner) readTenantCreds(ctx context.Context, tenant stri
 	if creds.vastEndpoint == "" {
 		return tenantCreds{}, fmt.Errorf("hub secret %s/%s missing %s", p.configNamespace, name, secretKeyVastEndpoint)
 	}
+	if protocol == v1alpha1.VolumeProtocolNFS {
+		return creds, nil
+	}
 	if creds.vipPoolName == "" && creds.vipPoolFQDN == "" {
 		return tenantCreds{}, fmt.Errorf("hub secret %s/%s missing a VIP pool (%s or %s)",
 			p.configNamespace, name, secretKeyVipPoolName, secretKeyVipPoolFQDN)
@@ -294,6 +416,26 @@ func (c tenantCreds) applyVipPool(params map[string]string) {
 		return
 	}
 	params["vip_pool_name"] = c.vipPoolName
+}
+
+// csiSecrets returns the per-request credentials the vendor driver
+// authenticates with. tenant is sent as the X-Tenant-Name header.
+func (c tenantCreds) csiSecrets(tenant string) map[string]string {
+	return map[string]string{
+		"username": c.username,
+		"password": c.password,
+		"endpoint": c.vastEndpoint,
+		"tenant":   tenant,
+	}
+}
+
+// mountVolumeCapability builds a filesystem (mount) CSI volume capability from
+// the CRD access mode.
+func mountVolumeCapability(mode v1alpha1.VolumeAccessMode) *csi.VolumeCapability {
+	return &csi.VolumeCapability{
+		AccessType: &csi.VolumeCapability_Mount{Mount: &csi.VolumeCapability_MountVolume{}},
+		AccessMode: &csi.VolumeCapability_AccessMode{Mode: toCSIAccessMode(mode)},
+	}
 }
 
 // blockVolumeCapability builds a block CSI volume capability from the CRD access

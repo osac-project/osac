@@ -302,6 +302,7 @@ func (s *PrivateSecretsServer) Update(ctx context.Context,
 	}
 
 	persistInVault := existingSecret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT &&
+		updateIncludesField(request.GetUpdateMask(), "data") &&
 		len(request.GetObject().GetData()) > 0
 	var data map[string][]byte
 	if persistInVault {

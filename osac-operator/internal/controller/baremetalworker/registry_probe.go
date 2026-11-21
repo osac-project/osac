@@ -521,9 +521,8 @@ func registryProbeResultPatch(image, status, reason, message string) []byte {
 
 const registryProbeSystemdUnit = `[Unit]
 Description=OSAC CaaS worker registry access probe
-Wants=network-online.target
+Wants=network-online.target osac-worker-network-config.service
 After=network-online.target osac-worker-network-config.service
-Requires=osac-worker-network-config.service
 
 [Service]
 Type=oneshot

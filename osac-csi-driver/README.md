@@ -21,7 +21,13 @@ The driver runs in two modes controlled by Kubernetes deployment topology:
 
 - **Node plugin** (DaemonSet): Handles `NodeStageVolume`, `NodePublishVolume`,
   and related RPCs by routing to vendor node plugins based on the `osac.backend`
-  key in the volume context set at creation time.
+  and `osac.protocol` keys in the volume context set at creation time. Each
+  volume's route is kept under `--node-state-dir`, so unstage and unpublish
+  still reach the vendor after the node plugin restarts.
+
+Vendor socket and controller maps are keyed `<backend>/<protocol>` (for example
+`vast/nfs`), with a bare `<backend>` key serving every protocol that has no
+protocol-specific entry.
 
 ## Build
 
@@ -46,7 +52,10 @@ make image-push   # Push container image
 | `--fulfillment-issuer-url` | (empty) | Keycloak issuer URL for `client_credentials` token exchange |
 | `--fulfillment-ca-file` | (empty) | PEM CA bundle for verified fulfillment-service and OAuth TLS connections |
 | `--grpc-insecure` | `false` | Skip TLS server certificate verification |
-| `--vendor-sockets` | (empty) | Comma-separated `backend=socketpath` pairs |
+| `--vendor-sockets` | (empty) | Comma-separated `backend=socketpath` pairs; keys may be `backend/protocol` |
+| `--vendor-controllers` | (empty) | Comma-separated `backend=endpoint` pairs for attach and detach; keys may be `backend/protocol`, and `none` makes attach a no-op |
+| `--node-state-dir` | (empty, routes kept in memory) | Directory where the node plugin keeps each volume's route across restarts |
+| `--node-only` | `false` | Serve only the Identity and Node services; no fulfillment configuration is needed |
 
 The node DaemonSet supplies `NODE_NAME` from the Kubernetes downward API. The
 LVMS socket is routed through the existing vendor socket map and defaults to

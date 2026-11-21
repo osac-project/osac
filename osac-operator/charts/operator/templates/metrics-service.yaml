@@ -5,6 +5,10 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "osac-operator.labels" . | nindent 4 }}
+    {{- /* Distinguishes this Service from the console-proxy Service, which
+    shares most of the common labels. Selected by templates/servicemonitor.yaml;
+    read it before changing this label or the port. */}}
+    app.kubernetes.io/component: metrics
 spec:
   ports:
   - name: https

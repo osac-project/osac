@@ -487,14 +487,17 @@ _LIB_OPEN_SCHEMA_MAPS=(
     apiTokenPeppers
     aap.instanceGroups.networkFulfillment.config
     aap.instanceGroups.networkFulfillment.secret
+    bmf.serviceMonitor.labels
     metering.prometheusRule.labels
     metering.serviceMonitor.labels
     operator.fabricDomainInventory
     operator.networkManagers.fabricManagers
     operator.networkManagers.k8sManagers
+    operator.serviceMonitor.labels
     operator.stall.workersJoiningByInstanceType
     operator.vendorControllers
     preflight.skip
+    service.serviceMonitor.labels
 )
 
 # Constraints the installer's own schemas add, so a rejected value names the

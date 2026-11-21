@@ -92,6 +92,18 @@ monitoring and exporter templates only, not a live exporter or Prometheus;
 see the [osac-metering guide](osac-metering.md) for the reader boundaries
 and remaining gaps.
 
+The component charts the umbrella installs run their `helm unittest` suites in
+that same leg: `fulfillment-service/charts/service`,
+`osac-operator/charts/operator` and
+`bare-metal-fulfillment-operator/charts/operator`. They cover the
+ServiceMonitors those charts ship — selector-to-Service agreement, the HTTPS
+scrape settings the two controller-runtime endpoints need, and the
+`.Capabilities.APIVersions.Has` guard that keeps a cluster without the
+Prometheus operator CRDs installable. Nothing at this tier proves a target is
+actually scraped; that needs a deployed cluster with user-workload monitoring
+and remains uncovered by CI, tracked by
+[OSAC-6132](https://redhat.atlassian.net/browse/OSAC-6132).
+
 ## OSAC-5343 deployed enablement coverage
 
 The release E2E path adds trust assertions to existing `tests/e2e/` journeys

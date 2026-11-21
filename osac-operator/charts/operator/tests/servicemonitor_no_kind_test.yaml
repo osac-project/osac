@@ -1,0 +1,11 @@
+suite: operator metrics ServiceMonitor with only the monitoring API group
+templates:
+  - templates/servicemonitor.yaml
+capabilities:
+  apiVersions:
+    - monitoring.coreos.com/v1
+tests:
+  - it: renders nothing when the ServiceMonitor kind is absent
+    asserts:
+      - hasDocuments:
+          count: 0

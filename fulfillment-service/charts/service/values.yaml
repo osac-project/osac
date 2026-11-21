@@ -328,3 +328,27 @@ kafka:
   # `brokers`. TLS trust uses `certs.caBundle`; include the broker CA in that ConfigMap when it is
   # not already trusted.
   connection: []
+
+# Prometheus scraping of the /metrics endpoints this chart deploys. Enabled by
+# default: the services expose metrics unconditionally, and before this existed
+# nothing collected them, which read as instrumented while collecting nothing.
+#
+# The ServiceMonitor is rendered only where the monitoring.coreos.com/v1
+# ServiceMonitor CRD exists, so a Kind install with no Prometheus operator still
+# applies the chart. Collection also needs a Prometheus that selects it: on
+# OpenShift, enable user-workload monitoring.
+serviceMonitor:
+  enabled: true
+
+  # Scrape interval. The endpoints are cheap but wide: the gRPC server returns
+  # about 3000 series, mostly db_operation_duration buckets.
+  interval: 60s
+
+  # Extra labels for Prometheus installations that select monitors by label
+  # (for example a kube-prometheus-stack release label).
+  labels: {}
+
+  # Extra metricRelabelings appended after the built-in rule that drops the
+  # Envoy per-worker series. Use to trim further, for example the
+  # db_operation_duration histogram buckets.
+  metricRelabelings: []

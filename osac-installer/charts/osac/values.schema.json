@@ -765,6 +765,27 @@
         "global": {
           "type": "object",
           "description": "Helm-injected global values (passed automatically to subcharts)"
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "description": "Prometheus ServiceMonitor for the operator controller-manager metrics endpoint. Requires a Prometheus operator or OpenShift user-workload monitoring; rendered only where the ServiceMonitor CRD exists.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create the ServiceMonitor scraping the controller-manager /metrics endpoint",
+              "default": true
+            },
+            "interval": {
+              "$ref": "#/$defs/prometheusDuration",
+              "description": "Scrape interval"
+            },
+            "labels": {
+              "type": "object",
+              "description": "Extra labels for Prometheus instances that select monitors by label",
+              "additionalProperties": { "type": "string" }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -1171,6 +1192,32 @@
         "global": {
           "type": "object",
           "description": "Helm-injected global values (passed automatically to subcharts)"
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "description": "Prometheus ServiceMonitor covering every fulfillment /metrics endpoint. Requires a Prometheus operator or OpenShift user-workload monitoring; rendered only where the ServiceMonitor CRD exists.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create the ServiceMonitor scraping the fulfillment /metrics endpoints",
+              "default": true
+            },
+            "interval": {
+              "$ref": "#/$defs/prometheusDuration",
+              "description": "Scrape interval"
+            },
+            "labels": {
+              "type": "object",
+              "description": "Extra labels for Prometheus instances that select monitors by label",
+              "additionalProperties": { "type": "string" }
+            },
+            "metricRelabelings": {
+              "type": "array",
+              "description": "Extra metricRelabelings appended after the built-in rule that drops the Envoy per-worker series",
+              "items": { "type": "object" }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "allOf": [
@@ -2340,6 +2387,27 @@
         "global": {
           "type": "object",
           "description": "Helm-injected global values (passed automatically to subcharts)"
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "description": "Prometheus ServiceMonitor for the BMF operator controller-manager metrics endpoint. Requires a Prometheus operator or OpenShift user-workload monitoring; rendered only where the ServiceMonitor CRD exists.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Create the ServiceMonitor scraping the controller-manager /metrics endpoint",
+              "default": true
+            },
+            "interval": {
+              "$ref": "#/$defs/prometheusDuration",
+              "description": "Scrape interval"
+            },
+            "labels": {
+              "type": "object",
+              "description": "Extra labels for Prometheus instances that select monitors by label",
+              "additionalProperties": { "type": "string" }
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -2543,6 +2611,13 @@
       "minLength": 2,
       "maxLength": 64,
       "pattern": "^[1-9][0-9]*(?:\\.[0-9]+)?(?:ns|us|µs|ms|s|m|h)(?:[0-9]+(?:\\.[0-9]+)?(?:ns|us|µs|ms|s|m|h))*$"
+    },
+    "prometheusDuration": {
+      "type": "string",
+      "description": "Prometheus duration (e.g. 30s, 1m, 1h30m, 1d). Integers only: fractional values such as 1.5m are rejected by the ServiceMonitor API. The units are y, w, d, h, m, s and ms; Go's ns and us are not accepted. An empty value is not allowed here, so a scrape falls back to the Prometheus global interval only when serviceMonitor.interval is omitted.",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^(0|(([0-9]+)y)?(([0-9]+)w)?(([0-9]+)d)?(([0-9]+)h)?(([0-9]+)m)?(([0-9]+)s)?(([0-9]+)ms)?)$"
     },
     "globalNetworking": {
       "type": "object",

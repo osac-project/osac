@@ -1,0 +1,59 @@
+{{- if and .Values.serviceMonitor.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor") }}
+{{- /*
+Scraping for the controller-manager metrics endpoint.
+
+The endpoint is HTTPS, not plain HTTP: cmd/main.go runs the controller-runtime
+metrics server with SecureServing and
+filters.WithAuthenticationAndAuthorization, and templates/deployment.yaml binds
+it to :8443. So the scrape needs a bearer token and a TLS config.
+
+insecureSkipVerify is required because controller-runtime generates a
+self-signed certificate when no CertDir is configured, as is the case here. The
+connection is still authenticated in the direction that matters: the operator
+rejects any caller whose token does not pass a TokenReview and a
+SubjectAccessReview for GET /metrics.
+
+The token comes from a Secret rather than bearerTokenFile, which OpenShift's
+user-workload Prometheus rejects outright; templates/metrics-scraper.yaml
+creates the identity it belongs to and explains why. The checks themselves
+need nothing new: templates/aggregate-roles.yaml already grants the operator's
+ServiceAccount the tokenreviews and subjectaccessreviews to run them.
+
+Rendered only where the ServiceMonitor CRD exists, so a Kind install without a
+Prometheus operator still applies the chart.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "bare-metal-fulfillment-operator.fullname" . }}-controller-manager-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: metrics
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "bare-metal-fulfillment-operator.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: metrics
+  endpoints:
+  - port: https
+    scheme: https
+    path: /metrics
+    {{- /* Quoted: the CRD types interval as a string, and an unquoted 0 --
+    a valid Prometheus duration meaning "use the global interval" -- is a YAML
+    integer, which the API server rejects. */}}
+    interval: {{ .Values.serviceMonitor.interval | quote }}
+    authorization:
+      type: Bearer
+      credentials:
+        name: {{ include "bare-metal-fulfillment-operator.fullname" . }}-metrics-scraper-token
+        key: token
+    tlsConfig:
+      insecureSkipVerify: true
+{{- end }}

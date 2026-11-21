@@ -76,3 +76,18 @@ metal3:
   enabled: false
   namespace: ""
   hostClass: "metal3"
+
+# Prometheus scraping of the controller-manager metrics endpoint. Enabled by
+# default: the deployment serves metrics unconditionally, and before this
+# existed nothing collected them.
+#
+# The ServiceMonitor is rendered only where the monitoring.coreos.com/v1
+# ServiceMonitor CRD exists, so a Kind install with no Prometheus operator still
+# applies the chart. The endpoint is HTTPS with authn/authz, so the scrape uses
+# the Prometheus ServiceAccount token; see templates/servicemonitor.yaml.
+serviceMonitor:
+  enabled: true
+  interval: 60s
+
+  # Extra labels for Prometheus installations that select monitors by label.
+  labels: {}

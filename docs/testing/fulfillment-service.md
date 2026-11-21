@@ -15,11 +15,30 @@ Touched-area requirements: [component guide](../../fulfillment-service/AGENTS.md
 | Component integration (deployed) | The deployed `it/` suite, run through the installer integration target with the fulfillment suite selected | Deployed Fulfillment Service, PostgreSQL, authenticated APIs, Kubernetes, and the CLI from this checkout | Provider networking is disabled. Only the `networking-operator` and `compute-storage` phases deploy the current operator; other cases do not establish operator/provider behavior. |
 | Component integration (identity) ([DEV] [OSAC-6553](https://redhat.atlassian.net/browse/OSAC-6553), [OSAC-6554](https://redhat.atlassian.net/browse/OSAC-6554), [OSAC-6555](https://redhat.atlassian.net/browse/OSAC-6555), [OSAC-6556](https://redhat.atlassian.net/browse/OSAC-6556)) | Service-account, RoleBinding, and service-account CLI suites in `it/`, via the deployed target above | Fulfillment, PostgreSQL, Keycloak, and the configured runtime identities | Failure-injection cases run the service and reconciler in process against PostgreSQL and Keycloak; they do not exercise the deployed controller loop, and external provider provisioning is out of scope. |
 | E2E | `../tests/e2e/` | Deployed cross-component user journeys | Requires the corresponding operators, AAP, and providers. |
+| Unit (chart render) | `charts/service/tests/`, run by `helm unittest charts/service` in the `helm-unit` CI leg | The ServiceMonitor and the `osac.openshift.io/metrics` label it selects on, including which Services must not carry it and the `.Capabilities.APIVersions.Has` guard | No cluster and no Prometheus. That a target is actually scraped is not shown here; it needs user-workload monitoring on a deployed cluster, tracked by [OSAC-6132](https://redhat.atlassian.net/browse/OSAC-6132). |
 
 For commands, see the
 [component guide](../../fulfillment-service/AGENTS.md#integration-tests) and
 run `make -C osac-installer help` from the repository root for the installer targets that drive the
 deployed suite.
+
+## Chart render tests
+
+```bash
+helm unittest charts/service   # helm-unittest plugin; CI pins v1.2.1
+```
+
+Runs in the `helm-unit` CI leg. Run it when changing a Service's labels or
+ports, the ServiceMonitor, or `serviceMonitor.*` values.
+
+One ServiceMonitor selects every scraped Service by the
+`osac.openshift.io/metrics` label, rather than one monitor per component,
+because the components are gated inconsistently: `consoleProxy.disabled` is
+negated, `eventPublisher.enabled` is positive, and the rest are ungated. A
+Service that is not rendered is then simply not selected. That only holds
+while exactly the Services with a metrics port carry the label, so the suites
+assert both directions, along with the `.Capabilities.APIVersions.Has` guard
+that keeps a cluster without the Prometheus operator CRDs installable.
 
 ## ComputeInstance disk handoff (OSAC-6685)
 

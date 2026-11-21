@@ -2,8 +2,14 @@ apiVersion: v1
 kind: Service
 metadata:
   labels:
+    {{- /* The labels helper already emits control-plane: controller-manager
+    through the selector labels. It used to be repeated here as well, which
+    Helm tolerates but a strict YAML parser rejects as a duplicate key; the
+    rendered output is unchanged. */}}
     {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
-    control-plane: controller-manager
+    {{- /* Selected by templates/servicemonitor.yaml; read it before changing
+    this label or the port. */}}
+    app.kubernetes.io/component: metrics
   name: {{ include "bare-metal-fulfillment-operator.fullname" . }}-controller-manager-metrics-service
   namespace: {{ .Release.Namespace }}
 spec:

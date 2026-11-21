@@ -768,6 +768,7 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				"/osac.public.v1.NATGateways/List":                   {},
 				"/osac.public.v1.ProjectMemberships/List":            {},
 				"/osac.public.v1.Projects/List":                      {},
+				"/osac.public.v1.QuotaUsage/Get":                     {},
 				"/osac.public.v1.RoleBindings/Get":                   {},
 				"/osac.public.v1.RoleBindings/List":                  {},
 				"/osac.public.v1.Roles/Get":                          {},

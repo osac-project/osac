@@ -17,10 +17,13 @@ limitations under the License.
 package controller
 
 import (
+	"errors"
 	"reflect"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	ctrl "sigs.k8s.io/controller-runtime"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -94,6 +97,48 @@ func TestUpdateTenantClusterStorageSupportsMultipleCaaSClusters(t *testing.T) {
 	}
 	if !reflect.DeepEqual(tenant.Status.ClusterStorage, want) {
 		t.Fatalf("ClusterStorage = %#v, want %#v", tenant.Status.ClusterStorage, want)
+	}
+}
+
+// TestCombineStageResults covers the rule for merging the VMaaS and CaaS stage
+// results: VMaaS error first, then CaaS error, then the smaller positive requeue.
+func TestCombineStageResults(t *testing.T) {
+	errVMaaS := errors.New("vmaas failed")
+	errCaaS := errors.New("caas failed")
+	rq := func(d time.Duration) ctrl.Result { return ctrl.Result{RequeueAfter: d} }
+
+	tests := []struct {
+		name       string
+		vmaas      ctrl.Result
+		vmaasErr   error
+		caas       ctrl.Result
+		caasErr    error
+		wantResult ctrl.Result
+		wantErr    error
+	}{
+		{name: "both zero"},
+		{name: "only VMaaS requeue", vmaas: rq(10 * time.Second), wantResult: rq(10 * time.Second)},
+		{name: "only CaaS requeue", caas: rq(20 * time.Second), wantResult: rq(20 * time.Second)},
+		{name: "both requeue, VMaaS shorter", vmaas: rq(5 * time.Second), caas: rq(30 * time.Second), wantResult: rq(5 * time.Second)},
+		{name: "both requeue, CaaS shorter", vmaas: rq(30 * time.Second), caas: rq(5 * time.Second), wantResult: rq(5 * time.Second)},
+		{name: "VMaaS error with CaaS requeue", vmaasErr: errVMaaS, caas: rq(5 * time.Second), wantErr: errVMaaS},
+		{name: "CaaS error with VMaaS requeue", vmaas: rq(5 * time.Second), caasErr: errCaaS, wantErr: errCaaS},
+		{name: "both errors, VMaaS wins", vmaas: rq(7 * time.Second), vmaasErr: errVMaaS, caas: rq(3 * time.Second), caasErr: errCaaS, wantResult: rq(7 * time.Second), wantErr: errVMaaS},
+		{name: "negative VMaaS requeue ignored", vmaas: rq(-time.Second), caas: rq(10 * time.Second), wantResult: rq(10 * time.Second)},
+		{name: "negative CaaS requeue ignored", vmaas: rq(10 * time.Second), caas: rq(-time.Second), wantResult: rq(10 * time.Second)},
+		{name: "only a negative requeue gives zero", vmaas: rq(-time.Second)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := combineStageResults(tt.vmaas, tt.vmaasErr, tt.caas, tt.caasErr)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("error = %v, want %v", err, tt.wantErr)
+			}
+			if got != tt.wantResult {
+				t.Fatalf("result = %+v, want %+v", got, tt.wantResult)
+			}
+		})
 	}
 }
 

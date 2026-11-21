@@ -191,6 +191,10 @@ operator:
   # Provider-to-endpoint map consumed by the Volume controller. Node-local
   # providers such as LVMS use "none" because they do not dial a vendor gRPC endpoint.
   vendorControllers: {}
+  # Launch one AAP job per Ready ClusterOrder that installs the OSAC CSI driver
+  # for that cluster.
+  csiInstall:
+    enabled: false
   configSecret:
     name: "osac-config"
     optional: true

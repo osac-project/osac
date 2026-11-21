@@ -293,6 +293,10 @@ func (t *task) buildConfigFromIdp(idp *privatev1.IdentityProvider, clientSecret 
 
 	if oidc := spec.GetOidc(); oidc != nil {
 		config["authorizationUrl"] = oidc.GetAuthorizationUrl()
+		// Keycloak defaults an unset forwardParameters to forwarding acr_values.
+		// A comma produces an empty parameter list while remaining non-empty in
+		// the provider config, so configured URL parameters are the only values sent.
+		config["forwardParameters"] = ","
 		config["tokenUrl"] = oidc.GetTokenUrl()
 		config["clientId"] = oidc.GetClientId()
 		config["clientSecret"] = clientSecret

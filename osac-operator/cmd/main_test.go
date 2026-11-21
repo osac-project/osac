@@ -564,9 +564,55 @@ var _ = Describe("parseVendorControllers", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("backend and endpoint must not be empty"))
 	})
+
+	It("keeps a provider/protocol key intact", func() {
+		m, err := parseVendorControllers("vast/nfs=n:1")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(m).To(Equal(map[string]string{"vast/nfs": "n:1"}))
+	})
 })
 
 var _ = Describe("newVendorProvisionerRegistry", func() {
+	newRegistry := func(endpoints map[string]string) controller.VendorProvisionerRegistry {
+		client := fake.NewClientBuilder().Build()
+		registry, err := newVendorProvisionerRegistry(client, client, "osac-system", endpoints)
+		Expect(err).ToNot(HaveOccurred())
+		return registry
+	}
+
+	It("registers one VAST provisioner for per-protocol keys", func() {
+		registry := newRegistry(map[string]string{"vast/nfs": "n:1", "vast/block": "b:1"})
+		Expect(registry).To(HaveLen(1))
+		Expect(registry["vast"]).To(BeAssignableToTypeOf(&controller.VastVendorProvisioner{}))
+	})
+
+	It("still registers VAST from a bare key", func() {
+		registry := newRegistry(map[string]string{"vast": "b:1"})
+		Expect(registry).To(HaveLen(1))
+		Expect(registry["vast"]).To(BeAssignableToTypeOf(&controller.VastVendorProvisioner{}))
+	})
+
+	It("registers VAST and LVMS together", func() {
+		registry := newRegistry(map[string]string{"vast/nfs": "n:1", "lvms": "none"})
+		Expect(registry).To(HaveLen(2))
+		Expect(registry["vast"]).To(BeAssignableToTypeOf(&controller.VastVendorProvisioner{}))
+		Expect(registry["lvms"]).To(BeAssignableToTypeOf(&controller.LvmsVendorProvisioner{}))
+	})
+
+	It("seeds an unimplemented provider once for a per-protocol key", func() {
+		registry := newRegistry(map[string]string{"netapp/nfs": "x:1"})
+		Expect(registry).To(HaveLen(1))
+		_, ok := registry["netapp"]
+		Expect(ok).To(BeTrue())
+		Expect(registry["netapp"]).To(BeNil())
+	})
+
+	It("groups an unknown VAST protocol key under VAST without failing startup", func() {
+		registry := newRegistry(map[string]string{"vast/foo": "x:1"})
+		Expect(registry).To(HaveLen(1))
+		Expect(registry["vast"]).To(BeAssignableToTypeOf(&controller.VastVendorProvisioner{}))
+	})
+
 	It("registers VAST and marks unsupported providers as unimplemented", func() {
 		client := fake.NewClientBuilder().Build()
 		registry, err := newVendorProvisionerRegistry(

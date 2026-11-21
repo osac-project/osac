@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
@@ -45,6 +46,15 @@ const (
 	secretKeyVipPoolFQDN     = "vip_pool_fqdn"
 	secretKeyTenantUIDHash   = "tenant_uid_hash"
 )
+
+// vastNFSTrashDisabledMessage is the fixed text reported when VAST refuses to
+// delete an NFS volume because trash folder access is disabled. It carries no
+// vendor text so it is safe to surface outside the operator.
+const vastNFSTrashDisabledMessage = "VAST refused NFS volume deletion; trash folder access must be enabled on the VAST cluster"
+
+// ErrVendorNFSTrashDisabled reports that VAST refused an NFS volume deletion
+// because trash folder access is disabled on the VAST cluster.
+var ErrVendorNFSTrashDisabled = errors.New(vastNFSTrashDisabledMessage)
 
 // vendorCSIClient is the subset of the CSI controller service the provisioner
 // uses. csi.ControllerClient (over a real gRPC connection) satisfies it, and

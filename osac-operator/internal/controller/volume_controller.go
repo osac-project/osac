@@ -86,6 +86,24 @@ type VendorCreateVolumeRequest struct {
 	// It lets asynchronous provisioners resume an in-progress operation without
 	// creating a second backend resource after a reconcile.
 	VendorContext map[string]string
+
+	// NFS carries the per-tenant, per-tier NFS settings a file volume is created
+	// with. It is required when Protocol is NFS and ignored otherwise.
+	NFS *VendorNFSParams
+}
+
+// VendorNFSParams are the backend settings an NFS volume is created under. They
+// come from the tenant's storage configuration on the hub, never from the
+// consuming cluster.
+type VendorNFSParams struct {
+	// RootExport is the export path under which the volume's directory is created.
+	RootExport string
+	// ViewPolicy is the backend view policy applied to the volume's view.
+	ViewPolicy string
+	// VipPoolFQDN is the DNS name of the virtual IP pool clients mount from.
+	VipPoolFQDN string
+	// QoSPolicy is the optional backend QoS policy for the volume.
+	QoSPolicy string
 }
 
 // VendorCreateVolumeResponse carries the vendor-assigned identifiers that the
@@ -117,8 +135,11 @@ type VendorDeleteVolumeRequest struct {
 	UID            string
 	VendorVolumeID string
 	Provider       string
-	Tenant         string
-	VendorContext  map[string]string
+	// Protocol selects the vendor controller instance that owns the volume. An
+	// empty value is treated as block, for volumes recorded before it was set.
+	Protocol      v1alpha1.VolumeProtocol
+	Tenant        string
+	VendorContext map[string]string
 }
 
 // VolumeReconciler reconciles Volume CRs created by the fulfillment-service

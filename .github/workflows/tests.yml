@@ -443,6 +443,21 @@ jobs:
           ref: ${{ inputs.commit }}
           persist-credentials: false
 
+      # The networking provisioning regression runs the prep-osac values tasks
+      # from this checkout instead of a copy; OSAC_TEST_INFRA points at it.
+      - name: Check out osac-test-infra
+        if: inputs.kind == 'it-osac-installer'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: osac-project/osac-test-infra
+          ref: main
+          path: osac-test-infra
+          persist-credentials: false
+
+      - name: Set up Python
+        if: inputs.kind == 'it-osac-installer'
+        uses: ./.github/actions/setup-python
+
       - name: Set up Helm
         if: inputs.kind == 'it-osac-installer'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
@@ -468,6 +483,8 @@ jobs:
       - name: Validate Helm networking values
         if: inputs.kind == 'it-osac-installer'
         working-directory: osac-installer
+        env:
+          OSAC_TEST_INFRA: ${{ github.workspace }}/osac-test-infra
         run: make helm-networking-test
 
       - name: Template charts (dry-run validation)

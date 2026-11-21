@@ -459,11 +459,14 @@ func (r *VolumeReconciler) handleDelete(ctx context.Context, vol *v1alpha1.Volum
 			UID:            string(vol.UID),
 			VendorVolumeID: vol.Status.VendorVolumeID,
 			Provider:       provider,
+			Protocol:       vol.Status.Protocol,
 			Tenant:         vol.GetAnnotations()[osacTenantKey],
 			VendorContext:  vol.Status.VendorContext,
 		})
 		if err != nil {
 			log.Error(err, "vendor deprovisioning failed")
+			reason, message := deleteFailureCondition(err)
+			setVendorProvisionedCondition(&vol.Status.Conditions, metav1.ConditionFalse, reason, message)
 			return ctrl.Result{}, err
 		}
 		log.Info("vendor deprovisioning succeeded", "vendorVolumeID", vol.Status.VendorVolumeID)
@@ -555,6 +558,16 @@ func (r *VolumeReconciler) mapLogicalVolumeToVolume(_ context.Context, obj clien
 // Uses apimeta.SetStatusCondition which preserves LastTransitionTime when
 // the status hasn't changed, but always updates Reason and Message so
 // repeated failures reflect the latest error.
+// deleteFailureCondition maps a vendor delete error to the VendorProvisioned
+// condition reason and message. Messages are fixed text: vendor errors can
+// carry backend detail, so they stay in the operator log only.
+func deleteFailureCondition(err error) (reason, message string) {
+	if errors.Is(err, ErrVendorNFSTrashDisabled) {
+		return "VendorNFSTrashDisabled", vastNFSTrashDisabledMessage
+	}
+	return "VendorDeleteFailed", "Vendor volume deletion failed; see operator logs"
+}
+
 func setVendorProvisionedCondition(conditions *[]metav1.Condition, status metav1.ConditionStatus, reason, message string) {
 	apimeta.SetStatusCondition(conditions, metav1.Condition{
 		Type:    string(v1alpha1.VolumeConditionVendorProvisioned),

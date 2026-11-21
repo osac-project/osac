@@ -18,6 +18,40 @@
 - name: Include shared tier protocol validation
   ansible.builtin.include_tasks: _validate_tier_protocols.yaml
 
+# StorageClass provisioning creates VMS views, policies and QoS with admin
+# credentials, so it is unsupported in tenant-credentials-only mode. Refuse
+# before any hub Secret read or VAST call.
+- name: Decide whether this backend runs without VAST admin credentials
+  ansible.builtin.include_tasks: _detect_credential_mode.yaml
+
+- name: Build structured failure artifact for StorageClass request without admin credentials
+  when: _vast_tenant_credentials_only | bool
+  ansible.builtin.set_fact:
+    osac_storage_provider_failures:
+      - reason: storage_class_unsupported_without_admin_credentials
+        tiers: "{{ _provider_tiers | map(attribute='name') | list }}"
+        backend_ids:
+          - "{{ _vast_backend_id }}"
+        message: >-
+          VAST backend '{{ _vast_backend_id }}' has no admin credentials
+          (tenant-credentials-only mode); StorageClass provisioning is not supported
+          without admin credentials.
+
+- name: Emit structured failure artifact for StorageClass request without admin credentials
+  when: _vast_tenant_credentials_only | bool
+  ansible.builtin.set_stats:
+    data:
+      osac_storage_provider_failures: "{{ osac_storage_provider_failures }}"
+    aggregate: false
+
+- name: Fail StorageClass provisioning when no admin credentials were supplied
+  when: _vast_tenant_credentials_only | bool
+  ansible.builtin.fail:
+    msg: >-
+      VAST backend '{{ _vast_backend_id }}' has no admin credentials
+      (tenant-credentials-only mode); StorageClass provisioning is not supported
+      without admin credentials.
+
 - name: Compute unique protocols from tiers
   ansible.builtin.set_fact:
     _vast_required_protocols: "{{ _provider_tiers | map(attribute='protocol') | unique | sort | list }}"

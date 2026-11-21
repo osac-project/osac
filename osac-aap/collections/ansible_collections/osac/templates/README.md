@@ -305,9 +305,11 @@ endpoint, is not this mode and fails the "missing one or more of endpoint,
 username, password" validation. In this mode `setup` and `teardown_backend` make no VAST
 calls, do not run the OLM-based vendor CSI operator install (`ensure_csi_operator.yaml`)
 and write no hub Secret. `setup` reports `tenant_credentials_only: true` in its tenant
-config. `ensure_storage_class` on the `vmaas` target requires admin credentials and the
-per-tenant hub Secret that `setup` writes in the admin flow, which this mode never
-creates, so it fails with the "Tenant config Secret ... not found" error.
+config. `ensure_storage_class` is not supported in this mode: it creates VMS views,
+policies and QoS with admin credentials. It fails with "VAST backend '<id>' has no admin
+credentials (tenant-credentials-only mode); StorageClass provisioning is not supported
+without admin credentials." before any hub Secret read or VAST call, and records reason
+`storage_class_unsupported_without_admin_credentials` in `osac_storage_provider_failures`.
 The dispatcher's hub vendor CSI controller step (`ensure_csi_backends.yaml`, off by
 default) is not affected by this mode: the hub VAST CSI controller is what the OSAC CSI
 volume path uses.
@@ -315,6 +317,12 @@ volume path uses.
 - The mode is selected by missing credentials, so credentials that resolve empty (or
   renamed keys) imitate it. Check what the operator passes if a backend unexpectedly
   skips VAST work.
+- Limitation: today the operator sends `{endpoint, username: "", password: ""}` for any
+  non-CSP backend registered without credentials. Such a backend, whether it was
+  registered without credentials by mistake or on purpose, now gets a successful backend
+  job and a Tenant that never becomes ready, where the job used to fail. This lasts until
+  the operator derives readiness for these backends from the per-tenant record instead of
+  the hub Secret (OSAC-7839).
 - `setup` and `teardown_backend` first read the hub Secret
   (`<prefix><tenant>-<backend_id>`) through the Kubernetes API, so the role needs hub
   access even without admin credentials. They refuse, and fail the job, when an

@@ -412,10 +412,12 @@ Required for a production deployment:
 Required for CaaS:
 
 - **DNS credentials.** The chart schema accepts `dns.route53.dns` (the
-  default) and `dns.noop.dns`. Route 53 requires an `AWS_ACCESS_KEY_ID` value
-  and an `AWS_SECRET_ACCESS_KEY` value that can manage the target hosted zone.
-  `dns.noop.dns` does not. To run without OSAC managing DNS, set
-  `DNS_CLASS` as described in
+  default), `dns.rfc2136.dns` and `dns.noop.dns`. Route 53 requires an
+  `AWS_ACCESS_KEY_ID` value and an `AWS_SECRET_ACCESS_KEY` value that can
+  manage the target hosted zone. `dns.rfc2136.dns` requires a DNS server that
+  accepts RFC 2136 dynamic updates for the zone and a TSIG key for it
+  (`DNS_RFC2136_*` settings). `dns.noop.dns` does not need credentials. To run
+  without OSAC managing DNS, set `DNS_CLASS` as described in
   [Section 8.4](#84-installing-without-dns-management). For more information,
   see
   [`dns-backend.md`](https://github.com/osac-project/osac/blob/main/osac-installer/docs/dns-backend.md).
@@ -2135,7 +2137,9 @@ configure endpoint routes and DNS outside OSAC.
   [Section 2.1](#21-cluster-and-access)). Hosted control planes provision
   etcd persistent volume claims from it.
 - If `DNS_CLASS` is `dns.route53.dns`, you have AWS Route 53 credentials
-  for the target hosted zone. They are not required for `dns.noop.dns`.
+  for the target hosted zone. If it is `dns.rfc2136.dns`, you have the
+  update server address and a TSIG key allowed to update the zone. Neither
+  is required for `dns.noop.dns`.
 - The CaaS prerequisites in
   [Section 2.4](#24-credentials-and-external-services), including those for
   provider networking, are in place.
@@ -2221,6 +2225,11 @@ configure endpoint routes and DNS outside OSAC.
            AWS_ACCESS_KEY_ID: "<route53_access_key_id>"
            AWS_SECRET_ACCESS_KEY: "<route53_secret_access_key>"
    ```
+
+   If `DNS_CLASS` is `dns.rfc2136.dns`, put `DNS_RFC2136_KEY_SECRET` in the
+   same file under `secret`, and the server and key name settings in
+   `my-values.yaml`; see
+   [RFC 2136 configuration](https://github.com/osac-project/osac/blob/main/osac-installer/docs/dns-backend.md#rfc-2136-configuration).
 
    If `DNS_CLASS` is `dns.noop.dns`, set it in `my-values.yaml` as described
    in [Section 8.4](#84-installing-without-dns-management), skip the Route 53
@@ -3753,8 +3762,10 @@ values and run `helm upgrade` again.
   (`aap.configAsCode.eeImage`). With a provider Fabric Manager, it holds the
   provider's Ansible collection on top of OSAC's image.
 - **DNS backend (`DNS_CLASS`)** — How CaaS clusters get DNS records:
-  `dns.route53.dns` (default, AWS Route 53), or `dns.noop.dns` (OSAC manages
-  no DNS records; see [Section 8.4](#84-installing-without-dns-management)).
+  `dns.route53.dns` (default, AWS Route 53), `dns.rfc2136.dns` (a DNS server
+  that accepts RFC 2136 dynamic updates with a TSIG key), or `dns.noop.dns`
+  (OSAC manages no DNS records; see
+  [Section 8.4](#84-installing-without-dns-management)).
 - **config-as-code** — The Ansible content that the `osac-aap-bootstrap` job
   loads into AAP. Its subscription manifest is stored in the
   `config-as-code-manifest-ig` Secret.

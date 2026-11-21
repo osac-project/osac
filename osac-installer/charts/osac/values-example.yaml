@@ -356,9 +356,18 @@ aap:
         HOSTED_CLUSTER_BASE_DOMAIN: ""
         HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: ""
         HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: ""
+        # RFC 2136 dynamic DNS (BIND, PowerDNS, Knot, ...) instead of Route 53:
+        # DNS_CLASS: "dns.rfc2136.dns"
+        # DNS_ZONE: "clusters.example.com"
+        # DNS_RFC2136_SERVER: "192.0.2.53"
+        # DNS_RFC2136_PORT: "53"
+        # DNS_RFC2136_PROTOCOL: "tcp"
+        # DNS_RFC2136_KEY_NAME: "osac-update"
+        # DNS_RFC2136_KEY_ALGORITHM: "hmac-sha256"
       secret:
         AWS_ACCESS_KEY_ID: ""
         AWS_SECRET_ACCESS_KEY: ""
+        # DNS_RFC2136_KEY_SECRET: ""   # base64 TSIG secret for dns.rfc2136.dns
     # Network manager settings (ConfigMap network-fulfillment-ig) and
     # credentials (Secret network-fulfillment-ig), written verbatim. Keys start
     # with the manager's registration name in upper case.

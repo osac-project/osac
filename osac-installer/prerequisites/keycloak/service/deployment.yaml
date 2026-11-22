@@ -105,6 +105,12 @@ spec:
               *) echo "ERROR: OSAC_UI_URL must use https:// for '${OSAC_UI_HOST}'; http:// is allowed only for local development (localhost, *.localhost, 127.0.0.1)" >&2; exit 1 ;;
             esac
           fi
+          # The thanos-admin callback must name the admin Route host, never a
+          # wildcard: a wildcard lets any HTTPS origin finish the login and take
+          # the authorization code. Applying this manifest unedited fails here
+          # because the value is empty by default.
+          THANOS_ADMIN_REDIRECT_URI="${THANOS_ADMIN_REDIRECT_URI:?THANOS_ADMIN_REDIRECT_URI must be set (https://thanos-query-admin-osac-observability.<cluster ingress domain>/oauth2/callback)}"
+          [[ "${THANOS_ADMIN_REDIRECT_URI}" =~ ^https://[A-Za-z0-9.-]+/oauth2/callback$ ]] || { echo "ERROR: THANOS_ADMIN_REDIRECT_URI must be https://thanos-query-admin-osac-observability.<cluster ingress domain>/oauth2/callback" >&2; exit 1; }
           json_escape_string() { python3 -c "import json,sys; print(json.dumps(sys.argv[1])[1:-1])" "$1"; }
           escape_sed_replacement() { printf '%s' "$1" | sed -e 's/[\&#]/\\&/g'; }
           sed \
@@ -115,6 +121,7 @@ spec:
             -e "s#__OSAC_REALM_ADMIN_USERNAME__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_USERNAME}")")#" \
             -e "s#__OSAC_REALM_ADMIN_PASSWORD__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_PASSWORD}")")#" \
             -e "s#__OSAC_UI_URL__#$(escape_sed_replacement "${OSAC_UI_URL}")#g" \
+            -e "s#__THANOS_ADMIN_REDIRECT_URI__#$(escape_sed_replacement "${THANOS_ADMIN_REDIRECT_URI}")#g" \
             /realm-raw/realm.json > /realm/realm.json
         env:
         # Browser-facing base URL of the OSAC UI Route, e.g.
@@ -124,6 +131,13 @@ spec:
         # redirectUris point at someone else's hostname. Set it before applying
         # -- the Helm chart sets it from keycloak.uiUrl.
         - name: OSAC_UI_URL
+          value: ""
+        # Exact callback of the thanos-admin client, e.g.
+        # https://thanos-query-admin-osac-observability.<cluster ingress
+        # domain>/oauth2/callback. Intentionally empty: the resolver rejects it,
+        # so applying this manifest unedited fails loudly instead of importing a
+        # realm whose thanos-admin client accepts any HTTPS origin.
+        - name: THANOS_ADMIN_REDIRECT_URI
           value: ""
         - name: REALM_ADMIN_USERNAME
           valueFrom:

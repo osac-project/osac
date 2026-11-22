@@ -94,9 +94,10 @@ for path in sys.argv[1:]:
         if admin.get(key) != value:
             fail(f"{path}: thanos-admin.{key} is {admin.get(key)!r}, expected {value!r}")
     # The Route host is computed at install time from the cluster domain and
-    # namespace, so the static realm cannot name it. A wildcard https callback
-    # is the same shape the osac-admin client uses for its console login.
-    if admin.get("redirectUris") != ["https://*/*"]:
+    # namespace, so the checked-in realm carries a placeholder that the
+    # substitution hook replaces with the exact callback. A wildcard would let
+    # any HTTPS origin finish the login and take the authorization code.
+    if admin.get("redirectUris") != ["__THANOS_ADMIN_REDIRECT_URI__"]:
         fail(f"{path}: thanos-admin.redirectUris is {admin.get('redirectUris')!r}")
 
     if "cloud-provider-admin" not in roles:
@@ -124,5 +125,75 @@ done
 # key on upgrade instead of failing the import on an empty secret.
 grep -Fq -- 'to add thanos-admin key' "${RESOLVER}" ||
   { echo "ERROR: ${RESOLVER} has no upgrade path for the thanos-admin key" >&2; exit 1; }
+
+echo "checking both resolvers write the exact thanos-admin callback"
+# The chart resolver computes the callback from the cluster domain and fails
+# when the domain is empty; the standalone deployment takes the whole callback
+# as an input and fails when it is empty. Both must substitute the placeholder
+# rather than ship the checked-in value.
+grep -Fq -- '__THANOS_ADMIN_REDIRECT_URI__' "${RESOLVER}" ||
+  { echo "ERROR: ${RESOLVER} does not substitute __THANOS_ADMIN_REDIRECT_URI__" >&2; exit 1; }
+grep -Fq -- 'thanos-query-admin-${OBS_NAMESPACE}.${CLUSTER_DOMAIN}/oauth2/callback' "${RESOLVER}" ||
+  { echo "ERROR: ${RESOLVER} does not build the callback from the cluster domain" >&2; exit 1; }
+grep -Fq -- 'CLUSTER_DOMAIN must be set' "${RESOLVER}" ||
+  { echo "ERROR: ${RESOLVER} does not fail when the cluster domain is empty" >&2; exit 1; }
+grep -Fq -- '__THANOS_ADMIN_REDIRECT_URI__' "${STANDALONE_DEPLOYMENT}" ||
+  { echo "ERROR: ${STANDALONE_DEPLOYMENT} does not substitute __THANOS_ADMIN_REDIRECT_URI__" >&2; exit 1; }
+grep -Fq -- 'THANOS_ADMIN_REDIRECT_URI must be set' "${STANDALONE_DEPLOYMENT}" ||
+  { echo "ERROR: ${STANDALONE_DEPLOYMENT} does not fail when the callback is empty" >&2; exit 1; }
+
+echo "checking the chart resolver writes the callback Keycloak must accept"
+TMP_DIR=$(mktemp -d)
+trap 'rm -rf "${TMP_DIR}"' EXIT
+mkdir -p "${TMP_DIR}/bin"
+cat >"${TMP_DIR}/bin/oc" <<'OC'
+#!/usr/bin/env bash
+# The resolver only reads the Secret; every key already exists, so it never
+# creates or patches it.
+if [[ "$*" == *"-o jsonpath="* ]]; then
+  printf 'dGVzdA=='
+fi
+exit 0
+OC
+chmod +x "${TMP_DIR}/bin/oc"
+for domain in apps.example.com ""; do
+  out="${TMP_DIR}/realm-${domain:-empty}.json"
+  status=0
+  PATH="${TMP_DIR}/bin:${PATH}" \
+    KEYCLOAK_NAMESPACE=keycloak \
+    REALM_RAW_PATH="${CHART_REALM}" \
+    REALM_OUTPUT_PATH="${out}" \
+    OSAC_UI_URL=http://ui.osac.localhost:8080 \
+    REALM_ADMIN_PASSWORD=test-password \
+    OBS_NAMESPACE=osac-observability \
+    CLUSTER_DOMAIN="${domain}" \
+    bash "${RESOLVER}" >"${TMP_DIR}/resolver.out" 2>&1 || status=$?
+  if [ -z "${domain}" ]; then
+    if [ "${status}" -eq 0 ]; then
+      echo "ERROR: ${RESOLVER} accepted an empty CLUSTER_DOMAIN" >&2
+      exit 1
+    fi
+    grep -Fq -- 'CLUSTER_DOMAIN must be set' "${TMP_DIR}/resolver.out" ||
+      { echo "ERROR: ${RESOLVER} did not explain the empty CLUSTER_DOMAIN" >&2; cat "${TMP_DIR}/resolver.out" >&2; exit 1; }
+    continue
+  fi
+  if [ "${status}" -ne 0 ]; then
+    echo "ERROR: ${RESOLVER} failed with CLUSTER_DOMAIN=${domain}" >&2
+    cat "${TMP_DIR}/resolver.out" >&2
+    exit 1
+  fi
+  python3 - "${out}" <<'PY'
+import json
+import sys
+
+expected = "https://thanos-query-admin-osac-observability.apps.example.com/oauth2/callback"
+with open(sys.argv[1], encoding="utf-8") as handle:
+    realm = json.load(handle)
+admin = next(c for c in realm["clients"] if c.get("clientId") == "thanos-admin")
+if admin.get("redirectUris") != [expected]:
+    print(f"ERROR: resolved thanos-admin.redirectUris is {admin.get('redirectUris')!r}, expected {expected!r}", file=sys.stderr)
+    sys.exit(1)
+PY
+done
 
 echo "Observability realm checks passed."

@@ -94,6 +94,21 @@ if [[ "${OSAC_UI_URL}" == http://* ]]; then
     esac
 fi
 
+# The thanos-admin client is reached through the Route host
+# thanos-query-admin-<namespace>.<clusterDomain>. The realm is imported before
+# that Route exists, so the callback is written here from the cluster domain.
+# A wildcard callback would let any HTTPS origin finish the login and take the
+# authorization code, so an empty domain is an error rather than a wildcard.
+CLUSTER_DOMAIN="${CLUSTER_DOMAIN:?CLUSTER_DOMAIN must be set (Helm value global.clusterDomain)}"
+OBS_NAMESPACE="${OBS_NAMESPACE:-osac-observability}"
+# DNS name only: a scheme, port, or path here would silently produce a
+# redirectUri Keycloak will not match.
+[[ "${CLUSTER_DOMAIN}" =~ ^[A-Za-z0-9.-]+$ ]] || {
+    echo "ERROR: CLUSTER_DOMAIN must be a DNS name with no scheme, port, or path; check the global.clusterDomain Helm value" >&2
+    exit 1
+}
+THANOS_ADMIN_REDIRECT_URI="https://thanos-query-admin-${OBS_NAMESPACE}.${CLUSTER_DOMAIN}/oauth2/callback"
+
 # REALM_ADMIN_USERNAME/PASSWORD are user-supplied Helm values (unlike the
 # auto-generated base64 client secrets above) substituted into JSON string
 # values, so each needs two escaping passes: first full JSON string escaping
@@ -119,6 +134,7 @@ sed \
     -e "s#__OSAC_REALM_ADMIN_USERNAME__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_USERNAME}")")#" \
     -e "s#__OSAC_REALM_ADMIN_PASSWORD__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_PASSWORD}")")#" \
     -e "s#__OSAC_UI_URL__#$(escape_sed_replacement "${OSAC_UI_URL}")#g" \
+    -e "s#__THANOS_ADMIN_REDIRECT_URI__#$(escape_sed_replacement "${THANOS_ADMIN_REDIRECT_URI}")#g" \
     "${RAW_REALM}" > "${RESOLVED_REALM}"
 
 echo "Realm secrets resolved -> ${RESOLVED_REALM}"

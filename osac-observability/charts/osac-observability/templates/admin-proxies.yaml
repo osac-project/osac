@@ -29,8 +29,8 @@
 {{- $keycloakArgs := list "--provider=keycloak-oidc"
       (printf "--oidc-issuer-url=%s" $issuer)
       (printf "--client-id=%s" ($keycloak.adminClientId | default "thanos-admin"))
-      "--client-secret-file=/etc/thanos-oauth2/client-secret"
-      "--cookie-secret-file=/etc/thanos-oauth2/cookie-secret"
+      "--client-secret-file=/etc/thanos-oauth2/client-secret/client-secret"
+      "--cookie-secret-file=/etc/thanos-oauth2/cookie-secret/cookie-secret"
       "--email-domain=*"
       "--http-address=0.0.0.0:4180"
       (printf "--upstream=%s" $allowlistURL)
@@ -136,14 +136,15 @@ spec:
               memory: 128Mi
           securityContext:
             {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
+          # Directory mounts, not subPath: a subPath mount keeps the old value
+          # after Keycloak rotates the client Secret. The Secret keys are the
+          # file names inside each directory.
           volumeMounts:
             - name: oauth2-client-secret
               mountPath: /etc/thanos-oauth2/client-secret
-              subPath: client-secret
               readOnly: true
             - name: oauth2-cookie-secret
               mountPath: /etc/thanos-oauth2/cookie-secret
-              subPath: cookie-secret
               readOnly: true
         - name: query-allowlist
           image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag }}"
@@ -263,7 +264,7 @@ spec:
             - --upstream={{ $allowlistURL }}
             - --openshift-service-account=thanos-query-admin-openshift
             - --openshift-group={{ $openshiftGroup }}
-            - --cookie-secret-file=/etc/thanos-oauth/cookie-secret
+            - --cookie-secret-file=/etc/thanos-oauth/cookie-secret/cookie-secret
             - --email-domain=*
             - --skip-provider-button
           ports:
@@ -285,10 +286,10 @@ spec:
               memory: 128Mi
           securityContext:
             {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
+          # Directory mount for the same reason as the Keycloak proxy.
           volumeMounts:
             - name: oauth-cookie-secret
               mountPath: /etc/thanos-oauth/cookie-secret
-              subPath: cookie-secret
               readOnly: true
         - name: query-allowlist
           image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag }}"

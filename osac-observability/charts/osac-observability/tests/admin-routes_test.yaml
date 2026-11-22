@@ -178,10 +178,16 @@ tests:
           content: --client-id=thanos-admin
       - contains:
           path: spec.template.spec.containers[1].args
-          content: --client-secret-file=/etc/thanos-oauth2/client-secret
+          content: --client-secret-file=/etc/thanos-oauth2/client-secret/client-secret
       - contains:
           path: spec.template.spec.containers[1].args
-          content: --cookie-secret-file=/etc/thanos-oauth2/cookie-secret
+          content: --cookie-secret-file=/etc/thanos-oauth2/cookie-secret/cookie-secret
+      # Directory mounts, not subPath: a subPath mount keeps the old value after
+      # Keycloak rotates the client Secret.
+      - notExists:
+          path: spec.template.spec.containers[1].volumeMounts[0].subPath
+      - notExists:
+          path: spec.template.spec.containers[1].volumeMounts[1].subPath
       - contains:
           path: spec.template.spec.containers[1].args
           content: --email-domain=*
@@ -299,7 +305,9 @@ tests:
           content: --openshift-group=osac-cloud-infrastructure-admins
       - contains:
           path: spec.template.spec.containers[1].args
-          content: --cookie-secret-file=/etc/thanos-oauth/cookie-secret
+          content: --cookie-secret-file=/etc/thanos-oauth/cookie-secret/cookie-secret
+      - notExists:
+          path: spec.template.spec.containers[1].volumeMounts[0].subPath
       - equal:
           path: spec.template.spec.serviceAccountName
           value: thanos-query-admin-openshift

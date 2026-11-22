@@ -183,10 +183,12 @@ spec:
           configMap:
             name: {{ .Values.configMaps.profiles }}
             optional: true
+        # Not optional: the process exits when the service-CA Secret is absent,
+        # so the pod must wait for it rather than serve a self-signed
+        # certificate that Prometheus cannot verify.
         - name: metrics-certs
           secret:
             secretName: {{ include "bare-metal-fulfillment-operator.fullname" . }}-metrics-tls
-            optional: true
         {{- if .Values.bcm.enabled }}
         - name: bcm-certs
           secret:

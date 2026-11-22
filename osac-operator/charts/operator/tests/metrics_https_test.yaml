@@ -33,13 +33,15 @@ tests:
             name: metrics-certs
             mountPath: /etc/metrics-certs
             readOnly: true
-      - contains:
-          path: spec.template.spec.volumes
-          content:
+      # Not optional: the container must wait for the service-CA Secret instead
+      # of serving controller-runtime's self-signed certificate for the life of
+      # the process, which Prometheus cannot verify.
+      - equal:
+          path: spec.template.spec.volumes[0]
+          value:
             name: metrics-certs
             secret:
               secretName: osac-operator-metrics-tls
-              optional: true
   - it: renders the ServiceMonitor and Prometheus binding when observability is enabled
     set:
       global.observability.enabled: true

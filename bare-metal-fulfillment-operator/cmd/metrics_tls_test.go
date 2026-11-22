@@ -58,9 +58,12 @@ func TestMetricsCertificateTLSOpts(t *testing.T) {
 	t.Run("uses the mounted certificate when present", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTestCertificate(t, dir)
-		opts, watcher := metricsCertificateTLSOpts(
+		opts, watcher, err := metricsCertificateTLSOpts(
 			dir, "tls.crt", "tls.key", []func(*tls.Config){base}, logr.Discard(),
 		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if watcher == nil {
 			t.Fatal("expected a certificate watcher")
 		}
@@ -69,23 +72,33 @@ func TestMetricsCertificateTLSOpts(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back when the certificate is missing", func(t *testing.T) {
-		opts, watcher := metricsCertificateTLSOpts(
+	t.Run("fails when the certificate is missing", func(t *testing.T) {
+		// The chart mounts the service-CA Secret without optional: true, so a
+		// missing file is a real failure. Falling back to a self-signed
+		// certificate would leave Prometheus unable to verify the scrape for
+		// the life of the process.
+		opts, watcher, err := metricsCertificateTLSOpts(
 			filepath.Join(t.TempDir(), "missing"), "tls.crt", "tls.key",
 			[]func(*tls.Config){base}, logr.Discard(),
 		)
+		if err == nil {
+			t.Fatal("expected an error when the mounted certificate is missing")
+		}
 		if watcher != nil {
 			t.Fatal("expected no certificate watcher")
 		}
-		if got, want := len(opts), 1; got != want {
-			t.Fatalf("got %d TLS options, want %d", got, want)
+		if opts != nil {
+			t.Fatalf("expected no TLS options, got %d", len(opts))
 		}
 	})
 
 	t.Run("does nothing without a certificate path", func(t *testing.T) {
-		opts, watcher := metricsCertificateTLSOpts(
+		opts, watcher, err := metricsCertificateTLSOpts(
 			"", "tls.crt", "tls.key", []func(*tls.Config){base}, logr.Discard(),
 		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if watcher != nil {
 			t.Fatal("expected no certificate watcher")
 		}

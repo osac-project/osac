@@ -1203,9 +1203,13 @@ func main() { //nolint:gocyclo // Startup orchestrates many optional controllers
 		tlsOpts = append(tlsOpts, disableHTTP2)
 	}
 
-	metricsTLSOpts, metricsCertWatcher := metricsCertificateTLSOpts(
+	metricsTLSOpts, metricsCertWatcher, err := metricsCertificateTLSOpts(
 		metricsCertPath, metricsCertName, metricsCertKey, tlsOpts, setupLog,
 	)
+	if err != nil {
+		setupLog.Error(err, "unable to configure the metrics serving certificate")
+		os.Exit(1)
+	}
 
 	webhookServer := webhook.NewServer(webhook.Options{
 		TLSOpts: tlsOpts,

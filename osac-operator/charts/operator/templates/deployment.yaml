@@ -221,10 +221,12 @@ spec:
             mountPath: /etc/metrics-certs
             readOnly: true
       volumes:
+        # Not optional: the process exits when the service-CA Secret is absent,
+        # so the pod must wait for it rather than serve a self-signed
+        # certificate that Prometheus cannot verify.
         - name: metrics-certs
           secret:
             secretName: {{ include "osac-operator.fullname" . }}-metrics-tls
-            optional: true
         - name: fulfillment-ca-bundle
           configMap:
             name: {{ .Values.fulfillment.tls.caBundle.configMap | required "fulfillment.tls.caBundle.configMap is required" }}

@@ -200,9 +200,13 @@ func main() {
 		TLSOpts: webhookTLSOpts,
 	})
 
-	metricsTLSOpts, metricsCertWatcher := metricsCertificateTLSOpts(
+	metricsTLSOpts, metricsCertWatcher, err := metricsCertificateTLSOpts(
 		metricsCertPath, metricsCertName, metricsCertKey, tlsOpts, setupLog,
 	)
+	if err != nil {
+		setupLog.Error(err, "unable to configure the metrics serving certificate")
+		os.Exit(1)
+	}
 
 	// Metrics endpoint is enabled in 'config/default/kustomization.yaml'. The Metrics options configure the server.
 	// More info:

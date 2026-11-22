@@ -17,6 +17,9 @@ data:
       bucket: {{ required "global.observability.objectStorage.bucket is required when observability is enabled" $storage.bucket | quote }}
       endpoint: {{ required "global.observability.objectStorage.endpoint is required when observability is enabled" $storage.endpoint | quote }}
       insecure: {{ $storage.insecure | default false }}
+      # Use the pod's credential chain (the mounted Secret) instead of the
+      # anonymous default, which would make every bucket read fail.
+      aws_sdk_auth: true
       {{- with $storage.region }}
       region: {{ . | quote }}
       {{- end }}

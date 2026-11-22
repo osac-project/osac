@@ -291,6 +291,13 @@ require "${enabled}" 'endpoint: "https://s3.example.com"'
 for forbidden in AWS_SECRET_ACCESS_KEY MINIO_ROOT_PASSWORD secret_key: access_key:; do
   reject "${enabled}" "${forbidden}"
 done
+objstore="${TMP_DIR}/object-storage-configmap.yaml"
+extract_kind_name "${enabled}" ConfigMap thanos-object-storage >"${objstore}"
+# Without aws_sdk_auth Thanos ignores the pod credentials and falls back to
+# anonymous access, so the bucket reads fail even though the Secret exists.
+require "${objstore}" 'aws_sdk_auth: true'
+reject "${objstore}" 'access_key'
+reject "${objstore}" 'secret_key'
 enabled_secrets="${TMP_DIR}/thanos-secrets.yaml"
 extract_kind_ns "${enabled}" Secret osac-observability >"${enabled_secrets}"
 if [ -s "${enabled_secrets}" ]; then

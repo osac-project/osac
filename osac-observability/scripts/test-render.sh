@@ -259,6 +259,13 @@ echo "checking object storage is referenced by Secret name only"
 require "${enabled}" 'bucket: "thanos"'
 require "${enabled}" 'endpoint: "https://s3.example.com"'
 require "${TMP_DIR}/thanos-receive.yaml" 'secretRef:'
+objstore="${TMP_DIR}/object-storage-configmap.yaml"
+extract_kind_name "${enabled}" ConfigMap thanos-object-storage >"${objstore}"
+# Without aws_sdk_auth Thanos ignores the pod credentials and falls back to
+# anonymous access, so the bucket reads fail even though the Secret exists.
+require "${objstore}" 'aws_sdk_auth: true'
+reject "${objstore}" 'access_key'
+reject "${objstore}" 'secret_key'
 reject "${enabled}" 'AWS_SECRET_ACCESS_KEY'
 reject "${enabled}" 'MINIO_ROOT_PASSWORD'
 reject "${enabled}" 'secretKey:'

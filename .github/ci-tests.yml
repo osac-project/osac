@@ -81,8 +81,8 @@
   # Reuse the Ginkgo runner; this suite starts real Keycloak containers.
   kind: go-unit
   dir: fulfillment-service
-  cmd: ginkgo run --timeout 10m -v it/realmauth
-  timeout: 20
+  cmd: ginkgo run --timeout 30m -v it/realmauth
+  timeout: 40  # Four cold imports, two persisted restarts, safety tests and compilation
   filters: [integration-tests-csi-realm-auth]
 - id: Integration test (osac-operator)
   group: integration

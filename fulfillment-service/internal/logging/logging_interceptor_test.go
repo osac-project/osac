@@ -352,6 +352,8 @@ var _ = Describe("Interceptor", func() {
 				"/osac.public.v1.ExternalIPPools/List",
 				"/osac.public.v1.ExternalIPAttachments/Get",
 				"/osac.public.v1.ExternalIPAttachments/List",
+				"/osac.private.v1.ExternalIPAttachments/Get",
+				"/osac.private.v1.ExternalIPAttachments/List",
 				"/osac.public.v1.NATGateways/Get",
 				"/osac.public.v1.NATGateways/List",
 			}
@@ -378,7 +380,7 @@ var _ = Describe("Interceptor", func() {
 
 		It("Omits customer network status messages and details on failed Create", func() {
 			const resourceID = "customer-network-resource-id"
-			method := "/osac.public.v1.ExternalIPAttachments/Create"
+			method := "/osac.private.v1.ExternalIPAttachments/Create"
 			rpcStatus, err := grpcstatus.New(grpccodes.FailedPrecondition,
 				"ExternalIP "+resourceID+" is not ready").WithDetails(&errdetails.ErrorInfo{
 				Reason:   "DEPENDENCY_NOT_READY",

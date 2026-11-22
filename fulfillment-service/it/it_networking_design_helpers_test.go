@@ -60,6 +60,8 @@ const ndTimeout = 2 * time.Minute
 // ndPoll is the polling interval of the Eventually checks of the networking design specs.
 const ndPoll = 500 * time.Millisecond
 
+const ndListPageSize = int32(100)
+
 // ndClients holds the clients of the networking design specs: private clients with the administrator identity and
 // public clients with the identity of the regular test user, which belongs to the tenant usersGroup.
 type ndClients struct {
@@ -567,20 +569,20 @@ func ndCreatePool(ctx context.Context, c ndClients, cidr string) *privatev1.Exte
 func cleanupExternalIPsForPool(ctx context.Context, c ndClients, poolID string) error {
 	ndSetPoolState(ctx, c, poolID, privatev1.ExternalIPPoolState_EXTERNAL_IP_POOL_STATE_PENDING)
 
-	ips, err := c.externalIPs.List(ctx, privatev1.ExternalIPsListRequest_builder{}.Build())
+	ips, err := listAllExternalIPs(ctx, c.externalIPs)
 	if err != nil {
 		return fmt.Errorf("failed to list ExternalIPs for pool %s: %w", poolID, err)
 	}
-	gateways, err := c.natGateways.List(ctx, privatev1.NATGatewaysListRequest_builder{}.Build())
+	gateways, err := listAllNATGateways(ctx, c.natGateways)
 	if err != nil {
 		return fmt.Errorf("failed to list NATGateways for pool %s: %w", poolID, err)
 	}
 	adminPublicNATGateways := publicv1.NewNATGatewaysClient(tool.ExternalView().AdminConn())
-	for _, externalIP := range ips.GetItems() {
+	for _, externalIP := range ips {
 		if externalIP.GetSpec().GetPool().GetId() != poolID {
 			continue
 		}
-		for _, gateway := range gateways.GetItems() {
+		for _, gateway := range gateways {
 			if gateway.GetSpec().GetExternalIp().GetId() != externalIP.GetId() {
 				continue
 			}
@@ -593,6 +595,46 @@ func cleanupExternalIPsForPool(ctx context.Context, c ndClients, poolID string) 
 		}
 	}
 	return nil
+}
+
+func listAllExternalIPs(ctx context.Context, client privatev1.ExternalIPsClient) ([]*privatev1.ExternalIP, error) {
+	var items []*privatev1.ExternalIP
+	offset := int32(0)
+	limit := ndListPageSize
+	for {
+		response, err := client.List(ctx, privatev1.ExternalIPsListRequest_builder{
+			Offset: &offset,
+			Limit:  &limit,
+		}.Build())
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, response.GetItems()...)
+		offset += response.GetSize()
+		if response.GetSize() == 0 || offset >= response.GetTotal() {
+			return items, nil
+		}
+	}
+}
+
+func listAllNATGateways(ctx context.Context, client privatev1.NATGatewaysClient) ([]*privatev1.NATGateway, error) {
+	var items []*privatev1.NATGateway
+	offset := int32(0)
+	limit := ndListPageSize
+	for {
+		response, err := client.List(ctx, privatev1.NATGatewaysListRequest_builder{
+			Offset: &offset,
+			Limit:  &limit,
+		}.Build())
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, response.GetItems()...)
+		offset += response.GetSize()
+		if response.GetSize() == 0 || offset >= response.GetTotal() {
+			return items, nil
+		}
+	}
 }
 
 // ndSetPoolState waits until the controller placed the pool, then writes its state through the private API.

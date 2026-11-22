@@ -101,6 +101,9 @@
       loop:
         - osac-test-osac-csi-sc-gold
         - osac-test-osac-csi-sc-silver
+        - osac-test-osac-csi-sc-nfsgold
+        - osac-test-osac-csi-sc-nfssilver
+        - osac-test-osac-csi-sc-blkgold
 
     - name: Delete the other tenant's StorageClasses
       kubernetes.core.k8s:

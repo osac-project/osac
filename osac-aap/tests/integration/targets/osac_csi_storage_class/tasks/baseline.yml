@@ -655,6 +655,7 @@
         wait: true
       loop:
         - osac-test-osac-csi-sc-nfsgold
+        - osac-test-osac-csi-sc-nfssilver
         - osac-test-osac-csi-sc-blkgold
 
     - name: Register the CSIDriver fixture
@@ -685,6 +686,14 @@
                 protocol: block
                 provider: vast
                 backend_id: be-sc-vast
+              # Second VAST backend. The dispatcher runs (provider, backend_id) pairs
+              # sorted, and be-sc-vast sorts before be-sc-vast2, so the pair holding the
+              # block tier runs first. This tier's StorageClass must still be created
+              # after the refusal.
+              - name: nfssilver
+                protocol: nfs
+                provider: vast
+                backend_id: be-sc-vast2
             storage_provider_backend_connections: {}
             storage_provider_provisioning_target: caas
             storage_provider_target_kubeconfig: "{{ _remote_kubeconfig }}"
@@ -701,6 +710,7 @@
               - "'blkgold' in ansible_failed_result.msg"
               - "'not supported on CLaaS' in ansible_failed_result.msg"
               - "'nfsgold' not in ansible_failed_result.msg"
+              - "'nfssilver' not in ansible_failed_result.msg"
               - "'must be a non-empty string' not in ansible_failed_result.msg"
               - "'not a valid DNS label' not in ansible_failed_result.msg"
             fail_msg: "Unexpected failure: {{ ansible_failed_result.msg | default('') }}"
@@ -729,6 +739,14 @@
         name: osac-test-osac-csi-sc-nfsgold
       register: _sc_vast_nfs
 
+    - name: Read the nfssilver StorageClass (second VAST backend)
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-osac-csi-sc-nfssilver
+      register: _sc_vast2_nfs
+
     - name: Read the blkgold StorageClass
       kubernetes.core.k8s_info:
         kubeconfig: "{{ _remote_kubeconfig }}"
@@ -741,11 +759,12 @@
       ansible.builtin.assert:
         that:
           - _sc_vast_nfs.resources | length == 1
+          - _sc_vast2_nfs.resources | length == 1
           - _sc_vast_block.resources | length == 0
         fail_msg: >-
-          The VAST nfs tier must still get its StorageClass and the refused VAST block
-          tier must get none.
-        success_msg: "nfsgold StorageClass exists, blkgold StorageClass does not"
+          The VAST nfs tiers (both backends) must still get their StorageClass and the
+          refused VAST block tier must get none.
+        success_msg: "nfsgold and nfssilver StorageClasses exist, blkgold StorageClass does not"
 
 # ── Play 7: cleanup ──
 - name: "OSAC CSI StorageClass - Cleanup"
@@ -796,4 +815,5 @@
         - osac-test-osac-csi-sc-gold
         - osac-test-osac-csi-sc-silver
         - osac-test-osac-csi-sc-nfsgold
+        - osac-test-osac-csi-sc-nfssilver
         - osac-test-osac-csi-sc-blkgold

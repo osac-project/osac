@@ -59,9 +59,9 @@ global:
     tenantNamespace: osac-csi
   # The single observability switch. Helm propagates only global.* into subchart
   # values, so this one key drives the umbrella templates (platform-monitoring
-  # namespace labels and namespace-scoped scrape RBAC) and the component charts'
-  # plain-HTTP ServiceMonitors. It does not deploy storage or querying; later
-  # stories add those to the osac-observability namespace.
+  # namespace labels and namespace-scoped scrape RBAC), the component charts'
+  # plain-HTTP ServiceMonitors, and the Thanos Receive, Store, Query and
+  # Compactor workloads in the osac-observability namespace.
   observability:
     enabled: false
     thanos:
@@ -125,9 +125,11 @@ global:
         replicaLabel: replica
       downsampling:
         # false renders --downsampling.disable and keeps no 5-minute or
-        # 1-hour aggregates. true runs Thanos's default aggregation, so a
-        # long-range admin query returns coarser points than the samples
-        # collected.
+        # 1-hour aggregates. true renders explicit --retention.resolution-5m
+        # and --retention.resolution-1h from thanos.resolution;
+        # osac.validateValues requires both to equal thanos.retention, so
+        # every role keeps one retention and a long-range admin query returns
+        # coarser points than the samples collected.
         enabled: false
     services:
       metricsAuth:
@@ -144,13 +146,15 @@ global:
         # Placeholder; overwritten at release time.
         tag: ""
     clusterRemoteWrite:
-      enabled: true
-      # Cluster certificate lifetime for tenant and workload clusters. Epic
-      # OSAC-7992 consumes these.
+      # Not enforced in this release: no controller reads these yet. Later
+      # work uses them for tenant and workload cluster writes and their client
+      # certificates.
+      enabled: false
       certificateDuration: 90d
       renewBefore: 30d
     tenant:
-      # Epic OSAC-7993 consumes these; admins are not limited.
+      # Not enforced in this release: no controller reads these yet; admins
+      # are not limited.
       limits:
         maxConcurrentQueries: 10
         maxQueryRange: 24h

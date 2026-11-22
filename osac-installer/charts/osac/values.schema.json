@@ -200,13 +200,13 @@
                     },
                     "5m": {
                       "type": "string",
-                      "description": "5-minute aggregate retention, used only when downsampling is enabled",
+                      "description": "5-minute aggregate retention. Passed as the explicit Compactor --retention.resolution-5m flag only when downsampling is enabled; must equal thanos.retention.",
                       "default": "365d",
                       "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
                     },
                     "1h": {
                       "type": "string",
-                      "description": "1-hour aggregate retention, used only when downsampling is enabled",
+                      "description": "1-hour aggregate retention. Passed as the explicit Compactor --retention.resolution-1h flag only when downsampling is enabled; must equal thanos.retention.",
                       "default": "365d",
                       "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
                     }
@@ -446,7 +446,7 @@
                   "properties": {
                     "enabled": {
                       "type": "boolean",
-                      "description": "When false (default) the Compactor runs with --downsampling.disable and keeps no 5-minute or 1-hour aggregates. When true the Compactor runs Thanos's default 5-minute and 1-hour aggregation, so long-range admin queries return coarser points than the raw samples collected.",
+                      "description": "When false (default) the Compactor runs with --downsampling.disable and keeps no 5-minute or 1-hour aggregates. When true the Compactor runs with explicit --retention.resolution-5m and --retention.resolution-1h built from thanos.resolution; osac.validateValues requires both to equal thanos.retention, so every role keeps one retention and long-range admin queries return coarser points than the raw samples collected.",
                       "default": false
                     }
                   },
@@ -512,12 +512,12 @@
             },
             "clusterRemoteWrite": {
               "type": "object",
-              "description": "Remote write from tenant and workload clusters (epic OSAC-7992 consumes these)",
+              "description": "Remote write from tenant and workload clusters. No controller enforces these settings in this release.",
               "properties": {
                 "enabled": {
                   "type": "boolean",
-                  "description": "Enable the managed-cluster write path",
-                  "default": true
+                  "description": "Reserved for the managed-cluster write path; no controller reads it in this release",
+                  "default": false
                 },
                 "certificateDuration": {
                   "type": "string",
@@ -536,7 +536,7 @@
             },
             "tenant": {
               "type": "object",
-              "description": "Tenant query limits (epic OSAC-7993 consumes these; admins are not limited)",
+              "description": "Per-tenant query limits. No controller enforces them in this release; admins are not limited.",
               "properties": {
                 "limits": {
                   "type": "object",

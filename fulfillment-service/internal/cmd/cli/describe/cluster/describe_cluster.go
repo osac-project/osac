@@ -90,9 +90,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		versionsClient := publicv1.NewClusterVersionsClient(conn)
 		version, err = lookup.Find(versionName, "cluster version",
 			func(filter string, limit int32) ([]*publicv1.ClusterVersion, error) {
-				// Override the public-API default filter that hides obsolete versions.
-				// A cluster may reference any version regardless of lifecycle state.
-				filter = fmt.Sprintf("(%s) && this.spec.state != 0", filter)
+				// Override public-API defaults because a cluster may reference any version.
+				// Enum values are compared as text, so use != rather than a numeric range.
+				filter = fmt.Sprintf("(%s) && this.spec.state != 0 && (this.spec.enabled == true || this.spec.enabled == false)", filter)
 				resp, err := versionsClient.List(ctx, publicv1.ClusterVersionsListRequest_builder{
 					Filter: proto.String(filter),
 					Limit:  proto.Int32(limit),

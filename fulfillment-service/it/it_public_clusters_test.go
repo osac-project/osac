@@ -574,7 +574,7 @@ var _ = Describe("Public clusters", func() {
 		Expect(storedSpec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID))
 	})
 
-	It("describes an obsolete version referenced by a cluster", func() {
+	DescribeTable("describes any referenced version", func(state privatev1.ClusterVersionState, enabled bool, expectedState string) {
 		image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
 		versionsClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
 		version := nextCVVersion()
@@ -640,10 +640,11 @@ var _ = Describe("Public clusters", func() {
 			Object: privatev1.ClusterVersion_builder{
 				Id: versionObject.GetId(),
 				Spec: privatev1.ClusterVersionSpec_builder{
-					State: privatev1.ClusterVersionState_CLUSTER_VERSION_STATE_OBSOLETE,
+					State:   state,
+					Enabled: proto.Bool(enabled),
 				}.Build(),
 			}.Build(),
-			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.state"}},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.state", "spec.enabled"}},
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
 
@@ -658,8 +659,13 @@ var _ = Describe("Public clusters", func() {
 		Expect(stderr).NotTo(ContainSubstring("Warning: failed to resolve cluster version"))
 		Expect(output).To(ContainSubstring(versionObject.GetMetadata().GetName()))
 		Expect(output).To(ContainSubstring(version))
-		Expect(output).To(ContainSubstring("OBSOLETE"))
-	})
+		Expect(output).To(ContainSubstring(expectedState))
+	},
+		Entry("active and enabled", privatev1.ClusterVersionState_CLUSTER_VERSION_STATE_ACTIVE, true, "ACTIVE"),
+		Entry("deprecated and enabled", privatev1.ClusterVersionState_CLUSTER_VERSION_STATE_DEPRECATED, true, "DEPRECATED"),
+		Entry("obsolete and enabled", privatev1.ClusterVersionState_CLUSTER_VERSION_STATE_OBSOLETE, true, "OBSOLETE"),
+		Entry("obsolete and disabled", privatev1.ClusterVersionState_CLUSTER_VERSION_STATE_OBSOLETE, false, "OBSOLETE"),
+	)
 
 	DescribeTable("Rejects create with an unusable explicit version", func(suffix string, invalidSpec *privatev1.ClusterVersionSpec, expectedMessage string) {
 		cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())

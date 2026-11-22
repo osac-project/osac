@@ -160,5 +160,6 @@ Keycloak 26.6.4 databases. It covers persisted pre-fix state, corrected-import
 restart, fresh JWT verification, real private RPC authorization, preservation
 sentinels, idempotence and rollback. Protocol fixtures cover failure and
 transport paths. These checks do not establish credential placement, tenant
-data filtering, a deployed CSI/PVC/provider lifecycle, or contracts for all
-other machine clients.
+data filtering or a deployed CSI/PVC/provider lifecycle. The suite documents
+the seven supported fresh-import machine-client contracts and the still-missing
+prerequisites/UI positive contract separately.

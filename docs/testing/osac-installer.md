@@ -12,7 +12,7 @@ Run `make help` to list the test targets.
 | Unit | `make kind-runtime-test` | Makefile/runtime routing and shell behavior | Container engines, Helm, host privilege changes and downloads are command stubs |
 | Unit | `make infra-ready-wait-test` | The readiness waits that end `make install-infra` fail the step naming a dependency that never becomes ready | Commands and time are mocked through a stub `kubectl`; no cluster is started |
 | Contract (Helm render) | `make mce-render-test`, `make fulfillment-trust-render-test`, `make helm-networking-test` | Production chart templates and their configuration contracts | No Kubernetes API, running hooks, MCE catalog, deployed TLS or provider calls |
-| Contract (CSI realm) | [Realm authorization suite](../../fulfillment-service/it/realmauth/README.md) in Fulfillment | Both actual resolvers, fresh Keycloak imports, persistent old-state restart, explicit updater and rollback, fresh JWT/private RPCs | Only disposable local Keycloak; no shared cluster, deployed Fulfillment or storage provider |
+| Contract (machine-client realms) | [Realm authorization suite](../../fulfillment-service/it/realmauth/README.md) in Fulfillment | Both actual resolvers, seven positive client/import claim/permission contracts, known prerequisites/UI rejection, persistent CSI updater/rollback | Prerequisites/UI positive remains missing (OSAC-8052). Only disposable local Keycloak; no shared cluster, deployed Fulfillment or storage provider |
 | Component integration | `make test` (suite selection in `make help`) | Current images and chart wiring in Kind | Depends on the selected suite; provider networking is disabled in the standard profile |
 
 The installer networking checks script under `scripts/` runs against the

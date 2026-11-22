@@ -15,6 +15,8 @@ package realmauth
 
 import (
 	"encoding/json"
+	"slices"
+	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/ginkgo/v2"
@@ -64,10 +66,90 @@ func contractFor(clientID string) clientContract {
 	return c
 }
 
-// This compiling, nonmutating interface is introduced with behavioral RED
-// controls before its implementation. It must report only fixed field names.
-func claimMismatches(_ jwt.MapClaims, _ string, _ clientContract) []string {
-	return nil
+// Only fixed field names escape this checker, including on malformed input.
+// Never let assertion formatting print claims or a raw bearer.
+func claimMismatches(claims jwt.MapClaims, issuer string, c clientContract) []string {
+	var mismatches []string
+	for _, field := range []struct{ name, expected string }{
+		{"iss", issuer}, {"azp", c.clientID}, {"sub", c.subject},
+		{"username", "service-account-" + c.clientID},
+	} {
+		if value, ok := claims[field.name].(string); !ok || value != field.expected {
+			mismatches = append(mismatches, field.name)
+		}
+	}
+	// Production extraction prefers preferred_username over username. The
+	// shipped mapper uses username; any additional preferred name must agree.
+	if value, present := claims["preferred_username"]; present && value != "service-account-"+c.clientID {
+		mismatches = append(mismatches, "preferred_username")
+	}
+	if !jsonStringSetMatches(claims["aud"], c.audiences, true) {
+		mismatches = append(mismatches, "aud")
+	}
+	scope, ok := claims["scope"].(string)
+	if !ok || !stringSetMatches(strings.Fields(scope), c.scopes) {
+		mismatches = append(mismatches, "scope")
+	}
+	realm, present := claims["realm_access"]
+	if (present && !roleSetMatches(realm, c.realmRoles)) || (!present && len(c.realmRoles) != 0) {
+		mismatches = append(mismatches, "realm_access")
+	}
+	resources, present := claims["resource_access"]
+	rolesMatch := len(c.clientRoles) == 0
+	if present {
+		mapping, typed := resources.(map[string]any)
+		rolesMatch = typed && len(mapping) == len(c.clientRoles)
+		for client, roles := range c.clientRoles {
+			rolesMatch = rolesMatch && roleSetMatches(mapping[client], roles)
+		}
+	}
+	if !rolesMatch {
+		mismatches = append(mismatches, "resource_access")
+	}
+	// No default mapper emits these authorization inputs for the four legacy
+	// clients. Organization is optional and no consumer here requests it.
+	for _, name := range []string{"groups", "organization", "organizations", "osac_tenant", "kubernetes.io"} {
+		if _, present := claims[name]; present {
+			mismatches = append(mismatches, name)
+		}
+	}
+	return mismatches
+}
+
+func roleSetMatches(value any, expected []string) bool {
+	roles, ok := value.(map[string]any)
+	return ok && len(roles) == 1 && jsonStringSetMatches(roles["roles"], expected, false)
+}
+
+func jsonStringSetMatches(value any, expected []string, single bool) bool {
+	var actual []string
+	switch values := value.(type) {
+	case string:
+		if !single {
+			return false
+		}
+		actual = []string{values}
+	case []any:
+		for _, item := range values {
+			text, ok := item.(string)
+			if !ok {
+				return false
+			}
+			actual = append(actual, text)
+		}
+	default:
+		return false
+	}
+	return stringSetMatches(actual, expected)
+}
+
+func stringSetMatches(actual, expected []string) bool {
+	actual = slices.Clone(actual)
+	expected = slices.Clone(expected)
+	slices.Sort(actual)
+	slices.Sort(expected)
+	// Length and element equality also reject duplicate/unexpected entries.
+	return slices.Equal(actual, expected)
 }
 
 const syntheticIssuer = "https://issuer.example.invalid/realms/osac"
@@ -123,6 +205,7 @@ var _ = Describe("Synthetic machine-client claim controls", func() {
 		Entry("other authorized party", "osac-csi-driver", "azp", func(c jwt.MapClaims) { c["azp"] = "osac-admin" }),
 		Entry("different subject", "osac-csi-driver", "sub", func(c jwt.MapClaims) { c["sub"] = "different-user" }),
 		Entry("administrator username", "osac-csi-driver", "username", func(c jwt.MapClaims) { c["username"] = "service-account-osac-admin" }),
+		Entry("preferred principal override", "osac-ui-backend", "preferred_username", func(c jwt.MapClaims) { c["preferred_username"] = "service-account-osac-admin" }),
 		Entry("additional audience", "osac-csi-driver", "aud", func(c jwt.MapClaims) { c["aud"] = []any{"osac-api", "account"} }),
 		Entry("missing audience", "osac-admin", "aud", func(c jwt.MapClaims) { c["aud"] = "osac-api" }),
 		Entry("duplicate audience", "osac-csi-driver", "aud", func(c jwt.MapClaims) { c["aud"] = []any{"osac-api", "osac-api"} }),
@@ -155,6 +238,8 @@ var _ = Describe("Synthetic machine-client claim controls", func() {
 		Entry("malformed client roles", "osac-admin", "resource_access", func(c jwt.MapClaims) { c["resource_access"] = "invalid" }),
 		Entry("administrator group", "osac-ui-backend", "groups", func(c jwt.MapClaims) { c["groups"] = []any{"admins"} }),
 		Entry("unexpected tenant claim", "osac-csi-driver", "organization", func(c jwt.MapClaims) { c["organization"] = []any{"tenant"} }),
+		Entry("managed-client marker", "osac-admin", "osac_tenant", func(c jwt.MapClaims) { c["osac_tenant"] = "tenant" }),
+		Entry("Kubernetes identity marker", "osac-admin", "kubernetes.io", func(c jwt.MapClaims) { c["kubernetes.io"] = map[string]any{} }),
 	)
 	It("detects changed expectations independently of the claim input", func() {
 		c := contractFor("osac-csi-driver")

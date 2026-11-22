@@ -1,4 +1,4 @@
-# Shipped CSI realm authorization contract
+# Shipped machine-client realm authorization contracts
 
 Run from `fulfillment-service/` with the repository's Go/Ginkgo versions,
 Python 3.11 or later, Bash, and a working Podman or Docker runtime:
@@ -33,23 +33,82 @@ drift detection; this is a mutation control, not an existing product defect.
 Equivalence does not prove that identical changes to both files are correct, or
 that their different resolvers perform equivalent substitutions.
 
-The client uses the same OAuth `clientcredentials.Config` as the CSI driver,
-including its default scopes, and calls the generated private `Volumes/List`
-and `Clusters/List` clients over TLS. The server uses the production JWKS
-discovery, JWT validator, authentication interceptor, authorization interceptor
-and embedded OPA policy, without emergency accounts or policy overrides.
-Both RPCs execute before role/success assertions. Output records only issuance,
-verification, role presence, gRPC status and handler counts; no credentials.
-An independent issuance attempt uses the actual controller lookup value as the
-CSI secret and must receive HTTP 401 / `unauthorized_client` from the same Keycloak.
+## Fresh-import machine-client contracts
 
-Claim and RPC permission contracts are limited to CSI. The persisted-state
-fixtures also check other clients' credential validity; those sentinels and the
-separate lookup values do not establish their claim or permission contracts. In particular, the prerequisites resolver does not substitute the UI
-backend secret. Seeding that fixture key does not repair the imported client;
-prerequisites/UI positive coverage and the remaining client matrix are pending.
+There are **seven positive client/import combinations**. Every positive obtains
+a real `client_credentials` token using its distinct Secret lookup value,
+verifies it through production JWKS/JWT code, and exercises generated RPCs with
+the production authentication/authorization interceptors and embedded OPA
+policy. There are no emergency accounts or policy overrides.
 
-The backend handlers return empty lists and count calls. They make authorization
+| Client | Positive imports | Requested OAuth scopes | Audiences | Representative method permissions |
+| --- | --- | --- | --- | --- |
+| `osac-csi-driver` | Helm and prerequisites | Default (none added) | `osac-api` | Private Volumes/List allowed; private and public Clusters/List denied |
+| `osac-controller` | Helm and prerequisites | `openid` | `osac-api`, `account`, `realm-management` | Private Volumes/List and Clusters/List, public Clusters/List and Users/Create allowed |
+| `osac-admin` | Helm and prerequisites | `openid` | `osac-api`, `account` | Same four method allows as controller |
+| `osac-ui-backend` | Helm | Default (none added) | `osac-api` | Real v1 reflection and public Clusters/List allowed; private Volumes/List and Clusters/List and public Users/Create denied |
+
+The CSI request follows the [driver](../../../osac-csi-driver/cmd/osac-csi-driver/main.go).
+Controller and CLI use the [credentials flow](../../internal/oauth/oauth_credentials_flow.go)
+and [default `openid` scope](../../internal/oauth/oauth_token_source.go).
+UI follows the [proxy token request](../../../osac-ui/proxy/auth/oidc.go) and
+[reflection consumer](../../../osac-ui/proxy/bridge/connectjson.go): credentials
+in the token form, no added scope, and bearer metadata on the v1 reflection
+stream. The reflection test uses the real registered server, lists services and
+fetches a generated service descriptor through both production **stream**
+interceptors. An anonymous request is rejected before that backend.
+
+Expected claims are reviewed constants in [client_contract_test.go](client_contract_test.go),
+independent of imported JSON and observed tokens. Every positive requires the
+fixture issuer, the exact client `azp`, exported service-account `sub` and
+`service-account-<client>` principal, exact audience/scope sets and exact
+realm/client role sets. Production identity extraction must agree. The
+[shipped realm](../../../osac-installer/charts/osac-infra/files/realm.json)
+provides users, role assignments, scopes and mappers:
+
+- CSI emits only the `osac-csi-driver` realm role, with no client roles.
+  Its direct realm-role scope mapping intersects the assigned service-account
+  role while `fullScopeAllowed=false`.
+- UI emits no realm or client roles: it has no matching role scope and retains
+  `fullScopeAllowed=false`.
+- Controller and admin emit `default-roles-my realm`, `offline_access` and
+  `uma_authorization`. Their account roles are `view-profile`,
+  `manage-account` and its composite child `manage-account-links`.
+- Controller additionally emits realm-management roles `manage-realm`,
+  `manage-users`, `view-realm`, `view-users`, `manage-identity-providers`,
+  `view-identity-providers`, `create-client`, `view-clients` and their composite
+  children `query-groups`, `query-users` and `query-clients`. This excludes
+  `realm-admin` and every other undeclared role.
+- The roles audience resolver adds `account`/`realm-management` where those
+  client roles are emitted; the explicit API mapper adds `osac-api`. Only
+  `profile`/`email` default scopes opt into the scope claim; controller/admin
+  also request `openid`.
+
+Exact sets detect privilege leakage, including unexpected clients or roles.
+Group, tenant and Kubernetes identity claims are absent from these default
+machine-client contracts. Pure synthetic mutation controls verify the assertion
+helper's rejection behavior; they never enter runtime token/RPC tests. Those
+controls are test-harness evidence, not additional issued-client contracts.
+
+The [policy](../../internal/auth/policies/authz.rego) explicitly grants the
+controller/admin account names all methods. Their negative coverage uses real
+wrong-client-secret rejection and claim-drift controls; it does not invent a
+forbidden business RPC for an administrator. UI's public Clusters/List allow is
+only the generic client method rule, not proof of access to tenant data.
+The original CSI private calls still execute before role/success assertions.
+Each client/import pair also rejects another client's actual Secret lookup with
+HTTP 401 / `unauthorized_client`. Output contains checked source constants,
+fixed-field mismatch diagnostics, statuses and counters, never credentials,
+bearers or token-endpoint response bodies.
+
+**Known missing positive: prerequisites/UI ([OSAC-8052](https://redhat.atlassian.net/browse/OSAC-8052)).**
+The prerequisites resolver leaves the UI secret placeholder unresolved. A named,
+executed diagnostic uses the intended distinct UI Secret and confirms real
+HTTP 401 / `unauthorized_client` with no issued token. It is negative evidence
+of the gap, not an eighth passing positive, a skipped test or a repaired fixture.
+The production resolver remains unchanged.
+
+The backend handlers return empty responses and count calls. They make authorization
 observable without a database. Keycloak uses a disposable file database, and
 both TLS endpoints use a generated localhost certificate with verification
 enabled. This is an identity/authorization contract, not a deployed Fulfillment
@@ -100,11 +159,14 @@ credential/record files, uncertain writes, stale records and transport failures.
 These doubles supplement the real Keycloak and RPC proof.
 
 There are four initial Keycloak startups and two restarts across the suite,
-not one container per client or safety case. Fresh-import specs have five-minute
-budgets; each persisted lifecycle has eight minutes, including startup/restart.
-The existing required contract leg allows a 30-minute suite and a 40-minute job,
-covering the aggregate spec budgets plus compilation, image setup and safety
-cases. Local timing does not establish hosted or production performance.
+not one container per client or safety case. Every fresh-import spec keeps a
+five-minute budget because selecting any one case also runs `BeforeAll`.
+New matrix probes additionally bound steady-state work to 45 seconds per
+positive case, 20 seconds per rejection and 10 seconds per reflection stream;
+HTTP requests have ten-second deadlines. Each persisted lifecycle retains eight
+minutes including startup/restart. The required leg retains its 30-minute suite
+and 40-minute job budgets; the matrix adds no cold starts. Local normal/race
+timings are validation evidence, not hosted or production performance guarantees.
 
 For the explicit administrator procedure, authorization requirements, operation
 record handling and concurrency assumptions, see the
@@ -112,4 +174,4 @@ record handling and concurrency assumptions, see the
 Rollback does not revoke previously issued JWTs or clear cached tokens. These
 contracts do not establish credential placement, rotation, tenant data
 isolation, global audience/authorized-party enforcement, other upgrades or the
-full machine-client token/permission matrix.
+missing prerequisites/UI positive contract.

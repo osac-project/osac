@@ -18,6 +18,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync/atomic"
@@ -40,6 +41,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/tlsconfig"
 	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 func TestRealmAuthorization(t *testing.T) {
@@ -63,7 +65,9 @@ var _ = Describe("Client credentials from a shipped realm", func() {
 			// SpecTimeout includes BeforeAll, including when a single case is selected.
 			BeforeAll(func(ctx SpecContext) {
 				var err error
-				logger, err = logging.NewLogger().SetWriter(GinkgoWriter).Build()
+				// Only explicit status/contract proof below reaches the test log.
+				// Validator diagnostics on unexpected claims must not disclose values.
+				logger, err = logging.NewLogger().SetWriter(io.Discard).Build()
 				Expect(err).ToNot(HaveOccurred())
 				fixture = startKeycloak(ctx, source)
 				caPool, err = trust.NewCertPool().SetLogger(logger).AddFile(fixture.certFile).Build()
@@ -88,16 +92,15 @@ var _ = Describe("Client credentials from a shipped realm", func() {
 				// Match the driver's request: no added roles or optional scopes.
 				config := clientcredentials.Config{
 					ClientID:     "osac-csi-driver",
-					ClientSecret: fixture.secrets.clients["osac-csi-driver"],
+					ClientSecret: fixture.secrets.read(ctx, "osac-csi-driver"),
 					TokenURL:     fixture.issuer + "/protocol/openid-connect/token",
 				}
 				tokenSource := config.TokenSource(context.WithValue(ctx, oauth2.HTTPClient, httpClient))
 				token, err := tokenSource.Token()
 				// OAuth errors can carry response bodies. Never print them or the bearer token.
-				if err != nil {
+				if err != nil || token == nil || token.AccessToken == "" {
 					Fail("client_credentials issuance must succeed (response withheld)")
 				}
-				Expect(token.AccessToken).ToNot(BeEmpty(), "Keycloak must issue an access token")
 
 				jwks, err := auth.NewJwksCache().SetLogger(logger).SetCaPool(caPool).AddIssuer(fixture.issuer).Build()
 				Expect(err).ToNot(HaveOccurred())
@@ -117,8 +120,10 @@ var _ = Describe("Client credentials from a shipped realm", func() {
 				DeferCleanup(server.Stop)
 				volumes := &volumeHandler{}
 				clusters := &clusterHandler{}
+				publicClusters := &publicClusterHandler{}
 				privatev1.RegisterVolumesServer(server.Registrar(), volumes)
 				privatev1.RegisterClustersServer(server.Registrar(), clusters)
+				publicv1.RegisterClustersServer(server.Registrar(), publicClusters)
 				server.Start()
 				conn, err := grpc.NewClient(server.Address(),
 					grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
@@ -133,8 +138,11 @@ var _ = Describe("Client credentials from a shipped realm", func() {
 				defer cancel()
 				_, listErr := privatev1.NewVolumesClient(conn).List(rpcCtx, &privatev1.VolumesListRequest{})
 				_, unrelatedErr := privatev1.NewClustersClient(conn).List(rpcCtx, &privatev1.ClustersListRequest{})
+				_, publicErr := publicv1.NewClustersClient(conn).List(rpcCtx, &publicv1.ClustersListRequest{})
 				validated, err := validator.Validate(ctx, token.AccessToken)
-				Expect(err).ToNot(HaveOccurred(), "the issued token must pass production JWT verification")
+				if err != nil {
+					Fail("the issued token must pass production JWT verification (details withheld)")
+				}
 				identity, err := auth.ExtractAuthContext(validated)
 				Expect(err).ToNot(HaveOccurred())
 				roles, _ := identity.RealmAccess["roles"].([]any)
@@ -145,18 +153,25 @@ var _ = Describe("Client credentials from a shipped realm", func() {
 					}
 				}
 				_, err = fmt.Fprintf(GinkgoWriter,
-					"realm=%s token_issued=true jwt_verified=true csi_role=%t fullScopeAllowed=%t "+
+					"realm=%s client=osac-csi-driver token_issued=true jwt_verified=true csi_role=%t fullScopeAllowed=%t "+
 						"Volumes/List=%s Clusters/List=%s volume_handler_calls=%d cluster_handler_calls=%d\n",
 					source, hasRole, fixture.fullScopeAllowed, status.Code(listErr), status.Code(unrelatedErr),
 					volumes.calls.Load(), clusters.calls.Load())
+				Expect(err).ToNot(HaveOccurred())
+				_, err = fmt.Fprintf(GinkgoWriter,
+					"matrix_rpc artifact=%s client=osac-csi-driver method=public.Clusters/List status=%s handler_calls=%d\n",
+					source, status.Code(publicErr), publicClusters.calls.Load())
 				Expect(err).ToNot(HaveOccurred())
 
 				Expect(fixture.fullScopeAllowed).To(BeFalse(), "CSI must retain explicit role scope")
 				Expect(status.Code(unrelatedErr)).To(Equal(codes.PermissionDenied))
 				Expect(clusters.calls.Load()).To(BeZero(), "unrelated private RPC must not reach its handler")
-				Expect(listErr).ToNot(HaveOccurred(), "the bundled CSI identity must be allowed to list private volumes")
+				Expect(status.Code(listErr)).To(Equal(codes.OK), "the bundled CSI identity must be allowed to list private volumes")
 				Expect(volumes.calls.Load()).To(Equal(int32(1)))
 				Expect(hasRole).To(BeTrue(), "the issued token must contain the osac-csi-driver realm role")
+				Expect(status.Code(publicErr)).To(Equal(codes.PermissionDenied))
+				Expect(publicClusters.calls.Load()).To(BeZero())
+				verifyClientClaims(source, fixture.issuer, contractFor("osac-csi-driver"), validated)
 			}, SpecTimeout(5*time.Minute))
 
 			It("rejects the controller lookup value as a CSI client secret", func(ctx SpecContext) {
@@ -186,6 +201,27 @@ var _ = Describe("Client credentials from a shipped realm", func() {
 				Expect(issued).To(BeFalse(), "the controller lookup value must not authenticate the CSI client")
 				Expect(credentialRejected).To(BeTrue(), "Keycloak must reject the wrong client secret with HTTP 401 / unauthorized_client")
 			}, SpecTimeout(5*time.Minute))
+
+			for _, clientID := range []string{"osac-controller", "osac-admin", "osac-ui-backend"} {
+				if source == "prerequisites" && clientID == "osac-ui-backend" {
+					It("records the missing prerequisites/UI positive contract (OSAC-8052)", func(ctx SpecContext) {
+						// The real resolver leaves the placeholder untouched. Use the
+						// intended Secret lookup, never the literal placeholder or a repair.
+						rejectMachineSecret(ctx, source, fixture, clientID, clientID, httpClient, true)
+					}, SpecTimeout(5*time.Minute))
+				} else {
+					It("verifies "+clientID+" claims and source-supported method permissions", func(ctx SpecContext) {
+						exerciseMachineClient(ctx, source, fixture, clientID, logger, caPool, tlsConfig, httpClient)
+					}, SpecTimeout(5*time.Minute))
+				}
+				It("rejects another client's real lookup value for "+clientID, func(ctx SpecContext) {
+					otherClient := "osac-controller"
+					if clientID == otherClient {
+						otherClient = "osac-admin"
+					}
+					rejectMachineSecret(ctx, source, fixture, clientID, otherClient, httpClient, false)
+				}, SpecTimeout(5*time.Minute))
+			}
 		})
 	}
 })

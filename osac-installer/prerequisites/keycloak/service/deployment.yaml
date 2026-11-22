@@ -64,10 +64,11 @@ spec:
         - |
           set -e
           if ! oc get secret keycloak-client-secrets > /dev/null 2>&1; then
-            echo "generating osac-controller/osac-admin/osac-csi-driver client secrets"
+            echo "generating osac-controller/osac-admin/thanos-admin/osac-csi-driver client secrets"
             oc create secret generic keycloak-client-secrets \
               --from-literal=osac-controller="$(openssl rand -base64 18)" \
               --from-literal=osac-admin="$(openssl rand -base64 18)" \
+              --from-literal=thanos-admin="$(openssl rand -base64 18)" \
               --from-literal=osac-csi-driver="$(openssl rand -base64 18)"
           elif ! oc get secret keycloak-client-secrets -o jsonpath='{.data.osac-csi-driver}' | grep -q .; then
             echo "patching keycloak-client-secrets to add osac-csi-driver key"
@@ -75,10 +76,18 @@ spec:
             oc patch secret keycloak-client-secrets \
               -p "{\"data\":{\"osac-csi-driver\":\"$(printf '%s' "${CSI_DRIVER_NEW}" | base64 -w0)\"}}"
           fi
+          # Upgrade path: add the thanos-admin key if the Secret predates this client.
+          if ! oc get secret keycloak-client-secrets -o jsonpath='{.data.thanos-admin}' | grep -q .; then
+            echo "patching keycloak-client-secrets to add thanos-admin key"
+            THANOS_ADMIN_NEW=$(openssl rand -base64 18)
+            oc patch secret keycloak-client-secrets \
+              -p "{\"data\":{\"thanos-admin\":\"$(printf '%s' "${THANOS_ADMIN_NEW}" | base64 -w0)\"}}"
+          fi
           CONTROLLER_SECRET=$(oc get secret keycloak-client-secrets -o jsonpath='{.data.osac-controller}' | base64 -d)
           ADMIN_SECRET=$(oc get secret keycloak-client-secrets -o jsonpath='{.data.osac-admin}' | base64 -d)
+          THANOS_ADMIN_SECRET=$(oc get secret keycloak-client-secrets -o jsonpath='{.data.thanos-admin}' | base64 -d)
           CSI_DRIVER_SECRET=$(oc get secret keycloak-client-secrets -o jsonpath='{.data.osac-csi-driver}' | base64 -d)
-          [[ -n "${CONTROLLER_SECRET}" && -n "${ADMIN_SECRET}" && -n "${CSI_DRIVER_SECRET}" ]] || { echo "ERROR: keycloak-client-secrets is missing osac-controller, osac-admin, or osac-csi-driver" >&2; exit 1; }
+          [[ -n "${CONTROLLER_SECRET}" && -n "${ADMIN_SECRET}" && -n "${THANOS_ADMIN_SECRET}" && -n "${CSI_DRIVER_SECRET}" ]] || { echo "ERROR: keycloak-client-secrets is missing osac-controller, osac-admin, thanos-admin, or osac-csi-driver" >&2; exit 1; }
           [[ -n "${REALM_ADMIN_USERNAME}" && -n "${REALM_ADMIN_PASSWORD}" ]] || { echo "ERROR: keycloak-admin-credentials is missing admin-username or admin-password" >&2; exit 1; }
           # OSAC-3884: Keycloak rejects an absolute browser callback when the
           # osac-ui client's redirectUris are relative, so the UI's real URL is
@@ -101,6 +110,7 @@ spec:
           sed \
             -e "s#__OSAC_CONTROLLER_CLIENT_SECRET__#${CONTROLLER_SECRET}#" \
             -e "s#__OSAC_ADMIN_CLIENT_SECRET__#${ADMIN_SECRET}#" \
+            -e "s#__THANOS_ADMIN_CLIENT_SECRET__#${THANOS_ADMIN_SECRET}#" \
             -e "s#__OSAC_CSI_DRIVER_CLIENT_SECRET__#${CSI_DRIVER_SECRET}#" \
             -e "s#__OSAC_REALM_ADMIN_USERNAME__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_USERNAME}")")#" \
             -e "s#__OSAC_REALM_ADMIN_PASSWORD__#$(escape_sed_replacement "$(json_escape_string "${REALM_ADMIN_PASSWORD}")")#" \

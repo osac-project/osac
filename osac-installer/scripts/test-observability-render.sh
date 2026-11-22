@@ -205,6 +205,100 @@ extract_kind "${interval}" ServiceMonitor >"${interval_sms}"
 expect_count "${interval_sms}" 'interval: "45s"' 9
 expect_count "${interval_sms}" 'interval: "30s"' 0
 
+# Extract one kind that also carries a namespace, so the checks cannot match a
+# same-kind object owned by another component.
+extract_kind_ns() {
+  local file=$1
+  local kind=$2
+  local namespace=$3
+  awk -v kind="${kind}" -v ns="${namespace}" '
+    /^---[[:space:]]*$/ {
+      if (isKind && isNs) printf "%s", doc
+      doc = ""
+      isKind = 0
+      isNs = 0
+      next
+    }
+    { doc = doc $0 "\n" }
+    /^kind: / { if ($0 == "kind: " kind) isKind = 1 }
+    /^  namespace: / { if ($0 == "  namespace: " ns) isNs = 1 }
+    END { if (isKind && isNs) printf "%s", doc }
+  ' "${file}"
+}
+
+echo "checking the four Thanos workloads render with their replica counts"
+for kind_name in \
+  'StatefulSet:thanos-receive' \
+  'Deployment:thanos-store' \
+  'Deployment:thanos-query' \
+  'StatefulSet:thanos-compactor'; do
+  kind=${kind_name%%:*}
+  name=${kind_name##*:}
+  workload="${TMP_DIR}/${name}.yaml"
+  extract_kind_ns "${enabled}" "${kind}" osac-observability >"${workload}"
+  require "${workload}" "kind: ${kind}"
+  require "${workload}" "name: ${name}"
+done
+require "${TMP_DIR}/thanos-receive.yaml" 'replicas: 2'
+require "${TMP_DIR}/thanos-store.yaml" 'replicas: 2'
+require "${TMP_DIR}/thanos-query.yaml" 'replicas: 2'
+require "${TMP_DIR}/thanos-compactor.yaml" 'replicas: 1'
+
+echo "checking remote write is served over TLS on the service-CA certificate"
+thanos_services="${TMP_DIR}/thanos-services.yaml"
+extract_kind_ns "${enabled}" Service osac-observability >"${thanos_services}"
+require "${thanos_services}" 'name: thanos-receive'
+require "${thanos_services}" 'service.beta.openshift.io/serving-cert-secret-name: thanos-receive-tls'
+require "${thanos_services}" 'name: remote-write'
+require "${thanos_services}" 'port: 19291'
+require "${TMP_DIR}/thanos-receive.yaml" '--remote-write.server-tls-cert=/etc/thanos/tls/tls.crt'
+require "${TMP_DIR}/thanos-receive.yaml" '--remote-write.server-tls-key=/etc/thanos/tls/tls.key'
+
+echo "checking object storage is referenced by Secret name only"
+require "${TMP_DIR}/thanos-receive.yaml" 'name: thanos-object-storage'
+require "${TMP_DIR}/thanos-store.yaml" 'name: thanos-object-storage'
+require "${TMP_DIR}/thanos-compactor.yaml" 'name: thanos-object-storage'
+require "${enabled}" 'bucket: "thanos"'
+require "${enabled}" 'endpoint: "https://s3.example.com"'
+for forbidden in AWS_SECRET_ACCESS_KEY MINIO_ROOT_PASSWORD secret_key: access_key:; do
+  reject "${enabled}" "${forbidden}"
+done
+enabled_secrets="${TMP_DIR}/thanos-secrets.yaml"
+extract_kind_ns "${enabled}" Secret osac-observability >"${enabled_secrets}"
+if [ -s "${enabled_secrets}" ]; then
+  fail "the observability render must not create a Secret"
+fi
+
+echo "checking replication, retention and downsampling flags"
+require "${TMP_DIR}/thanos-receive.yaml" '--receive.replication-factor=2'
+require "${TMP_DIR}/thanos-receive.yaml" '--label=replica=$(POD_NAME)'
+require "${TMP_DIR}/thanos-query.yaml" '--query.replica-label=replica'
+require "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-raw=365d'
+require "${TMP_DIR}/thanos-compactor.yaml" '--downsampling.disable'
+reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-5m'
+reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-1h'
+
+echo "checking four network policies gate the store pods"
+enabled_policies="${TMP_DIR}/thanos-networkpolicies.yaml"
+extract_kind_ns "${enabled}" NetworkPolicy osac-observability >"${enabled_policies}"
+expect_count "${enabled_policies}" '^kind: NetworkPolicy' 4
+for policy in thanos-query thanos-authorizer thanos-store thanos-receive; do
+  require "${enabled_policies}" "name: ${policy}"
+done
+require "${enabled_policies}" 'app.kubernetes.io/component: receive'
+require "${enabled_policies}" 'app.kubernetes.io/component: store'
+require "${enabled_policies}" 'app.kubernetes.io/component: query'
+reject "${enabled_policies}" 'podSelector: {}'
+reject "${enabled_policies}" 'osac.openshift.io/tenant'
+reject "${enabled_policies}" 'egress:'
+
+echo "checking the observability gate renders before install"
+require "${enabled}" 'name: osac-observability-preflight'
+enabled_jobs="${TMP_DIR}/enabled-jobs.yaml"
+extract_kind "${enabled}" Job >"${enabled_jobs}"
+require "${enabled_jobs}" 'name: osac-observability-preflight'
+require "${enabled_jobs}" 'pre-install,pre-upgrade'
+
 echo "checking disabled render"
 disabled="${TMP_DIR}/disabled.yaml"
 "${HELM_BIN}" "${COMMON_ARGS[@]}" >"${disabled}"
@@ -232,6 +326,17 @@ require "${disabled}" 'serving-cert-secret-name: osac-operator-metrics-tls'
 require "${disabled}" 'serving-cert-secret-name: bmf-operator-metrics-tls'
 reject "${disabled}" 'name: osac-operator-metrics-reader-prometheus'
 reject "${disabled}" 'name: bmf-operator-metrics-reader-prometheus'
+
+echo "checking the disabled render keeps no Thanos resource"
+for name in thanos-receive thanos-store thanos-query thanos-compactor \
+  thanos-authorizer osac-observability-preflight; do
+  reject "${disabled}" "name: ${name}"
+done
+reject "${disabled}" 'namespace: osac-observability'
+# Removing the owned keys is the same upsert with the switch off, so the
+# remote-write Job stays and runs against the disabled payload.
+require "${disabled_jobs}" 'name: osac-observability-remote-write'
+require "${disabled_jobs}" 'value: "false"'
 
 echo "checking monitoring CRD guard"
 no_crd="${TMP_DIR}/no-crd.yaml"

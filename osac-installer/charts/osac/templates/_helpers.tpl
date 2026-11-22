@@ -301,6 +301,15 @@ cannot express.
     {{- fail (printf "global.observability.thanos.resolution.%s must equal global.observability.thanos.retention (got %q and %q)" $level $value $retention) }}
   {{- end -}}
 {{- end -}}
+{{- /* Receive rejects a write it cannot replicate to as many pods as the
+     replication factor asks for, so a factor above the replica count drops
+     every sample. */ -}}
+{{- $receive := $thanos.receive | default dict -}}
+{{- $receiveReplicas := $receive.replicas | default 2 | int -}}
+{{- $replicationFactor := $receive.replicationFactor | default 2 | int -}}
+{{- if gt $replicationFactor $receiveReplicas -}}
+  {{- fail (printf "global.observability.thanos.receive.replicationFactor (%d) must not exceed global.observability.thanos.receive.replicas (%d)" $replicationFactor $receiveReplicas) }}
+{{- end -}}
 {{- end -}}
 
 {{/*

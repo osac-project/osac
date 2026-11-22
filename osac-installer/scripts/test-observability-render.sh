@@ -565,6 +565,14 @@ expect_render_failure retention-resolution-mismatch \
   --set global.observability.thanos.resolution.5m=365d \
   --set global.observability.thanos.resolution.1h=30d
 
+echo "checking the receive replication factor fits the replica count"
+# Receive rejects every write it cannot replicate, so one replica with the
+# default factor of two would silently drop all remote write.
+expect_render_failure replication-factor-exceeds-replicas \
+  'global.observability.thanos.receive.replicationFactor (2) must not exceed global.observability.thanos.receive.replicas (1)' \
+  "${OBS_ARGS[@]}" \
+  --set global.observability.thanos.receive.replicas=1
+
 retention_ok="${TMP_DIR}/retention-ok.yaml"
 "${HELM_BIN}" "${COMMON_ARGS[@]}" \
   "${OBS_ARGS[@]}" \

@@ -11,13 +11,12 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 
-import { SecurityGroupState, SubnetState } from '@osac/types';
+import { SecurityGroupState, SecurityGroups, SubnetState, Subnets } from '@osac/types';
 
+import { useListResource } from '../../../api/use-resource';
 import {
   defaultSecurityGroupListFilter,
   defaultSubnetListFilter,
-  useSecurityGroups,
-  useSubnets,
 } from '../../../api/v1/networking';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
@@ -40,8 +39,8 @@ const DefaultNetworkSummary = () => {
   // project of the tenant. Only tenant users reach the provisioning wizards, and
   // the server scopes their lists to their tenant.
   const inDefaultProject = (metadata?: { project?: string }) => metadata?.project === '';
-  const subnetsQuery = useSubnets({ filter: defaultSubnetListFilter() });
-  const subnet = subnetsQuery.data
+  const subnetsQuery = useListResource(Subnets, { filter: defaultSubnetListFilter() });
+  const subnet = subnetsQuery.data?.items
     ?.filter(
       (item) =>
         item.metadata?.labels?.['osac.openshift.io/default'] === 'true' &&
@@ -52,13 +51,14 @@ const DefaultNetworkSummary = () => {
     )
     .sort(newestFirst)[0];
   const virtualNetworkId = subnet?.spec?.virtualNetwork?.id ?? '';
-  const securityGroupsQuery = useSecurityGroups(
+  const securityGroupsQuery = useListResource(
+    SecurityGroups,
     {
       filter: defaultSecurityGroupListFilter(virtualNetworkId),
     },
     { enabled: Boolean(virtualNetworkId) },
   );
-  const securityGroup = securityGroupsQuery.data
+  const securityGroup = securityGroupsQuery.data?.items
     ?.filter(
       (group) =>
         group.metadata?.labels?.['osac.openshift.io/default'] === 'true' &&

@@ -33,6 +33,14 @@ profile_values=(
 )
 chart_render=$(helm template test charts/osac-devstack --namespace osac \
   "${profile_values[@]}" --set ui.enabled=true)
+virt_install_render=$(helm template test charts/osac-devstack --namespace osac \
+  "${profile_values[@]}" --show-only templates/hooks/install-virt.yaml)
+if ! grep -Fq 'kubectl apply --server-side -f "https://github.com/kubevirt/kubevirt/releases/download/${version}/kubevirt-operator.yaml"' <<<"$virt_install_render" \
+  || ! grep -Fq 'kubectl wait --for=condition=Established --timeout=120s crd/kubevirts.kubevirt.io' <<<"$virt_install_render" \
+  || ! grep -Fq 'kubectl apply --server-side -f "https://github.com/kubevirt/kubevirt/releases/download/${version}/kubevirt-cr.yaml"' <<<"$virt_install_render"; then
+  echo "KubeVirt installation must use server-side apply for large CRDs and wait for the API before creating its CR" >&2
+  exit 1
+fi
 cdi_rbac_render=$(helm template test charts/osac-devstack --namespace osac \
   "${profile_values[@]}" --show-only templates/cdi-rbac.yaml)
 cdi_route_rules=$(awk '/^rules:/ { in_rules = 1; next }

@@ -5,17 +5,16 @@ import type { SecurityGroup, VirtualNetwork } from '@osac/types';
 import { Protocol, SecurityGroupState, VirtualNetworkState } from '@osac/types';
 
 import { SecurityGroupsListPage } from './SecurityGroupsListPage';
-import * as networkingApi from '../../api/v1/networking';
+import * as resourceApi from '../../api/use-resource';
 import { mockMutationResult, mockQueryResult } from '../../test-utils/query';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
-vi.mock('../../api/v1/networking', async (importOriginal) => {
-  const actual = await importOriginal<typeof networkingApi>();
+vi.mock('../../api/use-resource', async (importOriginal) => {
+  const actual = await importOriginal<typeof resourceApi>();
   return {
     ...actual,
-    useSecurityGroups: vi.fn(),
-    useVirtualNetworks: vi.fn(),
-    useCreateSecurityGroup: vi.fn(),
+    useListResource: vi.fn(),
+    useCreateResource: vi.fn(),
   };
 });
 
@@ -55,15 +54,26 @@ describe('SecurityGroupsListPage', () => {
   ];
 
   beforeEach(() => {
-    vi.mocked(networkingApi.useVirtualNetworks).mockReturnValue(
-      mockQueryResult<VirtualNetwork[]>({ data: mockVirtualNetworks as VirtualNetwork[] }),
+    vi.clearAllMocks();
+    vi.mocked(resourceApi.useListResource).mockImplementation((service) =>
+      service.typeName.includes('VirtualNetwork')
+        ? (mockQueryResult({
+            data: {
+              items: mockVirtualNetworks as VirtualNetwork[],
+              size: mockVirtualNetworks.length,
+              total: mockVirtualNetworks.length,
+            },
+          }) as ReturnType<typeof resourceApi.useListResource>)
+        : (mockQueryResult({
+            data: {
+              items: mockSecurityGroups as SecurityGroup[],
+              size: mockSecurityGroups.length,
+              total: mockSecurityGroups.length,
+            },
+          }) as ReturnType<typeof resourceApi.useListResource>),
     );
 
-    vi.mocked(networkingApi.useSecurityGroups).mockReturnValue(
-      mockQueryResult<SecurityGroup[]>({ data: mockSecurityGroups as SecurityGroup[] }),
-    );
-
-    vi.mocked(networkingApi.useCreateSecurityGroup).mockReturnValue(
+    vi.mocked(resourceApi.useCreateResource).mockReturnValue(
       mockMutationResult({ mutateAsync: vi.fn() }),
     );
   });
@@ -102,7 +112,19 @@ describe('SecurityGroupsListPage', () => {
   });
 
   it('shows empty state when no security groups exist', () => {
-    vi.mocked(networkingApi.useSecurityGroups).mockReturnValue(mockQueryResult<SecurityGroup[]>());
+    vi.mocked(resourceApi.useListResource).mockImplementation((service) =>
+      service.typeName.includes('VirtualNetwork')
+        ? (mockQueryResult({
+            data: {
+              items: mockVirtualNetworks as VirtualNetwork[],
+              size: mockVirtualNetworks.length,
+              total: mockVirtualNetworks.length,
+            },
+          }) as ReturnType<typeof resourceApi.useListResource>)
+        : (mockQueryResult({
+            data: { items: [], size: 0, total: 0 },
+          }) as ReturnType<typeof resourceApi.useListResource>),
+    );
 
     renderPage();
 

@@ -282,6 +282,25 @@ cannot express.
 {{- if or (not (regexMatch $observabilityPattern $observabilityInterval)) (not (regexMatch "[1-9]" $observabilityInterval)) -}}
   {{- fail (printf "global.observability.collection.osacControlPlane must be a positive Prometheus duration (got %q)" $observabilityInterval) }}
 {{- end -}}
+{{- $infrastructureInterval := $collection.infrastructure | default "" | toString -}}
+{{- if or (not (regexMatch $observabilityPattern $infrastructureInterval)) (not (regexMatch "[1-9]" $infrastructureInterval)) -}}
+  {{- fail (printf "global.observability.collection.infrastructure must be a positive Prometheus duration (got %q)" $infrastructureInterval) }}
+{{- end -}}
+{{- /* Thanos keeps one retention value for every resolution. Each level must be a
+     positive duration and equal thanos.retention, otherwise the Compactor drops
+     data one level still serves or the Store keeps data no level may return. */ -}}
+{{- $thanos := $globalObservability.thanos | default dict -}}
+{{- $retention := $thanos.retention | default "" | toString -}}
+{{- if or (not (regexMatch $observabilityPattern $retention)) (not (regexMatch "[1-9]" $retention)) -}}
+  {{- fail (printf "global.observability.thanos.retention must be a positive Prometheus duration (got %q)" $retention) }}
+{{- end -}}
+{{- $resolution := $thanos.resolution | default dict -}}
+{{- range $level := list "raw" "5m" "1h" -}}
+  {{- $value := index $resolution $level | default "" | toString -}}
+  {{- if ne $value $retention -}}
+    {{- fail (printf "global.observability.thanos.resolution.%s must equal global.observability.thanos.retention (got %q and %q)" $level $value $retention) }}
+  {{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/*

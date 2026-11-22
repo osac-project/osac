@@ -281,4 +281,35 @@ expect_render_failure malformed-interval \
   --set global.observability.enabled=true \
   --set global.observability.collection.osacControlPlane=30x
 
+echo "checking thanos retention and resolution validation"
+expect_render_failure zero-retention \
+  'global.observability.thanos.retention must be a positive Prometheus duration' \
+  --set global.observability.enabled=true \
+  --set global.observability.thanos.retention=0d
+expect_render_failure retention-resolution-mismatch \
+  'global.observability.thanos.resolution.5m must equal global.observability.thanos.retention' \
+  --set global.observability.enabled=true \
+  --set global.observability.thanos.retention=30d \
+  --set global.observability.thanos.resolution.raw=30d \
+  --set global.observability.thanos.resolution.5m=365d \
+  --set global.observability.thanos.resolution.1h=30d
+
+retention_ok="${TMP_DIR}/retention-ok.yaml"
+"${HELM_BIN}" "${COMMON_ARGS[@]}" \
+  --set global.observability.enabled=true \
+  --set global.observability.thanos.retention=30d \
+  --set global.observability.thanos.resolution.raw=30d \
+  --set global.observability.thanos.resolution.5m=30d \
+  --set global.observability.thanos.resolution.1h=30d >"${retention_ok}"
+require "${retention_ok}" 'name: osac-observability'
+
+echo "checking infrastructure collection interval validation"
+# The schema pattern already rejects an empty string; skip it so this proves
+# osac.validateValues never rewrites a missing interval to the default.
+expect_render_failure empty-infrastructure \
+  'global.observability.collection.infrastructure must be a positive Prometheus duration' \
+  --skip-schema-validation \
+  --set global.observability.enabled=true \
+  --set global.observability.collection.infrastructure=
+
 echo 'Observability render checks passed.'

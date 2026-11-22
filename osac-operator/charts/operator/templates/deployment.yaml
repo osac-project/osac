@@ -36,6 +36,7 @@ spec:
           - --leader-elect
           - --health-probe-bind-address=:8081
           - --metrics-bind-address=:8443
+          - --metrics-cert-path=/etc/metrics-certs
           - --fulfillment-ca-file=/etc/ca-bundle/bundle.pem
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -216,7 +217,14 @@ spec:
             mountPath: {{ dir .Values.remoteClusterKubeconfig | quote }}
             readOnly: true
         {{- end }}
+          - name: metrics-certs
+            mountPath: /etc/metrics-certs
+            readOnly: true
       volumes:
+        - name: metrics-certs
+          secret:
+            secretName: {{ include "osac-operator.fullname" . }}-metrics-tls
+            optional: true
         - name: fulfillment-ca-bundle
           configMap:
             name: {{ .Values.fulfillment.tls.caBundle.configMap | required "fulfillment.tls.caBundle.configMap is required" }}

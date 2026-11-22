@@ -158,3 +158,12 @@ networkManagers:
         role. Capabilities: ipv4 only.
       capabilities:
       - ipv4
+
+# Standalone ServiceMonitor override. The umbrella chart enables scrapes
+# through global.observability; when both are off, neither the ServiceMonitor
+# nor its Prometheus ClusterRoleBinding renders.
+serviceMonitor:
+  enabled: false
+  # When empty, global.observability.collection.osacControlPlane is used.
+  interval: ""
+  prometheusNamespace: openshift-monitoring

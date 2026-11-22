@@ -86,6 +86,10 @@ helm-validate: helm-lint ## Lint and template-render Helm charts.
 	helm template osac-operator-crds charts/operator-crds/
 	helm template osac-operator charts/operator/
 
+.PHONY: helm-unittest
+helm-unittest: ## Run the Helm unit tests for the operator chart.
+	helm unittest charts/operator/
+
 # Run integration tests against a pre-existing Kind cluster deployed via
 # the root Makefile's `make dev-env` + `make integration-test-operator`.
 .PHONY: integration-tests

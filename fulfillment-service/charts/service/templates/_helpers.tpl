@@ -117,6 +117,9 @@ global.observability, the only value Helm propagates into subcharts.
 Resolve the scrape interval. The standalone serviceMonitor.interval wins when
 set; otherwise the umbrella's global.observability.collection.osacControlPlane
 is used. Fails rather than defaulting so no template hardcodes an interval.
+
+Keep this in sync with the identical helper in the metering chart. A subchart
+cannot call a parent or sibling template, so the resolution is duplicated.
 */}}
 {{- define "fulfillment-service.serviceMonitorInterval" -}}
 {{- $serviceMonitor := .Values.serviceMonitor | default dict -}}

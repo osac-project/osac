@@ -1,4 +1,4 @@
-{{- if .Values.observability.enabled }}
+{{- if .Values.global.observability.enabled }}
 {{- $fullname := include "osac.fullname" . }}
 # Namespace-scoped scrape permissions for the platform Prometheus. Nothing
 # cluster-wide: prometheus-k8s may only read the service, endpoint, and pod

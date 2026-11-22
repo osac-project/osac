@@ -149,16 +149,16 @@
         },
         "observability": {
           "type": "object",
-          "description": "Mirror of the top-level observability block for subcharts; osac.validateValues rejects a mismatch.",
+          "description": "OSAC control-plane metrics collection. This is the single observability switch: it reaches both the umbrella templates and the subcharts. It does not deploy storage or querying.",
           "properties": {
             "enabled": {
               "type": "boolean",
-              "description": "Mirror of observability.enabled. When true, the component charts render their plain-HTTP ServiceMonitors.",
+              "description": "Enable the platform-monitoring namespace labels, the namespace-scoped scrape RBAC, and the plain-HTTP ServiceMonitors. Does not enable storage or querying.",
               "default": false
             },
             "collection": {
               "type": "object",
-              "description": "Mirror of observability.collection",
+              "description": "Metrics collection settings",
               "properties": {
                 "osacControlPlane": {
                   "type": "string",
@@ -2034,31 +2034,6 @@
               "type": "object",
               "description": "Extra labels for Prometheus instances that select rules by label",
               "additionalProperties": { "type": "string" }
-            }
-          },
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
-    },
-    "observability": {
-      "type": "object",
-      "description": "OSAC control-plane metrics collection: platform-monitoring namespace labels, scrape RBAC, and plain-HTTP ServiceMonitors. Does not deploy storage or querying.",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "description": "Enable the platform-monitoring namespace labels, the namespace-scoped scrape RBAC, and the plain-HTTP ServiceMonitors. Does not enable storage or querying.",
-          "default": false
-        },
-        "collection": {
-          "type": "object",
-          "description": "Metrics collection settings",
-          "properties": {
-            "osacControlPlane": {
-              "type": "string",
-              "description": "Scrape interval for every OSAC control-plane target (Prometheus duration, e.g. 30s)",
-              "default": "30s",
-              "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
             }
           },
           "additionalProperties": false

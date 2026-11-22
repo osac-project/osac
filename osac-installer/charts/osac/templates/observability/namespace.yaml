@@ -1,4 +1,4 @@
-{{- if .Values.observability.enabled }}
+{{- if .Values.global.observability.enabled }}
 # Platform Prometheus discovers ServiceMonitors in namespaces labeled with
 # openshift.io/cluster-monitoring. This is a labeled component namespace that
 # carries the namespace-scoped scrape Role; it does not host a store or query

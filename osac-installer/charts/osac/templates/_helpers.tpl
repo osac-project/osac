@@ -270,32 +270,17 @@ cannot express.
 */}}
 {{- define "osac.validateValues" -}}
 {{- include "osac.networking.validate" . -}}
-{{- /* Observability is declared twice: the top-level block is the contract the
-     umbrella templates read, and global.observability is the copy that reaches
-     subcharts. This check always runs on every render. */ -}}
-{{- $observability := .Values.observability | default dict -}}
-{{- $globalValues := .Values.global | default dict -}}
-{{- $globalObservability := $globalValues.observability | default dict -}}
-{{- if ne (hasKey .Values "observability") (hasKey $globalValues "observability") -}}
-  {{- fail "observability and global.observability must both be set: Helm propagates only global values into subcharts" }}
-{{- end -}}
-{{- $observabilityEnabled := $observability.enabled | default false | toString -}}
-{{- $globalObservabilityEnabled := $globalObservability.enabled | default false | toString -}}
-{{- if ne $observabilityEnabled $globalObservabilityEnabled -}}
-  {{- fail (printf "observability.enabled (%s) and global.observability.enabled (%s) must match" $observabilityEnabled $globalObservabilityEnabled) }}
-{{- end -}}
-{{- $observabilityCollection := $observability.collection | default dict -}}
-{{- $globalObservabilityCollection := $globalObservability.collection | default dict -}}
-{{- $observabilityInterval := $observabilityCollection.osacControlPlane | default "30s" | toString -}}
-{{- $globalObservabilityInterval := $globalObservabilityCollection.osacControlPlane | default "30s" | toString -}}
-{{- if ne $observabilityInterval $globalObservabilityInterval -}}
-  {{- fail (printf "observability.collection.osacControlPlane (%q) and global.observability.collection.osacControlPlane (%q) must match" $observabilityInterval $globalObservabilityInterval) }}
-{{- end -}}
+{{- /* global.observability is the single enablement switch: it reaches both the
+     umbrella templates and the subcharts, so there is no second copy to compare
+     against. The interval is validated here, on every render, because the
+     component charts cannot see the umbrella's defaults. Never default the
+     value here: an empty interval must fail, not silently become 30s. */ -}}
+{{- $globalObservability := (.Values.global | default dict).observability | default dict -}}
+{{- $collection := $globalObservability.collection | default dict -}}
+{{- $observabilityInterval := $collection.osacControlPlane | default "" | toString -}}
 {{- $observabilityPattern := "^([0-9]+(ms|s|m|h|d|w|y))+$" -}}
-{{- range $key, $value := dict "observability.collection.osacControlPlane" $observabilityInterval "global.observability.collection.osacControlPlane" $globalObservabilityInterval -}}
-  {{- if or (not (regexMatch $observabilityPattern $value)) (not (regexMatch "[1-9]" $value)) -}}
-    {{- fail (printf "%s must be a positive Prometheus duration (got %q)" $key $value) }}
-  {{- end -}}
+{{- if or (not (regexMatch $observabilityPattern $observabilityInterval)) (not (regexMatch "[1-9]" $observabilityInterval)) -}}
+  {{- fail (printf "global.observability.collection.osacControlPlane must be a positive Prometheus duration (got %q)" $observabilityInterval) }}
 {{- end -}}
 {{- end -}}
 

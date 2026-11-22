@@ -8,8 +8,6 @@ set:
   # Required by the chart schema; unrelated to this suite.
   service.internalHostname: fulfillment.osac.svc
   service.externalHostname: fulfillment.example.com
-  observability.enabled: true
-  observability.collection.osacControlPlane: "30s"
   global.observability.enabled: true
   global.observability.collection.osacControlPlane: "30s"
 
@@ -29,7 +27,6 @@ tests:
   - it: renders no observability namespace when disabled
     template: templates/observability/namespace.yaml
     set:
-      observability.enabled: false
       global.observability.enabled: false
     asserts:
       - hasDocuments:
@@ -93,17 +90,22 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].command[0]
           value: /bin/bash
+      # The script must fail closed: `set -e` must abort on a failed kubectl
+      # get, and the get must be its own command (not a $(...) assignment, which
+      # a missing set -e would ignore).
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: set -euo pipefail
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: kubectl get namespace "\$ns" .* > /tmp/monitoring-label
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: kubectl label namespace "\$ns" openshift\.io/cluster-monitoring-
-      - matchRegex:
-          path: spec.template.spec.containers[0].command[2]
-          pattern: kubectl get namespace "\$ns"
 
   - it: removes a leftover label on upgrade when disabled
     template: templates/observability/label-namespaces.yaml
     set:
-      observability.enabled: false
       global.observability.enabled: false
     asserts:
       - hasDocuments:
@@ -219,7 +221,6 @@ tests:
   - it: renders no scrape resources when disabled
     template: templates/observability/scrape-rbac.yaml
     set:
-      observability.enabled: false
       global.observability.enabled: false
     asserts:
       - hasDocuments:

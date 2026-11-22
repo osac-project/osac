@@ -29,8 +29,9 @@ CRD_ARGS=(
   --api-versions monitoring.coreos.com/v1
   --api-versions monitoring.coreos.com/v1/ServiceMonitor
 )
+# One switch: global.observability reaches both the umbrella templates and the
+# subcharts. Enabling it must not require a second --set.
 OBS_ARGS=(
-  --set observability.enabled=true
   --set global.observability.enabled=true
 )
 METERING_ARGS=(
@@ -154,6 +155,13 @@ require "${enabled}" 'name: osac-unlabel-namespaces'
 
 echo "checking metering scrape target"
 require "${enabled}" 'targetPort: health'
+# The adapter ServiceMonitors derive their Prometheus job from the Service
+# label, so assert the Services carry the component labels the relabel reads.
+enabled_services="${TMP_DIR}/enabled-services.yaml"
+extract_kind "${enabled}" Service >"${enabled_services}"
+require "${enabled_services}" 'app.kubernetes.io/component: echo-adapter'
+require "${enabled_services}" 'app.kubernetes.io/component: m360-adapter'
+require "${enabled_sms}" '__meta_kubernetes_service_label_app_kubernetes_io_component'
 
 echo "checking observability-only render keeps metering off"
 default_render="${TMP_DIR}/default.yaml"
@@ -167,7 +175,6 @@ echo "checking custom scrape interval"
 interval="${TMP_DIR}/interval.yaml"
 "${HELM_BIN}" "${COMMON_ARGS[@]}" "${CRD_ARGS[@]}" \
   "${OBS_ARGS[@]}" "${METERING_ARGS[@]}" \
-  --set observability.collection.osacControlPlane=45s \
   --set global.observability.collection.osacControlPlane=45s >"${interval}"
 interval_sms="${TMP_DIR}/interval-servicemonitors.yaml"
 extract_kind "${interval}" ServiceMonitor >"${interval_sms}"
@@ -200,15 +207,20 @@ expect_count "${no_crd_sms}" '^kind: ServiceMonitor' 0
 require "${no_crd}" 'name: osac-observability'
 require "${no_crd}" 'name: osac-prometheus-scrape'
 
-echo "checking observability/global mismatch rejection"
-mismatch="${TMP_DIR}/mismatch.stderr"
-if "${HELM_BIN}" "${COMMON_ARGS[@]}" "${CRD_ARGS[@]}" \
-  --set observability.enabled=true >/dev/null 2>"${mismatch}"; then
-  fail "observability/global mismatch unexpectedly rendered"
+echo "checking the top-level observability key is rejected"
+# global.observability is the only switch; a second top-level object would give
+# the wizard a control that does nothing. Helm 4 says "additional properties
+# 'observability' not allowed"; Helm 3 says "Additional property observability
+# is not allowed", so match either phrasing.
+top_level="${TMP_DIR}/top-level.stderr"
+if "${HELM_BIN}" "${COMMON_ARGS[@]}" --set observability.enabled=true >/dev/null 2>"${top_level}"; then
+  fail "a top-level observability key unexpectedly rendered"
 fi
-require "${mismatch}" 'observability.enabled'
-require "${mismatch}" 'global.observability.enabled'
-require "${mismatch}" 'must match'
+if ! grep -Eq "[Aa]dditional propert(y|ies).*observability.*not allowed" "${top_level}"; then
+  echo "ERROR: top-level observability was not rejected by the schema" >&2
+  cat "${top_level}" >&2
+  exit 1
+fi
 
 echo "checking component serviceMonitor defaults stay off"
 for chart in "${FULFILLMENT_CHART}" "${METERING_CHART}"; do
@@ -226,15 +238,21 @@ for chart in "${FULFILLMENT_CHART}" "${METERING_CHART}"; do
 done
 
 echo "checking invalid scrape interval rejection"
+# Skip schema validation here: the schema pattern rejects an empty string first,
+# so this exercises osac.validateValues and proves an empty interval is not
+# silently rewritten to the 30s default.
+expect_render_failure empty-interval \
+  'global.observability.collection.osacControlPlane must be a positive Prometheus duration' \
+  --skip-schema-validation \
+  --set global.observability.enabled=true \
+  --set global.observability.collection.osacControlPlane=
 expect_render_failure zero-interval \
   'must be a positive Prometheus duration' \
-  --set observability.enabled=true --set global.observability.enabled=true \
-  --set observability.collection.osacControlPlane=0s \
+  --set global.observability.enabled=true \
   --set global.observability.collection.osacControlPlane=0s
 expect_render_failure malformed-interval \
   'does not match pattern' \
-  --set observability.enabled=true --set global.observability.enabled=true \
-  --set observability.collection.osacControlPlane=30x \
+  --set global.observability.enabled=true \
   --set global.observability.collection.osacControlPlane=30x
 
 echo 'Observability render checks passed.'

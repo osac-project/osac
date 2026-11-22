@@ -386,7 +386,7 @@ var _ = Describe("Compute instances server", func() {
 			Expect(object.GetStatus().HasLastProvisioningFailure()).To(BeFalse())
 		})
 
-		DescribeTable("Projects the latest provisioning failure through public reads",
+		DescribeTable("Returns the latest provisioning failure through public reads",
 			func(reason privatev1.ComputeInstanceProvisioningFailureReason, publicReason publicv1.ComputeInstanceProvisioningFailureReason, message string) {
 				createTemplate("general.small")
 				created, err := server.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{

@@ -114,11 +114,11 @@ For detailed workflows, annotation reference, and troubleshooting, see [CLEANAPI
 
 `ComputeInstance.status.last_provisioning_failure` is an optional, system-owned
 object returned to callers who can read the instance through Get or List.
-It contains the latest failure's `reason`, fixed public `message`, one-based
-failed `attempt`, and `observed_at` timestamp. The failed attempt can differ
-from the currently running retry, and the observation time does not advance
-when the same failure is read again. No failure history or provider log text
-is exposed.
+It contains the latest failure's `reason`, fixed public `message`, `attempt`,
+and `observed_at` timestamp. The `attempt` field is the number of the provisioning
+attempt that failed. The first attempt is numbered 1. This can differ from the
+attempt currently running as a retry. The observation time does not advance when
+the same failure is read again. No failure history or provider log text is exposed.
 
 The field is absent when no failure is retained. Clearing removes the object
 rather than replacing it with empty values. Provisioning success clears the

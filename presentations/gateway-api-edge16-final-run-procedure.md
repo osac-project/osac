@@ -204,8 +204,63 @@ release) intentionally retained.
 
 ### Phase C evidence — install
 
-(pending)
+```
+$ AAP_LICENSE_FILE=values/vmaas-ci/license.zip make install-osac \
+    PLATFORM=openshift PROFILE=vmaas-ci NS=osac INGRESS_DRIVER=gatewayapi \
+    EXTRA_HELM_ARGS="--set-string service.httpCorsAllowedOrigins[0]=..."
+
+gateway-bridge.sh (background, around helm --wait):
+  waiting for ready gateway Pod IPs (openshift-ingress/osac-gateway-openshift-default)...
+  ... (15 polls, ~2.5 min) ...
+Gateway openshift-ingress/osac-gateway-openshift-default Pod IPs: 172.30.24.36
+Bridge EndpointSlices applied in osac.
+
+helm:
+LAST DEPLOYED: Sun Nov 22 17:26:21 2026
+STATUS: deployed
+make exit: 0
+```
+
+The only "error" string in the log is the Makefile's echoed
+REMOTE_KUBECONFIG guard, not a failure.
 
 ### Phase D evidence — verification battery
 
-(pending)
+```
+$ oc -n openshift-ingress get endpointslices \
+    -l kubernetes.io/service-name=osac-gateway-openshift-default \
+    -o jsonpath='{.items[*].endpoints[*].addresses}'
+["172.30.24.36"]
+
+$ oc -n osac get endpointslices | grep fulfillment
+fulfillment-api-gateway             IPv4   443   172.30.24.36   16m
+fulfillment-internal-api-gateway    IPv4   443   172.30.24.36   16m
+
+$ oc -n osac get deploy --no-headers
+fulfillment-console-proxy 1/1/1     fulfillment-controller 1/1/1
+fulfillment-event-publisher 1/1/1   fulfillment-grpc-server 1/1/1
+fulfillment-rest-gateway 1/1/1      osac-aap-controller-task 1/1/1
+osac-aap-controller-web 1/1/1       osac-aap-gateway 1/1/1
+osac-metering 1/1/1                 osac-metering-echo-adapter 1/1/1
+osac-operator 1/1/1                 osac-operator-console-proxy 1/1/1
+osac-ui 1/1/1
+
+(All 13 deployments ready. Three osac-aap-bootstrap-* pods in Error
+state are early job retries before the fresh postgres was ready; the
+bootstrap job completed and osac-aap-controller-web is 1/1.)
+
+$ oc -n osac get secrets -l owner=helm
+sh.helm.release.v1.osac.v1   helm.sh/release.v1   1      18m
+
+External battery:
+jwks 200
+REST 400  {"code":3,"message":"user provisioning failed: ... tenant 'osac' doesn't exist"}
+          (known non-blocker: fresh-DB tenant seeding, application layer;
+           the response proves the full ingress path)
+bad-token 401
+UI 200
+keycloak 302
+```
+
+**Run 2 verdict: green.** Identical results to run 1, fully documented
+from clean slate to battery.

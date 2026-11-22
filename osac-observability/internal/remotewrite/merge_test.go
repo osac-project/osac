@@ -274,6 +274,78 @@ func TestMergeDisabledLeavesForeignLabelsWhenNothingElseIsOwned(t *testing.T) {
 	}
 }
 
+// TestMergeDisabledRestoresThePreviousScrapeInterval pins that a disable does
+// not leave the interval the enable path overwrote. The previous value comes
+// from the record the Job keeps beside the document.
+func TestMergeDisabledRestoresThePreviousScrapeInterval(t *testing.T) {
+	current := []byte(`prometheusK8s:
+  scrapeInterval: 30s
+  externalLabels:
+    cluster: management
+    managed_by: osac
+  remoteWrite:
+    - name: osac
+      url: https://old.example.com/api/v1/receive
+    - name: guest
+      url: https://guest.example.com/api/v1/receive
+`)
+	opts := testOptions(false)
+	opts.PreviousScrapeInterval = "15s"
+	out, err := Merge(current, opts)
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	want := parseDocument(t, []byte(`prometheusK8s:
+  scrapeInterval: 15s
+  remoteWrite:
+    - name: guest
+      url: https://guest.example.com/api/v1/receive
+`))
+	got := parseDocument(t, out)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("disabled document mismatch\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+// TestMergeDisabledRemovesTheScrapeIntervalItAdded pins the no-previous-value
+// path: the key OSAC set is deleted rather than left at OSAC's value.
+func TestMergeDisabledRemovesTheScrapeIntervalItAdded(t *testing.T) {
+	current := []byte(`prometheusK8s:
+  scrapeInterval: 30s
+  remoteWrite:
+    - name: osac
+      url: https://old.example.com/api/v1/receive
+`)
+	out, err := Merge(current, testOptions(false))
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	prom := prometheusK8s(t, out)
+	if value, ok := prom["scrapeInterval"]; ok {
+		t.Fatalf("scrapeInterval = %v, want the key deleted", value)
+	}
+}
+
+// TestMergeDisabledLeavesAForeignScrapeInterval pins that the disable path
+// only removes the value OSAC wrote. Another operator may have changed the
+// interval after the enable.
+func TestMergeDisabledLeavesAForeignScrapeInterval(t *testing.T) {
+	current := []byte(`prometheusK8s:
+  scrapeInterval: 15s
+  remoteWrite:
+    - name: osac
+      url: https://old.example.com/api/v1/receive
+`)
+	out, err := Merge(current, testOptions(false))
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	prom := prometheusK8s(t, out)
+	if prom["scrapeInterval"] != "15s" {
+		t.Fatalf("scrapeInterval = %v, want 15s", prom["scrapeInterval"])
+	}
+}
+
 func TestMergeDisabledWithoutAConfigMapIsANoOp(t *testing.T) {
 	out, err := Merge(nil, testOptions(false))
 	if err != nil {

@@ -1,7 +1,9 @@
 // Package remotewrite merges the keys OSAC owns into the management cluster's
 // cluster-monitoring-config document. It preserves every other key, including
 // a pre-existing enableUserWorkload, and never writes enableUserWorkload or the
-// userWorkloadMonitoring block itself.
+// userWorkloadMonitoring block itself. The enable path overwrites
+// scrapeInterval; the disable path restores the value the caller remembered,
+// or deletes the key when there was none.
 package remotewrite
 
 import (
@@ -21,10 +23,16 @@ const caFile = "/etc/prometheus/configmaps/service-ca-bundle/service-ca.crt"
 
 // Options carries the values the management cluster writes with.
 type Options struct {
-	Enabled            bool
-	ScrapeInterval     string
-	ReceiveURL         string
-	PlatformNamespaces []string
+	Enabled bool
+	// ScrapeInterval is the interval the enable path writes. The disable path
+	// only removes or restores a value that still equals it.
+	ScrapeInterval string
+	// PreviousScrapeInterval is the interval the enable path overwrote, kept
+	// by the caller. Empty means there was no previous value, so the disable
+	// path deletes the key instead.
+	PreviousScrapeInterval string
+	ReceiveURL             string
+	PlatformNamespaces     []string
 }
 
 // Merge returns the cluster-monitoring-config document with OSAC's owned keys
@@ -47,7 +55,7 @@ func Merge(current []byte, opts Options) ([]byte, error) {
 		if err := upsertEnabled(root, opts); err != nil {
 			return current, err
 		}
-	} else if !removeOwned(root) {
+	} else if !removeOwned(root, opts) {
 		return current, nil
 	}
 
@@ -56,6 +64,24 @@ func Merge(current []byte, opts Options) ([]byte, error) {
 		return nil, fmt.Errorf("marshal cluster-monitoring-config: %w", err)
 	}
 	return out, nil
+}
+
+// ScrapeInterval returns prometheusK8s.scrapeInterval from the current
+// document, or "" when the key or the whole document is absent. Callers use it
+// to remember the value the enable path is about to overwrite.
+func ScrapeInterval(current []byte) (string, error) {
+	doc, err := decode(current)
+	if err != nil {
+		return "", err
+	}
+	if doc == nil {
+		return "", nil
+	}
+	prom := mappingValue(doc.Content[0], "prometheusK8s")
+	if prom == nil || prom.Kind != yaml.MappingNode {
+		return "", nil
+	}
+	return scalarValue(prom, "scrapeInterval"), nil
 }
 
 func decode(current []byte) (*yaml.Node, error) {
@@ -123,12 +149,23 @@ func dropDuplicateOSAC(entries []*yaml.Node, keep int) []*yaml.Node {
 	return kept
 }
 
-func removeOwned(root *yaml.Node) bool {
+func removeOwned(root *yaml.Node, opts Options) bool {
 	prom := mappingValue(root, "prometheusK8s")
 	if prom == nil || prom.Kind != yaml.MappingNode {
 		return false
 	}
 	changed := false
+	// The enable path overwrites scrapeInterval. Put the remembered value back,
+	// or delete the key when there was none. A different value belongs to
+	// another writer and is left alone.
+	if opts.ScrapeInterval != "" && scalarValue(prom, "scrapeInterval") == opts.ScrapeInterval {
+		if opts.PreviousScrapeInterval != "" {
+			setScalar(prom, "scrapeInterval", opts.PreviousScrapeInterval)
+		} else {
+			_ = deleteKey(prom, "scrapeInterval")
+		}
+		changed = true
+	}
 	if labels := mappingValue(prom, "externalLabels"); labels != nil && labels.Kind == yaml.MappingNode {
 		changed = deleteKeyWithValue(labels, "cluster", "management") || changed
 		changed = deleteKeyWithValue(labels, "managed_by", "osac") || changed

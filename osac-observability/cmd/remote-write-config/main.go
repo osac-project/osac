@@ -24,6 +24,10 @@ const (
 	defaultReceiveURL         = "https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive"
 	defaultPlatformNamespaces = `["osac","osac-csi","osac-observability"]`
 	dataKey                   = "config.yaml"
+	// previousIntervalAnnotation records the scrapeInterval the enable path
+	// overwrote, so the disable path can put it back. It is the Job's own key:
+	// the cluster monitoring operator ignores metadata annotations.
+	previousIntervalAnnotation = "osac.openshift.io/prometheus-scrape-interval"
 )
 
 type config struct {
@@ -117,17 +121,47 @@ func run(ctx context.Context, client kubernetes.Interface, cfg config) error {
 		return fmt.Errorf("read ConfigMap %s/%s: %w", cfg.Namespace, cfg.Name, err)
 	}
 
-	merged, err := remotewrite.Merge([]byte(cm.Data[dataKey]), cfg.options())
+	data := cm.Data[dataKey]
+	previous := cm.Annotations[previousIntervalAnnotation]
+	opts := cfg.options()
+	opts.PreviousScrapeInterval = previous
+	if cfg.Enabled && previous == "" {
+		// First enable over this document: remember what the overwrite
+		// replaces. A later enable leaves the record alone so it never
+		// becomes OSAC's own interval.
+		current, err := remotewrite.ScrapeInterval([]byte(data))
+		if err != nil {
+			return fmt.Errorf("read the current scrape interval: %w", err)
+		}
+		previous = current
+	}
+
+	merged, err := remotewrite.Merge([]byte(data), opts)
 	if err != nil {
 		return err
 	}
-	if string(merged) == cm.Data[dataKey] {
+	changed := string(merged) != data
+	annotationsChanged := false
+	switch {
+	case cfg.Enabled && previous != "" && cm.Annotations[previousIntervalAnnotation] == "":
+		if cm.Annotations == nil {
+			cm.Annotations = map[string]string{}
+		}
+		cm.Annotations[previousIntervalAnnotation] = previous
+		annotationsChanged = true
+	case !cfg.Enabled && previous != "":
+		delete(cm.Annotations, previousIntervalAnnotation)
+		annotationsChanged = true
+	}
+	if !changed && !annotationsChanged {
 		return nil
 	}
-	if cm.Data == nil {
-		cm.Data = map[string]string{}
+	if changed {
+		if cm.Data == nil {
+			cm.Data = map[string]string{}
+		}
+		cm.Data[dataKey] = string(merged)
 	}
-	cm.Data[dataKey] = string(merged)
 	if _, err := configMaps.Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("update ConfigMap %s/%s: %w", cfg.Namespace, cfg.Name, err)
 	}

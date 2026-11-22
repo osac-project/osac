@@ -144,6 +144,79 @@ func TestRunDoesNotWriteWhenNothingChanged(t *testing.T) {
 	}
 }
 
+const previousIntervalKey = "osac.openshift.io/prometheus-scrape-interval"
+
+func TestRunRemembersThePreviousScrapeInterval(t *testing.T) {
+	client := fake.NewSimpleClientset(existingConfigMap(
+		"prometheusK8s:\n  scrapeInterval: 15s\n"))
+	if err := run(context.Background(), client, testConfig(true)); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	cm, err := client.CoreV1().ConfigMaps(defaultNamespace).Get(context.Background(), defaultName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get ConfigMap: %v", err)
+	}
+	if got := cm.Annotations[previousIntervalKey]; got != "15s" {
+		t.Fatalf("remembered interval = %q, want 15s", got)
+	}
+	if !strings.Contains(cm.Data[dataKey], "scrapeInterval: 30s") {
+		t.Fatalf("scrapeInterval was not overwritten:\n%s", cm.Data[dataKey])
+	}
+}
+
+// TestRunKeepsTheFirstRememberedInterval pins that a second enable is not
+// mistaken for a fresh one: the recorded value must stay the pre-OSAC value,
+// never OSAC's own interval.
+func TestRunKeepsTheFirstRememberedInterval(t *testing.T) {
+	cm := existingConfigMap("prometheusK8s:\n  scrapeInterval: 30s\n")
+	cm.Annotations = map[string]string{previousIntervalKey: "15s"}
+	client := fake.NewSimpleClientset(cm)
+	if err := run(context.Background(), client, testConfig(true)); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got, err := client.CoreV1().ConfigMaps(defaultNamespace).Get(context.Background(), defaultName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get ConfigMap: %v", err)
+	}
+	if got.Annotations[previousIntervalKey] != "15s" {
+		t.Fatalf("remembered interval = %q, want 15s", got.Annotations[previousIntervalKey])
+	}
+}
+
+func TestRunRestoresTheRememberedScrapeIntervalOnDisable(t *testing.T) {
+	cm := existingConfigMap("prometheusK8s:\n  scrapeInterval: 30s\n  remoteWrite:\n    - name: osac\n      url: https://old.example.com/api/v1/receive\n")
+	cm.Annotations = map[string]string{previousIntervalKey: "15s"}
+	client := fake.NewSimpleClientset(cm)
+	if err := run(context.Background(), client, testConfig(false)); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got, err := client.CoreV1().ConfigMaps(defaultNamespace).Get(context.Background(), defaultName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get ConfigMap: %v", err)
+	}
+	if !strings.Contains(got.Data[dataKey], "scrapeInterval: 15s") {
+		t.Fatalf("previous interval was not restored:\n%s", got.Data[dataKey])
+	}
+	if _, ok := got.Annotations[previousIntervalKey]; ok {
+		t.Fatalf("remembered key survived the disable: %v", got.Annotations)
+	}
+}
+
+func TestRunDeletesTheScrapeIntervalItAddedOnDisable(t *testing.T) {
+	client := fake.NewSimpleClientset(existingConfigMap(
+		"prometheusK8s:\n  scrapeInterval: 30s\n  remoteWrite:\n    - name: osac\n      url: https://old.example.com/api/v1/receive\n"))
+	if err := run(context.Background(), client, testConfig(false)); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got, err := client.CoreV1().ConfigMaps(defaultNamespace).Get(context.Background(), defaultName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get ConfigMap: %v", err)
+	}
+	if strings.Contains(got.Data[dataKey], "scrapeInterval") {
+		t.Fatalf("scrapeInterval survived the disable:\n%s", got.Data[dataKey])
+	}
+}
+
 func TestLoadConfigDefaults(t *testing.T) {
 	cfg, err := loadConfig(func(string) string { return "" })
 	if err != nil {

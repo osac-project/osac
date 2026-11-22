@@ -43,6 +43,54 @@ type CascadeDeleteItemsOptions[T CascadeResource] struct {
 	Signal func(context.Context, string) error
 }
 
+// CascadeDeleteAllOptions describes how to list and delete every child resource a filter
+// matches. The list function returns one page of the filter's results and the total number of
+// matching rows.
+type CascadeDeleteAllOptions[T CascadeResource] struct {
+	Filter string
+	List   func(ctx context.Context, filter string, limit, offset int32) (items []T, total int32, err error)
+	Delete func(ctx context.Context, id string) error
+	Signal func(ctx context.Context, id string) error
+}
+
+// CascadeDeleteAll lists every item the filter matches, in pages, deletes each one, and reports
+// whether any item is still pending. It lists all pages before deleting, so a tenant with more
+// rows than one page drains in a single pass.
+func CascadeDeleteAll[T CascadeResource](
+	ctx context.Context, options CascadeDeleteAllOptions[T]) (pending bool, err error) {
+	const pageSize = 100
+	var items []T
+	var total int32
+	for offset := int32(0); ; {
+		page, pageTotal, listErr := options.List(ctx, options.Filter, pageSize, offset)
+		if listErr != nil {
+			return false, listErr
+		}
+		if pageTotal < 0 || int64(len(page)) > int64(pageTotal) {
+			return false, errors.New("the listing returned an invalid page")
+		}
+		if total == 0 {
+			total = pageTotal
+		} else if total != pageTotal {
+			return false, errors.New("the listing total changed while it was being read")
+		}
+		items = append(items, page...)
+		if int64(len(items)) >= int64(total) {
+			break
+		}
+		if len(page) == 0 {
+			return false, errors.New("the listing returned an incomplete page")
+		}
+		size := int32(len(page)) // #nosec G115 -- bounded by the requested page size
+		offset += size
+	}
+	return CascadeDeleteItems(ctx, CascadeDeleteItemsOptions[T]{
+		Items:  items,
+		Delete: options.Delete,
+		Signal: options.Signal,
+	})
+}
+
 // CascadeDeleteItems processes each listed child. It treats NotFound as success, signals
 // children already deleting when requested, and joins independent action errors.
 // pending reports whether this pass requested or signaled a deletion.

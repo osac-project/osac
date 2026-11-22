@@ -764,6 +764,36 @@ var _ = Describe("Interceptor", func() {
 		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
 	})
 
+	It("Redacts invalid-filter status logs for ComputeInstances list client calls", func() {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		filter := `this.metadata.labels["customer.example.test/private-filter"] == "customer-sensitive-filter-value"`
+		rpcStatus, err := grpcstatus.New(grpccodes.InvalidArgument, "invalid filter: "+filter).WithDetails(
+			testsv1.Object_builder{MyString: filter}.Build(),
+		)
+		Expect(err).ToNot(HaveOccurred())
+
+		request, response := computeInstancesListLogFixtures()
+		invoker := func(context.Context, string, any, any, *grpc.ClientConn, ...grpc.CallOption) error {
+			return rpcStatus.Err()
+		}
+		err = redactedInterceptor.UnaryClient(ctx, "/osac.public.v1.ComputeInstances/List",
+			request, response, conn, invoker)
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+
+		responseLogs := Find(Parse(buffer), "Received unary response")
+		Expect(responseLogs).To(HaveLen(1))
+		Expect(responseLogs[0]).To(HaveKeyWithValue("message", redactMark))
+		Expect(responseLogs[0]["details"]).To(ContainElement(redactMark))
+		Expect(buffer.String()).ToNot(ContainSubstring(filter))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer-sensitive-filter-value"))
+	})
+
 	It("Redacts customer values from ComputeInstances list server body logs", func() {
 		redactedInterceptor, err := NewInterceptor().
 			SetLogger(logger).
@@ -785,6 +815,35 @@ var _ = Describe("Interceptor", func() {
 		expectComputeInstancesListBodyLogs(buffer, "Received unary request", "Sent unary response")
 		Expect(proto.Equal(request, originalRequest)).To(BeTrue())
 		Expect(proto.Equal(response, originalResponse)).To(BeTrue())
+	})
+
+	It("Redacts invalid-filter status logs for ComputeInstances list server calls", func() {
+		redactedInterceptor, err := NewInterceptor().
+			SetLogger(logger).
+			SetBodies(true).
+			SetRedact(true).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		filter := `this.metadata.labels["customer.example.test/private-filter"] == "customer-sensitive-filter-value"`
+		rpcStatus, err := grpcstatus.New(grpccodes.InvalidArgument, "invalid filter: "+filter).WithDetails(
+			testsv1.Object_builder{MyString: filter}.Build(),
+		)
+		Expect(err).ToNot(HaveOccurred())
+
+		request, response := computeInstancesListLogFixtures()
+		_, err = redactedInterceptor.UnaryServer(ctx, request,
+			&grpc.UnaryServerInfo{FullMethod: "/osac.public.v1.ComputeInstances/List"},
+			func(context.Context, any) (any, error) { return response, rpcStatus.Err() })
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+
+		responseLogs := Find(Parse(buffer), "Sent unary response")
+		Expect(responseLogs).To(HaveLen(1))
+		Expect(responseLogs[0]).To(HaveKeyWithValue("code", "InvalidArgument"))
+		loggedError, ok := responseLogs[0]["error"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(loggedError).To(HaveKeyWithValue("message", redactMark))
+		Expect(buffer.String()).ToNot(ContainSubstring("customer-sensitive-filter-value"))
 	})
 
 	It("Does not log ComputeInstance catalog bodies from unary client logs", func() {

@@ -191,7 +191,11 @@ func (i *Interceptor) UnaryServer(ctx context.Context, request any, info *grpc.U
 		}
 	}
 	if err != nil && !catalogMethod {
-		errField := slog.Any("error", err)
+		loggedError := err
+		if i.redact && isComputeInstancesListMethod(info.FullMethod) {
+			loggedError = errors.New(redactMark)
+		}
+		errField := slog.Any("error", loggedError)
 		responseFields = append(responseFields, errField)
 	}
 	i.logger.DebugContext(ctx, "Sent unary response", responseFields...)
@@ -327,13 +331,20 @@ func (i *Interceptor) UnaryClient(ctx context.Context, method string, request, r
 		codeField := slog.String("code", status.Code().String())
 		responseFields = append(responseFields, codeField)
 		if !catalogMethod {
+			redactStatus := i.redact && isComputeInstancesListMethod(method)
 			message := status.Message()
 			if message != "" {
+				if redactStatus {
+					message = redactMark
+				}
 				messageField := slog.String("message", message)
 				responseFields = append(responseFields, messageField)
 			}
 			details := status.Details()
 			if len(details) > 0 {
+				if redactStatus {
+					details = []any{redactMark}
+				}
 				detailsField := slog.Any("details", details)
 				responseFields = append(responseFields, detailsField)
 			}
@@ -359,6 +370,10 @@ func (i *Interceptor) UnaryClient(ctx context.Context, method string, request, r
 // isCatalogItemsMethod reports whether a method belongs to a catalog API.
 func isCatalogItemsMethod(method string) bool {
 	return strings.Contains(method, "CatalogItems/")
+}
+
+func isComputeInstancesListMethod(method string) bool {
+	return strings.HasSuffix(method, "ComputeInstances/List")
 }
 
 // StreamClient is the stream client interceptor function.

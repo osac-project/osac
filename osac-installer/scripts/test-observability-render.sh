@@ -35,6 +35,12 @@ CRD_ARGS=(
 # subcharts. Enabling it must not require a second --set.
 OBS_ARGS=(
   --set global.observability.enabled=true
+  # Object storage is referenced by Secret name; the render only needs the
+  # names, never key material.
+  --set global.observability.objectStorage.secretName=thanos-object-storage
+  --set global.observability.objectStorage.endpoint=https://s3.example.com
+  --set global.observability.objectStorage.bucket=thanos
+  --set global.observability.objectStorage.region=us-east-1
 )
 # Metering is always deployed (billing is not optional), so the scrape checks
 # only switch its billing adapters on.
@@ -205,7 +211,11 @@ disabled="${TMP_DIR}/disabled.yaml"
 disabled_sms="${TMP_DIR}/disabled-servicemonitors.yaml"
 extract_kind "${disabled}" ServiceMonitor >"${disabled_sms}"
 expect_count "${disabled_sms}" '^kind: ServiceMonitor' 0
-reject "${disabled}" 'name: osac-observability'
+# The remote-write Job keeps its name on the disabled path, so the namespace
+# check must look only at Namespace documents.
+disabled_ns="${TMP_DIR}/disabled-namespace.yaml"
+extract_kind "${disabled}" Namespace >"${disabled_ns}"
+reject "${disabled_ns}" 'name: osac-observability'
 reject "${disabled}" 'name: osac-prometheus-scrape'
 reject "${disabled}" 'openshift.io/cluster-monitoring=true'
 # The disabled revision still carries the upgrade hook that removes a label an
@@ -270,25 +280,25 @@ echo "checking invalid scrape interval rejection"
 expect_render_failure empty-interval \
   'global.observability.collection.osacControlPlane must be a positive Prometheus duration' \
   --skip-schema-validation \
-  --set global.observability.enabled=true \
+  "${OBS_ARGS[@]}" \
   --set global.observability.collection.osacControlPlane=
 expect_render_failure zero-interval \
   'must be a positive Prometheus duration' \
-  --set global.observability.enabled=true \
+  "${OBS_ARGS[@]}" \
   --set global.observability.collection.osacControlPlane=0s
 expect_render_failure malformed-interval \
   'does not match pattern' \
-  --set global.observability.enabled=true \
+  "${OBS_ARGS[@]}" \
   --set global.observability.collection.osacControlPlane=30x
 
 echo "checking thanos retention and resolution validation"
 expect_render_failure zero-retention \
   'global.observability.thanos.retention must be a positive Prometheus duration' \
-  --set global.observability.enabled=true \
+  "${OBS_ARGS[@]}" \
   --set global.observability.thanos.retention=0d
 expect_render_failure retention-resolution-mismatch \
   'global.observability.thanos.resolution.5m must equal global.observability.thanos.retention' \
-  --set global.observability.enabled=true \
+  "${OBS_ARGS[@]}" \
   --set global.observability.thanos.retention=30d \
   --set global.observability.thanos.resolution.raw=30d \
   --set global.observability.thanos.resolution.5m=365d \
@@ -296,7 +306,7 @@ expect_render_failure retention-resolution-mismatch \
 
 retention_ok="${TMP_DIR}/retention-ok.yaml"
 "${HELM_BIN}" "${COMMON_ARGS[@]}" \
-  --set global.observability.enabled=true \
+  "${OBS_ARGS[@]}" \
   --set global.observability.thanos.retention=30d \
   --set global.observability.thanos.resolution.raw=30d \
   --set global.observability.thanos.resolution.5m=30d \
@@ -309,7 +319,7 @@ echo "checking infrastructure collection interval validation"
 expect_render_failure empty-infrastructure \
   'global.observability.collection.infrastructure must be a positive Prometheus duration' \
   --skip-schema-validation \
-  --set global.observability.enabled=true \
+  "${OBS_ARGS[@]}" \
   --set global.observability.collection.infrastructure=
 
 echo 'Observability render checks passed.'

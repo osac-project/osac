@@ -1,6 +1,7 @@
 suite: observability namespaces and scrape access
 templates:
   - templates/observability/*.yaml
+  - templates/hooks/observability-pre-install-validate.yaml
   - templates/hooks/observability-remote-write.yaml
 release:
   name: osac
@@ -347,3 +348,112 @@ tests:
           content:
             name: OBSERVABILITY_ENABLED
             value: "false"
+
+  - it: skips the prerequisite gate when observability is disabled
+    template: templates/hooks/observability-pre-install-validate.yaml
+    set:
+      global.observability.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: grants the prerequisite gate only the named Secret and namespace
+    template: templates/hooks/observability-pre-install-validate.yaml
+    set:
+      global.observability.objectStorage.secretName: thanos-object-storage
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+      - equal:
+          path: rules[0].resources
+          value: [namespaces]
+      - equal:
+          path: rules[0].resourceNames
+          value: [osac-observability]
+      - equal:
+          path: rules[0].verbs
+          value: [get]
+      - equal:
+          path: rules[1].resources
+          value: [secrets]
+      - equal:
+          path: rules[1].resourceNames
+          value: [thanos-object-storage]
+      - equal:
+          path: rules[1].verbs
+          value: [get]
+
+  - it: binds the prerequisite role to its own service account
+    template: templates/hooks/observability-pre-install-validate.yaml
+    documentIndex: 2
+    asserts:
+      - isKind:
+          of: ClusterRoleBinding
+      - equal:
+          path: roleRef.kind
+          value: ClusterRole
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+      - equal:
+          path: subjects[0].namespace
+          value: osac
+
+  - it: gates the install before any observability resource is created
+    template: templates/hooks/observability-pre-install-validate.yaml
+    set:
+      global.observability.objectStorage.secretName: thanos-object-storage
+      global.observability.objectStorage.endpoint: https://s3.example.com
+    documentIndex: 3
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: metadata.namespace
+          value: osac
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "-20"
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 120
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: quay.io/openshift/origin-cli:4.20.0
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: observability object-storage Secret .* was not found
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: cert-manager.io/v1 API is not served
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OBS_SECRET_NAME
+            value: thanos-object-storage
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OBS_SECRET_NAMESPACE
+            value: osac-observability
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OBS_ENDPOINT
+            value: https://s3.example.com

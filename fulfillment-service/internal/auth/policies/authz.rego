@@ -672,6 +672,37 @@ subject_user = input.auth.identity.username if {
 subject_user = split(input.auth.identity.user.username, ":")[3] if {
   input.auth.identity.authnMethod == "serviceaccount"
 }
+
+service_account_namespace := split(input.auth.identity.user.username, ":")[2] if {
+  input.auth.identity.authnMethod == "serviceaccount"
+}
+
+# Resolve the principal's home tenant independently of which tenants are visible.
+default subject_tenant := ""
+subject_tenant := "system" if {
+  is_admin
+}
+subject_tenant := "system" if {
+  is_csi
+}
+subject_tenant := input.auth.identity.managed_service_account_tenant if {
+  is_managed_service_account_valid
+}
+subject_tenant := service_account_namespace if {
+  not is_admin
+}
+subject_tenant := tenant if {
+  not is_admin
+  not is_csi
+  not is_managed_service_account_candidate
+  input.auth.identity.authnMethod == "jwt"
+  organizations := {org | some org in subject_tenants}
+  count(organizations) == 1
+  some tenant in organizations
+  is_string(tenant)
+  not tenant in {"", "*", "shared"}
+}
+
 subject_tenant_result = ["*"] if {
   is_admin
 }
@@ -707,8 +738,7 @@ subject_tenant_result = subject_tenants if {
   input.auth.identity.authnMethod == "jwt"
   not is_managed_service_account_candidate
 }
-subject_tenant_result = [split(input.auth.identity.user.username, ":")[2]] if {
+subject_tenant_result = [service_account_namespace] if {
   not is_admin
   not is_csi
-  input.auth.identity.authnMethod == "serviceaccount"
 }

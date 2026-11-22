@@ -1,5 +1,6 @@
 import React, { type ReactNode, createElement } from 'react';
 import { MemoryRouter } from 'react-router-dom';
+import { toJson } from '@bufbuild/protobuf';
 import { createRouterTransport } from '@connectrpc/connect';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
@@ -8,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type BareMetalInstance,
   BareMetalInstanceRunStrategy,
+  BareMetalInstanceSchema,
   BareMetalInstances,
   Capabilities,
 } from '@osac/types';
@@ -168,5 +170,35 @@ describe('usePatchBareMetalInstance', () => {
     const req = await mutateAndCapture({ id: 'bmi-1', action: 'restart', currentTrigger: 3n });
     const object = (req as { object?: { spec?: { restartTrigger?: bigint } } }).object;
     expect(object?.spec?.restartTrigger).toBe(4n);
+  });
+
+  it('sends only the intended power field and no immutable workload data', async () => {
+    const cases: Array<{
+      input: PatchBareMetalInstanceInput;
+      spec: { runStrategy?: string; restartTrigger?: string };
+    }> = [
+      {
+        input: { id: 'bmi-1', action: 'start' },
+        spec: { runStrategy: 'BARE_METAL_INSTANCE_RUN_STRATEGY_ALWAYS' },
+      },
+      {
+        input: { id: 'bmi-1', action: 'stop' },
+        spec: { runStrategy: 'BARE_METAL_INSTANCE_RUN_STRATEGY_HALTED' },
+      },
+      {
+        input: { id: 'bmi-1', action: 'restart', currentTrigger: 1n },
+        spec: { restartTrigger: '2' },
+      },
+    ];
+
+    for (const { input, spec } of cases) {
+      const req = await mutateAndCapture(input);
+      const object = (req as { object?: BareMetalInstance }).object;
+      expect(object).toBeDefined();
+      expect(toJson(BareMetalInstanceSchema, object as BareMetalInstance)).toEqual({
+        id: 'bmi-1',
+        spec,
+      });
+    }
   });
 });

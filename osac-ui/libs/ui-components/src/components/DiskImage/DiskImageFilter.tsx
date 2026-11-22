@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Alert, MenuToggle, Select, SelectList, SelectOption } from '@patternfly/react-core';
 
-import { useDiskImages } from '@osac/ui-components/api/v1/disk-image';
+import { DiskImages } from '@osac/types';
+import { useListResource } from '@osac/ui-components/api/use-resource';
+import { diskImageListRequestFilter } from '@osac/ui-components/api/v1/disk-image';
 import { getErrorMessage } from '@osac/ui-components/utils/error';
 
 import { useTranslation } from '../../hooks/useTranslation';
@@ -17,14 +19,15 @@ const DiskImageFilter = ({ selected, onChange }: DiskImageFilterProps) => {
   const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
 
-  const { data: diskImages = [], error } = useDiskImages({});
+  const { data, error } = useListResource(DiskImages, { filter: diskImageListRequestFilter({}) });
 
   const sortedDiskImages = useMemo(() => {
+    const diskImages = data?.items ?? [];
     const names = diskImages
       .map((diskImage) => diskImage.metadata?.name?.trim())
       .filter((name): name is string => name !== undefined);
     return [...new Set(names)].sort((left, right) => left.localeCompare(right));
-  }, [diskImages]);
+  }, [data?.items]);
 
   const allLabel = t('All disk images');
   const selectedLabel = selected || allLabel;

@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Code, ConnectError } from '@connectrpc/connect';
 import {
@@ -13,15 +14,17 @@ import {
 } from '@patternfly/react-core';
 import { Formik, type FormikHelpers } from 'formik';
 
-import { SourceType } from '@osac/types';
+import { DiskImages, SourceType } from '@osac/types';
 import { Tenants } from '@osac/types/private';
+import {
+  architectureLabels,
+  guestOsFamilyLabels,
+} from '@osac/ui-components/components/DiskImage/utils';
 
-import { architectureLabels, guestOsFamilyLabels } from './DiskImageTable';
 import { diskImageFieldIds } from './fieldIds';
 import { getDiskImageCreateSchema } from './validation';
 import { DiskImageFormValues, diskImageCreateValues } from './values';
-import { useListResource } from '../../api/use-resource';
-import { useCreateDiskImage } from '../../api/v1/disk-image';
+import { useCreateResource, useListResource } from '../../api/use-resource';
 import { useSession } from '../../hooks/use-session';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
@@ -62,11 +65,13 @@ const DiskImageForm = () => {
   const isAdmin = useSession().role === 'admin';
   const { data: tenantsResponse } = useListResource(Tenants, {}, { enabled: isAdmin });
   const tenants = tenantsResponse?.items ?? [];
-  const { mutateAsync: create, error } = useCreateDiskImage();
-  const errorMessage = error ? getErrorMessage(error) : undefined;
+  const { mutateAsync: createAsync, error: mutationError } = useCreateResource(DiskImages);
+  const [responseError, setResponseError] = useState<Error | undefined>();
+  const createError = mutationError ?? responseError;
+  const errorMessage = createError ? getErrorMessage(createError) : undefined;
   const errorField =
-    error instanceof ConnectError && error.code === Code.InvalidArgument
-      ? mapInvalidArgumentToField(error.rawMessage)
+    createError instanceof ConnectError && createError.code === Code.InvalidArgument
+      ? mapInvalidArgumentToField(createError.rawMessage)
       : undefined;
 
   const guestOsFamilyOptions = Object.entries(guestOsFamilyLabels(t))
@@ -86,26 +91,36 @@ const DiskImageForm = () => {
     values: DiskImageFormValues,
     { setFieldError }: FormikHelpers<DiskImageFormValues>,
   ) => {
+    setResponseError(undefined);
     try {
-      const created = await create({
-        metadata: {
-          name: values.metadata.name,
-          ...(isAdmin && values.metadata.tenant ? { tenant: values.metadata.tenant } : {}),
-        },
-        spec: {
-          sourceType: SourceType.REGISTRY,
-          sourceRef: values.spec.sourceRef,
-          guestOsFamily: values.spec.guestOsFamily,
-          architecture: values.spec.architecture,
+      const resp = await createAsync({
+        object: {
+          metadata: {
+            name: values.metadata.name,
+            ...(isAdmin && values.metadata.tenant ? { tenant: values.metadata.tenant } : {}),
+          },
+          spec: {
+            sourceType: SourceType.REGISTRY,
+            sourceRef: values.spec.sourceRef,
+            guestOsFamily: values.spec.guestOsFamily,
+            architecture: values.spec.architecture,
+          },
         },
       });
-      navigate(`${DISK_IMAGES_LIST_ROUTE}/${created.id}`);
+      if (!resp.object?.id) {
+        throw new Error('Create response missing disk image id');
+      }
+      navigate(`${DISK_IMAGES_LIST_ROUTE}/${resp.object.id}`);
     } catch (err) {
       if (err instanceof ConnectError && err.code === Code.InvalidArgument) {
         const field = mapInvalidArgumentToField(err.rawMessage);
         if (field) {
           setFieldError(field, err.rawMessage);
+          return;
         }
+      }
+      if (err instanceof Error && !(err instanceof ConnectError)) {
+        setResponseError(err);
       }
       // otherwise the generic Alert below (driven by the mutation's error state) applies
     }
@@ -159,7 +174,7 @@ const DiskImageForm = () => {
                 )}
               </OsacForm>
             </StackItem>
-            {!!error && !errorField && (
+            {!!createError && !errorField && (
               <StackItem>
                 <Alert variant="danger" title={t('Failed to save disk image')} isInline>
                   {errorMessage}

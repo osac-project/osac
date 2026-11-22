@@ -1,9 +1,11 @@
+import { toJson } from '@bufbuild/protobuf';
 import { Code, ConnectError, createRouterTransport } from '@connectrpc/connect';
 import { screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
   type ComputeInstance,
+  ComputeInstanceSchema,
   ComputeInstanceState,
   ComputeInstances,
   type InstanceType,
@@ -12,6 +14,7 @@ import {
 } from '@osac/types';
 
 import EditInstanceTypeModal from './EditInstanceTypeModal';
+import { connectErrorInterceptor } from '../../../api/api-context';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
 const cpu = {
@@ -41,8 +44,16 @@ const vm = (state: ComputeInstanceState, instanceTypeId: string): ComputeInstanc
   ({
     id: 'vm-1',
     metadata: { name: 'web-01' },
-    status: { state },
-    spec: { instanceType: { id: instanceTypeId } },
+    status: {
+      state,
+      internalIpAddress: '10.0.0.5',
+      computeNetworkAttachmentStatuses: [{ subnetRef: 'subnet-1', ipAddress: '10.0.0.5' }],
+    },
+    spec: {
+      instanceType: { id: instanceTypeId },
+      networkAttachments: [{ subnet: { id: 'subnet-1' }, securityGroups: [{ id: 'sg-1' }] }],
+      autoExternalIpAttachment: true,
+    },
   }) as ComputeInstance;
 
 const renderWrapper = ({
@@ -53,6 +64,7 @@ const renderWrapper = ({
   onUpdate,
   onList,
   rejectUpdate = false,
+  immutableNetworkError = false,
 }: {
   instance?: ComputeInstance;
   types?: InstanceType[];
@@ -61,37 +73,48 @@ const renderWrapper = ({
   onUpdate?: (request: unknown) => void;
   onList?: (request: { filter?: string }) => void;
   rejectUpdate?: boolean;
+  immutableNetworkError?: boolean;
 } = {}) => {
   let getCalls = 0;
-  const transport = createRouterTransport((router) => {
-    router.service(InstanceTypes, {
-      list: (request) => {
-        onList?.(request);
-        return { items: types };
-      },
-      get: () => {
-        getCalls += 1;
-        if (getMode === 'error') {
-          throw new ConnectError('lookup failed', Code.Unavailable);
-        }
-        if (getMode === 'loading' && getCalls === 1) {
-          return new Promise(() => undefined);
-        }
-        return {
-          object: currentType ?? types.find((item) => item.id === instance.spec?.instanceType?.id),
-        };
-      },
-    });
-    router.service(ComputeInstances, {
-      update: (request) => {
-        onUpdate?.(request);
-        if (rejectUpdate) {
-          throw new ConnectError('cannot change GPU configuration', Code.FailedPrecondition);
-        }
-        return { object: request.object, warnings: [] };
-      },
-    });
-  });
+  const transport = createRouterTransport(
+    (router) => {
+      router.service(InstanceTypes, {
+        list: (request) => {
+          onList?.(request);
+          return { items: types };
+        },
+        get: () => {
+          getCalls += 1;
+          if (getMode === 'error') {
+            throw new ConnectError('lookup failed', Code.Unavailable);
+          }
+          if (getMode === 'loading' && getCalls === 1) {
+            return new Promise(() => undefined);
+          }
+          return {
+            object:
+              currentType ?? types.find((item) => item.id === instance.spec?.instanceType?.id),
+          };
+        },
+      });
+      router.service(ComputeInstances, {
+        update: (request) => {
+          onUpdate?.(request);
+          if (immutableNetworkError) {
+            throw new ConnectError(
+              'spec.network_attachments is immutable after creation',
+              Code.InvalidArgument,
+            );
+          }
+          if (rejectUpdate) {
+            throw new ConnectError('cannot change GPU configuration', Code.FailedPrecondition);
+          }
+          return { object: request.object, warnings: [] };
+        },
+      });
+    },
+    { transport: { interceptors: [connectErrorInterceptor] } },
+  );
 
   const onClose = vi.fn();
   const view = renderWithProviders(<EditInstanceTypeModal vm={instance} onClose={onClose} />, {
@@ -196,7 +219,25 @@ describe('EditInstanceTypeModal wrapper', () => {
     await user.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(await screen.findByText('Failed to update the instance type')).toBeInTheDocument();
+    expect(screen.getByText('cannot change GPU configuration')).toBeInTheDocument();
+    expect(screen.queryByText(/Delete and recreate/)).not.toBeInTheDocument();
     expect(screen.getByRole('dialog', { name: 'Edit instance type' })).toBeInTheDocument();
+  });
+
+  it('displays the immutable networking error exactly as returned by the server', async () => {
+    const { user } = renderWrapper({
+      instance: vm(ComputeInstanceState.RUNNING, 'cpu-1'),
+      immutableNetworkError: true,
+    });
+
+    await user.click(await screen.findByRole('combobox'));
+    await user.click(await screen.findByRole('option', { name: /CPU large/ }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText('Failed to update the instance type')).toBeInTheDocument();
+    expect(
+      screen.getByText('spec.network_attachments is immutable after creation', { exact: true }),
+    ).toBeInTheDocument();
   });
 
   it('updates with the explicit instance type mask', async () => {
@@ -219,6 +260,10 @@ describe('EditInstanceTypeModal wrapper', () => {
 
     await waitFor(() => expect(request?.updateMask?.paths).toEqual(['spec.instance_type']));
     expect(request?.object?.spec?.instanceType?.id).toBe('cpu-2');
+    expect(toJson(ComputeInstanceSchema, request?.object as ComputeInstance)).toEqual({
+      id: 'vm-1',
+      spec: { instanceType: { id: 'cpu-2' } },
+    });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 });

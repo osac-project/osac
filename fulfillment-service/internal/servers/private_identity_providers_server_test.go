@@ -439,9 +439,9 @@ var _ = Describe("Private identity providers server", func() {
 		})
 
 		Describe("Tenant Validation", func() {
-			It("Rejects creation when no tenant is specified and default tenant is invalid", func() {
+			It("Allows creation when no tenant is specified and the default tenant is system", func() {
 				// Build a server with a tenancy mock that returns SystemTenant as default,
-				// simulating an admin whose default tenant is a reserved tenant.
+				// simulating an admin creating a platform-scoped identity provider.
 				localTenancy := auth.NewMockTenancyLogic(ctrl)
 				localTenancy.EXPECT().DetermineAssignableTenants(gomock.Any()).
 					Return(auth.AllTenants, nil).
@@ -464,7 +464,7 @@ var _ = Describe("Private identity providers server", func() {
 				Expect(err).ToNot(HaveOccurred())
 				createCtx := database.TxIntoContext(context.Background(), createTx)
 
-				_, err = localServer.Create(createCtx, privatev1.IdentityProvidersCreateRequest_builder{
+				response, err := localServer.Create(createCtx, privatev1.IdentityProvidersCreateRequest_builder{
 					Object: privatev1.IdentityProvider_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name: "test-oidc",
@@ -481,17 +481,14 @@ var _ = Describe("Private identity providers server", func() {
 						}.Build(),
 					}.Build(),
 				}.Build())
-				Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
-				Expect(status.Message()).To(ContainSubstring("cannot be placed in the 'system' tenant"))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetMetadata().GetTenant()).To(Equal(auth.SystemTenant))
 
-				// End the transaction — the reported error triggers rollback
+				// End the transaction and verify the successful create is committed.
 				err = createTx.End(createCtx)
 				Expect(err).ToNot(HaveOccurred())
 
-				// Verify the identity provider was not persisted after rollback
+				// Verify the identity provider was persisted.
 				verifyTx, err := tm.Begin(context.Background())
 				Expect(err).ToNot(HaveOccurred())
 				verifyCtx := database.TxIntoContext(context.Background(), verifyTx)
@@ -503,7 +500,8 @@ var _ = Describe("Private identity providers server", func() {
 					Filter: new("this.metadata.name == 'test-oidc'"),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
-				Expect(listResp.GetItems()).To(BeEmpty())
+				Expect(listResp.GetItems()).To(HaveLen(1))
+				Expect(listResp.GetItems()[0].GetMetadata().GetTenant()).To(Equal(auth.SystemTenant))
 			})
 
 			It("Rejects creation when tenant is explicitly set to 'shared'", func() {
@@ -534,7 +532,7 @@ var _ = Describe("Private identity providers server", func() {
 				Expect(status.Message()).To(ContainSubstring("cannot be placed in the 'shared' tenant"))
 			})
 
-			It("Rejects creation when tenant is explicitly set to 'system'", func() {
+			It("Allows creation when tenant is explicitly set to 'system'", func() {
 				request := privatev1.IdentityProvidersCreateRequest_builder{
 					Object: privatev1.IdentityProvider_builder{
 						Metadata: privatev1.Metadata_builder{
@@ -554,12 +552,9 @@ var _ = Describe("Private identity providers server", func() {
 					}.Build(),
 				}.Build()
 
-				_, err := server.Create(ctx, request)
-				Expect(err).To(HaveOccurred())
-				status, ok := grpcstatus.FromError(err)
-				Expect(ok).To(BeTrue())
-				Expect(status.Code()).To(Equal(grpccodes.PermissionDenied))
-				Expect(status.Message()).To(ContainSubstring("cannot be placed in the 'system' tenant"))
+				response, err := server.Create(ctx, request)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetMetadata().GetTenant()).To(Equal(auth.SystemTenant))
 			})
 		})
 	})

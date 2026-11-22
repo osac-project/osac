@@ -9,8 +9,10 @@ validation is structural.
 
 ## Validation Commands
 
-After making changes, run the following commands from the installer root
-in order. Every command must pass -- CI enforces all of them on every PR.
+Select relevant checks from the installer root for the changed behavior.
+Prefer an existing focused render or script check from `../AGENTS.md` and
+`AGENTS.md`; use broader validation only when needed. Report unavailable
+checks and unrelated failures without expanding the fix.
 
 1. **YAML lint** (strict mode, repo-level `.yamllint.yaml` config):
 
@@ -22,7 +24,7 @@ in order. Every command must pass -- CI enforces all of them on every PR.
    files, private key detection, YAML lint):
 
    ```bash
-   pre-commit run --all-files
+   pre-commit run --files <changed-files>
    ```
 
 3. **Helm lint** (validates chart structure and templates -- see `Makefile` for full command):

@@ -87,7 +87,8 @@ fi
 mac_arm_make_output=$(make --no-print-directory --dry-run install-devstack \
   PLATFORM=kind PROFILE=dev-full NS=osac HOST_IS_MAC_ARM=true)
 if ! grep -Fq -- '--set arm64VmCompatibility.enabled=true' <<<"$mac_arm_make_output" \
-  || ! grep -Eq '^[[:space:]]*scripts/dev-full/check-cluster-compatibility\.sh[[:space:]]*$' <<<"$mac_arm_make_output"; then
+  || ! grep -Fq 'scripts/dev-full/check-cluster-compatibility.sh --kubeconfig "$KIND_KUBECONFIG" --context "kind-osac-dev"' \
+    <<<"$mac_arm_make_output"; then
   echo "Apple Silicon dev-full must check node architecture and enable the compatibility policy" >&2
   exit 1
 fi
@@ -95,7 +96,7 @@ fi
 linux_make_output=$(make --no-print-directory --dry-run install-devstack \
   PLATFORM=kind PROFILE=dev-full NS=osac HOST_IS_MAC_ARM=false)
 if grep -Fq 'arm64VmCompatibility.enabled=true' <<<"$linux_make_output" \
-  || grep -Fq -- 'check-cluster-compatibility.sh' <<<"$linux_make_output"; then
+  || grep -Eq 'check-cluster-compatibility\.sh|--context "kind-osac-dev"' <<<"$linux_make_output"; then
   echo "Linux dev-full must not enable the ARM64 VM compatibility policy or run its compatibility check" >&2
   exit 1
 fi

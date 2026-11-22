@@ -94,6 +94,28 @@ The index operator `[]` can be used to access values inside map fields. For exam
 `this.metadata.labels['env']` returns the value of the `env` label. The key must be a literal
 string. The result can then be compared with `==` or `!=`.
 
+### Matching fields in repeated messages with `exists`
+
+Use `array.exists(item, predicate)` to select objects with at least one matching
+element in a repeated message field. For example, select RoleBindings containing
+a user or service-account reference:
+
+```cel
+this.spec.users.exists(u, u.id == "user-id")
+this.spec.service_accounts.exists(sa, sa.id == "account-id")
+```
+
+Predicates use the same supported field selectors and operators as other filters.
+Conditions combined inside one `exists` apply to the same array element. Nested
+`exists` predicates can refer to outer iteration variables and to `this`.
+An empty or absent array does not match; multiple matching elements still return
+the containing object only once. Filtering applies before counts and pagination
+and does not change which tenants or projects the caller can see.
+
+Only repeated message fields are supported by `exists`, not scalar arrays, map
+iteration, or list literals. Other comprehensions such as `all`, `exists_one`,
+`map`, and `filter` are not supported.
+
 ## Reserved metadata
 
 The public API does not allow List filters or `Events.Watch` filters to test whether a reserved

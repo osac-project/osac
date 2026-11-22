@@ -196,6 +196,15 @@ func (r *CSIInstallReconciler) reconcileInstall(ctx context.Context, instance *v
 		jobCtx = provisioning.WithAdminKubeconfig(ctx, string(kubeconfig))
 	}
 
+	// After a failed launch, wait out its backoff before calling AAP again,
+	// however often other controllers write the ClusterOrder.
+	if isCSIInstallLaunchFailure(provisioning.FindLatestJobByType(instance.Status.CSIInstallJobs, v1alpha1.JobTypeProvision)) &&
+		!csiInstallLaunchDue(instance.Status.CSIInstallJobs) {
+		updateCSIDriverReadyCondition(instance)
+		return r.finishInstall(ctx, key, instance, originalJobs, originalCondition,
+			ctrl.Result{RequeueAfter: csiInstallRetryAfter(instance.Status.CSIInstallJobs)})
+	}
+
 	result, err := provisioning.RunProvisioningLifecycle(
 		jobCtx, r.ProvisioningProvider, instance, provState,
 		r.MaxJobHistory, r.StatusPollInterval, nil,
@@ -212,9 +221,19 @@ func (r *CSIInstallReconciler) reconcileInstall(ctx context.Context, instance *v
 	)
 	if err != nil {
 		log.Error(err, "failed to launch the CSI install job")
-		setCSIDriverReadyCondition(instance, metav1.ConditionFalse, v1alpha1.ClusterOrderReasonCSIDriverInstallFailed,
-			truncateAddOnOperatorMessage(fmt.Sprintf("Failed to launch the CSI install job: %v", err)))
-		return r.finishInstall(ctx, key, instance, originalJobs, originalCondition, ctrl.Result{RequeueAfter: provisioning.BackoffBaseDelay})
+		// Record the failed launch, with no job ID, so its backoff applies
+		// to the next attempt as it would after a failed job.
+		message := truncateAddOnOperatorMessage(fmt.Sprintf("Failed to launch the CSI install job: %v", err))
+		instance.Status.CSIInstallJobs = provisioning.AppendJob(instance.Status.CSIInstallJobs, v1alpha1.JobStatus{
+			Type:          v1alpha1.JobTypeProvision,
+			Timestamp:     metav1.Now(),
+			State:         v1alpha1.JobStateFailed,
+			Message:       message,
+			ConfigVersion: provState.DesiredConfigVersion,
+		}, r.MaxJobHistory)
+		setCSIDriverReadyCondition(instance, metav1.ConditionFalse, v1alpha1.ClusterOrderReasonCSIDriverInstallFailed, message)
+		return r.finishInstall(ctx, key, instance, originalJobs, originalCondition,
+			ctrl.Result{RequeueAfter: csiInstallRetryAfter(instance.Status.CSIInstallJobs)})
 	}
 
 	updateCSIDriverReadyCondition(instance)
@@ -272,24 +291,36 @@ func (r *CSIInstallReconciler) recordWarningEvent(instance *v1alpha1.ClusterOrde
 	}
 }
 
-// csiInstallLaunchDue reports whether the next lifecycle step may launch a
-// job: there is none yet, or the latest one failed and its backoff elapsed.
-func csiInstallLaunchDue(jobs []v1alpha1.JobStatus) bool {
-	latest := provisioning.FindLatestJobByType(jobs, v1alpha1.JobTypeProvision)
-	if !provisioning.HasJobID(latest) {
-		return true
-	}
-	if !latest.State.IsTerminal() || latest.State.IsSuccessful() {
-		return false
-	}
-	return csiInstallBackoffRemaining(jobs, latest) <= 0
+// isCSIInstallLaunchFailure reports whether job records a launch that failed
+// before AAP created a job: a Failed entry with no job ID.
+func isCSIInstallLaunchFailure(job *v1alpha1.JobStatus) bool {
+	return job != nil && job.JobID == "" && job.State == v1alpha1.JobStateFailed
 }
 
-// csiInstallRetryAfter returns when to retry after a failed job, or zero when
-// the latest job did not fail.
+// csiInstallFailed reports whether job is a failed launch or a failed job.
+func csiInstallFailed(job *v1alpha1.JobStatus) bool {
+	if isCSIInstallLaunchFailure(job) {
+		return true
+	}
+	return provisioning.HasJobID(job) && job.State.IsTerminal() && !job.State.IsSuccessful()
+}
+
+// csiInstallLaunchDue reports whether the next lifecycle step may launch a
+// job: there is none yet, or the latest launch or job failed and its backoff
+// elapsed.
+func csiInstallLaunchDue(jobs []v1alpha1.JobStatus) bool {
+	latest := provisioning.FindLatestJobByType(jobs, v1alpha1.JobTypeProvision)
+	if csiInstallFailed(latest) {
+		return csiInstallBackoffRemaining(jobs, latest) <= 0
+	}
+	return !provisioning.HasJobID(latest)
+}
+
+// csiInstallRetryAfter returns when to retry after a failed launch or job, or
+// zero when the latest did not fail.
 func csiInstallRetryAfter(jobs []v1alpha1.JobStatus) time.Duration {
 	latest := provisioning.FindLatestJobByType(jobs, v1alpha1.JobTypeProvision)
-	if !provisioning.HasJobID(latest) || !latest.State.IsTerminal() || latest.State.IsSuccessful() {
+	if !csiInstallFailed(latest) {
 		return 0
 	}
 	if remaining := csiInstallBackoffRemaining(jobs, latest); remaining > 0 {

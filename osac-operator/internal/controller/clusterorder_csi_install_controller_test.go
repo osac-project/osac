@@ -54,6 +54,9 @@ type csiInstallAAPClient struct {
 	canceled    []string
 	templateErr error
 	nextID      int
+	// templateLookups counts launch attempts, including those that fail
+	// before a job is created.
+	templateLookups int
 }
 
 func newCSIInstallAAPClient() *csiInstallAAPClient {
@@ -61,6 +64,9 @@ func newCSIInstallAAPClient() *csiInstallAAPClient {
 }
 
 func (c *csiInstallAAPClient) GetTemplate(_ context.Context, name string) (*aap.Template, error) {
+	c.mu.Lock()
+	c.templateLookups++
+	c.mu.Unlock()
 	if c.templateErr != nil {
 		return nil, c.templateErr
 	}
@@ -309,6 +315,60 @@ var _ = Describe("CSIInstallReconciler", func() {
 		Expect(condition.Status).To(Equal(metav1.ConditionFalse))
 		Expect(condition.Reason).To(Equal(osacv1alpha1.ClusterOrderReasonCSIDriverInstallFailed))
 		Expect(condition.Message).To(ContainSubstring("not found"))
+	})
+
+	It("holds launch attempts after a launch failure until the backoff expires", func() {
+		createOrder(osacv1alpha1.ClusterOrderPhaseReady)
+		aapClient.templateErr = errors.New("template osac-install-cluster-csi not found")
+
+		_, _ = reconciler.Reconcile(ctx, request)
+		Expect(aapClient.templateLookups).To(Equal(1))
+		stored := getOrder()
+		Expect(stored.Status.CSIInstallJobs).To(HaveLen(1))
+		failure := stored.Status.CSIInstallJobs[0]
+		Expect(failure.JobID).To(BeEmpty())
+		Expect(failure.Type).To(Equal(osacv1alpha1.JobTypeProvision))
+		Expect(failure.State).To(Equal(osacv1alpha1.JobStateFailed))
+		Expect(failure.Message).To(ContainSubstring("not found"))
+
+		// A status write by another controller requeues the ClusterOrder.
+		result, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(aapClient.templateLookups).To(Equal(1))
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(result.RequeueAfter).To(BeNumerically("<=", provisioning.BackoffBaseDelay))
+		Expect(findCSIDriverCondition(getOrder()).Reason).To(Equal(osacv1alpha1.ClusterOrderReasonCSIDriverInstallFailed))
+
+		// A second failure after the backoff doubles the next delay.
+		stored = getOrder()
+		stored.Status.CSIInstallJobs[0].Timestamp = metav1.NewTime(time.Now().Add(-3 * time.Minute))
+		Expect(k8sClient.Status().Update(ctx, stored)).To(Succeed())
+		_, _ = reconciler.Reconcile(ctx, request)
+		Expect(aapClient.templateLookups).To(Equal(2))
+		result, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(aapClient.templateLookups).To(Equal(2))
+		Expect(result.RequeueAfter).To(BeNumerically(">", provisioning.BackoffBaseDelay))
+	})
+
+	It("launches a job once the launch-failure backoff expires", func() {
+		createOrder(osacv1alpha1.ClusterOrderPhaseReady)
+		aapClient.templateErr = errors.New("template osac-install-cluster-csi not found")
+		_, _ = reconciler.Reconcile(ctx, request)
+
+		aapClient.templateErr = nil
+		stored := getOrder()
+		Expect(stored.Status.CSIInstallJobs).To(HaveLen(1))
+		stored.Status.CSIInstallJobs[0].Timestamp = metav1.NewTime(time.Now().Add(-provisioning.BackoffBaseDelay - time.Second))
+		Expect(k8sClient.Status().Update(ctx, stored)).To(Succeed())
+		reconcile()
+
+		Expect(aapClient.launchCount()).To(Equal(1))
+		stored = getOrder()
+		latest := provisioning.FindLatestJobByType(stored.Status.CSIInstallJobs, osacv1alpha1.JobTypeProvision)
+		Expect(latest).NotTo(BeNil())
+		Expect(latest.JobID).To(Equal("1"))
+		Expect(findCSIDriverCondition(stored).Reason).To(Equal(osacv1alpha1.ClusterOrderReasonCSIDriverInstalling))
 	})
 
 	It("does nothing and writes no condition when disabled", func() {

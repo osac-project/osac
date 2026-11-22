@@ -37,21 +37,6 @@ type keycloakFixture struct {
 	fullScopeAllowed bool
 }
 
-// The only stand-in on the import path is the Kubernetes Secret store. Execute
-// the shipped resolver unchanged, supplying disposable secrets through `oc`.
-// Unknown commands fail closed, so setup cannot repair roles or scope mappings.
-const secretStore = `#!/usr/bin/env bash
-set -euo pipefail
-case "$*" in
-  "get secret keycloak-client-secrets"*)
-    if [[ "$*" == *"-o jsonpath="* ]]; then
-      printf '%s' "${REALM_TEST_SECRET}" | base64 | tr -d '\n'
-    fi
-    ;;
-  *) exit 1 ;;
-esac
-`
-
 func startKeycloak(ctx context.Context, source string) keycloakFixture {
 	GinkgoHelper()
 	root, err := filepath.Abs("../../..")
@@ -59,6 +44,9 @@ func startKeycloak(ctx context.Context, source string) keycloakFixture {
 	installer := filepath.Join(root, "osac-installer")
 	chart := filepath.Join(installer, "charts/osac-infra")
 	prerequisites := filepath.Join(installer, "prerequisites/keycloak/service")
+	// Compare the complete shipped documents before either resolver substitutes secrets.
+	Expect(equivalentRealmArtifacts(filepath.Join(chart, "files/realm.json"),
+		filepath.Join(prerequisites, "files/realm.json"))).To(Succeed())
 	var values struct {
 		Keycloak struct {
 			Images struct {
@@ -183,7 +171,8 @@ func startKeycloak(ctx context.Context, source string) keycloakFixture {
 	})
 	address := runContainerCommand(ctx, tool, "port", id, "8443/tcp")
 	Expect(address).To(HavePrefix("127.0.0.1:"))
-	fmt.Fprintf(GinkgoWriter, "realm=%s image=%s fresh_startup_import=true\n", source, image)
+	_, err = fmt.Fprintf(GinkgoWriter, "realm=%s image=%s fresh_startup_import=true\n", source, image)
+	Expect(err).ToNot(HaveOccurred())
 	return keycloakFixture{
 		issuer: "https://" + address + "/realms/osac", secrets: secrets,
 		certFile: certFile, fullScopeAllowed: fullScopeAllowed,

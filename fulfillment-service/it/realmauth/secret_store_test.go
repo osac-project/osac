@@ -17,6 +17,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +25,32 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+// The only stand-in on the import path is a pre-existing Kubernetes Secret.
+// Accept just the argument vectors used by the shipped resolvers, including
+// Helm's namespace and MCP-key probe. Mutations and unknown lookups fail closed.
+const secretStore = `#!/usr/bin/env bash
+set -euo pipefail
+[[ $# -ge 3 ]] || exit 1
+[[ "$1" == get && "$2" == secret && "$3" == keycloak-client-secrets ]] || exit 1
+shift 3
+if [[ "${1:-}" == -n ]]; then
+  [[ $# -ge 2 ]] || exit 1
+  [[ "$2" == keycloak ]] || exit 1
+  shift 2
+fi
+[[ $# -ne 0 ]] || exit 0
+[[ $# -eq 2 && "$1" == -o ]] || exit 1
+case "$2" in
+  'jsonpath={.data.osac-controller}') secret="${REALM_TEST_CONTROLLER_SECRET}" ;;
+  'jsonpath={.data.osac-admin}') secret="${REALM_TEST_ADMIN_SECRET}" ;;
+  'jsonpath={.data.osac-csi-driver}') secret="${REALM_TEST_CSI_SECRET}" ;;
+  'jsonpath={.data.osac-ui-backend}') secret="${REALM_TEST_UI_SECRET}" ;;
+  'jsonpath={.data.osac-mcp-exchange}') secret="${REALM_TEST_MCP_SECRET}" ;;
+  *) exit 1 ;;
+esac
+printf '%s' "$secret" | base64 | tr -d '\n'
+`
 
 type secretStoreFixture struct {
 	path       string
@@ -33,25 +60,29 @@ type secretStoreFixture struct {
 
 func newSecretStoreFixture(dir string) secretStoreFixture {
 	GinkgoHelper()
-	// Preserve the existing shared-secret behavior while establishing regressions.
-	shared := rand.Text()
 	fixture := secretStoreFixture{
 		path: filepath.Join(dir, "oc"),
 		clients: map[string]string{
-			"osac-controller":   shared,
-			"osac-admin":        shared,
-			"osac-csi-driver":   shared,
-			"osac-ui-backend":   shared,
-			"osac-mcp-exchange": shared,
+			"osac-controller":   rand.Text(),
+			"osac-admin":        rand.Text(),
+			"osac-csi-driver":   rand.Text(),
+			"osac-ui-backend":   rand.Text(),
+			"osac-mcp-exchange": rand.Text(),
 		},
-		realmAdmin: shared,
+		realmAdmin: rand.Text(),
 	}
 	Expect(os.WriteFile(fixture.path, []byte(secretStore), 0700)).To(Succeed())
 	return fixture
 }
 
 func (f secretStoreFixture) environment() []string {
-	return append(os.Environ(), "REALM_TEST_SECRET="+f.clients["osac-csi-driver"])
+	return append(os.Environ(),
+		"REALM_TEST_CONTROLLER_SECRET="+f.clients["osac-controller"],
+		"REALM_TEST_ADMIN_SECRET="+f.clients["osac-admin"],
+		"REALM_TEST_CSI_SECRET="+f.clients["osac-csi-driver"],
+		"REALM_TEST_UI_SECRET="+f.clients["osac-ui-backend"],
+		"REALM_TEST_MCP_SECRET="+f.clients["osac-mcp-exchange"],
+	)
 }
 
 func (f secretStoreFixture) command(ctx context.Context, args ...string) *exec.Cmd {
@@ -119,7 +150,9 @@ var _ = Describe("Realm secret-store fixture", func() {
 	)
 
 	DescribeTable("rejects unsupported invocations", func(ctx SpecContext, args []string) {
-		rejected := fixture.command(ctx, args...).Run() != nil
+		err := fixture.command(ctx, args...).Run()
+		var exitErr *exec.ExitError
+		rejected := errors.As(err, &exitErr) && exitErr.ExitCode() == 1
 		Expect(rejected).To(BeTrue(), "unsupported secret-store invocation must fail")
 	},
 		Entry("unknown JSONPath key", []string{

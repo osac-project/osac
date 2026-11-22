@@ -4,9 +4,8 @@
 evidence. Suite commands, environment gates and per-area requirements live in
 the [touched-area map](../../tests/e2e/AGENTS.md#touched-area-map); fixtures
 and skip conditions live in `tests/e2e/conftest.py` and the suite directories.
-Read both before extending or claiming coverage. Unit tests under `tests/unit/`
-validate helpers and selectors; pytest collection proves import/selection
-readiness only.
+Read both before extending or claiming coverage. Pytest collection proves
+import/selection readiness only, not deployed helper or lifecycle correctness.
 
 ## Suite boundaries
 
@@ -82,9 +81,8 @@ labels or suite/marker overrides. Periodics select all of `caas` (sanity +
 regression) plus reference tests marked `requires_caas` or `reference_common`.
 Manual dispatches default to sanity and keep overrides. The reusable runner
 never adds references to sanity; an empty requested tier fails rather than
-falling back. [DEV] selection checks under `tests/unit/` evaluate real caller
-YAML (companion checks skip without `OSAC_TEST_INFRA_DIR`) and prove selection
-only, not [QE] deployed CaaS success.
+falling back. Inspect the caller YAML when changing selection; static inspection
+does not prove deployed CaaS success.
 
 ## Focused CaaS natural-teardown boundary
 

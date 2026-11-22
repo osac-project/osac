@@ -19,8 +19,8 @@ lint_command: uv run ansible-lint
 
 ### Artifact Paths
 
-All artifact paths (`.artifacts/bugfix/{issue}/`) should use `.ai-bot/`
-instead.
+Create separate reports only when requested; preserve outputs required by the
+calling workflow at its specified paths and formats.
 
 ## Process
 
@@ -61,6 +61,8 @@ convention rather than adopting the suggestion.
 
 ### Step 5: Validate
 
+Select relevant existing checks and report unavailable or unrelated failures.
+
 ```bash
 # Mandatory
 uv run ansible-lint
@@ -69,36 +71,18 @@ uv run ansible-lint
 ansible-playbook --syntax-check playbook_osac_<modified>.yml
 
 # Pre-commit
-pre-commit run --all-files
+pre-commit run --files <changed-files>
 
 # Helm (if charts/ changed)
 helm lint charts/aap/
 ```
 
-### Step 6: Update Session Context
+### Step 6: Respond
 
-Append a feedback round section to `.ai-bot/session-context.md`:
-
-```markdown
-## Feedback Round N
-**Comments addressed**: [@reviewer on file:line, ...]
-**Changes made**:
-- [Description] (file:line) -- [why this approach]
-**Suggestions declined**:
-- [@reviewer on file:line]: [reason]
-**Tests updated**: [list changes or "no test changes needed"]
-```
-
-### Step 7: Write Comment Responses
-
-Write `.ai-bot/comment-responses.json` mapping each comment to a response:
-
-```json
-[
-  {"comment_id": 123, "response": "Applied FQCN as suggested."},
-  {"comment_id": 456, "response": "Kept underscore naming per project convention."}
-]
-```
+Summarize changes, relevant checks and limitations concisely, including the
+reason for declined suggestions. Session reports are optional unless requested;
+preserve caller-required outputs at their specified paths and formats. Keep PR
+text and response JSON concise.
 
 ## Common Review Feedback Patterns
 

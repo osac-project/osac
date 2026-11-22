@@ -68,8 +68,8 @@ make test     # Run unit tests (ginkgo, recursive)
 make lint     # Run golangci-lint
 cd ..
 
-# chart render tests (need the helm-unittest plugin; CI pins v1.2.1)
-make helm-test
+# reader grant render contract
+make readers-render-test
 ```
 
 Integration tests run against real PostgreSQL and Kafka in containers; they

@@ -1,0 +1,157 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $ns := include "osac-observability.namespace" . -}}
+{{- $thanosLabels := dict "app.kubernetes.io/name" "thanos" -}}
+# Every policy selects pods by the labels this chart renders or by the role
+# label the authentication proxies carry, so none of them fails open by
+# selecting an empty set. Rules are split by source so each allowed port set
+# stays explicit.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: thanos-query
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- $thanosLabels | toYaml | nindent 6 }}
+      app.kubernetes.io/component: query
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              osac.openshift.io/observability-role: authorizer
+      ports:
+        - protocol: TCP
+          port: 9090
+    - from:
+        - podSelector:
+            matchLabels:
+              osac.openshift.io/observability-role: query-auth-proxy
+      ports:
+        - protocol: TCP
+          port: 9090
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: thanos-authorizer
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      osac.openshift.io/observability-role: authorizer
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              osac.openshift.io/observability-role: tenant-auth-proxy
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: thanos-store
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- $thanosLabels | toYaml | nindent 6 }}
+      app.kubernetes.io/component: store
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- $thanosLabels | toYaml | nindent 14 }}
+              app.kubernetes.io/component: query
+      ports:
+        - protocol: TCP
+          port: 10901
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-monitoring
+      ports:
+        - protocol: TCP
+          port: 10902
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: thanos-receive
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- $thanosLabels | toYaml | nindent 6 }}
+      app.kubernetes.io/component: receive
+  policyTypes:
+    - Ingress
+  ingress:
+    # Cluster monitoring writes the management cluster's series into Receive
+    # and scrapes its own metrics.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-monitoring
+      ports:
+        - protocol: TCP
+          port: 19291
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-monitoring
+      ports:
+        - protocol: TCP
+          port: 10902
+    # Tenant and cluster remote write arrives through the write proxy.
+    - from:
+        - podSelector:
+            matchLabels:
+              osac.openshift.io/observability-role: write-proxy
+      ports:
+        - protocol: TCP
+          port: 19291
+    # Query and peer replicas read the gRPC endpoint; replicas also replicate
+    # remote write between themselves.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- $thanosLabels | toYaml | nindent 14 }}
+              app.kubernetes.io/component: query
+      ports:
+        - protocol: TCP
+          port: 10901
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- $thanosLabels | toYaml | nindent 14 }}
+              app.kubernetes.io/component: receive
+      ports:
+        - protocol: TCP
+          port: 10901
+        - protocol: TCP
+          port: 19291
+{{- end }}

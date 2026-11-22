@@ -1,0 +1,191 @@
+suite: thanos network policies
+templates:
+  - templates/*.yaml
+release:
+  name: osac
+  namespace: osac
+set:
+  global.observability.enabled: true
+  global.observability.objectStorage.secretName: thanos-object-storage
+  global.observability.objectStorage.endpoint: https://s3.example.com
+  global.observability.objectStorage.bucket: thanos
+  global.observability.objectStorage.region: us-east-1
+  global.observability.thanos.image.registry: registry.redhat.io
+  global.observability.thanos.image.repository: openshift4/ose-thanos-rhel8
+  global.observability.thanos.image.tag: ""
+  global.observability.thanos.retention: 365d
+  global.observability.thanos.resolution.raw: 365d
+  global.observability.thanos.resolution.5m: 365d
+  global.observability.thanos.resolution.1h: 365d
+
+tests:
+  - it: admits only the authorizer, the auth proxy and cluster monitoring to Query
+    template: templates/networkpolicies.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-query
+    asserts:
+      - isKind:
+          of: NetworkPolicy
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/name"]
+          value: thanos
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/component"]
+          value: query
+      - equal:
+          path: spec.policyTypes
+          value:
+            - Ingress
+      - notExists:
+          path: spec.egress
+      - equal:
+          path: spec.ingress[0].from[0].podSelector.matchLabels["osac.openshift.io/observability-role"]
+          value: authorizer
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 9090
+      - equal:
+          path: spec.ingress[1].from[0].podSelector.matchLabels["osac.openshift.io/observability-role"]
+          value: query-auth-proxy
+      - equal:
+          path: spec.ingress[1].ports[0].port
+          value: 9090
+      - equal:
+          path: spec.ingress[2].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: openshift-monitoring
+      - equal:
+          path: spec.ingress[2].ports[0].port
+          value: 9090
+
+  - it: admits only the tenant auth proxy to the authorizer
+    template: templates/networkpolicies.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-authorizer
+    asserts:
+      - equal:
+          path: spec.podSelector.matchLabels["osac.openshift.io/observability-role"]
+          value: authorizer
+      - equal:
+          path: spec.ingress[0].from[0].podSelector.matchLabels["osac.openshift.io/observability-role"]
+          value: tenant-auth-proxy
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 8080
+
+  - it: admits only Query and cluster monitoring to Store
+    template: templates/networkpolicies.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-store
+    asserts:
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/component"]
+          value: store
+      - equal:
+          path: spec.ingress[0].from[0].podSelector.matchLabels["app.kubernetes.io/component"]
+          value: query
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 10901
+      - equal:
+          path: spec.ingress[1].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: openshift-monitoring
+      - equal:
+          path: spec.ingress[1].ports[0].port
+          value: 10902
+      - notExists:
+          path: spec.ingress[*].from[*].namespaceSelector.matchLabels["osac.openshift.io/tenant"]
+
+  - it: admits writes, scraping and peer replication to Receive
+    template: templates/networkpolicies.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-receive
+    asserts:
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/component"]
+          value: receive
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: openshift-monitoring
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 19291
+      - equal:
+          path: spec.ingress[1].ports[0].port
+          value: 10902
+      - equal:
+          path: spec.ingress[2].from[0].podSelector.matchLabels["osac.openshift.io/observability-role"]
+          value: write-proxy
+      - equal:
+          path: spec.ingress[2].ports[0].port
+          value: 19291
+      - equal:
+          path: spec.ingress[3].from[0].podSelector.matchLabels["app.kubernetes.io/component"]
+          value: query
+      - equal:
+          path: spec.ingress[3].ports[0].port
+          value: 10901
+      - equal:
+          path: spec.ingress[4].from[0].podSelector.matchLabels["app.kubernetes.io/component"]
+          value: receive
+      - equal:
+          path: spec.ingress[4].ports[0].port
+          value: 10901
+      - equal:
+          path: spec.ingress[4].ports[1].port
+          value: 19291
+
+  - it: never selects every pod or opens a tenant path
+    template: templates/networkpolicies.yaml
+    asserts:
+      - exists:
+          path: spec.podSelector.matchLabels
+      - isNotEmpty:
+          path: spec.ingress[*].from[*].podSelector
+      - isNotEmpty:
+          path: spec.ingress[*].from[*].namespaceSelector
+      - notExists:
+          path: spec.ingress[*].from[*].namespaceSelector.matchLabels["osac.openshift.io/tenant"]
+      - notExists:
+          path: spec.ingress[*].from[*].namespaceSelector.matchExpressions[0].key
+      - notExists:
+          path: spec.ingress[*].from[*].podSelector.matchExpressions[0].key
+
+  - it: renders exactly four policies and no Compactor policy
+    template: templates/networkpolicies.yaml
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: selects the pods Receive actually renders
+    template: templates/receive.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/name"]
+          value: thanos
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: receive
+
+  - it: selects the pods Store actually renders
+    template: templates/store.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/name"]
+          value: thanos
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: store
+
+  - it: selects the pods Query actually renders
+    template: templates/query.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/name"]
+          value: thanos
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: query

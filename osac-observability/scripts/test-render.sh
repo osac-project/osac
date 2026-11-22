@@ -105,6 +105,15 @@ require "${TMP_DIR}/thanos-compactor.yaml" '--downsampling.disable'
 reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-5m'
 reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-1h'
 
+echo "checking four network policies gate the store pods"
+extract_kind "${enabled}" NetworkPolicy >"${TMP_DIR}/networkpolicies.yaml"
+for policy in thanos-query thanos-authorizer thanos-store thanos-receive; do
+  require "${TMP_DIR}/networkpolicies.yaml" "name: ${policy}"
+done
+reject "${TMP_DIR}/networkpolicies.yaml" 'podSelector: {}'
+reject "${TMP_DIR}/networkpolicies.yaml" 'osac.openshift.io/tenant'
+reject "${TMP_DIR}/networkpolicies.yaml" 'egress:'
+
 echo "checking object storage is referenced by Secret name only"
 require "${enabled}" 'bucket: "thanos"'
 require "${enabled}" 'endpoint: "https://s3.example.com"'

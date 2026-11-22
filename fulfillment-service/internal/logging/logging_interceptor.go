@@ -437,6 +437,12 @@ func isCustomerNetworkMethod(method string) bool {
 		strings.Contains(method, "/osac.public.v1.ExternalIPPools/") ||
 		strings.Contains(method, "/osac.public.v1.ExternalIPAttachments/") ||
 		strings.Contains(method, "/osac.private.v1.ExternalIPAttachments/") ||
+		strings.Contains(method, "/osac.private.v1.ExternalIPs/") ||
+		strings.Contains(method, "/osac.private.v1.ExternalIPPools/") ||
+		strings.Contains(method, "/osac.private.v1.NATGateways/") ||
+		strings.Contains(method, "/osac.private.v1.VirtualNetworks/") ||
+		strings.Contains(method, "/osac.private.v1.Subnets/") ||
+		strings.Contains(method, "/osac.private.v1.SecurityGroups/") ||
 		strings.Contains(method, "/osac.public.v1.NATGateways/")
 }
 

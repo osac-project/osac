@@ -354,6 +354,18 @@ var _ = Describe("Interceptor", func() {
 				"/osac.public.v1.ExternalIPAttachments/List",
 				"/osac.private.v1.ExternalIPAttachments/Get",
 				"/osac.private.v1.ExternalIPAttachments/List",
+				"/osac.private.v1.ExternalIPs/Get",
+				"/osac.private.v1.ExternalIPs/List",
+				"/osac.private.v1.ExternalIPPools/Get",
+				"/osac.private.v1.ExternalIPPools/List",
+				"/osac.private.v1.NATGateways/Get",
+				"/osac.private.v1.NATGateways/List",
+				"/osac.private.v1.VirtualNetworks/Get",
+				"/osac.private.v1.VirtualNetworks/List",
+				"/osac.private.v1.Subnets/Get",
+				"/osac.private.v1.Subnets/List",
+				"/osac.private.v1.SecurityGroups/Get",
+				"/osac.private.v1.SecurityGroups/List",
 				"/osac.public.v1.NATGateways/Get",
 				"/osac.public.v1.NATGateways/List",
 			}
@@ -376,11 +388,20 @@ var _ = Describe("Interceptor", func() {
 				Expect(messages[1]).To(HaveKeyWithValue("method", method))
 				Expect(buffer.String()).ToNot(ContainSubstring("customer-network-resource-id"))
 			}
+
+			buffer.Reset()
+			err := interceptor.UnaryClient(ctx, "/test.Service/TestMethod",
+				testsv1.Object_builder{Id: "unrelated-resource-id"}.Build(),
+				testsv1.Object_builder{Id: "unrelated-resource-id"}.Build(), conn, invoker)
+			Expect(err).ToNot(HaveOccurred())
+			messages := Parse(buffer)
+			Expect(messages[0]).To(HaveKey("request"))
+			Expect(messages[1]).To(HaveKey("response"))
 		})
 
 		It("Omits customer network status messages and details on failed Create", func() {
 			const resourceID = "customer-network-resource-id"
-			method := "/osac.private.v1.ExternalIPAttachments/Create"
+			method := "/osac.private.v1.ExternalIPs/Create"
 			rpcStatus, err := grpcstatus.New(grpccodes.FailedPrecondition,
 				"ExternalIP "+resourceID+" is not ready").WithDetails(&errdetails.ErrorInfo{
 				Reason:   "DEPENDENCY_NOT_READY",
@@ -406,6 +427,15 @@ var _ = Describe("Interceptor", func() {
 			Expect(responseMessage).ToNot(HaveKey("details"))
 			Expect(responseMessage).ToNot(HaveKey("error"))
 			Expect(buffer.String()).ToNot(ContainSubstring(resourceID))
+
+			buffer.Reset()
+			method = "/test.Service/TestMethod"
+			err = interceptor.UnaryClient(ctx, method, testsv1.Object_builder{Id: resourceID}.Build(), nil,
+				conn, invoker)
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			messages = Parse(buffer)
+			Expect(messages[1]).To(HaveKeyWithValue("message", "ExternalIP "+resourceID+" is not ready"))
+			Expect(messages[1]).To(HaveKey("details"))
 		})
 
 		It("Logs gRPC errors in unary client calls", func() {
@@ -548,6 +578,20 @@ var _ = Describe("Interceptor", func() {
 				"/osac.public.v1.ExternalIPPools/List",
 				"/osac.public.v1.ExternalIPAttachments/Get",
 				"/osac.public.v1.ExternalIPAttachments/List",
+				"/osac.private.v1.ExternalIPAttachments/Get",
+				"/osac.private.v1.ExternalIPAttachments/List",
+				"/osac.private.v1.ExternalIPs/Get",
+				"/osac.private.v1.ExternalIPs/List",
+				"/osac.private.v1.ExternalIPPools/Get",
+				"/osac.private.v1.ExternalIPPools/List",
+				"/osac.private.v1.NATGateways/Get",
+				"/osac.private.v1.NATGateways/List",
+				"/osac.private.v1.VirtualNetworks/Get",
+				"/osac.private.v1.VirtualNetworks/List",
+				"/osac.private.v1.Subnets/Get",
+				"/osac.private.v1.Subnets/List",
+				"/osac.private.v1.SecurityGroups/Get",
+				"/osac.private.v1.SecurityGroups/List",
 				"/osac.public.v1.NATGateways/Get",
 				"/osac.public.v1.NATGateways/List",
 			}
@@ -571,11 +615,25 @@ var _ = Describe("Interceptor", func() {
 				Expect(messages[1]).To(HaveKeyWithValue("method", method))
 				Expect(buffer.String()).ToNot(ContainSubstring("customer-network-resource-id"))
 			}
+
+			buffer.Reset()
+			request := testsv1.Object_builder{Id: "unrelated-resource-id"}.Build()
+			response := testsv1.Object_builder{Id: "unrelated-resource-id"}.Build()
+			result, err := interceptor.UnaryServer(ctx, request,
+				&grpc.UnaryServerInfo{FullMethod: "/test.Service/TestMethod"},
+				func(context.Context, any) (any, error) {
+					return response, nil
+				})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result).To(BeIdenticalTo(response))
+			messages := Parse(buffer)
+			Expect(messages[0]).To(HaveKey("request"))
+			Expect(messages[1]).To(HaveKey("response"))
 		})
 
 		It("Omits customer network errors on failed Create", func() {
 			const resourceID = "customer-network-resource-id"
-			method := "/osac.public.v1.ExternalIPAttachments/Create"
+			method := "/osac.private.v1.ExternalIPs/Create"
 			rpcStatus, err := grpcstatus.New(grpccodes.FailedPrecondition,
 				"ExternalIP "+resourceID+" is not ready").WithDetails(&errdetails.ErrorInfo{
 				Reason:   "DEPENDENCY_NOT_READY",
@@ -601,6 +659,20 @@ var _ = Describe("Interceptor", func() {
 			Expect(responseMessage).To(HaveKeyWithValue("code", "FailedPrecondition"))
 			Expect(responseMessage).ToNot(HaveKey("error"))
 			Expect(buffer.String()).ToNot(ContainSubstring(resourceID))
+
+			buffer.Reset()
+			method = "/test.Service/TestMethod"
+			info = &grpc.UnaryServerInfo{FullMethod: method}
+			response, err = interceptor.UnaryServer(ctx, testsv1.Object_builder{Id: resourceID}.Build(), info,
+				func(context.Context, any) (any, error) {
+					return nil, rpcError
+				})
+			Expect(response).To(BeNil())
+			Expect(err).To(BeIdenticalTo(rpcError))
+			logOutput := buffer.String()
+			messages = Parse(buffer)
+			Expect(messages[1]).To(HaveKey("error"))
+			Expect(logOutput).To(ContainSubstring(resourceID))
 		})
 	})
 

@@ -1,0 +1,21 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $ns := include "osac-observability.namespace" . -}}
+{{- /* One list, mounted by both admin proxies. The entries mirror
+       allowlist.DefaultSpecifiers in osac-observability/internal/allowlist;
+       the proxy fails closed on an empty file and falls back to these same
+       five paths when the file is absent. */ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osac-observability-query-allowlist
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+data:
+  endpoints: |
+    /api/v1/query
+    /api/v1/query_range
+    /api/v1/series
+    /api/v1/labels
+    /api/v1/label/<name>/values
+{{- end }}

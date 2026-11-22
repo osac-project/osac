@@ -105,4 +105,45 @@ spec:
       port: 10901
       targetPort: grpc
       protocol: TCP
+---
+# The admin Routes reach these Services, never Thanos Query directly: each
+# Service selects one proxy Deployment by its per-workload instance label and
+# sends the request to the authentication proxy first.
+apiVersion: v1
+kind: Service
+metadata:
+  name: thanos-query-admin
+  namespace: {{ $ns }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: thanos
+    app.kubernetes.io/instance: thanos-query-admin
+    app.kubernetes.io/component: query-auth-proxy
+  ports:
+    - name: http
+      port: 9091
+      targetPort: oauth2-proxy
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: thanos-query-admin-openshift
+  namespace: {{ $ns }}
+  labels:
+    {{- $labels | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: thanos
+    app.kubernetes.io/instance: thanos-query-admin-openshift
+    app.kubernetes.io/component: query-auth-proxy
+  ports:
+    - name: http
+      port: 9091
+      targetPort: oauth-proxy
+      protocol: TCP
 {{- end }}

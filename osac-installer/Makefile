@@ -433,6 +433,11 @@ helm-template: ## Dry-run render all templates
 
 .PHONY: helm-unit
 helm-unit: helm-deps ## Run Helm unit tests
+	@helm plugin list | grep -q '^unittest' || { \
+		echo "ERROR: the helm-unittest plugin is required. Install it with:" >&2; \
+		echo "  helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.8.2" >&2; \
+		exit 1; \
+	}
 	helm unittest $(OSAC_CHART) -s=false
 	helm unittest ../osac-metering/charts/osac-metering
 	helm unittest ../fulfillment-service/charts/service

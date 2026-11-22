@@ -194,6 +194,33 @@ cannot express (duplicated Netris config, inverted port ranges, networking
 facade vs low-level surface mismatches).
 */}}
 {{- define "osac.validateValues" -}}
+{{- /* Observability is declared twice: the top-level block is the contract the
+     umbrella templates read, and global.observability is the copy that reaches
+     subcharts. This check always runs on every render. */ -}}
+{{- $observability := .Values.observability | default dict -}}
+{{- $globalValues := .Values.global | default dict -}}
+{{- $globalObservability := $globalValues.observability | default dict -}}
+{{- if ne (hasKey .Values "observability") (hasKey $globalValues "observability") -}}
+  {{- fail "observability and global.observability must both be set: Helm propagates only global values into subcharts" }}
+{{- end -}}
+{{- $observabilityEnabled := $observability.enabled | default false | toString -}}
+{{- $globalObservabilityEnabled := $globalObservability.enabled | default false | toString -}}
+{{- if ne $observabilityEnabled $globalObservabilityEnabled -}}
+  {{- fail (printf "observability.enabled (%s) and global.observability.enabled (%s) must match" $observabilityEnabled $globalObservabilityEnabled) }}
+{{- end -}}
+{{- $observabilityCollection := $observability.collection | default dict -}}
+{{- $globalObservabilityCollection := $globalObservability.collection | default dict -}}
+{{- $observabilityInterval := $observabilityCollection.osacControlPlane | default "30s" | toString -}}
+{{- $globalObservabilityInterval := $globalObservabilityCollection.osacControlPlane | default "30s" | toString -}}
+{{- if ne $observabilityInterval $globalObservabilityInterval -}}
+  {{- fail (printf "observability.collection.osacControlPlane (%q) and global.observability.collection.osacControlPlane (%q) must match" $observabilityInterval $globalObservabilityInterval) }}
+{{- end -}}
+{{- $observabilityPattern := "^([0-9]+(ms|s|m|h|d|w|y))+$" -}}
+{{- range $key, $value := dict "observability.collection.osacControlPlane" $observabilityInterval "global.observability.collection.osacControlPlane" $globalObservabilityInterval -}}
+  {{- if or (not (regexMatch $observabilityPattern $value)) (not (regexMatch "[1-9]" $value)) -}}
+    {{- fail (printf "%s must be a positive Prometheus duration (got %q)" $key $value) }}
+  {{- end -}}
+{{- end -}}
 {{- $networking := include "osac.networking.effective" . | fromYaml -}}
 {{- $expert := .Values.global.expertOverrides | default dict -}}
 {{- $netris := $networking.netris | default dict -}}
@@ -324,11 +351,5 @@ facade vs low-level surface mismatches).
 {{- $syncInterval := $nm.capabilitiesSyncInterval | default "5m" -}}
 {{- if not (regexMatch "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$" ($syncInterval | toString)) }}
   {{- fail (printf "operator.networkManagers.capabilitiesSyncInterval must be a valid Go duration (got %q)" $syncInterval) }}
-{{- end }}
-{{- $observability := .Values.observability | default dict -}}
-{{- $collection := $observability.collection | default dict -}}
-{{- $osacInterval := $collection.osacControlPlane | default "30s" | toString -}}
-{{- if or (not (regexMatch "^([0-9]+(ms|s|m|h|d|w|y))+$" $osacInterval)) (not (regexMatch "[1-9]" $osacInterval)) }}
-  {{- fail (printf "observability.collection.osacControlPlane must be a positive Prometheus duration (got %q)" $osacInterval) }}
 {{- end }}
 {{- end -}}

@@ -1006,21 +1006,36 @@ type AuditRecord_builder struct {
 	// Resources without a standalone reference message are not represented here.
 
 	// Fields of oneof TargetObject:
-	AddOnOperator                *AddOnOperatorReference
+	// The affected add-on operator.
+	AddOnOperator *AddOnOperatorReference
+	// The affected bare-metal instance catalog item.
 	BareMetalInstanceCatalogItem *BareMetalInstanceCatalogItemReference
-	ClusterCatalogItem           *ClusterCatalogItemReference
-	ClusterTemplate              *ClusterTemplateReference
-	ClusterVersion               *ClusterVersionReference
-	ComputeInstanceCatalogItem   *ComputeInstanceCatalogItemReference
-	ComputeInstanceTemplate      *ComputeInstanceTemplateReference
-	StorageTier                  *StorageTierReference
-	DiskImage                    *DiskImageReference
-	ExternalIpPool               *ExternalIPPoolReference
-	InstanceType                 *InstanceTypeReference
-	Secret                       *SecretReference
-	Role                         *RoleReference
-	ServiceAccount               *ServiceAccountReference
-	TargetUser                   *UserReference
+	// The affected cluster catalog item.
+	ClusterCatalogItem *ClusterCatalogItemReference
+	// The affected cluster template.
+	ClusterTemplate *ClusterTemplateReference
+	// The affected cluster version.
+	ClusterVersion *ClusterVersionReference
+	// The affected compute instance catalog item.
+	ComputeInstanceCatalogItem *ComputeInstanceCatalogItemReference
+	// The affected compute instance template.
+	ComputeInstanceTemplate *ComputeInstanceTemplateReference
+	// The affected storage tier.
+	StorageTier *StorageTierReference
+	// The affected disk image.
+	DiskImage *DiskImageReference
+	// The affected external IP pool.
+	ExternalIpPool *ExternalIPPoolReference
+	// The affected instance type.
+	InstanceType *InstanceTypeReference
+	// The affected secret.
+	Secret *SecretReference
+	// The affected role.
+	Role *RoleReference
+	// The affected service account.
+	ServiceAccount *ServiceAccountReference
+	// The affected user.
+	TargetUser *UserReference
 	// -- end of TargetObject
 	// Outcome of the action, such as success or failure.
 	Outcome string
@@ -1100,62 +1115,77 @@ type isAuditRecord_TargetObject interface {
 }
 
 type AuditRecord_AddOnOperator struct {
+	// The affected add-on operator.
 	AddOnOperator *AddOnOperatorReference `protobuf:"bytes,7,opt,name=add_on_operator,json=addOnOperator,proto3,oneof"`
 }
 
 type AuditRecord_BareMetalInstanceCatalogItem struct {
+	// The affected bare-metal instance catalog item.
 	BareMetalInstanceCatalogItem *BareMetalInstanceCatalogItemReference `protobuf:"bytes,8,opt,name=bare_metal_instance_catalog_item,json=bareMetalInstanceCatalogItem,proto3,oneof"`
 }
 
 type AuditRecord_ClusterCatalogItem struct {
+	// The affected cluster catalog item.
 	ClusterCatalogItem *ClusterCatalogItemReference `protobuf:"bytes,12,opt,name=cluster_catalog_item,json=clusterCatalogItem,proto3,oneof"`
 }
 
 type AuditRecord_ClusterTemplate struct {
+	// The affected cluster template.
 	ClusterTemplate *ClusterTemplateReference `protobuf:"bytes,13,opt,name=cluster_template,json=clusterTemplate,proto3,oneof"`
 }
 
 type AuditRecord_ClusterVersion struct {
+	// The affected cluster version.
 	ClusterVersion *ClusterVersionReference `protobuf:"bytes,14,opt,name=cluster_version,json=clusterVersion,proto3,oneof"`
 }
 
 type AuditRecord_ComputeInstanceCatalogItem struct {
+	// The affected compute instance catalog item.
 	ComputeInstanceCatalogItem *ComputeInstanceCatalogItemReference `protobuf:"bytes,15,opt,name=compute_instance_catalog_item,json=computeInstanceCatalogItem,proto3,oneof"`
 }
 
 type AuditRecord_ComputeInstanceTemplate struct {
+	// The affected compute instance template.
 	ComputeInstanceTemplate *ComputeInstanceTemplateReference `protobuf:"bytes,16,opt,name=compute_instance_template,json=computeInstanceTemplate,proto3,oneof"`
 }
 
 type AuditRecord_StorageTier struct {
+	// The affected storage tier.
 	StorageTier *StorageTierReference `protobuf:"bytes,17,opt,name=storage_tier,json=storageTier,proto3,oneof"`
 }
 
 type AuditRecord_DiskImage struct {
+	// The affected disk image.
 	DiskImage *DiskImageReference `protobuf:"bytes,18,opt,name=disk_image,json=diskImage,proto3,oneof"`
 }
 
 type AuditRecord_ExternalIpPool struct {
+	// The affected external IP pool.
 	ExternalIpPool *ExternalIPPoolReference `protobuf:"bytes,19,opt,name=external_ip_pool,json=externalIpPool,proto3,oneof"`
 }
 
 type AuditRecord_InstanceType struct {
+	// The affected instance type.
 	InstanceType *InstanceTypeReference `protobuf:"bytes,20,opt,name=instance_type,json=instanceType,proto3,oneof"`
 }
 
 type AuditRecord_Secret struct {
+	// The affected secret.
 	Secret *SecretReference `protobuf:"bytes,21,opt,name=secret,proto3,oneof"`
 }
 
 type AuditRecord_Role struct {
+	// The affected role.
 	Role *RoleReference `protobuf:"bytes,22,opt,name=role,proto3,oneof"`
 }
 
 type AuditRecord_ServiceAccount struct {
+	// The affected service account.
 	ServiceAccount *ServiceAccountReference `protobuf:"bytes,23,opt,name=service_account,json=serviceAccount,proto3,oneof"`
 }
 
 type AuditRecord_TargetUser struct {
+	// The affected user.
 	TargetUser *UserReference `protobuf:"bytes,24,opt,name=target_user,json=targetUser,proto3,oneof"`
 }
 

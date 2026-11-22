@@ -20,6 +20,7 @@ global:
   #   service.database.connection[].secret.name: <run id>-db-client-cert
   #   metering.database.connection[].secret.name: <run id>-db-metering-config
   #   metering.database.connection[].secret.name: <run id>-db-metering-client-cert
+  #   operator.aap.url: <aap controller url>/api/controller
   #
   # global.instanceId names every shared-service object the run creates: the
   # database names (<run id>_service, <run id>_metering) and the workload-db
@@ -33,7 +34,68 @@ global:
   # secret keeps its name (fulfillment-service-kafka): it lives in the run's
   # own vcluster, so runs cannot collide on it. eventTopicPrefix stays a
   # separate value because it also carries the metering discovery contract
-  # (see charts/osac/values.yaml).
+  # (see charts/osac/values.yaml). operator.aap.url points the operator at
+  # the shared AAP by its outer route: the in-cluster default
+  # (http://osac-aap/api/controller) does not resolve inside a vcluster.
+  #
+  # --- Suite selection -----------------------------------------------
+  # One profile serves all three suites: the overlay selects the suite with
+  # the keys below, copied from what values/bmaas-ci/instance.yaml and
+  # values/caas-ci/instance.yaml set on top of the VMaaS base. Without any
+  # of them the profile renders VMaaS, exactly as it did before the suite
+  # keys existed. The run name's suite letter (v, b, c) picks the block.
+  #
+  # VMaaS (suite letter v): no suite keys; the profile defaults apply.
+  #
+  # BMaaS (suite letter b):
+  #   global.services.vmaas.enabled: false
+  #   global.services.bmaas.enabled: true
+  #   # No Kubernetes Manager: BMaaS has no VM overlay networking, and its
+  #   # SecurityGroups keep their ICMP rules (see values/bmaas-ci).
+  #   global.networking.k8sManager: ""
+  #   aap.instanceGroups.clusterFulfillment.enabled: true
+  #   bmf.metal3.enabled: true
+  #   bmf.metal3.namespace: <run id>-hosts
+  #   bmf.env.aapUrl: <aap controller url>/api/controller
+  #   bmf.env.aapInsecureSkipVerify: "true"
+  #   # The run's AAP organization prefixes its job template names, so the
+  #   # BMF operator must launch <run id>-create-bare-metal-pool, not
+  #   # osac-create-bare-metal-pool.
+  #   bmf.env.aapTemplatePrefix: <run id>
+  #   bmf.secretAPI.issuerUrl: https://keycloak-keycloak.<domain>/realms/<run id>
+  #   bmf.secretAPI.credentialsSecret: <run id>-fulfillment-controller-credentials
+  #
+  # CaaS (suite letter c) takes the BMaaS keys (CaaS runs the BMF operator
+  # and the BMaaS APIs for its bare-metal workers) plus:
+  #   global.services.caas.enabled: true
+  #   global.services.bmaas.enabled: true
+  #   # vmaas stays enabled: CaaS registers its RHCOS DiskImage through the
+  #   # VMaaS-owned DiskImages API, but provisions no VMs.
+  #   global.services.vmaas.enabled: true
+  #   # agentless_net is the logical fabric manager CaaS BMI validation
+  #   # needs (see values/caas-ci); no Netris connection settings either.
+  #   global.networking.fabricManager: agentless_net
+  #   # The ComputeInstance controller would otherwise turn on with vmaas.
+  #   operator.controllers.computeInstance: false
+  #   # The operator reads the OUTER cluster's ingress CA (MCE's Assisted
+  #   # Service ignition URL) through the remote kubeconfig.
+  #   operator.ignition.trustIngressCA: true
+  #   aap.instanceGroups.clusterFulfillment.config:
+  #     HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY: SingleReplica
+  #     HOSTED_CLUSTER_INFRASTRUCTURE_AVAILABILITY_POLICY: SingleReplica
+  #     # The chart's default derives this from the cluster's ingress
+  #     # lookup, which a vcluster has no API for; hosted clusters live in
+  #     # the outer cluster, so the overlay passes its domain explicitly.
+  #     HOSTED_CLUSTER_BASE_DOMAIN: hosted.<outer domain without apps.>
+  #   clusterVersions.enabled: true
+  #   clusterVersions.versions: <copy of values/caas-ci/instance.yaml's list>
+  #
+  # No per-suite preflight keys: the metal3 checks (requiredFor bmaas) skip
+  # themselves when bmf.remoteClusterKubeconfigSecretName is set, the MCE
+  # check (requiredFor caas) when operator.remoteClusterKubeconfigSecretName
+  # is, and install-osac always sets both for this profile (REMOTE_KUBECONFIG
+  # is required). kubevirt-crds stays in the skipChecks list for every
+  # suite: OpenShift Virtualization is never visible in a vcluster API.
   fulfillmentTrust:
     enabled: false
   services:

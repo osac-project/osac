@@ -2348,6 +2348,11 @@
             "aapTokenSecretKey": {
               "type": "string",
               "description": "Key within the AAP token Secret"
+            },
+            "aapTemplatePrefix": {
+              "type": "string",
+              "description": "Prefix of the AAP job template names the BMF operator launches (<prefix>-create-bare-metal-pool, ...). Empty keeps the operator's 'osac' default; shared-AAP installs set it to their instance ID, like operator.aap.templatePrefix.",
+              "default": ""
             }
           },
           "additionalProperties": false
@@ -2408,6 +2413,11 @@
               "description": "OIDC issuer for the BMF Keycloak service client; must match service.auth.issuerUrl.",
               "default": "https://keycloak-keycloak.{{ .Values.global.clusterDomain }}/realms/osac",
               "pattern": "^https://([^/\\s]+|[^/]*\\{\\{[^}]+\\}\\})"
+            },
+            "credentialsSecret": {
+              "type": "string",
+              "description": "Secret holding the BMF operator's Keycloak client credentials (keys client-id and client-secret) for the Fulfillment Service; keep aligned with operator.fulfillment.credentials.secretName.",
+              "default": "fulfillment-controller-credentials"
             },
             "caBundle": {
               "type": "object",

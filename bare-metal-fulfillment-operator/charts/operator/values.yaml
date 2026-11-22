@@ -40,11 +40,25 @@ env:
   aapTokenSecretName: "osac-aap-api-token"
   aapTokenSecretKey: "token"
   aapInsecureSkipVerify: ""
+  # Prefix of the AAP job template names the operator launches
+  # (<prefix>-create-bare-metal-pool, ...). Empty keeps the operator's own
+  # "osac" default, which matches the config-as-code's fixed organization.
+  # A shared AAP names every object after the deployment's instance ID, so
+  # those installs set this to the same prefix the osac-operator gets
+  # through operator.aap.templatePrefix.
+  aapTemplatePrefix: ""
 
 secretAPI:
   url: "https://fulfillment-internal-api:8001"
   # Must match the OIDC issuer configured for the Fulfillment Service.
   issuerUrl: ""
+  # Secret, in the release namespace, holding the Keycloak client
+  # credentials (keys client-id and client-secret) the operator
+  # authenticates to the Fulfillment Service with. Installs that share one
+  # Keycloak between several deployments name each deployment's client
+  # credentials differently; keep it aligned with
+  # operator.fulfillment.credentials.secretName.
+  credentialsSecret: "fulfillment-controller-credentials"
   caBundle:
     # Fresh installs using system-trusted certificates can leave this empty.
     # Standalone upgrades that relied on the former "ca-bundle" default must

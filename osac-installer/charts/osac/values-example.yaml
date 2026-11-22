@@ -459,6 +459,10 @@ bmf:
     url: "https://fulfillment-internal-api:8001"
     # Must match service.auth.issuerUrl.
     issuerUrl: "https://keycloak.keycloak.svc.cluster.local/realms/osac"
+    # Keycloak client credentials (keys client-id, client-secret) the BMF
+    # operator authenticates with; keep aligned with
+    # operator.fulfillment.credentials.secretName.
+    credentialsSecret: "fulfillment-controller-credentials"
     caBundle:
       # Cluster trust-manager ConfigMap. Set empty to omit this CA mount.
       configMap: "ca-bundle"

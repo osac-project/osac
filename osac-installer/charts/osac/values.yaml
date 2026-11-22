@@ -513,6 +513,11 @@ bmf:
     profiles: "osac-profiles"
   env:
     aapInsecureSkipVerify: "true"
+    # Prefix of the AAP job template names the BMF operator launches. Empty
+    # keeps the operator's own "osac" default; installs that share one AAP
+    # between several deployments set it to their instance ID, like
+    # operator.aap.templatePrefix for the osac-operator.
+    aapTemplatePrefix: ""
   bcm:
     enabled: false
     url: ""
@@ -526,6 +531,11 @@ bmf:
     url: "https://fulfillment-internal-api:8001"
     # Keep aligned with service.auth.issuerUrl; tpl resolves the cluster domain at render time.
     issuerUrl: "https://keycloak-keycloak.{{ .Values.global.clusterDomain }}/realms/osac"
+    # The BMF operator's copy of the controller credentials; keep aligned
+    # with operator.fulfillment.credentials.secretName. The BMF subchart
+    # mounts it as the client-id/client-secret files for its Fulfillment
+    # Service client.
+    credentialsSecret: "fulfillment-controller-credentials"
     caBundle:
       configMap: "ca-bundle"
       key: "bundle.pem"

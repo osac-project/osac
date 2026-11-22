@@ -383,6 +383,13 @@ integration-tests-caas:
 # full stack by design -- so no filter for it exists here.
 integration-tests-fulfillment-service:
   - '{fulfillment-service/**,bare-metal-fulfillment-operator/**,osac-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
+# Real shipped-realm import and CSI private API authorization. Test-only edits
+# also select it; the suite never depends on the deployed E2E approval gate.
+integration-tests-csi-realm-auth:
+  - '{fulfillment-service/**,osac-csi-driver/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/actions/setup-go/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
+  - '!**/*.md'
+  - '!**/docs/**'
+  - '!**/LICENSE'
 integration-tests-osac-operator:
   - '{osac-operator/**,bare-metal-fulfillment-operator/**,proto/**,osac-installer/**,tests/contract/network-task/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 integration-tests-bare-metal-fulfillment-operator:

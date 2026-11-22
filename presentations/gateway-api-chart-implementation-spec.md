@@ -22,11 +22,17 @@ Default stays `envoy` (fully backward compatible). `gatewayapi` is opt-in.
   ClusterIP. The API server rejects an EndpointSlice address that is another
   Service's ClusterIP for non-privileged identities (403, `endpoint address ...
   is not allowed`, even with RBAC allowed) — the same constraint the POC cutover
-  notes recorded. The bridge is maintained by a chart-resource Job in the
-  umbrella chart that resolves the ready gateway Pod IPs from the gateway
-  Service's own EndpointSlices. Known limitation, unchanged from the POC: the
-  slices go stale when gateway Pods are replaced until the next upgrade re-runs
-  the Job; an operator controller remains the follow-up path for that.
+  notes recorded. The bridge is applied by `osac-installer`'s
+  `scripts/gateway-bridge.sh` with the installer's admin credentials. It
+  cannot live in the chart: OpenShift's RestrictedEndpointsAdmission plugin
+  rejects an EndpointSlice address inside the pod or service network for
+  non-privileged identities on BOTH create and update, so an in-cluster Job
+  with a ServiceAccount can never set the address (verified live: every
+  previously green run only worked because admin-applied slices already
+  existed and the Job performed an allowed no-op patch). Known limitation,
+  unchanged from the POC: the slices go stale when gateway Pods are replaced
+  until the bridge script re-runs; an operator controller running as a
+  privileged identity remains the follow-up path for that.
 - **GatewayClass:** cluster-scoped and triggers the CIO istiod install, so it is a
   prerequisite installed by `osac-installer`, not the per-release service chart.
 - **D5 / ISSUE-2:** both are route-config only. No `fulfillment-service` Go change.
@@ -60,7 +66,7 @@ ingress:
     # How in-cluster callers reach the gateway: selectorless Services bridged
     # to the gateway Pod IPs via EndpointSlices. The bridge is NOT the gateway
     # Service ClusterIP: the API server rejects ClusterIP endpoint addresses
-    # for non-privileged identities. The umbrella chart's gateway-bridge Job
+    # for non-privileged identities). The installer's gateway-bridge.sh
     # resolves the Pod IPs at install; set gatewayAddress to render the
     # EndpointSlices statically instead (e.g. for operator-controller setups).
     # Request timeouts. gRPC stream routes MUST be 0s (uncapped); REST stays bounded.
@@ -130,7 +136,7 @@ ingress:
 | `httproute-internal.yaml` | hostnames `internalHostname` + `fulfillment-internal-api`; attached to `internal` + `int-svc`. Same console-ws/jwks; REST `PathPrefix /api`; Connect `Exact` as above; unary `PathPrefix /` -> grpc-server:8000 (`grpcRequestTimeout`). |
 | `backendtlspolicy.yaml` | ×3 (grpc-server / rest-gateway / console-proxy) -> `caCertificateRefs` = `backendCaConfigMap`, `validation.hostname = fulfillment-<svc>.{{ .Release.Namespace }}.svc.cluster.local`. **apiVersion `gateway.networking.k8s.io/v1`** — OpenShift 4.22 CIO serves BackendTLSPolicy at GA v1, not v1alpha3 (caught on the edge-16 greenfield install; the schema shape is unchanged). |
 | `backend-ca-bundle.yaml` | trust-manager `Bundle` -> target ConfigMap `backendCaConfigMap` with key `ca.crt`, sourced from the ClusterIssuer CA. |
-| `bridge.yaml` | Static variant only: when `ingress.gatewayapi.gatewayAddress` is set, renders EndpointSlices wiring the selectorless Services to that address:443 with port names `external-api` / `internal-api`. Otherwise the umbrella chart's gateway-bridge Job owns the bridge (see section 4). Delete-legacy-Endpoints concern disappears because the Services are chart-managed selectorless from the start. |
+| `bridge.yaml` | Static variant only: when `ingress.gatewayapi.gatewayAddress` is set, renders EndpointSlices wiring the selectorless Services to that address:443 with port names `external-api` / `internal-api`. Otherwise the installer's `scripts/gateway-bridge.sh` owns the bridge (see section 4). Delete-legacy-Endpoints concern disappears because the Services are chart-managed selectorless from the start. |
 
 Note: no separate `Watch` route is needed — same backend and `0s` timeout as the
 unary catch-all. Routing is specificity-driven (Exact/Prefix), never dependent on
@@ -141,16 +147,17 @@ RegEx ordering.
 - **GatewayClass** prerequisite (cluster-scoped) in the deps/prereq layer, rendered
   when gateway mode is enabled, with the `Accepted` / `ControllerInstalled` /
   `CRDsReady` readiness wait and a check that no `servicemesh` Subscription appears.
-- **gateway-bridge Job** (`charts/osac/templates/gateway-bridge.yaml` +
-  `files/gateway-bridge.sh`), a regular chart resource (NOT a post-install hook —
-  the callers crash-loop until the bridge exists, which deadlocks any hook gated
-  on release readiness under `helm --wait`). SA + Role in the release namespace
-  (endpointslices get/list/create/update/patch) + Role in the gateway namespace
-  (get the gateway Service; get/list its EndpointSlices for the Pod IPs).
-  `backoffLimit: 3`, `activeDeadlineSeconds: 1800` (container startup alone can
-  take ~15m on a busy SNO), `ttlSecondsAfterFinished: 300` so a later upgrade
-  with a changed spec can recreate the immutable Job. Rendered only when the
-  driver is `gatewayapi` and no static `gatewayAddress` is set.
+- **gateway-bridge script** (`scripts/gateway-bridge.sh`), run by
+  `make install-osac` with `INGRESS_DRIVER=gatewayapi` (which also sets
+  `service.ingress.driver=gatewayapi`). Launched in the background around
+  `helm --wait`: it waits for the ready gateway Pod IPs (resolved from the
+  gateway Service's own EndpointSlices) and applies the bridge EndpointSlices
+  with the installer's admin credentials, so the caller pods converge inside
+  the wait window. The bridge slices are not helm-owned; `make uninstall-osac`
+  deletes them explicitly. There is no chart-resource bridge:
+  RestrictedEndpointsAdmission denies non-privileged identities any
+  endpoint-address write (create and update alike), which is why the earlier
+  chart Job design could never work.
 - **Enable per profile** via a CI overlay / profile values passthrough:
   ```yaml
   fulfillment-service:

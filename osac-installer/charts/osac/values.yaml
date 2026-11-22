@@ -230,7 +230,7 @@ service:
       # In-cluster reachable address of the gateway (a Pod IP; an
       # EndpointSlice address may NOT be another Service's ClusterIP —
       # the API server rejects it for non-privileged identities). Leave
-      # empty: the installer's gateway-bridge chart-resource Job resolves
+      # empty: the installer's scripts/gateway-bridge.sh resolves
       # the ready gateway Pod IPs and maintains the bridge EndpointSlices.
       gatewayAddress: ""
       # Request timeouts. gRPC stream routes MUST stay 0s (uncapped).

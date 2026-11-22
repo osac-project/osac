@@ -85,7 +85,7 @@ ingress:
     # In-cluster reachable address of the gateway (a Pod IP; an EndpointSlice
     # address may NOT be another Service's ClusterIP — the API server rejects
     # it for non-privileged identities). When empty the bridge EndpointSlices
-    # are not rendered here and the umbrella chart's gateway-bridge Job
+    # are not rendered here and the installer's gateway-bridge.sh
     # maintains them against the ready gateway Pod IPs.
     gatewayAddress: ""
     # Request timeouts. gRPC stream routes MUST be 0s (uncapped); REST stays bounded.

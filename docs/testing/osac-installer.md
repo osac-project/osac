@@ -63,7 +63,6 @@ Kind development cluster.
 
 | Tier | Real | Faked or not covered |
 |---|---|---|
-| Unit ([DEV] OSAC-6566, OSAC-6562) | Helm rendering of the real chart, the engine, catalog, report and failure message | The cluster: `lookup`, capabilities, release revision are mocked. The plugin's fake client rejects a LIST of a kind with no objects, so empty-list branches are not covered |
 | Harness unit | CRD readiness deadlines and fixture-error diagnostics, through the preflight harness script under `scripts/` | Commands and time are mocked; does not replace the Kind tier. Runs in the installer unit-test CI leg |
 | Helm contract | Offline `helm template` of the umbrella and CSI charts, report schema validation, catalog consistency, the packaged archive | No cluster. Asserts the log policy on every hook Job, CSI hook deadlines, that an offline render never blocks, that `preflight.*` values are closed by the schema, and that `helm package` ships the catalog, schema and preflight templates |
 | Component integration ([DEV] OSAC-6566) | Multiple Helm majors, a real API server, real `lookup`, release Secrets, hooks, failed-hook logs | A preflight-only chart copy (no workloads); stub CRDs, a Service with an EndpointSlice, Secrets; OpenShift-only checks run as `skipped: not OpenShift` |
@@ -86,11 +85,8 @@ Coverage gaps:
   `helm template --dry-run=server -s templates/preflight/report.yaml` works
   anywhere; on Helm 4 the failing render's JSON line is the portable channel.
 
-The `helm unittest` suites for the `osac-infra` chart run in the same
-helm-unit CI leg as the umbrella-chart unit tier. They render-test the
-monitoring and exporter templates only, not a live exporter or Prometheus;
-see the [osac-metering guide](osac-metering.md) for the reader boundaries
-and remaining gaps.
+Offline render checks do not establish a live exporter or Prometheus;
+see the [osac-metering guide](osac-metering.md) for reader boundaries and gaps.
 
 ## OSAC-5343 deployed enablement coverage
 

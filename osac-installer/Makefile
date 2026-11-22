@@ -13,7 +13,7 @@
 #   make install-osac    PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
 #   make uninstall-osac  PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
 #   make uninstall-infra PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac
-#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac  SUITE=all|fulfillment|compute-storage|operator|bmf
+#   make test            PLATFORM=kind|openshift  PROFILE=dev|dev-full|vmaas-ci|bmaas-ci|bmaas-netbox-ci|caas-ci|full-ci  NS=osac  SUITE=all|fulfillment|compute-storage|operator|bmf|caas
 #
 # PROFILE=dev-full (kind only) is a superset of dev: it runs the same chart-based
 # control plane, then layers on the full local dev stack (KubeVirt/CDI/Multus, AWX,
@@ -112,13 +112,13 @@ export NS
 # Make-level default, so an unconditional freeze is safe.
 override REMOTE_KUBECONFIG := $(value REMOTE_KUBECONFIG)
 export REMOTE_KUBECONFIG
-# Freeze a caller-supplied KUBECONFIG here, before the first parse-time
-# $(shell ...) call: make expands command-line variables when it exports them
-# into a shell function's environment, so a Make expression in the value would
-# run there even though nothing reads KUBECONFIG yet. The kind-file default
-# and the export are applied below, where KIND_KUBECONFIG is known.
+# Freeze caller-supplied kubeconfig paths before any parse-time shell calls.
+# Make exports command-line variables to those calls and expands recursive values.
 ifneq ($(filter command line environment override,$(origin KUBECONFIG)),)
 override KUBECONFIG := $(value KUBECONFIG)
+endif
+ifeq ($(origin KIND_KUBECONFIG),command line)
+override KIND_KUBECONFIG := $(value KIND_KUBECONFIG)
 endif
 
 # oc names the kubeconfig file in its own errors, and that path can carry
@@ -150,11 +150,13 @@ endif
 # disable, or set a different value to experiment.
 GODEBUG ?= http2client=0
 TOPOLVM_BACKING_SIZE ?= 20G
+# Ordinary Kind suites use placeholders; native-provider suites supply their APIs.
+KIND_FAKE_CRDS ?= true
 
 # -- Fail-fast parameter validation ------------------------------------
 # Guards fire at parse time, gated by MAKECMDGOALS so `make help` works.
 
-ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-build-load-images validate-inputs kind-load-images test
+ALL_TARGETS := install install-multicluster uninstall install-infra uninstall-infra install-osac uninstall-osac install-devstack kind-build-load-images validate-inputs kind-load-images test test-platform-images
 
 ifneq ($(filter $(ALL_TARGETS),$(MAKECMDGOALS)),)
 ifndef PLATFORM
@@ -246,10 +248,15 @@ endif
 SUITE_TARGETS := test
 ifneq ($(filter $(SUITE_TARGETS),$(MAKECMDGOALS)),)
 ifndef SUITE
-$(error SUITE is required (all|fulfillment|compute-storage|operator|bmf))
+$(error SUITE is required (all|fulfillment|compute-storage|operator|bmf|caas))
 endif
-ifeq ($(filter $(SUITE),all fulfillment compute-storage operator bmf),)
-$(error SUITE=$(SUITE) is invalid; must be all, fulfillment, compute-storage, operator, or bmf)
+ifeq ($(filter $(SUITE),all fulfillment compute-storage operator bmf caas),)
+$(error SUITE=$(SUITE) is invalid; must be all, fulfillment, compute-storage, operator, bmf, or caas)
+endif
+ifeq ($(SUITE),caas)
+ifneq ($(PLATFORM)/$(PROFILE)/$(NS),kind/dev/osac)
+$(error SUITE=caas requires PLATFORM=kind PROFILE=dev NS=osac)
+endif
 endif
 ifeq ($(MCP_TEST_ENABLED),true)
 ifneq ($(PLATFORM),kind)
@@ -458,6 +465,13 @@ KIND_KUBECONFIG := $(HOME)/.kube/$(KIND_CLUSTER_NAME)-kind-root.kubeconfig
 else
 KIND_KUBECONFIG := $(HOME)/.kube/$(KIND_CLUSTER_NAME)-kind.kubeconfig
 endif
+export KIND_KUBECONFIG
+# Kind installs use the exported file and the context for the selected cluster.
+ifeq ($(PLATFORM),kind)
+KIND_INSTALL_TARGET = --kubeconfig "$$KIND_KUBECONFIG"
+INSTALL_HELM_TARGET = $(KIND_INSTALL_TARGET) --kube-context "kind-$(KIND_CLUSTER_NAME)"
+KIND_KUBECTL_TARGET = $(KIND_INSTALL_TARGET) --context "kind-$(KIND_CLUSTER_NAME)"
+endif
 # Use the caller's KUBECONFIG if they set a non-empty one. An empty-but-defined
 # value still gets a default, because a shell that exports KUBECONFIG= would
 # otherwise leave helm/kubectl on localhost:8080. The default is the kind file
@@ -467,7 +481,8 @@ endif
 # here it is only compared through $(value ...) so a Make expression in it
 # cannot expand. The defaults need override because the frozen value carries
 # origin "override", which a plain assignment cannot replace.
-ifeq ($(strip $(value KUBECONFIG)),)
+KUBECONFIG_DEFAULTED := $(if $(strip $(value KUBECONFIG)),false,true)
+ifeq ($(KUBECONFIG_DEFAULTED),true)
 ifeq ($(PLATFORM),kind)
 override KUBECONFIG := $(KIND_KUBECONFIG)
 else
@@ -490,29 +505,7 @@ define kind-load-local-image
 	CONTAINER_TOOL="$(CONTAINER_TOOL)" "$(KIND_LOAD_IMAGE_SCRIPT)" "$(1)"
 endef
 
-define kind-load-image
-	@if [ "$(KIND_RUNTIME_REQUIRED)" = "true" ]; then \
-		tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
-		trap 'rm -f "$$tmpfile"' EXIT; \
-		$(KIND_RUNTIME_CMD) container save $(1) > "$$tmpfile"; \
-		$(KIND_RUNTIME_CMD) load image-archive "$$tmpfile" --name $(KIND_CLUSTER_NAME); \
-	elif [ "$$(basename $(CONTAINER_TOOL))" = "podman" ]; then \
-		tmpfile=$$(mktemp /tmp/kind-image-XXXXXX.tar); \
-		trap 'rm -f "$$tmpfile"' EXIT; \
-		$(CONTAINER_TOOL) save $(1) -o "$$tmpfile"; \
-		kind load image-archive "$$tmpfile" --name $(KIND_CLUSTER_NAME); \
-	else \
-		kind load docker-image $(1) --name $(KIND_CLUSTER_NAME); \
-	fi
-endef
-
-define kind-container-build
-	@if [ "$(KIND_RUNTIME_REQUIRED)" = "true" ]; then \
-		$(KIND_RUNTIME_CMD) container build $(1); \
-	else \
-		$(CONTAINER_TOOL) build $(1); \
-	fi
-endef
+include scripts/kind-images.mk
 
 # -- Help --------------------------------------------------------------
 
@@ -564,53 +557,61 @@ install-infra: validate-inputs helm-infra-deps ## Install infrastructure (PLATFO
 ifeq ($(PLATFORM),kind)
 ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME_CMD) check
-	@$(KIND_RUNTIME_CMD) create-cluster $(KIND_CLUSTER_NAME) $(KIND_CONFIG) $(KIND_KUBECONFIG)
+	@$(KIND_RUNTIME_CMD) create-cluster "$(KIND_CLUSTER_NAME)" "$(KIND_CONFIG)" "$$KIND_KUBECONFIG"
 else ifeq ($(PROFILE),dev-full)
 	@$(KIND_RUNTIME_CMD) check
-	@$(KIND_RUNTIME_CMD) create-cluster $(KIND_CLUSTER_NAME) $(KIND_CONFIG) $(KIND_KUBECONFIG)
+	@$(KIND_RUNTIME_CMD) create-cluster "$(KIND_CLUSTER_NAME)" "$(KIND_CONFIG)" "$$KIND_KUBECONFIG"
 else
-	@if kind get nodes --name $(KIND_CLUSTER_NAME) | grep -q .; then \
+	@source scripts/lib.sh; \
+	if kind get nodes --name "$(KIND_CLUSTER_NAME)" | grep -q .; then \
 		echo "Kind cluster '$(KIND_CLUSTER_NAME)' already exists"; \
 	else \
 		echo "Creating Kind cluster '$(KIND_CLUSTER_NAME)'..."; \
-		kind create cluster --name $(KIND_CLUSTER_NAME) --config $(KIND_CONFIG) --wait 60s; \
+		create_kind_cluster kind "$(KIND_CLUSTER_NAME)" "$(KIND_CONFIG)"; \
 	fi; \
 	if [[ "$${KIND_EXPERIMENTAL_PROVIDER:-}" == podman ]]; then \
-		source scripts/lib.sh; \
 		ensure_podman_pid_limits "$(KIND_CLUSTER_NAME)" kind podman; \
 	fi; \
-	kind export kubeconfig --name $(KIND_CLUSTER_NAME) --kubeconfig $(KIND_KUBECONFIG)
+	kind export kubeconfig --name "$(KIND_CLUSTER_NAME)" $(KIND_INSTALL_TARGET); \
+	printf 'Use: kubectl cluster-info --context %q --kubeconfig %q\n' "kind-$(KIND_CLUSTER_NAME)" "$$KIND_KUBECONFIG"
 endif
 ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME_ENV) $(KIND_ARM64_CLI_IMAGE_SCRIPT) $(KIND_CLUSTER_NAME) $(KIND_ARM64_CLI_IMAGE)
 endif
 	helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager \
 		--version v1.20.0 --namespace cert-manager --create-namespace \
-		--set crds.enabled=true --wait --timeout 5m
+		--set crds.enabled=true $(INSTALL_HELM_TARGET) --wait --timeout 5m
 	helm upgrade --install trust-manager oci://quay.io/jetstack/charts/trust-manager \
 		--version v0.22.0 --namespace cert-manager \
-		--set defaultPackage.enabled=false --wait --timeout 5m
+		--set defaultPackage.enabled=false $(INSTALL_HELM_TARGET) --wait --timeout 5m
 	helm upgrade --install envoy-gateway oci://docker.io/envoyproxy/gateway-helm \
 		--version v1.6.5 --namespace envoy-gateway --create-namespace \
-		--wait --timeout 5m
+		$(INSTALL_HELM_TARGET) --wait --timeout 5m
 	helm upgrade --install strimzi-cluster-operator oci://quay.io/strimzi-helm/strimzi-kafka-operator \
 		--version 1.1.0 --namespace osac-kafka --create-namespace \
-		--wait --timeout 5m
+		$(INSTALL_HELM_TARGET) --wait --timeout 5m
 	helm upgrade --install osac-infra $(INFRA_CHART) \
 		--namespace osac-infra --create-namespace \
 		-f $(INFRA_VALUES) $${INFRA_VALUES_EXTRA} \
 		--set osacNamespace=$(NS) \
-		$(INFRA_HELM_ARGS) \
+		$(INFRA_HELM_ARGS) --set fakeCrds.enabled=$(KIND_FAKE_CRDS) \
 		$(OIDC_IDP_CA_HELM_ARGS) \
-		--wait-for-jobs --timeout 30m \
-	|| { echo "=== osac-infra hook jobs ==="; kubectl get jobs,pods,cm -n osac-infra || true; kubectl logs -n osac-infra -l job-name=osac-infra-apply-ca-bundle --tail=200 || true; kubectl get deploy,endpoints,certificate -n cert-manager || true; exit 1; }
-	@bash -c 'source scripts/lib.sh && wait_for_infra_ready kubectl'
+		$(INSTALL_HELM_TARGET) --wait-for-jobs --timeout 30m \
+	|| { echo "=== osac-infra hook jobs ==="; \
+		kubectl $(KIND_KUBECTL_TARGET) get jobs,pods,cm -n osac-infra || true; \
+		kubectl $(KIND_KUBECTL_TARGET) logs -n osac-infra -l job-name=osac-infra-apply-ca-bundle --tail=200 || true; \
+		kubectl $(KIND_KUBECTL_TARGET) get deploy,endpoints,certificate -n cert-manager || true; exit 1; }
+	@source scripts/lib.sh; \
+	kind_kubectl() { kubectl $(KIND_KUBECTL_TARGET) "$$@"; }; \
+	wait_for_infra_ready kind_kubectl
+ifeq ($(KIND_FAKE_CRDS),true)
 	@for f in ../osac-operator/config/crd/fakes/*.yaml; do \
 		case "$$(basename "$$f")" in \
 			*osac.openshift.io*|kustomization.*) continue ;; \
 		esac; \
-		kubectl apply --server-side --force-conflicts -f "$$f"; \
+		kubectl $(KIND_KUBECTL_TARGET) apply --server-side --force-conflicts -f "$$f"; \
 	done
+endif
 else
 	$(eval OCP_VERSION := $(shell oc get clusterversion version -o jsonpath='{.status.desired.version}' $(OC_QUERY_STDERR) | cut -d. -f1,2 | grep -Eo '^[0-9]+\.[0-9]+' | head -1))
 	@bash -c 'source scripts/lib.sh && \
@@ -828,7 +829,7 @@ ifeq ($(PLATFORM),kind)
 		--namespace osac-infra \
 		-f $(INFRA_VALUES) $${INFRA_VALUES_EXTRA} \
 		--set osacNamespace=$(NS) \
-		$(INFRA_HELM_ARGS) \
+		$(INFRA_HELM_ARGS) --set fakeCrds.enabled=$(KIND_FAKE_CRDS) \
 		$(OIDC_IDP_CA_HELM_ARGS) \
 	|| { echo "ERROR: invalid installer inputs for osac-infra; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
 	@export NETBOX_SEED_WILL_RUN=$(NETBOX_SEED_WILL_RUN); source scripts/lib.sh && split_argv EXTRA_HELM_ARGS "$${EXTRA_HELM_ARGS}" && \
@@ -836,7 +837,7 @@ ifeq ($(PLATFORM),kind)
 		--namespace osac-infra \
 		-f $(INFRA_VALUES) $${INFRA_VALUES_EXTRA} \
 		--set osacNamespace=$(NS) \
-		$(INFRA_HELM_ARGS) $(OIDC_IDP_CA_HELM_ARGS) && \
+		$(INFRA_HELM_ARGS) --set fakeCrds.enabled=$(KIND_FAKE_CRDS) $(OIDC_IDP_CA_HELM_ARGS) && \
 	render_osac_chart_offline "$(NETBOX_OFFLINE_PLACEHOLDER)" \
 		osac "$${OSAC_CHART_OCI_REF:-$(OSAC_CHART)}" $${OSAC_CHART_OCI_VERSION:+--version "$${OSAC_CHART_OCI_VERSION}"} \
 		-f $(INSTANCE_VALUES) $${INSTANCE_VALUES_EXTRA} \
@@ -969,7 +970,7 @@ endif
 		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac --set ui.externalHostname=$(UI_HOSTNAME)) \
 		$(INSTANCE_HELM_ARGS) \
 		$${ARGV[@]+"$${ARGV[@]}"} $(OSAC_HELM_FORCE_CONFLICTS) $(REMOTE_CLUSTER_HELM_ARGS) \
-		--wait --timeout 40m
+		$(INSTALL_HELM_TARGET) --wait --timeout 40m
 .PHONY: uninstall-osac
 uninstall-osac: validate-ns ## Uninstall OSAC instance (PLATFORM= PROFILE= NS= required)
 	helm uninstall osac --namespace $(NS) --ignore-not-found
@@ -982,7 +983,7 @@ ifneq ($(PLATFORM)/$(PROFILE),kind/dev-full)
 	@echo "ERROR: install-devstack requires PLATFORM=kind PROFILE=dev-full" >&2; exit 1
 endif
 	@case "$(HELM_MAJOR)" in 3|4) ;; *) echo "ERROR: install-devstack requires Helm 3 or 4; could not detect a supported Helm version" >&2; exit 1;; esac
-	$(DEVSTACK_CLUSTER_CHECK)
+	$(if $(DEVSTACK_CLUSTER_CHECK),$(DEVSTACK_CLUSTER_CHECK) $(KIND_KUBECTL_TARGET))
   # Pre-install: node-level CNI setup (requires host container runtime access)
 	$(KIND_RUNTIME_ENV) scripts/dev-full/install-virt-node-setup.sh $(KIND_CLUSTER_NAME)
 ifeq ($(HELM_MAJOR),4)
@@ -1001,7 +1002,7 @@ endif
 		$(DEVSTACK_HELM_ARGS) \
 		--post-renderer $(DEV_FULL_HELM_POST_RENDERER) \
 		$(DEVSTACK_HELM_APPLY_ARGS) \
-		--wait --timeout 30m
+		$(INSTALL_HELM_TARGET) --wait --timeout 30m
 
 ##@ Composite
 
@@ -1090,7 +1091,7 @@ ifeq ($(PLATFORM),kind)
 		--namespace osac-infra \
 		-f $(INFRA_VALUES) $${INFRA_VALUES_EXTRA} \
 		--set osacNamespace=$(NS) \
-		$(INFRA_HELM_ARGS) \
+		$(INFRA_HELM_ARGS) --set fakeCrds.enabled=$(KIND_FAKE_CRDS) \
 		$(OIDC_IDP_CA_HELM_ARGS)
 else
 	helm template osac-deps $(DEPS_CHART) \
@@ -1225,8 +1226,26 @@ uninstall: uninstall-osac uninstall-infra ## Full uninstall: osac + infra (PLATF
 METERING_IT_IMAGE := localhost/metering-service:it
 METERING_IT_IMAGE_ARGS := --set metering.image.repository=localhost/metering-service --set metering.image.tag=it --set metering.image.pullPolicy=Never
 
+.PHONY: test-platform-images
+test-platform-images: validate-ns ## Build and load the API, metering and operator images used by integration suites
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
+	$(call kind-load-image,localhost/fulfillment-service:it)
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
+	$(call kind-load-image,$(METERING_IT_IMAGE))
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
+	$(call kind-load-image,localhost/osac-operator:it)
+
 .PHONY: test
-test: validate-ns ## Run integration tests (SUITE= required: all|fulfillment|compute-storage|operator|bmf)
+test: validate-ns ## Run integration tests (SUITE= required: all|fulfillment|compute-storage|operator|bmf|caas)
+ifeq ($(SUITE),caas)
+# The suite supplies its defaults when the installer selected the kubeconfig.
+ifeq ($(KUBECONFIG_DEFAULTED),true)
+	env -u KUBECONFIG $(MAKE) -C ../tests/integration/caas test
+else
+	kubeconfig="$$(python3 -c 'import os; print(os.pathsep.join(os.path.join(os.getcwd(), p) if p else p for p in os.environ["KUBECONFIG"].split(os.pathsep)))')"; \
+	$(MAKE) -C ../tests/integration/caas test KUBECONFIG="$$kubeconfig"
+endif
+endif
 ifeq ($(SUITE),all)
 	$(MAKE) test SUITE=fulfillment
 	$(MAKE) test SUITE=operator
@@ -1239,12 +1258,7 @@ ifneq ($(strip $(FULFILLMENT_IT_REPORT_DIR)),)
 endif
 # Exercise event-driven reconciliation without full synchronization in every test phase.
 	python3 -m unittest discover -s ../fulfillment-service/it/testdata -p test_compute_storage_aap.py
-	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
-	$(call kind-load-image,localhost/fulfillment-service:it)
-	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
-	$(call kind-load-image,$(METERING_IT_IMAGE))
-	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
-	$(call kind-load-image,localhost/osac-operator:it)
+	$(MAKE) test-platform-images
 endif
 ifeq ($(SUITE),fulfillment)
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \

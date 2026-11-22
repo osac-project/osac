@@ -20,18 +20,21 @@ import {
 } from '@patternfly/react-core';
 import type { TFunction } from 'i18next';
 
-import { type DiskImage, DiskImageLifecycle, SourceType } from '@osac/types';
+import { type DiskImage, DiskImageLifecycle, DiskImages, SourceType } from '@osac/types';
+import { useGetResource } from '@osac/ui-components/api/use-resource';
+import {
+  architectureLabels,
+  guestOsFamilyLabels,
+} from '@osac/ui-components/components/DiskImage/utils';
 import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import DiskImageDeleteConfirmModal from './DiskImageDeleteConfirmModal';
 import DiskImageLifecycleLabel from './DiskImageLifecycleLabel';
-import { architectureLabels, guestOsFamilyLabels } from './DiskImageTable';
 import {
   type DiskImageLifecycleAction,
   getDiskImageLifecycleActions,
   useDiskImageLifecycleAction,
 } from './useDiskImageLifecycleAction';
-import { useDiskImage } from '../../api/v1/disk-image';
 import { useTranslation } from '../../hooks/useTranslation';
 import { displayValue } from '../../utils/detailFormatters';
 import { Timestamp } from '../Primitives/Timestamp';
@@ -120,7 +123,8 @@ const DiskImageDetailPage = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { id = '' } = useParams<{ id: string }>();
-  const { data: diskImage, isLoading, isError, error, refetch } = useDiskImage(id);
+  const { data, isLoading, isError, error, refetch } = useGetResource(DiskImages, { id });
+  const diskImage = data?.object;
 
   if (isLoading) {
     return (

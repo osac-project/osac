@@ -816,9 +816,13 @@ type ComputeInstanceSpec_builder struct {
 	//	}
 	RestartRequestedAt *timestamppb.Timestamp
 	// Boot disk configuration.
+	//
+	// Quota: one volume for the boot disk.
 	BootDisk *ComputeInstanceDisk
 	// Additional disk configurations. When creating from a Catalog Item, omit this field to use its default.
 	// Set `items` to an empty list to request no additional disks.
+	//
+	// Quota: one volume per disk.
 	AdditionalDisks *ComputeInstanceDiskList
 	// Run strategy for the compute instance.
 	RunStrategy *ComputeInstanceRunStrategy
@@ -831,12 +835,16 @@ type ComputeInstanceSpec_builder struct {
 	// When set, the server fetches the catalog item and applies its typed field policies.
 	CatalogItem *ComputeInstanceCatalogItemReference
 	// Reference to an instance type. Specifies the compute configuration (cores, memory)
-	// for this instance. The API validates that the instance type exists and is not OBSOLETE;
-	// resolution of cores/memory_gib happens in the reconciler.
+	// for this instance. The API validates that the instance type exists and is not OBSOLETE.
+	//
+	// Quota: the instance counts the vCPUs and memory of its instance type. While a resize
+	// is in progress it counts the larger of the current and the target type.
 	InstanceType *InstanceTypeReference
 	// When true, the system auto-selects an ExternalIPPool and creates an ExternalIP
 	// with an ExternalIPAttachment for this instance atomically during creation.
 	// Immutable after creation.
+	//
+	// Quota: one external IP address, when the field is true.
 	AutoExternalIpAttachment *bool
 	// Reference to a DiskImage resource. Required after template/catalog item
 	// defaults are applied. The server validates existence, lifecycle, and tenant visibility.

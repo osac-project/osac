@@ -380,12 +380,9 @@ assume Helm upgrades CRDs automatically. Maintainers should add verified
 release-specific upgrade or migration notes when applicable; do not invent
 an upgrade path from version numbers alone.
 
-Release automation changes have offline regression coverage in the required
-pre-commit CI job. Run the same tests locally without publishing anything:
-
-```sh
-uv run --no-project --with pyyaml==6.0.3 python -m unittest discover -s .github/scripts -p test_umbrella_release.py -v
-```
+For release automation changes, follow the focused validation and publication
+boundaries in [the release automation guide](testing/release-automation.md).
+Do not publish artifacts merely to validate a documentation or workflow edit.
 
 ## Releasing a new component version
 

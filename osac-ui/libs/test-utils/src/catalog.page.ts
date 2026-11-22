@@ -110,14 +110,23 @@ export const deleteCatalogItem = async (page: Page, name: string): Promise<void>
 };
 
 /** Launch the published VM catalog item from its details page. */
-export const launchCatalogItem = async (page: Page): Promise<void> => {
+export const launchCatalogItem = async (page: Page, name: string): Promise<string> => {
+  const itemPath = new URL(page.url()).pathname;
+  const match = /^\/catalog\/vms\/([^/]+)$/.exec(itemPath);
+  if (!match) {
+    throw new Error(`Expected a VM catalog item details page, got '${itemPath}'.`);
+  }
   const launchButton = page.getByRole('button', { name: 'Launch instance', exact: true });
 
   await expect(launchButton).toBeVisible();
   await expect(launchButton).toBeEnabled();
   await launchButton.click();
-  await expect(page).toHaveURL((url) => /^\/catalog\/vms\/[^/]+\/launch$/.test(url.pathname));
+  await expect(page).toHaveURL((url) => url.pathname === `${itemPath}/launch`);
   await expect(
     page.getByRole('heading', { name: 'Create a virtual machine', exact: true }),
   ).toBeVisible();
+  await expect(
+    page.getByRole('navigation', { name: 'Breadcrumb' }).getByRole('link', { name, exact: true }),
+  ).toHaveAttribute('href', itemPath);
+  return decodeURIComponent(match[1]);
 };

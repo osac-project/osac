@@ -41,6 +41,7 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
     pull_secret_name: str,
     ssh_key_secret: str,
     metering: MeteringCollector,
+    networking_provisioning_enabled: bool,
 ) -> None:
     """Verify that cluster deletion transitions through DELETING state
     without waiting for full provisioning (OSAC-1586).
@@ -93,6 +94,18 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
         cli.delete_cluster(uuid=uuid)
 
         wait_for_cluster_deleting(k8s=k8s_hub_client, name=co_name)
+        if not networking_provisioning_enabled:
+            # Disabled mode runs no reserve, release, ingress, or DNS task, so the
+            # deletion leaves the operator's job record empty. One optional read:
+            # a deletion that completes between two reads must not fail here.
+            snapshot = k8s_hub_client.get_json_optional(resource="clusterorder", name=co_name)
+            if snapshot is None:
+                # The name is not logged: CodeQL traces it back to the create
+                # call, whose arguments include secret references.
+                logger.info("CaaS: the ClusterOrder was removed before its job record could be read")
+            else:
+                jobs = snapshot.get("status", {}).get("jobs") or []
+                assert not jobs, f"ClusterOrder {co_name} deletion must record no provider networking job, got {jobs}"
         wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid)
         wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
         wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)

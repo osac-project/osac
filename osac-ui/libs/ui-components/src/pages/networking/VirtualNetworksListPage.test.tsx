@@ -119,6 +119,16 @@ describe('VirtualNetworksListPage', () => {
     );
   });
 
+  it('offers only View details in the action menu', async () => {
+    const { user } = renderPage();
+    await screen.findByRole('link', { name: 'vn-prod' });
+
+    await user.click(screen.getByRole('button', { name: 'Actions for vn-prod' }));
+
+    expect(screen.getAllByRole('menuitem')).toHaveLength(1);
+    expect(screen.getByRole('menuitem', { name: 'View details' })).toBeInTheDocument();
+  });
+
   it('shows an empty state when no virtual networks exist', async () => {
     renderPage({ virtualNetworks: [] });
 

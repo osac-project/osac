@@ -172,8 +172,18 @@ func registerReferenceLookups(
 	if err != nil {
 		return fmt.Errorf("failed to create StorageTier DAO for reference lookups: %w", err)
 	}
-	references.RegisterDAOLookup(validator, "osac.private.v1.StorageTierReference", storageTiersDAO)
-	references.RegisterDAOLookup(validator, "osac.public.v1.StorageTierReference", storageTiersDAO)
+	// OSAC-7515: StorageTiers are platform-scoped; resolve names across the
+	// caller-visible tiers instead of restricting them to the instance tenant.
+	references.RegisterPlatformScopedDAOLookup(
+		validator,
+		"osac.private.v1.StorageTierReference",
+		storageTiersDAO,
+	)
+	references.RegisterPlatformScopedDAOLookup(
+		validator,
+		"osac.public.v1.StorageTierReference",
+		storageTiersDAO,
+	)
 
 	// Cluster and bare metal references
 	clustersDAO, err := dao.NewGenericDAO[*privatev1.Cluster]().

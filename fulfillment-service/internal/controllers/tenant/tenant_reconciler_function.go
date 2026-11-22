@@ -44,6 +44,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
+	"github.com/osac-project/osac/fulfillment-service/internal/password"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -228,7 +229,7 @@ type task struct {
 	defaultNetworkErr      error
 }
 
-const tenantDeletionRetryInterval = time.Second
+const defaultRetryTimeout = 60 * time.Second
 
 // update performs the reconciliation logic for creating or updating a tenant,
 // then refreshes infrastructure conditions independently of lifecycle errors.
@@ -236,8 +237,12 @@ func (t *task) update(ctx context.Context) error {
 	oldTenant := proto.Clone(t.tenant).(*privatev1.Tenant)
 	reconcileErr := t.updateLifecycle(ctx)
 	if reconcileErr != nil {
-		// Failed lifecycle work must not leak partial mutations into the status update.
+		modifiedTenant := t.tenant
+		// Roll back partial mutations, retaining the status and Secret reference needed to retry.
 		t.tenant = oldTenant
+		if controllers.IsRequeueable(reconcileErr) {
+			restoreRetryState(t.tenant, modifiedTenant)
+		}
 	}
 	if t.r != nil && t.r.hubsClient != nil && t.r.hubCache != nil {
 		t.checkInfrastructureConditions(ctx)
@@ -245,6 +250,32 @@ func (t *task) update(ctx context.Context) error {
 		t.projectStorageOnboardingCondition(nil, true)
 	}
 	return reconcileErr
+}
+
+func restoreRetryState(initial, modified *privatev1.Tenant) {
+	// Restore the status if it was modified during the reconciliation attempt.
+	if modified.HasStatus() {
+		initial.SetStatus(proto.Clone(modified.GetStatus()).(*privatev1.TenantStatus))
+	}
+	modifiedRef := modified.GetSpec().GetBreakGlassCredentialsSecret()
+	initialRef := initial.GetSpec().GetBreakGlassCredentialsSecret()
+	if proto.Equal(modifiedRef, initialRef) {
+		return
+	}
+	// Remove the credentials if it was removed during the reconciliation attempt.
+	if modifiedRef == nil {
+		if !initial.HasSpec() {
+			return
+		}
+		initial.GetSpec().ClearBreakGlassCredentialsSecret()
+		return
+	}
+	// Set the credentials if it was set during the reconciliation attempt.
+	if !initial.HasSpec() {
+		initial.SetSpec(&privatev1.TenantSpec{})
+	}
+	initial.GetSpec().SetBreakGlassCredentialsSecret(proto.Clone(
+		modifiedRef).(*privatev1.SecretLocalReference))
 }
 
 // updateLifecycle performs the normal tenant lifecycle reconciliation.
@@ -278,6 +309,12 @@ func (t *task) updateLifecycle(ctx context.Context) error {
 		if t.tenant.GetStatus().GetState() == privatev1.TenantState_TENANT_STATE_FAILED {
 			return nil
 		}
+		if t.tenant.GetSpec().GetBreakGlassCredentialsSecret() != nil {
+			_, err := t.validateBreakGlassSecret(ctx)
+			if err != nil {
+				return err
+			}
+		}
 		if err := t.ensureDefaultNetworking(ctx); err != nil {
 			return err
 		}
@@ -290,55 +327,44 @@ func (t *task) updateLifecycle(ctx context.Context) error {
 
 // syncToIDP synchronizes the tenant to the identity provider.
 func (t *task) syncToIDP(ctx context.Context) error {
+	var breakGlassPassword string
 	if t.tenant.GetStatus().GetIdpTenantName() == "" {
 		t.tenant.GetStatus().SetState(privatev1.TenantState_TENANT_STATE_PENDING)
 
 		tenantName := t.tenant.GetMetadata().GetName()
-		password, err := t.resolveBreakGlassPassword(ctx)
-		if err != nil {
+		if err := t.ensureVaultNamespace(ctx); err != nil {
 			return err
+		}
+		if t.r.vaultLifecycle != nil && !t.isConditionTrue(privatev1.TenantConditionType_TENANT_CONDITION_TYPE_VAULT_READY) {
+			return controllers.RequeueAfter(errors.New("vault is not ready"), defaultRetryTimeout)
+		}
+		var err error
+		breakGlassPassword, err = t.ensureBreakGlassSecret(ctx)
+		if err != nil {
+			t.r.logger.ErrorContext(ctx, "Failed to create break-glass credentials secret",
+				slog.String("tenant_id", t.tenant.GetId()),
+				slog.Any("error", err),
+			)
+			t.tenant.GetStatus().SetState(privatev1.TenantState_TENANT_STATE_PENDING)
+			return controllers.RequeueAfter(err, defaultRetryTimeout)
 		}
 		config := &idp.TenantConfig{
 			Name:               tenantName,
 			Enabled:            new(!t.isBuiltin()),
 			Domains:            t.tenant.GetSpec().GetDomains(),
-			BreakGlassPassword: password,
+			BreakGlassPassword: breakGlassPassword,
 		}
 
 		credentials, err := t.r.idpManager.CreateTenant(ctx, config)
 		if err != nil {
-			t.tenant.GetStatus().SetState(privatev1.TenantState_TENANT_STATE_FAILED)
+			t.tenant.GetStatus().SetState(privatev1.TenantState_TENANT_STATE_PENDING)
 			t.tenant.GetStatus().SetMessage(fmt.Sprintf("Tenant creation in IDP failed: %v", err))
-			return nil
+			return controllers.RequeueAfter(err, defaultRetryTimeout)
 		}
 
-		// Record IDP identity before persisting the secret so a later persist
-		// failure does not retry CreateTenant (the IDP tenant already exists).
+		// Record the IdP identity after the tenant and break-glass account exist.
 		t.tenant.GetStatus().SetIdpTenantName(config.Name)
 		t.tenant.GetStatus().SetBreakGlassUserId(credentials.UserID)
-	}
-
-	// Ensure the Vault namespace exists before attempting to persist the break-glass secret.
-	// The secret will be stored in Vault under the tenant's namespace, so the namespace
-	// must be provisioned first.
-	if err := t.ensureVaultNamespace(ctx); err != nil {
-		return err
-	}
-	// If vault is enabled and provisioning failed, the condition is FALSE and status will be persisted.
-	// Skip break-glass secret persistence since it requires vault.
-	if t.r.vaultLifecycle != nil && !t.isConditionTrue(privatev1.TenantConditionType_TENANT_CONDITION_TYPE_VAULT_READY) {
-		return nil
-	}
-
-	if err := t.persistBreakGlassSecret(ctx); err != nil {
-		t.r.logger.ErrorContext(ctx, "Failed to persist break-glass credentials secret",
-			slog.String("tenant_id", t.tenant.GetId()),
-			slog.Any("error", err),
-		)
-		// Stay PENDING with idpTenantName set so the next reconcile retries
-		// persist without calling CreateTenant again.
-		t.tenant.GetStatus().SetState(privatev1.TenantState_TENANT_STATE_PENDING)
-		return nil
 	}
 
 	t.tenant.GetStatus().SetState(privatev1.TenantState_TENANT_STATE_SYNCED)
@@ -353,54 +379,76 @@ func (t *task) syncToIDP(ctx context.Context) error {
 	return nil
 }
 
-// resolveBreakGlassPassword returns the break-glass password, preferring inline status credentials
-// (legacy / Create fallback) and otherwise fetching data["password"] from the referenced Secret.
-func (t *task) resolveBreakGlassPassword(ctx context.Context) (string, error) {
-	if password := t.tenant.GetStatus().GetBreakGlassCredentials().GetPassword(); password != "" {
-		return password, nil
-	}
-	ref := t.tenant.GetSpec().GetBreakGlassCredentialsSecret()
-	if ref == nil {
-		return "", nil
-	}
-	if t.r.secretsClient == nil {
-		return "", fmt.Errorf("secrets client is required to resolve break_glass_credentials_secret")
-	}
-	id := ref.GetId()
-	if id == "" {
-		return "", fmt.Errorf("break_glass_credentials_secret must have an id")
-	}
-	response, err := t.r.secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{
-		Id: id,
-	}.Build())
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch break-glass credentials secret: %w", err)
-	}
-	value, ok := response.GetObject().GetData()["password"]
-	if !ok || len(value) == 0 {
-		return "", fmt.Errorf("secret %q is missing data[\"password\"]", id)
-	}
-	return string(value), nil
-}
-
 const breakGlassSecretName = "break-glass-credentials"
 
-// persistBreakGlassSecret stores the break-glass username as a Secret and records the reference
-// on the tenant spec. The password is only shown once at tenant creation and is not persisted.
-// No-op when a reference is already set or no secrets client is configured (unit tests). If the
-// Secret already exists (retry after a failed status save), the existing object is adopted.
-func (t *task) persistBreakGlassSecret(ctx context.Context) error {
-	if t.tenant.GetSpec().GetBreakGlassCredentialsSecret() != nil {
-		return nil
-	}
+func (t *task) ensureBreakGlassSecret(ctx context.Context) (string, error) {
 	if t.r.secretsClient == nil {
-		return nil
-	}
-	creds := t.tenant.GetStatus().GetBreakGlassCredentials()
-	if creds.GetPassword() == "" {
-		return nil
+		return "", fmt.Errorf("secrets client is required to ensure break-glass credentials")
 	}
 	tenantName := t.tenant.GetMetadata().GetName()
+
+	if t.tenant.GetSpec().GetBreakGlassCredentialsSecret() != nil {
+		storedPassword, err := t.getBreakGlassSecretPassword(ctx)
+		if err == nil {
+			return storedPassword, nil
+		}
+		if grpcstatus.Code(err) == grpccodes.NotFound &&
+			t.tenant.GetStatus().GetIdpTenantName() == "" {
+			t.clearBreakGlassSecretRef()
+		} else {
+			return "", err
+		}
+	}
+	breakGlassPassword, err := password.Generate()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate break-glass password: %w", err)
+	}
+	if err := t.createBreakGlassSecret(ctx, breakGlassPassword); err != nil {
+		if grpcstatus.Code(err) == grpccodes.AlreadyExists {
+			return t.adoptExistingBreakGlassSecret(ctx, tenantName)
+		}
+		return "", fmt.Errorf("failed to store break-glass credentials secret: %w", err)
+	}
+	return breakGlassPassword, nil
+}
+
+func (t *task) getBreakGlassSecretPassword(ctx context.Context) (string, error) {
+	ref := t.tenant.GetSpec().GetBreakGlassCredentialsSecret()
+	if ref == nil || ref.GetId() == "" {
+		return "", errors.New("break_glass_credentials_secret must have an id")
+	}
+	response, err := t.r.secretsClient.Get(ctx, privatev1.SecretsGetRequest_builder{Id: ref.GetId()}.Build())
+	if err != nil {
+		return "", err
+	}
+	data := response.GetObject().GetData()
+	if len(data["username"]) == 0 || len(data["password"]) == 0 {
+		return "", errors.New("break-glass credentials secret is missing username or password")
+	}
+	expectedUsername := fmt.Sprintf("%s-osac-break-glass", t.tenant.GetMetadata().GetName())
+	if string(data["username"]) != expectedUsername {
+		return "", fmt.Errorf("break-glass credentials secret username must be %q", expectedUsername)
+	}
+	storedPassword := string(data["password"])
+	return storedPassword, nil
+}
+
+func (t *task) validateBreakGlassSecret(ctx context.Context) (string, error) {
+	if t.r.secretsClient == nil {
+		return "", fmt.Errorf("secrets client is required to validate break-glass credentials")
+	}
+	password, err := t.getBreakGlassSecretPassword(ctx)
+	if err != nil {
+		return "", err
+	}
+	return password, nil
+}
+
+func (t *task) createBreakGlassSecret(ctx context.Context, password string) error {
+	tenantName := t.tenant.GetMetadata().GetName()
+	if password == "" {
+		return errors.New("cannot create break-glass credentials secret without a password")
+	}
 	response, err := t.r.secretsClient.Create(ctx, privatev1.SecretsCreateRequest_builder{
 		Object: privatev1.Secret_builder{
 			Metadata: privatev1.Metadata_builder{
@@ -409,22 +457,20 @@ func (t *task) persistBreakGlassSecret(ctx context.Context) error {
 			}.Build(),
 			Type: privatev1.SecretType_SECRET_TYPE_OPAQUE,
 			Data: map[string][]byte{
-				"username": []byte(creds.GetUsername()),
+				"username": []byte(fmt.Sprintf("%s-osac-break-glass", tenantName)),
+				"password": []byte(password),
 			},
 		}.Build(),
 	}.Build())
 	if err != nil {
-		if grpcstatus.Code(err) == grpccodes.AlreadyExists {
-			return t.adoptExistingBreakGlassSecret(ctx, tenantName)
-		}
-		return fmt.Errorf("failed to store break-glass credentials secret: %w", err)
+		return err
 	}
 	created := response.GetObject()
 	t.setBreakGlassSecretRef(created.GetId(), created.GetMetadata().GetName())
 	return nil
 }
 
-func (t *task) adoptExistingBreakGlassSecret(ctx context.Context, tenantName string) error {
+func (t *task) adoptExistingBreakGlassSecret(ctx context.Context, tenantName string) (string, error) {
 	filter := fmt.Sprintf(
 		"this.metadata.name == %s && this.metadata.tenant == %s",
 		strconv.Quote(breakGlassSecretName), strconv.Quote(tenantName),
@@ -434,15 +480,15 @@ func (t *task) adoptExistingBreakGlassSecret(ctx context.Context, tenantName str
 		Limit:  new(int32(1)),
 	}.Build())
 	if err != nil {
-		return fmt.Errorf("failed to look up existing break-glass credentials secret: %w", err)
+		return "", fmt.Errorf("failed to look up existing break-glass credentials secret: %w", err)
 	}
 	items := listResp.GetItems()
 	if len(items) == 0 {
-		return fmt.Errorf("break-glass credentials secret already exists but could not be found")
+		return "", fmt.Errorf("break-glass credentials secret already exists but could not be found")
 	}
 	existing := items[0]
 	t.setBreakGlassSecretRef(existing.GetId(), existing.GetMetadata().GetName())
-	return nil
+	return t.validateBreakGlassSecret(ctx)
 }
 
 func (t *task) setBreakGlassSecretRef(id, name string) {
@@ -549,7 +595,7 @@ func (t *task) delete(ctx context.Context) error {
 				t.updateCondition(privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY,
 					privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "Deleting",
 					"Deleting the default networking resources: "+strings.Join(t.remainingDefaults(ctx), ", "))
-				return controllers.RequeueAtInterval(wrapped, tenantDeletionRetryInterval)
+				return controllers.RequeueAtInterval(wrapped, defaultRetryTimeout)
 			}
 			return wrapped
 		}
@@ -565,7 +611,7 @@ func (t *task) delete(ctx context.Context) error {
 	if pendingUsers {
 		return controllers.RequeueAtInterval(
 			errors.New("tenant users are still pending deletion"),
-			tenantDeletionRetryInterval,
+			defaultRetryTimeout,
 		)
 	}
 
@@ -579,7 +625,7 @@ func (t *task) delete(ctx context.Context) error {
 	if pendingProjects {
 		return controllers.RequeueAtInterval(
 			errors.New("tenant projects are still pending deletion"),
-			tenantDeletionRetryInterval,
+			defaultRetryTimeout,
 		)
 	}
 
@@ -595,7 +641,7 @@ func (t *task) delete(ctx context.Context) error {
 		)
 		return controllers.RequeueAtInterval(
 			fmt.Errorf("tenant still has %d project(s) pending deletion", remaining),
-			tenantDeletionRetryInterval,
+			defaultRetryTimeout,
 		)
 	}
 

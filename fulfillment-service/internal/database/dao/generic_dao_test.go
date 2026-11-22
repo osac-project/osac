@@ -1563,6 +1563,53 @@ var _ = Describe("Generic DAO", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		DescribeTable("Filters repeated messages with exists", func(filter string, expected []string) {
+			for _, object := range []*testsv1.Object{
+				testsv1.Object_builder{Id: "a", MyString: "yes", MyRepeated: []*testsv1.Object{
+					testsv1.Object_builder{MyString: "yes", MyInt32: 1, MyRepeated: []*testsv1.Object{
+						testsv1.Object_builder{MyString: "deep"}.Build(),
+					}}.Build(),
+					testsv1.Object_builder{MyString: "no", MyInt32: 2}.Build(),
+				}}.Build(),
+				testsv1.Object_builder{Id: "b", MyRepeated: []*testsv1.Object{
+					testsv1.Object_builder{MyString: "yes"}.Build(),
+					testsv1.Object_builder{MyString: "again"}.Build(),
+					testsv1.Object_builder{MyString: "yes"}.Build(),
+				}}.Build(),
+				testsv1.Object_builder{Id: "c", MyRepeated: []*testsv1.Object{}}.Build(),
+				testsv1.Object_builder{Id: "d"}.Build(),
+			} {
+				object.SetMetadata(testsv1.Metadata_builder{Tenant: "my-tenant", Name: object.GetId()}.Build())
+				_, err := objectsDao.Create().SetObject(object).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+			}
+			response, err := objectsDao.List().SetFilter(filter).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			var ids []string
+			for _, object := range response.GetItems() {
+				ids = append(ids, object.GetId())
+			}
+			Expect(ids).To(ConsistOf(expected))
+			Expect(response.GetTotal()).To(Equal(int32(len(expected)))) // #nosec G115 -- bounded test fixture
+		},
+			Entry("match without duplicate rows", `this.my_repeated.exists(x, x.my_string == 'yes')`, []string{"a", "b"}),
+			Entry("nonmatch", `this.my_repeated.exists(x, x.my_string == 'missing')`, []string{}),
+			Entry("empty and absent arrays", `!this.my_repeated.exists(x, true)`, []string{"c", "d"}),
+			Entry("same element conjunction", `this.my_repeated.exists(x, x.my_string == 'yes' && x.my_int32 == 2)`, []string{}),
+			Entry("disjunction", `this.my_repeated.exists(x, x.my_string == 'yes' || x.my_string == 'no')`, []string{"a", "b"}),
+			Entry("numeric predicate", `this.my_repeated.exists(x, x.my_int32 > 0)`, []string{"a"}),
+			Entry("negated predicate", `this.my_repeated.exists(x, !(x.my_string == 'yes'))`, []string{"a", "b"}),
+			Entry("outer field correlation", `this.my_repeated.exists(x, x.my_string == this.my_string)`, []string{"a"}),
+			Entry("nested shadowing", `this.my_repeated.exists(x, x.my_repeated.exists(x, x.my_string == 'deep') && x.my_string == 'yes')`, []string{"a"}),
+			Entry("outer iterator correlation", `this.my_repeated.exists(x, x.my_repeated.exists(y, x.my_string == 'yes' && y.my_string == 'deep'))`, []string{"a"}),
+			Entry("sibling scopes", `this.my_repeated.exists(x, x.my_string == 'yes') && this.my_repeated.exists(x, x.my_string == 'no')`, []string{"a"}),
+			Entry("shadowing this", `this.my_repeated.exists(this, this.my_string == 'yes')`, []string{"a", "b"}),
+			Entry("shadowing now", `this.my_repeated.exists(now, now.my_string == 'yes')`, []string{"a", "b"}),
+			Entry("presence predicate", `this.my_repeated.exists(x, has(x.my_repeated))`, []string{"a"}),
+			Entry("null predicate under negation", `!this.my_repeated.exists(x, x.my_msg.my_string == 'missing')`, []string{"a", "b", "c", "d"}),
+			Entry("SQL literal escaping", `this.my_repeated.exists(x, x.my_string == "x' OR true --")`, []string{}),
+		)
+
 		It("Filters by identifier", func() {
 			for i := range 10 {
 				_, err := objectsDao.Create().

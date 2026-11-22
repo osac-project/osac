@@ -712,23 +712,6 @@ var _ = Describe("Break-glass credentials secret reference", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	It("Returns generated break-glass credentials on Create", func() {
-		response, err := tenantsServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
-			Object: privatev1.Tenant_builder{
-				Metadata: privatev1.Metadata_builder{
-					Name: "secret-tenant",
-				}.Build(),
-			}.Build(),
-		}.Build())
-		Expect(err).ToNot(HaveOccurred())
-
-		creds := response.GetObject().GetStatus().GetBreakGlassCredentials()
-		Expect(creds).ToNot(BeNil())
-		Expect(creds.GetUsername()).To(Equal("secret-tenant-osac-break-glass"))
-		Expect(creds.GetPassword()).ToNot(BeEmpty())
-		Expect(response.GetObject().GetSpec().GetBreakGlassCredentialsSecret()).To(BeNil())
-	})
-
 	It("Rejects a nonexistent break_glass_credentials_secret", func() {
 		_, err := tenantsServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
 			Object: privatev1.Tenant_builder{

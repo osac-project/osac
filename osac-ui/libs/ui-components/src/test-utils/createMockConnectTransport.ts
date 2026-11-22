@@ -437,7 +437,7 @@ const matchesInstanceTypeActiveFilter = (
   return state === InstanceTypeState.ACTIVE;
 };
 
-const matchesDiskImageLifecycleFilter = (
+export const matchesDiskImageLifecycleFilter = (
   filter: string | undefined,
   lifecycle: number | undefined,
 ): boolean => {

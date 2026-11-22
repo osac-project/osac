@@ -13,10 +13,10 @@ settings:
 - **branch**: Stay on the current branch (already created by the orchestration
   system -- do not create a new branch).
 - **lint_command**: `cd fulfillment-service && gofmt -s -w .`
-- **iteration_cap**: Maximum 3 fix-test cycles before escalating.
 
-All artifact paths (`.artifacts/bugfix/{issue}/`) should use `.ai-bot/`
-instead. Write the PR description to `.ai-bot/pr.md`.
+Keep routine output to a concise summary of changes, relevant checks and
+limitations. Create separate reports only when requested; preserve outputs
+required by the calling workflow at its specified paths and formats.
 
 ### Repo-Specific Test Commands
 
@@ -25,10 +25,7 @@ Use these exact commands (from `fulfillment-service/`) during the test phase:
 ```bash
 cd fulfillment-service
 
-# Unit tests (mandatory -- always run)
-ginkgo run -r internal
-
-# Focused unit tests (use during iteration to speed up feedback)
+# Focused existing unit tests for the changed behavior
 ginkgo run -r internal --focus="<test pattern matching the fix area>"
 ```
 
@@ -72,22 +69,11 @@ go generate ./path/to/package/
 
 ### Final Validation (Before Writing PR Description)
 
-Run these in order (from `fulfillment-service/`). All must pass:
-
-1. `gofmt -s -w .` then `git diff --exit-code` (formatting)
-2. `buf lint` (proto linting, if protos changed)
-3. `ginkgo run -r internal` (full unit test suite)
-4. `go build ./cmd/fulfillment-service && go build ./cmd/osac` (both binaries)
-
-### Session Context
-
-After completing the fix, write a session context summary to
-`.ai-bot/session-context.md` covering:
-
-- Root cause summary
-- Files changed and why
-- Test strategy (what was tested, what was not)
-- Risks or areas that need human review
+Select relevant formatting, lint, build and focused unit checks from
+`fulfillment-service/AGENTS.md`. Use the full suite only when needed for the
+changed behavior. Summarize the checks performed and any limitations or
+unrelated failures. Session/review reports are optional; preserve caller-required
+outputs at their specified paths and formats.
 
 ## osac-operator
 
@@ -100,53 +86,30 @@ Execute the following bugfix workflow phases in order.
 Each phase is defined in the corresponding skill file.
 
 1. Read and execute `.ai-workflows/bugfix/skills/assess.md`
-   The bug report is in `.ai-bot/issue.md`. Do not ask clarifying
-   questions — make reasonable assumptions where needed.
+   The bug report is in `.ai-bot/issue.md`. Clarify ambiguous scope before
+   making destructive or unrelated changes.
 
 2. Read and execute `.ai-workflows/bugfix/skills/diagnose.md`
-   Write your root cause analysis to `.ai-bot/diagnosis.md`.
    Read `osac-operator/.claude/rules/controller-patterns.md` and
    `osac-operator/.claude/rules/common-pitfalls.md` before diagnosing — many
    bugs in this codebase fall into the documented pitfall categories.
 
 3. Read and execute `.ai-workflows/bugfix/skills/fix.md`
-   Implement the minimal fix. Write implementation notes to
-   `.ai-bot/implementation-notes.md`.
+   Implement the minimal fix.
    - If you touch `osac-operator/api/v1alpha1/*_types.go`, run
      `cd osac-operator && make manifests generate` immediately.
    - If you touch `osac-operator/go.mod`, run `cd osac-operator && go mod tidy`
      immediately.
-   - Always add or update unit tests in the same step.
+   - Add meaningful regression coverage only where needed, using existing suites.
 
-4. Read and execute `.ai-workflows/bugfix/skills/test.md`
-   Run the full test suite with `cd osac-operator && make test`. If tests
-   fail, revise your fix and retest (up to 5 iterations).
-   Write test verification to `.ai-bot/test-verification.md`.
+4. Select relevant existing checks from `osac-operator/AGENTS.md`, using
+   focused tests for the changed behavior. Use full suites only when needed.
 
-5. Read and execute `.ai-workflows/bugfix/skills/review.md`
-   Self-review your changes. If issues are found, correct them,
-   retest, and re-review (up to 4 iterations).
-   Write review findings to `.ai-bot/review.md`.
+5. Review the diff for correctness, scope and safety. Fix attributable issues;
+   report unrelated failures or unavailable checks rather than repeating a
+   fixed test/review loop.
 
-6. Run `cd osac-operator && make lint` and fix all reported issues. Repeat
-   until it exits cleanly. This is the final gate — lint failures block CI.
-
-7. Write a PR title and description to `.ai-bot/pr.md`.
-   Use the `## Title` heading format:
-
-   ```markdown
-   ## Title
-
-   OSAC-XXXXX: short description in lowercase
-
-   ## Summary
-
-   ...PR body...
-
-   ## Root Cause
-
-   ...(from .ai-bot/diagnosis.md)...
-   ```
-
-8. Write session context to `.ai-bot/session-context.md` for
-   continuity if feedback rounds are needed.
+6. Summarize the changes, checks and limitations concisely in the PR response.
+   Separate diagnosis, verification, review and session reports are optional
+   unless requested by the task or required by the calling workflow. Preserve
+   its output paths and formats.

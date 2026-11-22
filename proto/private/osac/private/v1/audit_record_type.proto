@@ -1,0 +1,103 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "cleanapi/cleanapi.proto";
+import "google/protobuf/timestamp.proto";
+import "osac/private/v1/add_on_operator_type.proto";
+import "osac/private/v1/baremetal_instance_catalog_item_type.proto";
+import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/cluster_catalog_item_type.proto";
+import "osac/private/v1/cluster_template_type.proto";
+import "osac/private/v1/cluster_version_type.proto";
+import "osac/private/v1/compute_instance_catalog_item_type.proto";
+import "osac/private/v1/compute_instance_template_type.proto";
+import "osac/private/v1/compute_instance_common_type.proto";
+import "osac/private/v1/instance_type_type.proto";
+import "osac/private/v1/disk_image_type.proto";
+import "osac/private/v1/external_ip_pool_type.proto";
+import "osac/private/v1/role_type.proto";
+import "osac/private/v1/role_binding_type.proto";
+import "osac/private/v1/secret_type.proto";
+import "osac/private/v1/user_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+
+// The source that produced an audit record.
+enum AuditSource {
+  AUDIT_SOURCE_UNSPECIFIED = 0;
+
+  // The record was produced by an API request.
+  AUDIT_SOURCE_API = 1;
+}
+
+// The identity that performed the audited action.
+message AuditActor {
+  oneof subject {
+    // A user who performed the action.
+    UserReference user = 1;
+
+    // A service account that performed the action.
+    ServiceAccountReference service_account = 2;
+  }
+}
+
+// A minimized record of an action performed through the OSAC API.
+//
+// The record contains identifying and outcome information only. It does not contain request or response payloads,
+// credentials, or free-text error details.
+message AuditRecord {
+  // Metadata.name is the stable event identifier. Metadata.tenant is the owning tenant for this record.
+  Metadata metadata = 1;
+
+  // Correlates request and response events.
+  string request_id = 2;
+
+  // Time at which this event occurred.
+  google.protobuf.Timestamp event_timestamp = 3;
+
+  // Source that produced this record.
+  AuditSource source = 4;
+
+  // Action performed by the actor.
+  string action = 5;
+
+  // Actor that performed the action, when known.
+  optional AuditActor actor = 6;
+
+  // Existing typed reference to the object affected by the action, when applicable.
+  // Resources without a standalone reference message are not represented here.
+  oneof target_object {
+    AddOnOperatorReference add_on_operator = 7;
+    BareMetalInstanceCatalogItemReference bare_metal_instance_catalog_item = 8;
+    ClusterCatalogItemReference cluster_catalog_item = 12;
+    ClusterTemplateReference cluster_template = 13;
+    ClusterVersionReference cluster_version = 14;
+    ComputeInstanceCatalogItemReference compute_instance_catalog_item = 15;
+    ComputeInstanceTemplateReference compute_instance_template = 16;
+    StorageTierReference storage_tier = 17;
+    DiskImageReference disk_image = 18;
+    ExternalIPPoolReference external_ip_pool = 19;
+    InstanceTypeReference instance_type = 20;
+    SecretReference secret = 21;
+    RoleReference role = 22;
+    ServiceAccountReference service_account = 23;
+    UserReference target_user = 24;
+  }
+
+  // Outcome of the action, such as success or failure.
+  string outcome = 9;
+}

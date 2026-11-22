@@ -8,6 +8,7 @@ set:
   # Required by the chart schema; unrelated to this suite.
   service.internalHostname: fulfillment.osac.svc
   service.externalHostname: fulfillment.example.com
+  global.networking.fabricManager: test_fabric
   global.observability.enabled: true
   global.observability.collection.osacControlPlane: "30s"
 

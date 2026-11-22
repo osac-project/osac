@@ -36,8 +36,9 @@ CRD_ARGS=(
 OBS_ARGS=(
   --set global.observability.enabled=true
 )
+# Metering is always deployed (billing is not optional), so the scrape checks
+# only switch its billing adapters on.
 METERING_ARGS=(
-  --set metering.enabled=true
   --set metering.echoAdapter.enabled=true
   --set metering.echoAdapter.image.repository=example/echo
   --set metering.echoAdapter.image.tag=v1
@@ -177,13 +178,16 @@ require "${enabled_services}" 'app.kubernetes.io/component: echo-adapter'
 require "${enabled_services}" 'app.kubernetes.io/component: m360-adapter'
 require "${enabled_sms}" '__meta_kubernetes_service_label_app_kubernetes_io_component'
 
-echo "checking observability-only render keeps metering off"
+echo "checking observability-only render keeps the billing adapters off"
 default_render="${TMP_DIR}/default.yaml"
 "${HELM_BIN}" "${COMMON_ARGS[@]}" "${CRD_ARGS[@]}" "${OBS_ARGS[@]}" >"${default_render}"
 default_sms="${TMP_DIR}/default-servicemonitors.yaml"
 extract_kind "${default_render}" ServiceMonitor >"${default_sms}"
-expect_count "${default_sms}" '^kind: ServiceMonitor' 7
-reject "${default_sms}" 'replacement: osac-metering'
+# Metering is deployed unconditionally, so its own target is present; only the
+# adapter endpoint (derived from the Service component label) is absent.
+expect_count "${default_sms}" '^kind: ServiceMonitor' 8
+require "${default_sms}" 'replacement: osac-metering'
+reject "${default_sms}" '__meta_kubernetes_service_label_app_kubernetes_io_component'
 
 echo "checking custom scrape interval"
 interval="${TMP_DIR}/interval.yaml"

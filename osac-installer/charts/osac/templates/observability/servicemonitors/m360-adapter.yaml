@@ -1,0 +1,11 @@
+{{- if and .Values.observability.enabled .Values.metering.enabled (dig "m360Adapter" "enabled" false .Values.metering) (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor") }}
+{{- include "osac.serviceMonitor" (dict
+  "root" .
+  "name" "m360-adapter"
+  "jobLabel" "app.kubernetes.io/component"
+  "selector" (dict
+    "app.kubernetes.io/name" "osac-metering"
+    "app.kubernetes.io/instance" .Release.Name
+    "app.kubernetes.io/component" "m360-adapter")
+  "port" "http") }}
+{{- end }}

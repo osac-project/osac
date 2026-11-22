@@ -1,0 +1,12 @@
+{{- if .Values.observability.enabled }}
+# Platform Prometheus discovers ServiceMonitors in namespaces labeled with
+# openshift.io/cluster-monitoring. This namespace hosts the metrics store and
+# query tier added by later observability stories.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: osac-observability
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+    openshift.io/cluster-monitoring: "true"
+{{- end }}

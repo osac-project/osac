@@ -1,0 +1,335 @@
+suite: observability scrape wiring
+templates:
+  - templates/observability/*.yaml
+  - templates/observability/servicemonitors/*.yaml
+release:
+  name: osac
+  namespace: osac
+capabilities:
+  apiVersions:
+    - monitoring.coreos.com/v1
+    - monitoring.coreos.com/v1/ServiceMonitor
+set:
+  global.osacDeploymentId: test-deployment
+  service.externalHostname: api.example.com
+  service.internalHostname: internal.example.com
+  ui.externalHostname: ui.example.com
+  observability.enabled: true
+  observability.collection.osacControlPlane: "30s"
+  service.enabled: true
+  metering.enabled: true
+  metering.echoAdapter.enabled: true
+  metering.m360Adapter.enabled: true
+
+tests:
+  - it: labels the observability namespace for platform monitoring
+    template: templates/observability/namespace.yaml
+    asserts:
+      - isKind:
+          of: Namespace
+      - equal:
+          path: metadata.name
+          value: osac-observability
+      - equal:
+          path: metadata.labels["openshift.io/cluster-monitoring"]
+          value: "true"
+
+  - it: renders no observability namespace when disabled
+    template: templates/observability/namespace.yaml
+    set:
+      observability.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: labels the release namespace from a pre-install and pre-upgrade hook
+    template: templates/observability/label-namespaces.yaml
+    documentIndex: 3
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: osac-label-namespaces
+      - contains:
+          path: spec.template.spec.containers[0].command
+          content: openshift.io/cluster-monitoring=true
+      - equal:
+          path: spec.template.spec.containers[0].command[3]
+          value: osac
+
+  - it: restricts the namespace label permission to the release namespace
+    template: templates/observability/label-namespaces.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: rules[0].resources[0]
+          value: namespaces
+      - equal:
+          path: rules[0].resourceNames[0]
+          value: osac
+      - equal:
+          path: rules[0].verbs
+          value: [get, patch, update]
+
+  - it: binds the label hook to its own service account
+    template: templates/observability/label-namespaces.yaml
+    documentIndex: 2
+    asserts:
+      - isKind:
+          of: ClusterRoleBinding
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+      - equal:
+          path: subjects[0].name
+          value: osac-label-namespaces
+      - equal:
+          path: subjects[0].namespace
+          value: osac
+
+  - it: grants scrape access in the release namespace only
+    template: templates/observability/scrape-rbac.yaml
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: metadata.namespace
+          value: osac
+      - equal:
+          path: rules[0].resources
+          value: [services, endpoints, pods]
+      - equal:
+          path: rules[0].verbs
+          value: [get, list, watch]
+
+  - it: binds scrape access to prometheus-k8s in the release namespace
+    template: templates/observability/scrape-rbac.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: metadata.namespace
+          value: osac
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+      - equal:
+          path: subjects[0].name
+          value: prometheus-k8s
+      - equal:
+          path: subjects[0].namespace
+          value: openshift-monitoring
+      - equal:
+          path: roleRef.kind
+          value: Role
+
+  - it: grants scrape access in the observability namespace
+    template: templates/observability/scrape-rbac.yaml
+    documentIndex: 2
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+
+  - it: binds scrape access to prometheus-k8s in the observability namespace
+    template: templates/observability/scrape-rbac.yaml
+    documentIndex: 3
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+      - equal:
+          path: subjects[0].name
+          value: prometheus-k8s
+
+  - it: renders no scrape resources when disabled
+    template: templates/observability/scrape-rbac.yaml
+    set:
+      observability.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: scrapes fulfillment-grpc-server by its app label
+    template: templates/observability/servicemonitors/fulfillment-grpc-server.yaml
+    asserts:
+      - isKind:
+          of: ServiceMonitor
+      - equal:
+          path: metadata.name
+          value: fulfillment-grpc-server
+      - equal:
+          path: spec.jobLabel
+          value: app
+      - equal:
+          path: spec.selector.matchLabels.app
+          value: fulfillment-grpc-server
+      - equal:
+          path: spec.endpoints[0].port
+          value: metrics
+      - equal:
+          path: spec.endpoints[0].scheme
+          value: http
+      - equal:
+          path: spec.endpoints[0].path
+          value: /metrics
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 30s
+
+  - it: scrapes fulfillment-rest-gateway
+    template: templates/observability/servicemonitors/fulfillment-rest-gateway.yaml
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels.app
+          value: fulfillment-rest-gateway
+      - equal:
+          path: spec.endpoints[0].port
+          value: metrics
+
+  - it: scrapes fulfillment-controller
+    template: templates/observability/servicemonitors/fulfillment-controller.yaml
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels.app
+          value: fulfillment-controller
+      - equal:
+          path: spec.endpoints[0].port
+          value: metrics
+
+  - it: scrapes fulfillment-event-publisher
+    template: templates/observability/servicemonitors/fulfillment-event-publisher.yaml
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels.app
+          value: fulfillment-event-publisher
+      - equal:
+          path: spec.endpoints[0].port
+          value: metrics
+
+  - it: scrapes fulfillment-console-proxy
+    template: templates/observability/servicemonitors/fulfillment-console-proxy.yaml
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels.app
+          value: fulfillment-console-proxy
+      - equal:
+          path: spec.endpoints[0].port
+          value: metrics
+
+  - it: omits the console proxy monitor when the console proxy is disabled
+    template: templates/observability/servicemonitors/fulfillment-console-proxy.yaml
+    set:
+      service.consoleProxy.disabled: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: scrapes the metering service by its app name
+    template: templates/observability/servicemonitors/osac-metering.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: osac-metering
+      - equal:
+          path: spec.jobLabel
+          value: app.kubernetes.io/name
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: metering
+      - equal:
+          path: spec.endpoints[0].port
+          value: metrics
+
+  - it: scrapes the echo adapter on its existing http port
+    template: templates/observability/servicemonitors/echo-adapter.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: echo-adapter
+      - equal:
+          path: spec.jobLabel
+          value: app.kubernetes.io/component
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: echo-adapter
+      - equal:
+          path: spec.endpoints[0].port
+          value: http
+
+  - it: omits the echo adapter monitor when the adapter is disabled
+    template: templates/observability/servicemonitors/echo-adapter.yaml
+    set:
+      metering.echoAdapter.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: scrapes the m360 adapter on its existing http port
+    template: templates/observability/servicemonitors/m360-adapter.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: m360-adapter
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: m360-adapter
+      - equal:
+          path: spec.endpoints[0].port
+          value: http
+
+  - it: omits the m360 adapter monitor when the adapter is disabled
+    template: templates/observability/servicemonitors/m360-adapter.yaml
+    set:
+      metering.m360Adapter.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: omits every monitor when metering is not deployed
+    template: templates/observability/servicemonitors/osac-metering.yaml
+    set:
+      metering.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no monitors when the ServiceMonitor CRD is absent
+    template: templates/observability/servicemonitors/fulfillment-grpc-server.yaml
+    capabilities:
+      apiVersions:
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no monitors when observability is disabled
+    template: templates/observability/servicemonitors/fulfillment-grpc-server.yaml
+    set:
+      observability.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: takes the scrape interval from the collection value
+    template: templates/observability/servicemonitors/fulfillment-grpc-server.yaml
+    set:
+      observability.collection.osacControlPlane: "45s"
+    asserts:
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 45s

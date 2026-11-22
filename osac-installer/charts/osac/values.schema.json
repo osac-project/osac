@@ -1156,6 +1156,23 @@
           },
           "additionalProperties": false
         },
+        "serviceMonitor": {
+          "type": "object",
+          "description": "ServiceMonitor settings for the fulfillment Services (the umbrella chart renders the OSAC monitors; standalone installs stay disabled)",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "interval": {
+              "type": "string"
+            },
+            "labels": {
+              "type": "object"
+            }
+          },
+          "additionalProperties": false
+        },
         "httpCorsAllowedOrigins": {
           "type": "array",
           "description": "Allowed CORS origins for the fulfillment service HTTP API (subchart default)",
@@ -1965,6 +1982,10 @@
               "description": "Create ServiceMonitors scraping the /metrics endpoints",
               "default": false
             },
+            "interval": {
+              "type": "string",
+              "description": "Scrape interval for the metering targets (Prometheus duration; defaults to global.observability.collection.osacControlPlane)"
+            },
             "labels": {
               "type": "object",
               "description": "Extra labels for Prometheus instances that select monitors by label",
@@ -1986,6 +2007,31 @@
               "type": "object",
               "description": "Extra labels for Prometheus instances that select rules by label",
               "additionalProperties": { "type": "string" }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "observability": {
+      "type": "object",
+      "description": "Observability configuration for metrics collection, storage, and querying (OSAC-6980)",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable OSAC metrics collection, storage, and querying. When false, no namespace labels, scrape RBAC, or ServiceMonitors are rendered.",
+          "default": false
+        },
+        "collection": {
+          "type": "object",
+          "description": "Metrics collection settings",
+          "properties": {
+            "osacControlPlane": {
+              "type": "string",
+              "description": "Scrape interval for every OSAC control-plane target (Prometheus duration, e.g. 30s)",
+              "default": "30s",
+              "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
             }
           },
           "additionalProperties": false

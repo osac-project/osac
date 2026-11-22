@@ -1,0 +1,8 @@
+{{- if and .Values.observability.enabled .Values.service.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor") }}
+{{- include "osac.serviceMonitor" (dict
+  "root" .
+  "name" "fulfillment-event-publisher"
+  "jobLabel" "app"
+  "selector" (dict "app" "fulfillment-event-publisher")
+  "port" "metrics") }}
+{{- end }}

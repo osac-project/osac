@@ -169,6 +169,23 @@ jobs:
         make helm-devstack-deps
         helm dependency build charts/osac/
 
+    - name: Install helm-unittest
+      if: steps.should-run.outputs.run
+      run: helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.8.2 --verify=false
+
+    - name: Run Helm unit tests
+      if: steps.should-run.outputs.run
+      working-directory: osac-installer
+      run: |
+        helm unittest charts/osac -s=false
+        helm unittest ../osac-metering/charts/osac-metering
+        helm unittest ../fulfillment-service/charts/service
+
+    - name: Test observability rendering
+      if: steps.should-run.outputs.run
+      working-directory: osac-installer
+      run: ./scripts/test-observability-render.sh
+
     - name: Test networking values
       working-directory: osac-installer
       run: uv run --project .. python scripts/test-networking-values.py

@@ -1,0 +1,86 @@
+suite: fulfillment services expose scrape targets
+templates:
+  - templates/grpc-server/service.yaml
+  - templates/rest-gateway/service.yaml
+  - templates/controller/service.yaml
+  - templates/event-publisher/service.yaml
+  - templates/console-proxy/service.yaml
+
+tests:
+  - it: exposes the grpc server metrics port and app label
+    template: templates/grpc-server/service.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: metadata.labels.app
+          value: fulfillment-grpc-server
+      - equal:
+          path: spec.ports[1].name
+          value: metrics
+      - equal:
+          path: spec.ports[1].port
+          value: 8002
+      - equal:
+          path: spec.ports[1].targetPort
+          value: metrics
+
+  - it: exposes the rest gateway metrics port and app label
+    template: templates/rest-gateway/service.yaml
+    asserts:
+      - equal:
+          path: metadata.labels.app
+          value: fulfillment-rest-gateway
+      - equal:
+          path: spec.ports[1].name
+          value: metrics
+      - equal:
+          path: spec.ports[1].port
+          value: 8002
+
+  - it: exposes the controller metrics port and app label
+    template: templates/controller/service.yaml
+    asserts:
+      - equal:
+          path: metadata.labels.app
+          value: fulfillment-controller
+      - equal:
+          path: spec.ports[1].name
+          value: metrics
+      - equal:
+          path: spec.ports[1].port
+          value: 8002
+
+  - it: exposes the event publisher metrics port and app label
+    template: templates/event-publisher/service.yaml
+    asserts:
+      - equal:
+          path: metadata.labels.app
+          value: fulfillment-event-publisher
+      - equal:
+          path: spec.ports[0].name
+          value: metrics
+      - equal:
+          path: spec.ports[0].port
+          value: 8002
+
+  - it: exposes the console proxy metrics port and app label
+    template: templates/console-proxy/service.yaml
+    asserts:
+      - equal:
+          path: metadata.labels.app
+          value: fulfillment-console-proxy
+      - equal:
+          path: spec.ports[2].name
+          value: metrics
+      - equal:
+          path: spec.ports[2].port
+          value: 8002
+
+  - it: renders no console proxy service when disabled
+    template: templates/console-proxy/service.yaml
+    set:
+      consoleProxy.disabled: true
+    asserts:
+      - hasDocuments:
+          count: 0

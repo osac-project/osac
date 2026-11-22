@@ -1,3 +1,6 @@
+# The metering service serves both its health endpoints and /metrics on the
+# same listener. The umbrella chart's ServiceMonitor scrapes this Service on the
+# metrics port.
 apiVersion: v1
 kind: Service
 metadata:

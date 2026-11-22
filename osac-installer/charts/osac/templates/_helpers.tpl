@@ -270,6 +270,12 @@ cannot express.
 */}}
 {{- define "osac.validateValues" -}}
 {{- include "osac.networking.validate" . -}}
+{{- $observability := .Values.observability | default dict -}}
+{{- $collection := $observability.collection | default dict -}}
+{{- $osacInterval := $collection.osacControlPlane | default "30s" | toString -}}
+{{- if or (not (regexMatch "^([0-9]+(ms|s|m|h|d|w|y))+$" $osacInterval)) (not (regexMatch "[1-9]" $osacInterval)) }}
+  {{- fail (printf "observability.collection.osacControlPlane must be a positive Prometheus duration (got %q)" $osacInterval) }}
+{{- end }}
 {{- end -}}
 
 {{/*

@@ -4,10 +4,13 @@
 # Helm creates any chart resource, so a failure aborts the install with the
 # missing prerequisite named and nothing deployed.
 #
-# The object-storage Secret is read only when its namespace already exists.
-# On a first install this chart creates osac-observability after pre-install
-# hooks run, so that run validates everything else and the pre-upgrade run
-# repeats the Secret check before any upgrade changes the stack.
+# The gate owns the osac-observability namespace: the chart must not render a
+# Namespace object, because Helm would delete it, the admin's Secret and the
+# Receive and Compactor PVCs on the upgrade that sets enabled: false. This
+# script creates the namespace when it does not exist, labels it for platform
+# monitoring on every run, and then requires the object-storage Secret. The
+# Secret check runs on the first install too: skipping it there let an enabled
+# install come up with no object storage at all.
 
 set -euo pipefail
 
@@ -35,15 +38,30 @@ if [ -z "${endpoint}" ]; then
 fi
 
 if namespace_output=$(oc get namespace "${namespace}" -o name 2>&1); then
-  if ! oc get secret "${secret_name}" -n "${namespace}" >/dev/null 2>&1; then
-    fail "observability object-storage Secret \"${secret_name}\" was not found in namespace \"${namespace}\""
-  fi
+  :
 elif printf '%s\n' "${namespace_output}" | grep -q "NotFound"; then
-  echo "namespace \"${namespace}\" is created by this release; the object-storage Secret check runs on pre-upgrade"
+  if ! create_output=$(oc create namespace "${namespace}" 2>&1); then
+    # A concurrent create can win the race; only a real failure aborts.
+    if ! printf '%s\n' "${create_output}" | grep -q "AlreadyExists"; then
+      printf '%s\n' "${create_output}" >&2
+      fail "could not create namespace \"${namespace}\""
+    fi
+  else
+    echo "created namespace \"${namespace}\""
+  fi
 else
   # Any other error is unexpected; fail closed rather than skipping the check.
   printf '%s\n' "${namespace_output}" >&2
   fail "could not read namespace \"${namespace}\""
+fi
+
+if ! label_output=$(oc label namespace "${namespace}" openshift.io/cluster-monitoring=true --overwrite 2>&1); then
+  printf '%s\n' "${label_output}" >&2
+  fail "could not label namespace \"${namespace}\" for platform monitoring"
+fi
+
+if ! oc get secret "${secret_name}" -n "${namespace}" >/dev/null 2>&1; then
+  fail "observability object-storage Secret \"${secret_name}\" was not found in namespace \"${namespace}\""
 fi
 
 host="${endpoint#*://}"

@@ -3,6 +3,7 @@ templates:
   - templates/observability/*.yaml
   - templates/hooks/observability-pre-install-validate.yaml
   - templates/hooks/observability-remote-write.yaml
+  - templates/hooks/observability-unlabel-namespace.yaml
 release:
   name: osac
   namespace: osac
@@ -17,25 +18,35 @@ set:
   global.observability.services.metricsAuth.tag: test-metrics-auth
 
 tests:
-  - it: labels the observability namespace for platform monitoring
-    template: templates/observability/namespace.yaml
+  # Helm must not own osac-observability: a rendered Namespace is deleted by the
+  # upgrade that disables observability, which would also take the admin's Secret
+  # and the Receive and Compactor PVCs with it. The prerequisite gate creates and
+  # labels the namespace, and the disabled revision only removes the label.
+  - it: creates and labels the observability namespace from the prerequisite gate
+    template: templates/hooks/observability-pre-install-validate.yaml
+    set:
+      global.observability.objectStorage.secretName: thanos-object-storage
+      global.observability.objectStorage.endpoint: https://s3.example.com
+    documentIndex: 3
     asserts:
       - isKind:
-          of: Namespace
-      - equal:
-          path: metadata.name
-          value: osac-observability
-      - equal:
-          path: metadata.labels["openshift.io/cluster-monitoring"]
-          value: "true"
-
-  - it: renders no observability namespace when disabled
-    template: templates/observability/namespace.yaml
-    set:
-      global.observability.enabled: false
-    asserts:
-      - hasDocuments:
-          count: 0
+          of: Job
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: oc get namespace "\$\{namespace\}" -o name
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: oc create namespace "\$\{namespace\}"
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: >-
+            oc label namespace "\$\{namespace\}"
+            openshift\.io/cluster-monitoring=true --overwrite
+      # A missing Secret fails the first install too; deleting the
+      # namespace-is-new branch is what previously let it through.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: oc get secret "\$\{secret_name\}" -n "\$\{namespace\}"
 
   - it: labels the release namespace from a pre-install and pre-upgrade hook
     template: templates/observability/label-namespaces.yaml
@@ -385,15 +396,25 @@ tests:
           value: [osac-observability]
       - equal:
           path: rules[0].verbs
-          value: [get]
+          value: [get, patch, update]
+      # create cannot be limited by resourceNames; the grant is hook-only and is
+      # deleted when the gate succeeds.
       - equal:
           path: rules[1].resources
-          value: [secrets]
-      - equal:
+          value: [namespaces]
+      - notExists:
           path: rules[1].resourceNames
-          value: [thanos-object-storage]
       - equal:
           path: rules[1].verbs
+          value: [create]
+      - equal:
+          path: rules[2].resources
+          value: [secrets]
+      - equal:
+          path: rules[2].resourceNames
+          value: [thanos-object-storage]
+      - equal:
+          path: rules[2].verbs
           value: [get]
 
   - it: binds the prerequisite role to its own service account
@@ -463,3 +484,69 @@ tests:
           content:
             name: OBS_ENDPOINT
             value: https://s3.example.com
+
+  - it: renders no namespace-cleanup hook while observability is enabled
+    template: templates/hooks/observability-unlabel-namespace.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: removes the observability namespace label on upgrade when disabled
+    template: templates/hooks/observability-unlabel-namespace.yaml
+    set:
+      global.observability.enabled: false
+    documentIndex: 3
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: metadata.name
+          value: osac-unlabel-observability-namespace
+      - equal:
+          path: metadata.namespace
+          value: osac
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "0"
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: osac-unlabel-observability-namespace
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      # Only the label is removed. The namespace itself, the admin's Secret and
+      # the Receive and Compactor PVCs must survive a disable.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: kubectl label namespace osac-observability openshift\.io/cluster-monitoring-
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: kubectl get namespace osac-observability
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: kubectl (delete|create) namespace
+
+  - it: restricts the namespace-cleanup permission to the observability namespace
+    template: templates/hooks/observability-unlabel-namespace.yaml
+    set:
+      global.observability.enabled: false
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-upgrade
+      - equal:
+          path: rules[0].resources
+          value: [namespaces]
+      - equal:
+          path: rules[0].resourceNames
+          value: [osac-observability]
+      # Label removal is a patch; never a cluster-wide namespace write.
+      - equal:
+          path: rules[0].verbs
+          value: [get, patch, update]

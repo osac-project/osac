@@ -168,8 +168,6 @@ for forbidden in insecureSkipVerify bearerTokenSecret basicAuth oauth2; do
 done
 
 echo "checking platform monitoring discovery"
-require "${enabled}" 'name: osac-observability'
-require "${enabled}" 'openshift.io/cluster-monitoring: "true"'
 require "${enabled}" 'name: osac-prometheus-scrape'
 require "${enabled}" 'name: prometheus-k8s'
 require "${enabled}" 'namespace: openshift-monitoring'
@@ -336,6 +334,25 @@ enabled_jobs="${TMP_DIR}/enabled-jobs.yaml"
 extract_kind "${enabled}" Job >"${enabled_jobs}"
 require "${enabled_jobs}" 'name: osac-observability-preflight'
 require "${enabled_jobs}" 'pre-install,pre-upgrade'
+# Helm must not own the component namespace: a rendered Namespace object makes
+# the upgrade that disables observability delete the namespace, the admin's
+# Secret and the Receive and Compactor PVCs. The gate creates and labels it
+# instead, then requires the object-storage Secret on every install, including
+# the first one.
+enabled_namespaces="${TMP_DIR}/enabled-namespaces.yaml"
+extract_kind "${enabled}" Namespace >"${enabled_namespaces}"
+reject "${enabled_namespaces}" 'name: osac-observability'
+require "${enabled_jobs}" 'oc create namespace "${namespace}"'
+require "${enabled_jobs}" \
+  'oc label namespace "${namespace}" openshift.io/cluster-monitoring=true --overwrite'
+require "${enabled_jobs}" 'oc get secret "${secret_name}" -n "${namespace}"'
+preflight_role="${TMP_DIR}/preflight-clusterrole.yaml"
+extract_kind_name "${enabled}" ClusterRole osac-observability-preflight >"${preflight_role}"
+require "${preflight_role}" 'resourceNames: ["osac-observability"]'
+require "${preflight_role}" 'verbs: ["get", "patch", "update"]'
+# create cannot be restricted by resourceNames, so the grant is a hook-only
+# ClusterRole that Helm deletes when the gate succeeds.
+require "${preflight_role}" 'verbs: ["create"]'
 
 echo "checking the admin query routes and proxies"
 # The Routes take their hosts from global.clusterDomain, which the baseline
@@ -444,6 +461,17 @@ disabled_jobs="${TMP_DIR}/disabled-jobs.yaml"
 extract_kind "${disabled}" Job >"${disabled_jobs}"
 require "${disabled_jobs}" 'name: osac-unlabel-namespaces'
 require "${disabled_jobs}" 'pre-upgrade'
+# Disabling removes the osac-observability cluster-monitoring label but never
+# the namespace: the admin's Secret and the Receive and Compactor PVCs live
+# there and must survive a disable/re-enable cycle.
+unlabel_obs="${TMP_DIR}/unlabel-observability-namespace.yaml"
+extract_kind_name "${disabled}" Job osac-unlabel-observability-namespace \
+  >"${unlabel_obs}"
+require "${unlabel_obs}" 'name: osac-unlabel-observability-namespace'
+require "${unlabel_obs}" 'pre-upgrade'
+require "${unlabel_obs}" 'openshift.io/cluster-monitoring-'
+reject "${unlabel_obs}" 'create namespace'
+reject "${unlabel_obs}" 'delete namespace'
 # Disabling observability removes the scrapes and their Prometheus RBAC, but the
 # operators keep serving HTTPS metrics on 8443 with the service-CA certificate.
 require "${disabled}" '--metrics-bind-address=:8443'

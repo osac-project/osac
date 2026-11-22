@@ -6,9 +6,12 @@
 {{- $name := printf "%s-observability-preflight" $fullname -}}
 {{- /* A pre-install hook runs before Helm creates any chart resource, so the
        osac-observability Namespace and a namespaced Role do not exist yet. The
-       read is therefore granted by a ClusterRole restricted to the one Secret
-       and the one Namespace name, and all preflight RBAC is a hook resource
-       deleted when the hook succeeds. */ -}}
+       gate therefore creates and labels that namespace itself; the chart must
+       never render it, or Helm would delete it together with the admin's Secret
+       and the Receive and Compactor PVCs when observability is disabled. The
+       get/patch/update rule is limited by resourceNames to that one namespace.
+       `create` cannot be scoped by resourceNames, so it stands alone; the whole
+       ClusterRole is a hook resource that Helm deletes when the gate succeeds. */ -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -35,7 +38,10 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces"]
     resourceNames: ["osac-observability"]
-    verbs: ["get"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create"]
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames: [{{ $secretName | quote }}]

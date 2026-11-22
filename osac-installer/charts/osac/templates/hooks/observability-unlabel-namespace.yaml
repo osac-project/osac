@@ -1,0 +1,125 @@
+{{- if not (.Values.global.observability.enabled | default false) }}
+{{- $fullname := include "osac.fullname" . -}}
+{{- $name := printf "%s-unlabel-observability-namespace" $fullname -}}
+{{- /*
+The osac-observability namespace is not owned by Helm (see
+observability-pre-install-validate.yaml): the prerequisite gate creates and
+labels it, so disabling observability must undo only the label. The namespace,
+the admin's Secret and the Receive and Compactor PVCs stay in place, and a
+re-enable finds them intact. This Job has only the pre-upgrade event, so a fresh
+disabled install neither creates nor runs it.
+*/ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames: ["osac-observability"]
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        {{- include "osac.labels" . | nindent 8 }}
+      annotations:
+        openshift.io/required-scc: restricted-v2
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: {{ $name }}
+      restartPolicy: Never
+      containers:
+        - name: unlabel-observability-namespace
+          image: {{ .Values.cliImage }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              if ! kubectl get namespace osac-observability -o name >/dev/null 2>&1; then
+                echo "namespace osac-observability does not exist; nothing to unlabel"
+                exit 0
+              fi
+              kubectl get namespace osac-observability -o jsonpath='{.metadata.labels.openshift\.io/cluster-monitoring}' > /tmp/monitoring-label
+              current=$(cat /tmp/monitoring-label)
+              if [ -n "$current" ]; then
+                kubectl label namespace osac-observability openshift.io/cluster-monitoring-
+              fi
+          env:
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

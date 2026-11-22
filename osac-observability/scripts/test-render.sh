@@ -128,13 +128,24 @@ disabled="${TMP_DIR}/disabled.yaml"
 "${HELM_BIN}" "${COMMON_ARGS[@]}" "${OBS_ARGS[@]}" >"${enabled}"
 "${HELM_BIN}" "${COMMON_ARGS[@]}" >"${disabled}"
 
-echo "checking the observability subchart renders only when enabled"
+echo "checking the observability namespace is not owned by Helm"
+# A rendered Namespace object is deleted by the upgrade that disables
+# observability, which would also delete the admin's Secret and the Receive and
+# Compactor PVCs. The pre-install gate creates and labels the namespace instead
+# and only removes the label when observability is disabled.
 extract_kind "${enabled}" Namespace >"${TMP_DIR}/enabled-namespace.yaml"
 extract_kind "${disabled}" Namespace >"${TMP_DIR}/disabled-namespace.yaml"
-require "${TMP_DIR}/enabled-namespace.yaml" 'name: osac-observability'
+reject "${TMP_DIR}/enabled-namespace.yaml" 'name: osac-observability'
 if [ -s "${TMP_DIR}/disabled-namespace.yaml" ]; then
   fail "the observability namespace rendered while disabled"
 fi
+extract_kind "${enabled}" Job >"${TMP_DIR}/enabled-hook-jobs.yaml"
+require "${TMP_DIR}/enabled-hook-jobs.yaml" 'oc create namespace "${namespace}"'
+require "${TMP_DIR}/enabled-hook-jobs.yaml" \
+  'oc label namespace "${namespace}" openshift.io/cluster-monitoring=true --overwrite'
+extract_kind "${disabled}" Job >"${TMP_DIR}/disabled-hook-jobs.yaml"
+require "${TMP_DIR}/disabled-hook-jobs.yaml" \
+  'kubectl label namespace osac-observability openshift.io/cluster-monitoring-'
 
 echo "checking the four Thanos workloads render in the component namespace"
 for kind_name in \

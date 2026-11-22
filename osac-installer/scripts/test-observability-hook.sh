@@ -21,10 +21,12 @@ fail() {
 }
 
 # The stubs answer from environment variables so each case states only what it
-# changes.
+# changes. Every invocation is appended to STUB_CALLS so a case can prove that
+# the gate created and labeled the namespace before it checked the Secret.
 cat >"${STUB_DIR}/oc" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' "$*" >>"${STUB_CALLS:-/dev/null}"
 case "$*" in
   "get namespace osac-observability -o name")
     case "${STUB_NAMESPACE:-absent}" in
@@ -40,6 +42,12 @@ case "$*" in
         exit 1
         ;;
     esac
+    ;;
+  "create namespace osac-observability")
+    echo "namespace/osac-observability created"
+    ;;
+  "label namespace osac-observability openshift.io/cluster-monitoring=true --overwrite")
+    echo "namespace/osac-observability labeled"
     ;;
   "get secret "*" -n osac-observability")
     if [ "${STUB_SECRET:-missing}" != "present" ]; then
@@ -102,6 +110,21 @@ expect_exit() {
   echo "ok: ${name}"
 }
 
+# expect_calls <calls-file> <exact oc invocation...>: asserts that every listed
+# invocation was made, in no particular order.
+expect_calls() {
+  local calls=$1
+  local call
+  shift
+  for call in "$@"; do
+    if ! grep -Fxq -- "${call}" "${calls}"; then
+      echo "ERROR: expected oc invocation ${call@Q} was not made" >&2
+      cat "${calls}" >&2 || true
+      exit 1
+    fi
+  done
+}
+
 echo "checking the observability prerequisite gate"
 
 expect_exit empty-secret 1 \
@@ -120,11 +143,39 @@ expect_exit forbidden-namespace 1 \
   'could not read namespace "osac-observability"' \
   STUB_NAMESPACE=forbidden
 
-# The first install runs before this release creates osac-observability, so the
-# Secret cannot be read yet; the pre-upgrade run repeats the check.
-expect_exit first-install 0 \
-  'the object-storage Secret check runs on pre-upgrade' \
-  STUB_NAMESPACE=absent STUB_CERTMANAGER=served
+# On a first install no chart resource exists yet, so the gate itself creates
+# and labels osac-observability. The Secret must then exist: skipping the check
+# because the namespace was new let an enabled install come up without object
+# storage.
+first_install_calls="${TMP_DIR}/first-install.calls"
+expect_exit first-install-missing-secret 1 \
+  'observability object-storage Secret "thanos-object-storage" was not found in namespace "osac-observability"' \
+  STUB_NAMESPACE=absent STUB_SECRET=missing STUB_CERTMANAGER=served \
+  STUB_CALLS="${first_install_calls}"
+expect_calls "${first_install_calls}" \
+  'get namespace osac-observability -o name' \
+  'create namespace osac-observability' \
+  'label namespace osac-observability openshift.io/cluster-monitoring=true --overwrite'
+
+first_install_ok_calls="${TMP_DIR}/first-install-ok.calls"
+expect_exit first-install-creates-namespace 0 \
+  'observability prerequisites validated' \
+  STUB_NAMESPACE=absent STUB_SECRET=present STUB_CERTMANAGER=served \
+  STUB_CALLS="${first_install_ok_calls}"
+expect_calls "${first_install_ok_calls}" \
+  'create namespace osac-observability' \
+  'label namespace osac-observability openshift.io/cluster-monitoring=true --overwrite'
+
+# An upgrade relabels the existing namespace but must not try to create it.
+upgrade_calls="${TMP_DIR}/upgrade.calls"
+expect_exit upgrade-relabels 0 'observability prerequisites validated' \
+  STUB_NAMESPACE=present STUB_SECRET=present STUB_CERTMANAGER=served \
+  STUB_CALLS="${upgrade_calls}"
+expect_calls "${upgrade_calls}" \
+  'label namespace osac-observability openshift.io/cluster-monitoring=true --overwrite'
+if grep -Fxq -- 'create namespace osac-observability' "${upgrade_calls}"; then
+  fail "an existing namespace must not be created again"
+fi
 
 expect_exit unresolvable-endpoint 1 \
   'observability object-storage endpoint host "no-such-host" does not resolve' \

@@ -8,6 +8,7 @@
 
 - name: List cluster Machines before NodePool deletion
   kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     api_version: cluster.x-k8s.io/v1beta1
     kind: Machine
     namespace: "{{ hosted_control_plane_namespace }}"
@@ -27,6 +28,7 @@
 
 - name: Skip drain for cluster Machines before NodePool deletion
   kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     state: present
     merge_type: [merge]
     definition:
@@ -43,6 +45,7 @@
 
 - name: List NodePools owned by this cluster
   kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     api_version: hypershift.openshift.io/v1beta1
     kind: NodePool
     namespace: "{{ hosted_cluster_namespace }}"
@@ -52,6 +55,7 @@
 
 - name: Delete NodePool resources
   kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     state: absent
     api_version: hypershift.openshift.io/v1beta1
     kind: NodePool
@@ -65,6 +69,7 @@
 # the NodePool deletion; validate ownership again before changing anything.
 - name: List cluster Machines after NodePool deletion
   kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     api_version: cluster.x-k8s.io/v1beta1
     kind: Machine
     namespace: "{{ hosted_control_plane_namespace }}"
@@ -84,6 +89,7 @@
 
 - name: Skip drain for cluster Machines after NodePool deletion
   kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     state: present
     merge_type: [merge]
     definition:
@@ -100,6 +106,7 @@
 
 - name: Wait for NodePool resources to finish deleting
   kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     api_version: hypershift.openshift.io/v1beta1
     kind: NodePool
     namespace: "{{ hosted_cluster_namespace }}"
@@ -111,6 +118,7 @@
   delay: 10
 
 - name: Wait for baremetalworker to finish deleting workers
+  # ClusterOrder is a hub object: this watch stays on the in-cluster API.
   kubernetes.core.k8s_info:
     api_version: osac.openshift.io/v1alpha1
     kind: ClusterOrder
@@ -126,6 +134,7 @@
 
 - name: Delete Secret resource containing pull-secret
   kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     state: absent
     api_version: v1
     kind: secret
@@ -134,6 +143,7 @@
 
 - name: Delete Secret resource containing ssh-key
   kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     state: absent
     api_version: v1
     kind: secret
@@ -144,6 +154,7 @@
 # we remove the HostedCluster, as we do not create the ManagedCluster.
 - name: Delete ManagedCluster resource
   kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     state: absent
     api_version: cluster.open-cluster-management.io/v1
     kind: ManagedCluster
@@ -151,6 +162,7 @@
 
 - name: Delete HostedCluster resource
   kubernetes.core.k8s:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     state: absent
     api_version: hypershift.openshift.io/v1beta1
     kind: HostedCluster
@@ -162,6 +174,7 @@
 # teardown of the hosted cluster.
 - name: Wait for HostedCluster to finish deleting
   kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     api_version: hypershift.openshift.io/v1beta1
     kind: HostedCluster
     namespace: "{{ hosted_cluster_namespace }}"

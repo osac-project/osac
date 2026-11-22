@@ -53,6 +53,8 @@
           }}
 
     - name: Read user data from Secret
+      # Reads from the hub where the BareMetalInstance exists; the remote
+      # kubeconfig targets the outer cluster's hosts.
       when: template_params.get('userDataSecret', '') | length > 0
       kubernetes.core.k8s_info:
         api_version: v1

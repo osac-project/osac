@@ -18,6 +18,7 @@
 
 - name: List all agents in namespace
   kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     kind: Agent
     api_version: agent-install.openshift.io/v1beta1
     namespace: "{{ default_agent_namespace }}"
@@ -37,6 +38,7 @@
   block:
     - name: Clear clusterDeploymentName on each agent
       kubernetes.core.k8s_json_patch:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
         api_version: agent-install.openshift.io/v1beta1
         kind: Agent
         name: "{{ agent.metadata.name }}"
@@ -61,6 +63,7 @@
 
     - name: Wait for agents to return to available state
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
         kind: Agent
         api_version: agent-install.openshift.io/v1beta1
         namespace: "{{ default_agent_namespace }}"

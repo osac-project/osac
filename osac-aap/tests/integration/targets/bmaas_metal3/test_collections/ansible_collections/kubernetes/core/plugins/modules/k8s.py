@@ -59,6 +59,7 @@ def main():
         "kind": kind,
         "namespace": namespace,
         "name": name,
+        "kubeconfig": module.params.get("kubeconfig"),
         "definition": definition,
     }
     state.setdefault("operations", []).append(operation)

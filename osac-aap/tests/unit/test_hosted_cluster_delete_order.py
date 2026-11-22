@@ -74,6 +74,8 @@ def test_machine_selection_is_scoped_and_validated(phase: str) -> None:
     tasks = deletion_tasks_by_name()
     list_index, listing = tasks[f"List cluster Machines {phase} NodePool deletion"]
     assert listing["kubernetes.core.k8s_info"] == {
+        # Machines are infrastructure: the call follows the remote kubeconfig.
+        "kubeconfig": "{{ remote_cluster_kubeconfig | default(omit) }}",
         "api_version": "cluster.x-k8s.io/v1beta1",
         "kind": "Machine",
         "namespace": "{{ hosted_control_plane_namespace }}",
@@ -162,3 +164,31 @@ def test_skip_drain_preserves_teardown_and_is_delete_only() -> None:
             assert should_patch(item={"metadata": {"annotations": annotations}}) is expected
         assert should_patch(item={"metadata": {}}) is True
         assert "finalizers" not in str(patch)
+
+
+KUBECONFIG_ARG = "{{ remote_cluster_kubeconfig | default(omit) }}"
+HUB_EXCEPTIONS = ("Wait for baremetalworker to finish deleting workers",)
+
+
+def _k8s_calls(tasks: list[dict]) -> list[tuple[str, dict]]:
+    calls = []
+    for task in tasks:
+        for module in ("kubernetes.core.k8s", "kubernetes.core.k8s_info"):
+            if module in task:
+                calls.append((task["name"], task[module]))
+    return calls
+
+
+def test_every_delete_call_reaches_infrastructure_through_the_remote_kubeconfig() -> None:
+    """Machines, NodePools, HostedClusters, Secrets and the ManagedCluster
+    are infrastructure: every call that touches them follows the remote
+    kubeconfig. The ClusterOrder worker wait is the one hub object in the
+    flow and stays on the in-cluster API."""
+    calls = _k8s_calls(yaml.safe_load(DELETE_TASKS.read_text()))
+
+    assert calls, "the delete tasks must keep making k8s calls"
+    for name, args in calls:
+        if name in HUB_EXCEPTIONS:
+            assert "kubeconfig" not in args, name
+        else:
+            assert args.get("kubeconfig") == KUBECONFIG_ARG, name

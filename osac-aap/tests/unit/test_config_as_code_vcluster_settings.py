@@ -56,6 +56,8 @@ def render_controller(monkeypatch, environment):
         "VCLUSTER_TOKEN",
         "VCLUSTER_TOKEN_SECRET_NAME",
         "VCLUSTER_TOKEN_SECRET_KEY",
+        "REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME",
+        "REMOTE_CLUSTER_KUBECONFIG_SECRET_KEY",
         "NETRIS_CA_CONFIGMAP",
     ):
         monkeypatch.delenv(name, raising=False)

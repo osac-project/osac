@@ -36,6 +36,20 @@ def main():
     )
     resource = state.get("resources", {}).get(key)
     resources = [resource] if resource is not None else []
+    # Reads are recorded like writes so tests can assert which cluster each
+    # call targeted through the kubeconfig argument.
+    state.setdefault("operations", []).append(
+        {
+            "module": "k8s_info",
+            "apiVersion": module.params["api_version"],
+            "kind": module.params["kind"],
+            "namespace": module.params.get("namespace"),
+            "name": module.params.get("name"),
+            "kubeconfig": module.params.get("kubeconfig"),
+        }
+    )
+    with open(state_path, "w", encoding="utf-8") as state_file:
+        json.dump(state, state_file)
     module.exit_json(changed=False, resources=resources, api_found=True)
 
 

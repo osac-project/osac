@@ -1,6 +1,7 @@
 ---
 - name: List agents currently labeled with the cluster order label
   kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     kind: Agent
     api_version: agent-install.openshift.io/v1beta1
     namespace: "{{ default_agent_namespace }}"
@@ -50,6 +51,7 @@
 
 - name: Remove cluster_order_label from agents
   kubernetes.core.k8s_json_patch:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     api_version: agent-install.openshift.io/v1beta1
     kind: Agent
     name: "{{ agent.metadata.name }}"
@@ -70,6 +72,7 @@
 
 - name: Remove agentMachineRef label from agents
   kubernetes.core.k8s_json_patch:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     api_version: agent-install.openshift.io/v1beta1
     kind: Agent
     name: "{{ agent.metadata.name }}"

@@ -45,6 +45,10 @@
 
 # Fall back to provider default Secret if pull_secret or ssh_public_key still empty
 - name: Get default pull-secret and ssh-key from provider Secret
+  # The provider default Secret is a hub-side deployment object (its
+  # namespace is a role default, not a chart setting). The post-install
+  # flow also runs this role with K8S_AUTH_KUBECONFIG pointing at the
+  # guest hosted cluster, which an explicit kubeconfig here would override.
   when: >-
     not cluster_settings_pull_secret
     or not cluster_settings_ssh_public_key

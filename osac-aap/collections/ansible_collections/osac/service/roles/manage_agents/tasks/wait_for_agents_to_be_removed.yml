@@ -1,6 +1,7 @@
 ---
 - name: List agents currently labeled with the cluster order label
   kubernetes.core.k8s_info:
+    kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
     kind: Agent
     api_version: agent-install.openshift.io/v1beta1
     namespace: "{{ default_agent_namespace }}"
@@ -23,6 +24,7 @@
 
     - name: Wait for all expected agents to be removed from the cluster
       kubernetes.core.k8s_info:
+        kubeconfig: "{{ remote_cluster_kubeconfig | default(omit) }}"
         kind: Agent
         api_version: agent-install.openshift.io/v1beta1
         namespace: "{{ default_agent_namespace }}"

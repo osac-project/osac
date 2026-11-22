@@ -7,6 +7,7 @@
     workflow_status: unknown
   tasks:
     - name: Report workflow status
+      # The ClusterOrder is a hub object: this annotation stays in-cluster.
       when: >-
         workflow_status != "succeeded" or
         cluster_order.metadata.annotations["osac.openshift.io/ansible-workflow-status"] | default("") != workflow_status

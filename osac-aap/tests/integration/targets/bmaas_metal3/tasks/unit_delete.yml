@@ -6,6 +6,14 @@
     OSAC_BM_HOST_PROVISIONING_STATE: "{{ bm_test_state_file }}"
   vars:
     bare_metal_instance: "{{ bm_test_bare_metal_instance }}"
+  pre_tasks:
+    # The real playbook_osac_delete_bare_metal_instance.yml loads the remote
+    # kubeconfig before calling the template role; mirror it here so the
+    # recorded calls carry what production would pass.
+    - name: Include get remote cluster kubeconfig
+      ansible.builtin.include_role:
+        name: osac.service.common
+        tasks_from: get_remote_cluster_kubeconfig
   tasks:
     - name: Run the real Metal3 delete tasks
       ansible.builtin.include_role:

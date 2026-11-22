@@ -26,3 +26,11 @@ argument_specs:
           name:
             type: str
             required: true
+      finalizer_kubeconfig:
+        type: str
+        required: false
+        description: >-
+          Kubeconfig of the cluster holding the target, for finalizers on
+          infrastructure objects that live outside the hub. Unset, the calls
+          use the in-cluster (or K8S_AUTH_KUBECONFIG) credentials, which is
+          the behavior of every hub-side caller.

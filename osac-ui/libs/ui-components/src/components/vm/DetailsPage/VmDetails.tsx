@@ -8,7 +8,7 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 
-import { type ComputeInstance, DiskImages, InstanceTypes } from '@osac/types';
+import { type ComputeInstance, ComputeInstanceState, DiskImages, InstanceTypes } from '@osac/types';
 import { useGetResource } from '@osac/ui-components/api/use-resource';
 
 import VmDetailsActionButtons from './VmDetailsActionButtons';
@@ -44,6 +44,19 @@ const VmDetails = ({ vm }: Props) => {
     <>
       <PageSection hasBodyWrapper={false}>
         <Stack hasGutter>
+          {vm.status?.state === ComputeInstanceState.DELETING && (
+            <StackItem>
+              <Alert
+                variant="warning"
+                title={t('Virtual machine deletion in progress')}
+                role="status"
+                isInline
+                isLiveRegion
+              >
+                {t('Information on this page may be outdated.')}
+              </Alert>
+            </StackItem>
+          )}
           {instanceTypeError ? (
             <StackItem>
               <Alert variant="danger" title={t('Could not load instance types')} isInline>

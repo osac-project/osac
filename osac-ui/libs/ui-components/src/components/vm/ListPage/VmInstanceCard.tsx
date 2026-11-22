@@ -24,7 +24,7 @@ const VmInstanceCard = ({ vm }: VmInstanceCardProps) => {
   const { t } = useTranslation();
   const state = vm.status?.state;
   const locked = state === ComputeInstanceState.DELETING;
-  const detailsUrl = locked ? undefined : `/vms/${encodeURIComponent(vm.id)}`;
+  const detailsUrl = `/vms/${encodeURIComponent(vm.id)}`;
   const externalIp = vm.status?.externalIpAddress;
 
   return (

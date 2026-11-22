@@ -56,6 +56,28 @@ const (
 	NetworkJobStateCancelled NetworkJobState = "Cancelled"
 )
 
+// NetworkJobFailure records the latest failure of a provisioning attempt.
+type NetworkJobFailure struct {
+	// Reason classifies the failure without exposing provider details.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=ProviderReported;ResultRejected;TimedOut;JobLost;JobNotStarted;InvalidResult;ProviderError
+	Reason string `json:"reason"`
+
+	// Message is a fixed, tenant-safe description of the failure.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Message string `json:"message"`
+
+	// Attempt is the launch number that failed.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=1
+	Attempt int32 `json:"attempt"`
+
+	// ObservedAt is when the engine observed the failed outcome.
+	// +kubebuilder:validation:Required
+	ObservedAt metav1.Time `json:"observedAt"`
+}
+
 // NetworkJobStatus tracks the latest AAP job of one task on one manager
 // (contract §4.7 Job tracking). OSAC never removes an entry.
 type NetworkJobStatus struct {
@@ -85,6 +107,10 @@ type NetworkJobStatus struct {
 	// OSAC rejected the result; while retrying it also names the next retry time.
 	// +kubebuilder:validation:Optional
 	Message string `json:"message,omitempty"`
+
+	// LastFailure is the latest safe failure recorded for this task.
+	// +kubebuilder:validation:Optional
+	LastFailure *NetworkJobFailure `json:"lastFailure,omitempty"`
 }
 
 // NetworkManagerRef records one manager selected for a resource.

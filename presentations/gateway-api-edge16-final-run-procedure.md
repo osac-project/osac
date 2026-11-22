@@ -20,7 +20,9 @@ branch OSAC-7866/gateway-api-install.
 | 1 | `make uninstall-osac PLATFORM=openshift PROFILE=vmaas-ci NS=osac` | The `osac` helm release and everything it owns: deployments, pods, Services, the bridge SA/RBAC/Job, EndpointSlices, Secrets, hook resources |
 | 2 | `oc -n osac delete pvc postgres-15-osac-aap-postgres-15-0` | The AAP postgres PVC. PVCs survive helm uninstall; stale data with a regenerated secret key caused the AAP `run-migrations` `InvalidToken` crash loop on 2026-11-22 |
 | 3 | `oc -n osac delete tenant.osac.openshift.io osac` | Hand-created Tenant CR from debugging the REST 400 (not chart-owned) |
-| 4 | `oc -n osac delete endpointslice fulfillment-api-gateway fulfillment-internal-api-gateway` (only if any survive step 1) | No stale bridge pointing at an old gateway Pod IP |
+| 4 | `oc -n osac delete endpointslice fulfillment-api-gateway fulfillment-internal-api-gateway --wait=false` (only if any survive step 1) | No stale bridge pointing at an old gateway Pod IP |
+| 5 | `oc -n osac delete tenant shared system --wait=false` then, for each stuck tenant, `oc -n osac patch tenant <name> -p '{"metadata":{"finalizers":[]}}' --type=merge` | Tenant CRs carry operator finalizers (`osac.openshift.io/tenant`, `-feedback`, `storage`) that only the operator clears — and the operator is uninstalled first, so deletion hangs in Terminating forever without stripping them. `shared`/`system` are operator-created, not helm-owned, so the uninstall leaves them behind |
+| 6 | `oc -n osac delete job osac-aap-bootstrap osac-aap-create-token --wait=false` | Completed post-install hook Jobs with no `hook-delete-policy` survive the uninstall |
 
 Kept on purpose: the `osac-infra` release and
 `GatewayClass openshift-default`. install-infra stays green; no reason

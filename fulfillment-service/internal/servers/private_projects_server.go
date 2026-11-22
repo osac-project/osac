@@ -25,6 +25,8 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -44,6 +46,7 @@ type PrivateProjectsServer struct {
 	privatev1.UnimplementedProjectsServer
 	logger  *slog.Logger
 	generic *GenericServer[*privatev1.Project]
+	dao     *dao.GenericDAO[*privatev1.Project]
 }
 
 // NewPrivateProjectsServer creates a new builder for the private projects server.
@@ -98,6 +101,16 @@ func (b *PrivateProjectsServerBuilder) Build() (result *PrivateProjectsServer, e
 	// Create the server early, so that we can use its methods:
 	s := &PrivateProjectsServer{
 		logger: b.logger,
+	}
+
+	// Create the DAO used to read the project this server is asked to delete:
+	s.dao, err = dao.NewGenericDAO[*privatev1.Project]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
 	}
 
 	// Create the generic server:
@@ -188,8 +201,45 @@ func (s *PrivateProjectsServer) Update(ctx context.Context,
 
 func (s *PrivateProjectsServer) Delete(ctx context.Context,
 	request *privatev1.ProjectsDeleteRequest) (response *privatev1.ProjectsDeleteResponse, err error) {
+	// The project's unsent quota warnings reference the project with a foreign key and have
+	// no API of their own. Remove them here, when the deletion is accepted, so they cannot
+	// block the final removal of the project row:
+	if err = s.deleteQuotaOutbox(ctx, request.GetId()); err != nil {
+		return
+	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
+}
+
+// deleteQuotaOutbox removes the project's unsent quota warnings, the way the tenants server
+// removes a tenant's. The outbox rows reference the project with a foreign key and have no API
+// of their own, so they are removed in the Projects/Delete transaction: leaving them behind
+// would keep the project from being archived after its finalizers are gone.
+func (s *PrivateProjectsServer) deleteQuotaOutbox(ctx context.Context, id string) error {
+	getResponse, err := s.dao.Get().SetId(id).Do(ctx)
+	if err != nil {
+		// The generic Delete below refuses a missing project the same way:
+		return ConvertDAOErrorToGRPC(err, "get", id)
+	}
+	metadata := getResponse.GetObject().GetMetadata()
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to get transaction for quota outbox deletion",
+			slog.String("project", metadata.GetName()),
+			slog.Any("error", err))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to delete project '%s'", metadata.GetName())
+	}
+	_, err = tx.Exec(ctx,
+		`delete from quota_outbox where tenant = $1 and project::text = $2`,
+		metadata.GetTenant(), metadata.GetName())
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to delete quota outbox rows",
+			slog.String("tenant", metadata.GetTenant()),
+			slog.String("project", metadata.GetName()),
+			slog.Any("error", err))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to delete project '%s'", metadata.GetName())
+	}
+	return nil
 }
 
 func (s *PrivateProjectsServer) Signal(ctx context.Context,

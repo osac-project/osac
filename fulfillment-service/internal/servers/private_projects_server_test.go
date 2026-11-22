@@ -232,6 +232,49 @@ var _ = Describe("Private projects server", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
+	It("Deletes the project's quota outbox rows with the accepted delete", func() {
+		// Create a project:
+		createResp, err := privateServer.Create(ctx, privatev1.ProjectsCreateRequest_builder{
+			Object: privatev1.Project_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   "my-project",
+					Tenant: "my-tenant",
+				}.Build(),
+				Spec: privatev1.ProjectSpec_builder{
+					Title: "My Project",
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// The project's unsent quota warnings, which have no API of their own:
+		tx, err := database.TxFromContext(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = tx.Exec(ctx, `insert into quota_outbox (tenant, project, dimension, data)
+			values ('my-tenant', 'my-project'::ltree, 'compute.vcpus', '{}')`)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = tx.Exec(ctx, `insert into quota_outbox (tenant, project, dimension, data)
+			values ('my-tenant', ''::ltree, 'compute.vcpus', '{}')`)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Delete the project:
+		_, err = privateServer.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{
+			Id: createResp.Object.Id,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// The project's rows are gone, and the tenant's own stayed:
+		var count int
+		Expect(tx.QueryRow(ctx,
+			`select count(*) from quota_outbox where project::text = 'my-project'`).Scan(&count)).
+			To(Succeed())
+		Expect(count).To(BeZero())
+		Expect(tx.QueryRow(ctx,
+			`select count(*) from quota_outbox where project::text = ''`).Scan(&count)).
+			To(Succeed())
+		Expect(count).To(Equal(1))
+	})
+
 	It("Can delete the default project", func() {
 		// Find the default project:
 		listResponse, err := privateServer.List(ctx, privatev1.ProjectsListRequest_builder{

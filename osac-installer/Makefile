@@ -975,17 +975,28 @@ endif
 		validate_remote_kubeconfig_secret "$${REMOTE_KUBECONFIG_SECRET_NAME}" "$${REMOTE_KUBECONFIG_SECRET_KEY}"; \
 	fi; \
 	split_argv EXTRA_HELM_ARGS "$${EXTRA_HELM_ARGS}"; \
+	if [ "$(INGRESS_DRIVER)" = "gatewayapi" ]; then \
+		bash scripts/gateway-bridge.sh "$(NS)" & bridge_pid=$$!; \
+		trap 'kill $${bridge_pid} 2>/dev/null || true' EXIT; \
+	fi; \
 	helm upgrade --install osac "$${OSAC_CHART_OCI_REF:-$(OSAC_CHART)}" $${OSAC_CHART_OCI_VERSION:+--version "$${OSAC_CHART_OCI_VERSION}"} \
 		-f $(INSTANCE_VALUES) $${INSTANCE_VALUES_EXTRA} \
 		--namespace $(NS) --create-namespace \
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac --set ui.externalHostname=$(UI_HOSTNAME)) \
 		$(INSTANCE_HELM_ARGS) \
+		$(if $(filter gatewayapi,$(INGRESS_DRIVER)),--set service.ingress.driver=gatewayapi) \
 		$${ARGV[@]+"$${ARGV[@]}"} $(OSAC_HELM_FORCE_CONFLICTS) $(REMOTE_CLUSTER_HELM_ARGS) \
-		$(INSTALL_HELM_TARGET) --wait --timeout 40m
+		$(INSTALL_HELM_TARGET) --wait --timeout 40m; rc=$$?; \
+	if [ -n "$${bridge_pid:-}" ]; then wait $${bridge_pid} || true; fi; \
+	exit $$rc
 .PHONY: uninstall-osac
 uninstall-osac: validate-ns ## Uninstall OSAC instance (PLATFORM= PROFILE= NS= required)
 	helm uninstall osac --namespace $(NS) --ignore-not-found
+# The gateway bridge EndpointSlices are applied by scripts/gateway-bridge.sh
+# with the installer's credentials, not by helm, so uninstall must remove
+# them explicitly or a stale bridge breaks the next gatewayapi install.
+	oc delete endpointslice -n $(NS) fulfillment-api-gateway fulfillment-internal-api-gateway --ignore-not-found
 
 ##@ Entity: Dev Stack (kind PROFILE=dev-full only)
 

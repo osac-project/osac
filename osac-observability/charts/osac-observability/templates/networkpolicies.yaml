@@ -34,13 +34,6 @@ spec:
       ports:
         - protocol: TCP
           port: 9090
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: openshift-monitoring
-      ports:
-        - protocol: TCP
-          port: 9090
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -154,4 +147,23 @@ spec:
           port: 10901
         - protocol: TCP
           port: 19291
+---
+# The Compactor is not a serving endpoint: Query does not use it, and nothing
+# else is allowed to reach it. An explicit empty ingress list keeps it
+# reachable from no source at all even when another policy admits a pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: thanos-compactor
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- $thanosLabels | toYaml | nindent 6 }}
+      app.kubernetes.io/component: compactor
+  policyTypes:
+    - Ingress
+  ingress: []
 {{- end }}

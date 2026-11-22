@@ -58,6 +58,44 @@ extract_kind() {
   ' "${file}"
 }
 
+# Extract one kind with one metadata name, so per-route and per-proxy
+# assertions cannot match a sibling object of the same kind.
+extract_kind_name() {
+  local file=$1 kind=$2 name=$3
+  awk -v kind="${kind}" -v name="${name}" '
+    /^---[[:space:]]*$/ {
+      if (isKind && isName) printf "%s", doc
+      doc = ""
+      isKind = 0
+      isName = 0
+      next
+    }
+    { doc = doc $0 "\n" }
+    /^kind: / { if ($0 == "kind: " kind) isKind = 1 }
+    /^  name: / { if ($0 == "  name: " name) isName = 1 }
+    END { if (isKind && isName) printf "%s", doc }
+  ' "${file}"
+}
+
+# Extract one kind that also carries a namespace, so the checks cannot match a
+# same-kind object owned by another component of the umbrella chart.
+extract_kind_ns() {
+  local file=$1 kind=$2 namespace=$3
+  awk -v kind="${kind}" -v ns="${namespace}" '
+    /^---[[:space:]]*$/ {
+      if (isKind && isNs) printf "%s", doc
+      doc = ""
+      isKind = 0
+      isNs = 0
+      next
+    }
+    { doc = doc $0 "\n" }
+    /^kind: / { if ($0 == "kind: " kind) isKind = 1 }
+    /^  namespace: / { if ($0 == "  namespace: " ns) isNs = 1 }
+    END { if (isKind && isNs) printf "%s", doc }
+  ' "${file}"
+}
+
 COMMON_ARGS=(
   template osac "${CHART_DIR}"
   --namespace osac
@@ -124,14 +162,30 @@ require "${TMP_DIR}/thanos-compactor.yaml" '--downsampling.disable'
 reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-5m'
 reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-1h'
 
-echo "checking four network policies gate the store pods"
-extract_kind "${enabled}" NetworkPolicy >"${TMP_DIR}/networkpolicies.yaml"
-for policy in thanos-query thanos-authorizer thanos-store thanos-receive; do
-  require "${TMP_DIR}/networkpolicies.yaml" "name: ${policy}"
+echo "checking five network policies gate the store pods"
+policies="${TMP_DIR}/networkpolicies.yaml"
+extract_kind "${enabled}" NetworkPolicy >"${policies}"
+expect_count "${policies}" '^kind: NetworkPolicy' 5
+for policy in thanos-query thanos-authorizer thanos-store thanos-receive \
+  thanos-compactor; do
+  require "${policies}" "name: ${policy}"
 done
-reject "${TMP_DIR}/networkpolicies.yaml" 'podSelector: {}'
-reject "${TMP_DIR}/networkpolicies.yaml" 'osac.openshift.io/tenant'
-reject "${TMP_DIR}/networkpolicies.yaml" 'egress:'
+require "${policies}" 'app.kubernetes.io/component: compactor'
+# The Compactor is not a serving endpoint; an explicit empty ingress list keeps
+# every source out of it.
+require "${policies}" 'ingress: []'
+reject "${policies}" 'podSelector: {}'
+reject "${policies}" 'osac.openshift.io/tenant'
+reject "${policies}" 'egress:'
+# Cluster monitoring may scrape Store and write to Receive, but must not reach
+# the unrestricted Query API on 9090; only the authorizer and the admin proxies
+# may connect there.
+query_policy="${TMP_DIR}/networkpolicy-query.yaml"
+extract_kind_name "${enabled}" NetworkPolicy thanos-query >"${query_policy}"
+require "${query_policy}" 'port: 9090'
+expect_count "${query_policy}" 'port: 9090' 2
+reject "${query_policy}" 'namespaceSelector'
+reject "${query_policy}" 'openshift-monitoring'
 
 echo "checking the remote-write Job follows the switch"
 extract_kind "${enabled}" Job >"${TMP_DIR}/enabled-jobs.yaml"
@@ -145,44 +199,6 @@ reject "${disabled}" 'namespace: openshift-monitoring'
 require "${TMP_DIR}/enabled-jobs.yaml" 'value: "30s"'
 require "${TMP_DIR}/enabled-jobs.yaml" \
   'value: https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive'
-
-# Extract one kind with one metadata name, so per-route and per-proxy
-# assertions cannot match a sibling object of the same kind.
-extract_kind_name() {
-  local file=$1 kind=$2 name=$3
-  awk -v kind="${kind}" -v name="${name}" '
-    /^---[[:space:]]*$/ {
-      if (isKind && isName) printf "%s", doc
-      doc = ""
-      isKind = 0
-      isName = 0
-      next
-    }
-    { doc = doc $0 "\n" }
-    /^kind: / { if ($0 == "kind: " kind) isKind = 1 }
-    /^  name: / { if ($0 == "  name: " name) isName = 1 }
-    END { if (isKind && isName) printf "%s", doc }
-  ' "${file}"
-}
-
-# Extract one kind that also carries a namespace, so the checks cannot match a
-# same-kind object owned by another component of the umbrella chart.
-extract_kind_ns() {
-  local file=$1 kind=$2 namespace=$3
-  awk -v kind="${kind}" -v ns="${namespace}" '
-    /^---[[:space:]]*$/ {
-      if (isKind && isNs) printf "%s", doc
-      doc = ""
-      isKind = 0
-      isNs = 0
-      next
-    }
-    { doc = doc $0 "\n" }
-    /^kind: / { if ($0 == "kind: " kind) isKind = 1 }
-    /^  namespace: / { if ($0 == "  namespace: " ns) isNs = 1 }
-    END { if (isKind && isNs) printf "%s", doc }
-  ' "${file}"
-}
 
 echo "checking the admin query routes and proxies"
 # The Routes take their hosts from global.clusterDomain, which the enabled

@@ -23,7 +23,7 @@ set:
   global.observability.thanos.resolution.1h: 365d
 
 tests:
-  - it: admits only the authorizer, the auth proxy and cluster monitoring to Query
+  - it: admits only the authorizer and the auth proxy to Query
     template: templates/networkpolicies.yaml
     documentSelector:
       path: metadata.name
@@ -55,12 +55,15 @@ tests:
       - equal:
           path: spec.ingress[1].ports[0].port
           value: 9090
-      - equal:
-          path: spec.ingress[2].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
-          value: openshift-monitoring
-      - equal:
-          path: spec.ingress[2].ports[0].port
-          value: 9090
+      # The Query API is reachable only through the admin proxies; cluster
+      # monitoring must not reach port 9090 directly.
+      - lengthEqual:
+          path: spec.ingress
+          count: 2
+      - notExists:
+          path: spec.ingress[*].from[*].namespaceSelector
+      - isNotEmpty:
+          path: spec.ingress[*].from[*].podSelector
 
   - it: admits only the tenant auth proxy to the authorizer
     template: templates/networkpolicies.yaml
@@ -93,6 +96,10 @@ tests:
       - equal:
           path: spec.ingress[0].ports[0].port
           value: 10901
+      - isNotEmpty:
+          path: spec.ingress[*].from[*].podSelector
+      - isNotEmpty:
+          path: spec.ingress[*].from[*].namespaceSelector
       - equal:
           path: spec.ingress[1].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
           value: openshift-monitoring
@@ -141,16 +148,40 @@ tests:
       - equal:
           path: spec.ingress[4].ports[1].port
           value: 19291
+      - isNotEmpty:
+          path: spec.ingress[*].from[*].podSelector
+      - isNotEmpty:
+          path: spec.ingress[*].from[*].namespaceSelector
+
+  - it: denies every ingress to the Compactor
+    template: templates/networkpolicies.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-compactor
+    asserts:
+      - isKind:
+          of: NetworkPolicy
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/name"]
+          value: thanos
+      - equal:
+          path: spec.podSelector.matchLabels["app.kubernetes.io/component"]
+          value: compactor
+      - equal:
+          path: spec.policyTypes
+          value:
+            - Ingress
+      - lengthEqual:
+          path: spec.ingress
+          count: 0
+      - notExists:
+          path: spec.egress
 
   - it: never selects every pod or opens a tenant path
     template: templates/networkpolicies.yaml
     asserts:
       - exists:
           path: spec.podSelector.matchLabels
-      - isNotEmpty:
-          path: spec.ingress[*].from[*].podSelector
-      - isNotEmpty:
-          path: spec.ingress[*].from[*].namespaceSelector
       - notExists:
           path: spec.ingress[*].from[*].namespaceSelector.matchLabels["osac.openshift.io/tenant"]
       - notExists:
@@ -158,11 +189,11 @@ tests:
       - notExists:
           path: spec.ingress[*].from[*].podSelector.matchExpressions[0].key
 
-  - it: renders exactly four policies and no Compactor policy
+  - it: renders exactly five policies including the Compactor deny-all
     template: templates/networkpolicies.yaml
     asserts:
       - hasDocuments:
-          count: 4
+          count: 5
 
   - it: selects the pods Receive actually renders
     template: templates/receive.yaml

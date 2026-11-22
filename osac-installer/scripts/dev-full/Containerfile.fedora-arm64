@@ -2,7 +2,7 @@
 # from this image: disabling PCI MSI is a workaround for nested virtualization.
 FROM quay.io/containerdisks/fedora@sha256:4e905e6cdb66b93a82af98192452988c7f6777e67b7b2fdfd67598301ea4d759 AS upstream
 
-FROM registry.fedoraproject.org/fedora:45 AS customize
+FROM registry.fedoraproject.org/fedora:46 AS customize
 RUN dnf install -y guestfs-tools qemu-system-aarch64-core kernel-core && dnf clean all
 COPY --from=upstream /disk/ /disk/
 # The customization appliance uses software emulation so it does not depend on

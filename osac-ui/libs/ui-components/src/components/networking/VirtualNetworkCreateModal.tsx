@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Alert,
@@ -63,6 +63,7 @@ export const VirtualNetworkCreateModal = ({
   const navigate = useNavigate();
   const { t } = useTranslation();
   const { mutateAsync: create, error } = useCreateResource(VirtualNetworks);
+  const [submitError, setSubmitError] = useState<unknown>(null);
 
   const validationSchema = useMemo(
     () =>
@@ -83,6 +84,7 @@ export const VirtualNetworkCreateModal = ({
       }}
       validationSchema={validationSchema}
       onSubmit={async (values) => {
+        setSubmitError(null);
         let result: VirtualNetwork;
         try {
           const response = await create({
@@ -97,8 +99,8 @@ export const VirtualNetworkCreateModal = ({
             throw new Error('Create response missing id');
           }
           result = response.object;
-        } catch {
-          // tanstack handles the error
+        } catch (submissionError) {
+          setSubmitError(submissionError);
           return;
         }
         if (onCreated) {
@@ -121,10 +123,10 @@ export const VirtualNetworkCreateModal = ({
               <StackItem>
                 <VirtualNetworkCreateForm />
               </StackItem>
-              {!!error && (
+              {!!(submitError ?? error) && (
                 <StackItem>
                   <Alert variant="danger" title={t('Failed to create virtual network')} isInline>
-                    {getErrorMessage(error)}
+                    {getErrorMessage(submitError ?? error)}
                   </Alert>
                 </StackItem>
               )}

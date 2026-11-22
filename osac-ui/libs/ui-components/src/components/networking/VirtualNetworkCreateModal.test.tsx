@@ -169,4 +169,19 @@ describe('VirtualNetworkCreateModal', () => {
       expect(screen.getByText(/API error/i)).toBeInTheDocument();
     });
   });
+
+  it('shows error alert when create response is missing an id', async () => {
+    mutateAsync.mockResolvedValue({ object: {} });
+
+    const { user } = renderModal(mockOnClose);
+
+    await user.type(screen.getByLabelText(/Name/i), 'vn-prod');
+    await user.type(screen.getByLabelText(/IPv4 CIDR/i), '10.0.0.0/16');
+    await user.click(screen.getByRole('button', { name: /Create/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Create response missing id')).toBeInTheDocument();
+    });
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
 });

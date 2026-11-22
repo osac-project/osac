@@ -113,6 +113,22 @@ describe('SecurityGroupCreateModal', () => {
     });
   });
 
+  it('shows error alert when create response is missing an id', async () => {
+    const user = userEvent.setup();
+    mutateAsync.mockResolvedValue({ object: {} });
+
+    renderModal();
+
+    await user.click(screen.getByLabelText(/Virtual Network/i));
+    await user.click(screen.getByRole('option', { name: /vn-prod/i }));
+    await user.type(screen.getByLabelText(/Name/i), 'sg-web');
+    await user.click(screen.getByRole('button', { name: /Create/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Create response missing id')).toBeInTheDocument();
+    });
+  });
+
   it('calls onClose when Cancel is clicked', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();

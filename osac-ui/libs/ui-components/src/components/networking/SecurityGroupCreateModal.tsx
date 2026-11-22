@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MessageInitShape } from '@bufbuild/protobuf';
 import {
@@ -51,6 +52,7 @@ export const SecurityGroupCreateModal = ({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const createSecurityGroup = useCreateResource(SecurityGroups);
+  const [submitError, setSubmitError] = useState<unknown>(null);
   const {
     data: virtualNetworksResponse,
     isLoading,
@@ -74,6 +76,7 @@ export const SecurityGroupCreateModal = ({
       }}
       validationSchema={validationSchema(t)}
       onSubmit={async (values) => {
+        setSubmitError(null);
         try {
           const body: MessageInitShape<typeof SecurityGroupSchema> = {
             metadata: {
@@ -94,8 +97,8 @@ export const SecurityGroupCreateModal = ({
             throw new Error('Create response missing id');
           }
           navigate(`/networking/security-groups/${response.object.id}`);
-        } catch {
-          // Error is surfaced via createSecurityGroup.error below
+        } catch (error) {
+          setSubmitError(error);
         }
       }}
     >
@@ -109,10 +112,10 @@ export const SecurityGroupCreateModal = ({
           <ModalHeader title={t('Create security group')} labelId="sg-create-modal-title" />
           <ModalBody>
             <Stack hasGutter>
-              {!!createSecurityGroup.error && (
+              {!!(submitError ?? createSecurityGroup.error) && (
                 <StackItem>
                   <Alert variant="danger" title={t('Error')} isInline>
-                    {getErrorMessage(createSecurityGroup.error)}
+                    {getErrorMessage(submitError ?? createSecurityGroup.error)}
                   </Alert>
                 </StackItem>
               )}

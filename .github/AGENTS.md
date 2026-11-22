@@ -27,34 +27,14 @@ Read [CI.md](CI.md) before changing workflows, filters or policy.
 
 ## Validation
 
-Run from the repository root. The reusable `workflows/pre-commit.yaml` runs on
-every change and includes these regression checks:
+Select relevant checks from the repository root: actionlint for changed
+workflows, applicable pre-commit hooks, and inspection of affected selection,
+matrix and required-check reporting. Preserve the separate PR-range secret scan
+in `workflows/pre-commit.yaml` with its base-owned configuration.
 
-```bash
-uv run --no-project --with pyyaml==6.0.3 python -m unittest discover -s .github/scripts -p test_umbrella_release.py -v
-uv run --no-project --with pyyaml==6.0.3 python -m unittest discover -s .github/scripts -p test_release_versioning.py -v
-```
-
-Preserve `workflows/pre-commit.yaml`'s separate PR-range secret-scan consumer
-with base-owned configuration; contribution-level scanning is covered at root.
-
-| Touched area | Additional repository-root validation |
-|---|---|
-| Workflow/filter/policy | actionlint and applicable pre-commit hooks; inspect required-check reporting |
-| CaaS selection | `OSAC_TEST_INFRA_DIR=/path/to/osac-test-infra uv run pytest -n 0 tests/unit/test_caas_ci_suite_policy.py` (companion checks skip without that checkout) |
-| Flake reporting | `python3 -m unittest discover -s .github/scripts -p test_flake_report.py` |
-
-Release helper tests use captured publication operations, not live registry or
-Konflux evidence; inspect prerequisites and [boundaries](../docs/INTEGRATION-TESTING.md#release-automation).
-
-## Component-hooks and sandbox regression smoke tests
-
-Follow the [local commands and production boundary](../.agentic-ci/AGENTS.md).
-The workflow stays present on every PR and merge-group run, including unrelated
-changes that skip execution.
-Its path filter uses one brace-alternation entry because `predicate-quantifier:
-every` combines separate entries with AND. Keep overlay/helper, test, and Python
-setup paths in that entry. See the [sandbox coverage boundary](../docs/INTEGRATION-TESTING.md#agentic-ci-sandbox).
+Local checks do not establish hosted scheduling, publication or deployed E2E
+success. Report those limitations when relevant; do not add a new test harness
+for routine workflow edits.
 
 ## Release safety
 

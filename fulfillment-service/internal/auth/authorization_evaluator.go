@@ -45,6 +45,7 @@ type AuthzDecision struct {
 	Allowed               bool
 	Reason                string
 	SubjectUser           string   // The user extracted from OPA policy output (subject_user)
+	SubjectTenant         string   // The home tenant extracted from OPA policy output (subject_tenant)
 	SubjectTenants        []string // The tenants extracted from OPA policy output (subject_tenant_result)
 	ManagedServiceAccount bool
 }
@@ -308,6 +309,7 @@ func (e *OPAAuthorizationEvaluator) Evaluate(
 
 	// Extract subject data from OPA output
 	subjectUser, _ := authzData["subject_user"].(string)
+	subjectTenant, _ := authzData["subject_tenant"].(string)
 
 	var subjectTenants []string
 	if tenantValues, ok := authzData["subject_tenant_result"].([]any); ok {
@@ -321,6 +323,7 @@ func (e *OPAAuthorizationEvaluator) Evaluate(
 	decision := &AuthzDecision{
 		Allowed:               allow,
 		SubjectUser:           subjectUser,
+		SubjectTenant:         subjectTenant,
 		SubjectTenants:        subjectTenants,
 		ManagedServiceAccount: managedServiceAccount,
 	}

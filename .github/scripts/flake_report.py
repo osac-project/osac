@@ -92,11 +92,27 @@ def collect_jobs(
         conclusion = job["status"]
         if conclusion == "completed":
             conclusion = job.get("conclusion") or "unknown"
+        original_conclusion = conclusion
+        timeout_message = None
+        if conclusion == "cancelled":
+            if job.get("timeout_annotation_error") or type(job.get("timeout")) is not bool:
+                conclusion = "unverified_cancellation"
+                issues.append(f"Job {job['id']}: timeout classification unavailable; cancellation may be a timeout.")
+            elif job["timeout"]:
+                conclusion = "timed_out"
+                timeout_message = job.get("timeout_message")
+        timed_out = conclusion == "timed_out"
+        if timed_out:
+            conclusion = "failure"
         observations.append(
             {
                 "iteration": iteration,
                 "job_id": job["id"],
                 "conclusion": conclusion,
+                "original_conclusion": original_conclusion,
+                "timeout": timed_out,
+                "timeout_message": timeout_message,
+                "annotation_error": job.get("timeout_annotation_error"),
                 "failed_steps": [
                     step["name"] for step in job.get("steps", []) if step.get("conclusion") in ("failure", "timed_out")
                 ],
@@ -120,6 +136,7 @@ def summarize_suite(group: str, name: str, jobs: list[dict[str, Any]], expected:
         "expected": expected,
         "passed": passed,
         "failed": failed,
+        "timeouts": sum(job["timeout"] for job in jobs),
         "other": other,
         "incomplete": other + missing if missing is not None else None,
         "missing": missing,
@@ -199,6 +216,7 @@ def result_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "executions": executions,
         "completed": outcomes["success"] + outcomes["failure"],
         "failed": outcomes["failure"],
+        "timeouts": sum(row["timeouts"] for row in rows),
         "cancelled": outcomes["cancelled"],
         "affected": sum(bool(row["failed"] or row["other"] or row["missing"]) for row in rows),
         "missing": missing,
@@ -217,6 +235,21 @@ def format_overall_failure_risk(report: dict[str, Any]) -> str:
         return "Unavailable"
     risk = 1 - math.prod(1 - suite["failed"] / (suite["passed"] + suite["failed"]) for suite in report["suites"])
     return f"{risk:.1%}"
+
+
+def suite_status_icon(suite: dict[str, Any], summary: dict[str, Any]) -> str:
+    all_cancelled = summary["complete"] and summary["cancelled"] == summary["executions"] == suite["expected"]
+    if all_cancelled:
+        return INCOMPLETE_ICON
+    return status_icon(bool(summary["failed"] or summary["cancelled"]), not summary["complete"])
+
+
+def format_timeout_note(summary: dict[str, Any]) -> str:
+    count = summary["timeouts"]
+    if not count:
+        return ""
+    noun = "timeout" if count == 1 else "timeouts"
+    return "all timeouts" if count == summary["failed"] else f"including {count:,} {noun}"
 
 
 def format_failure_rate(summary: dict[str, Any], *, compact: bool = False) -> str:
@@ -327,11 +360,11 @@ def render_suite_table(report: dict[str, Any]) -> list[str]:
         lines.extend(["", f"### {title}", "", "| Suite | Failed / Completed | Failure rate |", "|---|---:|---:|"])
         for suite in suites:
             summary = result_summary([suite])
-            icon = status_icon(bool(summary["failed"] or summary["cancelled"]), not summary["complete"])
+            icon = suite_status_icon(suite, summary)
             rate = format_failure_rate(summary)
             if suite["failed"]:
                 rate = f"**{rate}**"
-            notes = format_result_notes(summary)
+            notes = " · ".join(note for note in (format_timeout_note(summary), format_result_notes(summary)) if note)
             extra = f" · {notes}" if notes else ""
             lines.append(
                 f"| {icon} {suite_name(suite)} | {suite['failed']:,} / {summary['completed']:,} | {rate}{extra} |"
@@ -355,7 +388,12 @@ def render_execution_tables(report: dict[str, Any]) -> list[str]:
                 )
                 job = f"[View job]({execution['url']})"
                 failed = execution["conclusion"] == "failure"
-                if not failed:
+                if execution["timeout"]:
+                    detail = execution["timeout_message"]
+                    job += " · **Timeout**"
+                    if detail:
+                        job += f" — {html.escape(detail).replace('|', '&#124;')}"
+                elif not failed:
                     job += f" · {execution['conclusion'].replace('_', ' ')}"
                 row = (
                     f"| {group} / {suite_name(suite)} | {execution['iteration']}/{expected} | "
@@ -377,7 +415,7 @@ def render_execution_tables(report: dict[str, Any]) -> list[str]:
                 f"{len(failed_rows):,} failed {executions} across {len(failed_suites)} {suites}. "
                 "Each job and artifact link points to the corresponding execution.",
                 "",
-                "| Suite | Execution | Failed job | Artifacts |",
+                "| Suite | Execution | Job and outcome | Artifacts |",
                 "|---|---:|---|---|",
                 *failed_rows,
             ]
@@ -432,7 +470,9 @@ def render_markdown(report: dict[str, Any]) -> str:
         "",
         "Overall failure risk is calculated from observed suite failure rates using "
         "`1 - product(1 - suite failure rate)`, assuming independent suite outcomes. "
-        "Failure rates use completed executions (success + failure), excluding cancellations. "
+        "Failure rates use completed executions (success + failure). Failures include native job timeouts "
+        "and cancellations explicitly identified by GitHub as exceeding the job execution limit. "
+        "Other cancellations are excluded. Unverified cancellations make the report incomplete. "
         "Risk is unavailable if any suite has no completed executions. "
         "Zero observed failures do not establish zero future risk.",
     ]
@@ -459,7 +499,7 @@ def slack_group_summary(title: str, suites: list[dict[str, Any]]) -> str:
         if result["complete"] and not (result["failed"] or result["cancelled"]):
             clean_count += 1
             continue
-        icon = status_icon(bool(result["failed"] or result["cancelled"]), not result["complete"])
+        icon = suite_status_icon(suite, result)
         rate = format_failure_rate(result, compact=True)
         notes = format_result_notes(result | {"cancelled": 0})
         extra = f" · {notes}" if notes else ""
@@ -467,8 +507,11 @@ def slack_group_summary(title: str, suites: list[dict[str, Any]]) -> str:
             outcome = f"{result['cancelled']:,}/{result['executions']:,} executions cancelled."
         else:
             outcome = f"{result['failed']:,}/{result['completed']:,} executions failed ({rate})"
+            timeout_note = format_timeout_note(result)
+            if timeout_note:
+                outcome += f", {timeout_note}"
             if result["cancelled"]:
-                outcome += f", {result['cancelled']:,} cancelled."
+                outcome += f"; {result['cancelled']:,} cancelled."
         lines.append(f"- {icon} {suite_name(suite, slack=True)}: {outcome}{extra}")
     if clean_count:
         noun = "suite" if clean_count == 1 else "suites"

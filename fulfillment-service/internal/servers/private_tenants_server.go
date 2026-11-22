@@ -29,7 +29,6 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	"github.com/osac-project/osac/fulfillment-service/internal/password"
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -201,24 +200,6 @@ func (s *PrivateTenantsServer) Create(ctx context.Context,
 
 	if err = s.validateBreakGlassCredentialsSecret(ctx, object, false); err != nil {
 		return
-	}
-
-	// Only generate break-glass credentials when the caller did NOT supply a secret reference.
-	// When a reference is provided the reconciler reads the password from the Secret directly.
-	if object.GetSpec().GetBreakGlassCredentialsSecret() == nil {
-		pw, genErr := password.Generate()
-		if genErr != nil {
-			err = grpcstatus.Errorf(grpccodes.Internal, "failed to generate break-glass password: %v", genErr)
-			return
-		}
-		if !object.HasStatus() {
-			object.SetStatus(&privatev1.TenantStatus{})
-		}
-		creds := privatev1.BreakGlassCredentials_builder{
-			Username: fmt.Sprintf("%s-osac-break-glass", name),
-			Password: pw,
-		}.Build()
-		object.GetStatus().SetBreakGlassCredentials(creds)
 	}
 
 	// Domain validation is now handled by protovalidate in the interceptor

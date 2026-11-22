@@ -14,20 +14,16 @@ Early Autofix sandbox feedback; ordinary GitHub CI remains authoritative.
 
 ## Local validation
 
-From the repository root, after selector, overlay or regression changes:
-
-```bash
-uv run --no-project --with 'pyyaml>=6.0' python tools/test/agentic-ci-validation-smoke.py
-bash tools/test/component-hooks-smoke.sh
-```
-
-These smoke checks do not replace the production scenarios below. Workflow
-changes also require actionlint and the applicable root pre-commit checks.
+Inspect changed selector and overlay paths and run the relevant existing lint
+checks from the repository root. Workflow changes use actionlint and applicable
+pre-commit hooks. Preserve path selection, failure propagation and required-check
+reporting; do not add meta-tests for routine wiring changes.
 
 <a id="touched-area-map"></a>
 
 ## Production boundary
 
-Selector/setup changes also require [production component scenarios](../docs/INTEGRATION-TESTING.md#agentic-ci-sandbox).
-Dependency-discard changes require the profiling/restoration checks there.
-Workflow/filter changes must retain [PR and merge-group reporting](../.github/AGENTS.md#component-hooks-and-sandbox-regression-smoke-tests).
+Use the [sandbox guide](../docs/INTEGRATION-TESTING.md#agentic-ci-sandbox) for
+production runner boundaries. Run an authorized production scenario when the
+changed setup or runtime behavior needs it; report unavailable environments
+rather than treating local checks as production evidence.

@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
@@ -141,17 +142,9 @@ func (b *PrivateSecretsServerBuilder) Build() (result *PrivateSecretsServer, err
 // to fetch individual secrets with populated data.
 func (s *PrivateSecretsServer) List(ctx context.Context,
 	request *privatev1.SecretsListRequest) (response *privatev1.SecretsListResponse, err error) {
-	canReadCredentials, err := s.canReadServiceAccountCredentials(ctx)
+	request, err = s.filterProtectedSecrets(ctx, request)
 	if err != nil {
 		return nil, err
-	}
-	if !canReadCredentials {
-		request = proto.Clone(request).(*privatev1.SecretsListRequest)
-		credentialFilter := fmt.Sprintf("this.type != %d", privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL)
-		if filter := request.GetFilter(); filter != "" {
-			credentialFilter = fmt.Sprintf("(%s) && (%s)", filter, credentialFilter)
-		}
-		request.SetFilter(credentialFilter)
 	}
 	err = s.generic.List(ctx, request, &response)
 	return
@@ -168,7 +161,7 @@ func (s *PrivateSecretsServer) Get(ctx context.Context,
 	if err = s.authorizePlatformSecretManagement(ctx, obj); err != nil {
 		return
 	}
-	if err = s.authorizeServiceAccountCredential(ctx, obj, false); err != nil {
+	if err = s.authorizeProtectedSecret(ctx, obj, false); err != nil {
 		return
 	}
 	if obj.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
@@ -216,7 +209,7 @@ func (s *PrivateSecretsServer) Create(ctx context.Context,
 	if err != nil {
 		return
 	}
-	if err = s.authorizeServiceAccountCredential(ctx, secret, true); err != nil {
+	if err = s.authorizeProtectedSecret(ctx, secret, true); err != nil {
 		return
 	}
 
@@ -299,7 +292,7 @@ func (s *PrivateSecretsServer) Update(ctx context.Context,
 	if err = s.authorizePlatformSecretManagement(ctx, existingSecret); err != nil {
 		return
 	}
-	if err = s.authorizeServiceAccountCredential(ctx, existingSecret, true); err != nil {
+	if err = s.authorizeProtectedSecret(ctx, existingSecret, true); err != nil {
 		return
 	}
 
@@ -359,7 +352,7 @@ func (s *PrivateSecretsServer) Delete(ctx context.Context,
 	if err = s.authorizePlatformSecretManagement(ctx, obj); err != nil {
 		return
 	}
-	if err = s.authorizeServiceAccountCredential(ctx, obj, true); err != nil {
+	if err = s.authorizeProtectedSecret(ctx, obj, true); err != nil {
 		return
 	}
 
@@ -415,20 +408,51 @@ func (s *PrivateSecretsServer) canManagePlatformSecrets(ctx context.Context) (bo
 	return assignable.Universal(), nil
 }
 
-func (s *PrivateSecretsServer) canReadServiceAccountCredentials(ctx context.Context) (bool, error) {
+func (s *PrivateSecretsServer) canReadProtectedSecrets(ctx context.Context) (bool, error) {
 	if auth.IsTenantAdmin(ctx) || auth.IsControllerServiceAccount(ctx) {
 		return true, nil
 	}
 	return s.canManagePlatformSecrets(ctx)
 }
 
-func (s *PrivateSecretsServer) authorizeServiceAccountCredential(ctx context.Context,
+// filterProtectedSecrets removes all secret classes that ordinary callers must
+// not discover through List. The object-level authorization remains necessary
+// because callers can request a protected object directly by ID.
+func (s *PrivateSecretsServer) filterProtectedSecrets(ctx context.Context,
+	request *privatev1.SecretsListRequest) (*privatev1.SecretsListRequest, error) {
+	allowed, err := s.canReadProtectedSecrets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if allowed {
+		return request, nil
+	}
+
+	if filter := request.GetFilter(); filter != "" {
+		if err := validateCELSyntax(filter); err != nil {
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %s", err)
+		}
+	}
+
+	request = proto.Clone(request).(*privatev1.SecretsListRequest)
+	protectedFilter := fmt.Sprintf("this.type != %d && !this.metadata.name.contains(%q)",
+		privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL,
+		breakGlassCredentialsSecretName)
+	if filter := request.GetFilter(); filter != "" {
+		protectedFilter = fmt.Sprintf("(%s) && (%s)", filter, protectedFilter)
+	}
+	request.SetFilter(protectedFilter)
+	return request, nil
+}
+
+func (s *PrivateSecretsServer) authorizeProtectedSecret(ctx context.Context,
 	secret *privatev1.Secret, mutate bool) error {
-	if secret == nil || secret.GetType() != privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL {
+	if !isProtectedSecret(secret) {
 		return nil
 	}
+
 	if !mutate {
-		allowed, err := s.canReadServiceAccountCredentials(ctx)
+		allowed, err := s.canReadProtectedSecrets(ctx)
 		if err != nil {
 			return err
 		}
@@ -436,7 +460,7 @@ func (s *PrivateSecretsServer) authorizeServiceAccountCredential(ctx context.Con
 			return nil
 		}
 		return grpcstatus.Error(grpccodes.PermissionDenied,
-			"service-account credential Secrets can only be read by tenant admins and managed by platform administrators or controllers")
+			"protected Secrets can only be read by tenant admins and managed by platform administrators or controllers")
 	}
 	if auth.IsControllerServiceAccount(ctx) {
 		return nil
@@ -448,9 +472,17 @@ func (s *PrivateSecretsServer) authorizeServiceAccountCredential(ctx context.Con
 	}
 	if !allowed {
 		return grpcstatus.Error(grpccodes.PermissionDenied,
-			"service-account credential Secrets can only be read by tenant admins and managed by platform administrators or controllers")
+			"protected Secrets can only be read by tenant admins and managed by platform administrators or controllers")
 	}
 	return nil
+}
+
+func isProtectedSecret(secret *privatev1.Secret) bool {
+	if secret == nil {
+		return false
+	}
+	return secret.GetType() == privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL ||
+		strings.Contains(secret.GetMetadata().GetName(), breakGlassCredentialsSecretName)
 }
 
 func (s *PrivateSecretsServer) withSavepoint(ctx context.Context, operation func(context.Context) error) error {
@@ -472,7 +504,7 @@ func (s *PrivateSecretsServer) Signal(ctx context.Context,
 	if err = s.authorizePlatformSecretManagement(ctx, getResponse.GetObject()); err != nil {
 		return
 	}
-	if err = s.authorizeServiceAccountCredential(ctx, getResponse.GetObject(), true); err != nil {
+	if err = s.authorizeProtectedSecret(ctx, getResponse.GetObject(), true); err != nil {
 		return
 	}
 	err = s.generic.Signal(ctx, request, &response)

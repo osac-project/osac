@@ -197,6 +197,7 @@ jobs:
           osac-metering
           osac-csi-driver
           osac-ui
+          osac-observability
         )
 
         RELEASE_LINE=$(read_release_line .)
@@ -457,6 +458,7 @@ jobs:
           ["osac-metering"]="osac-metering/charts/osac-metering"
           ["osac-csi-driver"]="osac-csi-driver/charts/csi-driver osac-csi-driver/charts/csi-backends"
           ["osac-ui"]="osac-ui/charts/ui"
+          ["osac-observability"]="osac-observability/charts/osac-observability"
         )
 
         # Every Containerfile that accepts an ARG VERSION, stamped to the
@@ -477,6 +479,7 @@ jobs:
           ["osac-metering"]="osac-metering/metering-service/Containerfile osac-metering/adapters/Containerfile.m360-adapter osac-metering/adapters/Containerfile.echo-adapter"
           ["osac-csi-driver"]="osac-csi-driver/Containerfile"
           ["osac-ui"]="osac-ui/Containerfile"
+          ["osac-observability"]="osac-observability/Containerfile"
         )
 
         for COMPONENT in $(printf '%s\n' "${!SUB_CHARTS[@]}" | sort); do
@@ -710,6 +713,13 @@ jobs:
             target: image-build
             push_target: image-push
             image: ghcr.io/osac-project/osac-ui
+          - name: osac-observability
+            component: osac-observability
+            dir: osac-observability
+            target: image-build
+            push_target: image-push
+            image: ghcr.io/osac-project/osac-observability
+            version_arg: true
     steps:
     - name: Checkout temporary branch
       uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
@@ -1030,6 +1040,7 @@ jobs:
           - osac-metering
           - osac-csi-driver
           - osac-ui
+          - osac-observability
 
     steps:
     - name: Checkout temporary branch
@@ -1122,6 +1133,7 @@ jobs:
           # osac-ui uses the same bare SemVer target as every other component.
           # Historical v* tags came from the archived standalone publish job.
           osac-ui) IMAGES=(ghcr.io/osac-project/osac-ui) ;;
+          osac-observability) IMAGES=(ghcr.io/osac-project/osac-observability) ;;
         esac
 
         echo "Promoting ${{ matrix.component }} image(s) sha-${MAIN_SHORT_SHA} -> ${SUB_VERSION}..."
@@ -1157,6 +1169,7 @@ jobs:
           osac-metering) CHART_DIRS=(osac-metering/charts/osac-metering) ;;
           osac-csi-driver) CHART_DIRS=(osac-csi-driver/charts/csi-driver osac-csi-driver/charts/csi-backends) ;;
           osac-ui) CHART_DIRS=(osac-ui/charts/ui) ;;
+          osac-observability) CHART_DIRS=(osac-observability/charts/osac-observability) ;;
         esac
 
         for CHART_DIR in "${CHART_DIRS[@]}"; do
@@ -1276,7 +1289,7 @@ jobs:
 
         UMBRELLA_VALUES="osac-installer/charts/osac/values.yaml"
 
-        for COMPONENT in osac-operator fulfillment-service osac-aap bare-metal-fulfillment-operator osac-metering osac-csi-driver osac-ui; do
+        for COMPONENT in osac-operator fulfillment-service osac-aap bare-metal-fulfillment-operator osac-metering osac-csi-driver osac-ui osac-observability; do
           SUB_VERSION=$(jq -r --arg k "${COMPONENT}" '.[$k] // empty' <<<"${COMPONENT_VERSIONS}")
           if [[ -z "${SUB_VERSION}" ]]; then
             safe_component=$(_gha_sanitize_for_message "${COMPONENT}")
@@ -1606,6 +1619,7 @@ jobs:
           ["osac-metering"]="osac-metering-chart"
           ["osac-csi-driver"]="osac-csi-driver-chart osac-csi-backends-chart"
           ["osac-ui"]="osac-ui-chart"
+          ["osac-observability"]="osac-observability-chart"
         )
 
         push_chart_tag() {
@@ -3131,6 +3145,7 @@ jobs:
           ["osac-metering"]="osac-metering-chart"
           ["osac-csi-driver"]="osac-csi-driver-chart osac-csi-backends-chart"
           ["osac-ui"]="osac-ui-chart"
+          ["osac-observability"]="osac-observability-chart"
         )
 
         if ! COMMIT_SHA=$(git rev-parse HEAD 2>&1); then

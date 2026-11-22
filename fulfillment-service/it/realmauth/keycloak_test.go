@@ -15,7 +15,6 @@ package realmauth
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -33,7 +32,7 @@ import (
 
 type keycloakFixture struct {
 	issuer           string
-	secret           string
+	secrets          secretStoreFixture
 	certFile         string
 	fullScopeAllowed bool
 }
@@ -94,8 +93,7 @@ func startKeycloak(ctx context.Context, source string) keycloakFixture {
 	for _, path := range []string{importDir, configDir, binDir} {
 		Expect(os.Mkdir(path, 0755)).To(Succeed())
 	}
-	Expect(os.WriteFile(filepath.Join(binDir, "oc"), []byte(secretStore), 0700)).To(Succeed())
-	secret := rand.Text()
+	secrets := newSecretStoreFixture(binDir)
 	resolved := filepath.Join(importDir, "osac-realm.json")
 	raw := filepath.Join(chart, "files/realm.json")
 	script := filepath.Join(chart, "files/hooks/resolve-realm-secrets.sh")
@@ -127,10 +125,10 @@ func startKeycloak(ctx context.Context, source string) keycloakFixture {
 	}
 	Expect(image).ToNot(BeEmpty())
 	command := exec.CommandContext(ctx, "bash", script)
-	command.Env = append(os.Environ(),
+	command.Env = append(secrets.environment(),
 		"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"REALM_TEST_SECRET="+secret,
-		"REALM_ADMIN_USERNAME=realm-test-admin", "REALM_ADMIN_PASSWORD="+secret,
+		"KEYCLOAK_NAMESPACE=keycloak",
+		"REALM_ADMIN_USERNAME=realm-test-admin", "REALM_ADMIN_PASSWORD="+secrets.realmAdmin,
 		"OSAC_UI_URL=https://localhost", "REALM_RAW_PATH="+raw, "REALM_OUTPUT_PATH="+resolved,
 	)
 	// Don't print resolver output: future resolver errors could contain credentials.
@@ -187,7 +185,7 @@ func startKeycloak(ctx context.Context, source string) keycloakFixture {
 	Expect(address).To(HavePrefix("127.0.0.1:"))
 	fmt.Fprintf(GinkgoWriter, "realm=%s image=%s fresh_startup_import=true\n", source, image)
 	return keycloakFixture{
-		issuer: "https://" + address + "/realms/osac", secret: secret,
+		issuer: "https://" + address + "/realms/osac", secrets: secrets,
 		certFile: certFile, fullScopeAllowed: fullScopeAllowed,
 	}
 }

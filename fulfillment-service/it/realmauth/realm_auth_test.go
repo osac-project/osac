@@ -15,6 +15,7 @@ package realmauth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync/atomic"
@@ -71,7 +72,7 @@ var _ = DescribeTable("CSI client credentials from a shipped realm",
 		// Match the driver's client_credentials request: no added roles or optional scopes.
 		config := clientcredentials.Config{
 			ClientID:     "osac-csi-driver",
-			ClientSecret: fixture.secret,
+			ClientSecret: fixture.secrets.clients["osac-csi-driver"],
 			TokenURL:     fixture.issuer + "/protocol/openid-connect/token",
 		}
 		tokenSource := config.TokenSource(context.WithValue(ctx, oauth2.HTTPClient, httpClient))
@@ -139,6 +140,21 @@ var _ = DescribeTable("CSI client credentials from a shipped realm",
 		Expect(listErr).ToNot(HaveOccurred(), "the bundled CSI identity must be allowed to list private volumes")
 		Expect(volumes.calls.Load()).To(Equal(int32(1)))
 		Expect(hasRole).To(BeTrue(), "the issued token must contain the osac-csi-driver realm role")
+
+		// Read the other client's actual lookup value, independently of the resolved realm.
+		// The old shared-secret fixture wrongly makes this a valid CSI credential.
+		wrongConfig := config
+		wrongConfig.ClientSecret = fixture.secrets.read(ctx, "osac-controller")
+		wrongToken, wrongErr := wrongConfig.Token(context.WithValue(ctx, oauth2.HTTPClient, httpClient))
+		issued := wrongErr == nil && wrongToken != nil && wrongToken.AccessToken != ""
+		var retrieval *oauth2.RetrieveError
+		invalidClient := errors.As(wrongErr, &retrieval) && retrieval.Response != nil &&
+			retrieval.Response.StatusCode == http.StatusUnauthorized && retrieval.ErrorCode == "invalid_client"
+		_, err = fmt.Fprintf(GinkgoWriter, "realm=%s wrong_client_secret_issued=%t invalid_client=%t\n",
+			source, issued, invalidClient)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(issued).To(BeFalse(), "the controller lookup value must not authenticate the CSI client")
+		Expect(invalidClient).To(BeTrue(), "Keycloak must reject the wrong client secret as invalid_client")
 	},
 	Entry("Helm chart", "chart", SpecTimeout(5*time.Minute)),
 	Entry("prerequisites manifest", "prerequisites", SpecTimeout(5*time.Minute)),

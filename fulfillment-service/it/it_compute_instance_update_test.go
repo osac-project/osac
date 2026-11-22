@@ -107,6 +107,16 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 		privateClient := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
 		filter := "this.id == '" + id + "'"
 
+		By("waiting for the controller to initialize the observed state")
+		// Public status preservation checks need a baseline after the controller
+		// has applied its initial state and transition time.
+		Eventually(func(g Gomega) {
+			got, getErr := publicClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(got.GetObject().GetStatus().GetState()).To(Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
+			g.Expect(got.GetObject().GetStatus().GetStateTransitionTime()).NotTo(BeNil())
+		}, 2*time.Minute, 100*time.Millisecond).Should(Succeed())
+
 		writeFailure := func(failure *privatev1.ComputeInstanceProvisioningFailure) {
 			GinkgoHelper()
 			Expect(retry.OnError(retry.DefaultBackoff, func(err error) bool {

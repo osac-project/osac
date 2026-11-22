@@ -14,7 +14,6 @@
             "gatewayNamespace": { "type": "string" },
             "gatewayClassName": { "type": "string" },
             "gatewayName": { "type": "string" },
-            "bridge": { "enum": ["service", "pod"] },
             "gatewayAddress": { "type": "string" },
             "grpcRequestTimeout": { "type": "string" },
             "restRequestTimeout": { "type": "string" },

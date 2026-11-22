@@ -834,14 +834,9 @@
                   "type": "string",
                   "description": "Name of the CIO-managed Gateway"
                 },
-                "bridge": {
-                  "type": "string",
-                  "description": "How in-cluster callers reach the gateway",
-                  "enum": ["service", "pod"]
-                },
                 "gatewayAddress": {
                   "type": "string",
-                  "description": "In-cluster address of the gateway Service; empty lets the installer hook resolve it"
+                  "description": "In-cluster address of the gateway (a Pod IP); empty lets the installer's gateway-bridge Job resolve it"
                 },
                 "grpcRequestTimeout": {
                   "type": "string",

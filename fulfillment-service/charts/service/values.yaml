@@ -82,13 +82,11 @@ ingress:
     # GatewayClass installed as a cluster prerequisite by osac-installer.
     gatewayClassName: openshift-default
     gatewayName: osac-gateway
-    # How in-cluster callers reach the gateway:
-    #   service - selectorless Services -> gateway Service ClusterIP (stable; recommended)
-    #   pod     - managed EndpointSlice -> gateway pod IP (needs osac-operator controller)
-    bridge: service
-    # In-cluster reachable address (ClusterIP) of the gateway Service. When empty the
-    # bridge EndpointSlices are not rendered and must be maintained by the lifecycle
-    # controller/hook (the gateway Service ClusterIP is stable across pod replacement).
+    # In-cluster reachable address of the gateway (a Pod IP; an EndpointSlice
+    # address may NOT be another Service's ClusterIP — the API server rejects
+    # it for non-privileged identities). When empty the bridge EndpointSlices
+    # are not rendered here and the umbrella chart's gateway-bridge Job
+    # maintains them against the ready gateway Pod IPs.
     gatewayAddress: ""
     # Request timeouts. gRPC stream routes MUST be 0s (uncapped); REST stays bounded.
     grpcRequestTimeout: "0s"

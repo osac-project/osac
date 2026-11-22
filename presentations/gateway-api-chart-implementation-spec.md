@@ -18,10 +18,15 @@ Default stays `envoy` (fully backward compatible). `gatewayapi` is opt-in.
   keyed `ca.crt` with that CA. The shared `ca-bundle` is keyed `bundle.pem`, so a
   dedicated `osac-backend-ca` (key `ca.crt`) is required, materialized via a
   trust-manager `Bundle` (trust-manager is already a dependency).
-- **In-cluster bridge:** target the gateway **Service ClusterIP** (stable across
-  pod replacement, no controller) rather than pinning the gateway pod IP. Kept as
-  a value (`bridge: service|pod`) so the pod-IP + operator-controller path remains
-  an option.
+- **In-cluster bridge:** target the gateway **Pod IPs**, not the gateway Service
+  ClusterIP. The API server rejects an EndpointSlice address that is another
+  Service's ClusterIP for non-privileged identities (403, `endpoint address ...
+  is not allowed`, even with RBAC allowed) — the same constraint the POC cutover
+  notes recorded. The bridge is maintained by a chart-resource Job in the
+  umbrella chart that resolves the ready gateway Pod IPs from the gateway
+  Service's own EndpointSlices. Known limitation, unchanged from the POC: the
+  slices go stale when gateway Pods are replaced until the next upgrade re-runs
+  the Job; an operator controller remains the follow-up path for that.
 - **GatewayClass:** cluster-scoped and triggers the CIO istiod install, so it is a
   prerequisite installed by `osac-installer`, not the per-release service chart.
 - **D5 / ISSUE-2:** both are route-config only. No `fulfillment-service` Go change.
@@ -52,10 +57,12 @@ ingress:
     # GatewayClass installed as a cluster prerequisite by osac-installer.
     gatewayClassName: openshift-default
     gatewayName: osac-gateway
-    # How in-cluster callers reach the gateway:
-    #   service - selectorless Services -> gateway Service ClusterIP (stable; recommended)
-    #   pod     - managed EndpointSlice -> gateway pod IP (needs osac-operator controller)
-    bridge: service
+    # How in-cluster callers reach the gateway: selectorless Services bridged
+    # to the gateway Pod IPs via EndpointSlices. The bridge is NOT the gateway
+    # Service ClusterIP: the API server rejects ClusterIP endpoint addresses
+    # for non-privileged identities. The umbrella chart's gateway-bridge Job
+    # resolves the Pod IPs at install; set gatewayAddress to render the
+    # EndpointSlices statically instead (e.g. for operator-controller setups).
     # Request timeouts. gRPC stream routes MUST be 0s (uncapped); REST stays bounded.
     grpcRequestTimeout: "0s"
     restRequestTimeout: "300s"
@@ -79,7 +86,7 @@ ingress:
         "gatewayNamespace":   { "type": "string" },
         "gatewayClassName":   { "type": "string" },
         "gatewayName":        { "type": "string" },
-        "bridge":             { "enum": ["service", "pod"] },
+        "gatewayAddress":     { "type": "string" },
         "grpcRequestTimeout": { "type": "string" },
         "restRequestTimeout": { "type": "string" },
         "jwksRequestTimeout": { "type": "string" },
@@ -123,7 +130,7 @@ ingress:
 | `httproute-internal.yaml` | hostnames `internalHostname` + `fulfillment-internal-api`; attached to `internal` + `int-svc`. Same console-ws/jwks; REST `PathPrefix /api`; Connect `Exact` as above; unary `PathPrefix /` -> grpc-server:8000 (`grpcRequestTimeout`). |
 | `backendtlspolicy.yaml` | ×3 (grpc-server / rest-gateway / console-proxy) -> `caCertificateRefs` = `backendCaConfigMap`, `validation.hostname = fulfillment-<svc>.{{ .Release.Namespace }}.svc.cluster.local`. **apiVersion `gateway.networking.k8s.io/v1`** — OpenShift 4.22 CIO serves BackendTLSPolicy at GA v1, not v1alpha3 (caught on the edge-16 greenfield install; the schema shape is unchanged). |
 | `backend-ca-bundle.yaml` | trust-manager `Bundle` -> target ConfigMap `backendCaConfigMap` with key `ca.crt`, sourced from the ClusterIssuer CA. |
-| `bridge.yaml` | `bridge=service`: selectorless Services wired (EndpointSlice) to the gateway **Service ClusterIP**:443 with port names `external-api` / `internal-api`. `bridge=pod`: `EndpointSlice` -> gateway pod IP:443 (requires the osac-operator reconciler). Delete-legacy-Endpoints concern disappears because the Services are chart-managed selectorless from the start. |
+| `bridge.yaml` | Static variant only: when `ingress.gatewayapi.gatewayAddress` is set, renders EndpointSlices wiring the selectorless Services to that address:443 with port names `external-api` / `internal-api`. Otherwise the umbrella chart's gateway-bridge Job owns the bridge (see section 4). Delete-legacy-Endpoints concern disappears because the Services are chart-managed selectorless from the start. |
 
 Note: no separate `Watch` route is needed — same backend and `0s` timeout as the
 unary catch-all. Routing is specificity-driven (Exact/Prefix), never dependent on
@@ -134,6 +141,16 @@ RegEx ordering.
 - **GatewayClass** prerequisite (cluster-scoped) in the deps/prereq layer, rendered
   when gateway mode is enabled, with the `Accepted` / `ControllerInstalled` /
   `CRDsReady` readiness wait and a check that no `servicemesh` Subscription appears.
+- **gateway-bridge Job** (`charts/osac/templates/gateway-bridge.yaml` +
+  `files/gateway-bridge.sh`), a regular chart resource (NOT a post-install hook —
+  the callers crash-loop until the bridge exists, which deadlocks any hook gated
+  on release readiness under `helm --wait`). SA + Role in the release namespace
+  (endpointslices get/list/create/update/patch) + Role in the gateway namespace
+  (get the gateway Service; get/list its EndpointSlices for the Pod IPs).
+  `backoffLimit: 3`, `activeDeadlineSeconds: 1800` (container startup alone can
+  take ~15m on a busy SNO), `ttlSecondsAfterFinished: 300` so a later upgrade
+  with a changed spec can recreate the immutable Job. Rendered only when the
+  driver is `gatewayapi` and no static `gatewayAddress` is set.
 - **Enable per profile** via a CI overlay / profile values passthrough:
   ```yaml
   fulfillment-service:
@@ -168,6 +185,14 @@ RegEx ordering.
    `BackendTLSPolicy` v1, not v1alpha3 — fixed in the template. Retried with
    `service.ingress.driver=gatewayapi` + the UI origin in
    `httpCorsAllowedOrigins`.
+   **Greenfield validated green (same cluster, 2026-11-22):** release deploys
+   clean with the fixed chart, the bridge Job completes in ~7s, all pods
+   Running, jwks 200 / bad-token 401 / UI 200 / console-proxy routing
+   confirmed. Four live-only bugs were fixed on the way (glued `---`
+   swallowing the bridge SA at render time, escaped jsonpath breaking the
+   wait loop, the ClusterIP endpoint-address admission rejection, AAP
+   postgres PVC surviving uninstall) — see
+   `gateway-api-edge16-troubleshooting.md` for the full log.
 
 ## 7. Testing environments
 

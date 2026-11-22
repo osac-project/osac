@@ -7,6 +7,7 @@ use (
 	./osac-metering/adapters
 	./osac-metering/metering-service
 	./osac-metering/schema
+	./osac-observability
 	./osac-operator
 	./osac-operator/api
 	./osac-ui/proxy

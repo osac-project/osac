@@ -76,8 +76,12 @@ disabled="${TMP_DIR}/disabled.yaml"
 "${HELM_BIN}" "${COMMON_ARGS[@]}" >"${disabled}"
 
 echo "checking the observability subchart renders only when enabled"
-require "${enabled}" 'name: osac-observability'
-reject "${disabled}" 'name: osac-observability'
+extract_kind "${enabled}" Namespace >"${TMP_DIR}/enabled-namespace.yaml"
+extract_kind "${disabled}" Namespace >"${TMP_DIR}/disabled-namespace.yaml"
+require "${TMP_DIR}/enabled-namespace.yaml" 'name: osac-observability'
+if [ -s "${TMP_DIR}/disabled-namespace.yaml" ]; then
+  fail "the observability namespace rendered while disabled"
+fi
 
 echo "checking the four Thanos workloads render in the component namespace"
 for kind_name in \
@@ -113,6 +117,17 @@ done
 reject "${TMP_DIR}/networkpolicies.yaml" 'podSelector: {}'
 reject "${TMP_DIR}/networkpolicies.yaml" 'osac.openshift.io/tenant'
 reject "${TMP_DIR}/networkpolicies.yaml" 'egress:'
+
+echo "checking the remote-write Job follows the switch"
+extract_kind "${enabled}" Job >"${TMP_DIR}/enabled-jobs.yaml"
+extract_kind "${disabled}" Job >"${TMP_DIR}/disabled-jobs.yaml"
+require "${TMP_DIR}/enabled-jobs.yaml" 'name: osac-observability-remote-write'
+require "${TMP_DIR}/disabled-jobs.yaml" 'name: osac-observability-remote-write'
+require "${TMP_DIR}/enabled-jobs.yaml" 'value: "true"'
+require "${TMP_DIR}/disabled-jobs.yaml" 'value: "false"'
+require "${TMP_DIR}/enabled-jobs.yaml" 'value: "30s"'
+require "${TMP_DIR}/enabled-jobs.yaml" \
+  'value: https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive'
 
 echo "checking object storage is referenced by Secret name only"
 require "${enabled}" 'bucket: "thanos"'

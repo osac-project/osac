@@ -1,0 +1,106 @@
+{{- $fullname := include "osac.fullname" . -}}
+{{- $observability := .Values.global.observability | default dict -}}
+{{- $collection := $observability.collection | default dict -}}
+{{- $image := ($observability.services | default dict).metricsAuth | default dict -}}
+{{- $name := printf "%s-observability-remote-write" $fullname -}}
+{{- /* The Job renders on every release, including the disable path, because
+       removing the owned keys is the same upsert with the switch off. Its RBAC
+       is a normal resource so it exists when the post-install hook runs. */ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: openshift-monitoring
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: openshift-monitoring
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    resourceNames:
+      - cluster-monitoring-config
+    verbs:
+      - get
+      - create
+      - update
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: openshift-monitoring
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: openshift-monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: openshift-monitoring
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    # After the observability workloads and the namespace exists.
+    "helm.sh/hook-weight": "20"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        {{- include "osac.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $name }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: remote-write-config
+          image: "{{ $image.repository }}:{{ $image.tag | default "latest" }}"
+          imagePullPolicy: IfNotPresent
+          command:
+            - /remote-write-config
+          env:
+            - name: OBSERVABILITY_ENABLED
+              value: {{ $observability.enabled | default false | quote }}
+            - name: OBS_SCRAPE_INTERVAL
+              value: {{ $collection.infrastructure | default "30s" | quote }}
+            - name: OBS_PLATFORM_NAMESPACES
+              value: {{ $collection.platformNamespaces | default (list "osac" "osac-csi" "osac-observability") | toJson | quote }}
+            - name: OBS_RECEIVE_URL
+              value: https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi

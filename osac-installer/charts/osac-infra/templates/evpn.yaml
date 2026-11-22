@@ -112,11 +112,7 @@ data:
     {{- range $uplink := $node.uplinks }}
       {{- if and $uplink.peerAddress $uplink.address }}
         {{- $metricRoutes = append $metricRoutes (dict "destination" (printf "%s/32" $uplink.peerAddress) "interface" $uplink.interface "state" "absent") }}
-        {{- if $.Values.evpn.bgp.activeActive }}
-          {{- $metricRoutes = append $metricRoutes (dict "destination" $uplink.address "interface" $uplink.interface "state" "present") }}
-        {{- else }}
-          {{- $metricRoutes = append $metricRoutes (dict "destination" $uplink.address "interface" $uplink.interface "state" "absent") }}
-        {{- end }}
+        {{- $metricRoutes = append $metricRoutes (dict "destination" $uplink.address "interface" $uplink.interface "state" "absent") }}
       {{- end }}
     {{- end }}
     apiVersion: nmstate.io/v1
@@ -149,6 +145,7 @@ data:
           ipv4:
             enabled: true
             dhcp: false
+            prefix-route-metric: {{ if $.Values.evpn.bgp.activeActive }}100{{ else }}-1{{ end }}
             address:
               - ip: {{ $uplinkAddress._0 | quote }}
                 prefix-length: {{ int $uplinkAddress._1 }}

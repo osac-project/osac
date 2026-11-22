@@ -305,7 +305,7 @@
             },
             "activeActive": {
               "type": "boolean",
-              "description": "Allow up to 16 eligible IPv4 BGP paths; numbered uplinks require address and receive equal-metric connected-subnet routes.",
+              "description": "Allow up to 16 eligible IPv4 BGP paths; numbered uplinks require address and receive connected-subnet route metric 100.",
               "default": false
             },
             "activeBackup": {

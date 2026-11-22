@@ -151,8 +151,8 @@ evpn:
     # routes inside these ranges are accepted from the fabric.
     acceptPrefixes: []
     # Allow up to 16 eligible IPv4 BGP paths for active-active forwarding.
-    # Numbered peers get equal-metric connected-subnet routes and require
-    # each uplink address; unnumbered peers retain node-provided route costs.
+    # Numbered peers get connected-subnet route metric 100 and require each
+    # uplink address; unnumbered peers retain node-provided route costs.
     activeActive: false
     # Use uplink roles to set local preference and prepend on backups in the
     # IPv4 unicast and L2VPN EVPN address families.

@@ -602,7 +602,7 @@ def test_multiple_nodes() -> None:
 
 
 def test_active_active_bgp() -> None:
-    """Render both uplinks with IPv4 multipath and no active-backup policy."""
+    """Render equal-cost connected routes with IPv4 multipath."""
     values = base_values(
         [
             node(
@@ -634,6 +634,12 @@ def test_active_active_bgp() -> None:
         "NodeNetworkConfigurationPolicy",
         "osac-evpn-worker-0",
     )
+    interfaces = {
+        interface["name"]: interface
+        for interface in nncp["spec"]["desiredState"]["interfaces"]
+    }
+    assert interfaces["ens6"]["ipv4"]["prefix-route-metric"] == 100
+    assert interfaces["ens7"]["ipv4"]["prefix-route-metric"] == 100
     assert nncp["spec"]["desiredState"]["routes"]["config"] == [
         {
             "destination": "169.254.133.1/32",
@@ -647,6 +653,7 @@ def test_active_active_bgp() -> None:
             "metric": 100,
             "next-hop-interface": "ens6",
             "table-id": 254,
+            "state": "absent",
         },
         {
             "destination": "169.254.134.1/32",
@@ -660,6 +667,7 @@ def test_active_active_bgp() -> None:
             "metric": 100,
             "next-hop-interface": "ens7",
             "table-id": 254,
+            "state": "absent",
         },
     ]
 
@@ -680,8 +688,8 @@ def test_active_active_bgp() -> None:
     assert "route-map EVPN-" not in raw_config
 
 
-def test_non_active_active_cleans_metric_routes() -> None:
-    """Remove routes previously installed for active-active uplinks."""
+def test_non_active_active_resets_connected_route_metric() -> None:
+    """Remove old metric routes and restore NMState's default metric."""
     values = base_values(
         [
             node(
@@ -703,6 +711,12 @@ def test_non_active_active_cleans_metric_routes() -> None:
         "NodeNetworkConfigurationPolicy",
         "osac-evpn-worker-0",
     )
+    interfaces = {
+        interface["name"]: interface
+        for interface in nncp["spec"]["desiredState"]["interfaces"]
+    }
+    assert interfaces["ens6"]["ipv4"]["prefix-route-metric"] == -1
+    assert interfaces["ens7"]["ipv4"]["prefix-route-metric"] == -1
     assert nncp["spec"]["desiredState"]["routes"]["config"] == [
         {
             "destination": "169.254.133.1/32",
@@ -1364,7 +1378,7 @@ def main() -> None:
     test_single_node()
     test_multiple_nodes()
     test_active_active_bgp()
-    test_non_active_active_cleans_metric_routes()
+    test_non_active_active_resets_connected_route_metric()
     test_active_active_numbered_uplink_requires_address()
     test_unnumbered_active_active_bgp()
     test_active_backup_bgp()

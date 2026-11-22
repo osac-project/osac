@@ -232,24 +232,82 @@ Role in the gateway namespace gains `get,list` on endpointslices. Known
 limitation, same as the POC: the slices go stale when gateway Pods are
 replaced until the next upgrade re-runs the Job.
 
-## Fixes (chart, all on branch OSAC-7866/gateway-api-install)
+## Step 6: the clean install exposes the real blocker - admission
 
-1. `de224c671` - move the glued `---` to its own line in
-   `gateway-bridge.yaml` (SA no longer swallowed; render goes from 166
-   to 167 documents).
-2. `gateway-bridge.sh` jsonpath `{.spec.clusterIPs\[0\]}` ->
-   `{.spec.clusterIP}` (uncommitted until a green reinstall).
-3. `activeDeadlineSeconds` 1200 -> 1800 (uncommitted, same).
-4. `gateway-bridge.sh` bridge target: gateway Service ClusterIP ->
-   ready gateway Pod IPs; Role in the gateway namespace grants
-   `get,list` on endpointslices (uncommitted, same).
+After the pod-IP fix, a clean reinstall still failed: the bridge Job's
+EndpointSlice create was rejected with 403 while RBAC allowed it:
 
-## Verification checklist for the green run
+```
+"message": "endpointslices.discovery.k8s.io \"fulfillment-api-gateway\" is
+           forbidden: endpoint address 172.30.25.179 is not allowed",
+"annotations": {
+  "authorization.k8s.io/decision": "allow",
+  "authorization.k8s.io/reason": "RBAC: allowed by RoleBinding ... to
+                                  ServiceAccount osac-gateway-bridge"
+}
+```
 
-- SA `osac-gateway-bridge` created by helm (release manifest applied)
-- bridge Job completes, TTL-deletes itself after 300s
-- EndpointSlices `fulfillment-api-gateway` / `fulfillment-internal-api-gateway`
-  point at the current gateway Service ClusterIP
-- all osac pods Running, helm release status deployed
-- external checks: jwks 200, REST List 200, console Connect 101, UI 200,
-  Keycloak realm 200
+The enforcer is the kube-apiserver's built-in
+`network.openshift.io/RestrictedEndpointsAdmission` plugin:
+
+```
+$ oc get kubeapiserver cluster -o yaml | grep -A8 RestrictedEndpointsAdmission
+  network.openshift.io/RestrictedEndpointsAdmission:
+    configuration:
+      restrictedCIDRs:
+      - 172.30.0.0/16     (pod network)
+      - 10.128.0.0/14     (service network)
+```
+
+It rejects an EndpointSlice address anywhere in the pod or service
+network for non-privileged identities - ClusterIP and Pod IP alike,
+which rules out every address a bridge could use.
+
+Why every earlier run looked green (the audit trail across the day):
+
+```
+09:00  v2 chart Job   create (ClusterIP)   403
+09:29  admin (manual) create (Pod IP)      created
+10:14  v3 chart Job   patch (no-op, slices pre-existed)  200
+11:55  clean-run Job  create (Pod IP)      403
+```
+
+The v3 "green" was an illusion: the Job only ever no-op patched slices
+an admin had applied minutes earlier. Live experiments confirmed the
+rule: an SA patch with no address change is allowed; an SA patch that
+changes the address is denied with the same message. Granting the SA
+`endpoints/restricted` and `endpointslices/restricted` did not help.
+
+Cross-check: the dev cluster where the POC cutover ran has the
+identical plugin config - the cutover worked because its slices were
+applied by kubeadmin, so the plugin never evaluated a non-admin. The
+POC steps doc had left "WHO updates these" as an open question; the
+chart commit answered it with an unvalidated Job+SA assumption.
+
+## Final fix - the bridge moves to the installer
+
+The bridge cannot live in the chart at all. It is now
+`osac-installer/scripts/gateway-bridge.sh`, run by
+`make install-osac INGRESS_DRIVER=gatewayapi` with the installer's
+admin credentials, in the background around `helm --wait` (it waits
+for the ready gateway Pod IPs, so callers converge inside the wait
+window). `make uninstall-osac` deletes the bridge slices explicitly
+since they are no longer helm-owned. The chart drops the bridge
+Job/SA/RBAC/ConfigMap.
+
+Validated with two clean greenfield runs (2026-11-22), both fully
+documented with per-phase evidence in
+`gateway-api-edge16-final-run-procedure.md`.
+
+## Fix ledger (branch OSAC-7866/gateway-api-install)
+
+1. `de224c671` - glued `---` separator swallowed the bridge SA at
+   render time.
+2. `b87ff0e19` - BackendTLSPolicy v1, bridge as chart resource,
+   Bundle from ClusterIssuer Secret (found on the Nov 19 install).
+3. `6c5b74479` - jsonpath `{.spec.clusterIPs\[0\]}` matched nothing
+   (wait loop never exited); deadline 1200 -> 1800; pod-IP bridge
+   target (later superseded by 4).
+4. `336bcbbc9` - dead `bridge` value removed from values and schemas.
+5. `3d16abceb` - the real fix: bridge moved out of the chart to the
+   installer script; `INGRESS_DRIVER` wiring; uninstall cleanup.

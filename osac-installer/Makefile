@@ -431,6 +431,12 @@ helm-template: ## Dry-run render all templates
 	helm template osac-infra $(INFRA_CHART)
 	helm template osac $(OSAC_CHART) --values $(OSAC_CHART)/ci/default-values.yaml
 
+.PHONY: helm-unit
+helm-unit: helm-deps ## Run Helm unit tests
+	helm unittest $(OSAC_CHART) -s=false
+	helm unittest ../osac-metering/charts/osac-metering
+	helm unittest ../fulfillment-service/charts/service
+
 .PHONY: csi-render-test
 csi-render-test: helm-deps ## Verify CSI and storage-provider chart rendering
 	@set -euo pipefail; \
@@ -555,7 +561,7 @@ dev-full-render-test: helm-deps ## Check dev-full TLS and Helm post-rendering
 	./scripts/test-dev-full-render.sh
 
 .PHONY: helm-validate
-helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-render-test dev-full-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint helm-unit csi-render-test helm-networking-test observability-render-test fulfillment-trust-render-test dev-full-render-test ## Validate all charts (lint + template)
 	@for d in values/*/; do \
 		infra="$${d}infra.yaml"; \
 		[ -f "$$infra" ] && echo "Validating $$infra..." && \
@@ -570,3 +576,7 @@ helm-validate: helm-lint csi-render-test helm-networking-test fulfillment-trust-
 .PHONY: helm-networking-test
 helm-networking-test: helm-deps ## Test networking fabricManager/k8sManager validation and derivation
 	./scripts/test-networking-values.sh
+
+.PHONY: observability-render-test
+observability-render-test: helm-deps ## Check the metrics scrape wiring renders as designed
+	./scripts/test-observability-render.sh

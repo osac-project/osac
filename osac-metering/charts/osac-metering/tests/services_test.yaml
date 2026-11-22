@@ -1,0 +1,76 @@
+suite: metering services expose scrape targets
+templates:
+  - templates/service.yaml
+  - templates/echo-adapter-service.yaml
+  - templates/m360-adapter-service.yaml
+set:
+  echoAdapter.enabled: true
+  m360Adapter.enabled: true
+
+tests:
+  - it: exposes the metering listener on a metrics port
+    template: templates/service.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: metering
+      - equal:
+          path: spec.ports[0].name
+          value: metrics
+      - equal:
+          path: spec.ports[0].port
+          value: 8080
+      - equal:
+          path: spec.ports[0].targetPort
+          value: health
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: metering
+
+  - it: exposes the echo adapter http listener
+    template: templates/echo-adapter-service.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: echo-adapter
+      - equal:
+          path: spec.ports[0].name
+          value: http
+      - equal:
+          path: spec.ports[0].port
+          value: 8080
+
+  - it: renders no echo adapter service when disabled
+    template: templates/echo-adapter-service.yaml
+    set:
+      echoAdapter.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: exposes the m360 adapter http listener
+    template: templates/m360-adapter-service.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: metadata.labels["app.kubernetes.io/component"]
+          value: m360-adapter
+      - equal:
+          path: spec.ports[0].name
+          value: http
+      - equal:
+          path: spec.ports[0].port
+          value: 8080
+
+  - it: renders no m360 adapter service when disabled
+    template: templates/m360-adapter-service.yaml
+    set:
+      m360Adapter.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

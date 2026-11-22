@@ -1,0 +1,11 @@
+{{- if and .Values.observability.enabled .Values.metering.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor") }}
+{{- include "osac.serviceMonitor" (dict
+  "root" .
+  "name" "osac-metering"
+  "jobLabel" "app.kubernetes.io/name"
+  "selector" (dict
+    "app.kubernetes.io/name" "osac-metering"
+    "app.kubernetes.io/instance" .Release.Name
+    "app.kubernetes.io/component" "metering")
+  "port" "metrics") }}
+{{- end }}

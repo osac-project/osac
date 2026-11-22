@@ -31,3 +31,29 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "osac-observability.serviceAccountName" -}}
 {{- printf "%s-thanos" .Release.Name -}}
 {{- end -}}
+
+{{/* One component label per workload so NetworkPolicies and Services can
+     select a single role and the label name matches the contract in AGENTS.md. */}}
+{{- define "osac-observability.componentLabels" -}}
+{{ include "osac-observability.labels" .root }}
+app.kubernetes.io/component: {{ .component }}
+{{- end -}}
+
+{{- define "osac-observability.componentSelectorLabels" -}}
+{{ include "osac-observability.selectorLabels" .root }}
+app.kubernetes.io/component: {{ .component }}
+{{- end -}}
+
+{{- define "osac-observability.podSecurityContext" -}}
+runAsNonRoot: true
+seccompProfile:
+  type: RuntimeDefault
+{{- end -}}
+
+{{- define "osac-observability.containerSecurityContext" -}}
+allowPrivilegeEscalation: false
+readOnlyRootFilesystem: true
+capabilities:
+  drop:
+    - ALL
+{{- end -}}

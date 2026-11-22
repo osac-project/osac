@@ -1,0 +1,241 @@
+suite: thanos workloads
+templates:
+  - templates/*.yaml
+release:
+  name: osac
+  namespace: osac
+set:
+  global.observability.enabled: true
+  global.observability.objectStorage.secretName: thanos-object-storage
+  global.observability.objectStorage.endpoint: https://s3.example.com
+  global.observability.objectStorage.bucket: thanos
+  global.observability.objectStorage.region: us-east-1
+  global.observability.thanos.image.registry: registry.redhat.io
+  global.observability.thanos.image.repository: openshift4/ose-thanos-rhel8
+  global.observability.thanos.image.tag: ""
+  global.observability.thanos.retention: 365d
+  global.observability.thanos.resolution.raw: 365d
+  global.observability.thanos.resolution.5m: 365d
+  global.observability.thanos.resolution.1h: 365d
+
+tests:
+  - it: renders Receive with remote write over TLS and the object storage Secret
+    template: templates/receive.yaml
+    asserts:
+      - isKind:
+          of: StatefulSet
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.redhat.io/openshift4/ose-thanos-rhel8:latest
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --remote-write.address=0.0.0.0:19291
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --remote-write.server-tls-cert=/etc/thanos/tls/tls.crt
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --remote-write.server-tls-key=/etc/thanos/tls/tls.key
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --receive.replication-factor=2
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --label=replica=$(POD_NAME)
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --receive.hashrings-file=/etc/thanos/hashring/hashring.json
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.resources.requests.storage
+          value: 20Gi
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].secretRef.name
+          value: thanos-object-storage
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+
+  - it: serves remote write on the service-CA certificate
+    template: templates/services.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-receive
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: metadata.annotations["service.beta.openshift.io/serving-cert-secret-name"]
+          value: thanos-receive-tls
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports[0].name
+          value: remote-write
+      - equal:
+          path: spec.ports[0].port
+          value: 19291
+
+  - it: publishes Receive grpc through a headless service for the hashring
+    template: templates/services.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-receive-headless
+    asserts:
+      - equal:
+          path: spec.clusterIP
+          value: None
+      - equal:
+          path: spec.ports[0].name
+          value: grpc
+      - equal:
+          path: spec.ports[0].port
+          value: 10901
+
+  - it: renders Store Gateway against object storage
+    template: templates/store.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.replicas
+          value: 2
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --grpc-address=0.0.0.0:10901
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --http-address=0.0.0.0:10902
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --objstore.config-file=/etc/thanos/objstore/objstore.yml
+      - equal:
+          path: spec.template.spec.containers[0].envFrom[0].secretRef.name
+          value: thanos-object-storage
+
+  - it: renders Query over both Store and Receive and deduplicates replicas
+    template: templates/query.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.replicas
+          value: 2
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --http-address=0.0.0.0:9090
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --store=dnssrv+_grpc._tcp.thanos-store-headless.osac-observability.svc.cluster.local
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --store=dnssrv+_grpc._tcp.thanos-receive-headless.osac-observability.svc.cluster.local
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --query.replica-label=replica
+
+  - it: serves PromQL on the Query service
+    template: templates/services.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-query
+    asserts:
+      - equal:
+          path: spec.ports[0].name
+          value: http
+      - equal:
+          path: spec.ports[0].port
+          value: 9090
+
+  - it: compacts raw blocks without downsampling by default
+    template: templates/compactor.yaml
+    asserts:
+      - isKind:
+          of: StatefulSet
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.volumeClaimTemplates[0].spec.resources.requests.storage
+          value: 100Gi
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --retention.resolution-raw=365d
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --deduplication.replica-label=replica
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --downsampling.disable
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --retention.resolution-5m=365d
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --retention.resolution-1h=365d
+
+  - it: compacts downsampled blocks when downsampling is enabled
+    template: templates/compactor.yaml
+    set:
+      global.observability.thanos.downsampling.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --retention.resolution-5m=365d
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --retention.resolution-1h=365d
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --downsampling.disable
+
+  - it: describes the bucket without any credential material
+    template: templates/object-storage-config.yaml
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - matchRegex:
+          path: data["objstore.yml"]
+          pattern: '(?s)type: S3'
+      - matchRegex:
+          path: data["objstore.yml"]
+          pattern: '(?s)bucket: "thanos"'
+      - matchRegex:
+          path: data["objstore.yml"]
+          pattern: '(?s)endpoint: "https://s3.example.com"'
+      - matchRegex:
+          path: data["objstore.yml"]
+          pattern: '(?s)region: "us-east-1"'
+      - matchRegex:
+          path: data["objstore.yml"]
+          pattern: '(?s)insecure: false'
+      - notMatchRegex:
+          path: data["objstore.yml"]
+          pattern: '(?i)access_key|secret_key|accessKey|secretKey'
+
+  - it: lists every Receive pod in the hashring
+    template: templates/receive-hashring.yaml
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - matchRegex:
+          path: data["hashring.json"]
+          pattern: '(?s)thanos-receive-0\.thanos-receive-headless\.osac-observability\.svc\.cluster\.local:10901'
+      - matchRegex:
+          path: data["hashring.json"]
+          pattern: '(?s)thanos-receive-1\.thanos-receive-headless\.osac-observability\.svc\.cluster\.local:10901'

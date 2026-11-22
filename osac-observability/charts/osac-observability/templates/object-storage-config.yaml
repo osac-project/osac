@@ -1,0 +1,23 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $obs := .Values.global.observability -}}
+{{- $storage := $obs.objectStorage | default dict -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: thanos-object-storage
+  namespace: {{ include "osac-observability.namespace" . }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+data:
+  # Non-secret description of the bucket. Credentials come from the existing
+  # Secret named by global.observability.objectStorage.secretName.
+  objstore.yml: |
+    type: S3
+    config:
+      bucket: {{ required "global.observability.objectStorage.bucket is required when observability is enabled" $storage.bucket | quote }}
+      endpoint: {{ required "global.observability.objectStorage.endpoint is required when observability is enabled" $storage.endpoint | quote }}
+      insecure: {{ $storage.insecure | default false }}
+      {{- with $storage.region }}
+      region: {{ . | quote }}
+      {{- end }}
+{{- end }}

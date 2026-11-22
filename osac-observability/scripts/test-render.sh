@@ -33,6 +33,23 @@ reject() {
   fi
 }
 
+# Extract the documents of one kind so workload assertions cannot match an
+# unrelated object in the umbrella render.
+extract_kind() {
+  local file=$1 kind=$2
+  awk -v kind="${kind}" '
+    /^---[[:space:]]*$/ {
+      if (isKind) printf "%s", doc
+      doc = ""
+      isKind = 0
+      next
+    }
+    { doc = doc $0 "\n" }
+    /^kind: / { if ($0 == "kind: " kind) isKind = 1 }
+    END { if (isKind) printf "%s", doc }
+  ' "${file}"
+}
+
 COMMON_ARGS=(
   template osac "${CHART_DIR}"
   --namespace osac
@@ -61,5 +78,41 @@ disabled="${TMP_DIR}/disabled.yaml"
 echo "checking the observability subchart renders only when enabled"
 require "${enabled}" 'name: osac-observability'
 reject "${disabled}" 'name: osac-observability'
+
+echo "checking the four Thanos workloads render in the component namespace"
+for kind_name in \
+  'StatefulSet:thanos-receive' \
+  'Deployment:thanos-store' \
+  'Deployment:thanos-query' \
+  'StatefulSet:thanos-compactor'; do
+  kind=${kind_name%%:*}
+  name=${kind_name##*:}
+  extract_kind "${enabled}" "${kind}" >"${TMP_DIR}/${name}.yaml"
+  require "${TMP_DIR}/${name}.yaml" "name: ${name}"
+  require "${TMP_DIR}/${name}.yaml" 'namespace: osac-observability'
+done
+
+echo "checking remote write is served over TLS on the service-CA certificate"
+require "${enabled}" 'service.beta.openshift.io/serving-cert-secret-name: thanos-receive-tls'
+require "${enabled}" 'name: remote-write'
+require "${enabled}" 'port: 19291'
+require "${TMP_DIR}/thanos-receive.yaml" '--remote-write.server-tls-cert=/etc/thanos/tls/tls.crt'
+require "${TMP_DIR}/thanos-receive.yaml" '--remote-write.server-tls-key=/etc/thanos/tls/tls.key'
+
+echo "checking the Compactor keeps downsampling off by default"
+require "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-raw=365d'
+require "${TMP_DIR}/thanos-compactor.yaml" '--downsampling.disable'
+reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-5m'
+reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-1h'
+
+echo "checking object storage is referenced by Secret name only"
+require "${enabled}" 'bucket: "thanos"'
+require "${enabled}" 'endpoint: "https://s3.example.com"'
+require "${TMP_DIR}/thanos-receive.yaml" 'secretRef:'
+reject "${enabled}" 'AWS_SECRET_ACCESS_KEY'
+reject "${enabled}" 'MINIO_ROOT_PASSWORD'
+reject "${enabled}" 'secretKey:'
+extract_kind "${enabled}" Secret >"${TMP_DIR}/secrets.yaml"
+reject "${TMP_DIR}/secrets.yaml" 'namespace: osac-observability'
 
 echo "Observability component render checks passed."

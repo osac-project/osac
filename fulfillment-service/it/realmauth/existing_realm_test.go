@@ -215,7 +215,7 @@ func (h *upgradeHarness) credentialsPreserved(ctx context.Context, source string
 		token, err := h.clientToken(ctx, clientID, secret)
 		issued := err == nil && token != nil && token.AccessToken != ""
 		// Preserve the unresolved prerequisites/UI boundary. This is only a
-		// credential-validity sentinel, not the pending four-client contracts.
+		// credential-validity sentinel; fresh-import contracts run separately.
 		expected := source != "prerequisites" || clientID != "osac-ui-backend"
 		Expect(issued).To(Equal(expected), "unchanged credential validity for %s (values withheld)", clientID)
 	}

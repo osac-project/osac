@@ -140,7 +140,9 @@ func (f *scopeProtocolFixture) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(f.failureStatus)
-		_, _ = io.WriteString(w, f.failureBody)
+		if _, err := io.WriteString(w, f.failureBody); err != nil {
+			f.violations++
+		}
 		return
 	}
 	var response any
@@ -232,7 +234,29 @@ func (f *scopeProtocolFixture) run(ctx context.Context, args ...string) (scopeCL
 
 func (f *scopeProtocolFixture) record() string { return filepath.Join(f.dir, "operation.json") }
 
+type failedResponseWriter struct {
+	http.ResponseWriter
+}
+
+func (failedResponseWriter) Write([]byte) (int, error) {
+	return 0, io.ErrClosedPipe
+}
+
 var _ = Describe("CSI updater protocol safety", func() {
+	It("reports protocol response write failures", func() {
+		f := newScopeProtocolFixture()
+		f.change(func(f *scopeProtocolFixture) {
+			f.failureMethod, f.failureStatus, f.failureBody = "GET", http.StatusUnauthorized, f.bearer
+		})
+		request := httptest.NewRequest(http.MethodGet, f.server.URL+scopePath, nil)
+		request.Header.Set("Authorization", "Bearer "+f.bearer)
+		f.serve(failedResponseWriter{httptest.NewRecorder()}, request)
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		Expect(f.violations).To(Equal(1), "a failed error-response write must be observable without logging its body")
+		Expect(f.writes).To(BeZero())
+	})
+
 	It("defaults to a read-only dry run", func(ctx SpecContext) {
 		f := newScopeProtocolFixture()
 		result, code := f.run(ctx)

@@ -449,6 +449,33 @@ var _ = Describe("Private cluster versions server", func() {
 
 		})
 
+		Describe("Uniqueness", func() {
+			It("identifies duplicate spec.version in AlreadyExists errors", func() {
+				const version = "4.18.42"
+
+				createCV("duplicate-version-first", version)
+
+				_, err := server.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+					Object: privatev1.ClusterVersion_builder{
+						Metadata: privatev1.Metadata_builder{Name: "duplicate-version-second"}.Build(),
+						Spec: privatev1.ClusterVersionSpec_builder{
+							Version: version,
+							Image:   "quay.io/ocp:" + version,
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).To(HaveOccurred())
+
+				status, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(status.Code()).To(Equal(grpccodes.AlreadyExists))
+				Expect(status.Message()).To(ContainSubstring("spec.version"))
+				Expect(status.Message()).ToNot(ContainSubstring("identifier"))
+				Expect(status.Message()).ToNot(ContainSubstring("duplicate-version-second"))
+			})
+
+		})
+
 		Describe("Create defaults", func() {
 			It("Defaults enabled to true when not set", func() {
 				object := createCV("default-enabled", "4.17.0")

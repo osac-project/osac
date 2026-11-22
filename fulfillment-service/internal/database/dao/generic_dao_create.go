@@ -199,6 +199,13 @@ func (r *CreateRequest[O]) translateError(ctx context.Context, id, tenant, proje
 	}
 	switch pgErr.Code {
 	case pgerrcode.UniqueViolation:
+		if pgErr.ConstraintName == "cluster_versions_unique_spec_version" {
+			return &ErrAlreadyExists{
+				Kind:           r.dao.kind,
+				Reason:         fmt.Sprintf("%s with spec.version already exists", r.dao.kind),
+				ConstraintName: pgErr.ConstraintName,
+			}
+		}
 		return &ErrAlreadyExists{
 			Kind:           r.dao.kind,
 			ID:             id,

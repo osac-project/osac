@@ -149,12 +149,422 @@
         },
         "observability": {
           "type": "object",
-          "description": "OSAC control-plane metrics collection. This is the single observability switch: it reaches both the umbrella templates and the subcharts. It does not deploy storage or querying.",
+          "description": "The single observability switch and its values contract. global.* is the only thing Helm propagates into subcharts, so every observability setting lives here and reaches both the umbrella templates and osac-observability.",
           "properties": {
             "enabled": {
               "type": "boolean",
-              "description": "Enable the platform-monitoring namespace labels, the namespace-scoped scrape RBAC, and the plain-HTTP ServiceMonitors. Does not enable storage or querying.",
+              "description": "Enable the platform-monitoring namespace labels, the namespace-scoped scrape RBAC, the plain-HTTP ServiceMonitors, and the Thanos store with its admin query Routes.",
               "default": false
+            },
+            "thanos": {
+              "type": "object",
+              "description": "Thanos workload sizing, retention and storage settings",
+              "properties": {
+                "image": {
+                  "type": "object",
+                  "description": "Thanos container image; the Red Hat build is published per OpenShift minor",
+                  "properties": {
+                    "registry": {
+                      "type": "string",
+                      "description": "Image registry host",
+                      "default": "registry.redhat.io"
+                    },
+                    "repository": {
+                      "type": "string",
+                      "description": "Image repository",
+                      "default": "openshift4/ose-thanos-rhel8"
+                    },
+                    "tag": {
+                      "type": "string",
+                      "description": "Image tag. Empty renders latest; set the hub cluster's OpenShift minor (for example v4.20).",
+                      "default": ""
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "retention": {
+                  "type": "string",
+                  "description": "How long any role may query samples (Prometheus duration, default 365 days). 0d fails the render.",
+                  "default": "365d",
+                  "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
+                },
+                "resolution": {
+                  "type": "object",
+                  "description": "Retention per resolution level. Each level must equal thanos.retention.",
+                  "properties": {
+                    "raw": {
+                      "type": "string",
+                      "description": "Raw sample retention",
+                      "default": "365d",
+                      "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
+                    },
+                    "5m": {
+                      "type": "string",
+                      "description": "5-minute aggregate retention, used only when downsampling is enabled",
+                      "default": "365d",
+                      "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
+                    },
+                    "1h": {
+                      "type": "string",
+                      "description": "1-hour aggregate retention, used only when downsampling is enabled",
+                      "default": "365d",
+                      "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "storageClass": {
+                  "type": "string",
+                  "description": "StorageClass for Receive and Compactor PVCs. Empty uses the cluster default.",
+                  "default": ""
+                },
+                "receive": {
+                  "type": "object",
+                  "description": "Thanos Receive (remote write endpoint and WAL)",
+                  "properties": {
+                    "replicas": {
+                      "type": "integer",
+                      "description": "Number of Receive pods",
+                      "default": 2,
+                      "minimum": 1
+                    },
+                    "replicationFactor": {
+                      "type": "integer",
+                      "description": "Copies of every sample kept across Receive pods",
+                      "default": 2,
+                      "minimum": 1
+                    },
+                    "resources": {
+                      "type": "object",
+                      "description": "Receive container resources",
+                      "properties": {
+                        "requests": {
+                          "type": "object",
+                          "description": "Resource requests",
+                          "properties": {
+                            "cpu": {
+                              "type": "string",
+                              "default": "500m"
+                            },
+                            "memory": {
+                              "type": "string",
+                              "default": "4Gi"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "limits": {
+                          "type": "object",
+                          "description": "Resource limits",
+                          "properties": {
+                            "cpu": {
+                              "type": "string",
+                              "default": "2"
+                            },
+                            "memory": {
+                              "type": "string",
+                              "default": "8Gi"
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "pvcSize": {
+                      "type": "string",
+                      "description": "WAL PersistentVolumeClaim size per Receive pod",
+                      "default": "20Gi"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "store": {
+                  "type": "object",
+                  "description": "Thanos Store Gateway",
+                  "properties": {
+                    "replicas": {
+                      "type": "integer",
+                      "description": "Number of Store Gateway pods",
+                      "default": 2,
+                      "minimum": 1
+                    },
+                    "resources": {
+                      "type": "object",
+                      "description": "Store Gateway container resources",
+                      "properties": {
+                        "requests": {
+                          "type": "object",
+                          "description": "Resource requests",
+                          "properties": {
+                            "cpu": {
+                              "type": "string",
+                              "default": "100m"
+                            },
+                            "memory": {
+                              "type": "string",
+                              "default": "256Mi"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "limits": {
+                          "type": "object",
+                          "description": "Resource limits",
+                          "properties": {
+                            "cpu": {
+                              "type": "string",
+                              "default": "500m"
+                            },
+                            "memory": {
+                              "type": "string",
+                              "default": "1Gi"
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "query": {
+                  "type": "object",
+                  "description": "Thanos Query (the single PromQL endpoint)",
+                  "properties": {
+                    "replicas": {
+                      "type": "integer",
+                      "description": "Number of Query pods",
+                      "default": 2,
+                      "minimum": 1
+                    },
+                    "resources": {
+                      "type": "object",
+                      "description": "Query container resources",
+                      "properties": {
+                        "requests": {
+                          "type": "object",
+                          "description": "Resource requests",
+                          "properties": {
+                            "cpu": {
+                              "type": "string",
+                              "default": "500m"
+                            },
+                            "memory": {
+                              "type": "string",
+                              "default": "1Gi"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "limits": {
+                          "type": "object",
+                          "description": "Resource limits",
+                          "properties": {
+                            "cpu": {
+                              "type": "string",
+                              "default": "2"
+                            },
+                            "memory": {
+                              "type": "string",
+                              "default": "4Gi"
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "compactor": {
+                  "type": "object",
+                  "description": "Thanos Compactor",
+                  "properties": {
+                    "resources": {
+                      "type": "object",
+                      "description": "Compactor container resources",
+                      "properties": {
+                        "requests": {
+                          "type": "object",
+                          "description": "Resource requests",
+                          "properties": {
+                            "cpu": {
+                              "type": "string",
+                              "default": "500m"
+                            },
+                            "memory": {
+                              "type": "string",
+                              "default": "2Gi"
+                            }
+                          },
+                          "additionalProperties": false
+                        },
+                        "limits": {
+                          "type": "object",
+                          "description": "Resource limits",
+                          "properties": {
+                            "cpu": {
+                              "type": "string",
+                              "default": "2"
+                            },
+                            "memory": {
+                              "type": "string",
+                              "default": "4Gi"
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "pvcSize": {
+                      "type": "string",
+                      "description": "Working PersistentVolumeClaim size for compaction",
+                      "default": "100Gi"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "deduplication": {
+                  "type": "object",
+                  "description": "How Query removes duplicate copies of replicated samples",
+                  "properties": {
+                    "replicaLabel": {
+                      "type": "string",
+                      "description": "Label Receive stamps with each pod's name; Query deduplicates on it",
+                      "default": "replica"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "downsampling": {
+                  "type": "object",
+                  "description": "Whether the Compactor keeps 5-minute and 1-hour aggregates",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "When false (default) the Compactor runs with --downsampling.disable and keeps no 5-minute or 1-hour aggregates. When true the Compactor runs Thanos's default 5-minute and 1-hour aggregation, so long-range admin queries return coarser points than the raw samples collected.",
+                      "default": false
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            "services": {
+              "type": "object",
+              "description": "Images for the OSAC helper and authentication proxies",
+              "properties": {
+                "metricsAuth": {
+                  "type": "object",
+                  "description": "OSAC helper image (remote-write configuration and query allowlist)",
+                  "properties": {
+                    "repository": {
+                      "type": "string",
+                      "default": "ghcr.io/osac-project/osac-observability"
+                    },
+                    "tag": {
+                      "type": "string",
+                      "description": "Image tag; overwritten at release time",
+                      "default": ""
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "oauth2Proxy": {
+                  "type": "object",
+                  "description": "oauth2-proxy image, used by the Keycloak admin Route",
+                  "properties": {
+                    "repository": {
+                      "type": "string",
+                      "default": "quay.io/oauth2-proxy/oauth2-proxy"
+                    },
+                    "tag": {
+                      "type": "string",
+                      "description": "Image tag; overwritten at release time",
+                      "default": ""
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "openshiftOauthProxy": {
+                  "type": "object",
+                  "description": "ose-oauth-proxy image, used by the OpenShift admin Route",
+                  "properties": {
+                    "repository": {
+                      "type": "string",
+                      "default": "registry.redhat.io/openshift4/ose-oauth-proxy"
+                    },
+                    "tag": {
+                      "type": "string",
+                      "description": "Image tag; overwritten at release time",
+                      "default": ""
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            },
+            "clusterRemoteWrite": {
+              "type": "object",
+              "description": "Remote write from tenant and workload clusters (epic OSAC-7992 consumes these)",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "description": "Enable the managed-cluster write path",
+                  "default": true
+                },
+                "certificateDuration": {
+                  "type": "string",
+                  "description": "Cluster client certificate lifetime",
+                  "default": "90d",
+                  "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
+                },
+                "renewBefore": {
+                  "type": "string",
+                  "description": "How long before expiry the client certificate is renewed",
+                  "default": "30d",
+                  "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
+                }
+              },
+              "additionalProperties": false
+            },
+            "tenant": {
+              "type": "object",
+              "description": "Tenant query limits (epic OSAC-7993 consumes these; admins are not limited)",
+              "properties": {
+                "limits": {
+                  "type": "object",
+                  "description": "Per-tenant query limits",
+                  "properties": {
+                    "maxConcurrentQueries": {
+                      "type": "integer",
+                      "description": "Maximum queries a single tenant may run at once",
+                      "default": 10,
+                      "minimum": 1
+                    },
+                    "maxQueryRange": {
+                      "type": "string",
+                      "description": "Maximum range a tenant query may cover",
+                      "default": "24h",
+                      "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
+                    },
+                    "queryTimeout": {
+                      "type": "string",
+                      "description": "Maximum duration of a tenant query",
+                      "default": "2m",
+                      "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
             },
             "collection": {
               "type": "object",
@@ -165,6 +575,98 @@
                   "description": "Scrape interval for every OSAC control-plane target (Prometheus duration, e.g. 30s)",
                   "default": "30s",
                   "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
+                },
+                "infrastructure": {
+                  "type": "string",
+                  "description": "How often the management cluster writes into Thanos (Prometheus duration). 0s fails the render.",
+                  "default": "30s",
+                  "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
+                },
+                "platformNamespaces": {
+                  "type": "array",
+                  "description": "Namespaces whose kube_pod_* and container_* series are kept; all others are dropped before the write",
+                  "default": ["osac", "osac-csi", "osac-observability"],
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "objectStorage": {
+              "type": "object",
+              "description": "S3-compatible bucket Thanos persists into. The chart takes a Secret name only and never key material.",
+              "properties": {
+                "secretName": {
+                  "type": "string",
+                  "description": "Existing Secret in osac-observability with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY keys. Required when enabled.",
+                  "default": ""
+                },
+                "endpoint": {
+                  "type": "string",
+                  "description": "S3 endpoint URL, for example https://s3.example.com. Required when enabled.",
+                  "default": "",
+                  "pattern": "^(https?://[^/\\s]+(/.*)?)?$"
+                },
+                "bucket": {
+                  "type": "string",
+                  "description": "Bucket the Cloud Infrastructure Admin created. Required when enabled.",
+                  "default": ""
+                },
+                "region": {
+                  "type": "string",
+                  "description": "Bucket region; may be empty for some S3-compatible stores",
+                  "default": ""
+                },
+                "insecure": {
+                  "type": "boolean",
+                  "description": "Skip TLS verification when talking to the endpoint",
+                  "default": false
+                }
+              },
+              "additionalProperties": false
+            },
+            "admin": {
+              "type": "object",
+              "description": "Admin query settings",
+              "properties": {
+                "openshiftGroup": {
+                  "type": "string",
+                  "description": "OpenShift group allowed through thanos-query-admin-openshift",
+                  "default": "osac-cloud-infrastructure-admins"
+                }
+              },
+              "additionalProperties": false
+            },
+            "keycloak": {
+              "type": "object",
+              "description": "Keycloak client and role settings for the OSAC-signed-in admin Route",
+              "properties": {
+                "realm": {
+                  "type": "string",
+                  "description": "Keycloak realm name",
+                  "default": "osac"
+                },
+                "keycloakAdminRole": {
+                  "type": "string",
+                  "description": "Realm role a Cloud Provider Admin must hold",
+                  "default": "cloud-provider-admin"
+                },
+                "adminClientId": {
+                  "type": "string",
+                  "description": "Keycloak client used by the admin Route",
+                  "default": "thanos-admin"
+                },
+                "tenantClientId": {
+                  "type": "string",
+                  "description": "Keycloak client used by the tenant Route (epic OSAC-7993 consumes this)",
+                  "default": "thanos-tenant"
+                },
+                "issuerUrl": {
+                  "type": "string",
+                  "description": "OIDC issuer URL, for example https://keycloak.example.com/realms/osac",
+                  "default": ""
                 }
               },
               "additionalProperties": false
@@ -2056,6 +2558,17 @@
             }
           },
           "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "observability": {
+      "type": "object",
+      "description": "Internal values of the osac-observability subchart. Helm injects this key for the chart dependency alias and the subchart reads only global.observability, so it accepts no user-facing settings.",
+      "properties": {
+        "global": {
+          "type": "object",
+          "description": "Values Helm propagates from the parent global block"
         }
       },
       "additionalProperties": false

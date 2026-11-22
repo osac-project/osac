@@ -64,9 +64,122 @@ global:
   # stories add those to the osac-observability namespace.
   observability:
     enabled: false
+    thanos:
+      image:
+        registry: registry.redhat.io
+        repository: openshift4/ose-thanos-rhel8
+        # Empty renders :latest. Set this to the hub cluster's OpenShift minor
+        # (for example v4.20); the Red Hat image is published per minor.
+        tag: ""
+      # How long any role may query samples. Must be positive; 0d fails the
+      # render. Aggregate levels must equal this value.
+      retention: 365d
+      resolution:
+        raw: 365d
+        5m: 365d
+        1h: 365d
+      storageClass: ""
+      receive:
+        replicas: 2
+        # Two copies of every sample; the Receive pods gossip the hashring and
+        # forward each write to their replication peer.
+        replicationFactor: 2
+        resources:
+          requests:
+            cpu: 500m
+            memory: 4Gi
+          limits:
+            cpu: "2"
+            memory: 8Gi
+        pvcSize: 20Gi
+      store:
+        replicas: 2
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+      query:
+        replicas: 2
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
+      compactor:
+        resources:
+          requests:
+            cpu: 500m
+            memory: 2Gi
+          limits:
+            cpu: "2"
+            memory: 4Gi
+        pvcSize: 100Gi
+      deduplication:
+        # Receive stamps this label with each pod's name; Query deduplicates on
+        # it because replicationFactor copies every sample.
+        replicaLabel: replica
+      downsampling:
+        # false renders --downsampling.disable and keeps no 5-minute or
+        # 1-hour aggregates. true runs Thanos's default aggregation, so a
+        # long-range admin query returns coarser points than the samples
+        # collected.
+        enabled: false
+    services:
+      metricsAuth:
+        # Builds the remote-write and query-allowlist helpers.
+        repository: ghcr.io/osac-project/osac-observability
+        # Placeholder; overwritten at release time.
+        tag: ""
+      oauth2Proxy:
+        repository: quay.io/oauth2-proxy/oauth2-proxy
+        # Placeholder; overwritten at release time.
+        tag: ""
+      openshiftOauthProxy:
+        repository: registry.redhat.io/openshift4/ose-oauth-proxy
+        # Placeholder; overwritten at release time.
+        tag: ""
+    clusterRemoteWrite:
+      enabled: true
+      # Cluster certificate lifetime for tenant and workload clusters. Epic
+      # OSAC-7992 consumes these.
+      certificateDuration: 90d
+      renewBefore: 30d
+    tenant:
+      # Epic OSAC-7993 consumes these; admins are not limited.
+      limits:
+        maxConcurrentQueries: 10
+        maxQueryRange: 24h
+        queryTimeout: 2m
     collection:
       # Scrape interval for every OSAC control-plane target. Prometheus duration.
       osacControlPlane: "30s"
+      # How often the management cluster writes into Thanos. Must be positive.
+      infrastructure: 30s
+      # kube_pod_* and container_* are kept only for these namespaces.
+      platformNamespaces: [osac, osac-csi, osac-observability]
+    objectStorage:
+      # Required when enabled. Names an existing Secret in osac-observability
+      # whose AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY keys are exported
+      # into the Thanos containers. Never put key material in values.
+      secretName: ""
+      endpoint: ""
+      bucket: ""
+      region: ""
+      insecure: false
+    admin:
+      # OpenShift group allowed through thanos-query-admin-openshift.
+      openshiftGroup: osac-cloud-infrastructure-admins
+    keycloak:
+      realm: osac
+      keycloakAdminRole: cloud-provider-admin
+      adminClientId: thanos-admin
+      tenantClientId: thanos-tenant
+      issuerUrl: ""
   # --- Service Enablement ---
   # Controls which service tiers are active across all OSAC components.
   # When all are true (the default), OSAC operates as a full-stack cloud.

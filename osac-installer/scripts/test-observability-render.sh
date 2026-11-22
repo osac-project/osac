@@ -234,14 +234,15 @@ require "${no_crd}" 'name: osac-prometheus-scrape'
 
 echo "checking the top-level observability key is rejected"
 # global.observability is the only switch; a second top-level object would give
-# the wizard a control that does nothing. Helm 4 says "additional properties
-# 'observability' not allowed"; Helm 3 says "Additional property observability
-# is not allowed", so match either phrasing.
+# the wizard a control that does nothing. The schema accepts the key only as the
+# internal dependency alias, so Helm 4 reports "at '/observability': additional
+# properties 'enabled' not allowed" while Helm 3 says "Additional property
+# observability is not allowed"; match either phrasing.
 top_level="${TMP_DIR}/top-level.stderr"
 if "${HELM_BIN}" "${COMMON_ARGS[@]}" --set observability.enabled=true >/dev/null 2>"${top_level}"; then
   fail "a top-level observability key unexpectedly rendered"
 fi
-if ! grep -Eq "[Aa]dditional propert(y|ies).*observability.*not allowed" "${top_level}"; then
+if ! grep -Eq "([Aa]dditional propert(y|ies).*['\"]?observability['\"]?.*not allowed|at '/observability'.*[Aa]dditional propert)" "${top_level}"; then
   echo "ERROR: top-level observability was not rejected by the schema" >&2
   cat "${top_level}" >&2
   exit 1

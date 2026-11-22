@@ -1,0 +1,4 @@
+# This chart reads only global.observability.*. The authoritative defaults live
+# in osac-installer/charts/osac/values.yaml with a matching values.schema.json
+# entry, and Helm propagates global.* unchanged into every subchart.
+global: {}

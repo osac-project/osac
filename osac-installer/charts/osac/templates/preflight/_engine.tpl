@@ -127,9 +127,9 @@ Release Secrets are read by name, newest first, instead of listing the namespace
 {{- $_ := set $features "metering" true -}}
 {{/*
 Secrets the release creates itself (directly or through its Certificates). The
-database ones are named off osac.pgPrefix, a fixed literal, and not off
-osac.fullname, which changes with the release and chart names; the db-init
-certificate follows the fullname.
+database ones are named off osac.pgPrefix (the fixed literal "osac", or the
+run's global.instanceId when one is set), not off osac.fullname, which changes
+with the release and chart names; the db-init certificate follows the fullname.
 */}}
 {{- $pg := include "osac.pgPrefix" $root -}}
 {{- $owned := list (printf "%s-db-config" $pg) (printf "%s-db-client-cert" $pg) (printf "%s-db-metering-config" $pg) (printf "%s-db-metering-client-cert" $pg) (printf "%s-db-init-cert" (include "osac.fullname" $root)) -}}

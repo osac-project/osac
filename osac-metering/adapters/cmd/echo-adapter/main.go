@@ -121,7 +121,7 @@ func main() {
 	r := runner.NewRunner(adapter, runner.RunnerConfig{
 		FlushInterval: flushInterval,
 		TopicsProvider: func(ctx context.Context) ([]string, error) {
-			return kafka.ConsumeTopics(echoClient)
+			return kafka.ConsumeTopics(echoClient, kafkaCfg.HeartbeatTopicPrefix)
 		},
 	}, logger, runner.WithDLQ(dlq))
 

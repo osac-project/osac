@@ -1151,7 +1151,7 @@ func TestCustomPrefixDiscoversAndFolds(t *testing.T) {
 	})
 
 	cfg := kafka.ConnectionConfig{Brokers: testenv.Broker(t)}
-	found, err := kafka.ListEventTenants(ctx, cfg, prefix)
+	found, err := kafka.ListEventTenants(ctx, cfg, prefix, "", "")
 	if err != nil {
 		t.Fatalf("listing event tenants: %v", err)
 	}

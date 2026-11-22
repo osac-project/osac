@@ -293,6 +293,13 @@ consoleProxy:
 # ConfigMap and Secret sources that provide the connection parameters.
 kafka:
 
+  # Prefix of the Kafka consumer groups the gRPC server's grouped event watches join
+  # (<prefix><group>). The umbrella chart's global.instanceId, when set, overrides this
+  # value with <instance id>.system., so deployments sharing one Kafka cluster keep their
+  # own groups. The event-publisher takes the same flag for a uniform argument surface;
+  # it produces events and joins no group.
+  consumerGroupPrefix: "osac.system."
+
   # List of sources for Kafka connection parameters. Each entry maps keys from a ConfigMap or Secret
   # to named Kafka configuration properties. Each item has a 'key' field that indicates the name of
   # the key in the ConfigMap (or Secret) and a 'param' field indicating the name of the Kafka

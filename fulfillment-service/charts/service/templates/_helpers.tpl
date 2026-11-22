@@ -82,6 +82,21 @@ Returns non-empty string for enabled, empty for disabled (for use in {{- if incl
 {{- end }}
 
 {{/*
+Consumer-group prefix the gRPC server prepends to a watch's group name.
+global.instanceId, when set, makes it <id>.system. so runs sharing one Kafka
+cluster keep their own consumer groups; otherwise kafka.consumerGroupPrefix
+applies. The umbrella chart's fulfillment KafkaUser resolves the same value
+for the group ACL, so both charts must agree on this order.
+*/}}
+{{- define "fulfillment-service.kafkaConsumerGroupPrefix" -}}
+{{- if .Values.global.instanceId -}}
+{{- printf "%s.system." .Values.global.instanceId -}}
+{{- else -}}
+{{- .Values.kafka.consumerGroupPrefix | default "osac.system." -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Networking installation settings, from global.networking:
 - provisioningEnabled (default true): whether OSAC runs provider networking jobs. It can't change after installation.
 - excludedIpv4Cidrs (default empty): canonical IPv4 CIDRs that the provider's infrastructure uses.

@@ -64,15 +64,8 @@ var _ = Describe("Private events server", Ordered, func() {
 		return config
 	}
 
-	startServer := func() privatev1.EventsClient {
-		server, err := servers.NewPrivateEventsServer().
-			SetLogger(testLogger).
-			SetKafkaConfig(newKafkaConfig()).
-			SetKafkaBrokers(broker.Brokers()).
-			Build()
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(server.Close)
-
+	// serveEvents serves one private events server over an in-memory connection.
+	serveEvents := func(server *servers.PrivateEventsServer) privatev1.EventsClient {
 		listener := bufconn.Listen(1024 * 1024)
 		grpcServer := grpc.NewServer()
 		privatev1.RegisterEventsServer(grpcServer, server)
@@ -95,6 +88,30 @@ var _ = Describe("Private events server", Ordered, func() {
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(connection.Close)
 		return privatev1.NewEventsClient(connection)
+	}
+
+	startServer := func() privatev1.EventsClient {
+		server, err := servers.NewPrivateEventsServer().
+			SetLogger(testLogger).
+			SetKafkaConfig(newKafkaConfig()).
+			SetKafkaBrokers(broker.Brokers()).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(server.Close)
+		return serveEvents(server)
+	}
+
+	startServerWithConsumerGroupPrefix := func(prefix string) privatev1.EventsClient {
+		server, err := servers.NewPrivateEventsServer().
+			SetLogger(testLogger).
+			SetKafkaConfig(newKafkaConfig()).
+			SetKafkaBrokers(broker.Brokers()).
+			SetKafkaTopicPrefix(servers.DefaultEventTopicPrefix).
+			SetKafkaConsumerGroupPrefix(prefix).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(server.Close)
+		return serveEvents(server)
 	}
 
 	newClient := func() sarama.Client {
@@ -133,6 +150,53 @@ var _ = Describe("Private events server", Ordered, func() {
 			Build()
 		Expect(err).To(MatchError("kafka configuration is mandatory"))
 		Expect(server).To(BeNil())
+	})
+
+	It("requires a consumer group prefix", func() {
+		server, err := servers.NewPrivateEventsServer().
+			SetLogger(testLogger).
+			SetKafkaConfig(newKafkaConfig()).
+			SetKafkaBrokers(broker.Brokers()).
+			SetKafkaConsumerGroupPrefix("").
+			Build()
+		Expect(err).To(MatchError("kafka consumer group prefix is mandatory"))
+		Expect(server).To(BeNil())
+	})
+
+	It("joins a grouped watch under the configured consumer group prefix", func() {
+		client := newClient()
+		eventsClient := startServerWithConsumerGroupPrefix("pr2100v1.system.")
+		producer, err := sarama.NewSyncProducerFromClient(client)
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(producer.Close)
+		topic := servers.DefaultEventTopicPrefix + "private-watch-grouped-" + uuid.New()
+		createTopic(client, topic)
+		event := privatev1.Event_builder{
+			Cluster: privatev1.Cluster_builder{Id: "grouped"}.Build(),
+		}.Build()
+		sendEvent(producer, topic, event)
+
+		watchCtx, cancel := context.WithCancel(context.Background())
+		DeferCleanup(cancel)
+		group := "e2e-" + uuid.New()
+		stream, err := eventsClient.Watch(watchCtx, &privatev1.EventsWatchRequest{Group: &group})
+		Expect(err).ToNot(HaveOccurred())
+
+		// Grouped watches start at the oldest offset, so the seed event itself
+		// proves the group consumed the topic.
+		response, err := stream.Recv()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetEvent().GetCluster().GetId()).To(Equal("grouped"))
+
+		admin, err := sarama.NewClusterAdmin([]string{broker.Brokers()}, newKafkaConfig())
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(admin.Close)
+		var groups map[string]string
+		Eventually(func() map[string]string {
+			groups, err = admin.ListConsumerGroups()
+			Expect(err).ToNot(HaveOccurred())
+			return groups
+		}, 10*time.Second).Should(HaveKey("pr2100v1.system." + group))
 	})
 
 	It("consumes, filters and streams Kafka events without changing the Watch request or event ID", func() {

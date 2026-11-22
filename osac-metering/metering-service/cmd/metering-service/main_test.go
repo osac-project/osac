@@ -59,3 +59,26 @@ func TestEventTopicPrefixFromEnv(t *testing.T) {
 		t.Fatalf("configured prefix must be kept, got %q", got)
 	}
 }
+
+// TestMeteringTopicPrefixesFromEnv checks that unset heartbeat and dead-letter prefixes
+// stay on the shared defaults and that set prefixes are the ones the loops will use.
+func TestMeteringTopicPrefixesFromEnv(t *testing.T) {
+	t.Setenv("METERING_HEARTBEAT_TOPIC_PREFIX", "")
+	t.Setenv("METERING_DEADLETTER_TOPIC_PREFIX", "")
+	cfg := configFromEnv()
+	if cfg.heartbeatTopicPrefix != schema.HeartbeatPrefix {
+		t.Fatalf("empty heartbeat prefix must default to %q, got %q", schema.HeartbeatPrefix, cfg.heartbeatTopicPrefix)
+	}
+	if cfg.deadLetterTopicPrefix != schema.DeadLetterPrefix {
+		t.Fatalf("empty dead-letter prefix must default to %q, got %q", schema.DeadLetterPrefix, cfg.deadLetterTopicPrefix)
+	}
+	t.Setenv("METERING_HEARTBEAT_TOPIC_PREFIX", "pr2100v1.metering.heartbeat.")
+	t.Setenv("METERING_DEADLETTER_TOPIC_PREFIX", "pr2100v1.metering.dlq.")
+	cfg = configFromEnv()
+	if cfg.heartbeatTopicPrefix != "pr2100v1.metering.heartbeat." {
+		t.Fatalf("configured heartbeat prefix must be kept, got %q", cfg.heartbeatTopicPrefix)
+	}
+	if cfg.deadLetterTopicPrefix != "pr2100v1.metering.dlq." {
+		t.Fatalf("configured dead-letter prefix must be kept, got %q", cfg.deadLetterTopicPrefix)
+	}
+}

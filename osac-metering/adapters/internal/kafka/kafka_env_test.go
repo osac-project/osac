@@ -53,13 +53,25 @@ var _ = Describe("KafkaConfigFromEnv", func() {
 		Expect(cfg.SASLPassFile).To(Equal("/run/secrets/kafka-password"))
 	})
 
+	It("reads the metering topic prefixes", func() {
+		GinkgoT().Setenv("METERING_HEARTBEAT_TOPIC_PREFIX", "pr2100v1.metering.heartbeat.")
+		GinkgoT().Setenv("METERING_DEADLETTER_TOPIC_PREFIX", "pr2100v1.metering.dlq.")
+		cfg := KafkaConfigFromEnv()
+		Expect(cfg.HeartbeatTopicPrefix).To(Equal("pr2100v1.metering.heartbeat."))
+		Expect(cfg.DeadLetterTopicPrefix).To(Equal("pr2100v1.metering.dlq."))
+	})
+
 	It("returns empty strings for unset optional fields", func() {
 		GinkgoT().Setenv("KAFKA_TLS_CA_CERT", "")
 		GinkgoT().Setenv("KAFKA_SASL_USERNAME", "")
 		GinkgoT().Setenv("KAFKA_SASL_PASSWORD_FILE", "")
+		GinkgoT().Setenv("METERING_HEARTBEAT_TOPIC_PREFIX", "")
+		GinkgoT().Setenv("METERING_DEADLETTER_TOPIC_PREFIX", "")
 		cfg := KafkaConfigFromEnv()
 		Expect(cfg.TLSCACert).To(BeEmpty())
 		Expect(cfg.SASLUser).To(BeEmpty())
 		Expect(cfg.SASLPassFile).To(BeEmpty())
+		Expect(cfg.HeartbeatTopicPrefix).To(BeEmpty())
+		Expect(cfg.DeadLetterTopicPrefix).To(BeEmpty())
 	})
 })

@@ -49,10 +49,16 @@ type DLQProducer struct {
 	topic    string
 	// perTenant derives the DLQ topic from the source topic of each failed record.
 	perTenant bool
+	// heartbeatPrefix and deadLetterPrefix name the per-tenant topics per-tenant mode
+	// routes between; empty uses the shared defaults.
+	heartbeatPrefix  string
+	deadLetterPrefix string
 }
 
 // NewPerTenantDLQProducer creates a DLQ producer that routes each failed record to the
-// dead-letter topic of the tenant whose heartbeat topic the record came from.
+// dead-letter topic of the tenant whose heartbeat topic the record came from. The
+// prefixes come from the adapter's Kafka configuration, so the producer maps the same
+// topics the adapter consumes.
 func NewPerTenantDLQProducer(brokers string, kafkaCfg kafka.KafkaConfig) (*DLQProducer, error) {
 	sc, err := kafka.NewProducerConfig(kafkaCfg)
 	if err != nil {
@@ -73,6 +79,8 @@ func NewPerTenantDLQProducer(brokers string, kafkaCfg kafka.KafkaConfig) (*DLQPr
 
 	return &DLQProducer{
 		producer: producer, client: client, offsets: client, perTenant: true,
+		heartbeatPrefix:  kafkaCfg.HeartbeatTopicPrefix,
+		deadLetterPrefix: kafkaCfg.DeadLetterTopicPrefix,
 		// The depth metric labels its series by topic; per-tenant mode aggregates
 		// every tenant's dead-letter topic into one series, so the label says that
 		// instead of sitting empty.
@@ -131,7 +139,7 @@ func (d *DLQProducer) Send(msg *sarama.ConsumerMessage, reason string, attempts 
 // topicFor returns the DLQ topic for a failed record from a source topic.
 func (d *DLQProducer) topicFor(source string) string {
 	if d.perTenant {
-		return kafka.DeadLetterTopicOf(source)
+		return kafka.DeadLetterTopicOf(source, d.heartbeatPrefix, d.deadLetterPrefix)
 	}
 	return d.topic
 }
@@ -149,7 +157,7 @@ func (d *DLQProducer) Occupancy() (int64, error) {
 	topics := []string{d.topic}
 	if d.perTenant {
 		var err error
-		topics, err = kafka.AllDeadLetterTopics(d.client)
+		topics, err = kafka.AllDeadLetterTopics(d.client, d.deadLetterPrefix)
 		if err != nil {
 			return 0, fmt.Errorf("listing DLQ topics: %w", err)
 		}

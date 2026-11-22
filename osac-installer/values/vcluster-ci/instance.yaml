@@ -12,6 +12,28 @@
 # --- Service Enablement ---
 global:
   osacDeploymentId: "ci/osac"
+  # The run setup's per-run overlay (osac-test-infra) applies the run's ID:
+  #
+  #   global.instanceId: <run id>            # e.g. pr2100v1
+  #   global.eventTopicPrefix: <run id>.events.
+  #   service.database.connection[].secret.name: <run id>-db-config
+  #   service.database.connection[].secret.name: <run id>-db-client-cert
+  #   metering.database.connection[].secret.name: <run id>-db-metering-config
+  #   metering.database.connection[].secret.name: <run id>-db-metering-client-cert
+  #
+  # global.instanceId names every shared-service object the run creates: the
+  # database names (<run id>_service, <run id>_metering) and the workload-db
+  # secret names derived from them, the KafkaUser names (<run
+  # id>-fulfillment-service, <run id>-osac-metering, ...), the consumer-group
+  # prefix (<run id>.system.) and the metering heartbeat/DLQ topic prefixes
+  # (<run id>.metering.heartbeat. / <run id>.metering.dlq.). The connection
+  # secrets above are the ones those names produce; the run setup creates
+  # them in the vcluster, so the values here name the default
+  # single-instance secrets for local renders only. The Kafka connection
+  # secret keeps its name (fulfillment-service-kafka): it lives in the run's
+  # own vcluster, so runs cannot collide on it. eventTopicPrefix stays a
+  # separate value because it also carries the metering discovery contract
+  # (see charts/osac/values.yaml).
   fulfillmentTrust:
     enabled: false
   services:

@@ -33,14 +33,21 @@ const IdleWait = 200 * time.Millisecond
 
 // Relay drains the outbox to Kafka.
 type Relay struct {
-	store    *database.Store
-	producer sarama.SyncProducer
-	logger   logr.Logger
+	store           *database.Store
+	producer        sarama.SyncProducer
+	logger          logr.Logger
+	heartbeatPrefix string
 }
 
-// New creates a relay on an open producer.
-func New(store *database.Store, producer sarama.SyncProducer, logger logr.Logger) (*Relay, error) {
-	return &Relay{store: store, producer: producer, logger: logger}, nil
+// New creates a relay on an open producer. heartbeatPrefix names the tenant heartbeat
+// topics it sends to; empty uses the default.
+func New(store *database.Store, producer sarama.SyncProducer, logger logr.Logger, heartbeatPrefix string) (*Relay, error) {
+	return &Relay{
+		store:           store,
+		producer:        producer,
+		logger:          logger,
+		heartbeatPrefix: heartbeatPrefix,
+	}, nil
 }
 
 // RunTenant drains the tenant's outbox until the context ends. It sends outbox rows in order,
@@ -51,7 +58,7 @@ func (r *Relay) RunTenant(ctx context.Context, tenant string) error {
 	if err := r.store.EnsureProgress(ctx, tenant); err != nil {
 		return err
 	}
-	topic := topics.Heartbeat(tenant)
+	topic := topics.HeartbeatTopic(r.heartbeatPrefix, tenant)
 	for {
 		select {
 		case <-ctx.Done():

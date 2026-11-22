@@ -68,6 +68,15 @@ func Cmd() *cobra.Command {
 		servers.DefaultEventTopicPrefix,
 		topicPrefixFlagHelp,
 	)
+	// The publisher produces events and joins no consumer group; the flag
+	// keeps the fulfillment Kafka flags uniform across its commands, so the
+	// shared deployment values apply to both without per-command arguments.
+	flags.StringVar(
+		&runner.args.consumerGroupPrefix,
+		"kafka-consumer-group-prefix",
+		servers.DefaultConsumerGroupPrefix,
+		consumerGroupPrefixFlagHelp,
+	)
 	flags.DurationVar(
 		&runner.args.kafkaTopicRetention,
 		"kafka-topic-retention",
@@ -84,6 +93,7 @@ type runnerContext struct {
 	args   struct {
 		caFiles             []string
 		topicPrefix         string
+		consumerGroupPrefix string
 		kafkaTopicRetention time.Duration
 	}
 }
@@ -268,4 +278,11 @@ _FILE_ - Files or directories containing trusted CA certificates in PEM format. 
 
 const topicPrefixFlagHelp = `
 _PREFIX_ - Prefix prepended to the tenant identifier to form Kafka topic names.
+`
+
+const consumerGroupPrefixFlagHelp = `
+_PREFIX_ - Prefix prepended to the group name of a grouped events watch to form
+the Kafka consumer group it joins. The publisher produces events and joins no
+group, so the value has no effect here; it is accepted to keep the fulfillment
+Kafka flags uniform across its commands.
 `

@@ -40,10 +40,11 @@ import (
 
 // PrivateEventsServerBuilder configures and creates a PrivateEventsServer.
 type PrivateEventsServerBuilder struct {
-	logger           *slog.Logger
-	kafkaConfig      *sarama.Config
-	kafkaBrokers     []string
-	kafkaTopicPrefix string
+	logger                   *slog.Logger
+	kafkaConfig              *sarama.Config
+	kafkaBrokers             []string
+	kafkaTopicPrefix         string
+	kafkaConsumerGroupPrefix string
 }
 
 var _ privatev1.EventsServer = (*PrivateEventsServer)(nil)
@@ -53,16 +54,17 @@ var _ privatev1.EventsServer = (*PrivateEventsServer)(nil)
 type PrivateEventsServer struct {
 	privatev1.UnimplementedEventsServer
 
-	logger                  *slog.Logger
-	kafkaClient             sarama.Client
-	kafkaConfig             *sarama.Config
-	kafkaBrokers            []string
-	kafkaTopicPrefix        string
-	celEnv                  *cel.Env
-	kafkaSubscriptionsMutex sync.Mutex
-	kafkaSubscriptions      map[*privateEventsServerSubscription]struct{}
-	kafkaTopicWatcherOnce   sync.Once
-	latestKafkaTopicUpdate  *privateEventsServerTopicUpdate
+	logger                   *slog.Logger
+	kafkaClient              sarama.Client
+	kafkaConfig              *sarama.Config
+	kafkaBrokers             []string
+	kafkaTopicPrefix         string
+	kafkaConsumerGroupPrefix string
+	celEnv                   *cel.Env
+	kafkaSubscriptionsMutex  sync.Mutex
+	kafkaSubscriptions       map[*privateEventsServerSubscription]struct{}
+	kafkaTopicWatcherOnce    sync.Once
+	latestKafkaTopicUpdate   *privateEventsServerTopicUpdate
 }
 
 type privateEventsServerSubscription struct {
@@ -83,7 +85,8 @@ type privateEventsServerSubscription struct {
 // NewPrivateEventsServer creates a builder for a private events server.
 func NewPrivateEventsServer() *PrivateEventsServerBuilder {
 	return &PrivateEventsServerBuilder{
-		kafkaTopicPrefix: DefaultEventTopicPrefix,
+		kafkaTopicPrefix:         DefaultEventTopicPrefix,
+		kafkaConsumerGroupPrefix: DefaultConsumerGroupPrefix,
 	}
 }
 
@@ -112,6 +115,13 @@ func (b *PrivateEventsServerBuilder) SetKafkaTopicPrefix(value string) *PrivateE
 	return b
 }
 
+// SetKafkaConsumerGroupPrefix sets the prefix prepended to the group name of a grouped events watch to form the
+// Kafka consumer group it joins. This is optional and defaults to DefaultConsumerGroupPrefix.
+func (b *PrivateEventsServerBuilder) SetKafkaConsumerGroupPrefix(value string) *PrivateEventsServerBuilder {
+	b.kafkaConsumerGroupPrefix = value
+	return b
+}
+
 func (b *PrivateEventsServerBuilder) Build() (result *PrivateEventsServer, err error) {
 	// Check parameters:
 	if b.logger == nil {
@@ -128,6 +138,10 @@ func (b *PrivateEventsServerBuilder) Build() (result *PrivateEventsServer, err e
 	}
 	if b.kafkaTopicPrefix == "" {
 		err = errors.New("kafka topic prefix is mandatory")
+		return
+	}
+	if b.kafkaConsumerGroupPrefix == "" {
+		err = errors.New("kafka consumer group prefix is mandatory")
 		return
 	}
 
@@ -148,13 +162,14 @@ func (b *PrivateEventsServerBuilder) Build() (result *PrivateEventsServer, err e
 
 	// Create the object:
 	result = &PrivateEventsServer{
-		logger:             b.logger,
-		kafkaClient:        kafkaClient,
-		kafkaConfig:        b.kafkaConfig,
-		kafkaBrokers:       slices.Clone(b.kafkaBrokers),
-		kafkaTopicPrefix:   b.kafkaTopicPrefix,
-		celEnv:             celEnv,
-		kafkaSubscriptions: map[*privateEventsServerSubscription]struct{}{},
+		logger:                   b.logger,
+		kafkaClient:              kafkaClient,
+		kafkaConfig:              b.kafkaConfig,
+		kafkaBrokers:             slices.Clone(b.kafkaBrokers),
+		kafkaTopicPrefix:         b.kafkaTopicPrefix,
+		kafkaConsumerGroupPrefix: b.kafkaConsumerGroupPrefix,
+		celEnv:                   celEnv,
+		kafkaSubscriptions:       map[*privateEventsServerSubscription]struct{}{},
 	}
 	return
 }
@@ -583,7 +598,7 @@ func (s *PrivateEventsServer) newConsumerGroup(name string) (sarama.ConsumerGrou
 	config.Consumer.Group.Rebalance.GroupStrategies = []sarama.BalanceStrategy{sarama.NewBalanceStrategyRoundRobin()}
 	config.Consumer.Offsets.Initial = sarama.OffsetOldest
 	config.Consumer.Return.Errors = true
-	return sarama.NewConsumerGroup(s.kafkaBrokers, "osac.system."+name, &config)
+	return sarama.NewConsumerGroup(s.kafkaBrokers, s.kafkaConsumerGroupPrefix+name, &config)
 }
 
 // privateEventsServerGroupHandler forwards claims to the subscription's single stream writer. Waiting for the result

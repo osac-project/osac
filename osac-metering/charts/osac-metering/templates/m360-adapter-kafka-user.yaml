@@ -2,7 +2,7 @@
 apiVersion: kafka.strimzi.io/v1
 kind: KafkaUser
 metadata:
-  name: osac-metering-m360-adapter
+  name: {{ include "osac-metering.m360AdapterKafkaUserName" . }}
   namespace: {{ include "osac-metering.kafkaClusterNamespace" . }}
   labels:
     strimzi.io/cluster: {{ include "osac-metering.kafkaClusterName" . }}
@@ -12,5 +12,5 @@ spec:
   authorization:
     type: simple
     acls:
-      {{- include "osac-metering.adapterKafkaUserAcls" "osac-metering-m360-adapter" | nindent 6 }}
+      {{- include "osac-metering.adapterKafkaUserAcls" (dict "root" . "user" (include "osac-metering.m360AdapterKafkaUserName" .)) | nindent 6 }}
 {{- end }}

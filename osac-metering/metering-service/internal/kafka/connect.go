@@ -70,8 +70,8 @@ func NewSyncProducer(cfg ConnectionConfig) (sarama.SyncProducer, error) {
 	return sarama.NewSyncProducer(brokers, sc)
 }
 
-func VerifyTopicExists(cfg ConnectionConfig, topic, eventPrefix string) error {
-	tenants, err := ListEventTenants(context.Background(), cfg, eventPrefix)
+func VerifyTopicExists(cfg ConnectionConfig, topic, eventPrefix, heartbeatPrefix, deadLetterPrefix string) error {
+	tenants, err := ListEventTenants(context.Background(), cfg, eventPrefix, heartbeatPrefix, deadLetterPrefix)
 	if err != nil {
 		return err
 	}
@@ -93,8 +93,11 @@ type topicAdmin interface {
 // EnsureTenantTopics creates the tenant's heartbeat and dead-letter topics when they are
 // missing. Metering owns both, so the discovery pass that first serves a tenant creates
 // them; nothing else does. An existing topic is left untouched, and a topic another pass
-// created in the meantime is not an error.
-func EnsureTenantTopics(cfg ConnectionConfig, tenant string, retentionMS string) error {
+// created in the meantime is not an error. heartbeatPrefix and deadLetterPrefix name the
+// topics; empty uses the defaults.
+func EnsureTenantTopics(
+	cfg ConnectionConfig, tenant string, retentionMS, heartbeatPrefix, deadLetterPrefix string,
+) error {
 	brokers := SplitAndTrim(cfg.Brokers, ",")
 	sc, err := baseConfig(cfg)
 	if err != nil {
@@ -106,7 +109,10 @@ func EnsureTenantTopics(cfg ConnectionConfig, tenant string, retentionMS string)
 	}
 	defer func() { _ = admin.Close() }()
 
-	for _, topic := range []string{topics.Heartbeat(tenant), topics.DeadLetter(tenant)} {
+	for _, topic := range []string{
+		topics.HeartbeatTopic(heartbeatPrefix, tenant),
+		topics.DeadLetterTopic(deadLetterPrefix, tenant),
+	} {
 		if err := ensureTopic(admin, topic, retentionMS); err != nil {
 			return err
 		}
@@ -177,7 +183,11 @@ func retentionContract(retentionMS string) map[string]string {
 // ListEventTenants returns the tenants that have an event topic, sorted by name. Metering
 // discovers tenants this way: a tenant exists for metering when its event topic does.
 // eventPrefix is the prefix fulfillment's publisher prepends; empty uses the default.
-func ListEventTenants(ctx context.Context, cfg ConnectionConfig, eventPrefix string) ([]string, error) {
+// heartbeatPrefix and deadLetterPrefix are this deployment's own topic prefixes, used to
+// keep metering's topics out of the tenant listing; empty uses the defaults.
+func ListEventTenants(
+	ctx context.Context, cfg ConnectionConfig, eventPrefix, heartbeatPrefix, deadLetterPrefix string,
+) ([]string, error) {
 	brokers := SplitAndTrim(cfg.Brokers, ",")
 	sc, err := baseConfig(cfg)
 	if err != nil {
@@ -193,18 +203,21 @@ func ListEventTenants(ctx context.Context, cfg ConnectionConfig, eventPrefix str
 	if err != nil {
 		return nil, fmt.Errorf("listing topics: %w", err)
 	}
-	return EventTenantsOf(names, eventPrefix), nil
+	return EventTenantsOf(names, eventPrefix, heartbeatPrefix, deadLetterPrefix), nil
 }
 
 // EventTenantsOf maps event topic names to the tenants metering serves, skipping the
 // built-in tenants. Fulfillment creates the system and shared tenants for platform use;
 // metering does not read them. Heartbeat and dead-letter topics are metering's own,
 // so a broad event prefix such as osac. must not turn them into tenants. eventPrefix
-// selects which names are event topics; empty uses the default prefix.
-func EventTenantsOf(names []string, eventPrefix string) []string {
+// selects which names are event topics; empty uses the default prefix. heartbeatPrefix
+// and deadLetterPrefix name the topics to skip; empty uses the defaults.
+func EventTenantsOf(names []string, eventPrefix, heartbeatPrefix, deadLetterPrefix string) []string {
+	heartbeat := topics.ResolveHeartbeatPrefix(heartbeatPrefix)
+	deadLetter := topics.ResolveDeadLetterPrefix(deadLetterPrefix)
 	var tenants []string
 	for _, name := range names {
-		if strings.HasPrefix(name, topics.HeartbeatPrefix) || strings.HasPrefix(name, topics.DeadLetterPrefix) {
+		if strings.HasPrefix(name, heartbeat) || strings.HasPrefix(name, deadLetter) {
 			continue
 		}
 		tenant, ok := topics.TenantOfEventTopic(name, eventPrefix)

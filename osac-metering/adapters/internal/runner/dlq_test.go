@@ -263,6 +263,34 @@ var _ = Describe("DLQProducer", func() {
 			Expect(sentMsg).NotTo(BeNil())
 			Expect(sentMsg.Topic).To(Equal("osac.metering.dlq.test"))
 		})
+
+		It("routes heartbeat records between configured prefixes", func() {
+			perTenant := &DLQProducer{
+				producer:         mockProducer,
+				perTenant:        true,
+				heartbeatPrefix:  "pr2100v1.metering.heartbeat.",
+				deadLetterPrefix: "pr2100v1.metering.dlq.",
+			}
+
+			var sentMsg *sarama.ProducerMessage
+			mockProducer.ExpectSendMessageWithMessageCheckerFunctionAndSucceed(
+				func(pm *sarama.ProducerMessage) error {
+					sentMsg = pm
+					return nil
+				},
+			)
+
+			msg := &sarama.ConsumerMessage{
+				Topic:     "pr2100v1.metering.heartbeat.test",
+				Partition: 0,
+				Offset:    0,
+				Value:     []byte(`{}`),
+			}
+			Expect(perTenant.Send(msg, "test", 1)).NotTo(HaveOccurred())
+
+			Expect(sentMsg).NotTo(BeNil())
+			Expect(sentMsg.Topic).To(Equal("pr2100v1.metering.dlq.test"))
+		})
 	})
 
 	Describe("DLQSender interface", func() {

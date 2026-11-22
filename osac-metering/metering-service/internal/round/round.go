@@ -100,6 +100,10 @@ type Round struct {
 	// to decide whether the fold has caught up.
 	eventPrefix string
 
+	// heartbeatPrefix is the prefix of the tenant heartbeat topics catch-up reads.
+	// Empty uses the default.
+	heartbeatPrefix string
+
 	// crashAfterGroups, when nonzero, stops catch-up with ErrCrashed after that many round
 	// groups have committed, as a pod kill would. For tests only.
 	crashAfterGroups int
@@ -108,7 +112,8 @@ type Round struct {
 // New creates a round runner. The client reads topic watermarks; the consumer reads the
 // heartbeat topic during catch-up. The rulesGate's read side brackets every tick; the
 // service's rules check holds the write side. eventPrefix is fulfillment's event-topic
-// prefix; empty uses the default.
+// prefix and heartbeatPrefix is the prefix of the tenant heartbeat topics; empty uses
+// the defaults.
 func New(
 	store *database.Store,
 	calculator Calculator,
@@ -117,11 +122,12 @@ func New(
 	logger logr.Logger,
 	rulesGate *sync.RWMutex,
 	eventPrefix string,
+	heartbeatPrefix string,
 ) (*Round, error) {
 	return &Round{
 		store: store, calculator: calculator, client: client, consumer: consumer, logger: logger,
 		rulesGate: rulesGate, eventTarget: map[string]int64{}, catchUpBatch: CatchUpBatch,
-		eventPrefix: topics.ResolvePrefix(eventPrefix),
+		eventPrefix: topics.ResolvePrefix(eventPrefix), heartbeatPrefix: heartbeatPrefix,
 	}, nil
 }
 

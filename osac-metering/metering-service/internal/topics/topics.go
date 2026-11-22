@@ -41,17 +41,39 @@ func ResolvePrefix(prefix string) string {
 	return prefix
 }
 
+// ResolveHeartbeatPrefix returns prefix, or the default heartbeat prefix when prefix is empty.
+func ResolveHeartbeatPrefix(prefix string) string {
+	if prefix == "" {
+		return HeartbeatPrefix
+	}
+	return prefix
+}
+
+// ResolveDeadLetterPrefix returns prefix, or the default dead-letter prefix when prefix is empty.
+func ResolveDeadLetterPrefix(prefix string) string {
+	if prefix == "" {
+		return DeadLetterPrefix
+	}
+	return prefix
+}
+
 // EventTopic returns the tenant's event topic for prefix. An empty prefix uses the default.
 func EventTopic(prefix, tenant string) string { return ResolvePrefix(prefix) + tenant }
 
 // Events returns the name of the tenant's event topic under the default prefix.
 func Events(tenant string) string { return EventTopic(EventsPrefix, tenant) }
 
-// Heartbeat returns the name of the tenant's heartbeat topic.
-func Heartbeat(tenant string) string { return HeartbeatPrefix + tenant }
+// HeartbeatTopic returns the tenant's heartbeat topic for prefix. An empty prefix uses the default.
+func HeartbeatTopic(prefix, tenant string) string { return ResolveHeartbeatPrefix(prefix) + tenant }
 
-// DeadLetter returns the name of the tenant's dead-letter topic.
-func DeadLetter(tenant string) string { return DeadLetterPrefix + tenant }
+// Heartbeat returns the name of the tenant's heartbeat topic under the default prefix.
+func Heartbeat(tenant string) string { return HeartbeatTopic(HeartbeatPrefix, tenant) }
+
+// DeadLetterTopic returns the tenant's dead-letter topic for prefix. An empty prefix uses the default.
+func DeadLetterTopic(prefix, tenant string) string { return ResolveDeadLetterPrefix(prefix) + tenant }
+
+// DeadLetter returns the name of the tenant's dead-letter topic under the default prefix.
+func DeadLetter(tenant string) string { return DeadLetterTopic(DeadLetterPrefix, tenant) }
 
 // TenantOfEventTopic returns the tenant that owns the event topic, and false when the topic
 // does not carry prefix. An empty prefix uses the default.

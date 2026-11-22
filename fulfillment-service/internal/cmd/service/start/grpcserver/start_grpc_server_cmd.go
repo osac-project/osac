@@ -144,6 +144,12 @@ func Cmd() *cobra.Command {
 		servers.DefaultEventTopicPrefix,
 		kafkaTopicPrefixFlagHelp,
 	)
+	flags.StringVar(
+		&runner.args.kafkaConsumerGroupPrefix,
+		"kafka-consumer-group-prefix",
+		servers.DefaultConsumerGroupPrefix,
+		kafkaConsumerGroupPrefixFlagHelp,
+	)
 	flags.StringSliceVar(
 		&runner.args.trustedTokenIssuers,
 		"grpc-authn-trusted-token-issuers",
@@ -233,6 +239,7 @@ type runnerContext struct {
 	args   struct {
 		caFiles                  []string
 		kafkaTopicPrefix         string
+		kafkaConsumerGroupPrefix string
 		authType                 string
 		externalAuthAddress      string
 		trustedTokenIssuers      []string
@@ -959,6 +966,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetKafkaConfig(kafkaConfig).
 		SetKafkaBrokers(kafkaBrokers...).
 		SetKafkaTopicPrefix(c.args.kafkaTopicPrefix).
+		SetKafkaConsumerGroupPrefix(c.args.kafkaConsumerGroupPrefix).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create private events server: %w", err)
@@ -1059,6 +1067,12 @@ services.
 
 const kafkaTopicPrefixFlagHelp = `
 _PREFIX_ - Prefix of the Kafka topics that contain fulfillment events.
+`
+
+const kafkaConsumerGroupPrefixFlagHelp = `
+_PREFIX_ - Prefix prepended to the group name of a grouped events watch to
+form the Kafka consumer group it joins. Deployments that share a Kafka
+cluster set it per instance so their groups do not collide.
 `
 
 const grpcAuthnTrustedTokenIssuersFlagHelp = `

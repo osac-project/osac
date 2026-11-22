@@ -86,7 +86,7 @@ func TestDrainOnceStoresTheSentOffset(t *testing.T) {
 		t.Fatalf("enqueueing: %v", err)
 	}
 
-	relay, err := New(store, testenv.NewProducer(t), logr.Discard())
+	relay, err := New(store, testenv.NewProducer(t), logr.Discard(), "")
 	if err != nil {
 		t.Fatalf("creating relay: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestRunTenantSurvivesSendErrors(t *testing.T) {
 
 	// A producer whose broker went away fails every send; the relay must keep looping
 	// rather than exit. The heartbeat is still in the outbox afterwards.
-	dead, err := New(store, failingProducer{}, logr.Discard())
+	dead, err := New(store, failingProducer{}, logr.Discard(), "")
 	if err != nil {
 		t.Fatalf("creating relay: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestRunTenantSurvivesSendErrors(t *testing.T) {
 		t.Fatalf("outbox depth gauge is %v, want 1 while the relay cannot send", depth)
 	}
 	// The real relay then drains the same outbox.
-	relay, err := New(store, testenv.NewProducer(t), logr.Discard())
+	relay, err := New(store, testenv.NewProducer(t), logr.Discard(), "")
 	if err != nil {
 		t.Fatalf("creating relay: %v", err)
 	}
@@ -236,7 +236,7 @@ func runRoundAt(t *testing.T, store *database.Store, tenant string, moment time.
 	}
 	roundLoop, err := round.New(
 		store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(),
-		&sync.RWMutex{}, "",
+		&sync.RWMutex{}, "", "",
 	)
 	if err != nil {
 		t.Fatalf("creating round: %v", err)
@@ -297,11 +297,11 @@ func TestTwoRelaysSendEachHeartbeatOnce(t *testing.T) {
 			base.Add(time.Minute)),
 	}
 
-	first, err := New(store, testenv.NewProducer(t), logr.Discard())
+	first, err := New(store, testenv.NewProducer(t), logr.Discard(), "")
 	if err != nil {
 		t.Fatalf("creating relay: %v", err)
 	}
-	second, err := New(store, testenv.NewProducer(t), logr.Discard())
+	second, err := New(store, testenv.NewProducer(t), logr.Discard(), "")
 	if err != nil {
 		t.Fatalf("creating relay: %v", err)
 	}
@@ -391,7 +391,7 @@ func TestRelayDoesNotAdvancePastUnreadHeartbeats(t *testing.T) {
 	// The restored database sends its own difference on top of the backlog.
 	enqueueOne(t, store, tenant, base.Add(2*time.Minute), base.Add(3*time.Minute),
 		base.Add(3*time.Minute))
-	relay, err := New(store, testenv.NewProducer(t), logr.Discard())
+	relay, err := New(store, testenv.NewProducer(t), logr.Discard(), "")
 	if err != nil {
 		t.Fatalf("creating relay: %v", err)
 	}

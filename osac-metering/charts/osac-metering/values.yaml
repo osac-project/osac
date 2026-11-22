@@ -63,8 +63,17 @@ variant: openshift
 # chart only creates the KafkaUser ACLs. The retention is the recovery
 # window: metering rebuilds its database from the topics, so -1 (indefinite)
 # keeps every record for a full rebuild.
+#
+# The prefixes name the topics: <heartbeatPrefix><tenant> and
+# <deadLetterPrefix><tenant>. The umbrella chart's global.instanceId, when
+# set, overrides both with <instance id>.metering.heartbeat. and
+# <instance id>.metering.dlq. so runs sharing one Kafka cluster keep their
+# own topics; a deployment that sets them directly shares these values with
+# the service and adapter Deployments and the KafkaUser ACLs.
 topics:
   retentionMs: "-1"
+  heartbeatPrefix: "osac.metering.heartbeat."
+  deadLetterPrefix: "osac.metering.dlq."
 
 # Readers: outside systems that read every tenant's heartbeat topics with their
 # own credentials. Each entry names one reader and no tenant, and the chart

@@ -1442,6 +1442,10 @@ const (
 	// DefaultEventTopicPrefix is prepended to the tenant identifier to form Kafka topic names.
 	DefaultEventTopicPrefix = "osac.events."
 
+	// DefaultConsumerGroupPrefix is prepended to the group name of a grouped events watch
+	// to form the Kafka consumer group it joins.
+	DefaultConsumerGroupPrefix = "osac.system."
+
 	// DefaultTopicRetention is how long a topic the publisher creates keeps records:
 	// indefinitely. Any negative duration means indefinite, matching the
 	// broker's own retention.ms = -1.

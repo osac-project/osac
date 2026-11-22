@@ -44,11 +44,54 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{- define "osac-metering.kafkaSaslUsername" -}}
-osac-metering
+{{- with .Values.global.instanceId }}{{ . }}-{{ end }}osac-metering
 {{- end -}}
 
 {{- define "osac-metering.kafkaSaslSecretName" -}}
-osac-metering
+{{- include "osac-metering.kafkaSaslUsername" . -}}
+{{- end -}}
+
+{{/*
+Name of the echo adapter's Strimzi KafkaUser. global.instanceId, when set,
+prefixes the name so the users of two deployments sharing one Kafka cluster
+do not collide.
+*/}}
+{{- define "osac-metering.echoAdapterKafkaUserName" -}}
+{{- with .Values.global.instanceId }}{{ . }}-{{ end }}osac-metering-echo-adapter
+{{- end -}}
+
+{{/*
+Name of the M360 adapter's Strimzi KafkaUser, prefixed like the echo
+adapter's.
+*/}}
+{{- define "osac-metering.m360AdapterKafkaUserName" -}}
+{{- with .Values.global.instanceId }}{{ . }}-{{ end }}osac-metering-m360-adapter
+{{- end -}}
+
+{{/*
+Prefix of the per-tenant heartbeat topics. global.instanceId, when set,
+makes it <id>.metering.heartbeat.; otherwise topics.heartbeatPrefix applies
+(osac.metering.heartbeat. by default). The service, the adapters and this
+chart's KafkaUser ACLs must resolve it the same way.
+*/}}
+{{- define "osac-metering.heartbeatTopicPrefix" -}}
+{{- if .Values.global.instanceId -}}
+{{- printf "%s.metering.heartbeat." .Values.global.instanceId -}}
+{{- else -}}
+{{- .Values.topics.heartbeatPrefix | default "osac.metering.heartbeat." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Prefix of the per-tenant dead-letter topics, resolved like
+osac-metering.heartbeatTopicPrefix.
+*/}}
+{{- define "osac-metering.deadLetterTopicPrefix" -}}
+{{- if .Values.global.instanceId -}}
+{{- printf "%s.metering.dlq." .Values.global.instanceId -}}
+{{- else -}}
+{{- .Values.topics.deadLetterPrefix | default "osac.metering.dlq." -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
@@ -121,14 +164,17 @@ Args: list of [context, saslSecretName]
 ACLs shared by the adapter KafkaUsers: the adapter reads every tenant's
 heartbeat topic and the shared inference topic, writes every tenant's
 dead-letter topic plus the inference dead-letter topic, and reads its own
-consumer group.
-Args: adapter user name (also the consumer group name)
+consumer group. The heartbeat and dead-letter prefixes follow the values the
+service uses, so the adapter's grants always match the topics that exist.
+Args: dict with root (the template context) and user (the adapter user name,
+also the consumer group name)
 */}}
 {{- define "osac-metering.adapterKafkaUserAcls" -}}
-{{- $user := . -}}
+{{- $root := .root -}}
+{{- $user := .user -}}
 - resource:
     type: topic
-    name: osac.metering.heartbeat.
+    name: {{ include "osac-metering.heartbeatTopicPrefix" $root }}
     patternType: prefix
   operations:
     - Read
@@ -144,7 +190,7 @@ Args: adapter user name (also the consumer group name)
   host: "*"
 - resource:
     type: topic
-    name: osac.metering.dlq.
+    name: {{ include "osac-metering.deadLetterTopicPrefix" $root }}
     patternType: prefix
   operations:
     - Write

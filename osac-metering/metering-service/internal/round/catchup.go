@@ -163,7 +163,7 @@ func (r *Round) applyGroup(
 func (r *Round) readHeartbeats(
 	ctx context.Context, tenant string, offset int64,
 ) ([]caughtHeartbeat, bool, error) {
-	topic := topics.Heartbeat(tenant)
+	topic := topics.HeartbeatTopic(r.heartbeatPrefix, tenant)
 	high, err := r.client.GetOffset(topic, 0, sarama.OffsetNewest)
 	if err != nil {
 		return nil, false, fmt.Errorf("reading the heartbeat topic end: %w", err)

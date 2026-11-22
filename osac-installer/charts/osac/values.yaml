@@ -22,6 +22,17 @@ global:
   # ACL change that hides the previous topics from that pod makes the tenant
   # absent. Coordinate that ACL change with removing the pod so those facts stay.
   eventTopicPrefix: "osac.events."
+  # Run ID that names every shared-service object this deployment creates, so
+  # two deployments sharing one outer cluster cannot collide: the database
+  # prefix (osac.pgPrefix), the KafkaUser names, the consumer-group prefix
+  # (<id>.system.) and the metering heartbeat/DLQ topic prefixes
+  # (<id>.metering.heartbeat. / <id>.metering.dlq.). The event topics follow
+  # global.eventTopicPrefix instead; a run's overlay sets it to <id>.events..
+  # Empty means exactly the single-instance behavior of today. Lowercase
+  # letters, digits and inner hyphens, alphanumeric at both ends, at most 12
+  # characters (a CI run ID such as pr2100v1): the ID becomes a PostgreSQL
+  # identifier, which is why the ends must be alphanumeric.
+  instanceId: ""
   # [REQUIRED on OpenShift, via --set global.clusterDomain=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')]
   # Backs the tpl-templated defaults below (service.auth.issuerUrl,
   # service.idp.url, service.vault.keycloakIssuerUrl) so they automatically

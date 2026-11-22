@@ -92,12 +92,12 @@ func NewPipelineWithRevisions(
 	}
 	roundLoop, err := round.New(
 		store, calculator, testenv.NewClient(t), testenv.NewConsumer(t), logr.Discard(),
-		&sync.RWMutex{}, "",
+		&sync.RWMutex{}, "", "",
 	)
 	if err != nil {
 		t.Fatalf("creating round: %v", err)
 	}
-	relayLoop, err := relay.New(store, testenv.NewProducer(t), logr.Discard())
+	relayLoop, err := relay.New(store, testenv.NewProducer(t), logr.Discard(), "")
 	if err != nil {
 		t.Fatalf("creating relay: %v", err)
 	}

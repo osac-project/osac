@@ -236,6 +236,26 @@
             }
           ]
         },
+        "instanceId": {
+          "type": "string",
+          "description": "Run ID that names every shared-service object this deployment creates, so two deployments sharing one outer cluster cannot collide: the database prefix, the KafkaUser names, the consumer-group prefix (<id>.system.) and the metering heartbeat/DLQ topic prefixes (<id>.metering.heartbeat. and <id>.metering.dlq.). Empty means exactly the single-instance behavior of today. Lowercase letters, digits and inner hyphens, alphanumeric at both ends, at most 12 characters: the ID becomes a PostgreSQL identifier, which cannot start or end with a hyphen.",
+          "default": "",
+          "anyOf": [
+            {
+              "enum": [""]
+            },
+            {
+              "allOf": [
+                {
+                  "maxLength": 12
+                },
+                {
+                  "pattern": "^[a-z0-9]([a-z0-9-]{0,10}[a-z0-9])?$"
+                }
+              ]
+            }
+          ]
+        },
         "networking": {
           "$ref": "#/$defs/globalNetworking"
         }
@@ -1141,6 +1161,26 @@
             "connection": {
               "type": "array",
               "description": "Kafka connection volume sources (secret or configMap references). Each item maps keys to Kafka properties named brokers, user, and password."
+            },
+            "consumerGroupPrefix": {
+              "type": "string",
+              "description": "Prefix of the Kafka consumer groups the fulfillment gRPC server's grouped event watches join. Include the trailing dot. Empty uses osac.system. The umbrella chart's global.instanceId, when set, overrides this value with <instance id>.system.",
+              "default": "osac.system.",
+              "anyOf": [
+                {
+                  "enum": [""]
+                },
+                {
+                  "allOf": [
+                    {
+                      "maxLength": 249
+                    },
+                    {
+                      "pattern": "^[A-Za-z0-9._-]*\\.$"
+                    }
+                  ]
+                }
+              ]
             }
           },
           "additionalProperties": false
@@ -1875,6 +1915,46 @@
               "description": "How long the topics keep records, in milliseconds; -1 keeps them indefinitely. The retention is the recovery window, because metering rebuilds its database from the topics",
               "pattern": "^(-1|[1-9][0-9]*)$",
               "default": "-1"
+            },
+            "heartbeatPrefix": {
+              "type": "string",
+              "description": "Prefix prepended to the tenant name to form its heartbeat topic. Include the trailing dot. Empty uses osac.metering.heartbeat. The umbrella chart's global.instanceId, when set, overrides this value with <instance id>.metering.heartbeat. A tenant name is at most 63 characters and a Kafka topic name is at most 249, so this prefix is at most 186 characters.",
+              "default": "osac.metering.heartbeat.",
+              "anyOf": [
+                {
+                  "enum": [""]
+                },
+                {
+                  "allOf": [
+                    {
+                      "maxLength": 186
+                    },
+                    {
+                      "pattern": "^[A-Za-z0-9._-]*\\.$"
+                    }
+                  ]
+                }
+              ]
+            },
+            "deadLetterPrefix": {
+              "type": "string",
+              "description": "Prefix prepended to the tenant name to form its dead-letter topic. Include the trailing dot. Empty uses osac.metering.dlq. The umbrella chart's global.instanceId, when set, overrides this value with <instance id>.metering.dlq. A tenant name is at most 63 characters and a Kafka topic name is at most 249, so this prefix is at most 186 characters.",
+              "default": "osac.metering.dlq.",
+              "anyOf": [
+                {
+                  "enum": [""]
+                },
+                {
+                  "allOf": [
+                    {
+                      "maxLength": 186
+                    },
+                    {
+                      "pattern": "^[A-Za-z0-9._-]*\\.$"
+                    }
+                  ]
+                }
+              ]
             }
           },
           "additionalProperties": false

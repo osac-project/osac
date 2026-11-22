@@ -30,7 +30,7 @@ spec:
         host: "*"
       - resource:
           type: topic
-          name: osac.metering.heartbeat.
+          name: {{ include "osac-metering.heartbeatTopicPrefix" . }}
           patternType: prefix
         operations:
           - Create
@@ -41,7 +41,7 @@ spec:
         host: "*"
       - resource:
           type: topic
-          name: osac.metering.dlq.
+          name: {{ include "osac-metering.deadLetterTopicPrefix" . }}
           patternType: prefix
         operations:
           - Create

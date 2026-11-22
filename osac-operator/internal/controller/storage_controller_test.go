@@ -110,6 +110,12 @@ func (c *testRemoteCluster) GetClient() client.Client {
 	return c.client
 }
 
+// GetAPIReader returns the same fake client: fakes serve fresh reads, so the
+// uncached reader and the cached client are one object.
+func (c *testRemoteCluster) GetAPIReader() client.Reader {
+	return c.client
+}
+
 // newRemoteTestMcManager wraps the local test manager with a single-cluster
 // provider named "remote" backed by remoteClient.
 func newRemoteTestMcManager(remoteClient client.Client) mcmanager.Manager {

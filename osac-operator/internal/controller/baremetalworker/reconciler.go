@@ -27,13 +27,17 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -61,6 +65,12 @@ type Reconciler struct {
 	clusterOrderNamespace string
 	macResolver           MACResolver
 	secrets               SecretsClient
+	// targetMgr and targetCluster name the cluster hosting the workers'
+	// infrastructure: the InfraEnv, its pull-secret, the Agents and the
+	// NodePools. They are wired by SetTargetCluster; unwired, that
+	// infrastructure is managed on the local cluster.
+	targetMgr     mcmanager.Manager
+	targetCluster mc.ClusterName
 }
 
 // SecretsClient is the Secrets.Get subset used to materialize a registered
@@ -105,6 +115,48 @@ func (r *Reconciler) SetMACResolver(resolver MACResolver) {
 // creation with an SSHKeyResolutionPending condition.
 func (r *Reconciler) SetSecretsClient(client SecretsClient) {
 	r.secrets = client
+}
+
+// SetTargetCluster wires the cluster that hosts the workers' infrastructure
+// objects. In remote mode that is the provider cluster; in local mode the
+// local cluster, which yields the clients the reconciler was constructed
+// with.
+func (r *Reconciler) SetTargetCluster(mgr mcmanager.Manager, target mc.ClusterName) {
+	r.targetMgr = mgr
+	r.targetCluster = target
+}
+
+// infrastructureClient returns the client for the workers' infrastructure
+// objects: the InfraEnv, its pull-secret, the Agents and the NodePools.
+// Without a wired target cluster it is the local (hub) client, so
+// single-cluster behavior is unchanged.
+func (r *Reconciler) infrastructureClient(ctx context.Context) (client.Client, error) {
+	if r.targetMgr == nil {
+		return r.Client, nil
+	}
+	cluster, err := r.targetMgr.GetCluster(ctx, r.targetCluster)
+	if err != nil {
+		return nil, err
+	}
+	return cluster.GetClient(), nil
+}
+
+// infrastructureReader returns the uncached reader for the workers'
+// infrastructure, for reads a stale cache must not serve. Without a wired
+// target cluster it is the local reader, or the local client when no reader
+// was given.
+func (r *Reconciler) infrastructureReader(ctx context.Context) (client.Reader, error) {
+	if r.targetMgr == nil {
+		if r.apiReader != nil {
+			return r.apiReader, nil
+		}
+		return r.Client, nil
+	}
+	cluster, err := r.targetMgr.GetCluster(ctx, r.targetCluster)
+	if err != nil {
+		return nil, err
+	}
+	return cluster.GetAPIReader(), nil
 }
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders,verbs=get;list;watch
@@ -202,43 +254,67 @@ func (r *Reconciler) SetupWithManager(mgr mcmanager.Manager) error {
 	}
 
 	log := ctrl.Log.WithName("baremetalworker")
-	bld := ctrl.NewControllerManagedBy(localMgr).
+	// ClusterOrders are hub objects: they stay on the local cluster. Agents
+	// and NodePools are infrastructure: with a provider configured their
+	// watches engage the provider cluster.
+	bld := mcbuilder.ControllerManagedBy(mgr).
 		Named("baremetalworker").
-		For(&v1alpha1.ClusterOrder{}, builder.WithPredicates(
+		For(&v1alpha1.ClusterOrder{}, mcbuilder.WithPredicates(
 			namespacePredicate(r.clusterOrderNamespace), workerClusterOrderChangedPredicate(),
-		))
+		), mcbuilder.WithEngageWithLocalCluster(true), mcbuilder.WithEngageWithProviderClusters(false))
 
-	if crdExists(mgr, agentGVK) {
+	agentCRD, err := r.crdExists(mgr, agentGVK)
+	if err != nil {
+		return err
+	}
+	if agentCRD {
 		agentObj := &unstructured.Unstructured{}
 		agentObj.SetGroupVersionKind(agentGVK)
-		bld = bld.Watches(agentObj, handler.EnqueueRequestsFromMapFunc(r.agentToClusterOrderMapper()))
+		bld = bld.Watches(agentObj, mchandler.EnqueueRequestsFromMapFunc(r.agentToClusterOrderMapper()))
 		log.Info("watching Agent CRs for MAC correlation")
 	} else {
 		log.Info("Agent CRD not found, skipping Agent watch")
 	}
 
 	npGVK := schema.GroupVersionKind{Group: "hypershift.openshift.io", Version: "v1beta1", Kind: "NodePool"}
-	if crdExists(mgr, npGVK) {
+	nodePoolCRD, err := r.crdExists(mgr, npGVK)
+	if err != nil {
+		return err
+	}
+	if nodePoolCRD {
 		npObj := &unstructured.Unstructured{}
 		npObj.SetGroupVersionKind(npGVK)
-		bld = bld.Watches(npObj, handler.EnqueueRequestsFromMapFunc(r.labelToClusterOrderMapper("osac.openshift.io/clusterorder")))
+		bld = bld.Watches(npObj, mchandler.EnqueueRequestsFromMapFunc(r.labelToClusterOrderMapper("osac.openshift.io/clusterorder")))
 		log.Info("watching NodePool CRs for replica convergence")
 	} else {
 		log.Info("NodePool CRD not found, skipping NodePool watch")
 	}
 
-	return bld.Complete(r)
+	return bld.Complete(reconcile.TypedFunc[mcreconcile.Request](r.reconcileLocalRequest))
 }
 
-// crdExists checks whether a CRD for the given GVK is registered in the API server.
-func crdExists(mgr mcmanager.Manager, gvk schema.GroupVersionKind) bool {
-	localMgr := mgr.GetLocalManager()
-	if localMgr == nil {
-		return false
+// reconcileLocalRequest strips the multicluster request's source cluster: the
+// reconciler picks its clusters itself — the local client for ClusterOrders,
+// the wired target cluster for infrastructure — so the cluster an event came
+// from carries no meaning.
+func (r *Reconciler) reconcileLocalRequest(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
+	return r.Reconcile(ctx, req.Request)
+}
+
+// crdExists checks whether a CRD for the given GVK is registered in the API
+// server that hosts the reconciler's infrastructure: the wired target cluster
+// when one is set, otherwise the manager's local cluster.
+func (r *Reconciler) crdExists(mgr mcmanager.Manager, gvk schema.GroupVersionKind) (bool, error) {
+	mapper := mgr.GetLocalManager().GetRESTMapper()
+	if r.targetMgr != nil {
+		cluster, err := r.targetMgr.GetCluster(context.Background(), r.targetCluster)
+		if err != nil {
+			return false, fmt.Errorf("resolving the infrastructure cluster for the %s watch: %w", gvk.Kind, err)
+		}
+		mapper = cluster.GetRESTMapper()
 	}
-	mapper := localMgr.GetRESTMapper()
 	_, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
-	return err == nil
+	return err == nil, nil
 }
 
 // agentToClusterOrderMapper maps Agent events to ClusterOrder reconcile requests.

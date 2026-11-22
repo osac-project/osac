@@ -39,6 +39,7 @@ import (
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
 
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/pkg/aap"
@@ -71,6 +72,11 @@ type AddOnOperatorReconciler struct {
 	MaxJobHistory         int
 	Recorder              events.EventRecorder
 	getAdminKubeconfig    func(context.Context, *v1alpha1.ClusterOrder) ([]byte, error)
+	// targetMgr and targetCluster name the cluster hosting the
+	// HostedControlPlanes whose admin kubeconfigs feed add-on jobs. They are
+	// wired by SetTargetCluster; unwired, they are read on the local cluster.
+	targetMgr     mcmanager.Manager
+	targetCluster mc.ClusterName
 }
 
 // NewAddOnOperatorReconciler creates a reconciler for add-on operator jobs.
@@ -97,6 +103,25 @@ func NewAddOnOperatorReconciler(
 	}
 	reconciler.getAdminKubeconfig = reconciler.getClusterKubeconfig
 	return reconciler
+}
+
+// SetTargetCluster wires the cluster that hosts the HostedControlPlanes the
+// reconciler reads admin kubeconfigs from. In remote mode that is the
+// provider cluster; in local mode the local cluster, which yields the reader
+// the reconciler was constructed with.
+func (r *AddOnOperatorReconciler) SetTargetCluster(mgr mcmanager.Manager, target mc.ClusterName) {
+	r.targetMgr = mgr
+	r.targetCluster = target
+}
+
+// infrastructureReader returns the uncached reader for the HostedControlPlane
+// and its kubeconfig Secret. Without a wired target cluster it is the local
+// reader, so single-cluster behavior is unchanged.
+func (r *AddOnOperatorReconciler) infrastructureReader(ctx context.Context) (client.Reader, error) {
+	if r.targetMgr == nil {
+		return r.apiReader, nil
+	}
+	return getTargetReader(ctx, r.targetMgr, r.targetCluster)
 }
 
 // SetupWithManager registers the namespaced ClusterOrder controller.
@@ -460,8 +485,12 @@ func (r *AddOnOperatorReconciler) getClusterKubeconfig(ctx context.Context, clus
 		return nil, nil
 	}
 	hcpNamespace := ref.Namespace + "-" + ref.HostedClusterName
+	reader, err := r.infrastructureReader(ctx)
+	if err != nil {
+		return nil, err
+	}
 	hcp := &hypershiftv1beta1.HostedControlPlane{}
-	if err := r.apiReader.Get(ctx, types.NamespacedName{Namespace: hcpNamespace, Name: ref.HostedClusterName}, hcp); err != nil {
+	if err := reader.Get(ctx, types.NamespacedName{Namespace: hcpNamespace, Name: ref.HostedClusterName}, hcp); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nil
 		}
@@ -471,7 +500,7 @@ func (r *AddOnOperatorReconciler) getClusterKubeconfig(ctx context.Context, clus
 		return nil, nil
 	}
 	secret := &corev1.Secret{}
-	if err := r.apiReader.Get(ctx, types.NamespacedName{Namespace: hcpNamespace, Name: hcp.Status.KubeConfig.Name}, secret); err != nil {
+	if err := reader.Get(ctx, types.NamespacedName{Namespace: hcpNamespace, Name: hcp.Status.KubeConfig.Name}, secret); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nil
 		}

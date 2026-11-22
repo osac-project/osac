@@ -54,6 +54,10 @@ type FeedbackReconciler struct {
 type FeedbackReconcilerConfig struct {
 	ClusterOrderNamespace string
 	UpgradeTimeouts       ClusterUpgradeTimeouts
+	// InfrastructureClient reads HostedClusters and NodePools for URL and
+	// removed-node-set feedback. Nil keeps those lookups on the hub client:
+	// the single-cluster mode where the objects live beside the ClusterOrders.
+	InfrastructureClient clnt.Client
 }
 
 // ClusterUpgradeTimeouts controls upgrade observation deadlines.
@@ -183,17 +187,24 @@ func newClusterOrderFeedbackBridge(hubClient clnt.Client, clustersClient private
 func newClusterOrderSyncUpdate(hubClient clnt.Client,
 	config FeedbackReconcilerConfig) func(context.Context, *ckv1alpha1.ClusterOrder, *privatev1.Cluster) error {
 	timeouts := config.UpgradeTimeouts.withDefaults()
+	// HostedClusters and NodePools are infrastructure: with
+	// InfrastructureClient set they are read from the provider cluster,
+	// otherwise from the hub cluster that also holds the ClusterOrders.
+	infrastructureClient := config.InfrastructureClient
+	if infrastructureClient == nil {
+		infrastructureClient = hubClient
+	}
 	return func(ctx context.Context, clusterOrder *ckv1alpha1.ClusterOrder, remote *privatev1.Cluster) error {
 		syncClusterOrderConditions(ctx, clusterOrder, remote)
 		syncClusterOrderWorkerConditions(clusterOrder, remote)
 		syncClusterOrderPhase(ctx, clusterOrder, remote)
-		if err := syncClusterOrderURLs(ctx, hubClient, clusterOrder, remote); err != nil {
+		if err := syncClusterOrderURLs(ctx, infrastructureClient, clusterOrder, remote); err != nil {
 			return err
 		}
 		syncClusterOrderNodeRequests(ctx, clusterOrder, remote)
 		syncClusterOrderObservedVersions(clusterOrder, remote)
 		syncClusterOrderUpgradeObservationsAt(clusterOrder, remote, time.Now(), timeouts)
-		if err := pruneRemovedNodeSetStatuses(ctx, hubClient, clusterOrder, remote); err != nil {
+		if err := syncRemovedNodeSetUpgrades(ctx, infrastructureClient, clusterOrder, remote); err != nil {
 			return err
 		}
 		syncClusterOrderAddOnOperators(clusterOrder, remote)

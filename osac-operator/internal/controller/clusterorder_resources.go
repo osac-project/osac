@@ -17,10 +17,15 @@ import (
 func (r *ClusterOrderReconciler) newNamespace(ctx context.Context, instance *v1alpha1.ClusterOrder) (*appResource, error) {
 	log := ctrllog.FromContext(ctx)
 
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	var namespaceList corev1.NamespaceList
 	var namespaceName string
 
-	if err := r.List(ctx, &namespaceList, labelSelectorFromInstance(instance)); err != nil {
+	if err := infrastructureClient.List(ctx, &namespaceList, labelSelectorFromInstance(instance)); err != nil {
 		log.Error(err, "failed to list namespaces")
 		return nil, err
 	}

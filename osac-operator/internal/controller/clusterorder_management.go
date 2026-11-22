@@ -158,8 +158,12 @@ func (r *ClusterOrderReconciler) checkManagementPublication(
 	}
 
 	hcpNamespace := hostedControlPlaneNamespace(hc)
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return managementPublicationCheck{}, err
+	}
 	hcp := &hypershiftv1beta1.HostedControlPlane{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: hcpNamespace, Name: hc.Name}, hcp); err != nil {
+	if err := infrastructureClient.Get(ctx, client.ObjectKey{Namespace: hcpNamespace, Name: hc.Name}, hcp); err != nil {
 		if errors.IsNotFound(err) {
 			return managementPending("Waiting for the HostedControlPlane"), nil
 		}
@@ -369,7 +373,11 @@ func (r *ClusterOrderReconciler) checkHostedClusterKubeconfig(
 		return nil, managementPending("Waiting for HostedCluster status.kubeconfig"), nil
 	}
 	secret := &corev1.Secret{}
-	if err := r.Get(ctx, client.ObjectKey{Namespace: hc.Namespace, Name: hc.Status.KubeConfig.Name}, secret); err != nil {
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return nil, managementPublicationCheck{}, err
+	}
+	if err := infrastructureClient.Get(ctx, client.ObjectKey{Namespace: hc.Namespace, Name: hc.Status.KubeConfig.Name}, secret); err != nil {
 		if errors.IsNotFound(err) {
 			return nil, managementPending("Waiting for the HostedCluster kubeconfig Secret"), nil
 		}
@@ -452,7 +460,11 @@ func (r *ClusterOrderReconciler) managementRouteEndpoints(
 
 	routes := &unstructured.UnstructuredList{}
 	routes.SetGroupVersionKind(schema.GroupVersionKind{Group: routeGroup, Version: routeVersion, Kind: routeListKind})
-	if err := r.List(ctx, routes, client.InNamespace(hostedControlPlaneNamespace(hc))); err != nil {
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return nil, managementPublicationCheck{}, err
+	}
+	if err := infrastructureClient.List(ctx, routes, client.InNamespace(hostedControlPlaneNamespace(hc))); err != nil {
 		return nil, managementPublicationCheck{}, fmt.Errorf("list HostedControlPlane Routes: %w", err)
 	}
 	routesByName := make(map[string]*unstructured.Unstructured, len(routes.Items))
@@ -538,7 +550,11 @@ func (r *ClusterOrderReconciler) managementRouteRootCAs(
 		}
 		key := client.ObjectKey{Namespace: hostedControlPlaneNamespace(hc), Name: secretName}
 		secret := &corev1.Secret{}
-		if err := r.Get(ctx, key, secret); err != nil {
+		infrastructureClient, err := r.infrastructureClient(ctx)
+		if err != nil {
+			return nil, managementPublicationCheck{}, err
+		}
+		if err := infrastructureClient.Get(ctx, key, secret); err != nil {
 			if errors.IsNotFound(err) {
 				return nil, managementPending(fmt.Sprintf(
 					"Waiting for HostedControlPlane serving CA Secret %s", key)), nil
@@ -616,7 +632,11 @@ func (r *ClusterOrderReconciler) infraEnvDiscoveryIgnitionURL(
 	}
 	infraEnv := assistedservice.NewInfraEnvObject()
 	key := client.ObjectKey{Namespace: instance.Namespace, Name: assistedservice.InfraEnvName(instance.Name)}
-	if err := r.Get(ctx, key, infraEnv); err != nil {
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return nil, managementPublicationCheck{}, err
+	}
+	if err := infrastructureClient.Get(ctx, key, infraEnv); err != nil {
 		if errors.IsNotFound(err) {
 			return nil, managementPending("Waiting for the Cluster InfraEnv"), nil
 		}

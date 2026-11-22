@@ -36,15 +36,17 @@ import (
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	crcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	controllerutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcbuilder "sigs.k8s.io/multicluster-runtime/pkg/builder"
+	mchandler "sigs.k8s.io/multicluster-runtime/pkg/handler"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mc "sigs.k8s.io/multicluster-runtime/pkg/multicluster"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/internal/networktask"
@@ -99,6 +101,13 @@ type ClusterOrderReconciler struct {
 	// AAP launch variable; it is never persisted on the ClusterOrder.
 	SecretsClient SecretsClient
 	now           func() time.Time
+	// targetMgr and targetCluster name the cluster hosting the ClusterOrder's
+	// infrastructure: the cluster namespace and its ServiceAccounts,
+	// RoleBindings, HostedClusters, NodePools and supporting objects. They are
+	// wired by SetTargetCluster; unwired, infrastructure is managed on the
+	// local cluster.
+	targetMgr     mcmanager.Manager
+	targetCluster mc.ClusterName
 }
 
 const (
@@ -163,6 +172,25 @@ func NewClusterOrderReconciler(
 		Recorder:                      nil,
 		now:                           time.Now,
 	}
+}
+
+// SetTargetCluster wires the cluster that hosts the ClusterOrder's
+// infrastructure objects. In remote mode that is the provider cluster; in
+// local mode the local cluster, which yields the same clients the reconciler
+// was constructed with.
+func (r *ClusterOrderReconciler) SetTargetCluster(mgr mcmanager.Manager, target mc.ClusterName) {
+	r.targetMgr = mgr
+	r.targetCluster = target
+}
+
+// infrastructureClient returns the client for the ClusterOrder's
+// infrastructure objects. Without a wired target cluster it is the local
+// (hub) client, so single-cluster behavior is unchanged.
+func (r *ClusterOrderReconciler) infrastructureClient(ctx context.Context) (client.Client, error) {
+	if r.targetMgr == nil {
+		return r.Client, nil
+	}
+	return getTargetClient(ctx, r.targetMgr, r.targetCluster)
 }
 
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=clusterorders,verbs=get;list;watch;create;update;patch;delete
@@ -464,49 +492,70 @@ func (r *ClusterOrderReconciler) SetupWithManager(mgr mcmanager.Manager) error {
 
 	// Management endpoint probes are synchronous and can take several seconds.
 	// Keep slow probes for one order from blocking unrelated ClusterOrders.
-	return ctrl.NewControllerManagedBy(localMgr).
-		WithOptions(crcontroller.Options{MaxConcurrentReconciles: 4}).
-		For(&v1alpha1.ClusterOrder{}, builder.WithPredicates(NamespacePredicate(r.ClusterOrderNamespace))).
+	//
+	// The cluster namespace and everything created inside it are
+	// infrastructure: with a provider configured those watches and the
+	// reconciler's reads and writes for them engage the provider cluster,
+	// while the ClusterOrder itself and the networking resources stay on the
+	// local cluster.
+	return mcbuilder.ControllerManagedBy(mgr).
+		WithOptions(crcontroller.TypedOptions[mcreconcile.Request]{MaxConcurrentReconciles: 4}).
+		For(&v1alpha1.ClusterOrder{},
+			mcbuilder.WithPredicates(NamespacePredicate(r.ClusterOrderNamespace)),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false)).
 		Watches(
 			&corev1.Namespace{},
-			handler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
-			builder.WithPredicates(labelPredicate),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
+			mcbuilder.WithPredicates(labelPredicate),
 		).
 		Watches(
 			&corev1.ServiceAccount{},
-			handler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
-			builder.WithPredicates(labelPredicate),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
+			mcbuilder.WithPredicates(labelPredicate),
 		).
 		Watches(
 			&rbacv1.RoleBinding{},
-			handler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
-			builder.WithPredicates(labelPredicate),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
+			mcbuilder.WithPredicates(labelPredicate),
 		).
 		Watches(
 			&hypershiftv1beta1.HostedCluster{},
-			handler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
-			builder.WithPredicates(labelPredicate),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
+			mcbuilder.WithPredicates(labelPredicate),
 		).
 		Watches(
 			&hypershiftv1beta1.NodePool{},
-			handler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
-			builder.WithPredicates(labelPredicate),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapObjectToCluster),
+			mcbuilder.WithPredicates(labelPredicate),
 		).
 		Watches(
 			&corev1.Service{},
-			handler.EnqueueRequestsFromMapFunc(r.mapControlPlaneServiceToCluster),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapControlPlaneServiceToCluster),
 		).
 		Watches(
 			&v1alpha1.Subnet{},
-			handler.EnqueueRequestsFromMapFunc(r.mapSubnetToCluster),
-			builder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapSubnetToCluster),
+			mcbuilder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
 		).
 		Watches(
 			&v1alpha1.ExternalIPAttachment{},
-			handler.EnqueueRequestsFromMapFunc(r.mapAutomaticAttachmentToCluster),
-			builder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
+			mchandler.EnqueueRequestsFromMapFunc(r.mapAutomaticAttachmentToCluster),
+			mcbuilder.WithPredicates(NetworkingNamespacePredicate(r.NetworkingNamespace)),
+			mcbuilder.WithEngageWithLocalCluster(true),
+			mcbuilder.WithEngageWithProviderClusters(false),
 		).
-		Complete(r)
+		Complete(reconcile.TypedFunc[mcreconcile.Request](r.reconcileLocalRequest))
+}
+
+// reconcileLocalRequest strips the multicluster request's source cluster: the
+// reconciler picks its clusters itself — the local client for hub objects,
+// the wired target cluster for infrastructure — so the cluster an event came
+// from carries no meaning.
+func (r *ClusterOrderReconciler) reconcileLocalRequest(ctx context.Context, req mcreconcile.Request) (ctrl.Result, error) {
+	return r.Reconcile(ctx, req.Request)
 }
 
 // mapObjectToCluster maps an event for a watched object to the associated
@@ -560,7 +609,12 @@ func (r *ClusterOrderReconciler) mapControlPlaneServiceToCluster(
 		return nil
 	}
 	hostedClusters := &hypershiftv1beta1.HostedClusterList{}
-	if err := r.List(ctx, hostedClusters); err != nil {
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		ctrllog.FromContext(ctx).Error(err, "resolving the infrastructure client for HostedCluster lookup")
+		return nil
+	}
+	if err := infrastructureClient.List(ctx, hostedClusters); err != nil {
 		return nil
 	}
 	for i := range hostedClusters.Items {
@@ -640,6 +694,11 @@ func (r *ClusterOrderReconciler) handleUpdateWithClusterLookup(
 		}
 	}
 
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	for _, component := range r.components() {
 		log.Info("handling component", "component", component.name)
 
@@ -649,7 +708,7 @@ func (r *ClusterOrderReconciler) handleUpdateWithClusterLookup(
 			return ctrl.Result{}, err
 		}
 
-		result, err := controllerutil.CreateOrUpdate(ctx, r.Client, resource.object, resource.mutateFn)
+		result, err := controllerutil.CreateOrUpdate(ctx, infrastructureClient, resource.object, resource.mutateFn)
 		if err != nil {
 			log.Error(err, "failed to create or update component", "component", component.name)
 			return ctrl.Result{}, err
@@ -758,7 +817,11 @@ func (r *ClusterOrderReconciler) handleHostedClusterWithClusterLookup(
 
 	// Fetch the node pools and handle them:
 	nodePools := &hypershiftv1beta1.NodePoolList{}
-	if err := r.List(ctx, nodePools, client.InNamespace(hc.Namespace), labelSelectorFromInstance(instance)); err != nil {
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return err
+	}
+	if err := infrastructureClient.List(ctx, nodePools, client.InNamespace(hc.Namespace), labelSelectorFromInstance(instance)); err != nil {
 		return err
 	}
 	if err := r.handleNodePools(ctx, instance, nodePools); err != nil {
@@ -1249,8 +1312,12 @@ func deriveProvisioningSubStage(hc *hypershiftv1beta1.HostedCluster) string {
 func (r *ClusterOrderReconciler) findHostedCluster(ctx context.Context, instance *v1alpha1.ClusterOrder, nsName string) (*hypershiftv1beta1.HostedCluster, error) {
 	log := ctrllog.FromContext(ctx)
 
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var hostedClusterList hypershiftv1beta1.HostedClusterList
-	if err := r.List(ctx, &hostedClusterList, client.InNamespace(nsName), labelSelectorFromInstance(instance)); err != nil {
+	if err := infrastructureClient.List(ctx, &hostedClusterList, client.InNamespace(nsName), labelSelectorFromInstance(instance)); err != nil {
 		log.Error(err, "failed to list hosted clusters")
 		return nil, err
 	}
@@ -1269,8 +1336,12 @@ func (r *ClusterOrderReconciler) findHostedCluster(ctx context.Context, instance
 func (r *ClusterOrderReconciler) findNamespace(ctx context.Context, instance *v1alpha1.ClusterOrder) (*corev1.Namespace, error) {
 	log := ctrllog.FromContext(ctx)
 
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var namespaceList corev1.NamespaceList
-	if err := r.List(ctx, &namespaceList, labelSelectorFromInstance(instance)); err != nil {
+	if err := infrastructureClient.List(ctx, &namespaceList, labelSelectorFromInstance(instance)); err != nil {
 		log.Error(err, "failed to list namespaces")
 		return nil, err
 	}
@@ -1368,7 +1439,11 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 
 	if ns != nil {
 		log.Info("deleting cluster namespace", "namespace", ns.GetName())
-		if err := r.Client.Delete(ctx, ns); err != nil {
+		infrastructureClient, err := r.infrastructureClient(ctx)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := infrastructureClient.Delete(ctx, ns); err != nil {
 			log.Error(err, "failed to delete namespace", "namespace", ns.GetName(), "error", err)
 			return ctrl.Result{}, err
 		}

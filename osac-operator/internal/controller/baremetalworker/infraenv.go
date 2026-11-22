@@ -104,8 +104,12 @@ func (r *Reconciler) observeInfraEnvEvidence(
 // artifacts are consumed as evidence.
 func (r *Reconciler) observeInfraEnvObject(ctx context.Context, co *v1alpha1.ClusterOrder) (*unstructured.Unstructured, error) {
 	key := client.ObjectKey{Name: assistedservice.InfraEnvName(co.Name), Namespace: co.Namespace}
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return nil, err
+	}
 	cached := assistedservice.NewInfraEnvObject()
-	err := r.Get(ctx, key, cached)
+	err = infrastructureClient.Get(ctx, key, cached)
 	if err == nil {
 		return cached, validateInfraEnvOwner(co, cached)
 	}
@@ -114,9 +118,9 @@ func (r *Reconciler) observeInfraEnvObject(ctx context.Context, co *v1alpha1.Clu
 	}
 	// Cache omission is not absence: an existing or recreated object must be
 	// confirmed gone before a Create is authorized.
-	reader := r.apiReader
-	if reader == nil {
-		reader = r.Client
+	reader, err := r.infrastructureReader(ctx)
+	if err != nil {
+		return nil, err
 	}
 	current := assistedservice.NewInfraEnvObject()
 	switch err := reader.Get(ctx, key, current); {
@@ -220,7 +224,11 @@ func (r *Reconciler) createMissingInfraEnv(
 	if err != nil {
 		return infraEnvEvidence{err: err}, ctrl.Result{}, false, nil
 	}
-	if err := r.Create(ctx, infraEnv); err != nil && !apierrors.IsAlreadyExists(err) {
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return infraEnvEvidence{err: err}, ctrl.Result{}, false, nil
+	}
+	if err := infrastructureClient.Create(ctx, infraEnv); err != nil && !apierrors.IsAlreadyExists(err) {
 		return infraEnvEvidence{err: fmt.Errorf("creating infraenv %s: %w", key, err)}, ctrl.Result{}, false, nil
 	}
 	ctrllog.FromContext(ctx).Info("created InfraEnv", "infraenv", key.String())
@@ -283,8 +291,12 @@ func (r *Reconciler) ensurePullSecret(ctx context.Context, co *v1alpha1.ClusterO
 	secretName := co.Name + pullSecretNameSuffix
 	key := client.ObjectKey{Name: secretName, Namespace: co.Namespace}
 
+	infrastructureClient, err := r.infrastructureClient(ctx)
+	if err != nil {
+		return err
+	}
 	existing := &corev1.Secret{}
-	if err := r.Get(ctx, key, existing); err == nil {
+	if err := infrastructureClient.Get(ctx, key, existing); err == nil {
 		return nil
 	} else if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("checking pull secret %s: %w", key, err)
@@ -316,7 +328,7 @@ func (r *Reconciler) ensurePullSecret(ctx context.Context, co *v1alpha1.ClusterO
 	if err := controllerutil.SetControllerReference(co, secret, r.scheme); err != nil {
 		return fmt.Errorf("setting pull secret owner reference: %w", err)
 	}
-	if err := r.Create(ctx, secret); err != nil {
+	if err := infrastructureClient.Create(ctx, secret); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			return nil
 		}

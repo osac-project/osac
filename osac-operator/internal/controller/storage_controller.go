@@ -1368,8 +1368,16 @@ func (r *StorageReconciler) getClusterKubeconfig(ctx context.Context, clusterOrd
 	// HyperShift places the HostedControlPlane in {HostedCluster-namespace}-{HostedCluster-name}.
 	hcpNamespace := ref.Namespace + "-" + ref.HostedClusterName
 
+	// The HostedControlPlane and its kubeconfig Secret are infrastructure:
+	// read them from the target cluster, which is the provider cluster in
+	// remote mode.
+	targetClient, err := getTargetClient(ctx, r.mgr, r.targetCluster)
+	if err != nil {
+		return nil, err
+	}
+
 	hcp := &hypershiftv1beta1.HostedControlPlane{}
-	if err := r.Get(ctx, types.NamespacedName{
+	if err := targetClient.Get(ctx, types.NamespacedName{
 		Namespace: hcpNamespace,
 		Name:      ref.HostedClusterName,
 	}, hcp); err != nil {
@@ -1388,7 +1396,7 @@ func (r *StorageReconciler) getClusterKubeconfig(ctx context.Context, clusterOrd
 	}
 
 	secret := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{
+	if err := targetClient.Get(ctx, types.NamespacedName{
 		Namespace: hcpNamespace,
 		Name:      hcp.Status.KubeConfig.Name,
 	}, secret); err != nil {

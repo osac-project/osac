@@ -210,16 +210,21 @@ def _observe_api_retry(grpc: GRPCClient, instance: Instance, reason: str) -> dic
     def read_reason() -> str:
         nonlocal condition, failure
         condition, failure = _public_status(grpc, instance)
-        return condition.get("reason", "absent")
+        observed = condition.get("reason")
+        if observed == reason:
+            return "expected retry reason"
+        if observed == "WaitingForVM":
+            return "WaitingForVM"
+        return "absent" if observed is None else "unexpected reason"
 
     try:
         # The public reconciler can lag the hub job transition.
-        instance.wait(read_reason, lambda value: value == reason, f"public API {reason}", retries=10)
+        instance.wait(read_reason, lambda value: value == "expected retry reason", f"public API {reason}", retries=10)
     except StuckState as exc:
         raise E2EFailure(
             Kind.ASSERTION,
             f"AAP entered retry, but the public API did not report {reason}. "
-            f"Last Provisioned reason: {condition.get('reason', 'absent')}.",
+            f"Last Provisioned reason: {exc.last_value}.",
             ids={"compute_instance": instance.id},
         ) from exc
     assert condition.get("status") == "CONDITION_STATUS_FALSE", "Retry must keep Provisioned=False"
@@ -230,9 +235,12 @@ def _observe_api_retry(grpc: GRPCClient, instance: Instance, reason: str) -> dic
     assert failure.get("attempt") == 1, "Expected the failed attempt to stay at 1"
     timestamp = failure.get("observedAt")
     assert isinstance(timestamp, str) and timestamp, "Expected the original failure observation timestamp"
-    observed_at = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    try:
+        observed_at = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError:
+        pytest.fail("Expected an ISO 8601 failure observation timestamp", pytrace=False)
     assert observed_at.tzinfo is not None, "Expected a timezone in the failure timestamp"
-    LOG.info("%s API %s; ProviderReported failed attempt 1 at %s", instance.id, reason, observed_at)
+    LOG.info("%s API %s with ProviderReported failure for attempt 1", instance.id, reason)
     return failure
 
 
@@ -295,17 +303,19 @@ def _cli_describe_status(cli: OsacCLI, instance: Instance, *, retrying: bool) ->
 def _wait_for_success_feedback(grpc: GRPCClient, instance: Instance) -> None:
     def feedback() -> str:
         provisioned, failure = _public_status(grpc, instance)
-        reason = provisioned.get("reason", "absent")
-        if reason in RETRY_REASONS or failure is not None:
-            return f"reason={reason} failure_present={failure is not None}"
+        reason = provisioned.get("reason")
+        if failure is not None:
+            return "failure still present"
+        if reason in RETRY_REASONS:
+            return "retry still reported"
         if reason in {"WaitingForVM", "ProvisioningStorage", "Scheduling"}:
             assert provisioned.get("status") == "CONDITION_STATUS_FALSE", (
                 "Infrastructure progress must keep Provisioned=False after AAP success"
             )
-            return f"cleared during {reason}"
+            return "cleared during infrastructure progress"
         if reason == "InfrastructureReady" and provisioned.get("status") == "CONDITION_STATUS_TRUE":
             return "cleared at InfrastructureReady (intermediate progress not observed)"
-        return f"unexpected reason={reason}"
+        return "unexpected provisioning state"
 
     phase = instance.wait(
         feedback, lambda value: value.startswith("cleared "), "public API cleared retry after AAP success"
@@ -316,10 +326,13 @@ def _wait_for_success_feedback(grpc: GRPCClient, instance: Instance) -> None:
 def _wait_for_ready(grpc: GRPCClient, instance: Instance) -> None:
     def progress() -> str:
         condition, failure = _public_status(grpc, instance)
-        return f"{condition.get('status')} / {condition.get('reason')} / failure_present={failure is not None}"
+        if failure is not None:
+            return "failure still present"
+        if condition.get("status") == "CONDITION_STATUS_TRUE" and condition.get("reason") == "InfrastructureReady":
+            return "ready"
+        return "waiting for infrastructure readiness"
 
-    expected = "CONDITION_STATUS_TRUE / InfrastructureReady / failure_present=False"
-    instance.wait(progress, lambda value: value == expected, "public API InfrastructureReady", retries=180)
+    instance.wait(progress, lambda value: value == "ready", "public API InfrastructureReady", retries=180)
     assert (
         instance.hub.get_compute_instance_condition_status(name=instance.cr, condition_type="Provisioned") == "True"
     ), "Public API reported InfrastructureReady ahead of the hub"

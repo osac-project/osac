@@ -75,6 +75,11 @@ OBS_ARGS=(
   --set global.observability.objectStorage.bucket=thanos
   --set global.observability.objectStorage.region=us-east-1
   --set global.observability.collection.osacControlPlane=30s
+  # The chart refuses an empty image tag; these renders never pull.
+  --set global.observability.services.metricsAuth.tag=test-metrics-auth
+  --set global.observability.thanos.image.tag=test-thanos
+  --set global.observability.services.oauth2Proxy.tag=test-oauth2-proxy
+  --set global.observability.services.openshiftOauthProxy.tag=test-ose-oauth-proxy
 )
 
 enabled="${TMP_DIR}/enabled.yaml"
@@ -130,9 +135,11 @@ echo "checking the remote-write Job follows the switch"
 extract_kind "${enabled}" Job >"${TMP_DIR}/enabled-jobs.yaml"
 extract_kind "${disabled}" Job >"${TMP_DIR}/disabled-jobs.yaml"
 require "${TMP_DIR}/enabled-jobs.yaml" 'name: osac-observability-remote-write'
-require "${TMP_DIR}/disabled-jobs.yaml" 'name: osac-observability-remote-write'
 require "${TMP_DIR}/enabled-jobs.yaml" 'value: "true"'
-require "${TMP_DIR}/disabled-jobs.yaml" 'value: "false"'
+# A fresh disabled render has no in-cluster ConfigMap to inspect, so it must
+# not create anything in openshift-monitoring.
+reject "${TMP_DIR}/disabled-jobs.yaml" 'name: osac-observability-remote-write'
+reject "${disabled}" 'namespace: openshift-monitoring'
 require "${TMP_DIR}/enabled-jobs.yaml" 'value: "30s"'
 require "${TMP_DIR}/enabled-jobs.yaml" \
   'value: https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive'

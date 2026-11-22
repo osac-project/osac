@@ -41,6 +41,11 @@ OBS_ARGS=(
   --set global.observability.objectStorage.endpoint=https://s3.example.com
   --set global.observability.objectStorage.bucket=thanos
   --set global.observability.objectStorage.region=us-east-1
+  # The chart refuses an empty image tag; these renders never pull.
+  --set global.observability.services.metricsAuth.tag=test-metrics-auth
+  --set global.observability.thanos.image.tag=test-thanos
+  --set global.observability.services.oauth2Proxy.tag=test-oauth2-proxy
+  --set global.observability.services.openshiftOauthProxy.tag=test-ose-oauth-proxy
 )
 # Metering is always deployed (billing is not optional), so the scrape checks
 # only switch its billing adapters on.
@@ -395,8 +400,8 @@ disabled="${TMP_DIR}/disabled.yaml"
 disabled_sms="${TMP_DIR}/disabled-servicemonitors.yaml"
 extract_kind "${disabled}" ServiceMonitor >"${disabled_sms}"
 expect_count "${disabled_sms}" '^kind: ServiceMonitor' 0
-# The remote-write Job keeps its name on the disabled path, so the namespace
-# check must look only at Namespace documents.
+# The namespace check must look only at Namespace documents because other
+# components' resources may carry the same string.
 disabled_ns="${TMP_DIR}/disabled-namespace.yaml"
 extract_kind "${disabled}" Namespace >"${disabled_ns}"
 reject "${disabled_ns}" 'name: osac-observability'
@@ -425,10 +430,11 @@ for name in thanos-receive thanos-store thanos-query thanos-compactor \
   reject "${disabled}" "name: ${name}"
 done
 reject "${disabled}" 'namespace: osac-observability'
-# Removing the owned keys is the same upsert with the switch off, so the
-# remote-write Job stays and runs against the disabled payload.
-require "${disabled_jobs}" 'name: osac-observability-remote-write'
-require "${disabled_jobs}" 'value: "false"'
+# A fresh disabled install must not touch openshift-monitoring. The Job that
+# removes a leftover osac remote-write entry only renders when an in-cluster
+# lookup finds one, and helm template has no cluster to look at.
+reject "${disabled}" 'name: osac-observability-remote-write'
+reject "${disabled}" 'namespace: openshift-monitoring'
 
 echo "checking monitoring CRD guard"
 no_crd="${TMP_DIR}/no-crd.yaml"

@@ -12,7 +12,10 @@ set:
   global.observability.objectStorage.region: us-east-1
   global.observability.thanos.image.registry: registry.redhat.io
   global.observability.thanos.image.repository: openshift4/ose-thanos-rhel8
-  global.observability.thanos.image.tag: ""
+  global.observability.thanos.image.tag: test-thanos
+  global.observability.services.metricsAuth.tag: test-metrics-auth
+  global.observability.services.oauth2Proxy.tag: test-oauth2-proxy
+  global.observability.services.openshiftOauthProxy.tag: test-ose-oauth-proxy
   global.observability.thanos.retention: 365d
   global.observability.thanos.resolution.raw: 365d
   global.observability.thanos.resolution.5m: 365d
@@ -32,7 +35,7 @@ tests:
           value: 2
       - equal:
           path: spec.template.spec.containers[0].image
-          value: registry.redhat.io/openshift4/ose-thanos-rhel8:latest
+          value: registry.redhat.io/openshift4/ose-thanos-rhel8:test-thanos
       - contains:
           path: spec.template.spec.containers[0].args
           content: --remote-write.address=0.0.0.0:19291

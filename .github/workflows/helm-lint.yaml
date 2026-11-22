@@ -49,7 +49,8 @@ jobs:
             {"component": "osac-aap", "chart": "aap"},
             {"component": "osac-csi-driver", "chart": "csi-driver"},
             {"component": "osac-csi-driver", "chart": "csi-backends"},
-            {"component": "osac-metering", "chart": "osac-metering"}
+            {"component": "osac-metering", "chart": "osac-metering"},
+            {"component": "osac-observability", "chart": "osac-observability"}
           ]'
           pick() {
             jq -c --arg c "${CHANGED}" \

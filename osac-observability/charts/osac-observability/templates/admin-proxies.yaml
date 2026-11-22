@@ -62,7 +62,7 @@ spec:
         {{- include "osac-observability.podSecurityContext" . | nindent 8 }}
       containers:
         - name: oauth2-proxy
-          image: "{{ $oauth2Proxy.repository }}:{{ $oauth2Proxy.tag | default "latest" }}"
+          image: "{{ $oauth2Proxy.repository }}:{{ $oauth2Proxy.tag }}"
           imagePullPolicy: IfNotPresent
           args:
             {{- toYaml $keycloakArgs | nindent 12 }}
@@ -95,7 +95,7 @@ spec:
               subPath: cookie-secret
               readOnly: true
         - name: query-allowlist
-          image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag | default "latest" }}"
+          image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag }}"
           imagePullPolicy: IfNotPresent
           command:
             - /query-allowlist
@@ -167,7 +167,7 @@ spec:
         {{- include "osac-observability.podSecurityContext" . | nindent 8 }}
       containers:
         - name: ose-oauth-proxy
-          image: "{{ $openshiftOAuthProxy.repository }}:{{ $openshiftOAuthProxy.tag | default "latest" }}"
+          image: "{{ $openshiftOAuthProxy.repository }}:{{ $openshiftOAuthProxy.tag }}"
           imagePullPolicy: IfNotPresent
           args:
             - --provider=openshift
@@ -205,7 +205,7 @@ spec:
               subPath: cookie-secret
               readOnly: true
         - name: query-allowlist
-          image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag | default "latest" }}"
+          image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag }}"
           imagePullPolicy: IfNotPresent
           command:
             - /query-allowlist

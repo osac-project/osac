@@ -130,8 +130,8 @@ func removeOwned(root *yaml.Node) bool {
 	}
 	changed := false
 	if labels := mappingValue(prom, "externalLabels"); labels != nil && labels.Kind == yaml.MappingNode {
-		changed = deleteKey(labels, "cluster") || changed
-		changed = deleteKey(labels, "managed_by") || changed
+		changed = deleteKeyWithValue(labels, "cluster", "management") || changed
+		changed = deleteKeyWithValue(labels, "managed_by", "osac") || changed
 		if len(labels.Content) == 0 {
 			changed = deleteKey(prom, "externalLabels") || changed
 		}
@@ -309,4 +309,14 @@ func deleteKey(mapping *yaml.Node, name string) bool {
 		}
 	}
 	return false
+}
+
+// deleteKeyWithValue removes a key only when it still carries the value OSAC
+// wrote. The disable path must not strip a label another operator set to a
+// different value under the same key.
+func deleteKeyWithValue(mapping *yaml.Node, name, value string) bool {
+	if scalarValue(mapping, name) != value {
+		return false
+	}
+	return deleteKey(mapping, name)
 }

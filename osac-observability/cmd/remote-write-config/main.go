@@ -11,7 +11,6 @@ import (
 	"strconv"
 
 	"github.com/osac-project/osac/osac-observability/internal/remotewrite"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -109,18 +108,10 @@ func run(ctx context.Context, client kubernetes.Interface, cfg config) error {
 		if !cfg.Enabled {
 			return nil
 		}
-		merged, err := remotewrite.Merge(nil, cfg.options())
-		if err != nil {
-			return err
-		}
-		_, err = configMaps.Create(ctx, &corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{Name: cfg.Name, Namespace: cfg.Namespace},
-			Data:       map[string]string{dataKey: string(merged)},
-		}, metav1.CreateOptions{})
-		if err != nil {
-			return fmt.Errorf("create ConfigMap %s/%s: %w", cfg.Namespace, cfg.Name, err)
-		}
-		return nil
+		// Cluster monitoring owns this ConfigMap. Creating it here would
+		// bypass its own defaults and hide a cluster that never enabled
+		// monitoring, so report the missing prerequisite instead.
+		return fmt.Errorf("ConfigMap %s/%s not found: enable cluster monitoring before enabling OSAC observability", cfg.Namespace, cfg.Name)
 	}
 	if err != nil {
 		return fmt.Errorf("read ConfigMap %s/%s: %w", cfg.Namespace, cfg.Name, err)

@@ -3,9 +3,40 @@
 {{- $collection := $observability.collection | default dict -}}
 {{- $image := ($observability.services | default dict).metricsAuth | default dict -}}
 {{- $name := printf "%s-observability-remote-write" $fullname -}}
-{{- /* The Job renders on every release, including the disable path, because
-       removing the owned keys is the same upsert with the switch off. Its RBAC
-       is a normal resource so it exists when the post-install hook runs. */ -}}
+{{- $enabled := $observability.enabled | default false -}}
+{{- /* The Job runs when observability is enabled, and also when a cluster that
+       was previously enabled still carries the osac remote-write entry: that
+       entry has to be removed on the disable path. A fresh install of a
+       disabled cluster must not render anything in openshift-monitoring, so
+       fall back to an in-cluster lookup. lookup returns nothing during
+       `helm template`, which is exactly the fresh-render semantics we want. */ -}}
+{{- $job := $enabled -}}
+{{- if not $enabled -}}
+  {{- $cm := lookup "v1" "ConfigMap" "openshift-monitoring" "cluster-monitoring-config" -}}
+  {{- if $cm -}}
+    {{- $raw := index ($cm.data | default dict) "config.yaml" | default "" -}}
+    {{- if $raw -}}
+      {{- $parsed := fromYaml $raw -}}
+      {{- if and (kindIs "map" $parsed) (hasKey $parsed "prometheusK8s") -}}
+        {{- $prom := index $parsed "prometheusK8s" -}}
+        {{- if kindIs "map" $prom -}}
+          {{- $entries := index $prom "remoteWrite" | default list -}}
+          {{- if kindIs "slice" $entries -}}
+            {{- range $entry := $entries -}}
+              {{- if and (kindIs "map" $entry) (eq (index $entry "name" | default "") "osac") -}}
+                {{- $job = true -}}
+              {{- end -}}
+            {{- end -}}
+          {{- end -}}
+        {{- end -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- if $job -}}
+{{- if not ($image.tag | default "") -}}
+{{- fail "global.observability.services.metricsAuth.tag must be set when the remote-write Job renders" -}}
+{{- end -}}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -30,9 +61,7 @@ rules:
       - cluster-monitoring-config
     verbs:
       - get
-      - create
       - update
-      - patch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -78,7 +107,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: remote-write-config
-          image: "{{ $image.repository }}:{{ $image.tag | default "latest" }}"
+          image: "{{ $image.repository }}:{{ $image.tag }}"
           imagePullPolicy: IfNotPresent
           command:
             - /remote-write-config
@@ -104,3 +133,4 @@ spec:
             limits:
               cpu: 100m
               memory: 128Mi
+{{- end }}

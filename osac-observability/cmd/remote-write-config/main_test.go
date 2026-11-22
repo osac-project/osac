@@ -42,17 +42,22 @@ func TestRunLeavesAMissingConfigMapAloneWhenDisabled(t *testing.T) {
 	}
 }
 
-func TestRunCreatesTheConfigMapWhenEnabled(t *testing.T) {
+// TestRunFailsWhenTheConfigMapIsMissing pins that cluster monitoring owns the
+// ConfigMap. Without it there is nowhere to enable remote write, and inventing
+// one would make the install look successful while the cluster scrapes nothing.
+func TestRunFailsWhenTheConfigMapIsMissing(t *testing.T) {
 	client := fake.NewSimpleClientset()
-	if err := run(context.Background(), client, testConfig(true)); err != nil {
-		t.Fatalf("run: %v", err)
+	err := run(context.Background(), client, testConfig(true))
+	if err == nil {
+		t.Fatal("expected an error for a missing cluster-monitoring-config")
 	}
-	cm, err := client.CoreV1().ConfigMaps(defaultNamespace).Get(context.Background(), defaultName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get ConfigMap: %v", err)
+	if !strings.Contains(err.Error(), "cluster-monitoring-config") {
+		t.Fatalf("error does not name the ConfigMap: %v", err)
 	}
-	if !strings.Contains(cm.Data[dataKey], "name: osac") {
-		t.Fatalf("created ConfigMap lacks the osac entry:\n%s", cm.Data[dataKey])
+	for _, action := range client.Actions() {
+		if action.GetVerb() == "create" {
+			t.Fatalf("run created %s %s", action.GetResource().Resource, action.GetSubresource())
+		}
 	}
 }
 

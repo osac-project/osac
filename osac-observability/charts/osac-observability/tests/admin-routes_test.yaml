@@ -21,6 +21,10 @@ set:
   global.observability.services.metricsAuth.repository: ghcr.io/osac-project/osac-observability
   global.observability.services.oauth2Proxy.repository: quay.io/oauth2-proxy/oauth2-proxy
   global.observability.services.openshiftOauthProxy.repository: registry.redhat.io/openshift4/ose-oauth-proxy
+  global.observability.thanos.image.tag: test-thanos
+  global.observability.services.metricsAuth.tag: test-metrics-auth
+  global.observability.services.oauth2Proxy.tag: test-oauth2-proxy
+  global.observability.services.openshiftOauthProxy.tag: test-ose-oauth-proxy
 
 tests:
   - it: lists exactly the five documented endpoints once
@@ -67,7 +71,7 @@ tests:
           value: query-allowlist
       - equal:
           path: spec.template.spec.containers[1].image
-          value: ghcr.io/osac-project/osac-observability:latest
+          value: ghcr.io/osac-project/osac-observability:test-metrics-auth
       - equal:
           path: spec.template.spec.containers[1].command
           value:
@@ -108,7 +112,7 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: quay.io/oauth2-proxy/oauth2-proxy:latest
+          value: quay.io/oauth2-proxy/oauth2-proxy:test-oauth2-proxy
       - contains:
           path: spec.template.spec.containers[0].args
           content: --provider=keycloak-oidc
@@ -188,7 +192,7 @@ tests:
           value: query-allowlist
       - equal:
           path: spec.template.spec.containers[0].image
-          value: registry.redhat.io/openshift4/ose-oauth-proxy:latest
+          value: registry.redhat.io/openshift4/ose-oauth-proxy:test-ose-oauth-proxy
       - contains:
           path: spec.template.spec.containers[0].args
           content: --http-address=0.0.0.0:4181

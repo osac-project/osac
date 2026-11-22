@@ -1,0 +1,22 @@
+{{- /* Empty image tags used to fall back to "latest", so a release could pull
+       an arbitrary image. Refuse to render when an image the chart runs is not
+       pinned. */ -}}
+{{- if dig "observability" "enabled" false (.Values.global | default dict) -}}
+{{- $obs := .Values.global.observability -}}
+{{- $missing := list -}}
+{{- if not (dig "thanos" "image" "tag" "" $obs) -}}
+{{- $missing = append $missing "global.observability.thanos.image.tag" -}}
+{{- end -}}
+{{- if not (dig "services" "metricsAuth" "tag" "" $obs) -}}
+{{- $missing = append $missing "global.observability.services.metricsAuth.tag" -}}
+{{- end -}}
+{{- if not (dig "services" "oauth2Proxy" "tag" "" $obs) -}}
+{{- $missing = append $missing "global.observability.services.oauth2Proxy.tag" -}}
+{{- end -}}
+{{- if not (dig "services" "openshiftOauthProxy" "tag" "" $obs) -}}
+{{- $missing = append $missing "global.observability.services.openshiftOauthProxy.tag" -}}
+{{- end -}}
+{{- if $missing -}}
+{{- fail (printf "observability image tags must be set when observability is enabled: %s" (join ", " $missing)) -}}
+{{- end -}}
+{{- end -}}

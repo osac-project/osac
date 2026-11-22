@@ -508,8 +508,10 @@ KIND_FULFILLMENT_IMAGE := ghcr.io/osac-project/fulfillment-service:latest
 KIND_OPERATOR_IMAGE := ghcr.io/osac-project/osac-operator:latest
 KIND_METERING_IMAGE := ghcr.io/osac-project/metering-service:latest
 KIND_AAP_IMAGE := ghcr.io/osac-project/osac-aap:latest
-# UI has no component Makefile, so the installer keeps its local image reference.
+# UI and observability have no component Makefile, so the installer keeps
+# their local image references.
 KIND_UI_IMAGE := ghcr.io/osac-project/osac-ui:latest
+KIND_OBSERVABILITY_IMAGE := ghcr.io/osac-project/osac-observability:latest
 KIND_LOAD_IMAGE_SCRIPT ?= $(abspath scripts/dev-full/kind-load-image.sh)
 define kind-load-local-image
 	$(KIND_RUNTIME_ENV) NS="$(NS)" \
@@ -537,6 +539,7 @@ kind-load-images: validate-ns ## Load previously built dev-full images into Kind
 	$(MAKE) -C ../osac-aap kind-load-image IMG=$(KIND_AAP_IMAGE) NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
 	$(call kind-load-local-image,$(KIND_METERING_IMAGE))
 	$(call kind-load-local-image,$(KIND_UI_IMAGE))
+	$(call kind-load-local-image,$(KIND_OBSERVABILITY_IMAGE))
 
 .PHONY: kind-build-load-images
 kind-build-load-images: ## Build and load dev-full images into Kind (PLATFORM=kind PROFILE=dev-full NS= required)
@@ -561,6 +564,7 @@ endif
 endif
 	$(MAKE) -C ../osac-aap execution-environment-build IMG=$(KIND_AAP_IMAGE) CONTAINER_TOOL=$(CONTAINER_TOOL)
 	$(CONTAINER_TOOL) build -f ../osac-ui/Containerfile -t $(KIND_UI_IMAGE) ..
+	$(CONTAINER_TOOL) build -f ../osac-observability/Containerfile -t $(KIND_OBSERVABILITY_IMAGE) ..
 	$(MAKE) kind-load-images PLATFORM=kind PROFILE=dev-full NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
 ##@ Entity: Infra
 

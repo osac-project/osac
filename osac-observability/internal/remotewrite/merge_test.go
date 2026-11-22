@@ -230,6 +230,50 @@ alertmanagerMain: {}
 	}
 }
 
+// TestMergeDisabledKeepsLabelsOSACDoesNotOwn pins that the disable path only
+// removes the label values OSAC wrote. A cluster whose external labels already
+// name another cluster or owner must keep them even though the same key names
+// appear.
+func TestMergeDisabledKeepsLabelsOSACDoesNotOwn(t *testing.T) {
+	out, err := Merge(readFixture(t, "foreign-labels.yaml"), testOptions(false))
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	want := parseDocument(t, []byte(`prometheusK8s:
+  retention: 15d
+  scrapeInterval: 1m
+  externalLabels:
+    cluster: prod-east
+    managed_by: platform-team
+    region: us-east-1
+  remoteWrite:
+    - name: guest
+      url: https://guest.example.com/api/v1/receive
+`))
+	got := parseDocument(t, out)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("disabled document mismatch\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+// TestMergeDisabledLeavesForeignLabelsWhenNothingElseIsOwned proves the label
+// removal is value gated on its own: there is no osac entry whose removal could
+// mask a changed document.
+func TestMergeDisabledLeavesForeignLabelsWhenNothingElseIsOwned(t *testing.T) {
+	current := []byte(`prometheusK8s:
+  externalLabels:
+    cluster: prod-east
+    managed_by: platform-team
+`)
+	out, err := Merge(current, testOptions(false))
+	if err != nil {
+		t.Fatalf("Merge: %v", err)
+	}
+	if string(out) != string(current) {
+		t.Fatalf("document changed:\n%s", out)
+	}
+}
+
 func TestMergeDisabledWithoutAConfigMapIsANoOp(t *testing.T) {
 	out, err := Merge(nil, testOptions(false))
 	if err != nil {

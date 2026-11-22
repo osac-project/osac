@@ -226,6 +226,27 @@ extract_kind_ns() {
   ' "${file}"
 }
 
+# Extract one kind with one metadata name, so per-route and per-proxy
+# assertions cannot match a sibling object of the same kind.
+extract_kind_name() {
+  local file=$1
+  local kind=$2
+  local name=$3
+  awk -v kind="${kind}" -v name="${name}" '
+    /^---[[:space:]]*$/ {
+      if (isKind && isName) printf "%s", doc
+      doc = ""
+      isKind = 0
+      isName = 0
+      next
+    }
+    { doc = doc $0 "\n" }
+    /^kind: / { if ($0 == "kind: " kind) isKind = 1 }
+    /^  name: / { if ($0 == "  name: " name) isName = 1 }
+    END { if (isKind && isName) printf "%s", doc }
+  ' "${file}"
+}
+
 echo "checking the four Thanos workloads render with their replica counts"
 for kind_name in \
   'StatefulSet:thanos-receive' \
@@ -299,6 +320,75 @@ extract_kind "${enabled}" Job >"${enabled_jobs}"
 require "${enabled_jobs}" 'name: osac-observability-preflight'
 require "${enabled_jobs}" 'pre-install,pre-upgrade'
 
+echo "checking the admin query routes and proxies"
+# The Routes take their hosts from global.clusterDomain, which the baseline
+# render deliberately leaves empty, so render one revision with the domain set.
+admin="${TMP_DIR}/admin.yaml"
+"${HELM_BIN}" "${COMMON_ARGS[@]}" "${CRD_ARGS[@]}" "${OBS_ARGS[@]}" \
+  --set global.clusterDomain=apps.example.com >"${admin}"
+admin_routes="${TMP_DIR}/admin-routes.yaml"
+extract_kind_ns "${admin}" Route osac-observability >"${admin_routes}"
+# Exactly one Route per admin path: a second Route to Thanos Query would expose
+# the unrestricted API beside the allowlisted one.
+expect_count "${admin_routes}" '^kind: Route' 2
+for route in thanos-query-admin thanos-query-admin-openshift; do
+  route_doc="${TMP_DIR}/route-${route}.yaml"
+  extract_kind_name "${admin}" Route "${route}" >"${route_doc}"
+  require "${route_doc}" "name: ${route}"
+  require "${route_doc}" 'host: '"${route}"'-osac-observability.apps.example.com'
+  # Each Route reaches its own proxy Service, never thanos-query directly.
+  expect_count "${route_doc}" '^    name: '"${route}"'$' 1
+done
+expect_count "${admin_routes}" '^    name: thanos-query$' 0
+
+# The proxies listen behind their Service, and the Service exposes 9091 while
+# the container port stays the proxy's own.
+for route in thanos-query-admin thanos-query-admin-openshift; do
+  service_doc="${TMP_DIR}/service-${route}.yaml"
+  extract_kind_name "${admin}" Service "${route}" >"${service_doc}"
+  require "${service_doc}" "name: ${route}"
+  require "${service_doc}" 'port: 9091'
+  require "${service_doc}" 'app.kubernetes.io/component: query-auth-proxy'
+done
+
+# Both proxies serve the same five-endpoint allowlist through one shared
+# implementation, so both must mount the same ConfigMap.
+for proxy in thanos-query-admin thanos-query-admin-openshift; do
+  proxy_doc="${TMP_DIR}/deployment-${proxy}.yaml"
+  extract_kind_name "${enabled}" Deployment "${proxy}" >"${proxy_doc}"
+  require "${proxy_doc}" "name: ${proxy}"
+  require "${proxy_doc}" 'osac.openshift.io/observability-role: query-auth-proxy'
+  require "${proxy_doc}" '- name: query-allowlist'
+  require "${proxy_doc}" '- /query-allowlist'
+  require "${proxy_doc}" 'name: osac-observability-query-allowlist'
+  require "${proxy_doc}" '--upstream=http://127.0.0.1:9091'
+done
+require "${TMP_DIR}/deployment-thanos-query-admin.yaml" '--client-id=thanos-admin'
+require "${TMP_DIR}/deployment-thanos-query-admin.yaml" \
+  '--allowed-role=cloud-provider-admin'
+require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" \
+  '--openshift-group=osac-cloud-infrastructure-admins'
+
+# The allowlist is the whole admin API surface: one entry per documented
+# endpoint and nothing else.
+allowlist="${TMP_DIR}/allowlist-configmap.yaml"
+extract_kind_name "${enabled}" ConfigMap osac-observability-query-allowlist >"${allowlist}"
+expect_count "${allowlist}" '^    /api/v1/' 5
+for endpoint in \
+  '/api/v1/query' \
+  '/api/v1/query_range' \
+  '/api/v1/series' \
+  '/api/v1/labels' \
+  '/api/v1/label/<name>/values'; do
+  require "${allowlist}" "${endpoint}"
+done
+# Only the allowlist sidecar may reach Thanos Query: the authentication proxy's
+# upstream is the sidecar on loopback, checked above.
+require "${TMP_DIR}/deployment-thanos-query-admin.yaml" \
+  'value: http://thanos-query.osac-observability.svc.cluster.local:9090'
+require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" \
+  'value: http://thanos-query.osac-observability.svc.cluster.local:9090'
+
 echo "checking disabled render"
 disabled="${TMP_DIR}/disabled.yaml"
 "${HELM_BIN}" "${COMMON_ARGS[@]}" >"${disabled}"
@@ -329,7 +419,9 @@ reject "${disabled}" 'name: bmf-operator-metrics-reader-prometheus'
 
 echo "checking the disabled render keeps no Thanos resource"
 for name in thanos-receive thanos-store thanos-query thanos-compactor \
-  thanos-authorizer osac-observability-preflight; do
+  thanos-authorizer osac-observability-preflight \
+  thanos-query-admin thanos-query-admin-openshift \
+  osac-observability-query-allowlist osac-observability-admin-credentials; do
   reject "${disabled}" "name: ${name}"
 done
 reject "${disabled}" 'namespace: osac-observability'

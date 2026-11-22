@@ -33,6 +33,14 @@ reject() {
   fi
 }
 
+expect_count() {
+  local file=$1 pattern=$2 expected=$3 actual
+  actual=$(grep -c -- "${pattern}" "${file}" || true)
+  if [ "${actual}" != "${expected}" ]; then
+    fail "expected ${expected} occurrences of ${pattern@Q} in ${file}, found ${actual}"
+  fi
+}
+
 # Extract the documents of one kind so workload assertions cannot match an
 # unrelated object in the umbrella render.
 extract_kind() {
@@ -128,6 +136,106 @@ require "${TMP_DIR}/disabled-jobs.yaml" 'value: "false"'
 require "${TMP_DIR}/enabled-jobs.yaml" 'value: "30s"'
 require "${TMP_DIR}/enabled-jobs.yaml" \
   'value: https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive'
+
+# Extract one kind with one metadata name, so per-route and per-proxy
+# assertions cannot match a sibling object of the same kind.
+extract_kind_name() {
+  local file=$1 kind=$2 name=$3
+  awk -v kind="${kind}" -v name="${name}" '
+    /^---[[:space:]]*$/ {
+      if (isKind && isName) printf "%s", doc
+      doc = ""
+      isKind = 0
+      isName = 0
+      next
+    }
+    { doc = doc $0 "\n" }
+    /^kind: / { if ($0 == "kind: " kind) isKind = 1 }
+    /^  name: / { if ($0 == "  name: " name) isName = 1 }
+    END { if (isKind && isName) printf "%s", doc }
+  ' "${file}"
+}
+
+# Extract one kind that also carries a namespace, so the checks cannot match a
+# same-kind object owned by another component of the umbrella chart.
+extract_kind_ns() {
+  local file=$1 kind=$2 namespace=$3
+  awk -v kind="${kind}" -v ns="${namespace}" '
+    /^---[[:space:]]*$/ {
+      if (isKind && isNs) printf "%s", doc
+      doc = ""
+      isKind = 0
+      isNs = 0
+      next
+    }
+    { doc = doc $0 "\n" }
+    /^kind: / { if ($0 == "kind: " kind) isKind = 1 }
+    /^  namespace: / { if ($0 == "  namespace: " ns) isNs = 1 }
+    END { if (isKind && isNs) printf "%s", doc }
+  ' "${file}"
+}
+
+echo "checking the admin query routes and proxies"
+# The Routes take their hosts from global.clusterDomain, which the enabled
+# render leaves empty, so render one revision with the domain set.
+admin="${TMP_DIR}/admin.yaml"
+"${HELM_BIN}" "${COMMON_ARGS[@]}" "${OBS_ARGS[@]}" \
+  --set global.clusterDomain=apps.example.com >"${admin}"
+admin_routes="${TMP_DIR}/admin-routes.yaml"
+extract_kind_ns "${admin}" Route osac-observability >"${admin_routes}"
+# Exactly one Route per admin path: a Route to Thanos Query would expose the
+# unrestricted API beside the allowlisted one.
+expect_count "${admin_routes}" '^kind: Route' 2
+for route in thanos-query-admin thanos-query-admin-openshift; do
+  route_doc="${TMP_DIR}/route-${route}.yaml"
+  extract_kind_name "${admin}" Route "${route}" >"${route_doc}"
+  require "${route_doc}" "name: ${route}"
+  require "${route_doc}" "host: ${route}-osac-observability.apps.example.com"
+  # Each Route reaches its own proxy Service, never thanos-query directly.
+  expect_count "${route_doc}" "^    name: ${route}\$" 1
+  service_doc="${TMP_DIR}/service-${route}.yaml"
+  extract_kind_name "${admin}" Service "${route}" >"${service_doc}"
+  require "${service_doc}" 'port: 9091'
+  require "${service_doc}" 'app.kubernetes.io/component: query-auth-proxy'
+done
+expect_count "${admin_routes}" '^    name: thanos-query$' 0
+
+# Both proxies serve the same five-endpoint allowlist through one shared
+# implementation, so both must mount the same ConfigMap.
+for proxy in thanos-query-admin thanos-query-admin-openshift; do
+  proxy_doc="${TMP_DIR}/deployment-${proxy}.yaml"
+  extract_kind_name "${enabled}" Deployment "${proxy}" >"${proxy_doc}"
+  require "${proxy_doc}" "name: ${proxy}"
+  require "${proxy_doc}" 'osac.openshift.io/observability-role: query-auth-proxy'
+  require "${proxy_doc}" '- name: query-allowlist'
+  require "${proxy_doc}" 'name: osac-observability-query-allowlist'
+  require "${proxy_doc}" '--upstream=http://127.0.0.1:9091'
+  require "${proxy_doc}" \
+    'value: http://thanos-query.osac-observability.svc.cluster.local:9090'
+done
+require "${TMP_DIR}/deployment-thanos-query-admin.yaml" '--client-id=thanos-admin'
+require "${TMP_DIR}/deployment-thanos-query-admin.yaml" \
+  '--allowed-role=cloud-provider-admin'
+require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" \
+  '--openshift-group=osac-cloud-infrastructure-admins'
+
+allowlist="${TMP_DIR}/allowlist-configmap.yaml"
+extract_kind_name "${enabled}" ConfigMap osac-observability-query-allowlist >"${allowlist}"
+expect_count "${allowlist}" '^    /api/v1/' 5
+for endpoint in \
+  '/api/v1/query' \
+  '/api/v1/query_range' \
+  '/api/v1/series' \
+  '/api/v1/labels' \
+  '/api/v1/label/<name>/values'; do
+  require "${allowlist}" "${endpoint}"
+done
+
+echo "checking the disabled path removes the admin surface"
+for name in thanos-query-admin thanos-query-admin-openshift \
+  osac-observability-query-allowlist osac-observability-admin-credentials; do
+  reject "${disabled}" "name: ${name}"
+done
 
 echo "checking object storage is referenced by Secret name only"
 require "${enabled}" 'bucket: "thanos"'

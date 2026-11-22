@@ -129,7 +129,11 @@ message BareMetalInstanceSpec {
   // When true, the system auto-selects an ExternalIPPool and creates an ExternalIP
   // with an ExternalIPAttachment for this instance atomically during creation.
   // Immutable after creation.
-  optional bool auto_external_ip_attachment = 9 [(google.api.field_behavior) = IMMUTABLE];
+  //
+  // Quota: one external IP address, when the field is true.
+  optional bool auto_external_ip_attachment = 9 [
+    (google.api.field_behavior) = IMMUTABLE
+  ];
 
   // Reference to the bare metal instance template. Either `template` or `catalog_item` is required on create.
   //
@@ -141,7 +145,9 @@ message BareMetalInstanceSpec {
   // Reference to the BareMetalInstanceType used for hardware placement.
   // If omitted from the create request, a catalog item or template may provide it.
   // The resolved reference is immutable after creation.
-  BareMetalInstanceTypeReference instance_type = 11 [(google.api.field_behavior) = IMMUTABLE];
+  BareMetalInstanceTypeReference instance_type = 11 [
+    (google.api.field_behavior) = IMMUTABLE
+  ];
 
   // Reference to a DiskImage resource, selected by ID or name. The reference is immutable after creation.
   // Catalog items can provide a default when callers omit it. The reference must resolve to an image in the instance
@@ -278,6 +284,9 @@ enum BareMetalInstanceConditionType {
 
   // Configuration changes require a restart to take effect.
   BARE_METAL_INSTANCE_CONDITION_TYPE_RESTART_REQUIRED      = 6;
+
+  // Tenant networking for this instance is ready.
+  BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY         = 7;
 }
 
 // Local reference to a BareMetalInstance resource.

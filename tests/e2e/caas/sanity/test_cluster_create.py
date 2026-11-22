@@ -16,11 +16,18 @@ from typing import Any
 
 import pytest
 
+from tests.e2e.caas.add_on_operators import (
+    _assert_cluster_add_on_operators_installed,
+    _ensure_published_operators,
+    _restore_operator_publication,
+)
 from tests.e2e.caas.deletion_diagnostics import snapshot_cluster_deletion
 from tests.e2e.core.failure_report import capture_failure, capture_snapshot
 from tests.e2e.core.fulfillment_trust import assert_cluster_trust, assert_management_tls
 from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import (
+    assert_no_network_attachment,
+    assert_no_network_jobs,
     unique_name,
     wait_for_cluster_deleting,
     wait_for_cluster_deletion_without_cleanup,
@@ -131,11 +138,13 @@ def _wait_for_cluster_and_infraenv_deletion(
 
 @dataclass(frozen=True)
 class _ClusterResources:
-    """Verified test-owned resources used by the shared natural teardown assertions."""
+    """Verified resources and HostedCluster identity shared by CaaS journeys."""
 
     co_name: str
     owned_bmi_ids: set[str]
     infra_env_name: str
+    hosted_cluster_name: str
+    hosted_cluster_namespace: str
 
 
 @dataclass(frozen=True)
@@ -372,6 +381,28 @@ def _assert_worker_provisioning(
     return cluster_tenant, candidate_bmis
 
 
+def _assert_disabled_networking_cluster(*, k8s: K8sClient, co_name: str, automatic_endpoints: bool) -> None:
+    """Disabled mode: no provider networking work, and no claimed endpoints.
+
+    Endpoint conditions only exist for templates that declare the automatic CaaS
+    endpoint capability; the legacy flow never sets EndpointsReady and publishes
+    its own ingress.
+    """
+    if automatic_endpoints:
+        endpoints = k8s.get_condition(resource="clusterorder", name=co_name, condition_type="EndpointsReady")
+        assert endpoints.get("status") == "True", f"ClusterOrder {co_name} EndpointsReady must be True: {endpoints}"
+        assert endpoints.get("reason") == "ProvisioningDisabled", (
+            f"ClusterOrder {co_name} EndpointsReady reason {endpoints.get('reason')!r}, "
+            f"expected 'ProvisioningDisabled': {endpoints}"
+        )
+        assert k8s.get_cluster_order_status(name=co_name).get("ingressEndpoint", "") == "", (
+            f"ClusterOrder {co_name} must not claim a tenant ingress address while provider networking is disabled"
+        )
+    assert_no_network_jobs(
+        k8s=k8s, resource="clusterorder", name=co_name, context=f"ClusterOrder {co_name} disabled mode"
+    )
+
+
 def assert_cluster_available(
     *,
     grpc: GRPCClient,
@@ -379,6 +410,7 @@ def assert_cluster_available(
     metering: MeteringCollector,
     uuid: str,
     version_name: str,
+    networking_provisioning_enabled: bool,
     expected_ssh_key: str = "",
 ) -> _AvailableCluster:
     """Verify provisioning, version propagation, guest readiness, and worker ownership."""
@@ -398,6 +430,9 @@ def assert_cluster_available(
     # ClusterVersion success and all NodePools ready), so wait for the phase
     # the billing gate actually keys on before expecting the heartbeat.
     wait_for_cluster_ready(k8s=k8s, name=co_name)
+    if not networking_provisioning_enabled:
+        automatic_endpoints = k8s.get_cluster_order_spec(name=co_name).get("supportsAutomaticCaaSEndpoints") is True
+        _assert_disabled_networking_cluster(k8s=k8s, co_name=co_name, automatic_endpoints=automatic_endpoints)
     metering.expect(HEARTBEAT_TYPE, resource_id=uuid, timeout=300, resource_kind=WaitResourceKind.CLUSTER_ORDER)
     metering.verify()
 
@@ -433,6 +468,9 @@ def assert_cluster_available(
         instance_types={worker_instance_type},
         ssh_key_id=ssh_key_id,
     )
+    if not networking_provisioning_enabled:
+        for bmi_id in owned_bmi_ids:
+            assert_no_network_attachment(k8s=k8s, target_kind="BareMetalInstance", target_id=bmi_id)
     infra_env_name = _wait_for_cluster_infra_env_name(k8s=k8s, co_name=co_name)
     if expected_ssh_key:
         # The operator materializes the registered Secret's public key into the
@@ -448,6 +486,8 @@ def assert_cluster_available(
         worker_node_set=worker_node_set,
         worker_instance_type=worker_instance_type,
         original_size=original_size,
+        hosted_cluster_name=hosted_cluster_name,
+        hosted_cluster_namespace=hosted_cluster_ns,
         owned_bmi_ids=owned_bmi_ids,
         infra_env_name=infra_env_name,
     )
@@ -637,6 +677,7 @@ def _assert_catalog_created_cluster(
 def test_cluster_create(
     request: pytest.FixtureRequest,
     cli: OsacCLI,
+    private_cli: OsacCLI,
     grpc: GRPCClient,
     private_grpc: GRPCClient,
     k8s_hub_client: K8sClient,
@@ -645,42 +686,50 @@ def test_cluster_create(
     ssh_key_secret: str,
     ssh_public_key_path: str,
     metering: MeteringCollector,
+    networking_provisioning_enabled: bool,
 ) -> None:
     """Verify the full CaaS cluster lifecycle through a catalog item: author a published
     ClusterCatalogItem, create a cluster from it, provision to Ready, version and
     releaseImage propagation to the HostedCluster, control-plane metering
     heartbeats, worker scale-up, and deletion."""
 
-    worker_instance_type_id = private_grpc.ensure_bare_metal_instance_type(name="ci-worker-bm")
-    logger.info("CaaS: ensuring DiskImage and ClusterVersion")
-    disk_image_id = private_grpc.ensure_disk_image(name="rhcos-4-22", source_ref=RHCOS_IMAGE)
-    version = private_grpc.ensure_cluster_version(
-        version="4.22.0-rhcos", image=TEST_RELEASE_IMAGE, disk_image=disk_image_id
+    operator_specs, publication_states, operator_ids = _ensure_published_operators(
+        private_cli, private_grpc, ("cert-manager", "serverless")
     )
-    logger.info("CaaS: ClusterVersion available")
-    logger.info("CaaS: creating ClusterCatalogItem")
-    # The shared offering locks every tenant-independent input (version, node sets);
-    # the pull secret and the registered SSH-key Secret stay caller-supplied because
-    # a shared catalog item cannot fix tenant-local secrets for every tenant.
-    catalog_item_id = private_grpc.create_cluster_catalog_item(
-        name=unique_name("e2e-caas-catalog"),
-        template=cluster_template,
-        fields={
-            "version": {"locked": {"id": version["id"]}},
-            "ssh_key": {"editable": {}},
-            "pull_secret_secret": {"editable": {}},
-            "node_sets": {
-                "locked": {
-                    "items": {"workers": {"size": 1, "baremetal_instance_type": {"id": worker_instance_type_id}}}
-                }
-            },
-        },
-        api=PRIVATE_API,
-    )
-    logger.info("CaaS: ClusterCatalogItem created")
-    name = unique_name("e2e-cluster")
+    catalog_item_id = ""
     uuid = ""
     try:
+        worker_instance_type_id = private_grpc.ensure_bare_metal_instance_type(name="ci-worker-bm")
+        logger.info("CaaS: ensuring DiskImage and ClusterVersion")
+        disk_image_id = private_grpc.ensure_disk_image(name="rhcos-4-22", source_ref=RHCOS_IMAGE)
+        version = private_grpc.ensure_cluster_version(
+            version="4.22.0-rhcos", image=TEST_RELEASE_IMAGE, disk_image=disk_image_id
+        )
+        logger.info("CaaS: ClusterVersion available")
+        logger.info("CaaS: creating ClusterCatalogItem")
+        # The shared offering locks every tenant-independent input (version, node sets, SSH
+        # key, and add-on operators); the pull secret stays caller-supplied because a
+        # shared catalog item cannot fix a tenant-local secret for every tenant.
+        catalog_item_id = private_grpc.create_cluster_catalog_item(
+            name=unique_name("e2e-caas-catalog"),
+            template=cluster_template,
+            fields={
+                "version": {"locked": {"id": version["id"]}},
+                "ssh_key": {"editable": {}},
+                "pull_secret_secret": {"editable": {}},
+                "add_on_operators": {
+                    "locked": {"items": [{"id": operator_id, "shared": True} for operator_id in operator_ids]}
+                },
+                "node_sets": {
+                    "locked": {
+                        "items": {"workers": {"size": 1, "baremetal_instance_type": {"id": worker_instance_type_id}}}
+                    }
+                },
+            },
+            api=PRIVATE_API,
+        )
+        logger.info("CaaS: ClusterCatalogItem created")
+        name = unique_name("e2e-cluster")
         logger.info("CaaS: creating cluster from catalog item")
         uuid = cli.create_cluster_with_catalog_item(
             catalog_item=catalog_item_id, name=name, pull_secret=pull_secret_name, ssh_key=ssh_key_secret
@@ -700,6 +749,7 @@ def test_cluster_create(
             metering=metering,
             uuid=uuid,
             version_name=version["name"],
+            networking_provisioning_enabled=networking_provisioning_enabled,
             expected_ssh_key=Path(ssh_public_key_path).read_text().strip(),
         )
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
@@ -707,6 +757,16 @@ def test_cluster_create(
             assert_cluster_trust(k8s_hub_client, cluster.co_name)
         _assert_cluster_metering(metering=metering, uuid=uuid, cluster_template=cluster_template)
         _assert_worker_metering(metering=metering, uuid=uuid, cluster=cluster)
+
+        _assert_cluster_add_on_operators_installed(
+            client=grpc,
+            hub_k8s=k8s_hub_client,
+            cluster_id=uuid,
+            cluster_order_name=cluster.co_name,
+            expected_operator_specs=operator_specs,
+            identity="CaaS catalog cluster",
+            hosted_cluster_reference=(cluster.hosted_cluster_name, cluster.hosted_cluster_namespace),
+        )
 
         scaled_size = cluster.original_size + 1
         cli.scale_cluster(uuid=uuid, node_set=cluster.worker_node_set, size=scaled_size)
@@ -723,8 +783,10 @@ def test_cluster_create(
         if uuid:
             with contextlib.suppress(subprocess.SubprocessError):
                 cli.delete_cluster(uuid=uuid)
-        with contextlib.suppress(subprocess.SubprocessError):
-            private_grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id, api=PRIVATE_API)
+        if catalog_item_id:
+            with contextlib.suppress(subprocess.SubprocessError):
+                private_grpc.delete_cluster_catalog_item(catalog_item_id=catalog_item_id, api=PRIVATE_API)
+        _restore_operator_publication(private_grpc, publication_states)
 
 
 def _assert_two_node_set_requests(
@@ -885,7 +947,7 @@ def assert_cluster_with_two_node_sets_available(
     expected_replicas = _assert_two_node_set_requests(
         cluster_order=cluster_order, cluster_node_sets=cluster["spec"]["nodeSets"], instance_types=instance_types
     )
-    hosted_cluster_ns = k8s.get_cluster_order_namespace(name=co_name)
+    hosted_cluster_name, hosted_cluster_namespace = wait_for_hosted_cluster_reference(k8s=k8s, co_name=co_name)
     _assert_worker_agents_and_installation(
         k8s=k8s, co_name=co_name, namespace=k8s.namespace, expected=sum(expected_replicas.values())
     )
@@ -896,7 +958,7 @@ def assert_cluster_with_two_node_sets_available(
     _assert_isolated_node_pools(
         k8s=k8s,
         co_name=co_name,
-        hosted_cluster_ns=hosted_cluster_ns,
+        hosted_cluster_ns=hosted_cluster_namespace,
         expected_replicas=expected_replicas,
         instance_types=instance_types,
     )
@@ -930,4 +992,10 @@ def assert_cluster_with_two_node_sets_available(
         cluster=cluster,
     )
     infra_env_name = _wait_for_cluster_infra_env_name(k8s=k8s, co_name=co_name)
-    return _ClusterResources(co_name=co_name, owned_bmi_ids=owned_bmi_ids, infra_env_name=infra_env_name)
+    return _ClusterResources(
+        co_name=co_name,
+        owned_bmi_ids=owned_bmi_ids,
+        infra_env_name=infra_env_name,
+        hosted_cluster_name=hosted_cluster_name,
+        hosted_cluster_namespace=hosted_cluster_namespace,
+    )

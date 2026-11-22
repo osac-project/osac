@@ -1,14 +1,16 @@
 ---
 - name: Test copying object create using multipart upload
   vars:
+    test_bucket: "{{ resource_prefix }}-multipart"
+    test_versioned_bucket: "{{ resource_prefix }}-multipart-versioned"
     obj_metadata:
       some: meta_info
       test: ci
   block:
     # Create Sample bucket
-    - name: Create bucket with name '{{ bucket_name_multipart }}'
+    - name: Create bucket with name '{{ test_bucket }}'
       amazon.aws.s3_bucket:
-        name: "{{ bucket_name_multipart }}"
+        name: "{{ test_bucket }}"
         state: present
 
     - name: Create object into bucket using multipart upload
@@ -17,17 +19,17 @@
         secret_key: "{{ aws_secret_key }}"
         session_token: "{{ security_token | default(omit) }}"
         region: "{{ aws_region }}"
-        bucket: "{{ bucket_name_multipart }}"
+        bucket: "{{ test_bucket }}"
         object: multipart_1
 
     # Test copying multipart-uploaded object
     - name: Copy object
       amazon.aws.s3_object:
-        bucket: "{{ bucket_name_multipart }}"
+        bucket: "{{ test_bucket }}"
         mode: copy
         object: multipart_1_copy
         copy_src:
-          bucket: "{{ bucket_name_multipart }}"
+          bucket: "{{ test_bucket }}"
           object: multipart_1
       register: _copy
 
@@ -38,7 +40,7 @@
 
     - name: Retrieve object info
       amazon.aws.s3_object_info:
-        bucket_name: "{{ bucket_name_multipart }}"
+        bucket_name: "{{ test_bucket }}"
         object_name: multipart_1_copy
       register: obj_info
 
@@ -49,11 +51,11 @@
 
     - name: Copy object once again (idempotency)
       amazon.aws.s3_object:
-        bucket: "{{ bucket_name_multipart }}"
+        bucket: "{{ test_bucket }}"
         mode: copy
         object: multipart_1_copy
         copy_src:
-          bucket: "{{ bucket_name_multipart }}"
+          bucket: "{{ test_bucket }}"
           object: multipart_1
       register: copy_idempotency
 
@@ -65,11 +67,11 @@
     # Update object with metadata
     - name: Copy object with metadata
       amazon.aws.s3_object:
-        bucket: "{{ bucket_name_multipart }}"
+        bucket: "{{ test_bucket }}"
         mode: copy
         object: multipart_1_copy
         copy_src:
-          bucket: "{{ bucket_name_multipart }}"
+          bucket: "{{ test_bucket }}"
           object: multipart_1
         metadata: "{{ obj_metadata }}"
       register: _copymetadata
@@ -81,7 +83,7 @@
 
     - name: Retrieve object info
       amazon.aws.s3_object_info:
-        bucket_name: "{{ bucket_name_multipart }}"
+        bucket_name: "{{ test_bucket }}"
         object_name: multipart_1_copy
       register: obj_info
 
@@ -94,11 +96,11 @@
     # Test copy with metadata (idempotency)
     - name: Copy object with metadata once again (idempotency)
       amazon.aws.s3_object:
-        bucket: "{{ bucket_name_multipart }}"
+        bucket: "{{ test_bucket }}"
         mode: copy
         object: multipart_1_copy
         copy_src:
-          bucket: "{{ bucket_name_multipart }}"
+          bucket: "{{ test_bucket }}"
           object: multipart_1
         metadata: "{{ obj_metadata }}"
       register: copy_idempotency
@@ -110,7 +112,7 @@
 
     - name: Retrieve object info
       amazon.aws.s3_object_info:
-        bucket_name: "{{ bucket_name_multipart }}"
+        bucket_name: "{{ test_bucket }}"
         object_name: multipart_1_copy
       register: obj_info
 
@@ -122,25 +124,25 @@
 
     # Test copying multipart-uploaded object into bucket with versioning activated
     # Create bucket with versioning activated
-    - name: Create bucket with name '{{ bucket_name_mp_versioned }}'
+    - name: Create bucket with name '{{ test_versioned_bucket }}'
       amazon.aws.s3_bucket:
-        name: "{{ bucket_name_mp_versioned }}"
+        name: "{{ test_versioned_bucket }}"
         versioning: true
         state: present
 
     - name: Copy object into bucket with versioning activated
       amazon.aws.s3_object:
-        bucket: "{{ bucket_name_mp_versioned }}"
+        bucket: "{{ test_versioned_bucket }}"
         mode: copy
         object: multipart_2
         copy_src:
-          bucket: "{{ bucket_name_multipart }}"
+          bucket: "{{ test_bucket }}"
           object: multipart_1
       register: _copy
 
     - name: Get objects info from bucket with versioning activated
       amazon.aws.s3_object_info:
-        bucket_name: "{{ bucket_name_mp_versioned }}"
+        bucket_name: "{{ test_versioned_bucket }}"
         object_name: multipart_2
       register: obj_info_1
 
@@ -148,22 +150,22 @@
       ansible.builtin.assert:
         that:
           - _copy is changed
-          - obj_info_1.object_info.0.object_data.version_id is defined
+          - obj_info_1.object_info.0.object_data.version_id
 
     # test copy idempotency with versioned bucket
     - name: Copy object into bucket with versioning activated (once again)
       amazon.aws.s3_object:
-        bucket: "{{ bucket_name_mp_versioned }}"
+        bucket: "{{ test_versioned_bucket }}"
         mode: copy
         object: multipart_2
         copy_src:
-          bucket: "{{ bucket_name_multipart }}"
+          bucket: "{{ test_bucket }}"
           object: multipart_1
       register: _copy_idempotency
 
     - name: Get objects info from bucket with versioning activated
       amazon.aws.s3_object_info:
-        bucket_name: "{{ bucket_name_mp_versioned }}"
+        bucket_name: "{{ test_versioned_bucket }}"
         object_name: multipart_2
       register: obj_info_2
 
@@ -180,5 +182,5 @@
         state: absent
         force: true
       with_items:
-        - "{{ bucket_name_mp_versioned }}"
-        - "{{ bucket_name_multipart }}"
+        - "{{ test_versioned_bucket }}"
+        - "{{ test_bucket }}"

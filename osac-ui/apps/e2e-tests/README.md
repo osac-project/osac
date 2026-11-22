@@ -5,9 +5,11 @@ real, already-deployed environment. The browser harness and Playwright
 projects live in [`apps/playwright`](../playwright); shared page helpers,
 locators, and CLI helpers live in `libs/`.
 
-These are UI journeys, not unit tests. Use the app's Vitest tests for isolated
-components. Use this package when the test must prove a real browser flow
-through the deployed UI, authentication, proxy, and fulfillment service.
+The tests under `src/` are UI journeys, not unit tests. Use the app's Vitest
+tests for isolated components. Use this package when the test must prove a real
+browser flow through the deployed UI, authentication, proxy, and fulfillment
+service. The separate `helper-tests/` directory checks the shared helpers in an
+isolated browser with simulated responses.
 
 ## Directory structure
 
@@ -15,11 +17,13 @@ through the deployed UI, authentication, proxy, and fulfillment service.
 apps/e2e-tests/
 ├── src/
 │   └── vmaas/                  current VMaaS flows and VMaaS test data
+├── helper-tests/               isolated helper regression tests
 ├── run_scripts/
 │   ├── prepare-setup-for-ui-run.sh  install and validate prerequisites
 │   └── run-ui-e2e.sh                run the configured VMaaS flow tags
 ├── extravars.yaml               VMaaS flow configuration
-├── package.json                 package-local typecheck command
+├── package.json                 package-local test and typecheck commands
+├── playwright.helpers.config.ts isolated helper test configuration
 └── tsconfig.json                TypeScript configuration
 
 apps/playwright/
@@ -117,6 +121,16 @@ nearest existing page helper and locator for the feature being tested.
   should normally use its own safe environment variables or fixtures instead.
 
 ## Prepare and run
+
+To run the isolated helper tests without a cluster, install Playwright's
+Chromium browser and run from `osac-ui/`:
+
+```bash
+pnpm --filter @osac/e2e-tests exec playwright install chromium
+pnpm --filter @osac/e2e-tests run test:browser
+```
+
+These tests do not replace the deployed UI journeys below.
 
 Run from the `osac-ui/` workspace root:
 

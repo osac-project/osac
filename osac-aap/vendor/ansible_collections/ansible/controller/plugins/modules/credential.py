@@ -257,8 +257,6 @@ def main():
     copy_lookup_data = lookup_data
     if organization:
         lookup_data['organization'] = org_id
-    if user:
-        lookup_data['organization'] = None
 
     credential = module.get_one('credentials', name_or_id=name, check_exists=(state == 'exists'), **{'data': lookup_data})
 
@@ -292,11 +290,8 @@ def main():
 
     if inputs:
         credential_fields['inputs'] = inputs
-    if description is not None:
-        if description == '':
-            credential_fields['description'] = ''
-        else:
-            credential_fields['description'] = description
+    if description:
+        credential_fields['description'] = description
     if organization:
         credential_fields['organization'] = org_id
 

@@ -6,6 +6,14 @@ with its tenant-owned BMI using the host MAC address, then approves and labels
 the Agent for its ClusterOrder and NodePool. There is no AAP-maintained pool of
 pre-booted Agents or periodic BMH/BCM Agent importer.
 
+Assisted Service owns Agent registration and its InfraEnv association and owner
+reference. OSAC owns approval, the preliminary `spec.clusterDeploymentName`
+reference, and the labels below; CAP-Agent records the subsequent Machine claim.
+An Agent does not require an `osac.openshift.io/tenant` annotation: OSAC verifies
+tenant ownership through the authoritative ClusterOrder and Fulfillment BMI,
+then correlates the Agent by namespace, worker association, and MAC address.
+If an Agent carries a conflicting tenant annotation, OSAC rejects its cleanup.
+
 | Label | Owner | Purpose |
 |---|---|---|
 | `osac.openshift.io/instance_type` | Bare-metal worker controller | Selected BMIT name, also recorded on NodePool metadata. |

@@ -1,0 +1,24 @@
+---
+# Default variables for views integration tests
+# Override these in tests/integration/integration_config.yml
+
+# VAST system connection details
+# Leave empty to skip tests gracefully
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+# Test view configuration
+test_view_name: ansible-test-view
+test_view_path: /ansible-test-view
+test_view_policy_id: 1
+test_view_protocols:
+  - NFS
+
+# Reusable connection dict — reference as ``vms: "{{ vms_auth }}"`` in tasks
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true

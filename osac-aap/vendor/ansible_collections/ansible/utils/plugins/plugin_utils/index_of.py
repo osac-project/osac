@@ -14,7 +14,8 @@ __metaclass__ = type
 
 import json
 
-from ansible.module_utils.common.text.converters import to_native
+from ansible.module_utils._text import to_native
+from ansible.module_utils.six import integer_types, string_types
 from jinja2.exceptions import TemplateSyntaxError
 
 
@@ -157,7 +158,7 @@ def index_of(
             if result:
                 res.append(idx)
 
-    elif isinstance(key, (str, int, bool)):
+    elif isinstance(key, (string_types, integer_types, bool)):
         if not all(isinstance(entry, dict) for entry in data):
             all_tipes = [type(_to_well_known_type(entry)).__name__ for entry in data]
             msg = (

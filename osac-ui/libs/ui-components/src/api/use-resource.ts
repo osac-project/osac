@@ -182,7 +182,10 @@ export const useUpdateResource = <Input extends DescMessage, Output extends Desc
 
   return useMutation({
     ...options,
-    mutationFn: (request) => client.update(buildUpdateRequest(service, request)),
+    mutationFn: (request) => {
+      const updateRequest = buildUpdateRequest(service, request);
+      return client.update(updateRequest);
+    },
     onSuccess: async (...args) => {
       await queryClient.invalidateQueries({ queryKey: [service.typeName] });
       await options.onSuccess?.(...args);

@@ -8,6 +8,20 @@
 global:
   # Required stable identity for this OSAC/fulfillment-service deployment.
   osacDeploymentId: ""
+  # Prefix fulfillment prepends to a tenant name to form that tenant's event
+  # topic (osac.events.acme by default). Metering discovers tenants by this
+  # prefix, and the Kafka ACLs for event topics use it too. Include the
+  # trailing dot. Empty leaves every side on osac.events.
+  # Do not use a prefix that covers osac.metering. (for example osac. or
+  # osac.metering.). Those Kafka permissions include metering's own topics.
+  # Changing this value stops metering from reading events under the old prefix.
+  # Events on the old topics that were not folded before the change are not read
+  # after it, and the fold reads each tenant's new topic from the beginning.
+  # A metering pod that still uses the previous prefix deletes a tenant's folded
+  # history and progress after that tenant is absent from its topic listing. An
+  # ACL change that hides the previous topics from that pod makes the tenant
+  # absent. Coordinate that ACL change with removing the pod so those facts stay.
+  eventTopicPrefix: "osac.events."
   # [REQUIRED on OpenShift, via --set global.clusterDomain=$(oc get ingresses.config/cluster -o jsonpath='{.spec.domain}')]
   # Backs the tpl-templated defaults below (service.auth.issuerUrl,
   # service.idp.url, service.vault.keycloakIssuerUrl) so they automatically
@@ -496,7 +510,7 @@ bmf:
     tokenSecretKey: "token"
     tokenValue: ""
     caCert: ""
-    allowInsecureHTTP: false
+    clientAllowInsecureHTTP: false
   metal3:
     enabled: false
     # Namespace where Metal3 inventory reads BareMetalHost resources.

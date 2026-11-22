@@ -1,0 +1,305 @@
+---
+# Integration tests for s3_policy_attachment_user module (Pattern E).
+# When VAST credentials are available: create policy and optionally a local user, then attach/detach by uid or username.
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials }}"
+
+- name: Get default tenant for local_provider_id (when creating test user)
+  vastdata.vms.tenants:
+    vms: "{{ vms_auth }}"
+    name: "default"
+    state: present
+  register: _tenant_result
+  when: can_run_tests | bool
+
+- name: Ensure test group does not exist before creating (for user's primary group)
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_attachment_user_name }}-group"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Create local group for test user (no target configured)
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_attachment_user_name }}-group"
+    gid: "{{ test_created_group_gid }}"
+    local_provider_id: "{{ _tenant_result.tenants.local_provider_id }}"
+    state: present
+  register: _create_group_result
+  when:
+    - can_run_tests | bool
+    - _tenant_result is not skipped
+
+- name: Ensure test user does not exist before creating
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_attachment_user_name }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Create local user for s3_policy_attachment_user test (no target configured)
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_attachment_user_name }}"
+    uid: "{{ test_created_user_uid }}"
+    gids: ["{{ test_created_group_gid }}"]
+    leading_gid: "{{ test_created_group_gid }}"
+    local_provider_id: "{{ _tenant_result.tenants.local_provider_id }}"
+    state: present
+  register: _create_user_result
+  when:
+    - can_run_tests | bool
+    - _create_group_result is not skipped
+
+- name: Set created-user flag and uid when we created the user
+  ansible.builtin.set_fact:
+    s3_attachment_we_created_user: true
+    test_attachment_user_uid: "{{ test_created_user_uid }}"
+  when:
+    - can_run_tests | bool
+    - _create_user_result is not skipped
+
+- name: Set attachment target facts for user tests
+  ansible.builtin.set_fact:
+    use_user_uid: >-
+      {{ (s3_attachment_we_created_user | default(false)) or
+      ((test_attachment_user_uid | default(none)) is not none) }}
+    use_username: >-
+      {{ (not (s3_attachment_we_created_user | default(false))) and
+      ((test_attachment_username | default('') or '') | length > 0) and
+      (test_attachment_user_uid | default(none)) is none }}
+  when: can_run_tests | bool
+
+# ====================
+# Ensure test S3 policy exists
+# ====================
+
+- name: Create or ensure S3 policy exists for attachment tests
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}"
+    tenant_id: "{{ test_s3policy_tenant_id }}"
+    policy: "{{ test_s3policy_document }}"
+    state: present
+  register: policy_result
+  when: can_run_tests | bool
+
+- name: Set policy ID for attachment tests
+  ansible.builtin.set_fact:
+    test_policy_id: "{{ policy_result.s3policies.id }}"
+  when:
+    - can_run_tests | bool
+    - policy_result is not skipped
+    - policy_result.s3policies is defined
+
+# ====================
+# Attach (user by uid or username)
+# ====================
+
+- name: Attach S3 policy to user (s3_policy_attachment_user by uid or username)
+  vastdata.vms.s3_policy_attachment_user:
+    vms: "{{ vms_auth }}"
+    s3_policy_id: "{{ test_policy_id }}"
+    uid: "{{ test_attachment_user_uid if use_user_uid | default(false) else omit }}"
+    username: "{{ test_attachment_username if use_username | default(false) else omit }}"
+    state: present
+  register: attach_user_result
+  when:
+    - can_run_tests | bool
+    - test_policy_id is defined
+    - use_user_uid | default(false) or use_username | default(false)
+
+- name: Verify attach to user (first attach must report changed and return summary)
+  ansible.builtin.assert:
+    that:
+      - attach_user_result is changed
+      - attach_user_result.s3_policy_attachment is defined
+      - attach_user_result.s3_policy_attachment.policy_id | int == test_policy_id | int
+      - attach_user_result.s3_policy_attachment.target_type == "user"
+    fail_msg: "First attach to user must report changed=true and return s3_policy_attachment summary"
+  when: attach_user_result is not skipped
+
+- name: Backend state - query user by uid (after attach)
+  ansible.builtin.uri:
+    url: "https://{{ vast_vms }}/api/latest/users/query/?uid={{ test_attachment_user_uid }}"
+    method: GET
+    user: "{{ vast_username }}"
+    password: "{{ vast_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    return_content: true
+  register: _user_query_after_attach_uid
+  when:
+    - attach_user_result is not skipped
+    - use_user_uid | default(false) | bool
+
+# Swagger declares GET /users/query/ returns a single object (UserQueryData).
+- name: Assert user query response is single object (per Swagger)
+  ansible.builtin.assert:
+    that: _user_query_after_attach_uid.json is mapping
+    fail_msg: "GET /users/query/ must return a single object (UserQueryData). Check API/spec."
+  when: _user_query_after_attach_uid is not skipped
+
+- name: Set user entity from query response (after attach)
+  ansible.builtin.set_fact:
+    _user_entity: "{{ _user_query_after_attach_uid.json }}"
+  when: _user_query_after_attach_uid is not skipped
+
+- name: Assert user s3_policies_ids contains test policy after attach
+  ansible.builtin.assert:
+    that:
+      - test_policy_id | int in (_user_entity.s3_policies_ids | default([]) | map('int') | list)
+    fail_msg: >-
+      Backend state: user s3_policies_ids must contain policy {{ test_policy_id }} after attach.
+      Got {{ _user_entity.s3_policies_ids | default('missing') }}
+  when: _user_entity is defined
+
+# ====================
+# Idempotency - attach again (no change)
+# ====================
+
+- name: Idempotency - attach same policy to user again
+  vastdata.vms.s3_policy_attachment_user:
+    vms: "{{ vms_auth }}"
+    s3_policy_id: "{{ test_policy_id }}"
+    uid: "{{ test_attachment_user_uid if use_user_uid | default(false) else omit }}"
+    username: "{{ test_attachment_username if use_username | default(false) else omit }}"
+    state: present
+    ignore_present: true
+  register: idem_user_result
+  when:
+    - can_run_tests | bool
+    - test_policy_id is defined
+    - use_user_uid | default(false) or use_username | default(false)
+
+- name: Verify user attach idempotency (no change on second attach)
+  ansible.builtin.assert:
+    that:
+      - idem_user_result is not changed
+      - idem_user_result.s3_policy_attachment is defined
+    fail_msg: "Second attach to user must report changed=false (idempotency)"
+  when: idem_user_result is not skipped
+
+# ====================
+# Detach
+# ====================
+
+- name: Detach S3 policy from user
+  vastdata.vms.s3_policy_attachment_user:
+    vms: "{{ vms_auth }}"
+    s3_policy_id: "{{ test_policy_id }}"
+    uid: "{{ test_attachment_user_uid if use_user_uid | default(false) else omit }}"
+    username: "{{ test_attachment_username if use_username | default(false) else omit }}"
+    state: absent
+  register: detach_user_result
+  when:
+    - can_run_tests | bool
+    - test_policy_id is defined
+    - use_user_uid | default(false) or use_username | default(false)
+
+- name: Verify detach from user (first detach must report changed)
+  ansible.builtin.assert:
+    that:
+      - detach_user_result is changed
+      - detach_user_result.s3_policy_attachment is defined
+    fail_msg: "First detach from user must report changed=true"
+  when: detach_user_result is not skipped
+
+- name: Backend state - query user by uid after detach
+  ansible.builtin.uri:
+    url: "https://{{ vast_vms }}/api/latest/users/query/?uid={{ test_attachment_user_uid }}"
+    method: GET
+    user: "{{ vast_username }}"
+    password: "{{ vast_password }}"
+    force_basic_auth: true
+    validate_certs: false
+    return_content: true
+  register: _user_query_after_detach_uid
+  when:
+    - detach_user_result is not skipped
+    - use_user_uid | default(false) | bool
+
+# Same as after attach: Swagger says single object.
+- name: Assert user query response is single object after detach (per Swagger)
+  ansible.builtin.assert:
+    that: _user_query_after_detach_uid.json is mapping
+    fail_msg: "GET /users/query/ must return a single object (UserQueryData). Check API/spec."
+  when: _user_query_after_detach_uid is not skipped
+
+- name: Set user entity from query response (after detach)
+  ansible.builtin.set_fact:
+    _user_entity_detach: "{{ _user_query_after_detach_uid.json }}"
+  when: _user_query_after_detach_uid is not skipped
+
+- name: Assert user s3_policies_ids does not contain test policy after detach
+  ansible.builtin.assert:
+    that:
+      - test_policy_id | int not in (_user_entity_detach.s3_policies_ids | default([]) | map('int') | list)
+    fail_msg: >-
+      Backend state: user s3_policies_ids must not contain policy {{ test_policy_id }} after detach.
+      Got {{ _user_entity_detach.s3_policies_ids | default('missing') }}
+  when: _user_entity_detach is defined
+
+# ====================
+# Detach idempotency
+# ====================
+
+- name: Idempotency - detach from user again (no change)
+  vastdata.vms.s3_policy_attachment_user:
+    vms: "{{ vms_auth }}"
+    s3_policy_id: "{{ test_policy_id }}"
+    uid: "{{ test_attachment_user_uid if use_user_uid | default(false) else omit }}"
+    username: "{{ test_attachment_username if use_username | default(false) else omit }}"
+    state: absent
+  register: idem_detach_user_result
+  when:
+    - can_run_tests | bool
+    - test_policy_id is defined
+    - use_user_uid | default(false) or use_username | default(false)
+
+- name: Verify user detach idempotency (no change on second detach)
+  ansible.builtin.assert:
+    that:
+      - idem_detach_user_result is not changed
+      - idem_detach_user_result.s3_policy_attachment is defined
+    fail_msg: "Second detach from user must report changed=false (idempotency)"
+  when: idem_detach_user_result is not skipped
+
+# ====================
+# Cleanup
+# ====================
+
+- name: Remove S3 policy created for s3_policy_attachment_user test
+  vastdata.vms.s3policies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_s3policy_name }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Remove local user created for s3_policy_attachment_user test
+  vastdata.vms.users:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_attachment_user_name }}"
+    state: absent
+  when: s3_attachment_we_created_user | default(false) | bool
+
+- name: Remove local group created for s3_policy_attachment_user test
+  vastdata.vms.groups:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_attachment_user_name }}-group"
+    state: absent
+  when: s3_attachment_we_created_user | default(false) | bool

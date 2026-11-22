@@ -40,6 +40,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
 	"github.com/osac-project/osac/fulfillment-service/internal/masks"
+	"github.com/osac-project/osac/fulfillment-service/internal/password"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -56,6 +57,16 @@ type mockSecretsClient struct {
 	createFunc func(ctx context.Context, req *privatev1.SecretsCreateRequest) (*privatev1.SecretsCreateResponse, error)
 	listFunc   func(ctx context.Context, req *privatev1.SecretsListRequest) (*privatev1.SecretsListResponse, error)
 	deleteFunc func(ctx context.Context, req *privatev1.SecretsDeleteRequest) (*privatev1.SecretsDeleteResponse, error)
+}
+
+func testBreakGlassSecretsClient() *mockSecretsClient {
+	return &mockSecretsClient{
+		createFunc: func(_ context.Context, req *privatev1.SecretsCreateRequest) (*privatev1.SecretsCreateResponse, error) {
+			secret := req.GetObject()
+			secret.SetId("test-break-glass-secret")
+			return privatev1.SecretsCreateResponse_builder{Object: secret}.Build(), nil
+		},
+	}
 }
 
 func (m *mockSecretsClient) Get(ctx context.Context, req *privatev1.SecretsGetRequest, _ ...grpc.CallOption) (*privatev1.SecretsGetResponse, error) {
@@ -259,8 +270,9 @@ var _ = Describe("IDP Sync", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		reconciler = &function{
-			logger:     logger,
-			idpManager: idpManager,
+			logger:        logger,
+			idpManager:    idpManager,
+			secretsClient: testBreakGlassSecretsClient(),
 		}
 	})
 
@@ -271,12 +283,6 @@ var _ = Describe("IDP Sync", func() {
 				Name:       "test-org",
 				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
-			}.Build(),
-			Status: privatev1.TenantStatus_builder{
-				BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{
-					Username: "test-org-osac-break-glass",
-					Password: testPreGeneratedPassword,
-				}.Build(),
 			}.Build(),
 		}.Build()
 
@@ -298,7 +304,7 @@ var _ = Describe("IDP Sync", func() {
 				Expect(user.Username).To(Equal("test-org-osac-break-glass"))
 				Expect(user.Email).To(Equal("break-glass@test-org.osac.local"))
 				Expect(user.Credentials).To(HaveLen(1))
-				Expect(user.Credentials[0].Value).To(Equal(testPreGeneratedPassword))
+				Expect(user.Credentials[0].Value).To(HaveLen(password.Length))
 				user.ID = "user-123"
 				return user, nil
 			}).
@@ -365,7 +371,7 @@ var _ = Describe("IDP Sync", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	It("should set FAILED state on IDP error", func() {
+	It("should remain PENDING on IDP error so creation can be retried", func() {
 		tenant := privatev1.Tenant_builder{
 			Metadata: privatev1.Metadata_builder{
 				Name:       "test-org",
@@ -385,16 +391,18 @@ var _ = Describe("IDP Sync", func() {
 		}
 
 		err := task.update(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		retryable, ok := err.(interface{ RequeueAfter() time.Duration })
+		Expect(ok).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(defaultRetryTimeout))
 
-		Expect(tenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_FAILED))
+		Expect(tenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_PENDING))
 		Expect(tenant.GetStatus().GetMessage()).To(ContainSubstring("Tenant creation in IDP failed"))
 		Expect(tenant.GetStatus().GetMessage()).To(ContainSubstring("IDP connection timeout"))
 		Expect(tenant.GetStatus().GetIdpTenantName()).To(BeEmpty())
 		Expect(tenant.GetStatus().GetBreakGlassUserId()).To(BeEmpty())
 	})
 
-	It("should not return error on IDP failure", func() {
+	It("should requeue on IDP failure", func() {
 		tenant := privatev1.Tenant_builder{
 			Metadata: privatev1.Metadata_builder{
 				Name:       "test-org",
@@ -414,7 +422,49 @@ var _ = Describe("IDP Sync", func() {
 		}
 
 		err := task.update(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		retryable, ok := err.(interface{ RequeueAfter() time.Duration })
+		Expect(ok).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(defaultRetryTimeout))
+	})
+
+	It("should persist the break-glass reference and IDP failure message when retrying", func() {
+		var updateRequest *privatev1.TenantsUpdateRequest
+		reconciler = &function{
+			logger:         logger,
+			idpManager:     idpManager,
+			secretsClient:  testBreakGlassSecretsClient(),
+			maskCalculator: masks.NewCalculator().Build(),
+			tenantsClient: finalizerClient{update: func(req *privatev1.TenantsUpdateRequest) (*privatev1.TenantsUpdateResponse, error) {
+				updateRequest = proto.Clone(req).(*privatev1.TenantsUpdateRequest)
+				return privatev1.TenantsUpdateResponse_builder{Object: req.GetObject()}.Build(), nil
+			}},
+		}
+
+		mockClient.EXPECT().
+			CreateTenant(gomock.Any(), gomock.Any()).
+			Return(nil, fmt.Errorf("IDP connection timeout"))
+
+		tenant := privatev1.Tenant_builder{
+			Id: "org-123",
+			Metadata: privatev1.Metadata_builder{
+				Name:       "test-org",
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
+				Tenant:     "tenant-1",
+			}.Build(),
+		}.Build()
+
+		err := reconciler.Run(ctx, tenant)
+		var retryable interface{ RequeueAfter() time.Duration }
+		Expect(errors.As(err, &retryable)).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(defaultRetryTimeout))
+		Expect(updateRequest).ToNot(BeNil())
+		Expect(updateRequest.GetObject().GetSpec().GetBreakGlassCredentialsSecret().GetId()).To(Equal("test-break-glass-secret"))
+		Expect(updateRequest.GetObject().GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_PENDING))
+		Expect(updateRequest.GetObject().GetStatus().GetMessage()).To(Equal("Tenant creation in IDP failed: failed to create tenant in IdP: IDP connection timeout"))
+		Expect(updateRequest.GetUpdateMask().GetPaths()).To(ContainElements(
+			"spec",
+			"status",
+		))
 	})
 
 	It("should create builtin tenants as disabled", func() {
@@ -748,8 +798,15 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 			idpManager: idpManager,
 			secretsClient: &mockSecretsClient{
 				getFunc: func(context.Context, *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
-					Fail("Secrets.Get should not be called when status credentials are present")
-					return nil, nil
+					return privatev1.SecretsGetResponse_builder{
+						Object: privatev1.Secret_builder{
+							Id: "secret-id",
+							Data: map[string][]byte{
+								"username": []byte("test-org-osac-break-glass"),
+								"password": []byte(testInlinePassword),
+							},
+						}.Build(),
+					}.Build(), nil
 				},
 			},
 		}
@@ -792,7 +849,7 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 		Expect(task.update(ctx)).To(Succeed())
 	})
 
-	It("should return an error when the Secret is missing data[\"password\"]", func() {
+	It("should return an error when the Secret is missing required data", func() {
 		reconciler = &function{
 			logger:     logger,
 			idpManager: idpManager,
@@ -823,19 +880,73 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 
 		task := &task{r: reconciler, tenant: tenant}
 		err := task.update(ctx)
-		Expect(err).To(HaveOccurred())
-		Expect(err.Error()).To(ContainSubstring(`missing data["password"]`))
+		retryable, ok := err.(interface{ RequeueAfter() time.Duration })
+		Expect(ok).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(defaultRetryTimeout))
+		Expect(tenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_PENDING))
 	})
 
-	It("should store the break-glass username as a Secret after IDP sync", func() {
+	It("should reject a Secret reference without an ID", func() {
+		reconciler = &function{
+			logger:     logger,
+			idpManager: idpManager,
+			secretsClient: &mockSecretsClient{
+				getFunc: func(context.Context, *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
+					Fail("Secrets.Get should not be called with an empty ID")
+					return nil, nil
+				},
+			},
+		}
+		tenant := privatev1.Tenant_builder{
+			Metadata: privatev1.Metadata_builder{Name: "test-org", Tenant: "tenant-1"}.Build(),
+			Spec: privatev1.TenantSpec_builder{
+				BreakGlassCredentialsSecret: privatev1.SecretLocalReference_builder{}.Build(),
+			}.Build(),
+		}.Build()
+		task := &task{r: reconciler, tenant: tenant}
+		_, err := task.getBreakGlassSecretPassword(context.Background())
+		Expect(err).To(MatchError("break_glass_credentials_secret must have an id"))
+	})
+
+	It("should reject a Secret username that does not match the tenant", func() {
+		reconciler = &function{
+			logger:     logger,
+			idpManager: idpManager,
+			secretsClient: &mockSecretsClient{
+				getFunc: func(context.Context, *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
+					return privatev1.SecretsGetResponse_builder{
+						Object: privatev1.Secret_builder{
+							Data: map[string][]byte{
+								"username": []byte("another-org-osac-break-glass"),
+								"password": []byte(testSecretPassword),
+							},
+						}.Build(),
+					}.Build(), nil
+				},
+			},
+		}
+		tenant := privatev1.Tenant_builder{
+			Metadata: privatev1.Metadata_builder{Name: "test-org", Tenant: "tenant-1"}.Build(),
+			Spec: privatev1.TenantSpec_builder{
+				BreakGlassCredentialsSecret: privatev1.SecretLocalReference_builder{Id: "secret-id"}.Build(),
+			}.Build(),
+		}.Build()
+		_, err := (&task{r: reconciler, tenant: tenant}).getBreakGlassSecretPassword(ctx)
+		Expect(err).To(MatchError(`break-glass credentials secret username must be "test-org-osac-break-glass"`))
+	})
+
+	It("should store generated credentials as a Secret after IDP sync", func() {
+		var generatedPassword string
 		secrets := &mockSecretsClient{
 			createFunc: func(_ context.Context, req *privatev1.SecretsCreateRequest) (*privatev1.SecretsCreateResponse, error) {
 				secret := req.GetObject()
+				generatedPassword = string(secret.GetData()["password"])
+				Expect(generatedPassword).To(HaveLen(password.Length))
 				Expect(secret.GetMetadata().GetName()).To(Equal("break-glass-credentials"))
 				Expect(secret.GetMetadata().GetTenant()).To(Equal("test-org"))
 				Expect(secret.GetType()).To(Equal(privatev1.SecretType_SECRET_TYPE_OPAQUE))
 				Expect(secret.GetData()).To(HaveKeyWithValue("username", []byte("test-org-osac-break-glass")))
-				Expect(secret.GetData()).ToNot(HaveKey("password"))
+				Expect(secret.GetData()).To(HaveKeyWithValue("password", []byte(generatedPassword)))
 				secret.SetId("created-secret-id")
 				return privatev1.SecretsCreateResponse_builder{Object: secret}.Build(), nil
 			},
@@ -853,12 +964,6 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
-			Status: privatev1.TenantStatus_builder{
-				BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{
-					Username: "test-org-osac-break-glass",
-					Password: testPreGeneratedPassword,
-				}.Build(),
-			}.Build(),
 		}.Build()
 
 		mockClient.EXPECT().
@@ -867,6 +972,8 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 		mockClient.EXPECT().
 			CreateUser(gomock.Any(), "test-org", gomock.Any()).
 			DoAndReturn(func(_ context.Context, _ string, user *idp.User) (*idp.User, error) {
+				Expect(user.Credentials).To(HaveLen(1))
+				Expect(user.Credentials[0].Value).To(Equal(generatedPassword))
 				user.ID = "user-123"
 				return user, nil
 			})
@@ -902,6 +1009,18 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 							}.Build(),
 						}.Build(),
 					},
+				}.Build(), nil
+			},
+			getFunc: func(_ context.Context, req *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
+				Expect(req.GetId()).To(Equal("existing-secret-id"))
+				return privatev1.SecretsGetResponse_builder{
+					Object: privatev1.Secret_builder{
+						Id: "existing-secret-id",
+						Data: map[string][]byte{
+							"username": []byte("test-org-osac-break-glass"),
+							"password": []byte(testPreGeneratedPassword),
+						},
+					}.Build(),
 				}.Build(), nil
 			},
 		}
@@ -949,7 +1068,7 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 		Expect(tenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
 	})
 
-	It("should keep idpTenantName when persist fails so CreateTenant is not retried", func() {
+	It("should not create the IDP tenant when Secret persistence fails", func() {
 		secrets := &mockSecretsClient{
 			createFunc: func(context.Context, *privatev1.SecretsCreateRequest) (*privatev1.SecretsCreateResponse, error) {
 				return nil, fmt.Errorf("secrets service unavailable")
@@ -976,25 +1095,148 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 			}.Build(),
 		}.Build()
 
-		mockClient.EXPECT().
-			CreateTenant(gomock.Any(), gomock.Any()).
-			Return(&idp.Tenant{Name: "test-org", Enabled: true}, nil)
-		mockClient.EXPECT().
-			CreateUser(gomock.Any(), "test-org", gomock.Any()).
-			DoAndReturn(func(_ context.Context, _ string, user *idp.User) (*idp.User, error) {
-				user.ID = "user-123"
-				return user, nil
-			})
-		mockClient.EXPECT().
-			AssignIdpManagerPermissions(gomock.Any(), "user-123").
-			Return(nil)
-
 		task := &task{r: reconciler, tenant: tenant}
-		Expect(task.update(ctx)).To(Succeed())
-		Expect(tenant.GetStatus().GetIdpTenantName()).To(Equal("test-org"))
-		Expect(tenant.GetStatus().GetBreakGlassUserId()).To(Equal("user-123"))
+		err := task.update(ctx)
+		retryable, ok := err.(interface{ RequeueAfter() time.Duration })
+		Expect(ok).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(defaultRetryTimeout))
+		Expect(tenant.GetStatus().GetIdpTenantName()).To(BeEmpty())
+		Expect(tenant.GetStatus().GetBreakGlassUserId()).To(BeEmpty())
 		Expect(tenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_PENDING))
 		Expect(tenant.GetSpec().GetBreakGlassCredentialsSecret()).To(BeNil())
+	})
+
+	It("should reuse the persisted password after an IDP failure", func() {
+		var persistedPassword string
+		var persistedTenant *privatev1.Tenant
+		secrets := &mockSecretsClient{
+			createFunc: func(_ context.Context, req *privatev1.SecretsCreateRequest) (*privatev1.SecretsCreateResponse, error) {
+				persistedPassword = string(req.GetObject().GetData()["password"])
+				secret := req.GetObject()
+				secret.SetId("break-glass-secret")
+				return privatev1.SecretsCreateResponse_builder{Object: secret}.Build(), nil
+			},
+			getFunc: func(_ context.Context, req *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
+				Expect(req.GetId()).To(Equal("break-glass-secret"))
+				return privatev1.SecretsGetResponse_builder{
+					Object: privatev1.Secret_builder{
+						Id: req.GetId(),
+						Data: map[string][]byte{
+							"username": []byte("test-org-osac-break-glass"),
+							"password": []byte(persistedPassword),
+						},
+					}.Build(),
+				}.Build(), nil
+			},
+		}
+		reconciler = &function{
+			logger:         logger,
+			idpManager:     idpManager,
+			secretsClient:  secrets,
+			maskCalculator: masks.NewCalculator().Build(),
+			tenantsClient: finalizerClient{update: func(req *privatev1.TenantsUpdateRequest) (*privatev1.TenantsUpdateResponse, error) {
+				if persistedTenant == nil {
+					persistedTenant = proto.Clone(req.GetObject()).(*privatev1.Tenant)
+				}
+				return privatev1.TenantsUpdateResponse_builder{Object: req.GetObject()}.Build(), nil
+			}},
+		}
+
+		tenant := privatev1.Tenant_builder{
+			Id: "org-123",
+			Metadata: privatev1.Metadata_builder{
+				Name:       "test-org",
+				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
+				Tenant:     "tenant-1",
+			}.Build(),
+		}.Build()
+
+		gomock.InOrder(
+			mockClient.EXPECT().CreateTenant(gomock.Any(), gomock.Any()).Return(nil, fmt.Errorf("IDP unavailable")),
+			mockClient.EXPECT().CreateTenant(gomock.Any(), gomock.Any()).Return(&idp.Tenant{Name: "test-org", Enabled: true}, nil),
+			mockClient.EXPECT().CreateUser(gomock.Any(), "test-org", gomock.Any()).DoAndReturn(
+				func(_ context.Context, _ string, user *idp.User) (*idp.User, error) {
+					Expect(user.Credentials).To(HaveLen(1))
+					Expect(user.Credentials[0].Value).To(Equal(persistedPassword))
+					user.ID = "user-123"
+					return user, nil
+				}),
+			mockClient.EXPECT().AssignIdpManagerPermissions(gomock.Any(), "user-123").Return(nil),
+		)
+
+		err := reconciler.Run(ctx, tenant)
+		var retryable interface{ RequeueAfter() time.Duration }
+		Expect(errors.As(err, &retryable)).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(defaultRetryTimeout))
+		Expect(persistedPassword).To(HaveLen(password.Length))
+		Expect(persistedTenant).ToNot(BeNil())
+		Expect(persistedTenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_PENDING))
+		Expect(persistedTenant.GetSpec().GetBreakGlassCredentialsSecret().GetId()).To(Equal("break-glass-secret"))
+
+		Expect(reconciler.Run(ctx, persistedTenant)).To(Succeed())
+		Expect(persistedTenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
+	})
+
+	It("should recreate a missing referenced Secret before IDP creation", func() {
+		var recreatedPassword string
+		secrets := &mockSecretsClient{
+			getFunc: func(context.Context, *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
+				return nil, grpcstatus.Error(grpccodes.NotFound, "secret not found")
+			},
+			createFunc: func(_ context.Context, req *privatev1.SecretsCreateRequest) (*privatev1.SecretsCreateResponse, error) {
+				secret := req.GetObject()
+				recreatedPassword = string(secret.GetData()["password"])
+				secret.SetId("replacement-secret")
+				Expect(recreatedPassword).To(HaveLen(password.Length))
+				return privatev1.SecretsCreateResponse_builder{Object: secret}.Build(), nil
+			},
+		}
+		reconciler = &function{logger: logger, idpManager: idpManager, secretsClient: secrets}
+		tenant := privatev1.Tenant_builder{
+			Metadata: privatev1.Metadata_builder{Name: "test-org", Tenant: "tenant-1"}.Build(),
+			Spec: privatev1.TenantSpec_builder{
+				BreakGlassCredentialsSecret: privatev1.SecretLocalReference_builder{Id: "deleted-secret"}.Build(),
+			}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{Password: testInlinePassword}.Build(),
+			}.Build(),
+		}.Build()
+		mockClient.EXPECT().CreateTenant(gomock.Any(), gomock.Any()).Return(&idp.Tenant{Name: "test-org"}, nil)
+		mockClient.EXPECT().CreateUser(gomock.Any(), "test-org", gomock.Any()).DoAndReturn(
+			func(_ context.Context, _ string, user *idp.User) (*idp.User, error) {
+				Expect(user.Credentials[0].Value).To(Equal(recreatedPassword))
+				return &idp.User{ID: "user-123"}, nil
+			})
+		mockClient.EXPECT().AssignIdpManagerPermissions(gomock.Any(), "user-123").Return(nil)
+		Expect((&task{r: reconciler, tenant: tenant}).update(ctx)).To(Succeed())
+		Expect(tenant.GetSpec().GetBreakGlassCredentialsSecret().GetId()).To(Equal("replacement-secret"))
+	})
+
+	It("should retain a missing Secret reference for a synced tenant", func() {
+		reconciler = &function{
+			logger:     logger,
+			idpManager: idpManager,
+			secretsClient: &mockSecretsClient{
+				getFunc: func(context.Context, *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
+					return nil, grpcstatus.Error(grpccodes.NotFound, "secret not found")
+				},
+			},
+		}
+		tenant := privatev1.Tenant_builder{
+			Metadata: privatev1.Metadata_builder{Name: "test-org", Tenant: "tenant-1"}.Build(),
+			Spec: privatev1.TenantSpec_builder{
+				BreakGlassCredentialsSecret: privatev1.SecretLocalReference_builder{Id: "deleted-secret"}.Build(),
+			}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				State:         privatev1.TenantState_TENANT_STATE_SYNCED,
+				IdpTenantName: "test-org",
+			}.Build(),
+		}.Build()
+		mockClient.EXPECT().GetTenant(gomock.Any(), "test-org").Return(&idp.Tenant{Name: "test-org"}, nil)
+		err := (&task{r: reconciler, tenant: tenant}).update(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+		Expect(tenant.GetSpec().GetBreakGlassCredentialsSecret().GetId()).To(Equal("deleted-secret"))
 	})
 })
 
@@ -1457,7 +1699,7 @@ var _ = Describe("Deletion", func() {
 		Expect(err.Error()).To(ContainSubstring("project(s) pending deletion"))
 		retryable, ok := err.(interface{ RequeueAfter() time.Duration })
 		Expect(ok).To(BeTrue(), "pending project deletion must trigger a tenant retry")
-		Expect(retryable.RequeueAfter()).To(Equal(time.Second))
+		Expect(retryable.RequeueAfter()).To(Equal(defaultRetryTimeout))
 		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.TenantLifecycle))
 	})
 
@@ -2527,25 +2769,17 @@ var _ = Describe("Vault namespace provisioning", func() {
 			}.Build(),
 		}.Build()
 
-		mockIDPClient.EXPECT().
-			CreateTenant(gomock.Any(), gomock.Any()).
-			Return(&idp.Tenant{Name: "vault-fail-org", Enabled: true}, nil)
-		mockIDPClient.EXPECT().
-			CreateUser(gomock.Any(), "vault-fail-org", gomock.Any()).
-			Return(&idp.User{ID: "user-fail"}, nil)
-		mockIDPClient.EXPECT().
-			AssignIdpManagerPermissions(gomock.Any(), "user-fail").
-			Return(nil)
-
 		mockVaultClient.EXPECT().
 			EnsureTenantNamespace(gomock.Any(), "vault-fail-org").
 			Return(fmt.Errorf("vault connection refused"))
 
 		t := &task{r: reconciler, tenant: tenant}
 		err := t.update(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		var retryable interface{ RequeueAfter() time.Duration }
+		Expect(errors.As(err, &retryable)).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(defaultRetryTimeout))
 		Expect(tenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_PENDING))
-		Expect(tenant.GetStatus().GetIdpTenantName()).To(Equal("vault-fail-org"))
+		Expect(tenant.GetStatus().GetIdpTenantName()).To(BeEmpty())
 		cond := findCondition(tenant)
 		Expect(cond).ToNot(BeNil())
 		Expect(cond.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_FALSE))

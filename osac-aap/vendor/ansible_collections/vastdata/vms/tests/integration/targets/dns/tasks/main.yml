@@ -1,0 +1,185 @@
+---
+# Integration tests for dns module
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials }}"
+
+# ====================
+# Cleanup - Remove existing DNS configurations if present
+# ====================
+
+- name: Get list of all DNS configurations
+  ansible.builtin.uri:
+    url: "https://{{ vast_vms }}/api/latest/dns/"
+    method: GET
+    user: "{{ vast_username }}"
+    password: "{{ vast_password }}"
+    validate_certs: false
+    force_basic_auth: true
+  register: dns_list
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - remove all existing DNS configurations before starting
+  vastdata.vms.dns:
+    vms: "{{ vms_auth }}"
+    id: "{{ item.id }}"
+    state: absent
+  loop: "{{ dns_list.json | default([]) }}"
+  when: can_run_tests | bool and dns_list.json is defined and dns_list.json | length > 0
+  failed_when: false
+
+# ====================
+# Create Tests
+# ====================
+
+- name: Test creating DNS configuration
+  vastdata.vms.dns:
+    vms: "{{ vms_auth }}"
+    name: "ansible-test-dns"
+    domain_suffix: "ansible-test.local"
+    enabled: true
+    port: 53
+    ttl: 300
+    vip: "192.168.1.100" # Required: at least one VIP type must be provided
+    vip_subnet_cidr: 24
+    vip_gateway: "192.168.1.1"
+    vip_vlan: 100
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify DNS creation succeeded
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.dns is defined
+      - result.dns.name == "ansible-test-dns"
+      - result.dns.domain_suffix == "ansible-test.local"
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests
+# ====================
+
+- name: Test idempotency - create same DNS again
+  vastdata.vms.dns:
+    vms: "{{ vms_auth }}"
+    name: "ansible-test-dns"
+    domain_suffix: "ansible-test.local"
+    enabled: true
+    port: 53
+    ttl: 300
+    vip: "192.168.1.100"
+    vip_subnet_cidr: 24
+    vip_gateway: "192.168.1.1"
+    vip_vlan: 100
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify idempotency (should not change)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Update Tests
+# ====================
+
+- name: Test updating DNS configuration
+  vastdata.vms.dns:
+    vms: "{{ vms_auth }}"
+    name: "ansible-test-dns"
+    domain_suffix: "ansible-test.local"
+    enabled: true
+    port: 53
+    ttl: 600 # Changed from 300
+    vip: "192.168.1.100"
+    vip_subnet_cidr: 24
+    vip_gateway: "192.168.1.1"
+    vip_vlan: 100
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify DNS was updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.dns is defined
+      - result.dns.ttl == 600
+  when: result is not skipped
+
+- name: Test update idempotency
+  vastdata.vms.dns:
+    vms: "{{ vms_auth }}"
+    name: "ansible-test-dns"
+    domain_suffix: "ansible-test.local"
+    enabled: true
+    port: 53
+    ttl: 600
+    vip: "192.168.1.100"
+    vip_subnet_cidr: 24
+    vip_gateway: "192.168.1.1"
+    vip_vlan: 100
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify update idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Delete Tests
+# ====================
+
+- name: Test deleting DNS configuration
+  vastdata.vms.dns:
+    vms: "{{ vms_auth }}"
+    name: "ansible-test-dns"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify DNS was deleted
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Test delete idempotency - delete again
+  vastdata.vms.dns:
+    vms: "{{ vms_auth }}"
+    name: "ansible-test-dns"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify delete idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Cleanup
+# ====================
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: "Skipping DNS integration tests - credentials not configured"
+  when: not (can_run_tests | bool)

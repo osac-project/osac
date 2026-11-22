@@ -1,0 +1,584 @@
+---
+# Integration tests for protectionpolicies module
+# These tests run against a real VAST system
+#
+# Configuration:
+# Set values in tests/integration/integration_config.yml
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials }}"
+
+# ====================
+# Cleanup - Remove existing test protection policy if present
+# ====================
+
+- name: Clean up - ensure test protection policy doesn't exist before starting
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}"
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Create Tests
+# ====================
+
+- name: Test creating a protection policy
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}"
+    prefix: "{{ test_protectionpolicy_prefix }}"
+    clone_type: "{{ test_protectionpolicy_clone_type }}"
+    frames: "{{ test_protectionpolicy_frames }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify protection policy was created
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.protectionpolicies is defined
+      - result.protectionpolicies.name == test_protectionpolicy_name
+      - result.protectionpolicies.prefix == test_protectionpolicy_prefix
+      - result.protectionpolicies.clone_type == test_protectionpolicy_clone_type
+      - result.diff is defined
+      - result.diff.before == {}
+      - result.diff.after is defined
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Create
+# ====================
+
+- name: Test idempotency - create same protection policy again
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify idempotency (should not change)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.protectionpolicies is defined
+  when: result is not skipped
+
+# ====================
+# Update Tests
+# ====================
+
+- name: Test updating protection policy - change prefix
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}"
+    prefix: "{{ test_protectionpolicy_updated_prefix }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify protection policy was updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.protectionpolicies is defined
+      - result.protectionpolicies.prefix == test_protectionpolicy_updated_prefix
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after is defined
+  when: result is not skipped
+
+- name: Test update idempotency
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}"
+    prefix: "{{ test_protectionpolicy_updated_prefix }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify update idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests - Update
+# ====================
+
+- name: Test check mode - update prefix
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}"
+    prefix: "ansible-check-prefix"
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported changes
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.protectionpolicies is defined
+  when: result is not skipped
+
+- name: Verify check mode didn't actually make changes
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}"
+    prefix: "{{ test_protectionpolicy_updated_prefix }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify prefix unchanged by check mode
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests - Create
+# ====================
+
+- name: Test check mode - create new protection policy
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-checkmode"
+    prefix: "checkmode-prefix"
+    clone_type: "LOCAL"
+    frames: "{{ test_protectionpolicy_frames }}"
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode create reported changes
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually create the protection policy
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-checkmode"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify protection policy was never created
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Diff Mode Tests
+# ====================
+
+- name: Update protection policy with diff mode
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}"
+    prefix: "ansible-diff-prefix"
+    state: present
+  diff: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify update diff output
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after is defined
+  when: result is not skipped
+
+# ====================
+# Indestructible Flag Tests
+# ====================
+
+- name: Test updating indestructible flag
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}"
+    indestructible: false
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify indestructible flag was set
+  ansible.builtin.assert:
+    that:
+      - result.protectionpolicies is defined
+      - result.protectionpolicies.indestructible == false
+  when: result is not skipped
+
+# ====================
+# Delete Tests
+# ====================
+
+- name: Test deleting protection policy
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify protection policy was deleted
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after == {}
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Delete
+# ====================
+
+- name: Test delete idempotency - delete again
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify delete idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Check Mode Delete Test
+# ====================
+
+- name: Create protection policy for check mode delete test
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-delcheck"
+    prefix: "delcheck-prefix"
+    clone_type: "LOCAL"
+    frames: "{{ test_protectionpolicy_frames }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Test check mode - delete
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-delcheck"
+    state: absent
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported deletion
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Verify check mode didn't actually delete
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-delcheck"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Check that protection policy still exists
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.protectionpolicies is defined
+  when: result is not skipped
+
+- name: Clean up check mode delete test protection policy
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-delcheck"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Error Handling Tests
+# ====================
+
+- name: Test error handling - invalid state
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}"
+    state: invalid
+  register: result
+  when: can_run_tests | bool
+  ignore_errors: true
+
+- name: Verify error was caught
+  ansible.builtin.assert:
+    that:
+      - result is failed
+  when: result is not skipped
+
+# ====================
+# ID-based Lookup Tests
+# ====================
+
+- name: Create protection policy for ID-based lookup test
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-idtest"
+    prefix: "idtest-prefix"
+    clone_type: "LOCAL"
+    frames: "{{ test_protectionpolicy_frames }}"
+    state: present
+  register: create_result
+  when: can_run_tests | bool
+
+- name: Test updating protection policy by ID
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    id: "{{ create_result.protectionpolicies.id }}"
+    prefix: "idtest-prefix-updated"
+    state: present
+  register: result
+  when: can_run_tests | bool and create_result is not skipped
+
+- name: Verify protection policy was updated by ID
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.protectionpolicies is defined
+      - result.protectionpolicies.prefix == "idtest-prefix-updated"
+  when: result is not skipped
+
+- name: Clean up ID-based lookup test protection policy
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-idtest"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================================================================
+# Frames Idempotency Tests
+# ====================================================================
+
+- name: Frames idempotency / cleanup - ensure unit-norm policy doesn't exist before starting
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-unit-norm"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Frames idempotency / create policy with normalize-prone frames (7D, 14D)
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-unit-norm"
+    prefix: "unit-norm-prefix"
+    clone_type: "LOCAL"
+    indestructible: false
+    frames: "{{ test_protectionpolicy_unit_norm_frames }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Frames idempotency / verify create reported changed
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.protectionpolicies is defined
+  when: result is not skipped
+
+- name: Frames idempotency / poll until server normalizes durations (7D -> 1W, 14D -> 2W)
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-unit-norm"
+    state: present
+  register: norm_check
+  until:
+    - norm_check.protectionpolicies is defined
+    - (norm_check.protectionpolicies.frames | default([]) | length) > 0
+    - norm_check.protectionpolicies.frames[0].every | default('') == '1W'
+    - norm_check.protectionpolicies.frames[0]['keep-local'] | default('') == '2W'
+  retries: 15
+  delay: 1
+  when: can_run_tests | bool
+
+- name: Frames idempotency / re-run identical playbook — must report not changed
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-unit-norm"
+    prefix: "unit-norm-prefix"
+    clone_type: "LOCAL"
+    indestructible: false
+    frames: "{{ test_protectionpolicy_unit_norm_frames }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Frames idempotency / verify no PATCH after server normalization
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+    fail_msg: >-
+      Frames idempotency regression: re-running an unchanged protection-policy
+      playbook issued a redundant PATCH after the server normalized duration
+      units (7D -> 1W, 14D -> 2W). The frames normalizer is not handling unit
+      equivalence correctly.
+  when: result is not skipped
+
+- name: Frames idempotency / cleanup - ensure default-keepremote policy doesn't exist
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-default-keepremote"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Frames idempotency / create policy with keep-remote omitted
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-default-keepremote"
+    prefix: "default-keepremote-prefix"
+    clone_type: "LOCAL"
+    frames: "{{ test_protectionpolicy_default_keepremote_frames }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Frames idempotency / verify create reported changed (defaults case)
+  ansible.builtin.assert:
+    that:
+      - result is changed
+  when: result is not skipped
+
+- name: Frames idempotency / poll until server injects default keep-remote (defaults case)
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-default-keepremote"
+    state: present
+  register: norm_check
+  until:
+    - norm_check.protectionpolicies is defined
+    - (norm_check.protectionpolicies.frames | default([]) | length) > 0
+    - "'keep-remote' in (norm_check.protectionpolicies.frames[0] | default({}))"
+  retries: 15
+  delay: 1
+  when: can_run_tests | bool
+
+- name: Frames idempotency / re-run with keep-remote still omitted — must be not changed
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-default-keepremote"
+    prefix: "default-keepremote-prefix"
+    clone_type: "LOCAL"
+    frames: "{{ test_protectionpolicy_default_keepremote_frames }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Frames idempotency / verify idempotency when keep-remote is server-defaulted
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+    fail_msg: >-
+      Frames idempotency regression: re-running with `keep-remote` omitted
+      issued a redundant PATCH because the server-added "keep-remote: 0s"
+      was treated as a real diff.
+  when: result is not skipped
+
+# ====================
+# Final Cleanup
+# ====================
+
+- name: Final cleanup - remove test protection policy if it exists
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove delcheck test protection policy if it exists
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-delcheck"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove idtest protection policy if it exists
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-idtest"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove bigcatalog test protection policy if it exists
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-bigcatalog"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove unit-norm idempotency policy if it exists
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-unit-norm"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove default-keepremote idempotency policy if it exists
+  vastdata.vms.protectionpolicies:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_protectionpolicy_name }}-default-keepremote"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Skip Message
+# ====================
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping protectionpolicies integration tests - credentials not configured.
+
+      To enable integration tests, set credentials in:
+        tests/integration/integration_config.yml
+
+      Example:
+        vast_vms: "vast-vms.example.com"
+        vast_username: "admin"
+        vast_password: "password"
+
+      Then run: ansible-test integration protectionpolicies -v
+  when: not (can_run_tests | bool)

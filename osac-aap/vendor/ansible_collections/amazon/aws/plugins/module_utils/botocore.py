@@ -64,9 +64,7 @@ except ImportError:
 if typing.TYPE_CHECKING:
     from typing_extensions import TypeAlias
 
-    from .retries import RetryingBotoClientWrapper
-
-    ClientType: TypeAlias = Union[botocore.client.BaseClient, RetryingBotoClientWrapper]
+    ClientType: TypeAlias = botocore.client.BaseClient
     ResourceType: TypeAlias = boto3.resources.base.ServiceResource
     BotoConn = Union[ClientType, ResourceType, Tuple[ClientType, ResourceType]]
     from .modules import AnsibleAWSModule
@@ -78,16 +76,18 @@ try:
 except ImportError:
     HAS_PACKAGING = False
 
+from ansible.module_utils._text import to_native
 from ansible.module_utils.ansible_release import __version__
 from ansible.module_utils.basic import missing_required_lib
-from ansible.module_utils.common.text.converters import to_native
+from ansible.module_utils.six import binary_type
+from ansible.module_utils.six import text_type
 
 from .common import get_collection_info
 from .exceptions import AnsibleBotocoreError
 from .retries import AWSRetry
 
-MINIMUM_BOTOCORE_VERSION = "1.38.23"
-MINIMUM_BOTO3_VERSION = "1.38.23"
+MINIMUM_BOTOCORE_VERSION = "1.31.0"
+MINIMUM_BOTO3_VERSION = "1.28.0"
 
 
 def _get_user_agent_string():
@@ -291,8 +291,8 @@ def _aws_connection_info(params: Dict) -> Tuple[Optional[str], Optional[str], Di
         boto_params["aws_config"] = botocore.config.Config(**config)
 
     for param, value in boto_params.items():
-        if isinstance(value, bytes):
-            boto_params[param] = str(value, "utf-8", "strict")
+        if isinstance(value, binary_type):
+            boto_params[param] = text_type(value, "utf-8", "strict")
 
     return region, endpoint_url, boto_params
 
@@ -378,39 +378,8 @@ def is_boto3_error_code(
         e = sys.exc_info()[1]
     if not isinstance(code, (list, tuple, set)):
         code = [code]
-    try:
-        if isinstance(e, ClientError) and e.response["Error"]["Code"] in code:
-            return ClientError
-    except KeyError:
-        pass
-    return type("NeverEverRaisedException", (Exception,), {})
-
-
-def is_boto3_error_httpstatus(
-    status: Union[List, Tuple, Set, int],
-    e: Optional[BaseException] = None,
-) -> Type[Exception]:
-    """Check if the botocore exception is raised by a specific HTTP status code.
-
-    Returns ClientError if the HTTP status code matches, a dummy exception if it does not have a status code or does not match
-
-    Example:
-    try:
-        ec2.describe_instances(InstanceIds=['potato'])
-    except is_boto3_error_httpstatus(501):
-        # handle the error for that status code case
-    except botocore.exceptions.ClientError as e:
-        # handle the generic error case for all other status codes
-    """
-    if e is None:
-        e = sys.exc_info()[1]
-    if not isinstance(status, (list, tuple, set)):
-        status = [status]
-    try:
-        if isinstance(e, ClientError) and e.response["ResponseMetadata"]["HTTPStatusCode"] in status:
-            return ClientError
-    except KeyError:
-        pass
+    if isinstance(e, ClientError) and e.response["Error"]["Code"] in code:
+        return ClientError
     return type("NeverEverRaisedException", (Exception,), {})
 
 
@@ -433,11 +402,8 @@ def is_boto3_error_message(
 
     if e is None:
         e = sys.exc_info()[1]
-    try:
-        if isinstance(e, ClientError) and msg in e.response["Error"]["Message"]:
-            return ClientError
-    except KeyError:
-        pass
+    if isinstance(e, ClientError) and msg in e.response["Error"]["Message"]:
+        return ClientError
     return type("NeverEverRaisedException", (Exception,), {})
 
 

@@ -5,8 +5,7 @@ the following repo-specific context.
 
 ## Context Recovery
 
-Read `.ai-bot/session-context.md` and `.ai-bot/implementation-notes.md`
-to understand the prior session's decisions and changes.
+Use existing task context when needed to understand earlier decisions.
 
 ## Feedback Handling Rules
 
@@ -20,21 +19,20 @@ to understand the prior session's decisions and changes.
 
 ## Post-Change Validation
 
-After addressing all review comments, run the full validation suite from the installer root:
+Select relevant existing checks from the installer root for the changed behavior:
 
 ```bash
 yamllint --strict .
-pre-commit run --all-files
+pre-commit run --files <changed-files>
 make helm-lint
 make helm-validate
 ```
 
 See `Makefile` for the underlying helm lint/template commands these targets execute.
 
-## Session Artifacts
+## Response
 
-Update `.ai-bot/session-context.md` with a summary of this feedback
-round (what changed, what was kept, why).
-
-Write `.ai-bot/comment-responses.json` with per-comment response
-summaries matching the comment IDs from the task file.
+Summarize changes, relevant checks and limitations concisely. Report unrelated
+failures without expanding the fix. Session reports are optional unless
+requested; preserve caller-required outputs at their specified paths and formats.
+Keep PR text and response JSON concise.

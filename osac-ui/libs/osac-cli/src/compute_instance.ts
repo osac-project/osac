@@ -36,6 +36,7 @@ interface InstanceTypeReference {
 
 interface ComputeInstance {
   spec?: {
+    catalog_item?: { id?: string };
     instance_type?: InstanceTypeReference;
   };
   status?: {
@@ -86,6 +87,51 @@ const getComputeInstance = async (tenantName: string, name: string): Promise<Com
   ]);
   expectOsacCommandSucceeded(result, `Get compute instance '${name}'`);
   return parseResource<ComputeInstance>(result.stdout, `compute instance '${name}'`);
+};
+
+/** Verify the VM references the catalog item from which it was launched. */
+export const expectComputeInstanceCatalogItem = async (
+  tenantName: string,
+  name: string,
+  catalogItemId: string,
+): Promise<void> => {
+  const computeInstance = await getComputeInstance(tenantName, name);
+  expect(computeInstance.spec?.catalog_item?.id).toBe(catalogItemId);
+};
+
+/** Confirm deletion through the API, independently of the VM list in the UI. */
+export const expectComputeInstanceDeleted = async (
+  tenantName: string,
+  name: string,
+  timeout = 180_000,
+): Promise<void> => {
+  await expect
+    .poll(
+      async () => {
+        const result = await runOsacCommand([
+          '--tenant',
+          tenantName,
+          'get',
+          'computeinstance',
+          '--filter',
+          `this.metadata.name == ${JSON.stringify(name)}`,
+          '--output',
+          'json',
+        ]);
+        expectOsacCommandSucceeded(result, `List compute instance '${name}'`);
+        const instances: unknown = JSON.parse(result.stdout);
+        if (!Array.isArray(instances)) {
+          throw new Error('The CLI returned an unexpected compute instance list.');
+        }
+        return instances.length;
+      },
+      {
+        message: `Wait for compute instance '${name}' to be deleted`,
+        timeout,
+        intervals: [1_000, 2_000, 5_000],
+      },
+    )
+    .toBe(0);
 };
 
 /** Return the time the controller last processed a restart, if any. */

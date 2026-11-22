@@ -1,0 +1,35 @@
+---
+# Default variables for ldaps integration tests
+#
+# LDAP configuration is loaded dynamically from sites.yaml based on detected region.
+# See: docs/SITE_CONFIG.md and docs/REGION_DETECTION.md
+#
+# To run tests:
+#   1. Auto (using sites.yaml): VAST_SITE=kfs ./test.sh integration ldaps
+#   2. Manual: Set environment variables and run ./test.sh integration ldaps
+#   3. Legacy: Override these in tests/integration/integration_config.yml
+
+# VAST system connection details
+# Leave empty to skip tests gracefully
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+# Test LDAP configuration
+# These are loaded from sites.yaml via environment variables
+# If not set, tests will be skipped
+test_ldap_domain: ""
+test_ldap_searchbase: ""
+test_ldap_binddn: ""
+test_ldap_bindpw: ""
+test_ldap_urls: []
+test_ldap_port: 389
+test_ldap_method: "simple"
+
+# Reusable connection dict — reference as ``vms: "{{ vms_auth }}"`` in tasks
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true

@@ -4,9 +4,8 @@
 evidence. Suite commands, environment gates and per-area requirements live in
 the [touched-area map](../../tests/e2e/AGENTS.md#touched-area-map); fixtures
 and skip conditions live in `tests/e2e/conftest.py` and the suite directories.
-Read both before extending or claiming coverage. Unit tests under `tests/unit/`
-validate helpers and selectors; pytest collection proves import/selection
-readiness only.
+Read both before extending or claiming coverage. Pytest collection proves
+import/selection readiness only, not deployed helper or lifecycle correctness.
 
 ## Suite boundaries
 
@@ -22,8 +21,26 @@ readiness only.
 | Networking billing (`networking/vmaas` billing) | ExternalIP/reattach/NATGateway billing through deployed metering and the echo adapter | Ordered cases inside the connectivity module, before the final cases: under `-x` an earlier failure hides billing and a billing failure hides them. Needs provider networking, a routed pool and the adapter; the module also needs the SSH helper, and cases that skip for a missing adapter carry no signal |
 | Netris BMaaS (`networking/bmaas`) | BMI networking on the deployed fabric | Needs BMH SSH and the BMI network interface. PR job omits slow cross-tenant cases; Netris `full` excludes the directory (`cudn_evpn` rejects its ICMP rules) |
 | Stretched (`networking/stretched`) | BMI/VM connectivity on one Subnet | Needs the stretched deploy suite, BMaaS SSH, VM template/helper, EVPN underlay; not in standard runs |
+| Provider networking disabled (`vmaas/sanity`, plus assertions in the VM, CaaS, and BMaaS journeys; [QE] [OSAC-6000](https://redhat.atlassian.net/browse/OSAC-6000)) | Deployed Fulfillment, operators, and hub CRs on a deployment whose stored mode is disabled: tenant defaults, networking resources, ExternalIP rejection, and the workload journeys | Skips when the installed mode is enabled; `status.jobs` is the absence evidence, so no AAP or provider work is claimed. No real hardware or power claim, and BMF condition reasons stay at the DEV tiers |
 
 - Networking references ([OSAC-6744](https://github.com/osac-project/osac/pull/2323)) distinguish disabled-mode rejection without storage/allocation/accounting changes from enabled-provider allocation and traffic. The disabled fixture requires private pool management and Kubernetes observation; enabled ID/name selectors run serially in the full ordered VMaaS module, retaining the final allocation for detach, automatic allocation, billing and teardown. Registration/default rendering and disabled component tests do not establish live Netris allocation, connectivity or release; missing deployed evidence remains unresolved.
+
+## Provider networking mode gate
+
+The provider networking mode is installation state, not a profile name, so the
+suites read it from Fulfillment's stored `InstallationSettings` through the
+private API (`networking_provisioning_enabled` session fixture) instead of
+guessing from the deployment. `provider_networking_disabled` skips tests that
+only exist for the disabled contract; assertions inside shared journeys are
+gated on the same value. The read uses `grpcurl -emit-defaults` because proto3
+omits a false boolean, which is exactly the disabled case, and it fails setup
+rather than skipping when the response is missing, malformed, or unreadable.
+Provider-work absence is limited to what the operator records: the tests
+require an empty `status.jobs` (and no `NetworkAttachment`), which shows that
+the operator launched no task. They do not read AAP job state, so they do not
+independently establish that no provider work occurred. The disabled reference
+fixture (`tests/e2e/references/test_networking_references.py`) uses the same
+two fixtures instead of reading the setting itself.
 
 ## Coverage gaps
 
@@ -31,10 +48,10 @@ The disabled reference fixture owns its shared pool; private API auth must allow
 pool create/read/delete and child ExternalIP List/delete, with Kubernetes
 observation for readiness and natural cleanup. No pre-existing pool is needed.
 Read failures remain failures; tenant-only credentials are insufficient.
-Its admin identity must also read private `InstallationSettings/Get`: the guard
-reads the stored mode with explicit JSON defaults before pool creation, skips
-only boolean enabled mode, and fails setup for missing/nonboolean mode or RPC
-errors. Disabled mode retains the full rejection contract; this guard does not
+Its admin identity must also read private `InstallationSettings/Get` through
+the shared `networking_provisioning_enabled` fixture, which reads the stored
+mode with `grpcurl -emit-defaults`, skips only boolean enabled mode, and fails
+setup for missing/nonboolean mode or RPC errors. Disabled mode retains the full rejection contract; this guard does not
 apply to enabled-provider suites. Hermetic diagnostic tests use synthetic
 subprocess failures, not live provider execution or evidence of real exposure.
 
@@ -64,9 +81,8 @@ labels or suite/marker overrides. Periodics select all of `caas` (sanity +
 regression) plus reference tests marked `requires_caas` or `reference_common`.
 Manual dispatches default to sanity and keep overrides. The reusable runner
 never adds references to sanity; an empty requested tier fails rather than
-falling back. [DEV] selection checks under `tests/unit/` evaluate real caller
-YAML (companion checks skip without `OSAC_TEST_INFRA_DIR`) and prove selection
-only, not [QE] deployed CaaS success.
+falling back. Inspect the caller YAML when changing selection; static inspection
+does not prove deployed CaaS success.
 
 ## Focused CaaS natural-teardown boundary
 
@@ -85,3 +101,35 @@ OSAC/operator/installer/AAP revisions and image digests; AAP must resolve the
 tested revision, not mutable `main`/`latest`. Guest LVMS disk prerequisites
 are an unresolved infrastructure follow-up (no revision, owner or Jira URL).
 Do not wipe/reuse the guest OS disk.
+
+## Fulfillment trust enablement
+
+Use the [release trust prerequisites](osac-installer.md#osac-5343-deployed-enablement-coverage)
+and enable `OSAC_FULFILLMENT_TRUST_E2E=true` only in that trust-enabled
+environment. Trust assertions extend CaaS, CSI storage, VMaaS and BMaaS journeys.
+CaaS/CSI checks pass the HostedControlPlane kubeconfig Secret to `kubectl` via
+stdin, never disk. It grants tenant-admin access to compare tenant ConfigMap
+and CSI Deployment hashes with the management bundle; per-ClusterOrder
+observer credentials are not required.
+
+- Run `tests/e2e/enablement/test_installer_trust.py` against a full OSAC Helm
+  release, not an isolated component.
+- From the repository root, run `osac-installer/scripts/test-ui-gateway.sh`
+  against deployed dev-full. Set `OSAC_UI_URL` for a non-default listener host/port.
+- Run `tests/e2e/enablement/test_ca_rotation_gate.py` with
+  `OSAC_TRUST_ROTATION_PHASE=overlap` and candidate
+  `OSAC_TRUST_ROTATION_EXPECTED_HASH` before switching the leaf certificate.
+  Run `OSAC_TRUST_ROTATION_PHASE=post-switch` before removing the retired root,
+  then `OSAC_TRUST_ROTATION_PHASE=final` after removal. Each run requires deployed
+  operator/metering metrics and these leaf-check inputs:
+  - `OSAC_TRUST_OLD_ROOT_PEM_PATH`: path to the old root PEM file.
+  - `OSAC_TRUST_NEW_ROOT_PEM_PATH`: path to the new root PEM file.
+  - `OSAC_TRUST_LEAF_ENDPOINT`: leaf listener as `host:port`, without a URL scheme.
+
+Operator metrics collection runs `kubectl create token` before port-forwarding.
+The caller needs `create` permission on `serviceaccounts/token` for the
+operator deployment's service account in its namespace, in addition to the
+resource-read and port-forward permissions. This TokenRequest is distinct from
+certificate rotation: the gate never mutates CA or leaf certificates. An
+operator or administrator performs rotation between passing gates, following
+the linked release prerequisites.

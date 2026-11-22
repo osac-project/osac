@@ -21,6 +21,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -30,7 +31,14 @@ var _ = Describe("Role binding role scopes", func() {
 	var roles *PrivateRolesServer
 	var roleID func(string) string
 	BeforeEach(func() {
-		var err error
+		users, err := dao.NewGenericDAO[*privatev1.User]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+		for id, tenant := range map[string]string{"human-user": testTenant, "csi-user": auth.SystemTenant} {
+			_, err = users.Create().SetObject(privatev1.User_builder{
+				Id: id, Metadata: privatev1.Metadata_builder{Name: id, Tenant: tenant}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+		}
 		permissionCatalog, err := catalog.Build(protoregistry.GlobalFiles)
 		Expect(err).ToNot(HaveOccurred())
 		public, err = NewRoleBindingsServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()

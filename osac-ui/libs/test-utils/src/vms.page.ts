@@ -1,4 +1,4 @@
-import { type Locator, type Page, expect } from '@playwright/test';
+import { type Locator, type Page, errors, expect } from '@playwright/test';
 
 import { confirmDetailDeletion, getTableRowByCellText } from './general/row_assertions';
 import { openMainPageOption } from './main.page';
@@ -367,8 +367,13 @@ export const deleteVmIfPresent = async (page: Page, name: string): Promise<boole
     await deleteVm(page, name);
   } else {
     await openVmsPage(page);
+    // Clear URL filters and override any persisted project selection before discovery.
+    await page.goto('/vms?project=', { waitUntil: 'domcontentloaded' });
+    await expect(page).toHaveURL((url) => url.pathname === '/vms');
+    await expect(page.getByRole(...VmsMainPage.pageTitle)).toBeVisible();
     const names = await listVmNames(page);
     if (!names.includes(name)) {
+      await waitForVmToBeDeleted(page, name);
       return false;
     }
     await openVmDetailsPage(page, name);
@@ -384,22 +389,96 @@ export const waitForVmToBeDeleted = async (
   name: string,
   timeout = 180_000,
 ): Promise<void> => {
+  let reportedRedirect = false;
   await expect
     .poll(
       async () => {
-        await page.reload();
-        await expect(page).toHaveURL((url) => url.pathname === '/vms');
-        await expect(page.getByRole(...VmsMainPage.pageTitle)).toBeVisible();
-
-        await selectVmListView(page);
-        const table = await waitForVmListReady(page);
-        if ((await table.count()) === 0) {
-          return 0;
+        // Explicitly clear the persisted project filter as well as URL filters.
+        try {
+          await page.goto('/vms?project=', { waitUntil: 'domcontentloaded' });
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            (error.message.includes('net::ERR_ABORTED') ||
+              /Navigation to .* is interrupted by another navigation/.test(error.message))
+          ) {
+            return 'VM list navigation interrupted';
+          }
+          throw error;
         }
-        await expect(table).toBeVisible();
-        return await getVmRow(page, name).count();
+        try {
+          await page
+            .getByRole(...VmsMainPage.pageTitle)
+            .waitFor({ state: 'visible', timeout: 5_000 });
+        } catch (error) {
+          if (!(error instanceof errors.TimeoutError)) {
+            throw error;
+          }
+          const path = new URL(page.url()).pathname;
+          if (path !== '/vms' && !reportedRedirect) {
+            process.stderr.write('[vm-delete] VM list navigation was interrupted; retrying.\n');
+            reportedRedirect = true;
+          }
+          return 'VM list not ready';
+        }
+        if (new URL(page.url()).pathname !== '/vms') {
+          return 'VM list navigation interrupted';
+        }
+        if (await page.getByRole(...VmsMainPage.errorState).isVisible()) {
+          throw new Error('The tenant VM list reported an API error while loading.');
+        }
+        const listView = page.locator(...VmsMainPage.listView);
+        if (!(await listView.isVisible())) {
+          return 'VM list controls not ready';
+        }
+        if ((await listView.getAttribute('aria-pressed')) !== 'true') {
+          await listView.click();
+        }
+        if ((await listView.getAttribute('aria-pressed')) !== 'true') {
+          return 'VM list not selected';
+        }
+
+        const table = page.getByRole(...VmsMainPage.vmsTable);
+        const emptyState = page.getByText(...VmsMainPage.emptyState);
+        const filteredState = page.getByText(...VmsMainPage.noMatchingState);
+        const errorState = page.getByRole(...VmsMainPage.errorState);
+        try {
+          await table
+            .or(emptyState)
+            .or(filteredState)
+            .or(errorState)
+            .filter({ visible: true })
+            .first()
+            .waitFor({ state: 'visible', timeout: Math.min(timeout, 15_000) });
+        } catch (error) {
+          if (!(error instanceof errors.TimeoutError)) {
+            throw error;
+          }
+          return 'VM list still loading';
+        }
+        if (await errorState.isVisible()) {
+          throw new Error('The tenant VM list reported an API error while loading.');
+        }
+        if (await filteredState.isVisible()) {
+          return 'VM list shows no matches; retrying';
+        }
+        if (await table.isVisible()) {
+          const rowCount = await getVmRow(page, name).count();
+          if (!(await table.isVisible())) {
+            return 'VM list still loading';
+          }
+          return rowCount === 0 ? 'absent' : 'VM still present';
+        }
+        if (await emptyState.isVisible()) {
+          return 'absent';
+        }
+        return 'VM list still loading';
       },
-      { timeout, intervals: [1_000, 2_000, 5_000] },
+      {
+        message: `Wait for VM '${name}' to disappear from the tenant VM list`,
+        timeout,
+        intervals: [1_000, 2_000, 5_000],
+      },
     )
-    .toBe(0);
+    .toBe('absent');
 };

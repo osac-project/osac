@@ -1,0 +1,42 @@
+---
+# Default variables for protectionpolicies integration tests
+# Override these in tests/integration/integration_config.yml
+
+# VAST system connection details
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+# Protection policy test configuration
+test_protectionpolicy_name: "ansible-test-protection-policy"
+test_protectionpolicy_prefix: "ansible-test-snapshot"
+test_protectionpolicy_clone_type: "LOCAL"
+test_protectionpolicy_frames:
+  - every: "1d"
+    keep-local: "1d"
+    start-at: "2026-04-14 00:00:00"
+test_protectionpolicy_updated_prefix: "ansible-test-snapshot-updated"
+
+
+test_protectionpolicy_unit_norm_frames:
+  - every: "7D"
+    keep-local: "14D"
+    keep-remote: "0s"
+    start-at: "2026-04-14 09:00:00"
+  - every: "7D"
+    keep-local: "8D"
+    keep-remote: "0s"
+    start-at: "2026-04-14 09:00:00"
+
+test_protectionpolicy_default_keepremote_frames:
+  - every: "7D"
+    keep-local: "14D"
+    start-at: "2026-04-14 09:00:00"
+
+# Reusable connection dict — reference as ``vms: "{{ vms_auth }}"`` in tasks
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true

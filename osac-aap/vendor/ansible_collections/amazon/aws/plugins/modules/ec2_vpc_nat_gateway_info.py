@@ -129,7 +129,7 @@ result:
                 description: The Elastic IP address associated with the NAT gateway.
                 returned: always
                 type: str
-                sample: 203.0.113.9
+                sample: 34.204.123.52
             status:
                 description: The address status.
                 returned: always

@@ -91,6 +91,13 @@ type Progress struct {
 	HeartbeatOffset      int64
 	LastRoundTime        *time.Time
 	LastRoundEventOffset int64
+	// EventTopic is the Kafka topic EventOffset and LastRoundEventOffset were taken
+	// from. Empty means those offsets were stored before the topic was recorded.
+	EventTopic string
+	// TopicGeneration counts the event topics those offsets have belonged to,
+	// starting at zero. It advances when the topic changes. History facts written
+	// afterward carry the new value, so they sort ahead of the previous topic.
+	TopicGeneration int64
 }
 
 // LedgerKey identifies one meter: a resource, a meter definition and component, and one set of
@@ -215,6 +222,41 @@ func TakeTenantLock(ctx context.Context, q Querier, kind LockKind, tenant string
 	return nil
 }
 
+// NoteEventTopic records the event topic the tenant's event offsets belong to. It creates
+// the progress row when the tenant is new. An empty stored topic is an offset written
+// before topics were recorded, and those offsets belong to legacyTopic, the default event
+// topic. They stay when topic is that legacy topic, and they are cleared when it is not,
+// so an upgrade onto a new prefix reads that topic from the beginning. A stored topic that
+// differs from topic is a later prefix change and clears the offsets the same way. Either
+// change advances topic_generation, so facts the fold writes afterward sort ahead of the
+// previous topic. The heartbeat offset is a different topic and stays.
+func (s *Store) NoteEventTopic(ctx context.Context, tenant, topic, legacyTopic string) error {
+	_, err := s.pool.Exec(
+		ctx,
+		`INSERT INTO progress (tenant, event_topic) VALUES ($1, $2)
+		 ON CONFLICT (tenant) DO UPDATE SET
+		   event_offset = CASE
+		     WHEN COALESCE(NULLIF(progress.event_topic, ''), $3) <> EXCLUDED.event_topic THEN 0
+		     ELSE progress.event_offset
+		   END,
+		   last_round_event_offset = CASE
+		     WHEN COALESCE(NULLIF(progress.event_topic, ''), $3) <> EXCLUDED.event_topic THEN 0
+		     ELSE progress.last_round_event_offset
+		   END,
+		   topic_generation = CASE
+		     WHEN COALESCE(NULLIF(progress.event_topic, ''), $3) <> EXCLUDED.event_topic
+		       THEN progress.topic_generation + 1
+		     ELSE progress.topic_generation
+		   END,
+		   event_topic = EXCLUDED.event_topic`,
+		tenant, topic, legacyTopic,
+	)
+	if err != nil {
+		return fmt.Errorf("recording the event topic: %w", err)
+	}
+	return nil
+}
+
 // EnsureProgress creates the tenant's progress row if it does not exist yet. A new tenant starts
 // at offset 0 of both its topics.
 func (s *Store) EnsureProgress(ctx context.Context, tenant string) error {
@@ -235,10 +277,14 @@ func GetProgress(ctx context.Context, q Querier, tenant string) (Progress, error
 	var lastRound *time.Time
 	err := q.QueryRow(
 		ctx,
-		`SELECT tenant, event_offset, heartbeat_offset, last_round_time, last_round_event_offset
+		`SELECT tenant, event_offset, heartbeat_offset, last_round_time, last_round_event_offset,
+		        event_topic, topic_generation
 		 FROM progress WHERE tenant = $1`,
 		tenant,
-	).Scan(&p.Tenant, &p.EventOffset, &p.HeartbeatOffset, &lastRound, &p.LastRoundEventOffset)
+	).Scan(
+		&p.Tenant, &p.EventOffset, &p.HeartbeatOffset, &lastRound, &p.LastRoundEventOffset,
+		&p.EventTopic, &p.TopicGeneration,
+	)
 	if err != nil {
 		return Progress{}, fmt.Errorf("reading progress of tenant %s: %w", tenant, err)
 	}
@@ -253,46 +299,133 @@ func (s *Store) GetTenantProgress(ctx context.Context, tenant string) (Progress,
 	return GetProgress(ctx, s.pool, tenant)
 }
 
-// InsertFacts writes facts that the tenant's event carries, and moves the tenant's event offset
-// to the given next offset, in the same transaction. The offset only moves forward. Facts are
-// consumed in log order, so a fact that exists already is updated to the arriving value: two
-// changes of one field within the same second collapse to the value the log carries last, and
-// replaying an event writes the value it already wrote.
-func InsertFacts(
-	ctx context.Context, q Querier, tenant string, facts []Fact, nextOffset int64,
-) error {
-	batch := &pgx.Batch{}
-	for _, fact := range facts {
-		batch.Queue(
-			`INSERT INTO history
-			     (tenant, resource_type, resource_id, field, since, value, event_offset)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7)
-			 ON CONFLICT (tenant, resource_type, resource_id, field, since)
-			 DO UPDATE SET value = EXCLUDED.value, event_offset = EXCLUDED.event_offset`,
-			tenant, fact.ResourceType, fact.ResourceID, fact.Field, fact.Since, fact.Value,
-			nextOffset,
-		)
+// collapseFacts keeps the last fact for each history key. One INSERT cannot update the same
+// conflict row twice, and a repeated key in one event is the later value of that field at that
+// time. since is compared as an instant, so equal timestamps from different locations collapse.
+func collapseFacts(facts []Fact) []Fact {
+	if len(facts) < 2 {
+		return facts
 	}
-	batch.Queue(
-		`UPDATE progress SET event_offset = GREATEST(event_offset, $2) WHERE tenant = $1`,
-		tenant, nextOffset,
-	)
-	if err := q.SendBatch(ctx, batch).Close(); err != nil {
+	type key struct {
+		resourceType string
+		resourceID   string
+		field        string
+		since        int64
+	}
+	index := make(map[key]int, len(facts))
+	collapsed := make([]Fact, 0, len(facts))
+	for _, fact := range facts {
+		k := key{fact.ResourceType, fact.ResourceID, fact.Field, fact.Since.UTC().UnixNano()}
+		if at, ok := index[k]; ok {
+			collapsed[at] = fact
+			continue
+		}
+		index[k] = len(collapsed)
+		collapsed = append(collapsed, fact)
+	}
+	return collapsed
+}
+
+// InsertFacts writes facts that the tenant's event carries, and moves the tenant's event offset
+// to the given next offset, in the same statement. The offset only moves forward. topic is the
+// topic the writer read. A stored topic that is already set and differs rejects the write, so
+// history and the offset stay as they were. An empty stored topic still accepts the write: that
+// row has not recorded a topic yet. Each fact records the progress row's topic generation, so a
+// write after a prefix change sorts ahead of the previous topic. Facts are consumed in log order,
+// so a fact that exists already is updated to the arriving value: two changes of one field within
+// the same second collapse to the value the log carries last, including when both are in this
+// call, and replaying an event writes the value it already wrote.
+func InsertFacts(
+	ctx context.Context, q Querier, tenant string, facts []Fact, nextOffset int64, topic string,
+) error {
+	if len(facts) == 0 {
+		return AdvanceEventOffset(ctx, q, tenant, nextOffset, topic)
+	}
+	facts = collapseFacts(facts)
+	resourceTypes := make([]string, len(facts))
+	resourceIDs := make([]string, len(facts))
+	fields := make([]string, len(facts))
+	sinces := make([]time.Time, len(facts))
+	values := make([]string, len(facts))
+	for i, fact := range facts {
+		resourceTypes[i] = fact.ResourceType
+		resourceIDs[i] = fact.ResourceID
+		fields[i] = fact.Field
+		sinces[i] = fact.Since
+		values[i] = fact.Value
+	}
+	var present, accepted bool
+	err := q.QueryRow(
+		ctx,
+		`WITH row AS (
+		     SELECT event_topic, topic_generation
+		     FROM progress
+		     WHERE tenant = $1
+		 ),
+		 guarded AS (
+		     SELECT topic_generation
+		     FROM row
+		     WHERE event_topic = '' OR event_topic = $8
+		 ),
+		 written AS (
+		     INSERT INTO history
+		         (tenant, resource_type, resource_id, field, since, value, event_offset,
+		          topic_generation)
+		     SELECT $1, fact.resource_type, fact.resource_id, fact.field, fact.since,
+		            fact.value, $7, guarded.topic_generation
+		     FROM unnest($2::text[], $3::text[], $4::text[], $5::timestamptz[], $6::text[])
+		         AS fact(resource_type, resource_id, field, since, value)
+		     CROSS JOIN guarded
+		     ON CONFLICT (tenant, resource_type, resource_id, field, since)
+		     DO UPDATE SET value = EXCLUDED.value, event_offset = EXCLUDED.event_offset,
+		                   topic_generation = EXCLUDED.topic_generation
+		     RETURNING 1
+		 ),
+		 advanced AS (
+		     UPDATE progress
+		     SET event_offset = GREATEST(event_offset, $7)
+		     WHERE tenant = $1 AND EXISTS (SELECT 1 FROM guarded)
+		     RETURNING 1
+		 )
+		 SELECT EXISTS (SELECT 1 FROM row), EXISTS (SELECT 1 FROM guarded)`,
+		tenant, resourceTypes, resourceIDs, fields, sinces, values, nextOffset, topic,
+	).Scan(&present, &accepted)
+	if err != nil {
 		return fmt.Errorf("writing %d facts of tenant %s: %w", len(facts), tenant, err)
+	}
+	if !present {
+		return fmt.Errorf("writing facts: progress row is missing")
+	}
+	if !accepted {
+		return fmt.Errorf("writing facts: the stored event topic changed")
 	}
 	return nil
 }
 
 // AdvanceEventOffset moves the tenant's event offset forward. Events of types metering does
-// not track only advance the offset.
-func AdvanceEventOffset(ctx context.Context, q Querier, tenant string, offset int64) error {
-	_, err := q.Exec(
+// not track only advance the offset. topic is the topic the writer read. A stored topic that
+// is already set and differs leaves the offset unchanged.
+func AdvanceEventOffset(ctx context.Context, q Querier, tenant string, offset int64, topic string) error {
+	var present, accepted bool
+	err := q.QueryRow(
 		ctx,
-		`UPDATE progress SET event_offset = GREATEST(event_offset, $2) WHERE tenant = $1`,
-		tenant, offset,
-	)
+		`WITH row AS (
+		     SELECT event_topic FROM progress WHERE tenant = $1
+		 ),
+		 advanced AS (
+		     UPDATE progress
+		     SET event_offset = GREATEST(event_offset, $2)
+		     WHERE tenant = $1 AND (event_topic = '' OR event_topic = $3)
+		     RETURNING 1
+		 )
+		 SELECT EXISTS (SELECT 1 FROM row), EXISTS (SELECT 1 FROM advanced)`,
+		tenant, offset, topic,
+	).Scan(&present, &accepted)
 	if err != nil {
 		return fmt.Errorf("advancing event offset of tenant %s: %w", tenant, err)
+	}
+	if present && !accepted {
+		return fmt.Errorf("advancing event offset: the stored event topic changed")
 	}
 	return nil
 }
@@ -311,18 +444,32 @@ func AdvanceHeartbeatOffset(ctx context.Context, q Querier, tenant string, offse
 }
 
 // SetLastRound records the time of the tenant's last round and the event offset it folded.
+// topic is the event topic that round read. A stored topic that is already set and differs
+// leaves the round cursor unchanged, so an earlier topic cannot move it forward again.
 func SetLastRound(
-	ctx context.Context, q Querier, tenant string, roundTime time.Time, eventOffset int64,
+	ctx context.Context, q Querier, tenant string, roundTime time.Time, eventOffset int64, topic string,
 ) error {
-	_, err := q.Exec(
+	var present, accepted bool
+	err := q.QueryRow(
 		ctx,
-		`UPDATE progress
-		 SET last_round_time = $2, last_round_event_offset = GREATEST(last_round_event_offset, $3)
-		 WHERE tenant = $1`,
-		tenant, roundTime, eventOffset,
-	)
+		`WITH row AS (
+		     SELECT event_topic FROM progress WHERE tenant = $1
+		 ),
+		 advanced AS (
+		     UPDATE progress
+		     SET last_round_time = $2,
+		         last_round_event_offset = GREATEST(last_round_event_offset, $3)
+		     WHERE tenant = $1 AND (event_topic = '' OR event_topic = $4)
+		     RETURNING 1
+		 )
+		 SELECT EXISTS (SELECT 1 FROM row), EXISTS (SELECT 1 FROM advanced)`,
+		tenant, roundTime, eventOffset, topic,
+	).Scan(&present, &accepted)
 	if err != nil {
 		return fmt.Errorf("recording last round of tenant %s: %w", tenant, err)
+	}
+	if present && !accepted {
+		return fmt.Errorf("recording last round: the stored event topic changed")
 	}
 	return nil
 }
@@ -346,8 +493,10 @@ func (s *Store) LastRoundTime(ctx context.Context) (time.Time, error) {
 }
 
 // LatestFactValue returns the history value last written in log order for this field.
-// ok is false when no row exists. event_offset is Kafka order; since is the event
-// timestamp and can run backwards relative to the log.
+// ok is false when no row exists. topic_generation orders successive event topics, so
+// a fact from the current topic sorts ahead of the previous one. event_offset is Kafka
+// order within that topic; since is the event timestamp and can run backwards relative
+// to the log.
 func LatestFactValue(
 	ctx context.Context, q Querier, tenant, resourceType, resourceID, field string,
 ) (value string, ok bool, err error) {
@@ -356,7 +505,7 @@ func LatestFactValue(
 		`SELECT value
 		 FROM history
 		 WHERE tenant = $1 AND resource_type = $2 AND resource_id = $3 AND field = $4
-		 ORDER BY event_offset DESC, since DESC
+		 ORDER BY topic_generation DESC, event_offset DESC, since DESC
 		 LIMIT 1`,
 		tenant, resourceType, resourceID, field,
 	).Scan(&value)
@@ -447,20 +596,23 @@ func resourcesWhere(
 }
 
 // ResourcesWithNewFacts returns the tenant's resources with a fact written at or after the
-// given event offset or dated at or after the given time. Only those resources can have
-// changed usage since the previous round. Both bounds are inclusive: a round bills the
+// given event offset in the given topic generation, or dated at or after the given time.
+// Offsets from an earlier generation do not count: after a prefix change they are larger
+// than the new topic's cursor and would otherwise select every old resource on every round.
+// The time bound stays across generations. Both bounds are inclusive: a round bills the
 // half-open window [last round, now), so a fact dated exactly at the last round time
 // belongs to the next window, and its resource must reach the round after the boundary
 // even though the boundary round consumed the fact and wrote no ledger row for it.
 func ResourcesWithNewFacts(
-	ctx context.Context, q Querier, tenant string, afterOffset int64, afterTime time.Time,
+	ctx context.Context, q Querier, tenant string, generation, afterOffset int64, afterTime time.Time,
 ) ([]LedgerKey, error) {
 	rows, err := q.Query(
 		ctx,
 		`SELECT DISTINCT resource_type, resource_id
 		 FROM history
-		 WHERE tenant = $1 AND (event_offset >= $2 OR since >= $3)`,
-		tenant, afterOffset, afterTime,
+		 WHERE tenant = $1
+		   AND ((topic_generation = $2 AND event_offset >= $3) OR since >= $4)`,
+		tenant, generation, afterOffset, afterTime,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("finding resources with new facts: %w", err)

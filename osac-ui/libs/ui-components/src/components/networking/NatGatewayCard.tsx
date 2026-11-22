@@ -24,7 +24,9 @@ import { type NATGateway, NATGatewayState } from '@osac/types';
 import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import { NatGatewayStatusLabel } from './NatGatewayStatusLabel';
+import { isDefaultNetworkingResource } from '../../api/v1/networking';
 import { useTranslation } from '../../hooks/useTranslation';
+import { defaultResourceDeleteReason } from '../../utils/networking';
 import { Timestamp } from '../Primitives/Timestamp';
 import QueryErrorState from '../Resource/QueryErrorState';
 
@@ -48,6 +50,8 @@ const NatGatewayCard = ({
   const { t } = useTranslation();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const isDeleting = natGateway?.status?.state === NATGatewayState.NAT_GATEWAY_STATE_DELETING;
+  const isDefault = isDefaultNetworkingResource(natGateway);
+  const canDelete = !isDeleting && !isDefault;
 
   return (
     <Card variant="secondary">
@@ -73,8 +77,12 @@ const NatGatewayCard = ({
               <DropdownList>
                 <DeleteResourceButton
                   isDropdown
-                  canDelete={!isDeleting}
+                  canDelete={canDelete}
+                  disabledReason={isDefault ? defaultResourceDeleteReason(t) : undefined}
                   onClick={() => {
+                    if (!canDelete) {
+                      return;
+                    }
                     onDetach(natGateway);
                     setIsMenuOpen(false);
                   }}

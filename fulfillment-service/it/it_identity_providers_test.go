@@ -372,7 +372,9 @@ var _ = Describe("Identity provider lifecycle", func() {
 	})
 
 	It("Rejects identity provider creation with invalid tenants", func() {
-		invalidTenants := []string{"shared", "system", ""}
+		// System is a supported platform tenant for identity providers. Shared and
+		// an omitted tenant remain invalid for this private API workflow.
+		invalidTenants := []string{"shared", ""}
 
 		for _, invalidTenant := range invalidTenants {
 			idpName := fmt.Sprintf("invalid-tenant-%s", uuid.New())

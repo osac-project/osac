@@ -99,6 +99,7 @@ describe('CatalogItemDetails', () => {
     expect(screen.getByRole('button', { name: 'Publish' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Launch instance' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Catalog' })).toHaveAttribute('href', '/catalog/vms');
     expect(screen.getAllByRole('separator')).toHaveLength(2);
   });
 

@@ -9,16 +9,13 @@ import {
 } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
-import { SecurityGroups } from '@osac/types';
+import { SecurityGroups, VirtualNetworks } from '@osac/types';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField.tsx';
 import { SEARCH_PARAM, usePageFilter } from '@osac/ui-components/hooks/use-page-filter.ts';
 
-import {
-  resourceDisplayName,
-  useSecurityGroups,
-  useVirtualNetworks,
-} from '../../api/v1/networking';
+import { useListResource } from '../../api/use-resource';
+import { resourceDisplayName } from '../../api/v1/networking';
 import { SecurityGroupCreateModal } from '../../components/networking/SecurityGroupCreateModal';
 import { SecurityGroupStatusLabel } from '../../components/networking/SecurityGroupStatusLabel';
 import ListPage from '../../components/Page/ListPage';
@@ -31,8 +28,10 @@ export const SecurityGroupsListPage = () => {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [search, setSearch] = usePageFilter(SEARCH_PARAM);
 
-  const { data: securityGroups = [], isLoading, error } = useSecurityGroups();
-  const { data: virtualNetworks = [] } = useVirtualNetworks();
+  const { data: securityGroupsResponse, isLoading, error } = useListResource(SecurityGroups);
+  const securityGroups = securityGroupsResponse?.items ?? [];
+  const { data: virtualNetworksResponse } = useListResource(VirtualNetworks);
+  const virtualNetworks = virtualNetworksResponse?.items ?? [];
 
   const filteredSGs = securityGroups.filter((sg) => {
     const name = sg.metadata?.name ?? '';

@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { type Project, VirtualNetworkSchema } from '@osac/types';
 
 import { VirtualNetworkCreateModal } from './VirtualNetworkCreateModal';
-import * as networkingApi from '../../api/v1/networking';
+import * as resourceApi from '../../api/use-resource';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const mockNavigate = vi.fn();
@@ -17,11 +17,11 @@ vi.mock('react-router-dom', async (importOriginal) => {
   };
 });
 
-vi.mock('../../api/v1/networking', async (importOriginal) => {
-  const actual = await importOriginal<typeof networkingApi>();
+vi.mock('../../api/use-resource', async (importOriginal) => {
+  const actual = await importOriginal<typeof resourceApi>();
   return {
     ...actual,
-    useCreateVirtualNetwork: vi.fn(),
+    useCreateResource: vi.fn(),
   };
 });
 
@@ -57,10 +57,10 @@ describe('VirtualNetworkCreateModal', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(networkingApi.useCreateVirtualNetwork).mockReturnValue({
+    vi.mocked(resourceApi.useCreateResource).mockReturnValue({
       mutateAsync,
       error: null,
-    } as unknown as ReturnType<typeof networkingApi.useCreateVirtualNetwork>);
+    } as unknown as ReturnType<typeof resourceApi.useCreateResource>);
   });
 
   it('renders with Name and IPv4 CIDR fields', () => {
@@ -91,7 +91,7 @@ describe('VirtualNetworkCreateModal', () => {
   });
 
   it('calls create and navigates on successful submit', async () => {
-    mutateAsync.mockResolvedValue({ id: 'vn-new' });
+    mutateAsync.mockResolvedValue({ object: { id: 'vn-new' } });
 
     const { user } = renderModal(mockOnClose);
 
@@ -104,11 +104,13 @@ describe('VirtualNetworkCreateModal', () => {
     await waitFor(() => {
       expect(mutateAsync).toHaveBeenCalledWith(
         expect.objectContaining({
-          metadata: { name: 'vn-prod', project: 'my-project' },
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-          spec: expect.objectContaining({
-            ipv4Cidr: '10.0.0.0/16',
-          }),
+          object: {
+            metadata: { name: 'vn-prod', project: 'my-project' },
+            // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+            spec: expect.objectContaining({
+              ipv4Cidr: '10.0.0.0/16',
+            }),
+          },
         }),
       );
       expect(mockNavigate).toHaveBeenCalledWith('/networking/virtual-networks/vn-new');
@@ -121,7 +123,7 @@ describe('VirtualNetworkCreateModal', () => {
       id: 'vn-new',
       metadata: { name: 'vn-prod' },
     });
-    mutateAsync.mockResolvedValue(network);
+    mutateAsync.mockResolvedValue({ object: network });
 
     const { user } = renderWithProviders(
       <VirtualNetworkCreateModal
@@ -138,7 +140,12 @@ describe('VirtualNetworkCreateModal', () => {
 
     await waitFor(() => {
       expect(mutateAsync).toHaveBeenCalledWith(
-        expect.objectContaining({ metadata: { name: 'vn-prod', project: 'my-project' } }),
+        expect.objectContaining({
+          // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+          object: expect.objectContaining({
+            metadata: { name: 'vn-prod', project: 'my-project' },
+          }),
+        }),
       );
       expect(onCreated).toHaveBeenCalledWith(network);
     });
@@ -147,10 +154,10 @@ describe('VirtualNetworkCreateModal', () => {
 
   it('shows error alert when create fails', async () => {
     mutateAsync.mockRejectedValue(new Error('API error'));
-    vi.mocked(networkingApi.useCreateVirtualNetwork).mockReturnValue({
+    vi.mocked(resourceApi.useCreateResource).mockReturnValue({
       mutateAsync,
       error: new Error('API error'),
-    } as unknown as ReturnType<typeof networkingApi.useCreateVirtualNetwork>);
+    } as unknown as ReturnType<typeof resourceApi.useCreateResource>);
 
     const { user } = renderModal(mockOnClose);
 
@@ -161,5 +168,20 @@ describe('VirtualNetworkCreateModal', () => {
     await waitFor(() => {
       expect(screen.getByText(/API error/i)).toBeInTheDocument();
     });
+  });
+
+  it('shows error alert when create response is missing an id', async () => {
+    mutateAsync.mockResolvedValue({ object: {} });
+
+    const { user } = renderModal(mockOnClose);
+
+    await user.type(screen.getByLabelText(/Name/i), 'vn-prod');
+    await user.type(screen.getByLabelText(/IPv4 CIDR/i), '10.0.0.0/16');
+    await user.click(screen.getByRole('button', { name: /Create/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Create response missing id')).toBeInTheDocument();
+    });
+    expect(mockNavigate).not.toHaveBeenCalled();
   });
 });

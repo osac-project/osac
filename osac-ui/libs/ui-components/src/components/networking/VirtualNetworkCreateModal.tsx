@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Alert,
@@ -13,9 +13,9 @@ import {
 import { Formik } from 'formik';
 import * as Yup from 'yup';
 
-import type { VirtualNetwork } from '@osac/types';
+import { type VirtualNetwork, VirtualNetworks } from '@osac/types';
 
-import { useCreateVirtualNetwork } from '../../api/v1/networking';
+import { useCreateResource } from '../../api/use-resource';
 import TextField from '../../components/Form/base/TextField';
 import OsacForm from '../../components/Form/OsacForm';
 import { useTranslation } from '../../hooks/useTranslation';
@@ -62,7 +62,8 @@ export const VirtualNetworkCreateModal = ({
 }: VirtualNetworkCreateModalProps) => {
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { mutateAsync: create, error } = useCreateVirtualNetwork();
+  const { mutateAsync: create, error } = useCreateResource(VirtualNetworks);
+  const [submitError, setSubmitError] = useState<unknown>(null);
 
   const validationSchema = useMemo(
     () =>
@@ -83,16 +84,23 @@ export const VirtualNetworkCreateModal = ({
       }}
       validationSchema={validationSchema}
       onSubmit={async (values) => {
+        setSubmitError(null);
         let result: VirtualNetwork;
         try {
-          result = await create({
-            metadata: values.metadata,
-            spec: {
-              ipv4Cidr: values.ipv4Cidr || undefined,
+          const response = await create({
+            object: {
+              metadata: values.metadata,
+              spec: {
+                ipv4Cidr: values.ipv4Cidr || undefined,
+              },
             },
           });
-        } catch {
-          // tanstack handles the error
+          if (!response.object?.id) {
+            throw new Error('Create response missing id');
+          }
+          result = response.object;
+        } catch (submissionError) {
+          setSubmitError(submissionError);
           return;
         }
         if (onCreated) {
@@ -115,10 +123,10 @@ export const VirtualNetworkCreateModal = ({
               <StackItem>
                 <VirtualNetworkCreateForm />
               </StackItem>
-              {!!error && (
+              {!!(submitError ?? error) && (
                 <StackItem>
                   <Alert variant="danger" title={t('Failed to create virtual network')} isInline>
-                    {getErrorMessage(error)}
+                    {getErrorMessage(submitError ?? error)}
                   </Alert>
                 </StackItem>
               )}

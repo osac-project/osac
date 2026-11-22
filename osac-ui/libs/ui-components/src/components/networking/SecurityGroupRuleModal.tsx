@@ -17,13 +17,14 @@ import {
   Protocol,
   type SecurityGroup,
   SecurityGroupSchema,
+  SecurityGroups,
   type SecurityRule,
   SecurityRuleSchema,
 } from '@osac/types';
 import { intSchema } from '@osac/ui-components/validation/number';
 
 import { type RuleFormValues, SecurityGroupRuleForm, showPortRange } from './SecurityGroupRuleForm';
-import { useUpdateSecurityGroup } from '../../api/v1/networking';
+import { useUpdateResource } from '../../api/use-resource';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
 import { buildCidrSchema } from '../../validation/cidr-validation';
@@ -59,7 +60,7 @@ export const SecurityGroupRuleModal = ({
   ruleIndex,
 }: SecurityGroupRuleModalProps) => {
   const { t } = useTranslation();
-  const updateSecurityGroup = useUpdateSecurityGroup();
+  const updateSecurityGroup = useUpdateResource(SecurityGroups);
 
   const { error, isPending, mutateAsync } = updateSecurityGroup;
   const showRestrictedError = Boolean(editingDisabledReason && error);

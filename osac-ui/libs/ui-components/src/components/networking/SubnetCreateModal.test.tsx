@@ -151,6 +151,26 @@ describe('SubnetCreateModal', () => {
     });
   });
 
+  it('shows error alert when create response is missing an id', async () => {
+    const user = userEvent.setup();
+    mutateAsync.mockResolvedValue({ object: {} });
+
+    render(
+      <SubnetCreateModal
+        onClose={mockOnClose}
+        parentVN={mockParentVN}
+        existingSubnets={mockExistingSubnets}
+      />,
+    );
+
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'subnet-new');
+    await user.type(screen.getByRole('textbox', { name: 'IPv4 CIDR' }), '10.0.2.0/24');
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+
+    expect(await screen.findByText('Create response missing id')).toBeInTheDocument();
+    expect(mockOnClose).not.toHaveBeenCalled();
+  });
+
   it('creates through the Subnets service without sending an Update', async () => {
     const actual = await vi.importActual<typeof resourceApi>('../../api/use-resource');
     vi.mocked(resourceApi.useCreateResource).mockImplementation(actual.useCreateResource);

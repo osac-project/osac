@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Alert,
   Button,
@@ -39,6 +39,7 @@ export const SubnetCreateModal = ({
 }: SubnetCreateModalProps) => {
   const { mutateAsync: create, error } = useCreateResource(Subnets);
   const { t } = useTranslation();
+  const [submitError, setSubmitError] = useState<unknown>(null);
 
   const parentIPv4CIDR = parentVN.spec?.ipv4Cidr ?? '';
   const hasIPv4 = Boolean(parentIPv4CIDR);
@@ -88,8 +89,9 @@ export const SubnetCreateModal = ({
       initialValues={{ metadata: { name: '' }, ipv4Cidr: '' }}
       validationSchema={validationSchema}
       onSubmit={async (values) => {
+        setSubmitError(null);
         try {
-          await create({
+          const response = await create({
             object: {
               metadata: { name: values.metadata.name, project: parentVN.metadata?.project },
               spec: {
@@ -100,9 +102,12 @@ export const SubnetCreateModal = ({
               },
             },
           });
+          if (!response.object?.id) {
+            throw new Error('Create response missing id');
+          }
           onClose();
-        } catch {
-          // tanstack handles the error
+        } catch (submissionError) {
+          setSubmitError(submissionError);
         }
       }}
     >
@@ -136,10 +141,10 @@ export const SubnetCreateModal = ({
                   )}
                 </OsacForm>
               </StackItem>
-              {!!error && (
+              {!!(submitError ?? error) && (
                 <StackItem>
                   <Alert variant="danger" title={t('Failed to create subnet')} isInline>
-                    {getErrorMessage(error)}
+                    {getErrorMessage(submitError ?? error)}
                   </Alert>
                 </StackItem>
               )}

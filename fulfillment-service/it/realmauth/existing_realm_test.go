@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -339,6 +340,31 @@ func (h *upgradeHarness) observeCSI(ctx context.Context, source, phase string) c
 	return csiObservation{hasRole: hasRole, volumes: status.Code(listErr), volumeCalls: volumes.calls.Load()}
 }
 
+func (h *upgradeHarness) mutationCounts(ctx context.Context) map[string]int {
+	GinkgoHelper()
+	counts := map[string]int{"CREATE": 0, "DELETE": 0}
+	for _, value := range h.adminGET(ctx, "admin-events?max=100").([]any) {
+		event := value.(map[string]any)
+		if event["resourcePath"] == "clients/"+csiClientUUID+"/scope-mappings/realm" {
+			operation, ok := event["operationType"].(string)
+			Expect(ok).To(BeTrue())
+			counts[operation]++
+		}
+	}
+	return counts
+}
+
+func (h *upgradeHarness) assertPreserved(ctx context.Context, source, phase string, before map[string]string, creates, deletes int) {
+	GinkgoHelper()
+	h.credentialsPreserved(ctx, source)
+	Expect(reflect.DeepEqual(h.sentinels(ctx), before)).To(BeTrue(), "unrelated persisted state must survive (content withheld)")
+	Expect(h.mutationCounts(ctx)).To(Equal(map[string]int{"CREATE": creates, "DELETE": deletes}))
+	_, err := fmt.Fprintf(GinkgoWriter,
+		"realm=%s phase=%s sentinels_preserved=true credential_validity_unchanged=true mapping_creates=%d mapping_deletes=%d\n",
+		source, phase, creates, deletes)
+	Expect(err).ToNot(HaveOccurred())
+}
+
 var _ = Describe("Persisted CSI realm upgrade", func() {
 	for _, source := range []string{"chart", "prerequisites"} {
 		It("restores private CSI authorization for "+source, func(ctx SpecContext) {
@@ -359,13 +385,62 @@ var _ = Describe("Persisted CSI realm upgrade", func() {
 			Expect(restarted).ToNot(Equal(started), "the same persistent container must actually restart")
 			h.credentialsPreserved(ctx, source)
 			Expect(reflect.DeepEqual(h.sentinels(ctx), before)).To(BeTrue(), "sentinel state must survive (content withheld)")
-			after := h.observeCSI(ctx, source, "corrected-import-restart")
-			// Product RED: reach the generated service with a fresh, verified token
-			// before asserting desired CSI authorization. No missing tool or setup
-			// failure substitutes for this persisted-state regression.
+			restartResult := h.observeCSI(ctx, source, "corrected-import-restart")
+			Expect(restartResult).To(Equal(csiObservation{volumes: codes.PermissionDenied}))
+			h.assertPreserved(ctx, source, "corrected-import-restart", before, 0, 0)
+
+			directory := GinkgoT().TempDir()
+			tokenFile, record := filepath.Join(directory, "admin.token"), filepath.Join(directory, "operation.json")
+			run := func(args ...string) scopeCLIResult {
+				GinkgoHelper()
+				Expect(os.WriteFile(tokenFile, []byte(h.adminToken(ctx)), 0600)).To(Succeed())
+				result, code, _ := runScopeCLI(ctx, strings.TrimSuffix(fixture.issuer, "/realms/osac"), tokenFile, fixture.certFile, args...)
+				Expect(code).To(BeZero(), "the administrator-run production updater must succeed (output withheld)")
+				return result
+			}
+			Expect(run()).To(Equal(scopeCLIResult{Result: "would-add"}))
+			// A real CSI service account cannot use the Keycloak Admin API.
+			nonadmin, err := h.clientToken(ctx, "osac-csi-driver", fixture.secrets.clients["osac-csi-driver"])
+			if err != nil || nonadmin == nil {
+				Fail("nonadministrator test token must be issued (response withheld)")
+			}
+			nonadminFile := filepath.Join(directory, "nonadmin.token")
+			Expect(os.WriteFile(nonadminFile, []byte(nonadmin.AccessToken), 0600)).To(Succeed())
+			_, rejected, output := runScopeCLI(ctx, strings.TrimSuffix(fixture.issuer, "/realms/osac"), nonadminFile,
+				fixture.certFile, "--apply", "--record", filepath.Join(directory, "nonadmin.json"))
+			Expect(rejected).ToNot(BeZero())
+			Expect(strings.Contains(output, nonadmin.AccessToken)).To(BeFalse())
+			authorizationDenied := strings.Contains(output, "HTTP 403") || strings.Contains(output, "HTTP 401")
+			Expect(authorizationDenied).To(BeTrue(), "the real Keycloak Admin API must reject the nonadministrator")
+			h.assertPreserved(ctx, source, "dry-run-and-nonadmin", before, 0, 0)
+
+			// Only this production entry point repairs scopes. There is no inline
+			// Admin API POST or permission repair hidden in the fixture.
+			Expect(run("--apply", "--record", record)).To(Equal(scopeCLIResult{Result: "added", Changed: true}))
+			after := h.observeCSI(ctx, source, "applied")
 			Expect(after.volumes).To(Equal(codes.OK), "existing realms need the CSI role-scope update")
 			Expect(after.volumeCalls).To(Equal(int32(1)))
 			Expect(after.hasRole).To(BeTrue())
+			h.assertPreserved(ctx, source, "applied", before, 1, 0)
+
+			Expect(run("--apply", "--record", record)).To(Equal(scopeCLIResult{Result: "already-present"}))
+			// A different operation seeing the existing binding must not acquire
+			// ownership, even when that binding was created by this regression.
+			preexisting := filepath.Join(directory, "preexisting.json")
+			Expect(run("--apply", "--record", preexisting)).To(Equal(scopeCLIResult{Result: "already-present"}))
+			Expect(run("--rollback", "--record", preexisting)).To(Equal(scopeCLIResult{Result: "rollback-noop"}))
+			Expect(h.observeCSI(ctx, source, "repeated-and-preexisting")).To(Equal(after))
+			h.assertPreserved(ctx, source, "repeated-and-preexisting", before, 1, 0)
+
+			Expect(run("--rollback", "--record", record)).To(Equal(scopeCLIResult{Result: "rolled-back", Changed: true}))
+			Expect(h.observeCSI(ctx, source, "rolled-back")).To(Equal(csiObservation{volumes: codes.PermissionDenied}))
+			Expect(run("--rollback", "--record", record)).To(Equal(scopeCLIResult{Result: "rollback-noop"}))
+			h.assertPreserved(ctx, source, "rolled-back", before, 1, 1)
+
+			reapply := filepath.Join(directory, "reapply.json")
+			Expect(run("--apply", "--record", reapply)).To(Equal(scopeCLIResult{Result: "added", Changed: true}))
+			Expect(h.observeCSI(ctx, source, "reapplied")).To(Equal(after))
+			h.assertPreserved(ctx, source, "reapplied", before, 2, 1)
 		}, SpecTimeout(8*time.Minute))
 	}
 })

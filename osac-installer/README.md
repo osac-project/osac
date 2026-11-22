@@ -185,6 +185,11 @@ make install-infra PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # Infra
 make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC application
 ```
 
+Existing Keycloak realms retain their stored state during startup import.
+For the targeted CSI role-scope correction, use the explicit
+[administrator-run updater procedure](../docs/guides/admin/keycloak-csi-role-scope.md).
+Chart installation and upgrades do not execute this operation automatically.
+
 | Variable | Description |
 | ---------- | ------------- |
 | `PLATFORM` | `kind` or `openshift` (required) |

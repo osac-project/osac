@@ -144,7 +144,7 @@ operator:
   enabled: true
   image:
     repository: ghcr.io/osac-project/osac-operator
-    tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+    tag: sha-e5de8dc
     pullPolicy: Always
   replicaCount: 1
   resources:
@@ -230,7 +230,7 @@ service:
   images:
     service:
       repository: ghcr.io/osac-project/fulfillment-service
-      tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+      tag: sha-e5de8dc
       pullPolicy: Always
     envoy:
       repository: ghcr.io/osac-project/envoy
@@ -332,7 +332,7 @@ aap:
       imagePullPolicy: IfNotPresent
   bootstrap:
     enabled: true
-    image: ghcr.io/osac-project/osac-aap:latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+    image: ghcr.io/osac-project/osac-aap:sha-e5de8dc
     backoffLimit: 15
     readinessConsecutiveSuccesses: 3
     gateway:
@@ -344,9 +344,9 @@ aap:
     secret: "config-as-code-ig"
     # Maximum number of add-on operator jobs allowed to run concurrently.
     addonOperatorMaxConcurrentJobs: 50
-    eeImage: ""
-    projectGitUri: ""
-    projectGitBranch: ""
+    eeImage: ghcr.io/osac-project/osac-aap:sha-e5de8dc
+    projectGitUri: https://github.com/osac-project/osac
+    projectGitBranch: e5de8dc4ae3f16c72b5a52a6357fd670a9bd8567
     remoteClusterKubeconfigSecretName: ""
     remoteClusterKubeconfigSecretKey: kubeconfig
   instanceGroups:
@@ -406,7 +406,7 @@ ui:
   log:
     level: info
   images:
-    ui: ghcr.io/osac-project/osac-ui:latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+    ui: ghcr.io/osac-project/osac-ui:sha-e5de8dc
     pullPolicy: auto
 
 # --- Metering ---
@@ -417,7 +417,7 @@ ui:
 metering:
   image:
     repository: ghcr.io/osac-project/metering-service
-    tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+    tag: sha-e5de8dc
     pullPolicy: Always
   # Outside systems that read every tenant's heartbeat topics with their own
   # credentials. Each entry names one reader and no tenant; the reader name is
@@ -451,7 +451,7 @@ bmfCrds: {}
 bmf:
   image:
     repository: ghcr.io/osac-project/bare-metal-fulfillment-operator
-    tag: latest  # PLACEHOLDER -- overwritten at release time by osac-build-and-publish.yaml
+    tag: sha-e5de8dc
     pullPolicy: Always
   replicaCount: 1
   resources:

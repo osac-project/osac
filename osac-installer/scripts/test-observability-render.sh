@@ -2,8 +2,8 @@
 
 # Verifies the OSAC metrics scrape wiring renders as designed: platform
 # monitoring labels and scrape RBAC, the six plain-HTTP ServiceMonitors with
-# their eight targets, the label-removal hooks, and the disabled path producing
-# none of it.
+# their eight targets, the two HTTPS operator ServiceMonitors, the
+# label-removal hooks, and the disabled path producing none of the scrapes.
 
 set -euo pipefail
 
@@ -12,6 +12,8 @@ CHART_DIR=$(cd -- "${SCRIPT_DIR}/../charts/osac" && pwd)
 REPO_ROOT=$(cd -- "${SCRIPT_DIR}/../.." && pwd)
 FULFILLMENT_CHART="${REPO_ROOT}/fulfillment-service/charts/service"
 METERING_CHART="${REPO_ROOT}/osac-metering/charts/osac-metering"
+OPERATOR_CHART="${REPO_ROOT}/osac-operator/charts/operator"
+BMF_CHART="${REPO_ROOT}/bare-metal-fulfillment-operator/charts/operator"
 HELM_BIN=${HELM_BIN:-helm}
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "${TMP_DIR}"' EXIT
@@ -121,27 +123,33 @@ echo "checking enabled render"
 
 enabled_sms="${TMP_DIR}/enabled-servicemonitors.yaml"
 extract_kind "${enabled}" ServiceMonitor >"${enabled_sms}"
-expect_count "${enabled_sms}" '^kind: ServiceMonitor' 6
+expect_count "${enabled_sms}" '^kind: ServiceMonitor' 8
 for job in \
   fulfillment-grpc-server \
   fulfillment-rest-gateway \
   fulfillment-controller \
   fulfillment-event-publisher \
   fulfillment-console-proxy \
-  osac-metering; do
+  osac-metering \
+  osac-operator \
+  bmf-operator; do
   require "${enabled_sms}" "replacement: ${job}"
 done
 require "${enabled_sms}" 'targetLabel: job'
 require "${enabled_sms}" 'port: metrics'
 require "${enabled_sms}" 'port: http'
 require "${enabled_sms}" 'scheme: http'
+require "${enabled_sms}" 'scheme: https'
+require "${enabled_sms}" 'port: https'
+require "${enabled_sms}" 'bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token'
+require "${enabled_sms}" 'caFile: /etc/prometheus/configmaps/service-ca-bundle/service-ca.crt'
 require "${enabled_sms}" 'path: /metrics'
 # Helm rewrites .Chart.Name to the subchart alias, so the metering selector is
 # "metering" here even though the chart's own name is osac-metering.
 require "${enabled_sms}" 'app.kubernetes.io/name: metering'
-expect_count "${enabled_sms}" 'interval: "30s"' 7
-expect_count "${enabled_sms}" '^    - osac$' 6
-for forbidden in insecureSkipVerify bearerTokenSecret tlsConfig basicAuth oauth2; do
+expect_count "${enabled_sms}" 'interval: "30s"' 9
+expect_count "${enabled_sms}" '^    - osac$' 8
+for forbidden in insecureSkipVerify bearerTokenSecret basicAuth oauth2; do
   reject "${enabled_sms}" "${forbidden}"
 done
 
@@ -152,6 +160,12 @@ require "${enabled}" 'name: osac-prometheus-scrape'
 require "${enabled}" 'name: prometheus-k8s'
 require "${enabled}" 'namespace: openshift-monitoring'
 require "${enabled}" 'name: osac-unlabel-namespaces'
+# The operators serve the service-CA certificate on 8443 and bind the platform
+# Prometheus service account to their aggregate metrics-reader role.
+require "${enabled}" 'serving-cert-secret-name: osac-operator-metrics-tls'
+require "${enabled}" 'serving-cert-secret-name: bmf-operator-metrics-tls'
+require "${enabled}" 'name: osac-operator-metrics-reader-prometheus'
+require "${enabled}" 'name: bmf-operator-metrics-reader-prometheus'
 
 echo "checking metering scrape target"
 require "${enabled}" 'targetPort: health'
@@ -168,7 +182,7 @@ default_render="${TMP_DIR}/default.yaml"
 "${HELM_BIN}" "${COMMON_ARGS[@]}" "${CRD_ARGS[@]}" "${OBS_ARGS[@]}" >"${default_render}"
 default_sms="${TMP_DIR}/default-servicemonitors.yaml"
 extract_kind "${default_render}" ServiceMonitor >"${default_sms}"
-expect_count "${default_sms}" '^kind: ServiceMonitor' 5
+expect_count "${default_sms}" '^kind: ServiceMonitor' 7
 reject "${default_sms}" 'replacement: osac-metering'
 
 echo "checking custom scrape interval"
@@ -178,7 +192,7 @@ interval="${TMP_DIR}/interval.yaml"
   --set global.observability.collection.osacControlPlane=45s >"${interval}"
 interval_sms="${TMP_DIR}/interval-servicemonitors.yaml"
 extract_kind "${interval}" ServiceMonitor >"${interval_sms}"
-expect_count "${interval_sms}" 'interval: "45s"' 7
+expect_count "${interval_sms}" 'interval: "45s"' 9
 expect_count "${interval_sms}" 'interval: "30s"' 0
 
 echo "checking disabled render"
@@ -197,6 +211,13 @@ disabled_jobs="${TMP_DIR}/disabled-jobs.yaml"
 extract_kind "${disabled}" Job >"${disabled_jobs}"
 require "${disabled_jobs}" 'name: osac-unlabel-namespaces'
 require "${disabled_jobs}" 'pre-upgrade'
+# Disabling observability removes the scrapes and their Prometheus RBAC, but the
+# operators keep serving HTTPS metrics on 8443 with the service-CA certificate.
+require "${disabled}" '--metrics-bind-address=:8443'
+require "${disabled}" 'serving-cert-secret-name: osac-operator-metrics-tls'
+require "${disabled}" 'serving-cert-secret-name: bmf-operator-metrics-tls'
+reject "${disabled}" 'name: osac-operator-metrics-reader-prometheus'
+reject "${disabled}" 'name: bmf-operator-metrics-reader-prometheus'
 
 echo "checking monitoring CRD guard"
 no_crd="${TMP_DIR}/no-crd.yaml"
@@ -223,7 +244,7 @@ if ! grep -Eq "[Aa]dditional propert(y|ies).*observability.*not allowed" "${top_
 fi
 
 echo "checking component serviceMonitor defaults stay off"
-for chart in "${FULFILLMENT_CHART}" "${METERING_CHART}"; do
+for chart in "${FULFILLMENT_CHART}" "${METERING_CHART}" "${OPERATOR_CHART}" "${BMF_CHART}"; do
   values="${TMP_DIR}/$(basename "${chart}")-values.yaml"
   "${HELM_BIN}" show values "${chart}" >"${values}"
   block=$(awk '/^serviceMonitor:/{f=1} f && /^[^[:space:]#]/ && !/^serviceMonitor:/{exit} f' "${values}")

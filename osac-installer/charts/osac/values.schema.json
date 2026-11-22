@@ -787,6 +787,25 @@
             "minLength": 1
           }
         },
+        "serviceMonitor": {
+          "type": "object",
+          "description": "Standalone ServiceMonitor override for the operator chart. The umbrella chart enables scrapes through global.observability.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "interval": {
+              "type": "string",
+              "description": "When empty, global.observability.collection.osacControlPlane is used."
+            },
+            "prometheusNamespace": {
+              "type": "string",
+              "default": "openshift-monitoring"
+            }
+          },
+          "additionalProperties": false
+        },
         "global": {
           "type": "object",
           "description": "Helm-injected global values (passed automatically to subcharts)"
@@ -2389,6 +2408,25 @@
         "fullnameOverride": {
           "type": "string",
           "description": "Override the full resource name for the BMF operator (subchart default)"
+        },
+        "serviceMonitor": {
+          "type": "object",
+          "description": "Standalone ServiceMonitor override for the bmf chart. The umbrella chart enables scrapes through global.observability.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "interval": {
+              "type": "string",
+              "description": "When empty, global.observability.collection.osacControlPlane is used."
+            },
+            "prometheusNamespace": {
+              "type": "string",
+              "default": "openshift-monitoring"
+            }
+          },
+          "additionalProperties": false
         },
         "global": {
           "type": "object",

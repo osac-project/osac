@@ -180,6 +180,8 @@ jobs:
         helm unittest charts/osac -s=false
         helm unittest ../osac-metering/charts/osac-metering
         helm unittest ../fulfillment-service/charts/service
+        helm unittest ../osac-operator/charts/operator
+        helm unittest ../bare-metal-fulfillment-operator/charts/operator
 
     - name: Test observability rendering
       if: steps.should-run.outputs.run

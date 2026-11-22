@@ -55,7 +55,6 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/controller"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/bmh"
 	netboxcredentials "github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/credentials/netbox"
-	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/directclient"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/helpers"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/inventory"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/management"
@@ -76,6 +75,9 @@ const (
 	// Manager level configuration
 	envBareMetalFulfillmentNamespace           = "OSAC_BARE_METAL_FULFILLMENT_NAMESPACE"
 	envBareMetalInstanceMaxConcurrentReconcile = "OSAC_BAREMETALINSTANCE_MAX_CONCURRENT_RECONCILES"
+
+	// Remote cluster holding the BareMetalHosts (vcluster runs)
+	envRemoteClusterKubeconfig = "OSAC_REMOTE_CLUSTER_KUBECONFIG"
 
 	// Controller level configuration
 	envInventoryConfigPath  = "OSAC_INVENTORY_CONFIG_PATH"
@@ -251,6 +253,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	remote, err := loadRemoteClusterAccess()
+	if err != nil {
+		setupLog.Error(err, "invalid remote cluster configuration")
+		os.Exit(1)
+	}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsServerOptions,
@@ -323,7 +331,7 @@ func main() {
 	}
 
 	if err := setupBareMetalInstanceController(
-		ctx, mgr, provisioningProvider, networkingProvisioningEnabled,
+		ctx, mgr, provisioningProvider, networkingProvisioningEnabled, remote,
 	); err != nil {
 		setupLog.Error(err, "unable to setup controller", "controller", "BareMetalInstance")
 		os.Exit(1)
@@ -356,7 +364,7 @@ func main() {
 	}
 
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctx); err != nil {
+	if err := startComponents(ctx, remote, mgr); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
@@ -430,6 +438,7 @@ func setupBareMetalInstanceController(
 	mgr ctrl.Manager,
 	provisioningProvider provisioning.ProvisioningProvider,
 	networkingEnabled bool,
+	remote *remoteClusterAccess,
 ) error {
 	// Read and parse inventory configuration
 	inventoryConfigPath := helpers.GetEnvWithDefault(envInventoryConfigPath, "/etc/osac/inventory/inventory.yaml")
@@ -456,7 +465,11 @@ func setupBareMetalInstanceController(
 		return fmt.Errorf("failed to parse management config: %w", err)
 	}
 
-	inventoryClient, err := createInventoryClient(ctx, &inventoryConfig, &managementConfig, mgr)
+	// The metal3 inventory and management backends build their own clients;
+	// in remote mode those must dial the outer cluster, not this one.
+	applyRemoteRestConfig(&inventoryConfig, &managementConfig, remote)
+
+	inventoryClient, err := createInventoryClient(ctx, &inventoryConfig, &managementConfig, mgr, remote)
 	if err != nil {
 		return err
 	}
@@ -524,12 +537,13 @@ func createInventoryClient(
 	inventoryCfg *inventory.Config,
 	managementCfg *management.Config,
 	mgr ctrl.Manager,
+	remote *remoteClusterAccess,
 ) (inventory.Client, error) {
 	switch inventoryCfg.Type {
 	case "bcm":
-		return createBCMInventoryClient(ctx, inventoryCfg, managementCfg, mgr)
+		return createBCMInventoryClient(ctx, inventoryCfg, managementCfg, mgr, remote)
 	case "netbox":
-		return createNetBoxInventoryClient(ctx, inventoryCfg, managementCfg, mgr)
+		return createNetBoxInventoryClient(ctx, inventoryCfg, managementCfg, mgr, remote)
 	}
 
 	inventoryClient, err := inventory.NewClient(ctx, inventoryCfg)
@@ -556,11 +570,12 @@ func createNetBoxInventoryClient(
 	inventoryCfg *inventory.Config,
 	managementCfg *management.Config,
 	mgr ctrl.Manager,
+	remote *remoteClusterAccess,
 ) (inventory.Client, error) {
 	if err := validateNetBoxInventoryConfig(inventoryCfg, managementCfg); err != nil {
 		return nil, err
 	}
-	bmhManager, secretWriter, err := createMetal3Managers(managementCfg, mgr)
+	bmhManager, secretWriter, err := createMetal3Managers(managementCfg, mgr, remote)
 	if err != nil {
 		return nil, fmt.Errorf("failed to configure Metal3 dependencies for NetBox: %w", err)
 	}
@@ -628,6 +643,7 @@ func createBCMInventoryClient(
 	inventoryCfg *inventory.Config,
 	managementCfg *management.Config,
 	mgr ctrl.Manager,
+	remote *remoteClusterAccess,
 ) (inventory.Client, error) {
 	bcmCfg, err := inventory.ParseBCMOptions(inventoryCfg.Options)
 	if err != nil {
@@ -659,7 +675,7 @@ func createBCMInventoryClient(
 		}
 		return nil, fmt.Errorf("BCM inventory requires Metal3 management backend (got %q)", managementType)
 	}
-	bmhMgr, secretWriter, err := createMetal3Managers(managementCfg, mgr)
+	bmhMgr, secretWriter, err := createMetal3Managers(managementCfg, mgr, remote)
 	if err != nil {
 		return nil, err
 	}
@@ -686,24 +702,22 @@ func createBCMInventoryClient(
 func createMetal3Managers(
 	managementCfg *management.Config,
 	mgr ctrl.Manager,
+	remote *remoteClusterAccess,
 ) (*baremetalhost.Manager, *bmh.SecretWriter, error) {
 	ns, err := management.ParseMetal3ManagementNamespace(managementCfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to parse metal3 namespace: %w", err)
 	}
-	if mgr == nil {
-		return nil, nil, fmt.Errorf("kubernetes manager is required to create Metal3 dependencies")
-	}
 
-	// Keep BMC credential Secret access off the cluster-wide informer. The
-	// direct client avoids Secret list/watch permissions and limits access to
-	// the operations performed by the BMH manager and the credentials writer.
-	direct, err := directclient.New(mgr.GetConfig(), mgr.GetScheme(), mgr.GetRESTMapper())
+	// BareMetalHosts and their BMC credential Secrets are infrastructure:
+	// in remote mode both clients resolve through the outer cluster, never
+	// through the local manager.
+	cached, direct, err := resolveMetal3Clients(mgr, remote)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create direct Kubernetes client: %w", err)
+		return nil, nil, err
 	}
 
-	bmhManager, err := baremetalhost.NewManager(mgr.GetClient(), direct, ns)
+	bmhManager, err := baremetalhost.NewManager(cached, direct, ns)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create BMH manager: %w", err)
 	}

@@ -81,3 +81,11 @@ metal3:
   enabled: false
   namespace: ""
   hostClass: "metal3"
+
+# Path and Secret used to read BareMetalHosts and their BMC credential
+# Secrets from a remote (outer) cluster, as remoteClusterKubeconfig does for
+# the osac-operator. Set path and Secret name together to enable
+# remote-cluster mode; leave both empty for local mode.
+remoteClusterKubeconfig: ""
+remoteClusterKubeconfigSecretName: ""
+remoteClusterKubeconfigSecretKey: kubeconfig

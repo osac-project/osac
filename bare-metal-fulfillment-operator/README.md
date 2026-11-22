@@ -154,6 +154,12 @@ The following environment variables can be used to configure controller behavior
 - **`OSAC_MANAGEMENT_CONFIG_PATH`** — Path to the management configuration file. Default: `/etc/osac/management/management.yaml`
 - **`OSAC_PROFILE_CONFIG_PATH`** — Path to the profile configuration file. Default: `/etc/osac/profile/profile.yaml`
 
+#### Remote Cluster
+
+- **`OSAC_REMOTE_CLUSTER_KUBECONFIG`** — Path to a kubeconfig for the cluster that holds the BareMetalHosts and their BMC credential Secrets (the outer cluster in a vcluster install). Optional; unset by default.
+
+When set, the manager keeps reconciling `BareMetalPool` and `BareMetalInstance` resources on the local cluster, while every BareMetalHost read and write — inventory allocation, power management, and the BMC credential Secrets — resolves through that kubeconfig. When unset, all clients resolve through the local cluster. The kubeconfig is read once at startup; rotating it requires a pod restart.
+
 #### AAP Provisioning Provider
 
 - **`OSAC_AAP_URL`** — AAP server URL. Optional at deploy time; injected post-install by `prepare-aap.sh`.

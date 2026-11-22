@@ -149,7 +149,10 @@ REMOTE_CLUSTER_HELM_ARGS := \
 	--set-string operator.remoteClusterKubeconfigSecretName=$${REMOTE_KUBECONFIG_SECRET_NAME} \
 	--set-string operator.remoteClusterKubeconfigSecretKey=$${REMOTE_KUBECONFIG_SECRET_KEY} \
 	--set-string aap.configAsCode.remoteClusterKubeconfigSecretName=$${REMOTE_KUBECONFIG_SECRET_NAME} \
-	--set-string aap.configAsCode.remoteClusterKubeconfigSecretKey=$${REMOTE_KUBECONFIG_SECRET_KEY}
+	--set-string aap.configAsCode.remoteClusterKubeconfigSecretKey=$${REMOTE_KUBECONFIG_SECRET_KEY} \
+	--set-string bmf.remoteClusterKubeconfig=/var/run/secrets/remote/$${REMOTE_KUBECONFIG_SECRET_KEY} \
+	--set-string bmf.remoteClusterKubeconfigSecretName=$${REMOTE_KUBECONFIG_SECRET_NAME} \
+	--set-string bmf.remoteClusterKubeconfigSecretKey=$${REMOTE_KUBECONFIG_SECRET_KEY}
 endif
 
 # Work around HTTP/2 stream resets from proxy.golang.org during container

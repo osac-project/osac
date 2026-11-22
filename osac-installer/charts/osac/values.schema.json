@@ -2498,6 +2498,21 @@
           },
           "additionalProperties": false
         },
+        "remoteClusterKubeconfig": {
+          "type": "string",
+          "description": "File path for the remote cluster kubeconfig that holds the BareMetalHosts. Set together with remoteClusterKubeconfigSecretName.",
+          "default": ""
+        },
+        "remoteClusterKubeconfigSecretName": {
+          "type": "string",
+          "description": "Secret containing the remote cluster kubeconfig.",
+          "default": ""
+        },
+        "remoteClusterKubeconfigSecretKey": {
+          "type": "string",
+          "description": "Secret key containing the remote cluster kubeconfig.",
+          "default": "kubeconfig"
+        },
         "fullnameOverride": {
           "type": "string",
           "description": "Override the full resource name for the BMF operator (subchart default)"

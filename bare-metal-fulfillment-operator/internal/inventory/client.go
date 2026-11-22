@@ -19,6 +19,8 @@ package inventory
 
 import (
 	"context"
+
+	"k8s.io/client-go/rest"
 )
 
 // Config is a struct that holds info needed to create a new client implementation
@@ -27,6 +29,12 @@ type Config struct {
 	Type      string         `json:"type"`
 	Options   map[string]any `json:"options"`
 	HostClass string         `json:"hostClass"`
+
+	// RESTConfig overrides the Kubernetes config for backends that reach
+	// Kubernetes (metal3): the outer cluster's config in remote mode, nil in
+	// local mode. The operator's startup sets it; the config file never
+	// carries it, and the json tag keeps that contract unchanged.
+	RESTConfig *rest.Config `json:"-"`
 }
 
 // Host is the common return type all clients must use

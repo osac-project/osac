@@ -546,6 +546,12 @@ bmf:
     # Namespace where Metal3 inventory reads BareMetalHost resources.
     namespace: ""
     hostClass: "metal3"
+  # Set together to route the operator's BareMetalHost reads and writes to a
+  # remote (outer) cluster, as operator.remoteClusterKubeconfig does for the
+  # osac-operator.
+  remoteClusterKubeconfig: ""
+  remoteClusterKubeconfigSecretName: ""
+  remoteClusterKubeconfigSecretKey: kubeconfig
 
 # --- Install preflight ---
 # Checks run while Helm renders the chart (helm install, helm upgrade and

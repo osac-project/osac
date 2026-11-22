@@ -1,5 +1,6 @@
 import {
   Alert,
+  AlertGroup,
   Divider,
   Flex,
   FlexItem,
@@ -8,7 +9,7 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 
-import { type ComputeInstance, DiskImages, InstanceTypes } from '@osac/types';
+import { type ComputeInstance, ComputeInstanceState, DiskImages, InstanceTypes } from '@osac/types';
 import { useGetResource } from '@osac/ui-components/api/use-resource';
 
 import VmDetailsActionButtons from './VmDetailsActionButtons';
@@ -44,6 +45,15 @@ const VmDetails = ({ vm }: Props) => {
     <>
       <PageSection hasBodyWrapper={false}>
         <Stack hasGutter>
+          <StackItem>
+            <AlertGroup isLiveRegion>
+              {vm.status?.state === ComputeInstanceState.DELETING && (
+                <Alert variant="warning" title={t('Virtual machine deletion in progress')} isInline>
+                  {t('Information on this page may be outdated.')}
+                </Alert>
+              )}
+            </AlertGroup>
+          </StackItem>
           {instanceTypeError ? (
             <StackItem>
               <Alert variant="danger" title={t('Could not load instance types')} isInline>

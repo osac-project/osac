@@ -7,7 +7,7 @@ import {
   FlexItem,
 } from '@patternfly/react-core';
 
-import { type ComputeInstance, ComputeInstanceState } from '@osac/types';
+import type { ComputeInstance } from '@osac/types';
 import InstanceCard from '@osac/ui-components/components/InstanceCard/InstanceCard';
 import { Timestamp } from '@osac/ui-components/components/Primitives/Timestamp';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField';
@@ -23,15 +23,14 @@ interface VmInstanceCardProps {
 const VmInstanceCard = ({ vm }: VmInstanceCardProps) => {
   const { t } = useTranslation();
   const state = vm.status?.state;
-  const locked = state === ComputeInstanceState.DELETING;
-  const detailsUrl = locked ? undefined : `/vms/${encodeURIComponent(vm.id)}`;
+  const detailsUrl = `/vms/${encodeURIComponent(vm.id)}`;
   const externalIp = vm.status?.externalIpAddress;
 
   return (
     <InstanceCard
       kind="vm"
       statusLabel={<VmStatusLabel state={state} />}
-      actionMenu={locked ? null : <VmActionMenu vm={vm} />}
+      actionMenu={<VmActionMenu vm={vm} />}
       title={<ResourceNameField resource={vm} detailsUrl={detailsUrl} />}
       body={
         <DescriptionList isHorizontal isCompact className="vm-instance-card__specs">
@@ -44,14 +43,12 @@ const VmInstanceCard = ({ vm }: VmInstanceCardProps) => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Disk image')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {locked ? '—' : vm.spec?.diskImage?.name || '—'}
+              {vm.spec?.diskImage?.name || '—'}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('External IP')}</DescriptionListTerm>
-            <DescriptionListDescription>
-              {locked ? '—' : externalIp || '—'}
-            </DescriptionListDescription>
+            <DescriptionListDescription>{externalIp || '—'}</DescriptionListDescription>
           </DescriptionListGroup>
         </DescriptionList>
       }

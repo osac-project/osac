@@ -28,9 +28,12 @@ to redo it.
 
 ## Phase B — verify the system is clean
 
+All checks use `oc` only (helm is not needed; on the edge-16 host use
+the node hop below).
+
 ```
-# 1. No helm release left in osac
-helm -n osac list                                   # expect: empty list
+# 1. No osac helm release left (expect: no output)
+oc -n osac get secrets -l owner=helm
 
 # 2. Nothing left running or stored in the osac namespace
 oc -n osac get pods,deploy,svc,pvc,sa               # expect: only the 3 default
@@ -45,10 +48,25 @@ oc -n openshift-ingress get svc | grep osac         # expect: no output
 
 # 4. What SHOULD still be there (infra layer, intentionally kept)
 oc get gatewayclass openshift-default               # expect: ACCEPTED True
-helm -n osac-infra list                             # expect: osac-infra deployed
+oc -n osac-infra get secrets -l owner=helm          # expect: osac-infra.v1
 
 # 5. Cluster still healthy
 oc get clusterversion                               # 4.22.14 Available
+```
+
+From the edge-16 host (no oc installed there):
+
+```
+ssh -i /home/cluster-tool/flavors/sno-4-22/crypto/cluster-tool.key core@192.168.160.10 \
+  "sudo oc --kubeconfig /etc/kubernetes/static-pod-resources/kube-apiserver-certs/secrets/node-kubeconfigs/lb-ext.kubeconfig \
+   -n osac get pods,deploy,svc,pvc,sa"
+```
+
+Optional helm equivalents (laptop, /usr/local/bin/helm):
+
+```
+helm -n osac list            # expect: empty
+helm -n osac-infra list      # expect: osac-infra deployed
 ```
 
 ## Phase C — final install
@@ -82,7 +100,7 @@ oc -n osac get endpointslices | grep fulfillment
 oc -n osac get pods | grep -viE "running|completed" # expect: header only
 
 # 4. Release state
-helm -n osac list                                   # osac deployed
+oc -n osac get secrets -l owner=helm                # osac.v1 present
 
 # 5. External battery (laptop /etc/hosts already has the edge16 apps hosts)
 EXT=fulfillment-api-osac.apps.test-infra-cluster-edge16.redhat.com

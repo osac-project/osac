@@ -1,5 +1,6 @@
 import {
   Alert,
+  AlertGroup,
   Divider,
   Flex,
   FlexItem,
@@ -44,19 +45,15 @@ const VmDetails = ({ vm }: Props) => {
     <>
       <PageSection hasBodyWrapper={false}>
         <Stack hasGutter>
-          {vm.status?.state === ComputeInstanceState.DELETING && (
-            <StackItem>
-              <Alert
-                variant="warning"
-                title={t('Virtual machine deletion in progress')}
-                role="status"
-                isInline
-                isLiveRegion
-              >
-                {t('Information on this page may be outdated.')}
-              </Alert>
-            </StackItem>
-          )}
+          <StackItem>
+            <AlertGroup isLiveRegion>
+              {vm.status?.state === ComputeInstanceState.DELETING && (
+                <Alert variant="warning" title={t('Virtual machine deletion in progress')} isInline>
+                  {t('Information on this page may be outdated.')}
+                </Alert>
+              )}
+            </AlertGroup>
+          </StackItem>
           {instanceTypeError ? (
             <StackItem>
               <Alert variant="danger" title={t('Could not load instance types')} isInline>

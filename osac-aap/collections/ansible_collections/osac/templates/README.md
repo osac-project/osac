@@ -307,9 +307,10 @@ value is refused). It picks the role in this order:
 4. Otherwise: `{provider}_storage`.
 
 On `vmaas` only rules 2 to 4 apply, so existing VMaaS routing is unchanged. On `caas`, every
-tier (nfs or block) of a non-guest-native provider routes to `osac_csi_storage`; for block
-tiers the provider's node plugin must exist on the guest cluster. This covers CLaaS
-(ClusterOrder) storage only.
+tier (nfs or block) of a non-guest-native provider routes to `osac_csi_storage`. On `caas`,
+VAST block tiers are refused after all other StorageClasses are created (reason
+`vast_block_unsupported_on_caas`, no StorageClass for them); NFS tiers, including those on
+other VAST backends, still get theirs, and netapp and pure block tiers are unaffected. This covers CLaaS (ClusterOrder) storage only.
 
 **VAST provider specifics:** The `vast_storage` role creates per-tenant VMS managers
 (TENANT_ADMIN user type) with random passwords via REST API (`POST /api/managers/`).
@@ -417,6 +418,12 @@ OSAC CSI driver to be registered there already (a `CSIDriver` named
 `osac_csi_driver_name`); without it `ensure_storage_class` fails and records the
 reason `csi_driver_not_registered` in `osac_storage_provider_failures`. It places no
 credentials on the cluster, and its StorageClasses do not allow volume expansion.
+`ensure_storage_class` skips any VAST block tier (no StorageClass) and appends its name to
+the fact `_storage_provider_refused_block_tiers` without failing. The `storage_provider`
+dispatcher fails once after every provider backend pair was handled, recording the reason
+`vast_block_unsupported_on_caas` (tiers and backend IDs) in
+`osac_storage_provider_failures` with the message "VAST block tiers are not supported on
+CLaaS clusters".
 `teardown_cluster_storage` deletes only the tenant's StorageClasses. Installing the
 driver is a separate entry point, `tasks_from: install_driver`, with
 `uninstall_driver` as its counterpart; the StorageClass actions do not call either.

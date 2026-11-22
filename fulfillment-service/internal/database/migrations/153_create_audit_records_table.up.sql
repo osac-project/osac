@@ -7,10 +7,14 @@
 --   http://www.apache.org/licenses/LICENSE-2.0
 --
 
--- Audit records use their stable event ID as the primary key and are retained without archival or cleanup.
+-- Audit records are immutable event data, not lifecycle-managed OSAC objects.
 create table audit_records (
   id text not null primary key,
   creation_timestamp timestamp with time zone not null default now(),
   tenant text not null,
   data jsonb not null
 );
+
+create trigger enqueue_change
+  after insert or update or delete on audit_records
+  for each row execute function enqueue_change();

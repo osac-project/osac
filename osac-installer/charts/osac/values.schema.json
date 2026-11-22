@@ -663,10 +663,15 @@
                   "description": "Keycloak client used by the tenant Route (epic OSAC-7993 consumes this)",
                   "default": "thanos-tenant"
                 },
+                "adminAudience": {
+                  "type": "string",
+                  "description": "Comma-separated Keycloak clients an OSAC login token may be minted for. Matched against the token's aud and azp claims",
+                  "default": "osac-ui,osac-cli"
+                },
                 "issuerUrl": {
                   "type": "string",
-                  "description": "OIDC issuer URL, for example https://keycloak.example.com/realms/osac",
-                  "default": ""
+                  "description": "OIDC issuer URL. The default renders https://keycloak-keycloak.<global.clusterDomain>/realms/osac; the render fails when it is empty",
+                  "default": "https://keycloak-keycloak.{{ .Values.global.clusterDomain }}/realms/osac"
                 }
               },
               "additionalProperties": false

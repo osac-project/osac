@@ -9,17 +9,25 @@
 {{- $ns := include "osac-observability.namespace" . -}}
 {{- $clusterDomain := (.Values.global | default dict).clusterDomain | default "" -}}
 {{- $queryURL := printf "http://thanos-query.%s.svc.cluster.local:9090" $ns -}}
-{{- /* Authentication comes first: the Route reaches the authentication proxy,
-       which forwards the signed-in request to the allowlist sidecar on
-       loopback. The sidecar forwards only the five documented endpoints to
-       Thanos Query and answers every other Prometheus API path with 501. This
-       order keeps the proxy's own /oauth2/* login and callback paths at the
-       proxy instead of turning them into 501s. */ -}}
+{{- /* Authentication comes first: the Route reaches the gate, which decides
+       with a plain 401 or 403 on the bearer path and forwards a browser
+       session to the OAuth proxy. The proxy forwards the signed-in request to
+       the allowlist sidecar on loopback. The sidecar forwards only the five
+       documented endpoints to Thanos Query and answers every other Prometheus
+       API path with 501. This order keeps the proxy's own /oauth2/* login and
+       callback paths at the proxy, and the gate exempts them, instead of
+       turning them into 401s or 501s. */ -}}
 {{- $allowlistURL := "http://127.0.0.1:9091" -}}
+{{- /* The umbrella defaults this to a tpl string backed by
+       global.clusterDomain; validate.yaml fails the render when it is empty. */ -}}
+{{- $issuer := tpl ($keycloak.issuerUrl | default "" | toString) . -}}
+{{- $audiences := $keycloak.adminAudience | default "osac-ui,osac-cli" | toString -}}
+{{- $adminRole := $keycloak.keycloakAdminRole | default "cloud-provider-admin" -}}
+{{- $openshiftGroup := $admin.openshiftGroup | default "osac-cloud-infrastructure-admins" -}}
 {{- $keycloakHost := printf "thanos-query-admin-%s" $ns -}}
 {{- $openshiftHost := printf "thanos-query-admin-openshift-%s" $ns -}}
 {{- $keycloakArgs := list "--provider=keycloak-oidc"
-      (printf "--oidc-issuer-url=%s" ($keycloak.issuerUrl | default ""))
+      (printf "--oidc-issuer-url=%s" $issuer)
       (printf "--client-id=%s" ($keycloak.adminClientId | default "thanos-admin"))
       "--client-secret-file=/etc/thanos-oauth2/client-secret"
       "--cookie-secret-file=/etc/thanos-oauth2/cookie-secret"
@@ -30,8 +38,12 @@
       "--pass-access-token"
       "--set-authorization-header"
       "--reverse-proxy=true"
-      (printf "--allowed-role=%s" ($keycloak.keycloakAdminRole | default "cloud-provider-admin"))
+      (printf "--allowed-role=%s" $adminRole)
+      "--skip-jwt-bearer-tokens=true"
 -}}
+{{- range $audience := splitList "," $audiences }}
+{{- $keycloakArgs = append $keycloakArgs (printf "--extra-jwt-issuers=%s=%s" $issuer (trim $audience)) -}}
+{{- end }}
 {{- if $clusterDomain }}
 {{- $keycloakArgs = append $keycloakArgs (printf "--redirect-url=https://%s.%s/oauth2/callback" $keycloakHost $clusterDomain) -}}
 {{- end }}
@@ -61,6 +73,45 @@ spec:
       securityContext:
         {{- include "osac-observability.podSecurityContext" . | nindent 8 }}
       containers:
+        - name: query-auth-gate
+          image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag }}"
+          imagePullPolicy: IfNotPresent
+          command:
+            - /query-auth-gate
+          env:
+            - name: LISTEN_ADDR
+              value: ":9092"
+            - name: MODE
+              value: keycloak
+            - name: PROXY_URL
+              value: "http://127.0.0.1:4180"
+            - name: ALLOWLIST_URL
+              value: {{ $allowlistURL | quote }}
+            - name: OIDC_ISSUER_URL
+              value: {{ $issuer | quote }}
+            - name: OIDC_AUDIENCE
+              value: {{ $audiences | quote }}
+            - name: ADMIN_ROLE
+              value: {{ $adminRole | quote }}
+          ports:
+            - name: gate
+              containerPort: 9092
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /livez
+              port: gate
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
         - name: oauth2-proxy
           image: "{{ $oauth2Proxy.repository }}:{{ $oauth2Proxy.tag }}"
           imagePullPolicy: IfNotPresent
@@ -166,6 +217,41 @@ spec:
       securityContext:
         {{- include "osac-observability.podSecurityContext" . | nindent 8 }}
       containers:
+        - name: query-auth-gate
+          image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag }}"
+          imagePullPolicy: IfNotPresent
+          command:
+            - /query-auth-gate
+          env:
+            - name: LISTEN_ADDR
+              value: ":9092"
+            - name: MODE
+              value: openshift
+            - name: PROXY_URL
+              value: "http://127.0.0.1:4181"
+            - name: ALLOWLIST_URL
+              value: {{ $allowlistURL | quote }}
+            - name: OPENSHIFT_GROUP
+              value: {{ $openshiftGroup | quote }}
+          ports:
+            - name: gate
+              containerPort: 9092
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /livez
+              port: gate
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
         - name: ose-oauth-proxy
           image: "{{ $openshiftOAuthProxy.repository }}:{{ $openshiftOAuthProxy.tag }}"
           imagePullPolicy: IfNotPresent
@@ -176,7 +262,7 @@ spec:
             - --https-address=
             - --upstream={{ $allowlistURL }}
             - --openshift-service-account=thanos-query-admin-openshift
-            - --openshift-group={{ $admin.openshiftGroup | default "osac-cloud-infrastructure-admins" }}
+            - --openshift-group={{ $openshiftGroup }}
             - --cookie-secret-file=/etc/thanos-oauth/cookie-secret
             - --email-domain=*
             - --skip-provider-button

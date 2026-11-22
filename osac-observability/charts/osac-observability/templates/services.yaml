@@ -108,7 +108,8 @@ spec:
 ---
 # The admin Routes reach these Services, never Thanos Query directly: each
 # Service selects one proxy Deployment by its per-workload instance label and
-# sends the request to the authentication proxy first.
+# sends the request to the authentication gate first. The gate answers 401/403
+# itself and forwards only an authorized request.
 apiVersion: v1
 kind: Service
 metadata:
@@ -125,7 +126,7 @@ spec:
   ports:
     - name: http
       port: 9091
-      targetPort: oauth2-proxy
+      targetPort: gate
       protocol: TCP
 ---
 apiVersion: v1
@@ -144,6 +145,6 @@ spec:
   ports:
     - name: http
       port: 9091
-      targetPort: oauth-proxy
+      targetPort: gate
       protocol: TCP
 {{- end }}

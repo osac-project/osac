@@ -1,0 +1,38 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $ns := include "osac-observability.namespace" . -}}
+{{- /* The OpenShift gate validates a bearer token with a TokenReview and reads
+       the configured group's membership. Both resources are cluster scoped, so
+       the permission lives in a ClusterRole, but it is bound only to the one
+       ServiceAccount that serves the admin Route. OSAC never creates or edits
+       the group. */ -}}
+{{- $name := printf "%s-thanos-query-admin-token-review" .Release.Name -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+  - apiGroups: ["user.openshift.io"]
+    resources: ["groups"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: thanos-query-admin-openshift
+    namespace: {{ $ns }}
+{{- end }}

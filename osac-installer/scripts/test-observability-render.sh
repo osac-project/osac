@@ -46,6 +46,8 @@ OBS_ARGS=(
   --set global.observability.thanos.image.tag=test-thanos
   --set global.observability.services.oauth2Proxy.tag=test-oauth2-proxy
   --set global.observability.services.openshiftOauthProxy.tag=test-ose-oauth-proxy
+  # The gate refuses an empty issuer; the render never reaches Keycloak.
+  --set global.observability.keycloak.issuerUrl=https://keycloak.example.com/realms/osac
 )
 # Metering is always deployed (billing is not optional), so the scrape checks
 # only switch its billing adapters on.
@@ -353,6 +355,7 @@ for route in thanos-query-admin thanos-query-admin-openshift; do
   extract_kind_name "${admin}" Service "${route}" >"${service_doc}"
   require "${service_doc}" "name: ${route}"
   require "${service_doc}" 'port: 9091'
+  require "${service_doc}" 'targetPort: gate'
   require "${service_doc}" 'app.kubernetes.io/component: query-auth-proxy'
 done
 
@@ -363,6 +366,8 @@ for proxy in thanos-query-admin thanos-query-admin-openshift; do
   extract_kind_name "${enabled}" Deployment "${proxy}" >"${proxy_doc}"
   require "${proxy_doc}" "name: ${proxy}"
   require "${proxy_doc}" 'osac.openshift.io/observability-role: query-auth-proxy'
+  require "${proxy_doc}" '- name: query-auth-gate'
+  require "${proxy_doc}" '- /query-auth-gate'
   require "${proxy_doc}" '- name: query-allowlist'
   require "${proxy_doc}" '- /query-allowlist'
   require "${proxy_doc}" 'name: osac-observability-query-allowlist'
@@ -373,6 +378,10 @@ require "${TMP_DIR}/deployment-thanos-query-admin.yaml" \
   '--allowed-role=cloud-provider-admin'
 require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" \
   '--openshift-group=osac-cloud-infrastructure-admins'
+require "${TMP_DIR}/deployment-thanos-query-admin.yaml" 'value: keycloak'
+require "${TMP_DIR}/deployment-thanos-query-admin.yaml" \
+  'value: "https://keycloak.example.com/realms/osac"'
+require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" 'value: openshift'
 
 # The allowlist is the whole admin API surface: one entry per documented
 # endpoint and nothing else.

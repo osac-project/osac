@@ -19,4 +19,11 @@
 {{- if $missing -}}
 {{- fail (printf "observability image tags must be set when observability is enabled: %s" (join ", " $missing)) -}}
 {{- end -}}
+{{- /* The admin gates verify tokens against this realm. An empty issuer would
+       render an empty --oidc-issuer-url and an issuer check that accepts any
+       realm, so refuse the render instead. */ -}}
+{{- $issuer := tpl (dig "keycloak" "issuerUrl" "" $obs | default "" | toString) . -}}
+{{- if or (not (regexMatch "^https?://[^/?#]+/.+$" $issuer)) (regexMatch "://[^/]*\\./" $issuer) -}}
+{{- fail (printf "global.observability.keycloak.issuerUrl must be set (with global.clusterDomain resolvable) when observability is enabled (got %q)" $issuer) -}}
+{{- end -}}
 {{- end -}}

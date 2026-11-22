@@ -95,7 +95,8 @@
         public: true
       vars:
         _provider_tiers: "{{ _computed_provider_tiers }}"
-        _provider_backend_connections: "{{ _computed_provider_backend_connections }}"
+        # osac_csi_storage never reads backend connections; do not hand it credentials.
+        _provider_backend_connections: "{{ {} if _dispatch_role == 'osac_csi_storage' else _computed_provider_backend_connections }}"
         vast_storage_csi_provisioner_map: "{{ storage_provider_csi_driver_matrix.vast.protocols }}"
 
 - name: "Accumulate tenant config after dispatch (setup only)"

@@ -44,6 +44,7 @@ argument_specs:
         type: str
         required: false
         default: ""
+        no_log: true
         description: >
           Passphrase for block encryption. Passed from the Tenant CR event payload.
           When empty, block StorageClasses are created without host encryption.
@@ -80,6 +81,16 @@ argument_specs:
           cluster, caas is a tenant guest cluster. On caas every provider except
           the guest-native ones (storage_provider_guest_native_providers) is
           served by the OSAC CSI role, osac.templates.osac_csi_storage.
+      storage_provider_guest_native_providers:
+        type: list
+        elements: str
+        required: false
+        default:
+          - lvms
+        description: >
+          Providers that keep their own template role on the caas target instead of
+          being served by osac.templates.osac_csi_storage. Names are compared with
+          hyphens read as underscores and a trailing _storage removed.
       storage_provider_target_kubeconfig:
         type: str
         required: false

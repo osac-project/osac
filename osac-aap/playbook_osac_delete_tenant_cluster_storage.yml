@@ -25,6 +25,10 @@
       {%- elif osac_job_vars.resource.kind == 'Tenant' -%}
       {{ osac_job_vars.resource.metadata.namespace }}
       {%- endif -%}
+    # Provisioning target for storage_provider routing, computed once: a Tenant is
+    # the hub (vmaas), a ClusterOrder is a guest cluster (caas). Any other kind is
+    # rejected by the pre_tasks assert below; an unmapped kind also fails the lookup.
+    _storage_provisioning_target: "{{ {'ClusterOrder': 'caas', 'Tenant': 'vmaas'}[osac_job_vars.resource.kind] }}"
 
   pre_tasks:
     - name: Show resource metadata
@@ -40,6 +44,14 @@
         osac_job_vars.resource.metadata.name | length == 0 or
         osac_job_vars.resource.metadata.namespace is not defined or
         osac_job_vars.resource.metadata.namespace | length == 0
+
+    - name: Validate the resource kind is one this playbook can route
+      ansible.builtin.assert:
+        that:
+          - osac_job_vars.resource.kind | default('') in ['Tenant', 'ClusterOrder']
+        fail_msg: >-
+          osac_job_vars.resource.kind must be 'Tenant' (hub storage) or 'ClusterOrder'
+          (guest-cluster storage). Got: {{ osac_job_vars.resource.kind | default('') | to_json }}
 
     - name: Validate storage_tier_definitions is a non-empty array in the EDA event
       ansible.builtin.fail:
@@ -104,4 +116,4 @@
         storage_provider_tiers: "{{ osac_job_vars.storage_tier_definitions }}"
         storage_provider_target_kubeconfig: "{{ _storage_target_kubeconfig | default(omit) }}"
         storage_provider_target_kubeconfig_insecure: "{{ _storage_target_kubeconfig_insecure | default(false) }}"
-        storage_provider_provisioning_target: "{{ 'caas' if osac_job_vars.resource.kind == 'ClusterOrder' else 'vmaas' }}"
+        storage_provider_provisioning_target: "{{ _storage_provisioning_target }}"

@@ -30,10 +30,14 @@
 # rather than using a syntactically-valid-but-unreachable placeholder.
 #
 # Requires: mock VMS server on 127.0.0.1:18443, kind cluster with osac-system namespace
-# (same requirements as storage_provider_ensure_sc, which this test's hub Secret fixtures
-# mirror). Does NOT require a published osac-csi-driver chart tag or the local chart
-# registry setup_test_env.sh stands up for csi_driver_install's own role-level test -- the
-# real Helm install is stubbed out entirely here.
+# (same requirements as storage_provider_ensure_sc; the Tenant cases mirror its hub Secret
+# fixtures). The ClusterOrder case needs no hub Secret: its fixture is the CSIDriver object
+# (csi.tcs-test.osac.openshift.io) the OSAC CSI driver registers, and it also creates a decoy
+# StorageClass carrying the tenant and osac-aap labels but not the osac-csi-driver managed-by
+# label, to prove the CaaS teardown deletes only OSAC CSI StorageClasses. Does NOT require a
+# published osac-csi-driver chart tag or the local chart registry setup_test_env.sh stands up
+# for csi_driver_install's own role-level test -- the real Helm install is stubbed out entirely
+# here.
 #
 # SCOPE: this test only proves the playbook-level `when: kind == 'Tenant'` gate
 # and that the real storage_provider dispatch still runs -- it does NOT exercise
@@ -46,6 +50,34 @@
 # and "Stage 2: Cluster storage provisioning" contexts), which drive
 # handleBackendReadiness against a real envtest control plane. The
 # csi_driver_install_override stub in both cases below is therefore intentional.
+
+# ── Guard: refuse to run against anything but the Kind test cluster ──
+# This target creates and deletes cluster-scoped objects (CSIDriver, StorageClass), and the
+# ClusterOrder case reads the kubeconfig from KUBECONFIG. Same guard as osac_csi_storage_class.
+- name: "Tenant Cluster Storage CSI Driver Install Gate - Guard: run only against the Kind test cluster"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Assert KUBECONFIG points at the Kind test kubeconfig
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'KUBECONFIG') is regex('kubeconfig-osac-test$')
+        fail_msg: >-
+          KUBECONFIG must end with kubeconfig-osac-test (run through run_tests.sh or the
+          documented focused run). Got: '{{ lookup('env', 'KUBECONFIG') }}'
+        success_msg: "Running against the Kind test kubeconfig"
+
+    - name: Assert K8S_AUTH_KUBECONFIG cannot redirect the modules to another cluster
+      ansible.builtin.assert:
+        that:
+          - >-
+            lookup('env', 'K8S_AUTH_KUBECONFIG') | length == 0
+            or lookup('env', 'K8S_AUTH_KUBECONFIG') == lookup('env', 'KUBECONFIG')
+        fail_msg: >-
+          K8S_AUTH_KUBECONFIG must be unset or equal KUBECONFIG. Got:
+          '{{ lookup('env', 'K8S_AUTH_KUBECONFIG') }}'
+        success_msg: "K8S_AUTH_KUBECONFIG is unset or matches KUBECONFIG"
 
 - name: Verify isolated Kind cluster before creating native CSI fixtures
   hosts: localhost
@@ -535,6 +567,24 @@
             name: "vast-nfs-test-tcs-clusterorder-default"
           failed_when: false
 
+        - name: Delete decoy StorageClass if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: storage.k8s.io/v1
+            kind: StorageClass
+            name: "osac-test-tcs-clusterorder-decoy"
+          failed_when: false
+
+        # Best-effort: a vendor-path regression would have left this hub Secret behind.
+        - name: Delete hub Secret if exists
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: "vast-tenant-config-test-tcs-clusterorder-be-tcs-clusterorder"
+            namespace: "osac-system"
+          failed_when: false
+
     - name: Register the OSAC CSI driver (CSIDriver fixture the driver install would create)
       kubernetes.core.k8s:
         state: present
@@ -734,6 +784,22 @@
   gather_facts: false
 
   tasks:
+    # Carries the tenant and osac-aap labels the vast_storage teardown selects on, but not
+    # osac.openshift.io/managed-by=osac-csi-driver, the label the osac_csi_storage teardown
+    # selects on. Only a teardown that wrongly used the vendor selector would delete it.
+    - name: Create a decoy StorageClass the OSAC CSI teardown must not delete
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "osac-test-tcs-clusterorder-decoy"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: test-tcs-clusterorder
+          provisioner: csi.tcs-test.osac.openshift.io
+
     - name: Set test variables (ClusterOrder/CaaS teardown)
       ansible.builtin.set_fact:
         osac_job_vars:
@@ -776,6 +842,23 @@
           - _co_storage_class_after_teardown.resources | length == 0
         fail_msg: "StorageClass 'osac-test-tcs-clusterorder-default' still exists after the ClusterOrder teardown"
         success_msg: "ClusterOrder teardown removed the OSAC CSI StorageClass"
+
+    - name: Read the decoy StorageClass after teardown
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "osac-test-tcs-clusterorder-decoy"
+      register: _co_decoy_after_teardown
+
+    - name: Assert teardown left the StorageClass without the osac-csi-driver label alone
+      ansible.builtin.assert:
+        that:
+          - _co_decoy_after_teardown.resources | length == 1
+        fail_msg: >-
+          Decoy StorageClass 'osac-test-tcs-clusterorder-decoy' (tenant and osac-aap labels,
+          no osac.openshift.io/managed-by=osac-csi-driver) was deleted by the ClusterOrder
+          teardown -- it must delete only StorageClasses the OSAC CSI role manages.
+        success_msg: "ClusterOrder teardown left the unmanaged decoy StorageClass in place"
 
 # ── Cleanup (ClusterOrder case) ──
 - name: "Tenant Cluster Storage CSI Driver Install Gate - Cleanup (ClusterOrder case)"
@@ -843,6 +926,14 @@
         kind: Secret
         name: "vast-tenant-config-test-tcs-clusterorder-be-tcs-clusterorder"
         namespace: "osac-system"
+      failed_when: false
+
+    - name: Delete decoy StorageClass
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "osac-test-tcs-clusterorder-decoy"
       failed_when: false
 
     - name: Delete override log

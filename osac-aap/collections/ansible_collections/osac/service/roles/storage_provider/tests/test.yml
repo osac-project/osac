@@ -1648,6 +1648,43 @@
             success_msg: "Unknown provisioning target rejected"
 
 # ──────────────────────────────────────────────────────────────
+# The resolver rejects an unknown provisioning target itself
+# Expected: _resolve_provider_role.yaml fails with its own message naming
+# storage_provider_provisioning_target. The argument spec check above never reaches
+# the resolver, so this guards the resolver for callers that include it directly.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- resolver rejects an unknown provisioning target (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run resolver unknown-target failure test
+      block:
+        - name: Set _current_provider for the resolver test
+          ansible.builtin.set_fact:
+            _current_provider: vast
+
+        - name: Resolve the provider role with an unknown target (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+            tasks_from: _resolve_provider_role.yaml
+          vars:
+            storage_provider_provisioning_target: bogus
+
+        - name: This task should not be reached -- the resolver should have failed
+          ansible.builtin.fail:
+            msg: "Resolver did not fail as expected when the provisioning target is unknown"
+
+      rescue:
+        - name: Verify the resolver's own message names storage_provider_provisioning_target
+          ansible.builtin.assert:
+            that:
+              - "'storage_provider_provisioning_target must be' in (ansible_failed_result.msg | default(''))"
+              - "'bogus' in (ansible_failed_result.msg | default(''))"
+            fail_msg: "Resolver failed but not with its own target message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Resolver rejected the unknown provisioning target"
+
+# ──────────────────────────────────────────────────────────────
 # Regression: the legacy CaaS VAST path validates the native CSI matrix.
 # This lives last so run_tests.sh's second invocation exercises it after its
 # start-at-task split around the invalid-provider runner failure.

@@ -306,9 +306,10 @@ value is refused). It picks the role in this order:
 3. Provider name already ends in `_storage`: that role.
 4. Otherwise: `{provider}_storage`.
 
-On `vmaas` only rules 2 to 4 apply, so existing VMaaS routing is unchanged. On `caas`, a block
-tier for a provider such as `vast` also routes to `osac_csi_storage`, so that provider's node
-plugin must exist on the guest cluster. This covers CLaaS (ClusterOrder) storage only.
+On `vmaas` only rules 2 to 4 apply, so existing VMaaS routing is unchanged. On `caas`, every
+tier (nfs or block) of a non-guest-native provider routes to `osac_csi_storage`; for block
+tiers the provider's node plugin must exist on the guest cluster. This covers CLaaS
+(ClusterOrder) storage only.
 
 **VAST provider specifics:** The `vast_storage` role creates per-tenant VMS managers
 (TENANT_ADMIN user type) with random passwords via REST API (`POST /api/managers/`).

@@ -1,0 +1,5 @@
+---
+- name: Delete the instance with the normal VM provider role
+  ansible.builtin.include_role:
+    name: osac.templates.ocp_virt_vm
+    tasks_from: delete

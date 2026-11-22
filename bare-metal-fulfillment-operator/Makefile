@@ -91,6 +91,10 @@ helm-validate: helm-lint ## Lint and template-render Helm charts.
 	helm template bmf-operator-crds charts/operator-crds/
 	helm template bmf-operator charts/operator/
 
+.PHONY: helm-unittest
+helm-unittest: ## Run the Helm unit tests for the operator chart.
+	helm unittest charts/operator/
+
 .PHONY: helm-crds
 helm-crds: manifests ## Copy generated CRDs into the operator-crds Helm chart.
 	@echo "Syncing CRDs to charts/operator-crds/templates/..."

@@ -1,0 +1,134 @@
+suite: bmf operator metrics over HTTPS
+templates:
+  - metrics-service.yaml
+  - deployment.yaml
+  - servicemonitor.yaml
+  - metrics-reader-prometheus.yaml
+release:
+  name: bmf-operator
+  namespace: osac
+capabilities:
+  apiVersions:
+    - monitoring.coreos.com/v1
+    - monitoring.coreos.com/v1/ServiceMonitor
+tests:
+  - it: serves the service-CA certificate on 8443 by default
+    template: metrics-service.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["service.beta.openshift.io/serving-cert-secret-name"]
+          value: bmf-operator-metrics-tls
+  - it: always binds metrics on 8443
+    template: deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-bind-address=:8443
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-cert-path=/etc/metrics-certs
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: metrics-certs
+            mountPath: /etc/metrics-certs
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: metrics-certs
+            secret:
+              secretName: bmf-operator-metrics-tls
+              optional: true
+  - it: renders the ServiceMonitor and Prometheus binding when observability is enabled
+    set:
+      global.observability.enabled: true
+      global.observability.collection.osacControlPlane: 30s
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: servicemonitor.yaml
+      - equal:
+          path: metadata.name
+          value: bmf-operator-metrics
+        template: servicemonitor.yaml
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: bare-metal-fulfillment-operator
+        template: servicemonitor.yaml
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/instance"]
+          value: bmf-operator
+        template: servicemonitor.yaml
+      - equal:
+          path: spec.endpoints[0].port
+          value: https
+        template: servicemonitor.yaml
+      - equal:
+          path: spec.endpoints[0].scheme
+          value: https
+        template: servicemonitor.yaml
+      - equal:
+          path: spec.endpoints[0].bearerTokenFile
+          value: /var/run/secrets/kubernetes.io/serviceaccount/token
+        template: servicemonitor.yaml
+      - equal:
+          path: spec.endpoints[0].tlsConfig.caFile
+          value: /etc/prometheus/configmaps/service-ca-bundle/service-ca.crt
+        template: servicemonitor.yaml
+      - equal:
+          path: spec.endpoints[0].tlsConfig.serverName
+          value: bmf-operator-controller-manager-metrics-service.osac.svc
+        template: servicemonitor.yaml
+      - equal:
+          path: spec.endpoints[0].relabelings[0].targetLabel
+          value: job
+        template: servicemonitor.yaml
+      - equal:
+          path: spec.endpoints[0].relabelings[0].replacement
+          value: bmf-operator
+        template: servicemonitor.yaml
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 30s
+        template: servicemonitor.yaml
+      - equal:
+          path: roleRef.name
+          value: bmf-operator-metrics-reader
+        template: metrics-reader-prometheus.yaml
+      - equal:
+          path: subjects[0].name
+          value: prometheus-k8s
+        template: metrics-reader-prometheus.yaml
+      - equal:
+          path: subjects[0].namespace
+          value: openshift-monitoring
+        template: metrics-reader-prometheus.yaml
+  - it: honours the standalone serviceMonitor override without global observability
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.interval: 45s
+    asserts:
+      - hasDocuments:
+          count: 1
+        template: servicemonitor.yaml
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 45s
+        template: servicemonitor.yaml
+  - it: renders neither the ServiceMonitor nor the Prometheus binding when disabled
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: servicemonitor.yaml
+      - hasDocuments:
+          count: 0
+        template: metrics-reader-prometheus.yaml
+  - it: does not disable TLS verification
+    set:
+      global.observability.enabled: true
+      global.observability.collection.osacControlPlane: 30s
+    template: servicemonitor.yaml
+    asserts:
+      - notExists:
+          path: spec.endpoints[0].tlsConfig.insecureSkipVerify

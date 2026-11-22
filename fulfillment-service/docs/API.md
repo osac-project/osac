@@ -331,16 +331,6 @@ All proto fields that have constraints (required, min/max length, format, etc.) 
 `buf.validate` rules. The protovalidate library enforces these constraints at runtime, rejecting
 invalid requests with `InvalidArgument` errors that include field-level violation details.
 
-### Validation flow
-
-- **Create requests**: Validated by protovalidate interceptor before reaching server handlers
-- **Update requests on update-capable services**: Server validates the merged object after applying `update_mask`
-  - Interceptor skips validation to avoid false errors on partial objects
-  - Server merges request fields (per mask) with database object
-  - Server validates the complete merged result with protovalidate
-
-This ensures validation always runs on the actual final state, not partial input.
-
 ### Standard constraints
 
 Common validation patterns:

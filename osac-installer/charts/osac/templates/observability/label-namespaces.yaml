@@ -1,5 +1,5 @@
 {{- $fullname := include "osac.fullname" . -}}
-{{- $enabled := .Values.observability.enabled | default false -}}
+{{- $enabled := .Values.global.observability.enabled | default false -}}
 {{- /*
 Helm cannot label its own release namespace declaratively, and rendering a
 Namespace object for it would make Helm own (and delete) the namespace on
@@ -162,8 +162,10 @@ spec:
         - /bin/bash
         - -c
         - |
+          set -euo pipefail
           ns="{{ .Release.Namespace }}"
-          current=$(kubectl get namespace "$ns" -o jsonpath='{.metadata.labels.openshift\.io/cluster-monitoring}')
+          kubectl get namespace "$ns" -o jsonpath='{.metadata.labels.openshift\.io/cluster-monitoring}' > /tmp/monitoring-label
+          current=$(cat /tmp/monitoring-label)
           if [ -n "$current" ]; then
             kubectl label namespace "$ns" openshift.io/cluster-monitoring-
           fi

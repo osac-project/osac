@@ -1,9 +1,10 @@
 {{- if dig "observability" "enabled" false (.Values.global | default dict) }}
 {{- $ns := include "osac-observability.namespace" . -}}
-{{- /* One list, mounted by both admin proxies. The entries mirror
-       allowlist.DefaultSpecifiers in osac-observability/internal/allowlist;
-       the proxy fails closed on an empty file and falls back to these same
-       five paths when the file is absent. */ -}}
+{{- /* One list, mounted by both admin proxies. The key is the file name the
+       proxies read (/etc/query-allowlist/endpoints.txt), so a rename on either
+       side is a startup error rather than a silent fallback. The entries
+       mirror allowlist.DefaultSpecifiers in osac-observability/internal/
+       allowlist; the proxy fails to start on a missing or unparseable file. */ -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -12,7 +13,7 @@ metadata:
   labels:
     {{- include "osac-observability.labels" . | nindent 4 }}
 data:
-  endpoints: |
+  endpoints.txt: |
     /api/v1/query
     /api/v1/query_range
     /api/v1/series

@@ -406,6 +406,17 @@ for endpoint in \
   '/api/v1/label/<name>/values'; do
   require "${allowlist}" "${endpoint}"
 done
+# A directory mount of /etc/query-allowlist yields one file per key, so the key
+# must be exactly the name ALLOWLIST_FILE reads. A rename on either side would
+# leave the sidecar reading a missing file, which is now a startup error.
+require "${allowlist}" '  endpoints.txt: |'
+reject "${allowlist}" '  endpoints: |'
+for proxy in thanos-query-admin thanos-query-admin-openshift; do
+  require "${TMP_DIR}/deployment-${proxy}.yaml" \
+    'value: /etc/query-allowlist/endpoints.txt'
+  require "${TMP_DIR}/deployment-${proxy}.yaml" \
+    'mountPath: /etc/query-allowlist'
+done
 # Only the allowlist sidecar may reach Thanos Query: the authentication proxy's
 # upstream is the sidecar on loopback, checked above.
 require "${TMP_DIR}/deployment-thanos-query-admin.yaml" \

@@ -24,24 +24,12 @@ func writeFile(t *testing.T, content string) string {
 	return path
 }
 
-func TestLoadMissingFileUsesTheDefaultEndpoints(t *testing.T) {
-	matcher, err := Load(filepath.Join(t.TempDir(), "does-not-exist.txt"))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	for _, path := range []string{
-		"/api/v1/query",
-		"/api/v1/query_range",
-		"/api/v1/series",
-		"/api/v1/labels",
-		"/api/v1/label/__name__/values",
-	} {
-		if !matcher.Allowed(http.MethodGet, path) {
-			t.Errorf("GET %s should be allowed by the default list", path)
-		}
-	}
-	if matcher.Allowed(http.MethodGet, "/api/v1/targets") {
-		t.Error("the default list must not allow an endpoint outside the five")
+func TestLoadRejectsAMissingFile(t *testing.T) {
+	// A missing file means the mount or its key is wrong. Falling back to a
+	// compiled-in list would make the pod Ready while serving endpoints the
+	// operator never configured.
+	if _, err := Load(filepath.Join(t.TempDir(), "does-not-exist.txt")); err == nil {
+		t.Fatal("Load should fail on a missing allowlist file")
 	}
 }
 

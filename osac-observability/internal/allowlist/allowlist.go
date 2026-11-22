@@ -14,7 +14,6 @@ package allowlist
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"net/http"
 	"os"
 	"regexp"
@@ -27,9 +26,9 @@ import (
 // turning it into a wildcard.
 const namePlaceholder = "<name>"
 
-// DefaultSpecifiers is the endpoint list the chart renders into the allowlist
-// ConfigMap, and the fallback when that file is not mounted. Keeping one
-// constant means the deployed list and the compiled-in default cannot drift.
+// DefaultSpecifiers is the canonical endpoint list the chart renders into the
+// allowlist ConfigMap. Keeping one constant means the deployed list and the
+// compiled-in reference cannot drift.
 const DefaultSpecifiers = "/api/v1/query\n" +
 	"/api/v1/query_range\n" +
 	"/api/v1/series\n" +
@@ -54,14 +53,12 @@ func Default() *Matcher {
 }
 
 // Load reads a newline-delimited list of endpoint paths. Blank lines and lines
-// starting with '#' are ignored. A missing file yields Default so a proxy with
-// no mounted ConfigMap still serves only the documented endpoints; an existing
-// but empty file is an error rather than a silent "allow all".
+// starting with '#' are ignored. A missing or unreadable file is an error: the
+// proxy must not start on a compiled-in list, because that would leave the
+// operator's ConfigMap silently unused. An empty file is an error too, rather
+// than a silent "allow all".
 func Load(path string) (*Matcher, error) {
 	content, err := os.ReadFile(path)
-	if errors.Is(err, fs.ErrNotExist) {
-		return Default(), nil
-	}
 	if err != nil {
 		return nil, fmt.Errorf("read allowlist %s: %w", path, err)
 	}

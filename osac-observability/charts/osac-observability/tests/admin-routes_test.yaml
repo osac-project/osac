@@ -38,13 +38,18 @@ tests:
       - equal:
           path: metadata.namespace
           value: osac-observability
+      # The key is the file name the proxies read under their directory mount
+      # (/etc/query-allowlist/endpoints.txt); any other key leaves the sidecar
+      # reading a missing file and failing to start.
+      - notExists:
+          path: data.endpoints
       # Five non-empty lines and nothing else: no method, no wildcard, no
       # sixth endpoint.
       - matchRegex:
-          path: data.endpoints
+          path: data["endpoints.txt"]
           pattern: '\A([^\s]+\n){5}\z'
       - equal:
-          path: data.endpoints
+          path: data["endpoints.txt"]
           value: |
             /api/v1/query
             /api/v1/query_range

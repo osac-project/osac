@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -54,6 +55,30 @@ var _ = Describe("CatalogItem SSH key policy", func() {
 		err = validateCatalogItemSSHKeyPolicy(ctx, referenceScope{tenant: testTenant}, policy, nil)
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		Expect(status.Convert(err).Message()).To(ContainSubstring("tenant-scoped"))
+	})
+
+	It("rejects SSH key references selecting a different tenant", func() {
+		secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+			SetLogger(logger).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = secretsDao.Create().SetObject(privatev1.Secret_builder{
+			Metadata: privatev1.Metadata_builder{Name: "catalog-key", Tenant: testTenant}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY,
+			Data:     map[string][]byte{"public_key": []byte(testSSHPublicKey)},
+		}.Build()).Do(ctx)
+		Expect(err).NotTo(HaveOccurred())
+
+		policy, err := fullSecretReferencePolicyFromJSON(
+			`{"editable":{"defaultValue":{"name":"catalog-key","tenant":"another-tenant"}}}`,
+		)
+		Expect(err).NotTo(HaveOccurred())
+
+		err = validateCatalogItemSSHKeyPolicy(ctx, referenceScope{tenant: testTenant}, policy, secretsDao)
+		Expect(status.Code(err)).To(Equal(codes.NotFound))
+		Expect(status.Convert(err).Message()).To(ContainSubstring("not found or is not visible"))
 	})
 
 	It("rejects fixed SSH keys on shared CatalogItems before lookup", func() {

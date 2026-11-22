@@ -1,9 +1,27 @@
-{{- if .Values.observability.enabled }}
-{{- $fullname := include "osac.fullname" . }}
-# Helm cannot label its own release namespace declaratively, so a pre-install /
-# pre-upgrade hook applies the cluster-monitoring label. The RBAC is
-# cluster-scoped (namespaces are cluster-scoped) but restricted by resourceNames
-# to the release namespace.
+{{- $fullname := include "osac.fullname" . -}}
+{{- $enabled := .Values.observability.enabled | default false -}}
+{{- /*
+Helm cannot label its own release namespace declaratively, and rendering a
+Namespace object for it would make Helm own (and delete) the namespace on
+uninstall. Namespaces are cluster-scoped, so a Role cannot grant patch on them;
+the ClusterRole below is limited by resourceNames to the release namespace,
+which is the narrowest grant that works. Do not replace this with a
+release-namespace Namespace object.
+
+Enabled renders a pre-install/pre-upgrade Job that adds the label, plus a
+pre-delete Job that removes it when the release is uninstalled. Disabled renders
+a pre-upgrade Job that removes a label left behind by an earlier enabled
+release; it has only the pre-upgrade event, so a fresh disabled install neither
+creates nor runs it. Each Job needs its RBAC to exist when it runs, so the RBAC
+carries the same hook events: pre-install hooks run before regular resources are
+created, and hook resources deleted on success are gone by pre-delete.
+*/ -}}
+{{- $rbacHookEvents := "pre-upgrade" -}}
+{{- $removeHookEvents := "pre-upgrade" -}}
+{{- if $enabled -}}
+{{- $rbacHookEvents = "pre-install,pre-upgrade,pre-delete" -}}
+{{- $removeHookEvents = "pre-delete" -}}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -12,7 +30,7 @@ metadata:
   labels:
     {{- include "osac.labels" . | nindent 4 }}
   annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook": {{ $rbacHookEvents | quote }}
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 ---
@@ -23,7 +41,7 @@ metadata:
   labels:
     {{- include "osac.labels" . | nindent 4 }}
   annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook": {{ $rbacHookEvents | quote }}
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 rules:
@@ -39,7 +57,7 @@ metadata:
   labels:
     {{- include "osac.labels" . | nindent 4 }}
   annotations:
-    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook": {{ $rbacHookEvents | quote }}
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 roleRef:
@@ -50,6 +68,7 @@ subjects:
 - kind: ServiceAccount
   name: {{ $fullname }}-label-namespaces
   namespace: {{ .Release.Namespace }}
+{{- if $enabled }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -70,6 +89,11 @@ spec:
       labels:
         {{- include "osac.labels" . | nindent 8 }}
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
       serviceAccountName: {{ $fullname }}-label-namespaces
       restartPolicy: Never
       containers:
@@ -104,3 +128,63 @@ spec:
       - name: tmp
         emptyDir: {}
 {{- end }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $fullname }}-unlabel-namespaces
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": {{ $removeHookEvents }}
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        {{- include "osac.labels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      serviceAccountName: {{ $fullname }}-label-namespaces
+      restartPolicy: Never
+      containers:
+      - name: unlabel-namespace
+        image: {{ .Values.cliImage }}
+        command:
+        - /bin/bash
+        - -c
+        - |
+          ns="{{ .Release.Namespace }}"
+          current=$(kubectl get namespace "$ns" -o jsonpath='{.metadata.labels.openshift\.io/cluster-monitoring}')
+          if [ -n "$current" ]; then
+            kubectl label namespace "$ns" openshift.io/cluster-monitoring-
+          fi
+        env:
+        - name: HOME
+          value: /tmp
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 10m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+      volumes:
+      - name: tmp
+        emptyDir: {}

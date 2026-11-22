@@ -101,3 +101,33 @@ Renders the command line arguments shared by the gRPC server and the controllers
 - --networking-excluded-ipv4-cidrs={{ join "," . }}
 {{- end }}
 {{- end }}
+
+{{/*
+Return "true" when this chart should render its ServiceMonitors. A standalone
+install sets serviceMonitor.enabled; the umbrella chart enables them through
+global.observability, the only value Helm propagates into subcharts.
+*/}}
+{{- define "fulfillment-service.serviceMonitorEnabled" -}}
+{{- $serviceMonitor := .Values.serviceMonitor | default dict -}}
+{{- $globalObservability := (.Values.global | default dict).observability | default dict -}}
+{{- if or $serviceMonitor.enabled $globalObservability.enabled -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Resolve the scrape interval. The standalone serviceMonitor.interval wins when
+set; otherwise the umbrella's global.observability.collection.osacControlPlane
+is used. Fails rather than defaulting so no template hardcodes an interval.
+*/}}
+{{- define "fulfillment-service.serviceMonitorInterval" -}}
+{{- $serviceMonitor := .Values.serviceMonitor | default dict -}}
+{{- $globalObservability := (.Values.global | default dict).observability | default dict -}}
+{{- $collection := $globalObservability.collection | default dict -}}
+{{- $interval := $serviceMonitor.interval | default "" | toString -}}
+{{- if not $interval -}}
+{{- $interval = $collection.osacControlPlane | default "" | toString -}}
+{{- end -}}
+{{- if not $interval -}}
+{{- fail "serviceMonitor.interval or global.observability.collection.osacControlPlane must be set" -}}
+{{- end -}}
+{{- $interval -}}
+{{- end }}

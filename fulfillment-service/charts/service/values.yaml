@@ -329,12 +329,9 @@ kafka:
   # not already trusted.
   connection: []
 
-# ServiceMonitor settings. The umbrella chart renders the metric scrape
-# configuration for every OSAC target; this block documents the standalone
-# default and keeps the fulfillment Services dark when the chart is installed
-# on its own.
+# Standalone ServiceMonitor override for a component-only install. The umbrella
+# chart turns scrapes on through global.observability and leaves this false.
 serviceMonitor:
   enabled: false
+  # When empty, global.observability.collection.osacControlPlane is used.
   interval: ""
-  labels: {}
-  relabelings: []

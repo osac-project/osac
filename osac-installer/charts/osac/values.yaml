@@ -57,6 +57,13 @@ global:
     # Enable only when tenant CSI trust support is deployed.
     enabled: false
     tenantNamespace: osac-csi
+  # Mirror of the top-level observability block. Helm propagates only global.*
+  # into subchart values, and the component charts render their ServiceMonitors
+  # from this copy. osac.validateValues fails the render when the two disagree.
+  observability:
+    enabled: false
+    collection:
+      osacControlPlane: "30s"
   # --- Service Enablement ---
   # Controls which service tiers are active across all OSAC components.
   # When all are true (the default), OSAC operates as a full-stack cloud.
@@ -444,10 +451,15 @@ metering:
         - key: ca.crt
           param: sslrootcert
 
-# Metrics collection, storage, and querying (OSAC-6980). This is the single
-# enablement switch for the metrics pipeline; the store and query tier are
-# added by later stories. While disabled, no namespace labels, scrape RBAC, or
-# ServiceMonitors are rendered.
+# --- Observability ---
+# Enables the platform-monitoring namespace labels, the namespace-scoped scrape
+# RBAC, and the plain-HTTP ServiceMonitors for the OSAC control plane. It does
+# not deploy storage or querying; later stories add those to the
+# osac-observability namespace.
+#
+# Subcharts can only read global.* values, so global.observability mirrors this
+# block and drives the component charts' ServiceMonitors. Set both; the render
+# fails if they disagree.
 observability:
   enabled: false
   collection:

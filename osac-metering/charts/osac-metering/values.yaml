@@ -104,9 +104,12 @@ m360Adapter:
 ## because billing can stop while the metering pod stays ready: the round
 ## loop logs its errors and keeps going, so liveness alone proves nothing.
 serviceMonitor:
+  # Standalone ServiceMonitor override for a component-only install. The
+  # umbrella chart turns scrapes on through global.observability and leaves
+  # this false.
   enabled: false
-  # Scrape interval (Prometheus duration). Empty takes
-  # global.observability.collection.osacControlPlane.
+  # Scrape interval (Prometheus duration). When empty,
+  # global.observability.collection.osacControlPlane is used.
   interval: ""
   # Extra labels for Prometheus instances that select monitors by label.
   labels: {}

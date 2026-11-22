@@ -166,3 +166,33 @@ Args: adapter user name (also the consumer group name)
     - Read
   host: "*"
 {{- end -}}
+
+{{/*
+Return "true" when this chart should render its ServiceMonitor. A standalone
+install sets serviceMonitor.enabled; the umbrella chart enables it through
+global.observability, the only value Helm propagates into subcharts.
+*/}}
+{{- define "osac-metering.serviceMonitorEnabled" -}}
+{{- $serviceMonitor := .Values.serviceMonitor | default dict -}}
+{{- $globalObservability := (.Values.global | default dict).observability | default dict -}}
+{{- if or $serviceMonitor.enabled $globalObservability.enabled -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+Resolve the scrape interval. The standalone serviceMonitor.interval wins when
+set; otherwise the umbrella's global.observability.collection.osacControlPlane
+is used. Fails rather than defaulting so no template hardcodes an interval.
+*/}}
+{{- define "osac-metering.serviceMonitorInterval" -}}
+{{- $serviceMonitor := .Values.serviceMonitor | default dict -}}
+{{- $globalObservability := (.Values.global | default dict).observability | default dict -}}
+{{- $collection := $globalObservability.collection | default dict -}}
+{{- $interval := $serviceMonitor.interval | default "" | toString -}}
+{{- if not $interval -}}
+{{- $interval = $collection.osacControlPlane | default "" | toString -}}
+{{- end -}}
+{{- if not $interval -}}
+{{- fail "serviceMonitor.interval or global.observability.collection.osacControlPlane must be set" -}}
+{{- end -}}
+{{- $interval -}}
+{{- end -}}

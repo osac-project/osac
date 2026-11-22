@@ -147,6 +147,31 @@
           },
           "additionalProperties": false
         },
+        "observability": {
+          "type": "object",
+          "description": "Mirror of the top-level observability block for subcharts; osac.validateValues rejects a mismatch.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Mirror of observability.enabled. When true, the component charts render their plain-HTTP ServiceMonitors.",
+              "default": false
+            },
+            "collection": {
+              "type": "object",
+              "description": "Mirror of observability.collection",
+              "properties": {
+                "osacControlPlane": {
+                  "type": "string",
+                  "description": "Scrape interval for every OSAC control-plane target (Prometheus duration, e.g. 30s)",
+                  "default": "30s",
+                  "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
         "services": {
           "type": "object",
           "description": "Service tier enablement flags. Controls which tiers are active across all OSAC components. At least one tier must be enabled.",
@@ -1158,17 +1183,19 @@
         },
         "serviceMonitor": {
           "type": "object",
-          "description": "ServiceMonitor settings for the fulfillment Services (the umbrella chart renders the OSAC monitors; standalone installs stay disabled)",
+          "description": "Standalone ServiceMonitor override for the fulfillment chart. The umbrella chart enables scrapes through global.observability.",
           "properties": {
             "enabled": {
               "type": "boolean",
               "default": false
             },
             "interval": {
-              "type": "string"
+              "type": "string",
+              "description": "When empty, global.observability.collection.osacControlPlane is used."
             },
             "labels": {
-              "type": "object"
+              "type": "object",
+              "description": "Extra labels for Prometheus instances that select monitors by label"
             }
           },
           "additionalProperties": false
@@ -2016,11 +2043,11 @@
     },
     "observability": {
       "type": "object",
-      "description": "Observability configuration for metrics collection, storage, and querying (OSAC-6980)",
+      "description": "OSAC control-plane metrics collection: platform-monitoring namespace labels, scrape RBAC, and plain-HTTP ServiceMonitors. Does not deploy storage or querying.",
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Enable OSAC metrics collection, storage, and querying. When false, no namespace labels, scrape RBAC, or ServiceMonitors are rendered.",
+          "description": "Enable the platform-monitoring namespace labels, the namespace-scoped scrape RBAC, and the plain-HTTP ServiceMonitors. Does not enable storage or querying.",
           "default": false
         },
         "collection": {

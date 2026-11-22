@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
 
 # Verifies the OSAC metrics scrape wiring renders as designed: platform
-# monitoring labels and scrape RBAC, the eight plain-HTTP ServiceMonitors, the
-# metering scrape targets, and the disabled path producing none of it.
+# monitoring labels and scrape RBAC, the six plain-HTTP ServiceMonitors with
+# their eight targets, the label-removal hooks, and the disabled path producing
+# none of it.
 
 set -euo pipefail
 
 SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 CHART_DIR=$(cd -- "${SCRIPT_DIR}/../charts/osac" && pwd)
+REPO_ROOT=$(cd -- "${SCRIPT_DIR}/../.." && pwd)
+FULFILLMENT_CHART="${REPO_ROOT}/fulfillment-service/charts/service"
+METERING_CHART="${REPO_ROOT}/osac-metering/charts/osac-metering"
 HELM_BIN=${HELM_BIN:-helm}
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
 COMMON_ARGS=(
   template osac "${CHART_DIR}"
+  # Pin the release namespace so the assertions do not depend on the local
+  # kubeconfig context.
+  --namespace osac
   --values "${CHART_DIR}/ci/default-values.yaml"
   # Required once metering is enabled, which the scrape checks need.
   --set global.osacDeploymentId=observability-render
@@ -21,6 +28,10 @@ COMMON_ARGS=(
 CRD_ARGS=(
   --api-versions monitoring.coreos.com/v1
   --api-versions monitoring.coreos.com/v1/ServiceMonitor
+)
+OBS_ARGS=(
+  --set observability.enabled=true
+  --set global.observability.enabled=true
 )
 METERING_ARGS=(
   --set metering.enabled=true
@@ -67,6 +78,24 @@ expect_count() {
   fi
 }
 
+# Extract the documents of one kind so endpoint assertions cannot accidentally
+# match unrelated objects in the umbrella render.
+extract_kind() {
+  local file=$1
+  local kind=$2
+  awk -v kind="${kind}" '
+    /^---[[:space:]]*$/ {
+      if (isKind) printf "%s", doc
+      doc = ""
+      isKind = 0
+      next
+    }
+    { doc = doc $0 "\n" }
+    /^kind: / { if ($0 == "kind: " kind) isKind = 1 }
+    END { if (isKind) printf "%s", doc }
+  ' "${file}"
+}
+
 expect_render_failure() {
   local name=$1
   local expected=$2
@@ -87,69 +116,125 @@ expect_render_failure() {
 enabled="${TMP_DIR}/enabled.yaml"
 echo "checking enabled render"
 "${HELM_BIN}" "${COMMON_ARGS[@]}" "${CRD_ARGS[@]}" \
-  --set observability.enabled=true "${METERING_ARGS[@]}" >"${enabled}"
+  "${OBS_ARGS[@]}" "${METERING_ARGS[@]}" >"${enabled}"
 
-expect_count "${enabled}" '^kind: ServiceMonitor' 8
-for name in \
+enabled_sms="${TMP_DIR}/enabled-servicemonitors.yaml"
+extract_kind "${enabled}" ServiceMonitor >"${enabled_sms}"
+expect_count "${enabled_sms}" '^kind: ServiceMonitor' 6
+for job in \
   fulfillment-grpc-server \
   fulfillment-rest-gateway \
   fulfillment-controller \
   fulfillment-event-publisher \
   fulfillment-console-proxy \
-  osac-metering \
-  echo-adapter \
-  m360-adapter; do
-  require "${enabled}" "name: ${name}"
+  osac-metering; do
+  require "${enabled_sms}" "replacement: ${job}"
 done
-expect_count "${enabled}" 'jobLabel: app$' 5
-expect_count "${enabled}" 'jobLabel: app.kubernetes.io/component' 2
-expect_count "${enabled}" 'jobLabel: app.kubernetes.io/name' 1
-require "${enabled}" 'port: metrics'
-require "${enabled}" 'port: http'
-require "${enabled}" 'scheme: http'
-require "${enabled}" 'path: /metrics'
+require "${enabled_sms}" 'targetLabel: job'
+require "${enabled_sms}" 'port: metrics'
+require "${enabled_sms}" 'port: http'
+require "${enabled_sms}" 'scheme: http'
+require "${enabled_sms}" 'path: /metrics'
+# Helm rewrites .Chart.Name to the subchart alias, so the metering selector is
+# "metering" here even though the chart's own name is osac-metering.
+require "${enabled_sms}" 'app.kubernetes.io/name: metering'
+expect_count "${enabled_sms}" 'interval: "30s"' 7
+expect_count "${enabled_sms}" '^    - osac$' 6
+for forbidden in insecureSkipVerify bearerTokenSecret tlsConfig basicAuth oauth2; do
+  reject "${enabled_sms}" "${forbidden}"
+done
 
 echo "checking platform monitoring discovery"
 require "${enabled}" 'name: osac-observability'
 require "${enabled}" 'openshift.io/cluster-monitoring: "true"'
-require "${enabled}" 'name: osac-label-namespaces'
-require "${enabled}" 'openshift.io/cluster-monitoring=true'
 require "${enabled}" 'name: osac-prometheus-scrape'
 require "${enabled}" 'name: prometheus-k8s'
 require "${enabled}" 'namespace: openshift-monitoring'
+require "${enabled}" 'name: osac-unlabel-namespaces'
 
 echo "checking metering scrape target"
 require "${enabled}" 'targetPort: health'
 
+echo "checking observability-only render keeps metering off"
+default_render="${TMP_DIR}/default.yaml"
+"${HELM_BIN}" "${COMMON_ARGS[@]}" "${CRD_ARGS[@]}" "${OBS_ARGS[@]}" >"${default_render}"
+default_sms="${TMP_DIR}/default-servicemonitors.yaml"
+extract_kind "${default_render}" ServiceMonitor >"${default_sms}"
+expect_count "${default_sms}" '^kind: ServiceMonitor' 5
+reject "${default_sms}" 'replacement: osac-metering'
+
 echo "checking custom scrape interval"
 interval="${TMP_DIR}/interval.yaml"
 "${HELM_BIN}" "${COMMON_ARGS[@]}" "${CRD_ARGS[@]}" \
-  --set observability.enabled=true "${METERING_ARGS[@]}" \
-  --set observability.collection.osacControlPlane=45s >"${interval}"
-expect_count "${interval}" 'interval: "45s"' 8
-expect_count "${interval}" 'interval: "30s"' 0
+  "${OBS_ARGS[@]}" "${METERING_ARGS[@]}" \
+  --set observability.collection.osacControlPlane=45s \
+  --set global.observability.collection.osacControlPlane=45s >"${interval}"
+interval_sms="${TMP_DIR}/interval-servicemonitors.yaml"
+extract_kind "${interval}" ServiceMonitor >"${interval_sms}"
+expect_count "${interval_sms}" 'interval: "45s"' 7
+expect_count "${interval_sms}" 'interval: "30s"' 0
 
 echo "checking disabled render"
 disabled="${TMP_DIR}/disabled.yaml"
 "${HELM_BIN}" "${COMMON_ARGS[@]}" >"${disabled}"
-expect_count "${disabled}" '^kind: ServiceMonitor' 0
+disabled_sms="${TMP_DIR}/disabled-servicemonitors.yaml"
+extract_kind "${disabled}" ServiceMonitor >"${disabled_sms}"
+expect_count "${disabled_sms}" '^kind: ServiceMonitor' 0
 reject "${disabled}" 'name: osac-observability'
 reject "${disabled}" 'name: osac-prometheus-scrape'
-reject "${disabled}" 'name: osac-label-namespaces'
-reject "${disabled}" 'openshift.io/cluster-monitoring'
+reject "${disabled}" 'openshift.io/cluster-monitoring=true'
+# The disabled revision still carries the upgrade hook that removes a label an
+# earlier enabled release applied. Other umbrella hooks also run on pre-upgrade,
+# so scope the hook check to the Job documents.
+disabled_jobs="${TMP_DIR}/disabled-jobs.yaml"
+extract_kind "${disabled}" Job >"${disabled_jobs}"
+require "${disabled_jobs}" 'name: osac-unlabel-namespaces'
+require "${disabled_jobs}" 'pre-upgrade'
 
 echo "checking monitoring CRD guard"
 no_crd="${TMP_DIR}/no-crd.yaml"
-"${HELM_BIN}" "${COMMON_ARGS[@]}" --set observability.enabled=true >"${no_crd}"
-expect_count "${no_crd}" '^kind: ServiceMonitor' 0
+"${HELM_BIN}" "${COMMON_ARGS[@]}" "${OBS_ARGS[@]}" "${METERING_ARGS[@]}" >"${no_crd}"
+no_crd_sms="${TMP_DIR}/no-crd-servicemonitors.yaml"
+extract_kind "${no_crd}" ServiceMonitor >"${no_crd_sms}"
+expect_count "${no_crd_sms}" '^kind: ServiceMonitor' 0
 require "${no_crd}" 'name: osac-observability'
+require "${no_crd}" 'name: osac-prometheus-scrape'
+
+echo "checking observability/global mismatch rejection"
+mismatch="${TMP_DIR}/mismatch.stderr"
+if "${HELM_BIN}" "${COMMON_ARGS[@]}" "${CRD_ARGS[@]}" \
+  --set observability.enabled=true >/dev/null 2>"${mismatch}"; then
+  fail "observability/global mismatch unexpectedly rendered"
+fi
+require "${mismatch}" 'observability.enabled'
+require "${mismatch}" 'global.observability.enabled'
+require "${mismatch}" 'must match'
+
+echo "checking component serviceMonitor defaults stay off"
+for chart in "${FULFILLMENT_CHART}" "${METERING_CHART}"; do
+  values="${TMP_DIR}/$(basename "${chart}")-values.yaml"
+  "${HELM_BIN}" show values "${chart}" >"${values}"
+  block=$(awk '/^serviceMonitor:/{f=1} f && /^[^[:space:]#]/ && !/^serviceMonitor:/{exit} f' "${values}")
+  if [ -z "${block}" ]; then
+    fail "no serviceMonitor block in the values of ${chart}"
+  fi
+  if ! printf '%s\n' "${block}" | grep -Eq '^  enabled: false$'; then
+    echo "ERROR: serviceMonitor.enabled must default to false in ${chart}:" >&2
+    printf '%s\n' "${block}" >&2
+    exit 1
+  fi
+done
 
 echo "checking invalid scrape interval rejection"
 expect_render_failure zero-interval \
-  'observability.collection.osacControlPlane must be a positive Prometheus duration' \
-  --set observability.enabled=true --set observability.collection.osacControlPlane=0s
+  'must be a positive Prometheus duration' \
+  --set observability.enabled=true --set global.observability.enabled=true \
+  --set observability.collection.osacControlPlane=0s \
+  --set global.observability.collection.osacControlPlane=0s
 expect_render_failure malformed-interval \
-  "does not match pattern" \
-  --set observability.enabled=true --set observability.collection.osacControlPlane=30x
+  'does not match pattern' \
+  --set observability.enabled=true --set global.observability.enabled=true \
+  --set observability.collection.osacControlPlane=30x \
+  --set global.observability.collection.osacControlPlane=30x
 
 echo 'Observability render checks passed.'

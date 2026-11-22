@@ -1,8 +1,0 @@
-{{- if and .Values.observability.enabled .Values.service.enabled (not (dig "consoleProxy" "disabled" false .Values.service)) (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor") }}
-{{- include "osac.serviceMonitor" (dict
-  "root" .
-  "name" "fulfillment-console-proxy"
-  "jobLabel" "app"
-  "selector" (dict "app" "fulfillment-console-proxy")
-  "port" "metrics") }}
-{{- end }}

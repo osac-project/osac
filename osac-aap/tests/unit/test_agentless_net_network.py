@@ -234,12 +234,68 @@ def test_run_command_bounds_subprocess_and_reports_timeout(monkeypatch):
         agentless_net_network.run_command(["ip", "netns", "list"])
 
 
-def test_delete_uplink_is_idempotent_when_already_absent(monkeypatch):
+@pytest.mark.parametrize(
+    "namespace_present,host_present,link_delete_rc,remaining_namespace,remaining_link,changed",
+    [
+        (False, False, 0, "", '[{"ifname":"vn-host-other"}]', False),
+        (False, True, 0, "", "[]", True),
+        (True, True, 1, "vn-test-other (id: 1)\n", "[]", True),
+        (True, True, 1, "", '[{"ifname":"vn-host"}]', None),
+        (True, False, 0, "vn-test (id: 1)\n", "[]", None),
+        (True, True, 1, "", "not JSON", None),
+        (True, True, 1, "", "", None),
+        (True, True, 1, "", '[{"index":1}]', None),
+    ],
+)
+def test_delete_uplink_verifies_cleanup(
+    monkeypatch, namespace_present, host_present, link_delete_rc,
+    remaining_namespace, remaining_link, changed,
+):
     def run(command, check=True):
+        match command:
+            case ["ip", "netns", "exec", "vn-test", "true"]:
+                rc, stdout = int(not namespace_present), ""
+            case ["ip", "netns", "delete", "vn-test"]:
+                assert namespace_present
+                rc, stdout = 0, ""
+            case ["ip", "-o", "link", "show", "dev", "vn-host"]:
+                rc, stdout = int(not host_present), ""
+            case ["ip", "link", "delete", "dev", "vn-host"]:
+                assert host_present
+                rc, stdout = link_delete_rc, ""
+            case ["ip", "netns", "list"]:
+                assert check
+                rc, stdout = 0, remaining_namespace
+            case ["ip", "-j", "link", "show"]:
+                assert check
+                rc, stdout = 0, remaining_link
+            case _:
+                pytest.fail(f"unexpected command: {command}")
+        if check and rc:
+            raise agentless_net_network.NetworkCommandError("test command failed")
+        return completed(command, stdout, rc)
+
+    monkeypatch.setattr(agentless_net_network, "run_command", run)
+    if changed is None:
+        with pytest.raises(agentless_net_network.NetworkCommandError):
+            agentless_net_network.delete_uplink("vn-test", "vn-host")
+    else:
+        assert agentless_net_network.delete_uplink("vn-test", "vn-host") is changed
+
+
+@pytest.mark.parametrize("failing_command", [["ip", "netns", "list"], ["ip", "-j", "link", "show"]])
+def test_delete_uplink_propagates_failed_verification(monkeypatch, failing_command):
+    def run(command, check=True):
+        if command == failing_command:
+            assert check
+            raise agentless_net_network.NetworkCommandError("test listing failed")
+        if command == ["ip", "netns", "list"]:
+            return completed(command)
         return completed(command, returncode=1)
 
     monkeypatch.setattr(agentless_net_network, "run_command", run)
-    assert agentless_net_network.delete_uplink("vn-test", "vn-host") is False
+    with pytest.raises(agentless_net_network.NetworkCommandError, match="test listing failed"):
+        agentless_net_network.delete_uplink("vn-test", "vn-host")
 
 
 @pytest.mark.parametrize("failure", ["exit", "oserror"])

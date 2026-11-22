@@ -890,6 +890,15 @@ endif
 else
 	$(eval OCP_VERSION := $(shell oc get clusterversion version -o jsonpath='{.status.desired.version}' $(OC_QUERY_STDERR) | cut -d. -f1,2 | grep -Eo '^[0-9]+\.[0-9]+' | head -1))
 	$(eval DOMAIN := $(shell oc get ingresses.config/cluster -o jsonpath='{.spec.domain}' $(OC_QUERY_STDERR) | grep -Eo '^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*' | head -1))
+	# CLUSTER_OCP_VERSION and CLUSTER_DOMAIN override the cluster reads: a
+	# vcluster has neither clusterversion nor ingresses.config API to ask,
+	# so a run against one carries the outer cluster's values explicitly.
+ifneq ($(strip $(CLUSTER_OCP_VERSION)),)
+	$(eval OCP_VERSION := $(CLUSTER_OCP_VERSION))
+endif
+ifneq ($(strip $(CLUSTER_DOMAIN)),)
+	$(eval DOMAIN := $(CLUSTER_DOMAIN))
+endif
 	@[ -n "$(OCP_VERSION)" ] || { echo "ERROR: could not determine the OpenShift version for input validation. Is oc logged in?" >&2; exit 1; }
 	@[ -n "$(DOMAIN)" ] || { echo "ERROR: could not determine cluster domain for input validation. Is oc logged in?" >&2; exit 1; }
 	@source scripts/lib.sh && render_chart_offline osac-deps $(DEPS_CHART) \

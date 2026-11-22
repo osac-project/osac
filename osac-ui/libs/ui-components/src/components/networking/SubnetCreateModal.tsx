@@ -12,9 +12,9 @@ import {
 import { Formik } from 'formik';
 import * as Yup from 'yup';
 
-import type { Subnet, VirtualNetwork } from '@osac/types';
-import { useCreateSubnet } from '@osac/ui-components/api/v1/networking';
+import { type Subnet, Subnets, type VirtualNetwork } from '@osac/types';
 
+import { useCreateResource } from '../../api/use-resource';
 import OsacForm from '../../components/Form/OsacForm';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
@@ -37,7 +37,7 @@ export const SubnetCreateModal = ({
   parentVN,
   existingSubnets,
 }: SubnetCreateModalProps) => {
-  const { mutateAsync: create, error } = useCreateSubnet();
+  const { mutateAsync: create, error } = useCreateResource(Subnets);
   const { t } = useTranslation();
 
   const parentIPv4CIDR = parentVN.spec?.ipv4Cidr ?? '';
@@ -90,12 +90,14 @@ export const SubnetCreateModal = ({
       onSubmit={async (values) => {
         try {
           await create({
-            metadata: { name: values.metadata.name, project: parentVN.metadata?.project },
-            spec: {
-              virtualNetwork: {
-                name: parentVN.metadata?.name,
+            object: {
+              metadata: { name: values.metadata.name, project: parentVN.metadata?.project },
+              spec: {
+                virtualNetwork: {
+                  name: parentVN.metadata?.name,
+                },
+                ...(values.ipv4Cidr && { ipv4Cidr: values.ipv4Cidr }),
               },
-              ...(values.ipv4Cidr && { ipv4Cidr: values.ipv4Cidr }),
             },
           });
           onClose();

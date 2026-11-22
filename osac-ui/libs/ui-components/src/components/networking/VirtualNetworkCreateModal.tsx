@@ -13,9 +13,9 @@ import {
 import { Formik } from 'formik';
 import * as Yup from 'yup';
 
-import type { VirtualNetwork } from '@osac/types';
+import { type VirtualNetwork, VirtualNetworks } from '@osac/types';
 
-import { useCreateVirtualNetwork } from '../../api/v1/networking';
+import { useCreateResource } from '../../api/use-resource';
 import TextField from '../../components/Form/base/TextField';
 import OsacForm from '../../components/Form/OsacForm';
 import { useTranslation } from '../../hooks/useTranslation';
@@ -62,7 +62,7 @@ export const VirtualNetworkCreateModal = ({
 }: VirtualNetworkCreateModalProps) => {
   const navigate = useNavigate();
   const { t } = useTranslation();
-  const { mutateAsync: create, error } = useCreateVirtualNetwork();
+  const { mutateAsync: create, error } = useCreateResource(VirtualNetworks);
 
   const validationSchema = useMemo(
     () =>
@@ -85,12 +85,18 @@ export const VirtualNetworkCreateModal = ({
       onSubmit={async (values) => {
         let result: VirtualNetwork;
         try {
-          result = await create({
-            metadata: values.metadata,
-            spec: {
-              ipv4Cidr: values.ipv4Cidr || undefined,
+          const response = await create({
+            object: {
+              metadata: values.metadata,
+              spec: {
+                ipv4Cidr: values.ipv4Cidr || undefined,
+              },
             },
           });
+          if (!response.object?.id) {
+            throw new Error('Create response missing id');
+          }
+          result = response.object;
         } catch {
           // tanstack handles the error
           return;

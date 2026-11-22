@@ -7,14 +7,14 @@ import type { SubnetsCreateRequest } from '@osac/types';
 import { Subnet, SubnetState, Subnets, VirtualNetwork, VirtualNetworkState } from '@osac/types';
 
 import { SubnetCreateModal } from './SubnetCreateModal';
-import * as networkingApi from '../../api/v1/networking';
+import * as resourceApi from '../../api/use-resource';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
-vi.mock('../../api/v1/networking', async (importOriginal) => {
-  const actual = await importOriginal<typeof networkingApi>();
+vi.mock('../../api/use-resource', async (importOriginal) => {
+  const actual = await importOriginal<typeof resourceApi>();
   return {
     ...actual,
-    useCreateSubnet: vi.fn(),
+    useCreateResource: vi.fn(),
   };
 });
 
@@ -76,10 +76,10 @@ describe('SubnetCreateModal', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(networkingApi.useCreateSubnet).mockReturnValue({
+    vi.mocked(resourceApi.useCreateResource).mockReturnValue({
       mutateAsync,
       error: null,
-    } as unknown as ReturnType<typeof networkingApi.useCreateSubnet>);
+    } as unknown as ReturnType<typeof resourceApi.useCreateResource>);
   });
 
   it('renders with Name and CIDR fields', () => {
@@ -143,15 +143,17 @@ describe('SubnetCreateModal', () => {
 
     await waitFor(() => {
       expect(mutateAsync).toHaveBeenCalledWith({
-        metadata: { name: 'subnet-new', project: 'foo' },
-        spec: { virtualNetwork: { name: 'prod-vn' }, ipv4Cidr: '10.0.2.0/24' },
+        object: {
+          metadata: { name: 'subnet-new', project: 'foo' },
+          spec: { virtualNetwork: { name: 'prod-vn' }, ipv4Cidr: '10.0.2.0/24' },
+        },
       });
     });
   });
 
   it('creates through the Subnets service without sending an Update', async () => {
-    const actual = await vi.importActual<typeof networkingApi>('../../api/v1/networking');
-    vi.mocked(networkingApi.useCreateSubnet).mockImplementation(actual.useCreateSubnet);
+    const actual = await vi.importActual<typeof resourceApi>('../../api/use-resource');
+    vi.mocked(resourceApi.useCreateResource).mockImplementation(actual.useCreateResource);
     let createRequest: SubnetsCreateRequest | undefined;
     const methods: string[] = [];
     const inner = createRouterTransport((router) => {

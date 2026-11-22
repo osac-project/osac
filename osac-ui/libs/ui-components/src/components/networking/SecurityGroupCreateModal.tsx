@@ -14,10 +14,9 @@ import { Formik } from 'formik';
 import type { TFunction } from 'i18next';
 import * as Yup from 'yup';
 
-import { type SecurityGroupSchema, VirtualNetworks } from '@osac/types';
+import { SecurityGroupSchema, SecurityGroups, VirtualNetworks } from '@osac/types';
 
-import { useListResource } from '../../api/use-resource';
-import { useCreateSecurityGroup } from '../../api/v1/networking';
+import { useCreateResource, useListResource } from '../../api/use-resource';
 import OsacForm from '../../components/Form/OsacForm';
 import { SelectField } from '../../components/Form/SelectField';
 import { useTranslation } from '../../hooks/useTranslation';
@@ -51,7 +50,7 @@ export const SecurityGroupCreateModal = ({
 }: SecurityGroupCreateModalProps) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const createSecurityGroup = useCreateSecurityGroup();
+  const createSecurityGroup = useCreateResource(SecurityGroups);
   const {
     data: virtualNetworksResponse,
     isLoading,
@@ -90,8 +89,11 @@ export const SecurityGroupCreateModal = ({
               egress: [],
             },
           };
-          const sg = await createSecurityGroup.mutateAsync(body);
-          navigate(`/networking/security-groups/${sg.id}`);
+          const response = await createSecurityGroup.mutateAsync({ object: body });
+          if (!response.object?.id) {
+            throw new Error('Create response missing id');
+          }
+          navigate(`/networking/security-groups/${response.object.id}`);
         } catch {
           // Error is surfaced via createSecurityGroup.error below
         }

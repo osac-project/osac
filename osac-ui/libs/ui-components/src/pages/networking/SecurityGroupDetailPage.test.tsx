@@ -9,17 +9,17 @@ import {
   SecurityGroupDetailPage,
   securityGroupRuleEditingDisabledReason,
 } from './SecurityGroupDetailPage';
-import * as networkingApi from '../../api/v1/networking';
+import * as resourceApi from '../../api/use-resource';
 import { tIdentity } from '../../test-utils/i18n';
 
-vi.mock('../../api/v1/networking', async (importOriginal) => {
-  const actual = await importOriginal<typeof networkingApi>();
+vi.mock('../../api/use-resource', async (importOriginal) => {
+  const actual = await importOriginal<typeof resourceApi>();
   return {
     ...actual,
-    useSecurityGroup: vi.fn(),
-    useVirtualNetworks: vi.fn(),
-    useUpdateSecurityGroup: vi.fn(),
-    useDeleteSecurityGroup: vi.fn(),
+    useGetResource: vi.fn(),
+    useListResource: vi.fn(),
+    useUpdateResource: vi.fn(),
+    useDeleteResource: vi.fn(),
   };
 });
 
@@ -63,32 +63,36 @@ describe('SecurityGroupDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    vi.mocked(networkingApi.useSecurityGroup).mockReturnValue({
-      data: mockSecurityGroup,
+    vi.mocked(resourceApi.useGetResource).mockReturnValue({
+      data: { object: mockSecurityGroup },
       isLoading: false,
       error: null,
-    } as ReturnType<typeof networkingApi.useSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useGetResource>);
 
-    vi.mocked(networkingApi.useVirtualNetworks).mockReturnValue({
-      data: mockVirtualNetworks,
+    vi.mocked(resourceApi.useListResource).mockReturnValue({
+      data: {
+        items: mockVirtualNetworks,
+        size: mockVirtualNetworks.length,
+        total: mockVirtualNetworks.length,
+      },
       isLoading: false,
       error: null,
-    } as ReturnType<typeof networkingApi.useVirtualNetworks>);
+    } as unknown as ReturnType<typeof resourceApi.useListResource>);
 
-    vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useUpdateResource).mockReturnValue({
       mutate,
       mutateAsync: vi.fn(),
       isPending: false,
       error: null,
       reset,
-    } as unknown as ReturnType<typeof networkingApi.useUpdateSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useUpdateResource>);
 
-    vi.mocked(networkingApi.useDeleteSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useDeleteResource).mockReturnValue({
       mutate: vi.fn(),
       isPending: false,
       error: null,
       reset: vi.fn(),
-    } as unknown as ReturnType<typeof networkingApi.useDeleteSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useDeleteResource>);
   });
 
   it('renders breadcrumb with link to list page', () => {
@@ -99,11 +103,11 @@ describe('SecurityGroupDetailPage', () => {
   });
 
   it('disables Delete while the security group is loading', () => {
-    vi.mocked(networkingApi.useSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useGetResource).mockReturnValue({
       data: undefined,
       isLoading: true,
       error: null,
-    } as unknown as ReturnType<typeof networkingApi.useSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useGetResource>);
 
     renderPage();
 
@@ -114,17 +118,19 @@ describe('SecurityGroupDetailPage', () => {
   });
 
   it('disables Delete for a default security group', async () => {
-    vi.mocked(networkingApi.useSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useGetResource).mockReturnValue({
       data: {
-        ...mockSecurityGroup,
-        metadata: {
-          ...mockSecurityGroup.metadata,
-          labels: { 'osac.openshift.io/default': 'true' },
+        object: {
+          ...mockSecurityGroup,
+          metadata: {
+            ...mockSecurityGroup.metadata,
+            labels: { 'osac.openshift.io/default': 'true' },
+          },
         },
       },
       isLoading: false,
       error: null,
-    } as unknown as ReturnType<typeof networkingApi.useSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useGetResource>);
 
     const user = userEvent.setup();
     renderPage();
@@ -157,14 +163,16 @@ describe('SecurityGroupDetailPage', () => {
   });
 
   it('shows FAILED alert when status is FAILED', () => {
-    vi.mocked(networkingApi.useSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useGetResource).mockReturnValue({
       data: {
-        ...mockSecurityGroup,
-        status: { state: SecurityGroupState.FAILED, message: 'Network error' },
+        object: {
+          ...mockSecurityGroup,
+          status: { state: SecurityGroupState.FAILED, message: 'Network error' },
+        },
       },
       isLoading: false,
       error: null,
-    } as ReturnType<typeof networkingApi.useSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useGetResource>);
 
     renderPage();
 
@@ -176,17 +184,19 @@ describe('SecurityGroupDetailPage', () => {
 
   it('disables rule editing for an automatic security group and keeps rules visible', async () => {
     const user = userEvent.setup();
-    vi.mocked(networkingApi.useSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useGetResource).mockReturnValue({
       data: {
-        ...mockSecurityGroup,
-        metadata: {
-          name: 'sg-web',
-          labels: { 'osac.openshift.io/auto-created': 'true' },
+        object: {
+          ...mockSecurityGroup,
+          metadata: {
+            name: 'sg-web',
+            labels: { 'osac.openshift.io/auto-created': 'true' },
+          },
         },
       },
       isLoading: false,
       error: null,
-    } as unknown as ReturnType<typeof networkingApi.useSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useGetResource>);
     renderPage();
 
     await user.click(screen.getByRole('tab', { name: /Inbound Rules/i }));
@@ -223,22 +233,24 @@ describe('SecurityGroupDetailPage', () => {
     'places the restriction above the rules card for %s rule lists in both tabs',
     async (ruleState) => {
       const user = userEvent.setup();
-      vi.mocked(networkingApi.useSecurityGroup).mockReturnValue({
+      vi.mocked(resourceApi.useGetResource).mockReturnValue({
         data: {
-          ...mockSecurityGroup,
-          metadata: {
-            ...mockSecurityGroup.metadata,
-            labels: { 'osac.openshift.io/auto-created': 'true' },
-          },
-          spec: {
-            ...mockSecurityGroup.spec,
-            ingress: ruleState === 'empty' ? [] : mockSecurityGroup.spec.ingress,
-            egress: ruleState === 'empty' ? [] : mockSecurityGroup.spec.egress,
+          object: {
+            ...mockSecurityGroup,
+            metadata: {
+              ...mockSecurityGroup.metadata,
+              labels: { 'osac.openshift.io/auto-created': 'true' },
+            },
+            spec: {
+              ...mockSecurityGroup.spec,
+              ingress: ruleState === 'empty' ? [] : mockSecurityGroup.spec.ingress,
+              egress: ruleState === 'empty' ? [] : mockSecurityGroup.spec.egress,
+            },
           },
         },
         isLoading: false,
         error: null,
-      } as unknown as ReturnType<typeof networkingApi.useSecurityGroup>);
+      } as unknown as ReturnType<typeof resourceApi.useGetResource>);
       renderPage();
 
       for (const tabName of ['Inbound Rules', 'Outbound Rules']) {
@@ -261,17 +273,19 @@ describe('SecurityGroupDetailPage', () => {
 
   it('keeps a default security group editable when only the default label is set', async () => {
     const user = userEvent.setup();
-    vi.mocked(networkingApi.useSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useGetResource).mockReturnValue({
       data: {
-        ...mockSecurityGroup,
-        metadata: {
-          name: 'sg-web',
-          labels: { 'osac.openshift.io/default': 'true' },
+        object: {
+          ...mockSecurityGroup,
+          metadata: {
+            name: 'sg-web',
+            labels: { 'osac.openshift.io/default': 'true' },
+          },
         },
       },
       isLoading: false,
       error: null,
-    } as unknown as ReturnType<typeof networkingApi.useSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useGetResource>);
     renderPage();
 
     await user.click(screen.getByRole('tab', { name: /Inbound Rules/i }));
@@ -283,14 +297,16 @@ describe('SecurityGroupDetailPage', () => {
   });
 
   it('keeps FAILED security groups editable for recovery', async () => {
-    vi.mocked(networkingApi.useSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useGetResource).mockReturnValue({
       data: {
-        ...mockSecurityGroup,
-        status: { state: SecurityGroupState.FAILED, message: 'Network error' },
+        object: {
+          ...mockSecurityGroup,
+          status: { state: SecurityGroupState.FAILED, message: 'Network error' },
+        },
       },
       isLoading: false,
       error: null,
-    } as ReturnType<typeof networkingApi.useSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useGetResource>);
     renderPage();
 
     await userEvent.setup().click(screen.getByRole('tab', { name: /Inbound Rules/i }));
@@ -305,13 +321,13 @@ describe('SecurityGroupDetailPage', () => {
 
   it('disables rule editing while a rule mutation is pending', async () => {
     const user = userEvent.setup();
-    vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useUpdateResource).mockReturnValue({
       mutate: vi.fn(),
       mutateAsync: vi.fn(),
       isPending: true,
       error: null,
       reset: vi.fn(),
-    } as unknown as ReturnType<typeof networkingApi.useUpdateSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useUpdateResource>);
     renderPage();
 
     await user.click(screen.getByRole('tab', { name: /Inbound Rules/i }));
@@ -333,11 +349,11 @@ describe('SecurityGroupDetailPage', () => {
     await user.click(tabPanel.getByRole('button', { name: /Add rule/i }));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
 
-    vi.mocked(networkingApi.useSecurityGroup).mockReturnValue({
-      data: { ...mockSecurityGroup, status: { state: SecurityGroupState.PENDING } },
+    vi.mocked(resourceApi.useGetResource).mockReturnValue({
+      data: { object: { ...mockSecurityGroup, status: { state: SecurityGroupState.PENDING } } },
       isLoading: false,
       error: null,
-    } as ReturnType<typeof networkingApi.useSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useGetResource>);
     view.rerender(pageElement());
 
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());

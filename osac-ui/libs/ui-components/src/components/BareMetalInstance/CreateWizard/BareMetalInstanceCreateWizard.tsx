@@ -3,8 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { PageSection, PageSectionTypes, Wizard, WizardStep } from '@patternfly/react-core';
 import { Formik } from 'formik';
 
-import { BareMetalInstanceCatalogItem, BareMetalInstanceCatalogItems } from '@osac/types';
-import { useCreateBareMetalInstance } from '@osac/ui-components/api/v1/baremetal-instance';
+import {
+  BareMetalInstanceCatalogItem,
+  BareMetalInstanceCatalogItems,
+  BareMetalInstances,
+} from '@osac/types';
+import { useCreateResource } from '@osac/ui-components/api/use-resource';
 import { FieldValidationProvider } from '@osac/ui-components/components/Form/FieldValidationContext';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
 import { CatalogStep } from '@osac/ui-components/components/ProvisioningWizard/CatalogStep';
@@ -30,7 +34,7 @@ interface Props {
 const BareMetalInstanceCreateWizard = ({ catalogItem, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const provision = useCreateBareMetalInstance();
+  const provision = useCreateResource(BareMetalInstances);
   const [selectedCatalogItem, setSelectedCatalogItem] = useState(catalogItem);
   const includeCatalogStep = !catalogItem;
   const [activeStep, setActiveStep] = useState<BareMetalWizardStepId>(
@@ -56,9 +60,10 @@ const BareMetalInstanceCreateWizard = ({ catalogItem, onClosed }: Props) => {
   const handleSubmit = useCallback(
     async (values: BareMetalInstanceWizardValues) => {
       try {
-        const created = await provision.mutateAsync(
-          buildBareMetalInstanceCreatePayload(values, selectedCatalogItem),
-        );
+        const response = await provision.mutateAsync({
+          object: buildBareMetalInstanceCreatePayload(values, selectedCatalogItem),
+        });
+        const created = response.object;
         if (created?.id) {
           navigate(`/bare-metal/${created.id}`);
         }

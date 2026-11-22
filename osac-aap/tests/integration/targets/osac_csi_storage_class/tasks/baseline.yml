@@ -18,8 +18,8 @@
 # namespace osac-csi and driver csi.osac.openshift.io on the same cluster.
 #
 # Plays: 0 guard, 1 clean slate, 2 driver not registered, 3 driver registered,
-# 4 idempotent, 5 teardown, 6 cleanup. Play 1 establishes a clean slate; plays 3-5
-# build on each other.
+# 4 idempotent, 5 teardown, 6 VAST block refused on CLaaS, 7 cleanup. Play 1
+# establishes a clean slate; plays 3-5 build on each other.
 
 # ── Play 0: refuse to run against anything but the Kind test cluster ──
 # This target creates and deletes cluster-scoped objects (CSIDriver, StorageClass,
@@ -635,7 +635,119 @@
           ConfigMap or its credentials Secret.
         success_msg: "CSIDriver, driver namespace, ConfigMap and credentials Secret survived teardown"
 
-# ── Play 6: cleanup ──
+# ── Play 6: VAST block tier refused on CLaaS ──
+# On the caas target vast reaches osac_csi_storage. VAST has no block protocol
+# support there, so a vast block tier is refused with a structured failure, while
+# the other tiers of the same backend still get their StorageClass.
+- name: "OSAC CSI StorageClass - VAST block tier refused on CLaaS"
+  hosts: localhost
+  gather_facts: false
+  vars: *csi_sc_vars
+
+  tasks:
+    - name: Delete the VAST test StorageClasses (clean slate)
+      kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ item }}"
+        wait: true
+      loop:
+        - osac-test-osac-csi-sc-nfsgold
+        - osac-test-osac-csi-sc-blkgold
+
+    - name: Register the CSIDriver fixture
+      kubernetes.core.k8s:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: CSIDriver
+          metadata:
+            name: csi.sc-test.osac.openshift.io
+          spec:
+            attachRequired: false
+
+    - name: Call ensure_storage_class with a VAST block tier on the caas target
+      block:
+        - name: Run ensure_storage_class through the storage_provider dispatcher
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: ensure_storage_class
+            storage_provider_tiers:
+              - name: nfsgold
+                protocol: nfs
+                provider: vast
+                backend_id: be-sc-vast
+              - name: blkgold
+                protocol: block
+                provider: vast
+                backend_id: be-sc-vast
+            storage_provider_backend_connections: {}
+            storage_provider_provisioning_target: caas
+            storage_provider_target_kubeconfig: "{{ _remote_kubeconfig }}"
+            storage_provider_target_kubeconfig_insecure: false
+
+        - name: This should not be reached
+          ansible.builtin.fail:
+            msg: "ensure_storage_class should have failed: VAST block is refused on CLaaS"
+
+      rescue:
+        - name: Assert the job failed naming the tier and the CLaaS limitation
+          ansible.builtin.assert:
+            that:
+              - "'blkgold' in ansible_failed_result.msg"
+              - "'not supported on CLaaS' in ansible_failed_result.msg"
+              - "'nfsgold' not in ansible_failed_result.msg"
+              - "'must be a non-empty string' not in ansible_failed_result.msg"
+              - "'not a valid DNS label' not in ansible_failed_result.msg"
+            fail_msg: "Unexpected failure: {{ ansible_failed_result.msg | default('') }}"
+            success_msg: "ensure_storage_class refused the VAST block tier"
+
+        - name: Assert the structured failure record
+          ansible.builtin.assert:
+            that:
+              - osac_storage_provider_failures is defined
+              - osac_storage_provider_failures | length == 1
+              - osac_storage_provider_failures[0].reason == 'vast_block_unsupported_on_caas'
+              - osac_storage_provider_failures[0].tiers == ['blkgold']
+              - osac_storage_provider_failures[0].backend_ids == ['be-sc-vast']
+              - "'blkgold' in osac_storage_provider_failures[0].message"
+              - "'not supported on CLaaS' in osac_storage_provider_failures[0].message"
+            fail_msg: >-
+              Unexpected osac_storage_provider_failures:
+              {{ osac_storage_provider_failures | default('undefined') | to_json }}
+            success_msg: "vast_block_unsupported_on_caas recorded for tier blkgold"
+
+    - name: Read the nfsgold StorageClass
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-osac-csi-sc-nfsgold
+      register: _sc_vast_nfs
+
+    - name: Read the blkgold StorageClass
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ _remote_kubeconfig }}"
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: osac-test-osac-csi-sc-blkgold
+      register: _sc_vast_block
+
+    - name: Assert the NFS tier got a StorageClass and the block tier did not
+      ansible.builtin.assert:
+        that:
+          - _sc_vast_nfs.resources | length == 1
+          - _sc_vast_block.resources | length == 0
+        fail_msg: >-
+          The VAST nfs tier must still get its StorageClass and the refused VAST block
+          tier must get none.
+        success_msg: "nfsgold StorageClass exists, blkgold StorageClass does not"
+
+# ── Play 7: cleanup ──
 - name: "OSAC CSI StorageClass - Cleanup"
   hosts: localhost
   gather_facts: false
@@ -683,3 +795,5 @@
       loop:
         - osac-test-osac-csi-sc-gold
         - osac-test-osac-csi-sc-silver
+        - osac-test-osac-csi-sc-nfsgold
+        - osac-test-osac-csi-sc-blkgold

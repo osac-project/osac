@@ -8,7 +8,7 @@ route:
 
 api:
   fulfillment:
-    # The UI proxy needs private RPCs for provider-admin pages.
+    # The UI proxy requires access to both public and private RPCs.
     url: https://fulfillment-internal-api:8001
     # Certificate configuration for Fulfillment API
     certs:

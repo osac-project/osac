@@ -3,6 +3,9 @@ kind: Pod
 metadata:
   labels:
     ansible_job: ''
+{% if vcluster_api_url %}
+  namespace: {{ current_namespace }}
+{% endif %}
 spec:
   serviceAccountName: {{ osac_sa_name }}
   affinity:
@@ -40,6 +43,10 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: metadata.uid
+{% if osac_instance_id %}
+        - name: OSAC_INSTANCE_ID
+          value: {{ osac_instance_id }}
+{% endif %}
       envFrom:
         - configMapRef:
             name: cluster-fulfillment-ig

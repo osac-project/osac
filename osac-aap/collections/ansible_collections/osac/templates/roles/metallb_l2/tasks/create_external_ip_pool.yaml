@@ -29,9 +29,10 @@
       metadata:
         name: "{{ pool_name }}"
         namespace: metallb-system
-        labels:
-          osac.openshift.io/externalippool: "{{ pool_name }}"
-          osac.openshift.io/managed-by: osac-fulfillment
+        labels: >-
+          {{ {'osac.openshift.io/externalippool': pool_name,
+              'osac.openshift.io/managed-by': 'osac-fulfillment'}
+             | combine(osac_instance_labels | default({})) }}
       spec:
         autoAssign: false
         avoidBuggyIPs: true  # skip .0 and .255
@@ -60,9 +61,10 @@
       metadata:
         name: "{{ pool_name }}-l2adv"
         namespace: metallb-system
-        labels:
-          osac.openshift.io/externalippool: "{{ pool_name }}"
-          osac.openshift.io/managed-by: osac-fulfillment
+        labels: >-
+          {{ {'osac.openshift.io/externalippool': pool_name,
+              'osac.openshift.io/managed-by': 'osac-fulfillment'}
+             | combine(osac_instance_labels | default({})) }}
       spec:
         ipAddressPools:
           - "{{ pool_name }}"

@@ -104,10 +104,11 @@
           metadata:
             name: "sg-{{ sg_name }}"
             namespace: "{{ item }}"
-            labels:
-              osac.openshift.io/managed-by: osac-fulfillment
-              osac.openshift.io/securitygroup: "{{ sg_name }}"
-              osac.openshift.io/virtual-network: "{{ sg_virtual_network }}"
+            labels: >-
+              {{ {'osac.openshift.io/managed-by': 'osac-fulfillment',
+                  'osac.openshift.io/securitygroup': sg_name,
+                  'osac.openshift.io/virtual-network': sg_virtual_network}
+                 | combine(osac_instance_labels | default({})) }}
           spec:
             podSelector:
               matchLabels: "{{ sg_pod_selector_labels }}"

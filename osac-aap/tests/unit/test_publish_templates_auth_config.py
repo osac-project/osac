@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from jinja2 import Environment
 
 
 def test_publish_templates_group_uses_keycloak_credentials_and_keeps_kubernetes_identity():
@@ -16,7 +17,12 @@ def test_publish_templates_group_uses_keycloak_credentials_and_keeps_kubernetes_
         for group in controller_config["controller_instance_groups"]
         if group["name"] == "{{ aap_prefix }}-publish-templates-ig"
     )
-    pod_spec = yaml.safe_load(publish_group["pod_spec_override"])
+    # Render like Ansible does before AAP sees the spec: the block carries
+    # vcluster conditionals that raw YAML cannot parse.
+    pod_spec_text = Environment().from_string(publish_group["pod_spec_override"]).render(
+        vcluster_api_url=""
+    )
+    pod_spec = yaml.safe_load(pod_spec_text)
     worker = pod_spec["spec"]["containers"][0]
     env = {item["name"]: item.get("valueFrom", {}) for item in worker["env"]}
 

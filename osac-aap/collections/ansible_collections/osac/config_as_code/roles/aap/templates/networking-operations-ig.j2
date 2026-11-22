@@ -3,6 +3,9 @@ kind: Pod
 metadata:
   labels:
     ansible_job: ''
+{% if vcluster_api_url %}
+  namespace: {{ current_namespace }}
+{% endif %}
 spec:
   serviceAccountName: {{ osac_sa_name }}
   affinity:
@@ -51,6 +54,10 @@ spec:
           value: "{{ netris_ca_path }}"
         - name: OSAC_LAUNCH_EXTRA_VARS_PATH
           value: /runner/env/extravars
+{% if osac_instance_id %}
+        - name: OSAC_INSTANCE_ID
+          value: {{ osac_instance_id }}
+{% endif %}
   volumes:
     - name: kube-api-access
       projected:

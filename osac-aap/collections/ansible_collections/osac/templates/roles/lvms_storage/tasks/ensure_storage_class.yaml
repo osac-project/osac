@@ -182,13 +182,13 @@
     _lvms_expected_sc_entries: >-
       {% set entries = [] -%}
       {% for tier in _provider_tiers -%}
-      {% set _ = entries.append({'name': 'osac-' ~ tenant_name ~ '-' ~ tier.name, 'tier': tier.name}) -%}
+      {% set _ = entries.append({'name': lvms_storage_storage_class_prefix ~ tenant_name ~ '-' ~ tier.name, 'tier': tier.name}) -%}
       {% endfor -%}
       {{ entries }}
     _lvms_expected_sc_names: >-
       {% set names = [] -%}
       {% for tier in _provider_tiers -%}
-      {% set _ = names.append('osac-' ~ tenant_name ~ '-' ~ tier.name) -%}
+      {% set _ = names.append(lvms_storage_storage_class_prefix ~ tenant_name ~ '-' ~ tier.name) -%}
       {% endfor -%}
       {{ names }}
 
@@ -198,9 +198,9 @@
     validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
     api_version: storage.k8s.io/v1
     kind: StorageClass
-    label_selectors:
-      - "osac.openshift.io/tenant={{ tenant_name }}"
-      - "app.kubernetes.io/managed-by=osac-aap"
+    label_selectors: >-
+      {{ ['osac.openshift.io/tenant=' ~ tenant_name,
+          'app.kubernetes.io/managed-by=osac-aap'] + lvms_storage_instance_selectors }}
   register: _lvms_sc_check
 
 - name: Determine missing StorageClasses
@@ -220,10 +220,13 @@
       kind: StorageClass
       metadata:
         name: "{{ item.name }}"
-        labels:
-          osac.openshift.io/tenant: "{{ tenant_name }}"
-          osac.openshift.io/storage-tier: "{{ item.tier }}"
-          app.kubernetes.io/managed-by: osac-aap
+        # The instance label lets the run's label-based teardown find these
+        # classes in the shared outer cluster.
+        labels: >-
+          {{ {'osac.openshift.io/tenant': tenant_name,
+              'osac.openshift.io/storage-tier': item.tier,
+              'app.kubernetes.io/managed-by': 'osac-aap'}
+             | combine(osac_instance_labels | default({})) }}
       provisioner: "{{ lvms_storage_provisioner }}"
       parameters:
         "topolvm.io/device-class": "{{ lvms_storage_device_class }}"

@@ -21,10 +21,10 @@
   kubernetes.core.k8s_info:
     api_version: storage.k8s.io/v1
     kind: StorageClass
-    name: "osac-{{ tenant_name }}-{{ item.name }}"
+    name: "{{ csi_driver_install_storage_class_prefix }}{{ tenant_name }}-{{ item.name }}"
   loop: "{{ _csi_driver_install_local_tiers }}"
   loop_control:
-    label: "osac-{{ tenant_name }}-{{ item.name }}"
+    label: "{{ csi_driver_install_storage_class_prefix }}{{ tenant_name }}-{{ item.name }}"
   register: _csi_driver_install_existing_classes
 
 - name: Validate immutable fields of existing local-tier StorageClasses
@@ -37,15 +37,15 @@
       - item.resources[0].reclaimPolicy == csi_driver_install_storage_class_reclaim_policy
       - item.resources[0].volumeBindingMode == csi_driver_install_storage_class_volume_binding_mode
     fail_msg: >-
-      StorageClass osac-{{ tenant_name }}-{{ item.item.name }} has incompatible
-      immutable fields and was not deleted or modified. Check existing PVC/PV
+      StorageClass {{ csi_driver_install_storage_class_prefix }}{{ tenant_name }}-{{ item.item.name }} has
+      incompatible immutable fields and was not deleted or modified. Check existing PVC/PV
       dependencies before explicitly removing and recreating this class for
       the CSI path, or leave csi_driver_install_lvms_storage_class_enabled=false
       to retain legacy provisioning. Changing the selector does not migrate
       existing volumes.
   loop: "{{ _csi_driver_install_existing_classes.results }}"
   loop_control:
-    label: "osac-{{ tenant_name }}-{{ item.item.name }}"
+    label: "{{ csi_driver_install_storage_class_prefix }}{{ tenant_name }}-{{ item.item.name }}"
   when: item.resources | length > 0
 
 - name: Create local-tier OSAC CSI StorageClasses
@@ -55,11 +55,14 @@
       apiVersion: storage.k8s.io/v1
       kind: StorageClass
       metadata:
-        name: "osac-{{ tenant_name }}-{{ item.name }}"
-        labels:
-          osac.openshift.io/tenant: "{{ tenant_name }}"
-          osac.openshift.io/storage-tier: "{{ item.name }}"
-          app.kubernetes.io/managed-by: osac-aap
+        name: "{{ csi_driver_install_storage_class_prefix }}{{ tenant_name }}-{{ item.name }}"
+        # The instance label lets the run's label-based teardown find these
+        # classes in the shared outer cluster.
+        labels: >-
+          {{ {'osac.openshift.io/tenant': tenant_name,
+              'osac.openshift.io/storage-tier': item.name,
+              'app.kubernetes.io/managed-by': 'osac-aap'}
+             | combine(osac_instance_labels | default({})) }}
       provisioner: "{{ csi_driver_install_storage_class_provisioner }}"
       parameters:
         osac.tier: "{{ item.name }}"
@@ -68,5 +71,5 @@
       volumeBindingMode: "{{ csi_driver_install_storage_class_volume_binding_mode }}"
   loop: "{{ _csi_driver_install_local_tiers }}"
   loop_control:
-    label: "osac-{{ tenant_name }}-{{ item.name }}"
+    label: "{{ csi_driver_install_storage_class_prefix }}{{ tenant_name }}-{{ item.name }}"
   when: _csi_driver_install_local_tiers | length > 0

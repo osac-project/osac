@@ -80,6 +80,36 @@ must be an http(s) URL without a path, because callers append
 {{- end }}
 
 {{/*
+The run's vcluster API URL (the umbrella chart's aap.vcluster.apiServerUrl).
+Empty leaves every vcluster wiring out of the render. A non-empty value must
+be an http(s) URL without a path (the AAP credential uses it as the API host)
+and must come with vcluster.tokenSecret.name and .key: the controller reads
+the bearer token from that Secret, so a half-set pair would configure a
+credential that cannot work. Each check fails the render naming what is
+missing; config-as-code-secret.yaml always renders, so the validation always
+runs. Include this in an {{ if }} to gate vcluster-only template sections.
+*/}}
+{{- define "osac-aap.vclusterApiServerUrl" -}}
+{{- $url := .Values.vcluster.apiServerUrl | toString -}}
+{{- $secretName := .Values.vcluster.tokenSecret.name | toString -}}
+{{- $secretKey := .Values.vcluster.tokenSecret.key | toString -}}
+{{- if $url -}}
+{{- if not (regexMatch "^https?://[^/?#\\[\\s]+$" $url) }}
+{{- fail (printf "vcluster.apiServerUrl must be an http(s) URL without a path, for example https://pr2100v1.vc-pr2100v1.svc.cluster.local (got %q)" $url) }}
+{{- end -}}
+{{- if not $secretName -}}
+{{- fail "vcluster.tokenSecret.name is required when vcluster.apiServerUrl is set" }}
+{{- end -}}
+{{- if not $secretKey -}}
+{{- fail "vcluster.tokenSecret.key is required when vcluster.apiServerUrl is set" }}
+{{- end -}}
+{{- else if or $secretName $secretKey -}}
+{{- fail "vcluster.apiServerUrl is required when vcluster.tokenSecret is set" }}
+{{- end -}}
+{{- $url -}}
+{{- end }}
+
+{{/*
 AAP gateway hostname (service name)
 */}}
 {{- define "osac-aap.gatewayHostname" -}}
@@ -318,6 +348,56 @@ env:
       fieldPath: metadata.namespace
 - name: AAP_ADMIN_SECRET_NAME
   value: {{ include "osac-aap.adminPasswordSecretName" . | quote }}
+volumeMounts:
+- name: tmp
+  mountPath: /tmp
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  capabilities:
+    drop: ["ALL"]
+{{- end }}
+
+{{/*
+Polls for the vcluster token Secret before the bootstrap container mounts it
+via secretKeyRef, for the same reason as wait-for-admin-secret: the run setup
+creates the Secret outside this release, and a missing Secret at pod-schedule
+time would otherwise block the whole pod with no log output.
+Rendered only when the vcluster settings are set.
+*/}}
+{{- define "osac-aap.waitForVclusterTokenScript" -}}
+echo "Waiting for vcluster token Secret ${VCLUSTER_TOKEN_SECRET_NAME}; the run setup creates it outside this release"
+for i in {1..60}; do
+  if oc get secret "${VCLUSTER_TOKEN_SECRET_NAME}" -n "${NAMESPACE}" --request-timeout=10s >/dev/null 2>&1; then
+    echo "Found vcluster token Secret."
+    exit 0
+  fi
+  echo "Attempt $i: vcluster token Secret not found yet, waiting 5 seconds..."
+  sleep 5
+done
+echo "ERROR: Timed out waiting for vcluster token Secret ${VCLUSTER_TOKEN_SECRET_NAME} in namespace ${NAMESPACE}."
+exit 1
+{{- end }}
+
+{{/* wait-for-vcluster-token init container env/volumeMounts/resources/securityContext. */}}
+{{- define "osac-aap.waitForVclusterTokenContainerSpec" -}}
+env:
+- name: HOME
+  value: /tmp
+- name: NAMESPACE
+  valueFrom:
+    fieldRef:
+      fieldPath: metadata.namespace
+- name: VCLUSTER_TOKEN_SECRET_NAME
+  value: {{ .Values.vcluster.tokenSecret.name | quote }}
 volumeMounts:
 - name: tmp
   mountPath: /tmp

@@ -2,6 +2,31 @@
 gateway_settings:
   gateway_access_token_expiration: 7200
 
+# Name of the credential that makes the AAP controller create this run's job
+# pods inside the run's vcluster: attached to every container group below, it
+# points the controller at the vcluster API with the run's bearer token.
+# Empty when no vcluster API URL is set; the vendored instance-group role
+# turns an empty credential into an omitted module argument, so the groups
+# stay exactly as they are today.
+aap_vcluster_credential_name: "{{ (aap_prefix ~ '-vcluster') if vcluster_api_url else '' }}"
+
+# The credential itself. verify_ssl is false: the CI CA that signed the
+# vcluster API certificate is not in the controller's trust store. The empty
+# list without a vcluster API URL leaves the dispatcher's credentials step a
+# no-op, like controller_roles in vars/aap.yml.
+controller_credentials: # noqa: var-naming[no-role-prefix]
+  "{{ [{
+         'name': aap_prefix ~ '-vcluster',
+         'description': 'Bearer token for the vcluster API of ' ~ aap_organization_name,
+         'organization': aap_organization_name,
+         'credential_type': 'OpenShift or Kubernetes API Bearer Token',
+         'inputs': {
+           'host': vcluster_api_url,
+           'bearer_token': vcluster_token,
+           'verify_ssl': false,
+         },
+       }] if vcluster_api_url else [] }}"
+
 # Create a project from the specified git repo. scm_url/scm_branch aren't
 # set here -- configure_project_scm.yml merges them in at runtime from
 # aap_project_git_uri/aap_project_git_branch (config.yml), which now default
@@ -877,17 +902,22 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
   # (prefix)-cluster-fulfilment-ig secret.
   - name: "{{ aap_prefix }}-cluster-fulfillment-ig"
     is_container_group: true
+    credential: "{{ aap_vcluster_credential_name }}"
     pod_spec_override: "{{ lookup('ansible.builtin.template', 'cluster-fulfillment-ig.j2') }}"
   # For config-as-code job template, we expect the configuration and the
   # credentials to be passed in (prefix)-config-as-code-ig secret
   - name: "{{ aap_prefix }}-config-as-code-ig"
     is_container_group: true
+    credential: "{{ aap_vcluster_credential_name }}"
     pod_spec_override: |
       apiVersion: v1
       kind: Pod
       metadata:
         labels:
           ansible_job: ''
+      {% if vcluster_api_url %}
+        namespace: {{ current_namespace }}
+      {% endif %}
       spec:
         serviceAccountName: default
         affinity:
@@ -917,6 +947,16 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
                 valueFrom:
                   fieldRef:
                     fieldPath: metadata.namespace
+      {% if vcluster_api_url %}
+              # The hourly rerun re-creates the vcluster credential, so it
+              # needs the token too; the Secret coordinates come from the
+              # envFrom Secret above (VCLUSTER_TOKEN_SECRET_NAME/KEY).
+              - name: VCLUSTER_TOKEN
+                valueFrom:
+                  secretKeyRef:
+                    name: {{ vcluster_token_secret_name }}
+                    key: {{ vcluster_token_secret_key }}
+      {% endif %}
               - name: AAP_PASSWORD
                 valueFrom:
                   secretKeyRef:
@@ -934,12 +974,16 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
               secretName: config-as-code-manifest-ig
   - name: "{{ aap_prefix }}-publish-templates-ig"
     is_container_group: true
+    credential: "{{ aap_vcluster_credential_name }}"
     pod_spec_override: |
       apiVersion: v1
       kind: Pod
       metadata:
         labels:
           ansible_job: ''
+      {% if vcluster_api_url %}
+        namespace: {{ current_namespace }}
+      {% endif %}
       spec:
         serviceAccountName: template-publisher
         affinity:
@@ -1015,11 +1059,19 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
           - name: cas
             configMap:
               name: ca-bundle
+  # No pod spec of their own today: under the vcluster they get the minimal
+  # spec (osac-sa, release namespace) so their job pods land inside the
+  # vcluster like every other group's; without it the empty string omits the
+  # override, as it does for the credential.
   - name: "{{ aap_prefix }}-create-hosted-cluster-post-install-ig"
     is_container_group: true
+    credential: "{{ aap_vcluster_credential_name }}"
+    pod_spec_override: "{{ lookup('ansible.builtin.template', 'vcluster-minimal-ig.j2') if vcluster_api_url else '' }}"
 
   - name: "{{ aap_prefix }}-addon-operators-ig"
     is_container_group: true
+    credential: "{{ aap_vcluster_credential_name }}"
+    pod_spec_override: "{{ lookup('ansible.builtin.template', 'vcluster-minimal-ig.j2') if vcluster_api_url else '' }}"
     max_concurrent_jobs: "{{ addon_operator_max_concurrent_jobs }}"
 
   # The protected tenant credential is attached to the job at launch.  This
@@ -1029,12 +1081,16 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
   # the dedicated ServiceAccount in this namespace.
   - name: "{{ aap_prefix }}-fulfillment-trust-sync-ig"
     is_container_group: true
+    credential: "{{ aap_vcluster_credential_name }}"
     pod_spec_override: |
       apiVersion: v1
       kind: Pod
       metadata:
         labels:
           ansible_job: ''
+      {% if vcluster_api_url %}
+        namespace: {{ current_namespace }}
+      {% endif %}
       spec:
         serviceAccountName: osac-fulfillment-trust-sync
         affinity:
@@ -1086,20 +1142,26 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
 
   - name: "{{ aap_prefix }}-compute-instance-operations-ig"
     is_container_group: true
+    credential: "{{ aap_vcluster_credential_name }}"
     pod_spec_override: "{{ lookup('ansible.builtin.template', 'compute-instance-operations-ig.j2') }}"
 
   - name: "{{ aap_prefix }}-networking-operations-ig"
     is_container_group: true
+    credential: "{{ aap_vcluster_credential_name }}"
     pod_spec_override: "{{ lookup('ansible.builtin.template', 'networking-operations-ig.j2') }}"
 
   - name: "{{ aap_prefix }}-bare-metal-fulfillment-ig"
     is_container_group: true
+    credential: "{{ aap_vcluster_credential_name }}"
     pod_spec_override: |
       apiVersion: v1
       kind: Pod
       metadata:
         labels:
           ansible_job: ''
+      {% if vcluster_api_url %}
+        namespace: {{ current_namespace }}
+      {% endif %}
       spec:
         serviceAccountName: {{ osac_sa_name }}
         affinity:
@@ -1134,6 +1196,10 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
                     fieldPath: metadata.namespace
               - name: OS_CLIENT_CONFIG_FILE
                 value: /etc/openstack/clouds.yaml
+      {% if osac_instance_id %}
+              - name: OSAC_INSTANCE_ID
+                value: {{ osac_instance_id }}
+      {% endif %}
             envFrom:
               - secretRef:
                   name: bare-metal-fulfillment-ig
@@ -1173,4 +1239,5 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
 
   - name: "{{ aap_prefix }}-storage-operations-ig"
     is_container_group: true
+    credential: "{{ aap_vcluster_credential_name }}"
     pod_spec_override: "{{ lookup('ansible.builtin.template', 'storage-operations-ig.j2') }}"

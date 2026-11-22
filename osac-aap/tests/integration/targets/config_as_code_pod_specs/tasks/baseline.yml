@@ -8,6 +8,8 @@
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
     osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: ""
+    vcluster_api_url: ""
+    osac_instance_id: ""
     _template_path: >-
       {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/compute-instance-operations-ig.j2
 
@@ -104,6 +106,8 @@
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
     osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: remote-cluster-kubeconfig
+    vcluster_api_url: ""
+    osac_instance_id: ""
     remote_cluster_kubeconfig_secret_key: kubeconfig
     _template_path: >-
       {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/compute-instance-operations-ig.j2
@@ -127,6 +131,8 @@
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
     osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: ""
+    vcluster_api_url: ""
+    osac_instance_id: ""
     remote_cluster_kubeconfig_secret_key: kubeconfig
     _template_path: >-
       {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/storage-operations-ig.j2
@@ -207,6 +213,8 @@
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
     osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: remote-cluster-kubeconfig
+    vcluster_api_url: ""
+    osac_instance_id: ""
     remote_cluster_kubeconfig_secret_key: kubeconfig
     _template_path: >-
       {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates/storage-operations-ig.j2
@@ -250,6 +258,8 @@
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
     osac_sa_name: osac-sa
     remote_cluster_kubeconfig_secret_name: remote-cluster-kubeconfig
+    vcluster_api_url: ""
+    osac_instance_id: ""
     remote_cluster_kubeconfig_secret_key: kubeconfig
     netris_ca_config_map_name: customer-netris-ca
     netris_ca_path: /etc/netris/ca/bundle.pem
@@ -326,6 +336,8 @@
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
     osac_sa_name: osac-sa
+    vcluster_api_url: ""
+    osac_instance_id: ""
     netris_ca_config_map_name: ""
     netris_ca_path: ""
     _template_path: >-
@@ -358,6 +370,8 @@
   vars:
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
     osac_sa_name: osac-sa
+    vcluster_api_url: ""
+    osac_instance_id: ""
     netris_ca_config_map_name: customer-netris-ca
     netris_ca_path: /etc/netris/ca/bundle.pem
     _template_path: >-
@@ -390,6 +404,8 @@
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
     osac_sa_name: customer-aap-sa
     remote_cluster_kubeconfig_secret_name: ""
+    vcluster_api_url: ""
+    osac_instance_id: ""
     remote_cluster_kubeconfig_secret_key: kubeconfig
     netris_controller_url: https://managed.example
     netris_ca_config_map_name: ""
@@ -420,5 +436,52 @@
           - item.pod.spec.serviceAccountName == 'customer-aap-sa'
         fail_msg: "{{ item.name }} must use the configured OSAC service account"
       loop: "{{ _sa_pod_specs }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+- name: Pod specs name the release namespace and run ID inside the vcluster
+  hosts: localhost
+  gather_facts: false
+  vars:
+    aap_ee_image: ghcr.io/osac-project/osac-aap:latest
+    osac_sa_name: osac-sa
+    remote_cluster_kubeconfig_secret_name: ""
+    netris_ca_config_map_name: ""
+    netris_ca_path: ""
+    vcluster_api_url: https://pr2100v1.vc-pr2100v1.svc.cluster.local
+    osac_instance_id: pr2100v1
+    current_namespace: osac
+    _templates_dir: >-
+      {{ playbook_dir }}/../../../../../collections/ansible_collections/osac/config_as_code/roles/aap/templates
+
+  tasks:
+    - name: Render every pod spec against the run's vcluster
+      ansible.builtin.set_fact:
+        _vc_pod_specs: >-
+          {{ _vc_pod_specs | default([]) + [
+             {'name': item,
+              'pod': lookup('ansible.builtin.template', _templates_dir ~ '/' ~ item) | from_yaml}
+          ] }}
+      loop:
+        - cluster-fulfillment-ig.j2
+        - compute-instance-operations-ig.j2
+        - networking-operations-ig.j2
+        - storage-operations-ig.j2
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Assert every pod spec runs in the release namespace with the run ID
+      ansible.builtin.assert:
+        that:
+          - item.pod.metadata.namespace == 'osac'
+          - >-
+            item.pod.spec.containers[0].env
+            | selectattr('name', 'equalto', 'OSAC_INSTANCE_ID')
+            | map(attribute='value') | list == ['pr2100v1']
+        fail_msg: >-
+          {{ item.name }} must create its job pod in the release namespace
+          inside the vcluster and carry the run ID for the labeling roles
+          when a vcluster API URL and run ID are configured.
+      loop: "{{ _vc_pod_specs }}"
       loop_control:
         label: "{{ item.name }}"

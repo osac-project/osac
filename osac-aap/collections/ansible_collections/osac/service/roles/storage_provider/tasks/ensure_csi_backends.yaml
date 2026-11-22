@@ -89,9 +89,10 @@
           kind: Namespace
           metadata:
             name: "{{ storage_provider_csi_backends_namespace }}"
-            labels:
-              pod-security.kubernetes.io/enforce: privileged
-              pod-security.kubernetes.io/warn: privileged
+            labels: >-
+              {{ {'pod-security.kubernetes.io/enforce': 'privileged',
+                  'pod-security.kubernetes.io/warn': 'privileged'}
+                 | combine(osac_instance_labels | default({})) }}
 
     - name: Install or upgrade csi-backends Helm chart
       when: _csi_backends_any_enabled | bool

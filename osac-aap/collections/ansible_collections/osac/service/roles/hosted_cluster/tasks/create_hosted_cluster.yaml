@@ -7,7 +7,7 @@
       metadata:
         name: "pullsecret-cluster-{{ hosted_cluster_name }}"
         namespace: "{{ hosted_cluster_namespace }}"
-        labels: "{{ hosted_cluster_default_cluster_order_label }}"
+        labels: "{{ hosted_cluster_default_cluster_order_label | combine(osac_instance_labels | default({})) }}"
       data:
         .dockerconfigjson: >-
           {{ ((hosted_cluster_settings.pull_secret | to_json)
@@ -25,7 +25,7 @@
       metadata:
         name: "sshkey-cluster-{{ hosted_cluster_name }}"
         namespace: "{{ hosted_cluster_namespace }}"
-        labels: "{{ hosted_cluster_default_cluster_order_label }}"
+        labels: "{{ hosted_cluster_default_cluster_order_label | combine(osac_instance_labels | default({})) }}"
       data:
         id_rsa.pub: "{{ hosted_cluster_settings.ssh_public_key | b64encode }}"
 
@@ -38,7 +38,10 @@
       metadata:
         name: "{{ hosted_cluster_name }}"
         namespace: "{{ hosted_cluster_namespace }}"
-        labels: "{{ {'cluster.open-cluster-management.io/clusterset': 'default'} | combine(hosted_cluster_default_cluster_order_label) }}"
+        labels: >-
+          {{ {'cluster.open-cluster-management.io/clusterset': 'default'}
+             | combine(hosted_cluster_default_cluster_order_label)
+             | combine(osac_instance_labels | default({})) }}
       spec:
         release:
           image: "{{ ocp_release_image }}"
@@ -136,6 +139,7 @@
       metadata:
         name: capi-provider-role
         namespace: "{{ hosted_cluster_default_agent_namespace }}"
+        labels: "{{ osac_instance_labels | default({}) }}"
       rules:
         - apiGroups: ["agent-install.openshift.io"]
           resources: ["agents"]

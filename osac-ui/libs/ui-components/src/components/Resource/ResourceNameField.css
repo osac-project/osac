@@ -1,0 +1,9 @@
+/* PatternFly 6 has no multi-line clamp utility (pf-v6-u-text-truncate is
+   single-line only), so keep the minimum needed for -webkit-line-clamp here. */
+.resource-name-field__clamped {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}

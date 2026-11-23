@@ -1187,6 +1187,7 @@
   "Total GB: {{total}}": "Total GB: {{total}}",
   "Try a different guest OS family, architecture, lifecycle, scope, or search term.": "Try a different guest OS family, architecture, lifecycle, scope, or search term.",
   "Try a different lifecycle state or search term.": "Try a different lifecycle state or search term.",
+  "Try a different project or search term.": "Try a different project or search term.",
   "Try a different project, power state, instance type, disk image, or search term.": "Try a different project, power state, instance type, disk image, or search term.",
   "Try a different project, state, or search term.": "Try a different project, state, or search term.",
   "Try a different project, status, cluster version, or search term.": "Try a different project, status, cluster version, or search term.",

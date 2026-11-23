@@ -100,20 +100,30 @@ describe('SecurityGroupsListPage', () => {
       expect(screen.getByRole('link', { name: 'sg-web' })).toBeInTheDocument();
       expect(screen.getByRole('link', { name: 'sg-db' })).toBeInTheDocument();
     });
+    expect(screen.getAllByText('Project').length).toBeGreaterThanOrEqual(1);
     expect(screen.getAllByText('Inbound Rules').length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByRole('grid', { name: 'Security groups' })).not.toBeInTheDocument();
   });
 
-  it('renders table with Name, Virtual Network, rule, status, and Created columns in list view', async () => {
+  it('renders the project filter', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Project:/i })).toBeInTheDocument();
+    });
+  });
+
+  it('renders table with Name, Status, Project, Virtual Network, rule, and Created columns in list view', async () => {
     localStorage.setItem(getViewTypePrefKey('security-groups'), 'list');
     renderPage();
 
     const table = await screen.findByRole('grid', { name: 'Security groups' });
     expect(within(table).getByText('Name')).toBeInTheDocument();
+    expect(within(table).getByText('Status')).toBeInTheDocument();
+    expect(within(table).getByText('Project')).toBeInTheDocument();
     expect(within(table).getByText('Virtual Network')).toBeInTheDocument();
     expect(within(table).getByText('Inbound Rules')).toBeInTheDocument();
     expect(within(table).getByText('Outbound Rules')).toBeInTheDocument();
-    expect(within(table).getByText('Status')).toBeInTheDocument();
     expect(within(table).getByText('Created')).toBeInTheDocument();
   });
 
@@ -122,8 +132,11 @@ describe('SecurityGroupsListPage', () => {
     renderPage();
 
     await screen.findByRole('link', { name: 'sg-web' });
-    const vnLinks = screen.getAllByRole('link', { name: 'vn-prod' });
-    expect(vnLinks).toHaveLength(2);
+    const vnLinks = await waitFor(() => {
+      const links = screen.getAllByRole('link', { name: 'vn-prod' });
+      expect(links).toHaveLength(2);
+      return links;
+    });
     vnLinks.forEach((link) => {
       expect(link).toHaveAttribute('href', '/networking/virtual-networks/vn-1');
     });
@@ -138,6 +151,8 @@ describe('SecurityGroupsListPage', () => {
     expect(webRow).toBeDefined();
     expect(dbRow).toBeDefined();
 
+    expect(getTableCellByLabel(webRow as HTMLElement, 'Project')).toHaveTextContent('Default');
+    expect(getTableCellByLabel(dbRow as HTMLElement, 'Project')).toHaveTextContent('Default');
     expect(getTableCellByLabel(webRow as HTMLElement, 'Inbound Rules')).toHaveTextContent('1');
     expect(getTableCellByLabel(webRow as HTMLElement, 'Outbound Rules')).toHaveTextContent('0');
     expect(getTableCellByLabel(dbRow as HTMLElement, 'Inbound Rules')).toHaveTextContent('1');
@@ -168,7 +183,7 @@ describe('SecurityGroupsListPage', () => {
         }),
       ).toBeInTheDocument();
     });
-    expect(screen.getByText('Try a different search term.')).toBeInTheDocument();
+    expect(screen.getByText('Try a different project or search term.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Clear all filters' })).toBeInTheDocument();
   });
 
@@ -186,7 +201,7 @@ describe('SecurityGroupsListPage', () => {
     await user.type(searchInput, 'web');
 
     await waitFor(() => {
-      expect(lastFilter).toBe(buildSecurityGroupListFilter('web'));
+      expect(lastFilter).toBe(buildSecurityGroupListFilter(undefined, 'web'));
       expect(screen.queryByRole('link', { name: 'sg-db' })).not.toBeInTheDocument();
     });
     expect(screen.getByRole('link', { name: 'sg-web' })).toBeInTheDocument();

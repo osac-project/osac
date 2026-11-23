@@ -27,6 +27,7 @@ export const SecurityGroupsTable = ({
     () => ({
       name: t('Name'),
       status: t('Status'),
+      project: t('Project'),
       virtualNetwork: t('Virtual Network'),
       inboundRules: t('Inbound Rules'),
       outboundRules: t('Outbound Rules'),
@@ -42,6 +43,7 @@ export const SecurityGroupsTable = ({
         <Tr>
           <Th>{columnLabels.name}</Th>
           <Th>{columnLabels.status}</Th>
+          <Th>{columnLabels.project}</Th>
           <Th>{columnLabels.virtualNetwork}</Th>
           <Th>{columnLabels.inboundRules}</Th>
           <Th>{columnLabels.outboundRules}</Th>
@@ -72,6 +74,9 @@ export const SecurityGroupsTable = ({
               </Td>
               <Td dataLabel={columnLabels.status}>
                 <SecurityGroupStatusLabel state={securityGroup.status?.state} />
+              </Td>
+              <Td dataLabel={columnLabels.project}>
+                {securityGroup.metadata?.project || t('Default')}
               </Td>
               <Td dataLabel={columnLabels.virtualNetwork}>
                 {virtualNetworkId ? (

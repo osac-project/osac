@@ -7,10 +7,11 @@ export const securityGroupDetailsPath = (id: string) =>
   `${SECURITY_GROUPS_LIST_PATH}/${encodeURIComponent(id)}`;
 
 export const buildSecurityGroupListFilter = (
+  projectFilter: CelFilter<SecurityGroup> | undefined,
   search: string,
 ): CelFilter<SecurityGroup> | undefined =>
-  cel<SecurityGroup>((group) =>
-    search ? group.field('metadata.name').contains(search) : undefined,
+  cel<SecurityGroup>((b) =>
+    b.and(projectFilter, search ? b.field('metadata.name').contains(search) : undefined),
   );
 
 export const uniqueVirtualNetworkIds = (securityGroups: SecurityGroup[]): string[] => [

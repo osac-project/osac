@@ -14,7 +14,7 @@ import {
   ToolbarItem,
 } from '@patternfly/react-core';
 
-import { SecurityGroups, type VirtualNetwork, VirtualNetworks } from '@osac/types';
+import { SecurityGroup, SecurityGroups, type VirtualNetwork, VirtualNetworks } from '@osac/types';
 import { cel } from '@osac/ui-components/api/cel';
 import { useListResource } from '@osac/ui-components/api/use-resource';
 import {
@@ -25,10 +25,13 @@ import SecurityGroupCard from '@osac/ui-components/components/networking/Securit
 import { SecurityGroupsTable } from '@osac/ui-components/components/networking/SecurityGroupsTable';
 import ListPage from '@osac/ui-components/components/Page/ListPage';
 import ListPageBody from '@osac/ui-components/components/Page/ListPageBody';
+import ProjectFilter from '@osac/ui-components/components/Page/ProjectFilter';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
 import DebounceSearchInput from '@osac/ui-components/components/Primitives/DebounceSearchInput';
 import ViewSwitcher from '@osac/ui-components/components/Primitives/ViewSwitcher';
 import { SEARCH_PARAM, usePageFilter } from '@osac/ui-components/hooks/use-page-filter.ts';
+import { useProjectFilterQuery } from '@osac/ui-components/hooks/use-project-filter-query';
+import { useSession } from '@osac/ui-components/hooks/use-session';
 import { useViewType } from '@osac/ui-components/hooks/use-view-type';
 import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
@@ -38,13 +41,19 @@ const SECURITY_GROUPS_VIEW_KEY = 'security-groups';
 
 export const SecurityGroupsListPage = () => {
   const { t } = useTranslation();
+  const { projects, setProjects } = useSession();
   const [, setSearchParams] = useSearchParams();
   const [search, setSearch] = usePageFilter(SEARCH_PARAM);
   const [viewType] = useViewType(SECURITY_GROUPS_VIEW_KEY);
   const [searchResetKey, setSearchResetKey] = useState(0);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
 
-  const filter = useMemo(() => buildSecurityGroupListFilter(search.trim()), [search]);
+  const projectFilter = useProjectFilterQuery<SecurityGroup>();
+
+  const filter = useMemo(
+    () => buildSecurityGroupListFilter(projectFilter, search.trim()),
+    [projectFilter, search],
+  );
 
   const { data, isLoading, error } = useListResource(SecurityGroups, { filter });
 
@@ -63,19 +72,22 @@ export const SecurityGroupsListPage = () => {
     [virtualNetworksData?.items],
   );
 
-  const isFiltered = Boolean(search.trim());
+  const isFiltered = Boolean(projects.length || search.trim());
   const showEmptyState = !isLoading && !error && items.length === 0;
 
   const clearAllFilters = () => {
     setSearchResetKey((key) => key + 1);
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        next.delete(SEARCH_PARAM);
-        return next;
-      },
-      { replace: true },
-    );
+    setProjects([]);
+    requestAnimationFrame(() => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete(SEARCH_PARAM);
+          return next;
+        },
+        { replace: true },
+      );
+    });
   };
 
   const emptyState = !isFiltered ? (
@@ -85,7 +97,7 @@ export const SecurityGroupsListPage = () => {
   ) : (
     <EmptyState titleText={t('No security groups match your filters')} headingLevel="h2">
       <EmptyStateBody>
-        {t('Try a different search term.')}{' '}
+        {t('Try a different project or search term.')}{' '}
         <Button variant="link" isInline onClick={clearAllFilters}>
           {t('Clear all filters')}
         </Button>
@@ -110,6 +122,9 @@ export const SecurityGroupsListPage = () => {
             <Toolbar>
               <ToolbarContent>
                 <ToolbarGroup>
+                  <ToolbarItem>
+                    <ProjectFilter />
+                  </ToolbarItem>
                   <ToolbarItem>
                     <DebounceSearchInput
                       placeholder={t('Search security groups')}

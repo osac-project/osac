@@ -51,6 +51,12 @@ const SecurityGroupCard = ({ securityGroup, virtualNetworksById }: SecurityGroup
       <CardBody>
         <DescriptionList isCompact isHorizontal>
           <DescriptionListGroup>
+            <DescriptionListTerm>{t('Project')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              {securityGroup.metadata?.project || t('Default')}
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+          <DescriptionListGroup>
             <DescriptionListTerm>{t('Virtual Network')}</DescriptionListTerm>
             <DescriptionListDescription>
               {virtualNetworkId ? (

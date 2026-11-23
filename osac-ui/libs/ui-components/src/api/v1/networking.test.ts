@@ -1,37 +1,29 @@
-import React, { type ReactNode, createElement } from 'react';
-import { createRouterTransport } from '@connectrpc/connect';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { initReactI18next } from 'react-i18next';
+import i18n from 'i18next';
 import { describe, expect, it } from 'vitest';
 
-import {
-  ExternalIPState,
-  Protocol,
-  SecurityGroupState,
-  SecurityGroups,
-  SubnetState,
-  Subnets,
-  VirtualNetworkState,
-  VirtualNetworks,
-} from '@osac/types';
+import { ExternalIPState, SecurityGroupState, SubnetState, VirtualNetworkState } from '@osac/types';
 
 import {
   VIRTUAL_NETWORK_READY_LIST_FILTER,
   defaultSecurityGroupListFilter,
   defaultSubnetListFilter,
   externalIpIdsFilter,
-  invalidateSecurityGroupsQueries,
-  invalidateSubnetsQueries,
-  invalidateVirtualNetworksQueries,
   securityGroupFilterForVirtualNetwork,
   securityGroupFilterForVirtualNetworkList,
   unallocatedExternalIpFilter,
-  useUpdateSecurityGroup,
   virtualNetworkFilterForSubnetList,
   virtualNetworkScopeFilter,
 } from './networking';
-import { ApiProvider } from '../api-context';
 import { escapeCelStringLiteral } from '../cel';
+
+i18n.use(initReactI18next).init({
+  initImmediate: false,
+  lng: 'en',
+  fallbackLng: 'en',
+  resources: { en: { translation: {} } },
+  interpolation: { escapeValue: false },
+});
 
 describe('networking list filters', () => {
   it("finds only ready IPv4 tenant-default subnets in the tenant's default project", () => {
@@ -132,92 +124,5 @@ describe('networking list filters', () => {
     expect(securityGroupFilterForVirtualNetwork('vn-\\')).toBe(
       'this.spec.virtual_network.id == "vn-\\\\"',
     );
-  });
-});
-
-describe('networking query invalidation', () => {
-  const asApiQueryClient = (qc: QueryClient) =>
-    ({
-      invalidateQueries: (filters: { queryKey: readonly unknown[] }) =>
-        qc.invalidateQueries(filters),
-    }) as unknown as Parameters<typeof invalidateVirtualNetworksQueries>[0];
-
-  it('invalidates both the list and by-id virtual network queries', async () => {
-    const qc = new QueryClient();
-    qc.setQueryData(['v1/virtual_networks'], { items: [] });
-    qc.setQueryData(['v1/virtual_networks', ['vn-1']], { id: 'vn-1' });
-    qc.setQueryData([VirtualNetworks.typeName, 'list', {}], { items: [] });
-
-    await invalidateVirtualNetworksQueries(asApiQueryClient(qc));
-
-    expect(qc.getQueryState(['v1/virtual_networks'])?.isInvalidated).toBe(true);
-    expect(qc.getQueryState(['v1/virtual_networks', ['vn-1']])?.isInvalidated).toBe(true);
-    expect(qc.getQueryState([VirtualNetworks.typeName, 'list', {}])?.isInvalidated).toBe(true);
-  });
-
-  it('invalidates both the list and by-id subnet queries', async () => {
-    const qc = new QueryClient();
-    qc.setQueryData(['v1/subnets'], { items: [] });
-    qc.setQueryData(['v1/subnets', ['subnet-1']], { id: 'subnet-1' });
-    qc.setQueryData([Subnets.typeName, 'list', {}], { items: [] });
-
-    await invalidateSubnetsQueries(asApiQueryClient(qc));
-
-    expect(qc.getQueryState(['v1/subnets'])?.isInvalidated).toBe(true);
-    expect(qc.getQueryState(['v1/subnets', ['subnet-1']])?.isInvalidated).toBe(true);
-    expect(qc.getQueryState([Subnets.typeName, 'list', {}])?.isInvalidated).toBe(true);
-  });
-
-  it('invalidates both the list and by-id security group queries', async () => {
-    const qc = new QueryClient();
-    qc.setQueryData(['v1/security_groups'], { items: [] });
-    qc.setQueryData(['v1/security_groups', ['sg-1']], { id: 'sg-1' });
-    qc.setQueryData([SecurityGroups.typeName, 'list', {}], { items: [] });
-
-    await invalidateSecurityGroupsQueries(asApiQueryClient(qc));
-
-    expect(qc.getQueryState(['v1/security_groups'])?.isInvalidated).toBe(true);
-    expect(qc.getQueryState(['v1/security_groups', ['sg-1']])?.isInvalidated).toBe(true);
-    expect(qc.getQueryState([SecurityGroups.typeName, 'list', {}])?.isInvalidated).toBe(true);
-  });
-});
-
-describe('useUpdateSecurityGroup', () => {
-  it('sends rule updates through the public API', async () => {
-    let captured: { object?: unknown } | undefined;
-    const transport = createRouterTransport((router) => {
-      router.service(SecurityGroups, {
-        update: (request) => {
-          captured = request;
-          return { object: request.object };
-        },
-      });
-    });
-    const queryClient = new QueryClient({
-      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
-    });
-    const wrapper = ({ children }: { children: ReactNode }) =>
-      createElement(
-        ApiProvider,
-        { transport } as React.ComponentProps<typeof ApiProvider>,
-        createElement(QueryClientProvider, { client: queryClient }, children),
-      );
-    const { result } = renderHook(() => useUpdateSecurityGroup(), { wrapper });
-    const object = {
-      id: 'sg-1',
-      metadata: { name: 'sg-web' },
-      spec: {
-        virtualNetwork: { id: 'vn-1' },
-        ingress: [{ protocol: Protocol.TCP, portFrom: 443, portTo: 443 }],
-        egress: [],
-      },
-    };
-
-    await act(async () => {
-      await result.current.mutateAsync({ object });
-    });
-
-    expect(captured?.object).toMatchObject(object);
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
   });
 });

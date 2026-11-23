@@ -6,6 +6,15 @@
 # is ever sourced by a script that forgot to.
 set -euo pipefail
 
+# Keep Kind's automatic export and failure cleanup separate from the caller's config.
+create_kind_cluster() (
+    local cli="$1" name="$2" config="$3" directory
+    directory=$(mktemp -d "${TMPDIR:-/tmp}/osac-kind-create-XXXXXX") || return 1
+    trap 'rm -rf -- "${directory}"' EXIT
+    "${cli}" create cluster --name "${name}" --config "${config}" --wait 60s \
+        --kubeconfig "${directory}/config"
+)
+
 # Prepare only a verified local Linux engine host; never persist sysctl changes.
 ensure_inotify_instances() {
     local floor=512
@@ -148,7 +157,8 @@ ensure_inotify_instances() {
              2>&1 >/dev/null) || write_failed=true
     fi
     if [[ "${write_failed}" == true ]]; then
-        local normalized="${diagnostic,,}" category="write command failed"
+        local normalized category="write command failed"
+        normalized=$(printf '%s' "${diagnostic}" | LC_ALL=C tr '[:upper:]' '[:lower:]')
         if [[ "${use_sudo}" == true && "${normalized}" == *"sudo: a password is required"* ]]; then
             category="passwordless sudo required; prepare the host manually if not authorized"
         elif [[ "${use_sudo}" == true && "${normalized}" == *"unable to initialize policy plugin"* ]]; then

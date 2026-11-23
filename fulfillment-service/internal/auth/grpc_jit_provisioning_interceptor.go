@@ -116,22 +116,9 @@ func (i *GrpcJitProvisioningInterceptor) provisionIfNeeded(ctx context.Context) 
 		return nil
 	}
 
-	// Only provision for users with exactly one tenant
-	// Users with zero tenants (unauthenticated), multiple tenants (cloud provider admins),
-	// or special tenants (system/shared) should not have user records
-	if !subject.Tenants.Finite() {
-		return nil
-	}
-
-	tenants := subject.Tenants.Inclusions()
-	if len(tenants) != 1 {
-		// Zero or multiple tenants - not a regular user
-		return nil
-	}
-
-	tenant := tenants[0]
-	if tenant == SystemTenant || tenant == SharedTenant {
-		// System and shared tenants don't have user records
+	tenant := subject.Tenant
+	if tenant == "" || tenant == SystemTenant || tenant == SharedTenant {
+		// Only provision user records for a known home tenant other than system or shared.
 		return nil
 	}
 

@@ -36,6 +36,7 @@ import (
 	"github.com/osac-project/osac-metering/internal/database"
 	"github.com/osac-project/osac-metering/internal/rules"
 	"github.com/osac-project/osac-metering/internal/service"
+	"github.com/osac-project/osac-metering/schema"
 )
 
 type config struct {
@@ -49,6 +50,11 @@ type config struct {
 	// for a tenant it serves for the first time. The retention is the recovery window,
 	// because metering rebuilds its database from the topics.
 	topicRetentionMS string
+
+	// eventTopicPrefix is fulfillment's event-topic prefix. Discovery and the
+	// per-tenant loops use it to find osac.events.<tenant>, or whatever prefix
+	// this deployment publishes under.
+	eventTopicPrefix string
 }
 
 func main() {
@@ -88,6 +94,7 @@ func configFromEnv() *config {
 		heartbeatTick:    parseDurationOrDefault(os.Getenv("HEARTBEAT_INTERVAL"), time.Minute),
 		deploymentID:     os.Getenv("METERING_DEPLOYMENT_ID"),
 		topicRetentionMS: envOrDefault("METERING_TOPIC_RETENTION_MS", "-1"),
+		eventTopicPrefix: envOrDefault("KAFKA_EVENT_TOPIC_PREFIX", schema.EventsPrefix),
 	}
 }
 
@@ -193,6 +200,7 @@ func run(ctx context.Context, logger logr.Logger, cfg *config) error {
 		DeploymentID:     cfg.deploymentID,
 		Logger:           logger,
 		TopicRetentionMS: cfg.topicRetentionMS,
+		EventTopicPrefix: cfg.eventTopicPrefix,
 	})
 	if err != nil {
 		return err

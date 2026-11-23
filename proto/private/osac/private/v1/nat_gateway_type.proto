@@ -21,6 +21,7 @@ import "google/protobuf/timestamp.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/external_ip_type.proto";
 import "osac/private/v1/metering_type.proto";
+import "osac/private/v1/quota_type.proto";
 import "osac/private/v1/virtual_network_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
@@ -42,6 +43,9 @@ option (cleanapi.file).package = "osac.public.v1";
 // The lifecycle follows: PENDING (SNAT rule being configured) -> READY (egress active).
 // FAILED is a terminal error state for provisioning failures. DELETING is set during deprovisioning.
 message NATGateway {
+  // Quota: one NAT gateway per resource.
+  option (osac.private.v1.quota_message) = {dimension: "network.nat_gateways"};
+
   // Unique identifier of the NAT gateway.
   string id = 1;
 

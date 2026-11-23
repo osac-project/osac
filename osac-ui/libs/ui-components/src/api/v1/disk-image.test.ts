@@ -1,44 +1,18 @@
 import React, { type ReactNode, createElement } from 'react';
-import { create } from '@bufbuild/protobuf';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import {
-  Architecture,
-  type DiskImage,
-  DiskImageLifecycle,
-  DiskImageSchema,
-  DiskImagesCreateResponseSchema,
-  DiskImagesUpdateResponseSchema,
-  GuestOSFamily,
-} from '@osac/types';
+import { Architecture, DiskImageLifecycle, DiskImages, GuestOSFamily } from '@osac/types';
 
 import {
   DISK_IMAGE_NON_OBSOLETE_FILTER,
   buildDiskImageListFilter,
-  invalidateDiskImagesQueries,
-  useCreateDiskImage,
-  useDiskImage,
-  useDiskImages,
-  useUpdateDiskImage,
+  diskImageListRequestFilter,
 } from './disk-image';
 import { createMockConnectTransport } from '../../test-utils/createMockConnectTransport';
 import { ApiProvider } from '../api-context';
-import { cel } from '../cel';
-
-const makeDiskImage = (
-  id: string,
-  lifecycle: DiskImageLifecycle = DiskImageLifecycle.AVAILABLE,
-): DiskImage =>
-  create(DiskImageSchema, {
-    id,
-    metadata: { name: `disk-image-${id}` },
-    spec: {
-      sourceRef: `quay.io/example/${id}:latest`,
-      lifecycle,
-    },
-  });
+import { useListResource } from '../use-resource';
 
 const makeWrapper = (transport: ReturnType<typeof createMockConnectTransport>) => {
   const queryClient = new QueryClient({
@@ -58,100 +32,6 @@ describe('DISK_IMAGE_NON_OBSOLETE_FILTER', () => {
     expect(DISK_IMAGE_NON_OBSOLETE_FILTER).toBe(
       `this.spec.lifecycle != ${DiskImageLifecycle.OBSOLETE}`,
     );
-  });
-});
-
-describe('useDiskImages', () => {
-  it('unwraps the list response into items', async () => {
-    const transport = createMockConnectTransport({
-      diskImages: [makeDiskImage('a'), makeDiskImage('b')],
-    });
-    const { wrapper } = makeWrapper(transport);
-    const { result } = renderHook(() => useDiskImages(), { wrapper });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.map((item) => item.id)).toEqual(['a', 'b']);
-  });
-
-  it('appends the default OBSOLETE-exclusion filter when no caller filter is given', async () => {
-    let capturedFilter: string | undefined;
-    const transport = createMockConnectTransport(
-      {},
-      {
-        onDiskImageList: (req) => {
-          capturedFilter = req.filter;
-          return { items: [] };
-        },
-      },
-    );
-    const { wrapper } = makeWrapper(transport);
-    const { result } = renderHook(() => useDiskImages(), { wrapper });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(capturedFilter).toBe(DISK_IMAGE_NON_OBSOLETE_FILTER);
-  });
-
-  it('leaves a caller filter that already references spec.lifecycle unmodified', async () => {
-    let capturedFilter: string | undefined;
-    const transport = createMockConnectTransport(
-      {},
-      {
-        onDiskImageList: (req) => {
-          capturedFilter = req.filter;
-          return { items: [] };
-        },
-      },
-    );
-    const callerFilter = cel<DiskImage>((filter) =>
-      filter.field('spec.lifecycle').equals(DiskImageLifecycle.AVAILABLE),
-    );
-    const { wrapper } = makeWrapper(transport);
-    const { result } = renderHook(() => useDiskImages({ filter: callerFilter }), { wrapper });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(capturedFilter).toBe(callerFilter);
-  });
-
-  it('still appends the default filter when the caller filter merely contains the lifecycle field name as text, not a predicate', async () => {
-    let capturedFilter: string | undefined;
-    const transport = createMockConnectTransport(
-      {},
-      {
-        onDiskImageList: (req) => {
-          capturedFilter = req.filter;
-          return { items: [] };
-        },
-      },
-    );
-    const callerFilter = cel<DiskImage>((filter) =>
-      filter.field('metadata.name').contains('this.spec.lifecycle'),
-    );
-    const { wrapper } = makeWrapper(transport);
-    const { result } = renderHook(() => useDiskImages({ filter: callerFilter }), { wrapper });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(capturedFilter).toBe(`(${callerFilter}) && ${DISK_IMAGE_NON_OBSOLETE_FILTER}`);
-  });
-
-  it('combines the default filter with a caller filter that does not reference lifecycle', async () => {
-    let capturedFilter: string | undefined;
-    const transport = createMockConnectTransport(
-      {},
-      {
-        onDiskImageList: (req) => {
-          capturedFilter = req.filter;
-          return { items: [] };
-        },
-      },
-    );
-    const callerFilter = cel<DiskImage>((filter) =>
-      filter.field('spec.architecture').someEquals(Architecture.AMD64),
-    );
-    const { wrapper } = makeWrapper(transport);
-    const { result } = renderHook(() => useDiskImages({ filter: callerFilter }), { wrapper });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(capturedFilter).toBe(`(${callerFilter}) && ${DISK_IMAGE_NON_OBSOLETE_FILTER}`);
   });
 });
 
@@ -214,7 +94,13 @@ describe('buildDiskImageListFilter', () => {
     expect(buildDiskImageListFilter(criteria)).toBe(expected);
   });
 
-  it('is not double-excluded by the default lifecycle filter when passed through useDiskImages', async () => {
+  it('keeps default obsolete exclusion when search text resembles a lifecycle predicate', () => {
+    const composedFilter = diskImageListRequestFilter({ search: 'this.spec.lifecycle ==' });
+    expect(composedFilter).toContain(DISK_IMAGE_NON_OBSOLETE_FILTER);
+    expect(composedFilter).toContain('this.metadata.name.contains("this.spec.lifecycle ==")');
+  });
+
+  it('is not double-excluded by the default lifecycle filter when passed through useListResource', async () => {
     let capturedFilter: string | undefined;
     const transport = createMockConnectTransport(
       {},
@@ -225,130 +111,14 @@ describe('buildDiskImageListFilter', () => {
         },
       },
     );
-    const composedFilter = buildDiskImageListFilter({ showObsolete: true });
+    const composedFilter = diskImageListRequestFilter({ showObsolete: true });
     const { wrapper } = makeWrapper(transport);
-    const { result } = renderHook(() => useDiskImages({ filter: composedFilter }), { wrapper });
+    const { result } = renderHook(() => useListResource(DiskImages, { filter: composedFilter }), {
+      wrapper,
+    });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(capturedFilter).toBe(composedFilter);
-  });
-});
-
-describe('useDiskImage', () => {
-  it('fetches a single disk image by id', async () => {
-    const transport = createMockConnectTransport({
-      diskImages: [makeDiskImage('a')],
-    });
-    const { wrapper } = makeWrapper(transport);
-    const { result } = renderHook(() => useDiskImage('a'), { wrapper });
-
-    await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(result.current.data?.id).toBe('a');
-  });
-
-  it('is disabled when the id is falsy', () => {
-    const transport = createMockConnectTransport({
-      diskImages: [makeDiskImage('a')],
-    });
-    const { wrapper } = makeWrapper(transport);
-    const { result } = renderHook(() => useDiskImage(undefined), { wrapper });
-
-    expect(result.current.fetchStatus).toBe('idle');
-    expect(result.current.data).toBeUndefined();
-  });
-});
-
-describe('useCreateDiskImage', () => {
-  it('creates a disk image and invalidates the list query', async () => {
-    const transport = createMockConnectTransport(
-      {},
-      {
-        onDiskImageCreate: () =>
-          create(DiskImagesCreateResponseSchema, {
-            object: makeDiskImage('new-di'),
-          }),
-      },
-    );
-    const { wrapper, queryClient } = makeWrapper(transport);
-    queryClient.setQueryData(['v1/disk_images'], { items: [] });
-    const { result } = renderHook(() => useCreateDiskImage(), { wrapper });
-
-    act(() => {
-      result.current.mutate({
-        metadata: { name: 'new-di' },
-        spec: { sourceRef: 'quay.io/example/new-di:latest' },
-      });
-    });
-
-    await waitFor(() => expect(result.current.isSuccess || result.current.isError).toBe(true));
-    expect(result.current.isSuccess).toBe(true);
-    expect(result.current.data?.id).toBe('new-di');
-    expect(queryClient.getQueryState(['v1/disk_images'])?.isInvalidated).toBe(true);
-  });
-
-  it('rejects when the create response is missing an object', async () => {
-    const transport = createMockConnectTransport(
-      {},
-      { onDiskImageCreate: () => create(DiskImagesCreateResponseSchema, {}) },
-    );
-    const { wrapper } = makeWrapper(transport);
-    const { result } = renderHook(() => useCreateDiskImage(), { wrapper });
-
-    act(() => {
-      result.current.mutate({ metadata: { name: 'new-di' } });
-    });
-
-    await waitFor(() => expect(result.current.isSuccess || result.current.isError).toBe(true));
-    expect(result.current.isError).toBe(true);
-  });
-});
-
-describe('useUpdateDiskImage', () => {
-  it('sends the given body with a matching update mask and invalidates the list query', async () => {
-    let captured: Record<string, unknown> | undefined;
-    const transport = createMockConnectTransport(
-      { diskImages: [makeDiskImage('di-1')] },
-      {
-        onDiskImageUpdate: (req) => {
-          captured = req as unknown as Record<string, unknown>;
-          return create(DiskImagesUpdateResponseSchema, {
-            object: makeDiskImage('di-1', DiskImageLifecycle.DEPRECATED),
-          });
-        },
-      },
-    );
-    const { wrapper, queryClient } = makeWrapper(transport);
-    queryClient.setQueryData(['v1/disk_images'], { items: [] });
-    const { result } = renderHook(() => useUpdateDiskImage(), { wrapper });
-
-    act(() => {
-      result.current.mutate({
-        id: 'di-1',
-        body: { spec: { lifecycle: DiskImageLifecycle.DEPRECATED } },
-      });
-    });
-
-    await waitFor(() => expect(result.current.isSuccess || result.current.isError).toBe(true));
-    expect(result.current.isSuccess).toBe(true);
-    expect((captured?.updateMask as { paths?: string[] } | undefined)?.paths).toEqual([
-      'spec.lifecycle',
-    ]);
-    const object = captured?.object as { id?: string };
-    expect(object.id).toBe('di-1');
-    expect(queryClient.getQueryState(['v1/disk_images'])?.isInvalidated).toBe(true);
-  });
-});
-
-describe('invalidateDiskImagesQueries', () => {
-  const asApiQueryClient = (qc: QueryClient) =>
-    qc as unknown as Parameters<typeof invalidateDiskImagesQueries>[0];
-
-  it('invalidates the disk images list query', async () => {
-    const qc = new QueryClient();
-    qc.setQueryData(['v1/disk_images'], { items: [] });
-
-    await invalidateDiskImagesQueries(asApiQueryClient(qc));
-
-    expect(qc.getQueryState(['v1/disk_images'])?.isInvalidated).toBe(true);
+    expect(capturedFilter).not.toContain(DISK_IMAGE_NON_OBSOLETE_FILTER);
   });
 });

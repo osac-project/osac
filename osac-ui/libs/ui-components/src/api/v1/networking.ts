@@ -1,6 +1,4 @@
 import { useMemo } from 'react';
-import { type MessageInitShape } from '@bufbuild/protobuf';
-import { useMutation } from '@tanstack/react-query';
 
 import {
   type ExternalIP,
@@ -9,69 +7,20 @@ import {
   type NATGateway,
   NATGateways,
   type SecurityGroup,
-  SecurityGroupSchema,
   SecurityGroupState,
-  SecurityGroups,
   type Subnet,
-  SubnetSchema,
   SubnetState,
-  Subnets,
   type VirtualNetwork,
-  VirtualNetworkSchema,
   VirtualNetworkState,
-  VirtualNetworks,
 } from '@osac/types';
 
-import { useApiFetch } from '../api-context';
 import { type CelFilter, cel } from '../cel';
-import { type ApiQueryKey, type ListParams, apiQueryKey } from '../types';
-import { type ApiQueryClient, useApiQuery, useApiQueryClient } from '../use-api-query';
 import { useListResource } from '../use-resource';
-
-type NetworkingQueryOptions = {
-  enabled?: boolean;
-};
 
 export interface NatGatewayWithAddress {
   natGateway: NATGateway;
   address?: string;
 }
-
-export const useVirtualNetworks = (
-  params: ListParams = {},
-  options: NetworkingQueryOptions = {},
-) => {
-  const client = useApiFetch(VirtualNetworks);
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/virtual_networks', undefined, params),
-    queryFn: () => client.list(params),
-    select: (data) => data.items,
-    enabled: options.enabled ?? true,
-  });
-};
-
-export const useSubnets = (params: ListParams = {}, options: NetworkingQueryOptions = {}) => {
-  const client = useApiFetch(Subnets);
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/subnets', undefined, params),
-    queryFn: () => client.list(params),
-    select: (data) => data.items,
-    enabled: options.enabled ?? true,
-  });
-};
-
-export const useSecurityGroups = (
-  params: ListParams = {},
-  options: NetworkingQueryOptions = {},
-) => {
-  const client = useApiFetch(SecurityGroups);
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/security_groups', undefined, params),
-    queryFn: () => client.list(params),
-    select: (data) => data.items,
-    enabled: options.enabled ?? true,
-  });
-};
 
 // Scope + ready filter: use where only attachable subnets are valid (e.g. the VM
 // provisioning wizard). Not for the detail page — it hides non-ready subnets.
@@ -264,149 +213,5 @@ export const formatResourceIdForReview = (
   resources: Array<{ id: string; metadata?: { name?: string } }>,
 ): string => formatResourceIdsForReview(id ? [id] : [], resources);
 
-export const useVirtualNetwork = (id: string) => {
-  const client = useApiFetch(VirtualNetworks);
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/virtual_networks', [id]),
-    queryFn: () => client.get({ id }),
-    select: (data) => data.object,
-    enabled: Boolean(id),
-  });
-};
-
-export const useSubnet = (id: string) => {
-  const client = useApiFetch(Subnets);
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/subnets', [id]),
-    queryFn: () => client.get({ id }),
-    select: (data) => data.object,
-    enabled: Boolean(id),
-  });
-};
-
-export const useSecurityGroup = (id: string) => {
-  const client = useApiFetch(SecurityGroups);
-  return useApiQuery({
-    queryKey: apiQueryKey('v1/security_groups', [id]),
-    queryFn: () => client.get({ id }),
-    select: (data) => data.object,
-    enabled: Boolean(id),
-  });
-};
-
-export const invalidateVirtualNetworksQueries = (qc: ApiQueryClient) =>
-  Promise.all([
-    qc.invalidateQueries({ queryKey: apiQueryKey('v1/virtual_networks') }),
-    qc.invalidateQueries({
-      queryKey: [VirtualNetworks.typeName] as unknown as ApiQueryKey,
-    }),
-  ]);
-
-export const invalidateSubnetsQueries = (qc: ApiQueryClient) =>
-  Promise.all([
-    qc.invalidateQueries({ queryKey: apiQueryKey('v1/subnets') }),
-    qc.invalidateQueries({
-      queryKey: [Subnets.typeName] as unknown as ApiQueryKey,
-    }),
-  ]);
-
-export const invalidateSecurityGroupsQueries = (qc: ApiQueryClient) =>
-  Promise.all([
-    qc.invalidateQueries({ queryKey: apiQueryKey('v1/security_groups') }),
-    qc.invalidateQueries({
-      queryKey: [SecurityGroups.typeName] as unknown as ApiQueryKey,
-    }),
-  ]);
-
-export const useCreateVirtualNetwork = () => {
-  const client = useApiFetch(VirtualNetworks);
-  const qc = useApiQueryClient();
-  return useMutation({
-    mutationFn: async (input: MessageInitShape<typeof VirtualNetworkSchema>) => {
-      const resp = await client.create({
-        object: input,
-      });
-      const vn = resp.object;
-      if (!vn?.id) {
-        throw new Error('Create response missing id');
-      }
-      return vn;
-    },
-    onSuccess: () => invalidateVirtualNetworksQueries(qc),
-  });
-};
-
-export const useDeleteVirtualNetwork = () => {
-  const client = useApiFetch(VirtualNetworks);
-  const qc = useApiQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => client.delete({ id }),
-    onSuccess: () => invalidateVirtualNetworksQueries(qc),
-  });
-};
-
-export const useCreateSubnet = () => {
-  const client = useApiFetch(Subnets);
-  const qc = useApiQueryClient();
-  return useMutation({
-    mutationFn: async (input: MessageInitShape<typeof SubnetSchema>) => {
-      const resp = await client.create({
-        object: input,
-      });
-      const subnet = resp.object;
-      if (!subnet?.id) {
-        throw new Error('Create response missing id');
-      }
-      return subnet;
-    },
-    onSuccess: () => invalidateSubnetsQueries(qc),
-  });
-};
-
-export const useDeleteSubnet = () => {
-  const client = useApiFetch(Subnets);
-  const qc = useApiQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => client.delete({ id }),
-    onSuccess: () => invalidateSubnetsQueries(qc),
-  });
-};
-
 export const securityGroupFilterForVirtualNetwork = (virtualNetworkId: string) =>
   cel<SecurityGroup>((filter) => filter.field('spec.virtualNetwork.id').equals(virtualNetworkId));
-
-export const useCreateSecurityGroup = () => {
-  const client = useApiFetch(SecurityGroups);
-  const qc = useApiQueryClient();
-  return useMutation({
-    mutationFn: async (body: MessageInitShape<typeof SecurityGroupSchema>) => {
-      const resp = await client.create({ object: body });
-      const sg = resp.object;
-      if (!sg?.id) {
-        throw new Error('Create response missing id');
-      }
-      return sg;
-    },
-    onSuccess: () => invalidateSecurityGroupsQueries(qc),
-  });
-};
-
-export const useUpdateSecurityGroup = () => {
-  const client = useApiFetch(SecurityGroups);
-  const qc = useApiQueryClient();
-  return useMutation({
-    mutationFn: ({ object }: { object: MessageInitShape<typeof SecurityGroupSchema> }) => {
-      return client.update({ object });
-    },
-    onSuccess: () => invalidateSecurityGroupsQueries(qc),
-  });
-};
-
-export const useDeleteSecurityGroup = () => {
-  const client = useApiFetch(SecurityGroups);
-  const qc = useApiQueryClient();
-  return useMutation({
-    mutationFn: (id: string) => client.delete({ id }),
-    onSuccess: () => invalidateSecurityGroupsQueries(qc),
-  });
-};

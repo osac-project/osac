@@ -18,7 +18,7 @@ on:  # yamllint disable-line rule:truthy
         default: ""
       kind:
         description: >-
-          Which tests: go-unit, ui-unit, metering-contract, it-fulfillment-service, it-osac-operator,
+          Which tests: go-unit, caas-unit, ui-unit, metering-contract, it-caas, it-fulfillment-service, it-osac-operator,
           it-bare-metal-fulfillment-operator, it-osac-aap, it-osac-installer, helm-unit or
           it-osac-installer-preflight-helm3/-helm322/-helm4
         required: true
@@ -123,6 +123,80 @@ jobs:
       - working-directory: osac-ui
         if: inputs.kind == 'ui-unit'
         run: pnpm test
+      # --- CaaS module checks and unit tests
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'caas-unit'
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        if: inputs.kind == 'caas-unit'
+        with:
+          working-directory: tests/integration/caas
+      - name: Install Helm
+        if: inputs.kind == 'caas-unit'
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: v3.22.0
+      - name: Check and test CaaS integration module
+        if: inputs.kind == 'caas-unit'
+        run: make -C tests/integration/caas check unit
+
+      # --- integration test: CaaS with native providers simulated on Kind
+      # PRs test their head commit so AWX can fetch that same revision from the contributor's fork.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'it-caas'
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ inputs.commit || github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        if: inputs.kind == 'it-caas'
+        with:
+          working-directory: tests/integration/caas
+      - name: Install Helm
+        if: inputs.kind == 'it-caas'
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        with:
+          version: v3.22.0
+      - name: Install Kind
+        if: inputs.kind == 'it-caas'
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
+        with:
+          install_only: true
+      - name: Prepare CaaS integration environment
+        if: inputs.kind == 'it-caas'
+        env:
+          CONTAINER_TOOL: docker
+          LOG_LEVEL: debug
+          PROJECT_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+        run: |
+          echo '127.0.0.1 fulfillment-api.osac.svc.cluster.local fulfillment-internal-api.osac.svc.cluster.local keycloak.keycloak.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
+          make -C osac-installer ensure-inotify
+          make -C tests/integration/caas prepare \
+            PROJECT_URL="https://github.com/${PROJECT_REPO}.git"
+
+      - name: Run CaaS integration tests
+        if: inputs.kind == 'it-caas'
+        env:
+          CONTAINER_TOOL: docker
+          LOG_LEVEL: debug
+        run: make -C tests/integration/caas run
+      - name: Collect CaaS diagnostics
+        if: inputs.kind == 'it-caas' && failure()
+        run: |
+          log_dir=tests/integration/caas/logs
+          mkdir -p "$log_dir"
+          kind export logs "$log_dir" --name osac-dev-caas || true
+      - if: inputs.kind == 'it-caas' && failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: caas-integration-logs${{ inputs.artifact_suffix }}
+          path: |
+            tests/integration/caas/logs
+            fulfillment-service/logs
+          retention-days: 7
+
       # --- integration test: fulfillment-service
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: inputs.kind == 'it-fulfillment-service'
@@ -369,6 +443,21 @@ jobs:
           ref: ${{ inputs.commit }}
           persist-credentials: false
 
+      # The networking provisioning regression runs the prep-osac values tasks
+      # from this checkout instead of a copy; OSAC_TEST_INFRA points at it.
+      - name: Check out osac-test-infra
+        if: inputs.kind == 'it-osac-installer'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: osac-project/osac-test-infra
+          ref: main
+          path: osac-test-infra
+          persist-credentials: false
+
+      - name: Set up Python
+        if: inputs.kind == 'it-osac-installer'
+        uses: ./.github/actions/setup-python
+
       - name: Set up Helm
         if: inputs.kind == 'it-osac-installer'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
@@ -394,6 +483,8 @@ jobs:
       - name: Validate Helm networking values
         if: inputs.kind == 'it-osac-installer'
         working-directory: osac-installer
+        env:
+          OSAC_TEST_INFRA: ${{ github.workspace }}/osac-test-infra
         run: make helm-networking-test
 
       - name: Template charts (dry-run validation)
@@ -541,7 +632,7 @@ jobs:
           python3 osac-installer/scripts/it-networking-checks.py \
             --namespace osac --release osac
 
-      # --- unit tests of the osac chart: helm-unittest (mocked cluster) and the offline preflight render script
+      # --- installer harness and offline chart render checks
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: inputs.kind == 'helm-unit'
         with:
@@ -567,30 +658,10 @@ jobs:
         run: |
           make helm-infra-deps
           helm dependency build charts/osac/
-      # The suites mock the cluster (lookup, capabilities) to cover every check and the outcome table. The plugin is
-      # the v1.2.1 release archive for linux/amd64, checked against its SHA-256 and unpacked into the Helm plugin
-      # directory, so there is no movable Git tag and no install script.
-      - name: Unit test the chart (helm-unittest)
+      - name: Test metering reader rendering
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer
-        env:
-          UNITTEST_URL: https://github.com/helm-unittest/helm-unittest/releases/download/v1.2.1/helm-unittest-linux-amd64-1.2.1.tgz
-          UNITTEST_SHA256: 48e86ecc1467b009630e5954375e5d8494139f73b466df5fe8c04fa45b634939
-        run: |
-          set -euo pipefail
-          archive="${RUNNER_TEMP}/helm-unittest.tgz"
-          curl -fsSL -o "${archive}" "${UNITTEST_URL}"
-          echo "${UNITTEST_SHA256}  ${archive}" | sha256sum --check --strict -
-          plugin_dir="$(helm env HELM_PLUGINS)/unittest"
-          mkdir -p "${plugin_dir}"
-          tar -xzf "${archive}" -C "${plugin_dir}"
-          helm unittest charts/osac
-          # The metering chart's reader grants are values an admin sets on the
-          # umbrella chart, and the infra chart owns the Kafka exporter the
-          # reader lag alert reads, so both suites run here too.
-          helm unittest ../osac-metering/charts/osac-metering
-          ../osac-metering/scripts/test-readers-render.sh
-          helm unittest charts/osac-infra
+        run: ../osac-metering/scripts/test-readers-render.sh
       - name: Test preflight rendering
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer

@@ -19,6 +19,7 @@ import "buf/validate/validate.proto";
 import "cleanapi/cleanapi.proto";
 import "google/api/field_behavior.proto";
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/quota_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
@@ -32,6 +33,10 @@ option (cleanapi.file).package = "osac.public.v1";
 // The `spec` contains the hardware specifications. The `status` contains the current state of the
 // bare metal instance type, is provided by the system and can't be modified by the user.
 message BareMetalInstanceType {
+  // Quota: each host of this type uses 1 of the type's own dimension, such as
+  // bare_metal.instances.metal-1tb. The type itself counts toward no limit.
+  option (osac.private.v1.quota_message) = {dimension: "bare_metal.instances.{metadata.name}"};
+
   // Unique identifier of the bare metal instance type.
   string id = 1;
 

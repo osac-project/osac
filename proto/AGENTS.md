@@ -1,11 +1,9 @@
 # AGENTS.md — `proto/`
 
-Shared Protobuf contract for the whole repo. This one module holds
-the proto sources **and** the single generated Go tree every other module
-imports (`github.com/osac-project/osac/proto/gen/osac/<layer>/v1`). Before this
-consolidation each Go module generated its own private copy into its
-`internal/api/`, so a proto change had to be regenerated and committed in up to
-four places or CI/e2e would fail downstream.
+Never edit this file except for minor corrections. Do not append new content.
+
+Shared Protobuf sources and the single generated Go tree consumed across the
+monorepo (`github.com/osac-project/osac/proto/gen/osac/<layer>/v1`).
 
 ## Layout
 
@@ -18,23 +16,30 @@ four places or CI/e2e would fail downstream.
   what every module imports.
 - `buf.yaml` / `buf.gen.yaml` / `buf.lock` — buf config for the module.
 
-## Contributing a proto change
+## Generation and validation
 
-1. Edit files under `private/` (or `tests/` for test-only types).
-2. From this directory: `make generate`
-   - regenerates `public/` from `private/` (via `fulfillment-service/dev.py`,
-     which owns the cleanapi toolchain), then
-   - regenerates the Go tree under `gen/` (`buf generate`).
-3. `make lint` runs `buf lint` (uses the `buf-plugin-osac-lint` plugin built
-   from `fulfillment-service/cmd/buf-plugin-osac-lint`).
-4. Commit **all** of: the `private/` (or `tests/`) source, the regenerated
-   `public/`, and the regenerated `gen/`. CI (`Check generated code (proto)`)
-   fails the PR if `gen/` or `public/` is stale.
+Use Go from `go.mod`, uv, Buf and protoc. Run from `proto/`:
 
-## Consumers
+```bash
+make generate
+make lint
+go build ./...
+```
 
-`go.work` wires this module into the workspace, so `go build ./...` in any
-member module resolves `github.com/osac-project/osac/proto` locally. Each
-consumer `go.mod` also carries a `replace github.com/osac-project/osac/proto =>
-<relative path>` so standalone `go mod tidy` / container builds resolve it
-without a published version.
+- `make generate` invokes fulfillment's `dev.py` cleanapi toolchain to generate
+  public protos, then `buf generate` for Go. Do not run the latter alone.
+- `make lint` invokes fulfillment's proto lint path and custom lint plugin.
+- Commit source and both generated trees; CI checks their freshness.
+- Generated Go compilation does not establish consumer compatibility; test
+  affected servers and clients. UI bindings use a separately authorized
+  [API baseline](../osac-ui/AGENTS.md#generated-api-bindings).
+
+## API semantics
+
+- Preserve wire compatibility when retiring or replacing fields.
+- For API shape, annotations, visibility and stored-object/update-mask validation,
+  follow [fulfillment invariants](../fulfillment-service/AGENTS.md#invariants),
+  [API.md](../fulfillment-service/docs/API.md) and
+  [CLEANAPI.md](../fulfillment-service/docs/CLEANAPI.md).
+- Generator and lint-plugin implementations/tests belong to fulfillment;
+  `tests/osac/tests/v1/` holds test contracts.

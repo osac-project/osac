@@ -67,7 +67,7 @@
 # CaaS (Cluster-as-a-Service) working group
 # Tests
 /tests/e2e/caas/ @osac-project/wg-caas
-/tests/unit/test_caas_*.py @osac-project/wg-caas
+/tests/integration/caas/ @osac-project/wg-caas
 /osac-aap/tests/integration/targets/cluster_create_caas/ @osac-project/wg-caas
 /osac-aap/tests/integration/targets/cluster_delete_caas/ @osac-project/wg-caas
 # CaaS CI installer values
@@ -111,8 +111,7 @@
 /osac-aap/tests/unit/test_cluster_infra_agent_namespace.py @osac-project/wg-caas
 /osac-aap/tests/unit/test_server_cluster_identity.py @osac-project/wg-caas
 /osac-aap/collections/ansible_collections/osac/test_overrides/roles/cluster_hooks/ @osac-project/wg-caas
-# Cluster unit tests and the CaaS E2E helper
-/tests/unit/test_cluster_*.py @osac-project/wg-caas
+# CaaS E2E helper
 /tests/e2e/core/caas_versions.py @osac-project/wg-caas
 
 # VMaaS (VM-as-a-Service) working group
@@ -274,4 +273,3 @@
 ## Tests
 /tests/e2e/networking/ @osac-project/wg-connectivity
 /tests/contract/network-task/ @osac-project/wg-connectivity
-/tests/unit/test_external_ip_*.py @osac-project/wg-connectivity

@@ -191,6 +191,21 @@ describe('DiskImageForm', () => {
       expect(screen.queryByText('Failed to save disk image')).not.toBeInTheDocument();
     });
 
+    it('shows an error and does not navigate when the create response is missing an object id', async () => {
+      const { user } = renderForm({
+        onDiskImageCreate: () => create(DiskImagesCreateResponseSchema, {}),
+      });
+
+      await fillValidForm(user);
+      await user.click(screen.getByRole('button', { name: 'Create' }));
+
+      await waitFor(() => {
+        expect(screen.getByText('Failed to save disk image')).toBeInTheDocument();
+      });
+      expect(screen.getByText('Create response missing disk image id')).toBeInTheDocument();
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
+
     it('falls back to the generic alert for an InvalidArgument that names no known field', async () => {
       const { user } = renderForm({
         onDiskImageCreate: () => {

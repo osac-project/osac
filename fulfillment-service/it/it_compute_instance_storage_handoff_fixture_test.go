@@ -262,11 +262,19 @@ func (f *computeStorageFixture) expectClassesUnchanged(ctx context.Context) {
 }
 
 func (f *computeStorageFixture) createInstance(ctx context.Context) *publicv1.ComputeInstance {
+	return f.createInstanceInTenant(ctx, "")
+}
+
+func (f *computeStorageFixture) createInstanceInTenant(ctx context.Context, tenant string) *publicv1.ComputeInstance {
 	GinkgoHelper()
 	instances := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
 	response, err := instances.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
 		Object: publicv1.ComputeInstance_builder{
-			Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(), Spec: f.spec,
+			Metadata: publicv1.Metadata_builder{
+				Name:   catalogItemFixtureName(),
+				Tenant: tenant,
+			}.Build(),
+			Spec: f.spec,
 		}.Build(),
 	}.Build())
 	Expect(err).NotTo(HaveOccurred())

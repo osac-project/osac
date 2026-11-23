@@ -318,6 +318,7 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(decision.Allowed).To(BeTrue())
 				Expect(decision.SubjectUser).To(Equal(authContext.ManagedServiceAccountClientID))
+				Expect(decision.SubjectTenant).To(Equal("tenant-a"))
 				Expect(decision.SubjectTenants).To(Equal([]string{"tenant-a"}))
 				Expect(decision.ManagedServiceAccount).To(BeTrue())
 
@@ -354,6 +355,7 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(decision.Allowed).To(BeTrue())
 				Expect(decision.SubjectTenants).To(ConsistOf("*"))
+				Expect(decision.SubjectTenant).To(Equal(SystemTenant))
 				decision, err = evaluator.Evaluate(ctx, authContext, "/osac.public.v1.Clusters/List")
 				Expect(err).ToNot(HaveOccurred())
 				Expect(decision.Allowed).To(BeFalse())

@@ -1635,7 +1635,9 @@ def wait_for_tenant_condition(*, k8s: K8sClient, name: str, condition_type: str,
     )
 
 
-def wait_for_tenant_default_networking_ready(*, grpc: GRPCClient, tenant_name: str) -> None:
+def wait_for_tenant_default_networking_ready(
+    *, grpc: GRPCClient, tenant_name: str, expected_reasons: set[str] | None = None
+) -> str:
     """Wait for configured tenant defaults, not merely the Tenant's ready flag.
 
     Workload creation that omits an attachment requires the actual defaults to
@@ -1643,10 +1645,14 @@ def wait_for_tenant_default_networking_ready(*, grpc: GRPCClient, tenant_name: s
     configured defaults are ready; fail immediately for known terminal states.
     Fulfillment owns this condition, so read it from the private Tenant API
     rather than the Kubernetes Tenant CR.
+
+    ``expected_reasons`` narrows the accepted reason to the installed provider
+    networking mode, so a disabled-mode suite cannot pass on an enabled
+    deployment. Returns the accepted reason.
     """
     condition_type = "TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY"
     expected_status = "CONDITION_STATUS_TRUE"
-    successful_reasons = {"AllResourcesReady", "ProvisioningDisabled"}
+    successful_reasons = expected_reasons or {"AllResourcesReady", "ProvisioningDisabled"}
     terminal_reasons = {"NoDefaultNetworking", "ResourceFailed", "ReservedTenant"}
     last_condition: dict[str, Any] = {}
 
@@ -1688,6 +1694,99 @@ def wait_for_tenant_default_networking_ready(*, grpc: GRPCClient, tenant_name: s
             f"with reason in {sorted(successful_reasons)} "
             f"(last status={status}, reason={reason}, message={message})"
         ) from None
+    return str(last_condition.get("reason", ""))
+
+
+def read_installed_networking_mode(*, private_grpc: GRPCClient) -> bool:
+    """Read the provider networking mode the installation stored at first start.
+
+    Every consumer compares against this stored value, so deployed suites gate
+    disabled-mode assertions on it instead of inferring the mode from a profile.
+    ``emit_defaults`` is required: proto3 omits a false boolean from the JSON
+    response, and disabled mode is exactly that case.
+    """
+    try:
+        response = private_grpc.call(service=f"{PRIVATE_API}.InstallationSettings/Get", data={}, emit_defaults=True)
+    except json.JSONDecodeError as err:
+        raise RuntimeError(f"InstallationSettings/Get returned malformed JSON: {err}") from err
+    if not isinstance(response, dict):
+        raise RuntimeError("InstallationSettings/Get must return a JSON object")
+    value = response.get("networkingProvisioningEnabled")
+    if not isinstance(value, bool):
+        # The value is untrusted API content and is never echoed: the reference
+        # harness asserts that a malformed response cannot print its payload.
+        raise RuntimeError("InstallationSettings/Get must return a boolean networkingProvisioningEnabled")
+    return value
+
+
+def security_group_cr_has_ingress_rule(spec: dict[str, Any], *, protocol: str = "tcp", port: int = 22) -> bool:
+    """True when the SecurityGroup CR spec carries the rule.
+
+    The Kubernetes CR stores rules in ``ingressRules`` with a lowercase protocol;
+    the API representation uses ``ingress`` with the enum name.
+    """
+    return any(
+        rule.get("protocol") == protocol and rule.get("portFrom") == port and rule.get("portTo") == port
+        for rule in spec.get("ingressRules") or []
+    )
+
+
+def assert_no_network_jobs(*, k8s: K8sClient, resource: str, name: str, context: str) -> None:
+    """Fail when the operator recorded any provider networking job on the resource.
+
+    ``status.jobs`` is the operator's own record of every launch, so it is
+    evidence that no task ran without depending on AAP access or job-pod timing.
+    Use it only where every entry is a networking entry; a workload CR also
+    records its own provision and deprovision jobs.
+    """
+    jobs = k8s.get_status_jobs(resource=resource, name=name)
+    assert not jobs, f"{context}: no provider networking job may run, but {resource}/{name} records {jobs}"
+
+
+def assert_no_network_attachment(*, k8s: K8sClient, target_kind: str, target_id: str) -> None:
+    """Fail when a NetworkAttachment exists for the workload; disabled mode creates none."""
+    items = k8s.list_json_all_namespaces(resource="networkattachments.osac.openshift.io").get("items", [])
+    matching = [
+        str(item.get("metadata", {}).get("name", ""))
+        for item in items
+        if item.get("spec", {}).get("target", {}).get("id") == target_id
+        and item.get("spec", {}).get("target", {}).get("kind") == target_kind
+    ]
+    assert not matching, (
+        f"provider networking is disabled, but NetworkAttachment(s) {matching} exist for {target_kind} {target_id}"
+    )
+
+
+def assert_no_default_external_access(*, private_grpc: GRPCClient, tenant: str) -> None:
+    """Fail when onboarding created default external access while networking is disabled.
+
+    Only the reserved default names of one tenant are checked: they cannot exist
+    in disabled mode, and checking every ExternalIP would let unrelated work on
+    the shared tenants fail this session-start assertion. The read gets a
+    bounded retry budget for transient transport errors, like the other session
+    waits; a successful read that carries a reserved name fails immediately.
+    """
+
+    def _default_external_access() -> list[str]:
+        response = private_grpc.call(service=f"{PRIVATE_API}.ExternalIPs/List")
+        names = [
+            str(item.get("metadata", {}).get("name", ""))
+            for item in response.get("items", [])
+            if item.get("metadata", {}).get("tenant") == tenant
+        ]
+        return [name for name in names if name == "default-nat" or name.startswith("auto-eip-")]
+
+    defaults = poll_until(
+        fn=_default_external_access,
+        until=lambda _defaults: True,
+        retries=6,
+        delay=5,
+        description=f"the ExternalIP list of tenant {tenant}",
+        retry_on_error=True,
+        resource_kind=WaitResourceKind.TENANT,
+        resource_id=tenant,
+    )
+    assert not defaults, f"provider networking is disabled, but tenant {tenant} has default external access {defaults}"
 
 
 def wait_for_tenant_deletion(*, k8s: K8sClient, name: str) -> None:

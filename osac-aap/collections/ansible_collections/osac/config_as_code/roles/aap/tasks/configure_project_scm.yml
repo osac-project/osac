@@ -6,6 +6,9 @@
         scm_type: git
         scm_url: "{{ aap_project_git_uri }}"
         scm_branch: "{{ aap_project_git_branch }}"
+        # A SHA is only fetchable while some ref still reaches it; fetch it by
+        # SHA as well (GitHub serves unadvertised objects).
+        scm_refspec: "{{ aap_project_git_branch if aap_project_git_branch is match('^[0-9a-f]{40}$') else '' }}"
   when: aap_project_archive_uri is not defined
 
 - name: Use archive scm type for controller project

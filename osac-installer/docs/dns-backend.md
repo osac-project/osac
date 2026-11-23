@@ -174,8 +174,9 @@ with an empty answer section. `REFUSED` means that the server did not answer
 the query, not that the record is gone. In that case check the zone's
 `allow-query`, or sign the query with the key by adding
 `-k /etc/named/osac-update.key`.
-If the server listens on a port other than 53 or answers only over TCP, add
-`-p <port>` and `+tcp` to match `DNS_RFC2136_PORT` and `DNS_RFC2136_PROTOCOL`.
+Add `-p <port>` if `DNS_RFC2136_PORT` is not 53. Separately, add `+tcp` if
+you need to query over TCP. Without these options, `dig` starts with UDP
+on port 53.
 
 ### Troubleshooting
 

@@ -170,10 +170,16 @@ def test_create_rerun_update_and_delete_caas_records(tmp_path, server, secret):
 
 
 def test_record_names_with_trailing_dot_and_upper_case_stay_in_zone(tmp_path, server, secret):
-    records = [{"name": f"API.{CLUSTER}.{ZONE.upper()}.", "addr": API_IP}]
+    records = [
+        {"name": f"{ZONE.upper()}.", "addr": API_IP},
+        {"name": f"API.{CLUSTER}.{ZONE.upper()}.", "addr": API_IP},
+    ]
     rc, out = run(tmp_path, "create", driver_env(server, secret), records=records, zone=f"{ZONE}.")
     assert rc == 0, out
-    assert server.records() == {(f"api.{CLUSTER}.{ZONE}.", "A"): (1800, [API_IP])}
+    assert server.records() == {
+        (f"{ZONE}.", "A"): (1800, [API_IP]),
+        (f"api.{CLUSTER}.{ZONE}.", "A"): (1800, [API_IP]),
+    }
 
 
 def test_ttl_change_updates_record(tmp_path, server, secret):
@@ -375,6 +381,25 @@ def test_suffix_match_is_on_label_boundary(tmp_path, server, secret):
     rc, out = run(tmp_path, "create", driver_env(server, secret), records=records)
     assert rc != 0
     assert "not inside DNS_ZONE" in out
+
+
+@pytest.mark.parametrize("operation", ["create", "delete"])
+@pytest.mark.parametrize(
+    ("name", "zone", "message"),
+    [
+        (rf"api\.{ZONE}", ZONE, "The DNS record name must use"),
+        (f"api.{ZONE}", r"clusters\.example.test", "DNS_ZONE must use"),
+    ],
+    ids=["escaped-record", "escaped-zone"],
+)
+def test_escaped_dns_names_fail_before_contacting_server(tmp_path, server, secret, operation, name, zone, message):
+    records = [{"name": name, "addr": API_IP}]
+    rc, out = run(tmp_path, operation, driver_env(server, secret), records=records, zone=zone)
+    assert rc != 0
+    assert message in out
+    assert server.state.requests == 0
+    for value in (name, zone, API_IP, secret):
+        assert value not in out
 
 
 # --- Full job event data -----------------------------------------------------

@@ -31,7 +31,8 @@
   ansible.builtin.assert:
     that:
       - dns_rfc2136_key_name | string | length > 0
-    fail_msg: DNS_RFC2136_KEY_NAME must name the TSIG key allowed to update the zone.
+    fail_msg: >-
+      DNS_RFC2136_KEY_NAME must name the TSIG key allowed to update the zone.
     quiet: true
 
 - name: Check DNS_RFC2136_KEY_ALGORITHM
@@ -52,18 +53,47 @@
 
 - name: Normalize DNS zone and record name
   ansible.builtin.set_fact:
-    dns_rfc2136_zone: "{{ dns_zone | trim | lower | regex_replace('\\.$', '') }}"
-    dns_rfc2136_record: "{{ dns_record_name | trim | lower | regex_replace('\\.$', '') }}"
+    dns_rfc2136_zone: >-
+      {{ dns_zone | trim | lower | regex_replace('\.$', '') }}
+    dns_rfc2136_record: >-
+      {{ dns_record_name | trim | lower | regex_replace('\.$', '') }}
   no_log: true
 
 - name: Check the record is inside the DNS zone
-  ansible.builtin.assert:
-    that:
-      - dns_rfc2136_zone | length > 0
-      - >-
-        dns_rfc2136_record == dns_rfc2136_zone
-        or dns_rfc2136_record.endswith('.' ~ dns_rfc2136_zone)
-    fail_msg: >-
-      The DNS record name is not inside DNS_ZONE. Set DNS_ZONE to the zone
-      configured on the DNS server that contains the cluster base domain.
-    quiet: true
+  vars:
+    dns_rfc2136_label_pattern: '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?'
+    dns_rfc2136_name_pattern: >-
+      {{ dns_rfc2136_label_pattern }}(?:[.]{{ dns_rfc2136_label_pattern }})*\Z
+  block:
+    # Allow only literal label separators so the suffix check and nsupdate
+    # agree on label boundaries. Only the record may have a wildcard prefix.
+    - name: Check DNS_ZONE labels
+      ansible.builtin.assert:
+        that:
+          - dns_rfc2136_zone | length <= 253
+          - dns_rfc2136_zone is match(dns_rfc2136_name_pattern)
+        fail_msg: DNS_ZONE must use unescaped DNS hostname labels.
+        quiet: true
+
+    - name: Check DNS record name labels
+      ansible.builtin.assert:
+        that:
+          - dns_rfc2136_record | length <= 253
+          - >-
+            dns_rfc2136_record is match(
+            '(?:[*][.])?' ~ dns_rfc2136_name_pattern)
+        fail_msg: >-
+          The DNS record name must use unescaped DNS hostname labels,
+          optionally starting with a wildcard label.
+        quiet: true
+
+    - name: Check DNS record zone membership
+      ansible.builtin.assert:
+        that:
+          - >-
+            dns_rfc2136_record == dns_rfc2136_zone
+            or dns_rfc2136_record.endswith('.' ~ dns_rfc2136_zone)
+        fail_msg: >-
+          The DNS record name is not inside DNS_ZONE. Set DNS_ZONE to the zone
+          configured on the DNS server that contains the cluster base domain.
+        quiet: true

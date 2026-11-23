@@ -367,7 +367,7 @@ func newNetBoxReconciler(m *mockNetBox, reader credentials.Reader) *BareMetalIns
 	secretWriter, err := bmh.NewSecretWriter(direct, netboxTestNS)
 	Expect(err).NotTo(HaveOccurred())
 	api := netboxclient.NewClientForTest(m.server.Client(), m.server.URL, testNetBoxToken)
-	inventoryClient := inventory.NewNetBoxClient(api, bmhManager, secretWriter, metal3HostClass, reader)
+	inventoryClient := inventory.NewNetBoxClient(api, bmhManager, secretWriter, metal3HostClass, reader, true)
 	return newTestReconciler(inventoryClient, netboxTestNS)
 }
 

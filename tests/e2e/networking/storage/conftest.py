@@ -6,6 +6,7 @@ from functools import partial
 
 import pytest
 
+from tests.e2e.caas.conftest import cluster_template, ssh_key_secret  # noqa: F401
 from tests.e2e.core.grpc_client import PUBLIC_API, GRPCClient
 from tests.e2e.core.helpers import registered_ssh_key_secret
 from tests.e2e.core.k8s_client import K8sClient

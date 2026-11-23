@@ -1408,3 +1408,96 @@ func TestProvisionManualCancellationRetainsCheckpointWhileHeld(t *testing.T) {
 		t.Fatalf("manual relaunch lost checkpoint: %+v", relaunched)
 	}
 }
+
+func TestLegacyProvisionRetryRecordsOnlyNewFailureAcrossRestart(t *testing.T) {
+	for _, attempt := range []int32{1, 3} {
+		t.Run(fmt.Sprintf("failed attempt %d", attempt), func(t *testing.T) {
+			ci := computeInstanceObj("ci")
+			ci.Status.Jobs = []v1alpha1.NetworkJobStatus{{
+				Task: "provision", Manager: v1alpha1.NetworkJobManagerNone,
+				Attempt: attempt, State: v1alpha1.NetworkJobStateRetrying,
+				Message: "legacy operational failure; next retry at 2020-01-01T00:00:00Z",
+			}}
+			h := newHarness(t, ci)
+			req := computeInstanceReq()
+			legacy := h.runComputeInstance("ci", req)
+			if !legacy.Retrying() || legacy.LastFailure != nil || legacy.RequeueAfter <= 0 {
+				t.Fatalf("legacy backoff invented history: %+v", legacy)
+			}
+			h.clock.Step(legacy.RequeueAfter)
+			launched := h.runComputeInstance("ci", req)
+			if launched.Entry.Attempt != attempt+1 || launched.LastFailure != nil {
+				t.Fatalf("legacy retry launch invented history: %+v", launched)
+			}
+			h.engine = New(h.client, h.client, h.aap, Config{Organization: "osac"}).WithClock(h.clock)
+			running := h.runComputeInstance("ci", req)
+			if running.Entry.State != v1alpha1.NetworkJobStateRunning || running.LastFailure != nil {
+				t.Fatalf("restarted legacy running job invented history: %+v", running)
+			}
+			h.clock.Step(time.Second)
+			observed := h.clock.Now()
+			h.aap.finish(running.Entry.JobID, "failed", `{"osac_error":{"message":"new private detail","retryable":true}}`, "")
+			failed := h.runComputeInstance("ci", req)
+			want := &v1alpha1.NetworkJobFailure{Reason: "ProviderReported", Message: "Provisioning failed.", Attempt: attempt + 1, ObservedAt: metav1.NewTime(observed)}
+			if !failed.Retrying() || !sameProvisionFailure(failed.LastFailure, want) {
+				t.Fatalf("first observed post-upgrade failure was not recorded: %+v", failed)
+			}
+			h.engine = New(h.client, h.client, h.aap, Config{Organization: "osac"}).WithClock(h.clock)
+			replay := h.runComputeInstance("ci", req)
+			if !sameProvisionFailure(replay.LastFailure, want) {
+				t.Fatalf("new checkpoint changed after restart: %+v", replay)
+			}
+			h.clock.Step(replay.RequeueAfter)
+			retry := h.runComputeInstance("ci", req)
+			if retry.Entry.Attempt != attempt+2 || !sameProvisionFailure(retry.LastFailure, want) {
+				t.Fatalf("retry lost first observed legacy failure: %+v", retry)
+			}
+		})
+	}
+}
+
+func TestLegacyRunningProvisionAttemptsHaveNoFailureHistory(t *testing.T) {
+	for _, attempt := range []int32{1, 3} {
+		t.Run(fmt.Sprintf("attempt %d", attempt), func(t *testing.T) {
+			ci := computeInstanceObj("ci")
+			ci.Status.Jobs = []v1alpha1.NetworkJobStatus{{Task: "provision", Manager: v1alpha1.NetworkJobManagerNone,
+				Attempt: attempt, State: v1alpha1.NetworkJobStateRunning, JobID: "999"}}
+			h := newHarness(t, ci)
+			h.aap.jobs[999] = &aap.Job{ID: 999, Status: "running"}
+			for range 2 {
+				h.engine = New(h.client, h.client, h.aap, Config{Organization: "osac"}).WithClock(h.clock)
+				out := h.runComputeInstance("ci", computeInstanceReq())
+				if out.Entry.State != v1alpha1.NetworkJobStateRunning || out.LastFailure != nil || out.Entry.LastFailure != nil {
+					t.Fatalf("legacy running attempt invented history: %+v", out)
+				}
+			}
+		})
+	}
+}
+
+func TestProvisionDeleteThroughRunClearsPersistedCheckpoint(t *testing.T) {
+	for _, state := range []v1alpha1.NetworkJobState{
+		v1alpha1.NetworkJobStateCancelled, v1alpha1.NetworkJobStateRetrying, v1alpha1.NetworkJobStateRunning,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			ci := computeInstanceObj("ci")
+			ci.Status.Jobs = []v1alpha1.NetworkJobStatus{{Task: "provision", Manager: v1alpha1.NetworkJobManagerNone,
+				Attempt: 2, State: state, JobID: "404", LastFailure: &v1alpha1.NetworkJobFailure{
+					Reason: "ProviderReported", Message: "Provisioning failed.", Attempt: 1,
+					ObservedAt: metav1.NewTime(time.Date(2026, 10, 1, 11, 0, 0, 0, time.UTC)),
+				},
+			}}
+			h := newHarness(t, ci)
+			req := computeInstanceReq()
+			req.TargetDeleting = true
+			out := h.runComputeInstance("ci", req)
+			if out.Entry.State != v1alpha1.NetworkJobStateCancelled || out.LastFailure != nil || out.Entry.LastFailure != nil || out.RequeueAfter != 0 {
+				t.Fatalf("deletion retained checkpoint: %+v", out)
+			}
+			stored := h.getComputeInstance("ci")
+			if stored.Status.Jobs[0].LastFailure != nil || len(h.aap.launches) != 0 {
+				t.Fatal("deletion retained a stored checkpoint or launched a new job")
+			}
+		})
+	}
+}

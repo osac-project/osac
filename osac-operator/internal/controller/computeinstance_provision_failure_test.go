@@ -139,6 +139,11 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 		Expect(out.LastFailure).To(BeNil())
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), stored)).To(Succeed())
 		Expect(stored.Status.Jobs[0].LastFailure).To(BeNil())
+		staleSuccessProjection := stored.DeepCopy()
+		stored.Annotations["test"] = "after-success"
+		Expect(k8sClient.Update(ctx, stored)).To(Succeed())
+		Expect(apierrors.IsConflict(k8sClient.Status().Update(ctx, staleSuccessProjection))).To(BeTrue())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), stored)).To(Succeed())
 		engine = networktask.New(k8sClient, k8sClient, aapClient, networktask.Config{Organization: "osac"}).WithClock(clock)
 		out, err = engine.Run(ctx, stored, req)
 		Expect(err).NotTo(HaveOccurred())

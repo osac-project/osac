@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from tests.e2e.core.failure_report import capture_failure, capture_snapshot
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     unique_name,
@@ -30,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 @pytest.mark.metering
 def test_cluster_delete_reports_deleting_state_without_provisioning(
+    request: pytest.FixtureRequest,
     cli: OsacCLI,
     grpc: GRPCClient,
     private_grpc: GRPCClient,
@@ -39,6 +41,7 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
     pull_secret_name: str,
     ssh_key_secret: str,
     metering: MeteringCollector,
+    networking_provisioning_enabled: bool,
 ) -> None:
     """Verify that cluster deletion transitions through DELETING state
     without waiting for full provisioning (OSAC-1586).
@@ -87,9 +90,22 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
         )
         logger.info("CaaS: %d worker BMI(s) allocated before the delete: %s", len(worker_bmi_ids), worker_bmi_ids)
 
+        capture_snapshot(request.config, request.node.nodeid)
         cli.delete_cluster(uuid=uuid)
 
         wait_for_cluster_deleting(k8s=k8s_hub_client, name=co_name)
+        if not networking_provisioning_enabled:
+            # Disabled mode runs no reserve, release, ingress, or DNS task, so the
+            # deletion leaves the operator's job record empty. One optional read:
+            # a deletion that completes between two reads must not fail here.
+            snapshot = k8s_hub_client.get_json_optional(resource="clusterorder", name=co_name)
+            if snapshot is None:
+                # The name is not logged: CodeQL traces it back to the create
+                # call, whose arguments include secret references.
+                logger.info("CaaS: the ClusterOrder was removed before its job record could be read")
+            else:
+                jobs = snapshot.get("status", {}).get("jobs") or []
+                assert not jobs, f"ClusterOrder {co_name} deletion must record no provider networking job, got {jobs}"
         wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid)
         wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
         wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
@@ -103,6 +119,9 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
         metering.assert_no_events(HEARTBEAT_TYPE, resource_id=uuid, since=started_at, within=120)
         for bmi_id in worker_bmi_ids:
             metering.assert_no_events(HEARTBEAT_TYPE, resource_id=bmi_id, since=started_at, within=120)
+    except (Exception, pytest.fail.Exception) as exc:
+        capture_failure(request.config, exc, request.node.nodeid)
+        raise
     finally:
         with contextlib.suppress(subprocess.CalledProcessError):
             cli.delete_cluster(uuid=uuid)

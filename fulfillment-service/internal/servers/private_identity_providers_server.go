@@ -113,6 +113,7 @@ func (b *PrivateIdentityProvidersServerBuilder) Build() (result *PrivateIdentity
 		SetService(privatev1.IdentityProviders_ServiceDesc.ServiceName).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
+		AddAllowedTenants(auth.SystemTenant).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc(b.filterDesc).
 		Build()

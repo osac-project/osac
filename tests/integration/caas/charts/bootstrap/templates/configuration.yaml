@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: caas-it-configuration
+data:
+  projectURL: {{ .Values.project.url | quote }}
+  projectCommit: {{ .Values.project.commit | quote }}
+  eeImage: {{ .Values.images.ee | quote }}
+  eePullPolicy: {{ .Values.images.eePullPolicy | quote }}

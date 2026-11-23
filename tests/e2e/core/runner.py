@@ -35,6 +35,7 @@ _PROGRESS_LOG_INTERVAL_S = 30
 
 _OUTPUT_TAIL = 2000
 _SCALAR_SUMMARY_LIMIT = 120
+_API_PROGRAMS = frozenset({"grpcurl", "osac"})
 
 
 def _text(value: str | bytes | None) -> str:
@@ -47,8 +48,9 @@ class CommandFailed(subprocess.CalledProcessError):
     """A command exited non-zero. `cmd` is sanitized; `stdout` and `stderr` stay as captured for callers."""
 
     def __init__(
-        self, returncode: int, cmd: Sequence[str], output: str | None = None, stderr: str | None = None
+        self, returncode: int, cmd: Sequence[str], output: str | bytes | None = None, stderr: str | bytes | None = None
     ) -> None:
+        self.is_api_command = bool(cmd and str(cmd[0]).rsplit("/", 1)[-1] in _API_PROGRAMS)
         super().__init__(returncode, sanitize_args(cmd), output, stderr)
         # Exception repr and pickling use args, which would otherwise hold the raw stderr.
         self.args = (str(self),)
@@ -134,8 +136,8 @@ def _summarize(value: object) -> str:
 
 
 def _describe_failure(exc: BaseException) -> str:
-    # Only a CommandFailed has a sanitized str(); any other exception may carry the raw command line.
-    return f"{type(exc).__name__}: {exc}" if isinstance(exc, CommandFailed) else type(exc).__name__
+    # Only CommandFailed and CommandTimedOut have a sanitized str(); any other exception may carry the raw command line.
+    return f"{type(exc).__name__}: {exc}" if isinstance(exc, (CommandFailed, CommandTimedOut)) else type(exc).__name__
 
 
 def poll_until(
@@ -167,7 +169,7 @@ def poll_until(
     if not isinstance(resource_id, str) or not resource_id.strip():
         raise ValueError(f"poll_until requires a non-empty resource_id, got {resource_id!r}")
     value: T | None = None
-    last_error: subprocess.CalledProcessError | None = None
+    last_error: subprocess.CalledProcessError | CommandTimedOut | None = None
     start = time.monotonic()
     last_logged = start
     label = sanitize_text(description)
@@ -182,11 +184,12 @@ def poll_until(
             # misconfig) and should fail fast, not be swallowed for the whole
             # retry budget. Only pollers built on a checked (raising) subprocess
             # call where a transient hiccup is expected -- e.g. a flaky grpcurl
-            # call hitting a momentarily-busy route -- should set this.
+            # call hitting a momentarily-busy route -- should set this. A command
+            # that ran past its timeout (CommandTimedOut) is the same kind of hiccup.
             if retry_on_error:
                 try:
                     value = fn()
-                except subprocess.CalledProcessError as exc:
+                except (subprocess.CalledProcessError, CommandTimedOut) as exc:
                     last_error = exc
                     value = None
                 else:

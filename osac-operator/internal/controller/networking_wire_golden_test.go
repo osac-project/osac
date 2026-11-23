@@ -26,10 +26,12 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	bmfov1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/internal/networktask"
 )
@@ -51,15 +53,18 @@ const wireGoldenDir = "../../../tests/contract/network-task"
 
 // Fixed API IDs. They match the IDs the osac-aap tests use for the same kinds.
 const (
-	wireVN           = "3f1c9a2e-7b4d-4e8a-9c6f-0d2e4b6a8c10"
-	wireSubnet       = "8a2b4c6d-1e3f-4a5b-9c7d-2e4f6a8b0c12"
-	wireClusterOrder = "9f8e7d6c-5b4a-4321-8765-4c3b2a109876"
-	wirePool         = "5d6a0f1e-2b3c-4d5e-8f90-a1b2c3d4e5f6"
-	wireEIP          = "7b6a5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d"
-	wireEIPA         = "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
-	wireNATGW        = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
-	wireVM           = "0f1e2d3c-4b5a-4968-8776-655443322110"
-	wireSG           = "6a5b4c3d-2e1f-4a0b-9c8d-7e6f5a4b3c2e"
+	wireVN             = "3f1c9a2e-7b4d-4e8a-9c6f-0d2e4b6a8c10"
+	wireSubnet         = "8a2b4c6d-1e3f-4a5b-9c7d-2e4f6a8b0c12"
+	wireClusterOrder   = "9f8e7d6c-5b4a-4321-8765-4c3b2a109876"
+	wirePool           = "5d6a0f1e-2b3c-4d5e-8f90-a1b2c3d4e5f6"
+	wireEIP            = "7b6a5c4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d"
+	wireEIPA           = "9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d"
+	wireNATGW          = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+	wireVM             = "0f1e2d3c-4b5a-4968-8776-655443322110"
+	wireBMI            = "b2c3d4e5-6f70-4182-93a4-b5c6d7e8f901"
+	wirePhysicalVN     = "d4e5f607-8192-4a3b-8c1d-2e3f4a5b6c7d"
+	wirePhysicalSubnet = "c3d4e5f6-7081-4293-a4b5-c6d7e8f90123"
+	wireSG             = "6a5b4c3d-2e1f-4a0b-9c8d-7e6f5a4b3c2e"
 )
 
 const wireNamespace = "osac-networking"
@@ -118,10 +123,18 @@ func wireJSON(value any) []byte {
 
 // expectLaunch compares the latest launch of task on manager with its input golden.
 func (g *wireGolden) expectLaunch(h *netHarness, task, manager string) {
+	g.expectLaunchVariant(h, task, manager, "")
+}
+
+func (g *wireGolden) expectLaunchVariant(h *netHarness, task, manager, variant string) {
 	GinkgoHelper()
 	launch := h.aap.latest(task, manager)
 	got := wireJSON(g.normalise(launch.vars))
-	file := filepath.Join(wireGoldenDir, "inputs", task+"."+manager+".json")
+	filename := task + "." + manager + ".json"
+	if variant != "" {
+		filename = task + "." + variant + "." + manager + ".json"
+	}
+	file := filepath.Join(wireGoldenDir, "inputs", filename)
 	if os.Getenv("UPDATE_GOLDEN") != "" {
 		Expect(os.WriteFile(file, got, 0o644)).To(Succeed())
 		return
@@ -132,9 +145,13 @@ func (g *wireGolden) expectLaunch(h *netHarness, task, manager string) {
 }
 
 // result returns the artifacts golden of task on manager.
-func wireResult(task, manager string) string {
+func wireResult(task, manager string, variant ...string) string {
 	GinkgoHelper()
-	data, err := os.ReadFile(filepath.Join(wireGoldenDir, "results", task+"."+manager+".json"))
+	filename := task + "." + manager + ".json"
+	if len(variant) > 0 && variant[0] != "" {
+		filename = task + "." + variant[0] + "." + manager + ".json"
+	}
+	data, err := os.ReadFile(filepath.Join(wireGoldenDir, "results", filename))
 	Expect(err).NotTo(HaveOccurred())
 	return string(data)
 }
@@ -244,6 +261,60 @@ var _ = Describe("Operator and AAP wire contract goldens", func() {
 		h.aap.succeed(networktask.ApplyNetworkAttachment, netFabric)
 		reconcileNet(attachments, na)
 		expectReady(na, metav1.ConditionTrue, v1alpha1.ReasonSucceeded)
+
+		// Physical BMaaS attachment: the same saved input drives apply, DHCP
+		// lease discovery and delete, each against a distinct shared golden.
+		physicalVN := &v1alpha1.VirtualNetwork{
+			ObjectMeta: h.meta(kindVirtualNetwork, wirePhysicalVN),
+			Spec:       v1alpha1.VirtualNetworkSpec{IPv4CIDR: "10.20.0.0/16"},
+		}
+		Expect(k8sClient.Create(ctx, physicalVN)).To(Succeed())
+		markReady(physicalVN, false, func(vn *v1alpha1.VirtualNetwork) {
+			vn.Status.L3VNI = 10001
+		})
+		g.register(physicalVN, "vn-d4e5f607", 9)
+		physicalSubnet := h.subnet(wirePhysicalSubnet, wirePhysicalVN, "10.20.1.0/24", testPlan)
+		markReady(physicalSubnet, false, func(subnet *v1alpha1.Subnet) {
+			ipam, err := networktask.Layout(subnet.Spec.IPv4CIDR, subnet.Spec.AddressPlan)
+			Expect(err).NotTo(HaveOccurred())
+			subnet.Status.IPAM = ipam
+		})
+		g.subs[wirePhysicalSubnet] = wireSubnet
+		g.register(physicalSubnet, "subnet-8a2b4c6d", 2)
+		bmi := h.bareMetalInstance(wireBMI, "rack1-node3")
+		attachmentName := v1alpha1.NetworkAttachmentName(v1alpha1.NetworkAttachmentTargetBareMetalInstance, wireBMI, "data-0")
+		physical := &v1alpha1.NetworkAttachment{
+			ObjectMeta: metav1.ObjectMeta{Name: attachmentName, Namespace: ns,
+				Annotations: map[string]string{networktask.TenantAnnotation: "tenant-a"}},
+			Spec: v1alpha1.NetworkAttachmentSpec{
+				Target:         v1alpha1.NetworkAttachmentTarget{Kind: v1alpha1.NetworkAttachmentTargetBareMetalInstance, ID: wireBMI},
+				Subnet:         wirePhysicalSubnet,
+				Interface:      v1alpha1.NetworkAttachmentInterface{Type: v1alpha1.NetworkInterfacePhysical, Name: "data-0", MACAddress: "aa:bb:cc:dd:ee:ff"},
+				SecurityGroups: []string{wireSG},
+			},
+		}
+		Expect(k8sClient.Create(ctx, physical)).To(Succeed())
+		g.register(physical, "baremetalinstance-"+wireBMI+"-data-0", 8)
+		reconcileNet(attachments, physical)
+		g.expectLaunchVariant(h, networktask.ApplyNetworkAttachment, netFabric, "physical")
+		h.aap.succeed(networktask.ApplyNetworkAttachment, netFabric)
+		reconcileNet(attachments, physical)
+		meta.SetStatusCondition(&bmi.Status.Conditions, metav1.Condition{
+			Type: string(bmfov1alpha1.HostConditionNetworkHandoffComplete), Status: metav1.ConditionTrue, Reason: "Done",
+		})
+		Expect(k8sClient.Status().Update(ctx, bmi)).To(Succeed())
+		reconcileNet(attachments, physical)
+		g.expectLaunchVariant(h, networktask.QueryDHCPLease, netFabric, "physical")
+		h.aap.finish(networktask.QueryDHCPLease, netFabric, "successful", wireResult(networktask.QueryDHCPLease, netFabric, "physical"))
+		reconcileNet(attachments, physical)
+		Expect(physical.Status.DHCPLease).To(Equal(&v1alpha1.NetworkAttachmentDHCPLease{
+			IPAddress: "10.20.1.130", MACAddress: "aa:bb:cc:dd:ee:ff",
+		}))
+		deleteNet(physical)
+		reconcileNet(attachments, physical)
+		g.expectLaunchVariant(h, networktask.DeleteNetworkAttachment, netFabric, "physical")
+		h.aap.succeed(networktask.DeleteNetworkAttachment, netFabric)
+		reconcileNet(attachments, physical)
 
 		// NATGateway: the input carries the nat_gateway_context snapshot.
 		natgw := &v1alpha1.NATGateway{ObjectMeta: h.meta(kindNATGateway, wireNATGW),

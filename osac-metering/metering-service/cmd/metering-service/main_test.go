@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	kafkapkg "github.com/osac-project/osac-metering/internal/kafka"
+	"github.com/osac-project/osac-metering/schema"
 )
 
 // TestValidateRejectsDestructiveRetention checks the retention guard: zero deletes the
@@ -43,5 +44,18 @@ func TestValidateRejectsDestructiveRetention(t *testing.T) {
 		if err := cfg.validate(); err != nil {
 			t.Fatalf("retention %q must be accepted, got %v", retention, err)
 		}
+	}
+}
+
+// TestEventTopicPrefixFromEnv checks that an unset prefix stays on fulfillment's default
+// and that a set prefix is the one discovery will use.
+func TestEventTopicPrefixFromEnv(t *testing.T) {
+	t.Setenv("KAFKA_EVENT_TOPIC_PREFIX", "")
+	if got := configFromEnv().eventTopicPrefix; got != schema.EventsPrefix {
+		t.Fatalf("empty prefix must default to %q, got %q", schema.EventsPrefix, got)
+	}
+	t.Setenv("KAFKA_EVENT_TOPIC_PREFIX", "custom.events.")
+	if got := configFromEnv().eventTopicPrefix; got != "custom.events." {
+		t.Fatalf("configured prefix must be kept, got %q", got)
 	}
 }

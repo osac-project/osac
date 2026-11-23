@@ -29,6 +29,10 @@ var expectedMCPServerToolNames = []string{
 	"delete_network_resource",
 	"create_project",
 	"update_project",
+	"create_catalog_offering",
+	"update_catalog_offering",
+	"publish_catalog_offering",
+	"delete_catalog_offering",
 }
 
 func connectMCPTokenSource(
@@ -62,6 +66,14 @@ func mcpToolNames(tools []*mcp.Tool) []string {
 }
 
 func startInProcessMCPServer(ctx context.Context, userAgent string) *httptest.Server {
+	return startInProcessMCPServerWithDeps(ctx, userAgent, nil)
+}
+
+func startInProcessMCPServerWithDeps(
+	ctx context.Context,
+	userAgent string,
+	configureDeps func(mcpserver.ServerDeps) mcpserver.ServerDeps,
+) *httptest.Server {
 	jwksCache, err := auth.NewJwksCache().
 		SetLogger(logger).
 		SetCaPool(tool.CaPool()).
@@ -82,8 +94,12 @@ func startInProcessMCPServer(ctx context.Context, userAgent string) *httptest.Se
 		Build()
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
 	DeferCleanup(func() { ExpectWithOffset(1, grpcConn.Close()).To(Succeed()) })
+	deps := mcpserver.NewServerDeps(grpcConn)
+	if configureDeps != nil {
+		deps = configureDeps(deps)
+	}
 	handler, err := mcpserver.NewHandler(
-		mcpserver.NewServerDeps(grpcConn), jwtValidator, "", "",
+		deps, jwtValidator, "", "",
 		mcpserver.TokenExchangerFunc(func(_ context.Context, subjectToken string, _ *jwt.Token) (string, error) {
 			return subjectToken, nil
 		}),

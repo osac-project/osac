@@ -8,7 +8,7 @@ export const ClusterRoutes = () => {
   return (
     <Routes>
       <Route index element={<ClustersPage />} />
-      <Route path="create/:catalogItemId?" element={<ClusterCreatePage />} />
+      <Route path="create" element={<ClusterCreatePage />} />
       <Route path=":clusterId" element={<ClusterDetailsPage />} />
     </Routes>
   );

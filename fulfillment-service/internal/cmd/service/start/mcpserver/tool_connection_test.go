@@ -158,7 +158,11 @@ var _ = Describe("handleCheckConnection", func() {
 		Expect(tenantListLimit).To(Equal(int32(maxCheckConnectionTenants + 1)))
 		Expect(output.ResourceFamilies).To(ConsistOf(
 			ResourceTypeComputeInstanceCatalogItem,
+			ResourceTypeClusterCatalogItem,
+			ResourceTypeBareMetalInstanceCatalogItem,
 			ResourceTypeComputeInstanceTemplate,
+			ResourceTypeClusterTemplate,
+			ResourceTypeBareMetalInstanceTemplate,
 			ResourceTypeInstanceType,
 			ResourceTypeDiskImage,
 			ResourceTypeStorageTier,
@@ -697,6 +701,7 @@ var _ = Describe("safePublicAPIError", func() {
 		Entry("permission denied", codes.PermissionDenied, "authorization", "PermissionDenied", false),
 		Entry("not found", codes.NotFound, "not_found", "NotFound", false),
 		Entry("already exists", codes.AlreadyExists, "conflict", "AlreadyExists", false),
+		Entry("aborted", codes.Aborted, "conflict", "Aborted", false),
 		Entry("resource exhausted", codes.ResourceExhausted, "rate_limited", "ResourceExhausted", true),
 		Entry("unavailable", codes.Unavailable, "service_unavailable", "Unavailable", true),
 		Entry("unknown", codes.Unknown, "upstream_failure", "Unknown", false),

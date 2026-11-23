@@ -15,7 +15,6 @@ package servers
 
 import (
 	"context"
-	"strings"
 
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -60,40 +59,4 @@ func (s *PrivateClustersServer) prepareUpdatedNodeSetHardware(ctx context.Contex
 		return resourceLookupError(err, kind, ref.GetId(), "", grpccodes.InvalidArgument)
 	}
 	return validateResourceNotDeleted(kind, refKey(ref), "", resolved.GetMetadata())
-}
-
-// restoreMaskedNodeSetFields retains stored fields that a nested map mask did
-// not select. The masked map entry in the candidate is only a partial message.
-func restoreMaskedNodeSetFields(name string, existing, selected *privatev1.ClusterNodeSet,
-	mask *fieldmaskpb.FieldMask) (*privatev1.ClusterNodeSet, error) {
-	if existing == nil {
-		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "unknown node set '%s'", name)
-	}
-	selectedVersion := selected.GetVersion()
-	selectedSize, hasSelectedSize := selected.GetSize(), selected.HasSize()
-	nodeSet := cloneMessage(existing)
-	if updateIncludesField(mask, "spec.node_sets."+name+".version") {
-		nodeSet.SetVersion(selectedVersion)
-	}
-	if updateIncludesField(mask, "spec.node_sets."+name+".size") {
-		if hasSelectedSize {
-			nodeSet.SetSize(selectedSize)
-		} else {
-			nodeSet.ClearSize()
-		}
-	}
-	return nodeSet, nil
-}
-
-func isUpdatingOnlyNodeSizeOrVersionFields(mask *fieldmaskpb.FieldMask) bool {
-	if len(mask.GetPaths()) == 0 {
-		return false
-	}
-	for _, path := range mask.GetPaths() {
-		if !strings.HasPrefix(path, "spec.node_sets.") ||
-			(!strings.HasSuffix(path, ".size") && !strings.HasSuffix(path, ".version")) {
-			return false
-		}
-	}
-	return true
 }

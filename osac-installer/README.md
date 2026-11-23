@@ -69,40 +69,62 @@ The OSAC platform relies on five core components to deliver governed self-servic
 
 ### Prerequisites & Setup
 
-> **System Requirements** This solution requires the following platforms to be installed
-> and operational:
->
-> - Red Hat OpenShift Advanced Cluster Management (RHACM)
-> - Red Hat OpenShift Virtualization (OCP-Virt) - **Optional**: Only required for VM as a Service (VMaaS) support
-> - Red Hat Ansible Automation Platform (AAP)
-> - A Fabric Manager for bare metal networking, registered by the admin
->   (`global.networking` — see [Networking Configuration](#networking-configuration))
+OSAC depends on a set of supporting components - a cluster management layer, an
+identity provider, a message broker, storage, and so on. You have two options for each:
 
-**Configuration Manifests**
+- **Reuse what you have.** The installer does not detect existing installations. To
+  use a component you already run (for example cert-manager or AAP), disable the
+  corresponding values flag.
+- **Let the installer deploy it.** Components not present on the cluster can be
+  installed automatically by `make install-infra` when the corresponding values flag is
+  enabled. Refer to the [Installer-Managed Components](#openshift-installer-managed-components)
+  table below for additional information.
 
-The `/prerequisites` directory contains additional manifests required to configure the
-target Hub cluster.
+For reference or manual installation, the [`prerequisites/`](prerequisites/) directory
+contains example manifests for some components.
 
 > **Warning: Cluster-Wide Impact** If you are using a shared cluster or are not the
-> primary administrator, **do not apply these manifests without consultation.** These
-> files modify cluster-wide settings. Please coordinate with the appropriate cluster
-> administrators before proceeding.
+> primary administrator, **do not apply these manifests without consultation.** The
+> installer and the `prerequisites/` manifests modify cluster-wide settings. Coordinate
+> with your cluster administrators before proceeding.
 
-### Prerequisites Summary
+### OpenShift Hard Prerequisites
 
-| **Category** | **Requirement** | **Notes / Details** |
+These must be satisfied before running the installer. Where a row names a values
+flag, the installer can provide that requirement instead.
+
+| **Category** | **Requirement** | **Notes** |
 | --------------- | ----------------- | ---------------------- |
 | **Platform** | Red Hat OpenShift Container Platform (OCP) 4.17 or later | Must have cluster admin access to the hub cluster. |
-| **Operators** | Red Hat Advanced Cluster Management (RHACM) 2.18+<br>Red Hat OpenShift Virtualization (OCP-Virt) 4.17+<br>Red Hat Ansible Automation Platform (AAP) 2.5+ | These must be installed and running prior to OSAC installation. |
+| **Cluster Management** | Red Hat Advanced Cluster Management (RHACM) 2.17+ | Required for Hosted Control Planes (CaaS). If you want to use RHACM, it must be pre-installed. Otherwise, the installer can deploy a standalone MCE instance — see `mce.enabled` in the [Installer-Managed Components](#openshift-installer-managed-components) table. |
 | **CLI Tools** | `oc` (OpenShift CLI) v4.17+<br>`helm` v3.x<br>`git` | Ensure all CLIs are available in your `PATH`. |
 | **Container Registry Access** | `registry.redhat.io` and `quay.io` | Verify credentials and pull secrets are valid in the target cluster namespace. |
-| **Network / DNS** | Ingress route configured for OSAC services | Required for external access to fulfillment API and AAP UI. |
-| **Authentication / IDM** | Organization Identity Provider (e.g., Keycloak, LDAP, RH-SSO) | Used for tenant and user identity mapping. |
-| **Kafka** | Broker access for fulfillment and metering events | See [external Kafka configuration](../docs/guides/installation/kafka-configuration.md) for connection settings, credentials, ACLs, TLS trust, and a Strimzi example. |
-| **Storage** | Dynamic storage class available (e.g., `ocs-storagecluster-cephfs`, `lvms-storage`) | Required for persistence of operator and AAP components. |
-| **Permissions** | Cluster-admin access to deploy operators and create CRDs | Limited access users can only deploy into namespaces configured by the admin. |
-| **License Files** | `license.zip` (AAP subscription) | Must be placed in your values directory (e.g., `values/<env>/license.zip`). |
-| **Internet Access** | Outbound access to GitHub and `ghcr.io` (for fetching chart dependencies, OCI charts, and releases) | Required during installation and updates. |
+| **Network / DNS** | Cluster ingress and DNS configured | Required for external access to the fulfillment API, Keycloak, and AAP UI. OpenShift's default ingress controller and wildcard DNS (`*.apps.<domain>`) satisfy this. |
+| **Storage** | Dynamic storage class available (e.g., `ocs-storagecluster-cephfs`, `lvms-vg1`) | Required for persistence of OSAC components. If no dynamic storage class exists, the installer can provision one — see `lvms.enabled` in the [Installer-Managed Components](#openshift-installer-managed-components) table. |
+| **Permissions** | Cluster-admin access to deploy operators and create CRDs | Limited-access users can only deploy into namespaces configured by the admin. |
+| **License Files** | `license.zip` (AAP subscription manifest) | Must be placed in your values directory (e.g., `values/<env>/license.zip`). |
+| **Internet Access** | Outbound access to GitHub, `ghcr.io`, and the Helm repositories `https://topolvm.github.io/topolvm` and `https://netbox-community.github.io/netbox-chart/` | Required during installation and updates to fetch chart dependencies, OCI charts, and releases. |
+| **Kafka** | Kafka connection | Required on install (preflight check `kafka-access`; a warning on upgrade). Enable `kafka.enabled`, or configure the `service.kafka.connection` ConfigMap/Secret sources for an external broker — see [kafka-configuration.md](../docs/guides/installation/kafka-configuration.md). |
+| **Networking Fabric Manager** | A Fabric Manager registration name (e.g., `netris`, `agentless_net`), applied by the admin | Required for bare metal provisioning (CaaS). See [Networking Configuration](#networking-configuration). |
+
+### OpenShift Installer-Managed Components
+
+The installer can deploy the following components by setting the corresponding value
+in your infra values file. It does not detect existing installations: if you already
+run one of them, disable its flag.
+
+| **Component** | **Values flag** | **Default** | **Bring your own** |
+| ------------- | --------------- | ----------- | ------------------ |
+| **Keycloak** (authentication / IdP) | `keycloak.enabled` | `true` | The bundled Keycloak is the only supported path via `make install`. The Makefile overrides always derive the issuer URL from the cluster domain (`keycloak-keycloak.$(DOMAIN)/realms/osac`), so disabling this flag and setting `keycloak.hostname` alone does not wire up an external Keycloak. There is no supported values-only path for an external Keycloak. |
+| **AAP** (Ansible Automation Platform 2.6, pinned to a specific operator version; the installer approves the initial InstallPlan, and newer versions are not installed automatically) | `aapOperator.enabled` | `true` | Configure instance groups in `aap.instanceGroups`. To use an external AAP instead, see [Using an External AAP Instance](#using-an-external-aap-instance). |
+| **cert-manager** | `certManager.enabled` | `true` | Disable if cert-manager is already installed on the cluster. |
+| **Kafka** (AMQ Streams / Strimzi) | `kafka.enabled` | `false` | Enable to deploy an in-cluster Kafka. Leave disabled and configure an external broker via [kafka-configuration.md](../docs/guides/installation/kafka-configuration.md). |
+| **LVMS** (local volume storage) | `lvms.enabled` | `false` | Enable to deploy LVM Storage as the dynamic storage backend. |
+| **MetalLB** (bare-metal load balancer) | `metallb.enabled` | `false` | Enable if the cluster has no load balancer. Not needed on OpenShift clusters with cloud provider LB support. |
+| **MCE** (MultiCluster Engine) | `mce.enabled` | `false` | Enable only when this installation owns the MCE lifecycle. Leave disabled when RHACM or an existing MCE is already present. |
+| **CNV / OCP-Virt** (VMaaS only) | `cnv.enabled` | `false` | Enable to deploy OpenShift Virtualization for VM as a Service. |
+| **trust-manager** | `trustManager.enabled` | `true` | Set `trustManager.upstream.enabled: true` if trust-manager is already installed on the cluster. Setting `trustManager.enabled: false` also drops the chart's trust-manager Certificate and Issuer. |
+| **EVPN** (FRR routing, NMState) | `evpn.enabled` | `false` | Enable for EVPN networking. Set `evpn.nmstate.install: false` when the NMState operator is already installed. |
 
 ## Installation
 
@@ -169,6 +191,7 @@ make install-osac  PLATFORM=openshift PROFILE=<profile> NS=<namespace>   # OSAC 
 | `PROFILE` | `dev`, `dev-full`, `vmaas-ci`, `bmaas-ci`, `caas-ci`, or `full-ci` (required; `dev-full` is kind only) |
 | `NS` | Target namespace (required) |
 | `EXTRA_HELM_ARGS` | Extra `--set`/`--set-string` args for the OSAC chart only |
+| `KIND_FAKE_CRDS` | Install placeholder APIs on Kind (default `true`); native-provider suites set `false` |
 | `DRY_RUN=1` | Render all releases from `make install` with `helm template`; no cluster connections or cluster commands are used |
 | `DRY_RUN_CLUSTER_DOMAIN` | Cluster ingress domain required for an OpenShift dry run |
 | `DRY_RUN_OCP_VERSION` | OpenShift major.minor version required for an OpenShift dry run, e.g. `4.20` |
@@ -193,6 +216,15 @@ dev-full host setup script. Since `helm template` does not connect to a cluster,
 no Kubernetes resources are changed. The generated manifests are printed to
 the terminal; `EXTRA_HELM_ARGS` still applies to the OSAC chart. Do not include a
 Helm `--dry-run` flag in `EXTRA_HELM_ARGS`; rendering is intrinsic to this mode.
+
+`EXTRA_HELM_ARGS` is parsed as a shell-word list without shell evaluation:
+whitespace separates arguments, and single quotes, double quotes and
+backslashes group or escape characters, but `$(...)`, backticks, `$VAR`
+references and globs stay literal. Let your shell expand them before `make`
+runs (the examples in this file quote values for that reason). Unlike
+`EXTRA_HELM_ARGS`, the `INFRA_VALUES_EXTRA` and `INSTANCE_VALUES_EXTRA` values
+file lists are expanded unquoted by the recipe, so a path containing
+whitespace cannot be passed through them.
 
 #### Two-cluster VMaaS installation (OpenShift)
 
@@ -247,7 +279,9 @@ make install-osac PLATFORM=openshift PROFILE=vmaas-ci NS=osac \
 management kubeconfig. `install-osac` creates the management Secret after
 confirming the target namespace exists; it also sets the operator and AAP chart
 values for remote-cluster mode. The combined `install-multicluster` target runs
-these steps in order.
+these steps in order and validates the inputs once for the whole flow: the two
+phase targets are invoked with the same values, so their own copies of the
+input-validation gate are skipped instead of repeating every render.
 
 The staged `osac-remote-access` service-account token requests a 365-day
 lifetime (`--duration=8760h`); the workload API server may cap the issued
@@ -261,6 +295,14 @@ The existing `make install ...` command continues to install a single-cluster
 OSAC deployment. `scripts/setup-remote-cluster.sh prepare` prepares only the
 workload cluster. Without arguments, the script retains the existing
 post-install configuration flow.
+
+#### CaaS integration tests
+
+```bash
+make test PLATFORM=kind PROFILE=dev NS=osac SUITE=caas
+```
+
+See the [CaaS guide](../tests/integration/caas/README.md).
 
 #### Full local dev environment (`PROFILE=dev-full`, kind only)
 
@@ -342,6 +384,30 @@ use one of the local image references. Component image-load targets default to
 loading checks the required tools and cluster availability without requiring
 KVM or the virtualization install tools. `CONTAINER_TOOL` selects the runtime
 unless `KIND_EXPERIMENTAL_PROVIDER` is set.
+
+Mac `dev-full` also prepares a separate ARM64 Fedora guest disk from a pinned
+upstream container-disk digest. Its boot configuration includes `pci=nomsi` to
+avoid the PCI interrupt hang seen with nested virtualization on Apple Silicon.
+The build customizes the disk offline using a software-emulated libguestfs
+appliance; it does not need working nested KVM. The first build downloads the
+image and customization tools. Later builds reuse the container build cache.
+
+`install-devstack`, including when run by `install`, prepares and loads
+`localhost/osac-dev/fedora-arm64:pci-nomsi-v1` into every Kind node. CDI's node
+pull method uses the loaded image with its `IfNotPresent` policy. The local
+catalog registers it as `fedora-mac-arm64`, advertising ARM64 only, and makes it
+the editable default for `linux-vm`. Rerunning the catalog hook updates this
+default on an existing deployment; it does not replace existing VM disks.
+To refresh only the development guest image:
+
+```bash
+make kind-prepare-fedora-image PLATFORM=kind PROFILE=dev-full NS=osac
+```
+
+This preparation runs only for Apple Silicon `kind/dev-full`. Linux development
+and product deployments keep their existing images. Custom images selected by
+the user are not modified. A running guest still requires nested KVM support
+from the Mac container runtime; the image workaround does not provide it.
 
 #### Netris + CUDN EVPN CI overlays
 
@@ -481,6 +547,18 @@ export KIND_EXPERIMENTAL_PROVIDER=podman
 make install PLATFORM=kind PROFILE=dev-full NS=osac
 ```
 
+On Apple Silicon, the container runtime's Linux VM may not expose `/dev/kvm`.
+In that case the launcher remains Pending with
+`Insufficient devices.kubevirt.io/kvm`. Check the runtime before testing VMs:
+
+```bash
+podman machine ssh -- ls -l /dev/kvm
+```
+
+The runtime must expose working nested virtualization. KubeVirt v1.9.1 on
+ARM64 permits only the `host-passthrough` CPU model, so enabling software
+emulation does not provide a working fallback for that version.
+
 `dev-full` installs TopoLVM as the tenant `local` storage backend. Before Kind
 is created, `kind-runtime.sh` prepares a disposable sparse disk (20 GiB by
 default), the `vg1` volume group, and an external `lvmd` process. Set
@@ -524,7 +602,12 @@ The `topolvm-provisioner` StorageClass is not the cluster default. Kind's
 `standard` class remains the default for dev-stack components such as AWX
 PostgreSQL. OSAC registers the existing `local` storage tier. AWX's storage
 templates create a tenant-labeled class for that tier, and the operator passes
-the tenant's resolved class to compute provisioning.
+the tenant's resolved class to compute provisioning. When reusing storage after
+a container-runtime reboot, the setup helper reactivates the existing logical
+volumes after checking that the volume group belongs to its backing file.
+The devstack grants CDI read-only access to Kind's placeholder OpenShift Route
+API. Without that permission, CDI's informer cache cannot synchronize and
+DataVolumes remain without PVCs, leaving VMs in `ErrorPvcNotFound`.
 Local AWX jobs receive `OSAC_STORAGE_CONFIG_NAMESPACE` from the selected OSAC
 namespace so they can find storage config Secrets without a mounted
 service-account namespace file.
@@ -627,7 +710,8 @@ cp values/dev/instance.yaml values/<project-name>/instance.yaml
 Prerequisites (cert-manager, AAP, LVMS, MetalLB, CNV, MCE) are installed
 automatically by Phase 1. Each is gated by a values toggle (e.g.,
 `certManager.enabled: true`). See [prerequisites/README.md](prerequisites/README.md)
-for details on what each prerequisite provides.
+for details on what each prerequisite provides. For a custom MetalLB
+**IPAddressPool**, see [MetalLB address pool](#metallb-address-pool) below.
 
 Standalone MCE is disabled by default. Set `mce.enabled: true` in the
 infrastructure values when this installation owns its lifecycle; the `caas-ci`
@@ -635,12 +719,151 @@ profile does so explicitly. Leave it `false` when RHACM or an existing MCE
 installation owns the lifecycle. The disabled state also suppresses the
 temporary Assisted image override resources.
 
+#### MetalLB address pool
+
+MetalLB supplies **LoadBalancer** IPs for CaaS (hosted control planes and
+similar services). Phase 1 installs the operator when `metallb.enabled: true`
+in your infrastructure values; the `osac-infra` chart applies the
+`caas-address-pool` **IPAddressPool** and runs the configure-metallb hook after
+the operator is ready.
+
+**Custom pool (recommended for production):** set explicit addresses in
+`values/<project-name>/infra.yaml`. The chart default is
+`192.168.100.240-192.168.100.250`; replace it with unused IPs on your node
+L2 network. Each entry follows MetalLB `spec.addresses` syntax:
+
+- IPv4 **CIDR** (for example `10.20.30.0/28`)
+- **Inclusive range** (for example `10.20.30.100-10.20.30.110`)
+- A **single** address as **`/32`** (for example `10.20.30.50/32`)
+
+```yaml
+metallb:
+  enabled: true
+  addresses:
+    - 10.20.30.100-10.20.30.110
+    - 10.20.30.200/32
+```
+
+Leave `derivePoolFromNodeIP: false` (the default) so the hook keeps this pool
+after install. Verify the pool on the cluster:
+
+```bash
+oc get ipaddresspool caas-address-pool -n metallb-system -o yaml
+```
+
+**Optional node-derived range (labs and CI):** when every node shares a subnet
+and you want the pool built from the first node's **InternalIP**, set
+`derivePoolFromNodeIP: true` and optionally adjust the last octets (defaults
+`240` and `250`). The hook patches the pool to
+`{subnet}.poolRangeStart-{subnet}.poolRangeEnd`. `poolRangeStart` must be less
+than `poolRangeEnd`. The `caas-ci`, `full-ci`, and `vmaas-ci` profiles enable
+this for automated environments; production installs should use explicit
+`addresses` instead.
+
+```yaml
+metallb:
+  enabled: true
+  derivePoolFromNodeIP: true
+  poolRangeStart: 240
+  poolRangeEnd: 250
+```
+
 #### AAP Configuration
 
 AAP instance groups carry backend credentials for provisioning jobs.
 Configure via Helm values under `aap.instanceGroups.*` in your values file.
 
 See [docs/aap-configuration.md](docs/aap-configuration.md) for details.
+
+#### Using an External AAP Instance
+
+The installer deploys and configures AAP by default. If AAP is already running
+elsewhere, you can point OSAC at it instead. This requires changes in both the
+infra values file and the instance values file.
+
+**In `infra.yaml`** (passed to `install-infra`):
+
+```yaml
+aapOperator:
+  enabled: false   # leave enabled only when this release should own the AAP operator Subscription
+```
+
+**In `instance.yaml`** (passed to `install-osac`):
+
+```yaml
+aap:
+  aap:
+    instance:
+      enabled: false     # do not create the AnsibleAutomationPlatform CR
+  bootstrap:
+    enabled: false       # the bootstrap job only targets the bundled AAP (see below)
+  apiToken:
+    create: false        # do not run the create-api-token hook (see below)
+  instanceGroups:        # rendered as ConfigMaps/Secrets in the OSAC namespace only
+    publishTemplates:
+      enabled: false     # the hook only dials the bundled AAP (see below)
+    clusterFulfillment:
+      enabled: true
+      config:
+        # provider-specific keys; see docs/aap-configuration.md
+      secret:
+        # sensitive keys (e.g. cloud credentials)
+
+operator:
+  aap:
+    url: "https://<external-aap-controller>/api/controller"
+    tokenSecret:
+      name: osac-aap-api-token
+      key: token
+    insecureSkipVerify: "false"
+
+# Include this block when BMaaS is enabled. BMF has its own AAP URL and does
+# not inherit operator.aap.url.
+bmf:
+  env:
+    aapUrl: "https://<external-aap-controller>/api/controller"
+    aapInsecureSkipVerify: "false"
+```
+
+The `create-api-token` hook waits for the bundled AAP admin-password Secret
+and dials the local AAP gateway. It must be disabled when using external AAP
+or the installation will stall waiting for resources that never appear.
+
+**Create the API token Secret manually** before `install-osac`. The hook
+normally creates this Secret. The operators read the token only at startup, so
+after creating it late or rotating it, restart `deployment/osac-operator` (and
+`deployment/bmf-operator-controller-manager` when BMaaS is enabled) in the
+`osac` namespace:
+
+```bash
+oc create secret generic osac-aap-api-token \
+  --from-file=token=/secure/osac-aap-api-token \
+  -n osac
+```
+
+Generate the token from your external AAP's web UI under
+**Users → <admin> → Tokens → Add**, or via its API.
+
+The bootstrap job and the `osac-publish-templates` hook cannot target an external
+AAP. Both derive the AAP hostnames from `aap.aap.instance.name` (in-cluster
+Service names), and the bootstrap job waits for the
+`<aap.aap.instance.name>-admin-password` Secret that only exists for the bundled
+instance. The `aap.bootstrap.gateway.hostname` and
+`aap.bootstrap.controller.hostname` values are not used by any template. Keep both
+disabled as shown above, and configure the objects the bootstrap job would
+otherwise create on your external AAP yourself: project, execution environment,
+inventory, instance groups, and job templates (including
+`<operator.aap.templatePrefix>-publish-templates`, run once after installation).
+
+With bootstrap disabled, `aap.instanceGroups.*` values only render ConfigMaps and
+Secrets in the OSAC namespace; they do not create instance groups in the external
+AAP. Job pods of the external container groups need matching ConfigMaps and Secrets
+in the cluster and namespace where they run, exposed through each group's
+`pod_spec_override`.
+
+For the complete external AAP workflow, see the externally managed AAP part of the
+[customer installation guide](../docs/guides/installation/customer-install-guide.md#42-configuring-the-helm-values). For the `aap.instanceGroups.*` keys, see
+[docs/aap-configuration.md](docs/aap-configuration.md).
 
 #### Networking Configuration
 
@@ -756,12 +979,79 @@ make kind-load-images PLATFORM=kind PROFILE=dev-full NS=... # Load existing imag
 make uninstall     PLATFORM=... PROFILE=... NS=...  # Full uninstall
 make test          PLATFORM=... PROFILE=... NS=... SUITE=...  # Integration tests
 make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage # API/operator disk handoff
+make validate-inputs PLATFORM=... PROFILE=... NS=... # Offline input validation (no cluster changes)
 make helm-lint                                       # Lint all charts
 make helm-template       # Dry-run render all templates
 make mce-render-test                                  # Verify disabled MCE defaults and CaaS enablement
+make input-validation-test                             # Test the upfront input-validation gate
 make helm-validate                                   # Lint + template (full validation)
 make sync-charts         # Rebuild chart dependencies (legacy alias; runs helm dependency build)
 ```
+
+#### Input validation
+
+Every installation target (`install`, `install-infra`, `install-osac`,
+`install-devstack`, `install-multicluster`) first runs `validate-inputs`:
+an offline `helm template` of the installer's own applicable charts:
+`osac-infra` and `osac`, plus `osac-deps` on OpenShift and `osac-devstack`
+for Kind's `dev-full` profile. Each receives the same profile values files
+and chart-specific overrides as the installation (`INFRA_HELM_ARGS`,
+`EXTRA_HELM_ARGS`, or `DEVSTACK_HELM_ARGS` as applicable), including the
+same read-only OpenShift lookups for the cluster domain and version.
+Separate external releases installed on Kind (`cert-manager`, `trust-manager`,
+`envoy-gateway`, and `strimzi-cluster-operator`) are not rendered by this gate.
+(With `DRY_RUN=1`, `install` renders offline via
+`install-dry-run` and skips the gate — the dry run is itself an offline
+render. Because `install-dry-run` calls `helm template` directly rather
+than through the gate, it does not suppress Helm's message: a failing dry
+run prints Helm's raw error, which can echo the rejected value, to the
+terminal or CI log.) Invalid values — wrong types, negative numbers where only
+zero-or-positive is allowed, unknown keys in schema-closed sections —
+fail the install before any namespace, secret, or release is created,
+and before any readiness wait. Unknown-key rejection depends on the
+section, in both charts: some sections are closed (for example
+`global.fulfillmentTrust`), while others — `osac-infra`'s `keycloak`
+and `topolvm`, or resource blocks like `operator.resources.requests`
+— remain open, so a typo there is accepted rather than rejected.
+The failure names the offending field. Helm's own message is suppressed
+because it can echo the rejected value, so for the constraints these
+schemas add themselves the gate also prints the violated constraint:
+`aap.bootstrap.backoffLimit` and the `bundledVault.podSecurityContext`
+POSIX IDs must be integers zero or greater, `runAsUser: 0` is rejected
+unless `runAsNonRoot` is explicitly `false`, and `global.fulfillmentTrust`
+rejects unknown keys. A numeric field's text covers both its type and its
+minimum, because the field path alone cannot say which one failed. Other
+schema failures name the field only. Fix the reported field and retry.
+
+The bmaas-netbox-ci profile gets its NetBox token Secret from the infra
+chart's seed hook. The gate trusts that hook only when the same command
+installs the infra chart (`install`, `install-infra`, or
+`install-multicluster`). A standalone `make install-osac` instead requires
+either the token Secret the osac chart reads to already exist in the cluster
+or a token supplied through `bmf.netbox.tokenValue`; without either, the gate
+fails before the namespace and license Secret are created rather than
+letting `helm upgrade` fail later.
+
+These checks reject values earlier releases accepted: a negative
+`aap.bootstrap.backoffLimit` or `bundledVault.podSecurityContext` ID,
+`runAsUser: 0` with the default `runAsNonRoot: true`, and unknown keys
+under `global.fulfillmentTrust`. Update overlays that set them before
+upgrading.
+
+The gate validates static inputs only. It does not check that the cluster is
+ready for the installation: prerequisites that must already exist (issuers,
+storage classes, CRDs) are verified by the render-time install preflight
+during `helm upgrade`, and resources the installer itself creates are allowed
+to become ready afterwards. `make validate-inputs` runs the same validation
+standalone without installing.
+
+Remote-cluster inputs are part of the gate: with `REMOTE_KUBECONFIG` set,
+`REMOTE_KUBECONFIG_SECRET_NAME` and `REMOTE_KUBECONFIG_SECRET_KEY` are
+checked against the Kubernetes Secret name/key grammars before any cluster
+mutation, and the osac-chart render carries the same remote kubeconfig
+`--set-string` arguments the installation applies. The gate also rejects an
+unreadable kubeconfig file; the file is parsed and staged into its Secret
+only at install time.
 
 ### Monitor Progress
 

@@ -228,7 +228,7 @@ def test_delete_skips_deprovisioning_when_baremetalhost_has_no_image(tmp_path):
 def test_delete_clears_generated_root_device_hint(tmp_path):
     bmh = bmh_resource(state="provisioned", image_url=IMAGE_URL)
     bmh["metadata"]["annotations"] = {
-        "osac.openshift.io/fallback-root-device": "/dev/vda"
+        "osac.openshift.io/fallback-root-device": '{"deviceName": "/dev/vda"}'
     }
     bmh["spec"]["rootDeviceHints"] = {"deviceName": "/dev/vda"}
 
@@ -253,6 +253,69 @@ def test_delete_clears_generated_root_device_hint(tmp_path):
     patched = state["resources"][BMH_KEY]
     assert "rootDeviceHints" not in patched["spec"]
     assert "osac.openshift.io/fallback-root-device" not in patched["metadata"]["annotations"]
+
+
+def test_delete_clears_legacy_root_device_hint(tmp_path):
+    bmh = bmh_resource(state="provisioned", image_url=IMAGE_URL)
+    bmh["metadata"]["annotations"] = {
+        "osac.openshift.io/fallback-root-device": "/dev/vda"
+    }
+    bmh["spec"]["rootDeviceHints"] = {"deviceName": "/dev/vda"}
+
+    result, state = run_role(
+        tmp_path,
+        "unit_delete.yml",
+        {BMH_KEY: bmh},
+    )
+
+    assert result.returncode == 0, result.stdout
+    patches = json_patch_operations(state)
+    assert len(patches) == 1
+    remove_paths = [
+        op["path"] for op in patches[0]["patch"] if op["op"] == "remove"
+    ]
+    assert remove_paths == [
+        "/spec/rootDeviceHints",
+        "/metadata/annotations/osac.openshift.io~1fallback-root-device",
+    ]
+    patched = state["resources"][BMH_KEY]
+    assert "rootDeviceHints" not in patched["spec"]
+    assert "osac.openshift.io/fallback-root-device" not in patched["metadata"]["annotations"]
+
+
+def test_delete_clears_generated_root_device_hint_changed_after_provisioning(tmp_path):
+    bmh = bmh_resource(state="provisioned", image_url=IMAGE_URL)
+    bmh["metadata"]["annotations"] = {
+        "osac.openshift.io/fallback-root-device": '{"deviceName": "/dev/vda"}'
+    }
+    bmh["spec"]["rootDeviceHints"] = {"serialNumber": "SER-42"}
+
+    result, state = run_role(
+        tmp_path,
+        "unit_delete.yml",
+        {BMH_KEY: bmh},
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert len(json_patch_operations(state)) == 1
+    patched = state["resources"][BMH_KEY]
+    assert "rootDeviceHints" not in patched["spec"]
+    assert "osac.openshift.io/fallback-root-device" not in patched["metadata"]["annotations"]
+
+
+def test_delete_keeps_root_device_hint_without_the_annotation(tmp_path):
+    bmh = bmh_resource(state="provisioned", image_url=IMAGE_URL)
+    bmh["spec"]["rootDeviceHints"] = {"serialNumber": "SER-42"}
+
+    result, state = run_role(
+        tmp_path,
+        "unit_delete.yml",
+        {BMH_KEY: bmh},
+    )
+
+    assert result.returncode == 0, result.stdout
+    assert json_patch_operations(state) == []
+    assert state["resources"][BMH_KEY]["spec"]["rootDeviceHints"] == {"serialNumber": "SER-42"}
 
 
 def test_delete_tolerates_already_absent_generated_secrets(tmp_path):

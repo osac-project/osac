@@ -37,7 +37,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 	newOrder := func() *v1alpha1.ClusterOrder {
 		return &v1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{
-				v1alpha1.UpgradeAttemptIDsAnnotation: `{"controlPlane":"cp-id","nodeSets":{"compute":"compute-id","gpu":"gpu-id"}}`,
+				v1alpha1.UpgradeAttemptIDAnnotation: "cluster-id",
 			}},
 			Spec: v1alpha1.ClusterOrderSpec{ReleaseImage: image,
 				NodeRequests: []v1alpha1.NodeRequest{
@@ -61,7 +61,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 	}
 	newControlPlane := func() *hypershiftv1beta1.HostedCluster {
 		hc := &hypershiftv1beta1.HostedCluster{ObjectMeta: metav1.ObjectMeta{
-			Generation: 3, Annotations: map[string]string{v1alpha1.UpgradeAttemptIDAnnotation: "cp-id"},
+			Generation: 3, Annotations: map[string]string{v1alpha1.UpgradeAttemptIDAnnotation: "cluster-id"},
 		}}
 		hc.Spec.Release.Image = image
 		return hc
@@ -100,13 +100,13 @@ var _ = Describe("upgrade attempt correlation", func() {
 		hc.Status.ControlPlaneVersion = controlPlaneVersionStatus("4.18.0", configv1.CompletedUpdate)
 		hc.Status.Conditions = healthyConditions()
 		recordUpgradeObservations(order, hc, []hypershiftv1beta1.NodePool{
-			newPool("compute", "compute-id"), newPool("gpu", "gpu-id"),
+			newPool("compute", "cluster-id"), newPool("gpu", "cluster-id"),
 		})
-		Expect(order.Status.UpgradeObservation.AttemptID).To(Equal("cp-id"))
+		Expect(order.Status.UpgradeObservation.AttemptID).To(Equal("cluster-id"))
 		Expect(order.Status.UpgradeObservation.State).To(Equal(v1alpha1.UpgradeObservationSucceeded))
 		Expect(order.Status.UpgradeObservation.Version).To(Equal("4.18.0"))
-		Expect(order.Status.NodeRequests[0].UpgradeObservation.AttemptID).To(Equal("compute-id"))
-		Expect(order.Status.NodeRequests[1].UpgradeObservation.AttemptID).To(Equal("gpu-id"))
+		Expect(order.Status.NodeRequests[0].UpgradeObservation.AttemptID).To(Equal("cluster-id"))
+		Expect(order.Status.NodeRequests[1].UpgradeObservation.AttemptID).To(Equal("cluster-id"))
 	})
 
 	DescribeTable("reports control-plane progress from either partial history", func(controlPlanePartial bool) {
@@ -120,7 +120,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 			hc.Status.Version = versionStatus("4.18.0", configv1.PartialUpdate)
 		}
 		recordUpgradeObservations(order, hc, nil)
-		Expect(order.Status.UpgradeObservation.AttemptID).To(Equal("cp-id"))
+		Expect(order.Status.UpgradeObservation.AttemptID).To(Equal("cluster-id"))
 		Expect(order.Status.UpgradeObservation.Version).To(Equal("4.18.0"))
 		Expect(order.Status.UpgradeObservation.State).To(Equal(v1alpha1.UpgradeObservationProgressing))
 	},
@@ -216,7 +216,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 		}}
 		recordUpgradeObservations(order, &hypershiftv1beta1.HostedCluster{}, []hypershiftv1beta1.NodePool{pool})
 		Expect(order.Status.NodeRequests[0].UpgradeObservation.BaselineTransitionTime.Time).To(Equal(baseline))
-		pool.Annotations[v1alpha1.UpgradeAttemptIDAnnotation] = "compute-id"
+		pool.Annotations[v1alpha1.UpgradeAttemptIDAnnotation] = "cluster-id"
 		recordUpgradeObservations(order, &hypershiftv1beta1.HostedCluster{}, []hypershiftv1beta1.NodePool{pool})
 		Expect(order.Status.NodeRequests[0].UpgradeObservation.State).To(BeEmpty())
 		pool.Status.Conditions[0].LastTransitionTime = metav1.NewTime(baseline.Add(time.Second))
@@ -226,7 +226,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 
 	It("reports node-pool progress when the current UpdatingVersion condition is true", func() {
 		order := newOrder()
-		pool := newPool("compute", "compute-id")
+		pool := newPool("compute", "cluster-id")
 		pool.Status.Conditions = []hypershiftv1beta1.NodePoolCondition{{
 			Type:   hypershiftv1beta1.NodePoolUpdatingVersionConditionType,
 			Status: corev1.ConditionTrue, ObservedGeneration: 2,
@@ -241,7 +241,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 
 	It("requires the current UpdatingVersion, AllMachinesReady, and Ready conditions for node-pool success", func() {
 		order := newOrder()
-		pool := newPool("compute", "compute-id")
+		pool := newPool("compute", "cluster-id")
 		pool.Status.Version = "4.18.0"
 		pool.Status.Conditions = []hypershiftv1beta1.NodePoolCondition{
 			{Type: hypershiftv1beta1.NodePoolUpdatingVersionConditionType, Status: corev1.ConditionFalse, ObservedGeneration: 2},
@@ -255,7 +255,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 
 	DescribeTable("does not report node-pool success without each current signal", func(change func(*hypershiftv1beta1.NodePool)) {
 		order := newOrder()
-		pool := newPool("compute", "compute-id")
+		pool := newPool("compute", "cluster-id")
 		pool.Status.Version = "4.18.0"
 		pool.Status.Conditions = []hypershiftv1beta1.NodePoolCondition{
 			{Type: hypershiftv1beta1.NodePoolUpdatingVersionConditionType, Status: corev1.ConditionFalse, ObservedGeneration: 2},
@@ -286,7 +286,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 
 	It("does not report a NodePool release condition as terminal failure", func() {
 		order := newOrder()
-		pool := newPool("compute", "compute-id")
+		pool := newPool("compute", "cluster-id")
 		pool.Status.Conditions = []hypershiftv1beta1.NodePoolCondition{{
 			Type:   hypershiftv1beta1.NodePoolValidReleaseImageConditionType,
 			Status: corev1.ConditionFalse, ObservedGeneration: 2, Reason: "ValidationFailed",
@@ -309,44 +309,96 @@ var _ = Describe("upgrade attempt correlation", func() {
 		Expect(entry.GetMessage()).To(Equal(observation.Message))
 	})
 
+	It("does not treat the control-plane image as a missing node-set image", func() {
+		order := newOrder()
+		order.Spec.NodeRequests[0].ReleaseImage = ""
+		pool := newPool("compute", "cluster-id")
+		recordUpgradeObservations(order, &hypershiftv1beta1.HostedCluster{}, []hypershiftv1beta1.NodePool{pool})
+		Expect(order.Status.NodeRequests[0].UpgradeObservation).To(BeNil())
+	})
+
 	It("does not attribute an old ID or another release image to the current attempt", func() {
 		order := newOrder()
 		hc := &hypershiftv1beta1.HostedCluster{}
 		old := newPool("compute", "previous-compute-id")
 		stale := newPool("gpu", "gpu-id")
 		stale.Spec.Release.Image = "quay.io/ocp/release:4.17.0"
-		order.Status.UpgradeObservation = &v1alpha1.UpgradeObservation{AttemptID: "cp-id"}
-		order.Status.NodeRequests[0].UpgradeObservation = &v1alpha1.UpgradeObservation{AttemptID: "compute-id"}
-		order.Status.NodeRequests[1].UpgradeObservation = &v1alpha1.UpgradeObservation{AttemptID: "gpu-id"}
+		order.Status.UpgradeObservation = &v1alpha1.UpgradeObservation{AttemptID: "cluster-id"}
+		order.Status.NodeRequests[0].UpgradeObservation = &v1alpha1.UpgradeObservation{AttemptID: "cluster-id"}
+		order.Status.NodeRequests[1].UpgradeObservation = &v1alpha1.UpgradeObservation{AttemptID: "cluster-id"}
 		recordUpgradeObservations(order, hc, []hypershiftv1beta1.NodePool{old, stale})
 		Expect(order.Status.UpgradeObservation).To(BeNil())
 		Expect(order.Status.NodeRequests[0].UpgradeObservation).To(BeNil())
 		Expect(order.Status.NodeRequests[1].UpgradeObservation).To(BeNil())
 	})
 
-	It("does not copy attempt observations into independently observed versions", func() {
+	It("records successful upgrade feedback in observed versions", func() {
 		order := newOrder()
-		order.Status.UpgradeObservation = &v1alpha1.UpgradeObservation{AttemptID: "cp-id", Version: "4.18.0"}
-		order.Status.NodeRequests[0].UpgradeObservation = &v1alpha1.UpgradeObservation{AttemptID: "compute-id", Version: "4.17.0"}
-		order.Status.NodeRequests[1].UpgradeObservation = &v1alpha1.UpgradeObservation{AttemptID: "old-gpu-id", Version: "4.17.0"}
+		order.Status.UpgradeObservation = &v1alpha1.UpgradeObservation{
+			AttemptID: "cluster-id", State: v1alpha1.UpgradeObservationSucceeded, Version: "4.18.0",
+		}
+		order.Status.NodeRequests[0].UpgradeObservation = &v1alpha1.UpgradeObservation{
+			AttemptID: "cluster-id", State: v1alpha1.UpgradeObservationSucceeded, Version: "4.18.0",
+		}
+		order.Status.NodeRequests[1].UpgradeObservation = &v1alpha1.UpgradeObservation{
+			AttemptID: "cluster-id", State: v1alpha1.UpgradeObservationProgressing, Version: "4.17.0",
+		}
+
+		entry := func(component *privatev1.ClusterUpgradeComponent) *privatev1.ClusterUpgradeHistoryEntry {
+			return privatev1.ClusterUpgradeHistoryEntry_builder{
+				AttemptId: "cluster-id", Component: component, TargetVersion: "4.18.0",
+				State: privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING,
+			}.Build()
+		}
+		controlPlane := &privatev1.ClusterUpgradeComponent{}
+		controlPlane.SetControlPlane(&emptypb.Empty{})
+		compute := &privatev1.ClusterUpgradeComponent{}
+		compute.SetNodeSetId("compute")
+		gpu := &privatev1.ClusterUpgradeComponent{}
+		gpu.SetNodeSetId("gpu")
+		cpEntry, computeEntry, gpuEntry := entry(controlPlane), entry(compute), entry(gpu)
+
+		remote := privatev1.Cluster_builder{
+			Status: privatev1.ClusterStatus_builder{
+				UpgradeAttemptId: "cluster-id",
+				ObservedVersion:  "4.17.0",
+				NodeSets: map[string]*privatev1.ClusterNodeSetStatus{
+					"compute": {}, "gpu": {ObservedVersion: "4.16.0"},
+				},
+				UpgradeHistory: []*privatev1.ClusterUpgradeHistoryEntry{gpuEntry, computeEntry, cpEntry},
+			}.Build(),
+		}.Build()
+
+		syncClusterOrderUpgradeObservations(order, remote)
+
+		Expect(cpEntry.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED))
+		Expect(computeEntry.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED))
+		Expect(gpuEntry.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
+		Expect(remote.GetStatus().GetObservedVersion()).To(Equal("4.18.0"))
+		Expect(remote.GetStatus().GetNodeSets()["compute"].GetObservedVersion()).To(Equal("4.18.0"))
+		Expect(remote.GetStatus().GetNodeSets()["gpu"].GetObservedVersion()).To(Equal("4.16.0"))
+	})
+
+	It("does not copy non-successful attempt observations into independently observed versions", func() {
+		order := newOrder()
+		order.Status.UpgradeObservation = &v1alpha1.UpgradeObservation{AttemptID: "cluster-id", Version: "4.18.0"}
+		order.Status.NodeRequests[0].UpgradeObservation = &v1alpha1.UpgradeObservation{AttemptID: "cluster-id", Version: "4.17.0"}
+		order.Status.NodeRequests[1].UpgradeObservation = &v1alpha1.UpgradeObservation{AttemptID: "old-cluster-id", Version: "4.17.0"}
 		cp := &privatev1.ClusterUpgradeHistoryEntry{}
-		cp.SetAttemptId("cp-id")
+		cp.SetAttemptId("cluster-id")
 		cpComponent := &privatev1.ClusterUpgradeComponent{}
 		cpComponent.SetControlPlane(&emptypb.Empty{})
 		cp.SetComponent(cpComponent)
 		compute := &privatev1.ClusterUpgradeHistoryEntry{}
-		compute.SetAttemptId("compute-id")
+		compute.SetAttemptId("cluster-id")
 		computeComponent := &privatev1.ClusterUpgradeComponent{}
 		computeComponent.SetNodeSetId("compute")
 		compute.SetComponent(computeComponent)
 		remote := &privatev1.Cluster{}
-		spec := &privatev1.ClusterSpec{}
-		spec.SetControlPlaneAttemptId("cp-id")
-		spec.SetNodeSetAttemptIds(map[string]string{"compute": "compute-id", "gpu": "gpu-id"})
-		remote.SetSpec(spec)
 		status := &privatev1.ClusterStatus{}
+		status.SetUpgradeAttemptId("cluster-id")
 		status.SetObservedVersion("4.17.0")
-		status.SetNodeSets(map[string]*privatev1.ClusterNodeSet{
+		status.SetNodeSets(map[string]*privatev1.ClusterNodeSetStatus{
 			"compute": {}, "gpu": {},
 		})
 		status.GetNodeSets()["gpu"].SetObservedVersion("4.16.0")
@@ -395,7 +447,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 		Expect(entry.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
 	})
 
-	It("updates every component independently when attempt IDs are shared", func() {
+	It("updates every component independently when the attempt ID is shared", func() {
 		order := newOrder()
 		order.Status.UpgradeObservation = &v1alpha1.UpgradeObservation{
 			AttemptID: "shared-id", State: v1alpha1.UpgradeObservationSucceeded, Version: "4.18.0"}
@@ -417,11 +469,10 @@ var _ = Describe("upgrade attempt correlation", func() {
 		}
 		cpEntry, computeEntry, gpuEntry := entry(controlPlane), entry(compute), entry(gpu)
 		remote := privatev1.Cluster_builder{
-			Spec: privatev1.ClusterSpec_builder{ControlPlaneAttemptId: "shared-id",
-				NodeSetAttemptIds: map[string]string{"compute": "shared-id", "gpu": "shared-id"}}.Build(),
-			Status: privatev1.ClusterStatus_builder{UpgradeHistory: []*privatev1.ClusterUpgradeHistoryEntry{
-				gpuEntry, computeEntry, cpEntry,
-			}}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				UpgradeAttemptId: "shared-id",
+				UpgradeHistory:   []*privatev1.ClusterUpgradeHistoryEntry{gpuEntry, computeEntry, cpEntry},
+			}.Build(),
 		}.Build()
 
 		syncClusterOrderUpgradeObservationsAt(order, remote, time.Date(2026, 10, 28, 10, 0, 0, 0, time.UTC))
@@ -435,7 +486,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 		order := newOrder()
 		now := time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC)
 		cp := &privatev1.ClusterUpgradeHistoryEntry{}
-		cp.SetAttemptId("cp-id")
+		cp.SetAttemptId("cluster-id")
 		cp.SetTargetVersion("4.18.0")
 		cp.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING)
 		cp.SetAcceptedTime(timestamppb.New(now))
@@ -444,11 +495,13 @@ var _ = Describe("upgrade attempt correlation", func() {
 		component.SetControlPlane(&emptypb.Empty{})
 		cp.SetComponent(component)
 		remote := &privatev1.Cluster{}
-		remote.SetSpec(privatev1.ClusterSpec_builder{ControlPlaneAttemptId: "cp-id"}.Build())
-		remote.SetStatus(privatev1.ClusterStatus_builder{ObservedVersion: "4.17.0",
-			UpgradeHistory: []*privatev1.ClusterUpgradeHistoryEntry{cp}}.Build())
+		remote.SetStatus(privatev1.ClusterStatus_builder{
+			UpgradeAttemptId: "cluster-id",
+			ObservedVersion:  "4.17.0",
+			UpgradeHistory:   []*privatev1.ClusterUpgradeHistoryEntry{cp},
+		}.Build())
 		order.Status.UpgradeObservation = &v1alpha1.UpgradeObservation{
-			AttemptID: "cp-id", State: v1alpha1.UpgradeObservationProgressing, Version: "4.18.0",
+			AttemptID: "cluster-id", State: v1alpha1.UpgradeObservationProgressing, Version: "4.18.0",
 		}
 		syncClusterOrderUpgradeObservationsAt(order, remote, now.Add(5*time.Minute))
 		Expect(cp.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING))
@@ -462,14 +515,14 @@ var _ = Describe("upgrade attempt correlation", func() {
 		order.Status.UpgradeObservation.Version = "4.18.0"
 		syncClusterOrderUpgradeObservationsAt(order, remote, now.Add(46*time.Minute))
 		Expect(cp.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_SUCCEEDED))
-		Expect(remote.GetStatus().GetObservedVersion()).To(Equal("4.17.0"))
+		Expect(remote.GetStatus().GetObservedVersion()).To(Equal("4.18.0"))
 	})
 
 	It("times out a pending node pool ten minutes after acceptance", func() {
 		order := newOrder()
 		now := time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC)
 		entry := &privatev1.ClusterUpgradeHistoryEntry{}
-		entry.SetAttemptId("compute-id")
+		entry.SetAttemptId("cluster-id")
 		entry.SetTargetVersion("4.18.0")
 		entry.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING)
 		entry.SetAcceptedTime(timestamppb.New(now))
@@ -479,16 +532,20 @@ var _ = Describe("upgrade attempt correlation", func() {
 		component.SetNodeSetId("compute")
 		entry.SetComponent(component)
 		remote := &privatev1.Cluster{}
-		remote.SetSpec(privatev1.ClusterSpec_builder{NodeSetAttemptIds: map[string]string{"compute": "compute-id"},
-			NodeSets: map[string]*privatev1.ClusterNodeSet{"compute": {}}}.Build())
-		remote.SetStatus(privatev1.ClusterStatus_builder{NodeSets: map[string]*privatev1.ClusterNodeSet{"compute": {}},
-			UpgradeHistory: []*privatev1.ClusterUpgradeHistoryEntry{entry}}.Build())
+		remote.SetSpec(privatev1.ClusterSpec_builder{
+			NodeSets: map[string]*privatev1.ClusterNodeSet{"compute": {}},
+		}.Build())
+		remote.SetStatus(privatev1.ClusterStatus_builder{
+			UpgradeAttemptId: "cluster-id",
+			NodeSets:         map[string]*privatev1.ClusterNodeSetStatus{"compute": {}},
+			UpgradeHistory:   []*privatev1.ClusterUpgradeHistoryEntry{entry},
+		}.Build())
 		syncClusterOrderUpgradeObservationsAt(order, remote, now.Add(9*time.Minute))
 		Expect(entry.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING))
 		syncClusterOrderUpgradeObservationsAt(order, remote, now.Add(10*time.Minute))
 		Expect(entry.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT))
 		Expect(entry.GetMessage()).To(ContainSubstring("progress"))
-		order.Status.NodeRequests[0].UpgradeObservation = &v1alpha1.UpgradeObservation{AttemptID: "compute-id",
+		order.Status.NodeRequests[0].UpgradeObservation = &v1alpha1.UpgradeObservation{AttemptID: "cluster-id",
 			State: v1alpha1.UpgradeObservationSucceeded, Version: "4.17.0"}
 		syncClusterOrderUpgradeObservationsAt(order, remote, now.Add(11*time.Minute))
 		Expect(entry.GetState()).To(Equal(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_TIMED_OUT))
@@ -498,7 +555,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 	It("uses the configured per-node completion timeout", func() {
 		now := time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC)
 		entry := &privatev1.ClusterUpgradeHistoryEntry{}
-		entry.SetAttemptId("compute-id")
+		entry.SetAttemptId("cluster-id")
 		entry.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING)
 		entry.SetAcceptedTime(timestamppb.New(now.Add(-time.Minute)))
 		entry.SetStateTransitionTime(timestamppb.New(now))
@@ -507,9 +564,13 @@ var _ = Describe("upgrade attempt correlation", func() {
 		component.SetNodeSetId("compute")
 		entry.SetComponent(component)
 		remote := privatev1.Cluster_builder{
-			Spec: privatev1.ClusterSpec_builder{NodeSetAttemptIds: map[string]string{"compute": "compute-id"},
-				NodeSets: map[string]*privatev1.ClusterNodeSet{"compute": {}}}.Build(),
-			Status: privatev1.ClusterStatus_builder{UpgradeHistory: []*privatev1.ClusterUpgradeHistoryEntry{entry}}.Build(),
+			Spec: privatev1.ClusterSpec_builder{
+				NodeSets: map[string]*privatev1.ClusterNodeSet{"compute": {}},
+			}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				UpgradeAttemptId: "cluster-id",
+				UpgradeHistory:   []*privatev1.ClusterUpgradeHistoryEntry{entry},
+			}.Build(),
 		}.Build()
 		config := ClusterUpgradeTimeouts{Pending: 2 * time.Minute, ControlPlane: 5 * time.Minute, NodePoolPerNode: 3 * time.Minute}
 		applyUpgradeTimeouts(remote, now.Add(5*time.Minute), config)
@@ -522,7 +583,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 	It("uses the configured pending and control-plane completion timeouts", func() {
 		now := time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC)
 		entry := &privatev1.ClusterUpgradeHistoryEntry{}
-		entry.SetAttemptId("cp-id")
+		entry.SetAttemptId("cluster-id")
 		entry.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING)
 		entry.SetAcceptedTime(timestamppb.New(now))
 		entry.SetStateTransitionTime(timestamppb.New(now))
@@ -530,8 +591,10 @@ var _ = Describe("upgrade attempt correlation", func() {
 		component.SetControlPlane(&emptypb.Empty{})
 		entry.SetComponent(component)
 		remote := privatev1.Cluster_builder{
-			Spec:   privatev1.ClusterSpec_builder{ControlPlaneAttemptId: "cp-id"}.Build(),
-			Status: privatev1.ClusterStatus_builder{UpgradeHistory: []*privatev1.ClusterUpgradeHistoryEntry{entry}}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				UpgradeAttemptId: "cluster-id",
+				UpgradeHistory:   []*privatev1.ClusterUpgradeHistoryEntry{entry},
+			}.Build(),
 		}.Build()
 		config := ClusterUpgradeTimeouts{Pending: 2 * time.Minute, ControlPlane: 5 * time.Minute, NodePoolPerNode: 3 * time.Minute}
 		applyUpgradeTimeouts(remote, now.Add(2*time.Minute), config)
@@ -546,15 +609,17 @@ var _ = Describe("upgrade attempt correlation", func() {
 
 	It("requeues only current attempts awaiting timeout", func() {
 		entry := &privatev1.ClusterUpgradeHistoryEntry{}
-		entry.SetAttemptId("cp-id")
+		entry.SetAttemptId("cluster-id")
 		entry.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING)
 		entry.SetAcceptedTime(timestamppb.Now())
 		component := &privatev1.ClusterUpgradeComponent{}
 		component.SetControlPlane(&emptypb.Empty{})
 		entry.SetComponent(component)
 		remote := privatev1.Cluster_builder{
-			Spec:   privatev1.ClusterSpec_builder{ControlPlaneAttemptId: "cp-id"}.Build(),
-			Status: privatev1.ClusterStatus_builder{UpgradeHistory: []*privatev1.ClusterUpgradeHistoryEntry{entry}}.Build(),
+			Status: privatev1.ClusterStatus_builder{
+				UpgradeAttemptId: "cluster-id",
+				UpgradeHistory:   []*privatev1.ClusterUpgradeHistoryEntry{entry},
+			}.Build(),
 		}.Build()
 		Expect(hasUpgradeAwaitingTimeout(remote)).To(BeTrue())
 		entry.SetState(privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PROGRESSING)
@@ -571,8 +636,8 @@ var _ = Describe("upgrade attempt correlation", func() {
 	It("propagates a removed NodeSet's live NodePool progress", func() {
 		order := newOrder()
 		order.Spec.NodeRequests = order.Spec.NodeRequests[:1]
-		order.Annotations[v1alpha1.UpgradeAttemptIDsAnnotation] = `{"nodeSets":{"compute":"compute-id"}}`
-		pool := newPool("gpu", "gpu-id")
+		order.Annotations[v1alpha1.UpgradeAttemptIDAnnotation] = "new-cluster-id"
+		pool := newPool("gpu", "cluster-id")
 		pool.Status.Conditions = []hypershiftv1beta1.NodePoolCondition{{
 			Type:   hypershiftv1beta1.NodePoolUpdatingVersionConditionType,
 			Status: corev1.ConditionTrue, ObservedGeneration: pool.Generation,
@@ -583,7 +648,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 		component := &privatev1.ClusterUpgradeComponent{}
 		component.SetNodeSetId("gpu")
 		entry := privatev1.ClusterUpgradeHistoryEntry_builder{
-			AttemptId: "gpu-id", Component: component, TargetVersion: "4.18.0",
+			AttemptId: "cluster-id", Component: component, TargetVersion: "4.18.0",
 			State: privatev1.ClusterUpgradeState_CLUSTER_UPGRADE_STATE_PENDING,
 		}.Build()
 		remote := privatev1.Cluster_builder{
@@ -601,7 +666,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 		order.Name = "order"
 		order.Spec.NodeRequests = order.Spec.NodeRequests[:1]
 		order.Status.ClusterReference = &v1alpha1.ClusterOrderClusterReferenceType{Namespace: "cluster-namespace"}
-		pool := newPool("gpu", "gpu-id")
+		pool := newPool("gpu", "cluster-id")
 		pool.Name = "nodepool-order-gpu"
 		pool.Namespace = "cluster-namespace"
 		pool.Labels[osacClusterOrderNameLabel] = order.Name
@@ -613,7 +678,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 		remote := &privatev1.Cluster{}
 		remote.SetSpec(privatev1.ClusterSpec_builder{NodeSets: map[string]*privatev1.ClusterNodeSet{"compute": {}}}.Build())
 		entry := &privatev1.ClusterUpgradeHistoryEntry{}
-		entry.SetAttemptId("gpu-id")
+		entry.SetAttemptId("cluster-id")
 		component := &privatev1.ClusterUpgradeComponent{}
 		component.SetNodeSetId("gpu")
 		entry.SetComponent(component)
@@ -622,7 +687,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 		transitionTime := timestamppb.New(time.Now().Add(-time.Minute))
 		entry.SetStateTransitionTime(transitionTime)
 		status := &privatev1.ClusterStatus{}
-		status.SetNodeSets(map[string]*privatev1.ClusterNodeSet{"compute": {}, "gpu": {}})
+		status.SetNodeSets(map[string]*privatev1.ClusterNodeSetStatus{"compute": {}, "gpu": {}})
 		status.GetNodeSets()["gpu"].SetObservedVersion("4.16.0")
 		status.SetUpgradeHistory([]*privatev1.ClusterUpgradeHistoryEntry{entry})
 		remote.SetStatus(status)
@@ -634,7 +699,7 @@ var _ = Describe("upgrade attempt correlation", func() {
 		Expect(remote.GetStatus().GetNodeSets()).To(HaveKey("gpu"))
 		Expect(entry.GetState()).To(Equal(initialState))
 		order.Status.NodeRequests[1].UpgradeObservation = &v1alpha1.UpgradeObservation{
-			AttemptID: "gpu-id", Version: "4.17.0",
+			AttemptID: "cluster-id", Version: "4.17.0",
 		}
 		syncClusterOrderUpgradeObservations(order, remote)
 		Expect(remote.GetStatus().GetNodeSets()["gpu"].GetObservedVersion()).To(Equal("4.16.0"))

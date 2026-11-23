@@ -1,7 +1,7 @@
 # Non-sensitive seed values for the VMaaS UI tests.
 #
-# The deployment URL and Keycloak credentials must be supplied through
-# OSAC_UI_BASE_URL, OSAC_ADMIN_USERNAME, and OSAC_ADMIN_PASSWORD.
+# Direct Playwright commands use OSAC_UI_BASE_URL and the OSAC_ADMIN_* variables;
+# run-ui-e2e.sh accepts the deployment credentials as command-line parameters.
 
 tenant_name: 'tenant-item-e2e'
 # The break-glass password is replaced with tenant_password, or tenant_name
@@ -29,8 +29,23 @@ instance_type:
   vcpus: 4
   memory_gib: 8
 
+# The resize flow creates this target type after the VM is created and removes
+# it in the project's teardown.
+resize_instance_type:
+  name: 'resize-target-e2e'
+  description: 'Resize target instance type created by e2e test'
+  vcpus: 6
+  memory_gib: 12
+
+# Mixed-direction resize target: more vCPUs and less memory than the base type.
+resize_cpu_up_memory_down_instance_type:
+  name: 'resize-mixed-e2e'
+  description: 'Resize target with increased CPU and decreased memory'
+  vcpus: 5
+  memory_gib: 4
+
 disk_image:
-  # Playwright appends a per-run suffix so teardown only targets this run's image.
+  # The runner appends --instance to resource names for isolated runs.
   name: 'disk-image-e2e'
   source_type: 'Registry'
   source_ref: 'quay.io/containerdisks/fedora:41'

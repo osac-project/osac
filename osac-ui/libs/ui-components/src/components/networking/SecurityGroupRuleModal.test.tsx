@@ -5,13 +5,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Protocol, type SecurityGroup } from '@osac/types';
 
 import { SecurityGroupRuleModal } from './SecurityGroupRuleModal';
-import * as networkingApi from '../../api/v1/networking';
+import * as resourceApi from '../../api/use-resource';
 
-vi.mock('../../api/v1/networking', async (importOriginal) => {
-  const actual = await importOriginal<typeof networkingApi>();
+vi.mock('../../api/use-resource', async (importOriginal) => {
+  const actual = await importOriginal<typeof resourceApi>();
   return {
     ...actual,
-    useUpdateSecurityGroup: vi.fn(),
+    useUpdateResource: vi.fn(),
   };
 });
 
@@ -30,11 +30,11 @@ describe('SecurityGroupRuleModal', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useUpdateResource).mockReturnValue({
       mutateAsync,
       isPending: false,
       error: null,
-    } as unknown as ReturnType<typeof networkingApi.useUpdateSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useUpdateResource>);
   });
 
   it('renders "Add rule" title in add mode', () => {
@@ -86,6 +86,7 @@ describe('SecurityGroupRuleModal', () => {
       object: {
         id: 'sg-1',
         spec: {
+          ingress: [{ protocol: Protocol.TCP, portFrom: 80, portTo: 80, ipv4Cidr: '0.0.0.0/0' }],
           egress: [{ protocol: Protocol.ALL, ipv4Cidr: '10.0.0.0/24' }],
         },
       },
@@ -122,11 +123,129 @@ describe('SecurityGroupRuleModal', () => {
       object: {
         id: 'sg-1',
         spec: {
-          ingress: [{ portFrom: 443, portTo: 443 }],
+          ingress: [{ protocol: Protocol.TCP, portFrom: 443, portTo: 443, ipv4Cidr: '0.0.0.0/0' }],
+          egress: [],
         },
       },
     });
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('prevents dismissal and another save while the update is pending', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    vi.mocked(resourceApi.useUpdateResource).mockReturnValue({
+      mutateAsync,
+      isPending: true,
+      error: null,
+    } as unknown as ReturnType<typeof resourceApi.useUpdateResource>);
+
+    render(
+      <SecurityGroupRuleModal
+        onClose={onClose}
+        securityGroup={securityGroup}
+        direction="ingress"
+        ruleIndex={0}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: /Save/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Cancel/i })).toBeDisabled();
+    await user.keyboard('{Escape}');
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /^Close$/ })).not.toBeInTheDocument();
+  });
+
+  it('calls onClose when Escape is pressed', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+
+    render(
+      <SecurityGroupRuleModal
+        onClose={onClose}
+        securityGroup={securityGroup}
+        direction="ingress"
+        ruleIndex={0}
+      />,
+    );
+
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('keeps an in-flight rule save open when editing becomes unavailable', () => {
+    const onClose = vi.fn();
+    const reason = 'Rules cannot be edited while the security group is updating.';
+    vi.mocked(resourceApi.useUpdateResource).mockReturnValue({
+      mutateAsync,
+      isPending: true,
+      error: null,
+    } as unknown as ReturnType<typeof resourceApi.useUpdateResource>);
+
+    const view = render(
+      <SecurityGroupRuleModal
+        onClose={onClose}
+        securityGroup={securityGroup}
+        direction="ingress"
+        editingDisabledReason={reason}
+        ruleIndex={0}
+      />,
+    );
+    expect(onClose).not.toHaveBeenCalled();
+
+    vi.mocked(resourceApi.useUpdateResource).mockReturnValue({
+      mutateAsync,
+      isPending: false,
+      error: null,
+    } as unknown as ReturnType<typeof resourceApi.useUpdateResource>);
+    view.rerender(
+      <SecurityGroupRuleModal
+        onClose={onClose}
+        securityGroup={securityGroup}
+        direction="ingress"
+        editingDisabledReason={reason}
+        ruleIndex={0}
+      />,
+    );
+
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('keeps the original error visible if a restricted group rejects a pending save', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    const reason = 'Rules cannot be edited while the security group is updating.';
+    const modal = () => (
+      <SecurityGroupRuleModal
+        onClose={onClose}
+        securityGroup={securityGroup}
+        direction="ingress"
+        editingDisabledReason={reason}
+        ruleIndex={0}
+      />
+    );
+
+    vi.mocked(resourceApi.useUpdateResource).mockReturnValue({
+      mutateAsync,
+      isPending: true,
+      error: null,
+    } as unknown as ReturnType<typeof resourceApi.useUpdateResource>);
+    const view = render(modal());
+
+    const message = 'Security group is being updated. Try again after it is ready.';
+    vi.mocked(resourceApi.useUpdateResource).mockReturnValue({
+      mutateAsync,
+      isPending: false,
+      error: new Error(message),
+    } as unknown as ReturnType<typeof resourceApi.useUpdateResource>);
+    view.rerender(modal());
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(message, { exact: true })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Port From/i)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /^Close$/ }));
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it('rejects semantically invalid IPv4 CIDR 999.555.666.777/99 (OSAC-3899)', async () => {

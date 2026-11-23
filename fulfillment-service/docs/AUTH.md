@@ -391,8 +391,9 @@ and tenant concepts.
 
 ### Subject Resolution
 
-The mapping from authentication details to the fulfillment service's internal `user` and `tenants`
-fields is performed by the service's built-in authentication and authorization interceptors.
+The fulfillment service's authentication and authorization interceptors set the subject's
+`user`, home `tenant`, and set of visible tenants (`tenants`). Tenancy logic adds `shared`
+to the visible tenants separately.
 
 For JWT-authenticated users, the `user` is taken from the `preferred_username` claim (falling back
 to `username` if not present). The `tenants` are resolved from the **`organization` claim** (from
@@ -400,18 +401,24 @@ Keycloak Organizations when the user belongs to an organization). This claim can
 - Array format: `["org-name"]`
 - Object format: `{"org-name": {"groups": [...]}}`
 
+For tenant users and tenant admins, a single Keycloak organization also identifies the home
+`tenant`. The home tenant is unset for anonymous callers and for tenant users or tenant
+admins without an unambiguous organization.
+
 Tenant-scoped service-account client-credentials tokens use `client_id` as the subject username and
-the single `osac_tenant` claim as the tenant. The controller configures these claims on each
-service-account client. OAuth client tokens without `osac_tenant` do not receive this fallback.
+use the tenant of the resolved Fulfillment service account as the home tenant. The controller
+configures `client_id` and `osac_tenant` claims on each service-account client. OAuth client tokens
+without `osac_tenant` do not receive this fallback.
 
 JWT users without an `organization` claim will have an empty tenant list and **cannot create objects**
 (they can only view objects in the `shared` tenant).
 
-For Kubernetes service accounts, the namespace is used as the tenant and the short service account
-name as the user.
+For non-admin Kubernetes service accounts, the namespace is used as the tenant and the short
+service account name as the user.
 
 For admin users (those matching `emergency_service_accounts`, `admin_service_accounts`, or
-`admin_groups`), the tenants are set to `["*"]` (universal), granting visibility to all tenants.
+`admin_groups`), the home tenant is `system` and `tenants` is set to `["*"]` (universal), granting
+visibility to all tenants. The legacy platform CSI client is also attributed to `system`.
 
 The authorization rules are implemented via the built-in Rego policy in the gRPC authorization
 interceptor.
@@ -757,8 +764,8 @@ The authorization system enforces several additional constraints beyond role-bas
 - **Fallback:** If user doesn't exist in database, creator = username (for service accounts)
 - **System Attribution:** Private API uses `"system"` as creator for all objects
 - **JIT Provisioning:** Regular users are automatically provisioned on first
-  access if they have exactly one tenant (excluding system/shared tenants).
-  Cloud Provider Admins with multiple tenants are excluded from this interceptor.
+  access in their home tenant. Provisioning is skipped for managed service accounts
+  and for subjects whose home tenant is unknown, `system`, or `shared`.
 
 The JIT provisioning interceptor (`grpc_jit_provisioning_interceptor.go`) runs after authentication and authorization, creating user records in the database for users who have been granted access.
 

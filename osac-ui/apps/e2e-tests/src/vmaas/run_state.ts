@@ -9,7 +9,12 @@ export interface VmaasFullFlowRunState {
   storageTierTestRunId: string;
 }
 
-const runStateFile = path.join(tmpdir(), 'osac-vmaas-full-flow-state.json');
+const testInstance = process.env.OSAC_E2E_INSTANCE ?? '1';
+if (!/^[0-9]+$/.test(testInstance)) {
+  throw new Error('OSAC_E2E_INSTANCE must be a non-negative integer.');
+}
+
+const runStateFile = path.join(tmpdir(), `osac-vmaas-full-flow-state-${testInstance}.json`);
 const runIdPattern = /^[a-z0-9]{1,32}$/i;
 
 const validateRunState = (value: unknown): VmaasFullFlowRunState => {

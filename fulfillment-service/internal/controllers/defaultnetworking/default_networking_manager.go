@@ -444,7 +444,9 @@ func (m *manager) ensureExternalIP(ctx context.Context, tenantName string) (*pri
 				Labels: map[string]string{defaultLabel: "true"},
 			}.Build(),
 			Spec: privatev1.ExternalIPSpec_builder{
-				Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetId()}.Build(),
+				Pool: privatev1.ExternalIPPoolReference_builder{
+					Id: pool.GetId(), Tenant: pool.GetMetadata().GetTenant(),
+				}.Build(),
 			}.Build(),
 		}.Build()
 		created, err = m.externalIPs.Create(ctx, privatev1.ExternalIPsCreateRequest_builder{Object: object}.Build())

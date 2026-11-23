@@ -19,15 +19,22 @@ import {
 } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
-import { type NATGateway, SecurityGroups, Subnets, VirtualNetworkState } from '@osac/types';
+import {
+  type NATGateway,
+  SecurityGroups,
+  Subnets,
+  VirtualNetworkState,
+  VirtualNetworks,
+} from '@osac/types';
 import CreateButton from '@osac/ui-components/components/Primitives/CreateButton.tsx';
+import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
+import DeleteResourceModal from '@osac/ui-components/components/Resource/DeleteResourceModal';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField.tsx';
 
+import { useDeleteResource, useGetResource, useListResource } from '../../api/use-resource';
 import {
+  isDefaultNetworkingResource,
   useNatGateway,
-  useSecurityGroups,
-  useSubnets,
-  useVirtualNetwork,
   virtualNetworkScopeFilter,
 } from '../../api/v1/networking';
 import { DetachNatGatewayModal } from '../../components/networking/DetachNatGatewayModal';
@@ -42,6 +49,7 @@ import ListPageBody from '../../components/Page/ListPageBody';
 import { SubtleContent } from '../../components/SubtleContent/SubtleContent';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
+import { defaultResourceDeleteReason } from '../../utils/networking';
 
 export const VirtualNetworkDetailPage = () => {
   const { t } = useTranslation();
@@ -49,23 +57,28 @@ export const VirtualNetworkDetailPage = () => {
   const { id = '' } = useParams<{ id: string }>();
   const [isSubnetModalOpen, setIsSubnetModalOpen] = useState(false);
   const [isSecurityGroupModalOpen, setIsSecurityGroupModalOpen] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [detachTarget, setDetachTarget] = useState<NATGateway>();
 
-  const { data: vn, isLoading, error } = useVirtualNetwork(id);
+  const { data: vnResponse, isLoading, error } = useGetResource(VirtualNetworks, { id });
+  const vn = vnResponse?.object;
+  const deleteVirtualNetwork = useDeleteResource(VirtualNetworks);
   const {
-    data: subnets = [],
+    data: subnetsResponse,
     isLoading: isLoadingSubnets,
     error: subnetsError,
-  } = useSubnets({
+  } = useListResource(Subnets, {
     filter: virtualNetworkScopeFilter(id),
   });
+  const subnets = subnetsResponse?.items ?? [];
   const {
-    data: securityGroups = [],
+    data: securityGroupsResponse,
     isLoading: isLoadingSecurityGroups,
     error: securityGroupsError,
-  } = useSecurityGroups({
+  } = useListResource(SecurityGroups, {
     filter: virtualNetworkScopeFilter(id),
   });
+  const securityGroups = securityGroupsResponse?.items ?? [];
   const {
     natGateway,
     natAddress,
@@ -75,12 +88,25 @@ export const VirtualNetworkDetailPage = () => {
 
   const vnName = vn?.metadata?.name ?? id;
   const isFailed = vn?.status?.state === VirtualNetworkState.FAILED;
+  const isDefault = isDefaultNetworkingResource(vn);
+  const canDelete = Boolean(vn) && !isDefault;
 
   return (
     <>
       <ListPage
         title={vnName}
         description={t('View the virtual network configuration and related resources.')}
+        actions={
+          <DeleteResourceButton
+            canDelete={canDelete}
+            disabledReason={isDefault ? defaultResourceDeleteReason(t) : undefined}
+            onClick={() => {
+              if (canDelete) {
+                setIsDeleteModalOpen(true);
+              }
+            }}
+          />
+        }
         breadcrumb={
           <Breadcrumb>
             <BreadcrumbItem>
@@ -174,7 +200,10 @@ export const VirtualNetworkDetailPage = () => {
                           {subnets.map((subnet) => (
                             <Tr key={subnet.id}>
                               <Td dataLabel="Name">
-                                <ResourceNameField resource={subnet} />
+                                <ResourceNameField
+                                  resource={subnet}
+                                  detailsUrl={`/networking/subnets/${subnet.id}`}
+                                />
                               </Td>
                               <Td dataLabel="Status">
                                 <SubnetStatusLabel state={subnet.status?.state} />
@@ -286,6 +315,20 @@ export const VirtualNetworkDetailPage = () => {
         <DetachNatGatewayModal
           natGateway={detachTarget}
           onClose={() => setDetachTarget(undefined)}
+        />
+      )}
+
+      {isDeleteModalOpen && canDelete && (
+        <DeleteResourceModal
+          resourceName={vnName}
+          label={t(
+            'This will permanently delete the virtual network. This action cannot be undone. Remove all dependent resources first.',
+          )}
+          errorLabel={t('Failed to delete virtual network')}
+          onClose={() => setIsDeleteModalOpen(false)}
+          onSuccess={() => navigate('/networking/virtual-networks')}
+          mutation={deleteVirtualNetwork}
+          variables={{ id }}
         />
       )}
     </>

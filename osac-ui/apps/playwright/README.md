@@ -9,6 +9,11 @@ and no way to run this hermetically — it exists for AI agents to manually conf
 change actually works end-to-end against a real deployment, the way you'd
 otherwise do by hand in a browser.
 
+The committed UI journeys live in
+[`apps/e2e-tests/README.md`](../e2e-tests/README.md). Read that guide when
+adding a new non-VMaaS test; this document focuses on running the browser
+harness and the existing VMaaS flows.
+
 ## Prerequisites
 
 - A reachable `osac-ui` deployment (any HTTPS URL that serves it).
@@ -51,12 +56,27 @@ the browser flow starts.
 bash apps/e2e-tests/run_scripts/prepare-setup-for-ui-run.sh \
   --osac-ui-dir="$PWD" --kubeconfig="${KUBECONFIG:-}"
 
-export OSAC_UI_BASE_URL=https://... OSAC_ADMIN_USERNAME=<keycloak-user>
-read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD && printf '\n'
-bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
-  --osac-ui-dir="$PWD" --tag=vmaas_all
-unset OSAC_ADMIN_PASSWORD
+(
+  set -o pipefail
+  bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
+    --osac-ui-dir="$PWD" \
+    --tag=vmaas_all \
+    --instance=1 \
+    --admin-user=admin \
+    --admin-password='YOUR_ADMIN_PASSWORD' \
+    --allow-root-e2e \
+    --ignore-tls \
+    --reporter=line 2>&1 | tee vmaas-flow-1.log
+  status=${PIPESTATUS[0]}
+  exit "$status"
+)
 ```
+
+Replace `YOUR_ADMIN_PASSWORD` before running; the command does not prompt for
+input. The live output is saved to `vmaas-flow-1.log`.
+
+The default HTML reporter does not show the full live test log in the terminal.
+Add `--reporter=line` to the runner command for live progress and test output.
 
 The preparation helper installs Node.js, npm, pnpm, Playwright dependencies,
 and Chromium. It installs `openshift-clients` when possible, validates the
@@ -66,11 +86,16 @@ VMaaS capacity preflight. A capacity failure means the cluster needs more
 allocatable memory/CPU or the configured instance type must be reduced; the
 script never changes cluster sizing automatically. The runner accepts the flow
 tags listed below, validates the deployment and VMaaS prerequisites, and keeps
-run-time credentials outside the setup step. The runner requires the admin
-password through `OSAC_ADMIN_PASSWORD` or `--admin-password-file=PATH` and does
-not print it. For VMaaS flows, the runner also authenticates the OSAC CLI for
-the duration of the run using the same credentials; temporary CLI files are
-removed on exit.
+run-time credentials outside the setup step. Pass the admin credentials with
+`--admin-user=USER` and `--admin-password=PASSWORD`; the username defaults to
+`admin`. The runner requires the password command-line option even when
+`OSAC_ADMIN_PASSWORD` is set in the environment, and never prompts for input.
+A missing password stops the run with a fix instruction. For VMaaS flows, the
+runner also authenticates the OSAC CLI for the duration of the run using the
+same credentials; temporary CLI files are removed on exit.
+`--instance=INDEX` defaults to `1` and appends the index
+to every VMaaS resource name, allowing isolated runs such as
+`tenant-item-e2e-1` and `tenant-item-e2e-2`.
 
 If the CLI is not already installed, provide a stable fulfillment-service
 version to download it, or pass an existing binary:
@@ -90,8 +115,15 @@ Environment variables:
 | `OSAC_UI_BASE_URL`    | Full URL of the `osac-ui` deployment to test, e.g. `https://osac-ui-<namespace>.<cluster-domain>` |
 | `OSAC_API_BASE_URL`   | Optional Fulfillment API URL; auto-discovered from the `fulfillment-api` route when possible      |
 | `OSAC_CLI_PATH`       | Optional path to the `osac` binary; the runner also checks `~/.local/bin/osac`                    |
+| `OSAC_E2E_INSTANCE`   | Optional resource-name index for direct Playwright commands; defaults to `1`                      |
 | `OSAC_ADMIN_USERNAME` | Username of the Keycloak admin test user on that deployment's realm                               |
 | `OSAC_ADMIN_PASSWORD` | Password for the admin test user                                                                  |
+
+When `OSAC_UI_BASE_URL` is unset, the runner reads the `osac-ui` route from
+the standard kubeconfig locations or derives the standard route from the
+kubeconfig API server. When `OSAC_API_BASE_URL` is unset, it reads the
+`fulfillment-api` route or derives it from a standard `osac-ui-...` route name.
+Set either URL explicitly for deployments that use different routes.
 
 ```bash
 export OSAC_UI_BASE_URL=https://... OSAC_ADMIN_USERNAME=...
@@ -200,9 +232,21 @@ The full-flow projects run in this order:
 5. `tenant-delete` removes the tenant-admin RoleBinding and OSAC User, SSH
    public-key Secret, tenant, generated credential file, and full-flow state.
 
-`vmaas-all-full-flows` is the aggregator for complete VMaaS flows. It currently
-depends on `vmaas_full_happy_basic`; add future full-flow projects to its
-dependencies in `playwright.config.ts`.
+`vmaas-all-full-flows` is the aggregator for complete VMaaS flows. It depends
+on `vmaas_full_happy_basic` and `vmaas-full-resize`; add future full-flow
+projects to its dependencies in `playwright.config.ts`.
+
+The VM power-actions test (`lifecycle.vm.spec.ts`, project
+`vm-flow-power-actions`) is not part of the happy flow. It stops, starts, and
+restarts the VM from its details page as the tenant admin, checks the success
+alert, the status, and which power buttons are enabled after each action, and
+confirms through the CLI that the controller processed the restart. Select it
+with a `run-ui-e2e.sh` flow tag:
+
+- `create_vm_power` runs the creation flow and the power actions and keeps the
+  resources for `delete_vm` or `delete_pre-resources`.
+- `full_vm_power` also deletes the VM and every resource afterwards through the
+  `vm-flow` and resource teardowns.
 
 Run the complete creation flow, including VM creation, with:
 
@@ -223,8 +267,9 @@ deletion runs first. The resource cleanup and tenant deletion run only after
 that VM cleanup succeeds.
 
 The creation command stores the non-secret run IDs in
-`/tmp/osac-vmaas-full-flow-state.json`. The deletion-only command reuses those
-IDs and must run on the same host. They expect the VM, generated tenant
+`/tmp/osac-vmaas-full-flow-state-<instance>.json`. The deletion-only command
+reuses those IDs and must run on the same host with the same `--instance`
+value. They expect the VM, generated tenant
 credentials, and full-flow resources to already exist. If the creation run
 failed, the state file remains available for cleanup. VM deletion is
 idempotent when the tenant VM list is already empty; a different VM in the
@@ -242,7 +287,7 @@ OSAC_VM_FLOW_MODE=full pnpm --filter @osac/playwright exec playwright test \
 
 The flow uses the same values from `apps/e2e-tests/extravars.yaml` as the
 individual create projects. The catalog item uses the configured template and
-the per-run instance type and disk image created by the resource project. The
+the instance-indexed instance type and disk image created by the resource project. The
 runner stops after the first failure, including a preflight failure because a
 resource already exists, so the remaining flow steps are not started. Use
 `--headed` when a graphical display is available:
@@ -252,15 +297,44 @@ pnpm --filter @osac/playwright exec playwright test \
   --project=vm-flow --headed
 ```
 
+### VM resize flow tests
+
+The resize flow reuses the existing `vmaas-full-flow-pre-resource` project for
+its base instance type, disk image, storage tier, tenant, and published catalog
+item. The resize spec creates its target and mixed-direction instance types in
+`beforeAll`, creates a fresh, resize-specific VM at the start of each scenario,
+and deletes that VM in `afterEach`. The existing full-flow teardown chain cleans
+up the shared resources after the resize project finishes.
+
+The scenario is in
+`apps/e2e-tests/src/vmaas/resize/resize.vm.spec.ts` and uses the test-plan
+names `TC-NFR1-01` and `TC-FR1-02`. The first verifies that a running VM reports
+`RESTART REQUIRED=True` after Save and applies the new sizing only after
+Restart. The second resizes a stopped VM, starts it, and verifies the new
+mixed-direction sizing for `TC-FR2-02`.
+
+Run it with:
+
+```bash
+bash apps/e2e-tests/run_scripts/run-ui-e2e.sh \
+  --osac-ui-dir="$PWD" --tag=vmaas_resize
+```
+
+The same flow can be run directly after the common runner preparation:
+
+```bash
+pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-full-resize
+```
+
 ### Storage tier flow tests
 
 The Storage tier specs read `storage_tier.name`, `description`, `backend`, and
 `protocol` from `apps/e2e-tests/extravars.yaml`. The configured backend must
 already exist. The create test checks that it is Ready and uses the `lvms`
 provider on Storage Backends, then verifies that it is selectable in the create
-form. Each run appends a unique suffix to `storage_tier.name`. Set
-`OSAC_STORAGE_TIER_TEST_RUN_ID` to a stable 1–32 character alphanumeric value
-when you need the same suffix across separate commands.
+form. The runner appends `--instance=INDEX` to `storage_tier.name`; use the
+same instance value for separate create and delete commands.
 
 The project run has two steps:
 
@@ -288,7 +362,7 @@ both commands. The specs check `storage_tier.name` and skip if it is unset;
 they do not use `tenant_name` or create or delete a tenant:
 
 ```bash
-export OSAC_STORAGE_TIER_TEST_RUN_ID=mytest123
+export OSAC_E2E_INSTANCE=1
 
 pnpm --filter @osac/playwright exec playwright test \
   create.storage_tier.spec.ts --project=storage-tier --no-deps
@@ -300,8 +374,8 @@ pnpm --filter @osac/playwright exec playwright test \
 The `--no-deps` option skips the create project's automatic teardown, so the
 explicit delete project runs after the separate create command. The delete
 test creates the configured tier from `extravars.yaml` if it is absent, then
-deletes the tier identified by that run ID. Use the same
-`OSAC_STORAGE_TIER_TEST_RUN_ID` to target a tier from an interrupted run.
+deletes the tier identified by the instance-indexed name. Use the same
+`OSAC_E2E_INSTANCE` to target a tier from an interrupted run.
 
 ### Disk image flow tests
 
@@ -337,10 +411,9 @@ finishes, including when the lifecycle test fails. To run only the delete
 project, use `--project=disk-image-delete --no-deps`. If the configured
 image is absent, the delete test creates it from `extravars.yaml` and then
 deletes it.
-Each run appends a unique suffix to `disk_image.name`, and the full name appears
-in the test title. To clean up an interrupted run, set
-`OSAC_DISK_IMAGE_TEST_RUN_ID` to that run's suffix when invoking the delete
-project.
+The runner appends `--instance=INDEX` to `disk_image.name`, and the full name
+appears in the test title. Use the same instance value to clean up an
+interrupted run.
 
 ### Instance type flow tests
 
@@ -348,7 +421,8 @@ The instance type tests read their hard-coded test data from
 `apps/e2e-tests/extravars.yaml`. Change the `instance_type` values there before
 running the flow if you need a different name, description, vCPU/memory values,
 or GPU configuration. The specs skip if `instance_type.name` is unset. The
-create test fails clearly if that instance type already exists.
+create test fails clearly if that instance type already exists. The runner
+appends `--instance=INDEX` to the configured instance type name.
 
 The tests run in this dependency order:
 
@@ -409,6 +483,8 @@ The catalog flow uses the admin UI wizard to create and publish the catalog
 item, then verifies it on the Catalog page. Deletion opens the item details
 page and uses its confirmation dialog. Set `OSAC_UI_BASE_URL`,
 `OSAC_ADMIN_USERNAME`, and `OSAC_ADMIN_PASSWORD` before running the tests.
+The runner appends `--instance=INDEX` to the catalog, instance type, and disk
+image names used by this flow.
 
 The catalog configuration is in `apps/e2e-tests/extravars.yaml`:
 

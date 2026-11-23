@@ -117,9 +117,30 @@ describe('AppShell', () => {
   });
 
   it.each([
-    { path: '/catalog/vm/item-1', title: 'VM catalog item not found' },
-    { path: '/catalog/cluster/item-1', title: 'Cluster catalog item not found' },
-    { path: '/catalog/bm/item-1', title: 'Bare metal catalog item not found' },
+    '/catalog/vms/item-1/launch',
+    '/catalog/clusters/item-1/launch',
+    '/catalog/bare-metal/item-1/launch',
+  ])('does not register catalog launch route for admin: %s', async (path) => {
+    renderAppShell(path, 'admin');
+
+    expect(await screen.findByRole('heading', { name: 'Tenants' })).toBeInTheDocument();
+  });
+
+  it.each(['tenant-admin', 'tenant-user'] as const)(
+    'registers the VM catalog launch route for %s',
+    async (role) => {
+      renderAppShell('/catalog/vms/item-1/launch', role);
+
+      expect(
+        await screen.findByRole('heading', { name: 'VM catalog item not found' }),
+      ).toBeInTheDocument();
+    },
+  );
+
+  it.each([
+    { path: '/catalog/vms/item-1', title: 'VM catalog item not found' },
+    { path: '/catalog/clusters/item-1', title: 'Cluster catalog item not found' },
+    { path: '/catalog/bare-metal/item-1', title: 'Bare metal catalog item not found' },
   ])('routes $path to its resource-specific catalog detail page', async ({ path, title }) => {
     renderAppShell(path);
 
@@ -139,6 +160,26 @@ describe('AppShell', () => {
     },
     {
       path: '/bare-metal/instance-1',
+      service: ServiceTier.BMAAS,
+      label: 'Bare Metal',
+    },
+    {
+      path: '/catalog/vms',
+      service: ServiceTier.VMAAS,
+      label: 'Virtual Machine',
+    },
+    {
+      path: '/catalog/vms/item-1',
+      service: ServiceTier.VMAAS,
+      label: 'Virtual Machine',
+    },
+    {
+      path: '/catalog/clusters/item-1/launch',
+      service: ServiceTier.CAAS,
+      label: 'Cluster',
+    },
+    {
+      path: '/catalog/bare-metal',
       service: ServiceTier.BMAAS,
       label: 'Bare Metal',
     },

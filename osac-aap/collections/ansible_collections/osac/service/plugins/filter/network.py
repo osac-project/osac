@@ -1,7 +1,10 @@
 import ipaddress
+from collections.abc import Callable
 
 
-def next_available_ip(cidr, allocated_ips):
+def next_available_ip(
+    cidr: str, allocated_ips: dict[str, str] | list[str]
+) -> str | None:
     """Returns the first available host IP in a CIDR range.
 
     Iterates through the CIDR lazily and returns the first IP not present
@@ -20,13 +23,11 @@ def next_available_ip(cidr, allocated_ips):
     for ip in network.hosts():
         if str(ip) not in used:
             return str(ip)
-    raise Exception(
-        "No available IPs in %s. All %d host addresses are allocated." % (cidr, len(used))
-    )
+    return None
 
 
 class FilterModule:
-    def filters(self):
+    def filters(self) -> dict[str, Callable[..., str | None]]:
         return {
             "next_available_ip": next_available_ip,
         }

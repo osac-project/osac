@@ -50,7 +50,7 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-tenant-config-test-csi-wiring"
+        name: "vast-tenant-config-test-csi-wiring-be-test"
         namespace: "osac-system"
 
     - name: Clear override log
@@ -131,7 +131,7 @@
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Secret
-        name: "vast-tenant-config-test-csi-wiring"
+        name: "vast-tenant-config-test-csi-wiring-be-test"
         namespace: "osac-system"
       register: _hub_secret
 
@@ -140,7 +140,7 @@
         that:
           - _hub_secret.resources | length == 1
         fail_msg: >-
-          Hub Secret 'vast-tenant-config-test-csi-wiring' was not created -- the real
+          Hub Secret 'vast-tenant-config-test-csi-wiring-be-test' was not created -- the real
           storage_provider dispatch that runs after the stubbed csi_driver_install step
           did not complete successfully.
         success_msg: "storage_provider's real dispatch succeeded immediately after the stubbed csi_driver_install step"
@@ -150,7 +150,7 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-tenant-config-test-csi-wiring"
+        name: "vast-tenant-config-test-csi-wiring-be-test"
         namespace: "osac-system"
 
     - name: Delete override log

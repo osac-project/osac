@@ -173,6 +173,7 @@ func (r *UpdateRequest[O]) do(ctx context.Context) (response *UpdateResponse[O],
 
 	// Prepare the result:
 	object := r.cloneObject(r.object)
+	canonicalizeSharedTenantSelectors(object.ProtoReflect())
 	metadata = r.makeMetadata(makeMetadataArgs{
 		creationTs:  creationTs,
 		deletionTs:  deletionTs,

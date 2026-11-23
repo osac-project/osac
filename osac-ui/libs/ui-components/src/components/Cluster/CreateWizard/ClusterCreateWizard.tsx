@@ -4,7 +4,7 @@ import { PageSection, PageSectionTypes, Wizard, WizardStep } from '@patternfly/r
 import { Formik } from 'formik';
 
 import { ClusterCatalogItem, ClusterCatalogItems, Clusters } from '@osac/types';
-import { useCreateResource, useGetResource } from '@osac/ui-components/api/use-resource';
+import { useCreateResource } from '@osac/ui-components/api/use-resource';
 import { FieldValidationProvider } from '@osac/ui-components/components/Form/FieldValidationContext';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
 import { CatalogStep } from '@osac/ui-components/components/ProvisioningWizard/CatalogStep';
@@ -20,22 +20,28 @@ import { buildClusterCreatePayload } from './payload';
 import { type ClusterWizardStepId, buildClusterStepSchema } from './schemas';
 
 interface Props {
-  initialCatalogItemId?: string;
+  /** Catalog item snapshot for a catalog-origin launch; omit for list-origin creation. */
+  catalogItem?: ClusterCatalogItem;
   onClosed: () => void;
 }
 
-const ClusterCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
+const ClusterCreateWizard = ({ catalogItem, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const provision = useCreateResource(Clusters);
-  const catalogItemQuery = useGetResource(
-    ClusterCatalogItems,
-    { id: initialCatalogItemId ?? '' },
-    { enabled: Boolean(initialCatalogItemId) },
+  const [selectedCatalogItem, setSelectedCatalogItem] = useState(catalogItem);
+  const includeCatalogStep = !catalogItem;
+  const [activeStep, setActiveStep] = useState<ClusterWizardStepId>(
+    includeCatalogStep ? 'catalog' : 'general',
   );
-  const [activeStep, setActiveStep] = useState<ClusterWizardStepId>('catalog');
   const [validationAlert, setValidationAlert] = useState(false);
-  const steps = ['catalog', 'general', 'configuration', 'networking', 'review'] as const;
+  const steps: ClusterWizardStepId[] = [
+    ...(includeCatalogStep ? (['catalog'] as const) : []),
+    'general',
+    'configuration',
+    'networking',
+    'review',
+  ];
   const stepLabels: Record<ClusterWizardStepId, string> = {
     catalog: t('Catalog item'),
     general: t('General'),
@@ -59,8 +65,8 @@ const ClusterCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
   );
 
   const initialValues = useMemo(
-    () => getInitialFormValues(catalogItemQuery.data?.object),
-    [catalogItemQuery.data?.object],
+    () => getInitialFormValues(selectedCatalogItem),
+    [selectedCatalogItem],
   );
 
   const schema = useMemo(() => buildClusterStepSchema(activeStep, t), [activeStep, t]);
@@ -97,11 +103,11 @@ const ClusterCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
           >
             {steps.map((step) => (
               <WizardStep key={step} id={step} name={stepLabels[step]}>
-                {step === 'catalog' && (
+                {includeCatalogStep && step === 'catalog' && (
                   <CatalogStep<ClusterCatalogItem, ClusterWizardValues>
                     catalogService={ClusterCatalogItems}
-                    isInitializing={Boolean(initialCatalogItemId) && catalogItemQuery.isPending}
                     getInitialFormValues={getInitialFormValues}
+                    onCatalogItemSelected={setSelectedCatalogItem}
                   />
                 )}
                 {step === 'general' && <ClusterGeneralStep />}

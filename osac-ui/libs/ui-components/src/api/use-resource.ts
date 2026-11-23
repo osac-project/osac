@@ -100,7 +100,6 @@ export const useListResource = <
   service: ResourceService<'list', Input, Output>,
   request: MessageInitShape<Input> = create(service.method.list.input),
   options: ResourceQueryOptions<Output, SelectedData> = {},
-  select?: (data: MessageShape<Output>) => SelectedData,
 ) => {
   const client = useApiFetch(service);
   const listRequest = create(service.method.list.input, request);
@@ -109,7 +108,6 @@ export const useListResource = <
     ...options,
     queryKey: [service.typeName, 'list', request],
     queryFn: () => client.list(listRequest),
-    select,
     placeholderData: keepPreviousData,
   });
 };
@@ -184,7 +182,10 @@ export const useUpdateResource = <Input extends DescMessage, Output extends Desc
 
   return useMutation({
     ...options,
-    mutationFn: (request) => client.update(buildUpdateRequest(service, request)),
+    mutationFn: (request) => {
+      const updateRequest = buildUpdateRequest(service, request);
+      return client.update(updateRequest);
+    },
     onSuccess: async (...args) => {
       await queryClient.invalidateQueries({ queryKey: [service.typeName] });
       await options.onSuccess?.(...args);

@@ -1,14 +1,27 @@
 import React, { type ReactNode, createElement, useState } from 'react';
+import { initReactI18next } from 'react-i18next';
 import { create } from '@bufbuild/protobuf';
-import { type Transport, createRouterTransport } from '@connectrpc/connect';
+import {
+  Code,
+  ConnectError,
+  type Interceptor,
+  type Transport,
+  createRouterTransport,
+} from '@connectrpc/connect';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
+import i18n from 'i18next';
 import { describe, expect, it, vi } from 'vitest';
 
-import { IdentityProviderSchema, IdentityProviders } from '@osac/types';
+import {
+  ComputeInstances,
+  type ComputeInstancesUpdateRequest,
+  IdentityProviderSchema,
+  IdentityProviders,
+} from '@osac/types';
 import { TenantSchema, Tenants } from '@osac/types/private';
 
-import { ApiProvider } from './api-context';
+import { ApiProvider, connectErrorInterceptor } from './api-context';
 import {
   useCreateResource,
   useDeleteResource,
@@ -18,6 +31,15 @@ import {
   useUpdateResource,
 } from './use-resource';
 import { createMockConnectTransport } from '../test-utils/createMockConnectTransport';
+import { UnauthorizedError } from '../utils/unauthorizedError';
+
+i18n.use(initReactI18next).init({
+  initImmediate: false,
+  lng: 'en',
+  fallbackLng: 'en',
+  resources: { en: { translation: {} } },
+  interpolation: { escapeValue: false },
+});
 
 const makeTenant = (id: string) =>
   create(TenantSchema, {
@@ -78,21 +100,21 @@ describe('resource queries', () => {
       () => {
         const [filter, setFilter] = useState('first');
         return {
-          query: useListResource(Tenants, { filter }, {}, (reply) => reply.items),
+          query: useListResource(Tenants, { filter }, {}),
           setFilter,
         };
       },
       { wrapper },
     );
 
-    await waitFor(() => expect(result.current.query.data?.[0]?.id).toBe('first'));
+    await waitFor(() => expect(result.current.query.data?.items[0]?.id).toBe('first'));
     act(() => result.current.setFilter('next'));
 
     await waitFor(() => expect(result.current.query.isPlaceholderData).toBe(true));
-    expect(result.current.query.data?.[0]?.id).toBe('first');
+    expect(result.current.query.data?.items[0]?.id).toBe('first');
 
     act(() => releaseNext?.());
-    await waitFor(() => expect(result.current.query.data?.[0]?.id).toBe('next'));
+    await waitFor(() => expect(result.current.query.data?.items[0]?.id).toBe('next'));
   });
 
   it('fetches every page only when requested and keeps normal list queries separate', async () => {
@@ -237,6 +259,52 @@ describe('resource queries', () => {
 });
 
 describe('resource mutations', () => {
+  it('sends an allowed narrow workload update with its exact mask', async () => {
+    let received: ComputeInstancesUpdateRequest | undefined;
+    const transport = createRouterTransport((router) => {
+      router.service(ComputeInstances, {
+        update: (request) => {
+          received = request;
+          return { object: request.object };
+        },
+      });
+    });
+    const onSuccess = vi.fn();
+    const { wrapper, queryClient } = makeWrapper(transport);
+    const listKey = [ComputeInstances.typeName, 'list', {}] as const;
+    queryClient.setQueryData(listKey, { items: [] });
+    const { result } = renderHook(() => useUpdateResource(ComputeInstances, { onSuccess }), {
+      wrapper,
+    });
+
+    const response = await result.current.mutateAsync({
+      object: { id: 'vm-1', spec: { instanceType: { id: 'standard-4-8' } } },
+      updateMask: { paths: ['spec.instance_type'] },
+    });
+
+    expect(response.object?.id).toBe('vm-1');
+    expect(received?.object?.spec?.instanceType?.id).toBe('standard-4-8');
+    expect(received?.updateMask?.paths).toEqual(['spec.instance_type']);
+    expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true);
+    expect(onSuccess).toHaveBeenCalled();
+  });
+
+  it('converts an unauthenticated response to UnauthorizedError', async () => {
+    const terminal = vi.fn(() =>
+      Promise.reject(new ConnectError('session expired', Code.Unauthenticated)),
+    );
+    const chained = connectErrorInterceptor(
+      terminal as unknown as Parameters<Interceptor>[0],
+    ) as unknown as (request: unknown) => Promise<unknown>;
+
+    await expect(
+      chained({
+        service: { typeName: ComputeInstances.typeName },
+        method: { name: 'Update' },
+      }),
+    ).rejects.toBeInstanceOf(UnauthorizedError);
+  });
+
   it('calls create, update, and delete and invalidates every query for the service', async () => {
     const transport = createMockConnectTransport();
     const { wrapper, queryClient } = makeWrapper(transport);

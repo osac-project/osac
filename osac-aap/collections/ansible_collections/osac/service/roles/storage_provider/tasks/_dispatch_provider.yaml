@@ -1,13 +1,13 @@
 ---
-# Thin wrapper for per-provider dispatch. Called via include_tasks with loop
-# because Ansible does not support loop: on include_role directly.
+# Thin wrapper for per-(provider, backend_id) dispatch. Called via include_tasks
+# with loop because Ansible does not support loop: on include_role directly.
 #
 # Receives from caller (via loop_var or set_fact):
-#   _current_provider  — the provider name for this iteration (e.g. 'vast')
+#   _current_pair      — dict with 'provider' and 'backend_id' for this iteration
 #   _dispatch_action   — task file to invoke (setup, ensure_storage_class, teardown_cluster_storage, teardown_backend)
 #
 # Uses from play scope:
-#   _storage_provider_tiers              — full tier list, qos_policy-defaulted (filtered here per provider)
+#   _storage_provider_tiers              — full tier list, qos_policy-defaulted (filtered here per provider and backend_id)
 #   storage_provider_backend_connections — backend connection details keyed by backend_id,
 #                                          filtered here to only the backend_id(s) referenced
 #                                          by this provider's dispatched tiers, so a role never
@@ -24,28 +24,50 @@
 #   _remote_kubeconfig_insecure          — remains the LVMS CaaS-install signal used by its
 #                                          direct OLM and LVMCluster operations
 
-- name: "Compute filtered tiers for current provider"
+- name: "Extract provider and backend_id from current pair"
   ansible.builtin.set_fact:
-    _computed_provider_tiers: >-
-      {{ _storage_provider_tiers | selectattr('provider', 'in', [_current_provider, _current_provider | replace('_', '-')]) | list }}
+    _current_provider: "{{ _current_pair.provider }}"
+    _current_backend_id: "{{ _current_pair.backend_id | string }}"
 
-- name: "Compute filtered backend connections for current provider's dispatched tiers"
+- name: "Compute filtered tiers for current provider and backend_id"
+  ansible.builtin.set_fact:
+    _computed_provider_tiers: []
+
+- name: "Build filtered tier list with backend_id normalization"
+  ansible.builtin.set_fact:
+    _computed_provider_tiers: "{{ _computed_provider_tiers + [item] }}"
+  when:
+    - item.provider in [_current_provider, _current_provider | replace('_', '-')]
+    - item.backend_id is defined
+    - item.backend_id | string == _current_backend_id
+  loop: "{{ _storage_provider_tiers }}"
+  loop_control:
+    label: "{{ item.name | default('tier') }}"
+
+- name: "Build backend connection list for comparison"
+  ansible.builtin.set_fact:
+    _tier_backend_ids: >-
+      {{
+        _computed_provider_tiers
+        | selectattr('backend_id', 'defined')
+        | map(attribute='backend_id')
+        | map('string')
+        | list
+      }}
+
+- name: "Filter backend connections for current provider's dispatched tiers"
+  ansible.builtin.set_fact:
+    _computed_provider_backend_connections: {}
+  no_log: true
+
+- name: "Add matching backend connections with normalized keys"
   ansible.builtin.set_fact:
     _computed_provider_backend_connections: >-
-      {{
-        storage_provider_backend_connections
-        | default({})
-        | dict2items
-        | selectattr(
-            'key',
-            'in',
-            (_computed_provider_tiers
-             | selectattr('backend_id', 'defined')
-             | map(attribute='backend_id')
-             | list)
-          )
-        | items2dict
-      }}
+      {{ _computed_provider_backend_connections | combine({item.key | string: item.value}) }}
+  when: item.key | string in _tier_backend_ids
+  loop: "{{ storage_provider_backend_connections | default({}) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
   no_log: true
 
 - name: "Dispatch provider storage action with remote kubeconfig routing"
@@ -73,7 +95,7 @@
 - name: "Accumulate tenant config after dispatch (setup only)"
   ansible.builtin.set_fact:
     _all_tenant_configs: >-
-      {{ _all_tenant_configs | combine({_current_provider: storage_provider_tenant_config}) }}
+      {{ _all_tenant_configs | combine({_current_backend_id: storage_provider_tenant_config}) }}
   when:
     - _dispatch_action == 'setup'
     - storage_provider_tenant_config is defined

@@ -166,11 +166,26 @@ jobs:
       working-directory: osac-installer
       run: |
         make helm-infra-deps
+        make helm-devstack-deps
         helm dependency build charts/osac/
 
     - name: Test networking values
       working-directory: osac-installer
       run: uv run --project .. python scripts/test-networking-values.py
+
+    - name: Check out osac-test-infra for the networking provisioning producer
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      with:
+        repository: osac-project/osac-test-infra
+        ref: main
+        path: osac-test-infra
+        persist-credentials: false
+
+    - name: Test the generated networking provisioning overlay
+      working-directory: osac-installer
+      env:
+        OSAC_TEST_INFRA: ${{ github.workspace }}/osac-test-infra
+      run: uv run --with ansible-core --project .. python scripts/test-networking-provisioning-overlay.py
 
     - name: Test the NetworkClass step
       working-directory: osac-installer
@@ -179,6 +194,10 @@ jobs:
     - name: Test Netris CA lifecycle contracts
       working-directory: osac-installer
       run: uv run --project .. python scripts/test-netris-ca-lifecycle.py
+
+    - name: Test input validation gate
+      working-directory: osac-installer
+      run: ./scripts/test-input-validation.sh
 
     - name: Test MCE rendering
       working-directory: osac-installer
@@ -197,7 +216,6 @@ jobs:
       run: uv run --project .. make lvms-optional-path-render-test
 
     - name: Test BMF NetBox rendering
-      if: steps.should-run.outputs.run
       working-directory: osac-installer
       run: uv run --project .. make bmf-netbox-render-test
 

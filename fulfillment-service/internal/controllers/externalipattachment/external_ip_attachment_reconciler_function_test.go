@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -79,6 +80,15 @@ func newAttachmentCR(id, namespace, name string, deletionTimestamp *metav1.Time)
 // hasFinalizer checks if the fulfillment-controller finalizer is present on the attachment.
 func hasFinalizer(attachment *privatev1.ExternalIPAttachment) bool {
 	return slices.Contains(attachment.GetMetadata().GetFinalizers(), finalizers.Controller)
+}
+
+func expectDeletionRetry(err error) {
+	var retryable interface{ RequeueAfter() time.Duration }
+	Expect(errors.As(err, &retryable)).To(BeTrue())
+	Expect(retryable.RequeueAfter()).To(Equal(time.Second))
+	var backoff interface{ UseExponentialBackoff() bool }
+	Expect(errors.As(err, &backoff)).To(BeTrue())
+	Expect(backoff.UseExponentialBackoff()).To(BeFalse())
 }
 
 // newTaskForDelete creates a task configured for testing delete() with hub-dependent paths.
@@ -294,7 +304,7 @@ var _ = Describe("delete", func() {
 		t := newTaskForDelete(attachmentID, hubID, hubCache)
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		expectDeletionRetry(err)
 		Expect(deleteCalled).To(BeTrue())
 		Expect(hasFinalizer(t.externalIPAttachment)).To(BeTrue())
 	})
@@ -329,7 +339,7 @@ var _ = Describe("delete", func() {
 		t := newTaskForDelete(attachmentID, hubID, hubCache)
 
 		err := t.delete(ctx)
-		Expect(err).ToNot(HaveOccurred())
+		expectDeletionRetry(err)
 		Expect(deleteCalled).To(BeFalse())
 		Expect(hasFinalizer(t.externalIPAttachment)).To(BeTrue())
 	})

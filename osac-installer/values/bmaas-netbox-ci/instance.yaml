@@ -15,7 +15,7 @@ bmf:
     bmhNamespace: host-inventory
     url: http://osac-infra-netbox.osac-infra.svc.cluster.local
     # NetBox is served over plain HTTP inside the cluster.
-    allowInsecureHTTP: true
+    clientAllowInsecureHTTP: true
   secrets:
     # osac-infra's netbox-token-seed hook writes the API token into the
     # osac namespace as netbox-api-token; the chart default

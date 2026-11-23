@@ -32,6 +32,9 @@
       _provider_tiers must be provided by the service role dispatcher.
       This role should not be called directly — use osac.service.storage_provider.
 
+- name: Resolve the backend_id this dispatch is scoped to
+  ansible.builtin.include_tasks: _resolve_backend_id.yaml
+
 - name: Validate tenant_name is a valid DNS label
   ansible.builtin.fail:
     msg: >-
@@ -327,11 +330,12 @@
               apiVersion: v1
               kind: Secret
               metadata:
-                name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
+                name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}"
                 namespace: "{{ vast_storage_config_namespace }}"
                 labels:
                   app.kubernetes.io/managed-by: osac-aap
                   osac.openshift.io/storage-provider: vast
+                  osac.openshift.io/storage-backend-id: "{{ _vast_backend_id }}"
                   osac.openshift.io/tenant: "{{ tenant_name }}"
               type: Opaque
               stringData:
@@ -352,22 +356,62 @@
 
       rescue:
         # Rollback uses live VMS queries to find and delete all tenant resources.
+        - name: Log rollback context
+          ansible.builtin.debug:
+            msg: >-
+              ROLLBACK: tenant={{ tenant_name }}, backend_id={{ _vast_backend_id | default('UNDEFINED') }},
+              Secret name will be: {{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id | default('UNDEFINED') }}
+
         - name: Rollback - delete per-tenant VMS manager
           ansible.builtin.include_tasks: delete_tenant_manager.yaml
           when: _vast_tenant_manager_name is defined and _vast_tenant_manager_name | length > 0
           ignore_errors: true  # noqa: ignore-errors
+
+        - name: Rollback - check if hub Secret exists before deletion
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}"
+            namespace: "{{ vast_storage_config_namespace }}"
+          register: _vast_rollback_secret_check
+          ignore_errors: true
+          no_log: true
+
+        - name: Log Secret existence before rollback deletion
+          ansible.builtin.debug:
+            msg: >-
+              Rollback: Checking for Secret {{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}:
+              {{ 'EXISTS (' ~ _vast_rollback_secret_check.resources | length ~ ' found)' if (_vast_rollback_secret_check.resources | default([]) | length > 0) else 'NOT FOUND' }}
 
         - name: Rollback - delete hub Secret
           kubernetes.core.k8s:
             state: absent
             api_version: v1
             kind: Secret
-            name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}"
+            name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}"
             namespace: "{{ vast_storage_config_namespace }}"
+          register: _vast_rollback_secret_delete
           ignore_errors: true  # noqa: ignore-errors
+          no_log: true
+
+        - name: Log Secret deletion result
+          ansible.builtin.debug:
+            msg: >-
+              Rollback Secret deletion for {{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}:
+              {{ 'deleted' if (_vast_rollback_secret_delete is defined and not _vast_rollback_secret_delete.failed) else 'failed or skipped' }}
+
+        - name: Rollback - check if tenant is shared before cleanup
+          when:
+            - _vast_vms_conn is defined
+            - vast_endpoint is defined
+            - _vast_backend_id is defined
+          ansible.builtin.include_tasks: _check_shared_vast_tenant.yaml
+          ignore_errors: true
 
         - name: Rollback - authenticate for VMS cleanup
-          when: _vast_vms_conn is defined
+          when:
+            - _vast_vms_conn is defined
+            - not (_vast_skip_tenant_delete | default(false) | bool)
           ansible.builtin.uri:
             url: "https://{{ vast_endpoint }}/api/token/"
             method: POST
@@ -388,6 +432,7 @@
             - _vast_rollback_auth is not failed
             - _vast_tenant_result is defined
             - _vast_tenant_result.tenants.id is defined
+            - not (_vast_skip_tenant_delete | default(false) | bool)
           ansible.builtin.include_tasks: delete_vms_resources_by_tenant.yaml
           loop:
             - views
@@ -405,6 +450,7 @@
           when:
             - _vast_vms_conn is defined
             - _vast_tenant_created | default(false) | bool
+            - not (_vast_skip_tenant_delete | default(false) | bool)
           vastdata.vms.tenants:
             vms: "{{ _vast_vms_conn }}"
             name: "{{ tenant_name }}"
@@ -424,6 +470,7 @@
             - _vast_local_provider_id | string | length > 0
             - _vast_rollback_auth is defined
             - _vast_rollback_auth is not failed
+            - not (_vast_skip_tenant_delete | default(false) | bool)
           ansible.builtin.uri:
             url: "https://{{ vast_endpoint }}/api/localproviders/{{ _vast_local_provider_id }}/"
             method: DELETE

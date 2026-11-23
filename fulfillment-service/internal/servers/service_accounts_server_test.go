@@ -123,7 +123,60 @@ var _ = Describe("Service account management", func() {
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 	}, Entry("status", "status"), Entry("client secret", "status.client_secret"),
 		Entry("state", "status.state"), Entry("message", "status.message"), Entry("finalizers", "metadata.finalizers"),
-		Entry("tenant", "metadata.tenant"), Entry("project", "metadata.project"), Entry("annotations", "metadata.annotations"))
+		Entry("creator", "metadata.creator"), Entry("tenant", "metadata.tenant"),
+		Entry("project", "metadata.project"), Entry("annotations", "metadata.annotations"))
+	DescribeTable("rejects private creator updates with the shared immutable-field error", func(paths []string) {
+		_, err := private.Update(tenantCtx, privatev1.ServiceAccountsUpdateRequest_builder{
+			Object: privatev1.ServiceAccount_builder{
+				Id: stored.GetId(),
+				Metadata: privatev1.Metadata_builder{
+					Creator: "attacker",
+					Tenant:  "other-tenant",
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: paths},
+		}.Build())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(status.Convert(err).Message()).To(Equal("field 'metadata.creator' is immutable"))
+
+		got, err := private.Get(tenantCtx, privatev1.ServiceAccountsGetRequest_builder{Id: stored.GetId()}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.GetObject().GetMetadata().GetCreator()).To(Equal(stored.GetMetadata().GetCreator()))
+		Expect(got.GetObject().GetMetadata().GetTenant()).To(Equal(stored.GetMetadata().GetTenant()))
+	}, Entry("creator field", []string{"metadata.creator"}), Entry("parent metadata field", []string{"metadata"}),
+		Entry("normalized creator field", []string{"metadata..creator"}),
+		Entry("creator and another field", []string{"metadata.creator", "metadata.tenant"}))
+	It("does not let a creator-related mask bypass the private status allowlist", func() {
+		_, err := private.Update(tenantCtx, privatev1.ServiceAccountsUpdateRequest_builder{
+			Object: privatev1.ServiceAccount_builder{
+				Id:       stored.GetId(),
+				Metadata: proto.Clone(stored.GetMetadata()).(*privatev1.Metadata),
+				Status:   &privatev1.ServiceAccountStatus{},
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata", "status"}},
+		}.Build())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(status.Convert(err).Message()).To(Equal(`field "status" is not mutable`))
+
+		got, err := private.Get(tenantCtx, privatev1.ServiceAccountsGetRequest_builder{Id: stored.GetId()}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(proto.Equal(got.GetObject().GetStatus(), stored.GetStatus())).To(BeTrue())
+	})
+	It("keeps other private update-mask paths restricted", func() {
+		_, err := private.Update(tenantCtx, privatev1.ServiceAccountsUpdateRequest_builder{
+			Object: privatev1.ServiceAccount_builder{
+				Id:       stored.GetId(),
+				Metadata: privatev1.Metadata_builder{Tenant: "other-tenant"}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
+		}.Build())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(status.Convert(err).Message()).To(Equal(`field "metadata.tenant" is not mutable`))
+
+		got, err := private.Get(tenantCtx, privatev1.ServiceAccountsGetRequest_builder{Id: stored.GetId()}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.GetObject().GetMetadata().GetTenant()).To(Equal(stored.GetMetadata().GetTenant()))
+	})
 	It("allows private status updates from controllers", func() {
 		response, err := private.Update(tenantCtx, privatev1.ServiceAccountsUpdateRequest_builder{
 			Object: privatev1.ServiceAccount_builder{

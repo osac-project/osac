@@ -148,7 +148,7 @@ production default. Production operators should supply their own compatible
 artifact.
 `architecture` defaults to `[ARCHITECTURE_AMD64]` when omitted; ARM64 and S390X
 are also supported metadata values. The hook creates a shared Linux registry
-DiskImage first, then references it by name with `shared: true` in the version.
+DiskImage first, then references it by name with `tenant: shared` in the version.
 Non-default versions may omit `diskImage`.
 
 On retry, HTTP 409 retains existing named records without updating their image
@@ -842,8 +842,9 @@ and cluster administrators.
 Create the workload kubeconfig Secret on the management cluster before phase
 2. The Secret contents and the console-proxy label are described in
 [VMaaS dedicated cluster](../../../osac-operator/docs/vmaas-dedicated-cluster/README.md).
-The phase-2 values that mount that Secret are in the
-[customer install guide](customer-install-guide.md#64-installing-vmaas-on-a-separate-workload-cluster).
+VMaaS with VMs on a separate workload cluster is not fully supported in this
+release; see [Section 9.4 of the customer install
+guide](customer-install-guide.md#94-not-supported).
 
 **Workload cluster.** Point `KUBECONFIG` at the workload cluster and refresh
 `OCP_VERSION` for this cluster. Set `LVMS_ENABLED` to the `lvms.enabled` value

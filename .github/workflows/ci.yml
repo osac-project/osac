@@ -42,9 +42,9 @@ jobs:
       contents: read
       pull-requests: read
     outputs:
-      # The filters that matched, as |name|name|, or every filter when the CI
-      # wiring itself changed or the emergency override is on. Tested with
-      # contains(changed, '|name|').
+      # The filters that matched, as |name|name|. CI wiring changes enable all
+      # except proto-check unless it matched; the emergency override enables
+      # every filter. Tested with contains(changed, '|name|').
       changed: ${{ steps.pick.outputs.changed }}
       # The unit and integration test legs this change needs (see .github/ci-tests.yml), as a JSON list for a matrix.
       tests: ${{ steps.tests.outputs.tests }}
@@ -71,6 +71,10 @@ jobs:
           set -euo pipefail
           if [[ "${GATING_OFF}" == "true" ]] || jq -e 'index("ci-config")' <<<"${MATCHED}" >/dev/null; then
             names=$(grep -oE '^[A-Za-z0-9_-]+:' .github/filters/ci-filters.yml | tr -d ':' | paste -sd'|')
+            # CI-only changes do not need proto generation; keep emergency run-all.
+            if [[ "${GATING_OFF}" != "true" ]] && ! jq -e 'index("proto-check")' <<<"${MATCHED}" >/dev/null; then
+              names=$(jq -Rr 'split("|") | map(select(. != "proto-check")) | join("|")' <<<"${names}")
+            fi
           else
             names=$(jq -r 'join("|")' <<<"${MATCHED}")
           fi

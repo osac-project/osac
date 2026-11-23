@@ -118,16 +118,14 @@ jobs:
       id: validate
       run: |
         set -euo pipefail
-        # Accepts an optional prerelease suffix (e.g. a release-branch
-        # freeze build's "-rc.1") -- same grammar as validate_semver
-        # (osac-installer/scripts/lib.sh), minus build metadata (unused
-        # by this pipeline). SLUG below must still match
+        # Same grammar as RELEASE_VERSION_RE (osac-installer/scripts/lib.sh):
+        # X.Y.Z or X.Y.Z-rc.N. SLUG below must still match
         # osac-build-and-publish.yaml's own version_slug computation
         # exactly (a plain dot-to-hyphen replace, no other
         # transformation), which is why it isn't restricted to only the
         # X.Y.Z portion.
-        if [[ ! "${RELEASE_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
-          echo "::error::release_version '${RELEASE_VERSION}' is not a valid semver (with an optional prerelease suffix)" >&2
+        if [[ ! "${RELEASE_VERSION}" =~ ^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})(-rc\.[1-9][0-9]{0,5})?$ ]]; then
+          echo "::error::release_version '${RELEASE_VERSION}' is not a valid release version (X.Y.Z or X.Y.Z-rc.N)" >&2
           exit 1
         fi
         SLUG="${RELEASE_VERSION//./-}"
@@ -261,6 +259,15 @@ jobs:
             if [[ "${get_output}" == *"NotFound"* ]]; then
               echo "::warning::${label} prod ReleasePlan '${name}' not found -- OSAC-1090 has not landed yet (or landed under a different name than expected). ${label} promotion will be skipped." >&2
               echo "false"
+            elif [[ "${get_output}" == *"is forbidden"* ]]; then
+              # This job's service account (konflux-bot-0, role
+              # konflux-releaser-bot-actions) may create and read Releases and
+              # Snapshots but not ReleasePlans, so the read is refused whether
+              # or not the plan exists, and every real run stopped here. The
+              # plans are live; the Release created later fails with a clear
+              # error if one is ever missing.
+              echo "::warning::${label} prod ReleasePlan '${name}' could not be checked: the service account may not read ReleasePlans. Continuing; creating the Release fails if the plan is missing." >&2
+              echo "true"
             else
               echo "${label} ReleasePlan lookup for '${name}' failed: ${get_output}" >&2
               echo "::error::${label} ReleasePlan lookup for '${name}' failed with an error other than NotFound (auth/network issue?) -- see the plain-text line just above in this step's raw log for details, deliberately not repeated in this annotation." >&2

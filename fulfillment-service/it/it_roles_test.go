@@ -53,7 +53,7 @@ var _ = Describe("Roles", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(listResponse).ToNot(BeNil())
 			items := listResponse.GetItems()
-			Expect(items).To(HaveLen(5))
+			Expect(items).To(HaveLen(6))
 
 			names := make([]string, len(items))
 			for i, item := range items {
@@ -65,6 +65,7 @@ var _ = Describe("Roles", func() {
 				"tenant-idp-manager",
 				"tenant-reader",
 				"cloud-provider-reader",
+				"tenant-user",
 			))
 		})
 
@@ -103,13 +104,14 @@ var _ = Describe("Roles", func() {
 						'tenant-admin',
 						'tenant-reader',
 						'tenant-idp-manager',
+						'tenant-user',
 					]
 				`),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(listResponse).ToNot(BeNil())
 			items := listResponse.GetItems()
-			Expect(items).To(HaveLen(3))
+			Expect(items).To(HaveLen(4))
 
 			names := make([]string, len(items))
 			for i, item := range items {
@@ -119,6 +121,7 @@ var _ = Describe("Roles", func() {
 				"tenant-admin",
 				"tenant-reader",
 				"tenant-idp-manager",
+				"tenant-user",
 			))
 		})
 

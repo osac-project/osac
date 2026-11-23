@@ -11,6 +11,7 @@
       - name: local
         protocol: block
         provider: lvms
+        backend_id: "lvms-backend-1"
     tenant_name: test-local-tier
     tenant_namespace: test-local-tier-ns
 
@@ -121,6 +122,7 @@
       - name: local
         protocol: block
         provider: lvms
+        backend_id: "lvms-backend-1"
     tenant_name: test-local-tier
 
   tasks:
@@ -165,6 +167,7 @@
       - name: local
         protocol: block
         provider: lvms
+        backend_id: "lvms-backend-1"
     tenant_name: test-local-tier
     tenant_namespace: test-local-tier-ns
 

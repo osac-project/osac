@@ -440,7 +440,7 @@ You write 16 task files for VMaaS:
 | Tasks | What to do |
 |---|---|
 | `create_virtual_network`, `delete_virtual_network`, `create_external_ip_pool`, `delete_external_ip_pool`, `create_external_ip`, `delete_external_ip`, `attach_external_ip`, `detach_external_ip`, `create_nat_gateway`, `delete_nat_gateway` | Implement. `create_virtual_network` allocates and returns `l3_vni`. |
-| `create_subnet`, `delete_subnet` | Implement the segment and EVPN duties. Serve no DHCP ([Address layout](#use-the-subnet-address-layout)). |
+| `create_subnet`, `delete_subnet` | Implement the segment and EVPN duties. When `ipam.physical_ipv4_cidrs` is non-empty, create or enable Fabric DHCP over that recorded range at Subnet creation and repair it on every rerun; a physical attachment also repairs it before moving a port. An empty physical pool leaves DHCP off. OSAC's Netris manager with `netris_evpn_vnet_gateway_mode: none` deliberately creates no gateway and no DHCP ([Address layout](#use-the-subnet-address-layout)). |
 | `create_security_group`, `delete_security_group` | Enforce SecurityGroups with your fabric's ACLs, or make both documented no-ops ([SecurityGroup tasks](#securitygroup-tasks)). |
 | `apply_network_attachment`, `delete_network_attachment` | For VM overlay attachments, bind or unbind the address and SecurityGroups in your fabric, or use the documented no-op when your fabric does not enforce them. For physical CaaS workers, apply and clean up the host-port attachment ([CaaS worker physical attachments](#caas-worker-physical-attachments)). |
 
@@ -1189,8 +1189,8 @@ Rules:
 - Read the lists. Never compute ranges from the Subnet CIDR or the plan.
 - The plan never changes after installation, and a recorded layout never changes, so no address moves.
 - Any list may be `[]`, and every task accepts it. With an empty `physical_ipv4_cidrs`, use no Subnet address for a fabric device.
-- **DHCP.** Serve no DHCP on a VMaaS Subnet. OVN-Kubernetes assigns the VM addresses, and a second server on the shared segment could answer a VM.
-- VMs get their address, the Subnet's prefix, `gateway_ipv4` as router (for example `10.0.1.17/24` via `10.0.1.1`), and the cluster DNS, from `cudn_evpn`'s DHCP. Your manager has no DNS task.
+- **DHCP.** `cudn_evpn` uses OVN-Kubernetes DHCP for VM addresses from `overlay_ipv4_cidrs`. OSAC's Netris manager enables DHCP for `physical_ipv4_cidrs` when it creates the Subnet's V-Net and that range is non-empty, and repairs it on every rerun; a physical attachment also enables it before moving a port. The pool stays enabled after the attachment is removed. A custom Fabric Manager must follow the same split: create Fabric DHCP when `physical_ipv4_cidrs` is non-empty, reserve addresses outside the overlay from OVN allocation, and serve DHCP to its physical interfaces from the physical range.
+- VMs get their address from OVN-Kubernetes DHCP, with the Subnet's prefix and `gateway_ipv4` as router (for example `10.0.1.17/24` via `10.0.1.1`), plus cluster DNS. Netris DHCP cannot filter by MAC, so a physical-range offer can reach VMs on the shared segment; whether a VM accepts it remains an open lab check.
 - Allocate only from your own range. Never use the network address or broadcast address for a fabric device.
 - Use `gateway_ipv4` only to serve the Subnet's gateway under the [Gateway rule](#gateway). Every other address for your own Subnet devices comes from `physical_ipv4_cidrs`.
 - Every CIDR of a layout has at least 16 addresses. OSAC rejects a Subnet whose prefix is too long for the plan (/26 for 0.75/0.25/0).
@@ -1500,7 +1500,7 @@ Record the release, your collection version, your image digest, and the results 
 - [ ] The 16 VMaaS task files exist; when CaaS is enabled, also add `query_dhcp_lease`, `reserve_cluster_ingress_ip`, and `release_cluster_ingress_ip` ([The task files you write](#the-task-files-you-write)).
 - [ ] For CaaS physical workers, `apply_network_attachment`, `query_dhcp_lease`, and `delete_network_attachment` implement the physical contract ([CaaS worker physical attachments](#caas-worker-physical-attachments)).
 - [ ] `create_virtual_network` and `create_subnet` always do their IP-VRF and MAC-VRF EVPN duties.
-- [ ] `create_subnet` serves no DHCP.
+- [ ] Any Fabric DHCP pool is disjoint from the addresses OVN-Kubernetes allocates.
 
 **Errors and results** ([Results and errors](#return-a-result-or-an-error))
 
@@ -1715,7 +1715,7 @@ OSAC adds `network_type: evpn` at launch to `create_virtual_network`, `create_su
 - Create the Subnet's L2 segment in the VirtualNetwork's routing domain, with routes to its sibling Subnets.
 - Give it a MAC-VRF with its `l2_vni`, and extend it to the hub nodes.
 - OVN-Kubernetes serves `gateway_ipv4` as the VM gateway. You may serve it too under the [Gateway rule](#gateway).
-- Serve no DHCP ([Address layout](#use-the-subnet-address-layout)).
+- Coordinate any Fabric DHCP pool with the CUDN's reserved ranges ([Address layout](#use-the-subnet-address-layout)).
 - Accept `[]` for every range.
 - If your fabric cannot build the Subnet, fail with `retryable: false`.
 

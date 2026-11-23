@@ -63,10 +63,10 @@ const VMCatalogItemWizard = ({ item }: VMCatalogItemWizardProps) => {
     try {
       if (item) {
         await updateAsync(buildComputeCatalogItemUpdateRequest(item, values));
-        navigate(`/catalog/vm/${item.id}`);
+        navigate(`/catalog/vms/${item.id}`);
       } else {
         const resp = await createAsync({ object: buildComputeCatalogItemCreatePayload(values) });
-        navigate(resp.object?.id ? `/catalog/vm/${resp.object.id}` : '/catalog');
+        navigate(resp.object?.id ? `/catalog/vms/${resp.object.id}` : '/catalog/vms');
       }
     } catch {
       // nothing to do, tanstack handles the error

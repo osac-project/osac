@@ -11,20 +11,15 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 
-import { SecurityGroupState, SubnetState } from '@osac/types';
+import { SecurityGroupState, SecurityGroups, SubnetState, Subnets } from '@osac/types';
 
+import { useListResource } from '../../../api/use-resource';
 import {
   defaultSecurityGroupListFilter,
   defaultSubnetListFilter,
-  useSecurityGroups,
-  useSubnets,
 } from '../../../api/v1/networking';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
-
-interface DefaultNetworkSummaryProps {
-  project: string;
-}
 
 const newestFirst = (
   a: { metadata?: { creationTimestamp?: { seconds: bigint; nanos: number } } },
@@ -38,29 +33,36 @@ const newestFirst = (
   return (bTime?.nanos ?? 0) - (aTime?.nanos ?? 0);
 };
 
-const DefaultNetworkSummary = ({ project }: DefaultNetworkSummaryProps) => {
+const DefaultNetworkSummary = () => {
   const { t } = useTranslation();
-  const subnetsQuery = useSubnets({ filter: defaultSubnetListFilter(project) });
-  const subnet = subnetsQuery.data
+  // Tenant defaults live in the tenant's default project and apply to every
+  // project of the tenant. Only tenant users reach the provisioning wizards, and
+  // the server scopes their lists to their tenant.
+  const inDefaultProject = (metadata?: { project?: string }) => metadata?.project === '';
+  const subnetsQuery = useListResource(Subnets, { filter: defaultSubnetListFilter() });
+  const subnet = subnetsQuery.data?.items
     ?.filter(
       (item) =>
         item.metadata?.labels?.['osac.openshift.io/default'] === 'true' &&
-        item.metadata.project === project &&
+        inDefaultProject(item.metadata) &&
         !item.metadata.deletionTimestamp &&
         item.status?.state === SubnetState.READY &&
         Boolean(item.spec?.ipv4Cidr),
     )
     .sort(newestFirst)[0];
   const virtualNetworkId = subnet?.spec?.virtualNetwork?.id ?? '';
-  const securityGroupsQuery = useSecurityGroups(
-    { filter: defaultSecurityGroupListFilter(project, virtualNetworkId) },
+  const securityGroupsQuery = useListResource(
+    SecurityGroups,
+    {
+      filter: defaultSecurityGroupListFilter(virtualNetworkId),
+    },
     { enabled: Boolean(virtualNetworkId) },
   );
-  const securityGroup = securityGroupsQuery.data
+  const securityGroup = securityGroupsQuery.data?.items
     ?.filter(
       (group) =>
         group.metadata?.labels?.['osac.openshift.io/default'] === 'true' &&
-        group.metadata.project === project &&
+        inDefaultProject(group.metadata) &&
         !group.metadata.deletionTimestamp &&
         group.spec?.virtualNetwork?.id === virtualNetworkId &&
         group.status?.state === SecurityGroupState.READY,

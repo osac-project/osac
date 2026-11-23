@@ -14,6 +14,14 @@ if [ -f "${SCRIPT_DIR}/.mock_vms_pid" ]; then
   rm -f "${SCRIPT_DIR}/.mock_vms_pid"
 fi
 
+# Stop the second mock VMS server (the "other array" used by multi-backend tests)
+if [ -f "${SCRIPT_DIR}/.mock_vms_pid_b" ]; then
+  MOCK_VMS_PID_B=$(cat "${SCRIPT_DIR}/.mock_vms_pid_b")
+  echo "Stopping second mock VMS server (PID: ${MOCK_VMS_PID_B})..."
+  kill "${MOCK_VMS_PID_B}" 2>/dev/null || true
+  rm -f "${SCRIPT_DIR}/.mock_vms_pid_b"
+fi
+
 # Stop local OCI registry for csi_driver_install tests, if running. Mirrors
 # setup_test_env.sh's own 3-way container-tool detection (KIND_EXPERIMENTAL_PROVIDER >
 # docker > podman) -- a 2-way docker/podman-only cascade here could remove the wrong

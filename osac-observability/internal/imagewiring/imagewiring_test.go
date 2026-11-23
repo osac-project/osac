@@ -75,6 +75,26 @@ func flatten(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
+// TestContainerfileBuildsAndShipsMetricsAuth keeps the write proxy binary in
+// the helper image. The chart runs it with `command`, so a missing COPY would
+// only surface as a crash loop on a deployed cluster.
+func TestContainerfileBuildsAndShipsMetricsAuth(t *testing.T) {
+	repo := repoRoot(t)
+	raw, err := os.ReadFile(filepath.Join(repo, "osac-observability", "Containerfile"))
+	if err != nil {
+		t.Fatalf("reading Containerfile: %v", err)
+	}
+	content := string(raw)
+	for _, want := range []string{
+		"for command in remote-write-config query-allowlist admin-credentials query-auth-gate metrics-auth;",
+		"COPY --from=builder /opt/app-root/src/bin/metrics-auth .",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("Containerfile is missing %q", want)
+		}
+	}
+}
+
 func TestImageBuildUsesTheComponentContainerfileAndRepoRootContext(t *testing.T) {
 	repo := repoRoot(t)
 	img := "ghcr.io/osac-project/osac-observability:test"

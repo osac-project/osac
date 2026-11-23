@@ -141,6 +141,7 @@ def storage_vms(
     vm_template: str,
     default_instance_type: str,  # noqa: F811
     default_disk_image: str,  # noqa: F811
+    tenant2_disk_image: str,
     default_storage_tier: str,
     tenant1_default_network: dict[str, str],
     tenant2_default_network: dict[str, str],
@@ -185,7 +186,7 @@ def storage_vms(
                     key_secret=storage_key_secrets["tenant2"],
                     vm_template=vm_template,
                     instance_type=default_instance_type,
-                    disk_image=default_disk_image,
+                    disk_image=tenant2_disk_image,
                     storage_tier=default_storage_tier,
                 ),
             ]

@@ -505,6 +505,25 @@ var _ = Describe("ClusterOrder tenant remote write", func() {
 		Expect(guest.Actions()).To(BeEmpty())
 	})
 
+	It("issues the client Certificate before a node is Ready", func() {
+		hub := fake.NewClientBuilder().
+			WithScheme(metricsWriteScheme()).
+			WithObjects(newMetricsWriteIssuer(true)).
+			Build()
+		guest := k8sfake.NewSimpleClientset()
+		// The API answers but no node is Ready yet, so cluster monitoring is not up.
+		reconciler := newMetricsWriteReconciler(hub, metricsWriteTestConfig(), guest, false, true)
+
+		result, err := reconciler.reconcileClusterMetricsWrite(ctx, metricsWriteTestInstance(), metricsWriteTestHostedCluster())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(Equal(30 * time.Second))
+
+		// The identity is requested once the kubeconfig is readable and the
+		// issuer is Ready; the Ready-node wait only guards the monitoring entry.
+		Expect(hub.Get(ctx, metricsWriteCertificateKey(), newMetricsWriteCertificate())).To(Succeed())
+		Expect(guest.Actions()).To(BeEmpty())
+	})
+
 	It("denylists the old serial before replacing a Certificate that renames the cluster", func() {
 		existing := newMetricsWriteCertificate()
 		Expect(unstructured.SetNestedField(existing.Object, "stale-cluster", "spec", "commonName")).To(Succeed())

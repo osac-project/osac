@@ -117,16 +117,17 @@ func (r *ClusterOrderReconciler) reconcileClusterMetricsWrite(
 		return requeue, nil
 	}
 
-	guest, ready, reachable, err := r.guestClusterClient(ctx, hc)
+	guest, nodesReady, reachable, err := r.guestClusterClient(ctx, hc)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if guest == nil || !reachable || !ready {
-		// Cluster monitoring only runs once a node is Ready, and the write
-		// entry would point at an endpoint that does not exist yet.
+	if guest == nil || !reachable {
 		return requeue, nil
 	}
 
+	// The identity only needs the kubeconfig and a ready issuer, so it is
+	// requested before a node is Ready. Minting it early means the tenant has
+	// it as soon as cluster monitoring starts, instead of after another cycle.
 	certificateName := metricswrite.CertificateName(instance.GetName())
 	if err := r.ensureMetricsWriteCertificate(ctx, instance, hc, certificateName); err != nil {
 		return ctrl.Result{}, err
@@ -154,6 +155,12 @@ func (r *ClusterOrderReconciler) reconcileClusterMetricsWrite(
 			return requeue, nil
 		}
 		return ctrl.Result{}, err
+	}
+	if !nodesReady {
+		// Cluster monitoring only runs once a node is Ready, so the remote-write
+		// entry would point at an endpoint that does not exist yet. The Secrets
+		// above are inert until it does.
+		return requeue, nil
 	}
 	if err := r.applyTenantMonitoringConfig(ctx, guest, hc); err != nil {
 		if isTransientTenantError(err) {

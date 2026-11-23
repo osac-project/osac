@@ -204,7 +204,8 @@ func (f *fakeNATGateways) Delete(context.Context, *privatev1.NATGatewaysDeleteRe
 
 func readyPool(id string, available int64) *privatev1.ExternalIPPool {
 	return privatev1.ExternalIPPool_builder{
-		Id: id,
+		Id:       id,
+		Metadata: privatev1.Metadata_builder{Tenant: "shared"}.Build(),
 		Spec: privatev1.ExternalIPPoolSpec_builder{
 			IpFamily: privatev1.IPFamily_IP_FAMILY_IPV4,
 		}.Build(),
@@ -397,6 +398,7 @@ var _ = Describe("default networking manager", func() {
 		externalIPs := m.externalIPs.(*fakeExternalIPs)
 		Expect(externalIPs.items).To(HaveLen(1))
 		Expect(externalIPs.items[0].GetSpec().GetPool().GetId()).To(Equal("pool-b"))
+		Expect(externalIPs.items[0].GetSpec().GetPool().GetTenant()).To(Equal("shared"))
 	})
 
 	It("waits without failing when there is no READY IPv4 pool", func() {

@@ -21,6 +21,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"log"
 	"maps"
 	"net/http"
 	"net/url"
@@ -232,7 +233,9 @@ func deviceResponse(id int, device Device) map[string]any {
 
 func writeJSON(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(value)
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		log.Printf("write NetBox fixture response: %v", err)
+	}
 }
 
 // DevicePayload returns the dcim.device response shape the generated SDK

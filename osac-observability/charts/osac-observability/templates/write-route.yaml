@@ -1,0 +1,34 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $write := (.Values.global.observability | default dict).clusterRemoteWrite | default dict -}}
+{{- if $write.enabled }}
+{{- $ns := include "osac-observability.namespace" . -}}
+{{- $clusterDomain := (.Values.global | default dict).clusterDomain | default "" -}}
+{{- $routeName := $write.routeName | default "thanos-receive-managed" -}}
+{{- /* This is the only externally reachable write endpoint. Termination is
+       passthrough: the router forwards the TLS session untouched so the proxy
+       terminates mTLS and verifies the tenant cluster's client certificate.
+       An edge Route would let the router accept the connection before the
+       proxy could reject an unknown or revoked identity. */ -}}
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ $routeName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+spec:
+  {{- if $clusterDomain }}
+  host: {{ $routeName }}-{{ $ns }}.{{ $clusterDomain }}
+  {{- end }}
+  to:
+    kind: Service
+    name: {{ $routeName }}
+    weight: 100
+  port:
+    targetPort: https
+  tls:
+    termination: passthrough
+    insecureEdgeTerminationPolicy: None
+  wildcardPolicy: None
+{{- end }}
+{{- end }}

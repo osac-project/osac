@@ -1,0 +1,26 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $write := (.Values.global.observability | default dict).clusterRemoteWrite | default dict -}}
+{{- if $write.enabled }}
+{{- $ns := include "osac-observability.namespace" . -}}
+{{- $name := $write.revocationConfigMap | default "osac-metrics-write-revocation" -}}
+{{- /* osac-operator appends a revoked serial here when it finalizes a cluster,
+       and the write proxy rejects any certificate whose serial is listed. The
+       chart must not wipe the denylist on upgrade, so an existing value is
+       carried over; a fresh render (and `helm get values`) shows one empty
+       key, never key material. */ -}}
+{{- $revoked := "" -}}
+{{- $existing := lookup "v1" "ConfigMap" $ns $name -}}
+{{- if and $existing $existing.data (hasKey $existing.data "revoked") -}}
+{{- $revoked = index $existing.data "revoked" -}}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+data:
+  revoked: {{ $revoked | default "" | quote }}
+{{- end }}
+{{- end }}

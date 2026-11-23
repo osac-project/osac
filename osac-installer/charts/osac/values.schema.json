@@ -512,11 +512,11 @@
             },
             "clusterRemoteWrite": {
               "type": "object",
-              "description": "Remote write from tenant and workload clusters. No controller enforces these settings in this release.",
+              "description": "Managed remote write from tenant and workload clusters: the write CA, write proxy, Route and revocation ConfigMap.",
               "properties": {
                 "enabled": {
                   "type": "boolean",
-                  "description": "Reserved for the managed-cluster write path; no controller reads it in this release",
+                  "description": "Render the managed write path and let osac-operator issue and revoke client certificates",
                   "default": false
                 },
                 "certificateDuration": {
@@ -530,6 +530,48 @@
                   "description": "How long before expiry the client certificate is renewed",
                   "default": "30d",
                   "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
+                },
+                "writeCAIssuer": {
+                  "type": "string",
+                  "description": "Name of the CA Issuer that signs client and proxy serving certificates",
+                  "default": "osac-metrics-write-ca"
+                },
+                "servingCertificate": {
+                  "type": "string",
+                  "description": "Name of the proxy serving Certificate and its Secret",
+                  "default": "thanos-receive-managed-tls"
+                },
+                "revocationConfigMap": {
+                  "type": "string",
+                  "description": "Name of the ConfigMap that holds revoked certificate serials",
+                  "default": "osac-metrics-write-revocation"
+                },
+                "routeName": {
+                  "type": "string",
+                  "description": "Name of the write Route and the write proxy workload",
+                  "default": "thanos-receive-managed"
+                },
+                "dropRule": {
+                  "type": "object",
+                  "description": "Metric families the write path always drops. The proxy and the cluster's own Prometheus configuration render from this one definition.",
+                  "properties": {
+                    "keepKubePrefix": {
+                      "type": "string",
+                      "description": "The only kube_ metric family allowed through",
+                      "default": "kube_node_",
+                      "minLength": 1
+                    },
+                    "dropPrefixes": {
+                      "type": "array",
+                      "description": "Metric-name prefixes that are always dropped",
+                      "default": ["container_", "claim", "mount", "kserve_", "vllm_", "dcgm_"],
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  },
+                  "additionalProperties": false
                 }
               },
               "additionalProperties": false

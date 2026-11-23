@@ -295,6 +295,89 @@ for proxy in thanos-query-admin thanos-query-admin-openshift; do
     'mountPath: /etc/query-allowlist'
 done
 
+echo "checking the managed write path"
+write_path="${TMP_DIR}/write-path.yaml"
+"${HELM_BIN}" "${COMMON_ARGS[@]}" "${OBS_ARGS[@]}" \
+  --set global.observability.clusterRemoteWrite.enabled=true \
+  --set global.clusterDomain=apps.example.com >"${write_path}"
+# A self-signed bootstrap Issuer, the CA Certificate and the CA Issuer. The CA
+# key pair lives only in cert-manager's Secret.
+extract_kind_ns "${write_path}" Issuer osac-observability \
+  >"${TMP_DIR}/write-issuers.yaml"
+expect_count "${TMP_DIR}/write-issuers.yaml" '^kind: Issuer' 2
+require "${TMP_DIR}/write-issuers.yaml" 'name: osac-metrics-write-ca-selfsigned'
+require "${TMP_DIR}/write-issuers.yaml" 'selfSigned: {}'
+require "${TMP_DIR}/write-issuers.yaml" 'secretName: osac-metrics-write-ca'
+require "${TMP_DIR}/write-issuers.yaml" 'namespace: osac-observability'
+extract_kind_ns "${write_path}" Certificate osac-observability \
+  >"${TMP_DIR}/write-certs.yaml"
+expect_count "${TMP_DIR}/write-certs.yaml" '^kind: Certificate' 2
+require "${TMP_DIR}/write-certs.yaml" 'name: osac-metrics-write-ca-cert'
+require "${TMP_DIR}/write-certs.yaml" 'isCA: true'
+require "${TMP_DIR}/write-certs.yaml" 'name: thanos-receive-managed-tls'
+require "${TMP_DIR}/write-certs.yaml" 'duration: 90d'
+require "${TMP_DIR}/write-certs.yaml" 'renewBefore: 30d'
+# Passthrough TLS means the tenant cluster verifies the external Route host.
+require "${TMP_DIR}/write-certs.yaml" \
+  'thanos-receive-managed-osac-observability.apps.example.com'
+# No key material may appear in a rendered template or in `helm get values`.
+reject "${TMP_DIR}/write-certs.yaml" 'BEGIN CERTIFICATE'
+reject "${TMP_DIR}/write-certs.yaml" 'PRIVATE KEY'
+reject "${TMP_DIR}/write-certs.yaml" 'tls.key:'
+
+echo "checking the revocation denylist starts empty with one key"
+revocation="${TMP_DIR}/write-revocation.yaml"
+extract_kind_name "${write_path}" ConfigMap osac-metrics-write-revocation \
+  >"${revocation}"
+require "${revocation}" 'name: osac-metrics-write-revocation'
+require "${revocation}" 'namespace: osac-observability'
+require "${revocation}" '  revoked: ""'
+expect_count "${revocation}" '^  revoked:' 1
+
+echo "checking the single write Route passes TLS through to the proxy"
+write_route="${TMP_DIR}/write-route.yaml"
+extract_kind_name "${write_path}" Route thanos-receive-managed >"${write_route}"
+require "${write_route}" 'name: thanos-receive-managed'
+require "${write_route}" \
+  'host: thanos-receive-managed-osac-observability.apps.example.com'
+require "${write_route}" 'termination: passthrough'
+require "${write_route}" 'insecureEdgeTerminationPolicy: None'
+require "${write_route}" 'targetPort: https'
+expect_count "${write_route}" "^    name: thanos-receive-managed\$" 1
+reject "${write_route}" 'termination: edge'
+
+echo "checking the write proxy verifies certificates and enforces the drop rule"
+write_proxy="${TMP_DIR}/write-proxy.yaml"
+extract_kind_name "${write_path}" Deployment thanos-receive-managed >"${write_proxy}"
+require "${write_proxy}" 'osac.openshift.io/observability-role: write-proxy'
+require "${write_proxy}" 'automountServiceAccountToken: true'
+require "${write_proxy}" '--client-ca-file=/etc/write-ca/ca.crt'
+require "${write_proxy}" \
+  '--upstream-ca-file=/etc/service-ca/service-ca.crt'
+require "${write_proxy}" \
+  '--upstream=https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive'
+require "${write_proxy}" '--revocation-name=osac-metrics-write-revocation'
+require "${write_proxy}" '--keep-kube-prefix=kube_node_'
+require "${write_proxy}" \
+  '--drop-prefixes=container_,claim,mount,kserve_,vllm_,dcgm_'
+require "${write_proxy}" 'secretName: osac-metrics-write-ca'
+# Only the CA certificate is mounted, never its private key.
+require "${write_proxy}" 'key: tls.crt'
+reject "${write_proxy}" 'key: tls.key'
+require "${write_proxy}" 'secretName: thanos-receive-tls'
+service_doc="${TMP_DIR}/service-thanos-receive-managed.yaml"
+extract_kind_name "${write_path}" Service thanos-receive-managed \
+  >"${service_doc}"
+require "${service_doc}" 'port: 8443'
+require "${service_doc}" 'targetPort: https'
+require "${service_doc}" 'app.kubernetes.io/component: write-proxy'
+
+echo "checking the write path stays off unless it is enabled"
+reject "${enabled}" 'osac-metrics-write-ca'
+reject "${enabled}" 'osac-metrics-write-revocation'
+reject "${disabled}" 'osac-metrics-write-ca'
+reject "${disabled}" 'thanos-receive-managed'
+
 echo "checking the disabled path removes the admin surface"
 for name in thanos-query-admin thanos-query-admin-openshift \
   osac-observability-query-allowlist osac-observability-admin-credentials; do

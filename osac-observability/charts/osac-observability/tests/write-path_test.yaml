@@ -1,0 +1,348 @@
+suite: managed write path
+templates:
+  - templates/*.yaml
+release:
+  name: osac
+  namespace: osac
+set:
+  global.observability.enabled: true
+  global.observability.clusterRemoteWrite.enabled: true
+  global.clusterDomain: apps.example.com
+  global.observability.keycloak.issuerUrl: https://keycloak.example.com/realms/osac
+  global.observability.objectStorage.secretName: thanos-object-storage
+  global.observability.objectStorage.endpoint: https://s3.example.com
+  global.observability.objectStorage.bucket: thanos
+  global.observability.objectStorage.region: us-east-1
+  global.observability.thanos.image.registry: registry.redhat.io
+  global.observability.thanos.image.repository: openshift4/ose-thanos-rhel8
+  global.observability.services.metricsAuth.repository: ghcr.io/osac-project/osac-observability
+  global.observability.thanos.image.tag: test-thanos
+  global.observability.services.metricsAuth.tag: test-metrics-auth
+  global.observability.services.oauth2Proxy.tag: test-oauth2-proxy
+  global.observability.services.openshiftOauthProxy.tag: test-ose-oauth-proxy
+
+tests:
+  - it: renders a self-signed bootstrap, a CA certificate and a CA issuer
+    template: templates/write-ca.yaml
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: bootstraps the write CA from a namespaced self-signed issuer
+    template: templates/write-ca.yaml
+    documentSelector:
+      path: metadata.name
+      value: osac-metrics-write-ca-selfsigned
+    asserts:
+      - isKind:
+          of: Issuer
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+      - equal:
+          path: spec.selfSigned
+          value: {}
+
+  - it: keeps the CA key pair in a cert-manager Secret, never in values
+    template: templates/write-ca.yaml
+    documentSelector:
+      path: metadata.name
+      value: osac-metrics-write-ca-cert
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+      - equal:
+          path: spec.isCA
+          value: true
+      - equal:
+          path: spec.secretName
+          value: osac-metrics-write-ca
+      - equal:
+          path: spec.issuerRef.name
+          value: osac-metrics-write-ca-selfsigned
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      # The chart never renders key material; cert-manager generates and owns
+      # the Secret.
+      - notExists:
+          path: spec.secretTemplate
+
+  - it: signs client and serving certificates from the CA issuer
+    template: templates/write-ca.yaml
+    documentSelector:
+      path: metadata.name
+      value: osac-metrics-write-ca
+    asserts:
+      - isKind:
+          of: Issuer
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+      - equal:
+          path: spec.ca.secretName
+          value: osac-metrics-write-ca
+
+  - it: renders exactly one empty revocation key
+    template: templates/revocation.yaml
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: osac-metrics-write-revocation
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+      # One key, and a fresh install lists no revoked serial. The operator
+      # appends serials through the API; the chart preserves them on upgrade.
+      - equal:
+          path: data
+          value:
+            revoked: ""
+
+  - it: issues the proxy serving certificate with the configured lifetime
+    template: templates/write-proxy.yaml
+    set:
+      global.observability.clusterRemoteWrite.certificateDuration: 45d
+      global.observability.clusterRemoteWrite.renewBefore: 15d
+    documentSelector:
+      path: metadata.name
+      value: thanos-receive-managed-tls
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+      - equal:
+          path: spec.secretName
+          value: thanos-receive-managed-tls
+      - equal:
+          path: spec.duration
+          value: 45d
+      - equal:
+          path: spec.renewBefore
+          value: 15d
+      - equal:
+          path: spec.issuerRef.name
+          value: osac-metrics-write-ca
+      - equal:
+          path: spec.usages
+          value:
+            - server auth
+      # Passthrough TLS means the tenant cluster verifies the external Route
+      # host, so the certificate must name it.
+      - contains:
+          path: spec.dnsNames
+          content: thanos-receive-managed-osac-observability.apps.example.com
+
+  - it: exposes only the TLS port through a passthrough Route
+    template: templates/write-route.yaml
+    asserts:
+      - isKind:
+          of: Route
+      - equal:
+          path: metadata.name
+          value: thanos-receive-managed
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+      - equal:
+          path: spec.host
+          value: thanos-receive-managed-osac-observability.apps.example.com
+      - equal:
+          path: spec.to.kind
+          value: Service
+      - equal:
+          path: spec.to.name
+          value: thanos-receive-managed
+      - equal:
+          path: spec.port.targetPort
+          value: https
+      # The router must not terminate TLS: only the proxy can inspect the
+      # client certificate and reject a revoked serial with a 401.
+      - equal:
+          path: spec.tls.termination
+          value: passthrough
+      - equal:
+          path: spec.tls.insecureEdgeTerminationPolicy
+          value: None
+
+  - it: runs the proxy with certificate identity, revocation and the drop rule
+    template: templates/write-proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: write-proxy
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/osac-project/osac-observability:test-metrics-auth
+      - equal:
+          path: spec.template.spec.containers[0].command
+          value:
+            - /metrics-auth
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: write-proxy
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --client-ca-file=/etc/write-ca/ca.crt
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --upstream=https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --revocation-name=osac-metrics-write-revocation
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --keep-kube-prefix=kube_node_
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --drop-prefixes=container_,claim,mount,kserve_,vllm_,dcgm_
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 8443
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /readyz
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /livez
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: thanos-receive-managed
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: true
+
+  - it: marks the proxy pod as the admitted write-proxy peer
+    template: templates/write-proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      # The Receive NetworkPolicy admits exactly this label on 19291.
+      - equal:
+          path: spec.template.metadata.labels["osac.openshift.io/observability-role"]
+          value: write-proxy
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/component"]
+          value: write-proxy
+
+  - it: mounts the CA certificate, serving certificate and upstream bundle
+    template: templates/write-proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].secret.secretName
+          value: thanos-receive-managed-tls
+      # Only the public CA certificate is mounted, so the CA private key never
+      # enters the proxy pod.
+      - equal:
+          path: spec.template.spec.volumes[1].secret.secretName
+          value: osac-metrics-write-ca
+      - equal:
+          path: spec.template.spec.volumes[1].secret.items[0].key
+          value: tls.crt
+      - equal:
+          path: spec.template.spec.volumes[1].secret.items[0].path
+          value: ca.crt
+      - equal:
+          path: spec.template.spec.volumes[2].secret.secretName
+          value: thanos-receive-tls
+      - equal:
+          path: spec.template.spec.volumes[2].secret.items[0].key
+          value: ca.crt
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[1].mountPath
+          value: /etc/write-ca
+
+  - it: lets the proxy watch the revocation ConfigMap only
+    template: templates/write-proxy.yaml
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: rules
+          value:
+            - apiGroups: [""]
+              resources: ["configmaps"]
+              verbs: ["get", "list", "watch"]
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+
+  - it: serves the write Route on the proxy TLS port
+    template: templates/write-proxy.yaml
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.selector["app.kubernetes.io/component"]
+          value: write-proxy
+      - equal:
+          path: spec.ports[0].port
+          value: 8443
+      - equal:
+          path: spec.ports[0].targetPort
+          value: https
+
+  - it: renders no write path when cluster remote write is disabled
+    template: templates/write-proxy.yaml
+    set:
+      global.observability.clusterRemoteWrite.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no write CA when cluster remote write is disabled
+    template: templates/write-ca.yaml
+    set:
+      global.observability.clusterRemoteWrite.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no revocation ConfigMap when cluster remote write is disabled
+    template: templates/revocation.yaml
+    set:
+      global.observability.clusterRemoteWrite.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no write Route when cluster remote write is disabled
+    template: templates/write-route.yaml
+    set:
+      global.observability.clusterRemoteWrite.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no write path when observability is disabled
+    template: templates/write-proxy.yaml
+    set:
+      global.observability.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

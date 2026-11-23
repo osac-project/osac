@@ -148,12 +148,26 @@ global:
         # Placeholder; overwritten at release time.
         tag: ""
     clusterRemoteWrite:
-      # Not enforced in this release: no controller reads these yet. Later
-      # work uses them for tenant and workload cluster writes and their client
-      # certificates.
+      # Renders the managed write path: the write CA, the write proxy and its
+      # Route, and the revocation ConfigMap. osac-operator also reads these
+      # values to issue and revoke each tenant cluster's client certificate.
       enabled: false
+      # Client certificates and the proxy's serving certificate. The proxy
+      # checks expiry, so keep the duration long enough for the renewal to
+      # arrive before it lapses.
       certificateDuration: 90d
       renewBefore: 30d
+      # Names shared by the chart and osac-operator.
+      writeCAIssuer: osac-metrics-write-ca
+      servingCertificate: thanos-receive-managed-tls
+      revocationConfigMap: osac-metrics-write-revocation
+      routeName: thanos-receive-managed
+      # The proxy's drop rule and the cluster-side copy of it render from this
+      # one definition, so they cannot drift. Only keepKubePrefix survives of
+      # the kube_ families; every dropPrefixes family is always dropped.
+      dropRule:
+        keepKubePrefix: kube_node_
+        dropPrefixes: [container_, claim, mount, kserve_, vllm_, dcgm_]
     tenant:
       # Not enforced in this release: no controller reads these yet; admins
       # are not limited.

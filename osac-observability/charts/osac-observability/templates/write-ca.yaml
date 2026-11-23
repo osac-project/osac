@@ -1,0 +1,54 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $write := (.Values.global.observability | default dict).clusterRemoteWrite | default dict -}}
+{{- if $write.enabled }}
+{{- $ns := include "osac-observability.namespace" . -}}
+{{- $issuer := $write.writeCAIssuer | default "osac-metrics-write-ca" -}}
+{{- /* The write CA is the only issuer trusted for tenant-cluster remote write.
+       It bootstraps from a namespaced self-signed Issuer so cert-manager keeps
+       the CA key pair in a Secret the chart never renders: no key material
+       appears in values, templates or `helm get values`. */ -}}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $issuer }}-selfsigned
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $issuer }}-cert
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  commonName: {{ $issuer }}
+  secretName: {{ $issuer }}
+  # The CA outlives every client certificate it signs; renewing it is an
+  # operator decision, not part of the 90-day client rotation.
+  duration: 87600h
+  renewBefore: 8760h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ $issuer }}-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ $issuer }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ $issuer }}
+{{- end }}
+{{- end }}

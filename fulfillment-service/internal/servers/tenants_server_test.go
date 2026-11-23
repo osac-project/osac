@@ -125,6 +125,12 @@ var _ = Describe("Public tenants server", func() {
 			Expect(getResponse.GetObject().GetMetadata().GetName()).To(Equal("my-tenant"))
 		})
 
+		It("Exposes only the public onboarding status field", func() {
+			fields := (&publicv1.TenantStatus{}).ProtoReflect().Descriptor().Fields()
+			Expect(fields.Len()).To(Equal(1))
+			Expect(string(fields.Get(0).Name())).To(Equal("onboarded"))
+		})
+
 		It("Can't create a tenant, not implemented", func() {
 			// Try to create the tenant via the public server. It should fail with an Unimplemented error.
 			_, err := publicServer.Create(ctx, publicv1.TenantsCreateRequest_builder{

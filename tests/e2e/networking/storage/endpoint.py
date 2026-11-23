@@ -79,19 +79,19 @@ def default_ssh_runner(endpoint: StorageEndpoint, command: str, timeout: int = 3
 
 def assert_log_readable(endpoint: StorageEndpoint, *, run: SshRunner = default_ssh_runner) -> None:
     """Fail before any test if the server's client log cannot be read."""
-    output, status = run(endpoint, f"test -r {shlex.quote(endpoint.log_path)}", 30)
+    output, status = run(endpoint, f"sudo test -r {shlex.quote(endpoint.log_path)}", 30)
     if status != 0:
         raise RuntimeError(f"Cannot read {endpoint.log_path} on {endpoint.ssh_host}: {output!r}")
 
 
 def log_line_count(endpoint: StorageEndpoint, *, run: SshRunner = default_ssh_runner) -> int:
-    output, status = run(endpoint, f"wc -l < {shlex.quote(endpoint.log_path)} 2>/dev/null || echo 0", 30)
+    output, status = run(endpoint, f"sudo wc -l < {shlex.quote(endpoint.log_path)}", 30)
     if status != 0:
         raise RuntimeError(f"Cannot count {endpoint.log_path} on {endpoint.ssh_host}: {output!r}")
     try:
         return max(int(output.strip().splitlines()[-1]), 0)
-    except (ValueError, IndexError):
-        return 0
+    except (ValueError, IndexError) as exc:
+        raise RuntimeError(f"Unexpected line count from {endpoint.log_path}: {output!r}") from exc
 
 
 _IPV4_RE = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?!\d)")
@@ -181,7 +181,7 @@ def new_log_lines(endpoint: StorageEndpoint, since: int, *, run: SshRunner = def
     if total <= since:
         return []
     request = max(total - since, 0)
-    output, status = run(endpoint, f"tail -n {int(request)} {shlex.quote(endpoint.log_path)} 2>/dev/null || true", 30)
+    output, status = run(endpoint, f"sudo tail -n {int(request)} {shlex.quote(endpoint.log_path)}", 30)
     if status != 0:
         raise RuntimeError(f"Cannot read {endpoint.log_path} on {endpoint.ssh_host}: {output!r}")
     return output.splitlines()

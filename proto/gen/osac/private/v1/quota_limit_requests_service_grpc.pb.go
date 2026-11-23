@@ -32,14 +32,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	QuotaLimitRequests_List_FullMethodName    = "/osac.private.v1.QuotaLimitRequests/List"
-	QuotaLimitRequests_Get_FullMethodName     = "/osac.private.v1.QuotaLimitRequests/Get"
-	QuotaLimitRequests_Create_FullMethodName  = "/osac.private.v1.QuotaLimitRequests/Create"
-	QuotaLimitRequests_Update_FullMethodName  = "/osac.private.v1.QuotaLimitRequests/Update"
-	QuotaLimitRequests_Delete_FullMethodName  = "/osac.private.v1.QuotaLimitRequests/Delete"
-	QuotaLimitRequests_Approve_FullMethodName = "/osac.private.v1.QuotaLimitRequests/Approve"
-	QuotaLimitRequests_Deny_FullMethodName    = "/osac.private.v1.QuotaLimitRequests/Deny"
-	QuotaLimitRequests_Signal_FullMethodName  = "/osac.private.v1.QuotaLimitRequests/Signal"
+	QuotaLimitRequests_List_FullMethodName   = "/osac.private.v1.QuotaLimitRequests/List"
+	QuotaLimitRequests_Get_FullMethodName    = "/osac.private.v1.QuotaLimitRequests/Get"
+	QuotaLimitRequests_Create_FullMethodName = "/osac.private.v1.QuotaLimitRequests/Create"
+	QuotaLimitRequests_Update_FullMethodName = "/osac.private.v1.QuotaLimitRequests/Update"
+	QuotaLimitRequests_Delete_FullMethodName = "/osac.private.v1.QuotaLimitRequests/Delete"
+	QuotaLimitRequests_Signal_FullMethodName = "/osac.private.v1.QuotaLimitRequests/Signal"
 )
 
 // QuotaLimitRequestsClient is the client API for QuotaLimitRequests service.
@@ -54,16 +52,13 @@ type QuotaLimitRequestsClient interface {
 	Get(ctx context.Context, in *QuotaLimitRequestsGetRequest, opts ...grpc.CallOption) (*QuotaLimitRequestsGetResponse, error)
 	// Creates a new request for the caller's tenant. Only one pending request exists per dimension.
 	Create(ctx context.Context, in *QuotaLimitRequestsCreateRequest, opts ...grpc.CallOption) (*QuotaLimitRequestsCreateResponse, error)
-	// Updates a pending request. Only the requested value can change; the dimension, tenant, and
-	// project are immutable.
+	// Updates a pending request. A tenant admin may change the requested value; only a cloud
+	// provider admin may set the state to APPROVED, which sets the requested limit for the
+	// request's tenant and dimension, or to DENIED, which changes no limit. The dimension,
+	// tenant, and project are immutable.
 	Update(ctx context.Context, in *QuotaLimitRequestsUpdateRequest, opts ...grpc.CallOption) (*QuotaLimitRequestsUpdateResponse, error)
 	// Deletes a request, for example to withdraw a pending one.
 	Delete(ctx context.Context, in *QuotaLimitRequestsDeleteRequest, opts ...grpc.CallOption) (*QuotaLimitRequestsDeleteResponse, error)
-	// Approves a pending request: sets the requested limit for the request's tenant and dimension
-	// and marks the request approved. Only a Cloud Provider Admin may approve a request.
-	Approve(ctx context.Context, in *QuotaLimitRequestsApproveRequest, opts ...grpc.CallOption) (*QuotaLimitRequestsApproveResponse, error)
-	// Denies a pending request and changes no limit. Only a Cloud Provider Admin may deny a request.
-	Deny(ctx context.Context, in *QuotaLimitRequestsDenyRequest, opts ...grpc.CallOption) (*QuotaLimitRequestsDenyResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(ctx context.Context, in *QuotaLimitRequestsSignalRequest, opts ...grpc.CallOption) (*QuotaLimitRequestsSignalResponse, error)
 }
@@ -126,26 +121,6 @@ func (c *quotaLimitRequestsClient) Delete(ctx context.Context, in *QuotaLimitReq
 	return out, nil
 }
 
-func (c *quotaLimitRequestsClient) Approve(ctx context.Context, in *QuotaLimitRequestsApproveRequest, opts ...grpc.CallOption) (*QuotaLimitRequestsApproveResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(QuotaLimitRequestsApproveResponse)
-	err := c.cc.Invoke(ctx, QuotaLimitRequests_Approve_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *quotaLimitRequestsClient) Deny(ctx context.Context, in *QuotaLimitRequestsDenyRequest, opts ...grpc.CallOption) (*QuotaLimitRequestsDenyResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(QuotaLimitRequestsDenyResponse)
-	err := c.cc.Invoke(ctx, QuotaLimitRequests_Deny_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *quotaLimitRequestsClient) Signal(ctx context.Context, in *QuotaLimitRequestsSignalRequest, opts ...grpc.CallOption) (*QuotaLimitRequestsSignalResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(QuotaLimitRequestsSignalResponse)
@@ -168,16 +143,13 @@ type QuotaLimitRequestsServer interface {
 	Get(context.Context, *QuotaLimitRequestsGetRequest) (*QuotaLimitRequestsGetResponse, error)
 	// Creates a new request for the caller's tenant. Only one pending request exists per dimension.
 	Create(context.Context, *QuotaLimitRequestsCreateRequest) (*QuotaLimitRequestsCreateResponse, error)
-	// Updates a pending request. Only the requested value can change; the dimension, tenant, and
-	// project are immutable.
+	// Updates a pending request. A tenant admin may change the requested value; only a cloud
+	// provider admin may set the state to APPROVED, which sets the requested limit for the
+	// request's tenant and dimension, or to DENIED, which changes no limit. The dimension,
+	// tenant, and project are immutable.
 	Update(context.Context, *QuotaLimitRequestsUpdateRequest) (*QuotaLimitRequestsUpdateResponse, error)
 	// Deletes a request, for example to withdraw a pending one.
 	Delete(context.Context, *QuotaLimitRequestsDeleteRequest) (*QuotaLimitRequestsDeleteResponse, error)
-	// Approves a pending request: sets the requested limit for the request's tenant and dimension
-	// and marks the request approved. Only a Cloud Provider Admin may approve a request.
-	Approve(context.Context, *QuotaLimitRequestsApproveRequest) (*QuotaLimitRequestsApproveResponse, error)
-	// Denies a pending request and changes no limit. Only a Cloud Provider Admin may deny a request.
-	Deny(context.Context, *QuotaLimitRequestsDenyRequest) (*QuotaLimitRequestsDenyResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(context.Context, *QuotaLimitRequestsSignalRequest) (*QuotaLimitRequestsSignalResponse, error)
 	mustEmbedUnimplementedQuotaLimitRequestsServer()
@@ -204,12 +176,6 @@ func (UnimplementedQuotaLimitRequestsServer) Update(context.Context, *QuotaLimit
 }
 func (UnimplementedQuotaLimitRequestsServer) Delete(context.Context, *QuotaLimitRequestsDeleteRequest) (*QuotaLimitRequestsDeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
-}
-func (UnimplementedQuotaLimitRequestsServer) Approve(context.Context, *QuotaLimitRequestsApproveRequest) (*QuotaLimitRequestsApproveResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Approve not implemented")
-}
-func (UnimplementedQuotaLimitRequestsServer) Deny(context.Context, *QuotaLimitRequestsDenyRequest) (*QuotaLimitRequestsDenyResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Deny not implemented")
 }
 func (UnimplementedQuotaLimitRequestsServer) Signal(context.Context, *QuotaLimitRequestsSignalRequest) (*QuotaLimitRequestsSignalResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Signal not implemented")
@@ -325,42 +291,6 @@ func _QuotaLimitRequests_Delete_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QuotaLimitRequests_Approve_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(QuotaLimitRequestsApproveRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(QuotaLimitRequestsServer).Approve(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: QuotaLimitRequests_Approve_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(QuotaLimitRequestsServer).Approve(ctx, req.(*QuotaLimitRequestsApproveRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _QuotaLimitRequests_Deny_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(QuotaLimitRequestsDenyRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(QuotaLimitRequestsServer).Deny(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: QuotaLimitRequests_Deny_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(QuotaLimitRequestsServer).Deny(ctx, req.(*QuotaLimitRequestsDenyRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _QuotaLimitRequests_Signal_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(QuotaLimitRequestsSignalRequest)
 	if err := dec(in); err != nil {
@@ -405,14 +335,6 @@ var QuotaLimitRequests_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Delete",
 			Handler:    _QuotaLimitRequests_Delete_Handler,
-		},
-		{
-			MethodName: "Approve",
-			Handler:    _QuotaLimitRequests_Approve_Handler,
-		},
-		{
-			MethodName: "Deny",
-			Handler:    _QuotaLimitRequests_Deny_Handler,
 		},
 		{
 			MethodName: "Signal",

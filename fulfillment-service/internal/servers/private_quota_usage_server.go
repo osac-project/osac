@@ -38,9 +38,9 @@ type PrivateQuotaUsageServerBuilder struct {
 
 var _ privatev1.QuotaUsageServer = (*PrivateQuotaUsageServer)(nil)
 
-// PrivateQuotaUsageServer builds the usage report of one tenant: each limit, the usage counted
-// from the database, the room left, and the dimensions over their limit, for the tenant and each
-// of its projects. The built-in tenants hold no quota state, so they have no report.
+// PrivateQuotaUsageServer builds the usage report of one tenant: each limit and the usage counted
+// from the database, for the tenant and each of its projects. The built-in tenants hold no quota
+// state, so they have no report.
 type PrivateQuotaUsageServer struct {
 	privatev1.UnimplementedQuotaUsageServer
 
@@ -122,8 +122,8 @@ func (s *PrivateQuotaUsageServer) Get(ctx context.Context,
 	return
 }
 
-// buildReport assembles the tenant's usage report: the limits, the counted usage, the room left
-// and the over-limit marks, for the tenant and each of its projects.
+// buildReport assembles the tenant's usage report: the limits and the counted usage, for the
+// tenant and each of its projects.
 func (s *PrivateQuotaUsageServer) buildReport(
 	ctx context.Context, tenant string) (report *privatev1.QuotaUsageReport, err error) {
 	usage, err := s.counter.Count(ctx, tenant)
@@ -261,8 +261,6 @@ func quotaUsageDimensions(usage map[string]int64, limit func(string) int64) []*p
 			Dimension: dimension,
 			Limit:     value,
 			Usage:     amount,
-			Room:      value - amount,
-			OverLimit: amount > value,
 		}.Build())
 	}
 	return result

@@ -19,7 +19,7 @@ import "cleanapi/cleanapi.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
-// One dimension's limit, usage, and room left, at one scope.
+// One dimension's limit and usage at one scope.
 message QuotaUsageDimension {
   // The quota dimension, such as `compute.vcpus`.
   string dimension = 1;
@@ -31,16 +31,14 @@ message QuotaUsageDimension {
   // The usage at this scope.
   int64 usage = 3;
 
-  // The room left: the limit minus the usage. Negative when the usage is over the limit.
-  int64 room = 4;
-
-  // True when the usage exceeds the limit.
-  bool over_limit = 5;
+  reserved 4, 5;
+  reserved "room", "over_limit";
 }
 
 // The quota usage of one project.
 message QuotaUsageProject {
-  // Full name of the project. Empty for the tenant's default project.
+  // Full name of the project. Empty for the tenant's default project, the root of the project
+  // tree.
   string project = 1;
 
   // One entry per dimension that has a project limit or usage in the project.

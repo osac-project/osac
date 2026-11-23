@@ -42,26 +42,6 @@ func (m *MockQuotaLimitsClient) EXPECT() *MockQuotaLimitsClientMockRecorder {
 	return m.recorder
 }
 
-// ClearDefault mocks base method.
-func (m *MockQuotaLimitsClient) ClearDefault(ctx context.Context, in *privatev1.QuotaLimitsClearDefaultRequest, opts ...grpc.CallOption) (*privatev1.QuotaLimitsClearDefaultResponse, error) {
-	m.ctrl.T.Helper()
-	varargs := []any{ctx, in}
-	for _, a := range opts {
-		varargs = append(varargs, a)
-	}
-	ret := m.ctrl.Call(m, "ClearDefault", varargs...)
-	ret0, _ := ret[0].(*privatev1.QuotaLimitsClearDefaultResponse)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// ClearDefault indicates an expected call of ClearDefault.
-func (mr *MockQuotaLimitsClientMockRecorder) ClearDefault(ctx, in any, opts ...any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	varargs := append([]any{ctx, in}, opts...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ClearDefault", reflect.TypeOf((*MockQuotaLimitsClient)(nil).ClearDefault), varargs...)
-}
-
 // Create mocks base method.
 func (m *MockQuotaLimitsClient) Create(ctx context.Context, in *privatev1.QuotaLimitsCreateRequest, opts ...grpc.CallOption) (*privatev1.QuotaLimitsCreateResponse, error) {
 	m.ctrl.T.Helper()
@@ -122,26 +102,6 @@ func (mr *MockQuotaLimitsClientMockRecorder) Get(ctx, in any, opts ...any) *gomo
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Get", reflect.TypeOf((*MockQuotaLimitsClient)(nil).Get), varargs...)
 }
 
-// GetDefault mocks base method.
-func (m *MockQuotaLimitsClient) GetDefault(ctx context.Context, in *privatev1.QuotaLimitsGetDefaultRequest, opts ...grpc.CallOption) (*privatev1.QuotaLimitsGetDefaultResponse, error) {
-	m.ctrl.T.Helper()
-	varargs := []any{ctx, in}
-	for _, a := range opts {
-		varargs = append(varargs, a)
-	}
-	ret := m.ctrl.Call(m, "GetDefault", varargs...)
-	ret0, _ := ret[0].(*privatev1.QuotaLimitsGetDefaultResponse)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// GetDefault indicates an expected call of GetDefault.
-func (mr *MockQuotaLimitsClientMockRecorder) GetDefault(ctx, in any, opts ...any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	varargs := append([]any{ctx, in}, opts...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetDefault", reflect.TypeOf((*MockQuotaLimitsClient)(nil).GetDefault), varargs...)
-}
-
 // List mocks base method.
 func (m *MockQuotaLimitsClient) List(ctx context.Context, in *privatev1.QuotaLimitsListRequest, opts ...grpc.CallOption) (*privatev1.QuotaLimitsListResponse, error) {
 	m.ctrl.T.Helper()
@@ -160,46 +120,6 @@ func (mr *MockQuotaLimitsClientMockRecorder) List(ctx, in any, opts ...any) *gom
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]any{ctx, in}, opts...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "List", reflect.TypeOf((*MockQuotaLimitsClient)(nil).List), varargs...)
-}
-
-// ListDefaults mocks base method.
-func (m *MockQuotaLimitsClient) ListDefaults(ctx context.Context, in *privatev1.QuotaLimitsListDefaultsRequest, opts ...grpc.CallOption) (*privatev1.QuotaLimitsListDefaultsResponse, error) {
-	m.ctrl.T.Helper()
-	varargs := []any{ctx, in}
-	for _, a := range opts {
-		varargs = append(varargs, a)
-	}
-	ret := m.ctrl.Call(m, "ListDefaults", varargs...)
-	ret0, _ := ret[0].(*privatev1.QuotaLimitsListDefaultsResponse)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// ListDefaults indicates an expected call of ListDefaults.
-func (mr *MockQuotaLimitsClientMockRecorder) ListDefaults(ctx, in any, opts ...any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	varargs := append([]any{ctx, in}, opts...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ListDefaults", reflect.TypeOf((*MockQuotaLimitsClient)(nil).ListDefaults), varargs...)
-}
-
-// SetDefault mocks base method.
-func (m *MockQuotaLimitsClient) SetDefault(ctx context.Context, in *privatev1.QuotaLimitsSetDefaultRequest, opts ...grpc.CallOption) (*privatev1.QuotaLimitsSetDefaultResponse, error) {
-	m.ctrl.T.Helper()
-	varargs := []any{ctx, in}
-	for _, a := range opts {
-		varargs = append(varargs, a)
-	}
-	ret := m.ctrl.Call(m, "SetDefault", varargs...)
-	ret0, _ := ret[0].(*privatev1.QuotaLimitsSetDefaultResponse)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// SetDefault indicates an expected call of SetDefault.
-func (mr *MockQuotaLimitsClientMockRecorder) SetDefault(ctx, in any, opts ...any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	varargs := append([]any{ctx, in}, opts...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "SetDefault", reflect.TypeOf((*MockQuotaLimitsClient)(nil).SetDefault), varargs...)
 }
 
 // Signal mocks base method.

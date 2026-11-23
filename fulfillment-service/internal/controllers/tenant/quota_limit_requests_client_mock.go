@@ -42,26 +42,6 @@ func (m *MockQuotaLimitRequestsClient) EXPECT() *MockQuotaLimitRequestsClientMoc
 	return m.recorder
 }
 
-// Approve mocks base method.
-func (m *MockQuotaLimitRequestsClient) Approve(ctx context.Context, in *privatev1.QuotaLimitRequestsApproveRequest, opts ...grpc.CallOption) (*privatev1.QuotaLimitRequestsApproveResponse, error) {
-	m.ctrl.T.Helper()
-	varargs := []any{ctx, in}
-	for _, a := range opts {
-		varargs = append(varargs, a)
-	}
-	ret := m.ctrl.Call(m, "Approve", varargs...)
-	ret0, _ := ret[0].(*privatev1.QuotaLimitRequestsApproveResponse)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// Approve indicates an expected call of Approve.
-func (mr *MockQuotaLimitRequestsClientMockRecorder) Approve(ctx, in any, opts ...any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	varargs := append([]any{ctx, in}, opts...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Approve", reflect.TypeOf((*MockQuotaLimitRequestsClient)(nil).Approve), varargs...)
-}
-
 // Create mocks base method.
 func (m *MockQuotaLimitRequestsClient) Create(ctx context.Context, in *privatev1.QuotaLimitRequestsCreateRequest, opts ...grpc.CallOption) (*privatev1.QuotaLimitRequestsCreateResponse, error) {
 	m.ctrl.T.Helper()
@@ -100,26 +80,6 @@ func (mr *MockQuotaLimitRequestsClientMockRecorder) Delete(ctx, in any, opts ...
 	mr.mock.ctrl.T.Helper()
 	varargs := append([]any{ctx, in}, opts...)
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockQuotaLimitRequestsClient)(nil).Delete), varargs...)
-}
-
-// Deny mocks base method.
-func (m *MockQuotaLimitRequestsClient) Deny(ctx context.Context, in *privatev1.QuotaLimitRequestsDenyRequest, opts ...grpc.CallOption) (*privatev1.QuotaLimitRequestsDenyResponse, error) {
-	m.ctrl.T.Helper()
-	varargs := []any{ctx, in}
-	for _, a := range opts {
-		varargs = append(varargs, a)
-	}
-	ret := m.ctrl.Call(m, "Deny", varargs...)
-	ret0, _ := ret[0].(*privatev1.QuotaLimitRequestsDenyResponse)
-	ret1, _ := ret[1].(error)
-	return ret0, ret1
-}
-
-// Deny indicates an expected call of Deny.
-func (mr *MockQuotaLimitRequestsClientMockRecorder) Deny(ctx, in any, opts ...any) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	varargs := append([]any{ctx, in}, opts...)
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Deny", reflect.TypeOf((*MockQuotaLimitRequestsClient)(nil).Deny), varargs...)
 }
 
 // Get mocks base method.

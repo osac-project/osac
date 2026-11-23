@@ -241,134 +241,6 @@ func local_request_QuotaLimits_Delete_0(ctx context.Context, marshaler runtime.M
 	return msg, metadata, err
 }
 
-var filter_QuotaLimits_ListDefaults_0 = &utilities.DoubleArray{Encoding: map[string]int{}, Base: []int(nil), Check: []int(nil)}
-
-func request_QuotaLimits_ListDefaults_0(ctx context.Context, marshaler runtime.Marshaler, client QuotaLimitsClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
-	var (
-		protoReq QuotaLimitsListDefaultsRequest
-		metadata runtime.ServerMetadata
-	)
-	if err := req.ParseForm(); err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
-	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_QuotaLimits_ListDefaults_0); err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
-	msg, err := client.ListDefaults(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
-	return msg, metadata, err
-}
-
-func local_request_QuotaLimits_ListDefaults_0(ctx context.Context, marshaler runtime.Marshaler, server QuotaLimitsServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
-	var (
-		protoReq QuotaLimitsListDefaultsRequest
-		metadata runtime.ServerMetadata
-	)
-	if err := req.ParseForm(); err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
-	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_QuotaLimits_ListDefaults_0); err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
-	msg, err := server.ListDefaults(ctx, &protoReq)
-	return msg, metadata, err
-}
-
-func request_QuotaLimits_GetDefault_0(ctx context.Context, marshaler runtime.Marshaler, client QuotaLimitsClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
-	var (
-		protoReq QuotaLimitsGetDefaultRequest
-		metadata runtime.ServerMetadata
-		err      error
-	)
-	val, ok := pathParams["id"]
-	if !ok {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "id")
-	}
-	protoReq.Id, err = runtime.String(val)
-	if err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "id", err)
-	}
-	msg, err := client.GetDefault(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
-	return msg, metadata, err
-}
-
-func local_request_QuotaLimits_GetDefault_0(ctx context.Context, marshaler runtime.Marshaler, server QuotaLimitsServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
-	var (
-		protoReq QuotaLimitsGetDefaultRequest
-		metadata runtime.ServerMetadata
-		err      error
-	)
-	val, ok := pathParams["id"]
-	if !ok {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "id")
-	}
-	protoReq.Id, err = runtime.String(val)
-	if err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "id", err)
-	}
-	msg, err := server.GetDefault(ctx, &protoReq)
-	return msg, metadata, err
-}
-
-func request_QuotaLimits_SetDefault_0(ctx context.Context, marshaler runtime.Marshaler, client QuotaLimitsClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
-	var (
-		protoReq QuotaLimitsSetDefaultRequest
-		metadata runtime.ServerMetadata
-	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq.Object); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
-	msg, err := client.SetDefault(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
-	return msg, metadata, err
-}
-
-func local_request_QuotaLimits_SetDefault_0(ctx context.Context, marshaler runtime.Marshaler, server QuotaLimitsServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
-	var (
-		protoReq QuotaLimitsSetDefaultRequest
-		metadata runtime.ServerMetadata
-	)
-	if err := marshaler.NewDecoder(req.Body).Decode(&protoReq.Object); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
-	msg, err := server.SetDefault(ctx, &protoReq)
-	return msg, metadata, err
-}
-
-func request_QuotaLimits_ClearDefault_0(ctx context.Context, marshaler runtime.Marshaler, client QuotaLimitsClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
-	var (
-		protoReq QuotaLimitsClearDefaultRequest
-		metadata runtime.ServerMetadata
-		err      error
-	)
-	val, ok := pathParams["id"]
-	if !ok {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "id")
-	}
-	protoReq.Id, err = runtime.String(val)
-	if err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "id", err)
-	}
-	msg, err := client.ClearDefault(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
-	return msg, metadata, err
-}
-
-func local_request_QuotaLimits_ClearDefault_0(ctx context.Context, marshaler runtime.Marshaler, server QuotaLimitsServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
-	var (
-		protoReq QuotaLimitsClearDefaultRequest
-		metadata runtime.ServerMetadata
-		err      error
-	)
-	val, ok := pathParams["id"]
-	if !ok {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "id")
-	}
-	protoReq.Id, err = runtime.String(val)
-	if err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "id", err)
-	}
-	msg, err := server.ClearDefault(ctx, &protoReq)
-	return msg, metadata, err
-}
-
 // RegisterQuotaLimitsHandlerServer registers the http handlers for service QuotaLimits to "mux".
 // UnaryRPC     :call QuotaLimitsServer directly.
 // StreamingRPC :currently unsupported pending https://github.com/grpc/grpc-go/issues/906.
@@ -474,86 +346,6 @@ func RegisterQuotaLimitsHandlerServer(ctx context.Context, mux *runtime.ServeMux
 			return
 		}
 		forward_QuotaLimits_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
-	})
-	mux.Handle(http.MethodGet, pattern_QuotaLimits_ListDefaults_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
-		ctx, cancel := context.WithCancel(req.Context())
-		defer cancel()
-		var stream runtime.ServerTransportStream
-		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
-		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/osac.public.v1.QuotaLimits/ListDefaults", runtime.WithHTTPPathPattern("/api/fulfillment/v1/quota_default_limits"))
-		if err != nil {
-			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		resp, md, err := local_request_QuotaLimits_ListDefaults_0(annotatedContext, inboundMarshaler, server, req, pathParams)
-		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
-		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
-		if err != nil {
-			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		forward_QuotaLimits_ListDefaults_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
-	})
-	mux.Handle(http.MethodGet, pattern_QuotaLimits_GetDefault_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
-		ctx, cancel := context.WithCancel(req.Context())
-		defer cancel()
-		var stream runtime.ServerTransportStream
-		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
-		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/osac.public.v1.QuotaLimits/GetDefault", runtime.WithHTTPPathPattern("/api/fulfillment/v1/quota_default_limits/{id}"))
-		if err != nil {
-			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		resp, md, err := local_request_QuotaLimits_GetDefault_0(annotatedContext, inboundMarshaler, server, req, pathParams)
-		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
-		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
-		if err != nil {
-			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		forward_QuotaLimits_GetDefault_0(annotatedContext, mux, outboundMarshaler, w, req, response_QuotaLimits_GetDefault_0{resp.(*QuotaLimitsGetDefaultResponse)}, mux.GetForwardResponseOptions()...)
-	})
-	mux.Handle(http.MethodPost, pattern_QuotaLimits_SetDefault_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
-		ctx, cancel := context.WithCancel(req.Context())
-		defer cancel()
-		var stream runtime.ServerTransportStream
-		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
-		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/osac.public.v1.QuotaLimits/SetDefault", runtime.WithHTTPPathPattern("/api/fulfillment/v1/quota_default_limits"))
-		if err != nil {
-			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		resp, md, err := local_request_QuotaLimits_SetDefault_0(annotatedContext, inboundMarshaler, server, req, pathParams)
-		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
-		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
-		if err != nil {
-			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		forward_QuotaLimits_SetDefault_0(annotatedContext, mux, outboundMarshaler, w, req, response_QuotaLimits_SetDefault_0{resp.(*QuotaLimitsSetDefaultResponse)}, mux.GetForwardResponseOptions()...)
-	})
-	mux.Handle(http.MethodDelete, pattern_QuotaLimits_ClearDefault_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
-		ctx, cancel := context.WithCancel(req.Context())
-		defer cancel()
-		var stream runtime.ServerTransportStream
-		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
-		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/osac.public.v1.QuotaLimits/ClearDefault", runtime.WithHTTPPathPattern("/api/fulfillment/v1/quota_default_limits/{id}"))
-		if err != nil {
-			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		resp, md, err := local_request_QuotaLimits_ClearDefault_0(annotatedContext, inboundMarshaler, server, req, pathParams)
-		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
-		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
-		if err != nil {
-			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		forward_QuotaLimits_ClearDefault_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -680,74 +472,6 @@ func RegisterQuotaLimitsHandlerClient(ctx context.Context, mux *runtime.ServeMux
 		}
 		forward_QuotaLimits_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodGet, pattern_QuotaLimits_ListDefaults_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
-		ctx, cancel := context.WithCancel(req.Context())
-		defer cancel()
-		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/osac.public.v1.QuotaLimits/ListDefaults", runtime.WithHTTPPathPattern("/api/fulfillment/v1/quota_default_limits"))
-		if err != nil {
-			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		resp, md, err := request_QuotaLimits_ListDefaults_0(annotatedContext, inboundMarshaler, client, req, pathParams)
-		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
-		if err != nil {
-			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		forward_QuotaLimits_ListDefaults_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
-	})
-	mux.Handle(http.MethodGet, pattern_QuotaLimits_GetDefault_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
-		ctx, cancel := context.WithCancel(req.Context())
-		defer cancel()
-		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/osac.public.v1.QuotaLimits/GetDefault", runtime.WithHTTPPathPattern("/api/fulfillment/v1/quota_default_limits/{id}"))
-		if err != nil {
-			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		resp, md, err := request_QuotaLimits_GetDefault_0(annotatedContext, inboundMarshaler, client, req, pathParams)
-		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
-		if err != nil {
-			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		forward_QuotaLimits_GetDefault_0(annotatedContext, mux, outboundMarshaler, w, req, response_QuotaLimits_GetDefault_0{resp.(*QuotaLimitsGetDefaultResponse)}, mux.GetForwardResponseOptions()...)
-	})
-	mux.Handle(http.MethodPost, pattern_QuotaLimits_SetDefault_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
-		ctx, cancel := context.WithCancel(req.Context())
-		defer cancel()
-		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/osac.public.v1.QuotaLimits/SetDefault", runtime.WithHTTPPathPattern("/api/fulfillment/v1/quota_default_limits"))
-		if err != nil {
-			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		resp, md, err := request_QuotaLimits_SetDefault_0(annotatedContext, inboundMarshaler, client, req, pathParams)
-		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
-		if err != nil {
-			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		forward_QuotaLimits_SetDefault_0(annotatedContext, mux, outboundMarshaler, w, req, response_QuotaLimits_SetDefault_0{resp.(*QuotaLimitsSetDefaultResponse)}, mux.GetForwardResponseOptions()...)
-	})
-	mux.Handle(http.MethodDelete, pattern_QuotaLimits_ClearDefault_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
-		ctx, cancel := context.WithCancel(req.Context())
-		defer cancel()
-		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/osac.public.v1.QuotaLimits/ClearDefault", runtime.WithHTTPPathPattern("/api/fulfillment/v1/quota_default_limits/{id}"))
-		if err != nil {
-			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		resp, md, err := request_QuotaLimits_ClearDefault_0(annotatedContext, inboundMarshaler, client, req, pathParams)
-		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
-		if err != nil {
-			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		forward_QuotaLimits_ClearDefault_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
-	})
 	return nil
 }
 
@@ -775,42 +499,18 @@ func (m response_QuotaLimits_Update_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 
-type response_QuotaLimits_GetDefault_0 struct {
-	*QuotaLimitsGetDefaultResponse
-}
-
-func (m response_QuotaLimits_GetDefault_0) XXX_ResponseBody() interface{} {
-	return m.Object
-}
-
-type response_QuotaLimits_SetDefault_0 struct {
-	*QuotaLimitsSetDefaultResponse
-}
-
-func (m response_QuotaLimits_SetDefault_0) XXX_ResponseBody() interface{} {
-	return m.Object
-}
-
 var (
-	pattern_QuotaLimits_List_0         = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3}, []string{"api", "fulfillment", "v1", "quota_limits"}, ""))
-	pattern_QuotaLimits_Get_0          = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"api", "fulfillment", "v1", "quota_limits", "id"}, ""))
-	pattern_QuotaLimits_Create_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3}, []string{"api", "fulfillment", "v1", "quota_limits"}, ""))
-	pattern_QuotaLimits_Update_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"api", "fulfillment", "v1", "quota_limits", "object.id"}, ""))
-	pattern_QuotaLimits_Delete_0       = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"api", "fulfillment", "v1", "quota_limits", "id"}, ""))
-	pattern_QuotaLimits_ListDefaults_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3}, []string{"api", "fulfillment", "v1", "quota_default_limits"}, ""))
-	pattern_QuotaLimits_GetDefault_0   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"api", "fulfillment", "v1", "quota_default_limits", "id"}, ""))
-	pattern_QuotaLimits_SetDefault_0   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3}, []string{"api", "fulfillment", "v1", "quota_default_limits"}, ""))
-	pattern_QuotaLimits_ClearDefault_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"api", "fulfillment", "v1", "quota_default_limits", "id"}, ""))
+	pattern_QuotaLimits_List_0   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3}, []string{"api", "fulfillment", "v1", "quota_limits"}, ""))
+	pattern_QuotaLimits_Get_0    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"api", "fulfillment", "v1", "quota_limits", "id"}, ""))
+	pattern_QuotaLimits_Create_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3}, []string{"api", "fulfillment", "v1", "quota_limits"}, ""))
+	pattern_QuotaLimits_Update_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"api", "fulfillment", "v1", "quota_limits", "object.id"}, ""))
+	pattern_QuotaLimits_Delete_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 1, 0, 4, 1, 5, 4}, []string{"api", "fulfillment", "v1", "quota_limits", "id"}, ""))
 )
 
 var (
-	forward_QuotaLimits_List_0         = runtime.ForwardResponseMessage
-	forward_QuotaLimits_Get_0          = runtime.ForwardResponseMessage
-	forward_QuotaLimits_Create_0       = runtime.ForwardResponseMessage
-	forward_QuotaLimits_Update_0       = runtime.ForwardResponseMessage
-	forward_QuotaLimits_Delete_0       = runtime.ForwardResponseMessage
-	forward_QuotaLimits_ListDefaults_0 = runtime.ForwardResponseMessage
-	forward_QuotaLimits_GetDefault_0   = runtime.ForwardResponseMessage
-	forward_QuotaLimits_SetDefault_0   = runtime.ForwardResponseMessage
-	forward_QuotaLimits_ClearDefault_0 = runtime.ForwardResponseMessage
+	forward_QuotaLimits_List_0   = runtime.ForwardResponseMessage
+	forward_QuotaLimits_Get_0    = runtime.ForwardResponseMessage
+	forward_QuotaLimits_Create_0 = runtime.ForwardResponseMessage
+	forward_QuotaLimits_Update_0 = runtime.ForwardResponseMessage
+	forward_QuotaLimits_Delete_0 = runtime.ForwardResponseMessage
 )

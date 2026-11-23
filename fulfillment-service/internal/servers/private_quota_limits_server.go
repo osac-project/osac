@@ -16,9 +16,7 @@ package servers
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
-	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
@@ -42,13 +40,12 @@ type PrivateQuotaLimitsServerBuilder struct {
 var _ privatev1.QuotaLimitsServer = (*PrivateQuotaLimitsServer)(nil)
 
 // PrivateQuotaLimitsServer serves the tenant overrides and project limits through the generic
-// machinery, and the default limits, which belong to no tenant, through their own store.
+// machinery.
 type PrivateQuotaLimitsServer struct {
 	privatev1.UnimplementedQuotaLimitsServer
 
 	logger           *slog.Logger
 	generic          *GenericServer[*privatev1.QuotaLimit]
-	defaultsDao      *dao.GenericDAO[*privatev1.QuotaDefaultLimit]
 	attributionLogic auth.AttributionLogic
 }
 
@@ -96,14 +93,6 @@ func (b *PrivateQuotaLimitsServerBuilder) Build() (result *PrivateQuotaLimitsSer
 		err = errors.New("attribution logic is mandatory")
 		return
 	}
-	defaultsDao, err := dao.NewGenericDAO[*privatev1.QuotaDefaultLimit]().
-		SetLogger(b.logger).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
-	if err != nil {
-		return
-	}
 	generic, err := NewGenericServer[*privatev1.QuotaLimit]().
 		SetLogger(b.logger).
 		SetService(privatev1.QuotaLimits_ServiceDesc.ServiceName).
@@ -118,7 +107,6 @@ func (b *PrivateQuotaLimitsServerBuilder) Build() (result *PrivateQuotaLimitsSer
 	result = &PrivateQuotaLimitsServer{
 		logger:           b.logger,
 		generic:          generic,
-		defaultsDao:      defaultsDao,
 		attributionLogic: b.attributionLogic,
 	}
 	return
@@ -152,6 +140,9 @@ func (s *PrivateQuotaLimitsServer) Create(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "limit value can't be negative")
 		return
 	}
+	if err = validateQuotaScope(limit.GetSpec(), limit.GetMetadata().GetProject()); err != nil {
+		return
+	}
 	fillQuotaName(limit, limit.GetSpec().GetDimension())
 	err = s.generic.Create(ctx, request, &response)
 	return
@@ -180,117 +171,35 @@ func (s *PrivateQuotaLimitsServer) Signal(ctx context.Context,
 	return
 }
 
-func (s *PrivateQuotaLimitsServer) ListDefaults(ctx context.Context,
-	request *privatev1.QuotaLimitsListDefaultsRequest) (response *privatev1.QuotaLimitsListDefaultsResponse, err error) {
-	listRequest := s.defaultsDao.List().
-		SetFilter(request.GetFilter()).
-		SetOffset(request.GetOffset())
-	if request.HasLimit() {
-		listRequest.SetLimit(request.GetLimit())
-	}
-	listResponse, listErr := listRequest.Do(ctx)
-	if listErr != nil {
-		err = ConvertDAOErrorToGRPC(listErr, "list", "")
-		return
-	}
-	response = &privatev1.QuotaLimitsListDefaultsResponse{}
-	response.SetItems(listResponse.GetItems())
-	response.SetSize(int32(len(listResponse.GetItems()))) // #nosec G115 -- bounded by the table size
-	response.SetTotal(listResponse.GetTotal())
-	return
-}
-
-func (s *PrivateQuotaLimitsServer) GetDefault(ctx context.Context,
-	request *privatev1.QuotaLimitsGetDefaultRequest) (response *privatev1.QuotaLimitsGetDefaultResponse, err error) {
-	if request.GetId() == "" {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
-		return
-	}
-	getResponse, getErr := s.defaultsDao.Get().SetId(request.GetId()).Do(ctx)
-	if getErr != nil {
-		err = ConvertDAOErrorToGRPC(getErr, "get", request.GetId())
-		return
-	}
-	response = &privatev1.QuotaLimitsGetDefaultResponse{}
-	response.SetObject(getResponse.GetObject())
-	return
-}
-
-func (s *PrivateQuotaLimitsServer) SetDefault(ctx context.Context,
-	request *privatev1.QuotaLimitsSetDefaultRequest) (response *privatev1.QuotaLimitsSetDefaultResponse, err error) {
-	limit := request.GetObject()
-	if err = validateQuotaDimension(limit.GetSpec().GetDimension()); err != nil {
-		return
-	}
-	// The custom write path runs no protovalidate, so the value's presence and sign are
-	// checked here: an omitted value must not silently become the zero that refuses
-	// everything, and a negative limit would refuse nothing.
-	if !limit.GetSpec().HasValue() {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "limit value is mandatory")
-		return
-	}
-	if limit.GetSpec().GetValue() < 0 {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "limit value can't be negative")
-		return
-	}
-	fillQuotaName(limit, limit.GetSpec().GetDimension())
-	creator, creatorErr := s.attributionLogic.DetermineAssignedCreator(ctx)
-	if creatorErr != nil {
-		err = grpcstatus.Errorf(grpccodes.Internal, "failed to determine the creator")
-		return
-	}
-	limit.GetMetadata().SetCreator(creator)
-	// A default belongs to the shared tenant, the way every platform-scoped kind does:
-	limit.GetMetadata().SetTenant(auth.SharedTenant)
-	object, setErr := upsertQuotaLimit(
-		ctx,
-		s.defaultsDao,
-		fmt.Sprintf("this.spec.dimension == %s", strconv.Quote(limit.GetSpec().GetDimension())),
-		limit,
-		func(existing, fresh *privatev1.QuotaDefaultLimit) *privatev1.QuotaDefaultLimit {
-			existing.SetSpec(fresh.GetSpec())
-			existing.GetMetadata().SetCreator(fresh.GetMetadata().GetCreator())
-			return existing
-		},
-	)
-	if setErr != nil {
-		err = s.internalDefaultsError(ctx, setErr)
-		return
-	}
-	response = &privatev1.QuotaLimitsSetDefaultResponse{}
-	response.SetObject(object)
-	return
-}
-
-func (s *PrivateQuotaLimitsServer) ClearDefault(ctx context.Context,
-	request *privatev1.QuotaLimitsClearDefaultRequest) (response *privatev1.QuotaLimitsClearDefaultResponse, err error) {
-	if request.GetId() == "" {
-		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
-		return
-	}
-	if _, clearErr := s.defaultsDao.Delete().SetId(request.GetId()).Do(ctx); clearErr != nil {
-		err = ConvertDAOErrorToGRPC(clearErr, "delete", request.GetId())
-		return
-	}
-	response = &privatev1.QuotaLimitsClearDefaultResponse{}
-	return
-}
-
-// internalDefaultsError logs the failure and hides its detail from the caller, except for a
-// rejection the upsert already phrased for the caller, like a taken name.
-func (s *PrivateQuotaLimitsServer) internalDefaultsError(ctx context.Context, err error) error {
-	if _, ok := grpcstatus.FromError(err); ok {
-		return err
-	}
-	s.logger.ErrorContext(ctx, "Failed to manage the quota default limits",
-		slog.Any("error", err))
-	return grpcstatus.Errorf(grpccodes.Internal, "failed to manage the quota default limits")
-}
-
 // validateQuotaDimension rejects a quota object whose spec names no dimension.
 func validateQuotaDimension(dimension string) error {
 	if dimension == "" {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.dimension' is required")
+	}
+	return nil
+}
+
+// quotaScopedSpec is the spec of a quota object whose scope says whether it covers the whole
+// tenant or the project the metadata names.
+type quotaScopedSpec interface {
+	GetScope() privatev1.QuotaScope
+	HasScope() bool
+}
+
+// validateQuotaScope rejects a quota object whose spec names no scope, and one whose scope
+// disagrees with the metadata: a tenant scope keeps the empty project name, the tenant's default
+// project, and a project scope requires a named one.
+func validateQuotaScope(spec quotaScopedSpec, project string) error {
+	if !spec.HasScope() || spec.GetScope() == privatev1.QuotaScope_QUOTA_SCOPE_UNSPECIFIED {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.scope' is required")
+	}
+	if spec.GetScope() == privatev1.QuotaScope_QUOTA_SCOPE_TENANT && project != "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'metadata.project' must be empty when the scope is the whole tenant")
+	}
+	if spec.GetScope() == privatev1.QuotaScope_QUOTA_SCOPE_PROJECT && project == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'metadata.project' is required when the scope is a project")
 	}
 	return nil
 }
@@ -324,13 +233,19 @@ type quotaNamedObject interface {
 	SetMetadata(*privatev1.Metadata)
 }
 
-// validateQuotaLimitUpdate rejects a change to a limit's identity: the dimension, tenant, project
-// and name never change, only the value does.
+// validateQuotaLimitUpdate rejects a change to a limit's identity: the dimension, scope, tenant,
+// project and name never change, only the value does.
 func validateQuotaLimitUpdate(_ context.Context, candidate, current *privatev1.QuotaLimit) error {
 	if candidate.GetSpec().GetDimension() != current.GetSpec().GetDimension() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.dimension' is immutable and cannot be changed from '%s' to '%s'",
 			current.GetSpec().GetDimension(), candidate.GetSpec().GetDimension())
+	}
+	if candidate.GetSpec().GetScope() != current.GetSpec().GetScope() {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.scope' is immutable")
+	}
+	if err := validateQuotaScope(candidate.GetSpec(), candidate.GetMetadata().GetProject()); err != nil {
+		return err
 	}
 	if candidate.GetMetadata().GetTenant() != current.GetMetadata().GetTenant() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.tenant' is immutable")

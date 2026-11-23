@@ -898,21 +898,33 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 		override, err := limitsServer.Create(ctx, privatev1.QuotaLimitsCreateRequest_builder{
 			Object: privatev1.QuotaLimit_builder{
 				Metadata: privatev1.Metadata_builder{Tenant: "quota-tenant"}.Build(),
-				Spec:     privatev1.QuotaLimitSpec_builder{Dimension: "compute.vcpus", Value: proto.Int64(10)}.Build(),
+				Spec: privatev1.QuotaLimitSpec_builder{
+					Dimension: "compute.vcpus",
+					Value:     proto.Int64(10),
+					Scope:     privatev1.QuotaScope_QUOTA_SCOPE_TENANT.Enum(),
+				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		projectLimit, err := limitsServer.Create(ctx, privatev1.QuotaLimitsCreateRequest_builder{
 			Object: privatev1.QuotaLimit_builder{
 				Metadata: privatev1.Metadata_builder{Tenant: "quota-tenant", Project: "team"}.Build(),
-				Spec:     privatev1.QuotaLimitSpec_builder{Dimension: "compute.vcpus", Value: proto.Int64(4)}.Build(),
+				Spec: privatev1.QuotaLimitSpec_builder{
+					Dimension: "compute.vcpus",
+					Value:     proto.Int64(4),
+					Scope:     privatev1.QuotaScope_QUOTA_SCOPE_PROJECT.Enum(),
+				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		threshold, err := thresholdsServer.Create(ctx, privatev1.QuotaThresholdsCreateRequest_builder{
 			Object: privatev1.QuotaThreshold_builder{
 				Metadata: privatev1.Metadata_builder{Tenant: "quota-tenant", Project: "team"}.Build(),
-				Spec:     privatev1.QuotaThresholdSpec_builder{Dimension: "compute.vcpus", Percent: int32Ptr(3)}.Build(),
+				Spec: privatev1.QuotaThresholdSpec_builder{
+					Dimension: "compute.vcpus",
+					Percent:   int32Ptr(3),
+					Scope:     privatev1.QuotaScope_QUOTA_SCOPE_PROJECT.Enum(),
+				}.Build(),
 			}.Build(),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())

@@ -41,8 +41,8 @@ const (
 //
 // Serves the quota usage of tenants. Read-only.
 type QuotaUsageClient interface {
-	// Retrieves the usage report of one tenant: each limit, the usage, the room left, and the
-	// dimensions over their limit, for the tenant and each of its projects.
+	// Retrieves the usage report of one tenant: each limit and the usage counted against it, for
+	// the tenant and each of its projects.
 	Get(ctx context.Context, in *QuotaUsageGetRequest, opts ...grpc.CallOption) (*QuotaUsageGetResponse, error)
 }
 
@@ -70,8 +70,8 @@ func (c *quotaUsageClient) Get(ctx context.Context, in *QuotaUsageGetRequest, op
 //
 // Serves the quota usage of tenants. Read-only.
 type QuotaUsageServer interface {
-	// Retrieves the usage report of one tenant: each limit, the usage, the room left, and the
-	// dimensions over their limit, for the tenant and each of its projects.
+	// Retrieves the usage report of one tenant: each limit and the usage counted against it, for
+	// the tenant and each of its projects.
 	Get(context.Context, *QuotaUsageGetRequest) (*QuotaUsageGetResponse, error)
 	mustEmbedUnimplementedQuotaUsageServer()
 }

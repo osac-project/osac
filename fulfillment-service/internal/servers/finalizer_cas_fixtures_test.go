@@ -312,8 +312,26 @@ func finalizerCases() []finalizerCase {
 					Spec: privatev1.QuotaLimitSpec_builder{
 						Dimension: finalizerName("dimension"),
 						Value:     proto.Int64(10),
+						Scope:     privatev1.QuotaScope_QUOTA_SCOPE_TENANT.Enum(),
 					}.Build(),
 				}.Build()
+			},
+		),
+		newFinalizerCase(privatev1.QuotaDefaultLimits_ServiceDesc,
+			func() *privatev1.QuotaDefaultLimit {
+				return privatev1.QuotaDefaultLimit_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   finalizerName("quota-default-limit"),
+						Tenant: auth.SharedTenant,
+					}.Build(),
+					Spec: privatev1.QuotaDefaultLimitSpec_builder{
+						Dimension: finalizerName("dimension"),
+						Value:     proto.Int64(10),
+					}.Build(),
+				}.Build()
+			},
+			func(b *GenericServerBuilder[*privatev1.QuotaDefaultLimit]) {
+				b.AddAllowedTenants(auth.SharedTenant)
 			},
 		),
 		newFinalizerCase(privatev1.QuotaThresholds_ServiceDesc,
@@ -340,6 +358,7 @@ func finalizerCases() []finalizerCase {
 					Spec: privatev1.QuotaThresholdSpec_builder{
 						Dimension: dimension,
 						Percent:   int32Ptr(3),
+						Scope:     privatev1.QuotaScope_QUOTA_SCOPE_PROJECT.Enum(),
 					}.Build(),
 				}.Build()
 			},

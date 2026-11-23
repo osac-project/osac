@@ -21,9 +21,9 @@ import "osac/public/v1/metadata_type.proto";
 
 // Lifecycle states for QuotaLimitRequest resources.
 //
-// A request starts PENDING. Approving it sets the requested limit for its tenant and dimension and
-// moves it to APPROVED; denying it moves it to DENIED and changes no limit. Both are terminal: a
-// new request replaces an old one.
+// A request starts PENDING. A review, an update that sets the state, then moves it: APPROVED sets
+// the requested limit for its tenant and dimension, and DENIED changes no limit. Both are
+// terminal: a new request replaces an old one.
 enum QuotaLimitRequestState {
   // State is unknown or has not been determined yet.
   QUOTA_LIMIT_REQUEST_STATE_UNSPECIFIED = 0;
@@ -48,7 +48,8 @@ message QuotaLimitRequest {
   // Unique identifier of the request.
   string id = 1;
 
-  // Metadata of the request. The tenant is required and the project is always empty.
+  // Metadata of the request. The tenant is required and the project is always empty, the
+  // tenant's default project, because a request asks for a limit that covers the whole tenant.
   Metadata metadata = 2;
 
   // Desired configuration of the request (user-specified).
@@ -79,7 +80,7 @@ message QuotaLimitRequestSpec {
 
 // Represents the current state of a QuotaLimitRequest.
 message QuotaLimitRequestStatus {
-  // The review state of the request. Set to PENDING on creation, changed only by Approve and
-  // Deny.
+  // The review state of the request. Set to PENDING on creation, changed only by a review, an
+  // update that a Cloud Provider Admin makes to set the state.
   QuotaLimitRequestState state = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
 }

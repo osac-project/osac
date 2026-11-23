@@ -950,6 +950,32 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	}
 	privatev1.RegisterQuotaLimitsServer(registrar, privateQuotaLimitsServer)
 
+	// Create the public quota default limits server:
+	deps.Logger.InfoContext(ctx, "Creating quota default limits server")
+	quotaDefaultLimitsServer, err := servers.NewQuotaDefaultLimitsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PublicAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create quota default limits server: %w", err)
+	}
+	publicv1.RegisterQuotaDefaultLimitsServer(registrar, quotaDefaultLimitsServer)
+
+	// Create the private quota default limits server:
+	deps.Logger.InfoContext(ctx, "Creating private quota default limits server")
+	privateQuotaDefaultLimitsServer, err := servers.NewPrivateQuotaDefaultLimitsServer().
+		SetLogger(deps.Logger).
+		SetAttributionLogic(deps.PrivateAttributionLogic).
+		SetTenancyLogic(deps.TenancyLogic).
+		SetMetricsRegisterer(deps.MetricsRegisterer).
+		Build()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create private quota default limits server: %w", err)
+	}
+	privatev1.RegisterQuotaDefaultLimitsServer(registrar, privateQuotaDefaultLimitsServer)
+
 	// Create the public quota thresholds server:
 	deps.Logger.InfoContext(ctx, "Creating quota thresholds server")
 	quotaThresholdsServer, err := servers.NewQuotaThresholdsServer().

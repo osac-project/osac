@@ -32,46 +32,33 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	QuotaLimits_List_FullMethodName         = "/osac.private.v1.QuotaLimits/List"
-	QuotaLimits_Get_FullMethodName          = "/osac.private.v1.QuotaLimits/Get"
-	QuotaLimits_Create_FullMethodName       = "/osac.private.v1.QuotaLimits/Create"
-	QuotaLimits_Update_FullMethodName       = "/osac.private.v1.QuotaLimits/Update"
-	QuotaLimits_Delete_FullMethodName       = "/osac.private.v1.QuotaLimits/Delete"
-	QuotaLimits_ListDefaults_FullMethodName = "/osac.private.v1.QuotaLimits/ListDefaults"
-	QuotaLimits_GetDefault_FullMethodName   = "/osac.private.v1.QuotaLimits/GetDefault"
-	QuotaLimits_SetDefault_FullMethodName   = "/osac.private.v1.QuotaLimits/SetDefault"
-	QuotaLimits_ClearDefault_FullMethodName = "/osac.private.v1.QuotaLimits/ClearDefault"
-	QuotaLimits_Signal_FullMethodName       = "/osac.private.v1.QuotaLimits/Signal"
+	QuotaLimits_List_FullMethodName   = "/osac.private.v1.QuotaLimits/List"
+	QuotaLimits_Get_FullMethodName    = "/osac.private.v1.QuotaLimits/Get"
+	QuotaLimits_Create_FullMethodName = "/osac.private.v1.QuotaLimits/Create"
+	QuotaLimits_Update_FullMethodName = "/osac.private.v1.QuotaLimits/Update"
+	QuotaLimits_Delete_FullMethodName = "/osac.private.v1.QuotaLimits/Delete"
+	QuotaLimits_Signal_FullMethodName = "/osac.private.v1.QuotaLimits/Signal"
 )
 
 // QuotaLimitsClient is the client API for QuotaLimits service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Manages quota limits: tenant overrides, project limits, and the defaults for all tenants.
+// Manages quota limits: tenant overrides and project limits.
 type QuotaLimitsClient interface {
 	// Retrieves the list of limits, tenant overrides and project limits alike.
 	List(ctx context.Context, in *QuotaLimitsListRequest, opts ...grpc.CallOption) (*QuotaLimitsListResponse, error)
 	// Retrieves the details of one specific limit.
 	Get(ctx context.Context, in *QuotaLimitsGetRequest, opts ...grpc.CallOption) (*QuotaLimitsGetResponse, error)
-	// Creates a new limit. A limit with no project is a tenant override, which only a Cloud Provider
-	// Admin may set; a limit with a project is a project limit, which a Tenant Admin may set.
+	// Creates a new limit. A limit of tenant scope is a tenant override, which only a Cloud
+	// Provider Admin may set; a limit of project scope is a project limit, which a Tenant Admin
+	// may set.
 	Create(ctx context.Context, in *QuotaLimitsCreateRequest, opts ...grpc.CallOption) (*QuotaLimitsCreateResponse, error)
-	// Updates an existing limit. Only the value can change; the dimension, tenant, and project are
-	// immutable.
+	// Updates an existing limit. Only the value can change; the dimension, scope, tenant, and
+	// project are immutable.
 	Update(ctx context.Context, in *QuotaLimitsUpdateRequest, opts ...grpc.CallOption) (*QuotaLimitsUpdateResponse, error)
 	// Deletes a limit, so its dimension falls back to the next scope in the resolution order.
 	Delete(ctx context.Context, in *QuotaLimitsDeleteRequest, opts ...grpc.CallOption) (*QuotaLimitsDeleteResponse, error)
-	// Retrieves the list of default limits.
-	ListDefaults(ctx context.Context, in *QuotaLimitsListDefaultsRequest, opts ...grpc.CallOption) (*QuotaLimitsListDefaultsResponse, error)
-	// Retrieves the details of one specific default limit.
-	GetDefault(ctx context.Context, in *QuotaLimitsGetDefaultRequest, opts ...grpc.CallOption) (*QuotaLimitsGetDefaultResponse, error)
-	// Sets the default limit of a dimension for all tenants. A dimension that already has a default
-	// has its value replaced. Only a Cloud Provider Admin may set a default.
-	SetDefault(ctx context.Context, in *QuotaLimitsSetDefaultRequest, opts ...grpc.CallOption) (*QuotaLimitsSetDefaultResponse, error)
-	// Clears the default limit of a dimension, so the dimension has limit 0 in every tenant without
-	// an override.
-	ClearDefault(ctx context.Context, in *QuotaLimitsClearDefaultRequest, opts ...grpc.CallOption) (*QuotaLimitsClearDefaultResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(ctx context.Context, in *QuotaLimitsSignalRequest, opts ...grpc.CallOption) (*QuotaLimitsSignalResponse, error)
 }
@@ -134,46 +121,6 @@ func (c *quotaLimitsClient) Delete(ctx context.Context, in *QuotaLimitsDeleteReq
 	return out, nil
 }
 
-func (c *quotaLimitsClient) ListDefaults(ctx context.Context, in *QuotaLimitsListDefaultsRequest, opts ...grpc.CallOption) (*QuotaLimitsListDefaultsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(QuotaLimitsListDefaultsResponse)
-	err := c.cc.Invoke(ctx, QuotaLimits_ListDefaults_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *quotaLimitsClient) GetDefault(ctx context.Context, in *QuotaLimitsGetDefaultRequest, opts ...grpc.CallOption) (*QuotaLimitsGetDefaultResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(QuotaLimitsGetDefaultResponse)
-	err := c.cc.Invoke(ctx, QuotaLimits_GetDefault_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *quotaLimitsClient) SetDefault(ctx context.Context, in *QuotaLimitsSetDefaultRequest, opts ...grpc.CallOption) (*QuotaLimitsSetDefaultResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(QuotaLimitsSetDefaultResponse)
-	err := c.cc.Invoke(ctx, QuotaLimits_SetDefault_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *quotaLimitsClient) ClearDefault(ctx context.Context, in *QuotaLimitsClearDefaultRequest, opts ...grpc.CallOption) (*QuotaLimitsClearDefaultResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(QuotaLimitsClearDefaultResponse)
-	err := c.cc.Invoke(ctx, QuotaLimits_ClearDefault_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *quotaLimitsClient) Signal(ctx context.Context, in *QuotaLimitsSignalRequest, opts ...grpc.CallOption) (*QuotaLimitsSignalResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(QuotaLimitsSignalResponse)
@@ -188,30 +135,21 @@ func (c *quotaLimitsClient) Signal(ctx context.Context, in *QuotaLimitsSignalReq
 // All implementations must embed UnimplementedQuotaLimitsServer
 // for forward compatibility.
 //
-// Manages quota limits: tenant overrides, project limits, and the defaults for all tenants.
+// Manages quota limits: tenant overrides and project limits.
 type QuotaLimitsServer interface {
 	// Retrieves the list of limits, tenant overrides and project limits alike.
 	List(context.Context, *QuotaLimitsListRequest) (*QuotaLimitsListResponse, error)
 	// Retrieves the details of one specific limit.
 	Get(context.Context, *QuotaLimitsGetRequest) (*QuotaLimitsGetResponse, error)
-	// Creates a new limit. A limit with no project is a tenant override, which only a Cloud Provider
-	// Admin may set; a limit with a project is a project limit, which a Tenant Admin may set.
+	// Creates a new limit. A limit of tenant scope is a tenant override, which only a Cloud
+	// Provider Admin may set; a limit of project scope is a project limit, which a Tenant Admin
+	// may set.
 	Create(context.Context, *QuotaLimitsCreateRequest) (*QuotaLimitsCreateResponse, error)
-	// Updates an existing limit. Only the value can change; the dimension, tenant, and project are
-	// immutable.
+	// Updates an existing limit. Only the value can change; the dimension, scope, tenant, and
+	// project are immutable.
 	Update(context.Context, *QuotaLimitsUpdateRequest) (*QuotaLimitsUpdateResponse, error)
 	// Deletes a limit, so its dimension falls back to the next scope in the resolution order.
 	Delete(context.Context, *QuotaLimitsDeleteRequest) (*QuotaLimitsDeleteResponse, error)
-	// Retrieves the list of default limits.
-	ListDefaults(context.Context, *QuotaLimitsListDefaultsRequest) (*QuotaLimitsListDefaultsResponse, error)
-	// Retrieves the details of one specific default limit.
-	GetDefault(context.Context, *QuotaLimitsGetDefaultRequest) (*QuotaLimitsGetDefaultResponse, error)
-	// Sets the default limit of a dimension for all tenants. A dimension that already has a default
-	// has its value replaced. Only a Cloud Provider Admin may set a default.
-	SetDefault(context.Context, *QuotaLimitsSetDefaultRequest) (*QuotaLimitsSetDefaultResponse, error)
-	// Clears the default limit of a dimension, so the dimension has limit 0 in every tenant without
-	// an override.
-	ClearDefault(context.Context, *QuotaLimitsClearDefaultRequest) (*QuotaLimitsClearDefaultResponse, error)
 	// Indicates that something changed in the object or the system that may require reconciling the object.
 	Signal(context.Context, *QuotaLimitsSignalRequest) (*QuotaLimitsSignalResponse, error)
 	mustEmbedUnimplementedQuotaLimitsServer()
@@ -238,18 +176,6 @@ func (UnimplementedQuotaLimitsServer) Update(context.Context, *QuotaLimitsUpdate
 }
 func (UnimplementedQuotaLimitsServer) Delete(context.Context, *QuotaLimitsDeleteRequest) (*QuotaLimitsDeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
-}
-func (UnimplementedQuotaLimitsServer) ListDefaults(context.Context, *QuotaLimitsListDefaultsRequest) (*QuotaLimitsListDefaultsResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ListDefaults not implemented")
-}
-func (UnimplementedQuotaLimitsServer) GetDefault(context.Context, *QuotaLimitsGetDefaultRequest) (*QuotaLimitsGetDefaultResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetDefault not implemented")
-}
-func (UnimplementedQuotaLimitsServer) SetDefault(context.Context, *QuotaLimitsSetDefaultRequest) (*QuotaLimitsSetDefaultResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SetDefault not implemented")
-}
-func (UnimplementedQuotaLimitsServer) ClearDefault(context.Context, *QuotaLimitsClearDefaultRequest) (*QuotaLimitsClearDefaultResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method ClearDefault not implemented")
 }
 func (UnimplementedQuotaLimitsServer) Signal(context.Context, *QuotaLimitsSignalRequest) (*QuotaLimitsSignalResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Signal not implemented")
@@ -365,78 +291,6 @@ func _QuotaLimits_Delete_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
-func _QuotaLimits_ListDefaults_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(QuotaLimitsListDefaultsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(QuotaLimitsServer).ListDefaults(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: QuotaLimits_ListDefaults_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(QuotaLimitsServer).ListDefaults(ctx, req.(*QuotaLimitsListDefaultsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _QuotaLimits_GetDefault_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(QuotaLimitsGetDefaultRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(QuotaLimitsServer).GetDefault(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: QuotaLimits_GetDefault_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(QuotaLimitsServer).GetDefault(ctx, req.(*QuotaLimitsGetDefaultRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _QuotaLimits_SetDefault_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(QuotaLimitsSetDefaultRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(QuotaLimitsServer).SetDefault(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: QuotaLimits_SetDefault_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(QuotaLimitsServer).SetDefault(ctx, req.(*QuotaLimitsSetDefaultRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _QuotaLimits_ClearDefault_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(QuotaLimitsClearDefaultRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(QuotaLimitsServer).ClearDefault(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: QuotaLimits_ClearDefault_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(QuotaLimitsServer).ClearDefault(ctx, req.(*QuotaLimitsClearDefaultRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _QuotaLimits_Signal_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(QuotaLimitsSignalRequest)
 	if err := dec(in); err != nil {
@@ -481,22 +335,6 @@ var QuotaLimits_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Delete",
 			Handler:    _QuotaLimits_Delete_Handler,
-		},
-		{
-			MethodName: "ListDefaults",
-			Handler:    _QuotaLimits_ListDefaults_Handler,
-		},
-		{
-			MethodName: "GetDefault",
-			Handler:    _QuotaLimits_GetDefault_Handler,
-		},
-		{
-			MethodName: "SetDefault",
-			Handler:    _QuotaLimits_SetDefault_Handler,
-		},
-		{
-			MethodName: "ClearDefault",
-			Handler:    _QuotaLimits_ClearDefault_Handler,
 		},
 		{
 			MethodName: "Signal",

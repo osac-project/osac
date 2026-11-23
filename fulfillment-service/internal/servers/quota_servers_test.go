@@ -41,8 +41,8 @@ var _ = Describe("Quota servers", func() {
 		thresholdsServer *QuotaThresholdsServer
 		requestsServer   *QuotaLimitRequestsServer
 		usageServer      *QuotaUsageServer
+		defaultsServer   *QuotaDefaultLimitsServer
 		limitsDao        *dao.GenericDAO[*privatev1.QuotaLimit]
-		defaultsDao      *dao.GenericDAO[*privatev1.QuotaDefaultLimit]
 	)
 
 	BeforeEach(func() {
@@ -74,13 +74,14 @@ var _ = Describe("Quota servers", func() {
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		limitsDao, err = dao.NewGenericDAO[*privatev1.QuotaLimit]().
+		defaultsServer, err = NewQuotaDefaultLimitsServer().
 			SetLogger(logger).
+			SetAttributionLogic(attribution).
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
-		defaultsDao, err = dao.NewGenericDAO[*privatev1.QuotaDefaultLimit]().
+		limitsDao, err = dao.NewGenericDAO[*privatev1.QuotaLimit]().
 			SetLogger(logger).
 			SetTenancyLogic(tenancy).
 			Build()
@@ -102,6 +103,15 @@ var _ = Describe("Quota servers", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
+	// quotaScopeFor returns the scope that agrees with the project: the empty project name is
+	// the tenant's default project, so an empty name means the tenant scope.
+	quotaScopeFor := func(project string) *publicv1.QuotaScope {
+		if project == "" {
+			return publicv1.QuotaScope_QUOTA_SCOPE_TENANT.Enum()
+		}
+		return publicv1.QuotaScope_QUOTA_SCOPE_PROJECT.Enum()
+	}
+
 	createLimit := func(project string, dimension string, value int64) *publicv1.QuotaLimit {
 		response, err := limitsServer.Create(ctx, publicv1.QuotaLimitsCreateRequest_builder{
 			Object: publicv1.QuotaLimit_builder{
@@ -110,6 +120,20 @@ var _ = Describe("Quota servers", func() {
 					Project: project,
 				}.Build(),
 				Spec: publicv1.QuotaLimitSpec_builder{
+					Dimension: dimension,
+					Value:     proto.Int64(value),
+					Scope:     quotaScopeFor(project),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		ExpectWithOffset(1, err).ToNot(HaveOccurred())
+		return response.GetObject()
+	}
+
+	createDefault := func(dimension string, value int64) *publicv1.QuotaDefaultLimit {
+		response, err := defaultsServer.Create(ctx, publicv1.QuotaDefaultLimitsCreateRequest_builder{
+			Object: publicv1.QuotaDefaultLimit_builder{
+				Spec: publicv1.QuotaDefaultLimitSpec_builder{
 					Dimension: dimension,
 					Value:     proto.Int64(value),
 				}.Build(),
@@ -136,7 +160,11 @@ var _ = Describe("Quota servers", func() {
 			_, err := limitsServer.Create(ctx, publicv1.QuotaLimitsCreateRequest_builder{
 				Object: publicv1.QuotaLimit_builder{
 					Metadata: publicv1.Metadata_builder{Tenant: testTenant}.Build(),
-					Spec:     publicv1.QuotaLimitSpec_builder{Dimension: "compute.vcpus", Value: proto.Int64(20)}.Build(),
+					Spec: publicv1.QuotaLimitSpec_builder{
+						Dimension: "compute.vcpus",
+						Value:     proto.Int64(20),
+						Scope:     quotaScopeFor(""),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(status.Code(err)).To(Equal(codes.AlreadyExists))
@@ -171,7 +199,11 @@ var _ = Describe("Quota servers", func() {
 				Object: publicv1.QuotaLimit_builder{
 					Id:       limit.GetId(),
 					Metadata: limit.GetMetadata(),
-					Spec:     publicv1.QuotaLimitSpec_builder{Dimension: "compute.memory_gib", Value: proto.Int64(20)}.Build(),
+					Spec: publicv1.QuotaLimitSpec_builder{
+						Dimension: "compute.memory_gib",
+						Value:     proto.Int64(20),
+						Scope:     quotaScopeFor(""),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
@@ -180,11 +212,57 @@ var _ = Describe("Quota servers", func() {
 				Object: publicv1.QuotaLimit_builder{
 					Id:       limit.GetId(),
 					Metadata: limit.GetMetadata(),
-					Spec:     publicv1.QuotaLimitSpec_builder{Dimension: "compute.vcpus", Value: proto.Int64(20)}.Build(),
+					Spec: publicv1.QuotaLimitSpec_builder{
+						Dimension: "compute.vcpus",
+						Value:     proto.Int64(20),
+						Scope:     quotaScopeFor(""),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(updated.GetObject().GetSpec().GetValue()).To(Equal(int64(20)))
+			Expect(updated.GetObject().GetSpec().GetScope()).
+				To(Equal(publicv1.QuotaScope_QUOTA_SCOPE_TENANT))
+		})
+
+		It("refuses a limit whose scope disagrees with its project, or names no scope", func() {
+			// A project scope needs the project it names:
+			_, err := limitsServer.Create(ctx, publicv1.QuotaLimitsCreateRequest_builder{
+				Object: publicv1.QuotaLimit_builder{
+					Metadata: publicv1.Metadata_builder{Tenant: testTenant}.Build(),
+					Spec: publicv1.QuotaLimitSpec_builder{
+						Dimension: "compute.vcpus",
+						Value:     proto.Int64(10),
+						Scope:     publicv1.QuotaScope_QUOTA_SCOPE_PROJECT.Enum(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+
+			// A tenant scope keeps the empty project name:
+			_, err = limitsServer.Create(ctx, publicv1.QuotaLimitsCreateRequest_builder{
+				Object: publicv1.QuotaLimit_builder{
+					Metadata: publicv1.Metadata_builder{Tenant: testTenant, Project: "team"}.Build(),
+					Spec: publicv1.QuotaLimitSpec_builder{
+						Dimension: "compute.vcpus",
+						Value:     proto.Int64(10),
+						Scope:     publicv1.QuotaScope_QUOTA_SCOPE_TENANT.Enum(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+
+			// An unnamed scope is refused rather than guessed from the project:
+			_, err = limitsServer.Create(ctx, publicv1.QuotaLimitsCreateRequest_builder{
+				Object: publicv1.QuotaLimit_builder{
+					Metadata: publicv1.Metadata_builder{Tenant: testTenant}.Build(),
+					Spec: publicv1.QuotaLimitSpec_builder{
+						Dimension: "compute.vcpus",
+						Value:     proto.Int64(10),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		})
 
 		It("deletes a limit", func() {
@@ -243,7 +321,11 @@ var _ = Describe("Quota servers", func() {
 			_, err = server.Create(ctx, publicv1.QuotaLimitsCreateRequest_builder{
 				Object: publicv1.QuotaLimit_builder{
 					Metadata: publicv1.Metadata_builder{Tenant: testTenant, Project: "team"}.Build(),
-					Spec:     publicv1.QuotaLimitSpec_builder{Dimension: "compute.vcpus", Value: proto.Int64(4)}.Build(),
+					Spec: publicv1.QuotaLimitSpec_builder{
+						Dimension: "compute.vcpus",
+						Value:     proto.Int64(4),
+						Scope:     quotaScopeFor("team"),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -282,7 +364,11 @@ var _ = Describe("Quota servers", func() {
 				Object: publicv1.QuotaLimit_builder{
 					Id:       override.GetId(),
 					Metadata: override.GetMetadata(),
-					Spec:     publicv1.QuotaLimitSpec_builder{Dimension: "compute.vcpus", Value: proto.Int64(100)}.Build(),
+					Spec: publicv1.QuotaLimitSpec_builder{
+						Dimension: "compute.vcpus",
+						Value:     proto.Int64(100),
+						Scope:     quotaScopeFor(""),
+					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.value"}},
 			}.Build())
@@ -292,25 +378,11 @@ var _ = Describe("Quota servers", func() {
 	})
 
 	Describe("Default limits", func() {
-		setDefault := func(dimension string, value int64) *publicv1.QuotaDefaultLimit {
-			response, err := limitsServer.SetDefault(ctx, publicv1.QuotaLimitsSetDefaultRequest_builder{
-				Object: publicv1.QuotaDefaultLimit_builder{
-					Spec: publicv1.QuotaDefaultLimitSpec_builder{
-						Dimension: dimension,
-						Value:     proto.Int64(value),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			ExpectWithOffset(1, err).ToNot(HaveOccurred())
-			return response.GetObject()
-		}
-
-		It("recovers a lost default insert race by updating the winner", func() {
-			// The race this pins: two transactions insert a default of one fresh
-			// dimension at the same time. The winner's insert runs first and stays
-			// uncommitted; the loser probes, sees nothing, and inserts, which waits on
-			// the winner's unique index entry. The winner commits, the loser's insert
-			// fails, and the recovery re-reads the winner's row and updates it.
+		It("leaves exactly one default of a lost insert race, and the loser gets AlreadyExists", func() {
+			// The race this pins: two transactions create a default of one fresh dimension
+			// at the same time. The winner's insert runs first and stays uncommitted; the
+			// loser's insert waits on the winner's unique index entry. The winner commits,
+			// the loser's insert fails, and the loser's Create reports AlreadyExists.
 			dimension := "race.winner.recovery"
 			winner, err := tm.Begin(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -338,24 +410,15 @@ var _ = Describe("Quota servers", func() {
 			go func() {
 				defer close(done)
 				defer GinkgoRecover()
-				_, upsertErr := upsertQuotaLimit(loserCtx, defaultsDao,
-					fmt.Sprintf("this.spec.dimension == %q", dimension),
-					privatev1.QuotaDefaultLimit_builder{
-						Metadata: privatev1.Metadata_builder{
-							Name:    quotaNameFromDimension(dimension),
-							Tenant:  "shared",
-							Creator: "system",
-						}.Build(),
-						Spec: privatev1.QuotaDefaultLimitSpec_builder{
+				_, createErr := defaultsServer.Create(loserCtx, publicv1.QuotaDefaultLimitsCreateRequest_builder{
+					Object: publicv1.QuotaDefaultLimit_builder{
+						Spec: publicv1.QuotaDefaultLimitSpec_builder{
 							Dimension: dimension,
 							Value:     proto.Int64(20),
 						}.Build(),
 					}.Build(),
-					func(existing, fresh *privatev1.QuotaDefaultLimit) *privatev1.QuotaDefaultLimit {
-						existing.SetSpec(fresh.GetSpec())
-						return existing
-					})
-				results <- upsertErr
+				}.Build())
+				results <- createErr
 			}()
 			// Whatever fails, commit the winner so the loser unblocks, wait for it,
 			// and close its transaction. No path leaves a connection stuck.
@@ -384,71 +447,44 @@ var _ = Describe("Quota servers", func() {
 				return blocked, err
 			}, 10*time.Second, 10*time.Millisecond).Should(BeTrue())
 
-			// The winner commits, so the loser's insert fails and the recovery runs:
+			// The winner commits, so the loser's insert fails and its Create reports the
+			// conventional outcome:
 			Expect(winner.End(ctx)).To(Succeed())
 			winner = nil
-			Eventually(results, 10*time.Second).Should(Receive(BeNil()))
+			var createErr error
+			Eventually(results, 10*time.Second).Should(Receive(&createErr))
+			Expect(status.Code(createErr)).To(Equal(codes.AlreadyExists))
 			Expect(loser.End(ctx)).To(Succeed())
 			loser = nil
 
-			// The winner's row survived and now carries the loser's value. Read on a
-			// separate connection: the suite's transaction cannot see committed rows.
+			// Exactly one default won, and it is the winner's. Read on a separate
+			// connection: the suite's transaction cannot see committed rows.
 			var value string
 			Expect(testPool.QueryRow(context.Background(),
 				`select data -> 'spec' ->> 'value' from quota_default_limits where id = 'race-winner'`).
 				Scan(&value)).To(Succeed())
-			Expect(value).To(Equal("20"))
+			Expect(value).To(Equal("10"))
 		})
 
-		It("recovers a lost default insert race through the savepoint", func() {
-			// The race this pins: two concurrent SetDefaults of one fresh dimension.
-			// Both probes miss, both inserts run, the winner commits first, and the loser's
-			// insert hits the unique index. The DAO translates the violation to its own
-			// error and records it in the managed transaction, which without the savepoint
-			// would roll the whole request back; the savepoint isolates the insert, the
-			// loser re-probes, finds the winner's row, and updates it.
-			//
-			// The race itself needs two transactions probing before either commits, which
-			// the suite's shared transaction cannot arrange. This test pins the recovery
-			// through the real path instead: the probe misses because it filters for
-			// another dimension, the insert collides with a row the probe never saw, and
-			// the recovery re-probes and fails to find the winner under that filter.
-			_, err := limitsServer.SetDefault(ctx, publicv1.QuotaLimitsSetDefaultRequest_builder{
+		It("refuses a Create that collides with a default the transaction already holds", func() {
+			// The collision this pins: a Create whose insert hits the dimension's unique
+			// index against a row the same transaction wrote. The conventional outcome is
+			// the loser's AlreadyExists, and the winner's row keeps its value.
+			first := createDefault("race.same.transaction", 10)
+			// The second default carries another name, so only the dimension's index can
+			// refuse it:
+			_, err := defaultsServer.Create(ctx, publicv1.QuotaDefaultLimitsCreateRequest_builder{
 				Object: publicv1.QuotaDefaultLimit_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: first.GetMetadata().GetName() + "-second",
+					}.Build(),
 					Spec: publicv1.QuotaDefaultLimitSpec_builder{
-						Dimension: "race.savepoint.recovery",
-						Value:     proto.Int64(10),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-
-			// The loser: a fresh object of the same dimension, probed with a filter that
-			// matches no row, so the upsert takes the insert path and collides.
-			_, err = upsertQuotaLimit(ctx, defaultsDao,
-				`this.spec.dimension == "race.savepoint.absent"`,
-				privatev1.QuotaDefaultLimit_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name:    "race-loser",
-						Tenant:  "shared",
-						Creator: "system",
-					}.Build(),
-					Spec: privatev1.QuotaDefaultLimitSpec_builder{
-						Dimension: "race.savepoint.recovery",
+						Dimension: "race.same.transaction",
 						Value:     proto.Int64(20),
 					}.Build(),
 				}.Build(),
-				func(existing, fresh *privatev1.QuotaDefaultLimit) *privatev1.QuotaDefaultLimit {
-					existing.SetSpec(fresh.GetSpec())
-					return existing
-				})
-			// The insert lost the race, the savepoint kept the transaction alive, and the
-			// recovery found no row under its own filter:
-			Expect(err).To(MatchError(ContainSubstring("vanished from its unique scope")))
-
-			// The transaction stayed usable, and the winner's row is untouched:
-			second := setDefault("race.savepoint.recovery", 30)
-			Expect(second.GetSpec().GetValue()).To(Equal(int64(30)))
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.AlreadyExists))
 		})
 
 		It("refuses a default whose name another dimension already holds", func() {
@@ -459,9 +495,9 @@ var _ = Describe("Quota servers", func() {
 			_, err = tx.Exec(ctx,
 				`delete from quota_default_limits where data -> 'spec' ->> 'dimension' = 'images.count'`)
 			Expect(err).ToNot(HaveOccurred())
-			first := setDefault("compute.vcpus", 10)
+			first := createDefault("compute.vcpus", 10)
 			// The second default reuses the first's name for another dimension:
-			_, err = limitsServer.SetDefault(ctx, publicv1.QuotaLimitsSetDefaultRequest_builder{
+			_, err = defaultsServer.Create(ctx, publicv1.QuotaDefaultLimitsCreateRequest_builder{
 				Object: publicv1.QuotaDefaultLimit_builder{
 					Metadata: publicv1.Metadata_builder{
 						Name: first.GetMetadata().GetName(),
@@ -475,15 +511,25 @@ var _ = Describe("Quota servers", func() {
 			Expect(status.Code(err)).To(Equal(codes.AlreadyExists))
 		})
 
-		It("refuses a default that changes the name of an existing dimension's row", func() {
-			setDefault("compute.vcpus", 10)
-			_, err := limitsServer.SetDefault(ctx, publicv1.QuotaLimitsSetDefaultRequest_builder{
+		It("refuses an update that changes a default's name or dimension", func() {
+			first := createDefault("compute.vcpus", 10)
+			_, err := defaultsServer.Update(ctx, publicv1.QuotaDefaultLimitsUpdateRequest_builder{
 				Object: publicv1.QuotaDefaultLimit_builder{
+					Id: first.GetId(),
 					Metadata: publicv1.Metadata_builder{
 						Name: "another-name",
 					}.Build(),
+					Spec: first.GetSpec(),
+				}.Build(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+
+			_, err = defaultsServer.Update(ctx, publicv1.QuotaDefaultLimitsUpdateRequest_builder{
+				Object: publicv1.QuotaDefaultLimit_builder{
+					Id:       first.GetId(),
+					Metadata: first.GetMetadata(),
 					Spec: publicv1.QuotaDefaultLimitSpec_builder{
-						Dimension: "compute.vcpus",
+						Dimension: "images.count",
 						Value:     proto.Int64(20),
 					}.Build(),
 				}.Build(),
@@ -491,41 +537,52 @@ var _ = Describe("Quota servers", func() {
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		})
 
-		It("sets, lists, gets and clears defaults, replacing the value", func() {
-			first := setDefault("compute.vcpus", 10)
+		It("creates, lists, gets, updates and deletes defaults", func() {
+			first := createDefault("compute.vcpus", 10)
 			Expect(first.GetMetadata().GetName()).ToNot(BeEmpty())
+			Expect(first.GetMetadata().GetTenant()).To(Equal("shared"))
 			Expect(first.GetSpec().GetValue()).To(Equal(int64(10)))
 
-			second := setDefault("compute.vcpus", 20)
-			Expect(second.GetId()).To(Equal(first.GetId()))
-			Expect(second.GetSpec().GetValue()).To(Equal(int64(20)))
-			Expect(second.GetMetadata().GetVersion()).To(Equal(first.GetMetadata().GetVersion() + 1))
+			updated, err := defaultsServer.Update(ctx, publicv1.QuotaDefaultLimitsUpdateRequest_builder{
+				Object: publicv1.QuotaDefaultLimit_builder{
+					Id:       first.GetId(),
+					Metadata: first.GetMetadata(),
+					Spec: publicv1.QuotaDefaultLimitSpec_builder{
+						Dimension: "compute.vcpus",
+						Value:     proto.Int64(20),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updated.GetObject().GetId()).To(Equal(first.GetId()))
+			Expect(updated.GetObject().GetSpec().GetValue()).To(Equal(int64(20)))
+			Expect(updated.GetObject().GetMetadata().GetVersion()).To(Equal(first.GetMetadata().GetVersion() + 1))
 
-			setDefault("network.virtual_networks", 2)
-			response, err := limitsServer.ListDefaults(ctx, publicv1.QuotaLimitsListDefaultsRequest_builder{
+			createDefault("network.virtual_networks", 2)
+			response, err := defaultsServer.List(ctx, publicv1.QuotaDefaultLimitsListRequest_builder{
 				Filter: new(`this.spec.dimension == "compute.vcpus"`),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetTotal()).To(Equal(int32(1)))
 
-			getResponse, err := limitsServer.GetDefault(ctx, publicv1.QuotaLimitsGetDefaultRequest_builder{
+			getResponse, err := defaultsServer.Get(ctx, publicv1.QuotaDefaultLimitsGetRequest_builder{
 				Id: first.GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(getResponse.GetObject().GetSpec().GetValue()).To(Equal(int64(20)))
 
-			_, err = limitsServer.ClearDefault(ctx, publicv1.QuotaLimitsClearDefaultRequest_builder{
+			_, err = defaultsServer.Delete(ctx, publicv1.QuotaDefaultLimitsDeleteRequest_builder{
 				Id: first.GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			_, err = limitsServer.GetDefault(ctx, publicv1.QuotaLimitsGetDefaultRequest_builder{
+			_, err = defaultsServer.Get(ctx, publicv1.QuotaDefaultLimitsGetRequest_builder{
 				Id: first.GetId(),
 			}.Build())
 			Expect(status.Code(err)).To(Equal(codes.NotFound))
 		})
 
 		It("rejects a default without a dimension", func() {
-			_, err := limitsServer.SetDefault(ctx, publicv1.QuotaLimitsSetDefaultRequest_builder{
+			_, err := defaultsServer.Create(ctx, publicv1.QuotaDefaultLimitsCreateRequest_builder{
 				Object: publicv1.QuotaDefaultLimit_builder{
 					Spec: publicv1.QuotaDefaultLimitSpec_builder{Value: proto.Int64(10)}.Build(),
 				}.Build(),
@@ -535,11 +592,30 @@ var _ = Describe("Quota servers", func() {
 	})
 
 	Describe("Quota thresholds", func() {
+		createThreshold := func(project string, dimension string, percent int32) *publicv1.QuotaThreshold {
+			response, err := thresholdsServer.Create(ctx, publicv1.QuotaThresholdsCreateRequest_builder{
+				Object: publicv1.QuotaThreshold_builder{
+					Metadata: publicv1.Metadata_builder{Tenant: testTenant, Project: project}.Build(),
+					Spec: publicv1.QuotaThresholdSpec_builder{
+						Dimension: dimension,
+						Percent:   int32Ptr(percent),
+						Scope:     quotaScopeFor(project),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			ExpectWithOffset(1, err).ToNot(HaveOccurred())
+			return response.GetObject()
+		}
+
 		It("refuses a threshold on a scope with no limit of the dimension", func() {
 			_, err := thresholdsServer.Create(ctx, publicv1.QuotaThresholdsCreateRequest_builder{
 				Object: publicv1.QuotaThreshold_builder{
 					Metadata: publicv1.Metadata_builder{Tenant: testTenant, Project: "team"}.Build(),
-					Spec:     publicv1.QuotaThresholdSpec_builder{Dimension: "compute.vcpus", Percent: int32Ptr(80)}.Build(),
+					Spec: publicv1.QuotaThresholdSpec_builder{
+						Dimension: "compute.vcpus",
+						Percent:   int32Ptr(80),
+						Scope:     quotaScopeFor("team"),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
@@ -551,7 +627,11 @@ var _ = Describe("Quota servers", func() {
 				_, err := thresholdsServer.Create(ctx, publicv1.QuotaThresholdsCreateRequest_builder{
 					Object: publicv1.QuotaThreshold_builder{
 						Metadata: publicv1.Metadata_builder{Tenant: testTenant, Project: "team"}.Build(),
-						Spec:     publicv1.QuotaThresholdSpec_builder{Dimension: "compute.vcpus", Percent: int32Ptr(percent)}.Build(),
+						Spec: publicv1.QuotaThresholdSpec_builder{
+							Dimension: "compute.vcpus",
+							Percent:   int32Ptr(percent),
+							Scope:     quotaScopeFor("team"),
+						}.Build(),
 					}.Build(),
 				}.Build())
 				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
@@ -559,7 +639,84 @@ var _ = Describe("Quota servers", func() {
 			_, err := thresholdsServer.Create(ctx, publicv1.QuotaThresholdsCreateRequest_builder{
 				Object: publicv1.QuotaThreshold_builder{
 					Metadata: publicv1.Metadata_builder{Tenant: testTenant, Project: "team"}.Build(),
-					Spec:     publicv1.QuotaThresholdSpec_builder{Dimension: "compute.vcpus"}.Build(),
+					Spec: publicv1.QuotaThresholdSpec_builder{
+						Dimension: "compute.vcpus",
+						Scope:     quotaScopeFor("team"),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		})
+
+		It("refuses an update whose mask clears the percent", func() {
+			createLimit("team", "compute.vcpus", 4)
+			threshold := createThreshold("team", "compute.vcpus", 80)
+			_, err := thresholdsServer.Update(ctx, publicv1.QuotaThresholdsUpdateRequest_builder{
+				Object: publicv1.QuotaThreshold_builder{
+					Id:       threshold.GetId(),
+					Metadata: threshold.GetMetadata(),
+					Spec: publicv1.QuotaThresholdSpec_builder{
+						Dimension: "compute.vcpus",
+						Scope:     quotaScopeFor("team"),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.percent"}},
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+
+			// An update that keeps a percent in bounds still works:
+			updated, err := thresholdsServer.Update(ctx, publicv1.QuotaThresholdsUpdateRequest_builder{
+				Object: publicv1.QuotaThreshold_builder{
+					Id:       threshold.GetId(),
+					Metadata: threshold.GetMetadata(),
+					Spec: publicv1.QuotaThresholdSpec_builder{
+						Dimension: "compute.vcpus",
+						Percent:   int32Ptr(60),
+						Scope:     quotaScopeFor("team"),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.percent"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updated.GetObject().GetSpec().GetPercent()).To(Equal(int32(60)))
+		})
+
+		It("refuses a threshold whose scope disagrees with its project, or names no scope", func() {
+			createLimit("team", "compute.vcpus", 4)
+			// A project scope needs the project it names:
+			_, err := thresholdsServer.Create(ctx, publicv1.QuotaThresholdsCreateRequest_builder{
+				Object: publicv1.QuotaThreshold_builder{
+					Metadata: publicv1.Metadata_builder{Tenant: testTenant}.Build(),
+					Spec: publicv1.QuotaThresholdSpec_builder{
+						Dimension: "compute.vcpus",
+						Percent:   int32Ptr(80),
+						Scope:     publicv1.QuotaScope_QUOTA_SCOPE_PROJECT.Enum(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+
+			// A tenant scope keeps the empty project name:
+			_, err = thresholdsServer.Create(ctx, publicv1.QuotaThresholdsCreateRequest_builder{
+				Object: publicv1.QuotaThreshold_builder{
+					Metadata: publicv1.Metadata_builder{Tenant: testTenant, Project: "team"}.Build(),
+					Spec: publicv1.QuotaThresholdSpec_builder{
+						Dimension: "compute.vcpus",
+						Percent:   int32Ptr(80),
+						Scope:     publicv1.QuotaScope_QUOTA_SCOPE_TENANT.Enum(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+
+			// An unnamed scope is refused rather than guessed from the project:
+			_, err = thresholdsServer.Create(ctx, publicv1.QuotaThresholdsCreateRequest_builder{
+				Object: publicv1.QuotaThreshold_builder{
+					Metadata: publicv1.Metadata_builder{Tenant: testTenant, Project: "team"}.Build(),
+					Spec: publicv1.QuotaThresholdSpec_builder{
+						Dimension: "compute.vcpus",
+						Percent:   int32Ptr(80),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
@@ -570,7 +727,11 @@ var _ = Describe("Quota servers", func() {
 			response, err := thresholdsServer.Create(ctx, publicv1.QuotaThresholdsCreateRequest_builder{
 				Object: publicv1.QuotaThreshold_builder{
 					Metadata: publicv1.Metadata_builder{Tenant: testTenant, Project: "team"}.Build(),
-					Spec:     publicv1.QuotaThresholdSpec_builder{Dimension: "compute.vcpus", Percent: int32Ptr(80)}.Build(),
+					Spec: publicv1.QuotaThresholdSpec_builder{
+						Dimension: "compute.vcpus",
+						Percent:   int32Ptr(80),
+						Scope:     quotaScopeFor("team"),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -580,7 +741,11 @@ var _ = Describe("Quota servers", func() {
 			_, err = thresholdsServer.Create(ctx, publicv1.QuotaThresholdsCreateRequest_builder{
 				Object: publicv1.QuotaThreshold_builder{
 					Metadata: publicv1.Metadata_builder{Tenant: testTenant, Project: "team"}.Build(),
-					Spec:     publicv1.QuotaThresholdSpec_builder{Dimension: "compute.vcpus", Percent: int32Ptr(60)}.Build(),
+					Spec: publicv1.QuotaThresholdSpec_builder{
+						Dimension: "compute.vcpus",
+						Percent:   int32Ptr(60),
+						Scope:     quotaScopeFor("team"),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(status.Code(err)).To(Equal(codes.AlreadyExists))
@@ -591,7 +756,11 @@ var _ = Describe("Quota servers", func() {
 			_, err := thresholdsServer.Create(ctx, publicv1.QuotaThresholdsCreateRequest_builder{
 				Object: publicv1.QuotaThreshold_builder{
 					Metadata: publicv1.Metadata_builder{Tenant: testTenant}.Build(),
-					Spec:     publicv1.QuotaThresholdSpec_builder{Dimension: "compute.vcpus", Percent: int32Ptr(90)}.Build(),
+					Spec: publicv1.QuotaThresholdSpec_builder{
+						Dimension: "compute.vcpus",
+						Percent:   int32Ptr(90),
+						Scope:     quotaScopeFor(""),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -601,7 +770,11 @@ var _ = Describe("Quota servers", func() {
 			_, err = thresholdsServer.Create(ctx, publicv1.QuotaThresholdsCreateRequest_builder{
 				Object: publicv1.QuotaThreshold_builder{
 					Metadata: publicv1.Metadata_builder{Tenant: testTenant, Project: "team"}.Build(),
-					Spec:     publicv1.QuotaThresholdSpec_builder{Dimension: "compute.vcpus", Percent: int32Ptr(80)}.Build(),
+					Spec: publicv1.QuotaThresholdSpec_builder{
+						Dimension: "compute.vcpus",
+						Percent:   int32Ptr(80),
+						Scope:     quotaScopeFor("team"),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -634,7 +807,11 @@ var _ = Describe("Quota servers", func() {
 			_, err = thresholdsServer.Create(ctx, publicv1.QuotaThresholdsCreateRequest_builder{
 				Object: publicv1.QuotaThreshold_builder{
 					Metadata: publicv1.Metadata_builder{Tenant: testTenant, Project: "team.web"}.Build(),
-					Spec:     publicv1.QuotaThresholdSpec_builder{Dimension: "compute.vcpus", Percent: int32Ptr(80)}.Build(),
+					Spec: publicv1.QuotaThresholdSpec_builder{
+						Dimension: "compute.vcpus",
+						Percent:   int32Ptr(80),
+						Scope:     quotaScopeFor("team.web"),
+					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -664,6 +841,22 @@ var _ = Describe("Quota servers", func() {
 			return response.GetItems()
 		}
 
+		// review updates a request's state the way a cloud provider admin does, by setting
+		// the state through the update mask:
+		review := func(server *QuotaLimitRequestsServer, request *publicv1.QuotaLimitRequest,
+			state publicv1.QuotaLimitRequestState) error {
+			_, err := server.Update(ctx, publicv1.QuotaLimitRequestsUpdateRequest_builder{
+				Object: publicv1.QuotaLimitRequest_builder{
+					Id:       request.GetId(),
+					Metadata: request.GetMetadata(),
+					Spec:     request.GetSpec(),
+					Status:   publicv1.QuotaLimitRequestStatus_builder{State: state}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
+			}.Build())
+			return err
+		}
+
 		It("holds a request as pending and rejects a client-supplied status", func() {
 			request := createRequest("compute.vcpus", 20)
 			Expect(request.GetStatus().GetState()).To(Equal(publicv1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_PENDING))
@@ -683,7 +876,7 @@ var _ = Describe("Quota servers", func() {
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		})
 
-		It("updates a pending request that omits the status, and rejects an explicit state", func() {
+		It("updates a pending request that omits the status, and reviews one that sets it", func() {
 			privateServer, err := NewPrivateQuotaLimitRequestsServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
@@ -717,21 +910,15 @@ var _ = Describe("Quota servers", func() {
 				To(Equal(privatev1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_PENDING))
 			Expect(updated.GetObject().GetSpec().GetRequestedValue()).To(Equal(int64(30)))
 
-			_, err = privateServer.Update(ctx, privatev1.QuotaLimitRequestsUpdateRequest_builder{
-				Object: privatev1.QuotaLimitRequest_builder{
-					Id:       request.GetId(),
-					Metadata: request.GetMetadata(),
-					Spec:     request.GetSpec(),
-					Status: privatev1.QuotaLimitRequestStatus_builder{
-						State: privatev1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_APPROVED,
+			// The omitted status left the request pending, so a review can still land on it:
+			_, err = requestsServer.Update(ctx, publicv1.QuotaLimitRequestsUpdateRequest_builder{
+				Object: publicv1.QuotaLimitRequest_builder{
+					Id: request.GetId(),
+					Status: publicv1.QuotaLimitRequestStatus_builder{
+						State: publicv1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_APPROVED,
 					}.Build(),
 				}.Build(),
-			}.Build())
-			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-
-			// The omitted status left the request pending, so a review can still act on it:
-			_, err = requestsServer.Approve(ctx, publicv1.QuotaLimitRequestsApproveRequest_builder{
-				Id: request.GetId(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.state"}},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		})
@@ -750,22 +937,20 @@ var _ = Describe("Quota servers", func() {
 			Expect(status.Code(err)).To(Equal(codes.AlreadyExists))
 		})
 
-		It("approves a request and sets the limit", func() {
+		It("approves a request through an update and sets the limit", func() {
 			request := createRequest("compute.vcpus", 20)
-			_, err := requestsServer.Approve(ctx, publicv1.QuotaLimitRequestsApproveRequest_builder{
-				Id: request.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			Expect(review(requestsServer, request,
+				publicv1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_APPROVED)).To(Succeed())
 
 			limits := listLimits("compute.vcpus")
 			Expect(limits).To(HaveLen(1))
 			Expect(limits[0].GetSpec().GetValue()).To(Equal(int64(20)))
+			Expect(limits[0].GetSpec().GetScope()).To(Equal(privatev1.QuotaScope_QUOTA_SCOPE_TENANT))
 			Expect(limits[0].GetMetadata().GetProject()).To(BeEmpty())
 
 			// The approved request is terminal:
-			_, err = requestsServer.Approve(ctx, publicv1.QuotaLimitRequestsApproveRequest_builder{
-				Id: request.GetId(),
-			}.Build())
+			err := review(requestsServer, request,
+				publicv1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_APPROVED)
 			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 			_, err = requestsServer.Update(ctx, publicv1.QuotaLimitRequestsUpdateRequest_builder{
 				Object: publicv1.QuotaLimitRequest_builder{
@@ -780,10 +965,8 @@ var _ = Describe("Quota servers", func() {
 		It("approving a request replaces an existing override", func() {
 			createLimit("", "compute.vcpus", 10)
 			request := createRequest("compute.vcpus", 20)
-			_, err := requestsServer.Approve(ctx, publicv1.QuotaLimitRequestsApproveRequest_builder{
-				Id: request.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			Expect(review(requestsServer, request,
+				publicv1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_APPROVED)).To(Succeed())
 			limits := listLimits("compute.vcpus")
 			Expect(limits).To(HaveLen(1))
 			Expect(limits[0].GetSpec().GetValue()).To(Equal(int64(20)))
@@ -801,6 +984,7 @@ var _ = Describe("Quota servers", func() {
 					Spec: publicv1.QuotaLimitSpec_builder{
 						Dimension: "compute.vcpus",
 						Value:     proto.Int64(10),
+						Scope:     quotaScopeFor(""),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -808,10 +992,8 @@ var _ = Describe("Quota servers", func() {
 			Expect(override.GetObject().GetMetadata().GetName()).To(Equal("chosen-override-name"))
 
 			request := createRequest("compute.vcpus", 20)
-			_, err = requestsServer.Approve(ctx, publicv1.QuotaLimitRequestsApproveRequest_builder{
-				Id: request.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			Expect(review(requestsServer, request,
+				publicv1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_APPROVED)).To(Succeed())
 
 			limits := listLimits("compute.vcpus")
 			Expect(limits).To(HaveLen(1))
@@ -820,39 +1002,74 @@ var _ = Describe("Quota servers", func() {
 			Expect(limits[0].GetMetadata().GetName()).To(Equal("chosen-override-name"))
 		})
 
-		It("denies a request and changes no limit", func() {
+		It("denies a request through an update and changes no limit", func() {
 			request := createRequest("compute.vcpus", 20)
-			_, err := requestsServer.Deny(ctx, publicv1.QuotaLimitRequestsDenyRequest_builder{
-				Id: request.GetId(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			Expect(review(requestsServer, request,
+				publicv1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_DENIED)).To(Succeed())
 			Expect(listLimits("compute.vcpus")).To(BeEmpty())
 
 			// A denied request doesn't block a new one:
 			createRequest("compute.vcpus", 30)
 		})
+
+		It("refuses a review from a caller without total visibility", func() {
+			visibility, err := auth.NewVisibility().
+				AddVisibleTenants(testTenant).
+				SetTotalProjectVisibility(testTenant).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			restricted := auth.NewMockTenancyLogic(ctrl)
+			restricted.EXPECT().DetermineAssignableTenants(gomock.Any()).
+				Return(collections.NewSet(testTenant), nil).
+				AnyTimes()
+			restricted.EXPECT().DetermineDefaultTenant(gomock.Any()).
+				Return(testTenant, nil).
+				AnyTimes()
+			restricted.EXPECT().DetermineVisibility(gomock.Any()).
+				Return(visibility, nil).
+				AnyTimes()
+			server, err := NewQuotaLimitRequestsServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(restricted).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			request := createRequest("compute.vcpus", 20)
+			// A tenant admin may edit the pending request's value:
+			_, err = server.Update(ctx, publicv1.QuotaLimitRequestsUpdateRequest_builder{
+				Object: publicv1.QuotaLimitRequest_builder{
+					Id:       request.GetId(),
+					Metadata: request.GetMetadata(),
+					Spec: publicv1.QuotaLimitRequestSpec_builder{
+						Dimension:      request.GetSpec().GetDimension(),
+						RequestedValue: proto.Int64(30),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.requested_value"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			// The review is a cloud provider admin's to make:
+			err = review(server, request, publicv1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_APPROVED)
+			Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
+			err = review(server, request, publicv1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_DENIED)
+			Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
+			// No limit landed and the request stayed pending:
+			Expect(listLimits("compute.vcpus")).To(BeEmpty())
+			stored, err := requestsServer.Get(ctx, publicv1.QuotaLimitRequestsGetRequest_builder{
+				Id: request.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetStatus().GetState()).
+				To(Equal(publicv1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_PENDING))
+		})
 	})
 
 	Describe("Quota usage", func() {
 		BeforeEach(func() {
-			_, err := limitsServer.SetDefault(ctx, publicv1.QuotaLimitsSetDefaultRequest_builder{
-				Object: publicv1.QuotaDefaultLimit_builder{
-					Spec: publicv1.QuotaDefaultLimitSpec_builder{
-						Dimension: "compute.vcpus",
-						Value:     proto.Int64(10),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			_, err = limitsServer.SetDefault(ctx, publicv1.QuotaLimitsSetDefaultRequest_builder{
-				Object: publicv1.QuotaDefaultLimit_builder{
-					Spec: publicv1.QuotaDefaultLimitSpec_builder{
-						Dimension: "network.virtual_networks",
-						Value:     proto.Int64(2),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			createDefault("compute.vcpus", 10)
+			createDefault("network.virtual_networks", 2)
 			createLimit("", "compute.vcpus", 5)
 			createLimit("team", "network.virtual_networks", 3)
 
@@ -907,7 +1124,7 @@ var _ = Describe("Quota servers", func() {
 			return nil
 		}
 
-		It("resolves the limits, counts the usage, and marks the over-limit dimensions", func() {
+		It("resolves the limits and counts the usage", func() {
 			response, err := usageServer.Get(ctx, publicv1.QuotaUsageGetRequest_builder{
 				Tenant: testTenant,
 			}.Build())
@@ -920,14 +1137,11 @@ var _ = Describe("Quota servers", func() {
 			// The override replaces the default of 10:
 			Expect(vcpus.GetLimit()).To(Equal(int64(5)))
 			Expect(vcpus.GetUsage()).To(Equal(int64(6)))
-			Expect(vcpus.GetRoom()).To(Equal(int64(-1)))
-			Expect(vcpus.GetOverLimit()).To(BeTrue())
 
 			gateways := findDimension(report.GetDimensions(), "network.virtual_networks")
 			Expect(gateways).ToNot(BeNil())
 			Expect(gateways.GetLimit()).To(Equal(int64(2)))
 			Expect(gateways.GetUsage()).To(Equal(int64(1)))
-			Expect(gateways.GetOverLimit()).To(BeFalse())
 
 			Expect(report.GetProjects()).To(HaveLen(2))
 			var team *publicv1.QuotaUsageProject
@@ -942,21 +1156,12 @@ var _ = Describe("Quota servers", func() {
 			// The project limit replaces the inherited tenant limit:
 			Expect(teamGateways.GetLimit()).To(Equal(int64(3)))
 			Expect(teamGateways.GetUsage()).To(Equal(int64(1)))
-			Expect(teamGateways.GetRoom()).To(Equal(int64(2)))
 		})
 
 		It("lists a dimension that has a limit and no usage", func() {
 			// The report covers every dimension with a default, an override or usage,
 			// so a dimension with a limit and nothing counted still appears:
-			_, err := limitsServer.SetDefault(ctx, publicv1.QuotaLimitsSetDefaultRequest_builder{
-				Object: publicv1.QuotaDefaultLimit_builder{
-					Spec: publicv1.QuotaDefaultLimitSpec_builder{
-						Dimension: "images.count",
-						Value:     proto.Int64(1000000),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			createDefault("images.count", 1000000)
 			createLimit("team", "storage.fast.gib", 7)
 			response, err := usageServer.Get(ctx, publicv1.QuotaUsageGetRequest_builder{
 				Tenant: testTenant,
@@ -1024,15 +1229,7 @@ var _ = Describe("Quota servers", func() {
 				}.Build()).
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			_, err = limitsServer.SetDefault(ctx, publicv1.QuotaLimitsSetDefaultRequest_builder{
-				Object: publicv1.QuotaDefaultLimit_builder{
-					Spec: publicv1.QuotaDefaultLimitSpec_builder{
-						Dimension: "images.count",
-						Value:     proto.Int64(0),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
+			createDefault("images.count", 0)
 
 			response, err := usageServer.Get(ctx, publicv1.QuotaUsageGetRequest_builder{
 				Tenant: testTenant,
@@ -1042,11 +1239,10 @@ var _ = Describe("Quota servers", func() {
 			Expect(images).ToNot(BeNil())
 			Expect(images.GetLimit()).To(Equal(int64(0)))
 			Expect(images.GetUsage()).To(Equal(int64(1)))
-			Expect(images.GetOverLimit()).To(BeTrue())
 		})
 
 		It("refuses a default without a value", func() {
-			_, err := limitsServer.SetDefault(ctx, publicv1.QuotaLimitsSetDefaultRequest_builder{
+			_, err := defaultsServer.Create(ctx, publicv1.QuotaDefaultLimitsCreateRequest_builder{
 				Object: publicv1.QuotaDefaultLimit_builder{
 					Spec: publicv1.QuotaDefaultLimitSpec_builder{
 						Dimension: "images.count",
@@ -1090,7 +1286,7 @@ var _ = Describe("Quota servers", func() {
 		})
 
 		It("refuses a negative default", func() {
-			_, err := limitsServer.SetDefault(ctx, publicv1.QuotaLimitsSetDefaultRequest_builder{
+			_, err := defaultsServer.Create(ctx, publicv1.QuotaDefaultLimitsCreateRequest_builder{
 				Object: publicv1.QuotaDefaultLimit_builder{
 					Spec: publicv1.QuotaDefaultLimitSpec_builder{
 						Dimension: "images.count",

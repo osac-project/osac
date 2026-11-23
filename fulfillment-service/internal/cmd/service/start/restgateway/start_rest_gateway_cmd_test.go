@@ -137,10 +137,12 @@ var sharedHandlers = []string{
 	"public/v1.RegisterQuotaThresholdsHandler",
 	"public/v1.RegisterQuotaLimitRequestsHandler",
 	"public/v1.RegisterQuotaUsageHandler",
+	"public/v1.RegisterQuotaDefaultLimitsHandler",
 	"private/v1.RegisterQuotaLimitsHandler",
 	"private/v1.RegisterQuotaThresholdsHandler",
 	"private/v1.RegisterQuotaLimitRequestsHandler",
 	"private/v1.RegisterQuotaUsageHandler",
+	"private/v1.RegisterQuotaDefaultLimitsHandler",
 }
 
 var _ = Describe("buildHandlerList", func() {

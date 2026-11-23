@@ -16,6 +16,10 @@ columns:
 - header: PROJECT
   value: "has(this.metadata.project)? this.metadata.project: '-'"
 
+- header: SCOPE
+  value: this.spec.scope
+  type: osac.private.v1.QuotaScope
+
 - header: ID
   value: this.id
 

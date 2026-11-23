@@ -183,6 +183,7 @@ func (s *QuotaLimitRequestsServer) Create(ctx context.Context,
 
 func (s *QuotaLimitRequestsServer) Update(ctx context.Context,
 	request *publicv1.QuotaLimitRequestsUpdateRequest) (response *publicv1.QuotaLimitRequestsUpdateResponse, err error) {
+	callerCtx := ctx
 	ctx = withPublicAPIView(ctx)
 	if err = validatePublicObjectMetadata(request.GetObject()); err != nil {
 		return
@@ -195,7 +196,14 @@ func (s *QuotaLimitRequestsServer) Update(ctx context.Context,
 	privateRequest.SetObject(object)
 	privateRequest.SetUpdateMask(request.GetUpdateMask())
 	privateRequest.SetLock(request.GetLock())
-	privateResponse, err := s.delegate.Update(ctx, privateRequest)
+	// The review state is the one status field a public update may set. The generic machinery
+	// restores output-only status for public callers, so a review rides the delegate's private
+	// path, which enforces that only a cloud provider admin may change the state.
+	updateCtx := ctx
+	if reviewIntent(request) != publicv1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_UNSPECIFIED {
+		updateCtx = callerCtx
+	}
+	privateResponse, err := s.delegate.Update(updateCtx, privateRequest)
 	if err != nil {
 		return nil, err
 	}
@@ -220,28 +228,25 @@ func (s *QuotaLimitRequestsServer) Delete(ctx context.Context,
 	return
 }
 
-func (s *QuotaLimitRequestsServer) Approve(ctx context.Context,
-	request *publicv1.QuotaLimitRequestsApproveRequest) (response *publicv1.QuotaLimitRequestsApproveResponse, err error) {
-	privateRequest := &privatev1.QuotaLimitRequestsApproveRequest{}
-	privateRequest.SetId(request.GetId())
-	_, err = s.delegate.Approve(ctx, privateRequest)
-	if err != nil {
-		return nil, err
+// reviewIntent tells the state a public update asks to review a request into, APPROVED or DENIED.
+// The caller names it through the update mask, or in the body when there is no mask, the way a
+// full-object update carries every field it changes; any other state is no review.
+func reviewIntent(request *publicv1.QuotaLimitRequestsUpdateRequest) publicv1.QuotaLimitRequestState {
+	state := request.GetObject().GetStatus().GetState()
+	if state != publicv1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_APPROVED &&
+		state != publicv1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_DENIED {
+		return publicv1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_UNSPECIFIED
 	}
-	response = &publicv1.QuotaLimitRequestsApproveResponse{}
-	return
-}
-
-func (s *QuotaLimitRequestsServer) Deny(ctx context.Context,
-	request *publicv1.QuotaLimitRequestsDenyRequest) (response *publicv1.QuotaLimitRequestsDenyResponse, err error) {
-	privateRequest := &privatev1.QuotaLimitRequestsDenyRequest{}
-	privateRequest.SetId(request.GetId())
-	_, err = s.delegate.Deny(ctx, privateRequest)
-	if err != nil {
-		return nil, err
+	paths := request.GetUpdateMask().GetPaths()
+	if len(paths) == 0 {
+		return state
 	}
-	response = &publicv1.QuotaLimitRequestsDenyResponse{}
-	return
+	for _, path := range paths {
+		if path == "status.state" {
+			return state
+		}
+	}
+	return publicv1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_UNSPECIFIED
 }
 
 func (s *QuotaLimitRequestsServer) mapIn(

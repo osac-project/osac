@@ -40,16 +40,16 @@ type PrivateQuotaLimitRequestsServerBuilder struct {
 
 var _ privatev1.QuotaLimitRequestsServer = (*PrivateQuotaLimitRequestsServer)(nil)
 
-// PrivateQuotaLimitRequestsServer serves the limit increase requests. Approving a pending request
-// sets the requested limit for its tenant and dimension in the same transaction as the approval;
-// denying changes no limit.
+// PrivateQuotaLimitRequestsServer serves the limit increase requests. A review, an update that
+// sets a pending request's state, sets the requested limit for its tenant and dimension in the
+// same transaction as the approval; a denial changes no limit.
 type PrivateQuotaLimitRequestsServer struct {
 	privatev1.UnimplementedQuotaLimitRequestsServer
 
 	logger           *slog.Logger
 	attributionLogic auth.AttributionLogic
+	tenancyLogic     auth.TenancyLogic
 	generic          *GenericServer[*privatev1.QuotaLimitRequest]
-	requestsDao      *dao.GenericDAO[*privatev1.QuotaLimitRequest]
 	limitsDao        *dao.GenericDAO[*privatev1.QuotaLimit]
 }
 
@@ -97,14 +97,6 @@ func (b *PrivateQuotaLimitRequestsServerBuilder) Build() (result *PrivateQuotaLi
 		err = errors.New("attribution logic is mandatory")
 		return
 	}
-	requestsDao, err := dao.NewGenericDAO[*privatev1.QuotaLimitRequest]().
-		SetLogger(b.logger).
-		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
-		Build()
-	if err != nil {
-		return
-	}
 	limitsDao, err := dao.NewGenericDAO[*privatev1.QuotaLimit]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
@@ -127,8 +119,8 @@ func (b *PrivateQuotaLimitRequestsServerBuilder) Build() (result *PrivateQuotaLi
 	result = &PrivateQuotaLimitRequestsServer{
 		logger:           b.logger,
 		attributionLogic: b.attributionLogic,
+		tenancyLogic:     b.tenancyLogic,
 		generic:          generic,
-		requestsDao:      requestsDao,
 		limitsDao:        limitsDao,
 	}
 	return
@@ -166,7 +158,7 @@ func (s *PrivateQuotaLimitRequestsServer) Create(ctx context.Context,
 	}
 	if limitRequest.GetMetadata().GetProject() != "" {
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'metadata.project' must be empty: a limit request asks for a tenant limit")
+			"field 'metadata.project' must be empty: a limit request asks for a limit that covers the whole tenant")
 		return
 	}
 	if err = rejectOutputStatusOnCreate(limitRequest.HasStatus()); err != nil {
@@ -204,66 +196,10 @@ func (s *PrivateQuotaLimitRequestsServer) Delete(ctx context.Context,
 	return
 }
 
-func (s *PrivateQuotaLimitRequestsServer) Approve(ctx context.Context,
-	request *privatev1.QuotaLimitRequestsApproveRequest) (response *privatev1.QuotaLimitRequestsApproveResponse, err error) {
-	limitRequest, err := s.lockPendingRequest(ctx, request.GetId(), "approve")
-	if err != nil {
-		return
-	}
-	// The requested limit is set in the same transaction as the approval, so a client can never
-	// see an approved request whose limit didn't land:
-	if err = s.applyRequestedLimit(ctx, limitRequest); err != nil {
-		return
-	}
-	limitRequest.GetStatus().SetState(privatev1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_APPROVED)
-	if _, err = s.requestsDao.Update().SetObject(limitRequest).Do(ctx); err != nil {
-		return nil, ConvertDAOErrorToGRPC(err, "update", request.GetId())
-	}
-	response = &privatev1.QuotaLimitRequestsApproveResponse{}
-	return
-}
-
-func (s *PrivateQuotaLimitRequestsServer) Deny(ctx context.Context,
-	request *privatev1.QuotaLimitRequestsDenyRequest) (response *privatev1.QuotaLimitRequestsDenyResponse, err error) {
-	limitRequest, err := s.lockPendingRequest(ctx, request.GetId(), "deny")
-	if err != nil {
-		return
-	}
-	limitRequest.GetStatus().SetState(privatev1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_DENIED)
-	if _, err = s.requestsDao.Update().SetObject(limitRequest).Do(ctx); err != nil {
-		return nil, ConvertDAOErrorToGRPC(err, "update", request.GetId())
-	}
-	response = &privatev1.QuotaLimitRequestsDenyResponse{}
-	return
-}
-
 func (s *PrivateQuotaLimitRequestsServer) Signal(ctx context.Context,
 	request *privatev1.QuotaLimitRequestsSignalRequest) (response *privatev1.QuotaLimitRequestsSignalResponse, err error) {
 	err = s.generic.Signal(ctx, request, &response)
 	return
-}
-
-// lockPendingRequest loads and locks a request that a review can act on: only a pending request
-// can be approved or denied, and the lock keeps two reviews from racing.
-func (s *PrivateQuotaLimitRequestsServer) lockPendingRequest(
-	ctx context.Context, id, action string) (*privatev1.QuotaLimitRequest, error) {
-	if id == "" {
-		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
-	}
-	response, err := s.requestsDao.Get().
-		SetId(id).
-		SetLock(true).
-		Do(ctx)
-	if err != nil {
-		return nil, ConvertDAOErrorToGRPC(err, "get", id)
-	}
-	limitRequest := response.GetObject()
-	if limitRequest.GetStatus().GetState() != privatev1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_PENDING {
-		return nil, grpcstatus.Errorf(grpccodes.FailedPrecondition,
-			"quota limit request '%s' is %s, and only a pending request can be %sd",
-			id, limitRequest.GetStatus().GetState().String(), action)
-	}
-	return limitRequest, nil
 }
 
 // applyRequestedLimit sets the requested limit for the request's tenant and dimension: a new
@@ -306,6 +242,7 @@ func (s *PrivateQuotaLimitRequestsServer) applyRequestedLimit(
 		Spec: privatev1.QuotaLimitSpec_builder{
 			Dimension: dimension,
 			Value:     &requested,
+			Scope:     privatev1.QuotaScope_QUOTA_SCOPE_TENANT.Enum(),
 		}.Build(),
 	}.Build()
 	_, err = upsertQuotaLimit(
@@ -331,10 +268,11 @@ func (s *PrivateQuotaLimitRequestsServer) applyRequestedLimit(
 	return nil
 }
 
-// validateRequestUpdate rejects a change to a request's identity, a change to its review state,
-// and any change to a request that is no longer pending: a new request replaces a reviewed one.
+// validateRequestUpdate rejects a change to a request's identity, a change to a request that is
+// no longer pending, and a review by a caller who may not review: a new request replaces a
+// reviewed one, and only a cloud provider admin may approve or deny.
 func (s *PrivateQuotaLimitRequestsServer) validateRequestUpdate(
-	_ context.Context, candidate, current *privatev1.QuotaLimitRequest) error {
+	ctx context.Context, candidate, current *privatev1.QuotaLimitRequest) error {
 	if current.GetStatus().GetState() != privatev1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_PENDING {
 		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
 			"quota limit request is %s, and only a pending request can be changed",
@@ -343,9 +281,6 @@ func (s *PrivateQuotaLimitRequestsServer) validateRequestUpdate(
 	if candidate.GetStatus().GetState() == privatev1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_UNSPECIFIED {
 		// An update that omits the status leaves the stored one in place:
 		candidate.SetStatus(current.GetStatus())
-	} else if candidate.GetStatus().GetState() != current.GetStatus().GetState() {
-		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"field 'status.state' is set only by the Approve and Deny operations")
 	}
 	if candidate.GetSpec().GetDimension() != current.GetSpec().GetDimension() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
@@ -361,5 +296,36 @@ func (s *PrivateQuotaLimitRequestsServer) validateRequestUpdate(
 	if candidate.GetMetadata().GetName() != current.GetMetadata().GetName() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.name' is immutable")
 	}
+	if candidate.GetStatus().GetState() != current.GetStatus().GetState() {
+		return s.reviewRequest(ctx, candidate)
+	}
 	return nil
+}
+
+// reviewRequest applies the review, the change of a pending request's state. Only a cloud
+// provider admin may review: an approval sets the requested limit in the same transaction as the
+// state change, so a client can never see an approved request whose limit didn't land, and a
+// denial writes nothing but the state.
+func (s *PrivateQuotaLimitRequestsServer) reviewRequest(
+	ctx context.Context, candidate *privatev1.QuotaLimitRequest) error {
+	state := candidate.GetStatus().GetState()
+	if state != privatev1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_APPROVED &&
+		state != privatev1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_DENIED {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'status.state' can only be changed to %s or %s",
+			privatev1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_APPROVED,
+			privatev1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_DENIED)
+	}
+	visibility, err := s.tenancyLogic.DetermineVisibility(ctx)
+	if err != nil {
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to determine the visible tenants")
+	}
+	if !visibility.IsTotal() {
+		return grpcstatus.Errorf(grpccodes.PermissionDenied,
+			"the review of a quota limit request is a cloud provider admin's to make")
+	}
+	if state == privatev1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_DENIED {
+		return nil
+	}
+	return s.applyRequestedLimit(ctx, candidate)
 }

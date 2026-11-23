@@ -155,6 +155,9 @@ func (s *PrivateQuotaThresholdsServer) Create(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "threshold percent is mandatory and must be 1 to 100")
 		return
 	}
+	if err = validateQuotaScope(threshold.GetSpec(), threshold.GetMetadata().GetProject()); err != nil {
+		return
+	}
 	fillQuotaName(threshold, threshold.GetSpec().GetDimension())
 	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response,
 		func(ctx context.Context, _, candidate *privatev1.QuotaThreshold) error {
@@ -217,14 +220,20 @@ func (s *PrivateQuotaThresholdsServer) checkScopeLimit(ctx context.Context,
 		metadata.GetProject(), dimension)
 }
 
-// validateThresholdUpdate rejects a change to a threshold's identity, and a threshold whose
-// scope lost its limit.
+// validateThresholdUpdate rejects a change to a threshold's identity, a threshold whose scope
+// lost its limit, and a threshold with no percent or one out of bounds.
 func (s *PrivateQuotaThresholdsServer) validateThresholdUpdate(
 	ctx context.Context, candidate, current *privatev1.QuotaThreshold) error {
 	if candidate.GetSpec().GetDimension() != current.GetSpec().GetDimension() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.dimension' is immutable and cannot be changed from '%s' to '%s'",
 			current.GetSpec().GetDimension(), candidate.GetSpec().GetDimension())
+	}
+	if candidate.GetSpec().GetScope() != current.GetSpec().GetScope() {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.scope' is immutable")
+	}
+	if err := validateQuotaScope(candidate.GetSpec(), candidate.GetMetadata().GetProject()); err != nil {
+		return err
 	}
 	if candidate.GetMetadata().GetTenant() != current.GetMetadata().GetTenant() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.tenant' is immutable")
@@ -234,6 +243,13 @@ func (s *PrivateQuotaThresholdsServer) validateThresholdUpdate(
 	}
 	if candidate.GetMetadata().GetName() != current.GetMetadata().GetName() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'metadata.name' is immutable")
+	}
+	// The update path validates the merged candidate, so the percent's presence and bounds are
+	// checked here as Create checks them: a mask that clears the percent must not silently
+	// leave a threshold that never warns.
+	if !candidate.GetSpec().HasPercent() ||
+		candidate.GetSpec().GetPercent() < 1 || candidate.GetSpec().GetPercent() > 100 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "threshold percent is mandatory and must be 1 to 100")
 	}
 	return s.checkScopeLimit(ctx, candidate)
 }

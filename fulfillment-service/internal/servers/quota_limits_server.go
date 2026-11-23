@@ -37,7 +37,7 @@ type QuotaLimitsServerBuilder struct {
 var _ publicv1.QuotaLimitsServer = (*QuotaLimitsServer)(nil)
 
 // QuotaLimitsServer is the public face of the quota limits. It adds one rule the method-level
-// policy can't express: a limit with no project is a tenant override, which only a cloud provider
+// policy can't express: a limit of tenant scope is a tenant override, which only a cloud provider
 // admin may write, while a tenant admin may write any limit of a project they can see.
 type QuotaLimitsServer struct {
 	publicv1.UnimplementedQuotaLimitsServer
@@ -47,8 +47,6 @@ type QuotaLimitsServer struct {
 	delegate     privatev1.QuotaLimitsServer
 	inMapper     *GenericMapper[*publicv1.QuotaLimit, *privatev1.QuotaLimit]
 	outMapper    *GenericMapper[*privatev1.QuotaLimit, *publicv1.QuotaLimit]
-	defaultsIn   *GenericMapper[*publicv1.QuotaDefaultLimit, *privatev1.QuotaDefaultLimit]
-	defaultsOut  *GenericMapper[*privatev1.QuotaDefaultLimit, *publicv1.QuotaDefaultLimit]
 }
 
 func NewQuotaLimitsServer() *QuotaLimitsServerBuilder {
@@ -102,20 +100,6 @@ func (b *QuotaLimitsServerBuilder) Build() (result *QuotaLimitsServer, err error
 	if err != nil {
 		return
 	}
-	defaultsIn, err := NewGenericMapper[*publicv1.QuotaDefaultLimit, *privatev1.QuotaDefaultLimit]().
-		SetLogger(b.logger).
-		SetStrict(true).
-		Build()
-	if err != nil {
-		return
-	}
-	defaultsOut, err := NewGenericMapper[*privatev1.QuotaDefaultLimit, *publicv1.QuotaDefaultLimit]().
-		SetLogger(b.logger).
-		SetStrict(false).
-		Build()
-	if err != nil {
-		return
-	}
 	delegate, err := NewPrivateQuotaLimitsServer().
 		SetLogger(b.logger).
 		SetAttributionLogic(b.attributionLogic).
@@ -132,8 +116,6 @@ func (b *QuotaLimitsServerBuilder) Build() (result *QuotaLimitsServer, err error
 		delegate:     delegate,
 		inMapper:     inMapper,
 		outMapper:    outMapper,
-		defaultsIn:   defaultsIn,
-		defaultsOut:  defaultsOut,
 	}
 	return
 }
@@ -184,12 +166,12 @@ func (s *QuotaLimitsServer) Get(ctx context.Context,
 
 func (s *QuotaLimitsServer) Create(ctx context.Context,
 	request *publicv1.QuotaLimitsCreateRequest) (response *publicv1.QuotaLimitsCreateResponse, err error) {
-	if err = s.checkOverrideWrite(ctx, request.GetObject().GetMetadata().GetProject()); err != nil {
-		return
-	}
 	object, err := s.mapLimitIn(ctx, request.GetObject())
 	if err != nil {
 		return nil, err
+	}
+	if err = s.checkOverrideWrite(ctx, object.GetSpec().GetScope()); err != nil {
+		return
 	}
 	privateRequest := &privatev1.QuotaLimitsCreateRequest{}
 	privateRequest.SetObject(object)
@@ -213,17 +195,17 @@ func (s *QuotaLimitsServer) Update(ctx context.Context,
 		return
 	}
 	// An update of an override is a write to the tenant's quota state, so the stored
-	// scope decides, the way Delete decides it. The request's own project cannot: the
-	// update mask drops every field it does not name, so a body that names a visible
-	// project next to a mask of spec.value would leave the stored override's empty
-	// project in place while this check read the visible one.
+	// scope decides, the way Delete decides it. The request's own scope cannot: the
+	// update mask drops every field it does not name, so a body that names a project
+	// scope next to a mask of spec.value would leave the stored override's tenant scope
+	// in place while this check read the project one.
 	privateGet := &privatev1.QuotaLimitsGetRequest{}
 	privateGet.SetId(request.GetObject().GetId())
 	stored, err := s.delegate.Get(ctx, privateGet)
 	if err != nil {
 		return nil, err
 	}
-	if err = s.checkOverrideWrite(ctx, stored.GetObject().GetMetadata().GetProject()); err != nil {
+	if err = s.checkOverrideWrite(ctx, stored.GetObject().GetSpec().GetScope()); err != nil {
 		return
 	}
 	object, err := s.mapLimitIn(ctx, request.GetObject())
@@ -256,7 +238,7 @@ func (s *QuotaLimitsServer) Delete(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	if err = s.checkOverrideWrite(ctx, privateResponse.GetObject().GetMetadata().GetProject()); err != nil {
+	if err = s.checkOverrideWrite(ctx, privateResponse.GetObject().GetSpec().GetScope()); err != nil {
 		return
 	}
 	deleteRequest := &privatev1.QuotaLimitsDeleteRequest{}
@@ -269,86 +251,11 @@ func (s *QuotaLimitsServer) Delete(ctx context.Context,
 	return
 }
 
-func (s *QuotaLimitsServer) ListDefaults(ctx context.Context,
-	request *publicv1.QuotaLimitsListDefaultsRequest) (response *publicv1.QuotaLimitsListDefaultsResponse, err error) {
-	privateRequest := &privatev1.QuotaLimitsListDefaultsRequest{}
-	privateRequest.SetOffset(request.GetOffset())
-	if request.HasLimit() {
-		privateRequest.SetLimit(request.GetLimit())
-	}
-	privateRequest.SetFilter(request.GetFilter())
-	privateResponse, err := s.delegate.ListDefaults(ctx, privateRequest)
-	if err != nil {
-		return nil, err
-	}
-	response = &publicv1.QuotaLimitsListDefaultsResponse{}
-	response.SetSize(privateResponse.GetSize())
-	response.SetTotal(privateResponse.GetTotal())
-	items := make([]*publicv1.QuotaDefaultLimit, len(privateResponse.GetItems()))
-	for i, item := range privateResponse.GetItems() {
-		if items[i], err = s.mapDefaultOut(ctx, item); err != nil {
-			return nil, err
-		}
-	}
-	response.SetItems(items)
-	return
-}
-
-func (s *QuotaLimitsServer) GetDefault(ctx context.Context,
-	request *publicv1.QuotaLimitsGetDefaultRequest) (response *publicv1.QuotaLimitsGetDefaultResponse, err error) {
-	privateRequest := &privatev1.QuotaLimitsGetDefaultRequest{}
-	privateRequest.SetId(request.GetId())
-	privateResponse, err := s.delegate.GetDefault(ctx, privateRequest)
-	if err != nil {
-		return nil, err
-	}
-	object, err := s.mapDefaultOut(ctx, privateResponse.GetObject())
-	if err != nil {
-		return nil, err
-	}
-	response = &publicv1.QuotaLimitsGetDefaultResponse{}
-	response.SetObject(object)
-	return
-}
-
-func (s *QuotaLimitsServer) SetDefault(ctx context.Context,
-	request *publicv1.QuotaLimitsSetDefaultRequest) (response *publicv1.QuotaLimitsSetDefaultResponse, err error) {
-	object, err := s.mapDefaultIn(ctx, request.GetObject())
-	if err != nil {
-		return nil, err
-	}
-	privateRequest := &privatev1.QuotaLimitsSetDefaultRequest{}
-	privateRequest.SetObject(object)
-	privateResponse, err := s.delegate.SetDefault(ctx, privateRequest)
-	if err != nil {
-		return nil, err
-	}
-	created, err := s.mapDefaultOut(ctx, privateResponse.GetObject())
-	if err != nil {
-		return nil, err
-	}
-	response = &publicv1.QuotaLimitsSetDefaultResponse{}
-	response.SetObject(created)
-	return
-}
-
-func (s *QuotaLimitsServer) ClearDefault(ctx context.Context,
-	request *publicv1.QuotaLimitsClearDefaultRequest) (response *publicv1.QuotaLimitsClearDefaultResponse, err error) {
-	privateRequest := &privatev1.QuotaLimitsClearDefaultRequest{}
-	privateRequest.SetId(request.GetId())
-	_, err = s.delegate.ClearDefault(ctx, privateRequest)
-	if err != nil {
-		return nil, err
-	}
-	response = &publicv1.QuotaLimitsClearDefaultResponse{}
-	return
-}
-
-// checkOverrideWrite refuses a write to a tenant override, a limit of no project, unless the
+// checkOverrideWrite refuses a write to a tenant override, a limit of tenant scope, unless the
 // caller sees every tenant: only a cloud provider admin manages overrides, while a tenant admin
 // manages the limits of their projects.
-func (s *QuotaLimitsServer) checkOverrideWrite(ctx context.Context, project string) error {
-	if project != "" {
+func (s *QuotaLimitsServer) checkOverrideWrite(ctx context.Context, scope privatev1.QuotaScope) error {
+	if scope == privatev1.QuotaScope_QUOTA_SCOPE_PROJECT {
 		return nil
 	}
 	visibility, err := s.tenancyLogic.DetermineVisibility(ctx)
@@ -357,7 +264,7 @@ func (s *QuotaLimitsServer) checkOverrideWrite(ctx context.Context, project stri
 	}
 	if !visibility.IsTotal() {
 		return grpcstatus.Errorf(grpccodes.PermissionDenied,
-			"a tenant limit without a project is a tenant override, which only a cloud provider admin may set")
+			"a quota limit of tenant scope is a tenant override, which only a cloud provider admin may set")
 	}
 	return nil
 }
@@ -380,28 +287,6 @@ func (s *QuotaLimitsServer) mapLimitOut(
 	if err := s.outMapper.Copy(ctx, object, result); err != nil {
 		s.logger.ErrorContext(ctx, "Failed to map private quota limit to public", slog.Any("error", err))
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process quota limit")
-	}
-	return result, nil
-}
-
-func (s *QuotaLimitsServer) mapDefaultIn(
-	ctx context.Context, object *publicv1.QuotaDefaultLimit,
-) (*privatev1.QuotaDefaultLimit, error) {
-	result := &privatev1.QuotaDefaultLimit{}
-	if err := s.defaultsIn.Copy(ctx, object, result); err != nil {
-		s.logger.ErrorContext(ctx, "Failed to map public quota default limit to private", slog.Any("error", err))
-		return nil, publicInputMappingError(err, "failed to process quota default limit")
-	}
-	return result, nil
-}
-
-func (s *QuotaLimitsServer) mapDefaultOut(
-	ctx context.Context, object *privatev1.QuotaDefaultLimit,
-) (*publicv1.QuotaDefaultLimit, error) {
-	result := &publicv1.QuotaDefaultLimit{}
-	if err := s.defaultsOut.Copy(ctx, object, result); err != nil {
-		s.logger.ErrorContext(ctx, "Failed to map private quota default limit to public", slog.Any("error", err))
-		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process quota default limit")
 	}
 	return result, nil
 }

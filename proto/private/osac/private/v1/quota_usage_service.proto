@@ -34,8 +34,8 @@ message QuotaUsageGetResponse {
 
 // Serves the quota usage of tenants. Read-only.
 service QuotaUsage {
-  // Retrieves the usage report of one tenant: each limit, the usage, the room left, and the
-  // dimensions over their limit, for the tenant and each of its projects.
+  // Retrieves the usage report of one tenant: each limit and the usage counted against it, for
+  // the tenant and each of its projects.
   rpc Get(QuotaUsageGetRequest) returns (QuotaUsageGetResponse) {
     option (google.api.http) = {
       get: "/api/private/v1/quota_usage/{tenant}"

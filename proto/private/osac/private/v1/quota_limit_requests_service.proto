@@ -108,20 +108,6 @@ message QuotaLimitRequestsDeleteRequest {
 
 message QuotaLimitRequestsDeleteResponse {}
 
-message QuotaLimitRequestsApproveRequest {
-  string id = 1;
-}
-
-// The approved limit is set in the same request; use QuotaLimitRequests.Get to observe the
-// request, or QuotaLimits.List to observe the limit.
-message QuotaLimitRequestsApproveResponse {}
-
-message QuotaLimitRequestsDenyRequest {
-  string id = 1;
-}
-
-message QuotaLimitRequestsDenyResponse {}
-
 message QuotaLimitRequestsSignalRequest {
   option (cleanapi.message).private = true;
   string id = 1;
@@ -155,8 +141,10 @@ service QuotaLimitRequests {
     };
   }
 
-  // Updates a pending request. Only the requested value can change; the dimension, tenant, and
-  // project are immutable.
+  // Updates a pending request. A tenant admin may change the requested value; only a cloud
+  // provider admin may set the state to APPROVED, which sets the requested limit for the
+  // request's tenant and dimension, or to DENIED, which changes no limit. The dimension,
+  // tenant, and project are immutable.
   rpc Update(QuotaLimitRequestsUpdateRequest) returns (QuotaLimitRequestsUpdateResponse) {
     option (google.api.http) = {
       patch: "/api/private/v1/quota_limit_requests/{object.id}"
@@ -168,23 +156,6 @@ service QuotaLimitRequests {
   // Deletes a request, for example to withdraw a pending one.
   rpc Delete(QuotaLimitRequestsDeleteRequest) returns (QuotaLimitRequestsDeleteResponse) {
     option (google.api.http) = {delete: "/api/private/v1/quota_limit_requests/{id}"};
-  }
-
-  // Approves a pending request: sets the requested limit for the request's tenant and dimension
-  // and marks the request approved. Only a Cloud Provider Admin may approve a request.
-  rpc Approve(QuotaLimitRequestsApproveRequest) returns (QuotaLimitRequestsApproveResponse) {
-    option (google.api.http) = {
-      post: "/api/private/v1/quota_limit_requests/{id}/approve"
-      body: "*"
-    };
-  }
-
-  // Denies a pending request and changes no limit. Only a Cloud Provider Admin may deny a request.
-  rpc Deny(QuotaLimitRequestsDenyRequest) returns (QuotaLimitRequestsDenyResponse) {
-    option (google.api.http) = {
-      post: "/api/private/v1/quota_limit_requests/{id}/deny"
-      body: "*"
-    };
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

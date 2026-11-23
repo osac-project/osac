@@ -39,9 +39,9 @@ const (
 
 // Lifecycle states for QuotaLimitRequest resources.
 //
-// A request starts PENDING. Approving it sets the requested limit for its tenant and dimension and
-// moves it to APPROVED; denying it moves it to DENIED and changes no limit. Both are terminal: a
-// new request replaces an old one.
+// A request starts PENDING. A review, an update that sets the state, then moves it: APPROVED sets
+// the requested limit for its tenant and dimension, and DENIED changes no limit. Both are
+// terminal: a new request replaces an old one.
 type QuotaLimitRequestState int32
 
 const (
@@ -216,7 +216,8 @@ type QuotaLimitRequest_builder struct {
 
 	// Unique identifier of the request.
 	Id string
-	// Metadata of the request. The tenant is required and the project is always empty.
+	// Metadata of the request. The tenant is required and the project is always empty, the
+	// tenant's default project, because a request asks for a limit that covers the whole tenant.
 	Metadata *Metadata
 	// Desired configuration of the request (user-specified).
 	Spec *QuotaLimitRequestSpec
@@ -377,8 +378,8 @@ func (x *QuotaLimitRequestStatus) SetState(v QuotaLimitRequestState) {
 type QuotaLimitRequestStatus_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// The review state of the request. Set to PENDING on creation, changed only by Approve and
-	// Deny.
+	// The review state of the request. Set to PENDING on creation, changed only by a review, an
+	// update that a Cloud Provider Admin makes to set the state.
 	State QuotaLimitRequestState
 }
 

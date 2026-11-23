@@ -378,6 +378,7 @@ The following are outside the accepted networking design:
 - IPv6 and dual-stack.
 - Disconnected (air-gapped) deployments with provider networking enabled.
 - Static IP addresses for workloads; addresses always come from DHCP.
+- Stateless network ACLs; OSAC firewall rules are stateful SecurityGroups.
 - More than one network interface per VM, server, or cluster; NIC bonding and
   VLAN trunking for tenants. Several multi-NIC designs for VMs are in
   review.

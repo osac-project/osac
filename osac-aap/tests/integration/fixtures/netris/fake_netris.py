@@ -48,7 +48,8 @@ fake while it runs as a background process:
 
 Command line:
 
-  python fake_netris.py --port-file <file> [--state-file <file>] [--cookie-file <file>] [--port N]
+  python fake_netris.py --port-file <file> [--state-file <file>] [--cookie-file <file>]
+      [--host HOST] [--port N]
 
 writes the chosen port to the port file once it listens, and a JSON snapshot of
 the state to the state file after every write request. The snapshot omits fault
@@ -352,9 +353,14 @@ class Netris(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, port: int = 0, state_file: str | None = None) -> None:
+    def __init__(
+        self,
+        port: int = 0,
+        state_file: str | None = None,
+        host: str = "127.0.0.1",
+    ) -> None:
         """Initialize the HTTP server, request lock, and provider state."""
-        super().__init__(("127.0.0.1", port), Handler)
+        super().__init__((host, port), Handler)
         self.lock = threading.RLock()
         self.state = empty_state()
         self.calls: list[list] = []
@@ -376,11 +382,16 @@ def main() -> int:
     parser.add_argument("--port-file", required=True, help="file that receives the listening port")
     parser.add_argument("--state-file", help="file that receives a JSON snapshot of the state after each write")
     parser.add_argument("--cookie-file", help="file that holds the session cookie clients must present")
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="address to listen on (defaults to loopback)",
+    )
     parser.add_argument("--port", type=int, default=0)
     args = parser.parse_args()
     if args.cookie_file:
         COOKIE = Path(args.cookie_file).read_text(encoding="utf-8").strip()
-    server = Netris(args.port, args.state_file)
+    server = Netris(args.port, args.state_file, args.host)
     server.dump()
     Path(args.port_file).write_text(str(server.server_port))
     try:

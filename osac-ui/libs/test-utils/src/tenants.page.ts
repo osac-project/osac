@@ -1,4 +1,4 @@
-import { type Locator, type Page, expect } from '@playwright/test';
+import { type APIResponse, type Locator, type Page, type Response, expect } from '@playwright/test';
 import { mkdir, readFile, rm, rmdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -17,6 +17,16 @@ import {
 } from '../../locators/tenants';
 
 const defaultTenantNames = ['shared', 'system'] as const;
+const tenantApiPath = '/api/fulfillment/osac.private.v1.Tenants';
+
+export interface TenantIdentity {
+  id: string;
+  creationTimestamp: string;
+}
+
+interface TenantRecord extends TenantIdentity {
+  breakGlassSecretId?: string;
+}
 
 export interface TenantCredentials {
   username: string;
@@ -181,11 +191,7 @@ export const expectTenantNotToExist = async (page: Page, tenantName: string): Pr
 };
 
 /** Fill and submit the tenant creation form. */
-export const createTenant = async (
-  page: Page,
-  tenantName: string,
-  domainName = '',
-): Promise<string> => {
+const submitTenantForm = async (page: Page, tenantName: string, domainName = ''): Promise<void> => {
   // Enter the required tenant name.
   await page.getByLabel(...TenantsCreatePage.name).fill(tenantName);
 
@@ -199,6 +205,106 @@ export const createTenant = async (
 
   // Submit the tenant creation form.
   await page.getByRole(...TenantsCreatePage.create).click();
+};
+
+const readTenantRecord = async (
+  response: APIResponse | Response,
+  tenantName: string,
+): Promise<TenantRecord> => {
+  if (!response.ok()) {
+    throw new Error(`Tenant API request failed (HTTP ${response.status()}).`);
+  }
+
+  try {
+    const { object } = (await response.json()) as {
+      object?: {
+        id?: string;
+        metadata?: { creationTimestamp?: string };
+        spec?: { breakGlassCredentialsSecret?: { id?: string } };
+      };
+    };
+    const creationTimestamp = object?.metadata?.creationTimestamp;
+    if (
+      object?.id === tenantName &&
+      typeof creationTimestamp === 'string' &&
+      Number.isFinite(Date.parse(creationTimestamp))
+    ) {
+      return {
+        id: object.id,
+        creationTimestamp,
+        breakGlassSecretId: object.spec?.breakGlassCredentialsSecret?.id,
+      };
+    }
+  } catch {
+    // An older deployment can return inline credentials. Keep the response out of errors.
+  }
+  throw new Error('The Tenant API did not return the expected tenant identity.');
+};
+
+/** Capture the identity acknowledged by the UI's successful Create request. */
+export const submitTenantAndReadIdentity = async (
+  page: Page,
+  tenantName: string,
+): Promise<TenantIdentity> => {
+  const createUrl = new URL(`${tenantApiPath}/Create`, page.url()).href;
+  const [response] = await Promise.all([
+    page.waitForResponse(
+      (result) => result.url() === createUrl && result.request().method() === 'POST',
+    ),
+    submitTenantForm(page, tenantName),
+  ]);
+  const { id, creationTimestamp } = await readTenantRecord(response, tenantName);
+  return { id, creationTimestamp };
+};
+
+/** Read identity and the secret reference through the authenticated OSAC browser session. */
+export const getTenantFromBrowser = async (
+  page: Page,
+  tenantName: string,
+): Promise<TenantRecord | undefined> => {
+  const response = await page.request.post(new URL(`${tenantApiPath}/Get`, page.url()).href, {
+    data: { id: tenantName },
+    headers: { 'Connect-Protocol-Version': '1' },
+  });
+  try {
+    return response.status() === 404 ? undefined : await readTenantRecord(response, tenantName);
+  } finally {
+    await response.dispose();
+  }
+};
+
+/** Save credentials in a tenant-specific file for later Playwright projects. */
+export const saveTenantCredentials = async (
+  tenantName: string,
+  { username, password }: TenantCredentials,
+): Promise<void> => {
+  const credentialsFile = tenantCredentialsFilePath(tenantName);
+  const credentialsDirectory = tenantCredentialsDirectoryPath(tenantName);
+  logProgress(
+    'tenant-credentials',
+    `Resetting the temporary credentials directory for tenant "${tenantName}".`,
+  );
+  await rm(credentialsDirectory, { force: true, recursive: true });
+  await mkdir(credentialsDirectory, { mode: 0o700 });
+  try {
+    await writeFile(
+      credentialsFile,
+      [`Tenant: ${tenantName}`, `Username: ${username}`, `Password: ${password}`, ''].join('\n'),
+      { encoding: 'utf8', flag: 'wx', mode: 0o600 },
+    );
+  } catch (error) {
+    await rm(credentialsDirectory, { force: true, recursive: true });
+    throw error;
+  }
+};
+
+/** Create a tenant and save the credentials shown in the dialog. */
+export const createTenant = async (
+  page: Page,
+  tenantName: string,
+  domainName = '',
+): Promise<void> => {
+  await submitTenantForm(page, tenantName, domainName);
 
   // Verify that the break-glass credentials dialog is displayed.
   const credentialsDialog = page.getByRole(...TenantsCredentialsPage.breakGlassDialog);
@@ -216,36 +322,14 @@ export const createTenant = async (
   await expect(username).toHaveValue(/.+/);
   await expect(password).toHaveValue(/.+/);
 
-  // Save the generated credentials in a tenant-specific temporary file.
-  const credentialsFile = tenantCredentialsFilePath(tenantName);
-  const credentialsDirectory = tenantCredentialsDirectoryPath(tenantName);
-  logProgress(
-    'tenant-credentials',
-    `Resetting the temporary credentials directory for tenant "${tenantName}".`,
-  );
-  await rm(credentialsDirectory, { force: true, recursive: true });
-  await mkdir(credentialsDirectory, { mode: 0o700 });
-  try {
-    await writeFile(
-      credentialsFile,
-      [
-        `Tenant: ${tenantName}`,
-        `Username: ${await username.inputValue()}`,
-        `Password: ${await password.inputValue()}`,
-        '',
-      ].join('\n'),
-      { encoding: 'utf8', flag: 'wx', mode: 0o600 },
-    );
-  } catch (error) {
-    await rm(credentialsDirectory, { force: true, recursive: true });
-    throw error;
-  }
+  await saveTenantCredentials(tenantName, {
+    username: await username.inputValue(),
+    password: await password.inputValue(),
+  });
 
   // Close the credentials dialog and return to the Tenants main page.
   await page.getByRole(...TenantsCredentialsPage.savedCredentials).click();
   await expect(page.getByRole(...TenantsMainPage.pageTitle)).toBeVisible();
-
-  return credentialsFile;
 };
 
 /** Verify that a tenant is synchronized and, when supplied, has the expected domain. */

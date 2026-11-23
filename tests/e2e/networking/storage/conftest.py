@@ -71,6 +71,14 @@ def _default_network(client: GRPCClient) -> dict[str, str]:
     )
     if group is None:
         raise RuntimeError(f"No {DEFAULT_SG_NAME} SecurityGroup; tenant default networking is not ready")
+    # The tenant default SecurityGroup has no ingress by default, so the SSH
+    # helper Pod cannot reach a VM on the default Subnet. Open it for the test
+    # (an update of an existing resource, not a new networking resource).
+    client.update_security_group_rules(
+        sg_id=group["id"],
+        ingress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
+        egress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
+    )
     return {
         "label": "default",
         "vnet_id": vnet_id,

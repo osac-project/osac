@@ -32,10 +32,13 @@ const (
 	sshKeyReferenceNotFoundMessage = "SSH key Secret was not found or is not visible in the selected project."
 )
 
-// validateTenantScopedSSHKeyReference rejects SSH Secret references marked as shared.
-func validateTenantScopedSSHKeyReference(reference *privatev1.SecretReference) error {
+// validateTenantScopedSSHKeyReference restricts SSH key Secrets to the owning tenant.
+func validateTenantScopedSSHKeyReference(reference *privatev1.SecretReference, ownerTenant string) error {
 	if reference != nil && reference.GetShared() {
 		return grpcstatus.Error(grpccodes.InvalidArgument, sshKeyTenantScopedMessage)
+	}
+	if reference != nil && reference.GetTenant() != "" && reference.GetTenant() != ownerTenant {
+		return grpcstatus.Error(grpccodes.NotFound, sshKeyReferenceNotFoundMessage)
 	}
 	return nil
 }
@@ -106,7 +109,7 @@ func resolveTenantScopedSSHKey(
 	if reference == nil {
 		return nil, nil
 	}
-	if err := validateTenantScopedSSHKeyReference(reference); err != nil {
+	if err := validateTenantScopedSSHKeyReference(reference, tenant); err != nil {
 		return nil, err
 	}
 

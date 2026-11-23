@@ -44,12 +44,15 @@ const makeBmi = (id: string, state: BareMetalInstanceState): BareMetalInstance =
   }) as unknown as BareMetalInstance;
 
 describe('useBareMetalActions', () => {
-  const createSuccessTransport = () =>
+  const createSuccessTransport = (onUpdate?: (request: unknown) => void) =>
     createRouterTransport((router) => {
       router.service(BareMetalInstances, {
         list: () => ({ items: [makeBmi('bmi-1', BareMetalInstanceState.RUNNING)] }),
         get: () => ({ object: makeBmi('bmi-1', BareMetalInstanceState.RUNNING) }),
-        update: () => ({ object: makeBmi('bmi-1', BareMetalInstanceState.STOPPING) }),
+        update: (request) => {
+          onUpdate?.(request);
+          return { object: makeBmi('bmi-1', BareMetalInstanceState.STOPPING) };
+        },
       });
     });
 
@@ -119,6 +122,28 @@ describe('useBareMetalActions', () => {
         title: expect.stringContaining('bmi-bmi-1'),
       }),
     );
+  });
+
+  it('uses the generic update request for a power action', async () => {
+    let request: unknown;
+    const instance = makeBmi('bmi-1', BareMetalInstanceState.RUNNING);
+    const { result } = renderWithTransport(
+      createSuccessTransport((value) => (request = value)),
+      instance,
+    );
+
+    act(() => {
+      result.current.stop();
+    });
+
+    await waitFor(() => expect(mockAddToast).toHaveBeenCalled());
+    expect(request).toMatchObject({
+      object: {
+        id: 'bmi-1',
+        spec: { runStrategy: BareMetalInstanceRunStrategy.HALTED },
+      },
+      updateMask: { paths: ['spec.run_strategy'] },
+    });
   });
 
   it('shows a success toast after restarting a bare metal instance', async () => {

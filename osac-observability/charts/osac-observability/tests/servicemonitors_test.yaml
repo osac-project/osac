@@ -120,3 +120,23 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+---
+# Enabling observability without the Prometheus Operator API would leave the
+# pipeline with no scrape configuration and no error to explain it, so the
+# render fails by name instead of silently dropping the ServiceMonitors. This
+# suite deliberately carries no capabilities.
+suite: service monitor capability gate
+templates:
+  - templates/servicemonitors.yaml
+release:
+  name: osac
+  namespace: osac
+set:
+  global.observability.enabled: true
+
+tests:
+  - it: fails the render when the ServiceMonitor API is not served
+    asserts:
+      - failedTemplate:
+          errorMessage: global.observability.enabled requires the monitoring.coreos.com/v1 ServiceMonitor API; enable cluster monitoring or install the Prometheus Operator CRDs

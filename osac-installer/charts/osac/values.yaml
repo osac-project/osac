@@ -64,6 +64,9 @@ global:
   # Compactor workloads in the osac-observability namespace.
   observability:
     enabled: false
+    # Image for the short-lived hooks that call the API server (the write-path
+    # revocation bootstrap). Must provide oc or kubectl.
+    cliImage: quay.io/openshift/origin-cli:4.20.0
     thanos:
       image:
         registry: registry.redhat.io
@@ -151,6 +154,9 @@ global:
       # Renders the managed write path: the write CA, the write proxy and its
       # Route, and the revocation ConfigMap. osac-operator also reads these
       # values to issue and revoke each tenant cluster's client certificate.
+      # While false, OSAC-8002 and OSAC-8003 stay inert: no CA, proxy, Route or
+      # per-cluster identity is created and no tenant cluster is reconfigured.
+      # Enabling it reconfigures every tenant cluster on its next reconcile.
       enabled: false
       # Client certificates and the proxy's serving certificate. The proxy
       # checks expiry, so keep the duration long enough for the renewal to

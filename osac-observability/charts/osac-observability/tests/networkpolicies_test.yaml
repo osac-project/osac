@@ -4,6 +4,9 @@ templates:
 release:
   name: osac
   namespace: osac
+capabilities:
+  apiVersions:
+    - monitoring.coreos.com/v1
 set:
   global.observability.enabled: true
   global.observability.keycloak.issuerUrl: https://keycloak.example.com/realms/osac
@@ -55,13 +58,25 @@ tests:
       - equal:
           path: spec.ingress[1].ports[0].port
           value: 9090
-      # The Query API is reachable only through the admin proxies; cluster
-      # monitoring must not reach port 9090 directly.
+      # Query's own /metrics is on the same 9090. Admitting the whole
+      # openshift-monitoring namespace would let any pod in it bypass the
+      # authorizer, so the third rule narrows the source to the CMO Prometheus
+      # pods by the labels CMO sets on them.
+      - equal:
+          path: spec.ingress[2].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: openshift-monitoring
+      - equal:
+          path: spec.ingress[2].from[0].podSelector.matchLabels["prometheus"]
+          value: k8s
+      - equal:
+          path: spec.ingress[2].from[0].podSelector.matchLabels["app.kubernetes.io/name"]
+          value: prometheus
+      - equal:
+          path: spec.ingress[2].ports[0].port
+          value: 9090
       - lengthEqual:
           path: spec.ingress
-          count: 2
-      - notExists:
-          path: spec.ingress[*].from[*].namespaceSelector
+          count: 3
       - isNotEmpty:
           path: spec.ingress[*].from[*].podSelector
 
@@ -153,7 +168,7 @@ tests:
       - isNotEmpty:
           path: spec.ingress[*].from[*].namespaceSelector
 
-  - it: denies every ingress to the Compactor
+  - it: admits only cluster monitoring to the Compactor metrics port
     template: templates/networkpolicies.yaml
     documentSelector:
       path: metadata.name
@@ -171,9 +186,19 @@ tests:
           path: spec.policyTypes
           value:
             - Ingress
+      # The ServiceMonitor scrapes /metrics on 10902; the gRPC port 10901 stays
+      # closed to every source, so this is the only admitted rule.
+      - equal:
+          path: spec.ingress[0].from[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: openshift-monitoring
+      - equal:
+          path: spec.ingress[0].ports[0].port
+          value: 10902
       - lengthEqual:
           path: spec.ingress
-          count: 0
+          count: 1
+      - notExists:
+          path: spec.ingress[0].ports[1]
       - notExists:
           path: spec.egress
 
@@ -220,11 +245,47 @@ tests:
       - notExists:
           path: spec.egress
 
-  - it: renders exactly six policies including the Compactor deny-all
+  - it: renders exactly six policies when cluster remote write is off
     template: templates/networkpolicies.yaml
     asserts:
       - hasDocuments:
           count: 6
+
+  # The tenant remote-write Route enters through the OpenShift router, so the
+  # write proxy admits 8443 from that namespace and nothing else. Its 8080
+  # health port has no Service and stays closed.
+  - it: admits only the router to the write proxy on 8443
+    template: templates/networkpolicies.yaml
+    set:
+      global.observability.clusterRemoteWrite.enabled: true
+      global.observability.cliImage: quay.io/openshift/origin-cli:4.20.0
+    documentSelector:
+      path: metadata.name
+      value: thanos-write-proxy
+    asserts:
+      - isKind:
+          of: NetworkPolicy
+      - equal:
+          path: spec.podSelector.matchLabels["osac.openshift.io/observability-role"]
+          value: write-proxy
+      - equal:
+          path: spec.policyTypes
+          value:
+            - Ingress
+      # Equality proves there is no second rule and no 8080: the whole ingress
+      # list is this one router source on the TLS port.
+      - equal:
+          path: spec.ingress
+          value:
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      network.openshift.io/policy-group: ingress
+              ports:
+                - protocol: TCP
+                  port: 8443
+      - notExists:
+          path: spec.egress
 
   - it: selects the pods Receive actually renders
     template: templates/receive.yaml

@@ -1,5 +1,7 @@
 {{- if dig "observability" "enabled" false (.Values.global | default dict) }}
 {{- $ns := include "osac-observability.namespace" . -}}
+{{- $observability := (.Values.global | default dict).observability | default dict -}}
+{{- $write := $observability.clusterRemoteWrite | default dict -}}
 {{- $thanosLabels := dict "app.kubernetes.io/name" "thanos" -}}
 # Every policy selects pods by the labels this chart renders or by the role
 # label the authentication proxies carry, so none of them fails open by
@@ -31,6 +33,23 @@ spec:
         - podSelector:
             matchLabels:
               osac.openshift.io/observability-role: query-auth-proxy
+      ports:
+        - protocol: TCP
+          port: 9090
+    # The platform Prometheus scrapes Query's own /metrics on 9090. Cluster
+    # monitoring is one namespace, but admitting the whole namespace on the
+    # query port would let any pod in it bypass the authorizer, so the source
+    # is narrowed to the CMO Prometheus pods by the labels CMO sets on them.
+    # These labels are documented for the OpenShift cluster-monitoring
+    # Prometheus but could not be checked against a live cluster here.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-monitoring
+          podSelector:
+            matchLabels:
+              prometheus: k8s
+              app.kubernetes.io/name: prometheus
       ports:
         - protocol: TCP
           port: 9090
@@ -148,9 +167,10 @@ spec:
         - protocol: TCP
           port: 19291
 ---
-# The Compactor is not a serving endpoint: Query does not use it, and nothing
-# else is allowed to reach it. An explicit empty ingress list keeps it
-# reachable from no source at all even when another policy admits a pod.
+# The Compactor is not a serving endpoint: Query does not use it, and its gRPC
+# port 10901 stays closed to every source. It does serve its own metrics on
+# 10902, which the platform Prometheus scrapes through the Compactor
+# ServiceMonitor, so that one port is admitted from cluster monitoring.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -165,7 +185,14 @@ spec:
       app.kubernetes.io/component: compactor
   policyTypes:
     - Ingress
-  ingress: []
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-monitoring
+      ports:
+        - protocol: TCP
+          port: 10902
 ---
 # The admin Route reaches the gate on the container port 9092. The same pod
 # also runs the two OAuth proxies on 4180 and 4181 and the allowlist on 9091;
@@ -196,4 +223,33 @@ spec:
       ports:
         - protocol: TCP
           port: 9092
+{{- if $write.enabled }}
+---
+# The tenant remote-write Route reaches the write proxy on 8443. The source is
+# the OpenShift router namespace, matched exactly like the admin gate, so only
+# the Route can reach the TLS listener. The proxy's 8080 health port is not
+# exposed by a Service and stays closed; kubelet probes come from the node and
+# are not filtered.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: thanos-write-proxy
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      osac.openshift.io/observability-role: write-proxy
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: ingress
+      ports:
+        - protocol: TCP
+          port: 8443
+{{- end }}
 {{- end }}

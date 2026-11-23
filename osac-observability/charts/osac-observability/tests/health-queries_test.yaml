@@ -24,11 +24,11 @@ tests:
           path: data
           content:
             receive-backlog: sum by (cluster) (prometheus_remote_storage_samples_pending)
-            receive-queue-length: max by (cluster) (time() - prometheus_remote_storage_queue_highest_sent_timestamp_seconds)
+            receive-queue-length: sum by (cluster) (thanos_receive_pending_write_requests)
             compaction-failures: sum by (cluster) (increase(thanos_compact_group_compactions_failures_total[1h]))
             store-gateway-errors: sum by (cluster) (increase(thanos_objstore_bucket_operation_failures_total{job="thanos-store"}[1h]))
             capacity-series: max(prometheus_tsdb_head_series{cluster="management", job="thanos-receive"})
-            stopped-clusters: time() - max by (cluster) (timestamp(up{managed_by="osac"})) > 60
+            stopped-clusters: time() - max by (cluster) (last_over_time(timestamp(up{managed_by="osac"})[365d:30s])) > 60
 
   - it: derives the stopped-cluster threshold from one scrape interval plus tolerance
     set:
@@ -36,7 +36,7 @@ tests:
     asserts:
       - matchRegex:
           path: data["stopped-clusters"]
-          pattern: ' > 90$'
+          pattern: '\[365d:30s\]\)\) > 90$'
 
   - it: uses the slower of the two collection intervals
     set:
@@ -45,14 +45,35 @@ tests:
     asserts:
       - matchRegex:
           path: data["stopped-clusters"]
-          pattern: ' > 180$'
+          pattern: '\[365d:30s\]\)\) > 180$'
 
-  - it: fails the render instead of shipping a threshold past the query lookback
+  - it: reads the stopped-cluster lookback from the Thanos retention
+    set:
+      global.observability.thanos.retention: 30d
+    asserts:
+      - matchRegex:
+          path: data["stopped-clusters"]
+          pattern: 'last_over_time\(timestamp\(up\{managed_by="osac"\}\)\[30d:30s\]\)'
+
+  - it: renders a threshold past the instant-query lookback instead of failing
     set:
       global.observability.collection.infrastructure: 5m
     asserts:
-      - failedTemplate:
-          errorMessage: global.observability.collection renders a 330s stopped-cluster threshold; keep max(osacControlPlane, infrastructure) at least 30s under the 5m query lookback
+      - matchRegex:
+          path: data["stopped-clusters"]
+          pattern: '\[365d:30s\]\)\) > 330$'
+
+  # timestamp() of a range function reports the evaluation time, so every
+  # cluster would look current. The sample timestamp is computed inside a
+  # subquery instead; scripts/test-render.sh pins the semantics with promtool.
+  - it: reads the sample timestamp instead of the evaluation time
+    asserts:
+      - notMatchRegex:
+          path: data["stopped-clusters"]
+          pattern: 'timestamp\(last_over_time\('
+      - matchRegex:
+          path: data["stopped-clusters"]
+          pattern: 'last_over_time\(timestamp\(up\{managed_by="osac"\}\)\[365d:30s\]\)'
 
   - it: renders nothing when observability is disabled
     set:

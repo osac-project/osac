@@ -1,10 +1,13 @@
 {{- if dig "observability" "enabled" false (.Values.global | default dict) }}
 {{- /* The platform Prometheus scrapes every store component into the same
-     store. ServiceMonitors only render where the Prometheus Operator CRD is
-     installed; the namespace carries openshift.io/cluster-monitoring=true from
-     the installer's prerequisite gate, which is the only namespace label
-     needed. */}}
-{{- if .Capabilities.APIVersions.Has "monitoring.coreos.com/v1" }}
+     store. The namespace carries openshift.io/cluster-monitoring=true from the
+     installer's prerequisite gate, which is the only namespace label needed.
+     Enabling observability without the Prometheus Operator API would leave the
+     pipeline with no scrape configuration and no error to explain it, so the
+     render fails by name instead of silently dropping the ServiceMonitors. */}}
+{{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+{{- fail "global.observability.enabled requires the monitoring.coreos.com/v1 ServiceMonitor API; enable cluster monitoring or install the Prometheus Operator CRDs" }}
+{{- end }}
 {{- $root := . -}}
 {{- $ns := include "osac-observability.namespace" . -}}
 {{- $collection := (.Values.global | default dict).observability.collection | default dict -}}
@@ -42,6 +45,5 @@ spec:
       path: /metrics
       scheme: http
       interval: {{ $interval }}
-{{- end }}
 {{- end }}
 {{- end }}

@@ -510,13 +510,18 @@
               },
               "additionalProperties": false
             },
+            "cliImage": {
+              "type": "string",
+              "description": "Image for the short-lived hooks that call the API server (the write revocation bootstrap). Must provide oc or kubectl.",
+              "default": "quay.io/openshift/origin-cli:4.20.0"
+            },
             "clusterRemoteWrite": {
               "type": "object",
-              "description": "Managed remote write from tenant and workload clusters: the write CA, write proxy, Route and revocation ConfigMap.",
+              "description": "Managed remote write from tenant and workload clusters: the write CA, write proxy, Route and revocation ConfigMap. While disabled, OSAC-8002 and OSAC-8003 stay inert and no tenant cluster is reconfigured; enabling it reconfigures every tenant cluster on its next reconcile.",
               "properties": {
                 "enabled": {
                   "type": "boolean",
-                  "description": "Render the managed write path and let osac-operator issue and revoke client certificates",
+                  "description": "Render the managed write path and let osac-operator issue and revoke client certificates; changing this value reconfigures every tenant cluster on its next reconcile",
                   "default": false
                 },
                 "certificateDuration": {

@@ -3,24 +3,138 @@
 {{- if $write.enabled }}
 {{- $ns := include "osac-observability.namespace" . -}}
 {{- $name := $write.revocationConfigMap | default "osac-metrics-write-revocation" -}}
-{{- /* osac-operator appends a revoked serial here when it finalizes a cluster,
-       and the write proxy rejects any certificate whose serial is listed. The
-       chart must not wipe the denylist on upgrade, so an existing value is
-       carried over; a fresh render (and `helm get values`) shows one empty
-       key, never key material. */ -}}
-{{- $revoked := "" -}}
-{{- $existing := lookup "v1" "ConfigMap" $ns $name -}}
-{{- if and $existing $existing.data (hasKey $existing.data "revoked") -}}
-{{- $revoked = index $existing.data "revoked" -}}
-{{- end }}
+{{- $bootstrap := printf "%s-bootstrap" $name -}}
+{{- $cliImage := (.Values.global.observability | default dict).cliImage | default "" -}}
+{{- /* The denylist must outlive every Helm operation, and no regular template
+       may render the ConfigMap: a rendered object would carry a stale or empty
+       data.revoked and the next apply would drop the serials osac-operator
+       appended. A pre-install hook creates it only when it is missing, so an
+       uninstall (which never owns it) and a reinstall both keep every appended
+       serial. There is deliberately no pre-upgrade hook: the object exists by
+       then and must not be touched. The Job and its short-lived RBAC carry
+       hook-delete-policy so only the ConfigMap survives. */ -}}
 apiVersion: v1
-kind: ConfigMap
+kind: ServiceAccount
 metadata:
-  name: {{ $name }}
+  name: {{ $bootstrap }}
   namespace: {{ $ns }}
   labels:
     {{- include "osac-observability.labels" . | nindent 4 }}
-data:
-  revoked: {{ $revoked | default "" | quote }}
+  annotations:
+    "helm.sh/hook": pre-install
+    # After the umbrella namespace gate (-20) and before the Job.
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $bootstrap }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+rules:
+  # get is scoped to the one ConfigMap. Kubernetes cannot restrict create by
+  # resourceName, so that verb stands alone; the Job only ever creates this
+  # one object and the grant disappears with the hook.
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    resourceNames:
+      - {{ $name }}
+    verbs:
+      - get
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $bootstrap }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install
+    "helm.sh/hook-weight": "-1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $bootstrap }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $bootstrap }}
+    namespace: {{ $ns }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $bootstrap }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        {{- include "osac-observability.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $bootstrap }}
+      restartPolicy: Never
+      securityContext:
+        {{- include "osac-observability.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: bootstrap-revocation
+          image: {{ required "global.observability.cliImage is required to bootstrap the write revocation ConfigMap" $cliImage }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -euo pipefail
+              if oc get configmap "${REVOCATION_NAME}" -n "${REVOCATION_NAMESPACE}" >/dev/null 2>&1; then
+                echo "revocation ConfigMap exists; keeping its denylist"
+                exit 0
+              fi
+              oc create configmap "${REVOCATION_NAME}" -n "${REVOCATION_NAMESPACE}" \
+                --from-literal=revoked=
+          env:
+            - name: HOME
+              value: /tmp
+            - name: REVOCATION_NAMESPACE
+              value: {{ $ns | quote }}
+            - name: REVOCATION_NAME
+              value: {{ $name | quote }}
+          securityContext:
+            {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
 {{- end }}
 {{- end }}

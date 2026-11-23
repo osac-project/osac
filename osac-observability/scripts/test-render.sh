@@ -190,21 +190,26 @@ reject "${policies}" 'port: 9091'
 reject "${policies}" 'port: 4180'
 reject "${policies}" 'port: 4181'
 require "${policies}" 'app.kubernetes.io/component: compactor'
-# The Compactor is not a serving endpoint; an explicit empty ingress list keeps
-# every source out of it.
-require "${policies}" 'ingress: []'
 reject "${policies}" 'podSelector: {}'
 reject "${policies}" 'osac.openshift.io/tenant'
 reject "${policies}" 'egress:'
-# Cluster monitoring may scrape Store and write to Receive, but must not reach
-# the unrestricted Query API on 9090; only the authorizer and the admin proxies
-# may connect there.
+# Query serves its own /metrics on 9090, so cluster monitoring reaches that one
+# port with the CMO Prometheus pods as the source. Admitting the namespace alone
+# would let any pod in openshift-monitoring skip the authorizer.
 query_policy="${TMP_DIR}/networkpolicy-query.yaml"
 extract_kind_name "${enabled}" NetworkPolicy thanos-query >"${query_policy}"
 require "${query_policy}" 'port: 9090'
-expect_count "${query_policy}" 'port: 9090' 2
-reject "${query_policy}" 'namespaceSelector'
-reject "${query_policy}" 'openshift-monitoring'
+expect_count "${query_policy}" 'port: 9090' 3
+require "${query_policy}" 'kubernetes.io/metadata.name: openshift-monitoring'
+require "${query_policy}" 'prometheus: k8s'
+require "${query_policy}" 'app.kubernetes.io/name: prometheus'
+# The Compactor serves Prometheus metrics on 10902; its gRPC port 10901 stays
+# closed to every source, so the metrics scrape is its only admitted rule.
+compactor_policy="${TMP_DIR}/networkpolicy-compactor.yaml"
+extract_kind_name "${enabled}" NetworkPolicy thanos-compactor >"${compactor_policy}"
+require "${compactor_policy}" 'port: 10902'
+reject "${compactor_policy}" 'port: 10901'
+reject "${compactor_policy}" 'ingress: []'
 
 echo "checking the remote-write Job follows the switch"
 extract_kind "${enabled}" Job >"${TMP_DIR}/enabled-jobs.yaml"
@@ -325,14 +330,37 @@ reject "${TMP_DIR}/write-certs.yaml" 'BEGIN CERTIFICATE'
 reject "${TMP_DIR}/write-certs.yaml" 'PRIVATE KEY'
 reject "${TMP_DIR}/write-certs.yaml" 'tls.key:'
 
-echo "checking the revocation denylist starts empty with one key"
-revocation="${TMP_DIR}/write-revocation.yaml"
+echo "checking Helm never owns the revocation denylist"
+# A rendered ConfigMap would carry a stale data.revoked, and each upgrade would
+# drop the serials osac-operator appended. Under --no-hooks the release carries
+# no revocation object at all; the normal render carries only the bootstrap
+# hook, which creates the ConfigMap when it is missing and never overwrites it.
+"${HELM_BIN}" "${COMMON_ARGS[@]}" "${OBS_ARGS[@]}" \
+  --set global.observability.clusterRemoteWrite.enabled=true \
+  --set global.clusterDomain=apps.example.com \
+  --no-hooks >"${TMP_DIR}/write-path-no-hooks.yaml"
+revocation_release="${TMP_DIR}/write-revocation-release.yaml"
+extract_kind_name "${TMP_DIR}/write-path-no-hooks.yaml" ConfigMap \
+  osac-metrics-write-revocation >"${revocation_release}"
+if [ -s "${revocation_release}" ]; then
+  fail "the revocation ConfigMap rendered as a release manifest; Helm would overwrite the denylist"
+fi
+revocation_cm="${TMP_DIR}/write-revocation-cm.yaml"
 extract_kind_name "${write_path}" ConfigMap osac-metrics-write-revocation \
-  >"${revocation}"
-require "${revocation}" 'name: osac-metrics-write-revocation'
-require "${revocation}" 'namespace: osac-observability'
-require "${revocation}" '  revoked: ""'
-expect_count "${revocation}" '^  revoked:' 1
+  >"${revocation_cm}"
+if [ -s "${revocation_cm}" ]; then
+  fail "the revocation ConfigMap rendered outside the bootstrap hook"
+fi
+bootstrap_job="${TMP_DIR}/revocation-bootstrap.yaml"
+extract_kind_name "${write_path}" Job osac-metrics-write-revocation-bootstrap \
+  >"${bootstrap_job}"
+# Helm quotes annotation keys that contain a slash.
+require "${bootstrap_job}" '"helm.sh/hook": pre-install'
+require "${bootstrap_job}" \
+  '"helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed'
+require "${bootstrap_job}" 'oc get configmap "${REVOCATION_NAME}"'
+require "${bootstrap_job}" 'oc create configmap "${REVOCATION_NAME}"'
+require "${bootstrap_job}" 'osac-metrics-write-revocation'
 
 echo "checking the single write Route passes TLS through to the proxy"
 write_route="${TMP_DIR}/write-route.yaml"
@@ -372,6 +400,18 @@ require "${service_doc}" 'port: 8443'
 require "${service_doc}" 'targetPort: https'
 require "${service_doc}" 'app.kubernetes.io/component: write-proxy'
 
+echo "checking the write proxy admits only the router on its TLS port"
+write_policy="${TMP_DIR}/networkpolicy-write-proxy.yaml"
+extract_kind_name "${write_path}" NetworkPolicy thanos-write-proxy \
+  >"${write_policy}"
+require "${write_policy}" 'osac.openshift.io/observability-role: write-proxy'
+require "${write_policy}" 'network.openshift.io/policy-group: ingress'
+require "${write_policy}" 'port: 8443'
+expect_count "${write_policy}" 'port: 8443' 1
+# 8080 serves only health probes; no Service exposes it and nothing else may
+# reach the pod IP.
+reject "${write_policy}" 'port: 8080'
+
 echo "checking the write path stays off unless it is enabled"
 reject "${enabled}" 'osac-metrics-write-ca'
 reject "${enabled}" 'osac-metrics-write-revocation'
@@ -407,5 +447,51 @@ for forbidden in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
 done
 extract_kind "${enabled}" Secret >"${TMP_DIR}/secrets.yaml"
 reject "${TMP_DIR}/secrets.yaml" 'namespace: osac-observability'
+
+echo "checking the stopped-cluster query names a cluster that stopped before the lookback"
+# Evaluate the rendered expression against synthetic series. The test file is
+# generated from the render, so the expression under test is the one shipped.
+# With a five-minute collection interval the threshold is 330s, which is longer
+# than the five-minute instant-query lookback; the stale cluster stopped at 4m,
+# so at 10m its age is 360s and it must still be named. The fresh cluster's age
+# is 60s and it must be absent. A query that cannot see past the lookback, or
+# that reports the evaluation time instead of the sample timestamp, names
+# neither cluster and fails this check.
+"${HELM_BIN}" "${COMMON_ARGS[@]}" "${OBS_ARGS[@]}" \
+  --set global.observability.collection.osacControlPlane=5m \
+  >"${TMP_DIR}/enabled-5m.yaml"
+health="${TMP_DIR}/health-queries-5m.yaml"
+extract_kind_name "${TMP_DIR}/enabled-5m.yaml" ConfigMap \
+  osac-observability-health-queries >"${health}"
+expr=$(sed -n 's/^  stopped-clusters: "\(.*\)"$/\1/p' "${health}" | sed 's/\\"/"/g')
+[ -n "${expr}" ] || fail "the health ConfigMap has no stopped-clusters expression"
+promql_dir="${TMP_DIR}/promql"
+mkdir -p "${promql_dir}"
+cat >"${promql_dir}/stopped-clusters.test.yaml" <<EOF
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'up{managed_by="osac",cluster="stale"}'
+        values: '1x4 _x20'
+      - series: 'up{managed_by="osac",cluster="fresh"}'
+        values: '1x10'
+    promql_expr_test:
+      # Comparisons return the left-hand value, not 1, so this asserts the age.
+      - expr: '${expr}'
+        eval_time: 10m
+        exp_samples:
+          - labels: '{cluster="stale"}'
+            value: 360
+EOF
+promtool_bin="${PROMTOOL_BIN:-}"
+if [ -z "${promtool_bin}" ] && command -v promtool >/dev/null 2>&1; then
+  promtool_bin=$(command -v promtool)
+fi
+if [ -n "${promtool_bin}" ]; then
+  "${promtool_bin}" test rules "${promql_dir}/stopped-clusters.test.yaml"
+else
+  echo "SKIP: promtool was not found, so the stopped-cluster PromQL semantics were NOT evaluated." >&2
+  echo "SKIP: install promtool or set PROMTOOL_BIN to run this check." >&2
+fi
 
 echo "Observability component render checks passed."

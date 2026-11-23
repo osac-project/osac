@@ -305,17 +305,9 @@ cannot express.
   {{- fail (printf "global.observability.collection.infrastructure must be a positive Prometheus duration (got %q)" $infrastructureInterval) }}
 {{- end -}}
 {{- /* The stopped-cluster query compares sample age against the slower
-     collection interval plus 30s of tolerance. Prometheus instant queries only
-     look back five minutes, so a larger threshold would let the last sample of
-     a stopped cluster go stale before the query could name it. */ -}}
-{{- if dig "enabled" false $globalObservability -}}
-{{- $controlPlaneSeconds := include "osac.durationSeconds" $observabilityInterval | int -}}
-{{- $infrastructureSeconds := include "osac.durationSeconds" $infrastructureInterval | int -}}
-{{- $stoppedThreshold := add (max $controlPlaneSeconds $infrastructureSeconds) 30 -}}
-{{- if ge $stoppedThreshold 300 -}}
-  {{- fail (printf "global.observability.collection renders a %ds stopped-cluster threshold; keep max(osacControlPlane, infrastructure) at least 30s under the 5m query lookback" $stoppedThreshold) }}
-{{- end -}}
-{{- end -}}
+     collection interval plus 30s of tolerance. Its range selector spans the
+     Thanos retention window, so the threshold is not bounded by the
+     instant-query lookback and a large interval simply names stops later. */ -}}
 {{- /* Thanos keeps one retention value for every resolution. Each level must be a
      positive duration and equal thanos.retention, otherwise the Compactor drops
      data one level still serves or the Store keeps data no level may return. */ -}}

@@ -554,9 +554,8 @@ tests:
           value: [get, patch, update]
 
 ---
-# Prometheus instant queries look back five minutes. A stopped-cluster
-# threshold above that would let a stopped cluster's last sample go stale, so
-# the health query would return nothing instead of naming the cluster.
+# The stopped-cluster query looks back over the Thanos retention window, so a
+# threshold above the instant-query lookback is valid and must render.
 suite: observability collection validation
 templates:
   - templates/validate-values.yaml
@@ -574,10 +573,10 @@ set:
   global.observability.collection.infrastructure: 5m
 
 tests:
-  - it: fails the render when the collection intervals outlive the health lookback
+  - it: accepts a five-minute interval whose threshold exceeds the instant-query lookback
     asserts:
-      - failedTemplate:
-          errorMessage: global.observability.collection renders a 330s stopped-cluster threshold; keep max(osacControlPlane, infrastructure) at least 30s under the 5m query lookback
+      - hasDocuments:
+          count: 0
 
   - it: accepts intervals whose threshold stays inside the lookback
     set:

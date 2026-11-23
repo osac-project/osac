@@ -35,6 +35,11 @@ spec:
   privateKey:
     algorithm: ECDSA
     size: 256
+    # A rotated key would leave every issued client certificate chained to a
+    # key the CA no longer holds while the Certificate still reports Ready, so
+    # the key is pinned for the CA's lifetime. Rotating the CA is an explicit
+    # operator action that reissues every cluster identity.
+    rotationPolicy: Never
   issuerRef:
     name: {{ $issuer }}-selfsigned
     kind: Issuer

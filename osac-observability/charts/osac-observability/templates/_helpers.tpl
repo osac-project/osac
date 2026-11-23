@@ -97,9 +97,9 @@ osac.openshift.io/metrics-job: {{ .job }}
 
 {{/* A cluster counts as stopped when no series with its cluster label arrived
      for longer than one scrape interval of either collector plus one interval
-     of tolerance. The threshold must stay under the Prometheus five-minute
-     instant-query lookback, or a stopped cluster's last sample is already stale
-     and the query returns nothing instead of naming it. */}}
+     of tolerance. The stopped-cluster query looks back over the Thanos
+     retention window, so the threshold only decides how old the newest sample
+     must be; it is not bounded by the instant-query lookback. */}}
 {{- define "osac-observability.stoppedClusterThresholdSeconds" -}}
 {{- $collection := (.Values.global | default dict).observability.collection | default dict -}}
 {{- $controlPlane := include "osac-observability.durationSeconds" ($collection.osacControlPlane | default "30s") | int -}}

@@ -350,7 +350,21 @@ require "${enabled_policies}" 'app.kubernetes.io/component: receive'
 require "${enabled_policies}" 'app.kubernetes.io/component: store'
 require "${enabled_policies}" 'app.kubernetes.io/component: query'
 require "${enabled_policies}" 'app.kubernetes.io/component: compactor'
-require "${enabled_policies}" 'ingress: []'
+# Every policy admits its scrape source, so none is left with an empty ingress
+# list. Query's own /metrics is on 9090 beside the admin API; admitting the
+# whole openshift-monitoring namespace would let any pod there bypass the
+# authorizer, so the scrape rule narrows to the CMO Prometheus pod labels.
+reject "${enabled_policies}" 'ingress: []'
+query_policy="${TMP_DIR}/thanos-query-policy.yaml"
+extract_kind_name "${enabled}" NetworkPolicy thanos-query >"${query_policy}"
+expect_count "${query_policy}" 'port: 9090' 3
+require "${query_policy}" 'prometheus: k8s'
+require "${query_policy}" 'app.kubernetes.io/name: prometheus'
+# The Compactor serves metrics on 10902; the gRPC port 10901 stays closed.
+compactor_policy="${TMP_DIR}/thanos-compactor-policy.yaml"
+extract_kind_name "${enabled}" NetworkPolicy thanos-compactor >"${compactor_policy}"
+require "${compactor_policy}" 'port: 10902'
+reject "${compactor_policy}" 'port: 10901'
 reject "${enabled_policies}" 'podSelector: {}'
 reject "${enabled_policies}" 'osac.openshift.io/tenant'
 reject "${enabled_policies}" 'egress:'
@@ -523,13 +537,64 @@ reject "${disabled}" 'name: osac-observability-remote-write'
 reject "${disabled}" 'namespace: openshift-monitoring'
 
 echo "checking monitoring CRD guard"
-no_crd="${TMP_DIR}/no-crd.yaml"
-"${HELM_BIN}" "${COMMON_ARGS[@]}" "${OBS_ARGS[@]}" "${METERING_ARGS[@]}" >"${no_crd}"
-no_crd_sms="${TMP_DIR}/no-crd-servicemonitors.yaml"
-extract_kind "${no_crd}" ServiceMonitor >"${no_crd_sms}"
-expect_count "${no_crd_sms}" '^kind: ServiceMonitor' 0
-require "${no_crd}" 'name: osac-observability'
-require "${no_crd}" 'name: osac-prometheus-scrape'
+# Enabling observability without the Prometheus Operator API would leave the
+# pipeline with no scrape configuration and no error to explain it, so the
+# render fails by name instead of silently dropping the ServiceMonitors. The
+# disabled render above already proves the gate is scoped to observability.
+expect_render_failure no-crd \
+  'global.observability.enabled requires the monitoring.coreos.com/v1 ServiceMonitor API' \
+  "${OBS_ARGS[@]}" "${METERING_ARGS[@]}"
+
+echo "checking the pipeline health queries render"
+health_cm="${TMP_DIR}/health-queries.yaml"
+extract_kind_name "${enabled}" ConfigMap osac-observability-health-queries >"${health_cm}"
+# The stopped-cluster query measures each cluster's newest sample over the
+# Thanos retention window, not the five-minute instant-query lookback, and it
+# takes the sample timestamp inside a subquery so the age is real.
+require "${health_cm}" \
+  'last_over_time(timestamp(up{managed_by=\"osac\"})[365d:30s])'
+# The comment block explains why the range-function form is unusable; only the
+# value of the query itself must be free of it.
+reject "${health_cm}" \
+  'stopped-clusters: "time() - max by (cluster) (timestamp(last_over_time('
+# The row keeps the OSAC-8004 name; the shipped Receive metric is a pending
+# request count rather than a queue age.
+require "${health_cm}" \
+  'receive-queue-length: "sum by (cluster) (thanos_receive_pending_write_requests)"'
+
+echo "checking the managed write path stays opt-in and denylist-safe"
+write="${TMP_DIR}/write-path.yaml"
+"${HELM_BIN}" "${COMMON_ARGS[@]}" "${CRD_ARGS[@]}" "${OBS_ARGS[@]}" \
+  --set global.observability.clusterRemoteWrite.enabled=true \
+  --set global.clusterDomain=apps.example.com >"${write}"
+# The CA key pair is generated once; a rotated CA key would strand every issued
+# tenant certificate while the Certificate still reports Ready.
+write_certs="${TMP_DIR}/write-certificates.yaml"
+extract_kind_ns "${write}" Certificate osac-observability >"${write_certs}"
+require "${write_certs}" 'rotationPolicy: Never'
+require "${write_certs}" 'isCA: true'
+# Helm must never own the denylist: a rendered ConfigMap would carry a stale
+# data.revoked and every upgrade would drop the serials osac-operator appended.
+no_hooks="${TMP_DIR}/write-path-no-hooks.yaml"
+"${HELM_BIN}" "${COMMON_ARGS[@]}" "${CRD_ARGS[@]}" "${OBS_ARGS[@]}" \
+  --set global.observability.clusterRemoteWrite.enabled=true \
+  --set global.clusterDomain=apps.example.com --no-hooks >"${no_hooks}"
+revocation="${TMP_DIR}/write-revocation.yaml"
+extract_kind_name "${no_hooks}" ConfigMap osac-metrics-write-revocation \
+  >"${revocation}"
+if [ -s "${revocation}" ]; then
+  fail "the revocation ConfigMap rendered as a release manifest; Helm would overwrite the denylist"
+fi
+# The one-shot pre-install Job creates the ConfigMap only when it is missing,
+# so a reinstall keeps the denylist.
+bootstrap_job="${TMP_DIR}/write-revocation-bootstrap.yaml"
+extract_kind_name "${write}" Job osac-metrics-write-revocation-bootstrap \
+  >"${bootstrap_job}"
+require "${bootstrap_job}" '"helm.sh/hook": pre-install'
+require "${bootstrap_job}" 'oc get configmap "${REVOCATION_NAME}"'
+require "${bootstrap_job}" 'oc create configmap "${REVOCATION_NAME}"'
+# The umbrella supplies the image the hook runs.
+require "${bootstrap_job}" 'quay.io/openshift/origin-cli'
 
 echo "checking the top-level observability key is rejected"
 # global.observability is the only switch; a second top-level object would give
@@ -566,28 +631,42 @@ echo "checking invalid scrape interval rejection"
 # Skip schema validation here: the schema pattern rejects an empty string first,
 # so this exercises osac.validateValues and proves an empty interval is not
 # silently rewritten to the 30s default.
+# Disable observability for these renders: a bad interval also fails the
+# component charts' ServiceMonitor helpers, and Helm reports the subchart error
+# before the umbrella one. The umbrella validates the interval on every render,
+# so this still proves an empty value is not defaulted to 30s.
 expect_render_failure empty-interval \
   'global.observability.collection.osacControlPlane must be a positive Prometheus duration' \
+  "${CRD_ARGS[@]}" \
   --skip-schema-validation \
   "${OBS_ARGS[@]}" \
+  --set global.observability.enabled=false \
   --set global.observability.collection.osacControlPlane=
 expect_render_failure zero-interval \
   'must be a positive Prometheus duration' \
+  "${CRD_ARGS[@]}" \
   "${OBS_ARGS[@]}" \
+  --set global.observability.enabled=false \
   --set global.observability.collection.osacControlPlane=0s
 expect_render_failure malformed-interval \
   'does not match pattern' \
+  "${CRD_ARGS[@]}" \
   "${OBS_ARGS[@]}" \
+  --set global.observability.enabled=false \
   --set global.observability.collection.osacControlPlane=30x
 
 echo "checking thanos retention and resolution validation"
 expect_render_failure zero-retention \
   'global.observability.thanos.retention must be a positive Prometheus duration' \
+  "${CRD_ARGS[@]}" \
   "${OBS_ARGS[@]}" \
+  --set global.observability.enabled=false \
   --set global.observability.thanos.retention=0d
 expect_render_failure retention-resolution-mismatch \
   'global.observability.thanos.resolution.5m must equal global.observability.thanos.retention' \
+  "${CRD_ARGS[@]}" \
   "${OBS_ARGS[@]}" \
+  --set global.observability.enabled=false \
   --set global.observability.thanos.retention=30d \
   --set global.observability.thanos.resolution.raw=30d \
   --set global.observability.thanos.resolution.5m=365d \
@@ -598,25 +677,36 @@ echo "checking the receive replication factor fits the replica count"
 # default factor of two would silently drop all remote write.
 expect_render_failure replication-factor-exceeds-replicas \
   'global.observability.thanos.receive.replicationFactor (2) must not exceed global.observability.thanos.receive.replicas (1)' \
+  "${CRD_ARGS[@]}" \
   "${OBS_ARGS[@]}" \
+  --set global.observability.enabled=false \
   --set global.observability.thanos.receive.replicas=1
 
 retention_ok="${TMP_DIR}/retention-ok.yaml"
-"${HELM_BIN}" "${COMMON_ARGS[@]}" \
+"${HELM_BIN}" "${COMMON_ARGS[@]}" "${CRD_ARGS[@]}" \
   "${OBS_ARGS[@]}" \
   --set global.observability.thanos.retention=30d \
   --set global.observability.thanos.resolution.raw=30d \
   --set global.observability.thanos.resolution.5m=30d \
   --set global.observability.thanos.resolution.1h=30d >"${retention_ok}"
 require "${retention_ok}" 'name: osac-observability'
+# The umbrella plumbs its own retention value into the component query, so the
+# stopped-cluster lookback narrows with the storage window.
+retention_health="${TMP_DIR}/retention-health-queries.yaml"
+extract_kind_name "${retention_ok}" ConfigMap \
+  osac-observability-health-queries >"${retention_health}"
+require "${retention_health}" \
+  'last_over_time(timestamp(up{managed_by=\"osac\"})[30d:30s])'
 
 echo "checking infrastructure collection interval validation"
 # The schema pattern already rejects an empty string; skip it so this proves
 # osac.validateValues never rewrites a missing interval to the default.
 expect_render_failure empty-infrastructure \
   'global.observability.collection.infrastructure must be a positive Prometheus duration' \
+  "${CRD_ARGS[@]}" \
   --skip-schema-validation \
   "${OBS_ARGS[@]}" \
+  --set global.observability.enabled=false \
   --set global.observability.collection.infrastructure=
 
 echo "checking the values descriptions match what is enforced"

@@ -4,6 +4,9 @@ templates:
 release:
   name: osac
   namespace: osac
+capabilities:
+  apiVersions:
+    - monitoring.coreos.com/v1
 set:
   global.observability.enabled: true
   global.observability.clusterRemoteWrite.enabled: true
@@ -20,6 +23,8 @@ set:
   global.observability.services.metricsAuth.tag: test-metrics-auth
   global.observability.services.oauth2Proxy.tag: test-oauth2-proxy
   global.observability.services.openshiftOauthProxy.tag: test-ose-oauth-proxy
+  # The revocation bootstrap hook runs oc; the umbrella sets this default.
+  global.observability.cliImage: quay.io/openshift/origin-cli:4.20.0
 
 tests:
   - it: renders a self-signed bootstrap, a CA certificate and a CA issuer
@@ -66,6 +71,11 @@ tests:
       - equal:
           path: spec.privateKey.algorithm
           value: ECDSA
+      # A rotated key would leave every issued client certificate chained to a
+      # key the CA no longer holds while the Certificate still reports Ready.
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Never
       # The chart never renders key material; cert-manager generates and owns
       # the Secret.
       - notExists:
@@ -86,23 +96,105 @@ tests:
           path: spec.ca.secretName
           value: osac-metrics-write-ca
 
-  - it: renders exactly one empty revocation key
+  # Helm must never own the denylist. A rendered ConfigMap would carry a stale
+  # data.revoked, and every upgrade would drop the serials osac-operator
+  # appended. A one-shot pre-install hook creates the object only when it is
+  # missing; the hook objects delete themselves, so only the ConfigMap survives
+  # an install, an upgrade, an uninstall and a reinstall.
+  - it: creates the revocation ConfigMap from a one-shot pre-install hook
     template: templates/revocation.yaml
     asserts:
+      - hasDocuments:
+          count: 4
       - isKind:
-          of: ConfigMap
+          of: ServiceAccount
+        documentIndex: 0
+      - isKind:
+          of: Role
+        documentIndex: 1
+      - isKind:
+          of: RoleBinding
+        documentIndex: 2
+      - isKind:
+          of: Job
+        documentIndex: 3
       - equal:
           path: metadata.name
-          value: osac-metrics-write-revocation
+          value: osac-metrics-write-revocation-bootstrap
+        documentIndex: 3
       - equal:
           path: metadata.namespace
           value: osac-observability
-      # One key, and a fresh install lists no revoked serial. The operator
-      # appends serials through the API; the chart preserves them on upgrade.
+        documentIndex: 3
       - equal:
-          path: data
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install
+        documentIndex: 3
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded,hook-failed
+        documentIndex: 3
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: osac-metrics-write-revocation-bootstrap
+        documentIndex: 3
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: quay.io/openshift/origin-cli:4.20.0
+        documentIndex: 3
+      # Create-if-missing: an existing ConfigMap is left untouched, so its
+      # denylist survives a reinstall.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: set -euo pipefail
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: oc get configmap "\$\{REVOCATION_NAME\}" -n "\$\{REVOCATION_NAMESPACE\}"
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: oc create configmap "\$\{REVOCATION_NAME\}" -n "\$\{REVOCATION_NAMESPACE\}"
+        documentIndex: 3
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REVOCATION_NAME
+            value: osac-metrics-write-revocation
+        documentIndex: 3
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: REVOCATION_NAMESPACE
+            value: osac-observability
+        documentIndex: 3
+
+  - it: grants the bootstrap hook get and create on the one ConfigMap
+    template: templates/revocation.yaml
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: rules[0].resourceNames
           value:
-            revoked: ""
+            - osac-metrics-write-revocation
+      - equal:
+          path: rules[0].verbs
+          value: [get]
+      # create cannot be limited by resourceNames; the grant lives on the hook
+      # only and is deleted whether the Job succeeds or fails.
+      - notExists:
+          path: rules[1].resourceNames
+      - equal:
+          path: rules[1].verbs
+          value: [create]
+
+  - it: fails the render when the bootstrap hook has no image
+    template: templates/revocation.yaml
+    set:
+      global.observability.cliImage: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: global.observability.cliImage is required to bootstrap the write revocation ConfigMap
 
   - it: issues the proxy serving certificate with the configured lifetime
     template: templates/write-proxy.yaml

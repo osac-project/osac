@@ -25,212 +25,205 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"strings"
+	"sync"
 	"sync/atomic"
-	"testing"
-	"testing/synctest"
 	"time"
 
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/ghttp"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 )
 
-func TestEmergencyTokenSourceRenewsAndInvalidates(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		const lifetime = 5 * time.Minute
-		tool, calls := tokenRequestTestTool(t, func(_ *http.Request, call int64) (int, any) {
-			return http.StatusCreated, syntheticTokenRequest(call, time.Now().Add(lifetime))
+var _ = Describe("Emergency TokenRequest source", func() {
+	It("mints eagerly, reuses, renews and invalidates tokens", func(ctx SpecContext) {
+		expiry := time.Now().Add(5 * time.Minute).Truncate(time.Second)
+		renewedExpiry := expiry.Add(time.Hour)
+		tool, calls := tokenRequestTestTool(func(call int64) (int, any) {
+			if call == 1 {
+				return http.StatusCreated, syntheticTokenRequest(call, expiry)
+			}
+			return http.StatusCreated, syntheticTokenRequest(call, renewedExpiry)
 		})
-		ctx := t.Context()
-		source, err := tool.makeKubernetesTokenSource(ctx, emergencyServiceAccount, "osac")
-		if err != nil {
-			t.Fatal(err)
-		}
-		first, err := source.Token(ctx)
-		if err != nil || first.Access != "synthetic-1" || calls.Load() != 1 {
-			t.Fatal("the initial token was not reused")
-		}
 
-		time.Sleep(lifetime - 30*time.Second - time.Second)
-		cached, err := source.Token(ctx)
-		if err != nil || cached.Access != first.Access || calls.Load() != 1 {
-			t.Fatal("the token was refreshed before the renewal window")
-		}
+		before := time.Now()
+		source := newTestEmergencyTokenSource(ctx, tool)
+		after := time.Now()
+		Expect(calls.Load()).To(Equal(int64(1)), "setup should mint the first token")
+		// The server grants about five minutes despite the one-hour request.
+		// Its early refresh boundary is one tenth of that granted lifetime
+		// before expiry. Bracket the production clock read within the call.
+		Expect(source.refreshAt).To(BeTemporally(">=", expiry.Add(-expiry.Sub(before)/10)))
+		Expect(source.refreshAt).To(BeTemporally("<=", expiry.Add(-expiry.Sub(after)/10)))
 
-		time.Sleep(time.Second)
-		renewed, err := source.Token(ctx)
-		if err != nil || renewed.Access != "synthetic-2" || calls.Load() != 2 {
-			t.Fatal("the token was not renewed before its server-reported expiry")
-		}
-		if !renewed.Expiry.Equal(time.Now().Add(lifetime)) {
-			t.Fatal("the renewed token did not carry its server-reported expiry")
-		}
+		token, err := source.Token(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(token.Access).To(Equal("synthetic-1"))
+		Expect(token.Expiry).To(BeTemporally("==", expiry))
+		Expect(calls.Load()).To(Equal(int64(1)), "reuse the cached token before its refresh window")
 
-		time.Sleep(lifetime)
-		afterExpiry, err := source.Token(ctx)
-		if err != nil || afterExpiry.Access != "synthetic-3" || calls.Load() != 3 {
-			t.Fatal("the expired token was not replaced")
-		}
-		if err := source.Invalidate(ctx); err != nil {
-			t.Fatal(err)
-		}
-		if calls.Load() != 3 {
-			t.Fatal("invalidation requested a token before the next use")
-		}
-		replacement, err := source.Token(ctx)
-		if err != nil || replacement.Access != "synthetic-4" || calls.Load() != 4 {
-			t.Fatal("the invalidated token was not replaced")
-		}
+		// Move the cached boundary into the past while the token is still valid.
+		source.refreshAt = time.Now().Add(-time.Minute)
+		Expect(source.token.Expiry).To(BeTemporally(">", time.Now()))
+		token, err = source.Token(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(token.Access).To(Equal("synthetic-2"))
+		Expect(token.Expiry).To(BeTemporally("==", renewedExpiry))
+		Expect(source.refreshAt).To(BeTemporally("==", renewedExpiry.Add(-time.Minute)))
+		Expect(calls.Load()).To(Equal(int64(2)), "refresh before the server-granted expiry")
+
+		source.token.Expiry = time.Now().Add(-time.Minute)
+		source.refreshAt = source.token.Expiry.Add(-time.Minute)
+		token, err = source.Token(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(token.Access).To(Equal("synthetic-3"))
+		Expect(calls.Load()).To(Equal(int64(3)), "replace an expired token")
+
+		Expect(source.Invalidate(ctx)).To(Succeed())
+		Expect(calls.Load()).To(Equal(int64(3)), "invalidation defers minting until the next read")
+		token, err = source.Token(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(token.Access).To(Equal("synthetic-4"))
+		Expect(calls.Load()).To(Equal(int64(4)))
 	})
-}
 
-func TestEmergencyTokenSourceRefreshErrors(t *testing.T) {
-	for _, scenario := range []struct {
-		name    string
-		failure func(int64) (int, any)
-		message string
-	}{
-		{
-			name: "API denial",
-			failure: func(_ int64) (int, any) {
-				return http.StatusForbidden, &metav1.Status{
-					TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Status"},
-					Status:   metav1.StatusFailure,
-					Reason:   metav1.StatusReasonForbidden,
-					Code:     http.StatusForbidden,
-					Message:  "synthetic-server-message",
+	DescribeTable("returns safe errors during setup and refresh, then recovers",
+		func(ctx SpecContext, fail func(int64) (int, any), message string) {
+			expiry := time.Now().Add(time.Hour).Truncate(time.Second)
+			tool, calls := tokenRequestTestTool(func(call int64) (int, any) {
+				if call == 1 || call == 3 {
+					return fail(call)
 				}
-			},
-			message: "Kubernetes API status 403",
-		},
-		{
-			name: "missing expiry",
-			failure: func(call int64) (int, any) {
-				return http.StatusCreated, syntheticTokenRequest(call, time.Time{})
-			},
-			message: "empty or expired token",
-		},
-		{
-			name: "already expired",
-			failure: func(call int64) (int, any) {
-				return http.StatusCreated, syntheticTokenRequest(call, time.Now())
-			},
-			message: "empty or expired token",
-		},
-		{
-			name: "empty token",
-			failure: func(call int64) (int, any) {
-				response := syntheticTokenRequest(call, time.Now().Add(time.Hour))
-				response.Status.Token = ""
-				return http.StatusCreated, response
-			},
-			message: "empty or expired token",
-		},
-	} {
-		t.Run(scenario.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				tool, calls := tokenRequestTestTool(t, func(_ *http.Request, call int64) (int, any) {
-					if call == 1 || call == 3 {
-						return scenario.failure(call)
-					}
-					return http.StatusCreated, syntheticTokenRequest(call, time.Now().Add(time.Hour))
-				})
-				ctx := t.Context()
-				source, err := tool.makeKubernetesTokenSource(ctx, emergencyServiceAccount, "osac")
-				if source != nil || err == nil || !strings.Contains(err.Error(), scenario.message) ||
-					strings.Contains(err.Error(), "synthetic-") {
-					t.Fatal("setup did not return a credential-safe TokenRequest error")
-				}
-				if calls.Load() != 1 {
-					t.Fatal("setup made more than one TokenRequest on failure")
-				}
-
-				source, err = tool.makeKubernetesTokenSource(ctx, emergencyServiceAccount, "osac")
-				if err != nil {
-					t.Fatal(err)
-				}
-				time.Sleep(59 * time.Minute)
-				token, err := source.Token(ctx)
-				if token != nil || err == nil || !strings.Contains(err.Error(), scenario.message) ||
-					strings.Contains(err.Error(), "synthetic-") {
-					t.Fatal("failed renewal did not return a credential-safe error")
-				}
-				token, err = source.Token(ctx)
-				if err != nil || token.Access != "synthetic-4" || calls.Load() != 4 {
-					t.Fatal("a subsequent request did not recover from failed renewal")
-				}
+				return http.StatusCreated, syntheticTokenRequest(call, expiry)
 			})
-		})
-	}
-}
 
-func TestEmergencyTokenSourceConcurrentRefresh(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
+			initial, err := tool.makeKubernetesTokenSource(ctx, emergencyServiceAccount, "osac")
+			Expect(initial).To(BeNil())
+			Expect(err).To(MatchError(And(ContainSubstring(message), Not(ContainSubstring("synthetic-")))))
+			Expect(calls.Load()).To(Equal(int64(1)))
+
+			source := newTestEmergencyTokenSource(ctx, tool)
+			source.refreshAt = time.Now().Add(-time.Minute)
+			token, err := source.Token(ctx)
+			Expect(token).To(BeNil())
+			Expect(err).To(MatchError(And(ContainSubstring(message), Not(ContainSubstring("synthetic-")))))
+			Expect(calls.Load()).To(Equal(int64(3)))
+
+			token, err = source.Token(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(token.Access).To(Equal("synthetic-4"))
+			Expect(token.Expiry).To(BeTemporally("==", expiry))
+			Expect(calls.Load()).To(Equal(int64(4)))
+		},
+		Entry("API denial", func(int64) (int, any) {
+			return http.StatusForbidden, &metav1.Status{
+				TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "Status"},
+				Status:   metav1.StatusFailure,
+				Reason:   metav1.StatusReasonForbidden,
+				Code:     http.StatusForbidden,
+				Message:  "synthetic-server-message",
+			}
+		}, "Kubernetes API status 403"),
+		Entry("missing expiry", func(call int64) (int, any) {
+			return http.StatusCreated, syntheticTokenRequest(call, time.Time{})
+		}, "empty or expired token"),
+		Entry("already expired", func(call int64) (int, any) {
+			return http.StatusCreated, syntheticTokenRequest(call, time.Now().Add(-time.Minute))
+		}, "empty or expired token"),
+		Entry("empty token", func(call int64) (int, any) {
+			response := syntheticTokenRequest(call, time.Now().Add(time.Hour))
+			response.Status.Token = ""
+			return http.StatusCreated, response
+		}, "empty or expired token"),
+	)
+
+	It("shares one refresh across callers and lets a waiter cancel", func(ctx SpecContext) {
+		const wait = 5 * time.Second
 		started, release := make(chan struct{}), make(chan struct{})
-		tool, calls := tokenRequestTestTool(t, func(_ *http.Request, call int64) (int, any) {
+		unblock := sync.OnceFunc(func() { close(release) })
+		DeferCleanup(unblock)
+		expiry := time.Now().Add(time.Hour).Truncate(time.Second)
+		tool, calls := tokenRequestTestTool(func(call int64) (int, any) {
 			if call == 2 {
 				close(started)
 				<-release
 			}
-			return http.StatusCreated, syntheticTokenRequest(call, time.Now().Add(time.Hour))
+			return http.StatusCreated, syntheticTokenRequest(call, expiry)
 		})
-		ctx := t.Context()
-		source, err := tool.makeKubernetesTokenSource(ctx, emergencyServiceAccount, "osac")
-		if err != nil {
-			t.Fatal(err)
+		source := newTestEmergencyTokenSource(ctx, tool)
+		source.refreshAt = time.Now().Add(-time.Minute)
+
+		type result struct {
+			token *auth.Token
+			err   error
 		}
-		time.Sleep(59 * time.Minute)
-		results := make(chan bool, 2)
-		readToken := func() {
-			token, err := source.Token(ctx)
-			results <- err == nil && token.Access == "synthetic-2"
-		}
-		go readToken()
-		synctest.Wait()
-		select {
-		case <-started:
-		default:
-			t.Fatal("renewal did not start")
+		readToken := func(ctx context.Context) <-chan result {
+			results := make(chan result, 1)
+			go func() {
+				token, err := source.Token(ctx)
+				results <- result{token: token, err: err}
+			}()
+			return results
 		}
 
-		go readToken()
+		first := readToken(ctx)
+		Eventually(started, wait).Should(BeClosed())
+		// The first request must hold the gate for the entire refresh.
+		acquired := source.gate.TryAcquire(1)
+		if acquired {
+			source.gate.Release(1)
+		}
+		Expect(acquired).To(BeFalse())
+
+		// A zero-weight acquisition consumes no permit and fails when another
+		// caller is queued. Wait for each reader to queue before letting it proceed.
+		queueIsEmpty := func() bool { return source.gate.TryAcquire(0) }
+
 		waiter, cancel := context.WithCancel(ctx)
-		waiterError := make(chan error, 1)
-		go func() {
-			_, err := source.Token(waiter)
-			waiterError <- err
-		}()
-		synctest.Wait()
+		DeferCleanup(cancel)
+		canceled := readToken(waiter)
+		Eventually(queueIsEmpty, wait).Should(BeFalse(), "the cancelable caller should queue behind the refresh")
 		cancel()
-		synctest.Wait()
-		select {
-		case err := <-waiterError:
-			if !errors.Is(err, context.Canceled) {
-				t.Error("a canceled waiter did not return the context error")
-			}
-		default:
-			t.Error("a canceled waiter remained blocked during renewal")
-		}
+		var canceledResult result
+		Eventually(canceled, wait).Should(Receive(&canceledResult))
+		Expect(canceledResult.err).To(MatchError(context.Canceled))
+		Expect(canceledResult.token).To(BeNil())
+		Expect(calls.Load()).To(Equal(int64(2)))
 
-		close(release)
-		first, second := <-results, <-results
-		if !first || !second || calls.Load() != 2 {
-			t.Fatal("the concurrent callers did not share a single renewed token")
+		second := readToken(ctx)
+		Eventually(queueIsEmpty, wait).Should(BeFalse(), "the second reader should queue behind the refresh")
+		unblock()
+		for _, caller := range []<-chan result{first, second} {
+			var got result
+			Eventually(caller, wait).Should(Receive(&got))
+			Expect(got.err).NotTo(HaveOccurred())
+			Expect(got.token.Access).To(Equal("synthetic-2"))
 		}
+		Expect(calls.Load()).To(Equal(int64(2)))
 	})
+})
+
+func newTestEmergencyTokenSource(ctx context.Context, tool *Tool) *kubernetesTokenSource {
+	GinkgoHelper()
+	source, err := tool.makeKubernetesTokenSource(ctx, emergencyServiceAccount, "osac")
+	Expect(err).NotTo(HaveOccurred())
+	Expect(source).To(BeAssignableToTypeOf(&kubernetesTokenSource{}))
+	return source.(*kubernetesTokenSource)
 }
 
-func tokenRequestTestTool(t *testing.T, respond func(*http.Request, int64) (int, any)) (*Tool, *atomic.Int64) {
-	t.Helper()
+func tokenRequestTestTool(respond func(int64) (int, any)) (*Tool, *atomic.Int64) {
+	GinkgoHelper()
 	var calls atomic.Int64
 	client := &http.Client{Transport: ghttp.RoundTripperFunc(func(request *http.Request) (*http.Response, error) {
-		defer request.Body.Close()
-		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/namespaces/osac/serviceaccounts/admin/token" {
-			t.Error("unexpected TokenRequest method or target")
+		if request.Method != http.MethodPost || request.URL.Path != "/api/v1/namespaces/osac/serviceaccounts/admin/token" || request.Body == nil {
+			return nil, errors.New("unexpected synthetic TokenRequest method, target, or body")
 		}
+		defer request.Body.Close()
 		var tokenRequest authenticationv1.TokenRequest
 		if err := json.NewDecoder(request.Body).Decode(&tokenRequest); err != nil {
 			return nil, fmt.Errorf("decode synthetic TokenRequest: %w", err)
@@ -238,9 +231,9 @@ func tokenRequestTestTool(t *testing.T, respond func(*http.Request, int64) (int,
 		spec := tokenRequest.Spec
 		if spec.ExpirationSeconds == nil || *spec.ExpirationSeconds != 3600 ||
 			len(spec.Audiences) != 0 || spec.BoundObjectRef != nil {
-			t.Error("TokenRequest changed the duration, default audiences, or binding")
+			return nil, errors.New("synthetic TokenRequest changed the duration, default audiences, or binding")
 		}
-		code, body := respond(request, calls.Add(1))
+		code, body := respond(calls.Add(1))
 		data, err := json.Marshal(body)
 		if err != nil {
 			return nil, err
@@ -255,9 +248,7 @@ func tokenRequestTestTool(t *testing.T, respond func(*http.Request, int64) (int,
 		Host:          "https://example.test",
 		ContentConfig: rest.ContentConfig{ContentType: "application/json"},
 	}, client)
-	if err != nil {
-		t.Fatal(err)
-	}
+	Expect(err).NotTo(HaveOccurred())
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	return &Tool{kubeClientSet: clientSet, logger: logger}, &calls
 }

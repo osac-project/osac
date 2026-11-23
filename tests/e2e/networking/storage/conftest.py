@@ -70,7 +70,7 @@ def _default_network(client: GRPCClient) -> dict[str, str]:
         "label": "default",
         "vnet_id": vnet_id,
         "sub_a_id": subnet["id"],
-        "subnet_cidr": subnet_spec["ipv4_cidr"],
+        "subnet_cidr": subnet_spec.get("ipv4Cidr") or subnet_spec.get("ipv4_cidr", ""),
         "sg_id": group["id"],
     }
 

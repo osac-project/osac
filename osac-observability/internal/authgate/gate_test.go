@@ -233,6 +233,34 @@ func TestKeycloakAcceptsATokenWithTheRealmRole(t *testing.T) {
 	}
 }
 
+// TestKeycloakKeepsTheCachedKeyWhenRefreshFails pins that a Keycloak blip
+// after the JWKS cache goes stale does not reject every still-valid token: the
+// cached key is enough while it is the key the token names.
+func TestKeycloakKeepsTheCachedKeyWhenRefreshFails(t *testing.T) {
+	jwks := newJWKS(t)
+	now := time.Now()
+	auth, err := NewKeycloakAuthenticator(KeycloakConfig{
+		Issuer:    jwks.issuer(),
+		Audiences: []string{testAudience, "osac-cli"},
+		AdminRole: testRole,
+		Now:       func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewKeycloakAuthenticator: %v", err)
+	}
+	token := jwks.token(t, testClaims(jwks.issuer(), nil))
+	if err := auth.Authenticate(context.Background(), token); err != nil {
+		t.Fatalf("Authenticate with the realm reachable: %v", err)
+	}
+
+	// Expire the cache, then take the realm's JWKS endpoint away.
+	now = now.Add(keyCacheTTL + time.Minute)
+	jwks.Close()
+	if err := auth.Authenticate(context.Background(), token); err != nil {
+		t.Fatalf("Authenticate with a cached key: %v", err)
+	}
+}
+
 func TestKeycloakRejectsATokenWithoutTheRealmRole(t *testing.T) {
 	jwks := newJWKS(t)
 	auth := newKeycloakAuthenticator(t, jwks.issuer())

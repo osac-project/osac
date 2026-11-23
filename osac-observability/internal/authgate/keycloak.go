@@ -192,8 +192,13 @@ func (a *KeycloakAuthenticator) key(ctx context.Context, kid string) (*rsa.Publi
 		return key, nil
 	}
 	if err := a.refreshLocked(ctx); err != nil {
-		// A cached key is still the best answer if the refresh fails.
-		return a.keys[kid], err
+		// A token minted before the realm rotated its keys is still verifiable
+		// with the cached key, so a Keycloak blip must not reject it. Only an
+		// unknown kid turns the refresh failure into an authentication failure.
+		if key, ok := a.keys[kid]; ok {
+			return key, nil
+		}
+		return nil, err
 	}
 	return a.keys[kid], nil
 }

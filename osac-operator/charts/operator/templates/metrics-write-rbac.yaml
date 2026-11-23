@@ -1,7 +1,12 @@
 {{- $observability := (.Values.global | default dict).observability | default dict }}
 {{- $write := $observability.clusterRemoteWrite | default dict }}
-{{- if $write.enabled }}
+{{- /* The write path ships with the observability stack. The Role must exist
+       even while clusterRemoteWrite.enabled is false: that flag only stops new
+       identities, and the operator still revokes an identity that was issued
+       while it was on. */ -}}
+{{- if or $write.enabled $observability.enabled }}
 {{- $writeNamespace := $observability.namespace | default "osac-observability" }}
+{{- $revocationConfigMap := $write.revocationConfigMap | default "osac-metrics-write-revocation" }}
 {{- /* The write CA and its issued client certificates live in one namespace.
        A namespaced Role keeps certificate creation and revocation out of every
        other namespace, which a cluster-wide marker-generated rule could not. */ -}}
@@ -13,32 +18,56 @@ metadata:
   labels:
     {{- include "osac-operator.labels" . | nindent 4 }}
 rules:
+# The operator creates, reads, updates and deletes the client Certificate.
 - apiGroups:
   - cert-manager.io
   resources:
   - certificates
-  - issuers
   verbs:
   - create
   - delete
   - get
-  - list
   - patch
   - update
   - watch
+# It only reads the Issuer to wait for readiness; cert-manager creates Issuers.
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - issuers
+  verbs:
+  - get
+  - list
+  - watch
+# Only the issued client Secret is read. cert-manager writes it, and this
+# namespace also holds the CA key and the object-storage Secret.
 - apiGroups:
   - ""
   resources:
-  # The issued client Secret and the shared revocation ConfigMap.
   - secrets
+  verbs:
+  - get
+# Read and update are scoped to the shared denylist. The operator does not
+# watch it; the write proxy does.
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  resourceNames:
+  - {{ $revocationConfigMap }}
+  verbs:
+  - get
+  - patch
+  - update
+# A missing denylist is created with the first revoked serial. Kubernetes
+# ignores resourceNames on create, so this verb cannot be name-scoped; the
+# controller only ever creates the ConfigMap above.
+- apiGroups:
+  - ""
+  resources:
   - configmaps
   verbs:
   - create
-  - get
-  - list
-  - patch
-  - update
-  - watch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

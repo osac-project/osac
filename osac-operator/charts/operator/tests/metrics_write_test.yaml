@@ -16,11 +16,91 @@ tests:
             name: OSAC_OBSERVABILITY_CLUSTER_REMOTE_WRITE_ENABLED
             value: "false"
 
-  - it: renders no write-path RBAC while tenant remote write is disabled
+  - it: renders no write-path RBAC while observability is disabled
     template: metrics-write-rbac.yaml
     asserts:
       - hasDocuments:
           count: 0
+
+  # The flag only stops new identities. An identity issued while it was on is
+  # still withdrawn, so the Role and the values withdrawal needs must exist.
+  - it: keeps withdrawal RBAC while tenant remote write is disabled
+    template: metrics-write-rbac.yaml
+    documentSelector:
+      path: kind
+      value: Role
+    set:
+      global.observability.enabled: true
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+      - equal:
+          path: rules
+          value:
+            - apiGroups:
+                - cert-manager.io
+              resources:
+                - certificates
+              verbs:
+                - create
+                - delete
+                - get
+                - patch
+                - update
+                - watch
+            - apiGroups:
+                - cert-manager.io
+              resources:
+                - issuers
+              verbs:
+                - get
+                - list
+                - watch
+            - apiGroups:
+                - ""
+              resources:
+                - secrets
+              verbs:
+                - get
+            - apiGroups:
+                - ""
+              resources:
+                - configmaps
+              resourceNames:
+                - osac-metrics-write-revocation
+              verbs:
+                - get
+                - patch
+                - update
+            - apiGroups:
+                - ""
+              resources:
+                - configmaps
+              verbs:
+                - create
+
+  - it: supplies the withdrawal settings while tenant remote write is disabled
+    template: deployment.yaml
+    set:
+      global.observability.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_NAMESPACE
+            value: osac-observability
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_REVOCATION_CONFIGMAP
+            value: osac-metrics-write-revocation
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_WRITE_URL
 
   - it: derives the tenant write configuration from the observability values
     template: deployment.yaml
@@ -132,7 +212,7 @@ tests:
       - failedTemplate:
           errorMessage: "global.clusterDomain is required when global.observability.clusterRemoteWrite.enabled is true"
 
-  - it: grants certificate, Secret and ConfigMap access only in the observability namespace
+  - it: grants only the write-path verbs the reconciler uses
     template: metrics-write-rbac.yaml
     documentSelector:
       path: kind
@@ -147,6 +227,10 @@ tests:
       - equal:
           path: metadata.namespace
           value: osac-observability
+      # Secrets are read-only: the namespace also holds the CA key and the
+      # object-storage Secret. ConfigMap update is scoped to the denylist, and
+      # create stays name-unscoped only because Kubernetes ignores
+      # resourceNames on create.
       - equal:
           path: rules
           value:
@@ -154,27 +238,68 @@ tests:
                 - cert-manager.io
               resources:
                 - certificates
-                - issuers
               verbs:
                 - create
                 - delete
                 - get
-                - list
                 - patch
                 - update
+                - watch
+            - apiGroups:
+                - cert-manager.io
+              resources:
+                - issuers
+              verbs:
+                - get
+                - list
                 - watch
             - apiGroups:
                 - ""
               resources:
                 - secrets
+              verbs:
+                - get
+            - apiGroups:
+                - ""
+              resources:
+                - configmaps
+              resourceNames:
+                - osac-metrics-write-revocation
+              verbs:
+                - get
+                - patch
+                - update
+            - apiGroups:
+                - ""
+              resources:
                 - configmaps
               verbs:
                 - create
-                - get
-                - list
-                - patch
-                - update
-                - watch
+
+  - it: scopes the denylist access to an overridden ConfigMap name
+    template: metrics-write-rbac.yaml
+    documentSelector:
+      path: kind
+      value: Role
+    set:
+      global.clusterDomain: apps.example.com
+      global.observability.enabled: true
+      global.observability.clusterRemoteWrite.enabled: true
+      global.observability.clusterRemoteWrite.revocationConfigMap: writers-denylist
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - ""
+            resources:
+              - configmaps
+            resourceNames:
+              - writers-denylist
+            verbs:
+              - get
+              - patch
+              - update
 
   - it: binds the write-path Role to the operator service account
     template: metrics-write-rbac.yaml

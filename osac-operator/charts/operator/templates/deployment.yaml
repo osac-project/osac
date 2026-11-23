@@ -173,17 +173,21 @@ spec:
             value: {{ .Values.global.fulfillmentTrust.tenantNamespace | quote }}
           - name: OSAC_OBSERVABILITY_CLUSTER_REMOTE_WRITE_ENABLED
             value: {{ $write.enabled | default false | quote }}
+          {{- if or $write.enabled $observability.enabled }}
+          # Needed to withdraw an identity that was issued while the flag was on,
+          # including after the flag is turned off.
+          - name: OSAC_OBSERVABILITY_NAMESPACE
+            value: {{ $writeNamespace | quote }}
+          - name: OSAC_OBSERVABILITY_REVOCATION_CONFIGMAP
+            value: {{ $write.revocationConfigMap | default "osac-metrics-write-revocation" | quote }}
+          {{- end }}
           {{- if $write.enabled }}
           {{- $clusterDomain := required "global.clusterDomain is required when global.observability.clusterRemoteWrite.enabled is true" (.Values.global | default dict).clusterDomain }}
           {{- $writeURL := printf "https://%s-%s.%s/api/v1/receive" $writeRoute $writeNamespace $clusterDomain }}
-          - name: OSAC_OBSERVABILITY_NAMESPACE
-            value: {{ $writeNamespace | quote }}
           - name: OSAC_OBSERVABILITY_WRITE_URL
             value: {{ $writeURL | quote }}
           - name: OSAC_OBSERVABILITY_WRITE_CA_ISSUER
             value: {{ $write.writeCAIssuer | default "osac-metrics-write-ca" | quote }}
-          - name: OSAC_OBSERVABILITY_REVOCATION_CONFIGMAP
-            value: {{ $write.revocationConfigMap | default "osac-metrics-write-revocation" | quote }}
           - name: OSAC_OBSERVABILITY_CERT_DURATION
             value: {{ $write.certificateDuration | default "90d" | quote }}
           - name: OSAC_OBSERVABILITY_CERT_RENEW_BEFORE

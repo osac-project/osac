@@ -414,7 +414,9 @@ reject "${write_policy}" 'port: 8080'
 
 echo "checking the write path stays off unless it is enabled"
 reject "${enabled}" 'osac-metrics-write-ca'
-reject "${enabled}" 'osac-metrics-write-revocation'
+# The operator still names the denylist while the flag is off, because that is
+# how an identity issued earlier is withdrawn; no object may take the name.
+reject "${enabled}" 'name: osac-metrics-write-revocation'
 reject "${disabled}" 'osac-metrics-write-ca'
 reject "${disabled}" 'thanos-receive-managed'
 

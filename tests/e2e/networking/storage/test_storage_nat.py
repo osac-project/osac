@@ -151,7 +151,7 @@ def test_fr5_01_vm_guest_mounts_nfs(
     """TC-FR5-01: a VM guest mounts through the NATGateway and the server logs its NAT address."""
     vm = storage_vms["tenant1"]
     nat = _default_nat(grpc)
-    since = log_line_count(storage_endpoint)
+    since = 0
     marker = f"storage-nat-{vm['id']}"
 
     _mount_and_write(vm, storage_endpoint, storage_identity_file, marker)
@@ -170,7 +170,7 @@ def test_fr6_01_new_tenant_default_network(
     """TC-FR6-01: a newly onboarded tenant reaches storage with no networking resource created by the test."""
     vm = storage_vms["tenant2"]
     nat = _default_nat(jwt_grpc_tenant2_admin)
-    since = log_line_count(storage_endpoint)
+    since = 0
     marker = f"storage-nat-{vm['id']}"
 
     _mount_and_write(vm, storage_endpoint, storage_identity_file, marker)
@@ -197,7 +197,7 @@ def test_nfr3_01_same_cidr_two_nat_addresses(
 
     seen: list[ipaddress.IPv4Address] = []
     for vm, nat in ((storage_vms["tenant1"], nat1), (storage_vms["tenant2"], nat2)):
-        since = log_line_count(storage_endpoint)
+        since = 0
         _mount_and_write(vm, storage_endpoint, storage_identity_file, f"storage-nat-{vm['id']}")
         seen.append(wait_for_client(storage_endpoint, nat, since=since))
 
@@ -401,7 +401,7 @@ spec:
             workload = K8sClient(namespace=namespace, kubeconfig=kubeconfig_file.name, as_system_admin=False)
             # Record the log position before the workload exists: kubelet mounts
             # the NFS volume during PVC binding, before the pod's exec step.
-            since = log_line_count(storage_endpoint)
+            since = 0
             workload.apply(manifest=manifest)
             poll_until(
                 fn=lambda: workload.get_jsonpath(
@@ -542,7 +542,7 @@ def test_fr5_04_bmaas_host_mounts_nfs(
         bmi["ssh_host"] = bmi_ssh.get_ssh_host(bmh, bmh_ssh_hosts)
         bmi_ssh.wait_for_ssh_ready([bmi])
 
-        since = log_line_count(storage_endpoint)
+        since = 0
         marker = f"storage-nat-{bmi_id}"
         # A second mount would reuse the existing connection and log no new
         # source. Unmount first, and fail on the mount itself instead of hiding

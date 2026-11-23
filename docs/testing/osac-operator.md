@@ -19,15 +19,22 @@ The CI job runs the installer's Kind target with the operator suite
 | Envtest | `internal/controller/` | API, etcd, CRDs, in-process reconcile | Provider/fulfillment responses and external progression test-controlled; not a deployed worker. |
 | Component integration | Deployed `test/integration/` | Installed operator, API, CRDs, console proxy, networking, worker RBAC, startup without LVMS/TopoLVM | No AAP/provider/infra; some tests remove finalizers to bypass provider boundaries. |
 | Component integration (CI) | Installer Kind target, operator suite | Thin Kind install, Fulfillment client disabled | Same provider limits; installation settings need separate deployed coverage. |
-| Unit (chart render) | `charts/operator/tests/`, run by `helm unittest charts/operator` in the `helm-unit` CI leg | The ServiceMonitor against the controller-runtime secure metrics endpoint: HTTPS scheme, ServiceAccount token, TLS config, selector-to-Service agreement, and the `.Capabilities.APIVersions.Has` guard | No cluster and no Prometheus. That a target is actually scraped is not shown here; it needs user-workload monitoring on a deployed cluster, tracked by [OSAC-6132](https://redhat.atlassian.net/browse/OSAC-6132). |
 | Component integration ([DEV] [OSAC-6685](https://redhat.atlassian.net/browse/OSAC-6685)) | Installer Kind target, compute-storage suite | Real Fulfillment APIs/PostgreSQL, installed storage and ComputeInstance controllers, and target StorageClass lookup | AAP is a recording double; tenant compute readiness is supplied by the fixture. No provider or VM execution; see the [fulfillment-service guide](fulfillment-service.md#computeinstance-disk-handoff-osac-6685) for the boundary. |
 | Contract | `test/contract/` | Helm RBAC templates vs permission contract | No deployed operator/provider. |
 | E2E | `../tests/e2e/` | Cross-component fulfillment journeys | Environment/provider-dependent. |
 
-Run `helm unittest charts/operator` when changing the metrics Service's labels
-or ports, the ServiceMonitor, or `serviceMonitor.*` values. It renders only:
-no Prometheus is scraped, and that a target is actually collected needs
-user-workload monitoring on a deployed cluster.
+The chart ships a ServiceMonitor for the controller-runtime secure metrics
+endpoint. The only automated coverage is the installer's input-validation
+gate (`osac-installer/scripts/test-input-validation.sh`, run by the Helm lint
+workflow), which renders it through the umbrella chart with the ServiceMonitor
+CRD present and asserts the scrape interval's value and quoting. Its HTTPS
+scheme, ServiceAccount token, TLS config, selector-to-Service agreement and
+the `.Capabilities.APIVersions.Has` guard that keeps a cluster without the
+Prometheus operator CRDs installable are all unasserted. Verify by hand when
+changing the metrics Service's labels or ports, the ServiceMonitor, or
+`serviceMonitor.*` values. Scrape coverage on a deployed cluster with
+user-workload monitoring is tracked by
+[OSAC-6132](https://redhat.atlassian.net/browse/OSAC-6132).
 
 ## Coverage boundaries
 

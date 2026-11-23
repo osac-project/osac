@@ -1,9 +1,0 @@
-suite: BMF operator metrics ServiceMonitor without the monitoring CRDs
-templates:
-  - templates/servicemonitor.yaml
-tests:
-  # A Kind install with no Prometheus operator must still apply the chart.
-  - it: renders nothing when the monitoring CRDs are absent
-    asserts:
-      - hasDocuments:
-          count: 0

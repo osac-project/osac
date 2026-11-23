@@ -17,14 +17,21 @@ suite (repository-root `make -C osac-installer help`, `.github/workflows/`).
 | Envtest | `internal/controller/` | Kubernetes API, etcd, OSAC and static Metal3 CRDs | Metal3 controller, Ironic/BMC, hardware and some provider clients faked. |
 | Component integration | Deployed `test/integration/` | Deployed operator, CRDs, API, pool/instance flows, status | Static `BareMetalHost` state and simulated transitions; no real Metal3 operator, Ironic, BMC or hardware. |
 | Component integration (CI) | Installer Kind target, BMF suite | Thin Kind install, installation API endpoint unset | Same static Metal3/provider boundary; installation settings need separate deployed coverage. |
-| Unit (chart render) | `charts/operator/tests/`, run by `helm unittest charts/operator` in the `helm-unit` CI leg | The ServiceMonitor against the controller-runtime secure metrics endpoint: HTTPS scheme, ServiceAccount token, TLS config, selector-to-Service agreement, and the `.Capabilities.APIVersions.Has` guard | No cluster and no Prometheus. That a target is actually scraped is not shown here; it needs user-workload monitoring on a deployed cluster, tracked by [OSAC-6132](https://redhat.atlassian.net/browse/OSAC-6132). |
 | Contract | None dedicated | No real provider boundary | Static Metal3 CRDs, patched status and simulated transitions do not exercise a real contract; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) for qualifying coverage. |
 | E2E | Cross-component suites | Fulfillment-to-operator journeys where available | Real hardware and providers remain environment-dependent. |
 
-Run `helm unittest charts/operator` when changing the metrics Service's labels
-or ports, the ServiceMonitor, or `serviceMonitor.*` values. It renders only:
-no Prometheus is scraped, and that a target is actually collected needs
-user-workload monitoring on a deployed cluster.
+The chart ships a ServiceMonitor for the controller-runtime secure metrics
+endpoint. The only automated coverage is the installer's input-validation
+gate (`osac-installer/scripts/test-input-validation.sh`, run by the Helm lint
+workflow), which renders it through the umbrella chart with the ServiceMonitor
+CRD present and asserts the scrape interval's value and quoting. Its HTTPS
+scheme, ServiceAccount token, TLS config, selector-to-Service agreement and
+the `.Capabilities.APIVersions.Has` guard that keeps a cluster without the
+Prometheus operator CRDs installable are all unasserted. Verify by hand when
+changing the metrics Service's labels or ports, the ServiceMonitor, or
+`serviceMonitor.*` values. Scrape coverage on a deployed cluster with
+user-workload monitoring is tracked by
+[OSAC-6132](https://redhat.atlassian.net/browse/OSAC-6132).
 
 ## Coverage notes
 

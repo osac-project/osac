@@ -153,6 +153,107 @@ var _ = Describe("Notifications API", Label("notifications"), func() {
 			publicv1.NotificationState_NOTIFICATION_STATE_READ))
 	})
 
+	It("creates platform announcements in shared and lists them for tenants", func(ctx context.Context) {
+		adminClient := publicv1.NewNotificationsClient(tool.ExternalView().AdminConn())
+		userClient := publicv1.NewNotificationsClient(tool.ExternalView().UserConn())
+
+		name := fmt.Sprintf("platform-ann-%s", uuid.New()[:8])
+		created, err := adminClient.Create(ctx, publicv1.NotificationsCreateRequest_builder{
+			Object: publicv1.Notification_builder{
+				Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+				Spec: publicv1.NotificationSpec_builder{
+					Kind:     publicv1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT,
+					Severity: publicv1.NotificationSeverity_NOTIFICATION_SEVERITY_WARNING,
+					Type:     "osac.notification.announcement.maintenance",
+					Scope:    publicv1.NotificationScope_NOTIFICATION_SCOPE_PLATFORM,
+					Title:    "Platform maintenance",
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		id := created.GetObject().GetId()
+		Expect(created.GetObject().GetMetadata().GetTenant()).To(Equal("shared"))
+		DeferCleanup(func(ctx context.Context) {
+			_, _ = adminClient.Delete(ctx, publicv1.NotificationsDeleteRequest_builder{Id: id}.Build())
+		})
+
+		listed, err := userClient.List(ctx, publicv1.NotificationsListRequest_builder{
+			Filter: new(fmt.Sprintf(`this.metadata.name == %q`, name)),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(containsId(listed.GetItems(), id)).To(BeTrue())
+
+		got, err := userClient.Get(ctx, publicv1.NotificationsGetRequest_builder{Id: id}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.GetObject().GetId()).To(Equal(id))
+	})
+
+	It("rejects announcement Create with spec.state set", func(ctx context.Context) {
+		_, conn := createCatalogItemTenantAdminFixture(ctx)
+		publicClient := publicv1.NewNotificationsClient(conn)
+
+		_, err := publicClient.Create(ctx, publicv1.NotificationsCreateRequest_builder{
+			Object: publicv1.Notification_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("ann-state-%s", uuid.New()[:8]),
+				}.Build(),
+				Spec: publicv1.NotificationSpec_builder{
+					Kind:     publicv1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT,
+					Severity: publicv1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+					Type:     "osac.notification.announcement.maintenance",
+					Scope:    publicv1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
+					Title:    "Should reject",
+					State:    publicv1.NotificationState_NOTIFICATION_STATE_UNREAD,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+	})
+
+	It("lists and deletes announcements that include a resource reference", func(ctx context.Context) {
+		_, conn := createCatalogItemTenantAdminFixture(ctx)
+		publicClient := publicv1.NewNotificationsClient(conn)
+
+		created, err := publicClient.Create(ctx, publicv1.NotificationsCreateRequest_builder{
+			Object: publicv1.Notification_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name: fmt.Sprintf("ann-res-%s", uuid.New()[:8]),
+				}.Build(),
+				Spec: publicv1.NotificationSpec_builder{
+					Kind:     publicv1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT,
+					Severity: publicv1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+					Type:     "osac.notification.announcement.maintenance",
+					Scope:    publicv1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
+					Title:    "With resource",
+					Resource: publicv1.NotificationResourceReference_builder{
+						Cluster: publicv1.ClusterLocalReference_builder{
+							Id: "nonexistent-cluster",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		id := created.GetObject().GetId()
+		DeferCleanup(func(ctx context.Context) {
+			_, _ = publicClient.Delete(ctx, publicv1.NotificationsDeleteRequest_builder{Id: id}.Build())
+		})
+
+		listed, err := publicClient.List(ctx, publicv1.NotificationsListRequest_builder{
+			Filter: new(fmt.Sprintf(`this.metadata.name == %q`,
+				created.GetObject().GetMetadata().GetName())),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(containsId(listed.GetItems(), id)).To(BeTrue())
+
+		got, err := publicClient.Get(ctx, publicv1.NotificationsGetRequest_builder{Id: id}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got.GetObject().GetId()).To(Equal(id))
+
+		_, err = publicClient.Delete(ctx, publicv1.NotificationsDeleteRequest_builder{Id: id}.Build())
+		Expect(err).ToNot(HaveOccurred())
+	})
+
 	It("hides other users' inbox rows from List and Get", func(ctx context.Context) {
 		publicClient := publicv1.NewNotificationsClient(tool.ExternalView().UserConn())
 		privateClient := privatev1.NewNotificationsClient(tool.InternalView().AdminConn())

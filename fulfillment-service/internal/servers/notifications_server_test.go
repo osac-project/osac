@@ -345,7 +345,7 @@ var _ = Describe("Notifications server", func() {
 			Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
 		})
 
-		It("Hides announcement Delete when resource access is denied", func() {
+		It("Allows announcement Delete even when resource access is denied", func() {
 			access := &stubNotificationResourceAccess{allow: map[string]bool{"cluster-denied": false}}
 			server, err := NewNotificationsServer().
 				SetLogger(logger).
@@ -379,7 +379,7 @@ var _ = Describe("Notifications server", func() {
 			_, err = server.Delete(adminCtx, publicv1.NotificationsDeleteRequest_builder{
 				Id: created.GetObject().GetId(),
 			}.Build())
-			Expect(status.Code(err)).To(Equal(codes.NotFound))
+			Expect(err).ToNot(HaveOccurred())
 		})
 	})
 })

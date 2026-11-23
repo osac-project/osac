@@ -286,8 +286,16 @@ require "${TMP_DIR}/thanos-store.yaml" 'name: thanos-object-storage'
 require "${TMP_DIR}/thanos-compactor.yaml" 'name: thanos-object-storage'
 require "${enabled}" 'bucket: "thanos"'
 require "${enabled}" 'endpoint: "https://s3.example.com"'
-for forbidden in AWS_SECRET_ACCESS_KEY MINIO_ROOT_PASSWORD secret_key: access_key:; do
+for forbidden in MINIO_ROOT_PASSWORD secret_key: access_key:; do
   reject "${enabled}" "${forbidden}"
+done
+# The prerequisite gate's embedded script names the two AWS variables it
+# requires in the Secret; that is a check, not credential material. The three
+# workloads that read the Secret must not carry either name at all.
+for forbidden in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+  for workload in thanos-receive thanos-store thanos-compactor; do
+    reject "${TMP_DIR}/${workload}.yaml" "${forbidden}"
+  done
 done
 objstore="${TMP_DIR}/object-storage-configmap.yaml"
 extract_kind_name "${enabled}" ConfigMap thanos-object-storage >"${objstore}"
@@ -311,14 +319,22 @@ require "${TMP_DIR}/thanos-compactor.yaml" '--downsampling.disable'
 reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-5m'
 reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-1h'
 
-echo "checking five network policies gate the store pods"
+echo "checking six network policies gate the store pods"
 enabled_policies="${TMP_DIR}/thanos-networkpolicies.yaml"
 extract_kind_ns "${enabled}" NetworkPolicy osac-observability >"${enabled_policies}"
-expect_count "${enabled_policies}" '^kind: NetworkPolicy' 5
+expect_count "${enabled_policies}" '^kind: NetworkPolicy' 6
 for policy in thanos-query thanos-authorizer thanos-store thanos-receive \
-  thanos-compactor; do
+  thanos-compactor thanos-query-auth-proxy; do
   require "${enabled_policies}" "name: ${policy}"
 done
+# The admin Route reaches the gate on 9092. The allowlist (9091) and the two
+# OAuth proxies (4180, 4181) must not be admitted from anywhere else, or a pod
+# can skip the gate by connecting to the proxy pod IP.
+require "${enabled_policies}" 'network.openshift.io/policy-group: ingress'
+require "${enabled_policies}" 'port: 9092'
+reject "${enabled_policies}" 'port: 9091'
+reject "${enabled_policies}" 'port: 4180'
+reject "${enabled_policies}" 'port: 4181'
 require "${enabled_policies}" 'app.kubernetes.io/component: receive'
 require "${enabled_policies}" 'app.kubernetes.io/component: store'
 require "${enabled_policies}" 'app.kubernetes.io/component: query'
@@ -351,8 +367,9 @@ extract_kind_name "${enabled}" ClusterRole osac-observability-preflight >"${pref
 require "${preflight_role}" 'resourceNames: ["osac-observability"]'
 require "${preflight_role}" 'verbs: ["get", "patch", "update"]'
 # create cannot be restricted by resourceNames, so the grant is a hook-only
-# ClusterRole that Helm deletes when the gate succeeds.
+# ClusterRole that Helm deletes whether the gate succeeds or fails.
 require "${preflight_role}" 'verbs: ["create"]'
+require "${preflight_role}" 'before-hook-creation,hook-succeeded,hook-failed'
 
 echo "checking the admin query routes and proxies"
 # The Routes take their hosts from global.clusterDomain, which the baseline
@@ -468,7 +485,7 @@ unlabel_obs="${TMP_DIR}/unlabel-observability-namespace.yaml"
 extract_kind_name "${disabled}" Job osac-unlabel-observability-namespace \
   >"${unlabel_obs}"
 require "${unlabel_obs}" 'name: osac-unlabel-observability-namespace'
-require "${unlabel_obs}" 'pre-upgrade'
+require "${unlabel_obs}" 'pre-upgrade,pre-delete'
 require "${unlabel_obs}" 'openshift.io/cluster-monitoring-'
 reject "${unlabel_obs}" 'create namespace'
 reject "${unlabel_obs}" 'delete namespace'

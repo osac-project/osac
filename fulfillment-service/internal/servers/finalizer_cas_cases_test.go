@@ -308,6 +308,23 @@ func finalizerTenantCases() []finalizerCase {
 				b.AddAllowedTenants(auth.SharedTenant, auth.SystemTenant)
 			},
 		),
+		newFinalizerCase(privatev1.Notifications_ServiceDesc,
+			func() *privatev1.Notification {
+				return privatev1.Notification_builder{
+					Metadata: privatev1.Metadata_builder{Name: finalizerName("notif")}.Build(),
+					Spec: privatev1.NotificationSpec_builder{
+						Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT,
+						Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+						Type:     "osac.notification.announcement.maintenance",
+						Scope:    privatev1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
+						Title:    "finalizer CAS",
+					}.Build(),
+				}.Build()
+			},
+			func(b *GenericServerBuilder[*privatev1.Notification]) {
+				b.AddAllowedTenants(auth.SystemTenant)
+			},
+		),
 		newFinalizerCase(privatev1.Secrets_ServiceDesc,
 			func() *privatev1.Secret {
 				return privatev1.Secret_builder{

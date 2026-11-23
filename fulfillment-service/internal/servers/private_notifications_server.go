@@ -257,13 +257,15 @@ func (s *PrivateNotificationsServer) Update(ctx context.Context,
 		return nil, err
 	}
 	existing := getResponse.GetObject()
+	mask := request.GetUpdateMask()
+	// An empty mask is a no-op used by finalizer CAS checks.
+	if mask == nil || len(mask.GetPaths()) == 0 {
+		response = &privatev1.NotificationsUpdateResponse{}
+		response.SetObject(existing)
+		return response, nil
+	}
 	if existing.GetSpec().GetKind() == privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "announcements do not support update")
-	}
-
-	mask := request.GetUpdateMask()
-	if mask == nil || len(mask.GetPaths()) == 0 {
-		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "update_mask is mandatory")
 	}
 	for _, path := range mask.GetPaths() {
 		if normalizeFieldMaskPath(path) != "spec.state" {

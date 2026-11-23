@@ -5,6 +5,31 @@ global:
   fulfillmentTrust:
     enabled: false
     tenantNamespace: osac-csi
+  # Mirrors the osac-observability chart's global values. The umbrella chart
+  # supplies them; these defaults keep a standalone operator install consistent.
+  observability:
+    # Must match the namespace the osac-observability chart renders into.
+    namespace: osac-observability
+    collection:
+      # How often a tenant cluster scrapes; also the interval the operator
+      # writes into the tenant's cluster monitoring configuration.
+      infrastructure: 30s
+    clusterRemoteWrite:
+      # When false the operator configures no tenant cluster and needs no
+      # write-path RBAC, and the osac-observability chart renders no proxy.
+      enabled: false
+      writeCAIssuer: osac-metrics-write-ca
+      # Shared denylist of withdrawn certificate serials the write proxy reads
+      # on every request.
+      revocationConfigMap: osac-metrics-write-revocation
+      routeName: thanos-receive-managed
+      certificateDuration: 90d
+      renewBefore: 30d
+      # One definition for the proxy's drop rule and the cluster-side copy the
+      # operator writes, so the two cannot drift.
+      dropRule:
+        keepKubePrefix: kube_node_
+        dropPrefixes: [container_, claim, mount, kserve_, vllm_, dcgm_]
 
 image:
   repository: ghcr.io/osac-project/osac-operator

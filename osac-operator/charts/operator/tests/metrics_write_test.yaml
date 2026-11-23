@@ -1,0 +1,200 @@
+suite: metrics write configuration
+templates:
+  - deployment.yaml
+  - metrics-write-rbac.yaml
+release:
+  name: osac-operator
+  namespace: osac
+
+tests:
+  - it: keeps tenant remote write off and renders no write-path RBAC by default
+    template: deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_CLUSTER_REMOTE_WRITE_ENABLED
+            value: "false"
+
+  - it: renders no write-path RBAC while tenant remote write is disabled
+    template: metrics-write-rbac.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: derives the tenant write configuration from the observability values
+    template: deployment.yaml
+    set:
+      global.clusterDomain: apps.example.com
+      global.observability.enabled: true
+      global.observability.clusterRemoteWrite.enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_CLUSTER_REMOTE_WRITE_ENABLED
+            value: "true"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_NAMESPACE
+            value: osac-observability
+      # The Route host the osac-observability chart renders, never a
+      # separately configured URL that could drift from it.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_WRITE_URL
+            value: https://thanos-receive-managed-osac-observability.apps.example.com/api/v1/receive
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_WRITE_CA_ISSUER
+            value: osac-metrics-write-ca
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_REVOCATION_CONFIGMAP
+            value: osac-metrics-write-revocation
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_CERT_DURATION
+            value: 90d
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_CERT_RENEW_BEFORE
+            value: 30d
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_KEEP_KUBE_PREFIX
+            value: kube_node_
+      # The comma-separated form the write proxy also accepts, so both copies
+      # of the drop rule come from one values definition.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_DROP_PREFIXES
+            value: container_,claim,mount,kserve_,vllm_,dcgm_
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_SCRAPE_INTERVAL
+            value: 30s
+
+  - it: follows an overridden namespace, route name and write lifetimes
+    template: deployment.yaml
+    set:
+      global.clusterDomain: apps.example.com
+      global.observability.enabled: true
+      global.observability.namespace: custom-obs
+      global.observability.clusterRemoteWrite.enabled: true
+      global.observability.clusterRemoteWrite.routeName: writers
+      global.observability.clusterRemoteWrite.certificateDuration: 45d
+      global.observability.clusterRemoteWrite.renewBefore: 15d
+      global.observability.clusterRemoteWrite.revocationConfigMap: writers-denylist
+      global.observability.collection.infrastructure: 60s
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_WRITE_URL
+            value: https://writers-custom-obs.apps.example.com/api/v1/receive
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_CERT_DURATION
+            value: 45d
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_CERT_RENEW_BEFORE
+            value: 15d
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_SCRAPE_INTERVAL
+            value: 60s
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OSAC_OBSERVABILITY_REVOCATION_CONFIGMAP
+            value: writers-denylist
+
+  - it: fails the render when tenant remote write is enabled without a cluster domain
+    template: deployment.yaml
+    set:
+      global.observability.enabled: true
+      global.observability.clusterRemoteWrite.enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "global.clusterDomain is required when global.observability.clusterRemoteWrite.enabled is true"
+
+  - it: grants certificate, Secret and ConfigMap access only in the observability namespace
+    template: metrics-write-rbac.yaml
+    documentSelector:
+      path: kind
+      value: Role
+    set:
+      global.clusterDomain: apps.example.com
+      global.observability.enabled: true
+      global.observability.clusterRemoteWrite.enabled: true
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+      - equal:
+          path: rules
+          value:
+            - apiGroups:
+                - cert-manager.io
+              resources:
+                - certificates
+                - issuers
+              verbs:
+                - create
+                - delete
+                - get
+                - list
+                - patch
+                - update
+                - watch
+            - apiGroups:
+                - ""
+              resources:
+                - secrets
+                - configmaps
+              verbs:
+                - create
+                - get
+                - list
+                - patch
+                - update
+                - watch
+
+  - it: binds the write-path Role to the operator service account
+    template: metrics-write-rbac.yaml
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    set:
+      global.clusterDomain: apps.example.com
+      global.observability.enabled: true
+      global.observability.clusterRemoteWrite.enabled: true
+    asserts:
+      - equal:
+          path: roleRef
+          value:
+            apiGroup: rbac.authorization.k8s.io
+            kind: Role
+            name: osac-operator-metrics-write
+      - equal:
+          path: subjects
+          value:
+            - kind: ServiceAccount
+              name: osac-operator
+              namespace: osac

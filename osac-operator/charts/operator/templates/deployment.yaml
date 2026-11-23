@@ -11,6 +11,11 @@ metadata:
 {{- if and .Values.remoteClusterKubeconfigSecretName (not .Values.remoteClusterKubeconfig) }}
 {{- fail "remoteClusterKubeconfig is required when remoteClusterKubeconfigSecretName is set" }}
 {{- end }}
+{{- $observability := (.Values.global | default dict).observability | default dict }}
+{{- $write := $observability.clusterRemoteWrite | default dict }}
+{{- $dropRule := $write.dropRule | default dict }}
+{{- $writeNamespace := $observability.namespace | default "osac-observability" }}
+{{- $writeRoute := $write.routeName | default "thanos-receive-managed" }}
 spec:
   replicas: {{ .Values.replicaCount }}
   selector:
@@ -166,6 +171,30 @@ spec:
             value: {{ .Values.global.fulfillmentTrust.enabled | default false | quote }}
           - name: OSAC_FULFILLMENT_TRUST_TENANT_NAMESPACE
             value: {{ .Values.global.fulfillmentTrust.tenantNamespace | quote }}
+          - name: OSAC_OBSERVABILITY_CLUSTER_REMOTE_WRITE_ENABLED
+            value: {{ $write.enabled | default false | quote }}
+          {{- if $write.enabled }}
+          {{- $clusterDomain := required "global.clusterDomain is required when global.observability.clusterRemoteWrite.enabled is true" (.Values.global | default dict).clusterDomain }}
+          {{- $writeURL := printf "https://%s-%s.%s/api/v1/receive" $writeRoute $writeNamespace $clusterDomain }}
+          - name: OSAC_OBSERVABILITY_NAMESPACE
+            value: {{ $writeNamespace | quote }}
+          - name: OSAC_OBSERVABILITY_WRITE_URL
+            value: {{ $writeURL | quote }}
+          - name: OSAC_OBSERVABILITY_WRITE_CA_ISSUER
+            value: {{ $write.writeCAIssuer | default "osac-metrics-write-ca" | quote }}
+          - name: OSAC_OBSERVABILITY_REVOCATION_CONFIGMAP
+            value: {{ $write.revocationConfigMap | default "osac-metrics-write-revocation" | quote }}
+          - name: OSAC_OBSERVABILITY_CERT_DURATION
+            value: {{ $write.certificateDuration | default "90d" | quote }}
+          - name: OSAC_OBSERVABILITY_CERT_RENEW_BEFORE
+            value: {{ $write.renewBefore | default "30d" | quote }}
+          - name: OSAC_OBSERVABILITY_KEEP_KUBE_PREFIX
+            value: {{ $dropRule.keepKubePrefix | default "kube_node_" | quote }}
+          - name: OSAC_OBSERVABILITY_DROP_PREFIXES
+            value: {{ join "," ($dropRule.dropPrefixes | default (list "container_" "claim" "mount" "kserve_" "vllm_" "dcgm_")) | quote }}
+          - name: OSAC_OBSERVABILITY_SCRAPE_INTERVAL
+            value: {{ ($observability.collection | default dict).infrastructure | default "30s" | quote }}
+          {{- end }}
           - name: OSAC_ENABLE_COMPUTE_INSTANCE_CONTROLLER
             value: {{ include "osac-operator.controllerEnabled" (list . "computeInstance" "vmaas") | quote }}
           - name: OSAC_ENABLE_TENANT_CONTROLLER

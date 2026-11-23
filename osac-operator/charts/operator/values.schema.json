@@ -14,6 +14,71 @@
               "description": "Installation-time provider-networking setting. When connected to Fulfillment, the Operator verifies it matches the saved value before reconciliation."
             }
           }
+        },
+        "observability": {
+          "type": "object",
+          "properties": {
+            "namespace": {
+              "type": "string",
+              "description": "Namespace the osac-observability chart renders into. The operator issues the write-path client certificates here."
+            },
+            "collection": {
+              "type": "object",
+              "properties": {
+                "infrastructure": {
+                  "type": "string",
+                  "description": "Scrape interval the operator writes into each tenant cluster's monitoring configuration."
+                }
+              }
+            },
+            "clusterRemoteWrite": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Configures every tenant cluster to remote-write through the managed proxy. Requires the osac-observability write path."
+                },
+                "writeCAIssuer": {
+                  "type": "string",
+                  "description": "Name of the ready cert-manager Issuer that signs tenant client certificates."
+                },
+                "revocationConfigMap": {
+                  "type": "string",
+                  "description": "Name of the shared denylist of withdrawn certificate serials the write proxy reads."
+                },
+                "routeName": {
+                  "type": "string",
+                  "description": "Name of the Route, Service and Deployment that serve the write proxy."
+                },
+                "certificateDuration": {
+                  "type": "string",
+                  "description": "Lifetime of an issued tenant client certificate."
+                },
+                "renewBefore": {
+                  "type": "string",
+                  "description": "How long before expiry cert-manager renews a tenant client certificate."
+                },
+                "dropRule": {
+                  "type": "object",
+                  "description": "One drop-rule definition shared by the proxy and the cluster-side copy.",
+                  "properties": {
+                    "keepKubePrefix": {
+                      "type": "string",
+                      "description": "The only kube_ metric family a tenant cluster may send."
+                    },
+                    "dropPrefixes": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Metric-name prefixes a tenant cluster drops before sending."
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }

@@ -1,0 +1,58 @@
+{{- $observability := (.Values.global | default dict).observability | default dict }}
+{{- $write := $observability.clusterRemoteWrite | default dict }}
+{{- if $write.enabled }}
+{{- $writeNamespace := $observability.namespace | default "osac-observability" }}
+{{- /* The write CA and its issued client certificates live in one namespace.
+       A namespaced Role keeps certificate creation and revocation out of every
+       other namespace, which a cluster-wide marker-generated rule could not. */ -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-metrics-write
+  namespace: {{ $writeNamespace }}
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+rules:
+- apiGroups:
+  - cert-manager.io
+  resources:
+  - certificates
+  - issuers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  # The issued client Secret and the shared revocation ConfigMap.
+  - secrets
+  - configmaps
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-metrics-write
+  namespace: {{ $writeNamespace }}
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "osac-operator.fullname" . }}-metrics-write
+subjects:
+- kind: ServiceAccount
+  name: {{ include "osac-operator.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}

@@ -13,6 +13,7 @@ OSAC's API.
 
 - [Prerequisites](#prerequisites)
 - [Overview](#overview)
+- [Storage connectivity](#storage-connectivity)
 - [Step 1: Create a VirtualNetwork](#step-1-create-a-virtualnetwork)
 - [Step 2: Create a Subnet](#step-2-create-a-subnet)
 - [Step 3: Create a SecurityGroup (optional)](#step-3-create-a-securitygroup-optional)
@@ -57,6 +58,39 @@ VirtualNetwork (tenant network with an IPv4 CIDR)
 ├── Subnet (CIDR range within VirtualNetwork)
 └── SecurityGroup (optional — firewall rules scoped to VirtualNetwork)
 ```
+
+A VirtualNetwork needs a `READY` NATGateway before its workloads can reach IP
+storage outside the fabric. A VirtualNetwork without a NATGateway has no
+outbound path, so a storage mount from a VM, CaaS worker, or bare-metal host
+times out. On a VirtualNetwork that has a NATGateway, the storage system sees
+the NATGateway's ExternalIP address, not the workload's tenant address.
+
+## Storage connectivity
+
+OSAC networking's responsibility for storage ends at the NATGateway's SNAT.
+The provider owns the route from the NAT to the storage endpoints and the route
+back to the ExternalIPPool CIDRs, the storage-side access control, and any
+firewall between them.
+
+- Put the storage endpoint ranges in `global.networking.excludedIpv4Cidrs` at
+  installation time. No VirtualNetwork, Subnet, or ExternalIPPool can overlap
+  an excluded range, so storage traffic is routed externally instead of being
+  captured inside the tenant network.
+- A tenant that creates another VirtualNetwork creates a NATGateway on it to
+  give its workloads a storage path. Each NATGateway has one immutable
+  ExternalIP, so each VirtualNetwork presents its own source address at storage.
+- Cluster pod and service CIDRs are not compared with `excludedIpv4Cidrs`.
+  A tenant who sets `pod_cidr` or `service_cidr` must keep them clear of the
+  storage ranges, or the cluster captures storage traffic internally. Use the
+  ClusterTemplate or catalog defaults when the tenant does not set them, and
+  keep those defaults clear as well.
+
+The storage system cannot open a connection back through a NATGateway. A
+workload that must be reachable from the storage network needs an
+ExternalIPAttachment, which creates inbound DNAT and is outside the storage
+path's guarantee. See
+[Storage connectivity in the installation guide](../installation/customer-install-guide.md#449-storage-connectivity)
+for the complete path table, the guarantees, and the capacity limits.
 
 - The provider configures one **NetworkClass** for the deployment at installation;
   tenants do not select or see it.
@@ -604,5 +638,7 @@ rejections with different status codes.
 
 ## Next steps
 
-With networking in place, you can create compute instances that attach to your Subnets
+For workloads that use IP storage, confirm the VirtualNetwork has a `READY`
+NATGateway and see [Storage connectivity](#storage-connectivity). With
+networking in place, you can create compute instances that attach to your Subnets
 (and optionally SecurityGroups). See [Creating a VM with OSAC](computeinstance-guide.md).

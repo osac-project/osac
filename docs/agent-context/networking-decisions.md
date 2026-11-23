@@ -87,6 +87,15 @@ superseded or extended design explicitly.
     readiness gates and create dependencies in order. Delete is allowed only
     when no active resource references the target, subject to the accepted
     auto-created resource cleanup rules.
+12. **Storage connectivity:** tenant workloads and CaaS workers reach IP
+    storage through their VirtualNetwork's NATGateway SNAT; VMaaS volumes use
+    the hub node network. Storage endpoints are listed in
+    `global.networking.excludedIpv4Cidrs`. Cluster pod and service networks are
+    not compared against excluded ranges, so the installation guide tells admins
+    and catalog authors to keep them clear. There is no storage-specific API
+    field, creation gate, or Fabric Manager task. The provider owns routing
+    after the NAT and storage-side access control. See
+    [Storage connectivity](../guides/installation/customer-install-guide.md#449-storage-connectivity).
 
 ## EVPN handoff implementation status
 

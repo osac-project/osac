@@ -41,6 +41,7 @@ For prerequisite setup instructions, see the
         - [4.4.6 Checking the `NetworkClass`](#446-checking-the-networkclass)
         - [4.4.7 Creating the ExternalIPPools](#447-creating-the-externalippools)
         - [4.4.8 Replacing the `NetworkClass`](#448-replacing-the-networkclass)
+        - [4.4.9 Storage connectivity](#449-storage-connectivity)
 5. [Helm chart configuration parameters](#5-helm-chart-configuration-parameters)
     - [5.1 Values set on the command line](#51-values-set-on-the-command-line)
 6. [Installation workflows by service](#6-installation-workflows-by-service)
@@ -1500,7 +1501,7 @@ be updated. Restore the earlier value and roll out again.
 | Enabled services (`global.services.*`) | Enabling BMaaS or CaaS while any VirtualNetwork exists is not supported. Disabling CaaS or BMaaS changes a derived address plan; see the `addressPlan` row. | The fulfillment service refuses to start: "Enabling BMaaS or CaaS after networking resources exist is not supported in this release; delete every VirtualNetwork or reinstall". |
 | `fabricManager`, `k8sManager`, `networkClass.defaults`, `networkClass.eastWestCapabilities` | Any difference from the `NetworkClass` fails the rollout. Set `k8sManager` at the first install if VMaaS will run. To change them, see [Section 4.4.8](#448-replacing-the-networkclass). | The installer: "NetworkClass <field>[, <field>] cannot change after installation; see Replacing the NetworkClass". |
 | `networkClass.addressPlan` | Never changes. The installer compares the plan in force with the stored one at every rollout. With `addressPlan` set, that is your plan. Unset, the installer derives it again from the enabled services and `k8sManager` ([Table 4.1](#table-41-default-address-plan)), so enabling or disabling CaaS or BMaaS changes it. To change it, see [Section 4.4.8](#448-replacing-the-networkclass). To disable a service without replacing the `NetworkClass`, first set `addressPlan` to the stored plan. | The installer: "NetworkClass spec.address_plan cannot change after installation; see Replacing the NetworkClass". A plan that breaks a rule fails earlier with the rule's message, for example "global.networking.networkClass.addressPlan.lbVip must be greater than 0 when CaaS is enabled". |
-| `excludedIpv4Cidrs` | You can add ranges that overlap none of these: the default `virtualNetworkIPv4CIDR`, a VirtualNetwork, or an ExternalIPPool. | The fulfillment service refuses to start: "excludedIpv4Cidrs range <CIDR> overlaps <kind> <ID or CIDR>". |
+| `excludedIpv4Cidrs` | You can add ranges that overlap none of these: the default `virtualNetworkIPv4CIDR`, a VirtualNetwork, or an ExternalIPPool. Storage endpoints belong here. Cluster pod and service networks are not compared. | The fulfillment service refuses to start: "excludedIpv4Cidrs range <CIDR> overlaps <kind> <ID or CIDR>". |
 | Node ASN, VTEP range and VNI range (`evpn.bgp.asn` and `evpn.nodes[].asn`, `evpn.vtepCIDR`, the Fabric Manager's VNI setting; none for Netris) | Fixed. To change them, reinstall. You can add or remove VMaaS nodes ([Section 2.6](#26-evpn-host-networking-for-vmaas)). | Nothing: agree on both sides before the first install ([Section 4.4.2](#442-prerequisites-for-provider-networking)). |
 | CaaS `EXTERNAL_ACCESS_BASE_DOMAIN`, `HOSTED_CLUSTER_BASE_DOMAIN`, `DNS_ZONE`, and `DNS_CLASS` | Do not change them while any Cluster exists. Keep each in-use HostedCluster base domain in `EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS` until all Clusters using it are deleted. | The endpoint jobs reject unsupported publication domains; removing a published domain blocks DNS cleanup and holds its automatic endpoint IPs until the domain is supported again. |
 | OSAC release | Patch releases (x.y.z) of the same minor release roll out in place. Another minor release, up or down, does not: delete all workloads and networking resources, or reinstall. | While any VirtualNetwork, ExternalIPPool, or workload exists, the fulfillment service refuses to start: "in-place upgrade or downgrade between minor releases is not supported; delete all workloads and networking resources or reinstall". |
@@ -1727,6 +1728,258 @@ address plan, for example to enable CaaS on a plan without `lbVip`: once the
 4. Once the `NetworkClass` is `READY`, create the ExternalIPPools again
    ([Section 4.4.7](#447-creating-the-externalippools)), then the Tenants.
 
+#### 4.4.9 Storage connectivity
+
+OSAC storage is not attached to the servers that use it. Volumes, disks, and
+mounts live on an IP storage system (NFS, iSCSI, or NVMe/TCP over Ethernet) that
+the workload reaches over the network. Tenant workloads reach it through the
+outbound SNAT of their VirtualNetwork's NATGateway. VMaaS volumes are the
+exception: the hub node's CSI node plugin mounts them, so they use the hub node
+network, not a tenant VirtualNetwork.
+
+List the storage endpoint ranges in `global.networking.excludedIpv4Cidrs`. No
+VirtualNetwork, Subnet, ExternalIPPool, or NetworkClass default may overlap
+them. OSAC networking's responsibility ends at the NATGateway's SNAT: the route
+from the NAT to storage, the network between the fabric gateway and storage, and
+storage-side access control are outside the managed fabric and outside OSAC
+networking.
+
+##### Storage paths
+
+| Consumer | Traffic origin | Path to storage | Source address at storage |
+|---|---|---|---|
+| VMaaS volumes (PVCs and VM disks) | CSI node plugin on a hub node | Hub node network; not the tenant VirtualNetwork and not a NATGateway | Hub node address |
+| VM guest that mounts storage itself | VM on a tenant Subnet | Tenant VirtualNetwork, then the NATGateway's SNAT | NAT address |
+| CaaS workers (CSI node plugin) | Bare-metal worker on a tenant Subnet, host network namespace | Tenant VirtualNetwork, then the NATGateway's SNAT | NAT address |
+| CaaS OSAC CSI Driver controller (control calls, not storage I/O) | Pod on a worker | Same SNAT path to the hub fulfillment API and its OIDC issuer | NAT address, seen by the hub endpoints |
+| CaaS vendor CSI driver (control calls) | Pods on the workers | Same SNAT path to the storage management endpoint | NAT address |
+| BMaaS hosts | Host on a tenant Subnet after the port move | Tenant VirtualNetwork, then the NATGateway's SNAT; the tenant configures the client | NAT address |
+| BMaaS host at first boot | Host on the provisioning network | Provider-owned provisioning network and its SNAT, not a tenant VirtualNetwork | Provider-defined |
+| Bare-metal host in a FabricDomain with a storage network | Host NIC on a template storage V-Net | The FabricDomain's storage network; not a NAT path | Host storage address |
+| Any service with provider networking disabled | Hub nodes, cluster pod network, or provisioning network | Provider-owned; no ExternalIP, so no NATGateway | Provider-defined |
+
+The CaaS worker is the storage client. CSI node plugins mount in the host
+network namespace, so the pod network is not on the storage path; the worker's
+own tenant Subnet address leaves through the VirtualNetwork's NATGateway. The
+same is true for a BMaaS host after its fabric port moves to the tenant Subnet.
+
+##### What OSAC guarantees and what is assumed outside it
+
+OSAC guarantees:
+
+- No VirtualNetwork (and so no Subnet), ExternalIPPool, or NetworkClass default
+  overlaps a listed range. Creates fail with `INVALID_ARGUMENT` and
+  `overlaps the excluded range <CIDR>`.
+- A `READY` NATGateway translates outbound traffic from the VirtualNetwork's
+  CIDR to its ExternalIP and allows no new inbound connections.
+- Every ExternalIPPool address is routed to the fabric from wherever the
+  provider exposes external addresses.
+- A tenant's default VirtualNetwork gets a NATGateway when provider networking
+  is enabled.
+- With provider networking enabled, a Cluster create needs a `READY` NATGateway
+  on its VirtualNetwork.
+
+These are assumptions, not OSAC duties:
+
+- A route from where the Fabric Manager sends NAT traffic to every storage
+  endpoint, and a route from the storage network back to every ExternalIPPool
+  CIDR.
+- Hub nodes reach the storage data endpoints, and the hub reaches the storage
+  management endpoint for VMaaS volumes.
+- A route from NAT addresses to the hub fulfillment API and the OIDC issuer used
+  by the OSAC CSI Driver on CaaS clusters, and to a storage management endpoint
+  when a vendor CSI driver runs on the workers.
+- The storage system controls access, and firewalls between the NAT and storage
+  allow the storage ports: NFS 2049, iSCSI 3260, NVMe/TCP 4420 and discovery
+  8009.
+- iSCSI redirect portals and NVMe/TCP discovery referrals point only to
+  addresses inside the listed ranges.
+- Cluster pod and service networks do not cover storage endpoints. Nothing
+  checks them (see [Checking existing Clusters](#checking-existing-clusters-before-adding-a-range)).
+
+##### Choosing storage ranges
+
+Collect every storage address that a tenant workload or hub node may connect
+to: data address pools and any storage management endpoint routable from tenant
+networks. One entry can be one CIDR per pool, or one CIDR that covers every
+pool; a covering CIDR means a new per-tenant pool carved from it needs no
+rollout.
+
+Storage ranges must not overlap:
+
+- the NetworkClass default `virtualNetworkIPv4CIDR` (installer default
+  `10.200.0.0/16`). The installer's `create-network-class` step fails with
+  `excludedIpv4Cidrs range <CIDR> overlaps the default VirtualNetwork CIDR
+  <CIDR>`, and the fulfillment service refuses to start with
+  `excludedIpv4Cidrs range <CIDR> overlaps the NetworkClass default ...`;
+- any existing VirtualNetwork or ExternalIPPool. The fulfillment service
+  refuses to start with `excludedIpv4Cidrs range <CIDR> overlaps <kind> <ID or
+  CIDR>`;
+- the default Cluster networks: pod `10.132.0.0/14` and service
+  `172.31.0.0/16`, and every ClusterTemplate `spec_defaults.network` and
+  catalog item policy in use. Nothing rejects a Cluster whose networks cover a
+  storage endpoint; its storage traffic stays inside the Cluster;
+- the hub cluster's own pod and service networks and its OVN-Kubernetes
+  internal ranges (join, transit, and masquerade subnets; in current OpenShift
+  releases `100.64.0.0/16`, `100.88.0.0/16`, and `169.254.0.0/17` by default).
+  Read the hub's values from its network configuration. Hub-node traffic for
+  VMaaS volumes to such an address stays inside the hub's cluster network.
+
+An excluded range that holds no storage, such as the Netris private allocation
+`10.0.0.0/8` in [Section 2.6](#26-evpn-host-networking-for-vmaas), may cover
+the default Cluster networks. Only storage ranges must stay outside them.
+
+Do not put storage on hub node addresses for VM guests: with `cudn_evpn`, VM
+traffic toward hub node IPs enters the host through the management port and is
+refused there.
+
+A Cluster's pod and service CIDRs come from, in order:
+
+1. `spec.network.pod_cidr` and `service_cidr` on the request, from the API, the
+   CLI, the UI wizard, or a catalog item's policy.
+2. The ClusterTemplate's `spec_defaults.network`, merged into the spec when the
+   request leaves a field unset.
+3. The AAP role defaults: pod `10.132.0.0/14` and service `172.31.0.0/16`.
+
+No create path checks any of them against excluded ranges, the VirtualNetwork
+CIDR, or ExternalIPPool CIDRs. Keep ClusterTemplate defaults and catalog
+policies outside every storage range, and tell tenants who set pod or service
+CIDRs to do the same.
+
+##### Checking existing Clusters before adding a range
+
+The startup check does not compare Cluster networks, and this release keeps it
+that way. Before a rollout that adds a storage entry, list every tenant's
+Clusters through the private Clusters API and compare each
+`spec.network.pod_cidr` and `service_cidr` with each new entry. When a field is
+unset, use the ClusterTemplate's `spec_defaults.network`, or else the role
+defaults `10.132.0.0/14` and `172.31.0.0/16`.
+
+When a conflict exists, drop the entry from the plan or remove the conflict
+before the rollout:
+
+- VirtualNetwork and ExternalIPPool specs are immutable. Delete and recreate
+  them with another range.
+- A Cluster's `spec.network` is accepted by Update today, but a running Cluster
+  is not known to re-network. Recreate the Cluster.
+- The NetworkClass default changes only by the NetworkClass replacement in
+  [Section 4.4.8](#448-replacing-the-networkclass).
+
+Removing an entry lifts the protection for new resources only. A Cluster that
+already covers a storage address keeps capturing that traffic.
+
+##### The NAT address at storage
+
+The storage system sees the NAT address, the `address` of the NATGateway's
+ExternalIP, as the source of tenant traffic; VMaaS volumes show the hub node
+address instead. The default `default-nat` address is stable for the tenant's
+life: tenants cannot use `default-nat` or create a NATGateway on the default
+VirtualNetwork, so they cannot release it.
+
+A tenant can delete the ExternalIP of a NATGateway it created at any time, and
+no design promises a delay before a released address is given to another
+tenant. An address rule alone is therefore safe only for `default-nat`
+addresses. For any other NAT address, also authenticate the tenant (for
+example Kerberos for NFS, CHAP for iSCSI, or in-band authentication for
+NVMe/TCP), or allow only `default-nat` addresses. Keeping storage-side rules in
+step with NAT addresses is outside OSAC networking.
+
+##### Capacity
+
+The contract promises nothing about port capacity or throughput. Every number
+here is general protocol knowledge:
+
+- With one source address, the upper bound is the unprivileged source port
+  space: 64,512 ports (1024 to 65535). A NAT with one shared port pool for all
+  destinations gives about 64,000 flows per NAT address in total; a NAT that
+  reuses a source port toward different destinations gives that many per
+  destination address and port. Without a statement from the Fabric Manager,
+  plan for one shared pool: about 64,000 flows per NAT address.
+- The Linux NFS client uses a source port below 1024 by default, and NFS
+  servers often require one (`secure`). A NAT that keeps privileged ports
+  privileged has about 424 such ports (600 to 1023). With one shared pool, that
+  is about 424 NFS flows per NAT address in total; with per-destination reuse,
+  424 per NFS server address. A NAT that remaps them to high ports makes
+  `secure` exports refuse the mount. With `nconnect=16`, 424 flows serve about
+  26 client mounts. Options: an `insecure` export (the client must also mount
+  with `noresvport`), more VirtualNetworks, or, with per-destination reuse,
+  more NFS data addresses.
+- An NFS client usually opens one TCP connection per server address, up to 16
+  with `nconnect`. iSCSI opens one per session (per target and path). NVMe/TCP
+  opens one admin queue plus, by default, one I/O queue per CPU, for each
+  controller.
+- Example: a Cluster of 20 workers with 64 CPUs each, NVMe/TCP, one subsystem,
+  and two paths opens 20 x 2 x 65 = 2,600 flows. 100 hosts with 128 CPUs open
+  100 x 2 x 129 = 25,800, inside the headroom below but close to it; a second
+  subsystem doubles that to 51,600, past it.
+- Keep the planned peak per NAT address under half the bound (about 32,000
+  flows), so a reconnect storm after a path failure still fits.
+- All of a VirtualNetwork's storage I/O crosses the Fabric Manager's NAT data
+  path, which may be a software gateway. On `evpn` Subnets the MTU is 1500, so
+  storage gets no jumbo frames.
+
+When this is not enough, in order of effort:
+
+1. Lower the NVMe/TCP I/O queue count per controller in the storage client
+   settings.
+2. With per-destination port reuse, add storage data addresses.
+3. Spread workloads over more VirtualNetworks, each with its own NATGateway and
+   address. A NATGateway has exactly one immutable ExternalIP, so this works per
+   VirtualNetwork, not per Cluster.
+4. Move the load to a dedicated storage network once one is available.
+
+##### Security
+
+- No inbound path through the NATGateway. The storage system cannot open a
+  connection to a workload through the NAT address. A workload with an
+  ExternalIPAttachment is the exception: `attach_external_ip` creates one-to-one
+  inbound DNAT, and automatic external access for CaaS adds such attachments.
+  Those workloads stay reachable as designed, also from the storage network.
+- Tenant VirtualNetwork CIDRs repeat across tenants; an ExternalIP has one
+  consumer, so two tenants never share a NAT address at the same time. The NAT
+  address identifies a tenant only while its ExternalIP exists.
+- Every tenant's storage traffic crosses the same NAT data path and provider
+  network. OSAC isolates tenant networks from each other, not tenants on the
+  path after the NAT.
+- The installer's default SecurityGroup rules allow all egress. A tenant
+  SecurityGroup with narrower egress must allow the storage ports.
+
+##### Protocol notes
+
+A protocol that needs the server to open a connection to the client does not
+work through SNAT. NFSv3 lock callbacks and NFSv4.0 delegation callbacks are
+such cases, and NFSv3 also needs the portmapper (111) and mountd ports. Only
+NFSv4.1 and later are supported on this path; they reuse the client's
+connection. iSCSI and NVMe/TCP connections are client-initiated. A NAT drops
+idle flows after a timeout, so enable TCP keepalives (or protocol keepalives)
+shorter than the NAT's idle timeout.
+
+##### Troubleshooting storage connectivity
+
+For a workload that cannot reach storage:
+
+1. Find the workload's VirtualNetwork and confirm it has a `READY` NATGateway:
+   `osac get natgateways`.
+2. `READY` means the Fabric Manager accepted the configuration, not that traffic
+   flows. From a workload on the VirtualNetwork, open a TCP connection to the
+   storage endpoint's port (for example `nc -vz <endpoint> 2049`) and confirm
+   that the endpoint or a capture after the NAT sees the NAT address.
+3. Read the NATGateway's ExternalIP address; that is the source the storage
+   system sees. Access at the storage system is checked by its administrator,
+   outside OSAC networking.
+4. Confirm the storage endpoint is inside a range of `excludedIpv4Cidrs`.
+5. For a Cluster, confirm its pod and service CIDRs, or the defaults it got, do
+   not cover the endpoint. Nothing checks this at create.
+6. From the provider network, confirm the route to the storage endpoint and the
+   route back to the pool CIDR.
+7. For VMaaS volumes, test the hub node path to the data endpoint instead.
+8. For NFS, confirm the client uses NFSv4.1 or later.
+
+To stop using the documented setup, remove the storage ranges from
+`excludedIpv4Cidrs`; existing resources and paths keep working, and new tenant
+networks may overlap storage again. See also
+[Section 11.13](#1113-networking-problems).
+
 ---
 
 ## 5. Helm chart configuration parameters
@@ -1803,7 +2056,7 @@ configures CUDN EVPN through `global.networking`, as shown in
 | Parameter | Source | Description | Default |
 |---|---|---|---|
 | `global.networking.provisioningEnabled` | schema | Provider networking. When `false`, OSAC runs no networking job, and networking resources become `READY` without connectivity. Fixed at the first install. | `true` |
-| `global.networking.excludedIpv4Cidrs` | schema | IPv4 CIDRs that your infrastructure uses: management, provisioning, and node networks and, with EVPN host networking, the EVPN ranges. No VirtualNetwork or ExternalIPPool can overlap them. You can add ranges later (see [Table 4.2](#table-42-settings-fixed-at-installation)). | `[]` |
+| `global.networking.excludedIpv4Cidrs` | schema | IPv4 CIDRs that your infrastructure uses: management, provisioning, node, and storage networks and, with EVPN host networking, the EVPN ranges. No VirtualNetwork or ExternalIPPool can overlap them. Cluster pod and service networks are not compared. You can add ranges later (see [Table 4.2](#table-42-settings-fixed-at-installation)). | `[]` |
 | `global.networking.fabricManager` | schema | The registration `name` of the Fabric Manager. Required for every deployment. | Not set |
 | `global.networking.k8sManager` | schema | The OSAC Kubernetes Manager: `cudn_evpn`, or empty. Required for VMaaS. | Not set |
 | `global.networking.caBundle.adminGroups` | schema | Groups allowed to create, update, or delete the customer-managed Netris CA ConfigMap used by CaaS `cluster-fulfillment` jobs. Its name comes from `aap.instanceGroups.networkFulfillment.config.NETRIS_CA_CONFIGMAP`; this protects the ConfigMap but does not mount it into networking jobs. Use `eeImage` and `NETRIS_CA_PATH` for private-CA networking jobs (see [Section 4.4.3](#443-setting-the-networking-helm-values)). Add identity-provider groups bound directly to `cluster-admin`; they are not included in the defaults. | `["system:masters", "system:cluster-admins"]` |
@@ -1931,7 +2184,9 @@ override; publish the required templates to Fulfillment separately.
 - Your environment provides a dynamic storage class.
   For storage prerequisites and tenant onboarding, see the
   [Storage documentation](../../storage/README.md) for your selected provider
-  and ownership model.
+  and ownership model, and
+  [Section 4.4.9](#449-storage-connectivity) for the network path from the
+  workload to storage.
 - With provider networking enabled, you have the provider's Fabric Manager,
   with `evpn` in the `network_types` of its registration.
 - With provider networking enabled, you completed
@@ -2848,7 +3103,10 @@ passed. If a step fails, see [Section 11](#11-troubleshooting).
     flows, and the install preflight checks no networking. With provider
     networking enabled, prove the data path with test VMs: traffic between two
     VMs, a VM reaching its gateway, NAT egress through a NATGateway, and
-    ingress through an attached ExternalIP.
+    ingress through an attached ExternalIP. If workloads use IP storage, also
+    prove the storage path ([Section 4.4.9](#449-storage-connectivity)): from a
+    VM on the tenant network, reach the storage endpoint and confirm the
+    storage system sees the tenant's NAT address.
 
 14. Run a service smoke test, as described in the Verification section of the
     workflow in [Section 6](#6-installation-workflows-by-service) for your
@@ -3621,6 +3879,11 @@ values and run `helm upgrade` again.
 
 ### 11.13 Networking problems
 
+- **A storage mount times out from a workload.** Confirm the VirtualNetwork has
+  a `READY` NATGateway, the endpoint is inside `excludedIpv4Cidrs`, the
+  Cluster's pod and service CIDRs do not cover the endpoint, and the route to
+  the endpoint and back to the pool CIDR exist. See
+  [Section 4.4.9](#449-storage-connectivity).
 - **`helm install` or `helm upgrade` fails before anything is applied**: a
   networking value breaks a rule of
   [Section 4.4.1](#441-choosing-the-networking-settings). A value of the wrong

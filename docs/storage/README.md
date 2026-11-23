@@ -74,6 +74,8 @@ deployment is a *profile* that combines one choice from each dimension; the
    choosing a tier per disk when creating a VM
 3. [Readiness and conditions](concepts/readiness.md): how to tell when
    storage is available
+4. [Storage connectivity](../guides/installation/customer-install-guide.md#449-storage-connectivity):
+   how workloads reach storage through their VirtualNetwork's NATGateway
 
 ## Contents
 
@@ -84,3 +86,6 @@ deployment is a *profile* that combines one choice from each dimension; the
 - [providers/](providers/): vendor integration requirements
 - [architecture/](architecture/): how the OSAC storage control plane works
 - [guides/](guides/): lifecycle guides and deployment profiles
+- [Storage connectivity](../guides/installation/customer-install-guide.md#449-storage-connectivity)
+  and the [tenant networking guide](../guides/developer/networking-guide.md#storage-connectivity):
+  the network path from workloads to storage and its prerequisites

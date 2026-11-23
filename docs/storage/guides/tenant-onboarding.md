@@ -43,6 +43,27 @@ resolved StorageClass; workload disk provisioning then fails with an
 actionable error. Hard-blocking ComputeInstance creation on completed
 onboarding is in development.
 
+## Network requirements for storage
+
+Workloads reach IP storage through their VirtualNetwork's NATGateway:
+
+- The VirtualNetwork needs a `READY` NATGateway. Without one, the workload has
+  no outbound path and a storage mount times out.
+- The storage system sees the NATGateway's ExternalIP address as the client,
+  not the workload's tenant address.
+- Cluster pod and service CIDRs are not checked against the provider's storage
+  ranges. A tenant who sets `pod_cidr` or `service_cidr` must keep them outside
+  the storage ranges; otherwise the cluster captures storage traffic internally
+  and its volumes never mount. The same applies to ClusterTemplate and catalog
+  defaults.
+
+The provider lists the storage ranges in `global.networking.excludedIpv4Cidrs`
+and owns the route from the NAT to storage and the storage-side access control.
+See [Storage connectivity in the installation guide](../../guides/installation/customer-install-guide.md#449-storage-connectivity)
+for the full path, and the
+[tenant networking guide](../../guides/developer/networking-guide.md#storage-connectivity)
+for the networking resources.
+
 ## Checking readiness
 
 Readiness is recorded on the Tenant resource in the management cluster:
@@ -104,4 +125,6 @@ For NetApp-specific diagnostics, see
 
 - [Readiness and conditions](../concepts/readiness.md)
 - [StorageClasses and labels](../concepts/storageclass.md)
+- [Storage connectivity in the installation guide](../../guides/installation/customer-install-guide.md#449-storage-connectivity)
+- [Tenant networking guide](../../guides/developer/networking-guide.md#storage-connectivity)
 - [Responsibility matrix](../architecture/responsibility-matrix.md)

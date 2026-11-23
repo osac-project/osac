@@ -110,6 +110,30 @@ func renderComputeInstance(w io.Writer, ci *publicv1.ComputeInstance) {
 	if ci.Status != nil && ci.Status.GetLastRestartedAt() != nil {
 		fmt.Fprintf(writer, "Last Restarted At:\t%s\n", ci.Status.GetLastRestartedAt().AsTime().Format(time.RFC3339))
 	}
+	for _, condition := range ci.GetStatus().GetConditions() {
+		if condition.GetType() == publicv1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED &&
+			condition.GetStatus() == publicv1.ConditionStatus_CONDITION_STATUS_FALSE &&
+			(condition.GetReason() == "RetryScheduled" || condition.GetReason() == "RetryRunning") {
+			fmt.Fprintln(writer, "Provisioning:\tRetrying")
+			break
+		}
+	}
+	if failure := ci.GetStatus().GetLastProvisioningFailure(); failure != nil {
+		reason := fmt.Sprintf("UNKNOWN:%d", failure.GetReason())
+		if name, ok := publicv1.ComputeInstanceProvisioningFailureReason_name[int32(failure.GetReason())]; ok {
+			reason = strings.TrimPrefix(name, "COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_")
+		}
+		fmt.Fprintf(writer, "Last Provisioning Failure Reason:\t%s\n", reason)
+		if message := failure.GetMessage(); message != "" {
+			fmt.Fprintf(writer, "Last Provisioning Failure Message:\t%s\n", message)
+		}
+		if attempt := failure.GetAttempt(); attempt > 0 {
+			fmt.Fprintf(writer, "Last Provisioning Failure Attempt:\t%d\n", attempt)
+		}
+		if observed := failure.GetObservedAt(); observed != nil && observed.CheckValid() == nil {
+			fmt.Fprintf(writer, "Last Provisioning Failure Observed At:\t%s\n", observed.AsTime().UTC().Format(time.RFC3339))
+		}
+	}
 	writer.Flush()
 }
 

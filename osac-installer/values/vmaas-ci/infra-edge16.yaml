@@ -1,5 +1,0 @@
-# edge-16 greenfield OSAC-7866 install overlay (untracked, local only).
-# Turns on the cluster-scoped GatewayClass prerequisite so the CIO-managed
-# Gateway API ingress driver can be used by install-osac.
-gatewayapi:
-  enabled: true

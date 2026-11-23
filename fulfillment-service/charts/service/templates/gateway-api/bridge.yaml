@@ -14,9 +14,11 @@ specific language governing permissions and limitations under the License.
 {{/*
 Bridge the selectorless fulfillment-api / fulfillment-internal-api Services to the
 gateway. Each Service port (8000 / 8001) maps to the gateway's 443 by EndpointSlice
-port name. The gateway address is not known at render time, so this is rendered only
-when ingress.gatewayapi.gatewayAddress is set; otherwise the lifecycle controller/hook
-maintains the EndpointSlices against the current gateway Service ClusterIP.
+port name. The gateway Pod IPs are not known at render time, so this is rendered
+only when ingress.gatewayapi.gatewayAddress is set (a Pod IP; an EndpointSlice
+address may not be another Service's ClusterIP); otherwise the installer's
+scripts/gateway-bridge.sh maintains the EndpointSlices against the ready gateway
+Pod IPs with the installer's admin credentials.
 */}}
 {{- if and (eq .Values.ingress.driver "gatewayapi") .Values.ingress.gatewayapi.gatewayAddress }}
 {{- range $b := list (dict "svc" "fulfillment-api" "portName" "external-api") (dict "svc" "fulfillment-internal-api" "portName" "internal-api") }}

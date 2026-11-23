@@ -1382,6 +1382,51 @@ Keycloak with `Invalid parameter: redirect_uri`. `make helm-validate` runs
 `scripts/validate-keycloak-ui-redirect-uris.py`, which fails if the client ever
 regains relative redirect URIs.
 
+## Gateway API Ingress Driver (experimental)
+
+The bundled `fulfillment-ingress-proxy` Envoy is the default ingress. As an
+opt-in alternative, `INGRESS_DRIVER=gatewayapi` exposes the public and
+internal APIs through the OpenShift CIO-managed Gateway API (OpenShift 4.19+;
+the bundled Envoy is not deployed in this mode).
+
+```bash
+# prerequisite: the cluster-scoped GatewayClass (once per cluster)
+make install-infra PLATFORM=openshift PROFILE=<profile> NS=<ns> \
+  INFRA_HELM_ARGS="--set gatewayapi.enabled=true"
+
+# OSAC release on the gatewayapi driver
+AAP_LICENSE_FILE=... make install-osac PLATFORM=openshift PROFILE=<profile> \
+  NS=<ns> INGRESS_DRIVER=gatewayapi
+```
+
+The `gatewayapi.enabled` infra value creates the `openshift-default`
+GatewayClass, which activates OpenShift's embedded gateway (Sail/Istio). The
+installer checks for the class before installing and fails with a pointer to
+`install-infra` when it is missing. Gateway identity can be changed with
+`GATEWAY_NAME`, `GATEWAY_NAMESPACE` and `GATEWAY_CLASS_NAME`; the driver and
+Gateway settings must come from these variables, not from
+`EXTRA_HELM_ARGS --set service.ingress.*`, which the installer rejects.
+
+In this mode `fulfillment-api` and `fulfillment-internal-api` are
+selectorless Services bridged to the gateway Pods through EndpointSlices.
+The bridge is applied by `osac-installer/scripts/gateway-bridge.sh` with the
+installer's credentials, because OpenShift's RestrictedEndpointsAdmission
+plugin denies non-privileged identities any endpoint-address write.
+`make uninstall-osac` removes the bridge EndpointSlices.
+
+**Known limitation (why this is experimental):** the bridge records the
+gateway Pod IPs at install time. Replacing a gateway Pod can leave the
+bridge pointing at old addresses, which breaks in-cluster callers of the
+two API Services until the bridge is re-applied. Recovery is manual:
+
+```bash
+bash osac-installer/scripts/gateway-bridge.sh "$NS"
+```
+
+Automatic bridge reconciliation without a reinstall or a cluster-admin
+controller is tracked as a design follow-up; the Envoy driver stays the
+default until it is proven.
+
 ## Uninstall
 
 When `keycloak.enabled: true` (the default), the `osac-infra` release owns the

@@ -205,6 +205,40 @@ endif
 endif
 endif
 
+# Ingress driver for the OSAC release (OSAC-7866). envoy (default) deploys
+# the bundled fulfillment-ingress-proxy; gatewayapi uses the OpenShift
+# CIO-managed Gateway API and the installer-managed bridge
+# (scripts/gateway-bridge.sh). The gatewayapi driver is experimental:
+# replacing a gateway Pod can leave the bridge EndpointSlices pointing at
+# old addresses until the installer is re-run (manual recovery).
+INGRESS_DRIVER ?= envoy
+GATEWAY_NAMESPACE ?= openshift-ingress
+GATEWAY_NAME ?= osac-gateway
+GATEWAY_CLASS_NAME ?= openshift-default
+# One source of truth shared by install-osac, install-dry-run and the
+# input-validation gate: the driver flag and the Gateway identity are always
+# set together, from these variables only.
+INGRESS_DRIVER_HELM_ARGS := $(if $(filter gatewayapi,$(INGRESS_DRIVER)),--set service.ingress.driver=gatewayapi --set service.ingress.gatewayapi.gatewayName=$(GATEWAY_NAME) --set service.ingress.gatewayapi.gatewayNamespace=$(GATEWAY_NAMESPACE) --set service.ingress.gatewayapi.gatewayClassName=$(GATEWAY_CLASS_NAME))
+ifneq ($(filter $(INGRESS_DRIVER),envoy gatewayapi),$(INGRESS_DRIVER))
+$(error INGRESS_DRIVER must be envoy or gatewayapi)
+endif
+ifneq ($(strip $(filter service.ingress.driver=%,$(EXTRA_HELM_ARGS))),)
+$(error set the ingress driver with INGRESS_DRIVER=, not EXTRA_HELM_ARGS --set service.ingress.driver)
+endif
+ifeq ($(INGRESS_DRIVER),gatewayapi)
+ifneq ($(PLATFORM),)
+ifneq ($(PLATFORM),openshift)
+$(error INGRESS_DRIVER=gatewayapi requires PLATFORM=openshift (the CIO-managed Gateway API))
+endif
+endif
+ifneq ($(strip $(filter service.ingress.gatewayapi.gatewayAddress=%,$(EXTRA_HELM_ARGS))),)
+$(error gatewayAddress (chart-managed static slices) cannot be combined with INGRESS_DRIVER=gatewayapi (installer-managed bridge); leave gatewayAddress empty)
+endif
+ifneq ($(strip $(filter service.ingress.gatewayapi.%,$(EXTRA_HELM_ARGS))),)
+$(error configure the gatewayapi driver with GATEWAY_NAME/GATEWAY_NAMESPACE/GATEWAY_CLASS_NAME, not EXTRA_HELM_ARGS service.ingress.gatewayapi.*)
+endif
+endif
+
 ifneq ($(filter install-multicluster,$(MAKECMDGOALS)),)
 ifneq ($(PLATFORM),openshift)
 $(error install-multicluster requires PLATFORM=openshift)
@@ -856,6 +890,7 @@ ifeq ($(PLATFORM),kind)
 		--namespace $(NS) \
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(INSTANCE_HELM_ARGS) \
+		$(INGRESS_DRIVER_HELM_ARGS) \
 		$${ARGV[@]+"$${ARGV[@]}"} \
 		$(REMOTE_CLUSTER_HELM_ARGS) \
 	|| { echo "ERROR: invalid installer inputs for the osac chart; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
@@ -918,6 +953,7 @@ else
 		--set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac \
 		--set ui.externalHostname=$(UI_HOSTNAME) \
 		$(INSTANCE_HELM_ARGS) \
+		$(INGRESS_DRIVER_HELM_ARGS) \
 		$${ARGV[@]+"$${ARGV[@]}"} \
 		$(REMOTE_CLUSTER_HELM_ARGS) \
 	|| { echo "ERROR: invalid installer inputs for the osac chart; no cluster changes were made. Fix the values reported above and retry." >&2; exit 1; }
@@ -975,9 +1011,15 @@ endif
 		validate_remote_kubeconfig_secret "$${REMOTE_KUBECONFIG_SECRET_NAME}" "$${REMOTE_KUBECONFIG_SECRET_KEY}"; \
 	fi; \
 	split_argv EXTRA_HELM_ARGS "$${EXTRA_HELM_ARGS}"; \
-	if [ "$(INGRESS_DRIVER)" = "gatewayapi" ]; then \
-		bash scripts/gateway-bridge.sh "$(NS)" & bridge_pid=$$!; \
-		trap 'kill $${bridge_pid} 2>/dev/null || true' EXIT; \
+	if [ "$(INGRESS_DRIVER)" = "gatewayapi" ] && [ "$(PLATFORM)" != "kind" ]; then \
+		gwclass_err=$$(oc get gatewayclass "$(GATEWAY_CLASS_NAME)" 2>&1 >/dev/null) || { \
+			case "$$gwclass_err" in *"(NotFound)"*) \
+				echo "ERROR: GatewayClass $(GATEWAY_CLASS_NAME) not found. The gatewayapi driver needs the CIO-managed Gateway API; run install-infra with gatewayapi.enabled=true first." >&2 ;; \
+			*) \
+				echo "ERROR: could not check GatewayClass $(GATEWAY_CLASS_NAME) (permissions or connection): $$gwclass_err" >&2 ;; \
+			esac; \
+			exit 1; }; \
+		bash scripts/gateway-bridge.sh "$(NS)" "$(GATEWAY_NAMESPACE)" "$(GATEWAY_NAME)-$(GATEWAY_CLASS_NAME)" & bridge_pid=$$!; \
 	fi; \
 	helm upgrade --install osac "$${OSAC_CHART_OCI_REF:-$(OSAC_CHART)}" $${OSAC_CHART_OCI_VERSION:+--version "$${OSAC_CHART_OCI_VERSION}"} \
 		-f $(INSTANCE_VALUES) $${INSTANCE_VALUES_EXTRA} \
@@ -985,18 +1027,41 @@ endif
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(if $(DOMAIN),--set service.externalHostname=fulfillment-api-$(NS).$(DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DOMAIN) --set global.clusterDomain=$(DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DOMAIN)/realms/osac --set ui.externalHostname=$(UI_HOSTNAME)) \
 		$(INSTANCE_HELM_ARGS) \
-		$(if $(filter gatewayapi,$(INGRESS_DRIVER)),--set service.ingress.driver=gatewayapi) \
+		$(INGRESS_DRIVER_HELM_ARGS) \
 		$${ARGV[@]+"$${ARGV[@]}"} $(OSAC_HELM_FORCE_CONFLICTS) $(REMOTE_CLUSTER_HELM_ARGS) \
 		$(INSTALL_HELM_TARGET) --wait --timeout 40m; rc=$$?; \
-	if [ -n "$${bridge_pid:-}" ]; then wait $${bridge_pid} || true; fi; \
+	if [ -n "$${bridge_pid:-}" ]; then \
+		if [ $$rc -eq 0 ]; then \
+			wait $${bridge_pid} || { echo "ERROR: the gateway bridge failed; in-cluster callers cannot reach the APIs through the selectorless Services" >&2; rc=1; }; \
+		else \
+			kill $${bridge_pid} 2>/dev/null || true; wait $${bridge_pid} 2>/dev/null || true; \
+		fi; \
+	fi; \
 	exit $$rc
 .PHONY: uninstall-osac
 uninstall-osac: validate-ns ## Uninstall OSAC instance (PLATFORM= PROFILE= NS= required)
-	helm uninstall osac --namespace $(NS) --ignore-not-found
-# The gateway bridge EndpointSlices are applied by scripts/gateway-bridge.sh
-# with the installer's credentials, not by helm, so uninstall must remove
-# them explicitly or a stale bridge breaks the next gatewayapi install.
-	oc delete endpointslice -n $(NS) fulfillment-api-gateway fulfillment-internal-api-gateway --ignore-not-found
+# The gateway bridge EndpointSlices of a gatewayapi install are applied by
+# scripts/gateway-bridge.sh with the installer's credentials, not by helm, so
+# they survive the release uninstall and must be removed explicitly or a
+# stale bridge breaks the next install. Read the driver from the release
+# BEFORE uninstalling (the release is gone afterwards), keep the default
+# envoy/kind path free of any oc dependency, and fail loudly instead of
+# silently skipping when gatewayapi cleanup is required but oc is missing.
+	@if helm get values osac --namespace $(NS) -o json 2>/dev/null | grep -q '"driver":"gatewayapi"'; then \
+		driver=gatewayapi; \
+	else \
+		driver=; \
+	fi; \
+	helm uninstall osac --namespace $(NS) --ignore-not-found; \
+	if [ "$$driver" = "gatewayapi" ]; then \
+		if command -v oc >/dev/null 2>&1; then \
+			oc delete endpointslice -n $(NS) fulfillment-api-gateway fulfillment-internal-api-gateway --ignore-not-found; \
+		else \
+			echo "ERROR: the release used the gatewayapi driver but oc is not available; remove the bridge EndpointSlices manually:" >&2; \
+			echo "  oc delete endpointslice -n $(NS) fulfillment-api-gateway fulfillment-internal-api-gateway" >&2; \
+			exit 1; \
+		fi; \
+	fi
 
 ##@ Entity: Dev Stack (kind PROFILE=dev-full only)
 
@@ -1152,6 +1217,7 @@ endif
 		--set-string global.osacDeploymentId=$(NS)/osac \
 		$(if $(filter openshift,$(PLATFORM)),--set service.externalHostname=fulfillment-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) --set service.internalHostname=fulfillment-internal-api-$(NS).$(DRY_RUN_CLUSTER_DOMAIN) --set global.clusterDomain=$(DRY_RUN_CLUSTER_DOMAIN) --set ui.auth.oidcIssuerURL=https://keycloak-keycloak.$(DRY_RUN_CLUSTER_DOMAIN)/realms/osac --set ui.externalHostname=osac-ui-$(NS).$(DRY_RUN_CLUSTER_DOMAIN)) \
 		$(INSTANCE_HELM_ARGS) \
+		$(INGRESS_DRIVER_HELM_ARGS) \
 		$${ARGV[@]+"$${ARGV[@]}"} \
 		$(REMOTE_CLUSTER_HELM_ARGS)
 ifeq ($(PROFILE),dev-full)

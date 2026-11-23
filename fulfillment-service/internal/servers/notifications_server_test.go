@@ -157,7 +157,7 @@ var _ = Describe("Notifications server", func() {
 					Spec: publicv1.NotificationSpec_builder{
 						Kind:     publicv1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT,
 						Severity: publicv1.NotificationSeverity_NOTIFICATION_SEVERITY_WARNING,
-						Type:     "osac.notification.announcement",
+						Type:     "osac.notification.announcement.maintenance",
 						Scope:    publicv1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
 						Title:    "Maintenance",
 					}.Build(),
@@ -331,7 +331,7 @@ var _ = Describe("Notifications server", func() {
 					Spec: publicv1.NotificationSpec_builder{
 						Kind:     publicv1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT,
 						Severity: publicv1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
-						Type:     "osac.notification.announcement",
+						Type:     "osac.notification.announcement.maintenance",
 						Scope:    publicv1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
 						Title:    "Admin only delete",
 					}.Build(),
@@ -361,7 +361,7 @@ var _ = Describe("Notifications server", func() {
 					Spec: privatev1.NotificationSpec_builder{
 						Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT,
 						Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
-						Type:     "osac.notification.announcement",
+						Type:     "osac.notification.announcement.maintenance",
 						Scope:    privatev1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
 						Title:    "gated announcement",
 						Resource: privatev1.NotificationResourceReference_builder{

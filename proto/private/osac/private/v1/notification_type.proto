@@ -131,7 +131,7 @@ message NotificationSpec {
     }
   ];
 
-  // Event type string. Example: osac.notification.event.resource_created.
+  // Type string in the form osac.notification.<kind>.<name>.
   string type = 3 [(google.api.field_behavior) = IMMUTABLE];
 
   // Producer event for an inbox notification.

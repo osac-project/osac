@@ -861,7 +861,7 @@ type NotificationSpec_builder struct {
 	Kind NotificationKind
 	// Severity of the notification.
 	Severity NotificationSeverity
-	// Event type string. Example: osac.notification.event.resource_created.
+	// Type string in the form osac.notification.<kind>.<name>.
 	Type string
 	// Producer event for an inbox notification.
 	Event *NotificationEventReference

@@ -19,6 +19,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -131,23 +132,23 @@ var _ = Describe("Public tenants server", func() {
 			Expect(string(fields.Get(0).Name())).To(Equal("onboarded"))
 		})
 
-		It("Can't create a tenant, not implemented", func() {
-			// Try to create the tenant via the public server. It should fail with an Unimplemented error.
+		It("Rejects public tenant creation with status", func() {
 			_, err := publicServer.Create(ctx, publicv1.TenantsCreateRequest_builder{
 				Object: publicv1.Tenant_builder{
 					Metadata: publicv1.Metadata_builder{
 						Name: "my-tenant",
 					}.Build(),
+					Status: publicv1.TenantStatus_builder{}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.Unimplemented))
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("status is output-only"))
 		})
 
-		It("Can't update a tenant, not implemented", func() {
-			// Create the tenant using the private server, as that isn't implemented for the public server:
+		It("Rejects public tenant update with status", func() {
 			createResponse, err := privateServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
 				Object: privatev1.Tenant_builder{
 					Metadata: &privatev1.Metadata{
@@ -156,22 +157,23 @@ var _ = Describe("Public tenants server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			object := createResponse.GetObject()
-			id := object.GetId()
+			id := createResponse.GetObject().GetId()
 
-			// Try to update the tenant via the public server. It should fail with an Unimplemented error.
 			_, err = publicServer.Update(ctx, publicv1.TenantsUpdateRequest_builder{
 				Object: publicv1.Tenant_builder{
 					Id: id,
 					Metadata: publicv1.Metadata_builder{
 						Name: "my-tenant",
 					}.Build(),
+					Status: publicv1.TenantStatus_builder{}.Build(),
 				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.onboarded"}},
 			}.Build())
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.Unimplemented))
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(status.Message()).To(ContainSubstring("status is output-only"))
 		})
 
 		It("Can't delete a tenant, not implemented", func() {

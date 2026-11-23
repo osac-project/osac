@@ -19,6 +19,9 @@ import (
 	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -157,6 +160,89 @@ func (s *TenantsServer) List(ctx context.Context,
 	response.SetSize(privateResponse.GetSize())
 	response.SetTotal(privateResponse.GetTotal())
 	response.SetItems(publicItems)
+	return
+}
+
+func rejectPublicTenantStatus(object *publicv1.Tenant, mask *fieldmaskpb.FieldMask) error {
+	if object.HasStatus() {
+		return status.Error(codes.InvalidArgument, "status is output-only and cannot be set by users")
+	}
+	return validateNoStatusInMask(mask)
+}
+
+func (s *TenantsServer) Create(ctx context.Context,
+	request *publicv1.TenantsCreateRequest) (response *publicv1.TenantsCreateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+	if err := rejectPublicTenantStatus(request.GetObject(), nil); err != nil {
+		return nil, err
+	}
+
+	privateObject := &privatev1.Tenant{}
+	err = s.inMapper.Copy(ctx, request.GetObject(), privateObject)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to map public tenant to private", slog.Any("error", err))
+		return nil, err
+	}
+
+	privateRequest := &privatev1.TenantsCreateRequest{}
+	privateRequest.SetObject(privateObject)
+
+	privateResponse, err := s.private.Create(ctx, privateRequest)
+	if err != nil {
+		return nil, err
+	}
+
+	publicObject := &publicv1.Tenant{}
+	err = s.outMapper.Copy(ctx, privateResponse.GetObject(), publicObject)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to map private tenant to public", slog.Any("error", err))
+		return nil, err
+	}
+
+	response = &publicv1.TenantsCreateResponse{}
+	response.SetObject(publicObject)
+	return
+}
+
+func (s *TenantsServer) Update(ctx context.Context,
+	request *publicv1.TenantsUpdateRequest) (response *publicv1.TenantsUpdateResponse, err error) {
+	ctx = withPublicAPIView(ctx)
+	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
+		return nil, err
+	}
+	if err := rejectPublicTenantStatus(request.GetObject(), request.GetUpdateMask()); err != nil {
+		return nil, err
+	}
+
+	privateObject := &privatev1.Tenant{}
+	err = s.inMapper.Copy(ctx, request.GetObject(), privateObject)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to map public tenant to private", slog.Any("error", err))
+		return nil, err
+	}
+
+	privateRequest := &privatev1.TenantsUpdateRequest{}
+	privateRequest.SetObject(privateObject)
+	privateRequest.SetUpdateMask(request.GetUpdateMask())
+	privateRequest.SetLock(request.GetLock())
+
+	privateResponse, err := s.private.Update(ctx, privateRequest)
+	if err != nil {
+		return nil, err
+	}
+
+	publicObject := &publicv1.Tenant{}
+	err = s.outMapper.Copy(ctx, privateResponse.GetObject(), publicObject)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to map private tenant to public", slog.Any("error", err))
+		return nil, err
+	}
+
+	response = &publicv1.TenantsUpdateResponse{}
+	response.SetObject(publicObject)
 	return
 }
 

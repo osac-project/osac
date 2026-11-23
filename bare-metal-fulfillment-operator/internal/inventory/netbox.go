@@ -82,6 +82,19 @@ type NetBoxClientConfig struct {
 	TokenFile               string `json:"tokenFile"`
 	CAFile                  string `json:"caFile"`
 	ClientAllowInsecureHTTP bool   `json:"clientAllowInsecureHTTP"`
+	// EnableBMCCertificateVerification defaults BMC certificate verification for
+	// created BareMetalHosts. A nil pointer resolves to enabled; the per-device
+	// osac_bmc_certificate_verification field overrides it.
+	EnableBMCCertificateVerification *bool `json:"enableBMCCertificateVerification"`
+}
+
+// BMCVerificationEnabled resolves the inventory-wide default; an absent setting
+// resolves to enabled.
+func (c *NetBoxClientConfig) BMCVerificationEnabled() bool {
+	if c == nil || c.EnableBMCCertificateVerification == nil {
+		return true
+	}
+	return *c.EnableBMCCertificateVerification
 }
 
 // ParseNetBoxOptions extracts the NetBox-specific settings from inventory
@@ -117,13 +130,18 @@ type NetBoxClient struct {
 	credentialsWriter bmcCredentials.Writer
 	hostClass         string
 	credentialsReader bmcCredentials.Reader
+	// enableBMCCertificateVerification is the inventory-wide default for BMC
+	// certificate verification on created BareMetalHosts; per-device NetBox
+	// data wins.
+	enableBMCCertificateVerification bool
 }
 
 var (
 	_ Client = (*NetBoxClient)(nil)
 )
 
-// NewNetBoxAPI constructs the secure NetBox API dependency from mounted configuration.
+// NewNetBoxAPI constructs the secure NetBox API dependency from mounted
+// configuration.
 func NewNetBoxAPI(config *Config) (NetBoxAPI, error) {
 	if config == nil {
 		return nil, fmt.Errorf("netbox inventory config is required")
@@ -152,13 +170,15 @@ func NewNetBoxClient(
 	credentialsWriter bmcCredentials.Writer,
 	hostClass string,
 	credentialsReader bmcCredentials.Reader,
+	enableBMCCertificateVerification bool,
 ) *NetBoxClient {
 	return &NetBoxClient{
-		api:               api,
-		bmhManager:        bmhManager,
-		credentialsWriter: credentialsWriter,
-		hostClass:         hostClass,
-		credentialsReader: credentialsReader,
+		api:                              api,
+		bmhManager:                       bmhManager,
+		credentialsWriter:                credentialsWriter,
+		hostClass:                        hostClass,
+		credentialsReader:                credentialsReader,
+		enableBMCCertificateVerification: enableBMCCertificateVerification,
 	}
 }
 
@@ -332,7 +352,7 @@ func (c *NetBoxClient) prepareMetal3Host(ctx context.Context, host *Host, connec
 		return nil, fmt.Errorf("failed to ensure BMC credentials Secret for NetBox host: %w", err)
 	}
 
-	params := bmhCreateParams(host.Name, connection.BMCAddress, connection.BootMACAddress, bareMetalInstanceID)
+	params := c.metal3HostCreateParams(ctx, host, connection, bareMetalInstanceID)
 	if err := c.bmhManager.CreateBMH(ctx, params); err != nil {
 		return nil, fmt.Errorf("failed to create BareMetalHost for NetBox host: %w", err)
 	}
@@ -343,6 +363,44 @@ func (c *NetBoxClient) prepareMetal3Host(ctx context.Context, host *Host, connec
 	}
 	host.Available = available
 	return host, nil
+}
+
+// metal3HostCreateParams builds the creation parameters and logs every host
+// whose BMC certificate verification is disabled, naming the deciding layer.
+func (c *NetBoxClient) metal3HostCreateParams(
+	ctx context.Context,
+	host *Host,
+	connection *netBoxConnectionData,
+	bareMetalInstanceID string,
+) baremetalhost.CreateParams {
+	certVerificationEnabled, source := c.bmcCertificateVerification(connection)
+	if !certVerificationEnabled {
+		ctrllog.FromContext(ctx).Info(
+			"BMC certificate verification disabled for BareMetalHost",
+			"host", host.Name,
+			"source", source,
+		)
+	}
+	return baremetalhost.NewCreateParams(host.Name, connection.BMCAddress, connection.BootMACAddress,
+		bareMetalInstanceID, baremetalhost.CreateOptions{
+			DisableCertificateVerification: !certVerificationEnabled,
+		})
+}
+
+const (
+	// netBoxCertVerificationSource* label the layer that decided the BMC
+	// certificate-verification flag, for the claim log line.
+	netBoxCertVerificationSourceDevice  = "netbox-device"
+	netBoxCertVerificationSourceDefault = "inventory-default"
+)
+
+// bmcCertificateVerification resolves whether BMC certificate verification is
+// enabled: a per-device NetBox value wins, else the inventory default applies.
+func (c *NetBoxClient) bmcCertificateVerification(connection *netBoxConnectionData) (enabled bool, source string) {
+	if connection != nil && connection.EnableCertificateVerification != nil {
+		return *connection.EnableCertificateVerification, netBoxCertVerificationSourceDevice
+	}
+	return c.enableBMCCertificateVerification, netBoxCertVerificationSourceDefault
 }
 
 func credentialFailureMessage(err error) string {
@@ -687,33 +745,78 @@ func (c *NetBoxClient) customFieldLogicalPortMACs(ctx context.Context, deviceID 
 const (
 	netBoxBMCAddressField = "osac_bmc_address"
 	netBoxBootMACField    = "osac_boot_mac"
+	// netBoxCertificateVerificationField is the optional per-device override of
+	// the BMH BMC certificate-verification setting.
+	netBoxCertificateVerificationField = "osac_bmc_certificate_verification"
 )
 
 // netBoxConnectionData contains validated BMC connection data from one NetBox device.
 type netBoxConnectionData struct {
 	BMCAddress     string
 	BootMACAddress string
+	// EnableCertificateVerification is the per-device override of the BMC
+	// certificate-verification setting. Nil means the device does not set it and
+	// the inventory-wide default applies.
+	EnableCertificateVerification *bool
 }
 
 func netBoxConnection(customFields map[string]interface{}) (*netBoxConnectionData, error) {
+	address, err := netBoxBMCAddress(customFields)
+	if err != nil {
+		return nil, err
+	}
+	bootMAC, err := netBoxBootMAC(customFields)
+	if err != nil {
+		return nil, err
+	}
+	enableCertVerification, err := netBoxCertificateVerification(customFields)
+	if err != nil {
+		return nil, err
+	}
+	return &netBoxConnectionData{
+		BMCAddress:                    address,
+		BootMACAddress:                bootMAC,
+		EnableCertificateVerification: enableCertVerification,
+	}, nil
+}
+
+// netBoxBMCAddress validates the required BMC address custom field.
+func netBoxBMCAddress(customFields map[string]interface{}) (string, error) {
 	address, ok := netBoxStringField(customFields, netBoxBMCAddressField)
 	if !ok ||
 		strings.TrimSpace(address) != address ||
 		bmcdiscovery.ValidateBMCAddress(address) != nil {
-		return nil, errors.New("NetBox device has a missing or invalid BMC address")
+		return "", errors.New("NetBox device has a missing or invalid BMC address")
 	}
+	return address, nil
+}
+
+// netBoxBootMAC validates the required boot MAC custom field and returns it in
+// canonical lowercase form.
+func netBoxBootMAC(customFields map[string]interface{}) (string, error) {
 	bootMAC, ok := netBoxStringField(customFields, netBoxBootMACField)
 	if !ok {
-		return nil, errors.New("NetBox device has a missing or invalid boot MAC")
+		return "", errors.New("NetBox device has a missing or invalid boot MAC")
 	}
 	parsedMAC, err := net.ParseMAC(bootMAC)
 	if err != nil || len(parsedMAC) != 6 {
-		return nil, errors.New("NetBox device has a missing or invalid boot MAC")
+		return "", errors.New("NetBox device has a missing or invalid boot MAC")
 	}
-	return &netBoxConnectionData{
-		BMCAddress:     address,
-		BootMACAddress: strings.ToLower(parsedMAC.String()),
-	}, nil
+	return strings.ToLower(parsedMAC.String()), nil
+}
+
+// netBoxCertificateVerification reads the per-device BMC verification override.
+// A nil result means the field is unset and the inventory-wide default applies.
+func netBoxCertificateVerification(customFields map[string]interface{}) (*bool, error) {
+	raw, ok := customFields[netBoxCertificateVerificationField]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	value, ok := raw.(bool)
+	if !ok {
+		return nil, fmt.Errorf("NetBox device has an invalid %s value, expected a boolean", netBoxCertificateVerificationField)
+	}
+	return &value, nil
 }
 
 func netBoxStringField(fields map[string]interface{}, key string) (string, bool) {

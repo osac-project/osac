@@ -18,6 +18,7 @@ on:  # zizmor: ignore[dangerous-triggers] -- no pull request code is checked out
       - "E2E VMaaS PR suite"
       - "E2E CaaS PR suite"
       - "E2E BMaaS PR suite"
+      - "E2E BMaaS NetBox PR suite"
       - "E2E BMaaS Netris PR suite"
       - "E2E VMaaS Netris PR suite"
       - "E2E Stretched Netris PR suite"

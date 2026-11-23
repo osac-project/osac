@@ -142,8 +142,8 @@ func (b *DiscoveryToolBuilder) Build() (result *DiscoveryTool, err error) {
 // Discover discovers endpoints from the configured issuer URL using the well-known configuration endpoints. This
 // implements the discovery process defined in RFC 8414 for OAuth and the OpenID Connect Discovery 1.0 specification.
 func (t *DiscoveryTool) Discover(ctx context.Context) (result *ServerMetadata, err error) {
-	result, err = t.discover(ctx, "oauth-authorization-server")
-	if err == nil {
+	result, oauthErr := t.discover(ctx, "oauth-authorization-server")
+	if oauthErr == nil {
 		t.logger.DebugContext(
 			ctx,
 			"Successfully discovered endpoints using OAuth endpoint",
@@ -153,10 +153,10 @@ func (t *DiscoveryTool) Discover(ctx context.Context) (result *ServerMetadata, e
 	t.logger.InfoContext(
 		ctx,
 		"Failed to discover endpoints using OAuth",
-		slog.Any("error", err),
+		slog.Any("error", oauthErr),
 	)
-	result, err = t.discover(ctx, "openid-configuration")
-	if err == nil {
+	result, oidcErr := t.discover(ctx, "openid-configuration")
+	if oidcErr == nil {
 		t.logger.DebugContext(
 			ctx,
 			"Successfully discovered endpoints using OIDC",
@@ -166,10 +166,29 @@ func (t *DiscoveryTool) Discover(ctx context.Context) (result *ServerMetadata, e
 	t.logger.InfoContext(
 		ctx,
 		"Failed to discover endpoints using OIDC",
-		slog.Any("error", err),
+		slog.Any("error", oidcErr),
 	)
-	err = fmt.Errorf("failed to discover endpoints using OAuth or OIDC")
+	// Keep both causes, so callers can tell a transient transport failure (for example an EOF from a reset
+	// connection) from a configuration problem:
+	err = &discoveryError{oauthErr: oauthErr, oidcErr: oidcErr}
 	return
+}
+
+// discoveryError reports that both discovery endpoints failed. It keeps the underlying causes available to
+// errors.Is and errors.As without changing the message that callers and users see.
+type discoveryError struct {
+	oauthErr error
+	oidcErr  error
+}
+
+// Error returns the message that reports the failure of both endpoints.
+func (e *discoveryError) Error() string {
+	return "failed to discover endpoints using OAuth or OIDC"
+}
+
+// Unwrap returns both underlying causes, so that transient transport failures can be classified by callers.
+func (e *discoveryError) Unwrap() []error {
+	return []error{e.oauthErr, e.oidcErr}
 }
 
 func (t *DiscoveryTool) discover(ctx context.Context, endpoint string) (result *ServerMetadata, err error) {

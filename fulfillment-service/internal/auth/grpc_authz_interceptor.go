@@ -430,22 +430,19 @@ func (i *GrpcAuthzInterceptor) buildSubjectFromDecision(decision *AuthzDecision)
 		return
 	}
 
-	// Check for the universal tenant marker "*"
+	result = &Subject{
+		User:                  decision.SubjectUser,
+		Tenant:                decision.SubjectTenant,
+		ManagedServiceAccount: decision.ManagedServiceAccount,
+	}
+	// Check for the universal tenant marker "*".
 	for _, tenant := range decision.SubjectTenants {
 		if tenant == "*" {
-			result = &Subject{
-				User:                  decision.SubjectUser,
-				Tenants:               AllTenants,
-				ManagedServiceAccount: decision.ManagedServiceAccount,
-			}
+			result.Tenants = AllTenants
 			return
 		}
 	}
 
-	result = &Subject{
-		User:                  decision.SubjectUser,
-		Tenants:               collections.NewSet(decision.SubjectTenants...),
-		ManagedServiceAccount: decision.ManagedServiceAccount,
-	}
+	result.Tenants = collections.NewSet(decision.SubjectTenants...)
 	return
 }

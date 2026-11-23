@@ -12,19 +12,19 @@ suite roles, prerequisites, dependency boundaries and known gaps. They do not
 copy exact command lines or individual test file names: discover commands from
 the owning source of truth (`make -C <component> help` or the Makefile `test*`
 targets, the component `AGENTS.md`, suite READMEs and fixtures, and the CI jobs
-under `.github/workflows/`) and cite that source as evidence. Individual
+under `.github/workflows/`) when selecting relevant checks. Individual
 test scenarios and assertions belong in test source; per-change execution results
 belong in the PR or linked task, and feature coverage matrices belong in the
 reviewed test plan.
 
-Update the affected suite guide when its suite role, prerequisites, dependency
-boundary, coverage scope or known gap changes. Update the component's touched-area
+Update an affected suite guide when needed to keep its role, prerequisites,
+dependency boundaries or limitations accurate. Update the component's touched-area
 map only when its required validation changes. Routine additions or changes to
 tests within an existing suite do not require a documentation inventory update.
 Do not add feature-specific sections or scenario lists to suite guides; a
 feature adds at most one boundary or gap line, with its Jira URL.
 Change this shared file only when shared policy or the guide links change.
-Link unresolved gaps to their owning Jira URLs; report missing ownership explicitly.
+Link relevant unresolved gaps to existing follow-up tasks when available.
 
 ## Shared tiers and boundaries
 
@@ -65,8 +65,8 @@ lower-tier test.
 
 ## Planning evidence
 
-Design test plans must include a coverage matrix derived from the affected
-components' touched-area maps and the actual test infrastructure. Use one row
+For designs that need a test plan, scale its coverage matrix to the affected
+behavior and actual test infrastructure. Use one row
 per behavior and required boundary; a cross-component case may need several
 rows. Include unit-only changes with their applicable tier rather than requiring
 integration tests for every change.
@@ -140,29 +140,18 @@ not execution-ready; static checks passing does not change that status.
 
 ## Implementation evidence
 
-Every change must classify its touched behaviors against the tier boundaries
-above and, when the affected component has one, its touched-area map. Changes
-that do not alter runtime behavior need no integration coverage; record that
-classification explicitly. Classify behavior-changing generated config against
-the touched-area map.
+Select existing validation for the changed behavior and its relevant boundary.
+Changes that do not alter runtime behavior need no integration coverage.
+Add meaningful behavior or regression coverage only where existing checks leave
+a relevant gap; prefer extending an existing suite over creating a new harness.
 
-Before opening a pull request:
-
-- Every required integration row must have an executed, passing test through
-  the named boundary. Unit tests and mocks do not satisfy a real component
-  boundary; a documented provider gap does not make a lower-tier test
-  coverage of that boundary.
-- Cite the executed command and working directory per row. Lint, typecheck,
-  collection, and schema-generation checks are build validation, not
-  integration evidence.
-- Missing or wrong-tier coverage is reported as a gap, never as covered. Link
-  it to the owning follow-up ticket using its Jira URL when one exists. If no
-  owner or ticket exists, report the gap as unresolved; do not invent a ticket.
-- The PR description or review report must state, per touched boundary: the
-  exercised boundary, running dependencies, executed command, and result — or
-  report the gap as unresolved with its owning ticket URL when one exists. If
-  there is no owner or ticket, state that explicitly; never claim the boundary
-  is covered.
+Before opening a pull request, summarize the changes, checks performed and
+relevant limitations. Run focused affected checks; use full suites or deployed
+environments only when needed for the change and authorized. Report unavailable
+checks and unrelated failures without expanding the implementation to fix them.
+Do not claim mocks, lint or collection prove a real deployed boundary. Link an
+existing follow-up for a relevant gap when useful, but do not create artifacts
+or exhaustive per-boundary reports for routine changes.
 
 ## Component suite guides
 

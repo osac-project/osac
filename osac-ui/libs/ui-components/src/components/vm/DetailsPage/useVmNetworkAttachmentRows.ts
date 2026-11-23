@@ -1,14 +1,9 @@
 import { useMemo } from 'react';
 
-import type { ComputeInstance } from '@osac/types';
+import { type ComputeInstance, SecurityGroups, Subnets, VirtualNetworks } from '@osac/types';
 
-import {
-  formatResourceIdForReview,
-  resourceDisplayName,
-  useSecurityGroups,
-  useSubnets,
-  useVirtualNetworks,
-} from '../../../api/v1/networking';
+import { useListResource } from '../../../api/use-resource';
+import { formatResourceIdForReview, resourceDisplayName } from '../../../api/v1/networking';
 
 export interface VmNetworkResource {
   id: string;
@@ -35,15 +30,18 @@ const findResourceReference = (
 };
 
 export const useVmNetworkAttachmentRows = (vm: ComputeInstance): VmNetworkAttachmentRow[] => {
-  const { data: virtualNetworks = [] } = useVirtualNetworks();
-  const { data: subnets = [] } = useSubnets();
-  const { data: securityGroups = [] } = useSecurityGroups();
+  const { data: virtualNetworksResponse } = useListResource(VirtualNetworks);
+  const virtualNetworks = virtualNetworksResponse?.items;
+  const { data: subnetsResponse } = useListResource(Subnets);
+  const subnets = subnetsResponse?.items;
+  const { data: securityGroupsResponse } = useListResource(SecurityGroups);
+  const securityGroups = securityGroupsResponse?.items;
 
   return useMemo((): VmNetworkAttachmentRow[] => {
     const attachments = vm.spec?.networkAttachments ?? [];
     const attachmentStatuses = vm.status?.computeNetworkAttachmentStatuses ?? [];
     return attachments.map((attachment) => {
-      const subnet = subnets.find((item) => item.id === attachment.subnet?.id);
+      const subnet = subnets?.find((item) => item.id === attachment.subnet?.id);
       const virtualNetworkId = subnet?.spec?.virtualNetwork?.id ?? '';
       const attachmentStatus = attachmentStatuses.find(
         (status) => status.subnetRef === attachment.subnet?.id,
@@ -52,10 +50,10 @@ export const useVmNetworkAttachmentRows = (vm: ComputeInstance): VmNetworkAttach
         attachmentStatus?.ipAddress ||
         (attachments.length === 1 ? (vm.status?.internalIpAddress ?? '') : '');
       return {
-        virtualNetwork: findResourceReference(virtualNetworkId, virtualNetworks),
-        subnet: formatResourceIdForReview(attachment.subnet?.id ?? '', subnets),
+        virtualNetwork: findResourceReference(virtualNetworkId, virtualNetworks ?? []),
+        subnet: formatResourceIdForReview(attachment.subnet?.id ?? '', subnets ?? []),
         securityGroups: (attachment.securityGroups ?? [])
-          .map(({ id }) => findResourceReference(id, securityGroups))
+          .map(({ id }) => findResourceReference(id, securityGroups ?? []))
           .filter((resource): resource is VmNetworkResource => resource !== undefined),
         internalIp: internalIp || '-',
       };

@@ -184,6 +184,7 @@ var _ = Describe("Rego authorization interceptor", func() {
 				func(ctx context.Context, req any) (any, error) {
 					subject := SubjectFromContext(ctx)
 					Expect(subject).To(Equal(Guest))
+					Expect(subject.Tenant).To(BeEmpty())
 					handled = true
 					return nil, nil
 				},
@@ -232,6 +233,7 @@ var _ = Describe("Rego authorization interceptor", func() {
 				func(ctx context.Context, req any) (any, error) {
 					subject := SubjectFromContext(ctx)
 					Expect(subject.User).To(Equal("my-user"))
+					Expect(subject.Tenant).To(Equal("my-tenant"))
 					Expect(subject.Tenants.Finite()).To(BeTrue())
 					Expect(subject.Tenants.Inclusions()).To(ConsistOf("my-tenant"))
 					handled = true
@@ -244,7 +246,7 @@ var _ = Describe("Rego authorization interceptor", func() {
 
 		It("Allows admin on the reflection API", func(ctx context.Context) {
 			token := createKeycloakUserToken("", "my-user", jwt.MapClaims{
-				"organization": nil,
+				"organization": []any{"tenant-a", "tenant-b"},
 				"groups": []any{
 					"admins",
 				},
@@ -260,6 +262,7 @@ var _ = Describe("Rego authorization interceptor", func() {
 				func(ctx context.Context, req any) (any, error) {
 					subject := SubjectFromContext(ctx)
 					Expect(subject.User).To(Equal("my-user"))
+					Expect(subject.Tenant).To(Equal(SystemTenant))
 					Expect(subject.Tenants.Universal()).To(BeTrue())
 					handled = true
 					return nil, nil
@@ -268,6 +271,32 @@ var _ = Describe("Rego authorization interceptor", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(handled).To(BeTrue())
 		})
+
+		DescribeTable("Resolves a home tenant without changing the set of visible tenants",
+			func(ctx context.Context, organization any, home string, tenants []string) {
+				token := createKeycloakUserToken("", "my-user", jwt.MapClaims{"organization": organization})
+				ctx = ContextWithToken(ctx, token)
+				response, err := interceptor.UnaryServer(
+					ctx,
+					nil,
+					&grpc.UnaryServerInfo{FullMethod: "/osac.public.v1.Clusters/List"},
+					func(ctx context.Context, req any) (any, error) {
+						return SubjectFromContext(ctx), nil
+					},
+				)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response).To(BeAssignableToTypeOf(&Subject{}))
+				subject := response.(*Subject)
+				Expect(subject.Tenant).To(Equal(home))
+				Expect(subject.Tenants.Finite()).To(BeTrue())
+				Expect(subject.Tenants.Inclusions()).To(ConsistOf(tenants))
+			},
+			Entry("Organization object", map[string]any{"tenant-a": map[string]any{}}, "tenant-a", []string{"tenant-a"}),
+			Entry("Duplicate organizations", []any{"tenant-a", "tenant-a"}, "tenant-a", []string{"tenant-a"}),
+			Entry("Multiple organizations", []any{"tenant-a", "tenant-b"}, "", []string{"tenant-a", "tenant-b"}),
+			Entry("No organization", nil, "", []string{}),
+			Entry("Shared is not a home tenant", []any{SharedTenant}, "", []string{SharedTenant}),
+		)
 
 		It("Allows guest on the health check API", func(ctx context.Context) {
 			handled := false
@@ -446,6 +475,7 @@ var _ = Describe("Rego authorization interceptor", func() {
 					func(ctx context.Context, req any) (any, error) {
 						subject := SubjectFromContext(ctx)
 						Expect(subject.User).To(Equal(name))
+						Expect(subject.Tenant).To(Equal(namespace))
 						Expect(subject.Tenants.Finite()).To(BeTrue())
 						Expect(subject.Tenants.Inclusions()).To(ConsistOf(namespace))
 						handled = true
@@ -616,6 +646,7 @@ var _ = Describe("Rego authorization interceptor", func() {
 					func(ctx context.Context, req any) (any, error) {
 						subject := SubjectFromContext(ctx)
 						Expect(subject.User).To(Equal("service-account-osac-csi-driver"))
+						Expect(subject.Tenant).To(Equal(SystemTenant))
 						// TEMPORARY (OSAC-4109): the shared CSI client is granted
 						// universal tenant scope; the tenant is carried on the
 						// request rather than enforced by identity. Reverts to
@@ -1018,6 +1049,7 @@ var _ = Describe("Rego authorization interceptor", func() {
 				func(ctx context.Context, req any) (any, error) {
 					subject := SubjectFromContext(ctx)
 					Expect(subject.User).To(Equal("my-user"))
+					Expect(subject.Tenant).To(Equal("my-tenant"))
 					Expect(subject.Tenants.Finite()).To(BeTrue())
 					Expect(subject.Tenants.Inclusions()).To(ConsistOf("my-tenant"))
 					handled = true

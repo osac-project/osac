@@ -584,6 +584,10 @@ func createNetBoxInventoryClientWithManager(
 	bmhManager *baremetalhost.Manager,
 	secretWriter *bmh.SecretWriter,
 ) (inventory.Client, error) {
+	netBoxConfig, err := inventory.ParseNetBoxOptions(inventoryCfg.Options)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse NetBox inventory config: %w", err)
+	}
 	netBoxAPI, err := inventory.NewNetBoxAPI(inventoryCfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create NetBox inventory client: %w", err)
@@ -597,6 +601,7 @@ func createNetBoxInventoryClientWithManager(
 	credentialsReader := netboxcredentials.NewReader(secretsClient)
 	netBoxClient := inventory.NewNetBoxClient(
 		netBoxAPI, bmhManager, secretWriter, inventoryCfg.HostClass, credentialsReader,
+		netBoxConfig.BMCVerificationEnabled(),
 	)
 	return netBoxClient, nil
 }

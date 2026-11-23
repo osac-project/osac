@@ -127,10 +127,14 @@ message ComputeInstanceSpec {
   reserved "ssh_public_key";
 
   // Boot disk configuration.
+  //
+  // Quota: one volume for the boot disk.
   optional ComputeInstanceDisk boot_disk = 8;
 
   // Additional disk configurations. When creating from a Catalog Item, omit this field to use its default.
   // Set `items` to an empty list to request no additional disks.
+  //
+  // Quota: one volume per disk.
   ComputeInstanceDiskList additional_disks = 9;
 
   // Run strategy for the compute instance.
@@ -158,14 +162,20 @@ message ComputeInstanceSpec {
   reserved "is_windows";
 
   // Reference to an instance type. Specifies the compute configuration (cores, memory)
-  // for this instance. The API validates that the instance type exists and is not OBSOLETE;
-  // resolution of cores/memory_gib happens in the reconciler.
+  // for this instance. The API validates that the instance type exists and is not OBSOLETE.
+  //
+  // Quota: the instance counts the vCPUs and memory of its instance type. While a resize
+  // is in progress it counts the larger of the current and the target type.
   InstanceTypeReference instance_type = 17;
 
   // When true, the system auto-selects an ExternalIPPool and creates an ExternalIP
   // with an ExternalIPAttachment for this instance atomically during creation.
   // Immutable after creation.
-  optional bool auto_external_ip_attachment = 18 [(google.api.field_behavior) = IMMUTABLE];
+  //
+  // Quota: one external IP address, when the field is true.
+  optional bool auto_external_ip_attachment = 18 [
+    (google.api.field_behavior) = IMMUTABLE
+  ];
 
   // Reference to a DiskImage resource. Required after template/catalog item
   // defaults are applied. The server validates existence, lifecycle, and tenant visibility.
@@ -284,6 +294,46 @@ message ComputeInstanceStatus {
   // The Volume records associated with this instance's disks. This list is
   // managed by the system and is read-only to API callers.
   repeated ComputeInstanceVolume volumes = 11;
+
+  // Latest provisioning failure retained while a retry is pending or running, or after a terminal failure.
+  // The system removes this field when provisioning succeeds, is cancelled for deletion, or starts for a new configuration.
+  optional ComputeInstanceProvisioningFailure last_provisioning_failure = 13;
+}
+
+// Describes the latest system-observed provisioning failure.
+message ComputeInstanceProvisioningFailure {
+  // Observed failure source; this does not determine whether provisioning is retried.
+  ComputeInstanceProvisioningFailureReason reason = 1;
+
+  // Fixed public explanation. Provider-reported failures use "Provisioning failed.", timeouts use
+  // "The provisioning attempt timed out.", and other failures use "Internal error".
+  string message = 2;
+
+  // One-based number of the attempt that failed, which can differ from the currently running retry.
+  int32 attempt = 3;
+
+  // Time the failure was first observed, retained unchanged while its retry is pending or running.
+  google.protobuf.Timestamp observed_at = 4;
+}
+
+// Classifies the observed source of a provisioning failure.
+enum ComputeInstanceProvisioningFailureReason {
+  // No failure source was specified.
+  COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_UNSPECIFIED = 0;
+  // The provisioning provider reported a failure.
+  COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_REPORTED = 1;
+  // The provisioning result could not be accepted.
+  COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_RESULT_REJECTED = 2;
+  // The provisioning attempt timed out.
+  COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_TIMED_OUT = 3;
+  // The provisioning attempt could no longer be found.
+  COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_JOB_LOST = 4;
+  // The provisioning attempt did not start.
+  COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_JOB_NOT_STARTED = 5;
+  // The provisioning provider returned an invalid result.
+  COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_INVALID_RESULT = 6;
+  // The provisioning provider encountered an infrastructure error.
+  COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_ERROR = 7;
 }
 
 // Associates a ComputeInstance disk with its Volume record.

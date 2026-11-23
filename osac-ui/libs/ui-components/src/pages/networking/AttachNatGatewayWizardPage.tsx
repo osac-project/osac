@@ -1,7 +1,9 @@
 import { useNavigate, useParams } from 'react-router-dom';
 import { Alert, Bullseye, Spinner } from '@patternfly/react-core';
 
-import { useVirtualNetwork } from '../../api/v1/networking';
+import { VirtualNetworks } from '@osac/types';
+
+import { useGetResource } from '../../api/use-resource';
 import { AttachNatGatewayWizard } from '../../components/networking/AttachNatGatewayWizard';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
@@ -10,7 +12,12 @@ const AttachNatGatewayWizardPage = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { id = '' } = useParams<{ id: string }>();
-  const { data: virtualNetwork, isLoading, error } = useVirtualNetwork(id);
+  const {
+    data: virtualNetworkResponse,
+    isLoading,
+    error,
+  } = useGetResource(VirtualNetworks, { id }, { enabled: Boolean(id) });
+  const virtualNetwork = virtualNetworkResponse?.object;
 
   if (isLoading) {
     return (

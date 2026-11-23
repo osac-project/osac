@@ -20,8 +20,9 @@ Two binaries: `fulfillment-service` (server) and `osac` (CLI).
 
 ### Validation Commands
 
-Run these commands (from the `fulfillment-service/` directory) to validate
-your changes. All must pass before committing.
+Select relevant checks from `fulfillment-service/` for the changed behavior.
+Prefer focused existing tests; use the full unit suite only when needed.
+Report unavailable checks and unrelated failures without expanding the fix.
 
 #### Build
 
@@ -150,16 +151,17 @@ fulfillment-service-specific golangci-lint and buf-lint hooks scoped to
 
 ### Validation Commands
 
-Before your session ends, run these commands (from the `osac-operator/`
-directory) in order and fix all failures. Lint failures block the PR —
-this is non-negotiable.
+Select relevant checks from `osac-operator/` for the changed behavior.
+Run generation after CRD changes and formatting/lint for changed Go code.
+Use focused existing tests where possible; report unrelated failures rather
+than repeatedly changing the fix to make the entire suite pass.
 
 ```bash
 cd osac-operator
-# 1. Regenerate if you touched CRD types (api/v1alpha1/*_types.go)
+# Regenerate if you touched CRD types (api/v1alpha1/*_types.go)
 make manifests generate
 
-# 2. Format, lint, and test
+# Select applicable formatting, lint and test checks
 make fmt
 make lint
 make test

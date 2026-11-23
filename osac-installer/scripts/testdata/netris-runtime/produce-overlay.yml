@@ -1,0 +1,89 @@
+---
+# Harness for the networking provisioning regression (OSAC-7131). It runs the
+# prep-osac values tasks from an osac-test-infra checkout with dummy lab facts
+# and a per-run output directory, so the overlay under test comes from the
+# role's own overlay builder and YAML writer rather than a checked-in copy.
+#
+# scripts/test-networking-provisioning-overlay.py invokes it with
+# OSAC_TEST_INFRA pointing at the checkout, ANSIBLE_ROLES_PATH at its roles
+# directory, output_dir at a temporary directory, and the inventory input as
+# extra vars (networking_provisioning_enabled), the way inventory/EXTRA_VARS
+# supplies it in the lab.
+- name: Produce the Netris runtime overlay from the prep-osac values tasks
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  vars:
+    # Directory the write task fills; prep-osac sets this from osac_installer_dir.
+    _values_dir: "{{ output_dir }}"
+
+    # Facts prep-osac derives from the lab before building the overlay. The
+    # regression only cares about the provisioning value, so these stand in for
+    # the Netris controller lookups, the OCP release CLI image, the SSH key, the
+    # excluded lab ranges and the selected profile.
+    _netris_ctl_url: "https://netris.example.com"
+    _netris_site_id: "1"
+    _netris_mgmt_vpc_id: "4"
+    _netris_resource_class_map: '{"fixture": {}}'
+    _netris_excluded_ipv4_cidrs:
+      - 10.0.0.0/8
+      - 192.168.16.0/20
+      - 198.51.100.32/29
+    _netris_manager_config:
+      NETRIS_CONTROLLER_URL: "https://netris.example.com"
+      NETRIS_USERNAME: "netris"
+      NETRIS_VALIDATE_CERTS: "false"
+      NETRIS_SITE_ID: "1"
+      NETRIS_TENANT_ID: "1"
+      NETRIS_TENANT_NAME: "Admin"
+      NETRIS_MGMT_VPC_ID: "4"
+      NETRIS_MGMT_VPC_NAME: "ocp-vpc"
+      NETRIS_BM_PROVISIONING_VNET: "bm-provisioning"
+      NETRIS_RESOURCE_CLASS_MAP: '{"fixture": {}}'
+    _ocp_cli_image:
+      stdout: "quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    _ssh_private_key:
+      # Base64, as the role slurps the lab key and base64-decodes it.
+      content: "Zml4dHVyZS1zc2gtcHJpdmF0ZS1rZXk="
+    _profile_values:
+      global:
+        services:
+          vmaas: {enabled: false}
+          bmaas: {enabled: false}
+          caas: {enabled: false}
+          maas: {enabled: false}
+
+    # Inventory defaults the overlay reads (osac-test-infra
+    # infra/netris/inventory/group_vars/all.yml). Only
+    # networking_provisioning_enabled comes from the caller: it is the input
+    # under test.
+    deploy_suite: ""
+    osac_profile: "full-ci"
+    netris_private_allocation_cidr: "10.0.0.0/8"
+    bare_metal_services: false
+    netris_k8s_manager_suites: [vmaas, full]
+    netris_tenant_network_cidr: "192.168.101.0/24"
+    netris_tenant_subnet_cidr: "192.168.101.0/24"
+    netris_username: "netris"
+    netris_password: "fixture-netris-password"
+    ocp_base_domain: "lab.example.com"
+    ocp_vpc_name: "ocp-vpc"
+    dns_hosted_zone: "lab.example.com"
+    bmaas_provisioning_vnet_name: "bm-provisioning"
+    aws_access_key_id: "fixture-aws-access-key-id"
+    aws_secret_access_key: "fixture-aws-secret-access-key"
+    osac_repo: "https://github.com/osac-project/osac.git"
+    osac_branch: "main"
+    osac_operator_image: ""
+    fulfillment_service_image: ""
+    osac_aap_image: ""
+    osac_ui_image: ""
+    bmf_operator_image: ""
+    aap_project_git_uri: ""
+    aap_project_git_branch: ""
+
+  tasks:
+    - name: Run the prep-osac values tasks
+      ansible.builtin.include_role:
+        name: prep-osac
+        tasks_from: generate-values

@@ -29,3 +29,8 @@ tests/*
 tests/integration/*
 !tests/integration/caas/
 tests/integration/caas/go.work.sum
+
+# Conformance suite image: setuptools reads the root build metadata and the
+# packaged tests. Both are excluded by the allowlist above.
+!pyproject.toml
+!tests/

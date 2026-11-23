@@ -19,17 +19,22 @@ import {
 } from '@patternfly/react-core';
 import type { TFunction } from 'i18next';
 
-import { type SecurityGroup, SecurityGroupSchema, SecurityGroupState } from '@osac/types';
+import {
+  type SecurityGroup,
+  SecurityGroupSchema,
+  SecurityGroupState,
+  SecurityGroups,
+  VirtualNetworks,
+} from '@osac/types';
 import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
 import {
-  isDefaultNetworkingResource,
-  resourceDisplayName,
-  useDeleteSecurityGroup,
-  useSecurityGroup,
-  useUpdateSecurityGroup,
-  useVirtualNetworks,
-} from '../../api/v1/networking';
+  useDeleteResource,
+  useGetResource,
+  useListResource,
+  useUpdateResource,
+} from '../../api/use-resource';
+import { isDefaultNetworkingResource, resourceDisplayName } from '../../api/v1/networking';
 import { SecurityGroupRuleModal } from '../../components/networking/SecurityGroupRuleModal';
 import { SecurityGroupRulesTable } from '../../components/networking/SecurityGroupRulesTable';
 import { SecurityGroupStatusLabel } from '../../components/networking/SecurityGroupStatusLabel';
@@ -105,10 +110,12 @@ export const SecurityGroupDetailPage = () => {
   const [deleteRuleTarget, setDeleteRuleTarget] = useState<Required<RuleTarget> | null>(null);
   const [showDeleteSgModal, setShowDeleteSgModal] = useState(false);
 
-  const { data: sg, isLoading, error } = useSecurityGroup(id);
-  const { data: virtualNetworks = [] } = useVirtualNetworks();
-  const deleteSecurityGroup = useDeleteSecurityGroup();
-  const updateSecurityGroup = useUpdateSecurityGroup();
+  const { data: securityGroupResponse, isLoading, error } = useGetResource(SecurityGroups, { id });
+  const sg = securityGroupResponse?.object;
+  const { data: virtualNetworksResponse } = useListResource(VirtualNetworks);
+  const virtualNetworks = virtualNetworksResponse?.items ?? [];
+  const deleteSecurityGroup = useDeleteResource(SecurityGroups);
+  const updateSecurityGroup = useUpdateResource(SecurityGroups);
   const editingDisabledReason = securityGroupRuleEditingDisabledReason(
     sg,
     updateSecurityGroup.isPending,
@@ -289,7 +296,7 @@ export const SecurityGroupDetailPage = () => {
           onClose={() => setShowDeleteSgModal(false)}
           onSuccess={() => navigate('/networking/security-groups')}
           mutation={deleteSecurityGroup}
-          variables={id}
+          variables={{ id }}
         />
       )}
     </ListPage>

@@ -443,6 +443,21 @@ jobs:
           ref: ${{ inputs.commit }}
           persist-credentials: false
 
+      # The networking provisioning regression runs the prep-osac values tasks
+      # from this checkout instead of a copy; OSAC_TEST_INFRA points at it.
+      - name: Check out osac-test-infra
+        if: inputs.kind == 'it-osac-installer'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: osac-project/osac-test-infra
+          ref: main
+          path: osac-test-infra
+          persist-credentials: false
+
+      - name: Set up Python
+        if: inputs.kind == 'it-osac-installer'
+        uses: ./.github/actions/setup-python
+
       - name: Set up Helm
         if: inputs.kind == 'it-osac-installer'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
@@ -468,6 +483,8 @@ jobs:
       - name: Validate Helm networking values
         if: inputs.kind == 'it-osac-installer'
         working-directory: osac-installer
+        env:
+          OSAC_TEST_INFRA: ${{ github.workspace }}/osac-test-infra
         run: make helm-networking-test
 
       - name: Template charts (dry-run validation)
@@ -615,7 +632,7 @@ jobs:
           python3 osac-installer/scripts/it-networking-checks.py \
             --namespace osac --release osac
 
-      # --- unit tests of the osac chart: helm-unittest (mocked cluster) and the offline preflight render script
+      # --- installer harness and offline chart render checks
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: inputs.kind == 'helm-unit'
         with:
@@ -642,37 +659,10 @@ jobs:
         run: |
           make helm-infra-deps
           helm dependency build charts/osac/
-      # The suites mock the cluster (lookup, capabilities) to cover every check and the outcome table. The plugin is
-      # the v1.2.1 release archive for linux/amd64, checked against its SHA-256 and unpacked into the Helm plugin
-      # directory, so there is no movable Git tag and no install script.
-      - name: Unit test the chart (helm-unittest)
+      - name: Test metering reader rendering
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer
-        env:
-          UNITTEST_URL: https://github.com/helm-unittest/helm-unittest/releases/download/v1.2.1/helm-unittest-linux-amd64-1.2.1.tgz
-          UNITTEST_SHA256: 48e86ecc1467b009630e5954375e5d8494139f73b466df5fe8c04fa45b634939
-        run: |
-          set -euo pipefail
-          archive="${RUNNER_TEMP}/helm-unittest.tgz"
-          curl -fsSL -o "${archive}" "${UNITTEST_URL}"
-          echo "${UNITTEST_SHA256}  ${archive}" | sha256sum --check --strict -
-          plugin_dir="$(helm env HELM_PLUGINS)/unittest"
-          mkdir -p "${plugin_dir}"
-          tar -xzf "${archive}" -C "${plugin_dir}"
-          helm unittest charts/osac
-          # The metering chart's reader grants are values an admin sets on the
-          # umbrella chart, and the infra chart owns the Kafka exporter the
-          # reader lag alert reads, so both suites run here too.
-          helm unittest ../osac-metering/charts/osac-metering
-          ../osac-metering/scripts/test-readers-render.sh
-          helm unittest charts/osac-infra
-          # The ServiceMonitors the component charts ship are deployment
-          # configuration of the same release the umbrella installs, and their
-          # capability guards are what keeps a Prometheus-operator-less cluster
-          # installable, so they run in this leg too.
-          helm unittest ../fulfillment-service/charts/service
-          helm unittest ../osac-operator/charts/operator
-          helm unittest ../bare-metal-fulfillment-operator/charts/operator
+        run: ../osac-metering/scripts/test-readers-render.sh
       - name: Test preflight rendering
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer

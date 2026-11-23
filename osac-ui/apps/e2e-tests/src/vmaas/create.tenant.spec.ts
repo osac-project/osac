@@ -1,8 +1,12 @@
 import { test } from '@playwright/test';
 
-import { tenantNameOrSkip, tenantPassword } from './test_data';
+import { writeTenantRunState } from './run_state';
+import { catalogTestRunId, tenantNameOrSkip, tenantPassword } from './test_data';
 import { createTenantSshKey } from '../../../../libs/osac-cli/src/secret';
-import { createTenantAdminRoleBinding } from '../../../../libs/osac-cli/src/tenant_admin';
+import {
+  createTenantAdminRoleBinding,
+  getTenantBreakGlassCredentials,
+} from '../../../../libs/osac-cli/src/tenant_admin';
 import { logout, openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import { openTenantsPage } from '../../../../libs/test-utils/src/main.page';
@@ -12,8 +16,12 @@ import {
   expectTenantNotToExist,
   expectTenantToBeSynced,
   expectTenantToExist,
+  getTenantFromBrowser,
   openCreateTenantPage,
   readTenantCredentials,
+  saveTenantCredentials,
+  submitTenantAndReadIdentity,
+  tenantCredentialsFilePath,
   updateTenantCredentialsPassword,
 } from '../../../../libs/test-utils/src/tenants.page';
 
@@ -25,6 +33,7 @@ test('creates a tenant from the Administration tenants page', async ({ page }) =
     logProgress('tenant-create', 'Skipped: tenant_name is not configured.');
     return;
   }
+  const tenantBootstrapConfig = process.env.OSAC_E2E_TENANT_BOOTSTRAP_CONFIG;
   logProgress('tenant-create', `Starting flow for "${configuredTenantName}".`);
 
   await testStep('tenant-create', 'Log in as the admin test user', async () => {
@@ -42,6 +51,11 @@ test('creates a tenant from the Administration tenants page', async ({ page }) =
   });
 
   await testStep('tenant-create', 'Verify default tenants are synced', async () => {
+    if (tenantBootstrapConfig) {
+      // https://redhat.atlassian.net/browse/OSAC-7988 blocks the shared tenant readiness check.
+      logProgress('tenant-create', 'Skipping the shared tenant readiness check (OSAC-7988).');
+      return expectTenantToBeSynced(page, 'system');
+    }
     await expectDefaultTenants(page);
   });
 
@@ -53,12 +67,21 @@ test('creates a tenant from the Administration tenants page', async ({ page }) =
     },
   );
 
-  const credentialsFile = await testStep(
+  const createdTenant = await testStep(
     'tenant-create',
     `Create tenant "${configuredTenantName}"`,
     async () => {
       await openCreateTenantPage(page);
-      return createTenant(page, configuredTenantName);
+      if (!tenantBootstrapConfig) {
+        await createTenant(page, configuredTenantName);
+        return;
+      }
+
+      // https://redhat.atlassian.net/browse/OSAC-7989 blocks validation of the credentials dialog.
+      const tenant = await submitTenantAndReadIdentity(page, configuredTenantName);
+      await writeTenantRunState(catalogTestRunId, tenant);
+      await page.goto('/admin/tenants');
+      return tenant;
     },
   );
   await testStep(
@@ -72,10 +95,30 @@ test('creates a tenant from the Administration tenants page', async ({ page }) =
     () => expectTenantToBeSynced(page, configuredTenantName),
   );
 
+  const credentialsFile = tenantCredentialsFilePath(configuredTenantName);
   const tenantCredentials = await testStep(
     'tenant-create',
     'Read generated tenant break-glass credentials',
-    () => readTenantCredentials(credentialsFile),
+    async () => {
+      if (!tenantBootstrapConfig) {
+        return readTenantCredentials(credentialsFile);
+      }
+      const tenant = await getTenantFromBrowser(page, configuredTenantName);
+      if (!createdTenant || tenant?.creationTimestamp !== createdTenant.creationTimestamp) {
+        throw new Error('The tenant in the browser does not match the tenant created by this run.');
+      }
+      const secretId = tenant.breakGlassSecretId;
+      if (!secretId) {
+        throw new Error('The new test tenant has no break-glass secret reference.');
+      }
+      const credentials = await getTenantBreakGlassCredentials(
+        configuredTenantName,
+        secretId,
+        tenantBootstrapConfig,
+      );
+      await saveTenantCredentials(configuredTenantName, credentials);
+      return credentials;
+    },
   );
 
   const replacementPassword = tenantPassword?.trim() || configuredTenantName;

@@ -20,6 +20,7 @@ import "cleanapi/cleanapi.proto";
 import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/private/v1/metadata_type.proto";
+import "osac/private/v1/quota_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
@@ -94,6 +95,9 @@ message DiskImageDeprecation {
 // The `spec` contains the desired configuration. The `status` contains the current state of the
 // disk image, is provided by the system and can't be modified by the user.
 message DiskImage {
+  // Quota: one image per tenant-uploaded image.
+  option (osac.private.v1.quota_message) = {dimension: "images.count"};
+
   // Unique identifier of the disk image.
   string id = 1;
 

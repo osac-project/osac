@@ -88,15 +88,22 @@ for control-loop boundaries and cross-component dependencies.
 
 ### Validation and evidence
 
-- Run affected unit tests and applicable pre-commit checks for code changes;
-  report checks that cannot run. Use each component's cwd and validation map.
-- Run the configured root gate with `pre-commit run --all-files`. It includes
-  component hooks; it is not just Markdown formatting.
-- Follow the canonical [testing policy](docs/INTEGRATION-TESTING.md), including
-  [planning](docs/INTEGRATION-TESTING.md#planning-evidence) and
-  [implementation evidence](docs/INTEGRATION-TESTING.md#implementation-evidence),
-  tier ownership and guide/gap maintenance. Inspect actual suite source before
-  extending coverage; report missing or wrong-tier coverage, not a pass.
+- Select relevant existing checks for the changed behavior using the component's
+  cwd and validation guidance. Use focused tests and
+  `pre-commit run --files <changed-files>`; reserve full suites for changes that
+  need them. Report unavailable checks and unrelated failures without expanding
+  the fix to address them. Prose-only documentation changes, including ordinary
+  explanatory comments and docstrings, need no unit tests: review the diff, run
+  applicable documentation, formatting and pre-commit checks, and briefly report
+  why no unit tests are affected. Executable examples, tool directives/annotations
+  and text actually consumed at runtime (including docstrings) need relevant
+  consumer validation, including affected unit tests. Validate actual consumers,
+  not hypothetical ones or unrelated suites.
+- Follow the [testing policy](docs/INTEGRATION-TESTING.md). Add meaningful
+  behavior or regression coverage where needed, preferably in an existing suite;
+  do not add tests or harnesses merely because a file changed.
+- Keep PR summaries concise: changes, checks performed and relevant limitations.
+  Detailed test plans belong to design work that needs them.
 - Check staged changes for secrets. `pre-commit run --all-files` is not a full
   secret scan: run `pre-commit run gitleaks` with the intended files staged.
   CI separately scans the PR diff using base-owned configuration.

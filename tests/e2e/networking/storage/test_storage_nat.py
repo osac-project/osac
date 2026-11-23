@@ -87,9 +87,9 @@ def _mount_and_write(vm: dict[str, str], endpoint: StorageEndpoint, identity: st
     # Distinguish a broken tenant NAT path from a slow package install. The
     # storage port test is the direct check: if it fails, no mount can work.
     probe = (
-        "ip -brief addr; echo ROUTES; ip route; echo DNS; getent hosts quay.io || echo DNS_FAIL; "
+        "ip -brief addr; echo ROUTES; ip route; echo DNS4; getent ahostsv4 quay.io | head -1 || echo DNS4_FAIL; "
         "command -v mount.nfs >/dev/null && echo HAVE_NFS || echo NO_NFS; "
-        "timeout 12 curl -sS -o /dev/null -w '%{http_code}' https://quay.io || echo CURL_FAIL; echo; "
+        "timeout 12 curl -4 -sS -o /dev/null -w '%{http_code}' https://quay.io || echo CURL_FAIL; echo; "
         f"timeout 8 bash -c 'cat </dev/null >/dev/tcp/{endpoint.server}/2049' "
         "&& echo NFS_PORT_OK || echo NFS_PORT_FAIL"
     )

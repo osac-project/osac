@@ -379,6 +379,7 @@ var _ = Describe("Public volumes API", func() {
 		}
 		approvedSpecFields := map[string]bool{
 			"storage_tier": true, "size_gib": true, "access_mode": true,
+			"owner": true,
 		}
 		approvedStatusFields := map[string]bool{
 			"state": true, "message": true,

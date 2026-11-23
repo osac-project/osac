@@ -17,6 +17,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/help"
+	"io"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -30,11 +31,25 @@ import (
 
 func formatComputeInstance(ci *publicv1.ComputeInstance) string {
 	var buf bytes.Buffer
-	renderComputeInstance(&buf, ci)
+	GinkgoHelper()
+	Expect(renderComputeInstance(&buf, ci)).To(Succeed())
 	return buf.String()
 }
 
 var _ = Describe("Describe Compute Instance", func() {
+	DescribeTable("returns output errors",
+		func(id string) {
+			outputErr := fmt.Errorf("output unavailable")
+			reader, writer := io.Pipe()
+			Expect(reader.CloseWithError(outputErr)).To(Succeed())
+			DeferCleanup(writer.Close)
+
+			Expect(renderComputeInstance(writer, &publicv1.ComputeInstance{Id: id})).To(MatchError(outputErr))
+		},
+		Entry("when the final flush fails", "ci-001"),
+		Entry("when a formfeed flushes during a write", "ci-001\f"),
+	)
+
 	It("should display all fields when set", func() {
 		ci := &publicv1.ComputeInstance{
 			Id: "ci-001",

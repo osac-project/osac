@@ -1000,6 +1000,15 @@ func publicFinalizerCases() []publicFinalizerCase {
 				server.Get, server.Update, (*publicv1.UsersGetResponse).GetObject,
 			)
 		}},
+		{privatev1.Notifications_ServiceDesc.ServiceName, func() publicFinalizerOps {
+			GinkgoHelper()
+			server, err := NewNotificationsServer().
+				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			return newPublicFinalizerOps(
+				server.Get, server.Update, (*publicv1.NotificationsGetResponse).GetObject,
+			)
+		}},
 		{privatev1.Secrets_ServiceDesc.ServiceName, func() publicFinalizerOps {
 			GinkgoHelper()
 			server, err := NewSecretsServer().

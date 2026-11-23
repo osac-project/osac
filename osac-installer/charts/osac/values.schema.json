@@ -836,7 +836,7 @@
                 },
                 "gatewayAddress": {
                   "type": "string",
-                  "description": "In-cluster address of the gateway (a Pod IP); empty lets the installer's gateway-bridge Job resolve it"
+                  "description": "In-cluster address of the gateway (a Pod IP); empty lets the installer gateway-bridge script resolve it"
                 },
                 "grpcRequestTimeout": {
                   "type": "string",

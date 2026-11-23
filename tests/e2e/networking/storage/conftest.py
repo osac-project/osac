@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-import time
+import uuid
 from collections.abc import Iterator
 from functools import partial
 from typing import Any
@@ -64,58 +64,45 @@ def _default_network(client: GRPCClient) -> dict[str, str]:
     vnet_id = _virtual_network_id(subnet_spec)
     if not vnet_id:
         raise RuntimeError(f"{DEFAULT_SUBNET_NAME} Subnet has no VirtualNetwork reference")
-    groups = client.call(service=f"{PUBLIC_API}.SecurityGroups/List").get("items", [])
-    group = next(
-        (
-            item
-            for item in groups
-            if item.get("metadata", {}).get("name") == DEFAULT_SG_NAME
-            and _virtual_network_id(item.get("spec", {})) == vnet_id
-        ),
-        None,
+    # The tenant default SecurityGroup has no ingress, so the SSH helper Pod
+    # cannot reach a VM on the default Subnet. Create a test SG for the suite
+    # (the default VN/Subnet/NATGateway remain the onboarding-created ones).
+    sg_id = client.create_security_group_with_rules(
+        name=f"storage-nat-sg-{uuid.uuid4().hex[:8]}",
+        virtual_network=vnet_id,
+        ingress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
+        egress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
     )
-    if group is None:
-        raise RuntimeError(f"No {DEFAULT_SG_NAME} SecurityGroup; tenant default networking is not ready")
-    # The tenant default SecurityGroup has no ingress by default, so the SSH
-    # helper Pod cannot reach a VM on the default Subnet. Open it for the test
-    # (an update of an existing resource, not a new networking resource).
-    last: Exception | None = None
-    for _ in range(12):
-        wait_for_grpc_security_group_ready(grpc=client, sg_id=group["id"])
-        try:
-            client.update_security_group_rules(
-                sg_id=group["id"],
-                ingress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
-                egress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
-            )
-            break
-        except Exception as exc:  # the default networking reconciler may be mid-update
-            if "being created or updated" not in str(exc):
-                raise
-            last = exc
-            time.sleep(5)
-    else:
-        raise RuntimeError(f"could not open the default SecurityGroup: {last}")
-    wait_for_grpc_security_group_ready(grpc=client, sg_id=group["id"])
+    wait_for_grpc_security_group_ready(grpc=client, sg_id=sg_id)
     return {
         "label": "default",
         "vnet_id": vnet_id,
         "sub_a_id": subnet["id"],
         "subnet_cidr": subnet_spec.get("ipv4Cidr") or subnet_spec.get("ipv4_cidr", ""),
-        "sg_id": group["id"],
+        "sg_id": sg_id,
     }
 
 
 @pytest.fixture(scope="module")
-def tenant1_default_network(grpc: GRPCClient) -> dict[str, str]:
-    return _default_network(grpc)
+def tenant1_default_network(grpc: GRPCClient) -> Iterator[dict[str, str]]:
+    network = _default_network(grpc)
+    yield network
+    try:
+        grpc.delete_security_group(sg_id=network["sg_id"])
+    except Exception as exc:
+        print(f"WARNING: failed to delete tenant1 test SG: {exc}")
 
 
 @pytest.fixture(scope="module")
-def tenant2_default_network(private_grpc: GRPCClient, jwt_grpc_tenant2_admin: GRPCClient) -> dict[str, str]:
+def tenant2_default_network(private_grpc: GRPCClient, jwt_grpc_tenant2_admin: GRPCClient) -> Iterator[dict[str, str]]:
     # FR-6 proves onboarding finished before the test relies on tenant2's defaults.
     wait_for_tenant_default_networking_ready(grpc=private_grpc, tenant_name="tenant2")
-    return _default_network(jwt_grpc_tenant2_admin)
+    network = _default_network(jwt_grpc_tenant2_admin)
+    yield network
+    try:
+        jwt_grpc_tenant2_admin.delete_security_group(sg_id=network["sg_id"])
+    except Exception as exc:
+        print(f"WARNING: failed to delete tenant2 test SG: {exc}")
 
 
 @pytest.fixture(scope="session")

@@ -133,11 +133,16 @@ var _ = Describe("Tenant storage onboarding feedback", func() {
 		return c
 	}
 
-	It("defines a private storage condition without exposing public Tenant status", func() {
+	It("defines a private storage condition and exposes only onboarding publicly", func() {
 		value := conditionType.Descriptor().Values().ByNumber(protoreflect.EnumNumber(conditionType))
 		Expect(value).NotTo(BeNil())
 		Expect(string(value.Name())).To(Equal("TENANT_CONDITION_TYPE_STORAGE_READY"))
-		Expect((&publicv1.Tenant{}).ProtoReflect().Descriptor().Fields().ByName("status")).To(BeNil())
+
+		statusField := (&publicv1.Tenant{}).ProtoReflect().Descriptor().Fields().ByName("status")
+		Expect(statusField).NotTo(BeNil())
+		statusFields := statusField.Message().Fields()
+		Expect(statusFields.Len()).To(Equal(1))
+		Expect(string(statusFields.Get(0).Name())).To(Equal("onboarded"))
 	})
 	DescribeTable("copies the operator condition exactly", func(status metav1.ConditionStatus, want privatev1.ConditionStatus) {
 		observe(clientWith(object(status)))

@@ -174,6 +174,15 @@ func isDetachedKnownUnbound(agent *unstructured.Unstructured, state string) bool
 	if state != "known-unbound" {
 		return false
 	}
+	return isDetachedAgent(agent)
+}
+
+// isDetachedAgent verifies that CAP-Agent has removed both ownership
+// references before OSAC takes over cleanup.  Assisted Service may leave an
+// installed host in "reclaiming" while it waits for a discovery reboot.  At
+// that point the cluster and AgentMachine references are already gone; the
+// host teardown performed by BMF is the safe next owner of the lifecycle.
+func isDetachedAgent(agent *unstructured.Unstructured) bool {
 	_, boundToCluster, err := unstructured.NestedFieldNoCopy(agent.Object, "spec", "clusterDeploymentName")
 	if err != nil || boundToCluster {
 		return false

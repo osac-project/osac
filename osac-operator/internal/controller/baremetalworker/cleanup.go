@@ -226,7 +226,8 @@ func (r *Reconciler) requestCleanupAgent(ctx context.Context, co *v1alpha1.Clust
 	if err != nil {
 		return fmt.Errorf("reading Agent %s detach state: %w", agent.GetName(), err)
 	}
-	if (state != agentUnbindingState && state != "known-unbound") || !isDetachedKnownUnbound(agent, "known-unbound") {
+	if (state != agentUnbindingState && state != "known-unbound" && state != "reclaiming") ||
+		!isDetachedAgent(agent) {
 		if w.Phase != workerPhaseFailed {
 			r.checkUnbindingTimeout(co, w, agent, time.Now())
 		}

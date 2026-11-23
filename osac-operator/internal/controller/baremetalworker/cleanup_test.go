@@ -147,6 +147,31 @@ var _ = It("uses a UID precondition when deleting an Agent", func() {
 	Expect(latest.GetDeletionTimestamp().IsZero()).To(BeTrue(), "successor mutated: %v", latest)
 })
 
+var _ = It("deletes a detached reclaiming Agent", func() {
+	r, base, co := workerReadHarness()
+	fc := &teardownReadClient{workerReadClient: base}
+	r.fulfillment = fc
+	w := co.Status.Workers[0]
+	w.Phase = workerPhaseUnbinding
+	fc.returned = ownedBMIFixture(co, w.BareMetalInstance.Name, w.BareMetalInstance.ID)
+	agent := &unstructured.Unstructured{Object: map[string]interface{}{
+		"spec":   map[string]interface{}{},
+		"status": map[string]interface{}{"debugInfo": map[string]interface{}{"state": "reclaiming"}},
+	}}
+	agent.SetGroupVersionKind(agentGVK)
+	agent.SetName("reclaiming-agent")
+	agent.SetNamespace(co.Namespace)
+	agent.SetUID("reclaiming-uid")
+	agent.SetLabels(map[string]string{workerNameLabel: w.Name})
+	ctx := context.Background()
+	Expect(r.Create(ctx, agent)).To(Succeed())
+
+	Expect(r.requestCleanupAgent(ctx, co, &w, agent)).To(Succeed())
+	removed := &unstructured.Unstructured{}
+	removed.SetGroupVersionKind(agentGVK)
+	Expect(r.Get(ctx, client.ObjectKeyFromObject(agent), removed)).To(HaveOccurred())
+})
+
 var _ = It("preserves the retry category for a bound failed worker", func() {
 	r, _, co := workerReadHarness()
 	w := co.Status.Workers[0]

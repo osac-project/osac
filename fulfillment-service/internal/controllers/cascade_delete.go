@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/gobuffalo/flect"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -58,31 +59,11 @@ type CascadeDeleteAllOptions[T CascadeResource] struct {
 // rows than one page drains in a single pass.
 func CascadeDeleteAll[T CascadeResource](
 	ctx context.Context, options CascadeDeleteAllOptions[T]) (pending bool, err error) {
-	const pageSize = 100
-	var items []T
-	var total int32
-	for offset := int32(0); ; {
-		page, pageTotal, listErr := options.List(ctx, options.Filter, pageSize, offset)
-		if listErr != nil {
-			return false, listErr
-		}
-		if pageTotal < 0 || int64(len(page)) > int64(pageTotal) {
-			return false, errors.New("the listing returned an invalid page")
-		}
-		if total == 0 {
-			total = pageTotal
-		} else if total != pageTotal {
-			return false, errors.New("the listing total changed while it was being read")
-		}
-		items = append(items, page...)
-		if int64(len(items)) >= int64(total) {
-			break
-		}
-		if len(page) == 0 {
-			return false, errors.New("the listing returned an incomplete page")
-		}
-		size := int32(len(page)) // #nosec G115 -- bounded by the requested page size
-		offset += size
+	items, err := dao.DrainPages(ctx, func(ctx context.Context, limit, offset int32) ([]T, int32, error) {
+		return options.List(ctx, options.Filter, limit, offset)
+	})
+	if err != nil {
+		return false, err
 	}
 	return CascadeDeleteItems(ctx, CascadeDeleteItemsOptions[T]{
 		Items:  items,

@@ -34,7 +34,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
 	"strings"
 
 	"github.com/gobuffalo/flect"
@@ -205,7 +204,7 @@ func (c *Counter) Count(ctx context.Context, tenant string) (map[string]map[stri
 		return nil, err
 	}
 	result := map[string]map[string]int64{}
-	for _, name := range sortedKindNames(c.kinds) {
+	for _, name := range quota.SortedKeys(c.kinds) {
 		kind := c.kinds[name]
 		if c.isType(name) {
 			continue
@@ -256,15 +255,6 @@ func (c *Counter) isType(name string) bool {
 		}
 	}
 	return false
-}
-
-func sortedKindNames(kinds map[string]*quota.Kind) []string {
-	names := make([]string, 0, len(kinds))
-	for name := range kinds {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }
 
 // pricePair is one dimension and its amount, as SQL text evaluated per row.
@@ -367,7 +357,7 @@ func (g *statementGenerator) generate() (string, error) {
 				%s
 			group by r.project, u.dimension
 			`,
-			g.table, joinClauses(g.rowJoins), union(g.asks), g.stopsCountingIn(g.kind.Name, "r"),
+			g.table, strings.Join(g.rowJoins, "\n"), union(g.asks), g.stopsCountingIn(g.kind.Name, "r"),
 		), nil
 	}
 	return fmt.Sprintf(`
@@ -403,7 +393,7 @@ func (g *statementGenerator) generate() (string, error) {
 			group by ex.dimension
 		) e on e.dimension = p.dimension
 		`,
-		g.table, joinClauses(g.rowJoins), union(g.asks), g.stopsCountingIn(g.kind.Name, "r"), union(g.exists),
+		g.table, strings.Join(g.rowJoins, "\n"), union(g.asks), g.stopsCountingIn(g.kind.Name, "r"), union(g.exists),
 	), nil
 }
 
@@ -414,7 +404,7 @@ func (g *statementGenerator) addThrough(field quota.Field) error {
 	name, tenant, project := referenceExprs("r", field.Path)
 	asked := g.nextAlias("t")
 	g.rowJoins = append(g.rowJoins, g.typeJoin(field.Through, name, tenant, project, "r", asked))
-	askedPrice := typePrice(typeKind, asked)
+	askedPrice := rowPrice(typeKind, asked)
 	// A stored row whose asked type resolves to nothing is priced at zero by the join, so a
 	// sentinel row makes the count fail loudly instead of undercounting the tenant:
 	g.asks = append(g.asks, missingTypeAsk(name, asked, ""))
@@ -431,7 +421,7 @@ func (g *statementGenerator) addThrough(field quota.Field) error {
 		// stays legitimate, because the status that holds it appears only once the
 		// resource runs.
 		g.asks = append(g.asks, missingTypeAsk(runningName, running, ""))
-		runningPrice = typePrice(typeKind, running)
+		runningPrice = rowPrice(typeKind, running)
 	}
 	for i, price := range askedPrice {
 		amount := price.amount
@@ -477,23 +467,10 @@ func itemReferenceExprs(item, path string) (name, tenant, project string) {
 	return itemPath(item, path+".name"), itemPath(item, path+".tenant"), itemPath(item, path+".project")
 }
 
-// typePrice prices one type row at the given alias: a type's own dimensions, which are a message
-// dimension and field dimensions. checkKinds refused any other shape.
-func typePrice(kind *quota.Kind, alias string) (result []pricePair) {
-	if kind.Dimension != "" {
-		result = append(result, pricePair{dimension: rowDimension(kind.Dimension, alias), amount: "1"})
-	}
-	for _, field := range kind.Fields {
-		result = append(result, pricePair{
-			dimension: rowDimension(field.Dimension, alias),
-			amount:    intCast(rowPath(alias, field.Path)),
-		})
-	}
-	return result
-}
-
 // rowPrice prices one stored row of a kind at the given alias: its message dimension and its field
-// dimensions. Through references need joins and are priced by the caller.
+// dimensions. Through references need joins and are priced by the caller. It prices a type's row
+// the same way: checkKinds refused a type kind with a field the counter can't price through it,
+// so every field of a type carries a dimension.
 func rowPrice(kind *quota.Kind, alias string) (result []pricePair) {
 	if kind.Dimension != "" {
 		result = append(result, pricePair{dimension: rowDimension(kind.Dimension, alias), amount: "1"})
@@ -562,7 +539,7 @@ func (g *statementGenerator) addCreates(field quota.Field) error {
 			// A planned child whose type resolves to nothing would ask for zero of its
 			// dimensions, so the sentinel makes the count fail loudly instead:
 			g.asks = append(g.asks, missingTypeAsk(name, alias, from))
-			for _, price := range typePrice(g.counter.kinds[createdField.Through], alias) {
+			for _, price := range rowPrice(g.counter.kinds[createdField.Through], alias) {
 				g.asks = append(g.asks, selectFrom(
 					price.dimension, fmt.Sprintf("%s * %s", count, price.amount), from,
 				))
@@ -597,7 +574,7 @@ func (g *statementGenerator) addCreates(field quota.Field) error {
 		name, tenant, project := referenceExprs(row, createdField.Path)
 		alias := g.nextAlias("t")
 		from += g.typeJoin(createdField.Through, name, tenant, project, row, alias)
-		for _, price := range typePrice(g.counter.kinds[createdField.Through], alias) {
+		for _, price := range rowPrice(g.counter.kinds[createdField.Through], alias) {
 			prices = append(prices, selectPrice(price.dimension, price.amount))
 		}
 	}
@@ -797,13 +774,6 @@ func selectPrice(dimension, amount string) string {
 
 func selectFrom(dimension, amount, from string) string {
 	return fmt.Sprintf("select %s as dimension, %s as amount %s", dimension, amount, from)
-}
-
-func joinClauses(clauses []string) string {
-	if len(clauses) == 0 {
-		return ""
-	}
-	return strings.Join(clauses, "\n")
 }
 
 func union(selects []string) string {

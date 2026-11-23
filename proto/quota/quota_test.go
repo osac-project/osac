@@ -724,38 +724,6 @@ func TestPriceLargeNodeSet(t *testing.T) {
 	}
 }
 
-// TestLinks pins the created_for link descriptors the usage query counts by. The query
-// trusts a link only when the linked resource's creator is `system`; that gate is the
-// query's rule, and the descriptors here are what it consumes.
-func TestLinks(t *testing.T) {
-	links, err := Links()
-	if err != nil {
-		t.Fatalf("failed to load the quota links: %v", err)
-	}
-
-	expected := []Link{
-		{
-			Kind:   "BareMetalInstance",
-			Parent: "Cluster",
-			Field:  "status.cluster",
-		},
-		{
-			Kind:      "ExternalIP",
-			IDLabel:   "osac.openshift.io/auto-created-for",
-			KindLabel: "osac.openshift.io/auto-created-kind",
-		},
-		{
-			Kind:       "Volume",
-			Parent:     "ComputeInstance",
-			NamePrefix: "ci-{parent}-",
-		},
-	}
-
-	if !reflect.DeepEqual(links, expected) {
-		t.Fatalf("the links don't match the expected contract:\nexpected: %#v\nactual:   %#v", expected, links)
-	}
-}
-
 // TestItemsOfNestedEach checks that an each path resolves nested paths the way validation
 // resolves them: "wrapper.items" must reach the list inside the wrapper message, not look
 // for one field literally named "wrapper.items".

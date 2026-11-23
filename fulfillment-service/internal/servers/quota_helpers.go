@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -40,26 +42,43 @@ func fnv32a(value string) uint32 {
 	return hash.Sum32()
 }
 
+// deleteQuotaOutboxRows removes the unsent quota warnings the SQL matches, inside the context's
+// transaction. The outbox rows reference tenants and projects with foreign keys and have no API of
+// their own, so each Delete path removes its own rows there: leaving them behind would keep the
+// parent from being archived after its finalizers are gone. The message names the parent in the
+// Internal error a failure returns; the attrs enter the failure logs.
+func deleteQuotaOutboxRows(
+	ctx context.Context,
+	logger *slog.Logger,
+	sql string,
+	args []any,
+	message string,
+	attrs ...slog.Attr,
+) error {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		logger.LogAttrs(ctx, slog.LevelError, "Failed to get transaction for quota outbox deletion",
+			append(slices.Clone(attrs), slog.Any("error", err))...)
+		return grpcstatus.Error(grpccodes.Internal, message)
+	}
+	_, err = tx.Exec(ctx, sql, args...)
+	if err != nil {
+		logger.LogAttrs(ctx, slog.LevelError, "Failed to delete quota outbox rows",
+			append(slices.Clone(attrs), slog.Any("error", err))...)
+		return grpcstatus.Error(grpccodes.Internal, message)
+	}
+	return nil
+}
+
 // quotaNameFromDimension converts a dimension to a DNS-1123 name: lowercased, non-alphanumerics
 // dashed, trimmed, and suffixed with a short hash of the original dimension so two dimensions that
 // sanitize to the same base still get different names.
 func quotaNameFromDimension(dimension string) string {
-	var sanitized strings.Builder
-	for _, r := range strings.ToLower(dimension) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			sanitized.WriteRune(r)
-		} else {
-			sanitized.WriteRune('-')
-		}
-	}
-	base := strings.Trim(sanitized.String(), "-")
+	base := utils.SanitizeDNS1123Name(dimension, 54, nil)
 	if base == "" {
 		// A dimension of only punctuation sanitizes to nothing; a name still needs a
 		// valid label, so the base falls back to the kind of object it names.
 		base = "quota"
-	}
-	if len(base) > 54 {
-		base = base[:54]
 	}
 	return fmt.Sprintf("%s-%x", base, fnv32a(dimension))
 }

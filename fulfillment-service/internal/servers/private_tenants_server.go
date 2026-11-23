@@ -435,21 +435,11 @@ func (s *PrivateTenantsServer) deleteSecretByID(ctx context.Context, tenant *pri
 // are removed in the Tenants/Delete transaction: leaving them behind would keep
 // the tenant from being archived after its finalizers are gone.
 func (s *PrivateTenantsServer) deleteQuotaOutbox(ctx context.Context, tenant string) error {
-	tx, err := database.TxFromContext(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to get transaction for quota outbox deletion",
-			slog.String("tenant", tenant),
-			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to delete tenant '%s'", tenant)
-	}
-	_, err = tx.Exec(ctx, `delete from quota_outbox where tenant = $1`, tenant)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to delete quota outbox rows",
-			slog.String("tenant", tenant),
-			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to delete tenant '%s'", tenant)
-	}
-	return nil
+	return deleteQuotaOutboxRows(ctx, s.logger,
+		`delete from quota_outbox where tenant = $1`, []any{tenant},
+		fmt.Sprintf("failed to delete tenant '%s'", tenant),
+		slog.String("tenant", tenant),
+	)
 }
 
 func (s *PrivateTenantsServer) clearStaleBreakGlassCredentialsSecretRef(ctx context.Context,

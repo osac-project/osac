@@ -16,6 +16,7 @@ package servers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 
@@ -25,7 +26,6 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -222,24 +222,13 @@ func (s *PrivateProjectsServer) deleteQuotaOutbox(ctx context.Context, id string
 		return ConvertDAOErrorToGRPC(err, "get", id)
 	}
 	metadata := getResponse.GetObject().GetMetadata()
-	tx, err := database.TxFromContext(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to get transaction for quota outbox deletion",
-			slog.String("project", metadata.GetName()),
-			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to delete project '%s'", metadata.GetName())
-	}
-	_, err = tx.Exec(ctx,
+	return deleteQuotaOutboxRows(ctx, s.logger,
 		`delete from quota_outbox where tenant = $1 and project::text = $2`,
-		metadata.GetTenant(), metadata.GetName())
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to delete quota outbox rows",
-			slog.String("tenant", metadata.GetTenant()),
-			slog.String("project", metadata.GetName()),
-			slog.Any("error", err))
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to delete project '%s'", metadata.GetName())
-	}
-	return nil
+		[]any{metadata.GetTenant(), metadata.GetName()},
+		fmt.Sprintf("failed to delete project '%s'", metadata.GetName()),
+		slog.String("tenant", metadata.GetTenant()),
+		slog.String("project", metadata.GetName()),
+	)
 }
 
 func (s *PrivateProjectsServer) Signal(ctx context.Context,

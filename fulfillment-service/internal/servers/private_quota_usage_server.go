@@ -193,34 +193,25 @@ func (s *PrivateQuotaUsageServer) buildReport(
 	return report, nil
 }
 
-// readLimits returns the tenant's overrides and each project's limits.
 // listAllRows reads every row the filter matches, in pages: the DAO's default page size
 // would silently truncate a tenant that holds more rows than it, and a report that drops
-// rows understates the usage or resolves a limit against a row it never saw.
+// rows understates the usage or resolves a limit against a row it never saw. The drain
+// refuses a listing whose rows move under it, so the report fails loudly instead of
+// quietly understating the tenant.
 func listAllRows[O dao.Object](
 	ctx context.Context, list *dao.GenericDAO[O], filter string,
 ) ([]O, error) {
-	const pageSize = 100
-	var result []O
-	for offset := int32(0); ; offset += pageSize {
+	return dao.DrainPages(ctx, func(ctx context.Context, limit, offset int32) ([]O, int32, error) {
 		response, err := list.List().
 			SetFilter(filter).
 			SetOffset(offset).
-			SetLimit(pageSize).
+			SetLimit(limit).
 			Do(ctx)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
-		result = append(result, response.GetItems()...)
-		if len(result) >= int(response.GetTotal()) {
-			return result, nil
-		}
-		// A page that returns nothing while the total still counts rows means the rows moved
-		// between the pages; return what was read rather than loop forever.
-		if len(response.GetItems()) == 0 {
-			return result, nil
-		}
-	}
+		return response.GetItems(), response.GetTotal(), nil
+	})
 }
 
 func (s *PrivateQuotaUsageServer) readLimits(

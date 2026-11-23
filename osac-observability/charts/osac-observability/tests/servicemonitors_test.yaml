@@ -1,0 +1,122 @@
+suite: store component scrapes
+templates:
+  - templates/servicemonitors.yaml
+  - templates/services.yaml
+release:
+  name: osac
+  namespace: osac
+capabilities:
+  apiVersions:
+    - monitoring.coreos.com/v1
+set:
+  global.observability.enabled: true
+
+tests:
+  - it: renders one ServiceMonitor per store component
+    template: templates/servicemonitors.yaml
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: tags the receive scrape with a stable job label
+    template: templates/servicemonitors.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-receive
+    asserts:
+      - isKind:
+          of: ServiceMonitor
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+      # Prometheus Operator reads jobLabel from the selected Service, so the
+      # value must be the label the Service carries, not a pod label.
+      - equal:
+          path: spec.jobLabel
+          value: osac.openshift.io/metrics-job
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: receive
+      - equal:
+          path: spec.selector.matchLabels["osac.openshift.io/metrics-scrape"]
+          value: "true"
+      - equal:
+          path: spec.endpoints[0].port
+          value: http
+      - equal:
+          path: spec.endpoints[0].path
+          value: /metrics
+
+  - it: gives the Receive Service the label the monitor promotes to job
+    template: templates/services.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-receive-headless
+    asserts:
+      - equal:
+          path: metadata.labels["osac.openshift.io/metrics-job"]
+          value: thanos-receive
+      - equal:
+          path: metadata.labels["osac.openshift.io/metrics-scrape"]
+          value: "true"
+
+  # Receive has two Services. Only the headless one is scrape-enabled, so the
+  # monitor does not select the same pods twice.
+  - it: leaves the remote-write Service unscraped
+    template: templates/services.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-receive
+    asserts:
+      - notExists:
+          path: metadata.labels["osac.openshift.io/metrics-scrape"]
+
+  - it: names the store job
+    template: templates/services.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-store-headless
+    asserts:
+      - equal:
+          path: metadata.labels["osac.openshift.io/metrics-job"]
+          value: thanos-store
+
+  - it: names the query job
+    template: templates/services.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-query
+    asserts:
+      - equal:
+          path: metadata.labels["osac.openshift.io/metrics-job"]
+          value: thanos-query
+
+  - it: names the compactor job
+    template: templates/services.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-compactor-headless
+    asserts:
+      - equal:
+          path: metadata.labels["osac.openshift.io/metrics-job"]
+          value: thanos-compactor
+
+  - it: follows the configured control-plane scrape interval
+    template: templates/servicemonitors.yaml
+    set:
+      global.observability.collection.osacControlPlane: 15s
+    documentSelector:
+      path: metadata.name
+      value: thanos-query
+    asserts:
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 15s
+
+  - it: renders nothing when observability is disabled
+    template: templates/servicemonitors.yaml
+    set:
+      global.observability.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

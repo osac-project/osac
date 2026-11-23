@@ -29,6 +29,7 @@ metadata:
   namespace: {{ $ns }}
   labels:
     {{- $labels | nindent 4 }}
+    {{- include "osac-observability.scrapeLabels" (dict "job" "thanos-receive") | nindent 4 }}
 spec:
   clusterIP: None
   # DNS SRV discovery in Query must see a pod before its readiness gate passes,
@@ -53,6 +54,7 @@ metadata:
   namespace: {{ $ns }}
   labels:
     {{- $labels | nindent 4 }}
+    {{- include "osac-observability.scrapeLabels" (dict "job" "thanos-store") | nindent 4 }}
 spec:
   clusterIP: None
   publishNotReadyAddresses: true
@@ -75,6 +77,7 @@ metadata:
   namespace: {{ $ns }}
   labels:
     {{- $labels | nindent 4 }}
+    {{- include "osac-observability.scrapeLabels" (dict "job" "thanos-query") | nindent 4 }}
 spec:
   type: ClusterIP
   selector:
@@ -92,6 +95,7 @@ metadata:
   namespace: {{ $ns }}
   labels:
     {{- $labels | nindent 4 }}
+    {{- include "osac-observability.scrapeLabels" (dict "job" "thanos-compactor") | nindent 4 }}
 spec:
   clusterIP: None
   selector:

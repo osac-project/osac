@@ -68,3 +68,41 @@ capabilities:
   drop:
     - ALL
 {{- end -}}
+
+{{/* Scrape labels the ServiceMonitors and the scraped Services share. The job
+     value becomes the series' job label: Prometheus Operator reads jobLabel
+     from the Service, not from the pod. */}}
+{{- define "osac-observability.scrapeLabels" -}}
+osac.openshift.io/metrics-scrape: "true"
+osac.openshift.io/metrics-job: {{ .job }}
+{{- end -}}
+
+{{/* Convert a Prometheus duration ("30s", "1m30s", "2h") to whole seconds. */}}
+{{- define "osac-observability.durationSeconds" -}}
+{{- $total := 0 -}}
+{{- range $part := regexFindAll "[0-9]+(ms|s|m|h|d|w|y)" (. | toString) -1 -}}
+  {{- $number := regexFind "^[0-9]+" $part | int -}}
+  {{- $unit := regexFind "(ms|s|m|h|d|w|y)$" $part -}}
+  {{- if eq $unit "ms" -}}{{- $total = add $total (div $number 1000) -}}
+  {{- else if eq $unit "s" -}}{{- $total = add $total $number -}}
+  {{- else if eq $unit "m" -}}{{- $total = add $total (mul $number 60) -}}
+  {{- else if eq $unit "h" -}}{{- $total = add $total (mul $number 3600) -}}
+  {{- else if eq $unit "d" -}}{{- $total = add $total (mul $number 86400) -}}
+  {{- else if eq $unit "w" -}}{{- $total = add $total (mul $number 604800) -}}
+  {{- else if eq $unit "y" -}}{{- $total = add $total (mul $number 31536000) -}}
+  {{- end -}}
+{{- end -}}
+{{- $total -}}
+{{- end -}}
+
+{{/* A cluster counts as stopped when no series with its cluster label arrived
+     for longer than one scrape interval of either collector plus one interval
+     of tolerance. The threshold must stay under the Prometheus five-minute
+     instant-query lookback, or a stopped cluster's last sample is already stale
+     and the query returns nothing instead of naming it. */}}
+{{- define "osac-observability.stoppedClusterThresholdSeconds" -}}
+{{- $collection := (.Values.global | default dict).observability.collection | default dict -}}
+{{- $controlPlane := include "osac-observability.durationSeconds" ($collection.osacControlPlane | default "30s") | int -}}
+{{- $infrastructure := include "osac-observability.durationSeconds" ($collection.infrastructure | default "30s") | int -}}
+{{- add (max $controlPlane $infrastructure) 30 -}}
+{{- end -}}

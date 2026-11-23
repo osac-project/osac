@@ -1,0 +1,62 @@
+suite: pipeline health queries
+templates:
+  - templates/health-queries.yaml
+release:
+  name: osac
+  namespace: osac
+set:
+  global.observability.enabled: true
+  global.observability.collection.osacControlPlane: 30s
+  global.observability.collection.infrastructure: 30s
+
+tests:
+  - it: ships runnable queries for every pipeline stage
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: osac-observability-health-queries
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+      - isSubset:
+          path: data
+          content:
+            receive-backlog: sum by (cluster) (prometheus_remote_storage_samples_pending)
+            receive-queue-length: max by (cluster) (time() - prometheus_remote_storage_queue_highest_sent_timestamp_seconds)
+            compaction-failures: sum by (cluster) (increase(thanos_compact_group_compactions_failures_total[1h]))
+            store-gateway-errors: sum by (cluster) (increase(thanos_objstore_bucket_operation_failures_total{job="thanos-store"}[1h]))
+            capacity-series: max(prometheus_tsdb_head_series{cluster="management", job="thanos-receive"})
+            stopped-clusters: time() - max by (cluster) (timestamp(up{managed_by="osac"})) > 60
+
+  - it: derives the stopped-cluster threshold from one scrape interval plus tolerance
+    set:
+      global.observability.collection.infrastructure: 1m
+    asserts:
+      - matchRegex:
+          path: data["stopped-clusters"]
+          pattern: ' > 90$'
+
+  - it: uses the slower of the two collection intervals
+    set:
+      global.observability.collection.osacControlPlane: 2m30s
+      global.observability.collection.infrastructure: 30s
+    asserts:
+      - matchRegex:
+          path: data["stopped-clusters"]
+          pattern: ' > 180$'
+
+  - it: fails the render instead of shipping a threshold past the query lookback
+    set:
+      global.observability.collection.infrastructure: 5m
+    asserts:
+      - failedTemplate:
+          errorMessage: global.observability.collection renders a 330s stopped-cluster threshold; keep max(osacControlPlane, infrastructure) at least 30s under the 5m query lookback
+
+  - it: renders nothing when observability is disabled
+    set:
+      global.observability.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

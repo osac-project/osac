@@ -264,6 +264,24 @@ sys.stdout.write(token)
       drop: ["ALL"]
 {{- end }}
 
+{{/* Convert a Prometheus duration ("30s", "1m30s", "2h") to whole seconds. */}}
+{{- define "osac.durationSeconds" -}}
+{{- $total := 0 -}}
+{{- range $part := regexFindAll "[0-9]+(ms|s|m|h|d|w|y)" (. | toString) -1 -}}
+  {{- $number := regexFind "^[0-9]+" $part | int -}}
+  {{- $unit := regexFind "(ms|s|m|h|d|w|y)$" $part -}}
+  {{- if eq $unit "ms" -}}{{- $total = add $total (div $number 1000) -}}
+  {{- else if eq $unit "s" -}}{{- $total = add $total $number -}}
+  {{- else if eq $unit "m" -}}{{- $total = add $total (mul $number 60) -}}
+  {{- else if eq $unit "h" -}}{{- $total = add $total (mul $number 3600) -}}
+  {{- else if eq $unit "d" -}}{{- $total = add $total (mul $number 86400) -}}
+  {{- else if eq $unit "w" -}}{{- $total = add $total (mul $number 604800) -}}
+  {{- else if eq $unit "y" -}}{{- $total = add $total (mul $number 31536000) -}}
+  {{- end -}}
+{{- end -}}
+{{- $total -}}
+{{- end -}}
+
 {{/*
 Fail helm template when values break a cross-field rule that JSON Schema
 cannot express.
@@ -285,6 +303,18 @@ cannot express.
 {{- $infrastructureInterval := $collection.infrastructure | default "" | toString -}}
 {{- if or (not (regexMatch $observabilityPattern $infrastructureInterval)) (not (regexMatch "[1-9]" $infrastructureInterval)) -}}
   {{- fail (printf "global.observability.collection.infrastructure must be a positive Prometheus duration (got %q)" $infrastructureInterval) }}
+{{- end -}}
+{{- /* The stopped-cluster query compares sample age against the slower
+     collection interval plus 30s of tolerance. Prometheus instant queries only
+     look back five minutes, so a larger threshold would let the last sample of
+     a stopped cluster go stale before the query could name it. */ -}}
+{{- if dig "enabled" false $globalObservability -}}
+{{- $controlPlaneSeconds := include "osac.durationSeconds" $observabilityInterval | int -}}
+{{- $infrastructureSeconds := include "osac.durationSeconds" $infrastructureInterval | int -}}
+{{- $stoppedThreshold := add (max $controlPlaneSeconds $infrastructureSeconds) 30 -}}
+{{- if ge $stoppedThreshold 300 -}}
+  {{- fail (printf "global.observability.collection renders a %ds stopped-cluster threshold; keep max(osacControlPlane, infrastructure) at least 30s under the 5m query lookback" $stoppedThreshold) }}
+{{- end -}}
 {{- end -}}
 {{- /* Thanos keeps one retention value for every resolution. Each level must be a
      positive duration and equal thanos.retention, otherwise the Compactor drops

@@ -552,3 +552,36 @@ tests:
       - equal:
           path: rules[0].verbs
           value: [get, patch, update]
+
+---
+# Prometheus instant queries look back five minutes. A stopped-cluster
+# threshold above that would let a stopped cluster's last sample go stale, so
+# the health query would return nothing instead of naming the cluster.
+suite: observability collection validation
+templates:
+  - templates/validate-values.yaml
+release:
+  name: osac
+  namespace: osac
+set:
+  service.internalHostname: fulfillment.osac.svc
+  service.externalHostname: fulfillment.example.com
+  global.networking.fabricManager: test_fabric
+  global.networking.k8sManager: cudn_evpn
+  global.observability.enabled: true
+  global.observability.services.metricsAuth.tag: test-metrics-auth
+  global.observability.collection.osacControlPlane: 30s
+  global.observability.collection.infrastructure: 5m
+
+tests:
+  - it: fails the render when the collection intervals outlive the health lookback
+    asserts:
+      - failedTemplate:
+          errorMessage: global.observability.collection renders a 330s stopped-cluster threshold; keep max(osacControlPlane, infrastructure) at least 30s under the 5m query lookback
+
+  - it: accepts intervals whose threshold stays inside the lookback
+    set:
+      global.observability.collection.infrastructure: 30s
+    asserts:
+      - hasDocuments:
+          count: 0

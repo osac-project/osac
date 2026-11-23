@@ -1,0 +1,38 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- /* Runnable PromQL for the pipeline health table and for naming stopped
+     clusters. The stopped-cluster threshold is derived from the two collection
+     intervals: one scrape of the slower collector, plus one interval of
+     tolerance. It must stay under the five-minute instant-query lookback, or a
+     stopped cluster's last sample is already stale and the query would return
+     nothing rather than name the cluster. */}}
+{{- $threshold := include "osac-observability.stoppedClusterThresholdSeconds" . | int -}}
+{{- if ge $threshold 300 -}}
+{{- fail (printf "global.observability.collection renders a %ds stopped-cluster threshold; keep max(osacControlPlane, infrastructure) at least 30s under the 5m query lookback" $threshold) -}}
+{{- end }}
+{{- $ns := include "osac-observability.namespace" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: osac-observability-health-queries
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+data:
+  # Samples waiting in every remote-write queue, per writing cluster. Growth
+  # means the pipeline is falling behind the scrape rate.
+  receive-backlog: {{ `sum by (cluster) (prometheus_remote_storage_samples_pending)` | quote }}
+  # Age in seconds of the oldest unsent sample, per writing cluster.
+  receive-queue-length: {{ `max by (cluster) (time() - prometheus_remote_storage_queue_highest_sent_timestamp_seconds)` | quote }}
+  # Compactions that failed in the last hour. A nonzero value means blocks are
+  # not being downsampled or cleaned up.
+  compaction-failures: {{ `sum by (cluster) (increase(thanos_compact_group_compactions_failures_total[1h]))` | quote }}
+  # Object-storage failures in the last hour, as seen by Store.
+  store-gateway-errors: {{ `sum by (cluster) (increase(thanos_objstore_bucket_operation_failures_total{job="thanos-store"}[1h]))` | quote }}
+  # Head series in the management cluster's Prometheus. Compare with the
+  # configured capacity; series leaving thanos-receive is the write path's
+  # clearest health signal.
+  capacity-series: {{ `max(prometheus_tsdb_head_series{cluster="management", job="thanos-receive"})` | quote }}
+  # Clusters whose newest remote-written sample is older than the threshold:
+  # the cluster stopped scraping, or its remote-write path stopped.
+  stopped-clusters: {{ printf `time() - max by (cluster) (timestamp(up{managed_by="osac"})) > %d` $threshold | quote }}
+{{- end }}

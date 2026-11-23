@@ -2,8 +2,9 @@
 
 # Verifies the OSAC metrics scrape wiring renders as designed: platform
 # monitoring labels and scrape RBAC, the six plain-HTTP ServiceMonitors with
-# their eight targets, the two HTTPS operator ServiceMonitors, the
-# label-removal hooks, and the disabled path producing none of the scrapes.
+# their eight targets, the four store-component ServiceMonitors for pipeline
+# health, the two HTTPS operator ServiceMonitors, the label-removal hooks, and
+# the disabled path producing none of the scrapes.
 
 set -euo pipefail
 
@@ -137,7 +138,9 @@ echo "checking enabled render"
 
 enabled_sms="${TMP_DIR}/enabled-servicemonitors.yaml"
 extract_kind "${enabled}" ServiceMonitor >"${enabled_sms}"
-expect_count "${enabled_sms}" '^kind: ServiceMonitor' 8
+# Eight component scrapes plus the four store-component scrapes that carry the
+# pipeline-health series.
+expect_count "${enabled_sms}" '^kind: ServiceMonitor' 12
 for job in \
   fulfillment-grpc-server \
   fulfillment-rest-gateway \
@@ -148,6 +151,13 @@ for job in \
   osac-operator \
   bmf-operator; do
   require "${enabled_sms}" "replacement: ${job}"
+done
+# The store components promote a Service label to the Prometheus job, so their
+# series arrive as job=thanos-receive|thanos-store|thanos-query|thanos-compactor.
+require "${enabled_sms}" 'jobLabel: osac.openshift.io/metrics-job'
+expect_count "${enabled_sms}" 'jobLabel: osac.openshift.io/metrics-job' 4
+for component in receive store query compactor; do
+  require "${enabled_sms}" "app.kubernetes.io/component: ${component}"
 done
 require "${enabled_sms}" 'targetLabel: job'
 require "${enabled_sms}" 'port: metrics'
@@ -195,8 +205,9 @@ default_render="${TMP_DIR}/default.yaml"
 default_sms="${TMP_DIR}/default-servicemonitors.yaml"
 extract_kind "${default_render}" ServiceMonitor >"${default_sms}"
 # Metering is deployed unconditionally, so its own target is present; only the
-# adapter endpoint (derived from the Service component label) is absent.
-expect_count "${default_sms}" '^kind: ServiceMonitor' 8
+# adapter endpoint (derived from the Service component label) is absent. The
+# store-component scrapes belong to observability, so they are still present.
+expect_count "${default_sms}" '^kind: ServiceMonitor' 12
 require "${default_sms}" 'replacement: osac-metering'
 reject "${default_sms}" '__meta_kubernetes_service_label_app_kubernetes_io_component'
 
@@ -608,16 +619,17 @@ expect_render_failure empty-infrastructure \
   "${OBS_ARGS[@]}" \
   --set global.observability.collection.infrastructure=
 
-echo "checking the values nothing enforces yet do not look active"
-# clusterRemoteWrite and tenant.limits have no consumer in this release, so
-# their defaults must not claim tenant clusters already write or that limits
-# are applied. The downsampling description must match the Compactor template,
-# which passes explicit resolution flags rather than Thanos's defaults.
+echo "checking the values descriptions match what is enforced"
+# clusterRemoteWrite is consumed by osac-operator (tenant certificate issuance
+# and revocation), so its description must not deny a consumer. tenant.limits
+# still has none, so that description must say so. Neither may point at a later
+# epic. The downsampling description must match the Compactor template, which
+# passes explicit resolution flags rather than Thanos's defaults.
 if grep -Fq -- 'does not deploy storage or querying' "${CHART_DIR}/values.yaml"; then
   fail "values.yaml still says the observability switch does not deploy the store"
 fi
 if grep -A2 '^    clusterRemoteWrite:$' "${CHART_DIR}/values.yaml" | grep -Fq -- '      enabled: true'; then
-  fail "clusterRemoteWrite.enabled defaults to true although nothing writes from tenant clusters"
+  fail "clusterRemoteWrite.enabled defaults to true; the write path must stay opt-in"
 fi
 python3 - "${CHART_DIR}/values.schema.json" <<'PY'
 import json
@@ -636,12 +648,18 @@ def fail(message):
 remote = props["clusterRemoteWrite"]
 if remote["properties"]["enabled"]["default"] is not False:
     fail("clusterRemoteWrite.enabled schema default is not false")
-for name in ("clusterRemoteWrite", "tenant"):
-    description = props[name]["description"]
-    if "no controller enforces" not in description.lower():
-        fail(f"{name} description does not say no controller enforces it: {description!r}")
-    if "epic" in description.lower():
-        fail(f"{name} description still points at a later epic: {description!r}")
+# osac-operator now consumes these settings, so the description may not claim
+# they are unenforced. The tenant limits still have no consumer and must say so.
+remote_description = remote["description"]
+if "no controller enforces" in remote_description.lower():
+    fail(f"clusterRemoteWrite description still says it is unenforced: {remote_description!r}")
+if "epic" in remote_description.lower():
+    fail(f"clusterRemoteWrite description still points at a later epic: {remote_description!r}")
+tenant_description = props["tenant"]["description"]
+if "no controller enforces" not in tenant_description.lower():
+    fail(f"tenant description does not say no controller enforces it: {tenant_description!r}")
+if "epic" in tenant_description.lower():
+    fail(f"tenant description still points at a later epic: {tenant_description!r}")
 down = props["thanos"]["properties"]["downsampling"]["properties"]["enabled"]["description"]
 if "--retention.resolution-5m" not in down or "thanos.retention" not in down:
     fail(f"downsampling description does not match the Compactor flags: {down!r}")

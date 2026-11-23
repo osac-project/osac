@@ -1,0 +1,47 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- /* The platform Prometheus scrapes every store component into the same
+     store. ServiceMonitors only render where the Prometheus Operator CRD is
+     installed; the namespace carries openshift.io/cluster-monitoring=true from
+     the installer's prerequisite gate, which is the only namespace label
+     needed. */}}
+{{- if .Capabilities.APIVersions.Has "monitoring.coreos.com/v1" }}
+{{- $root := . -}}
+{{- $ns := include "osac-observability.namespace" . -}}
+{{- $collection := (.Values.global | default dict).observability.collection | default dict -}}
+{{- $interval := $collection.osacControlPlane | default "30s" -}}
+{{- $components := list
+      (dict "component" "receive" "job" "thanos-receive")
+      (dict "component" "store" "job" "thanos-store")
+      (dict "component" "query" "job" "thanos-query")
+      (dict "component" "compactor" "job" "thanos-compactor") -}}
+{{- range $components }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ .job }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.componentLabels" (dict "root" $root "component" .component) | nindent 4 }}
+spec:
+  # Prometheus Operator reads jobLabel from the selected Service. The scrape
+  # labels helper puts this value on the Service, so the series carry the
+  # stable job name (job="thanos-receive") instead of a generated one.
+  jobLabel: osac.openshift.io/metrics-job
+  namespaceSelector:
+    matchNames:
+      - {{ $ns }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: thanos
+      app.kubernetes.io/instance: {{ $root.Release.Name }}
+      app.kubernetes.io/component: {{ .component }}
+      osac.openshift.io/metrics-scrape: "true"
+  endpoints:
+    - port: http
+      path: /metrics
+      scheme: http
+      interval: {{ $interval }}
+{{- end }}
+{{- end }}
+{{- end }}

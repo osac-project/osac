@@ -836,6 +836,68 @@ var _ = Describe("Identity provider client_secret_secret", func() {
 		Expect(status.Message()).To(ContainSubstring("SECRET_TYPE_VALUE"))
 	})
 
+	It("Rejects an invalid client_secret_secret update and preserves the existing reference", func() {
+		secretID, secretName := createClientSecret(ctx, map[string][]byte{"value": []byte("original-secret")})
+		idpName := fmt.Sprintf("test-invalid-update-%s", uuid.New())
+
+		createResponse, err := client.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name: idpName, Tenant: tenantName,
+				}.Build(),
+				Spec: privatev1.IdentityProviderSpec_builder{
+					Title: "Invalid Update Provider", Enabled: true,
+					Oidc: privatev1.OidcConfig_builder{
+						AuthorizationUrl:   "https://oidc.example.com/authorize",
+						TokenUrl:           "https://oidc.example.com/token",
+						ClientId:           "test-client",
+						ClientSecretSecret: privatev1.SecretLocalReference_builder{Id: secretID}.Build(),
+						Issuer:             "https://oidc.example.com",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		idpID := createResponse.GetObject().GetId()
+		DeferCleanup(func() {
+			_, _ = client.Delete(ctx, privatev1.IdentityProvidersDeleteRequest_builder{Id: idpID}.Build())
+		})
+
+		badUpdate := privatev1.IdentityProvidersUpdateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Id: idpID,
+				Spec: privatev1.IdentityProviderSpec_builder{
+					Oidc: privatev1.OidcConfig_builder{
+						ClientSecretSecret: privatev1.SecretLocalReference_builder{Id: uuid.New()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.oidc.client_secret_secret"}},
+		}.Build()
+		_, err = client.Update(ctx, badUpdate)
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+
+		getResponse, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{Id: idpID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		ref := getResponse.GetObject().GetSpec().GetOidc().GetClientSecretSecret()
+		Expect(ref.GetId()).To(Equal(secretID))
+		Expect(ref.GetName()).To(Equal(secretName))
+
+		// An unrelated update must preserve the hydrated reference and not require
+		// the caller to repeat it in the partial object.
+		_, err = client.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+			Object:     privatev1.IdentityProvider_builder{Id: idpID, Spec: privatev1.IdentityProviderSpec_builder{Title: "Preserved Reference"}.Build()}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.title"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		getResponse, err = client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{Id: idpID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		ref = getResponse.GetObject().GetSpec().GetOidc().GetClientSecretSecret()
+		Expect(ref.GetId()).To(Equal(secretID))
+		Expect(ref.GetName()).To(Equal(secretName))
+	})
+
 	It("Updates OIDC config and verifies Keycloak reflects new values", func() {
 		firstSecretId, _ := createClientSecret(ctx, map[string][]byte{"value": []byte("orig-secret")})
 
@@ -1103,6 +1165,8 @@ var _ = Describe("Identity provider client_secret_secret", func() {
 		Expect(json.Unmarshal(body, &kcIdp)).To(Succeed())
 		Expect(kcIdp["alias"]).To(Equal(expectedAlias),
 			"Keycloak IdP alias should match after secret rotation")
+		Expect(string(body)).ToNot(ContainSubstring("initial-secret"))
+		Expect(string(body)).ToNot(ContainSubstring("rotated-secret"))
 	})
 
 	It("Updates client_secret_secret to another Vault-backed secret", func() {

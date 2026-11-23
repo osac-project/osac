@@ -1143,6 +1143,32 @@ var _ = Describe("Deletion", func() {
 		Expect(identityProvider.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
 	})
 
+	It("should retry a transient delete failure and remove only the controller finalizer after broker deletion", func() {
+		deletionTimestamp := timestamppb.New(time.Now())
+		identityProvider := privatev1.IdentityProvider_builder{
+			Id: "idp-retry",
+			Metadata: privatev1.Metadata_builder{
+				Name:              "retry-idp",
+				Tenant:            "tenant-1",
+				Finalizers:        []string{finalizers.Controller, "other-finalizer"},
+				DeletionTimestamp: deletionTimestamp,
+			}.Build(),
+		}.Build()
+
+		mockClient.EXPECT().GetIdentityProvider(gomock.Any(), "tenant-1", "tenant-1-retry-idp").Return(
+			&idp.IdentityProvider{Alias: "tenant-1-retry-idp"}, nil).Times(2)
+		mockClient.EXPECT().DeleteIdentityProvider(gomock.Any(), "tenant-1", "tenant-1-retry-idp").Return(
+			&apiclient.APIError{StatusCode: 503, Body: "temporarily unavailable"}).Times(1)
+		mockClient.EXPECT().DeleteIdentityProvider(gomock.Any(), "tenant-1", "tenant-1-retry-idp").Return(nil).Times(1)
+
+		task := &task{r: reconciler, identityProvider: identityProvider}
+		Expect(task.delete(ctx)).To(HaveOccurred())
+		Expect(identityProvider.GetMetadata().GetFinalizers()).To(ConsistOf(finalizers.Controller, "other-finalizer"))
+
+		Expect(task.delete(ctx)).To(Succeed())
+		Expect(identityProvider.GetMetadata().GetFinalizers()).To(ConsistOf("other-finalizer"))
+	})
+
 	It("should remove finalizer when called", func() {
 		identityProvider := privatev1.IdentityProvider_builder{
 			Metadata: privatev1.Metadata_builder{

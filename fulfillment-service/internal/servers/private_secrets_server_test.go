@@ -1559,6 +1559,50 @@ var _ = Describe("Private secrets server", func() {
 				Expect(updateResponse.GetObject().GetData()).To(BeEmpty())
 			})
 
+			createOpaqueSecret := func(name string) *privatev1.Secret {
+				mockStore.EXPECT().
+					Store(gomock.Any(), testTenant, "", name, map[string][]byte{
+						"a": []byte("old-a"),
+						"b": []byte("old-b"),
+					}).
+					Return(nil)
+				created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+						Type:     privatev1.SecretType_SECRET_TYPE_OPAQUE,
+						Data: map[string][]byte{
+							"a": []byte("old-a"),
+							"b": []byte("old-b"),
+						},
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				return created.GetObject()
+			}
+
+			DescribeTable("Rejects per-key data masks without writing to vault",
+				func(maskPaths []string) {
+					const name = "masked-secret"
+					created := createOpaqueSecret(name)
+
+					_, err := server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+						Object: privatev1.Secret_builder{
+							Id: created.GetId(),
+							Data: map[string][]byte{
+								"a": []byte("new-a"),
+								"b": []byte("new-b"),
+							},
+						}.Build(),
+						UpdateMask: &fieldmaskpb.FieldMask{Paths: maskPaths},
+					}.Build())
+					Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+					Expect(err.Error()).To(ContainSubstring("data.a"))
+				},
+				Entry("with a per-key mask", []string{"data.a"}),
+				Entry("with a per-key mask alongside exact data", []string{"data", "data.a"}),
+				Entry("with a padded per-key mask", []string{" data . a "}),
+			)
+
 			It("Vault store unavailability on update returns Unavailable", func() {
 				mockStore.EXPECT().
 					Store(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).

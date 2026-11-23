@@ -569,6 +569,17 @@ func (s *PrivateSecretsServer) validateSecretUpdate(_ context.Context,
 			existingSecret.GetType(), newSecret.GetType())
 	}
 
+	// Per-key paths are rejected because the Vault writer replaces the complete
+	// version and cannot merge individual keys. Every path is inspected so an
+	// exact 'data' entry cannot hide an unsupported sibling such as 'data.a'.
+	for _, path := range updateMask.GetPaths() {
+		normalized := normalizeFieldMaskPath(path)
+		if strings.HasPrefix(normalized, "data.") {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"field mask path '%s' is not supported: field 'data' must be replaced as a whole",
+				normalized)
+		}
+	}
 	dataUpdated := updateMask == nil || len(updateMask.GetPaths()) == 0 ||
 		updateIncludesField(updateMask, "data")
 	if !dataUpdated {

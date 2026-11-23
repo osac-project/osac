@@ -2579,7 +2579,7 @@
         },
         "excludedIpv4Cidrs": {
           "type": "array",
-          "description": "Canonical IPv4 CIDRs used by the provider's infrastructure (for example management, provisioning and node networks). VirtualNetwork and ExternalIPPool CIDRs may not overlap them.",
+          "description": "Canonical IPv4 CIDRs of the provider's infrastructure (management, provisioning, node and storage networks). VirtualNetwork and ExternalIPPool ranges may not overlap them. Cluster pod and service networks are not compared, by Cluster creates or the startup check.",
           "default": [],
           "uniqueItems": true,
           "items": {

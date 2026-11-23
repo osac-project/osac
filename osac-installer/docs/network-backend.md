@@ -11,7 +11,7 @@ This page describes the installer side.
 global:
   networking:
     provisioningEnabled: true      # fixed at installation
-    excludedIpv4Cidrs: []          # provider infrastructure ranges
+    excludedIpv4Cidrs: []          # provider infrastructure and storage ranges
     fabricManager: acme_fabric     # required: the Fabric Manager registration name
     k8sManager: cudn_evpn          # "" or cudn_evpn; required with VMaaS
     networkClass:
@@ -39,8 +39,9 @@ aap:
   service stores the value at its first start and refuses to start when a
   later rollout changes it.
 - `excludedIpv4Cidrs`: canonical IPv4 CIDRs the provider's infrastructure uses
-  (management, provisioning and node networks). VirtualNetwork and
-  ExternalIPPool CIDRs may not overlap them.
+  (management, provisioning, node and storage networks). VirtualNetwork and
+  ExternalIPPool CIDRs may not overlap them. Cluster pod and service networks
+  are not compared, by Cluster creates or the startup check.
 - `fabricManager`: the `name` in the provider's Fabric Manager registration.
   There is no default. With `netris`, the installer chart renders the
   registration `osac-network-fabric-manager-netris`, which declares

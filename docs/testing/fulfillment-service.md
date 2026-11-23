@@ -37,6 +37,9 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   conditions to identify the actual boundary.
 - Tests gated on provider networking skip in the standard fulfillment target;
   their presence is not evidence for the enabled-provider path.
+- The dev profile sets `global.networking.excludedIpv4Cidrs: [192.0.2.0/24]`;
+  TC-IPAM-03 in `it/it_networking_design_test.go` uses that range for the
+  VirtualNetwork and ExternalIPPool rejection cases.
 - ExternalIPPool tenant placement: a pool created without a tenant is stored
   as shared, any other tenant is rejected without persisting, a shared pool
   cannot move into a tenant, and a pool stored in a tenant before this rule

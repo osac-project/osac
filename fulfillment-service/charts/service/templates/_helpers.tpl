@@ -84,7 +84,8 @@ Returns non-empty string for enabled, empty for disabled (for use in {{- if incl
 {{/*
 Networking installation settings, from global.networking:
 - provisioningEnabled (default true): whether OSAC runs provider networking jobs. It can't change after installation.
-- excludedIpv4Cidrs (default empty): canonical IPv4 CIDRs that the provider's infrastructure uses.
+- excludedIpv4Cidrs (default empty): canonical IPv4 CIDRs that the provider's infrastructure uses,
+  including storage endpoints. Cluster pod and service networks are not compared.
 Renders the command line arguments shared by the gRPC server and the controllers.
 */}}
 {{- define "fulfillment-service.networkingArgs" -}}

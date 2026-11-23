@@ -429,7 +429,7 @@ osac-test-infra generates as `netris-runtime.yaml` (gitignored):
 global:
   networking:
     excludedIpv4Cidrs:
-    - 192.0.2.0/24        # management, provisioning and node networks
+    - 192.0.2.0/24        # management, provisioning, node and storage networks
 aap:
   instanceGroups:
     networkFulfillment:
@@ -868,7 +868,8 @@ For the complete external AAP workflow, see the externally managed AAP part of t
 #### Networking Configuration
 
 Networking is configured under `global.networking`: `provisioningEnabled`
-(fixed at installation), `excludedIpv4Cidrs`, the required `fabricManager`
+(fixed at installation), `excludedIpv4Cidrs` (including storage endpoint ranges;
+Cluster pod and service networks are not compared), the required `fabricManager`
 (the name in the provider's Fabric Manager registration), `k8sManager`
 (`cudn_evpn`, required with VMaaS), and `networkClass` (tenant defaults,
 east-west capabilities and the optional address plan). Network manager

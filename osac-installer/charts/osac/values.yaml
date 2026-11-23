@@ -83,7 +83,9 @@ global:
     # ExternalIPAttachments and NATGateways are not offered.
     provisioningEnabled: true
     # Canonical IPv4 CIDRs of the provider's infrastructure (management,
-    # provisioning and node networks).
+    # provisioning, node and storage networks). VirtualNetwork and
+    # ExternalIPPool ranges may not overlap them. Cluster pod and service
+    # networks are not compared, by Cluster creates or the startup check.
     excludedIpv4Cidrs: []
     # [REQUIRED] Registration name of the provider's Fabric Manager.
     fabricManager: ""

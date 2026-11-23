@@ -499,6 +499,10 @@ the `osac` and `osac-devstack` releases plus `scripts/dev-full/`:
 - **OSAC UI** — deployed by the tracked `osac-ui` chart dependency in the
   `osac-devstack` release; the release adds a Kind-only Gateway API `HTTPRoute`
   to the shared Envoy Gateway and disables the OpenShift Route.
+  Its backend proxy uses `https://fulfillment-internal-api:8001` for both public
+  and private RPCs. The public listener on port 8000 returns HTTP 501 for private
+  calls used by admin pages, such as listing tenants
+  ([OSAC-3617](https://redhat.atlassian.net/browse/OSAC-3617)).
 - **Seeded catalog** — a `fedora` disk image, `u1-small/medium/large` instance types,
   the `osac.templates.ocp_virt_vm` template, and a `linux-vm` catalog item (shared/global
   objects; networking is per-tenant and auto-provisioned, see below)

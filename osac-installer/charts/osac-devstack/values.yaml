@@ -71,7 +71,8 @@ ui:
     enabled: false  # Kind uses the Gateway API HTTPRoute in templates/ui.yaml.
   api:
     fulfillment:
-      url: "https://fulfillment-api.osac.localhost:8000"
+      # OSAC-3617: admin pages need private RPCs on the internal listener.
+      url: "https://fulfillment-internal-api:8001"
       certs:
         caBundle:
           configMap: ca-bundle

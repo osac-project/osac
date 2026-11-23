@@ -168,7 +168,7 @@ func readerTestClusterObject(name, tenant string, assets readerTestAssets) *publ
 	return publicv1.Cluster_builder{
 		Metadata: publicv1.Metadata_builder{Name: name, Tenant: tenant}.Build(),
 		Spec: publicv1.ClusterSpec_builder{
-			Template: publicv1.ClusterTemplateReference_builder{Id: assets.templateID}.Build(),
+			Template: publicv1.ClusterTemplateReference_builder{Id: assets.templateID, Tenant: "shared"}.Build(),
 			NodeSets: testClusterNodeSets(assets.instanceTypeID, 3),
 		}.Build(),
 	}.Build()
@@ -244,22 +244,25 @@ func createReaderRoleBindingAndConnection(
 	Expect(usersResponse.GetItems()).To(HaveLen(1))
 
 	user := usersResponse.GetItems()[0]
-	createReaderRoleBinding(ctx, user.GetId(), roleName, user.GetMetadata().GetTenant())
+	createReaderRoleBinding(ctx, user.GetId(), user.GetMetadata().GetTenant(), roleName)
 	conn, tokenSource := newReaderTestConnection(ctx, username)
 	Expect(readerTokenRoles(ctx, tokenSource)).To(ContainElement(roleName))
 	return conn, tokenSource
 }
 
-func createReaderRoleBinding(ctx context.Context, userID, roleName, tenant string) string {
+func createReaderRoleBinding(ctx context.Context, userID, userTenant, roleName string) string {
 	GinkgoHelper()
 	client := privatev1.NewRoleBindingsClient(tool.InternalView().AdminConn())
 	response, err := client.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
 		Object: privatev1.RoleBinding_builder{
-			Metadata: privatev1.Metadata_builder{Name: "reader-" + uuid.New(), Tenant: tenant}.Build(),
+			Metadata: privatev1.Metadata_builder{
+				Name:   "reader-" + uuid.New(),
+				Tenant: userTenant,
+			}.Build(),
 			Spec: privatev1.RoleBindingSpec_builder{
-				Role: privatev1.RoleReference_builder{Name: roleName}.Build(),
+				Role: privatev1.RoleReference_builder{Name: roleName, Tenant: "shared"}.Build(),
 				Users: []*privatev1.UserReference{
-					privatev1.UserReference_builder{Id: userID}.Build(),
+					privatev1.UserReference_builder{Id: userID, Tenant: userTenant}.Build(),
 				},
 			}.Build(),
 		}.Build(),

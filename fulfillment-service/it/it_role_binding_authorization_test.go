@@ -163,7 +163,7 @@ var _ = Describe("Role binding authorization", func() {
 					Tenant: usersGroup,
 				}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
-					Role: privatev1.RoleReference_builder{Id: tenantAdminRoleID}.Build(),
+					Role: privatev1.RoleReference_builder{Id: tenantAdminRoleID, Tenant: "shared"}.Build(),
 					Users: []*privatev1.UserReference{
 						privatev1.UserReference_builder{Id: userID}.Build(),
 					},

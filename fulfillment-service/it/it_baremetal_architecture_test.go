@@ -80,8 +80,8 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 		return privatev1.BareMetalInstance_builder{
 			Metadata: catalogItemFixtureMetadata(usersGroup, ""),
 			Spec: privatev1.BareMetalInstanceSpec_builder{
-				Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: template, Shared: true}.Build(),
-				DiskImage: privatev1.DiskImageReference_builder{Id: image.GetId(), Shared: true}.Build(),
+				Template:  privatev1.BareMetalInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
+				DiskImage: privatev1.DiskImageReference_builder{Id: image.GetId(), Tenant: "shared"}.Build(),
 				UserDataSource: privatev1.UserDataSource_builder{
 					Inline: new("#cloud-config\n"),
 				}.Build(),
@@ -215,7 +215,7 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 		}, Entry("masked update", true), Entry("full update", false))
 
 		DescribeTable("preserves catalog image compatibility without an instance", func(ctx context.Context, locked bool) {
-			ref := privatev1.DiskImageReference_builder{Id: image.GetId(), Shared: true}.Build()
+			ref := privatev1.DiskImageReference_builder{Id: image.GetId(), Tenant: "shared"}.Build()
 			policy := &privatev1.DiskImageReferenceFieldPolicy{}
 			if locked {
 				policy.SetLocked(ref)
@@ -225,7 +225,7 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 			catalogs := privatev1.NewBareMetalInstanceCatalogItemsClient(tool.InternalView().AdminConn())
 			catalog, err := catalogs.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{Object: privatev1.BareMetalInstanceCatalogItem_builder{
 				Metadata: catalogItemFixtureMetadata(usersGroup, ""), Title: "Protected architecture", Published: true,
-				Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: template, Shared: true}.Build(),
+				Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Fields:   privatev1.BareMetalInstanceCatalogItemFields_builder{DiskImage: policy}.Build(),
 			}.Build()}.Build())
 			Expect(err).NotTo(HaveOccurred())
@@ -249,7 +249,7 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 			}
 			setArchitectures(ctx, architectures[imageCPU])
 			obj := object()
-			obj.GetSpec().SetInstanceType(privatev1.BareMetalInstanceTypeReference_builder{Id: selected.GetId(), Shared: true}.Build())
+			obj.GetSpec().SetInstanceType(privatev1.BareMetalInstanceTypeReference_builder{Id: selected.GetId(), Tenant: "shared"}.Build())
 			if byName {
 				obj.GetSpec().GetInstanceType().SetId("")
 				obj.GetSpec().GetInstanceType().SetName(selected.GetMetadata().GetName())
@@ -283,7 +283,7 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 			obj := object()
 			if cpu != "amd64" {
 				id := createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup, cpu)
-				obj.GetSpec().SetInstanceType(privatev1.BareMetalInstanceTypeReference_builder{Id: id, Shared: true}.Build())
+				obj.GetSpec().SetInstanceType(privatev1.BareMetalInstanceTypeReference_builder{Id: id, Tenant: "shared"}.Build())
 			}
 			result, _, err := create(ctx, obj, public, false)
 			if cpu == "s390x" {
@@ -301,8 +301,8 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 			if !compatible {
 				setArchitectures(ctx, architectures["arm64"])
 			}
-			typeRef := privatev1.BareMetalInstanceTypeReference_builder{Id: instanceType.GetId(), Shared: true}.Build()
-			imageRef := privatev1.DiskImageReference_builder{Id: image.GetId(), Shared: true}.Build()
+			typeRef := privatev1.BareMetalInstanceTypeReference_builder{Id: instanceType.GetId(), Tenant: "shared"}.Build()
+			imageRef := privatev1.DiskImageReference_builder{Id: image.GetId(), Tenant: "shared"}.Build()
 			typePolicy := &privatev1.BareMetalInstanceTypeReferenceFieldPolicy{}
 			imagePolicy := &privatev1.DiskImageReferenceFieldPolicy{}
 			if locked {
@@ -315,7 +315,7 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 			catalogs := privatev1.NewBareMetalInstanceCatalogItemsClient(tool.InternalView().AdminConn())
 			item := privatev1.BareMetalInstanceCatalogItem_builder{
 				Metadata: catalogItemFixtureMetadata(usersGroup, ""), Title: "Architecture admission", Published: true,
-				Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: template, Shared: true}.Build(),
+				Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Fields:   privatev1.BareMetalInstanceCatalogItemFields_builder{InstanceType: typePolicy, DiskImage: imagePolicy}.Build(),
 			}.Build()
 			catalog, err := catalogs.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{Object: item}.Build())
@@ -340,7 +340,7 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 			expectedType := instanceType.GetId()
 			if override {
 				expectedType = createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup, "arm64")
-				obj.GetSpec().SetInstanceType(privatev1.BareMetalInstanceTypeReference_builder{Id: expectedType, Shared: true}.Build())
+				obj.GetSpec().SetInstanceType(privatev1.BareMetalInstanceTypeReference_builder{Id: expectedType, Tenant: "shared"}.Build())
 				obj.GetSpec().SetDiskImage(imageRef)
 				compatible = !compatible
 			}
@@ -376,7 +376,7 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 			Expect(err).NotTo(HaveOccurred())
 			negativeTemplate := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil, createCatalogItemBareMetalInstanceTypeFixture(ctx, usersGroup, "arm64"))
 			obj := object()
-			obj.GetSpec().SetTemplate(privatev1.BareMetalInstanceTemplateReference_builder{Id: negativeTemplate, Shared: true}.Build())
+			obj.GetSpec().SetTemplate(privatev1.BareMetalInstanceTemplateReference_builder{Id: negativeTemplate, Tenant: "shared"}.Build())
 			if byName {
 				obj.GetSpec().GetDiskImage().SetId("")
 				obj.GetSpec().GetDiskImage().SetName(image.GetMetadata().GetName())
@@ -440,7 +440,7 @@ var _ = Describe("BareMetalInstance architecture admission", Ordered, ContinueOn
 			Expect(err).NotTo(HaveOccurred())
 		}
 		obj := object()
-		ref := privatev1.DiskImageReference_builder{Id: hidden.GetId()}.Build()
+		ref := privatev1.DiskImageReference_builder{Id: hidden.GetId(), Tenant: hidden.GetMetadata().GetTenant()}.Build()
 		if byName {
 			ref.SetId("")
 			ref.SetName(hidden.GetMetadata().GetName())

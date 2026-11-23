@@ -34,7 +34,6 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 )
 
@@ -69,6 +68,7 @@ type ReferenceValidatorBuilder struct {
 type ReferenceValidator struct {
 	logger                         *slog.Logger
 	registry                       map[protoreflect.FullName]ReferenceLookupFunc
+	platformScopedReferences       map[protoreflect.FullName]struct{}
 	excludedReferencePathsByMethod map[string]map[string]struct{}
 	sealed                         atomic.Bool
 	validationTotal                *prometheus.CounterVec
@@ -153,6 +153,7 @@ func (b *ReferenceValidatorBuilder) Build() (result *ReferenceValidator, err err
 	result = &ReferenceValidator{
 		logger:                         b.logger,
 		registry:                       make(map[protoreflect.FullName]ReferenceLookupFunc),
+		platformScopedReferences:       make(map[protoreflect.FullName]struct{}),
 		excludedReferencePathsByMethod: b.excludedReferencePathsByMethod,
 		validationTotal:                validationTotal,
 		validationDuration:             validationDuration,
@@ -167,6 +168,14 @@ func (v *ReferenceValidator) Register(fullName protoreflect.FullName, lookupFunc
 		panic(fmt.Sprintf("Register called after interceptor started serving: %s", fullName))
 	}
 	v.registry[fullName] = lookupFunc
+}
+
+// RegisterPlatformScoped marks a lookup as targeting a resource whose scope is independent of
+// the owning object, such as a platform-owned ExternalIPPool or StorageTier. All other
+// references must resolve within their explicit tenant or, when omitted, their owner's tenant.
+func (v *ReferenceValidator) RegisterPlatformScoped(fullName protoreflect.FullName, lookupFunc ReferenceLookupFunc) {
+	v.Register(fullName, lookupFunc)
+	v.platformScopedReferences[fullName] = struct{}{}
 }
 
 // HasLookup reports whether a lookup function is registered for the given reference message type.
@@ -440,15 +449,7 @@ func (v *ReferenceValidator) resolveAndMutate(ctx context.Context, refMsg protor
 	}
 
 	fieldPath := strings.Join(path, ".")
-	refTenant, refProject, scopeErr := resolveTenantProject(refMsg, fullName, callerTenant, callerProject)
-	if scopeErr != nil {
-		*violations = append(*violations, &errdetails.BadRequest_FieldViolation{
-			Field:       fieldPath,
-			Description: scopeErr.Error(),
-		})
-		v.recordResult(string(fullName.Name()), "invalid")
-		return nil
-	}
+	refTenant, refProject := resolveTenantProject(refMsg, fullName, callerTenant, callerProject)
 
 	idField := refMsg.Descriptor().Fields().ByName("id")
 	nameField := refMsg.Descriptor().Fields().ByName("name")
@@ -513,12 +514,15 @@ func (v *ReferenceValidator) resolveAndMutate(ctx context.Context, refMsg protor
 			"internal error resolving reference at %s", fieldPath)
 	}
 
-	// ID-based DAOLookup registrations preserve their visibility-based legacy behavior.
-	// If the request supplies an explicit tenant, verify the resolved target belongs to it
-	// before filling fields or allowing the request to proceed.
+	// Protect the scope invariant even when a registered lookup does not apply a tenant filter.
+	// Platform-scoped types may omit tenant to use their resource-specific global scope.
 	tenantField := refMsg.Descriptor().Fields().ByName("tenant")
-	if isStringField(tenantField) && refMsg.Get(tenantField).String() != "" &&
-		resolved.Tenant != refMsg.Get(tenantField).String() {
+	explicitTenant := ""
+	if isStringField(tenantField) {
+		explicitTenant = refMsg.Get(tenantField).String()
+	}
+	_, platformScoped := v.platformScopedReferences[fullName]
+	if refTenant != "" && (!platformScoped || explicitTenant != "") && resolved.Tenant != refTenant {
 		*violations = append(*violations, &errdetails.BadRequest_FieldViolation{
 			Field:       fieldPath,
 			Description: fmt.Sprintf("%s %q not found", shortName(fullName), identifier(id, name)),
@@ -579,13 +583,13 @@ func (v *ReferenceValidator) recordDuration(resourceType string, d time.Duration
 
 // resolveTenantProject determines the tenant and project for a reference lookup based on the
 // reference type and fields. Local references always use the caller's tenant and project.
-// Full references use an explicit tenant when present, falling back to the legacy shared
-// selector and then the caller tenant. Their project value is used directly: an empty project
+// Full references use an explicit tenant when present, falling back to the caller tenant.
+// Their project value is used directly: an empty project
 // selects the tenant's default/root project rather than inheriting the caller's project.
 func resolveTenantProject(refMsg protoreflect.Message, fullName protoreflect.FullName,
-	callerTenant, callerProject string) (string, string, error) {
+	callerTenant, callerProject string) (string, string) {
 	if isLocalReference(fullName) {
-		return callerTenant, callerProject, nil
+		return callerTenant, callerProject
 	}
 
 	tenant := callerTenant
@@ -595,15 +599,8 @@ func resolveTenantProject(refMsg protoreflect.Message, fullName protoreflect.Ful
 		explicitTenant = refMsg.Get(tenantField).String()
 	}
 
-	sharedField := refMsg.Descriptor().Fields().ByName("shared")
-	shared := sharedField != nil && refMsg.Get(sharedField).Bool()
-	if explicitTenant != "" && shared && explicitTenant != auth.SharedTenant {
-		return "", "", fmt.Errorf("reference has conflicting tenant and shared selectors")
-	}
 	if explicitTenant != "" {
 		tenant = explicitTenant
-	} else if shared {
-		tenant = auth.SharedTenant
 	}
 
 	project := ""
@@ -612,7 +609,7 @@ func resolveTenantProject(refMsg protoreflect.Message, fullName protoreflect.Ful
 		project = refMsg.Get(projectField).String()
 	}
 
-	return tenant, project, nil
+	return tenant, project
 }
 
 // extractTenantProject extracts the tenant and project from the request's embedded object metadata

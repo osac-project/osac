@@ -132,7 +132,7 @@ var _ = Describe("Worker attribution", func() {
 					Project: project,
 				}.Build(),
 				Spec: privatev1.BareMetalInstanceSpec_builder{
-					DiskImage:      privatev1.DiskImageReference_builder{Id: "worker-disk-image"}.Build(),
+					DiskImage:      privatev1.DiskImageReference_builder{Id: "worker-disk-image", Tenant: "shared"}.Build(),
 					CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 					InstanceType:   bareMetalInstanceTypeReference("worker-type"),
 					UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
@@ -238,10 +238,10 @@ var _ = Describe("Worker attribution", func() {
 					Project: "web",
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
-					DiskImage:   publicv1.DiskImageReference_builder{Id: "worker-disk-image"}.Build(),
+					DiskImage:   publicv1.DiskImageReference_builder{Id: "worker-disk-image", Tenant: "shared"}.Build(),
 					CatalogItem: publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 					InstanceType: publicv1.BareMetalInstanceTypeReference_builder{
-						Id: "worker-type", Shared: true,
+						Id: "worker-type", Tenant: "shared",
 					}.Build(),
 					UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 				}.Build(),

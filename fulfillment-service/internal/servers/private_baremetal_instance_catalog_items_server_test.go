@@ -91,7 +91,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			_, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Metadata: privatev1.Metadata_builder{Name: "system-bmi-offering", Tenant: auth.SystemTenant}.Build(),
-					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-shared-template-id", Shared: true}.Build(),
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-shared-template-id", Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied))
@@ -107,7 +107,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 					}.Build(),
 					Title:       "My catalog item",
 					Description: "A test catalog item.",
-					Template:    privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-shared-template-id"}.Build(),
+					Template:    privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-shared-template-id", Tenant: "shared"}.Build(),
 					Published:   true,
 				}.Build(),
 			}.Build())
@@ -116,7 +116,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetTitle()).To(Equal("My catalog item"))
 			Expect(object.GetTemplate().GetId()).To(Equal("my-shared-template-id"))
-			Expect(object.GetTemplate().GetShared()).To(BeTrue())
+			Expect(object.GetTemplate().GetTenant()).To(Equal("shared"))
 			Expect(object.GetPublished()).To(BeTrue())
 			Expect(object.GetMetadata().GetTenant()).To(Equal(testTenant))
 		})
@@ -156,14 +156,14 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 				Metadata: privatev1.Metadata_builder{Name: "obsolete-policy-catalog"}.Build(),
 				Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 				Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
-					Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Id: "obsolete-policy-image"}.Build()}.Build(),
+					Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Id: "obsolete-policy-image", Tenant: "shared"}.Build()}.Build(),
 				}.Build()}.Build(),
 			}.Build()}.Build())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
 			Expect(err).To(MatchError(ContainSubstring("obsolete")))
 		})
 
-		It("rejects a DiskImage default owned by another tenant on Create", func() {
+		It("rejects a DiskImage default from another explicitly selected tenant on Create", func() {
 			createTenant("other-tenant")
 			createAvailableDiskImageInTenant("other-tenant-policy-image", "other-tenant-policy-image", "other-tenant")
 
@@ -171,11 +171,10 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 				Metadata: privatev1.Metadata_builder{Name: "cross-tenant-policy-catalog"}.Build(),
 				Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
 				Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
-					Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Id: "other-tenant-policy-image"}.Build()}.Build(),
+					Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Id: "other-tenant-policy-image", Tenant: "other-tenant"}.Build()}.Build(),
 				}.Build()}.Build(),
 			}.Build()}.Build())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(err).To(MatchError(ContainSubstring("owning tenant or shared tenant")))
 		})
 
 		DescribeTable("validates DiskImage defaults on fields updates", func(name string, lifecycle privatev1.DiskImageLifecycle, expectedCode grpccodes.Code, warning bool) {
@@ -190,7 +189,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Id: createResponse.GetObject().GetId(),
 					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
-						Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Id: fmt.Sprintf("update-policy-image-%s", name)}.Build()}.Build(),
+						Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Id: fmt.Sprintf("update-policy-image-%s", name), Tenant: "shared"}.Build()}.Build(),
 					}.Build()}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"fields"}},
@@ -212,7 +211,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			Entry("rejects an obsolete image", "obsolete", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE, grpccodes.FailedPrecondition, false),
 		)
 
-		It("rejects a DiskImage default owned by another tenant on fields update", func() {
+		It("rejects a DiskImage default from another explicitly selected tenant on fields update", func() {
 			createResponse, err := server.Create(ctx, privatev1.BareMetalInstanceCatalogItemsCreateRequest_builder{Object: privatev1.BareMetalInstanceCatalogItem_builder{
 				Metadata: privatev1.Metadata_builder{Name: "cross-tenant-update-policy-catalog"}.Build(),
 				Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-template-id"}.Build(),
@@ -225,13 +224,12 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Id: createResponse.GetObject().GetId(),
 					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{
-						Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Id: "other-tenant-update-policy-image"}.Build()}.Build(),
+						Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Id: "other-tenant-update-policy-image", Tenant: "other-update-tenant"}.Build()}.Build(),
 					}.Build()}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"fields"}},
 			}.Build())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(err).To(MatchError(ContainSubstring("owning tenant or shared tenant")))
 		})
 
 		It("Lists objects", func() {
@@ -292,7 +290,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			_, err = server.Update(ctx, privatev1.BareMetalInstanceCatalogItemsUpdateRequest_builder{
 				Object: privatev1.BareMetalInstanceCatalogItem_builder{
 					Id:       createResponse.GetObject().GetId(),
-					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-shared-template-id"}.Build(),
+					Template: privatev1.BareMetalInstanceTemplateReference_builder{Id: "my-shared-template-id", Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
@@ -439,17 +437,16 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 					Fields: privatev1.BareMetalInstanceCatalogItemFields_builder{
 						SshKey: privatev1.FullSecretReferenceFieldPolicy_builder{
 							Locked: privatev1.SecretReference_builder{
-								Id:     secret.GetObject().GetId(),
-								Name:   secret.GetObject().GetMetadata().GetName(),
-								Shared: true,
+								Id:   secret.GetObject().GetId(),
+								Name: secret.GetObject().GetMetadata().GetName(), Tenant: "shared",
 							}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument),
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound),
 				"a shared locked key could never be consumed by an instance")
-			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("must be tenant-scoped"))
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("not found or is not visible"))
 
 			projects, err := dao.NewGenericDAO[*privatev1.Project]().
 				SetLogger(logger).SetTenancyLogic(tenancy).Build()
@@ -487,7 +484,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 			Expect(projectStored.GetId()).To(Equal(projectSecret.GetObject().GetId()))
 			Expect(projectStored.GetName()).To(Equal("catalog-project-ssh-key"))
 			Expect(projectStored.GetProject()).To(Equal("catalog-ssh-key-project"))
-			Expect(projectStored.GetShared()).To(BeFalse())
+			Expect(projectStored.GetTenant()).ToNot(Equal("shared"))
 		})
 
 		DescribeTable("rejects invalid BMaaS SSH-key catalog references", func(reference *privatev1.SecretReference, expected grpccodes.Code) {
@@ -586,7 +583,7 @@ var _ = Describe("Private bare metal instance catalog items server", func() {
 
 var _ = Describe("Bare Metal Instance Catalog Item policy application", func() {
 	It("applies every Bare Metal policy and deep-clones lists and messages", func() {
-		instanceType := privatev1.BareMetalInstanceTypeReference_builder{Id: "host-id", Name: "host", Shared: true}.Build()
+		instanceType := privatev1.BareMetalInstanceTypeReference_builder{Id: "host-id", Name: "host", Tenant: "shared"}.Build()
 		diskImage := privatev1.DiskImageReference_builder{Id: "image-id", Name: "disk-image"}.Build()
 		attachment := privatev1.BareMetalNetworkAttachment_builder{
 			Subnet:         policyTestSubnet("bare-metal-subnet"),
@@ -620,7 +617,7 @@ var _ = Describe("Bare Metal Instance Catalog Item policy application", func() {
 		Expect(spec.GetAutoExternalIpAttachment()).To(BeFalse())
 		Expect(spec.GetInstanceType()).NotTo(BeIdenticalTo(instanceType))
 		Expect(spec.GetInstanceType().GetName()).To(Equal(instanceType.GetName()))
-		Expect(spec.GetInstanceType().GetShared()).To(BeTrue())
+		Expect(spec.GetInstanceType().GetTenant()).To(Equal("shared"))
 		Expect(spec.GetDiskImage()).NotTo(BeIdenticalTo(diskImage))
 
 		spec.GetNetworkAttachments()[1].GetSubnet().SetName("changed")

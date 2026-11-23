@@ -587,7 +587,7 @@ var _ = Describe("Generic mapper", func() {
 						Tenant: "system",
 					}.Build(),
 					privatev1.AddOnOperatorReference_builder{
-						Id: "shared-addon-id", Name: "shared-addon", Tenant: "shared", Shared: true,
+						Id: "shared-addon-id", Name: "shared-addon", Tenant: "shared",
 					}.Build(),
 				},
 				NodeSets: map[string]*privatev1.ClusterNodeSet{
@@ -615,7 +615,7 @@ var _ = Describe("Generic mapper", func() {
 		Expect(template.GetName()).To(BeEmpty())
 		Expect(template.GetProject()).To(BeEmpty())
 		Expect(template.GetTenant()).To(BeEmpty())
-		Expect(template.GetShared()).To(BeFalse())
+		Expect(template.GetTenant()).ToNot(Equal("shared"))
 
 		operators := publicObject.GetSpec().GetAddOnOperators()
 		Expect(operators).To(HaveLen(2))
@@ -623,21 +623,22 @@ var _ = Describe("Generic mapper", func() {
 		Expect(operators[0].GetTenant()).To(BeEmpty())
 		Expect(operators[1].GetId()).To(Equal("shared-addon-id"))
 		Expect(operators[1].GetTenant()).To(Equal("shared"))
-		Expect(operators[1].GetShared()).To(BeTrue())
+		Expect(operators[1].GetTenant()).To(Equal("shared"))
 		nodeSetRef := publicObject.GetSpec().GetNodeSets()["system-node"].GetBaremetalInstanceType()
 		Expect(nodeSetRef.GetId()).To(BeEmpty())
 		Expect(nodeSetRef.GetTenant()).To(BeEmpty())
 		Expect(proto.Equal(privateObject, original)).To(BeTrue())
 	})
 
-	It("resolves ID-only user references before public redaction", func() {
+	It("resolves user references in their selected tenant before public redaction", func() {
 		privateObject := privatev1.ProjectMembership_builder{
 			Metadata: privatev1.Metadata_builder{Tenant: "acme"}.Build(),
 			Spec: privatev1.ProjectMembershipSpec_builder{
 				Users: []*privatev1.UserReference{
 					privatev1.UserReference_builder{Id: "system-user-id"}.Build(),
 					privatev1.UserReference_builder{Id: "regular-user-id"}.Build(),
-					privatev1.UserReference_builder{Id: "shared-user-id"}.Build(),
+					privatev1.UserReference_builder{Id: "shared-only-user-id"}.Build(),
+					privatev1.UserReference_builder{Id: "shared-user-id", Tenant: "shared"}.Build(),
 					privatev1.UserReference_builder{Id: "unavailable-user-id"}.Build(),
 					privatev1.UserReference_builder{Id: "explicit-tenant-user-id", Tenant: "acme"}.Build(),
 				},
@@ -657,6 +658,10 @@ var _ = Describe("Generic mapper", func() {
 				if tenant == "acme" {
 					return &references.ResolvedRef{ID: id, Tenant: "acme"}, nil
 				}
+			case "shared-only-user-id":
+				if tenant == "shared" {
+					return &references.ResolvedRef{ID: id, Tenant: "shared"}, nil
+				}
 			case "shared-user-id":
 				if tenant == "shared" {
 					return &references.ResolvedRef{ID: id, Tenant: "shared"}, nil
@@ -675,15 +680,17 @@ var _ = Describe("Generic mapper", func() {
 		Expect(mapper.Copy(ctx, privateObject, publicObject)).To(Succeed())
 
 		users := publicObject.GetSpec().GetUsers()
-		Expect(users).To(HaveLen(5))
+		Expect(users).To(HaveLen(6))
 		Expect(users[0].GetId()).To(BeEmpty())
 		Expect(users[0].GetTenant()).To(BeEmpty())
 		Expect(users[1].GetId()).To(Equal("regular-user-id"))
 		Expect(users[1].GetTenant()).To(BeEmpty())
-		Expect(users[2].GetId()).To(Equal("shared-user-id"))
-		Expect(users[3].GetId()).To(BeEmpty())
-		Expect(users[4].GetId()).To(Equal("explicit-tenant-user-id"))
-		Expect(users[4].GetTenant()).To(Equal("acme"))
+		Expect(users[2].GetId()).To(BeEmpty())
+		Expect(users[3].GetId()).To(Equal("shared-user-id"))
+		Expect(users[3].GetTenant()).To(Equal("shared"))
+		Expect(users[4].GetId()).To(BeEmpty())
+		Expect(users[5].GetId()).To(Equal("explicit-tenant-user-id"))
+		Expect(users[5].GetTenant()).To(Equal("acme"))
 	})
 
 	It("preserves system-tenant full references in private mappings", func() {

@@ -27,16 +27,10 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-const (
-	sshKeyTenantScopedMessage      = "SSH key reference must be tenant-scoped."
-	sshKeyReferenceNotFoundMessage = "SSH key Secret was not found or is not visible in the selected project."
-)
+const sshKeyReferenceNotFoundMessage = "SSH key Secret was not found or is not visible in the selected project."
 
 // validateTenantScopedSSHKeyReference restricts SSH key Secrets to the owning tenant.
 func validateTenantScopedSSHKeyReference(reference *privatev1.SecretReference, ownerTenant string) error {
-	if reference != nil && reference.GetShared() {
-		return grpcstatus.Error(grpccodes.InvalidArgument, sshKeyTenantScopedMessage)
-	}
 	if reference != nil && reference.GetTenant() != "" && reference.GetTenant() != ownerTenant {
 		return grpcstatus.Error(grpccodes.NotFound, sshKeyReferenceNotFoundMessage)
 	}
@@ -49,6 +43,7 @@ func canonicalSSHKeySecretReference(secret *privatev1.Secret) *privatev1.SecretR
 		Id:      secret.GetId(),
 		Name:    secret.GetMetadata().GetName(),
 		Project: secret.GetMetadata().GetProject(),
+		Tenant:  secret.GetMetadata().GetTenant(),
 	}.Build()
 }
 

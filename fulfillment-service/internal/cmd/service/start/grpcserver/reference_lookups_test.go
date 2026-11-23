@@ -138,9 +138,9 @@ var _ = Describe("RegisterReferenceLookups", func() {
 			requestType, err := protoregistry.GlobalTypes.FindMessageByName(protoreflect.FullName(prefix + "Clusters" + method + "Request"))
 			Expect(err).ToNot(HaveOccurred())
 			request = requestType.New().Interface()
-			body := `{"object":{"spec":{"nodeSets":{"workers":{"size":1,"baremetalInstanceType":{"name":"worker-type","shared":true}}}}}}`
+			body := `{"object":{"spec":{"nodeSets":{"workers":{"size":1,"baremetalInstanceType":{"name":"worker-type","tenant":"shared"}}}}}}`
 			if method == "Update" {
-				body = `{"object":{"id":"cluster-id","spec":{"nodeSets":{"workers":{"size":1,"baremetalInstanceType":{"name":"worker-type","shared":true}}}}},"updateMask":"spec.nodeSets"}`
+				body = `{"object":{"id":"cluster-id","spec":{"nodeSets":{"workers":{"size":1,"baremetalInstanceType":{"name":"worker-type","tenant":"shared"}}}}},"updateMask":"spec.nodeSets"}`
 			}
 			Expect(protojson.Unmarshal([]byte(body), request)).To(Succeed())
 			info = &grpc.UnaryServerInfo{FullMethod: "/" + prefix + "Clusters/" + method}
@@ -197,7 +197,7 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		requestType, err := protoregistry.GlobalTypes.FindMessageByName(protoreflect.FullName(prefix + "ClusterCatalogItems" + method + "Request"))
 		Expect(err).ToNot(HaveOccurred())
 		request := requestType.New().Interface()
-		nodeMap := `{"items":{"workers":{"size":1,"baremetalInstanceType":{"name":"unresolved-type","shared":true}}}}`
+		nodeMap := `{"items":{"workers":{"size":1,"baremetalInstanceType":{"name":"unresolved-type","tenant":"shared"}}}}`
 		if behavior == "editable" {
 			nodeMap = `{"defaultValue":` + nodeMap + `}`
 		}

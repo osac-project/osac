@@ -280,7 +280,9 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		specBuilder := publicv1.ClusterSpec_builder{
-			CatalogItem: &publicv1.ClusterCatalogItemReference{Id: catalogItem.GetId()},
+			CatalogItem: &publicv1.ClusterCatalogItemReference{
+				Id: catalogItem.GetId(), Tenant: catalogItem.GetMetadata().GetTenant(),
+			},
 		}
 		if err := c.applyOptionalSpecFields(&specBuilder); err != nil {
 			return err
@@ -323,7 +325,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	// Build the cluster spec:
 	specBuilder := publicv1.ClusterSpec_builder{
-		Template:           &publicv1.ClusterTemplateReference{Id: template.GetId()},
+		Template:           &publicv1.ClusterTemplateReference{Id: template.GetId(), Tenant: template.GetMetadata().GetTenant()},
 		TemplateParameters: templateParameterValues,
 	}
 	if err := c.applyOptionalSpecFields(&specBuilder); err != nil {
@@ -994,7 +996,7 @@ func parseClusterNodeSetFlag(s string) (string, *publicv1.ClusterNodeSet, error)
 
 	if bmitName := values["baremetal-instance-type"]; bmitName != "" {
 		builder.BaremetalInstanceType = publicv1.BareMetalInstanceTypeReference_builder{
-			Name: bmitName, Tenant: auth.SharedTenant, Shared: true,
+			Name: bmitName, Tenant: auth.SharedTenant,
 		}.Build()
 	}
 

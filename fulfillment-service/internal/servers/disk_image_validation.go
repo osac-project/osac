@@ -93,27 +93,15 @@ func resolveDiskImage(
 }
 
 // resolveDiskImageReference finds the image named by a Catalog policy or resource.
-// If acme/apps and shared/apps both have "fedora", {name: "fedora"} prefers acme, while
-// {name: "fedora", tenant: "shared"} selects shared. The legacy shared selector remains
-// supported during the compatibility period. Use project when the selected image is in a
-// different project. An ID selects a caller-visible image directly.
+// An omitted tenant selects the owner tenant. To select a different tenant, set tenant
+// explicitly; use project when the selected image is in a different project. An ID selects
+// a caller-visible image directly, subject to the same tenant check.
 // The image must belong to the owner tenant or selected tenant; callers check its lifecycle
 // and fill the stored reference after this function returns.
 func resolveDiskImageReference(ctx context.Context, resourceDao *dao.GenericDAO[*privatev1.DiskImage], scope referenceScope, ref *privatev1.DiskImageReference, source string) (*privatev1.DiskImage, error) {
-	var err error
-	var resolved *privatev1.DiskImage
-	if ref.GetId() == "" && ref.GetName() != "" && ref.GetTenant() == "" && !ref.GetShared() && ref.GetProject() == "" {
-		resolved, err = resolveDiskImage(
-			ctx, resourceDao, ref.GetName(), scope.tenant, source,
-		)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		resolved, err = resolveFullResourceReference(
-			ctx, resourceDao, scope, ref, "disk image", source, grpccodes.NotFound,
-		)
-	}
+	resolved, err := resolveFullResourceReference(
+		ctx, resourceDao, scope, ref, "disk image", source, grpccodes.NotFound,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -126,24 +114,11 @@ func resolveDiskImageReference(ctx context.Context, resourceDao *dao.GenericDAO[
 // resolveLockedDiskImageReference applies the same name and scope rules while holding
 // an exclusive lock on the selected image until the request transaction ends.
 func resolveLockedDiskImageReference(ctx context.Context, resourceDao *dao.GenericDAO[*privatev1.DiskImage], scope referenceScope, ref *privatev1.DiskImageReference, source string) (*privatev1.DiskImage, error) {
-	var err error
-	var resolved *privatev1.DiskImage
-	if ref.GetId() == "" && ref.GetName() != "" && ref.GetTenant() == "" && !ref.GetShared() && ref.GetProject() == "" {
-		resolved, err = resolveDiskImage(ctx, resourceDao, ref.GetName(), scope.tenant, source)
-		if err != nil {
-			return nil, err
-		}
-		resolved, err = getLockedReferenceResource(ctx, resourceDao, resolved.GetId())
-		if err != nil {
-			return nil, resourceLookupError(err, "disk image", ref.GetName(), source, grpccodes.NotFound)
-		}
-	} else {
-		resolved, err = resolveLockedFullResourceReference(
-			ctx, resourceDao, scope, ref, "disk image", source, grpccodes.NotFound,
-		)
-		if err != nil {
-			return nil, err
-		}
+	resolved, err := resolveLockedFullResourceReference(
+		ctx, resourceDao, scope, ref, "disk image", source, grpccodes.NotFound,
+	)
+	if err != nil {
+		return nil, err
 	}
 	if err := validateDependencyOwnerScope(scope, resolved.GetMetadata(), ref.GetTenant(), "disk image", source); err != nil {
 		return nil, err

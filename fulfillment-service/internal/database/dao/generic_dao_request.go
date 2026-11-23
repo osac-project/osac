@@ -401,11 +401,7 @@ func (r *request[O]) cloneObject(object O) O {
 }
 
 func (r *request[O]) marshalData(object O) (result []byte, err error) {
-	normalized := r.cloneObject(object)
-	if err = normalizeReferenceSelectors(normalized.ProtoReflect()); err != nil {
-		return nil, fmt.Errorf("failed to normalize reference selectors: %w", err)
-	}
-	result, err = r.dao.jsonEncoder.Marshal(normalized)
+	result, err = r.dao.jsonEncoder.Marshal(object)
 	return
 }
 
@@ -413,7 +409,6 @@ func (r *request[O]) unmarshalData(data []byte, object O) error {
 	if err := r.dao.unmarshalOptions.Unmarshal(data, object); err != nil {
 		return err
 	}
-	canonicalizeSharedTenantSelectors(object.ProtoReflect())
 	return nil
 }
 

@@ -87,7 +87,7 @@ var _ = Describe("RoleBinding UserReference authorization", func() {
 					Tenant: usersGroup,
 				}.Build(),
 				Spec: publicv1.RoleBindingSpec_builder{
-					Role: publicv1.RoleReference_builder{Name: "tenant-idp-manager"}.Build(),
+					Role: publicv1.RoleReference_builder{Name: "tenant-idp-manager", Tenant: "shared"}.Build(),
 					Users: []*publicv1.UserReference{
 						publicv1.UserReference_builder{Id: actorID}.Build(),
 					},
@@ -123,7 +123,7 @@ var _ = Describe("RoleBinding UserReference authorization", func() {
 			Object: publicv1.RoleBinding_builder{
 				Metadata: publicv1.Metadata_builder{Name: bindingName, Tenant: usersGroup}.Build(),
 				Spec: publicv1.RoleBindingSpec_builder{
-					Role: publicv1.RoleReference_builder{Name: "tenant-admin"}.Build(),
+					Role: publicv1.RoleReference_builder{Name: "tenant-admin", Tenant: "shared"}.Build(),
 					Users: []*publicv1.UserReference{
 						publicv1.UserReference_builder{Id: foreignUserID}.Build(),
 					},
@@ -186,7 +186,7 @@ var _ = Describe("RoleBinding UserReference authorization", func() {
 			Object: publicv1.RoleBinding_builder{
 				Metadata: publicv1.Metadata_builder{Name: bindingName, Tenant: usersGroup}.Build(),
 				Spec: publicv1.RoleBindingSpec_builder{
-					Role: publicv1.RoleReference_builder{Name: "tenant-admin"}.Build(),
+					Role: publicv1.RoleReference_builder{Name: "tenant-admin", Tenant: "shared"}.Build(),
 					Users: []*publicv1.UserReference{
 						publicv1.UserReference_builder{Name: username}.Build(),
 					},

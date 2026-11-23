@@ -268,7 +268,8 @@ func (s *PrivateBareMetalInstanceCatalogItemsServer) prepareCatalogItemCandidate
 }
 
 // validateAndCanonicalizeTemplate finds the Template named by this Catalog Item. A name lookup
-// starts in the item's tenant/project; project or shared selectors can choose another scope.
+// starts in the item's tenant/project; tenant selectors may choose shared dependencies, and
+// project selectors may choose another project in the same tenant.
 // It stores the Template's actual ID/name/scope, checks parameter policies against that
 // Template, and forbids changing the Template on Update.
 func (s *PrivateBareMetalInstanceCatalogItemsServer) validateAndCanonicalizeTemplate(
@@ -278,7 +279,7 @@ func (s *PrivateBareMetalInstanceCatalogItemsServer) validateAndCanonicalizeTemp
 	if ref == nil || (ref.GetId() == "" && ref.GetName() == "") {
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'template' must specify id or name")
 	}
-	resolved, err := resolveLockedFullResourceReference(ctx, s.templatesDao, catalogItemScope(candidate), ref,
+	resolved, err := resolveLockedCatalogItemReference(ctx, s.templatesDao, catalogItemScope(candidate), ref,
 		"bare metal instance template", " in template", grpccodes.InvalidArgument)
 	if err != nil {
 		return nil, err

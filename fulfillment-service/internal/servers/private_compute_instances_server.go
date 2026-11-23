@@ -1052,10 +1052,11 @@ func sameImmutableSSHKeyReference(
 	if proto.Equal(existing, candidate) {
 		return true
 	}
-	if existing == nil || candidate == nil || candidate.GetShared() {
+	if existing == nil || candidate == nil {
 		return false
 	}
-	if existing.GetProject() != candidate.GetProject() {
+	if existing.GetProject() != candidate.GetProject() ||
+		(candidate.GetTenant() != "" && existing.GetTenant() != "" && candidate.GetTenant() != existing.GetTenant()) {
 		return false
 	}
 	if candidate.GetId() != "" {

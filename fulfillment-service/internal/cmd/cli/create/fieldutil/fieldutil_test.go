@@ -29,7 +29,7 @@ var _ = Describe("ParseSSHKeyFlag", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ref.GetName()).To(Equal(wantName))
 			Expect(ref.GetProject()).To(Equal(wantProject))
-			Expect(ref.GetShared()).To(BeFalse())
+			Expect(ref.GetTenant()).ToNot(Equal("shared"))
 		},
 		Entry("bare name", "login-key", "login-key", ""),
 		Entry("name key", "name=login-key", "login-key", ""),

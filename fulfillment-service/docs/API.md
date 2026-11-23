@@ -759,32 +759,38 @@ There are two kinds of references:
 
 ### Full references
 
-Full references can point to objects in another project or tenant:
+Full references can point to objects in another project or a caller-visible tenant. They use
+`tenant` to select the target tenant. Field number `4` and the name `shared` are reserved because
+the legacy selector has been retired:
 
 ```protobuf
 message ClusterTemplateReference {
   string id = 1;
   string name = 2;
   string project = 3;
+  reserved 4;
+  reserved "shared";
   string tenant = 5;
 }
 ```
 
 | Field     | Description |
-|-----------|-----------------------------------------------|
-| `tenant`  | Tenant where the referenced object lives.     |
-| `project` | Project where the refrenced object lives.     |
-| `id`      | Unique identifier of the referenced object.   |
+|-----------|-------------|
+| `id`      | Unique identifier of the referenced object. |
 | `name`    | Human-readable name of the referenced object. |
+| `project` | Project used for name lookups. When omitted, the tenant's default project is used. |
+| `tenant`  | Tenant where the referenced object lives. When omitted, the owning tenant is used. The caller must be allowed to see an explicitly selected tenant. |
 
 When used as inputs supplied by the caller:
 
-- `tenant` is optional, and by default the server will use the tenant that the caller belongs to.
+- `tenant` is optional. When omitted, the server uses the owning tenant. An explicit tenant selects
+  the target tenant for both ID and name lookups.
 
-- `project` is optional, and by default the server will use the default project of the tenant.
+- `project` is optional. When omitted, name lookups use the tenant's default project.
 
-- Callers may supply only `id`, only `name`, or both. The server checks that they are consistent,
-  and populates the missing fields accordingly.
+- Callers may supply `id`, `name`, or both. When both are provided they must refer to the same
+  object; otherwise the server returns `InvalidArgument`. The server fills in whichever field is
+  missing after a successful lookup.
 
 When used as outputs returned by the server:
 
@@ -792,11 +798,14 @@ When used as outputs returned by the server:
   empty when they are not needed to select the object.
 
 - Public responses retain references to system-tenant objects but omit their `id`, `name`,
-  `project`, `tenant`, and `shared` values. User references that cannot be safely resolved are also
-  redacted.
+  `project`, and `tenant` values. User references that cannot be safely resolved are also redacted.
 
-The `shared` boolean field is equivalent to setting `tenant` to `shared`, it is now deprecated
-and will be removed soon.
+Full references are used when the target object may live outside the caller's project — for
+example, cluster templates, catalog items, host types, instance types, IP pools, roles, and users.
+
+ExternalIPPools live in the `shared` tenant. Because pools are platform-scoped, a name reference can
+omit the tenant selector. To select the tenant explicitly, set `tenant: "shared"`. An ID reference
+needs neither selector.
 
 ### Local references
 
@@ -902,8 +911,38 @@ To reference an object by name in another caller-visible tenant, set `tenant`. F
 }
 ```
 
-During the compatibility period, `shared: true` remains accepted when `tenant` is empty. If both
-selectors are set, `shared: true` is valid only with `tenant: "shared"`.
+### Server-side validation and resolution
+
+The server validates references on `Create` and `Update`. A gRPC interceptor handles most
+reference fields. For each field it handles, the interceptor:
+
+1. Determines the lookup scope from the reference and its owner. A non-empty `tenant` selects the
+   target tenant for both ID and name lookups. Without it, lookups stay within the owner tenant.
+   For name lookups, `project` selects the target project.
+2. Looks up the referenced object by `id` or `name`.
+3. If both `id` and `name` are provided, verifies they refer to the same object.
+4. Fills in whichever of `id` or `name` the caller omitted.
+
+For an `Update` with a non-empty mask containing only `status` or `status.*`
+paths, the interceptor does not revalidate references in the unchanged
+`object.spec`. References in `object.status` are still validated. `Create`,
+spec or mixed updates, and updates with an empty mask validate spec references.
+
+Some references are validated by the object's handler after the complete object to be saved is
+known.
+
+For invalid references found by the interceptor, the server returns `InvalidArgument` with
+`google.rpc.BadRequest` details. Each `FieldViolation` names the reference field (e.g.,
+`object.spec.network_attachments[0].subnet`).
+
+## Documentation
+
+All elements of the public API (services, methods, messages, fields, enums, and enum values) must
+have documentation comments in the `.proto` files. The private API must also be documented for all
+new additions, because in the future the public API will be generated from the private API.
+
+Documentation should be written for users of the API, not for developers of the system. It should
+not contain implementation details that are irrelevant to API consumers.
 
 ## Additional rules
 

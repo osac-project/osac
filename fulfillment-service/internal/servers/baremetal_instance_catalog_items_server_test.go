@@ -172,7 +172,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 					Metadata: publicv1.Metadata_builder{Name: "public-deprecated-policy-catalog"}.Build(),
 					Template: publicv1.BareMetalInstanceTemplateReference_builder{Id: "my-bmi-template-id"}.Build(),
 					Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
-						Editable: publicv1.EditableDiskImageReferenceField_builder{DefaultValue: publicv1.DiskImageReference_builder{Id: "deprecated-public-create"}.Build()}.Build(),
+						Editable: publicv1.EditableDiskImageReferenceField_builder{DefaultValue: publicv1.DiskImageReference_builder{Id: "deprecated-public-create", Tenant: "shared"}.Build()}.Build(),
 					}.Build()}.Build(),
 				}.Build(),
 			}.Build())
@@ -180,7 +180,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 			Expect(createResponse.GetWarnings()).To(ConsistOf(ContainSubstring("deprecated")))
 
 			item := proto.Clone(createResponse.GetObject()).(*publicv1.BareMetalInstanceCatalogItem)
-			item.GetFields().GetDiskImage().GetEditable().SetDefaultValue(publicv1.DiskImageReference_builder{Id: "deprecated-public-update"}.Build())
+			item.GetFields().GetDiskImage().GetEditable().SetDefaultValue(publicv1.DiskImageReference_builder{Id: "deprecated-public-update", Tenant: "shared"}.Build())
 			updateResponse, err := server.Update(ctx, publicv1.BareMetalInstanceCatalogItemsUpdateRequest_builder{
 				Object:     item,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"fields"}},
@@ -420,7 +420,7 @@ var _ = Describe("Bare metal instance catalog items server", func() {
 						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image", Tenant: "shared"}.Build(),
 						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemID}.Build(),
 						InstanceType:   bareMetalInstanceTypeReference("referenced-type"),
 						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
@@ -462,8 +462,8 @@ var _ = Describe("Catalog publication and references", func() {
 		Expect(err).ToNot(HaveOccurred())
 		request := publicv1.BareMetalInstanceCatalogItemsCreateRequest_builder{Object: publicv1.BareMetalInstanceCatalogItem_builder{
 			Metadata: publicv1.Metadata_builder{Name: "offering"}.Build(), Title: "Offering", Published: true,
-			Template: publicv1.BareMetalInstanceTemplateReference_builder{Name: "my-bare-metal-template", Shared: true}.Build(),
-			Fields:   publicv1.BareMetalInstanceCatalogItemFields_builder{DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{Locked: publicv1.DiskImageReference_builder{Id: dependency.GetId()}.Build()}.Build()}.Build(),
+			Template: publicv1.BareMetalInstanceTemplateReference_builder{Name: "my-bare-metal-template", Tenant: "shared"}.Build(),
+			Fields:   publicv1.BareMetalInstanceCatalogItemFields_builder{DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{Locked: publicv1.DiskImageReference_builder{Id: dependency.GetId(), Tenant: "shared"}.Build()}.Build()}.Build(),
 		}.Build()}.Build()
 		original := proto.Clone(request)
 		result, err := server.Create(ctx, request)

@@ -679,8 +679,8 @@ func createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx context.Con
 	image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
 	tier := createCatalogItemStorageTierFixture(ctx)
 	return createCatalogItemComputeInstanceTemplateFixture(ctx, privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-		InstanceType: privatev1.InstanceTypeReference_builder{Id: instanceType}.Build(),
-		DiskImage:    privatev1.DiskImageReference_builder{Id: image.GetId()}.Build(),
+		InstanceType: privatev1.InstanceTypeReference_builder{Id: instanceType, Tenant: "shared"}.Build(),
+		DiskImage:    privatev1.DiskImageReference_builder{Id: image.GetId(), Tenant: "shared"}.Build(),
 		BootDisk: privatev1.ComputeInstanceDisk_builder{
 			SizeGib:     new(int32(30)),
 			StorageTier: privatev1.StorageTierReference_builder{Id: tier}.Build(),
@@ -747,8 +747,7 @@ func createCatalogItemBareMetalInstanceTemplateFixture(ctx context.Context, defa
 	}
 	if len(instanceType) > 0 && instanceType[0] != "" {
 		object.InstanceType = privatev1.BareMetalInstanceTypeReference_builder{
-			Id:     instanceType[0],
-			Shared: true,
+			Id: instanceType[0], Tenant: "shared",
 		}.Build()
 	}
 	response, err := client.Create(ctx, privatev1.BareMetalInstanceTemplatesCreateRequest_builder{
@@ -809,7 +808,7 @@ func createCatalogItemClusterVersionFixture(ctx context.Context, version string)
 			Metadata: catalogItemFixtureMetadata("shared", ""),
 			Spec: privatev1.ClusterVersionSpec_builder{
 				Version: version, Image: "quay.io/openshift-release-dev/ocp-release:" + version + "-multi",
-				DiskImage: privatev1.DiskImageReference_builder{Id: image.GetId()}.Build(),
+				DiskImage: privatev1.DiskImageReference_builder{Id: image.GetId(), Tenant: "shared"}.Build(),
 			}.Build(),
 		}.Build(),
 	}.Build())

@@ -166,7 +166,7 @@ func validateComputeInstanceCatalogItemInstanceTypePolicy(
 	if state.hasLocked {
 		ref = state.lockedValue
 	}
-	resolved, err := resolveLockedFullResourceReference(ctx, resourceDao, scope, ref,
+	resolved, err := resolveLockedCatalogItemReference(ctx, resourceDao, scope, ref,
 		"instance type", " in fields.instance_type", grpccodes.NotFound)
 	if err != nil {
 		return nil, err

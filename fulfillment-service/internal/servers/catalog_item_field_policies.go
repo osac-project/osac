@@ -297,7 +297,7 @@ func validateCatalogItemNetworkAttachmentsNotEmpty[T any](field string, state po
 
 // validateCatalogItemDiskImagePolicy checks a locked image or editable image default when an
 // offering is saved. A name-only reference prefers the item's tenant image, then a shared image;
-// explicit project/shared selectors choose their scope. It returns the resolved image, stores
+// explicit project/tenant selectors choose their scope. It returns the resolved image, stores
 // its ID/name/scope in the policy, and holds a dependency lock through the request transaction.
 func validateCatalogItemDiskImagePolicy(
 	ctx context.Context,
@@ -316,7 +316,8 @@ func validateCatalogItemDiskImagePolicy(
 	if state.hasLocked {
 		ref = state.lockedValue
 	}
-	resolved, err := resolveLockedDiskImageReference(ctx, resourceDao, scope, ref, " in fields.disk_image")
+	resolved, err := resolveLockedCatalogItemReference(ctx, resourceDao, scope, ref,
+		"disk image", " in fields.disk_image", grpccodes.NotFound)
 	if err != nil {
 		return nil, nil, err
 	}

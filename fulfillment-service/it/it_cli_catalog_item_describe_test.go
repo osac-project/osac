@@ -35,7 +35,7 @@ var _ = Describe("CLI Catalog Item descriptions", Label("cli", "catalog-items"),
 		compute := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 			Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: "shared"}.Build(),
 			Title:    "Development VM", Published: true,
-			Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+			Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 			Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 				SshKey: publicv1.FullSecretReferenceFieldPolicy_builder{Editable: publicv1.EditableFullSecretReferenceField_builder{}.Build()}.Build(),
 				BootDisk: publicv1.ComputeInstanceBootDiskFieldPolicies_builder{
@@ -57,7 +57,7 @@ var _ = Describe("CLI Catalog Item descriptions", Label("cli", "catalog-items"),
 		clusterTemplate := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
 		cluster := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 			Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-			Template: publicv1.ClusterTemplateReference_builder{Id: clusterTemplate}.Build(),
+			Template: publicv1.ClusterTemplateReference_builder{Id: clusterTemplate, Tenant: "shared"}.Build(),
 			Fields: publicv1.ClusterCatalogItemFields_builder{
 				AutoExternalIpAttachment: publicv1.BoolFieldPolicy_builder{Locked: new(false)}.Build(),
 			}.Build(),
@@ -71,7 +71,7 @@ var _ = Describe("CLI Catalog Item descriptions", Label("cli", "catalog-items"),
 		bareTemplate := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)
 		bare := createBareMetalInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.BareMetalInstanceCatalogItem_builder{
 			Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-			Template: publicv1.BareMetalInstanceTemplateReference_builder{Id: bareTemplate}.Build(),
+			Template: publicv1.BareMetalInstanceTemplateReference_builder{Id: bareTemplate, Tenant: "shared"}.Build(),
 			Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
 				SshKey:         publicv1.FullSecretReferenceFieldPolicy_builder{Editable: publicv1.EditableFullSecretReferenceField_builder{}.Build()}.Build(),
 				UserDataSource: publicv1.UserDataSourceFieldPolicy_builder{Locked: publicv1.UserDataSource_builder{Inline: new("#cloud-config\nusers: []")}.Build()}.Build(),

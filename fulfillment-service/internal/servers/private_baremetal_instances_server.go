@@ -925,7 +925,7 @@ func validateBareMetalImmutability(
 			} else {
 				sameKey = existingKey.GetName() == newKey.GetName() &&
 					(newKey.GetProject() == "" || newKey.GetProject() == existingKey.GetProject()) &&
-					(!newKey.GetShared() || existingKey.GetShared())
+					(newKey.GetTenant() == "" || existingKey.GetTenant() == "" || newKey.GetTenant() == existingKey.GetTenant())
 			}
 		}
 		if !sameKey {

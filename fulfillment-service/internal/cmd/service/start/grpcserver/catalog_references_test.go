@@ -44,7 +44,7 @@ var _ = Describe("Catalog reference RPC integration", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = invokeCatalogRPC("private", kind+"Templates", "Create", fmt.Sprintf(`{"object":{"metadata":{"name":%q,"tenant":%q},"title":"Tenant Template"}}`, name, name))
 		Expect(err).ToNot(HaveOccurred())
-		response, err := invokeCatalogRPC(layer, kind+"CatalogItems", "Create", fmt.Sprintf(`{"object":{"metadata":{"name":%q,"tenant":"shared"},"title":"Offering","published":true,"template":{"name":%q,"shared":true}}}`, name, name))
+		response, err := invokeCatalogRPC(layer, kind+"CatalogItems", "Create", fmt.Sprintf(`{"object":{"metadata":{"name":%q,"tenant":"shared"},"title":"Offering","published":true,"template":{"name":%q,"tenant":"shared"}}}`, name, name))
 		Expect(err).ToNot(HaveOccurred())
 		object := response.ProtoReflect().Get(response.ProtoReflect().Descriptor().Fields().ByName("object")).Message()
 		id := object.Get(object.Descriptor().Fields().ByName("id")).String()
@@ -57,7 +57,7 @@ var _ = Describe("Catalog reference RPC integration", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("id and name"))
 		// A real ordinary tenant makes publication the first provisioning rejection for every resource type.
-		_, err = invokeCatalogRPC(layer, kind+"s", "Create", fmt.Sprintf(`{"object":{"metadata":{"name":"resource","tenant":%q},"spec":{"catalogItem":{"id":%q}}}}`, name, id))
+		_, err = invokeCatalogRPC(layer, kind+"s", "Create", fmt.Sprintf(`{"object":{"metadata":{"name":"resource","tenant":%q},"spec":{"catalogItem":{"id":%q,"tenant":"shared"}}}}`, name, id))
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("not published"))
 		// Same-name tenant and shared catalogs must resolve using the requested selector.
@@ -65,15 +65,17 @@ var _ = Describe("Catalog reference RPC integration", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = invokeCatalogRPC(layer, kind+"CatalogItems", "Update", fmt.Sprintf(`{"object":{"id":%q,"published":true},"updateMask":"published"}`, id))
 		Expect(err).ToNot(HaveOccurred())
-		for _, shared := range []bool{false, true} {
-			if shared {
+		for _, selectsSharedTenant := range []bool{false, true} {
+			selector := ""
+			if selectsSharedTenant {
 				By("resolving the published shared catalog by name")
+				selector = `,"tenant":"shared"`
 			} else {
 				By("rejecting the unpublished tenant catalog by name")
 			}
-			_, err = invokeCatalogRPC(layer, kind+"s", "Create", fmt.Sprintf(`{"object":{"metadata":{"name":"resource","tenant":%q},"spec":{"catalogItem":{"name":%q,"shared":%t}}}}`, name, name, shared))
+			_, err = invokeCatalogRPC(layer, kind+"s", "Create", fmt.Sprintf(`{"object":{"metadata":{"name":"resource","tenant":%q},"spec":{"catalogItem":{"name":%q%s}}}}`, name, name, selector))
 			Expect(err).To(HaveOccurred())
-			if shared {
+			if selectsSharedTenant {
 				Expect(err.Error()).ToNot(ContainSubstring("not published"))
 			} else {
 				Expect(err.Error()).To(ContainSubstring("not published"))

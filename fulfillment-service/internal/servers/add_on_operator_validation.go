@@ -60,7 +60,6 @@ type addOnOperatorReferenceCacheKey struct {
 	ownerTenant  string
 	ownerProject string
 	project      string
-	shared       bool
 }
 
 type addOnOperatorReferenceResolver struct {
@@ -74,7 +73,6 @@ func (r *addOnOperatorReferenceResolver) resolve(
 	ownerMetadata *privatev1.Metadata,
 	field string,
 ) (*privatev1.AddOnOperator, error) {
-	defaultAddOnOperatorReferenceScope(ref)
 	ownerMetadata = addOnOperatorOwnerMetadata(ownerMetadata, ref)
 	key := addOnOperatorReferenceCacheKey{
 		id:           ref.GetId(),
@@ -85,7 +83,6 @@ func (r *addOnOperatorReferenceResolver) resolve(
 	if fullReference, ok := ref.(fullResourceReference); ok {
 		key.tenant = fullReference.GetTenant()
 		key.project = fullReference.GetProject()
-		key.shared = fullReference.GetShared()
 	}
 	if cached, ok := r.cache[key]; ok {
 		canonicalizeResourceReference(ref, cached)
@@ -152,7 +149,6 @@ func (r *addOnOperatorResourceResolver) resolve(
 	if ref == nil || (ref.GetId() == "" && ref.GetName() == "") {
 		return nil, addOnOperatorFieldError(field, fmt.Sprintf("add-on operator reference in %s must specify id or name", field))
 	}
-	defaultAddOnOperatorReferenceScope(ref)
 	ownerMetadata = addOnOperatorOwnerMetadata(ownerMetadata, ref)
 	resolved, err := resolveAndCanonicalizeReferenceWithGet(
 		ctx,
@@ -175,28 +171,12 @@ func (r *addOnOperatorResourceResolver) resolve(
 	return resolved, nil
 }
 
-// defaultAddOnOperatorReferenceScope selects the shared tenant before resolving a name-only
-// add-on operator reference. Add-on operators are shared catalog resources, so the generic
-// resolver must see this scope selector during lookup rather than after canonicalization.
-func defaultAddOnOperatorReferenceScope(ref resourceReference) {
-	fullReference, ok := ref.(fullResourceReference)
-	if !ok {
-		return
-	}
-	if fullReference.GetId() != "" || fullReference.GetTenant() != "" ||
-		fullReference.GetProject() != "" || fullReference.GetShared() {
-		return
-	}
-	fullReference.SetTenant(auth.SharedTenant)
-}
-
 func addOnOperatorOwnerMetadata(ownerMetadata *privatev1.Metadata, ref resourceReference) *privatev1.Metadata {
 	fullReference, ok := ref.(fullResourceReference)
 	if !ok {
 		return ownerMetadata
 	}
-	selectsSharedTenant := fullReference.GetTenant() == auth.SharedTenant ||
-		(fullReference.GetTenant() == "" && fullReference.GetShared())
+	selectsSharedTenant := fullReference.GetTenant() == auth.SharedTenant
 	if selectsSharedTenant && fullReference.GetProject() == "" && ownerMetadata.GetProject() != "" {
 		ownerMetadata = cloneMessage(ownerMetadata)
 		ownerMetadata.SetProject("")

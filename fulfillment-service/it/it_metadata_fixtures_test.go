@@ -704,7 +704,7 @@ func newComputeInstanceMetadataFixture(ctx context.Context, accounts metadataTes
 	catalogItem := createComputeInstanceCatalogItemFixture(ctx, accounts.tenantAdmin.Conn,
 		publicv1.ComputeInstanceCatalogItem_builder{
 			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-			Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
+			Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: templateID, Tenant: "shared"}.Build(),
 			Published: true,
 			Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 				RunStrategy: publicv1.ComputeInstanceRunStrategyFieldPolicy_builder{
@@ -713,7 +713,7 @@ func newComputeInstanceMetadataFixture(ctx context.Context, accounts metadataTes
 			}.Build(),
 		}.Build())
 	instance, err := createComputeInstanceFixture(ctx, accounts.tenantUser.Conn, publicv1.ComputeInstanceSpec_builder{
-		CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: catalogItem.GetId()}.Build(),
+		CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: catalogItem.GetId(), Tenant: catalogItem.GetMetadata().GetTenant()}.Build(),
 		NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 	}.Build())
 	if err != nil {

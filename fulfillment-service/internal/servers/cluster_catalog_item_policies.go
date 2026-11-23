@@ -215,7 +215,7 @@ func validateClusterCatalogItemVersionPolicy(
 		if ref == nil {
 			return nil, nil
 		}
-		resolved, resolveErr := resolveLockedFullResourceReference(ctx, clusterVersionsDao, scope, ref,
+		resolved, resolveErr := resolveLockedCatalogItemReference(ctx, clusterVersionsDao, scope, ref,
 			"cluster version", " in fields.version", grpccodes.InvalidArgument)
 		if resolveErr != nil {
 			return nil, resolveErr
@@ -407,7 +407,7 @@ func validateClusterCatalogItemNodeSetPolicy(
 	for name, node := range nodeMap.GetItems() {
 		field := "fields.node_sets." + name + ".baremetal_instance_type"
 		ref := node.GetBaremetalInstanceType()
-		resolved, err := resolveLockedFullResourceReference(ctx, instanceTypes, catalogItemScope(item), ref,
+		resolved, err := resolveLockedCatalogItemReference(ctx, instanceTypes, catalogItemScope(item), ref,
 			"bare metal instance type", " in "+field, grpccodes.InvalidArgument)
 		if err != nil {
 			return err

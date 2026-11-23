@@ -46,15 +46,15 @@ func fullSecretReferencePolicyFromJSON(value string) (*privatev1.FullSecretRefer
 }
 
 var _ = Describe("CatalogItem SSH key policy", func() {
-	It("rejects shared Secret references before accessing the Secret DAO", func() {
+	It("rejects a shared-tenant Secret selector before accessing the Secret DAO", func() {
 		policy, err := fullSecretReferencePolicyFromJSON(
-			`{"editable":{"defaultValue":{"name":"catalog-key","project":"apps","shared":true}}}`,
+			`{"editable":{"defaultValue":{"name":"catalog-key","project":"apps","tenant":"shared"}}}`,
 		)
 		Expect(err).NotTo(HaveOccurred())
 
 		err = validateCatalogItemSSHKeyPolicy(ctx, referenceScope{tenant: testTenant}, policy, nil)
-		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-		Expect(status.Convert(err).Message()).To(ContainSubstring("tenant-scoped"))
+		Expect(status.Code(err)).To(Equal(codes.NotFound))
+		Expect(status.Convert(err).Message()).To(ContainSubstring("not found or is not visible"))
 	})
 
 	It("rejects SSH key references selecting a different tenant", func() {

@@ -207,7 +207,7 @@ var _ = Describe("Networking tenant isolation", func() {
 					Tenant: tenant,
 				}.Build(),
 				Spec: privatev1.ExternalIPSpec_builder{
-					Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID}.Build(),
+					Pool: privatev1.ExternalIPPoolReference_builder{Id: poolID, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -292,11 +292,11 @@ var _ = Describe("Networking tenant isolation", func() {
 					Tenant: tenant,
 				}.Build(),
 				Spec: privatev1.ClusterSpec_builder{
-					Template:          privatev1.ClusterTemplateReference_builder{Id: templateID}.Build(),
+					Template:          privatev1.ClusterTemplateReference_builder{Id: templateID, Tenant: "shared"}.Build(),
 					NetworkAttachment: network.privateClusterAttachment(),
 					NodeSets: map[string]*privatev1.ClusterNodeSet{
 						"workers": privatev1.ClusterNodeSet_builder{
-							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: instanceTypeName, Shared: true}.Build(),
+							BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: instanceTypeName, Tenant: "shared"}.Build(),
 							Size:                  new(int32(1)),
 						}.Build(),
 					},
@@ -326,7 +326,7 @@ var _ = Describe("Networking tenant isolation", func() {
 			}.Build(),
 		}.Build())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-		Expect(err).To(MatchError(ContainSubstring("does not exist")))
+		Expect(err).To(MatchError(ContainSubstring("not found")))
 	})
 
 	It("accepts Subnet referencing same-tenant VirtualNetwork", func() {
@@ -366,7 +366,7 @@ var _ = Describe("Networking tenant isolation", func() {
 			}.Build(),
 		}.Build())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-		Expect(err).To(MatchError(ContainSubstring("does not exist")))
+		Expect(err).To(MatchError(ContainSubstring("not found")))
 	})
 
 	It("accepts ExternalIP referencing a shared ExternalIPPool", func() {
@@ -413,7 +413,7 @@ var _ = Describe("Networking tenant isolation", func() {
 				Object: publicv1.ExternalIP_builder{
 					Metadata: publicv1.Metadata_builder{Name: ndUniqueName("eip")}.Build(),
 					Spec: publicv1.ExternalIPSpec_builder{
-						Pool: publicv1.ExternalIPPoolReference_builder{Name: name}.Build(),
+						Pool: publicv1.ExternalIPPoolReference_builder{Name: name, Tenant: "shared"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())

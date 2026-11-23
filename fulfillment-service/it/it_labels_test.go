@@ -115,7 +115,7 @@ var _ = Describe("Labels", func() {
 					Labels: labels,
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NetworkAttachment: network.clusterAttachment(),
 					NodeSets:          testClusterNodeSets(bmitName, 3),
 				}.Build(),
@@ -146,7 +146,7 @@ var _ = Describe("Labels", func() {
 					Name: fmt.Sprintf("labels-test-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NetworkAttachment: network.clusterAttachment(),
 					NodeSets:          testClusterNodeSets(bmitName, 3),
 				}.Build(),
@@ -168,7 +168,7 @@ var _ = Describe("Labels", func() {
 					Labels: labels,
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NetworkAttachment: object.GetSpec().GetNetworkAttachment(),
 				}.Build(),
 			}.Build(),
@@ -195,7 +195,7 @@ var _ = Describe("Labels", func() {
 					Name: fmt.Sprintf("labels-reserved-test-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NetworkAttachment: network.clusterAttachment(),
 					NodeSets:          testClusterNodeSets(bmitName, 3),
 				}.Build(),
@@ -248,7 +248,7 @@ var _ = Describe("Labels", func() {
 					Labels:  map[string]string{"public": "replacement"},
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
@@ -292,7 +292,7 @@ var _ = Describe("Labels", func() {
 					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
 						NetworkAttachment: network.clusterAttachment(),
-						Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+						Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -308,7 +308,7 @@ var _ = Describe("Labels", func() {
 						Name: fmt.Sprintf("labels-test-%s", uuid.New()[24:32]),
 					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+						Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 						NetworkAttachment: network.clusterAttachment(),
 						NodeSets:          testClusterNodeSets(bmitName, 3),
 					}.Build(),
@@ -328,7 +328,7 @@ var _ = Describe("Labels", func() {
 						},
 					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+						Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},

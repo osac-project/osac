@@ -242,7 +242,7 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 				Object: publicv1.ComputeInstance_builder{
 					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
 					Spec: publicv1.ComputeInstanceSpec_builder{
-						Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+						Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 						SshKey:             testCase.reference,
 					}.Build(),
@@ -257,7 +257,7 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 			Expect(ref.GetId()).To(Equal(testCase.secret.GetId()))
 			Expect(ref.GetName()).To(Equal(name))
 			Expect(ref.GetProject()).To(Equal(testCase.secret.GetMetadata().GetProject()))
-			Expect(ref.GetShared()).To(BeFalse())
+			Expect(ref.GetTenant()).ToNot(Equal("shared"))
 		}
 	})
 
@@ -271,7 +271,7 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 		client := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
 
 		created, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.ComputeInstanceSpec_builder{
-			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 			SshKey:             publicv1.SecretReference_builder{Name: name}.Build(),
 		}.Build())
@@ -284,7 +284,7 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 		body, err := json.Marshal(map[string]any{
 			"metadata": map[string]any{"name": catalogItemFixtureName()},
 			"spec": map[string]any{
-				"template": map[string]any{"id": template},
+				"template": map[string]any{"id": template, "tenant": "shared"},
 				"ssh_key":  map[string]any{"name": name, "project": ""},
 				"network_attachments": []any{map[string]any{
 					"subnet":          map[string]any{"id": network.subnetID},
@@ -332,7 +332,7 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 			Object: publicv1.ComputeInstance_builder{
 				Metadata: publicv1.Metadata_builder{Name: instanceName}.Build(),
 				Spec: publicv1.ComputeInstanceSpec_builder{
-					Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+					Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 					NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 					SshKey:             publicv1.SecretReference_builder{Id: outOfProject.GetId(), Project: ops}.Build(),
 				}.Build(),
@@ -368,7 +368,7 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 				Object: publicv1.ComputeInstance_builder{
 					Metadata: publicv1.Metadata_builder{Name: instanceName}.Build(),
 					Spec: publicv1.ComputeInstanceSpec_builder{
-						Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+						Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 						SshKey:             testCase.ref,
 					}.Build(),
@@ -422,7 +422,7 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 			deferComputeInstanceDeletion(instance.GetId(), tool.ExternalView().UserConn())
 			Expect(instance.GetSpec().GetSshKey().GetId()).To(Equal(testCase.secret.GetId()))
 			Expect(instance.GetSpec().GetSshKey().GetProject()).To(Equal(testCase.secret.GetMetadata().GetProject()))
-			Expect(instance.GetSpec().GetSshKey().GetShared()).To(BeFalse())
+			Expect(instance.GetSpec().GetSshKey().GetTenant()).ToNot(Equal("shared"))
 		}
 	})
 
@@ -440,7 +440,7 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-			Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+			Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 			Published: true,
 			Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 				SshKey: publicv1.FullSecretReferenceFieldPolicy_builder{
@@ -464,6 +464,6 @@ var _ = Describe("ComputeInstance SSH key project scope", Label("compute-instanc
 		Expect(instance.GetSpec().GetSshKey().GetId()).To(Equal(secret.GetId()))
 		Expect(instance.GetSpec().GetSshKey().GetName()).To(Equal(secret.GetMetadata().GetName()))
 		Expect(instance.GetSpec().GetSshKey().GetProject()).To(Equal(project))
-		Expect(instance.GetSpec().GetSshKey().GetShared()).To(BeFalse())
+		Expect(instance.GetSpec().GetSshKey().GetTenant()).ToNot(Equal("shared"))
 	})
 })

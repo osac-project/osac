@@ -228,15 +228,16 @@ The input file can contain multiple documents separated by `---`. Create depende
 
 ### Reference scope
 
-You can reference an object by ID or name. An ID must be visible to you, but does not need `tenant`
-or `project` selectors. If you supply both an ID and a name, they must identify the same object.
+You can reference an object by ID or name. If you supply both an ID and a name, they must identify
+the same object. An omitted `tenant` selects the Catalog Item's tenant, including for ID lookups;
+set `tenant: shared` when a tenant Catalog Item uses a shared dependency. Catalog Items may use only
+dependencies in their own tenant or in `shared`.
 
 When using a name, set `tenant: shared` for an object in the shared tenant. Set `project` to reference
 an object in another project within the same tenant. Omitting `project` selects the tenant's default
 project; it does not inherit the catalog item's project. Specify the non-default project for named
 dependencies there, or the lookup may fail or select a same-named object from the default project.
-Legacy `shared: true` remains accepted during the compatibility period. See
-[Object references](API.md#object-references) for the reference format.
+See [Object references](API.md#object-references) for the reference format.
 
 Shared catalogs use shared dependencies. Tenant catalogs can use shared objects or objects from
 their own tenant.

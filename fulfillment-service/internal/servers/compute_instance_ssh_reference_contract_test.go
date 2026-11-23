@@ -97,9 +97,10 @@ var _ = Describe("ComputeInstance SSH reference scope", func() {
 			projectField := reference.ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name("project"))
 			Expect(projectField).NotTo(BeNil())
 			Expect(reference.ProtoReflect().Get(projectField).String()).To(Equal(tc.project))
-			sharedField := reference.ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name("shared"))
-			Expect(sharedField).NotTo(BeNil())
-			Expect(reference.ProtoReflect().Get(sharedField).Bool()).To(BeFalse())
+			tenantField := reference.ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name("tenant"))
+			Expect(tenantField).NotTo(BeNil())
+			Expect(reference.ProtoReflect().Get(tenantField).String()).To(Equal(testTenant))
+			Expect(reference.ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name("shared"))).To(BeNil())
 		}
 	})
 
@@ -138,13 +139,13 @@ var _ = Describe("ComputeInstance SSH reference scope", func() {
 		}
 	})
 
-	It("rejects shared references before accessing the Secret DAO", func() {
-		instance, err := computeInstanceWithSSHKey(testTenant, `{"name":"hidden-key","shared":true}`)
+	It("rejects a shared-tenant selector before accessing the Secret DAO", func() {
+		instance, err := computeInstanceWithSSHKey(testTenant, `{"name":"hidden-key","tenant":"shared"}`)
 		Expect(err).NotTo(HaveOccurred())
 
 		err = (&PrivateComputeInstancesServer{}).validateSshPublicKey(ctx, instance, nil)
-		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-		Expect(status.Convert(err).Message()).To(Equal("SSH key reference must be tenant-scoped."))
+		Expect(status.Code(err)).To(Equal(codes.NotFound))
+		Expect(status.Convert(err).Message()).To(Equal(sshKeyReferenceNotFoundMessage))
 	})
 
 	It("keeps the full SSH reference immutable", func() {
@@ -158,26 +159,28 @@ var _ = Describe("ComputeInstance SSH reference scope", func() {
 		Expect(status.Convert(err).Message()).To(ContainSubstring("ssh_key is immutable"))
 	})
 
-	It("decodes stored ID/name-only references with default project and shared values", func() {
+	It("decodes stored ID/name-only references with owner tenant scope", func() {
 		instance, err := computeInstanceWithSSHKey(testTenant, `{"id":"legacy-id","name":"legacy-name"}`)
 		Expect(err).NotTo(HaveOccurred())
 		reference := instance.GetSpec().GetSshKey().ProtoReflect()
 		projectField := reference.Descriptor().Fields().ByName(protoreflect.Name("project"))
-		sharedField := reference.Descriptor().Fields().ByName(protoreflect.Name("shared"))
+		tenantField := reference.Descriptor().Fields().ByName(protoreflect.Name("tenant"))
 		Expect(projectField).NotTo(BeNil())
-		Expect(sharedField).NotTo(BeNil())
+		Expect(tenantField).NotTo(BeNil())
+		Expect(reference.Descriptor().Fields().ByName(protoreflect.Name("shared"))).To(BeNil())
 		Expect(reference.Get(projectField).String()).To(BeEmpty())
-		Expect(reference.Get(sharedField).Bool()).To(BeFalse())
+		Expect(reference.Get(tenantField).String()).To(BeEmpty())
 
 		item, err := computeInstanceCatalogItemWithSSHPolicy(testTenant,
 			`{"editable":{"defaultValue":{"id":"legacy-id","name":"legacy-name"}}}`)
 		Expect(err).NotTo(HaveOccurred())
 		legacyDefault := item.GetFields().GetSshKey().GetEditable().GetDefaultValue().ProtoReflect()
 		projectField = legacyDefault.Descriptor().Fields().ByName(protoreflect.Name("project"))
-		sharedField = legacyDefault.Descriptor().Fields().ByName(protoreflect.Name("shared"))
+		tenantField = legacyDefault.Descriptor().Fields().ByName(protoreflect.Name("tenant"))
 		Expect(projectField).NotTo(BeNil())
-		Expect(sharedField).NotTo(BeNil())
+		Expect(tenantField).NotTo(BeNil())
+		Expect(legacyDefault.Descriptor().Fields().ByName(protoreflect.Name("shared"))).To(BeNil())
 		Expect(legacyDefault.Get(projectField).String()).To(BeEmpty())
-		Expect(legacyDefault.Get(sharedField).Bool()).To(BeFalse())
+		Expect(legacyDefault.Get(tenantField).String()).To(BeEmpty())
 	})
 })

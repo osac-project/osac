@@ -127,7 +127,7 @@ var _ = Describe("Reference validator", func() {
 		localLookups := 0
 		v.Register("osac.tests.v1.TestTargetLocalReference", func(ctx context.Context, tenant, project, id, name string) (*ResolvedRef, error) {
 			localLookups++
-			return &ResolvedRef{ID: "local-id", Name: name}, nil
+			return &ResolvedRef{ID: "local-id", Tenant: tenant, Name: name}, nil
 		})
 		request := testsv1.UpdateTestResourceWithRefsRequest_builder{Object: testsv1.TestResourceWithRefs_builder{
 			Metadata: testsv1.Metadata_builder{Tenant: "tenant-a"}.Build(),
@@ -179,7 +179,7 @@ var _ = Describe("Reference validator", func() {
 					if name == "running-type" {
 						Expect(tenant).To(Equal("tenant-a"))
 						Expect(project).To(Equal("catalog"))
-						return &ResolvedRef{ID: "running-type-id", Name: name}, nil
+						return &ResolvedRef{ID: "running-type-id", Tenant: tenant, Name: name}, nil
 					}
 					return nil, &errRefNotFound{identifier: name}
 				})
@@ -306,7 +306,7 @@ var _ = Describe("Reference validator", func() {
 			Expect(tenant).To(Equal("tenant-a"))
 			Expect(project).To(Equal("project-a"))
 			if name == "kubeconfig" {
-				return &ResolvedRef{ID: "kubeconfig-id", Name: name}, nil
+				return &ResolvedRef{ID: "kubeconfig-id", Tenant: tenant, Name: name}, nil
 			}
 			return nil, &errRefNotFound{identifier: name}
 		})
@@ -764,7 +764,7 @@ var _ = Describe("Reference validator", func() {
 				if name == "" {
 					name = "name-" + id
 				}
-				return &ResolvedRef{ID: id, Name: name}, nil
+				return &ResolvedRef{ID: id, Tenant: tenant, Name: name}, nil
 			}
 			validator.Register("osac.tests.v1.TestTargetReference", lookup)
 			validator.Register("osac.tests.v1.TestTargetLocalReference", lookup)
@@ -860,13 +860,13 @@ var _ = Describe("Reference validator", func() {
 			var scopes []string
 			lookup := func(ctx context.Context, tenant, project, id, name string) (*ResolvedRef, error) {
 				scopes = append(scopes, tenant+"/"+project)
-				return &ResolvedRef{ID: "id-" + name, Name: name}, nil
+				return &ResolvedRef{ID: "id-" + name, Tenant: tenant, Name: name}, nil
 			}
 			validator.Register("osac.tests.v1.TestTargetReference", lookup)
 			validator.Register("osac.tests.v1.TestTargetLocalReference", lookup)
 			spec := testsv1.TestRefSpec_builder{
 				Targets: map[string]*testsv1.TestTargetReference{
-					"selected": testsv1.TestTargetReference_builder{Name: "shared", Shared: true, Project: "selected"}.Build(),
+					"selected": testsv1.TestTargetReference_builder{Name: "shared", Project: "selected", Tenant: "shared"}.Build(),
 				},
 				NumberedTargets: map[int64]*testsv1.TestTargetLocalReference{
 					1: testsv1.TestTargetLocalReference_builder{Name: "local"}.Build(),
@@ -934,7 +934,7 @@ var _ = Describe("Reference validator", func() {
 
 		It("rejects inconsistent id and name in a map reference", func() {
 			validator.Register("osac.tests.v1.TestTargetReference", func(ctx context.Context, tenant, project, id, name string) (*ResolvedRef, error) {
-				return &ResolvedRef{ID: "other-id", Name: name}, nil
+				return &ResolvedRef{ID: "other-id", Tenant: tenant, Name: name}, nil
 			})
 			spec := testsv1.TestRefSpec_builder{Targets: map[string]*testsv1.TestTargetReference{
 				"target": testsv1.TestTargetReference_builder{Id: "id", Name: "name"}.Build(),
@@ -986,7 +986,7 @@ var _ = Describe("Reference validator", func() {
 			Expect(err).ToNot(HaveOccurred())
 			lookup := func(ctx context.Context, tenant, project, id, name string) (*ResolvedRef, error) {
 				lookups++
-				return &ResolvedRef{ID: "id-" + name, Name: name}, nil
+				return &ResolvedRef{ID: "id-" + name, Tenant: tenant, Name: name}, nil
 			}
 			validator.Register("osac.tests.v1.TestTargetReference", lookup)
 			validator.Register("osac.tests.v1.TestTargetLocalReference", lookup)
@@ -1029,7 +1029,7 @@ var _ = Describe("Reference validator", func() {
 			Expect(err).ToNot(HaveOccurred())
 			lookup := func(ctx context.Context, tenant, project, id, name string) (*ResolvedRef, error) {
 				lookups++
-				return &ResolvedRef{ID: "id-" + name, Name: name}, nil
+				return &ResolvedRef{ID: "id-" + name, Tenant: tenant, Name: name}, nil
 			}
 			validator.Register("osac.tests.v1.TestOtherTargetLocalReference", lookup)
 			validator.Register("osac.tests.v1.TestTargetLocalReference", lookup)
@@ -1441,7 +1441,7 @@ var _ = Describe("Reference validator", func() {
 			Expect(capturedProject).To(Equal("other-project"))
 		})
 
-		It("Uses shared tenant when shared flag is set on full reference", func() {
+		It("uses the explicitly selected shared tenant on a full reference", func() {
 			var capturedTenant string
 			validator.Register("osac.tests.v1.TestTargetReference", func(
 				ctx context.Context, tenant, project, id, name string,
@@ -1459,8 +1459,7 @@ var _ = Describe("Reference validator", func() {
 					}.Build(),
 					Spec: testsv1.TestRefSpec_builder{
 						Target: testsv1.TestTargetReference_builder{
-							Name:   "shared-target",
-							Shared: true,
+							Name: "shared-target", Tenant: "shared",
 						}.Build(),
 					}.Build(),
 				}.Build(),
@@ -1541,13 +1540,13 @@ var _ = Describe("Reference validator", func() {
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 		})
 
-		It("rejects conflicting tenant and legacy shared selectors before lookup", func() {
+		It("rejects a target outside the owner tenant when tenant is omitted", func() {
 			lookupCalls := 0
 			validator.Register("osac.private.v1.DiskImageReference", func(
 				ctx context.Context, tenant, project, id, name string,
 			) (*ResolvedRef, error) {
 				lookupCalls++
-				return &ResolvedRef{ID: id, Tenant: tenant, Project: project, Name: name}, nil
+				return &ResolvedRef{ID: id, Tenant: "tenant-b", Project: project, Name: name}, nil
 			})
 
 			request := privatev1.ComputeInstancesCreateRequest_builder{
@@ -1555,7 +1554,7 @@ var _ = Describe("Reference validator", func() {
 					Metadata: privatev1.Metadata_builder{Tenant: "tenant-a"}.Build(),
 					Spec: privatev1.ComputeInstanceSpec_builder{
 						DiskImage: privatev1.DiskImageReference_builder{
-							Name: "image", Tenant: "tenant-b", Shared: true,
+							Name: "image",
 						}.Build(),
 					}.Build(),
 				}.Build(),
@@ -1569,7 +1568,7 @@ var _ = Describe("Reference validator", func() {
 			)
 
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(lookupCalls).To(BeZero())
+			Expect(lookupCalls).To(Equal(1))
 		})
 
 		// OSAC-6381 regression: a global reference with an empty
@@ -1698,8 +1697,7 @@ var _ = Describe("Reference validator", func() {
 					}.Build(),
 					Spec: testsv1.TestRefSpec_builder{
 						Target: testsv1.TestTargetReference_builder{
-							Name:   "shared-default-target",
-							Shared: true,
+							Name: "shared-default-target", Tenant: "shared",
 						}.Build(),
 					}.Build(),
 				}.Build(),
@@ -2028,8 +2026,9 @@ var _ = Describe("Reference validator", func() {
 				ctx context.Context, tenant, project, id, name string,
 			) (*ResolvedRef, error) {
 				return &ResolvedRef{
-					ID:   "my-id",
-					Name: "my-name",
+					ID:     "my-id",
+					Tenant: tenant,
+					Name:   "my-name",
 				}, nil
 			})
 
@@ -2071,8 +2070,9 @@ var _ = Describe("Reference validator", func() {
 				ctx context.Context, tenant, project, id, name string,
 			) (*ResolvedRef, error) {
 				return &ResolvedRef{
-					ID:   "different-id",
-					Name: "different-name",
+					ID:     "different-id",
+					Tenant: tenant,
+					Name:   "different-name",
 				}, nil
 			})
 
@@ -2126,8 +2126,9 @@ var _ = Describe("Reference validator", func() {
 				ctx context.Context, tenant, project, id, name string,
 			) (*ResolvedRef, error) {
 				return &ResolvedRef{
-					ID:   "resolved-" + name,
-					Name: name,
+					ID:     "resolved-" + name,
+					Tenant: tenant,
+					Name:   name,
 				}, nil
 			}
 			validator.Register("osac.tests.v1.TestTargetReference", lookupFunc)
@@ -2203,8 +2204,9 @@ var _ = Describe("Reference validator", func() {
 				ctx context.Context, tenant, project, id, name string,
 			) (*ResolvedRef, error) {
 				return &ResolvedRef{
-					ID:   "resolved-" + name,
-					Name: name,
+					ID:     "resolved-" + name,
+					Tenant: tenant,
+					Name:   name,
 				}, nil
 			})
 

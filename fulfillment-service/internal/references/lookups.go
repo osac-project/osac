@@ -45,16 +45,15 @@ func NewDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
 	return newDAOLookupFunc(d, false, false, false, false)
 }
 
-// NewScopedDAOLookupFunc creates a DAO lookup that additionally constrains references to an
-// explicitly supplied tenant/project. If the caller has no explicit tenant, it retains the
-// visibility-based behavior of NewDAOLookupFunc.
+// NewScopedDAOLookupFunc constrains references to the supplied tenant and project. The
+// ReferenceValidator supplies the owner's scope when the request omits tenant.
 func NewScopedDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
 	return newDAOLookupFunc(d, true, false, false, false)
 }
 
 // NewTenantScopedDAOLookupFunc scopes ID-based lookups to the supplied tenant and name-only
-// lookups to the supplied tenant and project. If no tenant is supplied, it retains the
-// visibility-based behavior of NewDAOLookupFunc.
+// lookups to the supplied tenant and project. The ReferenceValidator supplies the owner's
+// tenant when the request omits it.
 func NewTenantScopedDAOLookupFunc[O dao.Object](d *dao.GenericDAO[O]) ReferenceLookupFunc {
 	return newDAOLookupFunc(d, false, true, false, true)
 }
@@ -129,19 +128,15 @@ func PublishedFilter(filter string) string {
 	return "this.published == true && !has(this.metadata.deletion_timestamp) && (" + filter + ")"
 }
 
-// RegisterDAOLookup instantiates a DAO lookup and registers it on the
-// validator. Name-based lookups are constrained to the tenant/project
-// selected by resolveTenantProject so that a same-named resource in
-// another visible project cannot shadow the intended target. ID-based
-// lookups retain visibility-based behavior because IDs are globally
-// unique within a tenant and the canonical resolver does not scope
-// them by project.
+// RegisterDAOLookup instantiates a DAO lookup and registers it on the validator. Name-based
+// lookups are constrained to the selected tenant/project. ID-based lookups are constrained to
+// the selected tenant while retaining their globally unique project behavior.
 func RegisterDAOLookup[O dao.Object](
 	v *ReferenceValidator,
 	fullName protoreflect.FullName,
 	d *dao.GenericDAO[O],
 ) {
-	v.Register(fullName, newDAOLookupFunc(d, false, true, false, false))
+	v.Register(fullName, NewTenantScopedDAOLookupFunc(d))
 }
 
 // RegisterPlatformScopedDAOLookup registers a lookup that searches all objects
@@ -152,5 +147,5 @@ func RegisterPlatformScopedDAOLookup[O dao.Object](
 	fullName protoreflect.FullName,
 	d *dao.GenericDAO[O],
 ) {
-	v.Register(fullName, NewDAOLookupFunc(d))
+	v.RegisterPlatformScoped(fullName, NewDAOLookupFunc(d))
 }

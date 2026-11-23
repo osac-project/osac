@@ -174,7 +174,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					}.Build(),
 					Title:       "My CI catalog item",
 					Description: "My description.",
-					Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-shared-template-id"}.Build(),
+					Template:    privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-shared-template-id", Tenant: "shared"}.Build(),
 					Published:   true,
 				}.Build(),
 			}.Build())
@@ -185,7 +185,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetTitle()).To(Equal("My CI catalog item"))
 			Expect(object.GetTemplate().GetId()).To(Equal("my-ci-shared-template-id"))
-			Expect(object.GetTemplate().GetShared()).To(BeTrue())
+			Expect(object.GetTemplate().GetTenant()).To(Equal("shared"))
 			Expect(object.GetPublished()).To(BeTrue())
 			Expect(object.GetMetadata().GetTenant()).To(Equal(testTenant))
 		})
@@ -368,7 +368,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			_, err = server.Update(ctx, privatev1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: privatev1.ComputeInstanceCatalogItem_builder{
 					Id:       createResponse.GetObject().GetId(),
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-shared-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-shared-template-id", Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
@@ -569,7 +569,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Tenant: "shared",
 					}.Build(),
 					Title:    "CI catalog item for shared tenant",
-					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-shared-template-id"}.Build(),
+					Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-shared-template-id", Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -949,7 +949,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Title:    "Catalog item with deprecated disk image default",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Name: "deprecated-di"}.Build()}.Build()}.Build(),
+							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Name: "deprecated-di", Tenant: "shared"}.Build()}.Build()}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -984,7 +984,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Title:    "Catalog item to update",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Name: "deprecated-di-upd"}.Build()}.Build()}.Build(),
+							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Name: "deprecated-di-upd", Tenant: "shared"}.Build()}.Build()}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -1005,7 +1005,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Title:    "Catalog item with obsolete disk image default",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Name: "obsolete-di"}.Build()}.Build()}.Build(),
+							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Name: "obsolete-di", Tenant: "shared"}.Build()}.Build()}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -1039,7 +1039,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Title:    "Catalog item for obsolete disk image update",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Name: "obsolete-di-upd"}.Build()}.Build()}.Build(),
+							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Name: "obsolete-di-upd", Tenant: "shared"}.Build()}.Build()}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -1061,7 +1061,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 						Title:    "Catalog item with available disk image default",
 						Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-template-id"}.Build(),
 						Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
-							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Name: "available-di"}.Build()}.Build()}.Build(),
+							DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: privatev1.DiskImageReference_builder{Name: "available-di", Tenant: "shared"}.Build()}.Build()}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -1228,7 +1228,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 								Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 							}.Build(),
 							Title:    "Catalog item for disk image precedence",
-							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-shared-template-id"}.Build(),
+							Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "my-ci-shared-template-id", Tenant: "shared"}.Build(),
 							Fields: privatev1.ComputeInstanceCatalogItemFields_builder{
 								DiskImage: privatev1.DiskImageReferenceFieldPolicy_builder{Editable: privatev1.EditableDiskImageReferenceField_builder{DefaultValue: def}.Build()}.Build(),
 							}.Build(),
@@ -1259,7 +1259,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					createAvailableDiskImageInTenant("di-ubuntu-other", "ubuntu", "other-tenant")
 
 					s := buildCatalogServer("my-tenant", "my-tenant", "other-tenant")
-					resp, err := createCatalogItem(s, privatev1.DiskImageReference_builder{Name: "ubuntu"}.Build())
+					resp, err := createCatalogItem(s, privatev1.DiskImageReference_builder{Name: "ubuntu", Tenant: "shared"}.Build())
 					Expect(err).ToNot(HaveOccurred())
 
 					def := storedDiskImageDefault(resp.GetObject())
@@ -1267,7 +1267,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					Expect(def.GetId()).To(Equal("di-ubuntu-shared"))
 				})
 
-				It("Rejects an ambiguous name when neither the Catalog Item tenant nor shared owns it", func() {
+				It("does not search other visible tenants when the selector is omitted", func() {
 					createTenant("tenant-a")
 					createTenant("tenant-b")
 					createAvailableDiskImageInTenant("di-fedora-a", "fedora", "tenant-a")
@@ -1278,7 +1278,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					Expect(err).To(HaveOccurred())
 					status, ok := grpcstatus.FromError(err)
 					Expect(ok).To(BeTrue())
-					Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
+					Expect(status.Code()).To(Equal(grpccodes.NotFound))
 				})
 
 				It("Uses the id and ignores the name when the default already carries an id", func() {
@@ -1289,7 +1289,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					// The default pins the shared image by id even though the name "fedora" collides
 					// with the caller's own-tenant image: the by-id path must win, unambiguously.
 					s := buildCatalogServer("my-tenant", "my-tenant")
-					def := privatev1.DiskImageReference_builder{Id: "di-fedora-shared", Name: "fedora"}.Build()
+					def := privatev1.DiskImageReference_builder{Id: "di-fedora-shared", Name: "fedora", Tenant: "shared"}.Build()
 					resp, err := createCatalogItem(s, def)
 					Expect(err).ToNot(HaveOccurred())
 
@@ -1307,7 +1307,7 @@ var _ = Describe("Private compute instance catalog items server", func() {
 					// migration 101 backfills). diskImageDefaultKey takes the by-id path, so it resolves
 					// to the same image and re-stores the same id-form default.
 					s := buildCatalogServer(testTenant)
-					def := privatev1.DiskImageReference_builder{Id: "stable-di", Name: "stable-di"}.Build()
+					def := privatev1.DiskImageReference_builder{Id: "stable-di", Name: "stable-di", Tenant: "shared"}.Build()
 					resp, err := createCatalogItem(s, def)
 					Expect(err).ToNot(HaveOccurred())
 
@@ -1346,7 +1346,7 @@ var _ = Describe("Catalog publication and references", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = server.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{Object: privatev1.ComputeInstanceCatalogItem_builder{
 			Metadata: privatev1.Metadata_builder{Name: "shared-offering", Tenant: auth.SharedTenant}.Build(), Title: "Shared",
-			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "tenant-template"}.Build(),
+			Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "tenant-template", Tenant: testTenant}.Build(),
 		}.Build()}.Build())
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 	})

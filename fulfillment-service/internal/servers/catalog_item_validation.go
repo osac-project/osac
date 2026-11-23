@@ -57,9 +57,8 @@ func preserveCatalogItemProvenance[T interface {
 	if err := validateImmutableReferenceIdentity(current, candidate, "spec.catalog_item", "catalog item", false); err != nil {
 		return candidate, err
 	}
-	// A false shared flag has no protobuf presence; a mask targeting that flag makes it explicit.
 	for _, path := range mask.GetPaths() {
-		if (path == "spec.catalog_item.shared" && candidate.GetShared() != current.GetShared()) ||
+		if (path == "spec.catalog_item.tenant" && candidate.GetTenant() != current.GetTenant()) ||
 			(path == "spec.catalog_item.project" && candidate.GetProject() != current.GetProject()) ||
 			(path == "spec.catalog_item.name" && candidate.GetName() != current.GetName()) {
 			return candidate, grpcstatus.Errorf(grpccodes.InvalidArgument, "cannot change spec.catalog_item from '%s' to '%s': catalog item is immutable", refKey(current), refKey(candidate))

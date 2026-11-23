@@ -39,18 +39,11 @@ var _ = Describe("selectedReferenceScope", func() {
 		func(
 			owner referenceScope,
 			tenant string,
-			shared bool,
 			project string,
 			expectedTenant string,
 			expectedProject string,
-			expectConflict bool,
 		) {
-			result, err := selectedReferenceScope(owner, tenant, shared, project)
-			if expectConflict {
-				Expect(err).To(HaveOccurred())
-				return
-			}
-			Expect(err).ToNot(HaveOccurred())
+			result := selectedReferenceScope(owner, tenant, project)
 			Expect(result.tenant).To(
 				Equal(expectedTenant),
 				"tenant mismatch",
@@ -67,32 +60,30 @@ var _ = Describe("selectedReferenceScope", func() {
 		Entry(
 			"empty project from named-project owner "+
 				"selects default project",
-			ownerInNamedProject, "", false, "",
-			"acme", "", false,
+			ownerInNamedProject, "", "",
+			"acme", "",
 		),
 
-		// Shared reference with empty project targets the shared
-		// tenant's default project.
+		// An explicit shared tenant targets the shared tenant's default project.
 		Entry(
 			"shared with empty project selects "+
 				"shared default project",
-			ownerInNamedProject, "", true, "",
-			auth.SharedTenant, "", false,
+			ownerInNamedProject, auth.SharedTenant, "",
+			auth.SharedTenant, "",
 		),
 
 		// Explicit named project overrides the owner's project.
 		Entry(
 			"explicit project overrides owner project",
-			ownerInNamedProject, "", false, "infra",
-			"acme", "infra", false,
+			ownerInNamedProject, "", "infra",
+			"acme", "infra",
 		),
 
-		// Shared with explicit project selects that project in
-		// the shared tenant.
+		// An explicit shared tenant with a project selects that project.
 		Entry(
 			"shared with explicit project",
-			ownerInNamedProject, "", true, "templates",
-			auth.SharedTenant, "templates", false,
+			ownerInNamedProject, auth.SharedTenant, "templates",
+			auth.SharedTenant, "templates",
 		),
 
 		// Owner already in the default project — empty project
@@ -100,35 +91,25 @@ var _ = Describe("selectedReferenceScope", func() {
 		Entry(
 			"empty project from default-project owner "+
 				"stays at default",
-			ownerInDefaultProject, "", false, "",
-			"acme", "", false,
+			ownerInDefaultProject, "", "",
+			"acme", "",
 		),
 
-		// Non-shared, owner's tenant is preserved.
+		// An omitted tenant keeps the owner tenant.
 		Entry(
 			"non-shared keeps owner tenant",
-			ownerInNamedProject, "", false, "other",
-			"acme", "other", false,
+			ownerInNamedProject, "", "other",
+			"acme", "other",
 		),
 		Entry(
 			"explicit tenant selects a visible tenant",
-			ownerInNamedProject, "tenant-b", false, "catalog",
-			"tenant-b", "catalog", false,
+			ownerInNamedProject, "tenant-b", "catalog",
+			"tenant-b", "catalog",
 		),
 		Entry(
 			"explicit shared tenant selects shared",
-			ownerInNamedProject, auth.SharedTenant, false, "catalog",
-			auth.SharedTenant, "catalog", false,
-		),
-		Entry(
-			"matching explicit shared selectors are accepted",
-			ownerInNamedProject, auth.SharedTenant, true, "catalog",
-			auth.SharedTenant, "catalog", false,
-		),
-		Entry(
-			"conflicting explicit tenant and shared selectors are rejected",
-			ownerInNamedProject, "tenant-b", true, "catalog",
-			"", "", true,
+			ownerInNamedProject, auth.SharedTenant, "catalog",
+			auth.SharedTenant, "catalog",
 		),
 	)
 })
@@ -146,22 +127,22 @@ var _ = Describe("inheritReferenceScope", func() {
 
 		Expect(reference.GetTenant()).To(Equal("acme"))
 		Expect(reference.GetProject()).To(Equal("apps"))
-		Expect(reference.GetShared()).To(BeFalse())
+		Expect(reference.GetTenant()).ToNot(Equal("shared"))
 	})
 
-	It("keeps an ID-based default tenantless so a shared target remains valid", func() {
+	It("keeps an ID-based default tenantless and rejects a target outside the owner tenant", func() {
 		reference := privatev1.DiskImageReference_builder{Id: "shared-image-id"}.Build()
 
 		inheritReferenceScope(reference, owner)
 
 		Expect(reference.GetTenant()).To(BeEmpty())
-		Expect(reference.GetShared()).To(BeFalse())
+		Expect(reference.GetTenant()).ToNot(Equal("shared"))
 		Expect(reference.GetProject()).To(BeEmpty())
 		Expect(validateDependencyOwnerScope(
 			referenceScope{tenant: owner.GetTenant(), project: owner.GetProject()},
 			privatev1.Metadata_builder{Tenant: auth.SharedTenant}.Build(),
 			reference.GetTenant(), "disk image", "",
-		)).To(Succeed())
+		)).To(MatchError(ContainSubstring("must belong to the owning tenant")))
 	})
 
 	It("preserves an explicit reference scope", func() {

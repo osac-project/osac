@@ -49,7 +49,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			fields := publicv1.ClusterCatalogItemFields_builder{
 				Version: publicv1.ClusterVersionReferenceFieldPolicy_builder{
 					Editable: publicv1.EditableClusterVersionReferenceField_builder{
-						DefaultValue: publicv1.ClusterVersionReference_builder{Id: version}.Build(),
+						DefaultValue: publicv1.ClusterVersionReference_builder{Id: version, Tenant: "shared"}.Build(),
 					}.Build(),
 				}.Build(),
 				SshKey: publicv1.FullSecretReferenceFieldPolicy_builder{
@@ -73,7 +73,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 						DefaultValue: publicv1.ClusterNodeSetMap_builder{
 							Items: map[string]*publicv1.ClusterCatalogNodeSet{
 								"workers": publicv1.ClusterCatalogNodeSet_builder{Size: 4,
-									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
+									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Tenant: "shared"}.Build(),
 								}.Build(),
 							},
 						}.Build(),
@@ -85,7 +85,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			items := publicv1.NewClusterCatalogItemsClient(tool.ExternalView().AdminConn())
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata:           publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-				Template:           publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+				Template:           publicv1.ClusterTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published:          true,
 				Fields:             fields,
 				TemplateParameters: catalogItemParameterPolicies(),
@@ -95,12 +95,12 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 
 			By("creating a cluster with caller-selected version and node set")
 			request := publicv1.ClusterSpec_builder{
-				Version:     publicv1.ClusterVersionReference_builder{Id: overrideVersion}.Build(),
-				CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
+				Version:     publicv1.ClusterVersionReference_builder{Id: overrideVersion, Tenant: "shared"}.Build(),
+				CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 				Network:     publicv1.ClusterNetwork_builder{ServiceCidr: new("172.32.0.0/16")}.Build(),
 				NodeSets: map[string]*publicv1.ClusterNodeSet{
 					"extra": publicv1.ClusterNodeSet_builder{
-						BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: extraBmit, Shared: true}.Build(),
+						BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: extraBmit, Tenant: "shared"}.Build(),
 						Size:                  new(int32(3)),
 					}.Build(),
 				},
@@ -133,7 +133,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(proto.Equal(spec.GetTemplateParameters()["ordinary"], catalogItemParameterValue(wrapperspb.String("template")))).To(BeTrue())
 			By("materializing the catalog NodeSet default without template hardware")
 			defaulted, e := createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
-				CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
+				CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 				NodeSets:    map[string]*publicv1.ClusterNodeSet{},
 			}.Build())
 			Expect(e).NotTo(HaveOccurred())
@@ -207,7 +207,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			locked := publicv1.ClusterNodeSetMap_builder{
 				Items: map[string]*publicv1.ClusterCatalogNodeSet{
 					"workers": publicv1.ClusterCatalogNodeSet_builder{Size: 4,
-						BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
+						BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Tenant: "shared"}.Build(),
 					}.Build(),
 				},
 			}.Build()
@@ -222,7 +222,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			}.Build())
 			Expect(e).NotTo(HaveOccurred())
 			_, e = createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
-				CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
+				CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 				NodeSets: map[string]*publicv1.ClusterNodeSet{
 					"workers": publicv1.ClusterNodeSet_builder{Size: new(int32(4))}.Build(),
 				},
@@ -265,26 +265,26 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			templateVersion := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
 			catalogVersion := createCatalogItemClusterVersionFixture(ctx, "4.21.0")
 			template := createCatalogItemClusterTemplateFixture(ctx, privatev1.ClusterTemplateSpecDefaults_builder{
-				Version: privatev1.ClusterVersionReference_builder{Id: templateVersion}.Build(),
+				Version: privatev1.ClusterVersionReference_builder{Id: templateVersion, Tenant: "shared"}.Build(),
 			}.Build(), nil)
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ClusterTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 				Fields: publicv1.ClusterCatalogItemFields_builder{
 					Version: publicv1.ClusterVersionReferenceFieldPolicy_builder{
 						Editable: publicv1.EditableClusterVersionReferenceField_builder{
-							DefaultValue: publicv1.ClusterVersionReference_builder{Id: catalogVersion}.Build(),
+							DefaultValue: publicv1.ClusterVersionReference_builder{Id: catalogVersion, Tenant: "shared"}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			created, err := createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
-				CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
+				CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 				NetworkAttachment: network.clusterAttachment(),
 				NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
-					Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
+					Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Tenant: "shared"}.Build(),
 				}.Build()},
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
@@ -307,12 +307,12 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			version := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
 			sshKeySecret := createCatalogItemSSHKeySecretFixture(ctx, usersGroup)
 			template := createCatalogItemClusterTemplateFixture(ctx, privatev1.ClusterTemplateSpecDefaults_builder{
-				Version: privatev1.ClusterVersionReference_builder{Id: version}.Build(),
+				Version: privatev1.ClusterVersionReference_builder{Id: version, Tenant: "shared"}.Build(),
 				SshKey:  privatev1.SecretReference_builder{Id: sshKeySecret}.Build(),
 			}.Build(), nil, usersGroup)
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ClusterTemplateReference_builder{Id: template, Tenant: usersGroup}.Build(),
 				Published: true,
 				Fields: publicv1.ClusterCatalogItemFields_builder{
 					Version: publicv1.ClusterVersionReferenceFieldPolicy_builder{
@@ -342,11 +342,11 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
+						CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 						PullSecretSecret:  publicv1.SecretLocalReference_builder{Id: secret}.Build(),
 						NetworkAttachment: network.clusterAttachment(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
-							Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
+							Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Tenant: "shared"}.Build(),
 						}.Build()},
 					}.Build(),
 				}.Build(),
@@ -370,8 +370,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						Template:    publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
-						CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
+						Template:    publicv1.ClusterTemplateReference_builder{Id: template, Tenant: usersGroup}.Build(),
+						CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -387,10 +387,10 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			By("creating directly from a Template with its version default")
 
 			direct, e := createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
-				Template:          publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+				Template:          publicv1.ClusterTemplateReference_builder{Id: template, Tenant: usersGroup}.Build(),
 				NetworkAttachment: network.clusterAttachment(),
 				NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
-					Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
+					Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Tenant: "shared"}.Build(),
 				}.Build()},
 			}.Build())
 			Expect(e).NotTo(HaveOccurred())
@@ -399,10 +399,10 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			By("falling back to the system version without an authored default")
 			systemTemplate := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
 			system, e := createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
-				Template:          publicv1.ClusterTemplateReference_builder{Id: systemTemplate}.Build(),
+				Template:          publicv1.ClusterTemplateReference_builder{Id: systemTemplate, Tenant: "shared"}.Build(),
 				NetworkAttachment: network.clusterAttachment(),
 				NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
-					Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
+					Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Tenant: "shared"}.Build(),
 				}.Build()},
 			}.Build())
 			Expect(e).NotTo(HaveOccurred())
@@ -416,7 +416,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			other := createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", network.networkClassID)
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ClusterTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 				Fields: publicv1.ClusterCatalogItemFields_builder{
 					NetworkAttachment: publicv1.ClusterNetworkAttachmentFieldPolicy_builder{
@@ -433,10 +433,10 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
+						CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 						NetworkAttachment: bad,
 						NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
-							Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
+							Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Tenant: "shared"}.Build(),
 						}.Build()},
 					}.Build(),
 				}.Build(),
@@ -458,7 +458,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ClusterTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 				TemplateParameters: map[string]*publicv1.TemplateParameterPolicy{
 					"enabled": publicv1.TemplateParameterPolicy_builder{
@@ -474,10 +474,10 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
+						CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 						NetworkAttachment: network.clusterAttachment(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
-							Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
+							Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Tenant: "shared"}.Build(),
 						}.Build()},
 					}.Build(),
 				}.Build(),
@@ -531,13 +531,13 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			version := createCatalogItemClusterVersionFixture(ctx, "4.20.0")
 			bmit := createCatalogItemBareMetalInstanceTypeFixture(ctx, "shared")
 			template := createCatalogItemClusterTemplateFixture(ctx, privatev1.ClusterTemplateSpecDefaults_builder{
-				Version: privatev1.ClusterVersionReference_builder{Id: version}.Build(),
+				Version: privatev1.ClusterVersionReference_builder{Id: version, Tenant: "shared"}.Build(),
 			}.Build(), nil)
 			tenant, conn := createCatalogItemTenantAdminFixture(ctx)
 			items := publicv1.NewClusterCatalogItemsClient(conn)
 			owned := createClusterCatalogItemFixture(ctx, conn, publicv1.ClusterCatalogItem_builder{
 				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template: publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+				Template: publicv1.ClusterTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 			}.Build())
 			Expect(owned.GetMetadata().GetTenant()).To(Equal(tenant), "catalog item should belong to the tenant admin's tenant")
 
@@ -564,11 +564,11 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			network := createCatalogItemNetworkFixture(ctx, tenant, "")
 			memberSSHKeySecret := createCatalogItemSSHKeySecretFixture(ctx, tenant)
 			spec := publicv1.ClusterSpec_builder{
-				CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: owned.GetId()}.Build(),
+				CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: owned.GetId(), Tenant: owned.GetMetadata().GetTenant()}.Build(),
 				SshKey:            publicv1.SecretReference_builder{Id: memberSSHKeySecret}.Build(),
 				NetworkAttachment: network.clusterAttachment(),
 				NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
-					Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
+					Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Tenant: "shared"}.Build(),
 				}.Build()},
 			}.Build()
 			created, err := createClusterFixture(ctx, memberConn, spec)
@@ -589,7 +589,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(hidden.GetItems()).To(BeEmpty())
 			_, err = createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
-				CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: owned.GetId()}.Build(),
+				CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: owned.GetId(), Tenant: owned.GetMetadata().GetTenant()}.Build(),
 			}.Build())
 			expectCatalogItemStatusCode(err, codes.NotFound)
 
@@ -622,7 +622,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			user := publicv1.NewClusterCatalogItemsClient(tool.ExternalView().UserConn())
 			shared := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template: publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+				Template: publicv1.ClusterTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 			}.Build())
 			Expect(shared.GetMetadata().GetTenant()).To(Equal("shared"))
 			_, err := user.Get(ctx, publicv1.ClusterCatalogItemsGetRequest_builder{Id: shared.GetId()}.Build())
@@ -653,7 +653,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			name := catalogItemFixtureName()
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata: publicv1.Metadata_builder{Name: name}.Build(),
-				Template: publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+				Template: publicv1.ClusterTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Title:    name,
 			}.Build())
 			client := publicv1.NewClusterCatalogItemsClient(tool.ExternalView().AdminConn())
@@ -688,7 +688,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			replacementSSHKeySecret := createCatalogItemSSHKeySecretFixture(ctx, usersGroup)
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ClusterTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 				Fields: publicv1.ClusterCatalogItemFields_builder{
 					SshKey:                   publicv1.FullSecretReferenceFieldPolicy_builder{Locked: publicv1.SecretReference_builder{Id: sshKeySecret}.Build()}.Build(),
@@ -755,14 +755,14 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			template := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ClusterTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 				Fields: publicv1.ClusterCatalogItemFields_builder{
 					NodeSets: publicv1.ClusterNodeSetMapPolicy_builder{
 						Locked: publicv1.ClusterNodeSetMap_builder{
 							Items: map[string]*publicv1.ClusterCatalogNodeSet{
 								"workers": publicv1.ClusterCatalogNodeSet_builder{Size: 4,
-									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
+									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Tenant: "shared"}.Build(),
 								}.Build(),
 							},
 						}.Build(),
@@ -807,7 +807,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 						Items: map[string]*publicv1.ClusterCatalogNodeSet{
 							"workers": publicv1.ClusterCatalogNodeSet_builder{
 								Size:                  3,
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Name: "missing-type", Shared: true}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Name: "missing-type", Tenant: "shared"}.Build(),
 							}.Build(),
 						},
 					}.Build(),
@@ -839,7 +839,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			_, err := client.Create(ctx, publicv1.ClusterCatalogItemsCreateRequest_builder{
 				Object: publicv1.ClusterCatalogItem_builder{
 					Metadata: publicv1.Metadata_builder{Name: name, Tenant: catalogTenant}.Build(),
-					Template: publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 					Fields:   publicv1.ClusterCatalogItemFields_builder{PullSecretSecret: policy}.Build(),
 				}.Build(),
 			}.Build())
@@ -858,7 +858,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			template := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template: publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+				Template: publicv1.ClusterTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 			}.Build())
 			templates := privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
 			_, err := templates.Delete(ctx, privatev1.ClusterTemplatesDeleteRequest_builder{Id: template}.Build())
@@ -876,11 +876,11 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			dependencies := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ClusterTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 				Fields: publicv1.ClusterCatalogItemFields_builder{
 					Version: publicv1.ClusterVersionReferenceFieldPolicy_builder{
-						Locked: publicv1.ClusterVersionReference_builder{Id: id}.Build(),
+						Locked: publicv1.ClusterVersionReference_builder{Id: id, Tenant: "shared"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -897,7 +897,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 					Fields: publicv1.ClusterCatalogItemFields_builder{
 						Version: publicv1.ClusterVersionReferenceFieldPolicy_builder{
 							Editable: publicv1.EditableClusterVersionReferenceField_builder{
-								DefaultValue: publicv1.ClusterVersionReference_builder{Id: id}.Build(),
+								DefaultValue: publicv1.ClusterVersionReference_builder{Id: id, Tenant: "shared"}.Build(),
 							}.Build(),
 						}.Build(),
 					}.Build(),
@@ -926,13 +926,13 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			template := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-				Template: publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+				Template: publicv1.ClusterTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Fields: publicv1.ClusterCatalogItemFields_builder{
 					PullSecretSecret: publicv1.SecretReferenceFieldPolicy_builder{Locked: publicv1.SecretLocalReference_builder{Id: secret}.Build()}.Build(),
 					NodeSets: publicv1.ClusterNodeSetMapPolicy_builder{Locked: publicv1.ClusterNodeSetMap_builder{
 						Items: map[string]*publicv1.ClusterCatalogNodeSet{
 							"extra": publicv1.ClusterCatalogNodeSet_builder{Size: 3,
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: catalogType, Shared: true}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: catalogType, Tenant: "shared"}.Build(),
 							}.Build(),
 						},
 					}.Build()}.Build(),
@@ -969,19 +969,19 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			items := publicv1.NewClusterCatalogItemsClient(tool.ExternalView().AdminConn())
 			item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ClusterTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 				Fields: publicv1.ClusterCatalogItemFields_builder{
 					Version: publicv1.ClusterVersionReferenceFieldPolicy_builder{
-						Locked: publicv1.ClusterVersionReference_builder{Id: firstVersion}.Build(),
+						Locked: publicv1.ClusterVersionReference_builder{Id: firstVersion, Tenant: "shared"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
 			request := publicv1.ClusterSpec_builder{
-				CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
+				CatalogItem:       publicv1.ClusterCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 				NetworkAttachment: network.clusterAttachment(),
 				NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
-					Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
+					Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Tenant: "shared"}.Build(),
 				}.Build()},
 			}.Build()
 			first, e := createClusterFixture(ctx, tool.ExternalView().UserConn(), request)
@@ -992,7 +992,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 					Id: item.GetId(),
 					Fields: publicv1.ClusterCatalogItemFields_builder{
 						Version: publicv1.ClusterVersionReferenceFieldPolicy_builder{
-							Locked: publicv1.ClusterVersionReference_builder{Id: secondVersion}.Build(),
+							Locked: publicv1.ClusterVersionReference_builder{Id: secondVersion, Tenant: "shared"}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build(),
@@ -1020,7 +1020,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			}.Build())
 			Expect(e).NotTo(HaveOccurred())
 			_, e = client.Update(ctx, publicv1.ClustersUpdateRequest_builder{
-				Object:     publicv1.Cluster_builder{Id: first.GetId(), Spec: publicv1.ClusterSpec_builder{Version: publicv1.ClusterVersionReference_builder{Id: secondVersion}.Build()}.Build()}.Build(),
+				Object:     publicv1.Cluster_builder{Id: first.GetId(), Spec: publicv1.ClusterSpec_builder{Version: publicv1.ClusterVersionReference_builder{Id: secondVersion, Tenant: "shared"}.Build()}.Build()}.Build(),
 				UpdateMask: catalogItemUpdateMask("spec.version"),
 			}.Build())
 			Expect(e).NotTo(HaveOccurred())
@@ -1037,7 +1037,7 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 			_, e = createClusterFixture(ctx, tool.ExternalView().UserConn(), request)
 			expectCatalogItemStatusCode(e, codes.NotFound)
 			_, e = client.Update(ctx, publicv1.ClustersUpdateRequest_builder{
-				Object:     publicv1.Cluster_builder{Id: first.GetId(), Spec: publicv1.ClusterSpec_builder{Version: publicv1.ClusterVersionReference_builder{Id: firstVersion}.Build()}.Build()}.Build(),
+				Object:     publicv1.Cluster_builder{Id: first.GetId(), Spec: publicv1.ClusterSpec_builder{Version: publicv1.ClusterVersionReference_builder{Id: firstVersion, Tenant: "shared"}.Build()}.Build()}.Build(),
 				UpdateMask: catalogItemUpdateMask("spec.version"),
 			}.Build())
 			Expect(e).NotTo(HaveOccurred())
@@ -1050,8 +1050,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				Object: publicv1.Cluster_builder{
 					Id: first.GetId(),
 					Spec: publicv1.ClusterSpec_builder{
-						CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
-						Version:     publicv1.ClusterVersionReference_builder{Id: secondVersion}.Build(),
+						CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
+						Version:     publicv1.ClusterVersionReference_builder{Id: secondVersion, Tenant: "shared"}.Build(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: catalogItemUpdateMask("spec.catalog_item",
@@ -1068,8 +1068,8 @@ var _ = Describe("Cluster Catalog Items", Label("catalog-items"), func() {
 				Object: privatev1.Cluster_builder{
 					Id: first.GetId(),
 					Spec: privatev1.ClusterSpec_builder{
-						CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
-						Version:     privatev1.ClusterVersionReference_builder{Id: firstVersion}.Build(),
+						CatalogItem: privatev1.ClusterCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
+						Version:     privatev1.ClusterVersionReference_builder{Id: firstVersion, Tenant: "shared"}.Build(),
 					}.Build(),
 				}.Build(),
 				UpdateMask: catalogItemUpdateMask("spec.catalog_item",
@@ -1139,12 +1139,12 @@ var _ = Describe("Cluster Catalog Item add-on operator policies", Label("catalog
 		template := createCatalogItemClusterTemplateFixture(ctx, privatev1.ClusterTemplateSpecDefaults_builder{}.Build(), clusterCatalogItemParameterDefinitions())
 		item := createClusterCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ClusterCatalogItem_builder{
 			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-			Template:  publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+			Template:  publicv1.ClusterTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 			Published: true,
 			Fields: publicv1.ClusterCatalogItemFields_builder{
 				Version: publicv1.ClusterVersionReferenceFieldPolicy_builder{
 					Editable: publicv1.EditableClusterVersionReferenceField_builder{
-						DefaultValue: publicv1.ClusterVersionReference_builder{Id: version}.Build(),
+						DefaultValue: publicv1.ClusterVersionReference_builder{Id: version, Tenant: "shared"}.Build(),
 					}.Build(),
 				}.Build(),
 				NodeSets: publicv1.ClusterNodeSetMapPolicy_builder{
@@ -1152,7 +1152,7 @@ var _ = Describe("Cluster Catalog Item add-on operator policies", Label("catalog
 						DefaultValue: publicv1.ClusterNodeSetMap_builder{Items: map[string]*publicv1.ClusterCatalogNodeSet{
 							"workers": publicv1.ClusterCatalogNodeSet_builder{
 								Size:                  1,
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Tenant: "shared"}.Build(),
 							}.Build(),
 						}}.Build(),
 					}.Build(),
@@ -1160,7 +1160,7 @@ var _ = Describe("Cluster Catalog Item add-on operator policies", Label("catalog
 				AddOnOperators: publicv1.AddOnOperatorReferenceListFieldPolicy_builder{
 					Locked: publicv1.AddOnOperatorReferenceList_builder{
 						Items: []*publicv1.AddOnOperatorReference{
-							publicv1.AddOnOperatorReference_builder{Id: operator.GetId(), Shared: true}.Build(),
+							publicv1.AddOnOperatorReference_builder{Id: operator.GetId(), Tenant: "shared"}.Build(),
 						},
 					}.Build(),
 				}.Build(),
@@ -1184,7 +1184,7 @@ var _ = Describe("Cluster Catalog Item add-on operator policies", Label("catalog
 		Expect(listedReference.GetName()).To(Equal(operator.GetMetadata().GetName()))
 
 		created, err := createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
-			CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: item.GetId()}.Build(),
+			CatalogItem: publicv1.ClusterCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		clusters := publicv1.NewClustersClient(tool.ExternalView().UserConn())

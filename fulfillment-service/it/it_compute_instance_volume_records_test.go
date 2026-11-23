@@ -68,8 +68,8 @@ var _ = Describe("ComputeInstance Volume registration API contract", func() {
 		Expect(err).NotTo(HaveOccurred())
 		storageTierName = tierResponse.GetObject().GetMetadata().GetName()
 		templateID = createCatalogItemComputeInstanceTemplateFixture(ctx, privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-			InstanceType: privatev1.InstanceTypeReference_builder{Id: instanceTypeID}.Build(),
-			DiskImage:    privatev1.DiskImageReference_builder{Id: diskImage.GetId()}.Build(),
+			InstanceType: privatev1.InstanceTypeReference_builder{Id: instanceTypeID, Tenant: "shared"}.Build(),
+			DiskImage:    privatev1.DiskImageReference_builder{Id: diskImage.GetId(), Tenant: "shared"}.Build(),
 			BootDisk: privatev1.ComputeInstanceDisk_builder{
 				SizeGib:     new(int32(30)),
 				StorageTier: privatev1.StorageTierReference_builder{Id: storageTierID}.Build(),
@@ -79,7 +79,7 @@ var _ = Describe("ComputeInstance Volume registration API contract", func() {
 		computeInstances = privatev1.NewComputeInstancesClient(tool.InternalView().ControllerConn())
 		volumes = privatev1.NewVolumesClient(tool.InternalView().ControllerConn())
 		computeInstanceSpec = publicv1.ComputeInstanceSpec_builder{
-			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
+			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: templateID, Tenant: "shared"}.Build(),
 			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 		}.Build()
 	})
@@ -638,7 +638,7 @@ var _ = Describe("ComputeInstance Volume registration API contract", func() {
 		tierName := tier.GetObject().GetMetadata().GetName()
 
 		spec := publicv1.ComputeInstanceSpec_builder{
-			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
+			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: templateID, Tenant: "shared"}.Build(),
 			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 			BootDisk: publicv1.ComputeInstanceDisk_builder{
 				SizeGib:     new(int32(30)),
@@ -816,7 +816,7 @@ func createIsolatedDiskRegistrationInstance(
 		})
 	}
 	spec := privatev1.ComputeInstanceSpec_builder{
-		Template:           privatev1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
+		Template:           privatev1.ComputeInstanceTemplateReference_builder{Id: templateID, Tenant: "shared"}.Build(),
 		NetworkAttachments: []*privatev1.ComputeNetworkAttachment{attachment},
 	}.Build()
 	if len(diskSpec) > 0 {

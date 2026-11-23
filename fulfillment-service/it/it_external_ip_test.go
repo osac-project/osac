@@ -480,7 +480,7 @@ var _ = Describe("Private ExternalIPPool CRUD", func() {
 					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -576,7 +576,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -620,7 +620,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -701,7 +701,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -743,7 +743,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: publicv1.ExternalIPPoolReference_builder{Name: "nonexistent-pool"}.Build(),
+					Pool: publicv1.ExternalIPPoolReference_builder{Name: "nonexistent-pool", Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -775,7 +775,7 @@ var _ = Describe("ExternalIP lifecycle", func() {
 					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: publicv1.ExternalIPPoolReference_builder{Id: nonReadyPoolId}.Build(),
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: nonReadyPoolId, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -923,7 +923,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -1026,10 +1026,10 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NetworkAttachment: network.clusterAttachment(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
-						Size: new(int32(1)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName, Shared: true}.Build(),
+						Size: new(int32(1)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName, Tenant: "shared"}.Build(),
 					}.Build()},
 				}.Build(),
 			}.Build(),
@@ -1193,7 +1193,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 					},
 				}.Build(),
 				Spec: privatev1.ExternalIPSpec_builder{
-					Pool: privatev1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
+					Pool: privatev1.ExternalIPPoolReference_builder{Id: poolId, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -1229,9 +1229,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			Object: publicv1.Cluster_builder{
 				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-race-cluster-%s", uuid.New()[24:32])}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
-						Size: new(int32(1)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+						Size: new(int32(1)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName, Tenant: "shared"}.Build(),
 					}.Build()},
 					NetworkAttachment:        network.clusterAttachment(),
 					AutoExternalIpAttachment: &autoAttach,
@@ -1268,7 +1268,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 					},
 				}.Build(),
 				Spec: privatev1.ExternalIPSpec_builder{
-					Pool: privatev1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
+					Pool: privatev1.ExternalIPPoolReference_builder{Id: poolId, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -1373,9 +1373,9 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 			Object: publicv1.Cluster_builder{
 				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-held-cluster-%s", uuid.New()[24:32])}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
-						Size: new(int32(1)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName}.Build(),
+						Size: new(int32(1)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName, Tenant: "shared"}.Build(),
 					}.Build()},
 					NetworkAttachment:        network.clusterAttachment(),
 					AutoExternalIpAttachment: &autoAttach,
@@ -1412,7 +1412,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 					},
 				}.Build(),
 				Spec: privatev1.ExternalIPSpec_builder{
-					Pool: privatev1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
+					Pool: privatev1.ExternalIPPoolReference_builder{Id: poolId, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -1508,7 +1508,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 				Id:       raceIPID,
 				Metadata: publicv1.Metadata_builder{Name: raceIPID}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -1733,7 +1733,7 @@ var _ = Describe("ExternalIPAttachment cross-resource validation", func() {
 					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())

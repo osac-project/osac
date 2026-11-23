@@ -110,7 +110,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 						Locked: privatev1.ClusterNodeSetMap_builder{
 							Items: map[string]*privatev1.ClusterCatalogNodeSet{
 								"workers": privatev1.ClusterCatalogNodeSet_builder{
-									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: instanceType.GetId(), Shared: true}.Build(), Size: 1,
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: instanceType.GetId(), Tenant: "shared"}.Build(), Size: 1,
 								}.Build(),
 							},
 						}.Build(),
@@ -170,7 +170,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 							Items: map[string]*privatev1.ClusterCatalogNodeSet{
 								"workers": privatev1.ClusterCatalogNodeSet_builder{
 									Size: 2, BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
-										Id: instanceType.GetId(), Shared: true,
+										Id: instanceType.GetId(), Tenant: "shared",
 									}.Build(),
 								}.Build(),
 							},
@@ -192,7 +192,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			}.Build()
 			_, err := server.bareMetalInstanceTypesDao.Create().SetObject(instanceType).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			ref := privatev1.BareMetalInstanceTypeReference_builder{Name: "shared-policy-type", Shared: true}.Build()
+			ref := privatev1.BareMetalInstanceTypeReference_builder{Name: "shared-policy-type", Tenant: "shared"}.Build()
 			item := privatev1.ClusterCatalogItem_builder{
 				Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
 				Fields: privatev1.ClusterCatalogItemFields_builder{
@@ -208,7 +208,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(validateClusterCatalogItemNodeSetPolicy(ctx, item, server.bareMetalInstanceTypesDao)).To(Succeed())
 			Expect(ref.GetId()).To(Equal("shared-policy-type"))
 			Expect(ref.GetName()).To(Equal("shared-policy-type"))
-			Expect(ref.GetShared()).To(BeTrue())
+			Expect(ref.GetTenant()).To(Equal("shared"))
 		})
 
 		It("resolves editable default NodeSet references to shared for a tenant-owned catalog item", func() {
@@ -218,7 +218,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			}.Build()
 			_, err := server.bareMetalInstanceTypesDao.Create().SetObject(instanceType).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			ref := privatev1.BareMetalInstanceTypeReference_builder{Name: "shared-default-policy-type", Shared: true}.Build()
+			ref := privatev1.BareMetalInstanceTypeReference_builder{Name: "shared-default-policy-type", Tenant: "shared"}.Build()
 			item := privatev1.ClusterCatalogItem_builder{
 				Metadata: privatev1.Metadata_builder{Tenant: testTenant}.Build(),
 				Fields: privatev1.ClusterCatalogItemFields_builder{
@@ -233,7 +233,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			}.Build()
 			Expect(validateClusterCatalogItemNodeSetPolicy(ctx, item, server.bareMetalInstanceTypesDao)).To(Succeed())
 			Expect(ref.GetId()).To(Equal("shared-default-policy-type"))
-			Expect(ref.GetShared()).To(BeTrue())
+			Expect(ref.GetTenant()).To(Equal("shared"))
 		})
 
 		It("does not take node sets from the referenced template", func() {
@@ -259,7 +259,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 					}.Build(),
 					Title:       "My cluster catalog item",
 					Description: "My description.",
-					Template:    privatev1.ClusterTemplateReference_builder{Id: "my-shared-template-id"}.Build(),
+					Template:    privatev1.ClusterTemplateReference_builder{Id: "my-shared-template-id", Tenant: "shared"}.Build(),
 					Published:   true,
 				}.Build(),
 			}.Build())
@@ -270,7 +270,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			Expect(object.GetId()).ToNot(BeEmpty())
 			Expect(object.GetTitle()).To(Equal("My cluster catalog item"))
 			Expect(object.GetTemplate().GetId()).To(Equal("my-shared-template-id"))
-			Expect(object.GetTemplate().GetShared()).To(BeTrue())
+			Expect(object.GetTemplate().GetTenant()).To(Equal("shared"))
 			Expect(object.GetPublished()).To(BeTrue())
 			Expect(object.GetMetadata().GetTenant()).To(Equal(testTenant))
 		})
@@ -438,7 +438,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 			_, err = server.Update(ctx, privatev1.ClusterCatalogItemsUpdateRequest_builder{
 				Object: privatev1.ClusterCatalogItem_builder{
 					Id:       createResponse.GetObject().GetId(),
-					Template: privatev1.ClusterTemplateReference_builder{Id: "my-shared-template-id"}.Build(),
+					Template: privatev1.ClusterTemplateReference_builder{Id: "my-shared-template-id", Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
@@ -580,13 +580,13 @@ var _ = Describe("Private cluster catalog items server", func() {
 						Template: privatev1.ClusterTemplateReference_builder{Id: "my-template-id"}.Build(),
 						Fields: privatev1.ClusterCatalogItemFields_builder{
 							SshKey: privatev1.FullSecretReferenceFieldPolicy_builder{
-								Locked: privatev1.SecretReference_builder{Name: "shared-key-name", Shared: true}.Build(),
+								Locked: privatev1.SecretReference_builder{Name: "shared-key-name", Tenant: "shared"}.Build(),
 							}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("tenant-scoped"))
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
+				Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("not found or is not visible"))
 			})
 
 			DescribeTable("rejects a shared catalog item that fixes a tenant-owned SSH key",
@@ -606,7 +606,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 								Tenant: auth.SharedTenant,
 							}.Build(),
 							Title:    "Shared SSH key policy item",
-							Template: privatev1.ClusterTemplateReference_builder{Id: "my-shared-template-id"}.Build(),
+							Template: privatev1.ClusterTemplateReference_builder{Id: "my-shared-template-id", Tenant: "shared"}.Build(),
 							Fields: privatev1.ClusterCatalogItemFields_builder{
 								SshKey: policy,
 							}.Build(),
@@ -783,7 +783,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 						Tenant: "shared",
 					}.Build(),
 					Title:    "Catalog item for shared tenant",
-					Template: privatev1.ClusterTemplateReference_builder{Id: "my-shared-template-id"}.Build(),
+					Template: privatev1.ClusterTemplateReference_builder{Id: "my-shared-template-id", Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
@@ -1108,7 +1108,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 						AddOnOperators: privatev1.AddOnOperatorReferenceListFieldPolicy_builder{
 							Locked: privatev1.AddOnOperatorReferenceList_builder{
 								Items: []*privatev1.AddOnOperatorReference{
-									privatev1.AddOnOperatorReference_builder{Name: operatorName, Shared: true}.Build(),
+									privatev1.AddOnOperatorReference_builder{Name: operatorName, Tenant: "shared"}.Build(),
 								},
 							}.Build(),
 						}.Build(),
@@ -1144,7 +1144,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 							Editable: privatev1.EditableAddOnOperatorReferenceList_builder{
 								DefaultValue: privatev1.AddOnOperatorReferenceList_builder{
 									Items: []*privatev1.AddOnOperatorReference{
-										privatev1.AddOnOperatorReference_builder{Name: operatorName, Shared: true}.Build(),
+										privatev1.AddOnOperatorReference_builder{Name: operatorName, Tenant: "shared"}.Build(),
 									},
 								}.Build(),
 							}.Build(),
@@ -1194,7 +1194,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 						Fields: privatev1.ClusterCatalogItemFields_builder{
 							AddOnOperators: privatev1.AddOnOperatorReferenceListFieldPolicy_builder{
 								Locked: privatev1.AddOnOperatorReferenceList_builder{
-									Items: []*privatev1.AddOnOperatorReference{privatev1.AddOnOperatorReference_builder{Id: operatorID, Shared: true}.Build()},
+									Items: []*privatev1.AddOnOperatorReference{privatev1.AddOnOperatorReference_builder{Id: operatorID, Tenant: "shared"}.Build()},
 								}.Build(),
 							}.Build(),
 						}.Build(),
@@ -1230,7 +1230,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 						AddOnOperators: privatev1.AddOnOperatorReferenceListFieldPolicy_builder{
 							Locked: privatev1.AddOnOperatorReferenceList_builder{
 								Items: []*privatev1.AddOnOperatorReference{
-									privatev1.AddOnOperatorReference_builder{Id: operatorID, Shared: true}.Build(),
+									privatev1.AddOnOperatorReference_builder{Id: operatorID, Tenant: "shared"}.Build(),
 								},
 							}.Build(),
 						}.Build(),
@@ -1296,7 +1296,7 @@ var _ = Describe("Private cluster catalog items server", func() {
 						AddOnOperators: privatev1.AddOnOperatorReferenceListFieldPolicy_builder{
 							Locked: privatev1.AddOnOperatorReferenceList_builder{
 								Items: []*privatev1.AddOnOperatorReference{
-									privatev1.AddOnOperatorReference_builder{Id: operatorID, Project: projectName, Shared: true}.Build(),
+									privatev1.AddOnOperatorReference_builder{Id: operatorID, Project: projectName, Tenant: "shared"}.Build(),
 								},
 							}.Build(),
 						}.Build(),

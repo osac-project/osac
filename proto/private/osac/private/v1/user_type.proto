@@ -102,8 +102,8 @@ message UserReference {
   string id = 1;
   string name = 2;
   string project = 3;
-  bool shared = 4;
-  // Tenant where the referenced object lives. If omitted, the owner tenant is used;
-  // the legacy shared selector can select the shared tenant.
+  reserved 4;
+  reserved "shared";
+  // Tenant where the referenced object lives. If omitted, the owner tenant is used.
   string tenant = 5;
 }

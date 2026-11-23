@@ -428,22 +428,12 @@ func retainVisibleUserReference(
 	tenantField := message.Descriptor().Fields().ByName("tenant")
 	tenant := message.Get(tenantField).String()
 	project := message.Get(message.Descriptor().Fields().ByName("project")).String()
-	sharedField := message.Descriptor().Fields().ByName("shared")
-	shared := sharedField != nil && message.Get(sharedField).Bool()
 
 	scopes := []string{}
-	switch {
-	case tenant != "":
+	if tenant != "" {
 		scopes = append(scopes, tenant)
-	case shared:
-		scopes = append(scopes, auth.SharedTenant)
-	default:
-		if ownerTenant != "" {
-			scopes = append(scopes, ownerTenant)
-		}
-		if ownerTenant != auth.SharedTenant {
-			scopes = append(scopes, auth.SharedTenant)
-		}
+	} else if ownerTenant != "" {
+		scopes = append(scopes, ownerTenant)
 	}
 
 	for _, scopeTenant := range scopes {

@@ -389,7 +389,7 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 		computeTemplateID := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		computeItem := createComputeInstanceCatalogItemFixture(ctx, catalogAdmin, publicv1.ComputeInstanceCatalogItem_builder{
 			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: "users"}.Build(),
-			Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: computeTemplateID}.Build(),
+			Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: computeTemplateID, Tenant: "shared"}.Build(),
 			Published: true,
 			Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 				RunStrategy: publicv1.ComputeInstanceRunStrategyFieldPolicy_builder{
@@ -405,7 +405,7 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 		clusterTemplateID := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
 		clusterCatalogItem := createClusterCatalogItemFixture(ctx, catalogAdmin, publicv1.ClusterCatalogItem_builder{
 			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: "users"}.Build(),
-			Template:  publicv1.ClusterTemplateReference_builder{Id: clusterTemplateID}.Build(),
+			Template:  publicv1.ClusterTemplateReference_builder{Id: clusterTemplateID, Tenant: "shared"}.Build(),
 			Title:     "Metadata integration cluster offering",
 			Published: true,
 		}.Build())
@@ -417,7 +417,7 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 		bareMetalTemplateID := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)
 		bareMetalCatalogItem := createBareMetalInstanceCatalogItemFixture(ctx, catalogAdmin, publicv1.BareMetalInstanceCatalogItem_builder{
 			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: "users"}.Build(),
-			Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: bareMetalTemplateID}.Build(),
+			Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: bareMetalTemplateID, Tenant: "shared"}.Build(),
 			Title:     "Metadata integration bare metal offering",
 			Published: true,
 		}.Build())
@@ -433,7 +433,7 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 		bareMetalInstanceTemplateID := createCatalogItemBareMetalInstanceTemplateFixture(ctx, nil, nil)
 		haltedBareMetalItem := createBareMetalInstanceCatalogItemFixture(ctx, catalogAdmin, publicv1.BareMetalInstanceCatalogItem_builder{
 			Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: "users"}.Build(),
-			Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: bareMetalInstanceTemplateID}.Build(),
+			Template:  publicv1.BareMetalInstanceTemplateReference_builder{Id: bareMetalInstanceTemplateID, Tenant: "shared"}.Build(),
 			Published: true,
 			Fields: publicv1.BareMetalInstanceCatalogItemFields_builder{
 				RunStrategy: publicv1.BareMetalInstanceRunStrategyFieldPolicy_builder{
@@ -445,9 +445,9 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 			}.Build(),
 		}.Build())
 		bareMetalInstance, err := createBareMetalInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.BareMetalInstanceSpec_builder{
-			CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: haltedBareMetalItem.GetId()}.Build(),
-			DiskImage:    publicv1.DiskImageReference_builder{Id: bareMetalImage.GetId()}.Build(),
-			InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bareMetalInstanceTypeID, Shared: true}.Build(),
+			CatalogItem:  publicv1.BareMetalInstanceCatalogItemReference_builder{Id: haltedBareMetalItem.GetId(), Tenant: haltedBareMetalItem.GetMetadata().GetTenant()}.Build(),
+			DiskImage:    publicv1.DiskImageReference_builder{Id: bareMetalImage.GetId(), Tenant: "shared"}.Build(),
+			InstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bareMetalInstanceTypeID, Tenant: "shared"}.Build(),
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		fixtures = append(fixtures, struct {

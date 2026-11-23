@@ -50,14 +50,14 @@ func (s *publicClusterCreationFixture) Create(ctx context.Context, request *publ
 		spec = request.GetObject().GetSpec()
 		if spec.GetTemplate().GetId() == "my_bmit_template" || spec.GetTemplate().GetName() == "test-bmit-template" {
 			spec.SetNodeSets(map[string]*publicv1.ClusterNodeSet{"workers": publicv1.ClusterNodeSet_builder{
-				Size: proto.Int32(3), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Shared: true}.Build(),
+				Size: proto.Int32(3), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Tenant: "shared"}.Build(),
 			}.Build()})
 		} else {
 			nodeSets := map[string]*publicv1.ClusterNodeSet{
-				"compute": publicv1.ClusterNodeSet_builder{Size: proto.Int32(3), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Shared: true}.Build()}.Build(),
+				"compute": publicv1.ClusterNodeSet_builder{Size: proto.Int32(3), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Tenant: "shared"}.Build()}.Build(),
 			}
 			if !s.singleNodeSet {
-				nodeSets["gpu"] = publicv1.ClusterNodeSet_builder{Size: proto.Int32(1), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_gpu", Shared: true}.Build()}.Build()
+				nodeSets["gpu"] = publicv1.ClusterNodeSet_builder{Size: proto.Int32(1), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_gpu", Tenant: "shared"}.Build()}.Build()
 			}
 			spec.SetNodeSets(nodeSets)
 		}
@@ -387,7 +387,7 @@ var _ = Describe("Clusters server", func() {
 					Spec: publicv1.ClusterSpec_builder{
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						AddOnOperators: []*publicv1.AddOnOperatorReference{
-							publicv1.AddOnOperatorReference_builder{Name: "published-operator"}.Build(),
+							publicv1.AddOnOperatorReference_builder{Name: "published-operator", Tenant: "shared"}.Build(),
 						},
 					}.Build(),
 				}.Build(),
@@ -403,7 +403,7 @@ var _ = Describe("Clusters server", func() {
 					Spec: publicv1.ClusterSpec_builder{
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						AddOnOperators: []*publicv1.AddOnOperatorReference{
-							publicv1.AddOnOperatorReference_builder{Name: "unpublished-operator"}.Build(),
+							publicv1.AddOnOperatorReference_builder{Tenant: "shared", Name: "unpublished-operator"}.Build(),
 						},
 					}.Build(),
 				}.Build(),
@@ -431,7 +431,7 @@ var _ = Describe("Clusters server", func() {
 					Spec: publicv1.ClusterSpec_builder{
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						AddOnOperators: []*publicv1.AddOnOperatorReference{
-							publicv1.AddOnOperatorReference_builder{Name: root.GetMetadata().GetName()}.Build(),
+							publicv1.AddOnOperatorReference_builder{Tenant: "shared", Name: root.GetMetadata().GetName()}.Build(),
 						},
 					}.Build(),
 				}.Build(),
@@ -460,7 +460,7 @@ var _ = Describe("Clusters server", func() {
 					Spec: publicv1.ClusterSpec_builder{
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						AddOnOperators: []*publicv1.AddOnOperatorReference{
-							publicv1.AddOnOperatorReference_builder{Name: "deleted-operator"}.Build(),
+							publicv1.AddOnOperatorReference_builder{Tenant: "shared", Name: "deleted-operator"}.Build(),
 						},
 					}.Build(),
 				}.Build(),
@@ -490,13 +490,13 @@ var _ = Describe("Clusters server", func() {
 					Object: publicv1.Cluster_builder{
 						Metadata: publicv1.Metadata_builder{Name: name, Tenant: tenant}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
-							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template", Shared: true}.Build(),
-							Version:  publicv1.ClusterVersionReference_builder{Id: "shared-version-id", Shared: true}.Build(),
+							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template", Tenant: "shared"}.Build(),
+							Version:  publicv1.ClusterVersionReference_builder{Id: "shared-version-id", Tenant: "shared"}.Build(),
 							NodeSets: map[string]*publicv1.ClusterNodeSet{
 								"workers": publicv1.ClusterNodeSet_builder{
 									Size: proto.Int32(1),
 									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{
-										Id: "bmit_standard", Name: "test-bmit-standard", Shared: true,
+										Id: "bmit_standard", Name: "test-bmit-standard", Tenant: "shared",
 									}.Build(),
 								}.Build(),
 							},
@@ -615,7 +615,7 @@ var _ = Describe("Clusters server", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"junk": publicv1.ClusterNodeSet_builder{
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Shared: true}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Tenant: "shared"}.Build(),
 								Size:                  proto.Int32(1000),
 							}.Build(),
 						},
@@ -640,7 +640,7 @@ var _ = Describe("Clusters server", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Shared: true}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Tenant: "shared"}.Build(),
 								Size:                  proto.Int32(0),
 							}.Build(),
 						},
@@ -667,7 +667,7 @@ var _ = Describe("Clusters server", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Shared: true}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Tenant: "shared"}.Build(),
 								Size:                  proto.Int32(-1),
 							}.Build(),
 						},
@@ -694,7 +694,7 @@ var _ = Describe("Clusters server", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Shared: true}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Tenant: "shared"}.Build(),
 								Size:                  proto.Int32(1000),
 							}.Build(),
 						},
@@ -719,11 +719,11 @@ var _ = Describe("Clusters server", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Shared: true}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Tenant: "shared"}.Build(),
 								Size:                  proto.Int32(30),
 							}.Build(),
 							"gpu": publicv1.ClusterNodeSet_builder{
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_gpu", Shared: true}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_gpu", Tenant: "shared"}.Build(),
 								Size:                  proto.Int32(10),
 							}.Build(),
 						},
@@ -751,7 +751,7 @@ var _ = Describe("Clusters server", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Shared: true}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Tenant: "shared"}.Build(),
 								Size:                  proto.Int32(30),
 							}.Build(),
 						},
@@ -1109,7 +1109,7 @@ var _ = Describe("Clusters server", func() {
 					Spec: publicv1.ClusterSpec_builder{
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Shared: true}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Tenant: "shared"}.Build(),
 								Size:                  proto.Int32(4),
 							}.Build(),
 						},
@@ -1291,7 +1291,7 @@ var _ = Describe("Clusters server", func() {
 							Template: privatev1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 							NodeSets: map[string]*privatev1.ClusterNodeSet{
 								"compute": privatev1.ClusterNodeSet_builder{
-									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Name: "test-bmit-standard", Shared: true}.Build(),
+									BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Name: "test-bmit-standard", Tenant: "shared"}.Build(),
 									Size:                  proto.Int32(3),
 								}.Build(),
 							},
@@ -1315,7 +1315,7 @@ var _ = Describe("Clusters server", func() {
 						Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Name: "test-bmit-standard", Shared: true}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Name: "test-bmit-standard", Tenant: "shared"}.Build(),
 								Size:                  proto.Int32(4),
 							}.Build(),
 						},
@@ -1652,7 +1652,7 @@ var _ = Describe("Clusters server", func() {
 					Spec: publicv1.ClusterSpec_builder{
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Shared: true}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Tenant: "shared"}.Build(),
 								Size:                  proto.Int32(3),
 							}.Build(),
 						},
@@ -1697,15 +1697,15 @@ var _ = Describe("Clusters server", func() {
 					Spec: publicv1.ClusterSpec_builder{
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"compute": publicv1.ClusterNodeSet_builder{
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Shared: true}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Tenant: "shared"}.Build(),
 								Size:                  proto.Int32(3),
 							}.Build(),
 							"gpu": publicv1.ClusterNodeSet_builder{
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_gpu", Shared: true}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_gpu", Tenant: "shared"}.Build(),
 								Size:                  proto.Int32(1),
 							}.Build(),
 							"extra": publicv1.ClusterNodeSet_builder{
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Shared: true}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Tenant: "shared"}.Build(),
 								Size:                  proto.Int32(2),
 							}.Build(),
 						},
@@ -2111,12 +2111,12 @@ var _ = Describe("Clusters server", func() {
 						Object: publicv1.Cluster_builder{
 							Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("caas-shared-%s", uuid.NewString()[:8])}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
-								Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template"}.Build(),
+								Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template", Tenant: auth.SharedTenant}.Build(),
 								NodeSets: map[string]*publicv1.ClusterNodeSet{
 									"workers": publicv1.ClusterNodeSet_builder{
 										Size: proto.Int32(2),
 										BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{
-											Id: id, Name: name, Shared: shared, Project: project,
+											Id: id, Name: name, Project: project, Tenant: map[bool]string{true: "shared"}[shared],
 										}.Build(),
 									}.Build(),
 								},
@@ -2130,13 +2130,17 @@ var _ = Describe("Clusters server", func() {
 					ref := response.GetObject().GetSpec().GetNodeSets()["workers"].GetBaremetalInstanceType()
 					Expect(ref.GetId()).To(Equal("bmit_standard"))
 					Expect(ref.GetName()).To(Equal("test-bmit-standard"))
-					Expect(ref.GetShared()).To(Equal(shared))
+					if shared {
+						Expect(ref.GetTenant()).To(Equal("shared"))
+					} else {
+						Expect(ref.GetTenant()).To(BeEmpty())
+					}
 					Expect(ref.GetProject()).To(Equal(project))
 				},
 				Entry("accepts an explicitly shared name", "", "test-bmit-standard", true, ""),
 				Entry("accepts an explicitly shared ID", "bmit_standard", "", true, ""),
-				Entry("resolves a name without shared=true", "", "test-bmit-standard", false, ""),
-				Entry("resolves an ID without shared=true", "bmit_standard", "", false, ""),
+				Entry("resolves a name with omitted tenant", "", "test-bmit-standard", false, ""),
+				Entry("resolves an ID with omitted tenant", "bmit_standard", "", false, ""),
 				Entry("resolves an ID with a project selector", "bmit_standard", "", true, "other"),
 			)
 
@@ -2145,12 +2149,12 @@ var _ = Describe("Clusters server", func() {
 					Object: publicv1.Cluster_builder{
 						Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("caas-missing-bmit-%s", uuid.NewString()[:8])}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
-							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template"}.Build(),
+							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template", Tenant: auth.SharedTenant}.Build(),
 							NodeSets: map[string]*publicv1.ClusterNodeSet{
 								"workers": publicv1.ClusterNodeSet_builder{
 									Size: proto.Int32(2),
 									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{
-										Id: "missing-public-bmit-id", Shared: true,
+										Id: "missing-public-bmit-id", Tenant: "shared",
 									}.Build(),
 								}.Build(),
 							},
@@ -2167,7 +2171,7 @@ var _ = Describe("Clusters server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
-							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template"}.Build(),
+							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template", Tenant: auth.SharedTenant}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -2188,10 +2192,10 @@ var _ = Describe("Clusters server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
-							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template"}.Build(),
+							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template", Tenant: auth.SharedTenant}.Build(),
 							NodeSets: map[string]*publicv1.ClusterNodeSet{
 								"workers": publicv1.ClusterNodeSet_builder{
-									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Shared: true}.Build(),
+									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Tenant: "shared"}.Build(),
 									Size:                  proto.Int32(5),
 								}.Build(),
 							},
@@ -2214,10 +2218,10 @@ var _ = Describe("Clusters server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
-							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template"}.Build(),
+							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template", Tenant: auth.SharedTenant}.Build(),
 							NodeSets: map[string]*publicv1.ClusterNodeSet{
 								"workers": publicv1.ClusterNodeSet_builder{
-									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_gpu", Shared: true}.
+									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_gpu", Tenant: "shared"}.
 										Build(),
 									Size: proto.Int32(3),
 								}.Build(),
@@ -2239,7 +2243,7 @@ var _ = Describe("Clusters server", func() {
 							Template: publicv1.ClusterTemplateReference_builder{Id: "my_template"}.Build(),
 							NodeSets: map[string]*publicv1.ClusterNodeSet{
 								"compute": publicv1.ClusterNodeSet_builder{
-									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Shared: true}.
+									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Tenant: "shared"}.
 										Build(),
 									Size: proto.Int32(3),
 								}.Build(),
@@ -2258,7 +2262,7 @@ var _ = Describe("Clusters server", func() {
 							Name: "test-bmit-immutable",
 						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
-							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template"}.Build(),
+							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template", Tenant: auth.SharedTenant}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -2271,7 +2275,7 @@ var _ = Describe("Clusters server", func() {
 						Spec: publicv1.ClusterSpec_builder{
 							NodeSets: map[string]*publicv1.ClusterNodeSet{
 								"workers": publicv1.ClusterNodeSet_builder{
-									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_no_fabric", Shared: true}.
+									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_no_fabric", Tenant: "shared"}.
 										Build(),
 									Size: proto.Int32(3),
 								}.Build(),
@@ -2296,7 +2300,7 @@ var _ = Describe("Clusters server", func() {
 							Name: "test-bmit-same",
 						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
-							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template"}.Build(),
+							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template", Tenant: auth.SharedTenant}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -2309,7 +2313,7 @@ var _ = Describe("Clusters server", func() {
 						Spec: publicv1.ClusterSpec_builder{
 							NodeSets: map[string]*publicv1.ClusterNodeSet{
 								"workers": publicv1.ClusterNodeSet_builder{
-									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Shared: true}.
+									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_standard", Tenant: "shared"}.
 										Build(),
 									Size: proto.Int32(5),
 								}.Build(),
@@ -2333,7 +2337,7 @@ var _ = Describe("Clusters server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
-							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template"}.Build(),
+							Template: publicv1.ClusterTemplateReference_builder{Id: "my_bmit_template", Tenant: auth.SharedTenant}.Build(),
 							NetworkAttachment: publicv1.ClusterNetworkAttachment_builder{
 								Subnet: publicv1.SubnetLocalReference_builder{
 									Name: "dummy-subnet",
@@ -2376,10 +2380,10 @@ var _ = Describe("Clusters server", func() {
 							Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
 						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
-							Template: publicv1.ClusterTemplateReference_builder{Id: "my_no_fabric_template"}.Build(),
+							Template: publicv1.ClusterTemplateReference_builder{Id: "my_no_fabric_template", Tenant: "shared"}.Build(),
 							NodeSets: map[string]*publicv1.ClusterNodeSet{
 								"workers": publicv1.ClusterNodeSet_builder{
-									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_no_fabric", Shared: true}.Build(),
+									BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: "bmit_no_fabric", Tenant: "shared"}.Build(),
 									Size:                  new(int32(2)),
 								}.Build(),
 							},
@@ -2412,8 +2416,7 @@ var _ = Describe("Clusters server", func() {
 						}.Build(),
 						Spec: publicv1.ClusterSpec_builder{
 							Template: publicv1.ClusterTemplateReference_builder{
-								Name:   "test-bmit-template",
-								Shared: true,
+								Name: "test-bmit-template", Tenant: "shared",
 							}.Build(),
 						}.Build(),
 					}.Build(),

@@ -48,11 +48,11 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			}.Build(), computeInstanceCatalogItemParameterDefinitions())
 			fields := publicv1.ComputeInstanceCatalogItemFields_builder{
 				InstanceType: publicv1.InstanceTypeReferenceFieldPolicy_builder{
-					Locked: publicv1.InstanceTypeReference_builder{Id: instanceType}.Build(),
+					Locked: publicv1.InstanceTypeReference_builder{Id: instanceType, Tenant: "shared"}.Build(),
 				}.Build(),
 				DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
 					Editable: publicv1.EditableDiskImageReferenceField_builder{
-						DefaultValue: publicv1.DiskImageReference_builder{Name: image.GetMetadata().GetName(), Shared: true}.Build(),
+						DefaultValue: publicv1.DiskImageReference_builder{Name: image.GetMetadata().GetName(), Tenant: "shared"}.Build(),
 					}.Build(),
 				}.Build(),
 				UserDataSource: publicv1.UserDataSourceFieldPolicy_builder{Locked: publicv1.UserDataSource_builder{Inline: new("")}.Build()}.Build(),
@@ -90,7 +90,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata:           publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-				Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published:          true,
 				Fields:             fields,
 				TemplateParameters: catalogItemParameterPolicies(),
@@ -98,8 +98,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 
 			By("creating a VM with caller-selected disk inputs")
 			request := publicv1.ComputeInstanceSpec_builder{
-				DiskImage:   publicv1.DiskImageReference_builder{Id: overrideImage.GetId()}.Build(),
-				CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+				DiskImage:   publicv1.DiskImageReference_builder{Id: overrideImage.GetId(), Tenant: "shared"}.Build(),
+				CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 				BootDisk:    publicv1.ComputeInstanceDisk_builder{SizeGib: new(int32(100))}.Build(),
 				AdditionalDisks: publicv1.ComputeInstanceDiskList_builder{Items: []*publicv1.ComputeInstanceDisk{
 					publicv1.ComputeInstanceDisk_builder{
@@ -118,9 +118,9 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(err).NotTo(HaveOccurred())
 			spec := response.GetObject().GetSpec()
 			Expect(spec.GetInstanceType().GetId()).To(Equal(instanceType))
-			Expect(spec.GetInstanceType().GetShared()).To(BeTrue())
+			Expect(spec.GetInstanceType().GetTenant()).To(Equal("shared"))
 			Expect(spec.GetDiskImage().GetId()).To(Equal(overrideImage.GetId()))
-			Expect(spec.GetDiskImage().GetShared()).To(BeTrue())
+			Expect(spec.GetDiskImage().GetTenant()).To(Equal("shared"))
 			Expect(spec.GetUserDataSource().HasInline()).To(BeTrue())
 			Expect(spec.GetUserDataSource().GetInline()).To(BeEmpty())
 			Expect(spec.HasAutoExternalIpAttachment()).To(BeTrue())
@@ -145,7 +145,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				{
 					name: "identical InstanceType",
 					set: func(s *publicv1.ComputeInstanceSpec) {
-						s.SetInstanceType(publicv1.InstanceTypeReference_builder{Id: instanceType}.Build())
+						s.SetInstanceType(publicv1.InstanceTypeReference_builder{Id: instanceType, Tenant: "shared"}.Build())
 					},
 				},
 				{
@@ -197,7 +197,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			}
 			By("using catalog item defaults when editable collections and numeric fields are omitted")
 			defaulted, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.ComputeInstanceSpec_builder{
-				CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+				CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			persistedDefaults, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: defaulted.GetId()}.Build())
@@ -208,7 +208,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(defaulted.GetSpec().GetBootDisk().GetSizeGib()).To(Equal(int32(30)))
 			Expect(defaulted.GetSpec().GetAdditionalDisks().GetItems()[0].GetSizeGib()).To(Equal(int32(50)))
 			explicitEmpty, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.ComputeInstanceSpec_builder{
-				CatalogItem:     publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+				CatalogItem:     publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 				AdditionalDisks: publicv1.ComputeInstanceDiskList_builder{}.Build(),
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
@@ -227,7 +227,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			emptyDisks, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.ComputeInstanceSpec_builder{
-				CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+				CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			persistedEmptyDisks, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: emptyDisks.GetId()}.Build())
@@ -243,7 +243,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
 			tier := createCatalogItemStorageTierFixture(ctx)
 			template := createCatalogItemComputeInstanceTemplateFixture(ctx, privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-				DiskImage: privatev1.DiskImageReference_builder{Id: image.GetId()}.Build(),
+				DiskImage: privatev1.DiskImageReference_builder{Id: image.GetId(), Tenant: "shared"}.Build(),
 				BootDisk: privatev1.ComputeInstanceDisk_builder{
 					SizeGib:     new(int32(30)),
 					StorageTier: privatev1.StorageTierReference_builder{Id: tier}.Build(),
@@ -252,7 +252,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			}.Build(), nil)
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 				Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 					InstanceType: publicv1.InstanceTypeReferenceFieldPolicy_builder{
@@ -263,7 +263,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			client := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
 			name := catalogItemFixtureName()
 			spec := publicv1.ComputeInstanceSpec_builder{
-				CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+				CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 				NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 			}.Build()
 			_, err := client.Create(ctx, publicv1.ComputeInstancesCreateRequest_builder{
@@ -277,7 +277,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			listed, err := client.List(ctx, publicv1.ComputeInstancesListRequest_builder{Filter: new("this.metadata.name == '" + name + "'")}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(listed.GetItems()).To(BeEmpty())
-			spec.SetInstanceType(publicv1.InstanceTypeReference_builder{Id: instanceType}.Build())
+			spec.SetInstanceType(publicv1.InstanceTypeReference_builder{Id: instanceType, Tenant: "shared"}.Build())
 			created, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), spec)
 			Expect(err).NotTo(HaveOccurred())
 			persisted, err := client.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: created.GetId()}.Build())
@@ -290,7 +290,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 				Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 					UserDataSource: publicv1.UserDataSourceFieldPolicy_builder{
@@ -307,7 +307,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(e).NotTo(HaveOccurred())
 			name := catalogItemFixtureName()
 			spec := publicv1.ComputeInstanceSpec_builder{
-				CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+				CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 				NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 			}.Build()
 			dry := metadata.AppendToOutgoingContext(ctx, "x-dry-run", "true")
@@ -330,7 +330,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(after.GetTotal()).To(Equal(before.GetTotal()))
 
 			By("rejecting a request that names both the catalog item and its Template")
-			spec.SetTemplate(publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build())
+			spec.SetTemplate(publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build())
 			_, e = client.Create(dry, publicv1.ComputeInstancesCreateRequest_builder{
 				Object: publicv1.ComputeInstance_builder{
 					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
@@ -359,7 +359,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			other := createCatalogItemNetworkInClassFixture(ctx, usersGroup, "", network.networkClassID)
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 				Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 					NetworkAttachments: publicv1.ComputeNetworkAttachmentListFieldPolicy_builder{
@@ -378,7 +378,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				Object: publicv1.ComputeInstance_builder{
 					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
 					Spec: publicv1.ComputeInstanceSpec_builder{
-						CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+						CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{bad},
 					}.Build(),
 				}.Build(),
@@ -397,7 +397,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 				Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 					UserDataSource: publicv1.UserDataSourceFieldPolicy_builder{
@@ -410,7 +410,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				Object: publicv1.ComputeInstance_builder{
 					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
 					Spec: publicv1.ComputeInstanceSpec_builder{
-						CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+						CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 						UserDataSource:     publicv1.UserDataSource_builder{Secret: publicv1.SecretLocalReference_builder{Id: secret}.Build()}.Build(),
 						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{createCatalogItemNetworkFixture(ctx, usersGroup, "").computeInstanceAttachment()},
 					}.Build(),
@@ -430,7 +430,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup, Project: vmProject}.Build(),
-				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 			}.Build())
 			attachment := vmProjectNetwork.computeInstanceAttachment()
@@ -441,9 +441,9 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				NetworkAttachments: []*publicv1.ComputeNetworkAttachment{attachment},
 			}.Build()
 			if createFromCatalogItem {
-				spec.SetCatalogItem(publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build())
+				spec.SetCatalogItem(publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build())
 			} else {
-				spec.SetTemplate(publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build())
+				spec.SetTemplate(publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build())
 			}
 			client := publicv1.NewComputeInstancesClient(tool.ExternalView().AdminConn())
 			dryRunContext := metadata.AppendToOutgoingContext(ctx, "x-dry-run", "true")
@@ -478,7 +478,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			item := createComputeInstanceCatalogItemFixture(
 				ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 					Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-					Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+					Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 					Published: true,
 					Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 						SshKey: publicv1.FullSecretReferenceFieldPolicy_builder{
@@ -542,12 +542,12 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(), Published: true,
+				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(), Published: true,
 				TemplateParameters: map[string]*publicv1.TemplateParameterPolicy{"size": publicv1.TemplateParameterPolicy_builder{Locked: catalogItemParameterValue(wrapperspb.Int32(20))}.Build()},
 			}.Build())
 			structured := catalogItemParameterValue(structpb.NewStructValue(&structpb.Struct{Fields: map[string]*structpb.Value{"key": structpb.NewStringValue("value")}}))
 			spec := publicv1.ComputeInstanceSpec_builder{
-				CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+				CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 				NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 				TemplateParameters: map[string]*anypb.Any{"structured": structured},
 			}.Build()
@@ -600,7 +600,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 				TemplateParameters: map[string]*publicv1.TemplateParameterPolicy{
 					"enabled": publicv1.TemplateParameterPolicy_builder{
@@ -616,7 +616,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				Object: publicv1.ComputeInstance_builder{
 					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
 					Spec: publicv1.ComputeInstanceSpec_builder{
-						CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+						CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 					}.Build(),
 				}.Build(),
@@ -701,7 +701,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			created := request(http.MethodPost, path, map[string]any{
 				"metadata":  map[string]any{"name": catalogItemFixtureName(), "tenant": usersGroup},
-				"template":  map[string]any{"id": template},
+				"template":  map[string]any{"id": template, "tenant": "shared"},
 				"published": true,
 				"fields": map[string]any{
 					"auto_external_ip_attachment": map[string]any{"locked": false},
@@ -733,7 +733,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 
 			By("applying the named-project default through the public ComputeInstance API")
 			createdInstance, err := createComputeInstanceFixture(ctx, userConn, publicv1.ComputeInstanceSpec_builder{
-				CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: id}.Build(),
+				CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: id, Tenant: usersGroup}.Build(),
 				NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
@@ -744,7 +744,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(stored.GetObject().GetSpec().GetSshKey().GetId()).To(Equal(secret.GetId()))
 			Expect(stored.GetObject().GetSpec().GetSshKey().GetName()).To(Equal(secret.GetMetadata().GetName()))
 			Expect(stored.GetObject().GetSpec().GetSshKey().GetProject()).To(Equal(project))
-			Expect(stored.GetObject().GetSpec().GetSshKey().GetShared()).To(BeFalse())
+			Expect(stored.GetObject().GetSpec().GetSshKey().GetTenant()).ToNot(Equal("shared"))
 
 			By("updating only the SSH-key policy through REST")
 			request(http.MethodPatch, path+"/"+id+"?updateMask=fields.ssh_key", map[string]any{
@@ -769,7 +769,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			items := publicv1.NewComputeInstanceCatalogItemsClient(conn)
 			owned := createComputeInstanceCatalogItemFixture(ctx, conn, publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 			}.Build())
 			Expect(owned.GetMetadata().GetTenant()).To(Equal(tenant), "catalog item should belong to the tenant admin's tenant")
 
@@ -803,7 +803,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			By("provisioning a VM as a member with an editable override")
 			network := createCatalogItemNetworkFixture(ctx, tenant, "")
 			spec := publicv1.ComputeInstanceSpec_builder{
-				CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: owned.GetId()}.Build(),
+				CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: owned.GetId(), Tenant: owned.GetMetadata().GetTenant()}.Build(),
 				UserDataSource:     publicv1.UserDataSource_builder{Inline: new("member input")}.Build(),
 				NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 			}.Build()
@@ -825,7 +825,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(err).NotTo(HaveOccurred())
 			Expect(hidden.GetItems()).To(BeEmpty())
 			_, err = createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.ComputeInstanceSpec_builder{
-				CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: owned.GetId()}.Build(),
+				CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: owned.GetId(), Tenant: owned.GetMetadata().GetTenant()}.Build(),
 			}.Build())
 			expectCatalogItemStatusCode(err, codes.NotFound)
 
@@ -858,7 +858,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			user := publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().UserConn())
 			shared := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 			}.Build())
 			Expect(shared.GetMetadata().GetTenant()).To(Equal("shared"))
 			_, err := user.Get(ctx, publicv1.ComputeInstanceCatalogItemsGetRequest_builder{Id: shared.GetId()}.Build())
@@ -886,7 +886,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			name := catalogItemFixtureName()
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata: publicv1.Metadata_builder{Name: name}.Build(),
-				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Title:    name,
 			}.Build())
 			client := publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn())
@@ -919,7 +919,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			template := createCatalogItemComputeInstanceTemplateFixture(ctx, nil, nil)
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 				Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 					UserDataSource:           publicv1.UserDataSourceFieldPolicy_builder{Locked: publicv1.UserDataSource_builder{Inline: new("initial")}.Build()}.Build(),
@@ -986,7 +986,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			_, err := client.Create(ctx, publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Metadata: publicv1.Metadata_builder{Name: name, Tenant: usersGroup}.Build(),
-					Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+					Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 					Fields:   publicv1.ComputeInstanceCatalogItemFields_builder{NetworkAttachments: policy()}.Build(),
 				}.Build(),
 			}.Build())
@@ -1014,7 +1014,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			template := createCatalogItemComputeInstanceTemplateFixture(ctx, nil, nil)
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 			}.Build())
 			templates := privatev1.NewComputeInstanceTemplatesClient(tool.InternalView().AdminConn())
 			_, err := templates.Delete(ctx, privatev1.ComputeInstanceTemplatesDeleteRequest_builder{Id: template}.Build())
@@ -1032,20 +1032,20 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			dependencies := privatev1.NewDiskImagesClient(tool.InternalView().AdminConn())
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 				Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 					DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
-						Locked: publicv1.DiskImageReference_builder{Id: id}.Build(),
+						Locked: publicv1.DiskImageReference_builder{Id: id, Tenant: "shared"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
 			other := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 					DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
-						Locked: publicv1.DiskImageReference_builder{Id: id}.Build(),
+						Locked: publicv1.DiskImageReference_builder{Id: id, Tenant: "shared"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -1062,7 +1062,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 					Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 						DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
 							Editable: publicv1.EditableDiskImageReferenceField_builder{
-								DefaultValue: publicv1.DiskImageReference_builder{Id: id}.Build(),
+								DefaultValue: publicv1.DiskImageReference_builder{Id: id, Tenant: "shared"}.Build(),
 							}.Build(),
 						}.Build(),
 					}.Build(),
@@ -1101,7 +1101,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup, Project: project}.Build(),
-				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 				Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 					DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
@@ -1181,7 +1181,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			client := publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn())
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
-				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 				Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 					DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
@@ -1190,14 +1190,14 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				}.Build(),
 			}.Build())
 			Expect(item.GetFields().GetDiskImage().GetLocked().GetId()).To(Equal(local.GetId()))
-			Expect(item.GetFields().GetDiskImage().GetLocked().GetShared()).To(BeFalse())
+			Expect(item.GetFields().GetDiskImage().GetLocked().GetTenant()).ToNot(Equal("shared"))
 			for _, tc := range []struct {
 				name      string
 				reference *publicv1.DiskImageReference
 				code      codes.Code
 			}{
 				{"mismatched ID and name", publicv1.DiskImageReference_builder{Id: local.GetId(), Name: "disagrees"}.Build(), codes.InvalidArgument},
-				{"shared image in an invalid project", publicv1.DiskImageReference_builder{Name: name, Shared: true, Project: "invalid"}.Build(), codes.NotFound},
+				{"shared image in an invalid project", publicv1.DiskImageReference_builder{Name: name, Project: "invalid", Tenant: "shared"}.Build(), codes.NotFound},
 			} {
 				By(tc.name)
 				_, err := client.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
@@ -1217,7 +1217,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 					Id: item.GetId(),
 					Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 						DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
-							Locked: publicv1.DiskImageReference_builder{Name: name, Shared: true}.Build(),
+							Locked: publicv1.DiskImageReference_builder{Name: name, Tenant: "shared"}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build(),
@@ -1241,7 +1241,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				Object: publicv1.ComputeInstance_builder{
 					Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
 					Spec: publicv1.ComputeInstanceSpec_builder{
-						CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+						CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 						NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 					}.Build(),
 				}.Build(),
@@ -1323,9 +1323,13 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 					return err
 				}, nil)
 
+				templateReference := publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}
+				if templateTenant != catalogTenant {
+					templateReference.Tenant = templateTenant
+				}
 				candidate := publicv1.ComputeInstanceCatalogItem_builder{
 					Metadata: catalogItemMetadata(catalogTenant),
-					Template: publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
+					Template: templateReference.Build(),
 				}.Build()
 				client := publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn())
 				if !shouldSucceed {
@@ -1338,7 +1342,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), candidate)
 				Expect(item.GetMetadata().GetTenant()).To(Equal(catalogTenant))
 				Expect(item.GetTemplate().GetId()).To(Equal(templateID))
-				Expect(item.GetTemplate().GetShared()).To(Equal(templateTenant == "shared"))
+				Expect(item.GetTemplate().GetTenant()).To(Equal(templateTenant))
 			},
 			Entry("a tenant catalog item accepts a Template from its tenant", usersGroup, usersGroup, true),
 			Entry("a tenant catalog item accepts a shared Template", usersGroup, "shared", true),
@@ -1347,7 +1351,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Entry("a shared catalog item rejects a tenant's Template", "shared", usersGroup, false),
 		)
 
-		It("resolves a Template by name in an explicitly selected visible tenant", func(ctx context.Context) {
+		It("rejects a Template in another visible tenant selected by name", func(ctx context.Context) {
 			name := catalogItemFixtureName()
 			templates := privatev1.NewComputeInstanceTemplatesClient(tool.InternalView().AdminConn())
 			created, err := templates.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
@@ -1366,20 +1370,17 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				return err
 			}, nil)
 
-			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(),
-				publicv1.ComputeInstanceCatalogItem_builder{
+			_, err = publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn()).Create(ctx,
+				publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Metadata: catalogItemMetadata(usersGroup),
 					Template: publicv1.ComputeInstanceTemplateReference_builder{
 						Name: name, Tenant: otherTenant,
 					}.Build(),
-				}.Build(),
-			)
-			Expect(item.GetTemplate().GetId()).To(Equal(templateID))
-			Expect(item.GetTemplate().GetTenant()).To(Equal(otherTenant))
-			Expect(item.GetTemplate().GetShared()).To(BeFalse())
+				}.Build()}.Build())
+			expectCatalogItemStatusCode(err, codes.InvalidArgument)
 		})
 
-		It("resolves a Template by ID in an explicitly selected visible tenant", func(ctx context.Context) {
+		It("rejects a Template in another visible tenant selected by ID", func(ctx context.Context) {
 			name := catalogItemFixtureName()
 			templates := privatev1.NewComputeInstanceTemplatesClient(tool.InternalView().AdminConn())
 			created, err := templates.Create(ctx, privatev1.ComputeInstanceTemplatesCreateRequest_builder{
@@ -1398,17 +1399,14 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				return err
 			}, nil)
 
-			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(),
-				publicv1.ComputeInstanceCatalogItem_builder{
+			_, err = publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn()).Create(ctx,
+				publicv1.ComputeInstanceCatalogItemsCreateRequest_builder{Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Metadata: catalogItemMetadata(usersGroup),
 					Template: publicv1.ComputeInstanceTemplateReference_builder{
 						Id: templateID, Tenant: otherTenant,
 					}.Build(),
-				}.Build(),
-			)
-			Expect(item.GetTemplate().GetId()).To(Equal(templateID))
-			Expect(item.GetTemplate().GetTenant()).To(Equal(otherTenant))
-			Expect(item.GetTemplate().GetShared()).To(BeFalse())
+				}.Build()}.Build())
+			expectCatalogItemStatusCode(err, codes.InvalidArgument)
 		})
 
 		It("denies a caller a full reference to a tenant they cannot see", func(ctx context.Context) {
@@ -1420,8 +1418,8 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			tier := createCatalogItemStorageTierFixture(ctx)
 			network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 			defaults := privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-				InstanceType: privatev1.InstanceTypeReference_builder{Id: instanceType}.Build(),
-				DiskImage:    privatev1.DiskImageReference_builder{Id: image.GetId()}.Build(),
+				InstanceType: privatev1.InstanceTypeReference_builder{Id: instanceType, Tenant: "shared"}.Build(),
+				DiskImage:    privatev1.DiskImageReference_builder{Id: image.GetId(), Tenant: "shared"}.Build(),
 				BootDisk: privatev1.ComputeInstanceDisk_builder{
 					SizeGib:     new(int32(30)),
 					StorageTier: privatev1.StorageTierReference_builder{Id: tier}.Build(),
@@ -1471,10 +1469,10 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				image := createCatalogItemDiskImageFixture(ctx, imageTenant, catalogItemFixtureName())
 				candidate := publicv1.ComputeInstanceCatalogItem_builder{
 					Metadata: catalogItemMetadata(catalogTenant),
-					Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+					Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 					Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 						DiskImage: publicv1.DiskImageReferenceFieldPolicy_builder{
-							Locked: publicv1.DiskImageReference_builder{Id: image.GetId()}.Build(),
+							Locked: publicv1.DiskImageReference_builder{Id: image.GetId(), Tenant: imageTenant}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build()
@@ -1490,7 +1488,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				Expect(item.GetMetadata().GetTenant()).To(Equal(catalogTenant))
 				resolved := item.GetFields().GetDiskImage().GetLocked()
 				Expect(resolved.GetId()).To(Equal(image.GetId()))
-				Expect(resolved.GetShared()).To(Equal(imageTenant == "shared"))
+				Expect(resolved.GetTenant()).To(Equal(imageTenant))
 			},
 			Entry("a tenant catalog item accepts an image from its tenant", usersGroup, usersGroup, true),
 			Entry("a tenant catalog item accepts a shared image", usersGroup, "shared", true),
@@ -1539,7 +1537,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				}
 				candidate := publicv1.ComputeInstanceCatalogItem_builder{
 					Metadata: catalogItemMetadata(catalogTenant),
-					Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+					Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 					Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 						NetworkAttachments: networkPolicy,
 					}.Build(),
@@ -1576,7 +1574,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			newTier := createCatalogItemStorageTierFixture(ctx)
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template: publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 					BootDisk: publicv1.ComputeInstanceBootDiskFieldPolicies_builder{
 						StorageTier: publicv1.StorageTierReferenceFieldPolicy_builder{
@@ -1683,7 +1681,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			items := publicv1.NewComputeInstanceCatalogItemsClient(tool.ExternalView().AdminConn())
 			item := createComputeInstanceCatalogItemFixture(ctx, tool.ExternalView().AdminConn(), publicv1.ComputeInstanceCatalogItem_builder{
 				Metadata:  publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+				Template:  publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 				Published: true,
 				Fields: publicv1.ComputeInstanceCatalogItemFields_builder{
 					RunStrategy: publicv1.ComputeInstanceRunStrategyFieldPolicy_builder{Locked: new(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED)}.Build(),
@@ -1693,7 +1691,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				}.Build(),
 			}.Build())
 			spec := publicv1.ComputeInstanceSpec_builder{
-				CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+				CatalogItem:        publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 				NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 			}.Build()
 			first, e := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), spec)
@@ -1737,7 +1735,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			_, e = items.Update(ctx, publicv1.ComputeInstanceCatalogItemsUpdateRequest_builder{
 				Object: publicv1.ComputeInstanceCatalogItem_builder{
 					Id:       item.GetId(),
-					Template: publicv1.ComputeInstanceTemplateReference_builder{Id: other}.Build(),
+					Template: publicv1.ComputeInstanceTemplateReference_builder{Id: other, Tenant: "shared"}.Build(),
 				}.Build(),
 				UpdateMask: catalogItemUpdateMask("template"),
 			}.Build())
@@ -1767,7 +1765,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				Object: publicv1.ComputeInstance_builder{
 					Id: first.GetId(),
 					Spec: publicv1.ComputeInstanceSpec_builder{
-						CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+						CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 						RunStrategy: new(publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS),
 					}.Build(),
 				}.Build(),
@@ -1784,7 +1782,7 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 				Object: privatev1.ComputeInstance_builder{
 					Id: first.GetId(),
 					Spec: privatev1.ComputeInstanceSpec_builder{
-						CatalogItem: privatev1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId()}.Build(),
+						CatalogItem: privatev1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId(), Tenant: item.GetMetadata().GetTenant()}.Build(),
 						RunStrategy: new(privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED),
 					}.Build(),
 				}.Build(),
@@ -1797,13 +1795,13 @@ var _ = Describe("Compute Instance Catalog Items", Label("catalog-items"), func(
 			Expect(privateUpdated.GetObject().GetSpec().GetRunStrategy()).To(Equal(privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED))
 
 			By("rejecting public provenance mutation through whole-field and nested masks")
-			for _, mask := range []string{"spec.catalog_item", "spec.catalog_item.name", "spec.catalog_item.shared"} {
+			for _, mask := range []string{"spec.catalog_item", "spec.catalog_item.name", "spec.catalog_item.tenant"} {
 				By(mask)
 				_, e = client.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
 					Object: publicv1.ComputeInstance_builder{
 						Id: first.GetId(),
 						Spec: publicv1.ComputeInstanceSpec_builder{
-							CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId(), Name: "different", Shared: false}.Build(),
+							CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: item.GetId(), Name: "different"}.Build(),
 						}.Build(),
 					}.Build(),
 					UpdateMask: catalogItemUpdateMask(mask),

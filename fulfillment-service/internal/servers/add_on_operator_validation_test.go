@@ -25,31 +25,16 @@ import (
 )
 
 var _ = Describe("Add-on operator reference scope", func() {
-	It("defaults a name-only reference to the shared tenant", func() {
+	It("leaves an omitted tenant selector owner-scoped", func() {
 		reference := privatev1.AddOnOperatorReference_builder{Name: "operator"}.Build()
 
-		defaultAddOnOperatorReferenceScope(reference)
-
-		Expect(reference.GetTenant()).To(Equal(auth.SharedTenant))
-		Expect(reference.GetShared()).To(BeFalse())
+		Expect(reference.GetTenant()).To(BeEmpty())
 	})
 
 	It("preserves an explicit tenant selector", func() {
 		reference := privatev1.AddOnOperatorReference_builder{Name: "operator", Tenant: "tenant-a"}.Build()
 
-		defaultAddOnOperatorReferenceScope(reference)
-
 		Expect(reference.GetTenant()).To(Equal("tenant-a"))
-		Expect(reference.GetShared()).To(BeFalse())
-	})
-
-	It("preserves a legacy shared selector", func() {
-		reference := privatev1.AddOnOperatorReference_builder{Name: "operator", Shared: true}.Build()
-
-		defaultAddOnOperatorReferenceScope(reference)
-
-		Expect(reference.GetTenant()).To(BeEmpty())
-		Expect(reference.GetShared()).To(BeTrue())
 	})
 
 	It("clears the owner project for an explicitly shared-tenant reference", func() {

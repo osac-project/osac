@@ -2416,7 +2416,7 @@ var _ = Describe("Catalog publication and references", func() {
 		for _, tenant := range []string{testTenant, auth.SharedTenant} {
 			_, err = catalogs.Create(ctx, privatev1.ComputeInstanceCatalogItemsCreateRequest_builder{Object: privatev1.ComputeInstanceCatalogItem_builder{
 				Metadata: privatev1.Metadata_builder{Name: "same-name", Tenant: tenant}.Build(), Title: "Offering", Published: tenant == auth.SharedTenant,
-				Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "source-template"}.Build(),
+				Template: privatev1.ComputeInstanceTemplateReference_builder{Id: "source-template", Tenant: "shared"}.Build(),
 			}.Build()}.Build())
 			Expect(err).ToNot(HaveOccurred())
 		}
@@ -2424,7 +2424,7 @@ var _ = Describe("Catalog publication and references", func() {
 		Expect(err).ToNot(HaveOccurred())
 		request := publicv1.ComputeInstancesCreateRequest_builder{Object: publicv1.ComputeInstance_builder{
 			Metadata: publicv1.Metadata_builder{Name: "vm"}.Build(), Spec: publicv1.ComputeInstanceSpec_builder{
-				CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Name: "same-name", Shared: shared}.Build(),
+				CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Name: "same-name", Tenant: map[bool]string{true: "shared"}[shared]}.Build(),
 			}.Build(),
 		}.Build()}.Build()
 		original := proto.Clone(request)

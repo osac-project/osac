@@ -29,19 +29,19 @@ var _ = Describe("buildSpec", func() {
 		c := &runnerContext{}
 		c.args.sshKey = "login-key"
 
-		spec, err := c.buildSpec("tmpl", nil)
+		spec, err := c.buildSpec("tmpl", "shared", nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.GetSshKey().GetName()).To(Equal("login-key"))
 		Expect(spec.GetSshKey().GetId()).To(BeEmpty())
 		Expect(spec.GetSshKey().GetProject()).To(BeEmpty())
-		Expect(spec.GetSshKey().GetShared()).To(BeFalse())
+		Expect(spec.GetSshKey().GetTenant()).ToNot(Equal("shared"))
 	})
 
 	It("should parse name-only SSH key syntax for template creation", func() {
 		c := &runnerContext{}
 		c.args.sshKey = "name=login-key"
 
-		spec, err := c.buildSpec("tmpl", nil)
+		spec, err := c.buildSpec("tmpl", "shared", nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.GetSshKey().GetName()).To(Equal("login-key"))
 		Expect(spec.GetSshKey().GetProject()).To(BeEmpty())
@@ -51,17 +51,17 @@ var _ = Describe("buildSpec", func() {
 		c := &runnerContext{}
 		c.args.sshKey = "name=login-key,project=apps"
 
-		spec, err := c.buildSpec("tmpl", nil)
+		spec, err := c.buildSpec("tmpl", "shared", nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.GetSshKey().GetName()).To(Equal("login-key"))
 		Expect(spec.GetSshKey().GetProject()).To(Equal("apps"))
-		Expect(spec.GetSshKey().GetShared()).To(BeFalse())
+		Expect(spec.GetSshKey().GetTenant()).ToNot(Equal("shared"))
 	})
 
 	It("should send the resolved instance type ID", func() {
 		c := &runnerContext{}
 		c.args.instanceType = "instance-type-id"
-		spec, err := c.buildSpec("tmpl", nil)
+		spec, err := c.buildSpec("tmpl", "shared", nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.GetInstanceType().GetId()).To(Equal("instance-type-id"))
 	})
@@ -73,11 +73,11 @@ var _ = Describe("buildSpec", func() {
 				SecurityGroups: []*publicv1.SecurityGroupLocalReference{publicv1.SecurityGroupLocalReference_builder{Id: "g1"}.Build()},
 			}.Build(),
 		}
-		spec, err := c.buildSpec("tmpl", nil)
+		spec, err := c.buildSpec("tmpl", "shared", nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		want := publicv1.ComputeInstanceSpec_builder{
-			Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "tmpl"}.Build(),
+			Template: publicv1.ComputeInstanceTemplateReference_builder{Id: "tmpl", Tenant: "shared"}.Build(),
 			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
 				publicv1.ComputeNetworkAttachment_builder{
 					Subnet:         publicv1.SubnetLocalReference_builder{Id: "n2"}.Build(),
@@ -91,7 +91,7 @@ var _ = Describe("buildSpec", func() {
 	It("should set disk_image when disk-image flag is provided", func() {
 		c := &runnerContext{}
 		c.args.diskImage = "my-disk-image"
-		spec, err := c.buildSpec("tmpl", nil)
+		spec, err := c.buildSpec("tmpl", "shared", nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(spec.HasDiskImage()).To(BeTrue())
@@ -101,7 +101,7 @@ var _ = Describe("buildSpec", func() {
 	It("should leave disk_image unset when disk-image flag is empty", func() {
 		c := &runnerContext{}
 		c.args.diskImage = ""
-		spec, err := c.buildSpec("tmpl", nil)
+		spec, err := c.buildSpec("tmpl", "shared", nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(spec.HasDiskImage()).To(BeFalse())
@@ -110,7 +110,7 @@ var _ = Describe("buildSpec", func() {
 	It("should set user_data_source.secret when user-data-secret is provided", func() {
 		c := &runnerContext{}
 		c.args.userDataSecret = "cloud-init"
-		spec, err := c.buildSpec("tmpl", nil)
+		spec, err := c.buildSpec("tmpl", "shared", nil)
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(spec.GetUserDataSource().GetSecret().GetName()).To(Equal("cloud-init"))
@@ -123,7 +123,7 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 			c := &runnerContext{}
 			c.args.sshKey = value
 
-			spec, err := c.buildSpecFromCatalogItem("cat-001")
+			spec, err := c.buildSpecFromCatalogItem("cat-001", "shared")
 			Expect(err).NotTo(HaveOccurred())
 			Expect(spec.GetSshKey().GetName()).To(Equal("login-key"))
 			Expect(spec.GetSshKey().GetProject()).To(BeEmpty())
@@ -136,17 +136,17 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 		c := &runnerContext{}
 		c.args.sshKey = "name=login-key,project=apps"
 
-		spec, err := c.buildSpecFromCatalogItem("cat-001")
+		spec, err := c.buildSpecFromCatalogItem("cat-001", "shared")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.GetSshKey().GetName()).To(Equal("login-key"))
 		Expect(spec.GetSshKey().GetProject()).To(Equal("apps"))
-		Expect(spec.GetSshKey().GetShared()).To(BeFalse())
+		Expect(spec.GetSshKey().GetTenant()).ToNot(Equal("shared"))
 	})
 
 	It("should send the resolved instance type ID", func() {
 		c := &runnerContext{}
 		c.args.instanceType = "instance-type-id"
-		spec, err := c.buildSpecFromCatalogItem("cat-001")
+		spec, err := c.buildSpecFromCatalogItem("cat-001", "shared")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(spec.GetInstanceType().GetId()).To(Equal("instance-type-id"))
 	})
@@ -158,11 +158,11 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 				SecurityGroups: []*publicv1.SecurityGroupLocalReference{publicv1.SecurityGroupLocalReference_builder{Id: "g1"}.Build()},
 			}.Build(),
 		}
-		spec, err := c.buildSpecFromCatalogItem("cat-001")
+		spec, err := c.buildSpecFromCatalogItem("cat-001", "shared")
 		Expect(err).NotTo(HaveOccurred())
 
 		want := publicv1.ComputeInstanceSpec_builder{
-			CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: "cat-001"}.Build(),
+			CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: "cat-001", Tenant: "shared"}.Build(),
 			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{
 				publicv1.ComputeNetworkAttachment_builder{
 					Subnet:         publicv1.SubnetLocalReference_builder{Id: "n2"}.Build(),
@@ -175,11 +175,11 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 
 	It("should return spec without attachments when no network flags are set", func() {
 		c := &runnerContext{}
-		spec, err := c.buildSpecFromCatalogItem("cat-002")
+		spec, err := c.buildSpecFromCatalogItem("cat-002", "shared")
 		Expect(err).NotTo(HaveOccurred())
 
 		want := publicv1.ComputeInstanceSpec_builder{
-			CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: "cat-002"}.Build(),
+			CatalogItem: publicv1.ComputeInstanceCatalogItemReference_builder{Id: "cat-002", Tenant: "shared"}.Build(),
 		}.Build()
 		Expect(proto.Equal(spec, want)).To(BeTrue(), "spec should equal expected spec")
 	})
@@ -201,7 +201,7 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 	It("should set disk_image when disk-image flag is provided", func() {
 		c := &runnerContext{}
 		c.args.diskImage = "my-disk-image"
-		spec, err := c.buildSpecFromCatalogItem("cat-004")
+		spec, err := c.buildSpecFromCatalogItem("cat-004", "shared")
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(spec.HasDiskImage()).To(BeTrue())
@@ -211,7 +211,7 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 	It("should leave disk_image unset when disk-image flag is empty", func() {
 		c := &runnerContext{}
 		c.args.diskImage = ""
-		spec, err := c.buildSpecFromCatalogItem("cat-005")
+		spec, err := c.buildSpecFromCatalogItem("cat-005", "shared")
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(spec.HasDiskImage()).To(BeFalse())
@@ -220,7 +220,7 @@ var _ = Describe("buildSpecFromCatalogItem", func() {
 	It("should set user_data_source.secret when user-data-secret is provided", func() {
 		c := &runnerContext{}
 		c.args.userDataSecret = "cloud-init"
-		spec, err := c.buildSpecFromCatalogItem("cat-006")
+		spec, err := c.buildSpecFromCatalogItem("cat-006", "shared")
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(spec.GetUserDataSource().GetSecret().GetName()).To(Equal("cloud-init"))

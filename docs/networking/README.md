@@ -21,8 +21,8 @@ installation:
 ```
 A networking setup = FABRIC MANAGER   x  KUBERNETES MANAGER  x  ENABLED SERVICES
                      (netris)            (cudn_evpn)            (VMaaS)
-                     (provider's own)    (none)                 (BMaaS)
-                                                                (CaaS)
+                     (agentless_net)     (none)                 (BMaaS)
+                     (provider's own)                           (CaaS)
 ```
 
 - **Fabric Manager** (required): the plug-in that configures the provider's
@@ -70,8 +70,9 @@ Key behaviors:
   every workload that uses the group without recreating it.
 - **Firewall rules depend on the workload.** SecurityGroups are always
   enforced on VMs. On bare-metal servers and cluster workers they are
-  enforced only if the Fabric Manager supports it; with Netris they are not,
-  so those servers are isolated by their network but not filtered.
+  enforced only if the Fabric Manager supports it; with Netris and
+  AgentlessNet they are not, so those servers are isolated by their network
+  but not filtered.
 - **Safe ordering.** OSAC refuses to create something before what it depends
   on is ready, and refuses to delete something still in use, with a clear
   message.
@@ -94,8 +95,8 @@ Key behaviors:
           v                                              v
  +----------------------------+          +-------------------------------+
  | Kubernetes Manager         |          | Fabric Manager                |
- | (OSAC: cudn_evpn)          |          | (Netris, or the provider's    |
- | VM networking on the       |          |  own)                         |
+ | (OSAC: cudn_evpn)          |          | (Netris, AgentlessNet, or the |
+ | VM networking on the       |          |  provider's own)              |
  | OpenShift hub              |          | switches, routing, NAT,       |
  +----------------------------+          | external IPs, server ports    |
                                          +-------------------------------+
@@ -137,6 +138,21 @@ isolated networks over one physical fabric. Dedicated Netris gateway servers
 - The provider prepares the Netris controller, switches, gateways, and
   upstream routing before installing OSAC.
 
+### AgentlessNet (Fabric Manager)
+
+For providers with standard managed switches and no SDN controller. OSAC
+configures the switches directly (Cumulus Linux is the validated platform)
+and uses a Linux "net node" server for routing, DHCP, and NAT. Each Subnet
+becomes a VLAN, and each VirtualNetwork becomes an isolated routing domain on
+the net node. Nothing extra runs on the switches, hence "agentless".
+
+- Designed for bare-metal servers.
+- No VMs: it cannot pair with a Kubernetes Manager.
+- Clusters and east-west domains are not covered by its design yet.
+- Firewall rules are not enforced; traffic within a VirtualNetwork is
+  allowed.
+- Limited by the VLAN range: at most about 4,000 Subnets per fabric.
+
 ### The provider's own Fabric Manager
 
 A provider can implement the OSAC Fabric Manager contract for its own
@@ -173,16 +189,19 @@ installation and cannot change later.
 
 ## What works with what
 
-| | Netris + cudn_evpn | Netris alone | Provider's own | Networking disabled |
-|---|---|---|---|---|
-| VMs (VMaaS) | Yes | No | If EVPN + cudn_evpn | Yes, without tenant networking |
-| Bare-metal servers (BMaaS) | Yes | Yes | If conformant | Yes, provisioning network only |
-| Clusters (CaaS) | Yes | Yes | If conformant | Yes, endpoints by provider |
-| VMs and servers on one Subnet | Yes | n/a | If EVPN + cudn_evpn | No |
-| ExternalIPs and NAT | Yes | Yes | If conformant | No |
-| Firewall rules on VMs | Yes | n/a | If cudn_evpn | No |
-| Firewall rules on bare metal and cluster workers | No | No | Provider-specific | No |
-| East-west domains (FabricDomain) | Ethernet | Ethernet | If it declares it | No |
+| | Netris + cudn_evpn | Netris alone | AgentlessNet | Provider's own | Networking disabled |
+|---|---|---|---|---|---|
+| VMs (VMaaS) | Yes | No | No | If EVPN + cudn_evpn | Yes, without tenant networking |
+| Bare-metal servers (BMaaS) | Yes | Yes | Yes | If conformant | Yes, provisioning network only |
+| Clusters (CaaS) | Yes | Yes | Not designed yet | If conformant | Yes, endpoints by provider |
+| VMs and servers on one Subnet | Yes | n/a | n/a | If EVPN + cudn_evpn | No |
+| ExternalIPs and NAT | Yes | Yes | Yes | If conformant | No |
+| Firewall rules on VMs | Yes | n/a | n/a | If cudn_evpn | No |
+| Firewall rules on bare metal and cluster workers | No | No | No | Provider-specific | No |
+| East-west domains (FabricDomain) | Ethernet | Ethernet | No | If it declares it | No |
+
+The AgentlessNet column reflects its design; its implementation is still
+under review.
 
 Two rules apply to every setup:
 
@@ -230,7 +249,7 @@ bare-metal workers with Netris. Some provider-specific cluster templates
 - A tenant picks a pool, never a specific address.
 - **Inbound** = ExternalIP + ExternalIPAttachment to a VM, server, or cluster
   endpoint. All ports pass through; the workload's SecurityGroups decide what
-  is allowed. On bare metal with Netris nothing filters it,
+  is allowed. On bare metal with Netris or AgentlessNet nothing filters it,
   so every port of the server is reachable wherever the pool is routed.
 - **Outbound** = one NATGateway per VirtualNetwork, using one ExternalIP.
 - ExternalIPs and NATGateways are the networking resources that are metered
@@ -307,6 +326,7 @@ Designs (enhancement proposals):
   [CaaS networking](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1436-caas-networking/design.md),
   [BMaaS networking](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md)
 - [Netris Fabric Manager](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-2434-netris-fabric-manager-networking/design.md),
+  [AgentlessNet Fabric Manager](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-3664-agentless-vlan-fabric-manager/design.md),
   [CUDN EVPN Kubernetes Manager](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-4291-cudn-evpn-k8s-manager-phase-1-networking/design.md)
 - [Multi-fabric east-west networking](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1382-multi-fabric-east-west-networking/design.md)
 

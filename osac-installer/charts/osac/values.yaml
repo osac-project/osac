@@ -68,8 +68,10 @@ global:
       image:
         registry: registry.redhat.io
         repository: openshift4/ose-thanos-rhel8
-        # Empty renders :latest. Set this to the hub cluster's OpenShift minor
-        # (for example v4.20); the Red Hat image is published per minor.
+        # Must be set when observability is enabled: an empty tag fails the
+        # render instead of falling back to :latest. Set this to the hub
+        # cluster's OpenShift minor (for example v4.20); the Red Hat image is
+        # published per minor.
         tag: ""
       # How long any role may query samples. Must be positive; 0d fails the
       # render. Aggregate levels must equal this value.

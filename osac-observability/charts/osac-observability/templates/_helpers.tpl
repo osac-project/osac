@@ -21,8 +21,9 @@ app.kubernetes.io/name: thanos
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
-{{/* Image reference helper. An empty tag means "latest" so the values file
-     never carries the floating tag the repository's tag check rejects. */}}
+{{/* Image reference helper. An empty tag renders "registry/repository:", which
+     is not a valid reference, so validate.yaml fails the render when
+     observability is enabled instead of falling back to "latest". */}}
 {{- define "osac-observability.image" -}}
 {{- $image := . -}}
 {{- printf "%s/%s:%s" $image.registry $image.repository $image.tag -}}

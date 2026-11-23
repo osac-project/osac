@@ -58,12 +58,54 @@ var _ = DescribeMigration("Create audit records table", func() {
 		Expect(err).To(HaveOccurred())
 	})
 
-	It("requires a tenant", func(ctx context.Context) {
+	It("defaults a missing tenant to the generic DAO convention", func(ctx context.Context) {
 		_, err := conn.Exec(ctx, `
 			insert into audit_records (id, data)
 			values ($1, $2::jsonb)`,
 			"event-without-tenant", `{}`,
 		)
-		Expect(err).To(HaveOccurred())
+		Expect(err).ToNot(HaveOccurred())
+
+		var tenant string
+		err = conn.QueryRow(ctx, `
+			select tenant from audit_records where id = $1`,
+			"event-without-tenant",
+		).Scan(&tenant)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(tenant).To(BeEmpty())
+	})
+
+	It("has the columns required by the generic DAO", func(ctx context.Context) {
+		rows, err := conn.Query(ctx, `
+			select column_name
+			from information_schema.columns
+			where table_schema = 'public' and table_name = 'audit_records'`)
+		Expect(err).ToNot(HaveOccurred())
+		defer rows.Close()
+
+		columns := make(map[string]struct{})
+		for rows.Next() {
+			var column string
+			Expect(rows.Scan(&column)).To(Succeed())
+			columns[column] = struct{}{}
+		}
+		Expect(rows.Err()).ToNot(HaveOccurred())
+
+		for _, column := range []string{
+			"id",
+			"name",
+			"creation_timestamp",
+			"deletion_timestamp",
+			"finalizers",
+			"creator",
+			"tenant",
+			"project",
+			"labels",
+			"annotations",
+			"version",
+			"data",
+		} {
+			Expect(columns).To(HaveKey(column))
+		}
 	})
 })

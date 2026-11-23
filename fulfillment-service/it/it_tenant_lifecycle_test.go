@@ -28,6 +28,8 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	appsv1 "k8s.io/api/apps/v1"
+	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
@@ -377,6 +379,30 @@ func verifyTenantRemovedFromKeycloak(ctx context.Context, name string) {
 		2*time.Minute,
 		time.Second,
 	).Should(Succeed())
+}
+
+func restartFulfillmentController(ctx context.Context) {
+	key := crclient.ObjectKey{Namespace: "osac", Name: "fulfillment-controller"}
+	deployment := &appsv1.Deployment{}
+	Expect(tool.KubeClient().Get(ctx, key, deployment)).To(Succeed())
+	original := deployment.DeepCopy()
+	if deployment.Spec.Template.Annotations == nil {
+		deployment.Spec.Template.Annotations = map[string]string{}
+	}
+	deployment.Spec.Template.Annotations["osac.it/restarted-at"] = uuid.New()
+	Expect(tool.KubeClient().Patch(ctx, deployment, crclient.MergeFrom(original))).To(Succeed())
+
+	Eventually(ctx, func(g Gomega) {
+		current := &appsv1.Deployment{}
+		g.Expect(tool.KubeClient().Get(ctx, key, current)).To(Succeed())
+		desired := int32(1)
+		if current.Spec.Replicas != nil {
+			desired = *current.Spec.Replicas
+		}
+		g.Expect(current.Status.ObservedGeneration).To(BeNumerically(">=", current.Generation))
+		g.Expect(current.Status.UpdatedReplicas).To(Equal(desired))
+		g.Expect(current.Status.ReadyReplicas).To(Equal(desired))
+	}, 3*time.Minute, time.Second).Should(Succeed())
 }
 
 // loginAsBreakGlass creates a gRPC connection authenticated as the break-glass user
@@ -747,6 +773,79 @@ var _ = Describe("Tenant lifecycle", func() {
 		token, err := tokenSource.Token(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(token.Access).ToNot(BeEmpty())
+	})
+
+	It("changes the break-glass password on first login and authenticates with it", func(ctx context.Context) {
+		name := fmt.Sprintf("test-%s", uuid.New())
+		id := createTenant(ctx, tenantsClient, name)
+		waitForTenantSynced(ctx, tenantsClient, id)
+
+		tenantResponse, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		object := tenantResponse.GetObject()
+		ref := object.GetSpec().GetBreakGlassCredentialsSecret()
+		Expect(ref).ToNot(BeNil())
+
+		secretResponse, err := privatev1.NewSecretsClient(tool.InternalView().AdminConn()).Get(ctx,
+			privatev1.SecretsGetRequest_builder{Id: ref.GetId()}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		username := string(secretResponse.GetObject().GetData()["username"])
+		temporaryPassword := string(secretResponse.GetObject().GetData()["password"])
+		newPassword := "first-login-" + uuid.New() + "!"
+
+		token, err := tool.SimulatePasswordChangeLogin(ctx, username, temporaryPassword, newPassword)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(token).ToNot(BeEmpty())
+
+		// A fresh password-grant token proves the required action was completed,
+		// rather than merely completing the browser redirect.
+		tokenSource, err := tool.makeKeycloakTokenSource(ctx, username, newPassword)
+		Expect(err).ToNot(HaveOccurred())
+		accessToken, err := tokenSource.Token(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(accessToken.Access).ToNot(BeEmpty())
+	})
+
+	It("preserves an admin-reset break-glass password across reconciliation and controller restart", func(ctx context.Context) {
+		name := fmt.Sprintf("test-%s", uuid.New())
+		id := createTenant(ctx, tenantsClient, name)
+		waitForTenantSynced(ctx, tenantsClient, id)
+
+		getResponse, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		object := getResponse.GetObject()
+		username := fmt.Sprintf("%s-osac-break-glass", name)
+		resetPassword := "admin-reset-" + uuid.New() + "!"
+		code, _, err := tool.KeycloakAdminRequest(ctx, http.MethodPut,
+			fmt.Sprintf("/users/%s/reset-password", object.GetStatus().GetBreakGlassUserId()),
+			map[string]any{"type": "password", "value": resetPassword, "temporary": false})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(code).To(Equal(http.StatusNoContent))
+
+		// A tenant update forces the normal reconciliation path to observe the
+		// already-existing user before the controller itself is restarted.
+		fresh, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		fresh.GetObject().GetMetadata().SetLabels(map[string]string{"it-reconcile": uuid.New()})
+		_, err = tenantsClient.Update(ctx, privatev1.TenantsUpdateRequest_builder{
+			Object:     fresh.GetObject(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		_, err = tenantsClient.Signal(ctx, privatev1.TenantsSignalRequest_builder{Id: id}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		waitForTenantSynced(ctx, tenantsClient, id)
+
+		assertPasswordAuthenticates := func() {
+			tokenSource, tokenErr := tool.makeKeycloakTokenSource(ctx, username, resetPassword)
+			Expect(tokenErr).ToNot(HaveOccurred())
+			token, tokenErr := tokenSource.Token(ctx)
+			Expect(tokenErr).ToNot(HaveOccurred())
+			Expect(token.Access).ToNot(BeEmpty())
+		}
+		assertPasswordAuthenticates()
+		restartFulfillmentController(ctx)
+		assertPasswordAuthenticates()
 	})
 
 	It("Duplicate tenant name fails", func(ctx context.Context) {

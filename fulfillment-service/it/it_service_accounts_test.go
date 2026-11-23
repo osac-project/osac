@@ -35,6 +35,7 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/serviceaccounts"
@@ -42,6 +43,24 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
+
+func expectCredentialAbsentFromFulfillmentLogs(ctx context.Context, credential string) {
+	pods, err := tool.KubeClientSet().CoreV1().Pods("osac").List(ctx, metav1.ListOptions{})
+	Expect(err).ToNot(HaveOccurred())
+	Expect(pods.Items).ToNot(BeEmpty(), "expected deployed fulfillment pods")
+
+	for _, pod := range pods.Items {
+		for _, container := range pod.Spec.Containers {
+			logs, logErr := tool.KubeClientSet().CoreV1().Pods("osac").GetLogs(
+				pod.Name,
+				&corev1.PodLogOptions{Container: container.Name},
+			).Do(ctx).Raw()
+			Expect(logErr).ToNot(HaveOccurred(), "read logs for %s/%s", pod.Name, container.Name)
+			Expect(bytes.Contains(logs, []byte(credential))).To(BeFalse(),
+				"credential appeared in logs for %s/%s", pod.Name, container.Name)
+		}
+	}
+}
 
 var _ = Describe("Service-account infrastructure", Serial, func() {
 	It("manages credentials without changing an unrelated Keycloak client", func(ctx context.Context) {
@@ -113,6 +132,7 @@ var _ = Describe("Service-account infrastructure", Serial, func() {
 			Expect(e).ToNot(HaveOccurred())
 			Expect(bytes.Contains(data, []byte(secret))).To(BeFalse())
 		}
+		expectCredentialAbsentFromFulfillmentLogs(ctx, secret)
 		got, err := api.Get(ctx, publicv1.ServiceAccountsGetRequest_builder{Id: id}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("purpose", "automation"))

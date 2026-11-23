@@ -15,17 +15,24 @@ package billingproviderstatus
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
-	"github.com/osac-project/osac/fulfillment-service/internal/rendering"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
+)
+
+const (
+	formatTable = "table"
+	formatJson  = "json"
+	formatYaml  = "yaml"
 )
 
 // Cmd creates the command that shows the billing provider status.
@@ -40,7 +47,7 @@ func Cmd() *cobra.Command {
 		Args:    cobra.NoArgs,
 		RunE:    runner.run,
 	}
-	result.Flags().StringVarP(&runner.format, "output", "o", rendering.Table, outputFlagHelp)
+	result.Flags().StringVarP(&runner.format, "output", "o", formatTable, outputFlagHelp)
 	return result
 }
 
@@ -51,8 +58,9 @@ type runnerContext struct {
 // run fetches the status over gRPC and renders it in the requested format.
 func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
-	if err := rendering.ValidateFormat(c.format); err != nil {
-		return err
+	if c.format != formatTable && c.format != formatJson && c.format != formatYaml {
+		return fmt.Errorf("unknown output format '%s', should be '%s', '%s' or '%s'",
+			c.format, formatTable, formatJson, formatYaml)
 	}
 	cfg := config.SettingsFromContext(ctx)
 	if !cfg.Armed() {
@@ -71,17 +79,22 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	return render(ctx, terminal.ConsoleFromContext(ctx), c.format, response.GetObject())
 }
 
-// render writes the status as a table, JSON or YAML; the JSON and YAML encoding is shared in the rendering package.
+// render writes the status as a table, JSON or YAML.
 func render(ctx context.Context, console *terminal.Console, format string,
 	status *publicv1.BillingProviderStatus) error {
-	if format == rendering.Table {
-		return renderTable(console, status)
+	if format == formatTable {
+		renderTable(console, status)
+		return nil
 	}
-	value, err := rendering.Encode(status)
+	data, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(status)
 	if err != nil {
 		return fmt.Errorf("failed to encode billing provider status: %w", err)
 	}
-	if format == rendering.JSON {
+	var value any
+	if err := json.Unmarshal(data, &value); err != nil {
+		return fmt.Errorf("failed to encode billing provider status: %w", err)
+	}
+	if format == formatJson {
 		console.RenderJson(ctx, value)
 	} else {
 		console.RenderYaml(ctx, value)
@@ -90,7 +103,7 @@ func render(ctx context.Context, console *terminal.Console, format string,
 }
 
 // renderTable writes the status fields as aligned key/value rows.
-func renderTable(console *terminal.Console, status *publicv1.BillingProviderStatus) error {
+func renderTable(console *terminal.Console, status *publicv1.BillingProviderStatus) {
 	capabilities := make([]string, 0, len(status.GetSupportedCapabilities()))
 	for _, capability := range status.GetSupportedCapabilities() {
 		capabilities = append(capabilities, strings.TrimPrefix(capability.String(), "BILLING_PROVIDER_CAPABILITY_"))
@@ -100,23 +113,22 @@ func renderTable(console *terminal.Console, status *publicv1.BillingProviderStat
 		lastCheck = status.GetLastSuccessfulCheck().AsTime().Format(time.RFC3339)
 	}
 	writer := tabwriter.NewWriter(console, 0, 0, 2, ' ', 0)
-	var writeErr error
-	printf := func(format string, args ...any) {
-		if writeErr == nil {
-			_, writeErr = fmt.Fprintf(writer, format, args...)
-		}
-	}
-	printf("State:\t%s\n", strings.TrimPrefix(status.GetState().String(), "BILLING_PROVIDER_STATE_"))
-	printf("Provider:\t%s\n", rendering.Dash(status.GetProviderKey()))
-	printf("Message:\t%s\n", rendering.Dash(status.GetMessage()))
-	printf("Capabilities:\t%s\n", rendering.Dash(strings.Join(capabilities, ", ")))
-	printf("Last successful check:\t%s\n", lastCheck)
-	printf("Usage delivery:\t%s\n",
+	fmt.Fprintf(writer, "State:\t%s\n", strings.TrimPrefix(status.GetState().String(), "BILLING_PROVIDER_STATE_"))
+	fmt.Fprintf(writer, "Provider:\t%s\n", orDash(status.GetProviderKey()))
+	fmt.Fprintf(writer, "Message:\t%s\n", orDash(status.GetMessage()))
+	fmt.Fprintf(writer, "Capabilities:\t%s\n", orDash(strings.Join(capabilities, ", ")))
+	fmt.Fprintf(writer, "Last successful check:\t%s\n", lastCheck)
+	fmt.Fprintf(writer, "Usage delivery:\t%s\n",
 		strings.TrimPrefix(status.GetUsageDeliveryState().String(), "BILLING_USAGE_DELIVERY_STATE_"))
-	if writeErr != nil {
-		return writeErr
+	writer.Flush()
+}
+
+// orDash replaces an empty value with a dash for table output.
+func orDash(value string) string {
+	if value == "" {
+		return "-"
 	}
-	return writer.Flush()
+	return value
 }
 
 const shortHelp = `Show the billing provider status`

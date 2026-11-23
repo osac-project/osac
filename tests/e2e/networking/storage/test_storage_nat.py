@@ -84,7 +84,27 @@ def _run(vm: dict[str, str], command: str, identity: str, timeout: int = 180) ->
 
 
 def _mount_and_write(vm: dict[str, str], endpoint: StorageEndpoint, identity: str, marker: str) -> str:
-    output, status = _run(vm, ensure_nfs_client_command(), identity, timeout=300)
+    # Distinguish a broken tenant NAT path from a slow package install. The
+    # storage port test is the direct check: if it fails, no mount can work.
+    probe = (
+        "command -v mount.nfs >/dev/null && echo HAVE_NFS || echo NO_NFS; "
+        "timeout 12 curl -sS -o /dev/null -w '%{http_code}' https://quay.io || echo CURL_FAIL; echo; "
+        f"timeout 8 bash -c 'cat </dev/null >/dev/tcp/{endpoint.server}/2049' "
+        "&& echo NFS_PORT_OK || echo NFS_PORT_FAIL"
+    )
+    output, _ = _run(vm, probe, identity, timeout=40)
+    if "NFS_PORT_FAIL" in output:
+        pytest.fail(
+            f"tenant NAT path to {endpoint.server}:2049 is not working from {vm['name']}; probe output: {output!r}"
+        )
+    if "HAVE_NFS" not in output:
+        if "200" not in output:
+            pytest.fail(
+                f"guest {vm['name']} has no external egress for the NFS client install; probe output: {output!r}"
+            )
+        output, status = _run(vm, "sudo dnf install -y nfs-utils", identity, timeout=600)
+        assert status == 0, f"NFS client install failed on {vm['name']}: {output!r}"
+    output, status = _run(vm, ensure_nfs_client_command(), identity, timeout=60)
     assert status == 0, f"NFS client setup failed on {vm['name']}: {output!r}"
     # A second mount would reuse the existing NFS connection and produce no
     # new SYN, so the server log would have no new source address. Unmount

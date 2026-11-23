@@ -189,11 +189,42 @@ tests:
       - notExists:
           path: spec.ingress[*].from[*].podSelector.matchExpressions[0].key
 
-  - it: renders exactly five policies including the Compactor deny-all
+  # The gate port is 9092, the container port, not the Service port number
+  # 9091. Admitting 9091 here would open the unauthenticated allowlist to any
+  # pod that can route to the pod IP.
+  - it: admits only the router to the admin gate port
+    template: templates/networkpolicies.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-query-auth-proxy
+    asserts:
+      - isKind:
+          of: NetworkPolicy
+      - equal:
+          path: spec.podSelector.matchLabels["osac.openshift.io/observability-role"]
+          value: query-auth-proxy
+      - equal:
+          path: spec.policyTypes
+          value:
+            - Ingress
+      - equal:
+          path: spec.ingress
+          value:
+            - from:
+                - namespaceSelector:
+                    matchLabels:
+                      network.openshift.io/policy-group: ingress
+              ports:
+                - protocol: TCP
+                  port: 9092
+      - notExists:
+          path: spec.egress
+
+  - it: renders exactly six policies including the Compactor deny-all
     template: templates/networkpolicies.yaml
     asserts:
       - hasDocuments:
-          count: 5
+          count: 6
 
   - it: selects the pods Receive actually renders
     template: templates/receive.yaml

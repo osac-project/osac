@@ -19,6 +19,8 @@ osac-conformance = "tests.conformance.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["tests*"]
+# The harness's own unit tests are not part of the shipped suite image.
+exclude = ["tests.conformance.unit*"]
 
 [tool.setuptools.package-data]
 "tests.conformance" = ["*.yaml"]

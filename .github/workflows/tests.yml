@@ -19,7 +19,7 @@ on:  # yamllint disable-line rule:truthy
       kind:
         description: >-
           Which tests: go-unit, caas-unit, ui-unit, metering-contract, it-caas, it-fulfillment-service, it-osac-operator,
-          it-bare-metal-fulfillment-operator, it-osac-aap, it-osac-installer, helm-unit or
+          it-bare-metal-fulfillment-operator, it-osac-aap, it-osac-installer, helm-unit, python-unit or
           it-osac-installer-preflight-helm3/-helm322/-helm4 or e2e-workflow-policy
         required: true
         type: string
@@ -789,6 +789,21 @@ jobs:
         if: inputs.kind == 'helm-unit'
         working-directory: osac-installer
         run: uv run --script scripts/test-preflight-render.py
+      # --- unit tests of the conformance suite's own runner (no cluster, no target installation)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'python-unit'
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python
+        if: inputs.kind == 'python-unit'
+      # `uv sync` rather than `--locked`: the root uv.lock needs a refresh (`uv lock --check` fails), which is a
+      # separate change.
+      - name: Run conformance unit tests
+        if: inputs.kind == 'python-unit'
+        run: |
+          uv sync
+          uv run pytest -q tests/conformance/unit
 
       # --- integration test: osac-installer install preflight on Kind. Helm 3.18.0 is the oldest Helm that prints a
       # failed hook's log (helm.sh/hook-output-log-policy); 4.2.2 is the Helm 4 line.

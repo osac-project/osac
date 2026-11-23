@@ -359,6 +359,11 @@ unit-tests-osac-installer:
   - '{osac-installer/charts/**,osac-installer/Makefile,osac-installer/scripts/test-preflight-*.py,osac-installer/scripts/test-kind-runtime.py,osac-installer/scripts/dev-full/**,osac-installer/scripts/lib.sh,osac-aap/charts/**,osac-csi-driver/charts/**,osac-metering/charts/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
 unit-tests-caas-integration:
   - '{tests/integration/caas/**,fulfillment-service/**,osac-operator/**,bare-metal-fulfillment-operator/**,proto/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
+# The conformance suite's own unit tests (tests/conformance/unit/**). The runner imports the shared E2E core helpers
+# (tests/e2e/core/**), so their changes need it too. The build metadata and the container allowlist decide what goes into
+# the suite image, so they are included as well.
+unit-tests-conformance:
+  - '{tests/conformance/**,tests/e2e/core/**,pyproject.toml,uv.lock,.containerignore,.github/workflows/tests.yml,.github/ci-tests.yml}'
 
 # The CaaS Kind suite builds the platform and simulator images, installs the
 # dev infrastructure and AWX, and runs the API-led cluster scenarios.

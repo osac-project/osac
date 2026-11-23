@@ -8,7 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
+# tests/conformance/unit/<this file>: the repository root is three parents up.
+REPO = Path(__file__).resolve().parents[3]
 _REDACTION_MARKER_LOG = "redaction-marker-log"
 
 

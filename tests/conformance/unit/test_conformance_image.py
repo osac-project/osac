@@ -20,7 +20,8 @@ def test_containerfile_builds_and_starts(tmp_path: Path) -> None:
     runtime = runtime_command()
     if runtime is None:
         pytest.skip("neither podman nor docker is installed")
-    repo = Path(__file__).resolve().parents[2]
+    # tests/conformance/unit/<this file>: the repository root is three parents up.
+    repo = Path(__file__).resolve().parents[3]
     tag = f"osac-conformance:test-{tmp_path.name}"
     build = subprocess.run(
         [runtime, "build", "-f", "tests/conformance/Containerfile", "-t", tag, "."],

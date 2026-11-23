@@ -219,6 +219,20 @@ podman build -f tests/conformance/Containerfile -t osac-conformance:dev .
 IMAGE=osac-conformance:dev
 ```
 
+## Harness tests
+
+The runner's own unit tests live in `tests/conformance/unit/` and need no target
+installation:
+
+```sh
+uv sync
+uv run pytest -q tests/conformance/unit
+```
+
+CI runs them on changes under `tests/conformance/`, the shared E2E helpers they
+import (`tests/e2e/core/`) and the root `pyproject.toml`, and the scheduled unit
+run includes them. They are not shipped in the suite image.
+
 ## Report shape
 
 The report has these top-level keys:

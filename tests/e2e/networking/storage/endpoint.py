@@ -88,10 +88,10 @@ def log_line_count(endpoint: StorageEndpoint, *, run: SshRunner = default_ssh_ru
     output, status = run(endpoint, f"sudo wc -l < {shlex.quote(endpoint.log_path)}", 30)
     if status != 0:
         raise RuntimeError(f"Cannot count {endpoint.log_path} on {endpoint.ssh_host}: {output!r}")
-    try:
-        return max(int(output.strip().splitlines()[-1]), 0)
-    except (ValueError, IndexError) as exc:
-        raise RuntimeError(f"Unexpected line count from {endpoint.log_path}: {output!r}") from exc
+    numbers = re.findall(r"(?m)^\s*(\d+)\s*$", output)
+    if not numbers:
+        raise RuntimeError(f"Unexpected line count from {endpoint.log_path}: {output!r}")
+    return max(int(numbers[-1]), 0)
 
 
 _IPV4_RE = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?!\d)")

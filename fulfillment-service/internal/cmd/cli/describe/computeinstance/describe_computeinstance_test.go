@@ -170,6 +170,9 @@ var _ = Describe("Compute instance provisioning details", func() {
 	}
 	provisioned := publicv1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED
 	falseStatus := publicv1.ConditionStatus_CONDITION_STATUS_FALSE
+	trueStatus := publicv1.ConditionStatus_CONDITION_STATUS_TRUE
+	unspecifiedStatus := publicv1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED
+	unknownStatus := publicv1.ConditionStatus(99)
 
 	DescribeTable("uses only explicit active retry conditions",
 		func(conditions []*publicv1.ComputeInstanceCondition, retry bool) {
@@ -187,10 +190,10 @@ var _ = Describe("Compute instance provisioning details", func() {
 		},
 		Entry("legacy scheduled retry", []*publicv1.ComputeInstanceCondition{condition(provisioned, falseStatus, "RetryScheduled")}, true),
 		Entry("running retry", []*publicv1.ComputeInstanceCondition{condition(provisioned, falseStatus, "RetryRunning")}, true),
-		Entry("true condition", []*publicv1.ComputeInstanceCondition{condition(provisioned, publicv1.ConditionStatus_CONDITION_STATUS_TRUE, "RetryScheduled")}, false),
-		Entry("unknown status", []*publicv1.ComputeInstanceCondition{condition(provisioned, publicv1.ConditionStatus(99), "RetryRunning")}, false),
-		Entry("unspecified status", []*publicv1.ComputeInstanceCondition{condition(provisioned, publicv1.ConditionStatus(0), "RetryRunning")}, false),
-		Entry("different condition type", []*publicv1.ComputeInstanceCondition{condition(publicv1.ComputeInstanceConditionType(0), falseStatus, "RetryScheduled")}, false),
+		Entry("true condition", []*publicv1.ComputeInstanceCondition{condition(provisioned, trueStatus, "RetryScheduled")}, false),
+		Entry("unknown status", []*publicv1.ComputeInstanceCondition{condition(provisioned, unknownStatus, "RetryRunning")}, false),
+		Entry("unspecified status", []*publicv1.ComputeInstanceCondition{condition(provisioned, unspecifiedStatus, "RetryRunning")}, false),
+		Entry("different condition type", []*publicv1.ComputeInstanceCondition{condition(publicv1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_UNSPECIFIED, falseStatus, "RetryScheduled")}, false),
 		Entry("terminal failure", []*publicv1.ComputeInstanceCondition{condition(provisioned, falseStatus, "ProvisioningFailed")}, false),
 		Entry("free text alone", []*publicv1.ComputeInstanceCondition{condition(provisioned, falseStatus, "WaitingForVM")}, false),
 		Entry("unknown reason", []*publicv1.ComputeInstanceCondition{condition(provisioned, falseStatus, "FutureReason")}, false),
@@ -219,14 +222,14 @@ var _ = Describe("Compute instance provisioning details", func() {
 				}
 			}
 		},
-		Entry("unspecified", publicv1.ComputeInstanceProvisioningFailureReason(0), "UNSPECIFIED", "Internal error"),
-		Entry("provider reported", publicv1.ComputeInstanceProvisioningFailureReason(1), "PROVIDER_REPORTED", "Provisioning failed."),
-		Entry("result rejected", publicv1.ComputeInstanceProvisioningFailureReason(2), "RESULT_REJECTED", "Internal error"),
-		Entry("timed out", publicv1.ComputeInstanceProvisioningFailureReason(3), "TIMED_OUT", "The provisioning attempt timed out."),
-		Entry("job lost", publicv1.ComputeInstanceProvisioningFailureReason(4), "JOB_LOST", "Internal error"),
-		Entry("job not started", publicv1.ComputeInstanceProvisioningFailureReason(5), "JOB_NOT_STARTED", "Internal error"),
-		Entry("invalid result", publicv1.ComputeInstanceProvisioningFailureReason(6), "INVALID_RESULT", "Internal error"),
-		Entry("provider error", publicv1.ComputeInstanceProvisioningFailureReason(7), "PROVIDER_ERROR", "Internal error"),
+		Entry("unspecified", publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_UNSPECIFIED, "UNSPECIFIED", "Internal error"),
+		Entry("provider reported", publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_REPORTED, "PROVIDER_REPORTED", "Provisioning failed."),
+		Entry("result rejected", publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_RESULT_REJECTED, "RESULT_REJECTED", "Internal error"),
+		Entry("timed out", publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_TIMED_OUT, "TIMED_OUT", "The provisioning attempt timed out."),
+		Entry("job lost", publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_JOB_LOST, "JOB_LOST", "Internal error"),
+		Entry("job not started", publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_JOB_NOT_STARTED, "JOB_NOT_STARTED", "Internal error"),
+		Entry("invalid result", publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_INVALID_RESULT, "INVALID_RESULT", "Internal error"),
+		Entry("provider error", publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_ERROR, "PROVIDER_ERROR", "Internal error"),
 		Entry("unknown numeric value", publicv1.ComputeInstanceProvisioningFailureReason(99), "UNKNOWN:99", "Internal error"),
 	)
 

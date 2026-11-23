@@ -27,8 +27,11 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/authz"
 	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 // ObjectMetadata contains the metadata fields fetched from the database for authorization decisions.
@@ -298,6 +301,7 @@ func (i *GrpcAuthzInterceptor) authorizeWithToken(ctx context.Context, method st
 	// Store subject in context
 	result = ContextWithSubject(ctx, subject)
 	result = ContextWithAuthenticationMethod(result, authContext.AuthMethod)
+	result = withRoleMutationDecision(result, method, decision.TenantGrants)
 
 	logger.DebugContext(
 		result,
@@ -305,6 +309,29 @@ func (i *GrpcAuthzInterceptor) authorizeWithToken(ctx context.Context, method st
 		slog.String("user", subject.User),
 	)
 	return
+}
+
+var roleMutationMethods = collections.NewSet(
+	publicv1.Roles_Create_FullMethodName,
+	publicv1.Roles_Update_FullMethodName,
+	publicv1.Roles_Delete_FullMethodName,
+	publicv1.RoleBindings_Create_FullMethodName,
+	publicv1.RoleBindings_Update_FullMethodName,
+	publicv1.RoleBindings_Delete_FullMethodName,
+	privatev1.Roles_Create_FullMethodName,
+	privatev1.Roles_Update_FullMethodName,
+	privatev1.Roles_Delete_FullMethodName,
+	privatev1.RoleBindings_Create_FullMethodName,
+	privatev1.RoleBindings_Update_FullMethodName,
+	privatev1.RoleBindings_Delete_FullMethodName,
+)
+
+func withRoleMutationDecision(ctx context.Context, method string,
+	tenantGrants map[string]*authz.Grants) context.Context {
+	if tenantGrants == nil || !roleMutationMethods.Contains(method) {
+		return ctx
+	}
+	return ContextWithRoleMutationDecision(ctx, RoleMutationDecision{Grants: tenantGrants})
 }
 
 // extractId tries to extract the identifier of the object from the incoming request message. For get and delete

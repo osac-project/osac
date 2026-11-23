@@ -746,6 +746,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
 		SetUserReferenceLookup(userReferenceLookup).
+		SetPermissionCatalog(permissionCatalog).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create role bindings server: %w", err)
@@ -759,6 +760,7 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		SetAttributionLogic(deps.PrivateAttributionLogic).
 		SetTenancyLogic(deps.TenancyLogic).
 		SetMetricsRegisterer(deps.MetricsRegisterer).
+		SetPermissionCatalog(permissionCatalog).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create private role bindings server: %w", err)

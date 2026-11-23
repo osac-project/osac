@@ -25,14 +25,17 @@ import (
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/authz"
 	k8sfiles "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/files"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
@@ -244,7 +247,7 @@ var _ = Describe("Rego authorization interceptor", func() {
 			Expect(handled).To(BeTrue())
 		})
 
-		It("Allows admin on the reflection API", func(ctx context.Context) {
+		DescribeTable("Allows admin through OPA without a role mutation decision", func(ctx context.Context, method string) {
 			token := createKeycloakUserToken("", "my-user", jwt.MapClaims{
 				"organization": []any{"tenant-a", "tenant-b"},
 				"groups": []any{
@@ -257,20 +260,24 @@ var _ = Describe("Rego authorization interceptor", func() {
 				ctx,
 				nil,
 				&grpc.UnaryServerInfo{
-					FullMethod: "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo",
+					FullMethod: method,
 				},
 				func(ctx context.Context, req any) (any, error) {
 					subject := SubjectFromContext(ctx)
 					Expect(subject.User).To(Equal("my-user"))
 					Expect(subject.Tenant).To(Equal(SystemTenant))
 					Expect(subject.Tenants.Universal()).To(BeTrue())
+					_, scoped := RoleMutationDecisionFromContext(ctx)
+					Expect(scoped).To(BeFalse())
 					handled = true
 					return nil, nil
 				},
 			)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(handled).To(BeTrue())
-		})
+		}, Entry("reflection", "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo"),
+			Entry("public Role Create", publicv1.Roles_Create_FullMethodName),
+		)
 
 		DescribeTable("Resolves a home tenant without changing the set of visible tenants",
 			func(ctx context.Context, organization any, home string, tenants []string) {
@@ -1508,4 +1515,62 @@ var _ = Describe("Rego authorization interceptor", func() {
 			Expect(handled).To(BeTrue())
 		})
 	})
+})
+
+var _ = Describe("Role mutation decisions in the authorization interceptor", func() {
+	const homeTenant = "home-tenant"
+	const targetTenant = "target-tenant"
+
+	targetGrant := &authz.Grants{Tenant: targetTenant}
+	writeDecision := &RoleMutationDecision{Grants: map[string]*authz.Grants{
+		homeTenant:   {Tenant: homeTenant},
+		targetTenant: targetGrant,
+	}}
+
+	DescribeTable("attaches the appropriate decision for each RPC",
+		func(ctx context.Context, method string, want *RoleMutationDecision) {
+			evaluator := NewMockAuthorizationEvaluator(gomock.NewController(GinkgoT()))
+			evaluator.EXPECT().Evaluate(gomock.Any(), gomock.Any(), method).Return(&AuthzDecision{
+				Allowed:        true,
+				SubjectUser:    "caller",
+				SubjectTenant:  homeTenant,
+				SubjectTenants: []string{targetTenant},
+				TenantGrants: map[string]*authz.Grants{
+					homeTenant:   {Tenant: homeTenant},
+					targetTenant: targetGrant,
+				},
+			}, nil)
+			interceptor, err := NewGrpcAuthzInterceptor().SetLogger(logger).SetEvaluator(evaluator).Build()
+			Expect(err).NotTo(HaveOccurred())
+			ctx = ContextWithToken(ctx, &jwt.Token{Claims: jwt.MapClaims{"preferred_username": "caller"}})
+
+			result, err := interceptor.UnaryServer(ctx, nil, &grpc.UnaryServerInfo{FullMethod: method},
+				func(ctx context.Context, _ any) (any, error) {
+					subject := SubjectFromContext(ctx)
+					Expect(subject.Tenant).To(Equal(homeTenant))
+					Expect(subject.Tenants.Inclusions()).To(ConsistOf(targetTenant))
+					decision, scoped := RoleMutationDecisionFromContext(ctx)
+					Expect(scoped).To(Equal(want != nil))
+					if want != nil {
+						Expect(decision).To(Equal(*want))
+					}
+					return "handled", nil
+				})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal("handled"))
+		},
+		Entry("public Role Create", publicv1.Roles_Create_FullMethodName, writeDecision),
+		Entry("public Role Update", publicv1.Roles_Update_FullMethodName, writeDecision),
+		Entry("private Role Create", privatev1.Roles_Create_FullMethodName, writeDecision),
+		Entry("private Role Update", privatev1.Roles_Update_FullMethodName, writeDecision),
+		Entry("public RoleBinding Create", publicv1.RoleBindings_Create_FullMethodName, writeDecision),
+		Entry("public RoleBinding Update", publicv1.RoleBindings_Update_FullMethodName, writeDecision),
+		Entry("private RoleBinding Create", privatev1.RoleBindings_Create_FullMethodName, writeDecision),
+		Entry("private RoleBinding Update", privatev1.RoleBindings_Update_FullMethodName, writeDecision),
+		Entry("public Role Delete", publicv1.Roles_Delete_FullMethodName, writeDecision),
+		Entry("private Role Delete", privatev1.Roles_Delete_FullMethodName, writeDecision),
+		Entry("public RoleBinding Delete", publicv1.RoleBindings_Delete_FullMethodName, writeDecision),
+		Entry("private RoleBinding Delete", privatev1.RoleBindings_Delete_FullMethodName, writeDecision),
+		Entry("read", publicv1.Roles_Get_FullMethodName, nil),
+	)
 })

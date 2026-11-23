@@ -14,14 +14,19 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"github.com/osac-project/osac/fulfillment-service/internal/auth"
-	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -66,6 +71,169 @@ var _ = Describe("Private role bindings server", func() {
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
+	})
+
+	Describe("Scoped RoleBinding mutations", func() {
+		const coveredRole = "covered-role"
+		const broaderRole = "broader-role"
+
+		newBinding := func(name, tenant, roleID string) *privatev1.RoleBinding {
+			return privatev1.RoleBinding_builder{
+				Metadata: privatev1.Metadata_builder{Name: name, Tenant: tenant}.Build(),
+				Spec: privatev1.RoleBindingSpec_builder{
+					Role: privatev1.RoleReference_builder{Id: roleID}.Build(),
+				}.Build(),
+			}.Build()
+		}
+		createBinding := func(tenant string) *privatev1.RoleBinding {
+			GinkgoHelper()
+			created, err := roleBindingsServer.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+				Object: newBinding("existing-binding", tenant, coveredRole),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			return created.GetObject()
+		}
+
+		BeforeEach(func() {
+			permissionCatalog, err := catalog.Build(protoregistry.GlobalFiles)
+			Expect(err).NotTo(HaveOccurred())
+			roleBindingsServer, err = NewPrivateRoleBindingsServer().
+				SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).
+				SetPermissionCatalog(permissionCatalog).Build()
+			Expect(err).NotTo(HaveOccurred())
+
+			roles, err := dao.NewGenericDAO[*privatev1.Role]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).NotTo(HaveOccurred())
+			for id, methods := range map[string][]string{coveredRole: {"get"}, broaderRole: {"get", "list"}} {
+				_, err = roles.Create().SetObject(privatev1.Role_builder{
+					Id:       id,
+					Metadata: privatev1.Metadata_builder{Name: id, Tenant: auth.SharedTenant}.Build(),
+					Spec:     privatev1.RoleSpec_builder{Permissions: roleMutationClusterRules(methods...)}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
+
+		It("rejects assigning a Role with uncovered permissions", func() {
+			scopedCtx := roleMutationTestContext(ctx, testTenant, roleMutationClusterGet)
+			binding := newBinding("new-binding", testTenant, broaderRole)
+			binding.GetSpec().SetUsers([]*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-a"}.Build()})
+			_, err := roleBindingsServer.Create(scopedCtx, privatev1.RoleBindingsCreateRequest_builder{Object: binding}.Build())
+			Expect(status.Code(err)).To(Equal(codes.PermissionDenied), "%v", err)
+			Expect(status.Convert(err).Message()).To(ContainSubstring("exceeds grants"))
+		})
+
+		DescribeTable("checks the merged Role",
+			func(path string, want codes.Code, reason string) {
+				id := createBinding(testTenant).GetId()
+				candidate := newBinding("", "", broaderRole)
+				candidate.SetId(id)
+				candidate.GetMetadata().SetLabels(map[string]string{"updated": "true"})
+
+				updated, err := roleBindingsServer.Update(roleMutationTestContext(ctx, testTenant, roleMutationClusterGet),
+					privatev1.RoleBindingsUpdateRequest_builder{
+						Object: candidate, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{path}},
+					}.Build())
+				Expect(status.Code(err)).To(Equal(want), "%v", err)
+				if reason != "" {
+					Expect(status.Convert(err).Message()).To(ContainSubstring(reason))
+				} else {
+					Expect(updated.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("updated", "true"))
+				}
+				stored, err := roleBindingsServer.Get(ctx, privatev1.RoleBindingsGetRequest_builder{Id: id}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(stored.GetObject().GetSpec().GetRole().GetId()).To(Equal(coveredRole))
+			},
+			Entry("ignores a broader Role outside the mask", "metadata.labels", codes.OK, ""),
+			Entry("rejects changing to a broader Role", "spec.role", codes.PermissionDenied, "exceeds grants"),
+		)
+
+		It("updates labels on a stored binding whose Role no longer resolves", func() {
+			created, err := roleBindingsServer.generic.dao.Create().
+				SetObject(newBinding("binding-with-missing-role", testTenant, "missing-role")).
+				Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			original := created.GetObject()
+
+			_, err = roleBindingsServer.Update(roleMutationTestContext(ctx, testTenant),
+				privatev1.RoleBindingsUpdateRequest_builder{
+					Object: privatev1.RoleBinding_builder{
+						Id: original.GetId(),
+						Metadata: privatev1.Metadata_builder{
+							Labels: map[string]string{"updated": "true"},
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+				}.Build())
+			Expect(err).To(Succeed())
+
+			stored, err := roleBindingsServer.Get(ctx, privatev1.RoleBindingsGetRequest_builder{Id: original.GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(stored.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("updated", "true"))
+			Expect(proto.Equal(stored.GetObject().GetSpec(), original.GetSpec())).To(BeTrue())
+		})
+
+		It("checks delegation when only the subjects change", func() {
+			created, err := roleBindingsServer.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+				Object: newBinding("binding-with-broader-role", testTenant, broaderRole),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			id := created.GetObject().GetId()
+
+			_, err = roleBindingsServer.Update(roleMutationTestContext(ctx, testTenant, roleMutationClusterGet),
+				privatev1.RoleBindingsUpdateRequest_builder{
+					Object: privatev1.RoleBinding_builder{
+						Id: id,
+						Spec: privatev1.RoleBindingSpec_builder{
+							Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: "user-a"}.Build()},
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.users"}},
+				}.Build())
+			Expect(status.Code(err)).To(Equal(codes.PermissionDenied), "%v", err)
+			Expect(status.Convert(err).Message()).To(ContainSubstring("exceeds grants"))
+
+			stored, err := roleBindingsServer.Get(ctx, privatev1.RoleBindingsGetRequest_builder{Id: id}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(stored.GetObject().GetSpec().GetUsers()).To(BeEmpty())
+		})
+
+		DescribeTable("denies writes to a visible tenant outside the mutation scope", func(mutate func(context.Context) error) {
+			err := mutate(roleMutationTestContext(ctx, testTenant, roleMutationClusterGet))
+			Expect(status.Code(err)).To(Equal(codes.PermissionDenied), "%v", err)
+			Expect(status.Convert(err).Message()).To(ContainSubstring("not authorized in the target tenant"))
+		},
+			Entry("Create", func(ctx context.Context) error {
+				_, err := roleBindingsServer.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+					Object: newBinding("new-binding", auth.SharedTenant, coveredRole),
+				}.Build())
+				return err
+			}),
+			Entry("Update", func(ctx context.Context) error {
+				binding := createBinding(auth.SharedTenant)
+				binding.GetMetadata().SetLabels(map[string]string{"updated": "true"})
+				_, err := roleBindingsServer.Update(ctx, privatev1.RoleBindingsUpdateRequest_builder{
+					Object: binding, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+				}.Build())
+				return err
+			}),
+			Entry("Delete", func(_ context.Context) error {
+				binding := createBinding(auth.SharedTenant)
+				deleteCtx := roleMutationTestContext(ctx, testTenant)
+				_, err := roleBindingsServer.Delete(deleteCtx, privatev1.RoleBindingsDeleteRequest_builder{Id: binding.GetId()}.Build())
+				return err
+			}),
+		)
+
+		It("rejects moving a RoleBinding between assignable tenants", func() {
+			binding := createBinding(testTenant)
+			binding.GetMetadata().SetTenant(auth.SharedTenant)
+			_, err := roleBindingsServer.Update(ctx, privatev1.RoleBindingsUpdateRequest_builder{
+				Object: binding, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument), "%v", err)
+			Expect(status.Convert(err).Message()).To(ContainSubstring("RoleBinding tenant cannot change"))
+		})
 	})
 
 	Describe("Creation", func() {

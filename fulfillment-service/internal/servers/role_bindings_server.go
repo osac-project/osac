@@ -23,6 +23,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -35,6 +36,7 @@ type RoleBindingsServerBuilder struct {
 	tenancyLogic        auth.TenancyLogic
 	metricsRegisterer   prometheus.Registerer
 	userReferenceLookup references.ReferenceLookupFunc
+	permissionCatalog   *catalog.Catalog
 }
 
 var _ publicv1.RoleBindingsServer = (*RoleBindingsServer)(nil)
@@ -87,6 +89,12 @@ func (b *RoleBindingsServerBuilder) SetUserReferenceLookup(
 	return b
 }
 
+// SetPermissionCatalog configures delegation checks for named-role authorization.
+func (b *RoleBindingsServerBuilder) SetPermissionCatalog(value *catalog.Catalog) *RoleBindingsServerBuilder {
+	b.permissionCatalog = value
+	return b
+}
+
 // Build creates the public role bindings server from the builder configuration.
 func (b *RoleBindingsServerBuilder) Build() (result *RoleBindingsServer, err error) {
 	if b.logger == nil {
@@ -120,6 +128,7 @@ func (b *RoleBindingsServerBuilder) Build() (result *RoleBindingsServer, err err
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc((*publicv1.RoleBinding)(nil).ProtoReflect().Descriptor()).
+		SetPermissionCatalog(b.permissionCatalog).
 		Build()
 	if err != nil {
 		return

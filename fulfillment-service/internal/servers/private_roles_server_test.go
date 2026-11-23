@@ -27,7 +27,9 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/authz"
 	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
+	"github.com/osac-project/osac/fulfillment-service/internal/collections"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -54,7 +56,7 @@ var _ = Describe("Private roles server", func() {
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	Describe("Deleting a referenced Role", func() {
+	Describe("Mutating a referenced Role", func() {
 		const roleName = "test-default-role"
 		referencedStatus := status.New(codes.FailedPrecondition, "Role is still referenced by a Tenant default role or RoleBinding").Proto()
 		var (
@@ -69,7 +71,8 @@ var _ = Describe("Private roles server", func() {
 				SetLogger(logger).SetTenancyLogic(tenancy).SetAttributionLogic(attribution).Build()
 			Expect(err).NotTo(HaveOccurred())
 			bindings, err = NewPrivateRoleBindingsServer().
-				SetLogger(logger).SetTenancyLogic(tenancy).SetAttributionLogic(attribution).Build()
+				SetLogger(logger).SetTenancyLogic(tenancy).SetAttributionLogic(attribution).
+				SetPermissionCatalog(permissionCatalog).Build()
 			Expect(err).NotTo(HaveOccurred())
 
 			role, err := rolesServer.Create(ctx, privatev1.RolesCreateRequest_builder{
@@ -181,7 +184,7 @@ var _ = Describe("Private roles server", func() {
 				Expect(suiteTx.End(ctx)).To(Succeed())
 				suiteTx = nil
 
-				secondErr := runRoleDeleteRace(specCtx, first, second)
+				secondErr := runRoleMutationRace(specCtx, first, second)
 				Expect(status.Code(secondErr)).To(Equal(secondCode), "%v", secondErr)
 
 				readCtx := database.TxManagerIntoContext(specCtx, tm)
@@ -224,6 +227,42 @@ var _ = Describe("Private roles server", func() {
 			Entry("Role Delete wins over the RoleBinding create", deleteRole, createRacingBinding, codes.InvalidArgument,
 				committedState{}),
 		)
+
+		It("checks committed Role permissions before completing a concurrent assignment", func(specCtx SpecContext) {
+			Expect(suiteTx.End(ctx)).To(Succeed())
+			suiteTx = nil
+
+			edit := func(ctx context.Context) error {
+				_, err := rolesServer.Update(ctx, privatev1.RolesUpdateRequest_builder{
+					Object: privatev1.Role_builder{Id: roleID, Spec: privatev1.RoleSpec_builder{
+						Permissions: roleMutationClusterRules("get"),
+					}.Build()}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.permissions"}},
+				}.Build())
+				return err
+			}
+			assign := func(ctx context.Context) error {
+				return createRacingBinding(roleMutationTestContext(ctx, testTenant, "osac.private.v1.RoleBindings/Create"))
+			}
+
+			err := runRoleMutationRace(specCtx, edit, assign)
+			Expect(status.Code(err)).To(Equal(codes.PermissionDenied), "%v", err)
+			Expect(status.Convert(err).Message()).To(ContainSubstring("exceeds grants"))
+
+			Expect(tm.Run(specCtx, func(ctx context.Context) error {
+				role, err := rolesServer.Get(ctx, privatev1.RolesGetRequest_builder{Id: roleID}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				permissions := role.GetObject().GetSpec().GetPermissions()
+				Expect(permissions).To(HaveLen(1))
+				Expect(permissions[0].GetMethods()).To(Equal([]string{"get"}))
+
+				filter := fmt.Sprintf("this.metadata.name == %q", racingBinding)
+				list, err := bindings.List(ctx, privatev1.RoleBindingsListRequest_builder{Filter: &filter}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(list.GetItems()).To(BeEmpty())
+				return nil
+			})).To(Succeed())
+		})
 	})
 
 	Describe("Creation", func() {
@@ -430,6 +469,91 @@ var _ = Describe("Private roles server", func() {
 				Id: createResponse.GetObject().GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+		})
+	})
+
+	Describe("Scoped Role mutations", func() {
+		var scopedCtx context.Context
+		createRequest := func(name, tenant string, methods ...string) *privatev1.RolesCreateRequest {
+			role := privatev1.Role_builder{
+				Metadata: privatev1.Metadata_builder{Name: name, Tenant: tenant}.Build(),
+				Spec:     privatev1.RoleSpec_builder{Permissions: roleMutationClusterRules(methods...)}.Build(),
+			}.Build()
+			return privatev1.RolesCreateRequest_builder{Object: role}.Build()
+		}
+		seedRole := func(tenant string) *privatev1.Role {
+			GinkgoHelper()
+			created, err := rolesServer.Create(ctx, createRequest("existing-role", tenant, "get"))
+			Expect(err).NotTo(HaveOccurred())
+			return created.GetObject()
+		}
+
+		BeforeEach(func() {
+			scopedCtx = roleMutationTestContext(ctx, testTenant, roleMutationClusterGet)
+		})
+
+		DescribeTable("enforces the delegation ceiling on Create", func(methods []string, want codes.Code) {
+			_, err := rolesServer.Create(scopedCtx, createRequest("new-role", testTenant, methods...))
+			Expect(status.Code(err)).To(Equal(want), "%v", err)
+		},
+			Entry("accepts a covered permission", []string{"get"}, codes.OK),
+			Entry("rejects an uncovered permission", []string{"get", "list"}, codes.PermissionDenied),
+		)
+
+		DescribeTable("checks the merged permissions on Update", func(path, wantTitle string, want codes.Code) {
+			candidate := seedRole(testTenant)
+			candidate.GetSpec().SetTitle("Updated title")
+			candidate.GetSpec().SetPermissions(roleMutationClusterRules("get", "list"))
+
+			_, err := rolesServer.Update(scopedCtx, privatev1.RolesUpdateRequest_builder{
+				Object: candidate, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{path}},
+			}.Build())
+			Expect(status.Code(err)).To(Equal(want), "%v", err)
+
+			stored, err := rolesServer.Get(ctx, privatev1.RolesGetRequest_builder{Id: candidate.GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			spec := stored.GetObject().GetSpec()
+			Expect(spec.GetTitle()).To(Equal(wantTitle))
+			Expect(spec.GetPermissions()).To(HaveLen(1))
+			Expect(spec.GetPermissions()[0].GetMethods()).To(Equal([]string{"get"}))
+		},
+			Entry("ignores permissions outside the mask", "spec.title", "Updated title", codes.OK),
+			Entry("rejects broadening permissions inside the mask", "spec.permissions", "", codes.PermissionDenied),
+		)
+
+		DescribeTable("denies writes to a visible tenant outside the mutation scope", func(mutate func() error) {
+			err := mutate()
+			Expect(status.Code(err)).To(Equal(codes.PermissionDenied), "%v", err)
+			Expect(status.Convert(err).Message()).To(ContainSubstring("not authorized in the target tenant"))
+		},
+			Entry("Create", func() error {
+				_, err := rolesServer.Create(scopedCtx, createRequest("new-role", auth.SharedTenant, "get"))
+				return err
+			}),
+			Entry("Update", func() error {
+				role := seedRole(auth.SharedTenant)
+				role.GetSpec().SetTitle("Updated title")
+				_, err := rolesServer.Update(scopedCtx, privatev1.RolesUpdateRequest_builder{
+					Object: role, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.title"}},
+				}.Build())
+				return err
+			}),
+			Entry("Delete", func() error {
+				id := seedRole(auth.SharedTenant).GetId()
+				deleteCtx := roleMutationTestContext(ctx, testTenant)
+				_, err := rolesServer.Delete(deleteCtx, privatev1.RolesDeleteRequest_builder{Id: id}.Build())
+				return err
+			}),
+		)
+
+		It("rejects moving a Role between assignable tenants", func() {
+			role := seedRole(testTenant)
+			role.GetMetadata().SetTenant(auth.SharedTenant)
+			_, err := rolesServer.Update(ctx, privatev1.RolesUpdateRequest_builder{
+				Object: role, UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.tenant"}},
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument), "%v", err)
+			Expect(status.Convert(err).Message()).To(ContainSubstring("Role tenant cannot change"))
 		})
 	})
 
@@ -689,11 +813,28 @@ var _ = Describe("Private roles server", func() {
 	})
 })
 
-// runRoleDeleteRace commits the first request only after the second is waiting
+const roleMutationClusterGet = "osac.public.v1.Clusters/Get"
+
+func roleMutationClusterRules(methods ...string) []*privatev1.PermissionRule {
+	return []*privatev1.PermissionRule{
+		privatev1.PermissionRule_builder{Service: "osac.public.clusters", Methods: methods}.Build(),
+	}
+}
+
+func roleMutationTestContext(ctx context.Context, tenant string, methods ...string) context.Context {
+	ctx = auth.ContextWithSubject(ctx, &auth.Subject{Tenants: collections.NewSet(tenant)})
+	decision := auth.RoleMutationDecision{}
+	if len(methods) > 0 {
+		decision.Grants = map[string]*authz.Grants{tenant: {Tenant: tenant, Methods: methods}}
+	}
+	return auth.ContextWithRoleMutationDecision(ctx, decision)
+}
+
+// runRoleMutationRace commits the first request only after the second is waiting
 // for a lock in the spec's isolated database.
-func runRoleDeleteRace(ctx SpecContext, first, second func(context.Context) error) error {
+func runRoleMutationRace(ctx SpecContext, first, second func(context.Context) error) error {
 	GinkgoHelper()
-	const applicationName = "role-delete-race"
+	const applicationName = "role-mutation-race"
 
 	raceCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

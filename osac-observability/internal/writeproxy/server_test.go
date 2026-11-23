@@ -149,6 +149,43 @@ func TestHandlerForwardsTransformedPayload(t *testing.T) {
 	}
 }
 
+// The write CA can be rotated under a running pod. The handler must verify each
+// request against the pool the source currently reports, not the startup value.
+func TestHandlerVerifiesWithTheSuppliedRoots(t *testing.T) {
+	startupCA := newTestCA(t)
+	rotatedCA := newTestCA(t)
+	upstream := newFakeUpstream(t)
+	handler, err := NewHandler(Config{
+		Upstream:    upstream.url(t),
+		Roots:       startupCA.pool(),
+		RootsSource: func() *x509.CertPool { return rotatedCA.pool() },
+		Revocation:  syncedStore(),
+		Rule:        DefaultDropRule(),
+		Now:         func() time.Time { return testNow },
+	})
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	status := func(certificate *x509.Certificate) int {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/receive", strings.NewReader(string(validBody(t))))
+		request.Header.Set("Content-Encoding", "snappy")
+		request.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{certificate}}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder.Code
+	}
+
+	rotatedLeaf := rotatedCA.issue(t, "cluster-a", 1234, testNow.Add(-time.Minute), testNow.Add(time.Hour))
+	if got := status(rotatedLeaf); got != http.StatusOK {
+		t.Fatalf("status for a write signed by the rotated CA = %d, want 200", got)
+	}
+	startupLeaf := startupCA.issue(t, "cluster-b", 5678, testNow.Add(-time.Minute), testNow.Add(time.Hour))
+	if got := status(startupLeaf); got != http.StatusUnauthorized {
+		t.Fatalf("status for a write signed only by the previous CA = %d, want 401", got)
+	}
+}
+
 func TestHandlerRejectsBeforeForwarding(t *testing.T) {
 	ca := newTestCA(t)
 	otherCA := newTestCA(t)

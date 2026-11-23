@@ -176,6 +176,29 @@ func TestVerifyPeerRequiresClientAuthUsage(t *testing.T) {
 	}
 }
 
+// OSAC-8002: revocation is by serial, so a replacement certificate issued
+// under the same common name is accepted while the serial it replaced stays
+// revoked. This fails if verification ever starts denying a common name.
+func TestVerifyPeerAcceptsNewSerialForTheSameCommonName(t *testing.T) {
+	ca := newTestCA(t)
+	replaced := ca.issue(t, "cluster-a", 1, testNow.Add(-time.Minute), testNow.Add(time.Hour))
+	replacement := ca.issue(t, "cluster-a", 2, testNow.Add(-time.Minute), testNow.Add(time.Hour))
+	store := NewRevocationStore()
+	store.Apply(map[string]string{RevocationKey: replaced.SerialNumber.Text(16)})
+
+	identity, err := VerifyPeer([]*x509.Certificate{replacement}, ca.pool(), store, testNow)
+	if err != nil {
+		t.Fatalf("VerifyPeer for the replacement serial: %v", err)
+	}
+	if identity.Cluster != "cluster-a" {
+		t.Errorf("cluster = %q, want cluster-a", identity.Cluster)
+	}
+	_, err = VerifyPeer([]*x509.Certificate{replaced}, ca.pool(), store, testNow)
+	if !errors.Is(err, ErrRevoked) {
+		t.Fatalf("err for the replaced serial = %v, want ErrRevoked", err)
+	}
+}
+
 func TestVerifyPeerRejectsEmptyCommonName(t *testing.T) {
 	ca := newTestCA(t)
 	leaf := ca.issue(t, "", 1234, testNow.Add(-time.Minute), testNow.Add(time.Hour))

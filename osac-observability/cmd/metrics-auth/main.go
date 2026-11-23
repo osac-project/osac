@@ -127,11 +127,11 @@ func loadWriteProxyConfig(args []string, getenv func(string) string) (writeProxy
 }
 
 func runWriteProxy(cfg writeProxyConfig) error {
-	serverCertificate, err := tls.LoadX509KeyPair(cfg.TLSCertFile, cfg.TLSKeyFile)
+	serverCertificate, err := newReloadingCertificate(cfg.TLSCertFile, cfg.TLSKeyFile)
 	if err != nil {
 		return fmt.Errorf("loading server certificate: %w", err)
 	}
-	clientRoots, err := loadCertPool(cfg.ClientCAFile)
+	clientRoots, err := newReloadingCertPool(cfg.ClientCAFile)
 	if err != nil {
 		return fmt.Errorf("loading write CA: %w", err)
 	}
@@ -167,12 +167,12 @@ func runWriteProxy(cfg writeProxyConfig) error {
 	}()
 
 	handler, err := writeproxy.NewHandler(writeproxy.Config{
-		Upstream:   cfg.Upstream,
-		Roots:      clientRoots,
-		Revocation: store,
-		Rule:       cfg.Rule,
-		Client:     &http.Client{Timeout: time.Minute, Transport: upstreamTransport},
-		Logger:     slog.Default(),
+		Upstream:    cfg.Upstream,
+		RootsSource: clientRoots.Pool,
+		Revocation:  store,
+		Rule:        cfg.Rule,
+		Client:      &http.Client{Timeout: time.Minute, Transport: upstreamTransport},
+		Logger:      slog.Default(),
 	})
 	if err != nil {
 		return err
@@ -185,14 +185,7 @@ func runWriteProxy(cfg writeProxyConfig) error {
 	server := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{serverCertificate},
-			// The handler verifies the client chain, expiry and revocation so that every
-			// rejection is an HTTP 401 rather than a TLS handshake failure. The TLS layer
-			// still requires that a certificate was presented.
-			ClientAuth: tls.RequireAnyClientCert,
-			MinVersion: tls.VersionTLS12,
-		},
+		TLSConfig:         serverTLSConfig(serverCertificate),
 	}
 	go func() {
 		if err := server.Serve(tls.NewListener(listener, server.TLSConfig)); err != nil && !errors.Is(err, http.ErrServerClosed) {

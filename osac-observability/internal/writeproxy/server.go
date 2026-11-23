@@ -34,6 +34,10 @@ type Config struct {
 	Upstream *url.URL
 	// Roots verifies client certificates; it holds the write CA.
 	Roots *x509.CertPool
+	// RootsSource, when set, supplies the pool for each request. It lets a
+	// rotated write CA file take effect without a restart, and takes precedence
+	// over Roots.
+	RootsSource func() *x509.CertPool
 	// Revocation is the shared denylist.
 	Revocation RevocationList
 	// Rule drops metric families the store must never hold.
@@ -51,7 +55,7 @@ func NewHandler(cfg Config) (http.Handler, error) {
 	if cfg.Upstream == nil {
 		return nil, errors.New("write proxy: upstream URL is required")
 	}
-	if cfg.Roots == nil {
+	if cfg.Roots == nil && cfg.RootsSource == nil {
 		return nil, errors.New("write proxy: write CA pool is required")
 	}
 	if cfg.Revocation == nil {
@@ -101,7 +105,13 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.TLS != nil {
 		certs = r.TLS.PeerCertificates
 	}
-	identity, err := VerifyPeer(certs, s.cfg.Roots, s.cfg.Revocation, s.cfg.Now())
+	roots := s.cfg.Roots
+	if s.cfg.RootsSource != nil {
+		if current := s.cfg.RootsSource(); current != nil {
+			roots = current
+		}
+	}
+	identity, err := VerifyPeer(certs, roots, s.cfg.Revocation, s.cfg.Now())
 	if err != nil {
 		// Every identity rejection is a 401 and the samples are discarded.
 		s.cfg.Logger.Warn("rejected managed remote write", "remote_addr", r.RemoteAddr, "reason", err)

@@ -140,5 +140,56 @@ func renderComputeInstance(w io.Writer, ci *publicv1.ComputeInstance) {
 const shortHelp = `Describe a compute instance`
 
 const longHelp = `
-Describe a compute instance.
+Describe a compute instance, including provisioning retry and the latest failure when available.
+
+{{ bt 3 }}shell
+{{ binary }} describe computeinstance my-vm
+{{ bt 3 }}
+
+During retry backoff ({{ bt }}RetryScheduled{{ bt }}), the additional rows can look like:
+
+{{ bt 3 }}text
+Provisioning:                         Retrying
+Last Provisioning Failure Reason:     PROVIDER_REPORTED
+Last Provisioning Failure Message:    Provisioning failed.
+Last Provisioning Failure Attempt:    2
+Last Provisioning Failure Observed At: 2026-01-02T03:04:05Z
+{{ bt 3 }}
+
+During a running retry ({{ bt }}RetryRunning{{ bt }}), the same latest-failure rows remain
+visible alongside:
+
+{{ bt 3 }}text
+Provisioning: Retrying
+{{ bt 3 }}
+
+A terminal failure ({{ bt }}ProvisioningFailed{{ bt }}) retains its failure details,
+but has no provisioning retry row. For example:
+
+{{ bt 3 }}text
+Last Provisioning Failure Reason:  PROVIDER_REPORTED
+Last Provisioning Failure Message: Provisioning failed.
+{{ bt 3 }}
+
+Missing or legacy failure fields add no failure rows. A legacy scheduled retry
+can still show {{ bt }}Provisioning: Retrying{{ bt }} without failure details.
+An instance with neither retry nor failure fields shows only its existing details, for example:
+
+{{ bt 3 }}text
+ID:           my-vm
+Catalog Item: small
+State:        STARTING
+{{ bt 3 }}
+
+After the provisioning job succeeds, retry and failure rows disappear even while
+{{ bt }}WaitingForVM{{ bt }} or {{ bt }}ProvisioningStorage{{ bt }} still reports infrastructure progress.
+The existing state remains independent, for example:
+
+{{ bt 3 }}text
+ID:           my-vm
+Catalog Item: small
+State:        STARTING
+{{ bt 3 }}
+
+Failure presence and message text alone never imply retry. Failure timestamps use RFC 3339.
 `

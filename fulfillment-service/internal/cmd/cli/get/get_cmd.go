@@ -407,6 +407,29 @@ To watch for changes to objects in real time use the
 {{ binary }} get clusters --watch
 {{ bt 3 }}
 
+Compute instance provisioning status is shown separately from its power state:
+
+{{ bt 3 }}shell
+{{ binary }} get computeinstances
+{{ bt 3 }}
+
+The following examples show selected columns for retry backoff, a running retry,
+a terminal failure, missing status fields, and job success before infrastructure readiness:
+
+{{ bt 3 }}text
+NAME          STATE     PROVISIONING  LAST FAILURE
+backoff-vm    STARTING  Retrying      PROVIDER_REPORTED
+retry-vm      STARTING  Retrying      PROVIDER_REPORTED
+failed-vm     FAILED    -             PROVIDER_REPORTED
+legacy-vm     STARTING  -             -
+success-vm    STARTING  -             -
+{{ bt 3 }}
+
+{{ bt }}Retrying{{ bt }} requires an explicit active retry condition. A retained failure
+alone does not imply retry. A successful provisioning job clears retry and failure
+indicators even while infrastructure is becoming ready. Use
+{{ bt }}describe computeinstance ID|NAME{{ bt }} for failure details.
+
 There are also subcommands for retrieving specific kinds of data such as kubeconfigs, passwords and tokens. Use
 {{ bt }}--help{{ bt }} on any subcommand for details.
 `

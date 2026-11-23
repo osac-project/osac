@@ -16,6 +16,7 @@ package computeinstance
 import (
 	"bytes"
 	"fmt"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/help"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -253,5 +254,21 @@ var _ = Describe("Compute instance provisioning details", func() {
 			}})
 			Expect(output).To(ContainSubstring(fmt.Sprintf("%s\n", message)))
 		}
+	})
+})
+
+var _ = Describe("Compute instance describe help", func() {
+	It("renders retry and failure examples", func() {
+		cmd := Cmd()
+		help.Setup(cmd)
+		var output bytes.Buffer
+		cmd.SetOut(&output)
+		cmd.SetErr(&output)
+		cmd.SetArgs([]string{"--help"})
+		Expect(cmd.Execute()).To(Succeed())
+		for _, text := range []string{"RetryScheduled", "RetryRunning", "ProvisioningFailed", "WaitingForVM", "ProvisioningStorage", "Last Provisioning Failure Attempt", "2026-01-02T03:04:05Z"} {
+			Expect(output.String()).To(ContainSubstring(text))
+		}
+		Expect(output.String()).NotTo(ContainSubstring("{{"))
 	})
 })

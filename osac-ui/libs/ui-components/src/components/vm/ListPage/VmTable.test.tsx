@@ -113,20 +113,28 @@ describe('VmTable', () => {
     expect(screen.getByRole('link', { name: 'web-01' })).toHaveAttribute('href', '/vms/vm-1');
   });
 
-  it('masks disk image and external IP and disables the name link while deleting', () => {
-    const deletingVm = {
-      ...runningVm,
-      status: {
-        ...runningVm.status,
-        state: ComputeInstanceState.DELETING,
-      },
-    } as ComputeInstance;
+  it.each(['tenant-admin', 'tenant-user'] as const)(
+    'keeps deletion details accessible without list actions for %s',
+    (role) => {
+      const deletingVm = {
+        ...runningVm,
+        id: 'vm/deleting',
+        status: {
+          ...runningVm.status,
+          state: ComputeInstanceState.DELETING,
+        },
+      } as ComputeInstance;
 
-    renderWithProviders(<VmTable vms={[deletingVm]} />);
+      renderWithProviders(<VmTable vms={[deletingVm]} />, { session: { role } });
 
-    expect(screen.queryByRole('link', { name: 'web-01' })).not.toBeInTheDocument();
-    expect(screen.queryByText('rhel-9')).not.toBeInTheDocument();
-    expect(screen.queryByText('203.0.113.1')).not.toBeInTheDocument();
-    expect(screen.getAllByText('—')).toHaveLength(2);
-  });
+      expect(screen.getByRole('link', { name: 'web-01' })).toHaveAttribute(
+        'href',
+        '/vms/vm%2Fdeleting',
+      );
+      expect(screen.queryByRole('button', { name: 'Actions for web-01' })).not.toBeInTheDocument();
+      expect(screen.queryByText('rhel-9')).not.toBeInTheDocument();
+      expect(screen.queryByText('203.0.113.1')).not.toBeInTheDocument();
+      expect(screen.getAllByText('—')).toHaveLength(2);
+    },
+  );
 });

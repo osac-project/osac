@@ -118,13 +118,17 @@ func New(config Config) (*Client, error) {
 		},
 	}
 
+	return &Client{api: newAPIClient(endpoint, token, httpClient)}, nil
+}
+
+// newAPIClient builds the generated SDK client shared by production and tests.
+func newAPIClient(endpoint, token string, httpClient *http.Client) *netbox.APIClient {
 	configuration := netbox.NewConfiguration()
 	configuration.Servers[0].URL = endpoint
 	configuration.Debug = false
 	configuration.AddDefaultHeader("Authorization", netBoxAuthorizationScheme+token)
 	configuration.HTTPClient = httpClient
-
-	return &Client{api: netbox.NewAPIClient(configuration)}, nil
+	return netbox.NewAPIClient(configuration)
 }
 
 // ForEachDevice visits matching devices page by page. The visitor returns true

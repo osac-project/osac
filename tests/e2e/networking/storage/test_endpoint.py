@@ -17,7 +17,7 @@ from tests.e2e.networking.storage.endpoint import (
 
 def _fake_run(log: str) -> Callable[[StorageEndpoint, str, int], tuple[str, int]]:
     def run(_endpoint: StorageEndpoint, command: str, _timeout: int) -> tuple[str, int]:
-        return ("1\n" if command.startswith("wc -l") else log), 0
+        return ("1\n" if "wc -l" in command else log), 0
 
     return run
 

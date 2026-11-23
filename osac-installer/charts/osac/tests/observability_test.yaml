@@ -385,9 +385,11 @@ tests:
       - equal:
           path: metadata.annotations["helm.sh/hook"]
           value: pre-install,pre-upgrade
+      # hook-failed is what removes the cluster-wide create grant when the
+      # Secret is missing, which is the failure this gate exists to produce.
       - equal:
           path: metadata.annotations["helm.sh/hook-delete-policy"]
-          value: before-hook-creation,hook-succeeded
+          value: before-hook-creation,hook-succeeded,hook-failed
       - equal:
           path: rules[0].resources
           value: [namespaces]
@@ -398,7 +400,7 @@ tests:
           path: rules[0].verbs
           value: [get, patch, update]
       # create cannot be limited by resourceNames; the grant is hook-only and is
-      # deleted when the gate succeeds.
+      # deleted whether the gate succeeds or fails.
       - equal:
           path: rules[1].resources
           value: [namespaces]

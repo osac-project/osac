@@ -169,6 +169,54 @@ var _ = Describe("Public volumes server", func() {
 			Expect(err).To(HaveOccurred())
 		})
 
+		It("Exposes the owner of an owned volume and omits it for ownerless volumes", func() {
+			ownerless := createVolumeViaPrivate("ownerless-vol")
+			response, err := privateServer.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "owned-vol",
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Owner: privatev1.VolumeOwner_builder{
+							Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+							Reference: "ci-01a1",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			owned := response.GetObject()
+
+			getOwned, err := publicServer.Get(ctx, publicv1.VolumesGetRequest_builder{
+				Id: owned.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getOwned.GetObject().GetSpec().GetOwner().GetType()).
+				To(Equal(publicv1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE))
+			Expect(getOwned.GetObject().GetSpec().GetOwner().GetReference()).To(Equal("ci-01a1"))
+
+			getOwnerless, err := publicServer.Get(ctx, publicv1.VolumesGetRequest_builder{
+				Id: ownerless.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getOwnerless.GetObject().GetSpec().GetOwner()).To(BeNil())
+
+			listResponse, err := publicServer.List(ctx, publicv1.VolumesListRequest_builder{}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			owners := map[string]*publicv1.VolumeOwner{}
+			for _, item := range listResponse.GetItems() {
+				owners[item.GetMetadata().GetName()] = item.GetSpec().GetOwner()
+			}
+			Expect(owners["owned-vol"]).NotTo(BeNil())
+			Expect(owners["owned-vol"].GetReference()).To(Equal("ci-01a1"))
+			Expect(owners).To(HaveKey("ownerless-vol"))
+			Expect(owners["ownerless-vol"]).To(BeNil())
+		})
+
 		It("Lists volumes visible to the caller", func() {
 			for range 3 {
 				createVolumeViaPrivate(fmt.Sprintf("vol-%s", uuid.NewString()[:8]))

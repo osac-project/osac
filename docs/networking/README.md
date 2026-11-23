@@ -21,15 +21,18 @@ installation:
 ```
 A networking setup = FABRIC MANAGER   x  KUBERNETES MANAGER  x  ENABLED SERVICES
                      (netris)            (cudn_evpn)            (VMaaS)
-                     (agentless_net)     (none)                 (BMaaS)
-                     (provider's own)                           (CaaS)
+                     (agentless_net)     (k8s_only)             (BMaaS)
+                     (provider's own)    (none)                 (CaaS)
+                     (none)
 ```
 
-- **Fabric Manager** (required): the plug-in that configures the provider's
-  physical network: switches, routing, NAT, external addresses, and bare-metal
-  switch ports.
-- **Kubernetes Manager** (optional): the OSAC plug-in that connects VMs on the
-  OpenShift cluster that hosts them to the same networks. Needed only for VMs.
+- **Fabric Manager**: the plug-in that configures the provider's physical
+  network: switches, routing, NAT, external addresses, and bare-metal switch
+  ports. Required, except in the VM-only
+  [Kubernetes-only profile](#kubernetes-only-no-fabric-manager).
+- **Kubernetes Manager**: the OSAC plug-in that connects VMs on the
+  OpenShift cluster that hosts them to the tenant networks. Needed only for
+  VMs.
 - **Enabled services**: which of VMaaS, BMaaS, and CaaS the deployment offers.
 
 The tenant never sees these choices. The same tenant resources work the same
@@ -105,14 +108,17 @@ Key behaviors:
 - **One contract, many backends.** OSAC defines a fixed set of tasks a Fabric
   Manager must implement (create a network, attach a server, allocate an
   external address, and so on). Any backend that implements them plugs in
-  without changes to OSAC. A provider can write its own Fabric Manager for
-  networking equipment OSAC does not ship.
-- **Defined by tests.** The design defines a conformance test suite with one
-  test profile per service (VMs, bare metal, clusters). The provider runs it
-  against its Fabric Manager and reports the result; a service's networking
-  is supported on a backend only with a passing report for that service.
-  Tests of traffic behavior itself (isolation, firewall enforcement) are a
-  planned follow-up.
+  without changes to OSAC. A provider can
+  [bring its own network orchestration](#the-providers-own-fabric-manager)
+  by writing a Fabric Manager for equipment OSAC does not ship.
+- **Defined by tests.** The
+  [conformance suite design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-7068-conformance-suite/design.md)
+  has one test profile per service (VMs, bare metal, clusters). The provider
+  runs it in its own lab against its Fabric Manager and reports the result;
+  a service's networking is supported on a backend only with a passing
+  report for that service. OSAC does not enforce the report, and tests of
+  traffic behavior itself (isolation, firewall enforcement) are a planned
+  follow-up.
 - **Chosen once.** The managers, the enabled services, the default network
   ranges and firewall rules, and how each Subnet's addresses are shared
   between VMs, servers, and cluster ingress are set at installation. Changing
@@ -155,10 +161,22 @@ the net node. Nothing extra runs on the switches, hence "agentless".
 
 ### The provider's own Fabric Manager
 
-A provider can implement the OSAC Fabric Manager contract for its own
-networking stack, package it as an automation collection, and register it.
+A provider that already runs its own network orchestration (another SDN
+controller, its own automation) can keep it and connect it to OSAC by
+writing a Fabric Manager:
+
+1. Implement the contract's tasks as an Ansible role that calls the
+   provider's own network API.
+2. Package it in an automation image built on OSAC's image, rebuilt for each
+   OSAC release.
+3. Register it with OSAC at installation (a small configuration object that
+   names the role and what it supports).
+4. Run the conformance suite in a lab for each service it will support.
+
 It supports whatever services it passes the conformance suite for. To run VMs
-it must support EVPN-VXLAN so it can pair with `cudn_evpn`.
+it must support EVPN-VXLAN so it can pair with `cudn_evpn`. The
+[Fabric Manager guide](../guides/networking/customer-fabric-manager-guide.md)
+walks through every step.
 
 ### cudn_evpn (Kubernetes Manager, shipped with OSAC)
 
@@ -177,6 +195,27 @@ network.
   ICMP-only rule (Kubernetes network policies cannot express one); tenants
   use the "all protocols" rule, which includes ICMP.
 
+### Kubernetes-only (no Fabric Manager)
+
+For providers that offer only VMs and want to keep full control of their
+existing network. OSAC does not touch the switches: tenant networks exist
+only inside the OpenShift cluster, and the provider's network carries the
+traffic as it does today.
+
+- VMs only, on the management cluster only (not on dedicated VM clusters);
+  bare metal and clusters cannot be enabled with this profile.
+- Tenants keep the same resources: VirtualNetworks, Subnets, SecurityGroups
+  (enforced on the VMs), ExternalIPs, and NATGateways.
+- The provider supplies a range of external addresses reachable on the
+  cluster nodes' network.
+- Inbound access through an ExternalIP is limited to one list of ports set by
+  the provider for the whole installation (default: SSH, TCP 22).
+- One Subnet per VirtualNetwork can host VMs.
+- Requires OpenShift 4.22 or later; new installations only.
+
+See the
+[Kubernetes-only networking design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-7436-kubernetes-only-k8s-manager-networking/design.md).
+
 ### Provider networking disabled
 
 A provider can install OSAC without any provider networking. Tenants can
@@ -185,31 +224,44 @@ configures nothing on the network: there are no ExternalIPs, no NAT, and no
 isolation guarantees. VMs use the cluster's default network, bare-metal
 servers stay on the provider's provisioning network, and the provider makes
 cluster endpoints reachable by its own means. This choice is made at
-installation and cannot change later.
+installation and cannot change later, and such a deployment cannot obtain a
+networking conformance report.
+
+### NVIDIA NICo and Carbide
+
+The NVIDIA NICo bare-metal integration runs with OSAC provider networking
+disabled: NICo, with the DPUs in its servers, isolates the servers, and OSAC
+provides no ExternalIPs or NAT for them. OSAC-managed networking for NICo is
+outside the current design.
 
 ## What works with what
 
-| | Netris + cudn_evpn | Netris alone | AgentlessNet | Provider's own | Networking disabled |
-|---|---|---|---|---|---|
-| VMs (VMaaS) | Yes | No | No | If EVPN + cudn_evpn | Yes, without tenant networking |
-| Bare-metal servers (BMaaS) | Yes | Yes | Yes | If conformant | Yes, provisioning network only |
-| Clusters (CaaS) | Yes | Yes | Not designed yet | If conformant | Yes, endpoints by provider |
-| VMs and servers on one Subnet | Yes | n/a | n/a | If EVPN + cudn_evpn | No |
-| ExternalIPs and NAT | Yes | Yes | Yes | If conformant | No |
-| Firewall rules on VMs | Yes | n/a | n/a | If cudn_evpn | No |
-| Firewall rules on bare metal and cluster workers | No | No | No | Provider-specific | No |
-| East-west domains (FabricDomain) | Ethernet | Ethernet | No | If it declares it | No |
+| | Netris + cudn_evpn | Netris alone | AgentlessNet | Provider's own | Kubernetes-only | Networking disabled |
+|---|---|---|---|---|---|---|
+| VMs (VMaaS) | Yes | No | No | If EVPN + cudn_evpn | Yes, management cluster only | Yes, without tenant networking |
+| VMs on dedicated VM clusters | In design | No | No | In design | No | No |
+| Bare-metal servers (BMaaS) | Yes | Yes | Yes | If conformant | No | Yes, provisioning network only |
+| Clusters (CaaS) | Yes | Yes | Not designed yet | If conformant | No | Yes, endpoints by provider |
+| VMs and servers on one Subnet | Yes | n/a | n/a | If EVPN + cudn_evpn | n/a | No |
+| ExternalIPs and NAT | Yes | Yes | Yes | If conformant | Yes, fixed inbound ports | No |
+| Firewall rules on VMs | Yes | n/a | n/a | If cudn_evpn | Yes | No |
+| Firewall rules on bare metal and cluster workers | No | No | No | Provider-specific | n/a | No |
+| East-west domains (FabricDomain) | Ethernet | Ethernet | No | If it declares it | No | No |
 
 The AgentlessNet column reflects its design; its implementation is still
 under review.
 
 Two rules apply to every setup:
 
-- CaaS requires BMaaS, because cluster workers are bare-metal servers.
+- CaaS requires BMaaS, because in the networking design cluster workers are
+  bare-metal servers. Clusters with VM workers are a separate requirement
+  that the networking design does not cover yet.
 - Enable every service the provider will offer, and select `cudn_evpn` if it
   may ever offer VMs, before the first tenant is created. Every tenant gets
   a default network, so adding BMaaS, CaaS, or VMs later is not supported
-  without deleting all tenants.
+  without deleting all tenants. (The general per-service enablement design
+  allows adding services later; for networking this conflict is still
+  open.)
 
 ## Networking per service
 
@@ -254,13 +306,14 @@ networking enabled, every cluster from a standard template automatically
 gets two ExternalIPs, one for its API and one for its applications
 (ingress), plus DNS names in the provider's configured zone
 (`api.<cluster>.<domain>`, `api-int.<cluster>.<domain>`, and
-`*.apps.<cluster>.<domain>`). A cluster's VirtualNetwork needs a NATGateway
+`*.apps.<cluster>.<domain>`). The records go to AWS Route 53, to the
+provider's own DNS server (BIND, through standard dynamic DNS updates), or
+are created by hand. A cluster's VirtualNetwork needs a NATGateway
 so the workers can reach the control plane; the default VirtualNetwork
 already has one. OSAC also adds a cluster SecurityGroup that allows traffic
 from the cluster's Subnet, all outbound traffic, and web traffic (ports 80
 and 443) to the applications; like other rules, it is not enforced on
-bare-metal workers with Netris. Some provider-specific cluster templates
-(for example NVIDIA NICo) keep their own endpoint setup.
+bare-metal workers with Netris.
 
 ## External connectivity
 
@@ -281,6 +334,29 @@ bare-metal workers with Netris. Some provider-specific cluster templates
   whose setup failed this way is deleted and recreated by the provider; it
   does not recover on its own.
 
+## What the provider prepares
+
+Before installing OSAC, the provider's platform and network teams prepare:
+
+- **Platform:** OpenShift 4.22 or later for the management cluster, with
+  access to the internet (image registries and, for clusters, operator
+  catalogs).
+- **Address plan:** the ranges the infrastructure already uses (management,
+  provisioning, node, storage networks), which tenants may not use, and the
+  ranges for ExternalIP pools, routed to the fabric edge.
+- **Fabric (all setups except Kubernetes-only):** a network controller with a
+  Fabric Manager (Netris, or the provider's own), EVPN-VXLAN, BGP peering
+  between the VM cluster nodes and the switches, and an underlay that carries
+  slightly larger frames (at least 1,550 bytes).
+- **Bare metal and clusters:** a provisioning network and an isolated
+  management (BMC) network for the servers, and a record of which switch
+  port each server port connects to.
+- **Clusters:** a free address range on the management network for cluster
+  API addresses, and a DNS zone for cluster names.
+
+See [Installing with provider networking](../guides/installation/customer-install-guide.md#44-installing-with-provider-networking)
+for the exact settings.
+
 ## High-performance east-west networking
 
 AI workloads need fast server-to-server links in addition to the normal
@@ -300,19 +376,22 @@ See [Ethernet FabricDomains](../guides/admin/fabric-domains.md).
 The following are outside the accepted networking design:
 
 - IPv6 and dual-stack.
-- Disconnected (air-gapped) deployments.
+- Disconnected (air-gapped) deployments with provider networking enabled.
+- Static IP addresses for workloads; addresses always come from DHCP.
 - More than one network interface per VM, server, or cluster; NIC bonding and
-  VLAN trunking for tenants.
+  VLAN trunking for tenants. Several multi-NIC designs for VMs are in
+  review.
 - Connecting two VirtualNetworks to each other (peering).
 - Tenant-managed DNS zones, load balancers, and internet gateways.
 - Networking quotas and bandwidth metering.
-- Using DPUs / SmartNICs for tenant isolation, firewalling, or offload.
+- Using DPUs / SmartNICs for OSAC tenant isolation, firewalling, or offload
+  (NVIDIA NICo uses its own DPUs, outside OSAC networking).
 - DNS names for individual VMs and bare-metal servers (only clusters get
   names).
 - Per-tenant default networks or firewall rules; defaults are the same for
   every tenant.
-- Network technologies other than EVPN-VXLAN for VMs, and Kubernetes
-  Managers written by providers.
+- Network technologies other than EVPN-VXLAN for VMs on a provider fabric,
+  and Kubernetes Managers written by providers.
 - More than one management cluster (hub). VMs on dedicated VM clusters are
   in design ([above](#vms-on-dedicated-vm-clusters)).
 - Changing the managers, enabled services, or defaults while tenants exist.
@@ -351,11 +430,16 @@ Designs (enhancement proposals):
   [BMaaS networking](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md)
 - [Netris Fabric Manager](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-2434-netris-fabric-manager-networking/design.md),
   [AgentlessNet Fabric Manager](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-3664-agentless-vlan-fabric-manager/design.md),
-  [CUDN EVPN Kubernetes Manager](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-4291-cudn-evpn-k8s-manager-phase-1-networking/design.md)
+  [CUDN EVPN Kubernetes Manager](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-4291-cudn-evpn-k8s-manager-phase-1-networking/design.md),
+  [Kubernetes-only networking](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-7436-kubernetes-only-k8s-manager-networking/design.md)
+- [Per-tenant VM clusters](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-7305-remote-vm-cluster-networking/prd.md)
+- [Conformance suite](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-7068-conformance-suite/design.md)
 - [Multi-fabric east-west networking](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1382-multi-fabric-east-west-networking/design.md)
 
 In this repository:
 
+- [Fabric Manager guide](../guides/networking/customer-fabric-manager-guide.md):
+  building your own Fabric Manager
 - [Installing with provider networking](../guides/installation/customer-install-guide.md#44-installing-with-provider-networking)
 - [Tenant networking guide](../guides/developer/networking-guide.md)
 - [Ethernet FabricDomains](../guides/admin/fabric-domains.md)

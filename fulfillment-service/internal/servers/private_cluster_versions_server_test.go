@@ -1421,12 +1421,12 @@ var _ = Describe("Private cluster versions server", func() {
 						assertReference(stored.GetObject().GetSpec().GetDiskImage())
 					},
 					Entry("rejects a tenant-private image from the shared owner", auth.SharedTenant, &privatev1.DiskImageReference{Id: "local-image", Name: "rhcos"}, "", grpccodes.InvalidArgument),
-					Entry("allows a shared image", auth.SharedTenant, &privatev1.DiskImageReference{Id: "shared-image", Name: "rhcos", Shared: true}, "shared-image", grpccodes.OK),
+					Entry("allows a shared image", auth.SharedTenant, &privatev1.DiskImageReference{Id: "shared-image", Name: "rhcos", Tenant: auth.SharedTenant, Shared: true}, "shared-image", grpccodes.OK),
 					Entry("rejects a tenant-private project image from the shared owner", auth.SharedTenant, &privatev1.DiskImageReference{Id: "local-project-image", Name: "rhcos", Project: "images"}, "", grpccodes.InvalidArgument),
-					Entry("preserves shared and project selectors", auth.SharedTenant, &privatev1.DiskImageReference{Id: "shared-project-image", Name: "rhcos", Shared: true, Project: "images"}, "shared-project-image", grpccodes.OK),
+					Entry("preserves shared and project selectors", auth.SharedTenant, &privatev1.DiskImageReference{Id: "shared-project-image", Name: "rhcos", Tenant: auth.SharedTenant, Shared: true, Project: "images"}, "shared-project-image", grpccodes.OK),
 					Entry("does not canonicalize omitted project and shared selectors", auth.SharedTenant, &privatev1.DiskImageReference{Id: "shared-project-image", Name: "rhcos"}, "shared-project-image", grpccodes.OK),
 					Entry("rejects a foreign tenant even when visible", auth.SharedTenant, &privatev1.DiskImageReference{Id: "foreign-image", Name: "rhcos"}, "", grpccodes.InvalidArgument),
-					Entry("allows a shared owner to use a shared image", auth.SharedTenant, &privatev1.DiskImageReference{Id: "shared-image", Name: "rhcos", Shared: true}, "shared-image", grpccodes.OK),
+					Entry("allows a shared owner to use a shared image", auth.SharedTenant, &privatev1.DiskImageReference{Id: "shared-image", Name: "rhcos", Tenant: auth.SharedTenant, Shared: true}, "shared-image", grpccodes.OK),
 					Entry("rejects a shared owner referencing a tenant-private image", auth.SharedTenant, &privatev1.DiskImageReference{Id: "local-image", Name: "rhcos"}, "", grpccodes.InvalidArgument),
 				)
 			}

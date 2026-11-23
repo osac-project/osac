@@ -45,9 +45,24 @@ def register_endpoint(address: str) -> None:
 _JWT = re.compile(r"eyJ[\w-]+\.eyJ[\w-]+\.[\w-]*")
 # "Basic" is matched capitalised only, so prose such as "basic connectivity" survives.
 _AUTH_SCHEME = re.compile(r"\b((?i:bearer)|Basic)(\s+)[A-Za-z0-9._~+/=-]{8,}")
-_KEY_VALUE = re.compile(r"(?i)\b(password|passwd|client_secret)(\s*=\s*)\S+")
+# The label may follow an underscore (DB_PASSWORD, AWS_SECRET_ACCESS_KEY) but not a
+# letter or digit, so identifiers such as "mytokenizer" stay intact.
+_QUOTED_VALUE = r'"(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\''
+# One shell word of adjacent quoted and unquoted parts, so "a b"'c'd is one value.
+_SHELL_VALUE = rf'(?:{_QUOTED_VALUE}|\\.|[^\s"\'\\])+\S*'
+_KEY_VALUE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])"
+    r"(password|passwd|client[_-]?secret|secret[_-]?key|api[_-]?key|access[_-]?key|token|session[_-]?id)"
+    r"([ \t]*[=:][ \t]*)"
+    r"(" + _SHELL_VALUE + r"|\S+)"
+)
 _TOKEN_FLAG = re.compile(r"(--token(?:-script)?)([ =])\S+")
-_JSON_SECRET = re.compile(r'(?i)("[\w-]*(?:password|token|secret)[\w-]*"\s*:\s*)"(?:[^"\\]|\\.)*"')
+# The label may appear anywhere in a JSON key, so "api_key" and "access_key" are
+# covered even though the text rules need the separator right after the label.
+_JSON_SECRET = re.compile(
+    r'(?i)("[\w-]*(?:password|passwd|passphrase|client[_-]?secret|secret[_-]?key|api[_-]?key|access[_-]?key'
+    r'|private[_-]?key|token|session[_-]?id)[\w-]*"[ \t]*:[ \t]*)"(?:[^"\\]|\\.)*"'
+)
 
 # The value after one of these flags is dropped whole: a header holds the token, -d holds the request payload.
 _VALUE_FLAGS = frozenset({"-H", "--header", "-d", "--data", "--token", "--token-script", "--password"})
@@ -64,9 +79,10 @@ def sanitize_text(text: str | bytes) -> str:
         text = text.decode(errors="replace")
     text = _JWT.sub(REDACTED, text)
     text = _AUTH_SCHEME.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", text)
+    # JSON before the assignment rules: a secret value can itself hold "label=".
+    text = _JSON_SECRET.sub(lambda m: f'{m.group(1)}"{REDACTED}"', text)
     text = _KEY_VALUE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", text)
     text = _TOKEN_FLAG.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", text)
-    text = _JSON_SECRET.sub(lambda m: f'{m.group(1)}"{REDACTED}"', text)
     with _ENDPOINT_LOCK:
         hosts = _ENDPOINT_HOSTS
     for host in sorted(hosts, key=len, reverse=True):

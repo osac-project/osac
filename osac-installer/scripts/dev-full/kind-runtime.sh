@@ -252,6 +252,10 @@ else
   vgcreate vg1 "$loopdev"
 fi
 
+# The backing file and VG survive a runtime reboot, but LV device nodes do not.
+# Activate only after verifying that vg1 belongs to this backing device.
+vgchange --activate y vg1
+
 cat > /runtime/lvmd.yaml <<"EOF"
 socket-name: /run/topolvm/lvmd.sock
 # Run LVM in this helper container instead of entering the host namespaces.

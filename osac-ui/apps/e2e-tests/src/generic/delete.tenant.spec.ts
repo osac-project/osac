@@ -1,8 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { access } from 'node:fs/promises';
 
-import { readTenantRunState, removeTenantRunState, removeVmaasFullFlowRunState } from './run_state';
-import { catalogTestRunId, tenantNameOrSkip } from './test_data';
 import { deleteTenantSshKey } from '../../../../libs/osac-cli/src/secret';
 import { deleteTenantAdmin } from '../../../../libs/osac-cli/src/tenant_admin';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
@@ -17,6 +15,12 @@ import {
   removeTenantCredentials,
   tenantCredentialsFilePath,
 } from '../../../../libs/test-utils/src/tenants.page';
+import {
+  readTenantRunState,
+  removeTenantRunState,
+  removeVmaasFullFlowRunState,
+} from '../shared/run_state';
+import { catalogTestRunId, tenantNameOrSkip } from '../shared/test_data';
 
 test('deletes the requested tenant', async ({ page }) => {
   // Allow the 300-second backend deletion wait plus login and UI actions to complete.

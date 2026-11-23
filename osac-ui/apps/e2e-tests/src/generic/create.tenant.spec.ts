@@ -1,7 +1,5 @@
 import { test } from '@playwright/test';
 
-import { writeTenantRunState } from './run_state';
-import { catalogTestRunId, tenantNameOrSkip, tenantPassword } from './test_data';
 import { createTenantSshKey } from '../../../../libs/osac-cli/src/secret';
 import {
   createTenantAdminRoleBinding,
@@ -24,6 +22,8 @@ import {
   tenantCredentialsFilePath,
   updateTenantCredentialsPassword,
 } from '../../../../libs/test-utils/src/tenants.page';
+import { writeTenantRunState } from '../shared/run_state';
+import { catalogTestRunId, tenantNameOrSkip, tenantPassword } from '../shared/test_data';
 
 test('creates a tenant from the Administration tenants page', async ({ page }) => {
   // Allow backend reconciliation and tenant-admin provisioning waits to complete.

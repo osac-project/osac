@@ -132,7 +132,12 @@ message NotificationSpec {
   ];
 
   // Type string in the form osac.notification.<kind>.<name>.
-  string type = 3 [(google.api.field_behavior) = IMMUTABLE];
+  string type = 3 [
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).string = {
+      pattern: "^osac\\.notification\\.[a-z]+\\.[a-z0-9_]+$"
+    }
+  ];
 
   // Producer event for an inbox notification.
   NotificationEventReference event = 4 [(google.api.field_behavior) = IMMUTABLE];

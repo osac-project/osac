@@ -146,13 +146,10 @@ func (b *NotificationsServerBuilder) Build() (result *NotificationsServer, err e
 }
 
 // List returns notifications visible under tenancy, recipient, and resource rules.
+// Visibility filtering runs before offset/limit so size/total describe the public set.
 func (s *NotificationsServer) List(ctx context.Context,
 	request *publicv1.NotificationsListRequest) (response *publicv1.NotificationsListResponse, err error) {
 	privateRequest := &privatev1.NotificationsListRequest{}
-	privateRequest.SetOffset(request.GetOffset())
-	if request.HasLimit() {
-		privateRequest.SetLimit(request.GetLimit())
-	}
 	privateRequest.SetFilter(request.GetFilter())
 	privateRequest.SetOrder(request.GetOrder())
 
@@ -172,6 +169,10 @@ func (s *NotificationsServer) List(ctx context.Context,
 
 	resources := make([]*privatev1.NotificationResourceReference, len(candidates))
 	for i, candidate := range candidates {
+		// Ignore Announcement notifications
+		if candidate.GetSpec().GetKind() == privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT {
+			continue
+		}
 		resources[i] = candidate.GetSpec().GetResource()
 	}
 	visibleFlags, visErr := s.resourceAccess.MayAccessMany(ctx, resources)
@@ -189,11 +190,31 @@ func (s *NotificationsServer) List(ctx context.Context,
 		visibleFlags = failClosedResourceFlags(resources)
 	}
 
-	publicItems := make([]*publicv1.Notification, 0, len(candidates))
+	eligible := make([]*privatev1.Notification, 0, len(candidates))
 	for i, privateItem := range candidates {
-		if !visibleFlags[i] {
+		if privateItem.GetSpec().GetKind() != privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT &&
+			!visibleFlags[i] {
 			continue
 		}
+		eligible = append(eligible, privateItem)
+	}
+
+	total := int32(len(eligible)) // #nosec G115 -- bounded by result set
+	offset := request.GetOffset()
+	limit := request.GetLimit()
+	if offset < 0 || limit < 0 {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "offset and limit must be non-negative")
+	}
+	if offset > total {
+		offset = total
+	}
+	paged := eligible[offset:]
+	if limit > 0 && int32(len(paged)) > limit { // #nosec G115 -- bounded by result set
+		paged = paged[:limit]
+	}
+
+	publicItems := make([]*publicv1.Notification, len(paged))
+	for i, privateItem := range paged {
 		publicItem := &publicv1.Notification{}
 		err = s.outMapper.Copy(ctx, privateItem, publicItem)
 		if err != nil {
@@ -204,14 +225,7 @@ func (s *NotificationsServer) List(ctx context.Context,
 			)
 			return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process notifications")
 		}
-		publicItems = append(publicItems, publicItem)
-	}
-
-	// Adjust total for dropped rows only when this page is the full result set.
-	total := privateResponse.GetTotal()
-	if request.GetOffset() <= 0 && len(privateItems) == int(total) {
-		dropped := len(privateItems) - len(publicItems)
-		total -= int32(dropped) // #nosec G115 -- dropped <= len(privateItems) == total
+		publicItems[i] = publicItem
 	}
 
 	response = &publicv1.NotificationsListResponse{}
@@ -497,6 +511,10 @@ func (s *NotificationsServer) callerSeesAllInbox(ctx context.Context) bool {
 // isResourceVisible reports whether the caller may access the notification's linked resource.
 func (s *NotificationsServer) isResourceVisible(ctx context.Context,
 	notification *privatev1.Notification) (bool, error) {
+	// Ignore Announcement notifications
+	if notification.GetSpec().GetKind() == privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT {
+		return true, nil
+	}
 	resource := notification.GetSpec().GetResource()
 	if resource == nil {
 		return true, nil

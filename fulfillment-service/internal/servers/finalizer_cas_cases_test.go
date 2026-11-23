@@ -322,7 +322,7 @@ func finalizerTenantCases() []finalizerCase {
 				}.Build()
 			},
 			func(b *GenericServerBuilder[*privatev1.Notification]) {
-				b.AddAllowedTenants(auth.SystemTenant)
+				b.AddAllowedTenants(auth.SharedTenant)
 			},
 		),
 		newFinalizerCase(privatev1.Secrets_ServiceDesc,

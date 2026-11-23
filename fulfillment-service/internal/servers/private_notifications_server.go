@@ -113,7 +113,7 @@ func (b *PrivateNotificationsServerBuilder) Build() (result *PrivateNotification
 		SetTenancyLogic(b.tenancyLogic).
 		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc(b.filterDesc).
-		AddAllowedTenants(auth.SystemTenant).
+		AddAllowedTenants(auth.SharedTenant).
 		Build()
 	if err != nil {
 		return
@@ -180,6 +180,9 @@ func (s *PrivateNotificationsServer) validateCreate(object *privatev1.Notificati
 		if spec.GetEvent() != nil && (spec.GetEvent().GetId() != "" || spec.GetEvent().GetSource() != "") {
 			return grpcstatus.Error(grpccodes.InvalidArgument, "announcements must not set spec.event")
 		}
+		if spec.GetState() != privatev1.NotificationState_NOTIFICATION_STATE_UNSPECIFIED {
+			return grpcstatus.Error(grpccodes.InvalidArgument, "announcements must not set spec.state")
+		}
 		return nil
 	}
 
@@ -233,7 +236,7 @@ func (s *PrivateNotificationsServer) applyCreateDefaults(object *privatev1.Notif
 				metadata = &privatev1.Metadata{}
 				object.SetMetadata(metadata)
 			}
-			metadata.SetTenant(auth.SystemTenant)
+			metadata.SetTenant(auth.SharedTenant)
 		}
 		return
 	}

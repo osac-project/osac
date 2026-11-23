@@ -167,7 +167,7 @@ var _ = Describe("Private notifications server", func() {
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		})
 
-		It("Forces system tenant for platform announcements", func() {
+		It("Forces shared tenant for platform announcements", func() {
 			created, err := server.Create(ctx, privatev1.NotificationsCreateRequest_builder{
 				Object: privatev1.Notification_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -184,7 +184,7 @@ var _ = Describe("Private notifications server", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(created.GetObject().GetMetadata().GetTenant()).To(Equal(auth.SystemTenant))
+			Expect(created.GetObject().GetMetadata().GetTenant()).To(Equal(auth.SharedTenant))
 		})
 
 		DescribeTable("Rejects invalid creates",
@@ -266,6 +266,17 @@ var _ = Describe("Private notifications server", func() {
 					Scope:       privatev1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
 					RecipientId: "user-1",
 					Title:       "x",
+				}.Build(),
+			}.Build()),
+			Entry("announcement with state", privatev1.Notification_builder{
+				Metadata: privatev1.Metadata_builder{Name: "bad-ann-state"}.Build(),
+				Spec: privatev1.NotificationSpec_builder{
+					Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT,
+					Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+					Type:     "osac.notification.announcement.maintenance",
+					Scope:    privatev1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
+					Title:    "x",
+					State:    privatev1.NotificationState_NOTIFICATION_STATE_UNREAD,
 				}.Build(),
 			}.Build()),
 		)

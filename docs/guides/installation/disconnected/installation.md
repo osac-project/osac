@@ -43,11 +43,11 @@
   - [12. Glossary](#12-glossary)
 
 > [!IMPORTANT]
-> This is the final document in the disconnected installation sequence for OSAC **0.0.62**: [prereqs.md](prereqs.md) → [aap-git-source.md](aap-git-source.md) → [operators.md](operators.md) → **installation.md**. Complete all three preparation guides before continuing.
+> This is the final document in the disconnected installation sequence for OSAC **0.4.0**: [prereqs.md](prereqs.md) → [aap-git-source.md](aap-git-source.md) → [operators.md](operators.md) → **installation.md**. Complete all three preparation guides before continuing.
 
 ## 1. OSAC installation architecture
 
-This guide installs the **0.0.62** `osac` Helm release on a cluster prepared through [prerequisites](prereqs.md), [AAP Git source preparation](aap-git-source.md) and [Operator and infrastructure installation](operators.md). It does not install prerequisite Helm releases.
+This guide installs the **0.4.0** `osac` Helm release on a cluster prepared through [prerequisites](prereqs.md), [AAP Git source preparation](aap-git-source.md) and [Operator and infrastructure installation](operators.md). It does not install prerequisite Helm releases.
 
 ### 1.1 What is released
 
@@ -61,7 +61,7 @@ Complete the three preparation guides above for the same cluster, namespace and 
 
 - After that provider setup and before Section 4, complete the [mandatory metering provider checkpoint](prereqs.md#41-mandatory-metering-provider-checkpoint) for both Core and Core + VMaaS, including external Fulfillment Kafka. Resolve Q-0012's actual provider/API/watch-scope/RBAC/client contract; observe its exact User and Topic Operator containers with the bounded reads there. Missing or unresolved capability blocks Helm; do not infer a skip from `kafka.enabled=false`, a CSV alone or prepared values.
 
-- Keep the approved `OSAC_NAMESPACE`, `OSAC_CHART_DIR` and `VALUES_FILE` available in the installation shell. `OSAC_CHART_DIR` is the exact downloaded/extracted **0.0.62** chart path; `VALUES_FILE` is the complete prepared values file.
+- Keep the approved `OSAC_NAMESPACE`, `OSAC_CHART_DIR` and `VALUES_FILE` available in the installation shell. `OSAC_CHART_DIR` is the exact downloaded/extracted **0.4.0** chart path; `VALUES_FILE` is the complete prepared values file.
 
 - Mirror policies, pull credentials, required CLI images, EE and internal Git source are already prepared. Keep the selected service scope and credential/trust references unchanged; return missing preparation to its owning guide.
 
@@ -69,7 +69,7 @@ Complete the three preparation guides above for the same cluster, namespace and 
 
 | Item | Source for this installation |
 | --- | --- |
-| OSAC chart | Prepared **0.0.62** chart at `$OSAC_CHART_DIR` |
+| OSAC chart | Prepared **0.4.0** chart at `$OSAC_CHART_DIR` |
 | Component images | Release identities and mirror coverage established in [prereqs.md](prereqs.md), not the connected guide's example version table |
 | AAP Git and EE | Internal source/full commit and effective EE from [aap-git-source.md](aap-git-source.md) and the prepared values |
 
@@ -115,7 +115,7 @@ Do not run competing installations for this target. If Helm fails, stop and use 
 
 ## 5. Helm chart configuration parameters
 
-Use the **0.0.62** umbrella and subchart defaults/schemas for the parameter reference; the [connected parameter tables](../customer-install-guide.md#5-helm-chart-configuration-parameters) explain common settings. Merge the following inputs into the complete values, preserving other keys. The CLI overrides do not replace `aap.bootstrap.image` or the EE.
+Use the **0.4.0** umbrella and subchart defaults/schemas for the parameter reference; the [connected parameter tables](../customer-install-guide.md#5-helm-chart-configuration-parameters) explain common settings. Merge the following inputs into the complete values, preserving other keys. The CLI overrides do not replace `aap.bootstrap.image` or the EE.
 
 | Parameter | Disconnected requirement |
 | --- | --- |
@@ -134,7 +134,7 @@ Use only the service selected during preparation; retain the limits in [Section 
 
 ### 6.1 Installing OSAC for VMaaS
 
-Follow the [VMaaS workflow](../customer-install-guide.md#61-installing-osac-for-vmaas) with the prepared storage/LoadBalancer providers, network settings, mirrored disk images, internal AAP Git source and EE. Keep the required compute templates and storage-tier registration; do not enable an unselected provider. A complete Core + VMaaS sample for this chart version is [`osac-0.0.62-core-vmaas-values.yaml`](osac-0.0.62-core-vmaas-values.yaml); replace site values, credentials and mirror references before use.
+Follow the [VMaaS workflow](../customer-install-guide.md#61-installing-osac-for-vmaas) with the prepared storage/LoadBalancer providers, network settings, mirrored disk images, internal AAP Git source and EE. Keep the required compute templates and storage-tier registration; do not enable an unselected provider. A complete Core + VMaaS sample for this chart version is [`osac-0.4.0-core-vmaas-values.yaml`](osac-0.4.0-core-vmaas-values.yaml); replace site values, credentials and mirror references before use.
 
 **Execution order:** select the prepared Core + VMaaS values → install once through Section 4 → pass the platform checks in Section 7 steps 1–9 → prepare the selected mirror-backed DiskImage and resolved CDI consumer contract in Sections 6.1.1–6.1.2 → complete the one VMaaS acceptance procedure in Section 7.1 → record the selected-service result in Section 7 step 10 → record mandatory metering functional acceptance in step 11 using Section 7.2's approved contract. If that contract uses this service test as its stimulus, arrange its baseline before the test rather than requiring a metering pass first. Do not require all of Section 7 to be complete before the first test VM, and do not treat ready Pods alone as VM acceptance.
 
@@ -260,7 +260,7 @@ Perform platform checks 1–9 in order, using the prepared namespace `$NS`, sele
    ' "$OSAC_INSTALL_RECORD"
    ```
 
-   In 0.0.62, the pre-install validation Job has `hook-succeeded` cleanup: Helm
+   In 0.4.0, the pre-install validation Job has `hook-succeeded` cleanup: Helm
    records `last_run.phase: Succeeded` before deleting it. Successful database-init
    and publishing Jobs are also deleted. Later `NotFound` or absence is never
    proof of success; a missing record, missing validation hook or any result other
@@ -271,7 +271,7 @@ Perform platform checks 1–9 in order, using the prepared namespace `$NS`, sele
 
 4. Confirm prepared database, Kafka, secret-store and identity services remain ready. Use the configured issuer's discovery URL, not the connected example's Keycloak hostname or infrastructure namespace.
 
-5. Inspect `oc get pods -n "$NS"` and the selected Deployment/DaemonSet rollouts. Require ready current workloads, including Fulfillment, OSAC Operator, AAP and enabled UI, without image-pull or crash loops. Do not require OSAC CSI components in this namespace: the **0.0.62** chart does not deploy the OSAC CSI routing meta-driver, and provider CSI setup is separately owned.
+5. Inspect `oc get pods -n "$NS"` and the selected Deployment/DaemonSet rollouts. Require ready current workloads, including Fulfillment, OSAC Operator, AAP and enabled UI, without image-pull or crash loops. Do not require OSAC CSI components in this namespace: the **0.4.0** chart does not deploy the OSAC CSI routing meta-driver, and provider CSI setup is separately owned.
 
 6. Require the release's Certificates to be `Ready` and database initialization to have succeeded; if it failed, inspect the retained `osac-db-init` Pod/container logs rather than creating its generated certificate Secret yourself.
 
@@ -447,7 +447,7 @@ See the existing [network, DNS and AAP configuration references](../customer-ins
 
 ### 9.1 Supported for production
 
-Use the tagged **0.0.62** release with the external database, identity and secret-store contracts prepared through [operators.md](operators.md). The [connected production section](../customer-install-guide.md#91-supported-for-production) describes the common topology; follow this guide's release-specific resource ownership when examples differ. Mirrored content does not broaden service qualification.
+Use the tagged **0.4.0** release with the external database, identity and secret-store contracts prepared through [operators.md](operators.md). The [connected production section](../customer-install-guide.md#91-supported-for-production) describes the common topology; follow this guide's release-specific resource ownership when examples differ. Mirrored content does not broaden service qualification.
 
 ### 9.2 Evaluation only
 

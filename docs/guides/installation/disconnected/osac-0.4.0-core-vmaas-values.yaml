@@ -1,6 +1,6 @@
-# OSAC umbrella 0.0.62, core + VMaaS on the same SNO hub (dev, disconnected).
-# Generated from the 0.0.62 chart defaults:
-#   helm show values oci://ghcr.io/osac-project/charts/osac --version 0.0.62
+# OSAC umbrella 0.4.0, core + VMaaS on the same SNO hub (dev, disconnected).
+# Generated from the 0.4.0 chart defaults:
+#   helm show values oci://ghcr.io/osac-project/charts/osac --version 0.4.0
 # Service selection per the disconnected installation guide Section 6.1;
 # disconnected overrides (cliImage, AAP EE, internal Git) per Section 5.
 # Replace <approved-site-apps-domain> in all four domain-bearing fields below
@@ -46,7 +46,7 @@ cliImage: quay.io/openshift/origin-cli:4.20.0
 operator:
   replicaCount: 1
   aap:
-    # Dev-lab-only override: the 0.0.62 chart has no AAP CA-bundle input
+    # Dev-lab-only override: the 0.4.0 chart has no AAP CA-bundle input
     # , so certificate verification against the AAP route cannot be enabled here.
     #  Do not copy this into a production profile.
     insecureSkipVerify: "true"
@@ -59,7 +59,7 @@ operator:
     networking: true
     storage: true
     volume: true
-  # 0.0.62 replaced operator.fulfillment.tokenFile with OIDC client
+  # 0.4.0 replaced operator.fulfillment.tokenFile with OIDC client
   # credentials; defaults already point at the prepared Secret.
   fulfillment:
     serverAddress: fulfillment-internal-api:8001
@@ -162,7 +162,7 @@ aap:
       enabled: true
     publishTemplates:
       enabled: true
-# Metering is always deployed in 0.0.62 and wires its database through the
+# Metering is always deployed in 0.4.0 and wires its database through the
 # chart-created osac-db-metering-config / osac-db-metering-client-cert
 # Secrets for dbInit.host; no override is needed here.
 validation:
@@ -171,5 +171,5 @@ hubAccess:
   enabled: true
 lvms:
   enabled: true  # Registers backend local / block tier local, NOT StorageClass lvms-vg1.
-# The umbrella csiDriver block was removed in 0.0.62; hub/tenant CSI is no
+# The umbrella csiDriver block was removed in 0.4.0; hub/tenant CSI is no
 # longer configured through this chart.

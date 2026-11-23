@@ -7,13 +7,13 @@
   - [4. Delivery gate and failure flow](#4-delivery-gate-and-failure-flow)
   - [5. Day 2 and alternative servers](#5-day-2-and-alternative-servers)
 
-This is Doc 2a for OSAC **0.0.62**: [prereqs.md](prereqs.md) → **aap-git-source.md** → [operators.md](operators.md). The OSAC persona supplies the release source identity; the Git administrator publishes it and returns the internal Git URL. This guide does not install operators or create the AAP instance.
+This is Doc 2a for OSAC **0.4.0**: [prereqs.md](prereqs.md) → **aap-git-source.md** → [operators.md](operators.md). The OSAC persona supplies the release source identity; the Git administrator publishes it and returns the internal Git URL. This guide does not install operators or create the AAP instance.
 
 The source is the **full `osac-project/osac` monorepo**, including `osac-aap/`. A mirrored execution-environment image does not deliver the Git project. Use the [canonical installation guide](../customer-install-guide.md) for configuration semantics, and the site's normal Git hosting procedure for server administration.
 
 ## 1. OSAC persona → Git administrator
 
-Read the unchanged defaults of the actual downloaded `0.0.62` chart from prerequisites:
+Read the unchanged defaults of the actual downloaded `0.4.0` chart from prerequisites:
 
 ```bash
 helm show values "$OSAC_CHART_DIR" | yq -er '.aap.configAsCode.projectGitBranch'
@@ -23,15 +23,15 @@ Expected: one full, lowercase 40-character commit. Reject a branch name, short S
 
 | Input | Required contract |
 | --- | --- |
-| `OSAC_CHART_DIR` | Exact protected prerequisite-handoff path to the downloaded/extracted `0.0.62` chart; consume unchanged in the chart-default check |
-| Release / source | `0.0.62`; `https://github.com/osac-project/osac` |
+| `OSAC_CHART_DIR` | Exact protected prerequisite-handoff path to the downloaded/extracted `0.4.0` chart; consume unchanged in the chart-default check |
+| Release / source | `0.4.0`; `https://github.com/osac-project/osac` |
 | `AAP_COMMIT` | Exact full commit from `aap.configAsCode.projectGitBranch` in the actual chart's defaults |
 | Required tree | Full repository at that commit with `osac-aap/` present as a tree, not a subtree-only replacement repository |
-| `AAP_RELEASE_REF` | `refs/heads/osac-aap-0.0.62-e526ec64b1d5`; advertised ref must resolve to `AAP_COMMIT` |
+| `AAP_RELEASE_REF` | `refs/heads/osac-aap-0.4.0-e526ec64b1d5`; advertised ref must resolve to `AAP_COMMIT` |
 | Provenance | Approved chart identity/defaults binding and independently authenticated transfer provenance/checksum for the complete source bundle |
 | Probe context | Approved existing cluster namespace/egress path and exact mirrored EE containing Git; do not depend on a not-yet-created AAP instance or operator namespace |
 
-Release-source cross-check only: `osac/v0.0.62` source values pin `e526ec64b1d54981c13505af3c7142d1b6591239`. The actual downloaded chart remains authoritative; an unexpected difference stops for release-owner review, not substitution of this example.
+Release-source cross-check only: `osac/v0.4.0` source values pin `e526ec64b1d54981c13505af3c7142d1b6591239`. The actual downloaded chart remains authoritative; an unexpected difference stops for release-owner review, not substitution of this example.
 
 ## 2. Git administrator publication contract
 
@@ -46,7 +46,7 @@ Release-source cross-check only: `osac/v0.0.62` source values pin `e526ec64b1d54
 
 `git://` has **no transport authentication or encryption**. Explicit site approval, independent trusted provenance and restricted ingress are mandatory; a colocated checksum is not authentication. If site policy rejects this reference, stop; never embed credentials in a URL.
 
-> **0.0.62 chart constraint:** for Git, the closed `aap.configAsCode` schema (`additionalProperties=false`) exposes only `projectGitUri`/`projectGitBranch`, not SCM credential, SSH key, token or CA-trust fields; this guide supports unauthenticated delivery only.
+> **0.4.0 chart constraint:** for Git, the closed `aap.configAsCode` schema (`additionalProperties=false`) exposes only `projectGitUri`/`projectGitBranch`, not SCM credential, SSH key, token or CA-trust fields; this guide supports unauthenticated delivery only.
 > Authenticated alternatives require out-of-band Controller credential/trust configuration, outside this guide and the supported Helm contract.
 
 Serialize publishers across administration hosts using the Git service owner's authority. Stage and verify a complete repository before first publication; create a missing release ref with an atomic absent-ref precondition. An existing ref is acceptable only if it already equals the full expected commit. Never force-update it, replace a repository being read, or remove refs used by another installation. Service restarts and firewall changes require the Git administrator's normal approval.

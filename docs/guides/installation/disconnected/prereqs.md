@@ -16,9 +16,9 @@
     - [Secret-key acceptance reference](#secret-key-acceptance-reference)
 
 > [!IMPORTANT]
-> This is Doc 2a for OSAC **0.0.62** on OpenShift **4.22**. The normal sequence is the selected-profile [mirroring handoff](README.md), then §2 and the rest of this guide, then [AAP Git source handoff](aap-git-source.md), then [operators and shared infrastructure](operators.md). During Doc 1 only, after full mirroring and before catalog application, its administrator may invoke just the [pre-handoff node transport checkpoint](#pre-handoff-node-transport-checkpoint); this does not start the remaining Doc 2 preparation. [installation.md](installation.md) owns the OSAC Helm release.
+> This is Doc 2a for OSAC **0.4.0** on OpenShift **4.22**. The normal sequence is the selected-profile [mirroring handoff](README.md), then §2 and the rest of this guide, then [AAP Git source handoff](aap-git-source.md), then [operators and shared infrastructure](operators.md). During Doc 1 only, after full mirroring and before catalog application, its administrator may invoke just the [pre-handoff node transport checkpoint](#pre-handoff-node-transport-checkpoint); this does not start the remaining Doc 2 preparation. [installation.md](installation.md) owns the OSAC Helm release.
 
-This guide specifies disconnected inputs and acceptance gates. It does not install operators, shared services, provider operands, or the OSAC release. Use the canonical guides for configuration semantics; use the actual downloaded 0.0.62 chart for schema, defaults, images, and rendered consumers. Do not copy a different release's image inventory or version table.
+This guide specifies disconnected inputs and acceptance gates. It does not install operators, shared services, provider operands, or the OSAC release. Use the canonical guides for configuration semantics; use the actual downloaded 0.4.0 chart for schema, defaults, images, and rendered consumers. Do not copy a different release's image inventory or version table.
 
 | Canonical reference | Responsibility retained there |
 | --- | --- |
@@ -40,17 +40,17 @@ Keep values, endpoint identities, discovery documents, renders, credentials, and
 
 ### Evidence contract
 
-Validation is manual and evidence-based. Record the exact inputs, observed identities, and result of each printed check separately in protected runtime evidence. A result covers only that observation; it does not certify the whole preparation workflow or a consistent snapshot across resources. The actual **0.0.62** chart, its schema, and the commands in this guide are the validation surface; no companion toolkit is used. Missing, stale, ambiguous, or malformed evidence is failure, not a skip. No gate creates an operator, approves an InstallPlan, or repairs Doc 1.
+Validation is manual and evidence-based. Record the exact inputs, observed identities, and result of each printed check separately in protected runtime evidence. A result covers only that observation; it does not certify the whole preparation workflow or a consistent snapshot across resources. The actual **0.4.0** chart, its schema, and the commands in this guide are the validation surface; no companion toolkit is used. Missing, stale, ambiguous, or malformed evidence is failure, not a skip. No gate creates an operator, approves an InstallPlan, or repairs Doc 1.
 
 | Private input | Required value or source |
 | --- | --- |
-| `OSAC_CHART_REF`, `OSAC_CHART_VERSION` | `oci://ghcr.io/osac-project/charts/osac`, `0.0.62` |
+| `OSAC_CHART_REF`, `OSAC_CHART_VERSION` | `oci://ghcr.io/osac-project/charts/osac`, `0.4.0` |
 | `OSAC_NAMESPACE` | `osac`, or the approved consistent release namespace |
 | `DOC1_WORKSPACE` | Original oc-mirror workspace; ISC at its recorded authoritative location |
 | `MIRROR_HOST` | Exact registry authority including port; never substring matching |
 | `MIRROR_CA_FILE`, `MIRROR_AUTH_FILE` | Approved CA path; owner-readable authfile containing only the exact mirror entry and read-only credentials |
 | `CATALOG_SOURCE`, `CATALOG_NAMESPACE` | `redhat-operators`, `openshift-marketplace` |
-| `VALUES_FILE`, `OSAC_CHART_DIR` | Protected `values-osac.yaml` and exact path to the downloaded/extracted `0.0.62` chart |
+| `VALUES_FILE`, `OSAC_CHART_DIR` | Protected `values-osac.yaml` and exact path to the downloaded/extracted `0.4.0` chart |
 | Approved service inputs | Endpoint, namespace, credential/CA references, and owner evidence; no credential bytes in handoffs |
 
 ### Pre-handoff node transport checkpoint
@@ -84,7 +84,7 @@ Keep the observed node identities, registry authority, time and individual resul
 
 ## 2. Consume the mirror handoff
 
-Doc 1 owns one ISC and workspace lineage, registry population, and generated-resource application. Missing inventory, mirror content, mappings, or package visibility returns to Doc 1; do not create replacement resources here.
+Doc 1 owns one ISC and workspace lineage, registry population, and generated-resource application. Missing inventory, mirror content, mappings, or package visibility returns to Doc 1; do not create replacement resources here. Complete the Doc 1 handoff before entering this section. This receiving gate does not apply to the independently callable [pre-handoff node transport checkpoint](#pre-handoff-node-transport-checkpoint); do not run §3 to manufacture an input for that earlier call.
 
 | Handoff item | OSAC-specific requirement |
 | --- | --- |
@@ -322,9 +322,9 @@ Record each applicable canonical identity check separately; a single observation
 
 ### 4.1 Mandatory metering provider checkpoint
 
-Metering is mandatory for OSAC **0.0.62**, for both `core` and `core-vmaas`. `kafka_provider` and `kafka.enabled` select the Fulfillment Kafka path; `external`/`false` does not suppress metering's `KafkaUser`/`KafkaTopic` resources or its required same-cluster Strimzi User Operator and Topic Operator. Use the [canonical metering configuration](../kafka-configuration.md#metering); Fulfillment credentials do not configure metering.
+Metering is mandatory for OSAC **0.4.0**, for both `core` and `core-vmaas`. `kafka_provider` and `kafka.enabled` select the Fulfillment Kafka path; `external`/`false` does not suppress metering's `KafkaUser`/`KafkaTopic` resources or its required same-cluster Strimzi User Operator and Topic Operator. Use the [canonical metering configuration](../kafka-configuration.md#metering); Fulfillment credentials do not configure metering.
 
-> **TBD — Q-0012: production Strimzi/metering provider.** The Kafka/platform owners must approve the actual metering broker/cluster coordinates, same-cluster User/Topic Operator ownership and watch scope, served `kafka.strimzi.io/v1` APIs, credential-access RBAC, CA/authentication and availability/retention/recovery contract. Keep that provider decision open; do not select an interim cluster, namespace or broker. For the reference AMQ Streams installation, retain channel `stable`, Manual approval and the exact resolved-release compatibility review in `operators.md`; a running Pod or floating channel alone is not that decision.
+> **TBD — Q-0012: production Strimzi/metering provider.** The Kafka/platform owners must approve the actual metering broker/cluster coordinates, same-cluster User/Topic Operator ownership and watch scope, served `kafka.strimzi.io/v1` APIs, credential-access RBAC, CA/authentication and availability/retention/recovery contract. Keep that provider decision open; do not select an interim cluster, namespace or broker. For the reference AMQ Streams installation, retain channel `stable`, Manual approval and the exact resolved-release compatibility review in `operators.md` (recorded steps and gates in [amq-streams.md](amq-streams.md)); a running Pod or floating channel alone is not that decision.
 
 **Ordering:** declare this required capability during prerequisite selection, but run the live observations below only **after** the chosen AMQ Streams/Strimzi provider has been installed or owner-approved for adoption through Phase 1 setup, and **before** the OSAC Helm install. The in-cluster Kafka live-gate deferral above includes this mandatory Strimzi capability even when Fulfillment Kafka is external; the external Fulfillment service must still satisfy its own earlier canonical contract. A deferred metering check is required-post-setup, not ready or skipped. Do not require future metering `KafkaUser`/`KafkaTopic` objects, credential-copy outputs or an OSAC workload to perform this checkpoint; those generated objects stay Phase 2-owned. `installation.md` §2 calls this checkpoint after preparation.
 
@@ -345,13 +345,13 @@ Expected local result for each independent read: `true` and exit status zero. Mi
 The chart-delivery path is a controlled connected workstation/bastion with approved tunnel/VPN access to the disconnected API. Pull the published OCI chart there; do not use a repository checkout as the release artifact, push the chart into Quay Mirror, or assume oc-mirror v2 mirrors it. Cluster workloads must not fetch public registries or GitHub. Use a fresh chart staging directory; verify/adopt an existing approved chart instead of overwriting it on retry.
 
 ```bash
-helm pull oci://ghcr.io/osac-project/charts/osac --version 0.0.62 --untar --untardir .
+helm pull oci://ghcr.io/osac-project/charts/osac --version 0.4.0 --untar --untardir .
 ```
 
 Expected: successful pull and extracted `osac/` chart. Registry login is not required for this public chart.
 
 ```bash
-yq -e '.version == "0.0.62"' osac/Chart.yaml
+yq -e '.version == "0.4.0"' osac/Chart.yaml
 ```
 
 Expected local result: `true`. **Chart acceptance:** Before rendering or handoff, require successful signature verification of the pulled chart's exact OCI digest and approved OSAC publisher identity per the [repository chart-signature guidance](https://github.com/osac-project/osac/blob/37a47700819b4a1e4e51057dd503630f05a426e2/README.md). Retain the verified digest/result in existing private integrity state, bound to the complete chart/dependency contents actually used. A version match or local checksum alone is insufficient; failed verification or changed/unbound chart contents block use.
@@ -362,7 +362,7 @@ helm show values ./osac
 
 Expected local result: released defaults. Initialize the protected `VALUES_FILE` only when absent, using a no-clobber workflow; never truncate an existing approved file. Edit values through the canonical contracts; subsequent corrections modify values, not rendered manifests.
 
-| Values delta | OSAC 0.0.62 requirement |
+| Values delta | OSAC 0.4.0 requirement |
 | --- | --- |
 | `cliImage`, `aap.bootstrap.cliImage` | Merge `{cliImage: "<approved-mirror-cli-ref>", aap: {bootstrap: {cliImage: "<approved-mirror-cli-ref>"}}}` into protected `$VALUES_FILE`, preserving other `aap` keys; these independent settings otherwise retain Origin `4.20.0` defaults. Do not rely on a root-only or transient `--set` override. |
 | CLI-specific acceptance before Helm | Review each rendered CLI consumer and its exact mirror lineage/availability; perform a fresh cluster pull and non-mutating required-tool smoke test in an approved existing probe context. Pull success alone does not prove script compatibility. |
@@ -395,7 +395,7 @@ Review the individual check results and outstanding work with the change owner. 
 | Artifact | Consumer and boundary |
 | --- | --- |
 | `prerequisite-selection.env` | Protected, data-only selections; retain explicit fields and consistent approved inputs |
-| `prereqs-completion.txt` | Private `profile`, `enable_vmaas`, `with_lvms`, `with_metallb`, `kafka_provider`, `storage_class`, `chart_version=0.0.62`, original `values_sha256` |
+| `prereqs-completion.txt` | Private `profile`, `enable_vmaas`, `with_lvms`, `with_metallb`, `kafka_provider`, `storage_class`, `chart_version=0.4.0`, original `values_sha256` |
 | `prereqs-artifacts.sha256` and private input state | Retain the original values/render, approved chart identity and protected `OSAC_CHART_DIR` path (consume unchanged in `aap-git-source.md`), plus Doc 1 lineage and owner/resource references for review and resume, not audit export. A checksum comparison observes local bytes against an already approved record; it is not provenance, live-readiness or cross-resource consistency proof. |
 | Fresh prerequisite audit directory | Only schema-versioned allowlisted outcomes, timestamp, release/selections and approved configuration checksums; never endpoints, raw logs, source paths, credential-derived hashes or private input files |
 

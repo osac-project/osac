@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Iterator
 from functools import partial
 from typing import Any
@@ -78,12 +79,23 @@ def _default_network(client: GRPCClient) -> dict[str, str]:
     # The tenant default SecurityGroup has no ingress by default, so the SSH
     # helper Pod cannot reach a VM on the default Subnet. Open it for the test
     # (an update of an existing resource, not a new networking resource).
-    wait_for_grpc_security_group_ready(grpc=client, sg_id=group["id"])
-    client.update_security_group_rules(
-        sg_id=group["id"],
-        ingress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
-        egress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
-    )
+    last: Exception | None = None
+    for _ in range(12):
+        wait_for_grpc_security_group_ready(grpc=client, sg_id=group["id"])
+        try:
+            client.update_security_group_rules(
+                sg_id=group["id"],
+                ingress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
+                egress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
+            )
+            break
+        except Exception as exc:  # the default networking reconciler may be mid-update
+            if "being created or updated" not in str(exc):
+                raise
+            last = exc
+            time.sleep(5)
+    else:
+        raise RuntimeError(f"could not open the default SecurityGroup: {last}")
     wait_for_grpc_security_group_ready(grpc=client, sg_id=group["id"])
     return {
         "label": "default",

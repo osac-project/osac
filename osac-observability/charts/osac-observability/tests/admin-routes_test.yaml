@@ -342,19 +342,22 @@ tests:
               verbs: ["create"]
             - apiGroups: ["user.openshift.io"]
               resources: ["groups"]
+              resourceNames: ["osac-cloud-infrastructure-admins"]
               verbs: ["get"]
 
+  # TokenReview and the OpenShift Group resource are cluster scoped: a
+  # namespaced RoleBinding would grant nothing here and every token would come
+  # back 401 from the gate.
   - it: binds the gate permissions only to the OpenShift admin service account
     template: templates/admin-gate-rbac.yaml
     documentSelector:
       path: kind
-      value: RoleBinding
+      value: ClusterRoleBinding
     asserts:
       - isKind:
-          of: RoleBinding
-      - equal:
+          of: ClusterRoleBinding
+      - notExists:
           path: metadata.namespace
-          value: osac-observability
       - equal:
           path: roleRef.kind
           value: ClusterRole

@@ -84,7 +84,6 @@ message AuditRecord {
 
   // Typed reference to the object affected by the action, when applicable.
   oneof target_object {
-    AddOnOperatorReference add_on_operator = 7;
     BareMetalInstanceLocalReference bare_metal_instance = 8;
     ClusterLocalReference cluster = 10;
     ClusterTemplateReference cluster_template = 11;
@@ -104,6 +103,7 @@ message AuditRecord {
     BareMetalInstanceTemplateReference bare_metal_instance_template = 30;
     BareMetalInstanceCatalogItemReference bare_metal_instance_catalog_item = 31;
     ExternalIPPoolReference external_ip_pool = 35;
+    AddOnOperatorReference add_on_operator = 7;
     StorageTierReference storage_tier = 39;
     ServiceAccountReference service_account = 42;
   }

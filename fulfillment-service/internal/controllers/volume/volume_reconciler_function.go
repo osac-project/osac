@@ -453,6 +453,54 @@ func (t *task) buildSpec() osacv1alpha1.VolumeSpec {
 		SizeGiB:     t.volume.GetSpec().GetSizeGib(),
 		AccessMode:  protoAccessModeToCRD(t.volume.GetSpec().GetAccessMode()),
 		Topology:    topology,
+		Owner:       protoOwnerToCRD(t.volume.GetSpec().GetOwner()),
+		DiskImage:   protoDiskImageToCRD(t.volume.GetSpec().GetDiskImage()),
+		Target:      protoTargetToCRD(t.volume.GetSpec().GetTarget()),
+	}
+}
+
+// protoOwnerToCRD converts the proto VolumeOwner to the CRD VolumeOwner.
+func protoOwnerToCRD(source *privatev1.VolumeOwner) *osacv1alpha1.VolumeOwner {
+	if source == nil {
+		return nil
+	}
+	owner := &osacv1alpha1.VolumeOwner{
+		Reference: source.GetReference(),
+	}
+	switch source.GetType() {
+	case privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE:
+		owner.Type = osacv1alpha1.VolumeOwnerTypeComputeInstance
+	default:
+		owner.Type = ""
+	}
+	return owner
+}
+
+// protoDiskImageToCRD converts the proto DiskImageReference to the CRD
+// DiskImageReference. Only the identifier and the observability fields are
+// carried; the catalog-side shared and tenant selectors are deliberately
+// not projected onto the CRD.
+func protoDiskImageToCRD(source *privatev1.DiskImageReference) *osacv1alpha1.DiskImageReference {
+	if source == nil {
+		return nil
+	}
+	return &osacv1alpha1.DiskImageReference{
+		ID:      source.GetId(),
+		Name:    source.GetName(),
+		Project: source.GetProject(),
+	}
+}
+
+// protoTargetToCRD converts the proto VolumeTarget to the CRD VolumeTarget.
+func protoTargetToCRD(source *privatev1.VolumeTarget) *osacv1alpha1.VolumeTarget {
+	if source == nil {
+		return nil
+	}
+	return &osacv1alpha1.VolumeTarget{
+		DiskKey:        source.GetDiskKey(),
+		Namespace:      source.GetNamespace(),
+		DataVolumeName: source.GetDataVolumeName(),
+		TargetCluster:  source.GetTargetCluster(),
 	}
 }
 

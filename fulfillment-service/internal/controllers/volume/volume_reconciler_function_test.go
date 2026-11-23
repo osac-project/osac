@@ -227,6 +227,101 @@ var _ = Describe("buildSpec", func() {
 		spec := t.buildSpec()
 		Expect(spec.AccessMode).To(Equal(osacv1alpha1.VolumeAccessModeReadWriteOnce))
 	})
+
+	It("maps owner, disk image and target for an owned volume", func() {
+		t := &task{
+			volume: privatev1.Volume_builder{
+				Id: "vol-buildspec-owned",
+				Spec: privatev1.VolumeSpec_builder{
+					StorageTier: "gold",
+					SizeGib:     100,
+					AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+					Owner: privatev1.VolumeOwner_builder{
+						Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+						Reference: "ci-01a1",
+					}.Build(),
+					DiskImage: privatev1.DiskImageReference_builder{
+						Id:      "img-1",
+						Name:    "fedora",
+						Project: "project-1",
+						Shared:  true,
+					}.Build(),
+					Target: privatev1.VolumeTarget_builder{
+						DiskKey:        "boot",
+						Namespace:      "vm-ns",
+						DataVolumeName: "ci-01a1-root-disk",
+						TargetCluster:  "cluster-1",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		spec := t.buildSpec()
+
+		Expect(spec.Owner).To(Equal(&osacv1alpha1.VolumeOwner{
+			Type:      osacv1alpha1.VolumeOwnerTypeComputeInstance,
+			Reference: "ci-01a1",
+		}))
+		Expect(spec.DiskImage).To(Equal(&osacv1alpha1.DiskImageReference{
+			ID:      "img-1",
+			Name:    "fedora",
+			Project: "project-1",
+		}))
+		Expect(spec.Target).To(Equal(&osacv1alpha1.VolumeTarget{
+			DiskKey:        "boot",
+			Namespace:      "vm-ns",
+			DataVolumeName: "ci-01a1-root-disk",
+			TargetCluster:  "cluster-1",
+		}))
+	})
+
+	It("leaves the disk image nil for blank additional disks", func() {
+		t := &task{
+			volume: privatev1.Volume_builder{
+				Id: "vol-buildspec-blank",
+				Spec: privatev1.VolumeSpec_builder{
+					StorageTier: "gold",
+					SizeGib:     100,
+					AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+					Owner: privatev1.VolumeOwner_builder{
+						Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+						Reference: "ci-01a1",
+					}.Build(),
+					Target: privatev1.VolumeTarget_builder{
+						DiskKey:        "disk-1",
+						Namespace:      "vm-ns",
+						DataVolumeName: "ci-01a1-disk-1",
+						TargetCluster:  "cluster-1",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		spec := t.buildSpec()
+
+		Expect(spec.DiskImage).To(BeNil())
+		Expect(spec.Owner).NotTo(BeNil())
+		Expect(spec.Target).NotTo(BeNil())
+	})
+
+	It("leaves owner, disk image and target nil for ownerless volumes", func() {
+		t := &task{
+			volume: privatev1.Volume_builder{
+				Id: "vol-buildspec-ownerless",
+				Spec: privatev1.VolumeSpec_builder{
+					StorageTier: "gold",
+					SizeGib:     100,
+					AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+				}.Build(),
+			}.Build(),
+		}
+
+		spec := t.buildSpec()
+
+		Expect(spec.Owner).To(BeNil())
+		Expect(spec.DiskImage).To(BeNil())
+		Expect(spec.Target).To(BeNil())
+	})
 })
 
 var _ = Describe("setDefaults", func() {

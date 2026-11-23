@@ -88,9 +88,7 @@ message AuditRecord {
   // Typed reference to the object affected by the action, when applicable.
   oneof target_object {
     AddOnOperatorReference add_on_operator = 7;
-
     BareMetalInstanceLocalReference bare_metal_instance = 8;
-
     ClusterLocalReference cluster = 10;
     ClusterTemplateReference cluster_template = 11;
     ClusterVersionReference cluster_version = 12;

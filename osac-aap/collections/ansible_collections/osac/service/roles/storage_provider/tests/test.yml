@@ -81,6 +81,7 @@
               - name: trident-block
                 protocol: block
                 provider: netapp
+                backend_id: test-netapp
             storage_provider_action: ensure_csi_driver
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
@@ -143,6 +144,7 @@
           - name: osac-csi-block
             protocol: block
             provider: osac-csi
+            backend_id: test-osac-csi
         storage_provider_action: ensure_csi_driver
         tenant_name: tenant-acme
         tenant_namespace: osac-tenants

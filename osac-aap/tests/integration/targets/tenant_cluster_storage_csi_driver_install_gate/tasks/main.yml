@@ -820,9 +820,11 @@
           - name: local
             protocol: block
             provider: lvms
+            backend_id: be-lvms
           - name: osac-csi-block
             protocol: block
             provider: osac-csi
+            backend_id: be-osac-csi
         _native_csi_test_target_kubeconfig: >-
           {{ lookup('env', 'KUBECONFIG') | default(lookup('env', 'HOME') + '/.kube/config', true) }}
         storage_provider_netapp_trident_install_override:
@@ -1063,6 +1065,7 @@
           - name: unsupported
             protocol: block
             provider: pure
+            backend_id: be-pure
 
     - name: Assert provider without a native CSI handler was skipped
       ansible.builtin.assert:
@@ -1080,6 +1083,7 @@
               - name: nfs
                 protocol: nfs
                 provider: netapp
+                backend_id: be-netapp
 
         - name: Fail if NetApp NFS was accepted
           ansible.builtin.fail:
@@ -1314,6 +1318,7 @@
               - name: trident-block
                 protocol: block
                 provider: netapp
+                backend_id: be-netapp
               - name: shared-files
                 protocol: nfs
                 provider: vast
@@ -1489,6 +1494,7 @@
               - name: trident-block
                 protocol: block
                 provider: netapp
+                backend_id: be-netapp
               - name: shared-files
                 protocol: nfs
                 provider: vast

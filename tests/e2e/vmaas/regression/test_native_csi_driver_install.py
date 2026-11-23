@@ -97,9 +97,24 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
                 "spec": {},
             },
             "storage_tier_definitions": [
-                {"name": f"netapp-block-{test_run_id}", "provider": "netapp", "protocol": "block"},
-                {"name": f"vast-nfs-{test_run_id}", "provider": "vast", "protocol": "nfs"},
-                {"name": f"vast-block-{test_run_id}", "provider": "vast", "protocol": "block"},
+                {
+                    "name": f"netapp-block-{test_run_id}",
+                    "provider": "netapp",
+                    "protocol": "block",
+                    "backend_id": f"{tenant_name}-netapp",
+                },
+                {
+                    "name": f"vast-nfs-{test_run_id}",
+                    "provider": "vast",
+                    "protocol": "nfs",
+                    "backend_id": f"{tenant_name}-vast",
+                },
+                {
+                    "name": f"vast-block-{test_run_id}",
+                    "provider": "vast",
+                    "protocol": "block",
+                    "backend_id": f"{tenant_name}-vast",
+                },
             ],
         }
     }

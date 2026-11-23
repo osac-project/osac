@@ -61,7 +61,7 @@ const renderDetails = (
 
 describe('VmDetails', () => {
   it.each(['tenant-admin', 'tenant-user'] as const)(
-    'shows one page-top deletion warning and preserves action guards for %s',
+    'shows one deletion warning below the page header and preserves action guards for %s',
     (role) => {
       const view = renderWithProviders(<VmDetails vm={deletingVm} />, {
         apiFixtures: { instanceTypes: [instanceType] },
@@ -77,7 +77,7 @@ describe('VmDetails', () => {
         within(warning).getByText('Information on this page may be outdated.'),
       ).toBeInTheDocument();
       expect(
-        warning.compareDocumentPosition(screen.getByRole('heading', { name: 'web-01' })) &
+        screen.getByRole('heading', { name: 'web-01' }).compareDocumentPosition(warning) &
           Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
       expect(screen.getByText('VM detail sections')).toBeInTheDocument();

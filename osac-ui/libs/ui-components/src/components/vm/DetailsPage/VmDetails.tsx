@@ -45,15 +45,6 @@ const VmDetails = ({ vm }: Props) => {
     <>
       <PageSection hasBodyWrapper={false}>
         <Stack hasGutter>
-          <StackItem>
-            <AlertGroup isLiveRegion>
-              {vm.status?.state === ComputeInstanceState.DELETING && (
-                <Alert variant="warning" title={t('Virtual machine deletion in progress')} isInline>
-                  {t('Information on this page may be outdated.')}
-                </Alert>
-              )}
-            </AlertGroup>
-          </StackItem>
           {instanceTypeError ? (
             <StackItem>
               <Alert variant="danger" title={t('Could not load instance types')} isInline>
@@ -94,6 +85,15 @@ const VmDetails = ({ vm }: Props) => {
                 <VmDetailsActionButtons vm={vm} onOpenConsole={openConsole} />
               </FlexItem>
             </Flex>
+          </StackItem>
+          <StackItem>
+            <AlertGroup isLiveRegion>
+              {vm.status?.state === ComputeInstanceState.DELETING && (
+                <Alert variant="warning" title={t('Virtual machine deletion in progress')} isInline>
+                  {t('Information on this page may be outdated.')}
+                </Alert>
+              )}
+            </AlertGroup>
           </StackItem>
           <StackItem>
             <Divider />

@@ -160,7 +160,7 @@ func (s *retryingTokenSource) Token(ctx context.Context) (result *auth.Token, er
 		s.logger.WarnContext(ctx, "Transient failure obtaining token, will retry",
 			slog.Int("attempt", attempt),
 			slog.Duration("delay", delay),
-			slog.String("error", err.Error()),
+			slog.String("error_class", classifyTokenError(err)),
 		)
 		if sleepErr := sleepWithContext(ctx, delay); sleepErr != nil {
 			return nil, err
@@ -214,6 +214,43 @@ func isTransientTokenError(err error) bool {
 		}
 	}
 	return false
+}
+
+// classifyTokenError returns a short, non-sensitive description of a token error for logging. The raw error is
+// deliberately not logged: it embeds the issuer and token endpoint URLs, which the log scanner treats as
+// sensitive data.
+func classifyTokenError(err error) string {
+	switch {
+	case err == nil:
+		return "none"
+	case errors.Is(err, io.EOF):
+		return "eof"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "timeout"
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "connection reset"):
+		return "connection_reset"
+	case strings.Contains(message, "connection refused"):
+		return "connection_refused"
+	case strings.Contains(message, "broken pipe"):
+		return "broken_pipe"
+	case strings.Contains(message, "upstream overflow"):
+		return "upstream_overflow"
+	case strings.Contains(message, "unexpected response code 502"):
+		return "http_502"
+	case strings.Contains(message, "unexpected response code 503"):
+		return "http_503"
+	case strings.Contains(message, "unexpected response code 504"):
+		return "http_504"
+	default:
+		return "other"
+	}
 }
 
 // sleepWithContext waits for the given duration or until the context is done, whichever happens first.

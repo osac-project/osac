@@ -14,7 +14,3 @@ create table audit_records (
   tenant text not null,
   data jsonb not null
 );
-
-create trigger enqueue_change
-  after insert or update or delete on audit_records
-  for each row execute function enqueue_change();

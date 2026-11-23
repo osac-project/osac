@@ -61,7 +61,7 @@ const renderDetails = (
 
 describe('VmDetails', () => {
   it.each(['tenant-admin', 'tenant-user'] as const)(
-    'shows one page-top deletion warning and preserves action guards for %s',
+    'shows one deletion warning below the header divider and preserves action guards for %s',
     (role) => {
       const view = renderWithProviders(<VmDetails vm={deletingVm} />, {
         apiFixtures: { instanceTypes: [instanceType] },
@@ -77,7 +77,7 @@ describe('VmDetails', () => {
         within(warning).getByText('Information on this page may be outdated.'),
       ).toBeInTheDocument();
       expect(
-        warning.compareDocumentPosition(screen.getByRole('heading', { name: 'web-01' })) &
+        screen.getByRole('separator').compareDocumentPosition(warning) &
           Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
       expect(screen.getByText('VM detail sections')).toBeInTheDocument();
@@ -106,28 +106,24 @@ describe('VmDetails', () => {
       status: state === undefined ? undefined : { ...vm.status, state },
     } as ComputeInstance);
 
-    const liveRegion = within(view.container).getByRole('list');
-    expect(liveRegion).toHaveAttribute('aria-live', 'polite');
-    expect(liveRegion).toBeEmptyDOMElement();
+    expect(within(view.container).queryByRole('list')).not.toBeInTheDocument();
     expect(screen.getByText('VM detail sections')).toBeInTheDocument();
   });
 
-  it('preserves the live region as the deletion warning appears and disappears', () => {
+  it('only renders the deletion alert stack item while deleting', () => {
     const view = renderDetails();
-    const liveRegion = within(view.container).getByRole('list');
-    expect(liveRegion).toHaveAttribute('aria-live', 'polite');
-    expect(liveRegion).toBeEmptyDOMElement();
+    expect(within(view.container).queryByRole('list')).not.toBeInTheDocument();
 
     view.rerender(<VmDetails vm={deletingVm} />);
-    expect(within(view.container).getByRole('list')).toBe(liveRegion);
+    const liveRegion = within(view.container).getByRole('list');
+    expect(liveRegion).toHaveAttribute('aria-live', 'polite');
     expect(within(liveRegion).getAllByRole('listitem')).toHaveLength(1);
     expect(
       within(liveRegion).getByText('Virtual machine deletion in progress'),
     ).toBeInTheDocument();
 
     view.rerender(<VmDetails vm={vm} />);
-    expect(within(view.container).getByRole('list')).toBe(liveRegion);
-    expect(liveRegion).toBeEmptyDOMElement();
+    expect(within(view.container).queryByRole('list')).not.toBeInTheDocument();
   });
 
   it('renders the continuous VM details page without a tab strip', () => {

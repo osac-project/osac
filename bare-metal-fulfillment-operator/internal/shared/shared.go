@@ -21,6 +21,9 @@ const (
 	// OsacPrefix is the prefix used to identify osac resources
 	OsacPrefix string = "osac.openshift.io"
 
+	// OsacManagedByLabel marks resources created and owned by the operator.
+	OsacManagedByLabel = OsacPrefix + "/managed-by"
+
 	OsacNoopTemplate = "noop"
 
 	OsacBareMetalPoolIDLabel = "bareMetalPoolId"

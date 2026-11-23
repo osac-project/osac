@@ -2,6 +2,9 @@
 {{- if not .Values.bcm.url }}
 {{- fail "bcm.enabled is true but bcm.url is not set" }}
 {{- end }}
+{{- if regexMatch "^([A-Za-z][A-Za-z0-9+.-]*:)?//[^/?#]*@|^[^/?#]*@" .Values.bcm.url }}
+{{- fail "bcm.url must not include credentials" }}
+{{- end }}
 {{- if not .Values.bcm.bmhNamespace }}
 {{- fail "bcm.enabled is true but bcm.bmhNamespace is not set" }}
 {{- end }}

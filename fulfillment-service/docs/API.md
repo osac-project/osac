@@ -110,6 +110,33 @@ Private fields can have comments that describe internal details (they won't appe
 
 For detailed workflows, annotation reference, and troubleshooting, see [CLEANAPI.md](CLEANAPI.md).
 
+### ComputeInstance provisioning failure status
+
+`ComputeInstance.status.last_provisioning_failure` is an optional, system-owned
+object returned to callers who can read the instance through Get or List.
+It contains the latest failure's `reason`, fixed public `message`, `attempt`,
+and `observed_at` timestamp. The `attempt` field is the number of the provisioning
+attempt that failed. The first attempt is numbered 1. This can differ from the
+attempt currently running as a retry. The observation time does not advance when
+the same failure is read again. No failure history or provider log text is exposed.
+
+The field is absent when no failure is retained. Clearing removes the object
+rather than replacing it with empty values. Provisioning success clears the
+failure independently of infrastructure readiness; it does not by itself set
+`Provisioned=True` or change the metered VM power state. The reason identifies
+the observed source, not a new retry policy. Provider-reported failures use
+`Provisioning failed.`, timeouts use `The provisioning attempt timed out.`, and
+other sources use `Internal error`.
+
+Public Update rejects explicit `status` masks and all descendants, including
+`status.last_provisioning_failure` and its fields, with `InvalidArgument`.
+The stored failure is unchanged by attempts to set, replace, or clear it.
+Public Create ignores supplied status. A maskless public update infers only
+writable fields, so an echoed or modified failure object is ignored; updates
+masked to writable spec or metadata fields also preserve observed status.
+Trusted private updates can replace the failure or clear it with an explicit
+`status.last_provisioning_failure` mask and an absent field.
+
 ## File organization
 
 Each object type is defined across two files:

@@ -63,8 +63,12 @@ var _ = Describe("Tenant onboarding status", func() {
 		Expect(err).ToNot(HaveOccurred())
 		id := privateCreate.GetObject().GetId()
 
-		DeferCleanup(func() {
-			_, _ = privateClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
+		DeferCleanup(func(cleanupCtx context.Context) {
+			_, err := privateClient.Delete(cleanupCtx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
+			if grpcstatus.Code(err) == grpccodes.NotFound {
+				return
+			}
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		publicGet, err := publicClient.Get(ctx, publicv1.TenantsGetRequest_builder{Id: id}.Build())
@@ -75,7 +79,12 @@ var _ = Describe("Tenant onboarding status", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(privateGet.GetObject().GetStatus().GetOnboarded()).To(BeTrue())
 		Expect(privateGet.GetObject().GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
-		Expect(privateGet.GetObject().GetStatus().GetConditions()).To(HaveLen(1))
+		defaultNetworking := findTenantCondition(
+			privateGet.GetObject().GetStatus().GetConditions(),
+			privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY,
+		)
+		Expect(defaultNetworking).NotTo(BeNil())
+		Expect(defaultNetworking.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 	})
 
 	It("Rejects public status writes", func() {
@@ -99,8 +108,12 @@ var _ = Describe("Tenant onboarding status", func() {
 		Expect(err).ToNot(HaveOccurred())
 		id := privateCreate.GetObject().GetId()
 
-		DeferCleanup(func() {
-			_, _ = privateClient.Delete(ctx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
+		DeferCleanup(func(cleanupCtx context.Context) {
+			_, err := privateClient.Delete(cleanupCtx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
+			if grpcstatus.Code(err) == grpccodes.NotFound {
+				return
+			}
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		_, err = publicClient.Update(ctx, publicv1.TenantsUpdateRequest_builder{

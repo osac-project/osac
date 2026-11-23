@@ -291,7 +291,7 @@ var _ = Describe("BareMetalInstance lifecycle", func() {
 				}.Build(),
 				Spec: publicv1.BareMetalInstanceSpec_builder{
 					CatalogItem:    publicv1.BareMetalInstanceCatalogItemReference_builder{Id: catalogItemId}.Build(),
-					InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Shared: true}.Build(),
+					InstanceType:   publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeId, Tenant: "shared"}.Build(),
 					UserDataSource: publicv1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 					DiskImage:      publicv1.DiskImageReference_builder{Id: defaultDiskImageId}.Build(),
 				}.Build(),

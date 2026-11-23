@@ -152,7 +152,6 @@ var _ = Describe("Private role bindings server", func() {
 			Expect(ref.GetId()).To(Equal(id))
 			Expect(ref.GetName()).To(Equal(id))
 			Expect(ref.GetTenant()).To(Equal(testTenant))
-			Expect(ref.GetShared()).To(BeFalse())
 		}, Entry("Create", false), Entry("Update", true))
 
 		DescribeTable("rejects invalid subjects on Create and Update", func(ref *privatev1.UserReference) {
@@ -188,7 +187,7 @@ var _ = Describe("Private role bindings server", func() {
 			Entry("deleted User", privatev1.UserReference_builder{Id: "deleted-user"}.Build()),
 			Entry("ID/name mismatch", privatev1.UserReference_builder{Id: "user-a", Name: "user-b"}.Build()),
 			Entry("wrong explicit tenant", privatev1.UserReference_builder{Id: "user-a", Tenant: auth.SharedTenant}.Build()),
-			Entry("wrong shared selector", privatev1.UserReference_builder{Id: "user-a", Shared: true}.Build()),
+			Entry("wrong system tenant", privatev1.UserReference_builder{Id: "user-a", Tenant: auth.SystemTenant}.Build()),
 			Entry("foreign ID without selectors", privatev1.UserReference_builder{Id: "foreign-user"}.Build()),
 			Entry("foreign ID with explicit tenant", privatev1.UserReference_builder{Id: "foreign-user", Tenant: auth.SharedTenant}.Build()),
 		)
@@ -198,8 +197,8 @@ var _ = Describe("Private role bindings server", func() {
 				Object: privatev1.RoleBinding_builder{
 					Metadata: privatev1.Metadata_builder{Name: "shared-user-binding", Tenant: auth.SharedTenant}.Build(),
 					Spec: privatev1.RoleBindingSpec_builder{
-						Role:  privatev1.RoleReference_builder{Name: "tenant-reader", Shared: true}.Build(),
-						Users: []*privatev1.UserReference{privatev1.UserReference_builder{Name: "foreign-user", Shared: true}.Build()},
+						Role:  privatev1.RoleReference_builder{Name: "tenant-reader", Tenant: auth.SharedTenant}.Build(),
+						Users: []*privatev1.UserReference{privatev1.UserReference_builder{Name: "foreign-user", Tenant: auth.SharedTenant}.Build()},
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -207,7 +206,6 @@ var _ = Describe("Private role bindings server", func() {
 			ref := response.GetObject().GetSpec().GetUsers()[0]
 			Expect(ref.GetId()).To(Equal("foreign-user"))
 			Expect(ref.GetTenant()).To(Equal(auth.SharedTenant))
-			Expect(ref.GetShared()).To(BeTrue())
 		})
 
 		It("preserves an unchanged subject after the User is deleted", func() {
@@ -404,7 +402,7 @@ var _ = Describe("Private role bindings server", func() {
 				Object: privatev1.RoleBinding_builder{
 					Metadata: privatev1.Metadata_builder{Name: "inactive-account-binding"}.Build(),
 					Spec: privatev1.RoleBindingSpec_builder{
-						Role: privatev1.RoleReference_builder{Id: sharedRole.GetItems()[0].GetId()}.Build(),
+						Role: privatev1.RoleReference_builder{Id: sharedRole.GetItems()[0].GetId(), Tenant: auth.SharedTenant}.Build(),
 						ServiceAccounts: []*privatev1.ServiceAccountReference{
 							privatev1.ServiceAccountReference_builder{
 								Id: "00000000-0000-4000-8000-000000000001",
@@ -414,7 +412,7 @@ var _ = Describe("Private role bindings server", func() {
 				}.Build(),
 			}.Build())
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
-			Expect(err.Error()).To(ContainSubstring("service account must be active and provisioned"))
+			Expect(err.Error()).To(ContainSubstring("service account must be active and provisioned in the RoleBinding tenant"))
 		})
 
 		It("Lists role bindings", func() {

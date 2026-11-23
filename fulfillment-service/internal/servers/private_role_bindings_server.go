@@ -212,7 +212,7 @@ func (s *PrivateRoleBindingsServer) validateRoleBinding(ctx context.Context, cur
 func (s *PrivateRoleBindingsServer) validateUserSubjects(ctx context.Context, candidate *privatev1.RoleBinding) error {
 	tenant := candidate.GetMetadata().GetTenant()
 	for _, ref := range candidate.GetSpec().GetUsers() {
-		if (ref.GetTenant() != "" && ref.GetTenant() != tenant) || (ref.GetShared() && tenant != auth.SharedTenant) {
+		if ref.GetTenant() != "" && ref.GetTenant() != tenant {
 			return status.Error(codes.InvalidArgument, "user reference must belong to the RoleBinding tenant")
 		}
 		user, err := resolveAndCanonicalizeReference(ctx, s.users, candidate.GetMetadata(), ref,
@@ -263,7 +263,7 @@ func validateServiceAccountSubjects(ctx context.Context, refs []*privatev1.Servi
 func (s *PrivateRoleBindingsServer) resolveRoleReference(ctx context.Context,
 	candidate *privatev1.RoleBinding) (*privatev1.Role, error) {
 	ref := candidate.GetSpec().GetRole()
-	if ref.GetId() == "" && ref.GetName() != "" && ref.GetTenant() == "" && !ref.GetShared() && ref.GetProject() == "" {
+	if ref.GetId() == "" && ref.GetName() != "" && ref.GetTenant() == "" && ref.GetProject() == "" {
 		// Role names are unique globally across all tenants, so a given name
 		// identifies at most one Role. Search the binding tenant first so local Roles need no
 		// qualification, then the shared catalog; resolveAndCanonicalizeReference rejects a name whose

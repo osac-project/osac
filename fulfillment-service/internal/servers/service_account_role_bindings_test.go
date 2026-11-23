@@ -58,7 +58,7 @@ var _ = Describe("Role binding role scopes", func() {
 		response, err := public.Create(ctx, publicv1.RoleBindingsCreateRequest_builder{Object: publicv1.RoleBinding_builder{
 			Metadata: publicv1.Metadata_builder{Name: "automation-user"}.Build(),
 			Spec: publicv1.RoleBindingSpec_builder{
-				Role:  publicv1.RoleReference_builder{Id: roleID("tenant-automation")}.Build(),
+				Role:  publicv1.RoleReference_builder{Id: roleID("tenant-automation"), Tenant: auth.SharedTenant}.Build(),
 				Users: []*publicv1.UserReference{publicv1.UserReference_builder{Id: "human-user"}.Build()},
 			}.Build(),
 		}.Build()}.Build())

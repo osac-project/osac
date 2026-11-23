@@ -350,7 +350,6 @@ var _ = Describe("RoleBinding grant resolution with PostgreSQL", func() {
 			Expect(binding.GetObject().GetSpec().GetRole().GetId()).To(Equal(role.GetId()))
 			Expect(binding.GetObject().GetSpec().GetRole().GetName()).To(Equal("stable-reader"))
 			Expect(binding.GetObject().GetSpec().GetRole().GetTenant()).To(Equal(testTenant))
-			Expect(binding.GetObject().GetSpec().GetRole().GetShared()).To(BeFalse())
 
 			stored, err := bindingsDAO.Get().SetId(binding.GetObject().GetId()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -452,7 +451,7 @@ var _ = Describe("RoleBinding grant resolution with PostgreSQL", func() {
 				{privatev1.UserReference_builder{Name: "alice-row"}.Build()},
 				{privatev1.UserReference_builder{Id: alice.GetId(), Name: "wrong"}.Build()},
 				{privatev1.UserReference_builder{Id: alice.GetId(), Tenant: auth.SharedTenant}.Build()},
-				{privatev1.UserReference_builder{Id: alice.GetId(), Shared: true}.Build()},
+				{privatev1.UserReference_builder{Id: alice.GetId(), Tenant: auth.SystemTenant}.Build()},
 				// Qualifiers are write-time inputs; a stored matching ID is authoritative.
 				{privatev1.UserReference_builder{Id: alice.GetId(), Name: "wrong"}.Build(),
 					privatev1.UserReference_builder{Id: bob.GetId(), Name: "bob-row", Tenant: testTenant}.Build()},
@@ -520,7 +519,7 @@ var _ = Describe("RoleBinding grant resolution with PostgreSQL", func() {
 				Metadata: privatev1.Metadata_builder{Name: "shared-user-binding", Tenant: auth.SharedTenant}.Build(),
 				Spec: privatev1.RoleBindingSpec_builder{
 					Role:  privatev1.RoleReference_builder{Id: sharedRole.GetId()}.Build(),
-					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: sharedUser.GetId(), Shared: true, Tenant: auth.SharedTenant}.Build()},
+					Users: []*privatev1.UserReference{privatev1.UserReference_builder{Id: sharedUser.GetId(), Tenant: auth.SharedTenant}.Build()},
 				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -705,7 +704,6 @@ var _ = Describe("RoleBinding grant resolution with PostgreSQL", func() {
 				Expect(resolved.GetId()).To(Equal(shared.GetId()))
 				Expect(resolved.GetName()).To(Equal("explicit-shared-reader"))
 				Expect(resolved.GetTenant()).To(Equal(auth.SharedTenant))
-				Expect(resolved.GetShared()).To(BeTrue())
 			},
 			Entry("an unqualified name", func() *privatev1.RoleReference {
 				return privatev1.RoleReference_builder{Name: "explicit-shared-reader"}.Build()
@@ -713,11 +711,8 @@ var _ = Describe("RoleBinding grant resolution with PostgreSQL", func() {
 			Entry("an explicit shared tenant", func() *privatev1.RoleReference {
 				return privatev1.RoleReference_builder{Name: "explicit-shared-reader", Tenant: auth.SharedTenant}.Build()
 			}),
-			Entry("a shared selector", func() *privatev1.RoleReference {
-				return privatev1.RoleReference_builder{Name: "explicit-shared-reader", Shared: true}.Build()
-			}),
 			Entry("the role ID", func() *privatev1.RoleReference {
-				return privatev1.RoleReference_builder{Id: shared.GetId()}.Build()
+				return privatev1.RoleReference_builder{Id: shared.GetId(), Tenant: auth.SharedTenant}.Build()
 			}),
 		)
 
@@ -726,8 +721,8 @@ var _ = Describe("RoleBinding grant resolution with PostgreSQL", func() {
 				_, err := bindReference(refFor())
 				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 			},
-			Entry("conflicting tenant and shared selectors", func() *privatev1.RoleReference {
-				return privatev1.RoleReference_builder{Name: "explicit-shared-reader", Tenant: testTenant, Shared: true}.Build()
+			Entry("a system tenant that does not own the role", func() *privatev1.RoleReference {
+				return privatev1.RoleReference_builder{Name: "explicit-shared-reader", Tenant: auth.SystemTenant}.Build()
 			}),
 			Entry("a tenant that does not own the role", func() *privatev1.RoleReference {
 				return privatev1.RoleReference_builder{Id: shared.GetId(), Tenant: testTenant}.Build()

@@ -29,13 +29,11 @@ var _ = Describe("Cluster request capacity", func() {
 			Expect(spec.GetTemplate().GetId()).To(Equal(clusterTemplateID))
 			Expect(spec.GetVersion().GetName()).To(Equal("caas-it-4-17-1"))
 			Expect(spec.GetVersion().GetTenant()).To(Equal("shared"))
-			Expect(spec.GetVersion().GetShared()).To(BeFalse())
 			Expect(spec.GetNodeSets()).To(HaveLen(1))
 			compute := spec.GetNodeSets()["compute"]
 			Expect(compute.GetSize()).To(Equal(workers))
 			Expect(compute.GetBaremetalInstanceType().GetName()).To(Equal(group.InstanceTypeName))
 			Expect(compute.GetBaremetalInstanceType().GetTenant()).To(Equal("shared"))
-			Expect(compute.GetBaremetalInstanceType().GetShared()).To(BeFalse())
 			Expect(group.Inventory.Hosts).To(HaveLen(capacity))
 		},
 		Entry("one worker from a larger pool", 2, int32(1), false),

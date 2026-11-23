@@ -65,7 +65,8 @@ jobs:
         if: inputs.kind == 'e2e-workflow-policy'
         with:
           repository: osac-project/osac-test-infra
-          ref: main
+          # Keep this immutable so flake repetitions use the same runner policy.
+          ref: 622921ac820ff992a88327b925933595c8d552bd
           path: osac-test-infra
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -82,7 +83,7 @@ jobs:
         env:
           OSAC_TEST_INFRA_DIR: ${{ github.workspace }}/osac-test-infra
           PYTHONPATH: ${{ github.workspace }}/osac-ci/src
-        run: uv run --project osac-test-infra --with pydantic pytest -o addopts= -n 0 tests/unit/test_caas_full_variant.py tests/unit/test_caas_ci_suite_policy.py
+        run: uv run --project osac-test-infra --with pydantic pytest -o addopts= -n 0 tests/workflow_policy/test_caas_full_variant.py tests/workflow_policy/test_caas_ci_suite_policy.py
 
       # --- unit tests of a Go module (fulfillment-service, osac-metering/...)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

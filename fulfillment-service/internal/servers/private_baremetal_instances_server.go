@@ -533,6 +533,8 @@ func (s *PrivateBareMetalInstancesServer) Delete(ctx context.Context,
 	if err = s.rejectDeleteIfFabricDomainReferencesHost(ctx, instance); err != nil {
 		return
 	}
+	// Reject before generic.Delete so a referenced host does not enter DELETING
+	// while the tenant removes the FabricDomain and retries.
 	err = s.generic.Delete(ctx, request, &response)
 	return
 }

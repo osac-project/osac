@@ -210,6 +210,12 @@ var _ = Describe("Private fabric domains server", func() {
 			}.Build())
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
 			Expect(err).To(MatchError(ContainSubstring(created.GetObject().GetId())))
+			bmi, err := fixtureDAO[*privatev1.BareMetalInstance]().Get().SetId("fabric-domain-server-a").Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(bmi.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+			Expect(bmi.GetObject().GetStatus().GetState()).NotTo(
+				Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING),
+			)
 		})
 
 		It("accepts deletion with an unsynchronized host for live controller validation", func() {

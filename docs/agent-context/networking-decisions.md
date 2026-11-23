@@ -92,6 +92,10 @@ superseded or extended design explicitly.
     while any same-tenant FabricDomain record lists that host, including a
     FabricDomain already being deleted. The dependency ends when the
     FabricDomain record is removed, so tenants delete the FabricDomain first.
+    For a projected host, the API rejects BMI deletion before accepting it. If
+    the host is not yet projected, the delete reconciler checks the live BMI
+    before setting its state to DELETING; a discovered reference leaves the
+    lifecycle state unchanged until the tenant removes the FabricDomain.
     Fulfillment locks the BMI row during both FabricDomain create and BMI
     delete so the two operations cannot both succeed. A private synchronization
     marker keeps legacy BMI records from creating FabricDomains until Fulfillment
@@ -106,10 +110,6 @@ superseded or extended design explicitly.
     successful. On absence, Fulfillment checks the saved host against current
     FabricDomain references; a checkpoint with no saved host is accepted as
     unassigned.
-    Unexplained absence stays blocked. This guard replaces the retired
-    inventory repair-mark path; do not add its backend
-    marks or support procedure. See the [merged BMaaS networking design update,
-    PR #471](https://github.com/osac-project/enhancement-proposals/pull/471).
 
 ## EVPN handoff implementation status
 

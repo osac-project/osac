@@ -1510,6 +1510,9 @@ var _ = Describe("delete", func() {
 		Expect(t.delete(ctx)).To(MatchError(ContainSubstring("domain-a")))
 		Expect(cleanup.calls).To(Equal(1))
 		Expect(hasFinalizer(t.bareMetalInstance)).To(BeTrue())
+		Expect(t.bareMetalInstance.GetStatus().GetState()).NotTo(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING),
+		)
 	})
 
 	It("should finish networking cleanup before a resource-version-fenced delete fails", func() {
@@ -1637,6 +1640,12 @@ var _ = Describe("delete", func() {
 		Expect(filter).To(Equal(`this.metadata.tenant == "tenant-a" && "host-a" in this.spec.servers`))
 		Expect(requestedLimit).To(Equal(int32(1)))
 		Expect(t.r.networkingCleanup.(*fakeWorkloadNetworkingCleanup).calls).To(Equal(0))
+		Expect(t.bareMetalInstance.GetStatus().GetState()).NotTo(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING),
+		)
+		current := &bmfov1alpha1.BareMetalInstance{}
+		Expect(fakeClient.Get(ctx, clnt.ObjectKeyFromObject(cr), current)).To(Succeed())
+		Expect(current.DeletionTimestamp).To(BeNil())
 	})
 
 	It("should not call hubClient.Delete when K8s object has DeletionTimestamp", func() {
@@ -1711,7 +1720,7 @@ var _ = Describe("delete", func() {
 		Expect(hasFinalizer(t.bareMetalInstance)).To(BeFalse())
 	})
 
-	DescribeTable("should finish after the validated operator delete", func(liveHost string) {
+	DescribeTable("should finish after validating assigned or unassigned host state", func(liveHost string) {
 		scheme := newFakeScheme()
 		cr := newBareMetalInstanceCR(bmiID, hubNamespace, crName, nil)
 		cr.Spec.ExternalHostName = liveHost
@@ -1737,7 +1746,7 @@ var _ = Describe("delete", func() {
 		err := t.delete(ctx)
 		Expect(err).To(MatchError(ContainSubstring("persisting validated operator host state")))
 		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
-			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING))
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_RUNNING))
 		ready := findProtoCondition(t.bareMetalInstance,
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY)
 		Expect(ready).ToNot(BeNil())
@@ -1749,6 +1758,8 @@ var _ = Describe("delete", func() {
 
 		err = t.delete(ctx)
 		Expect(err).To(MatchError("kubernetes bare metal instance deletion is still in progress"))
+		Expect(t.bareMetalInstance.GetStatus().GetState()).To(
+			Equal(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING))
 		ready = findProtoCondition(t.bareMetalInstance,
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY)
 		Expect(ready.GetReason()).To(Equal(operatorDeleteValidatedReason))

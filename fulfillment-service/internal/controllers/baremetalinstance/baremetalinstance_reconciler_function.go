@@ -387,7 +387,6 @@ func (t *task) delete(ctx context.Context) (err error) {
 		return nil
 	}
 
-	t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING, nil)
 	if !t.deleteHostStateWasValidated() {
 		t.updateCondition(
 			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
@@ -399,6 +398,7 @@ func (t *task) delete(ctx context.Context) (err error) {
 			if err = t.validateMissingOperatorObjectForDelete(ctx); err != nil {
 				return controllers.RequeueAtInterval(err, time.Second)
 			}
+			t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING, nil)
 			if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.bareMetalInstance.GetId()); err != nil {
 				return err
 			}
@@ -416,6 +416,7 @@ func (t *task) delete(ctx context.Context) (err error) {
 		if err = t.validateMissingOperatorObjectForDelete(ctx); err != nil {
 			return controllers.RequeueAtInterval(err, time.Second)
 		}
+		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING, nil)
 		t.r.logger.DebugContext(
 			ctx,
 			"Bare metal instance doesn't exist",
@@ -435,9 +436,11 @@ func (t *task) delete(ctx context.Context) (err error) {
 		t.recordOperatorHostValidation(object)
 		return controllers.RequeueAtInterval(errors.New("persisting validated operator host state before deletion"), time.Second)
 	}
-	// Keep the BMI CR live while Fulfillment removes automatic networking. BMF
-	// starts host teardown as soon as it sees deletionTimestamp, so mark the CR
-	// for deletion only after both networking resource types are fully removed.
+	// Keep the BMI CR live until Fulfillment removes its automatic
+	// ExternalIPAttachment and ExternalIP. Setting deletionTimestamp starts BMF
+	// offboarding, which powers off the host and removes its NetworkAttachment;
+	// starting that teardown while automatic access remains would leave those
+	// dependent resources active against a workload already being torn down.
 	if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.bareMetalInstance.GetId()); err != nil {
 		return err
 	}
@@ -465,6 +468,11 @@ func (t *task) delete(ctx context.Context) (err error) {
 		return controllers.RequeueAtInterval(errors.New("persisting validated operator host state before deletion"), time.Second)
 	}
 
+	// The API rejects known references before accepting Delete. Keep status out
+	// of DELETING until both live-host checks pass and automatic networking is
+	// removed, so a reference discovered during revalidation does not leave the
+	// BMI reported as DELETING while tenant action is still required.
+	t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING, nil)
 	if object.GetDeletionTimestamp() == nil {
 		resourceVersion := object.GetResourceVersion()
 		err = t.hubClient.Delete(ctx, object, clnt.Preconditions{
@@ -498,29 +506,23 @@ func (t *task) delete(ctx context.Context) (err error) {
 	return controllers.RequeueAfterKubernetesDeletion("bare metal instance")
 }
 
-// rejectDeleteIfFabricDomainReferencesHost rechecks the live operator object
-// before deleting it. The resourceVersion precondition on Delete then fences
-// host assignments that race with this check: either deletion wins and the
-// operator stops reconciling, or an operator update wins and this reconciliation
-// retries against the new host name.
+// rejectDeleteIfFabricDomainReferencesHost checks the live host before deleting
+// it. BMF assigns ExternalHostName once and does not select a replacement host
+// after provisioning failure. The resourceVersion precondition on Delete fences
+// the initial empty-to-assigned host update if it races with this check.
 func (t *task) rejectDeleteIfFabricDomainReferencesHost(
 	ctx context.Context, object *bmfov1alpha1.BareMetalInstance,
 ) error {
 	if host := object.Spec.ExternalHostName; host != "" {
-		if err := t.rejectDeleteIfHostReferenced(ctx, host); err != nil {
-			return err
-		}
-	}
-	lastKnownHost := t.bareMetalInstance.GetStatus().GetExternalHostName()
-	if lastKnownHost != "" && lastKnownHost != object.Spec.ExternalHostName {
-		return t.rejectDeleteIfHostReferenced(ctx, lastKnownHost)
+		return t.rejectDeleteIfHostReferenced(ctx, host)
 	}
 	return nil
 }
 
 // validateMissingOperatorObjectForDelete requires evidence before allowing a
-// missing operator object to complete deletion. A projected or checkpointed
-// host is checked again; an observed empty host is accepted only with a
+// missing operator object to complete deletion. A host assignment is not
+// required: a confirmed empty host is safe to delete. A projected or
+// checkpointed host is checked again; an empty host is accepted only with a
 // persisted checkpoint or successful fenced-delete condition.
 func (t *task) validateMissingOperatorObjectForDelete(ctx context.Context) error {
 	host := t.bareMetalInstance.GetStatus().GetExternalHostName()

@@ -152,7 +152,7 @@ var _ = Describe("Public volumes API", func() {
 		Expect(vol.GetSpec().GetStorageTier()).To(Equal(tierName))
 		Expect(vol.GetSpec().GetSizeGib()).To(Equal(int64(10)))
 		Expect(vol.GetStatus().GetState()).To(Equal(
-			publicv1.VolumeState_VOLUME_STATE_CREATING))
+			publicv1.VolumeState_VOLUME_STATE_PENDING))
 
 		// Delete
 		_, err = publicVolumesClient.Delete(ctx,

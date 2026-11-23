@@ -49,6 +49,19 @@ case "$*" in
   "label namespace osac-observability openshift.io/cluster-monitoring=true --overwrite")
     echo "namespace/osac-observability labeled"
     ;;
+  "get secret "*" -n osac-observability -o jsonpath="*)
+    if [ "${STUB_SECRET:-missing}" != "present" ]; then
+      name=$(printf '%s' "$*" | cut -d' ' -f3)
+      echo "Error from server (NotFound): secrets \"${name}\" not found" >&2
+      exit 1
+    fi
+    # STUB_SECRET_KEYS lists the keys the Secret carries. An omitted key makes
+    # jsonpath print nothing, like a real Secret without that key.
+    key=$(printf '%s' "$*" | sed -n 's/.*jsonpath={\.data\.\([A-Za-z0-9_]*\)}.*/\1/p')
+    case ",${STUB_SECRET_KEYS:-AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY}," in
+      *",${key},"*) echo "c2VjcmV0" ;;
+    esac
+    ;;
   "get secret "*" -n osac-observability")
     if [ "${STUB_SECRET:-missing}" != "present" ]; then
       name=$(printf '%s' "$*" | cut -d' ' -f3)
@@ -139,6 +152,13 @@ expect_exit missing-secret 1 \
   'observability object-storage Secret "thanos-object-storage" was not found in namespace "osac-observability"' \
   STUB_NAMESPACE=present STUB_SECRET=missing
 
+# aws_sdk_auth needs both keys. A Secret that only carries one used to pass the
+# gate and then fail every Receive, Store and Compactor bucket call.
+expect_exit missing-secret-key 1 \
+  'observability object-storage Secret "thanos-object-storage" has no AWS_SECRET_ACCESS_KEY key in namespace "osac-observability"' \
+  STUB_NAMESPACE=present STUB_SECRET=present STUB_SECRET_KEYS=AWS_ACCESS_KEY_ID \
+  STUB_CERTMANAGER=served
+
 expect_exit forbidden-namespace 1 \
   'could not read namespace "osac-observability"' \
   STUB_NAMESPACE=forbidden
@@ -161,6 +181,7 @@ first_install_ok_calls="${TMP_DIR}/first-install-ok.calls"
 expect_exit first-install-creates-namespace 0 \
   'observability prerequisites validated' \
   STUB_NAMESPACE=absent STUB_SECRET=present STUB_CERTMANAGER=served \
+  STUB_SECRET_KEYS=AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY \
   STUB_CALLS="${first_install_ok_calls}"
 expect_calls "${first_install_ok_calls}" \
   'create namespace osac-observability' \
@@ -186,7 +207,8 @@ expect_exit missing-cert-manager 1 \
   STUB_NAMESPACE=present STUB_SECRET=present STUB_CERTMANAGER=missing
 
 expect_exit validated 0 'observability prerequisites validated' \
-  STUB_NAMESPACE=present STUB_SECRET=present STUB_CERTMANAGER=served
+  STUB_NAMESPACE=present STUB_SECRET=present STUB_CERTMANAGER=served \
+  STUB_SECRET_KEYS=AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY
 
 expect_exit disabled 0 'observability is disabled; skipping prerequisites' \
   OBSERVABILITY_ENABLED=false

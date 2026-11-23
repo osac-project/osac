@@ -64,6 +64,21 @@ if ! oc get secret "${secret_name}" -n "${namespace}" >/dev/null 2>&1; then
   fail "observability object-storage Secret \"${secret_name}\" was not found in namespace \"${namespace}\""
 fi
 
+# aws_sdk_auth reads the standard AWS environment, which the pods take from
+# this Secret. A Secret that exists but omits a key passes the check above and
+# then fails every bucket call, so require both keys here. Only the key name is
+# reported; the value is never printed.
+for key in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+  if ! key_output=$(oc get secret "${secret_name}" -n "${namespace}" \
+      -o "jsonpath={.data.${key}}" 2>&1); then
+    printf '%s\n' "${key_output}" >&2
+    fail "could not read key ${key} from observability object-storage Secret \"${secret_name}\" in namespace \"${namespace}\""
+  fi
+  if [ -z "${key_output}" ]; then
+    fail "observability object-storage Secret \"${secret_name}\" has no ${key} key in namespace \"${namespace}\""
+  fi
+done
+
 host="${endpoint#*://}"
 host="${host%%/*}"
 host="${host%%:*}"

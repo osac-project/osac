@@ -116,6 +116,15 @@ Networking controllers launch one job template per network manager task:
 - `OSAC_MAX_JOB_HISTORY` — maximum number of job history entries to retain per
   resource (default: 10).
 
+ComputeInstance provision job entries may include an optional `lastFailure`
+checkpoint. It contains only a fixed reason and message, the failed attempt,
+and when the operator observed it. The latest checkpoint survives retry
+launches and controller restarts, and a new failure replaces it. Accepted
+success, deletion cancellation, or a desired-configuration rerun clears it.
+Older job entries have no checkpoint; OSAC does not infer historical failures
+from their attempt count or operational message. This field is internal to the
+ComputeInstance custom resource job status.
+
 ### Fulfillment service (gRPC)
 
 - `OSAC_FULFILLMENT_SERVER_ADDRESS` — fulfillment service gRPC address

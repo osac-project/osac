@@ -27,6 +27,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -38,6 +39,41 @@ import (
 
 // VirtualNetworkIDLabel indexes Subnets that share a VirtualNetwork task slot.
 const VirtualNetworkIDLabel = "osac.openshift.io/virtual-network-id"
+
+type failureSource string
+
+const (
+	failureProviderReported failureSource = "ProviderReported"
+	failureResultRejected   failureSource = "ResultRejected"
+	failureTimedOut         failureSource = "TimedOut"
+	failureJobLost          failureSource = "JobLost"
+	failureJobNotStarted    failureSource = "JobNotStarted"
+	failureInvalidResult    failureSource = "InvalidResult"
+	failureProviderError    failureSource = "ProviderError"
+)
+
+func (s failureSource) message() string {
+	switch s {
+	case failureProviderReported:
+		return "Provisioning failed."
+	case failureTimedOut:
+		return "The provisioning attempt timed out."
+	default:
+		return "Internal error"
+	}
+}
+
+func isProvisionFailureTarget(obj v1alpha1.NetworkTaskObject, req Request) bool {
+	_, ok := obj.(*v1alpha1.ComputeInstance)
+	return ok && req.Task == "provision" && req.Manager == v1alpha1.NetworkJobManagerNone
+}
+
+func copyJobFailure(in *v1alpha1.NetworkJobFailure) *v1alpha1.NetworkJobFailure {
+	if in == nil {
+		return nil
+	}
+	return in.DeepCopy()
+}
 
 // AAP job statuses.
 const (
@@ -203,6 +239,8 @@ type Request struct {
 type Outcome struct {
 	// Entry is the task's entry after Run (zero when no job was recorded).
 	Entry v1alpha1.NetworkJobStatus
+	// LastFailure is the persisted safe failure associated with Entry.
+	LastFailure *v1alpha1.NetworkJobFailure
 	// Blocked is true when no job was launched because the resource or its
 	// target is being deleted.
 	Blocked bool
@@ -216,6 +254,9 @@ type Outcome struct {
 // Succeeded reports whether the entry succeeded.
 func (o Outcome) Succeeded() bool { return o.Entry.State == v1alpha1.NetworkJobStateSucceeded }
 
+// Retrying reports whether the entry is waiting for another attempt.
+func (o Outcome) Retrying() bool { return o.Entry.State == v1alpha1.NetworkJobStateRetrying }
+
 // Failed reports whether the entry failed finally.
 func (o Outcome) Failed() bool { return o.Entry.State == v1alpha1.NetworkJobStateFailed }
 
@@ -224,7 +265,14 @@ func (o Outcome) Failed() bool { return o.Entry.State == v1alpha1.NetworkJobStat
 // and writes status. Call it on every reconcile until the entry is
 // Succeeded or Failed. A conflict on a status write is returned as an error:
 // the in-memory object is then stale and must not be written; requeue.
-func (e *Engine) Run(ctx context.Context, obj v1alpha1.NetworkTaskObject, req Request) (Outcome, error) {
+func (e *Engine) Run(ctx context.Context, obj v1alpha1.NetworkTaskObject, req Request) (outcome Outcome, runErr error) {
+	defer func() {
+		if runErr != nil {
+			outcome = Outcome{}
+			return
+		}
+		outcome.LastFailure = copyJobFailure(outcome.Entry.LastFailure)
+	}()
 	if err := ValidateTask(req.Task, req.Manager); err != nil {
 		return Outcome{}, err
 	}
@@ -247,6 +295,12 @@ func (e *Engine) Run(ctx context.Context, obj v1alpha1.NetworkTaskObject, req Re
 		return Outcome{Entry: current}, nil
 	case v1alpha1.NetworkJobStateCancelled:
 		if e.blocked(obj, req) {
+			if current.LastFailure != nil {
+				current.LastFailure = nil
+				out, err := e.write(ctx, obj, current, 0)
+				out.Blocked = true
+				return out, err
+			}
 			return Outcome{Entry: current, Blocked: true}, nil
 		}
 		// Cancelled with no delete pending (for example by hand in AAP): run again at once.
@@ -254,6 +308,7 @@ func (e *Engine) Run(ctx context.Context, obj v1alpha1.NetworkTaskObject, req Re
 	case v1alpha1.NetworkJobStateRetrying:
 		if e.blocked(obj, req) {
 			current.State = v1alpha1.NetworkJobStateCancelled
+			current.LastFailure = nil
 			return e.write(ctx, obj, current, 0)
 		}
 		wait := e.retryWait(obj, current)
@@ -322,6 +377,11 @@ func (e *Engine) launch(ctx context.Context, obj v1alpha1.NetworkTaskObject, req
 		return Outcome{Blocked: true}, nil
 	}
 	if req.HoldLaunch {
+		if isProvisionFailureTarget(obj, req) {
+			if previous := FindJob(obj.GetNetworkJobs(), req.Task, req.Manager); previous != nil {
+				return Outcome{Entry: *previous, RequeueAfter: e.cfg.PollInterval}, nil
+			}
+		}
 		return Outcome{RequeueAfter: e.cfg.PollInterval}, nil
 	}
 	var unlockSlot func()
@@ -345,6 +405,9 @@ func (e *Engine) launch(ctx context.Context, obj v1alpha1.NetworkTaskObject, req
 		Manager: req.Manager,
 		Attempt: attempt,
 		State:   v1alpha1.NetworkJobStateRunning,
+	}
+	if previous := FindJob(obj.GetNetworkJobs(), req.Task, req.Manager); previous != nil {
+		entry.LastFailure = copyJobFailure(previous.LastFailure)
 	}
 	setJob(obj, entry)
 	if req.BeforeLaunch != nil {
@@ -454,6 +517,7 @@ func (e *Engine) poll(ctx context.Context, obj v1alpha1.NetworkTaskObject, req R
 		}
 		if e.blocked(obj, req) {
 			entry.State = v1alpha1.NetworkJobStateCancelled
+			entry.LastFailure = nil
 			return e.write(ctx, obj, entry, 0)
 		}
 		t.emptySince = time.Time{}
@@ -470,9 +534,10 @@ func (e *Engine) poll(ctx context.Context, obj v1alpha1.NetworkTaskObject, req R
 		if errors.As(err, &notFound) {
 			if e.blocked(obj, req) {
 				entry.State = v1alpha1.NetworkJobStateCancelled
+				entry.LastFailure = nil
 				return e.write(ctx, obj, entry, 0)
 			}
-			return e.fail(ctx, obj, req, entry, true, fmt.Sprintf("AAP has no record of job %s", entry.JobID))
+			return e.fail(ctx, obj, req, entry, true, fmt.Sprintf("AAP has no record of job %s", entry.JobID), failureJobLost)
 		}
 		log.Error(err, "Failed to read the AAP job", "jobID", entry.JobID)
 		return Outcome{Entry: entry, RequeueAfter: e.cfg.PollInterval}, nil
@@ -494,6 +559,7 @@ func (e *Engine) poll(ctx context.Context, obj v1alpha1.NetworkTaskObject, req R
 	// The job ended.
 	if e.blocked(obj, req) {
 		entry.State = v1alpha1.NetworkJobStateCancelled
+		entry.LastFailure = nil
 		return e.write(ctx, obj, entry, 0)
 	}
 	switch job.Status {
@@ -502,10 +568,10 @@ func (e *Engine) poll(ctx context.Context, obj v1alpha1.NetworkTaskObject, req R
 	case aapFailed:
 		artifacts := readArtifacts(job.Artifacts)
 		if isTimeout(job) {
-			return e.fail(ctx, obj, req, entry, true, MessageTimedOut)
+			return e.fail(ctx, obj, req, entry, true, MessageTimedOut, failureTimedOut)
 		}
 		if artifacts.osacError != nil {
-			return e.fail(ctx, obj, req, entry, artifacts.osacError.Retryable, artifacts.osacError.Message)
+			return e.fail(ctx, obj, req, entry, artifacts.osacError.Retryable, artifacts.osacError.Message, failureProviderReported)
 		}
 		message := fmt.Sprintf("AAP job %s failed", entry.JobID)
 		if job.JobExplanation != "" {
@@ -514,16 +580,16 @@ func (e *Engine) poll(ctx context.Context, obj v1alpha1.NetworkTaskObject, req R
 		if artifacts.malformedError {
 			message += "; malformed osac_error"
 		}
-		return e.fail(ctx, obj, req, entry, false, message)
+		return e.fail(ctx, obj, req, entry, false, message, failureInvalidResult)
 	case aapError:
 		message := fmt.Sprintf("AAP job %s ended with an error", entry.JobID)
 		if job.JobExplanation != "" {
 			message += ": " + job.JobExplanation
 		}
-		return e.fail(ctx, obj, req, entry, true, message)
+		return e.fail(ctx, obj, req, entry, true, message, failureProviderError)
 	case aapCanceled:
 		if entry.Message == MessageNotStarted {
-			return e.fail(ctx, obj, req, entry, true, MessageNotStarted)
+			return e.fail(ctx, obj, req, entry, true, MessageNotStarted, failureJobNotStarted)
 		}
 		// Cancelled by hand with no delete pending: launch the next attempt at once.
 		if req.HoldLaunch {
@@ -624,13 +690,14 @@ func (e *Engine) succeed(ctx context.Context, obj v1alpha1.NetworkTaskObject, re
 		t.failures = 0
 		entry.State = v1alpha1.NetworkJobStateSucceeded
 		entry.Message = ""
+		entry.LastFailure = nil
 		return e.write(ctx, obj, entry, 0)
 	case errors.As(err, &reject):
 		message := fmt.Sprintf("OSAC rejected the %s result: %s", req.Task, reject.Reason)
-		return e.fail(ctx, obj, req, entry, false, message)
+		return e.fail(ctx, obj, req, entry, false, message, failureResultRejected)
 	case errors.As(err, &retry):
 		message := fmt.Sprintf("OSAC deferred the %s result: %s", req.Task, retry.Reason)
-		return e.fail(ctx, obj, req, entry, true, message)
+		return e.fail(ctx, obj, req, entry, true, message, failureResultRejected)
 	default:
 		return Outcome{}, err
 	}
@@ -638,7 +705,11 @@ func (e *Engine) succeed(ctx context.Context, obj v1alpha1.NetworkTaskObject, re
 
 // fail records a failed job: Retrying with backoff when retryable (always for
 // cleanup tasks), else Failed.
-func (e *Engine) fail(ctx context.Context, obj v1alpha1.NetworkTaskObject, req Request, entry v1alpha1.NetworkJobStatus, retryable bool, message string) (Outcome, error) {
+func (e *Engine) fail(ctx context.Context, obj v1alpha1.NetworkTaskObject, req Request, entry v1alpha1.NetworkJobStatus, retryable bool, message string, source failureSource) (Outcome, error) {
+	if isProvisionFailureTarget(obj, req) {
+		now := e.clock.Now().UTC().Truncate(time.Second)
+		entry.LastFailure = &v1alpha1.NetworkJobFailure{Reason: string(source), Message: source.message(), Attempt: entry.Attempt, ObservedAt: metav1.NewTime(now)}
+	}
 	if !retryable && !IsCleanupTask(req.Task) {
 		entry.State = v1alpha1.NetworkJobStateFailed
 		entry.Message = message
@@ -725,6 +796,7 @@ func (e *Engine) MarkForRerun(obj v1alpha1.NetworkTaskObject, task string, manag
 	updated := *entry
 	updated.State = v1alpha1.NetworkJobStateRetrying
 	updated.Message = MessageRerun
+	updated.LastFailure = nil
 	setJob(obj, updated)
 	t := e.state(obj, task, manager, updated.Attempt)
 	t.failures = 0
@@ -781,6 +853,7 @@ func (e *Engine) cancelEntryForDelete(ctx context.Context, obj v1alpha1.NetworkT
 	log := ctrllog.FromContext(ctx)
 	cancelled := func() (bool, bool) {
 		entry.State = v1alpha1.NetworkJobStateCancelled
+		entry.LastFailure = nil
 		setJob(obj, entry)
 		return true, true
 	}
@@ -792,6 +865,11 @@ func (e *Engine) cancelEntryForDelete(ctx context.Context, obj v1alpha1.NetworkT
 	case entry.State == v1alpha1.NetworkJobStateCancelled && entry.JobID == "":
 		// Cancelled while its job was absent: a job AAP creates later is cancelled too.
 	default:
+		if entry.LastFailure != nil {
+			entry.LastFailure = nil
+			setJob(obj, entry)
+			return true, true
+		}
 		return false, true
 	}
 	if entry.JobID == "" {

@@ -84,7 +84,7 @@ Keep the observed node identities, registry authority, time and individual resul
 
 ## 2. Consume the mirror handoff
 
-Doc 1 owns one ISC and workspace lineage, registry population, and generated-resource application. Missing inventory, mirror content, mappings, or package visibility returns to Doc 1; do not create replacement resources here. Complete the Doc 1 handoff before entering this section. This receiving gate does not apply to the independently callable [pre-handoff node transport checkpoint](#pre-handoff-node-transport-checkpoint); do not run §3 to manufacture an input for that earlier call.
+Doc 1 owns one ISC and workspace lineage, registry population, and generated-resource application. Missing inventory, mirror content, mappings, or package visibility returns to Doc 1; do not create replacement resources here. Complete the Doc 1 mirror handoff before entering this section, §2, "Consume the mirror handoff". The unnumbered [Pre-handoff node transport checkpoint](#pre-handoff-node-transport-checkpoint) is a subsection of §1, "Execution and input contract", and may be invoked independently from Doc 1 Step 2c under its existing owner-approved inputs and privacy rules. Do not require completion of this section or the later §3, "Registry access and bounded configuration", to produce the input for that early invocation.
 
 | Handoff item | OSAC-specific requirement |
 | --- | --- |

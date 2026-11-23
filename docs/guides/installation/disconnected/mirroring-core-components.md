@@ -112,27 +112,27 @@ such as trust management, identity, and databases.
 Extract the tag of each sub-component from the released chart:
 
 ```bash
-helm show values oci://ghcr.io/osac-project/charts/osac --version 0.0.62 > values-upstream.yaml
+helm show values oci://ghcr.io/osac-project/charts/osac --version 0.4.0-rc.2 > values-upstream.yaml
 ```
 
 | Image | Tag | Condition |
 | ----- | --- | --------- |
-| `ghcr.io/osac-project/osac-operator` | `0.0.39` | Always |
-| `ghcr.io/osac-project/fulfillment-service` | `0.0.131` | Always |
+| `ghcr.io/osac-project/osac-operator` | `0.0.42` | Always |
+| `ghcr.io/osac-project/fulfillment-service` | `0.0.134` | Always |
 | `ghcr.io/osac-project/envoy` | `v1.33.0` | Always |
-| `ghcr.io/osac-project/osac-aap` | `0.0.45` | Always |
-| `ghcr.io/osac-project/osac-ui` | `0.0.30` | Always |
-| `ghcr.io/osac-project/metering-service` | `0.0.27` | Always (mandatory) |
-| `ghcr.io/osac-project/bare-metal-fulfillment-operator` | `0.0.38` | BMaaS only |
+| `ghcr.io/osac-project/osac-aap` | `0.0.48` | Always |
+| `ghcr.io/osac-project/osac-ui` | `0.0.33` | Always |
+| `ghcr.io/osac-project/metering-service` | `0.0.30` | Always (mandatory) |
+| `ghcr.io/osac-project/bare-metal-fulfillment-operator` | `0.0.41` | BMaaS only |
 
 ```yaml
-    # --- OSAC core components (chart 0.0.62) ---
-    - name: ghcr.io/osac-project/osac-operator:0.0.39
-    - name: ghcr.io/osac-project/fulfillment-service:0.0.131
+    # --- OSAC core components (chart 0.4.0) ---
+    - name: ghcr.io/osac-project/osac-operator:0.0.42
+    - name: ghcr.io/osac-project/fulfillment-service:0.0.134
     - name: ghcr.io/osac-project/envoy:v1.33.0
-    - name: docker.io/envoyproxy/envoy:v1.37.1
-    - name: ghcr.io/osac-project/osac-aap:0.0.45
-    - name: ghcr.io/osac-project/osac-ui:0.0.30
+    - name: ghcr.io/osac-project/osac-aap:0.0.48
+    - name: ghcr.io/osac-project/osac-ui:0.0.33
+    - name: ghcr.io/osac-project/metering-service:0.0.30
 ```
 
 ### Conditional Images - BMaaS

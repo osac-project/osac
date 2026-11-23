@@ -62,6 +62,8 @@ describe('ClusterNetworkingCard', () => {
         .map((header) => header.textContent),
     ).toEqual(['Virtual network', 'Security groups', 'Subnet']);
     expect(table).toHaveClass('pf-m-compact', 'pf-m-plain');
+    expect(within(table).queryByRole('button')).not.toBeInTheDocument();
+    expect(within(table).queryByRole('combobox')).not.toBeInTheDocument();
     expect(unary.mock.calls.map(([method]) => method)).toEqual([Subnets.method.get]);
     expect(unary.mock.calls[0][4]).toEqual({ id: 'subnet-1' });
   });

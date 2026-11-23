@@ -43,6 +43,10 @@
   kind: metering-contract
   timeout: 20
   filters: [metering-contract]
+- id: Unit tests (CaaS integration)
+  group: unit
+  kind: caas-unit
+  filters: [code, unit-tests-caas-integration]
 - id: Unit tests (osac-ui)
   group: unit
   kind: ui-unit
@@ -52,6 +56,11 @@
   group: unit
   kind: helm-unit
   filters: [code, unit-tests-osac-installer]
+- id: Integration test (CaaS)
+  group: integration
+  kind: it-caas
+  timeout: 120  # Kind, local image builds, AWX deployment and the 45m Ginkgo suite
+  filters: [integration-tests-caas]
 - id: Integration test (fulfillment-service)
   group: integration
   kind: it-fulfillment-service

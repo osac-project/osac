@@ -35,30 +35,22 @@ func main() {
 	if first == "" || rotated == "" || subtle.ConstantTimeCompare([]byte(first), []byte(rotated)) == 1 {
 		log.Fatal("the NetBox test fixture requires two distinct tokens")
 	}
-	mock := netboxmock.NewHandler()
-	mock.SetAuth("Bearer", first, rotated)
-	for name, fieldType := range map[string]string{
-		"osac_managed": "boolean", "osac_instance_id": "text", "fixture": "text",
-	} {
-		mock.AddField(netboxmock.Field{Name: name, Type: fieldType})
-	}
-	mock.AddDevice(netboxmock.Device{
-		ID: deviceID, Name: "Kind fixture", Status: "staged",
-		CustomFields: map[string]any{
-			"osac_managed":     true,
-			"osac_bmc_address": "redfish-virtualmedia+https://192.0.2.42/redfish/v1/Systems/1",
-			"osac_boot_mac":    "aa:bb:cc:dd:ee:42",
-			"fixture":          "kind",
-		},
+	mock := netboxmock.New(first, rotated)
+	mock.AddDevice(deviceID, "staged", map[string]any{
+		"osac_managed":     true,
+		"osac_bmc_address": "redfish-virtualmedia+https://192.0.2.42/redfish/v1/Systems/1",
+		"osac_boot_mac":    "aa:bb:cc:dd:ee:42",
+		"fixture":          "kind",
 	})
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /fixture-state", func(w http.ResponseWriter, _ *http.Request) {
-		device, _ := mock.Device(deviceID)
+		device := mock.Device(deviceID)
+		patches := mock.RequestsFor(http.MethodPatch, fmt.Sprintf("/api/dcim/devices/%d/", deviceID))
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(map[string]any{
 			"deviceID": deviceID, "status": device.Status, "owner": device.CustomFields["osac_instance_id"],
-			"rotatedClaims": countRotatedClaims(mock.Requests(), deviceID),
+			"rotatedClaims": countRotatedClaims(patches),
 		}); err != nil {
 			log.Print(err)
 		}
@@ -68,21 +60,12 @@ func main() {
 	log.Fatal(server.ListenAndServe())
 }
 
-// countRotatedClaims counts successful claim PATCHes authenticated with the
-// second token supplied to SetAuth.
-func countRotatedClaims(requests []netboxmock.Request, deviceID int) int {
+// countRotatedClaims counts successful claims authenticated with the rotated token.
+func countRotatedClaims(requests []netboxmock.Request) int {
 	const rotatedTokenIndex = 1
-	devicePath := fmt.Sprintf("/api/dcim/devices/%d/", deviceID)
 	count := 0
 	for _, request := range requests {
-		if request.TokenIndex != rotatedTokenIndex || request.Method != http.MethodPatch ||
-			request.Path != devicePath || request.StatusCode != http.StatusOK {
-			continue
-		}
-		var patch struct {
-			Status string `json:"status"`
-		}
-		if json.Unmarshal(request.Body, &patch) == nil && patch.Status == "active" {
+		if request.Claimed && request.TokenIndex == rotatedTokenIndex {
 			count++
 		}
 	}

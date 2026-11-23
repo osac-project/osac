@@ -52,6 +52,7 @@ import (
 
 const (
 	netboxFixture            = "bmf-netbox-fixture"
+	netboxFixtureBMCUsername = "fixture-user"
 	netboxBMFDeployment      = "bmf-operator-controller-manager"
 	netboxTokenVolume        = "netbox-token"
 	netboxTokenSecret        = "bmf-netbox-fixture-token"
@@ -161,7 +162,7 @@ func seedNetBoxBMCSecret(
 				Annotations: netboxFixtureAnnotations(name),
 			}.Build(),
 			Data: map[string][]byte{
-				"username": []byte("fixture-user"),
+				"username": []byte(netboxFixtureBMCUsername),
 				"password": []byte(fixturePassword),
 			},
 		}.Build(),
@@ -192,6 +193,13 @@ func runNetBoxAllocation(
 	create.Stdin = bytes.NewReader(request)
 	output, err := create.CombinedOutput()
 	Expect(err).NotTo(HaveOccurred(), string(output))
+	DeferCleanup(func(ctx SpecContext) {
+		err := cluster.CoreV1().Secrets(ns).Delete(ctx, netboxRuntimeSecret, metav1.DeleteOptions{})
+		if !apierrors.IsNotFound(err) {
+			Expect(err).NotTo(HaveOccurred())
+		}
+	}, NodeTimeout(30*time.Second))
+	DeferCleanup(testhelpers.DeleteAndWaitForCleanup, ns, "BareMetalHost", netboxHost)
 	DeferCleanup(testhelpers.DeleteAndWaitForCleanup, ns, "BareMetalInstance", name)
 
 	Eventually(ctx, func(g Gomega) {
@@ -208,7 +216,7 @@ func runNetBoxAllocation(
 		g.Expect(err).NotTo(HaveOccurred())
 		secret, err := cluster.CoreV1().Secrets(ns).Get(ctx, netboxRuntimeSecret, metav1.GetOptions{})
 		g.Expect(err).NotTo(HaveOccurred())
-		matchesFixture := string(secret.Data["username"]) == "fixture-user" &&
+		matchesFixture := string(secret.Data["username"]) == netboxFixtureBMCUsername &&
 			subtle.ConstantTimeCompare(secret.Data["password"], []byte(fixturePassword)) == 1
 		g.Expect(matchesFixture).To(BeTrue(), "expected the fixture BMC credentials")
 	}, 2*time.Minute, 2*time.Second).Should(Succeed())

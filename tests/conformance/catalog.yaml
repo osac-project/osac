@@ -1,0 +1,38 @@
+selectors:
+  - id: generic
+    type: marker
+    markers:
+      - conformance_generic
+  - id: vmaas
+    type: marker
+    markers:
+      - conformance_vmaas
+  - id: bmaas
+    type: marker
+    markers:
+      - conformance_bmaas
+  - id: caas
+    type: marker
+    markers:
+      - conformance_caas
+  - id: netris
+    type: marker
+    markers:
+      - conformance_netris
+
+profiles:
+  - id: generic
+    selectors:
+      - generic
+  - id: vm
+    selectors:
+      - vmaas
+  - id: baremetal
+    selectors:
+      - bmaas
+  - id: cluster
+    selectors:
+      - caas
+  - id: netris
+    selectors:
+      - netris

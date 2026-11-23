@@ -19,7 +19,7 @@ Touched-area requirements: [component guide](../../osac-metering/AGENTS.md#integ
 | E2E | Deployed cross-component metering deployment | The deployed metering pipeline and its configured Kafka/provider dependencies | Depends on the installer environment and enabled metering path. |
 | Helm render and lint | `make helm-lint` | Chart templates, the shipped rule revision, and the admission policy that protects it | Deployed behavior. |
 | Helm render | repository-root `make -C osac-installer metering-auth-render-test` | Metering Deployment, rules ConfigMap, admission policy and binding, and absence of fulfillment credentials in the CI profiles | Does not verify a deployed metering pipeline. |
-| Helm unit (reader grants) | `make helm-test` and `make readers-render-test`, plus the `helm unittest` suites in the helm-unit CI leg | Rendered reader ACLs, grant/revoke render stability, and the exporter and lag-rule templates | Does not prove broker enforcement, revocation timing, or live lag reporting against a deployed Kafka |
+| Helm render (reader grants) | `make readers-render-test` | Rendered reader ACLs and grant/revoke render stability | Does not prove broker enforcement, revocation timing, or live lag reporting against a deployed Kafka |
 
 `make test` runs the full component
 suite across schema, metering-service, adapters, and rule revision checks; it is

@@ -39,8 +39,7 @@ Read the applicable references before changing behavior:
 ### Tools and working directory
 
 - Run the commands below from `osac-installer/` unless a different cwd is stated.
-- Use Helm and Python/uv for chart contracts and script tests. Helm unit suites
-  require the helm-unittest plugin; CI pins v1.2.1.
+- Use Helm and Python/uv for chart contracts and script tests.
 - Chart dependency targets may download archives. Review lock/archive changes
   and distinguish dependency preparation from tests.
 - Read the [suite boundaries](../docs/INTEGRATION-TESTING.md#osac-installer)
@@ -52,14 +51,10 @@ For values, schema, chart dependencies or rendered resource changes:
 
 ```bash
 make helm-validate
-helm unittest charts/osac
-make helm-infra-deps
-helm unittest charts/osac-infra
-helm unittest ../osac-metering/charts/osac-metering
 ```
 
-`helm-validate` combines Helm lint and render contracts; the helm-unittest
-suites above are separate. Use the owning suite for isolated chart changes.
+`helm-validate` combines Helm lint and render contracts. For isolated changes,
+select the relevant existing render check below rather than running every check.
 
 Focused contracts, selected by the changed wiring:
 
@@ -76,10 +71,8 @@ Focused contracts, selected by the changed wiring:
 | EVPN host networking | `make evpn-render-test` |
 | OpenBao security context on Kind/OpenShift | `make openbao-security-context-test` |
 
-For metering reader values, the focused selection is
-`helm unittest -f 'tests/metering_readers*_test.yaml' charts/osac`; the full
-umbrella suite includes it. Kafka exporter/PodMonitor contracts belong to the
-infra suite, not a live-exporter check.
+For metering reader values, run `make -C ../osac-metering readers-render-test`.
+Offline chart rendering does not prove live exporter or broker behavior.
 
 ### Local script and harness checks
 
@@ -110,8 +103,9 @@ make install-osac PLATFORM=kind PROFILE=dev NS=osac
 make test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
 ```
 
-- Supported suites are `all`, `fulfillment`, `compute-storage`, `operator` and
-  `bmf`. Select with `SUITE`; inspect profile-specific prerequisites and cleanup.
+- Supported suites are `all`, `fulfillment`, `compute-storage`, `operator`,
+  `bmf` and the opt-in `caas` suite (`PLATFORM=kind PROFILE=dev NS=osac`).
+  Select with `SUITE`; inspect profile-specific prerequisites and cleanup.
 - For combined disk handoff, run
   `make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage`.
   This uses real Fulfillment/PostgreSQL/operator with a recording AAP double.

@@ -1,32 +1,37 @@
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { Protocol, SecurityGroupState, VirtualNetworkState } from '@osac/types';
+import { Protocol, type SecurityGroup, SecurityGroupState, VirtualNetworkState } from '@osac/types';
 
-import { SecurityGroupDetailPage } from './SecurityGroupDetailPage';
-import * as networkingApi from '../../api/v1/networking';
+import {
+  SecurityGroupDetailPage,
+  securityGroupRuleEditingDisabledReason,
+} from './SecurityGroupDetailPage';
+import * as resourceApi from '../../api/use-resource';
+import { tIdentity } from '../../test-utils/i18n';
 
-vi.mock('../../api/v1/networking', async (importOriginal) => {
-  const actual = await importOriginal<typeof networkingApi>();
+vi.mock('../../api/use-resource', async (importOriginal) => {
+  const actual = await importOriginal<typeof resourceApi>();
   return {
     ...actual,
-    useSecurityGroup: vi.fn(),
-    useVirtualNetworks: vi.fn(),
-    useUpdateSecurityGroup: vi.fn(),
-    useDeleteSecurityGroup: vi.fn(),
+    useGetResource: vi.fn(),
+    useListResource: vi.fn(),
+    useUpdateResource: vi.fn(),
+    useDeleteResource: vi.fn(),
   };
 });
 
-const renderPage = () =>
-  render(
-    <MemoryRouter initialEntries={['/networking/security-groups/sg-1']}>
-      <Routes>
-        <Route path="/networking/security-groups/:id" element={<SecurityGroupDetailPage />} />
-      </Routes>
-    </MemoryRouter>,
-  );
+const pageElement = () => (
+  <MemoryRouter initialEntries={['/networking/security-groups/sg-1']}>
+    <Routes>
+      <Route path="/networking/security-groups/:id" element={<SecurityGroupDetailPage />} />
+    </Routes>
+  </MemoryRouter>
+);
+
+const renderPage = () => render(pageElement());
 
 describe('SecurityGroupDetailPage', () => {
   const mockVirtualNetworks = [
@@ -58,32 +63,36 @@ describe('SecurityGroupDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    vi.mocked(networkingApi.useSecurityGroup).mockReturnValue({
-      data: mockSecurityGroup,
+    vi.mocked(resourceApi.useGetResource).mockReturnValue({
+      data: { object: mockSecurityGroup },
       isLoading: false,
       error: null,
-    } as ReturnType<typeof networkingApi.useSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useGetResource>);
 
-    vi.mocked(networkingApi.useVirtualNetworks).mockReturnValue({
-      data: mockVirtualNetworks,
+    vi.mocked(resourceApi.useListResource).mockReturnValue({
+      data: {
+        items: mockVirtualNetworks,
+        size: mockVirtualNetworks.length,
+        total: mockVirtualNetworks.length,
+      },
       isLoading: false,
       error: null,
-    } as ReturnType<typeof networkingApi.useVirtualNetworks>);
+    } as unknown as ReturnType<typeof resourceApi.useListResource>);
 
-    vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useUpdateResource).mockReturnValue({
       mutate,
       mutateAsync: vi.fn(),
       isPending: false,
       error: null,
       reset,
-    } as unknown as ReturnType<typeof networkingApi.useUpdateSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useUpdateResource>);
 
-    vi.mocked(networkingApi.useDeleteSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useDeleteResource).mockReturnValue({
       mutate: vi.fn(),
       isPending: false,
       error: null,
       reset: vi.fn(),
-    } as unknown as ReturnType<typeof networkingApi.useDeleteSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useDeleteResource>);
   });
 
   it('renders breadcrumb with link to list page', () => {
@@ -94,11 +103,11 @@ describe('SecurityGroupDetailPage', () => {
   });
 
   it('disables Delete while the security group is loading', () => {
-    vi.mocked(networkingApi.useSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useGetResource).mockReturnValue({
       data: undefined,
       isLoading: true,
       error: null,
-    } as unknown as ReturnType<typeof networkingApi.useSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useGetResource>);
 
     renderPage();
 
@@ -109,17 +118,19 @@ describe('SecurityGroupDetailPage', () => {
   });
 
   it('disables Delete for a default security group', async () => {
-    vi.mocked(networkingApi.useSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useGetResource).mockReturnValue({
       data: {
-        ...mockSecurityGroup,
-        metadata: {
-          ...mockSecurityGroup.metadata,
-          labels: { 'osac.openshift.io/default': 'true' },
+        object: {
+          ...mockSecurityGroup,
+          metadata: {
+            ...mockSecurityGroup.metadata,
+            labels: { 'osac.openshift.io/default': 'true' },
+          },
         },
       },
       isLoading: false,
       error: null,
-    } as unknown as ReturnType<typeof networkingApi.useSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useGetResource>);
 
     const user = userEvent.setup();
     renderPage();
@@ -152,14 +163,16 @@ describe('SecurityGroupDetailPage', () => {
   });
 
   it('shows FAILED alert when status is FAILED', () => {
-    vi.mocked(networkingApi.useSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useGetResource).mockReturnValue({
       data: {
-        ...mockSecurityGroup,
-        status: { state: SecurityGroupState.FAILED, message: 'Network error' },
+        object: {
+          ...mockSecurityGroup,
+          status: { state: SecurityGroupState.FAILED, message: 'Network error' },
+        },
       },
       isLoading: false,
       error: null,
-    } as ReturnType<typeof networkingApi.useSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useGetResource>);
 
     renderPage();
 
@@ -167,6 +180,291 @@ describe('SecurityGroupDetailPage', () => {
     expect(alertTitle).toBeInTheDocument();
     const alert = alertTitle.closest('.pf-v6-c-alert') as HTMLElement;
     expect(within(alert).getByText('Network error')).toBeInTheDocument();
+  });
+
+  it('disables rule editing for an automatic security group and keeps rules visible', async () => {
+    const user = userEvent.setup();
+    vi.mocked(resourceApi.useGetResource).mockReturnValue({
+      data: {
+        object: {
+          ...mockSecurityGroup,
+          metadata: {
+            name: 'sg-web',
+            labels: { 'osac.openshift.io/auto-created': 'true' },
+          },
+        },
+      },
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof resourceApi.useGetResource>);
+    renderPage();
+
+    await user.click(screen.getByRole('tab', { name: /Inbound Rules/i }));
+    let tabPanel = within(screen.getByRole('tabpanel'));
+    const reason = 'Automatic security group rules cannot be edited.';
+    expect(tabPanel.getByText(reason)).toBeInTheDocument();
+    expect(tabPanel.getAllByText('TCP')).toHaveLength(2);
+
+    const add = tabPanel.getByRole('button', { name: /Add rule/i });
+    expect(add).toHaveAttribute('aria-disabled', 'true');
+    await user.click(add);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    const edit = tabPanel.getAllByRole('button', { name: /Edit/i })[0];
+    expect(edit).toHaveAttribute('aria-disabled', 'true');
+    await user.click(edit);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    const remove = tabPanel.getAllByRole('button', { name: /Delete/i })[0];
+    expect(remove).toHaveAttribute('aria-disabled', 'true');
+    await user.click(remove);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('tab', { name: /Outbound Rules/i }));
+    tabPanel = within(screen.getByRole('tabpanel'));
+    expect(tabPanel.getByText(reason)).toBeInTheDocument();
+    expect(tabPanel.getByRole('button', { name: /Add rule/i })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+  });
+
+  it.each(['empty', 'populated'] as const)(
+    'places the restriction above the rules card for %s rule lists in both tabs',
+    async (ruleState) => {
+      const user = userEvent.setup();
+      vi.mocked(resourceApi.useGetResource).mockReturnValue({
+        data: {
+          object: {
+            ...mockSecurityGroup,
+            metadata: {
+              ...mockSecurityGroup.metadata,
+              labels: { 'osac.openshift.io/auto-created': 'true' },
+            },
+            spec: {
+              ...mockSecurityGroup.spec,
+              ingress: ruleState === 'empty' ? [] : mockSecurityGroup.spec.ingress,
+              egress: ruleState === 'empty' ? [] : mockSecurityGroup.spec.egress,
+            },
+          },
+        },
+        isLoading: false,
+        error: null,
+      } as unknown as ReturnType<typeof resourceApi.useGetResource>);
+      renderPage();
+
+      for (const tabName of ['Inbound Rules', 'Outbound Rules']) {
+        await user.click(screen.getByRole('tab', { name: tabName }));
+        const panel = screen.getByRole('tabpanel');
+        const heading = within(panel).getByRole('heading', {
+          name: /Automatic security group rules cannot be edited/,
+        });
+        expect(heading.closest('.pf-v6-c-card')).toBeNull();
+        const card = panel.querySelector('.pf-v6-c-card');
+        if (!card) {
+          throw new Error('Expected the rule content to remain inside a PatternFly card');
+        }
+        expect(heading.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+          Node.DOCUMENT_POSITION_FOLLOWING,
+        );
+      }
+    },
+  );
+
+  it('keeps a default security group editable when only the default label is set', async () => {
+    const user = userEvent.setup();
+    vi.mocked(resourceApi.useGetResource).mockReturnValue({
+      data: {
+        object: {
+          ...mockSecurityGroup,
+          metadata: {
+            name: 'sg-web',
+            labels: { 'osac.openshift.io/default': 'true' },
+          },
+        },
+      },
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof resourceApi.useGetResource>);
+    renderPage();
+
+    await user.click(screen.getByRole('tab', { name: /Inbound Rules/i }));
+    const tabPanel = within(screen.getByRole('tabpanel'));
+    const add = tabPanel.getByRole('button', { name: /Add rule/i });
+    expect(add).not.toHaveAttribute('aria-disabled');
+    await user.click(add);
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('keeps FAILED security groups editable for recovery', async () => {
+    vi.mocked(resourceApi.useGetResource).mockReturnValue({
+      data: {
+        object: {
+          ...mockSecurityGroup,
+          status: { state: SecurityGroupState.FAILED, message: 'Network error' },
+        },
+      },
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof resourceApi.useGetResource>);
+    renderPage();
+
+    await userEvent.setup().click(screen.getByRole('tab', { name: /Inbound Rules/i }));
+    const tabPanel = within(screen.getByRole('tabpanel'));
+    expect(tabPanel.getByRole('button', { name: /Add rule/i })).not.toHaveAttribute(
+      'aria-disabled',
+    );
+    expect(
+      tabPanel.queryByText('Rules cannot be edited while the security group is not ready.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('disables rule editing while a rule mutation is pending', async () => {
+    const user = userEvent.setup();
+    vi.mocked(resourceApi.useUpdateResource).mockReturnValue({
+      mutate: vi.fn(),
+      mutateAsync: vi.fn(),
+      isPending: true,
+      error: null,
+      reset: vi.fn(),
+    } as unknown as ReturnType<typeof resourceApi.useUpdateResource>);
+    renderPage();
+
+    await user.click(screen.getByRole('tab', { name: /Inbound Rules/i }));
+    const tabPanel = within(screen.getByRole('tabpanel'));
+    expect(
+      tabPanel.getByText('Rules cannot be edited while a rule change is in progress.'),
+    ).toBeInTheDocument();
+    expect(tabPanel.getByRole('button', { name: /Add rule/i })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+  });
+
+  it('closes a stale rule dialog when the group becomes unavailable', async () => {
+    const user = userEvent.setup();
+    const view = renderPage();
+    await user.click(screen.getByRole('tab', { name: /Inbound Rules/i }));
+    const tabPanel = within(screen.getByRole('tabpanel'));
+    await user.click(tabPanel.getByRole('button', { name: /Add rule/i }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+    vi.mocked(resourceApi.useGetResource).mockReturnValue({
+      data: { object: { ...mockSecurityGroup, status: { state: SecurityGroupState.PENDING } } },
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof resourceApi.useGetResource>);
+    view.rerender(pageElement());
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(
+      within(screen.getByRole('tabpanel')).getByText(
+        'Rules cannot be edited while the security group is being provisioned or deleted.',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  describe('securityGroupRuleEditingDisabledReason', () => {
+    const automaticReason = 'Automatic security group rules cannot be edited.';
+    const provisioningReason =
+      'Rules cannot be edited while the security group is being provisioned or deleted.';
+    const pendingMutationReason = 'Rules cannot be edited while a rule change is in progress.';
+    const updatingReason = 'Rules cannot be edited while the security group is updating.';
+    const notReadyReason = 'Rules cannot be edited while the security group is not ready.';
+
+    const group = (overrides: Record<string, unknown>): SecurityGroup =>
+      ({ ...mockSecurityGroup, ...overrides }) as unknown as SecurityGroup;
+
+    const cases: Array<[string, SecurityGroup, boolean, string | undefined]> = [
+      ['READY permits editing', group({}), false, undefined],
+      [
+        'FAILED permits editing',
+        group({ status: { state: SecurityGroupState.FAILED } }),
+        false,
+        undefined,
+      ],
+      [
+        'default label alone permits editing',
+        group({
+          metadata: { name: 'sg-web', labels: { 'osac.openshift.io/default': 'true' } },
+        }),
+        false,
+        undefined,
+      ],
+      [
+        'READY with an unrelated message permits editing',
+        group({ status: { state: SecurityGroupState.READY, message: 'Rules synced' } }),
+        false,
+        undefined,
+      ],
+      [
+        'READY with the Updating prefix blocks editing',
+        group({ status: { state: SecurityGroupState.READY, message: 'Updating firewall rules' } }),
+        false,
+        updatingReason,
+      ],
+      [
+        'PENDING blocks editing',
+        group({ status: { state: SecurityGroupState.PENDING } }),
+        false,
+        provisioningReason,
+      ],
+      [
+        'DELETING blocks editing',
+        group({ status: { state: SecurityGroupState.DELETING } }),
+        false,
+        provisioningReason,
+      ],
+      [
+        'UNSPECIFIED blocks editing',
+        group({ status: { state: SecurityGroupState.UNSPECIFIED } }),
+        false,
+        notReadyReason,
+      ],
+      ['unknown state blocks editing', group({ status: { state: 99 } }), false, notReadyReason],
+      [
+        'automatic label blocks editing',
+        group({
+          metadata: {
+            name: 'sg-web',
+            labels: { 'osac.openshift.io/auto-created': 'true' },
+          },
+        }),
+        false,
+        automaticReason,
+      ],
+      [
+        'auto-sg name prefix blocks editing',
+        group({ metadata: { name: 'auto-sg-web' } }),
+        false,
+        automaticReason,
+      ],
+      [
+        'automatic marker takes precedence over FAILED',
+        group({
+          metadata: {
+            name: 'sg-web',
+            labels: { 'osac.openshift.io/auto-created': 'true' },
+          },
+          status: { state: SecurityGroupState.FAILED },
+        }),
+        false,
+        automaticReason,
+      ],
+      ['a pending mutation blocks editing', group({}), true, pendingMutationReason],
+      [
+        'PENDING takes precedence over a pending mutation',
+        group({ status: { state: SecurityGroupState.PENDING } }),
+        true,
+        provisioningReason,
+      ],
+    ];
+
+    it.each(cases)('%s', (_label, securityGroup, pending, expected) => {
+      expect(securityGroupRuleEditingDisabledReason(securityGroup, pending, tIdentity)).toBe(
+        expected,
+      );
+    });
   });
 
   describe('rule deletion', () => {

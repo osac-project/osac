@@ -1,7 +1,7 @@
-import type { BareMetalInstance } from '@osac/types';
+import { type BareMetalInstance, BareMetalInstances } from '@osac/types';
+import { useDeleteResource } from '@osac/ui-components/api/use-resource';
 import DeleteResourceModal from '@osac/ui-components/components/Resource/DeleteResourceModal.tsx';
 
-import { useDeleteBareMetalInstance } from '../../api/v1/baremetal-instance';
 import { useTranslation } from '../../hooks/useTranslation';
 
 interface BareMetalDeleteConfirmModalProps {
@@ -16,7 +16,7 @@ const BareMetalDeleteConfirmModal = ({
   onSuccess,
 }: BareMetalDeleteConfirmModalProps) => {
   const { t } = useTranslation();
-  const deleteInstance = useDeleteBareMetalInstance();
+  const deleteInstance = useDeleteResource(BareMetalInstances);
   const name = instance.metadata?.name ?? instance.id;
 
   return (
@@ -27,7 +27,7 @@ const BareMetalDeleteConfirmModal = ({
       onClose={onClose}
       onSuccess={onSuccess}
       mutation={deleteInstance}
-      variables={instance.id}
+      variables={{ id: instance.id }}
     />
   );
 };

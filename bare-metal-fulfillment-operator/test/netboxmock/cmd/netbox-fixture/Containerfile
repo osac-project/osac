@@ -1,5 +1,5 @@
 # Build context is bare-metal-fulfillment-operator/.
-FROM registry.access.redhat.com/ubi10/go-toolset:1.26.10-1793622842 AS builder
+FROM registry.access.redhat.com/ubi10/go-toolset:1.26 AS builder
 WORKDIR /opt/app-root/src
 COPY --chown=1001:0 go.mod .
 COPY --chown=1001:0 test/netboxmock/ test/netboxmock/

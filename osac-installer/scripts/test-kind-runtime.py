@@ -96,6 +96,11 @@ fi
         self.write_command("jq", 'exit 0')
         self.write_command("kubectl", """
 printf 'kubectl %s\n' "$*" >> "$MOCK_LOG"
+if [[ "$*" == 'config view --raw' ]]; then
+  first="${KUBECONFIG%%:*}"
+  cat "$first"
+  exit 0
+fi
 if [[ "$*" == *'get --raw=/readyz' ]]; then
   attempt=0
   if [[ -f "$MOCK_READY_COUNT" ]]; then attempt=$(cat "$MOCK_READY_COUNT"); fi
@@ -175,9 +180,11 @@ fi
 printf 'kind %s %s\n' "${MOCK_AS_ROOT:-0}" "$*" >> "$MOCK_LOG"
 printf 'kind context provider=%s host=%s connection=%s\n' "${KIND_EXPERIMENTAL_PROVIDER:-unset}" "${CONTAINER_HOST:-unset}" "${CONTAINER_CONNECTION:-unset}" >> "$MOCK_LOG"
 cluster_name=kind
+kubeconfig=
 previous=
 for argument in "$@"; do
   if [[ "$previous" == --name ]]; then cluster_name="$argument"; fi
+  if [[ "$previous" == --kubeconfig ]]; then kubeconfig="$argument"; fi
   previous="$argument"
 done
 if [[ "${MOCK_PROVIDER_STATE:-0}" == 1 ]]; then
@@ -206,7 +213,17 @@ if [[ "$1 $2" == 'get nodes' ]]; then
     printf '%s\n' "$MOCK_KIND_NODES"
   fi
 elif [[ "${1:-}" == create ]]; then
+  if [[ "${MOCK_KIND_CREATE_FAILURE:-0}" == 1 ]]; then
+    # Kind may rewrite or remove the selected export during failed-create cleanup.
+    rm -f -- "$kubeconfig"
+    echo 'Kind create failed' >&2
+    exit 1
+  fi
   printf '%s\n' "$cluster_name" > "$MOCK_KIND_CREATED"
+  output="${kubeconfig:-${MOCK_KIND_AMBIENT_CONFIG:-}}"
+  if [[ "$output" == "$MOCK_PID_DIR/"* ]]; then printf 'stub kubeconfig\n' > "$output"; fi
+elif [[ "$1 $2" == 'export kubeconfig' ]]; then
+  if [[ "$kubeconfig" == "$MOCK_PID_DIR/"* ]]; then printf 'stub kubeconfig\n' > "$kubeconfig"; fi
 elif [[ "$1 $2" == 'get kubeconfig' ]]; then
   echo 'stub kubeconfig'
 elif [[ "$1 $2" == 'delete cluster' && "$MOCK_KIND_DELETE_FAILURE" == 1 ]]; then
@@ -512,6 +529,55 @@ esac
                 self.assertIn("osac-dev/topolvm-lvmd:0.41.1-container-v2", self.storage_run_arguments())
                 self.assertIn("b 252:* rwm", self.storage_run_arguments())
 
+    def test_reusing_storage_reactivates_only_the_verified_volume_group(self):
+        self.configure_storage_stubs()
+        self.assert_success(self.run_shell("prepare_topolvm_storage"))
+        runtime_dir = self.directory / "runtime"
+        runtime_dir.mkdir()
+        disk = runtime_dir / "backing.img"
+        disk.write_text("existing disk contents")
+        setup_script = self.storage_run_arguments()[-1].replace(
+            "/runtime", shlex.quote(str(runtime_dir)),
+        )
+        activated = self.directory / "activated"
+        self.env["MOCK_ACTIVATED"] = str(activated)
+        self.env["TOPOLVM_BACKING_SIZE"] = "1G"
+        self.write_command("awk", 'exec /usr/bin/awk "$@"')
+        self.write_command("numfmt", "echo 1073741824")
+        self.write_command("stat", "echo 1073741824")
+        self.write_command("losetup", '[[ "$1" == -j ]]; echo "/dev/loop0: backing.img"')
+        self.write_command("vgs", "exit 0")
+        self.write_command("pvs", 'echo "$MOCK_STORAGE_PV"')
+        self.write_command("vgchange", '''
+[[ "$*" == '--activate y vg1' ]]
+if [[ "$MOCK_ACTIVATION_FAILURE" == 1 ]]; then
+  echo 'activation failed' >&2
+  exit 1
+fi
+touch "$MOCK_ACTIVATED"
+''')
+        for command in ("pvcreate", "vgcreate", "truncate"):
+            self.write_command(command, "exit 99")
+
+        for pv, failure in (("/dev/loop0", "0"), ("/dev/loop1", "0"), ("/dev/loop0", "1")):
+            with self.subTest(pv=pv, activation_failure=failure):
+                activated.unlink(missing_ok=True)
+                self.env["MOCK_STORAGE_PV"] = pv
+                self.env["MOCK_ACTIVATION_FAILURE"] = failure
+                result = subprocess.run(
+                    ["/bin/bash", "-euo", "pipefail", "-c", setup_script],
+                    env=self.env, text=True, capture_output=True, timeout=15,
+                )
+                if pv == "/dev/loop0" and failure == "0":
+                    self.assert_success(result)
+                    self.assertTrue(activated.exists())
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(activated.exists())
+                    expected_error = "activation failed" if failure == "1" else "not the dev-full backing device"
+                    self.assertIn(expected_error, result.stderr)
+                self.assertEqual(disk.read_text(), "existing disk contents")
+
     def run_create_cluster(self):
         kubeconfig = self.directory / "cluster.kubeconfig"
         return self.run_shell(f'''
@@ -564,6 +630,10 @@ if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >>
         self.assert_direct_podman_create_and_reuse()
 
     def assert_direct_podman_create_and_reuse(self):
+        output = self.directory / "cluster.kubeconfig"
+        ambient = self.directory / "existing client config"
+        ambient.write_text("unrelated context\n")
+        self.env.update(KUBECONFIG=f"{output}:{ambient}", MOCK_KIND_AMBIENT_CONFIG=str(ambient))
         for existing in ("", f"{self.cluster_name}-control-plane\n{self.cluster_name}-worker"):
             with self.subTest(existing=bool(existing)):
                 self.log.unlink(missing_ok=True)
@@ -576,8 +646,16 @@ if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >>
                 self.assert_success(self.run_direct_infra())
                 commands = self.commands()
                 self.assertEqual(any(cmd.startswith("kind 0 create cluster") for cmd in commands), not bool(existing))
+                exports = [cmd for cmd in commands if cmd.startswith("kind 0 export kubeconfig")]
+                self.assertEqual(exports, [f"kind 0 export kubeconfig --name {self.cluster_name} --kubeconfig {output}"])
                 if not existing:
-                    self.assertTrue(any(cmd.startswith(f"kind 0 create cluster --name {self.cluster_name} ") for cmd in commands))
+                    creation = next(cmd for cmd in commands if cmd.startswith("kind 0 create cluster"))
+                    self.assertIn(f"--name {self.cluster_name} ", creation)
+                    config = Path(creation.split("--kubeconfig ")[1])
+                    self.assertNotEqual(config, output)
+                    self.assertFalse(config.parent.exists())
+                self.assertEqual(output.read_text(), "stub kubeconfig\n")
+                self.assertEqual(ambient.read_text(), "unrelated context\n")
                 nodes = existing.splitlines() or [f"{self.cluster_name}-control-plane"]
                 for node in nodes:
                     inspect = f"podman user inspect --format {{{{.HostConfig.PidsLimit}}}} {node}"
@@ -587,7 +665,14 @@ if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >>
                     self.assertGreater(len(commands) - 1 - commands[::-1].index(inspect), commands.index(update))
                 self.assertIn("kind context provider=podman host=unset connection=test-connection", commands)
                 self.assertFalse(any(cmd.startswith("sudo ") or "podman user info" in cmd for cmd in commands))
-                self.assertTrue(any(cmd.startswith("helm upgrade") for cmd in commands))
+                helm = [cmd for cmd in commands if cmd.startswith("helm upgrade")]
+                kubectl = [cmd for cmd in commands if cmd.startswith("kubectl ")]
+                self.assertTrue(helm)
+                self.assertTrue(kubectl)
+                for command in helm:
+                    self.assertIn(f"--kubeconfig {output} --kube-context kind-{self.cluster_name}", command)
+                for command in kubectl:
+                    self.assertIn(f"--kubeconfig {output} --context kind-{self.cluster_name}", command)
 
     def test_direct_nondefault_cluster_create_and_reuse(self):
         self.cluster_name = "review-cluster"
@@ -681,9 +766,10 @@ if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >>
                 self.env["KIND_EXPERIMENTAL_PROVIDER"] = provider
                 self.env["MOCK_KIND_NODES_FAILURE"] = "1"
                 self.assert_success(self.run_direct_infra())
-                self.assertTrue(any(cmd.startswith("kind 0 create cluster ") for cmd in self.commands()))
-                self.assertIn("kind 0 export kubeconfig --name osac-dev --kubeconfig "
-                              + str(self.directory / "cluster.kubeconfig"), self.commands())
+                creation = next(cmd for cmd in self.commands() if cmd.startswith("kind 0 create cluster "))
+                self.assertIn("--kubeconfig ", creation)
+                self.assertIn(f"kind 0 export kubeconfig --name {self.cluster_name} "
+                              f"--kubeconfig {self.directory / 'cluster.kubeconfig'}", self.commands())
                 self.assertTrue(any(cmd.startswith("helm upgrade") for cmd in self.commands()))
                 self.assertFalse(any(cmd.startswith(("podman ", "docker ", "sudo ")) for cmd in self.commands()))
 
@@ -695,8 +781,13 @@ if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >>
                 self.assert_success(self.run_direct_infra())
                 self.assertFalse(any(" update " in cmd for cmd in self.commands()))
 
-    def test_direct_pid_errors_stop_before_helm(self):
-        cases = (("MOCK_KIND_NODES_FAILURE", "1", "Could not list Podman Kind nodes"),
+    def test_direct_cluster_errors_stop_before_helm(self) -> None:
+        """Keep the selected kubeconfig intact on creation or PID errors."""
+        output = self.directory / "cluster.kubeconfig"
+        output.write_text("existing context\n")
+        self.env["MOCK_KIND_NODES"] = ""
+        cases = (("MOCK_KIND_CREATE_FAILURE", "1", "Kind create failed"),
+                 ("MOCK_KIND_NODES_FAILURE", "1", "Could not list Podman Kind nodes"),
                  ("MOCK_PID_INSPECT_FAILURE", "1", "inspect"),
                  ("MOCK_PID_LIMIT", "invalid", "inspect"),
                  ("MOCK_PID_UPDATE_FAILURE", "1", "raise"),
@@ -705,11 +796,13 @@ if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >>
         for setting, value, diagnostic in cases:
             with self.subTest(setting=setting):
                 self.log.unlink(missing_ok=True)
+                (self.directory / "kind-created").unlink(missing_ok=True)
                 self.env["MOCK_PID_LIMIT"] = "2048"
                 self.env[setting] = value
                 result = self.run_direct_infra()
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(diagnostic, result.stderr)
+                self.assertEqual(output.read_text(), "existing context\n")
                 self.assertFalse(any(cmd.startswith("helm upgrade") for cmd in self.commands()))
                 self.env[setting] = "0"
                 for state in self.directory.glob("*.pids"):
@@ -794,7 +887,7 @@ create_cluster osac-dev config.yaml {shlex.quote(str(self.directory / 'cluster.k
                     storage = commands.index("topolvm prepare")
                     start = commands.index(f"{runtime} start osac-dev-control-plane")
                     export = commands.index(f"kind {kind_user} get kubeconfig --name osac-dev")
-                    ready = next(i for i, cmd in enumerate(commands) if cmd.startswith("kubectl "))
+                    ready = next(i for i, cmd in enumerate(commands) if "get --raw=/readyz" in cmd)
                     self.assertLess(storage, start)
                     self.assertLess(start, export)
                     self.assertLess(export, ready)
@@ -805,6 +898,57 @@ create_cluster osac-dev config.yaml {shlex.quote(str(self.directory / 'cluster.k
                     self.assertEqual(kubeconfig.read_text(), "stub kubeconfig\n")
                     self.assertEqual(kubeconfig.stat().st_mode & 0o777, 0o600)
                     self.assertIn(f"--kubeconfig {kubeconfig} --namespace osac", commands[ready])
+
+    def test_wrapper_merges_kubeconfig_as_user_and_preserves_it_on_failure(self) -> None:
+        """Delegate a new-first merge, then replace atomically with user-owned mode 600."""
+        target = self.directory / "configs with spaces" / "cluster config"
+        target.parent.mkdir()
+        original = "unrelated context and previous Kind credentials\n"
+        merged = "new Kind credentials and unrelated context\n"
+        self.env.update(KIND_PROFILE="dev")
+        self.write_command("kubectl", '''
+printf 'kubectl %s\\n' "$*" >> "$MOCK_LOG"
+[[ "$*" == 'config view --raw' ]]
+IFS=: read -r new old <<< "$KUBECONFIG"
+[[ "$old" == "$MOCK_SOURCE" ]]
+[[ "${new%/*}" == "$MOCK_TARGET_DIR" ]]
+[[ "$(cat "$new")" == 'stub kubeconfig' ]]
+[[ "$(cat "$old")" == 'unrelated context and previous Kind credentials' ]]
+[[ "${MOCK_AS_ROOT:-0}" == 0 ]]
+if [[ "$MOCK_MERGE_RESULT" == empty ]]; then exit 0; fi
+printf 'new Kind credentials and unrelated context\\n'
+[[ "$MOCK_MERGE_RESULT" == success ]]
+''')
+        link = self.directory / "kubeconfig link"
+        for link_target in (None, str(target), os.path.relpath(target, self.directory)):
+            link.unlink(missing_ok=True)
+            if link_target is not None:
+                link.symlink_to(link_target)
+            configured = link if link_target is not None else target
+            self.env.update(MOCK_SOURCE=str(configured), MOCK_TARGET_DIR=str(target.parent))
+            for operating_system in ("Linux", "Darwin"):
+                for outcome in ("success", "failure", "empty"):
+                    with self.subTest(os=operating_system, outcome=outcome):
+                        target.write_text(original)
+                        target.chmod(0o640)
+                        self.env.update(MOCK_OS=operating_system, MOCK_MERGE_RESULT=outcome)
+                        result = self.run_shell(
+                            f'create_cluster osac-dev "Kind config.yaml" {shlex.quote(str(configured))}'
+                        )
+                        if outcome == "success":
+                            self.assert_success(result)
+                            self.assertEqual(target.read_text(), merged)
+                            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+                        else:
+                            self.assertNotEqual(result.returncode, 0)
+                            self.assertIn("Could not merge Kind kubeconfig", result.stderr)
+                            self.assertEqual(target.read_text(), original)
+                            self.assertEqual(target.stat().st_mode & 0o777, 0o640)
+                        if link_target is not None:
+                            self.assertTrue(link.is_symlink())
+                            self.assertEqual(os.readlink(link), link_target)
+                        self.assertEqual(target.stat().st_uid, os.getuid())
+                        self.assertEqual(list(target.parent.glob(target.name + ".tmp.*")), [])
 
     def test_reuse_keeps_kubeconfig_when_node_inspection_or_start_fails(self):
         kubeconfig = self.directory / "cluster.kubeconfig"
@@ -863,22 +1007,28 @@ create_cluster osac-dev config.yaml {shlex.quote(str(self.directory / 'cluster.k
         self.assertEqual(sum(cmd.startswith("kubectl ") for cmd in self.commands()), 30)
 
     def test_create_resets_credentials_only_after_confirming_cluster_absence(self):
-        self.env["MOCK_KIND_NODES"] = ""
+        ambient = self.directory / "existing client config"
+        ambient.write_text("unrelated context\n")
+        output = self.directory / "cluster.kubeconfig"
+        self.env.update(MOCK_KIND_NODES="", KUBECONFIG=f"{output}:{ambient}",
+                        MOCK_KIND_AMBIENT_CONFIG=str(ambient), TMPDIR=str(self.directory))
         self.assert_success(self.run_create_cluster())
         commands = self.commands()
         lookup = commands.index("kind 1 get nodes --name osac-dev")
         reset = next(i for i, cmd in enumerate(commands) if cmd.endswith("rm -rf /kubelet/pki"))
-        creation = commands.index("kind 1 create cluster --name osac-dev --config config.yaml --wait 60s")
+        creation = next(i for i, cmd in enumerate(commands) if cmd.startswith("kind 1 create cluster"))
         self.assertLess(lookup, reset)
         self.assertLess(reset, creation)
-
-    def test_create_uses_kind_default_node_image(self):
-        self.env["MOCK_KIND_NODES"] = ""
-        self.assert_success(self.run_create_cluster())
-        self.assertIn(
-            "kind 1 create cluster --name osac-dev --config config.yaml --wait 60s",
-            self.commands(),
-        )
+        prefix = "kind 1 create cluster --name osac-dev --config config.yaml --wait 60s --kubeconfig "
+        self.assertTrue(commands[creation].startswith(prefix), commands[creation])
+        self.assertNotIn("--image ", commands[creation])
+        temporary = Path(commands[creation].removeprefix(prefix))
+        self.assertNotEqual(temporary, output)
+        self.assertTrue(temporary.is_relative_to(self.directory))
+        self.assertFalse(temporary.exists())
+        self.assertEqual(ambient.read_text(), "unrelated context\n")
+        self.assertEqual(output.read_text(), "stub kubeconfig\n")
+        self.assertEqual(output.stat().st_mode & 0o777, 0o600)
 
     def test_uninstall_deletes_cluster_before_storage_cleanup(self):
         self.assert_success(self.run_shell("delete_cluster osac-dev"))
@@ -948,6 +1098,8 @@ create_cluster osac-dev config.yaml {shlex.quote(str(self.directory / 'cluster.k
         installer.mkdir(parents=True)
         (module / "it").mkdir(parents=True)
         shutil.copy(INSTALLER / "Makefile", installer / "Makefile")
+        (installer / "scripts").mkdir()
+        shutil.copy(INSTALLER / "scripts/kind-images.mk", installer / "scripts/kind-images.mk")
         env = {key: value for key, value in self.env.items() if key != "FULFILLMENT_IT_REPORT_DIR"}
         phases = ["service-only", "networking-operator", "bmaas-disabled", "compute-storage"]
         cases = [("default", None), ("disabled", ""), ("relative", "../local-reports"),
@@ -990,6 +1142,8 @@ create_cluster osac-dev config.yaml {shlex.quote(str(self.directory / 'cluster.k
         installer.mkdir(parents=True)
         (checkout / "fulfillment-service" / "it").mkdir(parents=True)
         shutil.copy(INSTALLER / "Makefile", installer / "Makefile")
+        (installer / "scripts").mkdir()
+        shutil.copy(INSTALLER / "scripts/kind-images.mk", installer / "scripts/kind-images.mk")
         result = subprocess.run(
             ["make", "--no-print-directory", "-n", "-C", str(installer), "test",
              "PLATFORM=kind", "PROFILE=dev", "NS=osac", "SUITE=fulfillment", "MAKE=true"],
@@ -1006,6 +1160,59 @@ create_cluster osac-dev config.yaml {shlex.quote(str(self.directory / 'cluster.k
         self.assertEqual(enabled, [["operator.enabled=false"], ["operator.enabled=true"],
                                    ["operator.enabled=false"], ["operator.enabled=true"]])
 
+    def test_native_provider_crds_are_selected_for_validation_and_installation(self):
+        """Render and install the same CRDs for native-provider and ordinary suites."""
+        for goal, count in (("install-infra", 3), ("install-dry-run", 1)):
+            for fake_crds in ("true", "false"):
+                with self.subTest(goal=goal, fake_crds=fake_crds):
+                    result = subprocess.run(
+                        ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), goal,
+                         "PLATFORM=kind", "PROFILE=dev", "NS=osac", "MAKE=true",
+                         f"KIND_FAKE_CRDS={fake_crds}"],
+                        env=self.env, text=True, capture_output=True, timeout=15,
+                    )
+                    self.assert_success(result)
+                    commands = [line for line in result.stdout.replace("\\\n", " ").splitlines()
+                                if any(command in line for command in (
+                                    "render_chart_offline osac-infra ", "netbox_seed_check osac-infra ",
+                                    "helm template osac-infra ", "helm upgrade --install osac-infra ",
+                                ))]
+                    self.assertEqual(len(commands), count)
+                    for command in commands:
+                        self.assertIn(f"--set fakeCrds.enabled={fake_crds}", command)
+
+    def test_platform_images_reject_invalid_namespace_before_commands(self):
+        """Validate shared image-helper inputs before building or loading images."""
+        sentinel = self.directory / "namespace-command-ran"
+        for namespace in ("../other", f"osac; touch {sentinel}", f"$(shell touch {sentinel})"):
+            with self.subTest(namespace=namespace):
+                self.log.unlink(missing_ok=True)
+                result = subprocess.run(
+                    ["make", "--no-print-directory", "-C", str(INSTALLER), "test-platform-images",
+                     "PLATFORM=kind", "PROFILE=dev", f"NS={namespace}"],
+                    env=self.env, text=True, capture_output=True, timeout=15,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("ERROR: invalid NS", result.stderr)
+                self.assertFalse(sentinel.exists())
+                self.assertEqual(self.commands(), [])
+
+    def test_caas_delegates_test_to_the_suite(self):
+        probe = self.directory / "delegate.mk"
+        probe.write_text('override KUBECONFIG := $(value KUBECONFIG)\nexport KUBECONFIG\n'
+                         'test:\n\t@printf "delegated:%s:%s\\n" "$(CURDIR)" "$$KUBECONFIG"\n')
+        relative = 'link/../caller "$config"'
+        kubeconfig = f"{relative}::{self.directory / 'absolute'}"
+        expected = f"{INSTALLER / relative}::{self.directory / 'absolute'}"
+        result = subprocess.run(
+            ["make", "--no-print-directory", "-C", str(INSTALLER), "test",
+             "PLATFORM=kind", "PROFILE=dev", "NS=osac", "SUITE=caas",
+             f"MAKE=make -f {probe}", f"KUBECONFIG={kubeconfig}"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+        self.assert_success(result)
+        self.assertIn(f"delegated:{REPO / 'tests/integration/caas'}:{expected}\n", result.stdout)
+
     def test_compute_storage_phase_uses_real_services_and_only_the_aap_recorder(self):
         result = subprocess.run(
             ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), "test",
@@ -1013,9 +1220,16 @@ create_cluster osac-dev config.yaml {shlex.quote(str(self.directory / 'cluster.k
             env=self.env, text=True, capture_output=True, timeout=15,
         )
         self.assert_success(result)
-        self.assertIn("fulfillment-service:it", result.stdout)
-        self.assertIn('container save localhost/fulfillment-service:it > "$tmpfile"', result.stdout)
-        self.assertIn("osac-operator:it", result.stdout)
+        self.assertIn("true test-platform-images", result.stdout)
+        images = subprocess.run(
+            ["make", "--no-print-directory", "-n", "-C", str(INSTALLER), "test-platform-images",
+             "PLATFORM=kind", "PROFILE=dev", "NS=osac", "MAKE=true"],
+            env=self.env, text=True, capture_output=True, timeout=15,
+        )
+        self.assert_success(images)
+        self.assertIn("fulfillment-service:it", images.stdout)
+        self.assertIn('container save localhost/fulfillment-service:it > "$tmpfile"', images.stdout)
+        self.assertIn("osac-operator:it", images.stdout)
         self.assertIn("operator.controllers.computeInstance=true", result.stdout)
         self.assertIn("operator.controllers.storage=true", result.stdout)
         self.assertIn("operator.controllers.volume=false", result.stdout)
@@ -1064,6 +1278,7 @@ create_cluster osac-dev config.yaml {shlex.quote(str(self.directory / 'cluster.k
         scripts.mkdir()
         shutil.copy(INSTALLER / "scripts/lib.sh", scripts / "lib.sh")
         shutil.copy(INSTALLER / "scripts/oc.sh", scripts / "oc.sh")
+        shutil.copy(INSTALLER / "scripts/kind-images.mk", scripts / "kind-images.mk")
         shutil.copy(INSTALLER / "charts/osac-infra/Chart.yaml", infra / "Chart.yaml")
         # One pinned archive per dependency declared in Chart.yaml; the Makefile
         # derives its build targets from the same list.
@@ -1154,6 +1369,8 @@ fi
                     self.assertEqual(len(commands), 1, result.stdout)
                     args = commands[0]
                     self.assertEqual(args[3], release)
+                    self.assertEqual(args[args.index("--kubeconfig") + 1], "$KIND_KUBECONFIG")
+                    self.assertEqual(args[args.index("--kube-context") + 1], "kind-osac-dev")
                     if release == "osac-devstack":
                         self.assertNotIn("--force-conflicts", args)
                         self.assertIn("ui.enabled=true", args)
@@ -1202,6 +1419,51 @@ exec /usr/bin/mktemp "$@"
         self.assert_success(self.run_image_load_target("kind-load-image", "dev-full", "docker"))
         self.assertIn("docker save test/operator:latest", self.commands())
         self.assertTrue(any(cmd.startswith("kind 0 load image-archive ") for cmd in self.commands()))
+
+    def test_shared_image_loader_uses_unique_portable_archives_and_cleans_failures(self):
+        """Exercise both archive branches of the shared Make macro with BSD templates."""
+        self.write_command("mktemp", '''
+[[ "${!#}" == *XXXXXX ]] || { echo 'invalid BSD mktemp template' >&2; exit 1; }
+file=$(/usr/bin/mktemp "$@")
+printf 'archive %s\\n' "$file" >> "$MOCK_LOG"
+printf '%s\\n' "$file"
+''')
+        self.write_command("runtime", '''
+if [[ "$1 $2" == 'container save' ]]; then
+  [[ "${MOCK_SAVE_FAILURE:-0}" == 0 ]] || exit 17
+  echo 'stub archive'
+else
+  kind "$@"
+fi
+''')
+        self.write_command("podman", '''
+[[ "$1" == save && "$3" == -o ]] || exit 1
+[[ "${MOCK_SAVE_FAILURE:-0}" == 0 ]] || exit 17
+echo 'stub archive' > "$4"
+''')
+        makefile = self.directory / "images.mk"
+        makefile.write_text(
+            "SHELL := /bin/bash\n.SHELLFLAGS := -ec\n"
+            f"include {INSTALLER / 'scripts/kind-images.mk'}\n"
+            "load:\n\t$(call kind-load-image,test/image:latest)\n"
+        )
+        archives = []
+        for required in ("true", "false"):
+            for failure in ("0", "0", "1"):
+                with self.subTest(runtime=required, failure=failure):
+                    self.env["MOCK_SAVE_FAILURE"] = failure
+                    result = subprocess.run(
+                        ["make", "--no-print-directory", "-f", str(makefile), "load",
+                         f"KIND_RUNTIME_REQUIRED={required}", "KIND_RUNTIME_CMD=runtime",
+                         "CONTAINER_TOOL=podman", "KIND_CLUSTER_NAME=osac-dev-caas"],
+                        env=self.env, text=True, capture_output=True, timeout=15,
+                    )
+                    self.assertEqual(result.returncode == 0, failure == "0", result.stderr)
+                    archive = [line.removeprefix("archive ") for line in self.commands()
+                               if line.startswith("archive ")][-1]
+                    self.assertFalse(Path(archive).exists(), "temporary archive leaked")
+                    archives.append(archive)
+        self.assertEqual(len(set(archives)), len(archives))
 
     def test_image_load_reports_authentication_failure_before_saving(self):
         self.env["MOCK_AUTH_DENIED"] = "1"
@@ -1285,6 +1547,10 @@ exec /usr/bin/mktemp "$@"
         devstack_install = output.find("helm upgrade --install osac-devstack ")
         self.assertGreater(osac_install, max(build_positions), output)
         self.assertGreater(devstack_install, osac_install, output)
+        fedora_prepare = "bash scripts/dev-full/build-fedora-image.sh "
+        self.assertEqual(output.count(fedora_prepare), 1, output)
+        self.assertGreater(output.find(fedora_prepare), osac_install, output)
+        self.assertLess(output.find(fedora_prepare), devstack_install, output)
         self.assertIn("kind-build-load-images", output)
         self.assertIn("KIND_REQUIRE_UV=true", output)
         self.assertNotIn("container save quay.io/openshift/origin-cli:4.19", output)
@@ -1331,6 +1597,7 @@ exec /usr/bin/mktemp "$@"
         )
         self.assert_success(mixed_runtime_result)
         mixed_output = mixed_runtime_result.stdout
+        self.assertEqual(mixed_output.count(fedora_prepare), 1, mixed_output)
         copy_out = mixed_output.find("container save quay.io/openshift/origin-cli:4.19")
         copy_in = mixed_output.find("docker load -i")
         mixed_aap_build = mixed_output.find(

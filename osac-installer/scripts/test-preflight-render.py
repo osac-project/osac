@@ -6,8 +6,8 @@
 """Offline Helm render checks for the install preflight work.
 
 Everything here runs `helm template` with no cluster. Checks that need a live
-API server live in test-preflight-kind.py; checks that mock the cluster live in
-the helm-unittest suites under charts/osac/tests/.
+API server live in test-preflight-kind.py; test-preflight-harness.py checks
+that suite's harness with mocks.
 
 Run: uv run --script scripts/test-preflight-render.py
 """

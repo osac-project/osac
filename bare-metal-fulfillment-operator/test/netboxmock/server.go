@@ -14,491 +14,252 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package netboxmock provides the stateful mock API used by NetBox tests.
+// Package netboxmock serves the device API subset used by the BMF tests.
 package netboxmock
 
 import (
 	"crypto/subtle"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
+	"maps"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
-// Field describes how to match a custom-field filter against fixture data.
-type Field struct {
-	Name string
-	Type string
-}
+const devicesPath = "/api/dcim/devices/"
 
-// Device is one dcim.device as the server stores it.
+// Device is a snapshot of the mock device's current state.
 type Device struct {
-	ID           int
-	Name         string
 	Status       string
 	CustomFields map[string]any
-	Tags         []string
-	// Version drives the ETag returned with detail reads and PATCHes.
-	Version int
+	version      int
 }
 
-// ETag returns the conditional-request token for the device.
-func (d Device) ETag() string {
-	return fmt.Sprintf(`"v%d"`, d.Version)
+func (d Device) etag() string {
+	return fmt.Sprintf(`"v%d"`, d.version)
 }
 
-// Request records an API call for assertions.
+// Request records the parts of an API call used by the tests.
 type Request struct {
 	Method     string
 	Path       string
 	Query      url.Values
 	IfMatch    string
-	Body       []byte
-	StatusCode int
-	// TokenIndex is the matched token's position in SetAuth, or -1.
 	TokenIndex int
+	Claimed    bool
 }
 
-// Server is a stateful NetBox HTTPS endpoint.
+// Server is an HTTP handler for an inventory of test devices.
 type Server struct {
 	mu       sync.Mutex
-	server   *httptest.Server
-	devices  map[int]*Device
-	fields   map[string]Field
+	devices  map[int]Device
+	tokens   []string
 	requests []Request
-
-	tokens      []string
-	tokenScheme string
-	beforePatch func(deviceID int)
 }
 
-// New starts a mock NetBox HTTPS server with no devices and no custom fields.
-func New() *Server {
-	s := NewHandler()
-	s.server = httptest.NewTLSServer(s)
-	return s
+// New returns a fixture which accepts the supplied Bearer tokens.
+func New(tokens ...string) *Server {
+	return &Server{devices: make(map[int]Device), tokens: slices.Clone(tokens)}
 }
 
-// NewHandler creates an unstarted mock for a caller-owned HTTP listener.
-func NewHandler() *Server {
-	return &Server{
-		devices: map[int]*Device{},
-		fields:  map[string]Field{},
+// AddDevice registers a fixture with the given status and custom fields.
+func (s *Server) AddDevice(id int, status string, fields map[string]any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	customFields := make(map[string]any, len(fields))
+	maps.Copy(customFields, fields)
+	s.devices[id] = Device{Status: status, CustomFields: customFields}
+}
+
+// Device returns a snapshot of the fixture with the given ID.
+func (s *Server) Device(id int) Device {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	device := s.devices[id]
+	device.CustomFields = maps.Clone(device.CustomFields)
+	return device
+}
+
+// RequestsFor returns recorded calls matching the given method and path.
+func (s *Server) RequestsFor(method, path string) []Request {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var matches []Request
+	for _, request := range s.requests {
+		if request.Method == method && request.Path == path {
+			matches = append(matches, request)
+		}
 	}
+	return matches
 }
 
-// Stop shuts the server down.
-func (s *Server) Stop() { s.server.Close() }
-
-// URL returns the server's HTTPS base URL.
-func (s *Server) URL() string { return s.server.URL }
-
-// Certificate returns the TLS certificate so a client can trust the server.
-func (s *Server) Certificate() *x509.Certificate { return s.server.Certificate() }
-
-// SetAuth configures the authorization scheme and accepted fixture tokens.
-func (s *Server) SetAuth(scheme string, tokens ...string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.tokenScheme, s.tokens = scheme, slices.Clone(tokens)
-}
-
-// SetBeforePatchHook injects a write between the adapter's read and PATCH.
-func (s *Server) SetBeforePatchHook(hook func(deviceID int)) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.beforePatch = hook
-}
-
-// AddField registers a dcim.device custom-field definition.
-func (s *Server) AddField(field Field) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.fields[field.Name] = field
-}
-
-// AddDevice registers a device fixture.
-func (s *Server) AddDevice(device Device) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	copied := Device{
-		ID:           device.ID,
-		Name:         device.Name,
-		Status:       device.Status,
-		CustomFields: map[string]any{},
-		Tags:         append([]string(nil), device.Tags...),
-		Version:      device.Version,
-	}
-	for key, value := range device.CustomFields {
-		copied.CustomFields[key] = value
-	}
-	s.devices[device.ID] = &copied
-}
-
-// Device returns a copy of a device fixture.
-func (s *Server) Device(id int) (Device, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	device, ok := s.devices[id]
-	if !ok {
-		return Device{}, false
-	}
-	return copyDevice(device), true
-}
-
-// UpdateDevice makes an external edit and invalidates the device ETag.
-func (s *Server) UpdateDevice(id int, mutate func(*Device)) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	device, ok := s.devices[id]
-	if !ok {
-		return false
-	}
-	mutate(device)
-	device.Version++
-	return true
-}
-
-// DeleteDevice removes a device, modeling an administrator deleting it.
-func (s *Server) DeleteDevice(id int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.devices, id)
-}
-
-// Requests returns every recorded request.
-func (s *Server) Requests() []Request {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]Request(nil), s.requests...)
-}
-
-// ServeHTTP handles the fixture endpoints.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	body := readBody(r)
-
-	recorder := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
-	w = recorder
-
-	headerScheme, token, _ := strings.Cut(r.Header.Get("Authorization"), " ")
-	s.mu.Lock()
-	requiresAuth := len(s.tokens) > 0
+	scheme, token, _ := strings.Cut(r.Header.Get("Authorization"), " ")
 	tokenIndex := -1
-	if headerScheme == s.tokenScheme {
-		for index, candidate := range s.tokens {
-			if subtle.ConstantTimeCompare([]byte(token), []byte(candidate)) == 1 && tokenIndex < 0 {
-				tokenIndex = index
+	if scheme == "Bearer" {
+		for i, candidate := range s.tokens {
+			if subtle.ConstantTimeCompare([]byte(token), []byte(candidate)) == 1 {
+				tokenIndex = i
 			}
 		}
 	}
-	requestIndex := len(s.requests)
-	s.requests = append(s.requests, Request{
-		Method:     r.Method,
-		Path:       r.URL.Path,
-		Query:      r.URL.Query(),
-		IfMatch:    r.Header.Get("If-Match"),
-		Body:       body,
-		TokenIndex: tokenIndex,
-	})
-	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		s.requests[requestIndex].StatusCode = recorder.status
-		s.mu.Unlock()
-	}()
-
-	if requiresAuth && tokenIndex < 0 {
-		writeError(w, http.StatusUnauthorized, "Invalid token")
+	if tokenIndex < 0 {
+		http.Error(w, "invalid token", http.StatusUnauthorized)
 		return
 	}
 
-	switch {
-	case r.Method == http.MethodGet && strings.TrimSuffix(r.URL.Path, "/") == "/api/dcim/interfaces":
-		writeJSON(w, map[string]any{"count": 0, "next": nil, "previous": nil, "results": []any{}})
-	case r.Method == http.MethodGet && strings.TrimSuffix(r.URL.Path, "/") == "/api/dcim/devices":
-		s.listDevices(w, r)
-	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/dcim/devices/"):
-		s.getDevice(w, r)
-	case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/dcim/devices/"):
-		s.patchDevice(w, r, body)
-	default:
-		writeError(w, http.StatusMethodNotAllowed, "Unsupported fixture route")
-	}
-}
-
-// statusRecorder captures the status code a handler wrote.
-type statusRecorder struct {
-	http.ResponseWriter
-	status int
-}
-
-func (r *statusRecorder) WriteHeader(status int) {
-	r.status = status
-	r.ResponseWriter.WriteHeader(status)
-}
-
-// listDevices applies exact status and custom-field filters, including the empty-owner lookup.
-func (s *Server) listDevices(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query()
-
 	s.mu.Lock()
-	matches := make([]*Device, 0, len(s.devices))
-	for _, device := range s.devices {
-		matched, ok := deviceMatchesQuery(device, query, s.fields)
-		if !ok {
-			s.mu.Unlock()
-			writeError(w, http.StatusBadRequest, "Invalid filter for device query")
-			return
-		}
-		if matched {
-			matches = append(matches, device)
-		}
+	defer s.mu.Unlock()
+	request := Request{
+		Method: r.Method, Path: r.URL.Path, Query: r.URL.Query(),
+		IfMatch: r.Header.Get("If-Match"), TokenIndex: tokenIndex,
 	}
-	sort.Slice(matches, func(i, j int) bool { return matches[i].ID < matches[j].ID })
-	results := make([]map[string]any, 0, len(matches))
-	for _, device := range matches {
-		results = append(results, devicePayload(device))
-	}
-	s.mu.Unlock()
+	defer func() { s.requests = append(s.requests, request) }()
 
-	total := len(results)
-	offset, end := pageBounds(query, total)
-	var next any
-	if end < total {
-		nextURL := url.URL{Path: "/api/dcim/devices/"}
-		nextQuery := url.Values{}
-		for key, values := range query {
-			for _, value := range values {
-				nextQuery.Add(key, value)
-			}
-		}
-		nextQuery.Set("offset", strconv.Itoa(end))
-		nextURL.RawQuery = nextQuery.Encode()
-		next = nextURL.String()
+	path := strings.TrimSuffix(r.URL.Path, "/") + "/"
+	switch {
+	case r.Method == http.MethodGet && path == "/api/dcim/interfaces/":
+		writeJSON(w, map[string]any{"count": 0, "next": nil, "previous": nil, "results": []any{}})
+	case r.Method == http.MethodGet && path == devicesPath:
+		s.listDevices(w, request.Query)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, devicesPath):
+		s.getDevice(w, r)
+	case r.Method == http.MethodPatch && strings.HasPrefix(path, devicesPath):
+		request.Claimed = s.patchDevice(w, r, request.IfMatch)
+	default:
+		http.NotFound(w, r)
 	}
-
-	writeJSON(w, map[string]any{
-		"count":    total,
-		"next":     next,
-		"previous": nil,
-		"results":  results[offset:end],
-	})
 }
 
-// deviceMatchesQuery reports whether a device matches the query. The second
-// return value is false when the query references a filter the server rejects.
-func deviceMatchesQuery(device *Device, query url.Values, fields map[string]Field) (bool, bool) {
-	keys := make([]string, 0, len(query))
-	for key := range query {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-
-	for _, key := range keys {
-		values := query[key]
-		if len(values) == 0 {
-			continue
-		}
-		value := values[len(values)-1]
-
-		switch key {
-		case "status":
-			if device.Status != value {
-				return false, true
-			}
-			continue
-		case "limit", "offset", "ordering", "brief", "q":
-			continue
-		}
-
-		if !strings.HasPrefix(key, "cf_") {
-			return false, false
-		}
-		name := strings.TrimPrefix(key, "cf_")
-		lookup := ""
-		if strings.HasSuffix(name, "__empty") {
-			name = strings.TrimSuffix(name, "__empty")
-			lookup = "empty"
-		}
-		field, known := fields[name]
-		if !known {
-			return false, false
-		}
-		if lookup == "empty" {
-			if (value == "true") != isEmptyValue(device.CustomFields[name]) {
-				return false, true
-			}
-			continue
-		}
-		if !exactMatch(device.CustomFields[name], field.Type, value) {
-			return false, true
+func (s *Server) listDevices(w http.ResponseWriter, query url.Values) {
+	var ids []int
+	for id, device := range s.devices {
+		if deviceMatchesQuery(device, query) {
+			ids = append(ids, id)
 		}
 	}
-	return true, true
+	sort.Ints(ids)
+	results := make([]map[string]any, 0, len(ids))
+	for _, id := range ids {
+		results = append(results, deviceResponse(id, s.devices[id]))
+	}
+	writeJSON(w, map[string]any{"count": len(results), "next": nil, "previous": nil, "results": results})
 }
 
-// exactMatch compares a stored custom-field value with a filter value using the
-// stored type, so booleans and integers match their NetBox textual forms.
-func exactMatch(stored any, fieldType, value string) bool {
-	if stored == nil {
+// deviceMatchesQuery evaluates the filters against the seeded device values.
+func deviceMatchesQuery(device Device, query url.Values) bool {
+	if status := query.Get("status"); status != "" && status != device.Status {
 		return false
 	}
-	switch fieldType {
-	case "boolean":
-		boolean, ok := stored.(bool)
-		return ok && strconv.FormatBool(boolean) == value
-	case "integer":
-		switch number := stored.(type) {
-		case int:
-			return strconv.Itoa(number) == value
-		case float64:
-			return strconv.FormatFloat(number, 'f', -1, 64) == value
-		case string:
-			return number == value
+	for key := range query {
+		field, ok := strings.CutPrefix(key, "cf_")
+		if !ok {
+			continue
+		}
+		value := query.Get(key)
+		if name, emptyLookup := strings.CutSuffix(field, "__empty"); emptyLookup {
+			stored := device.CustomFields[name]
+			if (value == "true") != (stored == nil || stored == "") {
+				return false
+			}
+			continue
+		}
+		stored, ok := device.CustomFields[field]
+		if !ok || fmt.Sprint(stored) != value {
+			return false
 		}
 	}
-	return fmt.Sprint(stored) == value
-}
-
-// isEmptyValue reports whether a custom-field value counts as empty, which is
-// the assumption the adapter's unassigned-owner filter depends on.
-func isEmptyValue(value any) bool {
-	if value == nil {
-		return true
-	}
-	text, ok := value.(string)
-	return ok && text == ""
+	return true
 }
 
 func (s *Server) getDevice(w http.ResponseWriter, r *http.Request) {
 	id, err := deviceIDFromPath(r.URL.Path)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "Not found")
+	device, found := s.devices[id]
+	if err != nil || !found {
+		http.NotFound(w, r)
 		return
 	}
-
-	s.mu.Lock()
-	device, ok := s.devices[id]
-	if !ok {
-		s.mu.Unlock()
-		writeError(w, http.StatusNotFound, "Not found")
-		return
-	}
-	payload := devicePayload(device)
-	etag := device.ETag()
-	s.mu.Unlock()
-
-	w.Header().Set("ETag", etag)
-	writeJSON(w, payload)
+	w.Header().Set("ETag", device.etag())
+	writeJSON(w, deviceResponse(id, device))
 }
 
-// patchDevice applies one conditional partial update. Custom fields merge, so a
-// PATCH that sends only osac_instance_id preserves every other value.
-func (s *Server) patchDevice(w http.ResponseWriter, r *http.Request, body []byte) {
+func (s *Server) patchDevice(w http.ResponseWriter, r *http.Request, ifMatch string) bool {
 	id, err := deviceIDFromPath(r.URL.Path)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "Not found")
-		return
+	device, found := s.devices[id]
+	if err != nil || !found {
+		http.NotFound(w, r)
+		return false
+	}
+	if ifMatch != device.etag() {
+		http.Error(w, "precondition failed", http.StatusPreconditionFailed)
+		return false
 	}
 
 	var patch struct {
 		Status       *string        `json:"status"`
 		CustomFields map[string]any `json:"custom_fields"`
 	}
-	if err := json.Unmarshal(body, &patch); err != nil {
-		writeError(w, http.StatusBadRequest, "Invalid body")
-		return
-	}
-
-	s.mu.Lock()
-	hook := s.beforePatch
-	s.mu.Unlock()
-	if hook != nil {
-		hook(id)
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	device, ok := s.devices[id]
-	if !ok {
-		writeError(w, http.StatusNotFound, "Not found")
-		return
-	}
-	if ifMatch := r.Header.Get("If-Match"); ifMatch != "" && ifMatch != device.ETag() {
-		writeError(w, http.StatusPreconditionFailed, "Precondition failed")
-		return
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return false
 	}
 
 	if patch.Status != nil {
 		device.Status = *patch.Status
 	}
-	for key, value := range patch.CustomFields {
-		device.CustomFields[key] = value
-	}
-	device.Version++
+	maps.Copy(device.CustomFields, patch.CustomFields)
+	device.version++
+	s.devices[id] = device
 
-	w.Header().Set("ETag", device.ETag())
-	writeJSON(w, devicePayload(device))
+	w.Header().Set("ETag", device.etag())
+	writeJSON(w, deviceResponse(id, device))
+	return patch.Status != nil && *patch.Status == "active"
 }
 
-func pageBounds(query url.Values, total int) (offset, end int) {
-	offset, _ = strconv.Atoi(query.Get("offset"))
-	offset = min(max(0, offset), total)
-	limit := 100
-	if requested, err := strconv.Atoi(query.Get("limit")); err == nil && requested > 0 {
-		limit = min(requested, limit)
-	}
-	return offset, min(offset+limit, total)
+func deviceIDFromPath(path string) (int, error) {
+	id := strings.TrimSuffix(strings.TrimPrefix(path, devicesPath), "/")
+	return strconv.Atoi(id)
 }
 
-func devicePayload(device *Device) map[string]any {
-	tags := make([]map[string]any, 0, len(device.Tags))
-	for _, tag := range device.Tags {
-		tags = append(tags, map[string]any{
-			"id": fieldID(tag), "url": "/api/extras/tags/" + strconv.Itoa(fieldID(tag)) + "/",
-			"display": tag, "name": tag, "slug": strings.ToLower(tag),
-		})
-	}
-	customFields := make(map[string]any, len(device.CustomFields))
-	for key, value := range device.CustomFields {
-		customFields[key] = value
-	}
+func deviceResponse(id int, device Device) map[string]any {
+	return DevicePayload(id, fmt.Sprintf("device-%d", id), device.Status, device.CustomFields)
+}
 
-	// NetBox always renders a non-empty display value: a device without a name
-	// still gets a generated label. The generated SDK rejects an empty required
-	// property, so a fixture that copied the name here would misrepresent the
-	// server. A nameless device sends a null name instead.
-	var name any
-	if device.Name != "" {
-		name = device.Name
-	}
-	display := device.Name
-	if display == "" {
-		display = fmt.Sprintf("Device %d", device.ID)
-	}
+func writeJSON(w http.ResponseWriter, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(value)
+}
 
+// DevicePayload returns the dcim.device response shape the generated SDK
+// requires, so tests share one fixture instead of maintaining their own copies.
+//
+//nolint:goconst // Keep the JSON keys visible in the wire fixture.
+func DevicePayload(id int, name, status string, customFields map[string]any) map[string]any {
+	fields := maps.Clone(customFields)
+	label := status
+	if status != "" {
+		label = strings.ToUpper(status[:1]) + status[1:]
+	}
 	return map[string]any{
-		"id":      device.ID,
-		"url":     "/api/dcim/devices/" + strconv.Itoa(device.ID) + "/",
-		"display": display,
+		"id":      id,
+		"url":     "/api/dcim/devices/" + strconv.Itoa(id) + "/",
+		"display": name,
 		"name":    name,
 		"device_type": map[string]any{
-			"id": 1, "url": "/api/dcim/device-types/1/", "display": "Test device type",
+			"id":      1,
+			"url":     "/api/dcim/device-types/1/",
+			"display": "Test device type",
 			"manufacturer": map[string]any{
 				"id": 1, "url": "/api/dcim/manufacturers/1/", "display": "Test manufacturer",
 				"name": "Test manufacturer", "slug": "test-manufacturer",
 			},
-			"model": "Test model", "slug": "test-device-type",
+			"model": "Test model",
+			"slug":  "test-device-type",
 		},
 		"role": map[string]any{
 			"id": 1, "url": "/api/dcim/device-roles/1/", "display": "Server",
@@ -508,9 +269,8 @@ func devicePayload(device *Device) map[string]any {
 			"id": 1, "url": "/api/dcim/sites/1/", "display": "Test site",
 			"name": "Test site", "slug": "test-site",
 		},
-		"status":                    map[string]any{"value": device.Status, "label": statusLabel(device.Status)},
-		"custom_fields":             customFields,
-		"tags":                      tags,
+		"status":                    map[string]any{"value": status, "label": label},
+		"custom_fields":             fields,
 		"console_port_count":        0,
 		"console_server_port_count": 0,
 		"power_port_count":          0,
@@ -520,65 +280,5 @@ func devicePayload(device *Device) map[string]any {
 		"device_bay_count":          0,
 		"module_bay_count":          0,
 		"inventory_item_count":      0,
-		"last_updated":              time.Now().UTC().Format(time.RFC3339),
 	}
-}
-
-func statusLabel(status string) string { return titleCase(status) }
-
-func copyDevice(device *Device) Device {
-	copied := Device{
-		ID:           device.ID,
-		Name:         device.Name,
-		Status:       device.Status,
-		CustomFields: map[string]any{},
-		Tags:         append([]string(nil), device.Tags...),
-		Version:      device.Version,
-	}
-	for key, value := range device.CustomFields {
-		copied.CustomFields[key] = value
-	}
-	return copied
-}
-
-func readBody(r *http.Request) []byte {
-	if r.Body == nil {
-		return nil
-	}
-	defer func() { _ = r.Body.Close() }()
-	var raw json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
-		return nil
-	}
-	return raw
-}
-
-func writeJSON(w http.ResponseWriter, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(value)
-}
-
-func writeError(w http.ResponseWriter, status int, detail string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{"detail": detail})
-}
-
-func deviceIDFromPath(path string) (int, error) {
-	trimmed := strings.TrimSuffix(strings.TrimPrefix(path, "/api/dcim/devices/"), "/")
-	return strconv.Atoi(trimmed)
-}
-
-// fieldID derives a stable numeric ID from a fixture name.
-func fieldID(name string) int {
-	hasher := fnv.New32a()
-	_, _ = hasher.Write([]byte(name))
-	return int(hasher.Sum32()%100000) + 1
-}
-
-func titleCase(value string) string {
-	if value == "" {
-		return ""
-	}
-	return strings.ToUpper(value[:1]) + value[1:]
 }

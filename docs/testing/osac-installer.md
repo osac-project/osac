@@ -49,6 +49,29 @@ step of the Helm lint CI job.
 | Unit with command stubs ([DEV] OSAC-7050) | The target graph and recipe expansion of every installation entry point, serial plus `make -j4` for `install`, against a throwaway copy of the installer; `INFRA_HELM_ARGS` parity across the OpenShift install's renders and upgrades; invalid remote-cluster identifiers aborting before any mutation; the shared remote kubeconfig argument construction and its precedence in the gate render and the upgrade; the gate running `netbox_seed_check` before the bridged render | Helm, `oc`, `kubectl` and `kind` are stubs: schema evaluation, chart rendering and the deployed install are not covered here |
 | Helm contract ([DEV] OSAC-7050) | Offline `helm template` of the umbrella and infra charts with CI values; the exact schema-rejection messages (field and constraint) for the non-negative bounds and closed objects; valid boundary and default renders; the `bmaas-netbox-ci` profile's raw lookup failure and its bridged gate render with the offline token placeholder — taken when either `netbox_seed_check` sees the install's infra values deploy the `netbox-token-seed` hook or a read-only lookup finds the Secret the osac chart reads and its key, and refused when neither holds — and caller-supplied NetBox tokens (`--set` and values file) reaching the gate's render unmasked | No cluster; the gate's OpenShift values assembly (domain/version lookups) runs only in the stubbed section |
 
+## Netris runtime overlay contract (OSAC-7131)
+
+`scripts/test-networking-provisioning-overlay.py` covers the whole path from the
+inventory setting `networking_provisioning_enabled` (osac-test-infra
+`inventory/EXTRA_VARS`) to the runtime configuration. It runs the `prep-osac`
+values tasks of an `osac-test-infra` checkout through Ansible with dummy lab
+facts, for each input (omitted/default `true`, explicit `true`, JSON `false`),
+and feeds the `netris-runtime.yaml` that run produced into the install-order
+render; `install-osac` layers that file after `values/<profile>/instance.yaml`
+and `values/<profile>/netris.yaml`.
+
+| Tier | Real | Faked or not covered |
+|---|---|---|
+| Helm contract ([DEV] OSAC-7131) | The role's own overlay builder and YAML writer (`infra/netris/roles/prep-osac/tasks/generate-values.yml`), the inventory default, offline `helm template` of the platform chart layered in the installer's order for the `full-ci`, `bmaas-ci` and `vmaas-ci` profiles: the YAML boolean, the runtime overlay winning over the committed profile overlays, `--networking-provisioning-enabled` on both fulfillment deployments, `OSAC_PROVISIONING_ENABLED` on `osac-operator`, and `OSAC_ENABLE_NETWORKING_PROVISIONING` on BMF and its absence where the BMF subchart is off | The lab: Netris controller lookups, OCP release CLI image, SSH key, excluded ranges and profile selection are dummy values in `scripts/testdata/netris-runtime/produce-overlay.yml`. No cluster, AAP or provider call. Deployed behavior across services is [OSAC-6000](https://redhat.atlassian.net/browse/OSAC-6000) |
+
+It needs an `osac-test-infra` checkout (`OSAC_TEST_INFRA`, or the sibling
+`../osac-test-infra` from `tools/bootstrap.sh`) and `ansible-playbook` from
+`ansible-core`; missing prerequisites fail the gate instead of skipping it. Run
+it with `make helm-networking-test`, or alone with
+`uv run --with ansible-core --project .. python scripts/test-networking-provisioning-overlay.py`.
+The harness and its stand-in values are documented in
+`scripts/testdata/netris-runtime/README.md`.
+
 ## Install preflight (OSAC-6561)
 
 Preflight runs while Helm renders the chart. The unit/render/Kind tiers are
@@ -63,7 +86,6 @@ Kind development cluster.
 
 | Tier | Real | Faked or not covered |
 |---|---|---|
-| Unit ([DEV] OSAC-6566, OSAC-6562) | Helm rendering of the real chart, the engine, catalog, report and failure message | The cluster: `lookup`, capabilities, release revision are mocked. The plugin's fake client rejects a LIST of a kind with no objects, so empty-list branches are not covered |
 | Harness unit | CRD readiness deadlines and fixture-error diagnostics, through the preflight harness script under `scripts/` | Commands and time are mocked; does not replace the Kind tier. Runs in the installer unit-test CI leg |
 | Helm contract | Offline `helm template` of the umbrella and CSI charts, report schema validation, catalog consistency, the packaged archive | No cluster. Asserts the log policy on every hook Job, CSI hook deadlines, that an offline render never blocks, that `preflight.*` values are closed by the schema, and that `helm package` ships the catalog, schema and preflight templates |
 | Component integration ([DEV] OSAC-6566) | Multiple Helm majors, a real API server, real `lookup`, release Secrets, hooks, failed-hook logs | A preflight-only chart copy (no workloads); stub CRDs, a Service with an EndpointSlice, Secrets; OpenShift-only checks run as `skipped: not OpenShift` |
@@ -86,11 +108,8 @@ Coverage gaps:
   `helm template --dry-run=server -s templates/preflight/report.yaml` works
   anywhere; on Helm 4 the failing render's JSON line is the portable channel.
 
-The `helm unittest` suites for the `osac-infra` chart run in the same
-helm-unit CI leg as the umbrella-chart unit tier. They render-test the
-monitoring and exporter templates only, not a live exporter or Prometheus;
-see the [osac-metering guide](osac-metering.md) for the reader boundaries
-and remaining gaps.
+Offline render checks do not establish a live exporter or Prometheus;
+see the [osac-metering guide](osac-metering.md) for reader boundaries and gaps.
 
 ## OSAC-5343 deployed enablement coverage
 

@@ -121,6 +121,21 @@ func New(config Config) (*Client, error) {
 	return &Client{api: newAPIClient(endpoint, token, httpClient)}, nil
 }
 
+// NewClientForTest creates a Client with an injected HTTP client and API token.
+func NewClientForTest(httpClient *http.Client, endpoint, token string) *Client {
+	testClient := *httpClient
+	transport := testClient.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	testClient.Transport = &requestExtensionTransport{base: transport}
+	testClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
+	return &Client{api: newAPIClient(strings.TrimRight(endpoint, "/"), token, &testClient)}
+}
+
 // newAPIClient builds the generated SDK client shared by production and tests.
 func newAPIClient(endpoint, token string, httpClient *http.Client) *netbox.APIClient {
 	configuration := netbox.NewConfiguration()

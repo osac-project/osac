@@ -82,7 +82,7 @@
   kind: go-unit
   dir: fulfillment-service
   cmd: ginkgo run --timeout 30m -v it/realmauth
-  timeout: 40  # Four cold imports, two persisted restarts, safety tests and compilation
+  timeout: 40  # Two cold realm imports, authorization checks and compilation
   filters: [integration-tests-csi-realm-auth]
 - id: Integration test (osac-operator)
   group: integration

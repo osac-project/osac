@@ -1,6 +1,6 @@
 # Realm authorization contract tests
 
-Requires the repository's Go/Ginkgo versions, Python 3.11+, Bash, and working Podman or Docker.
+Requires the repository's Go/Ginkgo versions, Bash, and working Podman or Docker.
 
 Run from `fulfillment-service/`:
 
@@ -15,8 +15,7 @@ machine-client tokens and production JWT/JWKS/OPA API authorization.
 Seven client/import combinations succeed; the prerequisites UI credential is
 a known HTTP 401 rejection, not an eighth positive case.
 
-Persisted-realm tests cover the CSI updater, idempotence, rollback/reapply and
-unrelated state preservation; see the [administrator guide](../../../docs/guides/admin/keycloak-csi-role-scope.md).
+These contracts cover fresh imports only. Existing realms are not migrated.
 
 This is an authorization contract, not deployed storage E2E: database tenant
 filtering, Kubernetes/CSI provisioning, vendor operations and mounted PVCs are

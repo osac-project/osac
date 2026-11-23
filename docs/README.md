@@ -27,8 +27,6 @@ for account administration, access grants, credential rotation, and workload aut
   inventory onboarding, membership changes, cleanup, and troubleshooting.
 - [Labels and annotations](guides/admin/metadata.md): reserved metadata,
   private/public API behavior, permissions, filters, and compatibility.
-- [Existing Keycloak CSI role scope](guides/admin/keycloak-csi-role-scope.md):
-  explicit administrator-run update, preservation checks and owned rollback.
 - [Metering and billing](guides/admin/metering-and-billing.md): what metering
   publishes, granting a billing reader, the reading rule, and billing
   integration.

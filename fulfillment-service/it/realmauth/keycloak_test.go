@@ -15,7 +15,6 @@ package realmauth
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -36,22 +35,9 @@ type keycloakFixture struct {
 	secrets          secretStoreFixture
 	certFile         string
 	fullScopeAllowed bool
-	tool             string
-	id               string
-	resolved         string
-	corrected        []byte
-	bootstrapSecret  string
-	sentinelSecret   string
-	sentinelPassword string
 }
 
 func startKeycloak(ctx context.Context, source string) keycloakFixture {
-	return startKeycloakImport(ctx, source, false)
-}
-
-// Only the dedicated upgrade fixtures reconstruct old state. The original
-// fresh-import contracts still import the resolved shipped artifact unchanged.
-func startKeycloakImport(ctx context.Context, source string, persisted bool) keycloakFixture {
 	GinkgoHelper()
 	root, err := filepath.Abs("../../..")
 	Expect(err).ToNot(HaveOccurred())
@@ -145,13 +131,7 @@ func startKeycloakImport(ctx context.Context, source string, persisted bool) key
 	data, err := os.ReadFile(resolved)
 	Expect(err).ToNot(HaveOccurred())
 	fixture := keycloakFixture{
-		secrets: secrets, resolved: resolved, corrected: data,
-	}
-	if persisted {
-		fixture.bootstrapSecret = rand.Text()
-		fixture.sentinelSecret = rand.Text()
-		fixture.sentinelPassword = rand.Text()
-		preparePersistedRealm(fixture)
+		secrets: secrets,
 	}
 	Expect(json.Unmarshal(data, &realm)).To(Succeed())
 	fullScopeAllowed := true
@@ -184,18 +164,12 @@ func startKeycloakImport(ctx context.Context, source string, persisted bool) key
 		"--volume", importDir + ":/opt/keycloak/data/import:ro,Z",
 		"--volume", configDir + ":/test-config:ro,Z",
 	}
-	if persisted {
-		args = append(args, "--env", "KC_BOOTSTRAP_ADMIN_USERNAME", "--env", "KC_BOOTSTRAP_ADMIN_PASSWORD",
-			"--env", "KC_SPI_IMPORT_REALM_FILE_STRATEGY=OVERWRITE")
-	}
 	args = append(args,
 		image, "start", "--db=dev-file", "--hostname-strict=false", "--http-enabled=false",
 		"--https-certificate-file=/test-config/tls.crt", "--https-certificate-key-file=/test-config/tls.key",
 		"--import-realm",
 	)
 	command = exec.CommandContext(ctx, tool, args...)
-	command.Env = append(os.Environ(), "KC_BOOTSTRAP_ADMIN_USERNAME=upgrade-test-admin",
-		"KC_BOOTSTRAP_ADMIN_PASSWORD="+fixture.bootstrapSecret)
 	output, err := command.Output()
 	if err != nil {
 		Fail("Keycloak startup command failed (output withheld)")
@@ -208,12 +182,10 @@ func startKeycloakImport(ctx context.Context, source string, persisted bool) key
 	})
 	address := runContainerCommand(ctx, tool, "port", id, "8443/tcp")
 	Expect(address).To(HavePrefix("127.0.0.1:"))
-	_, err = fmt.Fprintf(GinkgoWriter, "realm=%s image=%s fresh_startup_import=%t persisted_fixture=%t\n",
-		source, image, !persisted, persisted)
+	_, err = fmt.Fprintf(GinkgoWriter, "realm=%s image=%s fresh_startup_import=true\n", source, image)
 	Expect(err).ToNot(HaveOccurred())
 	fixture.issuer = "https://" + address + "/realms/osac"
 	fixture.certFile, fixture.fullScopeAllowed = certFile, fullScopeAllowed
-	fixture.tool, fixture.id = tool, id
 	return fixture
 }
 

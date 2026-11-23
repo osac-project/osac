@@ -95,7 +95,7 @@ var _ = Describe("Generic DAO", func() {
 		DeferCleanup(ctrl.Finish)
 
 		// Prepare the database pool:
-		db, err := server.NewInstance().Build()
+		db, err := databaseServer(ctx).NewInstance().Build()
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(db.Close)
 		pool, err := db.Pool(ctx)
@@ -164,7 +164,7 @@ var _ = Describe("Generic DAO", func() {
 		}
 		Expect(readSetting()).To(Equal(`"O'Reilly"`))
 
-		value = nil
+		value = (*string)(nil)
 		_, err = generic.Update().SetObject(response.GetObject()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(readSetting()).To(BeEmpty())

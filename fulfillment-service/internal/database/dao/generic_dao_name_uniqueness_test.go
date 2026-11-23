@@ -75,7 +75,7 @@ var _ = Describe("Name uniqueness", func() {
 		ctrl = gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
 
-		db, err = server.NewInstance().Build()
+		db, err = databaseServer(ctx).NewInstance().Build()
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(db.Close)
 		pool, err = db.Pool(ctx)

@@ -36,7 +36,7 @@ var _ = Describe("Generic DAO signal", func() {
 		var err error
 		ctx = context.Background()
 
-		db, err := server.NewInstance().Build()
+		db, err := databaseServer(ctx).NewInstance().Build()
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(db.Close)
 		pool, err := db.Pool(ctx)

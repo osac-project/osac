@@ -48,7 +48,7 @@ var _ = Describe("Lock", func() {
 		DeferCleanup(ctrl.Finish)
 
 		// Prepare the database pool:
-		db, err := server.NewInstance().Build()
+		db, err := databaseServer(ctx).NewInstance().Build()
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(db.Close)
 		pool, err = db.Pool(ctx)

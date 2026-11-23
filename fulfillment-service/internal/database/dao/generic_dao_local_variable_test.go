@@ -15,6 +15,7 @@ package dao
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/jackc/pgx/v5"
@@ -34,13 +35,14 @@ var _ = Describe("Generic DAO local variables", func() {
 	var (
 		ctx     context.Context
 		builder *GenericDAOBuilder[*testsv1.Object]
+		tenancy *auth.MockTenancyLogic
 		tx      *database.MockTx
 		object  *testsv1.Object
 	)
 
 	BeforeEach(func(specCtx SpecContext) {
 		ctrl := gomock.NewController(GinkgoT())
-		tenancy := auth.NewMockTenancyLogic(ctrl)
+		tenancy = auth.NewMockTenancyLogic(ctrl)
 		tenancy.EXPECT().DetermineVisibility(gomock.Any()).Return(auth.TotalVisibility(), nil).AnyTimes()
 		builder = NewGenericDAO[*testsv1.Object]().SetLogger(logger).SetTenancyLogic(tenancy)
 		tx = database.NewMockTx(ctrl)
@@ -66,14 +68,17 @@ var _ = Describe("Generic DAO local variables", func() {
 			{"number", 42, `42`},
 			{"flag", true, `true`},
 			{"cleared", nil, ""},
+			{"nil_pointer", (*string)(nil), ""},
 			{"nil_message", (*testsv1.Metadata)(nil), ""},
+			{"json_null", json.RawMessage("null"), "null"},
 		}
 		var settings []any
-		calls := map[string]int{}
+		var calls, wantCalls []string
 		for _, tc := range cases {
+			wantCalls = append(wantCalls, tc.name)
 			builder.AddLocalVariable(tc.name, func(callbackCtx context.Context) (any, error) {
 				Expect(callbackCtx).To(BeIdenticalTo(ctx))
-				calls[tc.name]++
+				calls = append(calls, tc.name)
 				return tc.value, nil
 			})
 			settings = append(settings, tx.EXPECT().Exec(ctx, setConfig, "osac."+tc.name, tc.json))
@@ -86,9 +91,40 @@ var _ = Describe("Generic DAO local variables", func() {
 		Expect(err).NotTo(HaveOccurred())
 		_, err = dao.Create().SetObject(object).Do(ctx)
 		Expect(err).NotTo(HaveOccurred())
-		for _, tc := range cases {
-			Expect(calls[tc.name]).To(Equal(1), tc.name)
-		}
+		Expect(calls).To(Equal(wantCalls))
+	})
+
+	It("applies the outer settings after a callback writes in the same transaction", func() {
+		inner, err := builder.AddLocalVariable("test", func(context.Context) (any, error) {
+			return "inner", nil
+		}).Build()
+		Expect(err).NotTo(HaveOccurred())
+
+		outer, err := NewGenericDAO[*testsv1.Object]().SetLogger(logger).
+			SetTenancyLogic(tenancy).
+			AddLocalVariable("test", func(context.Context) (any, error) {
+				return "outer", nil
+			}).
+			AddLocalVariable("nested", func(callbackCtx context.Context) (any, error) {
+				_, err := inner.Signal().SetId(object.GetId()).Do(callbackCtx)
+				return true, err
+			}).Build()
+		Expect(err).NotTo(HaveOccurred())
+
+		gomock.InOrder(
+			tx.EXPECT().Exec(ctx, setConfig, "osac.test", `"inner"`),
+			tx.EXPECT().Exec(ctx, "set local osac.signal = 'on'"),
+			tx.EXPECT().Exec(ctx, gomock.Regex(`update objects`), object.GetId()).
+				Return(pgconn.NewCommandTag("UPDATE 1"), nil),
+			tx.EXPECT().Exec(ctx, "set local osac.signal = 'off'"),
+			tx.EXPECT().Exec(ctx, setConfig, "osac.test", `"outer"`),
+			tx.EXPECT().Exec(ctx, setConfig, "osac.nested", "true"),
+			tx.EXPECT().QueryRow(ctx, gomock.Regex(`insert into objects`), gomock.Any()).
+				Return(localVariableRow(func(...any) error { return nil })),
+		)
+		tx.EXPECT().ReportError(gomock.Any()).Times(2)
+		_, err = outer.Create().SetObject(object).Do(ctx)
+		Expect(err).NotTo(HaveOccurred())
 	})
 
 	Context("with a callback that clears a setting", func() {
@@ -174,7 +210,7 @@ var _ = Describe("Generic DAO local variables", func() {
 			Expect(response).To(BeNil())
 			Expect(err).To(MatchError(ContainSubstring(want)))
 			if callbackErr != nil || sqlErr != nil {
-				Expect(err).To(MatchError(failure))
+				Expect(errors.Is(err, failure)).To(BeTrue())
 			}
 		},
 		Entry("callback error", nil, failure, nil, "failed to evaluate"),

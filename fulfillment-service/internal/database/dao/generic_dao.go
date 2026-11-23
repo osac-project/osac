@@ -200,8 +200,9 @@ func (b *GenericDAOBuilder[O]) SetFilterDesc(value protoreflect.MessageDescripto
 }
 
 // AddLocalVariable registers a callback to set osac.<name> in the current transaction before a Create, Update,
-// Delete or Signal writes to the database. Callbacks run once per mutation, in registration order. Values are
-// encoded as JSON (using protobuf field names for protobuf messages); a nil result clears the setting.
+// Delete or Signal writes to the database. Callbacks run once per mutation, in registration order, before any
+// settings are applied. Values are encoded as JSON (using protobuf field names for protobuf messages); a nil
+// result or typed nil pointer clears the setting, while explicit JSON null is stored as "null".
 // Names must be unique lowercase identifiers containing only letters, digits and underscores, and may not start
 // with a digit. The name "signal" is reserved for the Signal operation. Build rejects invalid registrations.
 func (b *GenericDAOBuilder[O]) AddLocalVariable(

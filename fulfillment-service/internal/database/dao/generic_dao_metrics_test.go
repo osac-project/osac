@@ -47,7 +47,7 @@ var _ = Describe("Metrics", func() {
 		DeferCleanup(ctrl.Finish)
 
 		// Prepare the database:
-		db, err := server.NewInstance().Build()
+		db, err := databaseServer(ctx).NewInstance().Build()
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(db.Close)
 		pool, err := db.Pool(ctx)

@@ -132,6 +132,91 @@ var _ = Describe("Public tenants server", func() {
 			Expect(string(fields.Get(0).Name())).To(Equal("onboarded"))
 		})
 
+		It("Maps only the public onboarding status field", func() {
+			privateMessage := "private detail"
+			createResponse, err := privateServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: &privatev1.Metadata{
+						Name: "status-tenant",
+					},
+					Status: privatev1.TenantStatus_builder{
+						Onboarded:        true,
+						State:            privatev1.TenantState_TENANT_STATE_SYNCED,
+						Message:          &privateMessage,
+						IdpTenantName:    "idp-tenant",
+						BreakGlassUserId: "breakglass-user",
+						Conditions: []*privatev1.TenantCondition{
+							privatev1.TenantCondition_builder{
+								Type:   privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY,
+								Status: privatev1.ConditionStatus_CONDITION_STATUS_TRUE,
+							}.Build(),
+						},
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			publicGet, err := publicServer.Get(ctx, publicv1.TenantsGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(publicGet.GetObject().GetStatus().GetOnboarded()).To(BeTrue())
+
+			publicList, err := publicServer.List(ctx, publicv1.TenantsListRequest_builder{
+				Filter: new("this.metadata.name == 'status-tenant'"),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(publicList.GetItems()).To(HaveLen(1))
+			Expect(publicList.GetItems()[0].GetStatus().GetOnboarded()).To(BeTrue())
+
+			privateGet, err := privateServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			privateStatus := privateGet.GetObject().GetStatus()
+			Expect(privateStatus.GetOnboarded()).To(BeTrue())
+			Expect(privateStatus.GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
+			Expect(privateStatus.GetMessage()).To(Equal("private detail"))
+			Expect(privateStatus.GetIdpTenantName()).To(Equal("idp-tenant"))
+			Expect(privateStatus.GetBreakGlassUserId()).To(Equal("breakglass-user"))
+			Expect(privateStatus.GetConditions()).To(HaveLen(1))
+		})
+
+		It("Creates a tenant without status", func() {
+			response, err := publicServer.Create(ctx, publicv1.TenantsCreateRequest_builder{
+				Object: publicv1.Tenant_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "public-tenant",
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetId()).To(Equal("public-tenant"))
+			Expect(response.GetObject().GetMetadata().GetName()).To(Equal("public-tenant"))
+		})
+
+		It("Updates a tenant without status", func() {
+			createResponse, err := privateServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: &privatev1.Metadata{
+						Name: "update-tenant",
+					},
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			updateResponse, err := publicServer.Update(ctx, publicv1.TenantsUpdateRequest_builder{
+				Object: publicv1.Tenant_builder{
+					Id: id,
+					Metadata: publicv1.Metadata_builder{
+						Name:   "update-tenant",
+						Labels: map[string]string{"public": "true"},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("public", "true"))
+		})
+
 		It("Rejects public tenant creation with status", func() {
 			_, err := publicServer.Create(ctx, publicv1.TenantsCreateRequest_builder{
 				Object: publicv1.Tenant_builder{

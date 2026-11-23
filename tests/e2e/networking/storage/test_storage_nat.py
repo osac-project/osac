@@ -103,7 +103,7 @@ def _mount_and_write(vm: dict[str, str], endpoint: StorageEndpoint, identity: st
             pytest.fail(
                 f"guest {vm['name']} has no external egress for the NFS client install; probe output: {output!r}"
             )
-        output, status = _run(vm, "sudo dnf install -y nfs-utils", identity, timeout=600)
+        output, status = _run(vm, "sudo dnf -y --setopt=ip_resolve=4 install nfs-utils", identity, timeout=600)
         assert status == 0, f"NFS client install failed on {vm['name']}: {output!r}"
     output, status = _run(vm, ensure_nfs_client_command(), identity, timeout=60)
     assert status == 0, f"NFS client setup failed on {vm['name']}: {output!r}"

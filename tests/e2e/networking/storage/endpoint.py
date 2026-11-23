@@ -144,7 +144,7 @@ def ensure_nfs_client_command() -> str:
     """Install the NFS client only when the guest image lacks mount.nfs."""
     return (
         "command -v mount.nfs >/dev/null"
-        " || { command -v dnf >/dev/null && sudo dnf install -y nfs-utils; }"
+        " || { command -v dnf >/dev/null && sudo dnf -y --setopt=ip_resolve=4 install nfs-utils; }"
         " || { command -v apt-get >/dev/null && sudo apt-get update"
         " && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nfs-common; }"
         " || true"

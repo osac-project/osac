@@ -4,7 +4,7 @@ import { deleteResourceModalIds } from '../ui-components/src/components/Resource
 type DiskImageLocator =
   | readonly [
       role: 'link' | 'heading' | 'button' | 'textbox' | 'grid' | 'navigation',
-      options: { name: string; exact: true },
+      options: { name: string | RegExp; exact: true },
     ]
   | readonly [label: string];
 
@@ -13,7 +13,9 @@ const id = (value: string): readonly [string] => [`#${value}`];
 export const DiskImagesMainPage = {
   pageTitle: ['heading', { name: 'Disk images', exact: true }],
   createDiskImage: ['link', { name: 'Create disk image', exact: true }],
+  listView: ['button', { name: 'List view', exact: true }],
   diskImagesTable: ['grid', { name: 'Disk images', exact: true }],
+  emptyState: ['heading', { name: /^No disk images (found|match your filters)$/, exact: true }],
   showObsolete: id(diskImageFieldIds.showObsolete),
 } as const satisfies Record<string, DiskImageLocator>;
 

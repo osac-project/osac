@@ -167,3 +167,24 @@ pnpm run typecheck
 pnpm lint
 pnpm test
 ```
+
+## Temporary VMaaS tenant setup workaround
+
+On deployments affected by [OSAC-7988](https://redhat.atlassian.net/browse/OSAC-7988)
+and [OSAC-7989](https://redhat.atlassian.net/browse/OSAC-7989), set
+`OSAC_E2E_TENANT_BOOTSTRAP_CONFIG` to the directory of an authenticated private
+OSAC CLI session for the same deployment. The private session must be allowed
+to read the new test tenant's break-glass Secret. The other steps continue to
+use the ordinary browser and CLI test identities.
+
+```bash
+OSAC_E2E_TENANT_BOOTSTRAP_CONFIG="$private_osac_cli_config" OSAC_VM_FLOW_MODE=full \
+  pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-all-full-flows --workers=1 --reporter=line
+```
+
+This skips the `shared` tenant status check and the credentials dialog
+assertions. The flow creates a fresh tenant, verifies that both `system` and
+the new tenant are `Synced`, and uses the exact break-glass Secret ID returned
+by the browser's deployment. Teardown uses the recorded tenant identity to
+clean up a tenant created by this run if credential setup fails.

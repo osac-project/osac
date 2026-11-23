@@ -37,6 +37,15 @@ const diskImageLink = (page: Page, diskImageName: string) => {
     .getByRole('link', { name: accessibleName });
 };
 
+const selectDiskImageListView = async (page: Page): Promise<void> => {
+  const listView = page.getByRole(...DiskImagesMainPage.listView);
+  await expect(listView).toBeVisible();
+  if ((await listView.getAttribute('aria-pressed')) !== 'true') {
+    await listView.click();
+  }
+  await expect(listView).toHaveAttribute('aria-pressed', 'true');
+};
+
 /** Verify a disk image detail value in the description-list row for its label. */
 export const expectDiskImageField = async (
   page: Page,
@@ -158,13 +167,13 @@ export const expectDiskImageListed = async (page: Page, diskImageName: string): 
     .click();
 
   await expect(page.getByRole(...DiskImagesMainPage.pageTitle)).toBeVisible();
-  const diskImagesTable = page.getByRole(...DiskImagesMainPage.diskImagesTable);
-  await expect(diskImagesTable).toBeVisible();
+  await selectDiskImageListView(page);
   await expect(diskImageLink(page, diskImageName)).toBeVisible();
 };
 
 /** Open a disk image detail page from its exact table link. */
 export const openDiskImageDetails = async (page: Page, diskImageName: string): Promise<void> => {
+  await selectDiskImageListView(page);
   const link = diskImageLink(page, diskImageName);
   await expect(link).toBeVisible();
   await link.click();
@@ -180,8 +189,10 @@ export const includeObsoleteDiskImages = async (page: Page, searchTerm?: string)
   }
   await page.goto(listUrl.toString());
 
-  // The list table is rendered after the filtered API query completes.
-  await expect(page.getByRole(...DiskImagesMainPage.diskImagesTable)).toBeVisible({
+  await selectDiskImageListView(page);
+  const table = page.getByRole(...DiskImagesMainPage.diskImagesTable);
+  const emptyState = page.getByRole(...DiskImagesMainPage.emptyState);
+  await expect(table.or(emptyState)).toBeVisible({
     timeout: 15_000,
   });
   const showObsolete = page.locator(...DiskImagesMainPage.showObsolete);
@@ -244,11 +255,6 @@ export const deleteDiskImage = async (page: Page, diskImageName: string): Promis
   );
   await expect(page.getByRole(...DiskImagesMainPage.pageTitle)).toBeVisible();
 
-  await includeObsoleteDiskImages(page);
-
-  const diskImagesTable = page.getByRole(...DiskImagesMainPage.diskImagesTable);
-  await expect(diskImagesTable).toBeVisible();
-  // Search only for the deleted resource, then assert that its link is gone.
-  await page.getByRole('textbox', { name: 'Search disk images', exact: true }).fill(diskImageName);
+  await includeObsoleteDiskImages(page, diskImageName);
   await expect(diskImageLink(page, diskImageName)).toHaveCount(0, { timeout: 120_000 });
 };

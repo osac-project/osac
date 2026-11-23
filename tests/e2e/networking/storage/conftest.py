@@ -20,7 +20,12 @@ from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env
 from tests.e2e.networking.storage.endpoint import StorageEndpoint, assert_log_readable, from_env
 from tests.e2e.networking.vmaas import guest_ssh, stack
-from tests.e2e.vmaas.conftest import default_disk_image, default_instance_type, test_run_id  # noqa: F401
+from tests.e2e.vmaas.conftest import (  # noqa: F401
+    DEFAULT_DISK_IMAGE_SOURCE_REF,
+    default_disk_image,
+    default_instance_type,
+    test_run_id,
+)
 
 DEFAULT_SUBNET_NAME = "default-ipv4"
 DEFAULT_SG_NAME = "default"
@@ -85,6 +90,26 @@ def tenant2_default_network(private_grpc: GRPCClient, jwt_grpc_tenant2_admin: GR
     # FR-6 proves onboarding finished before the test relies on tenant2's defaults.
     wait_for_tenant_default_networking_ready(grpc=private_grpc, tenant_name="tenant2")
     return _default_network(jwt_grpc_tenant2_admin)
+
+
+@pytest.fixture(scope="session")
+def tenant2_disk_image(
+    jwt_grpc_tenant2_admin: GRPCClient,
+    test_run_id: str,  # noqa: F811
+) -> Iterator[str]:
+    """A DiskImage is tenant-scoped; create one tenant2 can see for its VM."""
+    name = f"e2e-storage-di-t2-{test_run_id}"
+    image_id = jwt_grpc_tenant2_admin.create_disk_image(
+        name=name,
+        source_ref=DEFAULT_DISK_IMAGE_SOURCE_REF,
+        guest_os_family="GUEST_OS_FAMILY_LINUX",
+        architecture=["ARCHITECTURE_AMD64"],
+    )
+    yield name
+    try:
+        jwt_grpc_tenant2_admin.delete_disk_image(disk_image_id=image_id)
+    except Exception as exc:
+        print(f"WARNING: failed to delete tenant2 DiskImage {image_id}: {exc}")
 
 
 @pytest.fixture(scope="session")

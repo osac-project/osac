@@ -29,7 +29,7 @@ A networking setup = FABRIC MANAGER   x  KUBERNETES MANAGER  x  ENABLED SERVICES
   physical network: switches, routing, NAT, external addresses, and bare-metal
   switch ports.
 - **Kubernetes Manager** (optional): the OSAC plug-in that connects VMs on the
-  OpenShift management cluster to the same networks. Needed only for VMs.
+  OpenShift cluster that hosts them to the same networks. Needed only for VMs.
 - **Enabled services**: which of VMaaS, BMaaS, and CaaS the deployment offers.
 
 The tenant never sees these choices. The same tenant resources work the same
@@ -97,7 +97,7 @@ Key behaviors:
  | Kubernetes Manager         |          | Fabric Manager                |
  | (OSAC: cudn_evpn)          |          | (Netris, AgentlessNet, or the |
  | VM networking on the       |          |  provider's own)              |
- | OpenShift hub              |          | switches, routing, NAT,       |
+ | VM cluster                 |          | switches, routing, NAT,       |
  +----------------------------+          | external IPs, server ports    |
                                          +-------------------------------+
 ```
@@ -162,8 +162,8 @@ it must support EVPN-VXLAN so it can pair with `cudn_evpn`.
 
 ### cudn_evpn (Kubernetes Manager, shipped with OSAC)
 
-Connects VMs running on the OpenShift management cluster to the tenant's
-networks. It uses the OVN-Kubernetes networking built into OpenShift to
+Connects VMs to the tenant's networks on the OpenShift cluster that hosts
+them: the management cluster or a [dedicated VM cluster](#vms-on-dedicated-vm-clusters). It uses the OVN-Kubernetes networking built into OpenShift to
 extend each tenant Subnet from the switches onto the cluster nodes over
 EVPN-VXLAN, so VMs, bare-metal servers, and the outside world see one
 network.
@@ -219,6 +219,27 @@ and live migration. Its SecurityGroups are enforced on the cluster. Inbound
 access is through an ExternalIP, outbound through the VirtualNetwork's
 NATGateway. In this phase of the design, VMs can use only the first Subnet of
 each VirtualNetwork; bare-metal servers can use any Subnet.
+
+### VMs on dedicated VM clusters
+
+By default, VMs run on the management cluster, next to OSAC itself. A newer
+requirement, whose design is in review, lets the provider run VMs on one or
+more dedicated VM clusters instead, so tenant traffic and failures stay off
+the cluster that runs OSAC:
+
+- The provider registers each VM cluster with OSAC and prepares it for
+  tenant networking once, together with its network team. No per-tenant or
+  per-VM network setup is needed.
+- When a tenant is created, the provider assigns it one VM cluster (or the
+  management cluster). All the tenant's VMs run there, and its networks work
+  there the same way. Tenants do not see or choose the cluster, and the
+  assignment cannot change later.
+- A cluster that is not prepared for networking cannot be assigned, and a
+  cluster can be removed only when no tenant uses it.
+- OSAC itself still runs on one management cluster.
+
+See the
+[per-tenant VM clusters requirements](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-7305-remote-vm-cluster-networking/prd.md).
 
 **Bare-metal servers.** OSAC installs the server on the provider's
 provisioning network, then moves the server's chosen network port onto the
@@ -292,7 +313,8 @@ The following are outside the accepted networking design:
   every tenant.
 - Network technologies other than EVPN-VXLAN for VMs, and Kubernetes
   Managers written by providers.
-- More than one management cluster (hub), or VMs on a separate cluster.
+- More than one management cluster (hub). VMs on dedicated VM clusters are
+  in design ([above](#vms-on-dedicated-vm-clusters)).
 - Changing the managers, enabled services, or defaults while tenants exist.
 
 ## Glossary
@@ -304,7 +326,9 @@ The following are outside the accepted networking design:
 - **EVPN-VXLAN:** a standard way to run many isolated tenant networks over
   one shared physical network.
 - **Hub (management cluster):** the provider's OpenShift cluster that runs
-  OSAC itself and the tenants' VMs.
+  OSAC itself and, by default, the tenants' VMs.
+- **VM cluster:** an OpenShift cluster registered with OSAC to host tenant
+  VMs instead of the management cluster.
 - **Kubernetes network policy:** a firewall rule applied by OpenShift to
   traffic of the workloads it runs.
 - **NAT:** translating private addresses to an external one; outbound NAT

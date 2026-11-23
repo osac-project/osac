@@ -67,7 +67,10 @@ message AuditActor {
 // The record contains identifying and outcome information only. It does not contain request or response payloads,
 // credentials, or free-text error details.
 message AuditRecord {
-  // Metadata.name is the stable event identifier. Metadata.tenant is the owning tenant for this record.
+  // Unique identifier assigned by the system when the audit record is created.
+  optional string id = 43;
+
+  // Metadata.tenant is the owning tenant for this record.
   Metadata metadata = 1;
 
   // Correlates request and response events.
@@ -106,9 +109,9 @@ message AuditRecord {
     BareMetalInstanceTemplateReference bare_metal_instance_template = 30;
     BareMetalInstanceCatalogItemReference bare_metal_instance_catalog_item = 31;
     ExternalIPPoolReference external_ip_pool = 35;
-    AddOnOperatorReference add_on_operator = 7;
     StorageTierReference storage_tier = 39;
     ServiceAccountReference service_account = 42;
+    AddOnOperatorReference add_on_operator = 7;
   }
 
   // Outcome of the action, such as success or failure.

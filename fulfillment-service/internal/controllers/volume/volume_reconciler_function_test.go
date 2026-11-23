@@ -1081,6 +1081,126 @@ var _ = Describe("selectHub", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("no hubs available"))
 	})
+
+	It("inherits the hub from the owning ComputeInstance", func() {
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), "hub-ci").
+			Return(&controllers.HubEntry{
+				Namespace: "ci-hub-ns",
+				Client:    fake.NewClientBuilder().Build(),
+			}, nil)
+
+		parent := privatev1.ComputeInstance_builder{
+			Id:     "ci-01a1",
+			Status: privatev1.ComputeInstanceStatus_builder{Hub: "hub-ci"}.Build(),
+		}.Build()
+		client := &inventoryParentClient{parent: parent}
+
+		t := &task{
+			r: &function{
+				logger:                 logger,
+				hubCache:               hubCache,
+				computeInstancesClient: client,
+			},
+			volume: privatev1.Volume_builder{
+				Id: "vol-owned-hub",
+				Spec: privatev1.VolumeSpec_builder{
+					Owner: privatev1.VolumeOwner_builder{
+						Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+						Reference: "ci-01a1",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		err := t.selectHub(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(client.calls).To(Equal(1))
+		Expect(t.hubId).To(Equal("hub-ci"))
+		Expect(t.hubNamespace).To(Equal("ci-hub-ns"))
+	})
+
+	It("fails when the owning ComputeInstance is not found", func() {
+		parent := privatev1.ComputeInstance_builder{
+			Id:     "ci-other",
+			Status: privatev1.ComputeInstanceStatus_builder{Hub: "hub-ci"}.Build(),
+		}.Build()
+		client := &inventoryParentClient{parent: parent}
+
+		t := &task{
+			r: &function{
+				logger:                 logger,
+				computeInstancesClient: client,
+			},
+			volume: privatev1.Volume_builder{
+				Id: "vol-missing-owner",
+				Spec: privatev1.VolumeSpec_builder{
+					Owner: privatev1.VolumeOwner_builder{
+						Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+						Reference: "ci-gone",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		err := t.selectHub(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("ci-gone"))
+		Expect(err.Error()).To(ContainSubstring("not found"))
+	})
+
+	It("fails when the owning ComputeInstance has no hub assigned", func() {
+		parent := privatev1.ComputeInstance_builder{
+			Id: "ci-01a1",
+		}.Build()
+		client := &inventoryParentClient{parent: parent}
+
+		t := &task{
+			r: &function{
+				logger:                 logger,
+				computeInstancesClient: client,
+			},
+			volume: privatev1.Volume_builder{
+				Id: "vol-owner-no-hub",
+				Spec: privatev1.VolumeSpec_builder{
+					Owner: privatev1.VolumeOwner_builder{
+						Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+						Reference: "ci-01a1",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		err := t.selectHub(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("no hub assigned"))
+	})
+
+	It("fails when the owning ComputeInstance lookup fails", func() {
+		client := &inventoryParentClient{err: status.Error(codes.Unavailable, "parent unavailable")}
+
+		t := &task{
+			r: &function{
+				logger:                 logger,
+				computeInstancesClient: client,
+			},
+			volume: privatev1.Volume_builder{
+				Id: "vol-owner-lookup",
+				Spec: privatev1.VolumeSpec_builder{
+					Owner: privatev1.VolumeOwner_builder{
+						Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+						Reference: "ci-01a1",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		err := t.selectHub(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("ci-01a1"))
+		Expect(err.Error()).To(ContainSubstring("parent unavailable"))
+	})
 })
 
 var _ = Describe("Kubernetes validation error handling", func() {

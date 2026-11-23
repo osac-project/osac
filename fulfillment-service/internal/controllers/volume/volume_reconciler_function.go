@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"slices"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -42,6 +43,10 @@ import (
 )
 
 const objectPrefix = "vol-"
+
+// requeueOwnerHubDelay is the retry delay used while the owning workload's
+// hub cannot be resolved yet.
+const requeueOwnerHubDelay = time.Second
 
 // FunctionBuilder contains the data and logic needed to build a function that
 // reconciles volumes. It follows the same builder pattern as other reconciler
@@ -328,21 +333,31 @@ func (t *task) delete(ctx context.Context) (err error) {
 	return controllers.RequeueAfterKubernetesDeletion("volume")
 }
 
-// selectHub assigns a hub to the volume. Unlike resources that inherit their
-// hub from a parent (e.g. NATGateway inherits from VirtualNetwork), volumes
-// are independent, so the reconciler picks a hub randomly from the available
-// hubs (same as ComputeInstance).
+// selectHub assigns a hub to the volume. A volume that carries an owner
+// inherits the hub of the owning workload — its Volume CR is co-located
+// with the owner's CR — and the reconcile fails closed while the owner's
+// hub cannot be resolved. Ownerless volumes are independent, so the
+// reconciler picks a hub randomly from the available hubs (same as
+// ComputeInstance).
 func (t *task) selectHub(ctx context.Context) error {
 	t.hubId = t.volume.GetStatus().GetHub()
 	if t.hubId == "" {
-		response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
-		if err != nil {
-			return err
+		if owner := t.volume.GetSpec().GetOwner(); owner != nil {
+			hubId, err := t.ownerHub(ctx, owner)
+			if err != nil {
+				return err
+			}
+			t.hubId = hubId
+		} else {
+			response, err := t.r.hubsClient.List(ctx, privatev1.HubsListRequest_builder{}.Build())
+			if err != nil {
+				return err
+			}
+			if response == nil || len(response.Items) == 0 {
+				return errors.New("no hubs available")
+			}
+			t.hubId = response.Items[rand.IntN(len(response.Items))].GetId()
 		}
-		if response == nil || len(response.Items) == 0 {
-			return errors.New("no hubs available")
-		}
-		t.hubId = response.Items[rand.IntN(len(response.Items))].GetId()
 	}
 	t.r.logger.DebugContext(
 		ctx,
@@ -356,6 +371,32 @@ func (t *task) selectHub(ctx context.Context) error {
 	t.hubNamespace = hubEntry.Namespace
 	t.hubClient = hubEntry.Client
 	return nil
+}
+
+// ownerHub resolves the hub of the workload that owns the volume. It
+// returns a retryable error — the reconcile is requeued — when the owner
+// cannot be fetched or has no hub assigned yet.
+func (t *task) ownerHub(ctx context.Context, owner *privatev1.VolumeOwner) (string, error) {
+	if t.r.computeInstancesClient == nil {
+		return "", fmt.Errorf("ComputeInstances client is required to resolve the owning workload %q", owner.GetReference())
+	}
+	response, err := t.r.computeInstancesClient.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{
+		Id: owner.GetReference(),
+	}.Build())
+	if err != nil {
+		return "", controllers.RequeueAfter(
+			fmt.Errorf("failed to get the owning compute instance %q: %w", owner.GetReference(), err),
+			requeueOwnerHubDelay,
+		)
+	}
+	hubId := response.GetObject().GetStatus().GetHub()
+	if hubId == "" {
+		return "", controllers.RequeueAfter(
+			fmt.Errorf("owning compute instance %q has no hub assigned", owner.GetReference()),
+			requeueOwnerHubDelay,
+		)
+	}
+	return hubId, nil
 }
 
 func (t *task) getHub(ctx context.Context) error {

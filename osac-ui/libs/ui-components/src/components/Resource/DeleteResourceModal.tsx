@@ -23,6 +23,8 @@ interface DeleteMutation<TVariables> {
 
 interface DeleteResourceModalProps<TVariables> {
   resourceName: string;
+  /** When set, the confirmation cannot submit (a dependent appeared meanwhile). */
+  disabledReason?: string;
   label: ReactNode;
   errorLabel: string;
   onClose: () => void;
@@ -33,6 +35,7 @@ interface DeleteResourceModalProps<TVariables> {
 
 const DeleteResourceModal = <TVariables,>({
   resourceName,
+  disabledReason,
   label,
   errorLabel,
   onClose,
@@ -79,7 +82,7 @@ const DeleteResourceModal = <TVariables,>({
             reset();
             mutate(variables, { onSuccess: () => handleClosing(onSuccess) });
           }}
-          isDisabled={isPending}
+          isDisabled={isPending || Boolean(disabledReason)}
           isLoading={isPending}
         >
           {t('Delete')}

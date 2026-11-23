@@ -1,9 +1,11 @@
 import { VirtualNetworkState } from '@osac/types';
 
+import StatusWithMessage from './StatusWithMessage';
 import { ResourceStatusLabel, type StatusKind } from '../Resource/ResourceStatusLabel';
 
 interface VirtualNetworkStatusLabelProps {
   state?: VirtualNetworkState;
+  message?: string;
 }
 
 const VIRTUAL_NETWORK_STATUS_MAP: Record<
@@ -26,8 +28,12 @@ const resolveVirtualNetworkStatus = (
   return VIRTUAL_NETWORK_STATUS_MAP[VirtualNetworkState.UNSPECIFIED];
 };
 
-export const VirtualNetworkStatusLabel = ({ state }: VirtualNetworkStatusLabelProps) => {
+export const VirtualNetworkStatusLabel = ({ state, message }: VirtualNetworkStatusLabelProps) => {
   const { status, text } = resolveVirtualNetworkStatus(state);
 
-  return <ResourceStatusLabel status={status} text={text} />;
+  return (
+    <StatusWithMessage message={message}>
+      <ResourceStatusLabel status={status} text={text} />
+    </StatusWithMessage>
+  );
 };

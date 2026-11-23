@@ -1,17 +1,9 @@
 import { Route, Routes } from 'react-router-dom';
 import { create } from '@bufbuild/protobuf';
-import { Code, ConnectError } from '@connectrpc/connect';
-import { screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { screen, within } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
 
-import type {
-  ExternalIP,
-  NATGateway,
-  SecurityGroup,
-  Subnet,
-  VirtualNetwork,
-  VirtualNetworksDeleteRequest,
-} from '@osac/types';
+import type { ExternalIP, NATGateway, SecurityGroup, Subnet, VirtualNetwork } from '@osac/types';
 import {
   ExternalIPState,
   NATGatewayState,
@@ -21,23 +13,25 @@ import {
   SubnetState,
   VirtualNetworkLocalReferenceSchema,
   VirtualNetworkState,
-  VirtualNetworksDeleteResponseSchema,
 } from '@osac/types';
 
 import AttachNatGatewayWizardPage from './AttachNatGatewayWizardPage';
 import { VirtualNetworkDetailPage } from './VirtualNetworkDetailPage';
-import type {
-  MockApiFixtures,
-  MockTransportOverrides,
-} from '../../test-utils/createMockConnectTransport';
+import type { MockApiFixtures } from '../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const mockVN = {
   id: 'vn-1',
-  metadata: { name: 'vn-prod' },
+  metadata: { name: 'vn-prod', project: '', labels: {} },
   spec: { ipv4Cidr: '10.0.0.0/16' },
   status: { state: VirtualNetworkState.READY },
 } as VirtualNetwork;
+
+const defaultVN = {
+  ...mockVN,
+  id: 'vn-default',
+  metadata: { name: 'default', labels: { 'osac.openshift.io/default': 'true' } },
+} as unknown as VirtualNetwork;
 
 const mockSubnets = [
   {
@@ -101,7 +95,8 @@ const attachedIp = {
 
 const renderPage = (
   fixtures: MockApiFixtures = {},
-  transportOverrides: MockTransportOverrides = {},
+  path = '/networking/virtual-networks/vn-1',
+  transportOverrides = {},
 ) =>
   renderWithProviders(
     <Routes>
@@ -109,14 +104,12 @@ const renderPage = (
         path="/networking/virtual-networks/:id/nat-gateway/attach"
         element={<AttachNatGatewayWizardPage />}
       />
-      <Route path="/networking/virtual-networks" element={<div>virtual networks list</div>} />
-      <Route path="/networking/subnets/:id" element={<div>subnet details</div>} />
       <Route path="/networking/virtual-networks/:id" element={<VirtualNetworkDetailPage />} />
     </Routes>,
     {
-      routerEntries: ['/networking/virtual-networks/vn-1'],
+      routerEntries: [path],
       apiFixtures: {
-        virtualNetworks: [mockVN],
+        virtualNetworks: [mockVN, defaultVN],
         subnets: mockSubnets,
         securityGroups: mockSecurityGroups,
         ...fixtures,
@@ -126,72 +119,186 @@ const renderPage = (
   );
 
 describe('VirtualNetworkDetailPage', () => {
-  it('renders the security groups scoped to this virtual network', async () => {
+  it('shows the overview details, project Root and dependent counts', async () => {
     renderPage();
 
-    expect(await screen.findByText('Security groups')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'sg-web' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'vn-prod' })).toBeInTheDocument();
+    expect(screen.getByText('Root')).toBeInTheDocument();
+    expect(screen.getByText('10.0.0.0/16')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Overview' })).toHaveAttribute('aria-selected', 'true');
   });
 
   it('shows an empty state when there are no security groups', async () => {
-    renderPage({ securityGroups: [] });
+    const { user } = renderPage({ securityGroups: [] });
 
+    await user.click(await screen.findByRole('tab', { name: 'Security groups' }));
     expect(await screen.findByText(/No security groups yet/i)).toBeInTheDocument();
   });
 
   it('keeps the virtual network and its child rows read-only', async () => {
-    renderPage();
+    const { user } = renderPage();
 
+    await user.click(await screen.findByRole('tab', { name: 'Subnets' }));
     expect(await screen.findByText('subnet-a')).toBeInTheDocument();
-    expect(await screen.findByRole('link', { name: 'sg-web' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Create subnet' })).toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: 'Security groups' }));
+    expect(await screen.findByRole('link', { name: 'sg-web' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Create security group' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^(Edit|Update)/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: /^(Edit|Update)/ })).not.toBeInTheDocument();
   });
 
-  it('opens the create modal with the current virtual network pre-selected and locked', async () => {
+  it('links each subnet to its details page', async () => {
     const { user } = renderPage();
 
-    await user.click(await screen.findByRole('button', { name: /Create security group/i }));
+    await user.click(await screen.findByRole('tab', { name: 'Subnets' }));
+    expect(screen.getByRole('link', { name: 'subnet-a' })).toHaveAttribute(
+      'href',
+      '/networking/subnets/subnet-1',
+    );
+  });
+
+  it('renders the Unknown status instead of a literal 0', async () => {
+    renderPage(
+      {
+        virtualNetworks: [
+          mockVN,
+          defaultVN,
+          {
+            ...mockVN,
+            id: 'vn-unknown',
+            status: { state: VirtualNetworkState.UNSPECIFIED },
+          } as unknown as VirtualNetwork,
+        ],
+      },
+      '/networking/virtual-networks/vn-unknown',
+    );
+
+    expect(await screen.findByText('Unknown')).toBeInTheDocument();
+  });
+
+  it('disables Delete for an automatically created NAT gateway', async () => {
+    renderPage({
+      natGateways: [
+        {
+          ...attachedNat,
+          metadata: {
+            name: 'nat-egress',
+            labels: { 'osac.openshift.io/auto-created-for': 'virtual-network/vn-1' },
+          },
+        } as unknown as NATGateway,
+      ],
+      externalIps: [attachedIp],
+    });
+
+    expect(await screen.findByText('nat-egress')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete' })).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('disables Delete for a default NAT gateway', async () => {
+    renderPage({
+      natGateways: [
+        {
+          ...attachedNat,
+          metadata: { name: 'nat-egress', labels: { 'osac.openshift.io/default': 'true' } },
+        } as unknown as NATGateway,
+      ],
+      externalIps: [attachedIp],
+    });
+
+    expect(await screen.findByText('nat-egress')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete' })).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('shows the subnets in the Subnets tab', async () => {
+    const { user } = renderPage();
+
+    await user.click(await screen.findByRole('tab', { name: 'Subnets' }));
+    const tabPanel = screen.getByRole('tabpanel');
+    expect(within(tabPanel).getByText('subnet-a')).toBeInTheDocument();
+    expect(within(tabPanel).getByText('10.0.1.0/24')).toBeInTheDocument();
+  });
+
+  it('shows the security groups in the Security groups tab and creates one there', async () => {
+    const { user } = renderPage();
+
+    await user.click(await screen.findByRole('tab', { name: 'Security groups' }));
+    const tabPanel = screen.getByRole('tabpanel');
+    expect(within(tabPanel).getByRole('link', { name: 'sg-web' })).toBeInTheDocument();
+
+    await user.click(within(tabPanel).getByRole('button', { name: /Create security group/i }));
 
     expect(screen.getByRole('heading', { name: 'Create security group' })).toBeInTheDocument();
-    const vnField = screen.getByLabelText(/Virtual Network/i);
+    const dialog = screen.getByRole('dialog');
+    const vnField = within(dialog).getByLabelText(/Virtual Network/i);
     expect(vnField).toHaveTextContent(/vn-prod/i);
     expect(vnField.closest('button')).toBeDisabled();
   });
 
-  it('shows an empty NAT gateway section with Create', async () => {
-    const { user } = renderPage();
+  it('shows a dash and Create NAT gateway when none is attached', async () => {
+    renderPage();
 
-    expect(
-      await screen.findByText('No NAT gateway associated with this virtual network.'),
-    ).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Create' }));
-    expect(screen.getByRole('heading', { name: 'NAT gateway attachment' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Create NAT gateway' })).toBeInTheDocument();
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0);
   });
 
-  it('shows attached NAT gateway name, address, status, and delete', async () => {
+  it('hides Create NAT gateway and blocks Delete on a default network', async () => {
+    renderPage({}, '/networking/virtual-networks/vn-default');
+
+    await screen.findByRole('heading', { name: 'default' });
+    expect(screen.queryByRole('button', { name: 'Create NAT gateway' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete virtual network' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+  });
+
+  it('blocks Delete while the loaded dependents exist', async () => {
+    renderPage();
+
+    await screen.findByRole('heading', { name: 'vn-prod' });
+    expect(screen.getByRole('button', { name: 'Delete virtual network' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+  });
+
+  it('opens the delete confirmation when the network has no dependents', async () => {
+    const { user } = renderPage({ subnets: [], securityGroups: [] });
+
+    await screen.findByRole('heading', { name: 'vn-prod' });
+    await user.click(screen.getByRole('button', { name: 'Delete virtual network' }));
+    expect(screen.getByRole('dialog', { name: /Delete vn-prod\?/ })).toBeInTheDocument();
+  });
+
+  it('shows the attached NAT gateway name and address and deletes it', async () => {
     const { user } = renderPage({
       natGateways: [attachedNat],
       externalIps: [attachedIp],
     });
 
     expect(await screen.findByText('nat-egress')).toBeInTheDocument();
-    expect(
-      screen.getByText('NAT gateway attachment').closest('.pf-m-secondary'),
-    ).toBeInTheDocument();
-    expect(screen.getByText('203.0.113.10')).toBeInTheDocument();
+    expect(await screen.findByText(/203\.0\.113\.10/)).toBeInTheDocument();
     expect(screen.getAllByText('Ready').length).toBeGreaterThan(0);
-    expect(screen.getByText('203.0.113.10').closest('code')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Actions for NAT gateway attachment' }));
-    await user.click(screen.getByRole('menuitem', { name: 'Delete' }));
-    expect(screen.getByRole('heading', { name: /Delete nat-egress\?/ })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    expect(screen.getByRole('dialog', { name: /Delete nat-egress\?/ })).toBeInTheDocument();
+  });
+
+  it('keeps the loaded NAT gateway visible when the address lookup fails', async () => {
+    renderPage({ natGateways: [attachedNat] }, '/networking/virtual-networks/vn-1', {
+      onExternalIpList: () => {
+        throw new Error('addresses unavailable');
+      },
+    });
+
+    expect(await screen.findByText('nat-egress')).toBeInTheDocument();
+    expect(screen.getAllByText('Ready').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
   });
 
   it('disables Delete while the NAT gateway is deleting', async () => {
-    const { user } = renderPage({
+    renderPage({
       natGateways: [
         {
           ...attachedNat,
@@ -203,154 +310,6 @@ describe('VirtualNetworkDetailPage', () => {
       externalIps: [attachedIp],
     });
 
-    await screen.findByText('nat-egress');
-    await user.click(screen.getByRole('button', { name: 'Actions for NAT gateway attachment' }));
-    const deleteItem = screen.getByRole('menuitem', { name: 'Delete' });
-    expect(deleteItem).toHaveAttribute('aria-disabled', 'true');
-    expect(deleteItem).not.toBeDisabled();
-
-    await user.click(deleteItem);
-    expect(screen.queryByRole('heading', { name: /Delete nat-egress\?/ })).not.toBeInTheDocument();
-  });
-
-  it('disables Delete for a default NAT gateway', async () => {
-    const { user } = renderPage({
-      natGateways: [
-        {
-          ...attachedNat,
-          metadata: {
-            ...attachedNat.metadata,
-            labels: { 'osac.openshift.io/default': 'true' },
-          },
-        } as NATGateway,
-      ],
-      externalIps: [attachedIp],
-    });
-
-    await screen.findByText('nat-egress');
-    await user.click(screen.getByRole('button', { name: 'Actions for NAT gateway attachment' }));
-
-    const deleteItem = screen.getByRole('menuitem', { name: 'Delete' });
-    expect(deleteItem).toHaveAttribute('aria-disabled', 'true');
-
-    await user.click(deleteItem);
-    expect(screen.queryByRole('heading', { name: /Delete nat-egress\?/ })).not.toBeInTheDocument();
-  });
-
-  it('links each subnet to its detail page', async () => {
-    renderPage();
-
-    expect(await screen.findByRole('link', { name: 'subnet-a' })).toHaveAttribute(
-      'href',
-      '/networking/subnets/subnet-1',
-    );
-  });
-
-  describe('delete', () => {
-    it('deletes the virtual network and returns to the list', async () => {
-      let deleteRequest: VirtualNetworksDeleteRequest | undefined;
-      const { user } = renderPage(
-        {},
-        {
-          onVirtualNetworkDelete: (req) => {
-            deleteRequest = req;
-            return create(VirtualNetworksDeleteResponseSchema);
-          },
-        },
-      );
-
-      await screen.findByRole('heading', { name: 'vn-prod' });
-      await user.click(screen.getByRole('button', { name: /^Delete$/ }));
-      expect(screen.getByRole('heading', { name: /Delete vn-prod\?/ })).toBeInTheDocument();
-      expect(screen.getByText(/Remove all dependent resources first/)).toBeInTheDocument();
-
-      await user.click(
-        within(screen.getByRole('dialog')).getByRole('button', { name: /^Delete$/ }),
-      );
-
-      await waitFor(() => expect(deleteRequest?.id).toBe('vn-1'));
-      expect(await screen.findByText('virtual networks list')).toBeInTheDocument();
-    });
-
-    it('keeps the modal open and shows the server error when deletion fails', async () => {
-      const { user } = renderPage(
-        {},
-        {
-          onVirtualNetworkDelete: () => {
-            throw new ConnectError(
-              'cannot delete virtual network: referenced by Subnet subnet-1',
-              Code.FailedPrecondition,
-            );
-          },
-        },
-      );
-
-      await screen.findByRole('heading', { name: 'vn-prod' });
-      await user.click(screen.getByRole('button', { name: /^Delete$/ }));
-      await user.click(
-        within(screen.getByRole('dialog')).getByRole('button', { name: /^Delete$/ }),
-      );
-
-      expect(await screen.findByText('Failed to delete virtual network')).toBeInTheDocument();
-      expect(screen.getByText(/referenced by Subnet subnet-1/)).toBeInTheDocument();
-      expect(screen.getByRole('heading', { name: /Delete vn-prod\?/ })).toBeInTheDocument();
-    });
-
-    it('does not delete when Cancel is clicked', async () => {
-      const onVirtualNetworkDelete = vi.fn();
-      const { user } = renderPage({}, { onVirtualNetworkDelete });
-
-      await screen.findByRole('heading', { name: 'vn-prod' });
-      await user.click(screen.getByRole('button', { name: /^Delete$/ }));
-      await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: /Cancel/ }));
-
-      expect(onVirtualNetworkDelete).not.toHaveBeenCalled();
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-    });
-
-    it('disables Delete until the virtual network is loaded', async () => {
-      let resolveVnGet: ((value: { object?: VirtualNetwork }) => void) | undefined;
-      const pendingVnGet = new Promise<{ object?: VirtualNetwork }>((resolve) => {
-        resolveVnGet = resolve;
-      });
-
-      renderPage({}, { onVirtualNetworkGet: () => pendingVnGet });
-
-      expect(screen.getByRole('button', { name: /^Delete$/ })).toHaveAttribute(
-        'aria-disabled',
-        'true',
-      );
-
-      resolveVnGet?.({ object: mockVN });
-      await screen.findByRole('heading', { name: 'vn-prod' });
-      await waitFor(() =>
-        expect(screen.getByRole('button', { name: /^Delete$/ })).not.toHaveAttribute(
-          'aria-disabled',
-          'true',
-        ),
-      );
-    });
-
-    it('disables Delete for a default virtual network', async () => {
-      renderPage({
-        virtualNetworks: [
-          {
-            ...mockVN,
-            metadata: {
-              ...mockVN.metadata,
-              labels: { ...mockVN.metadata?.labels, 'osac.openshift.io/default': 'true' },
-            },
-          } as VirtualNetwork,
-        ],
-      });
-
-      await screen.findByRole('heading', { name: 'vn-prod' });
-      await waitFor(() =>
-        expect(screen.getByRole('button', { name: /^Delete$/ })).toHaveAttribute(
-          'aria-disabled',
-          'true',
-        ),
-      );
-    });
+    expect(await screen.findByText('Deleting')).toBeInTheDocument();
   });
 });

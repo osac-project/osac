@@ -105,6 +105,12 @@ func (cfg config) options() remotewrite.Options {
 	}
 }
 
+// updateAttempts bounds the read-merge-update loop. Another writer (the
+// cluster monitoring operator or an administrator) can change the ConfigMap
+// between the read and the update; a conflict is retried, but the Job's
+// backoffLimit stays 0 so a persistent conflict still fails the release.
+const updateAttempts = 3
+
 func run(ctx context.Context, client kubernetes.Interface, cfg config) error {
 	configMaps := client.CoreV1().ConfigMaps(cfg.Namespace)
 	cm, err := configMaps.Get(ctx, cfg.Name, metav1.GetOptions{})
@@ -121,49 +127,61 @@ func run(ctx context.Context, client kubernetes.Interface, cfg config) error {
 		return fmt.Errorf("read ConfigMap %s/%s: %w", cfg.Namespace, cfg.Name, err)
 	}
 
-	data := cm.Data[dataKey]
-	previous := cm.Annotations[previousIntervalAnnotation]
 	opts := cfg.options()
-	opts.PreviousScrapeInterval = previous
-	if cfg.Enabled && previous == "" {
+	opts.PreviousScrapeInterval = cm.Annotations[previousIntervalAnnotation]
+	if cfg.Enabled && opts.PreviousScrapeInterval == "" {
 		// First enable over this document: remember what the overwrite
 		// replaces. A later enable leaves the record alone so it never
-		// becomes OSAC's own interval.
-		current, err := remotewrite.ScrapeInterval([]byte(data))
+		// becomes OSAC's own interval. The value comes from the first read and
+		// survives a conflict: a concurrent writer may already show OSAC's
+		// interval, and remembering that would make disable delete it.
+		current, err := remotewrite.ScrapeInterval([]byte(cm.Data[dataKey]))
 		if err != nil {
 			return fmt.Errorf("read the current scrape interval: %w", err)
 		}
-		previous = current
+		opts.PreviousScrapeInterval = current
 	}
 
-	merged, err := remotewrite.Merge([]byte(data), opts)
-	if err != nil {
-		return err
-	}
-	changed := string(merged) != data
-	annotationsChanged := false
-	switch {
-	case cfg.Enabled && previous != "" && cm.Annotations[previousIntervalAnnotation] == "":
-		if cm.Annotations == nil {
-			cm.Annotations = map[string]string{}
+	for attempt := 1; ; attempt++ {
+		data := cm.Data[dataKey]
+		merged, err := remotewrite.Merge([]byte(data), opts)
+		if err != nil {
+			return err
 		}
-		cm.Annotations[previousIntervalAnnotation] = previous
-		annotationsChanged = true
-	case !cfg.Enabled && previous != "":
-		delete(cm.Annotations, previousIntervalAnnotation)
-		annotationsChanged = true
-	}
-	if !changed && !annotationsChanged {
+		changed := string(merged) != data
+		annotationsChanged := false
+		switch {
+		case cfg.Enabled && opts.PreviousScrapeInterval != "" && cm.Annotations[previousIntervalAnnotation] == "":
+			if cm.Annotations == nil {
+				cm.Annotations = map[string]string{}
+			}
+			cm.Annotations[previousIntervalAnnotation] = opts.PreviousScrapeInterval
+			annotationsChanged = true
+		case !cfg.Enabled && opts.PreviousScrapeInterval != "":
+			delete(cm.Annotations, previousIntervalAnnotation)
+			annotationsChanged = true
+		}
+		if !changed && !annotationsChanged {
+			return nil
+		}
+		if changed {
+			if cm.Data == nil {
+				cm.Data = map[string]string{}
+			}
+			cm.Data[dataKey] = string(merged)
+		}
+		if _, err := configMaps.Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+			if !apierrors.IsConflict(err) || attempt == updateAttempts {
+				return fmt.Errorf("update ConfigMap %s/%s: %w", cfg.Namespace, cfg.Name, err)
+			}
+			// Re-read the object the other writer changed and merge again. The
+			// remembered interval deliberately stays the first read's value.
+			cm, err = configMaps.Get(ctx, cfg.Name, metav1.GetOptions{})
+			if err != nil {
+				return fmt.Errorf("read ConfigMap %s/%s after a conflict: %w", cfg.Namespace, cfg.Name, err)
+			}
+			continue
+		}
 		return nil
 	}
-	if changed {
-		if cm.Data == nil {
-			cm.Data = map[string]string{}
-		}
-		cm.Data[dataKey] = string(merged)
-	}
-	if _, err := configMaps.Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("update ConfigMap %s/%s: %w", cfg.Namespace, cfg.Name, err)
-	}
-	return nil
 }

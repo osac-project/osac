@@ -10,7 +10,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 func testConfig(enabled bool) config {
@@ -180,6 +183,50 @@ func TestRunKeepsTheFirstRememberedInterval(t *testing.T) {
 	}
 	if got.Annotations[previousIntervalKey] != "15s" {
 		t.Fatalf("remembered interval = %q, want 15s", got.Annotations[previousIntervalKey])
+	}
+}
+
+// TestRunRetriesAConflictAndKeepsTheRememberedInterval reproduces a race with
+// another writer: the first update conflicts, the fresh read already shows a
+// different interval, and the retry still records the value the first read saw.
+func TestRunRetriesAConflictAndKeepsTheRememberedInterval(t *testing.T) {
+	client := fake.NewSimpleClientset(existingConfigMap(
+		"prometheusK8s:\n  scrapeInterval: 15s\n"))
+	updates := 0
+	client.PrependReactor("update", "configmaps", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		updates++
+		if updates > 1 {
+			return false, nil, nil
+		}
+		// Simulate the other writer: the stored object now carries a different
+		// interval and no remembered key.
+		cm := action.(k8stesting.UpdateAction).GetObject().(*corev1.ConfigMap).DeepCopy()
+		cm.Data[dataKey] = "prometheusK8s:\n  scrapeInterval: 20s\n"
+		cm.Annotations = map[string]string{}
+		if err := client.Tracker().Update(
+			schema.GroupVersionResource{Version: "v1", Resource: "configmaps"},
+			cm, defaultNamespace); err != nil {
+			t.Fatalf("seed the conflicting ConfigMap: %v", err)
+		}
+		return true, nil, apierrors.NewConflict(
+			schema.GroupResource{Resource: "configmaps"}, defaultName,
+			errors.New("the object has been modified"))
+	})
+	if err := run(context.Background(), client, testConfig(true)); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if updates != 2 {
+		t.Fatalf("update attempts = %d, want 2", updates)
+	}
+	cm, err := client.CoreV1().ConfigMaps(defaultNamespace).Get(context.Background(), defaultName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get ConfigMap: %v", err)
+	}
+	if got := cm.Annotations[previousIntervalKey]; got != "15s" {
+		t.Fatalf("remembered interval = %q, want the first read's 15s", got)
+	}
+	if !strings.Contains(cm.Data[dataKey], "scrapeInterval: 30s") {
+		t.Fatalf("scrapeInterval was not written:\n%s", cm.Data[dataKey])
 	}
 }
 

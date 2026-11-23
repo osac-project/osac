@@ -214,6 +214,9 @@ class NetrisKindFixture:
     def _delete(self, resources: list[str]) -> None:
         if not resources:
             return
+        resource_types = ",".join(
+            dict.fromkeys(resource.split("/", 1)[0] for resource in resources)
+        )
         selector = (
             "app.kubernetes.io/managed-by=osac-aap-test-fixture,"
             f"app.kubernetes.io/instance={self.name}"
@@ -221,9 +224,10 @@ class NetrisKindFixture:
         result = subprocess.run(
             self._kubectl_command(
                 "delete",
-                *resources,
+                resource_types,
                 "--selector",
                 selector,
+                "--cascade=foreground",
                 "--ignore-not-found=true",
                 "--wait=true",
             ),

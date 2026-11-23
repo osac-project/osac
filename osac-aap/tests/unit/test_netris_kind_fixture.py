@@ -89,9 +89,9 @@ def test_start_removes_only_resources_created_before_a_failure(monkeypatch):
         fixture.start()
 
     delete = next(command for command, _ in calls if "delete" in command)
-    assert "configmap/netris-fake-test" in delete
-    assert "service/netris-fake-test" not in delete
-    assert "deployment/netris-fake-test" not in delete
+    selector_index = delete.index("--selector")
+    assert delete[delete.index("delete") + 1 : selector_index] == ["configmap"]
+    assert "configmap/netris-fake-test" not in delete
 
 
 def test_admin_port_forward_listens_on_loopback(monkeypatch):
@@ -207,11 +207,14 @@ def test_stop_command_deletes_the_named_resources_without_an_image(monkeypatch):
         == 0
     )
 
-    assert "configmap/netris-fake-test" in calls[0]
-    assert "service/netris-fake-test" in calls[0]
-    assert "deployment/netris-fake-test" in calls[0]
-    assert "--selector" in calls[0]
+    delete = calls[0]
+    selector_index = delete.index("--selector")
+    assert delete[delete.index("delete") + 1 : selector_index] == [
+        "configmap,service,deployment"
+    ]
+    assert "configmap/netris-fake-test" not in delete
     assert any("app.kubernetes.io/instance=netris-fake-test" in arg for arg in calls[0])
+    assert "--cascade=foreground" in delete
     assert "--ignore-not-found=true" in calls[0]
 
 

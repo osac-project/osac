@@ -7,7 +7,6 @@ import pytest
 
 from tests.e2e.networking.storage.endpoint import (
     StorageEndpoint,
-    assert_tenants_are_distinct,
     client_addresses,
     expected_network,
     from_env,
@@ -36,9 +35,15 @@ def test_from_env_requires_every_endpoint_value():
         from_env({"OSAC_STORAGE_NFS_SERVER": "192.168.123.10"})
 
 
-def test_client_addresses_ignores_ports_and_finds_both_sides():
+def test_client_addresses_ignores_ports_and_returns_only_the_source():
     line = "10:00:00.1 IP 198.51.100.25.43210 > 192.168.123.10.2049: Flags [S]"
-    assert client_addresses(line) == [ipaddress.IPv4Address("198.51.100.25"), ipaddress.IPv4Address("192.168.123.10")]
+    assert client_addresses(line) == [ipaddress.IPv4Address("198.51.100.25")]
+
+
+def test_client_addresses_accepts_a_plain_server_log_line():
+    assert client_addresses("client 198.51.100.25 mounted /srv/osac-storage") == [
+        ipaddress.IPv4Address("198.51.100.25")
+    ]
 
 
 def test_expected_network_accepts_a_pool_cidr_and_a_single_address():
@@ -61,6 +66,13 @@ def test_wait_for_client_fails_when_only_the_tenant_address_is_logged():
         wait_for_client(ENDPOINT, "198.51.100.24/29", run=_fake_run(log), timeout=0)
 
 
+def test_wait_for_client_does_not_accept_a_destination_in_the_expected_cidr():
+    log = "IP 192.168.101.12.43210 > 198.51.100.25.2049: Flags [S]\n"
+
+    with pytest.raises(TimeoutError, match="logged no client"):
+        wait_for_client(ENDPOINT, "198.51.100.24/29", run=_fake_run(log), timeout=0)
+
+
 def test_wait_for_client_ignores_earlier_lines():
     log = "IP 198.51.100.25.43210 > 192.168.123.10.2049: Flags [S]\n"
 
@@ -73,9 +85,3 @@ def test_mount_command_uses_nfsv41_and_noresvport():
     assert "vers=4.1" in command
     assert "noresvport" in command
     assert "192.168.123.10:/srv/osac-storage" in command
-
-
-def test_two_distinct_tenant_addresses():
-    assert_tenants_are_distinct([ipaddress.IPv4Address("198.51.100.25"), ipaddress.IPv4Address("198.51.100.26")])
-    with pytest.raises(AssertionError):
-        assert_tenants_are_distinct([ipaddress.IPv4Address("198.51.100.25")] * 2)

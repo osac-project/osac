@@ -40,6 +40,8 @@ class WaitResourceKind(StrEnum):
     CONFIG_MAP = "ConfigMap"
     DEPLOYMENT = "Deployment"
     VOLUME = "Volume"
+    PERSISTENT_VOLUME_CLAIM = "PersistentVolumeClaim"
+    POD = "Pod"
     KEYCLOAK_REALM = "KeycloakRealm"
     KEYCLOAK_ORGANIZATION = "KeycloakOrganization"
     HEARTBEAT = "Heartbeat"

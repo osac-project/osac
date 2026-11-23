@@ -13,12 +13,11 @@ import re
 import shlex
 import subprocess
 import time
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 DEFAULT_TIMEOUT = 60
 DEFAULT_DELAY = 2
-LOG_LINES = 500
 
 # (output, return code) for a command run on the storage server.
 SshRunner = Callable[["StorageEndpoint", str, int], tuple[str, int]]
@@ -78,15 +77,11 @@ def default_ssh_runner(endpoint: StorageEndpoint, command: str, timeout: int = 3
     return (completed.stdout + completed.stderr).strip(), completed.returncode
 
 
-def read_client_log(
-    endpoint: StorageEndpoint, *, run: SshRunner = default_ssh_runner, lines: int = LOG_LINES, timeout: int = 30
-) -> str:
-    output, status = run(
-        endpoint, f"tail -n {int(lines)} {shlex.quote(endpoint.log_path)} 2>/dev/null || true", timeout
-    )
+def assert_log_readable(endpoint: StorageEndpoint, *, run: SshRunner = default_ssh_runner) -> None:
+    """Fail before any test if the server's client log cannot be read."""
+    output, status = run(endpoint, f"test -r {shlex.quote(endpoint.log_path)}", 30)
     if status != 0:
         raise RuntimeError(f"Cannot read {endpoint.log_path} on {endpoint.ssh_host}: {output!r}")
-    return output
 
 
 def log_line_count(endpoint: StorageEndpoint, *, run: SshRunner = default_ssh_runner) -> int:
@@ -100,21 +95,29 @@ def log_line_count(endpoint: StorageEndpoint, *, run: SshRunner = default_ssh_ru
 
 
 _IPV4_RE = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?!\d)")
+_TCPDUMP_ARROW_RE = re.compile(r"\s+>\s+")
 
 
 def client_addresses(text: str) -> list[ipaddress.IPv4Address]:
-    """Return every IPv4 address in a tcpdump-style client log, in order.
+    """Return the IPv4 client (source) addresses of a tcpdump-style log, in order.
 
-    tcpdump prints ``198.51.100.25.43210``, so a plain split on ``.`` or ``:``
-    cannot recover the address; match the dotted quad and leave the port.
+    tcpdump prints ``198.51.100.25.43210 > 192.168.123.10.2049``, so a plain
+    split on ``.`` or ``:`` cannot recover the address; match the dotted quad
+    and leave the port. A tcpdump line names its source before ``>``; counting
+    every address would let a destination in the expected CIDR satisfy a wait
+    even though no client in that CIDR connected. A line without a tcpdump
+    direction (a plain server log line) has no known destination, so all of its
+    addresses count.
     """
     addresses: list[ipaddress.IPv4Address] = []
-    for match in _IPV4_RE.finditer(text):
-        try:
-            address = ipaddress.IPv4Address(match.group(1))
-        except ipaddress.AddressValueError:
-            continue
-        addresses.append(address)
+    for line in text.splitlines():
+        source = _TCPDUMP_ARROW_RE.split(line, maxsplit=1)[0]
+        for match in _IPV4_RE.finditer(source):
+            try:
+                address = ipaddress.IPv4Address(match.group(1))
+            except ipaddress.AddressValueError:
+                continue
+            addresses.append(address)
     return addresses
 
 
@@ -131,6 +134,12 @@ def mount_command(endpoint: StorageEndpoint, mountpoint: str = "/mnt/osac-storag
     )
 
 
+def timeout_mount_command(endpoint: StorageEndpoint, mountpoint: str = "/mnt/osac-storage", timeout: int = 30) -> str:
+    """Try the mount under coreutils ``timeout`` so a missing NAT path is a 124, not a hang."""
+    mount = f"sudo mount -t nfs -o vers=4.1,noresvport {shlex.quote(endpoint.mount_target())} {shlex.quote(mountpoint)}"
+    return f"sudo mkdir -p {shlex.quote(mountpoint)} && timeout {int(timeout)} sh -c {shlex.quote(mount)}"
+
+
 def ensure_nfs_client_command() -> str:
     """Install the NFS client only when the guest image lacks mount.nfs."""
     return (
@@ -145,6 +154,19 @@ def ensure_nfs_client_command() -> str:
 def write_probe_file_command(mountpoint: str, marker: str) -> str:
     path = f"{mountpoint.rstrip('/')}/{marker}"
     return f"printf '%s' {shlex.quote(marker)} | sudo tee {shlex.quote(path)} >/dev/null && cat {shlex.quote(path)}"
+
+
+def marker_on_server(endpoint: StorageEndpoint, marker: str, *, run: SshRunner = default_ssh_runner) -> str:
+    """Read the probe file from the export; a local guest copy alone would not prove the mount."""
+    path = shlex.quote(f"{endpoint.export.rstrip('/')}/{marker}")
+    last_output = ""
+    for command in (f"cat {path}", f"sudo cat {path}"):
+        last_output, status = run(endpoint, command, 30)
+        if status == 0:
+            return last_output
+    raise AssertionError(
+        f"marker {marker} is not readable on {endpoint.ssh_host} at {endpoint.export}: {last_output!r}"
+    )
 
 
 def expected_network(expected: str) -> ipaddress.IPv4Network:
@@ -194,9 +216,3 @@ def wait_for_client(
                 f"{endpoint.ssh_host} logged no client in {network} after the mount; last line: {detail}"
             )
         time.sleep(delay)
-
-
-def assert_tenants_are_distinct(addresses: Iterable[ipaddress.IPv4Address]) -> None:
-    unique = set(addresses)
-    if len(unique) < 2:
-        raise AssertionError(f"expected two distinct NAT addresses at storage, got {sorted(unique)}")

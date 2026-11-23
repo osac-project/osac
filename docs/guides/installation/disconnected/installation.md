@@ -59,7 +59,7 @@ Complete the three preparation guides above for the same cluster, namespace and 
 
 - Required Operators, trust distribution, selected operands and external services are ready as described in [operators.md](operators.md); do not reinstall them here.
 
-- After that provider setup and before Section 4, complete the [mandatory metering provider checkpoint](prereqs.md#41-mandatory-metering-provider-checkpoint) for both Core and Core + VMaaS, including external Fulfillment Kafka. Resolve Q-0012's actual provider/API/watch-scope/RBAC/client contract; observe its exact User and Topic Operator containers with the bounded reads there. Missing or unresolved capability blocks Helm; do not infer a skip from `kafka.enabled=false`, a CSV alone or prepared values.
+- After that provider setup and before Section 4, complete the [mandatory metering provider checkpoint](prereqs.md#41-mandatory-metering-provider-checkpoint) for both Core and Core + VMaaS, including external Fulfillment Kafka. AMQ Streams is the accepted production provider; resolve the site's actual provider/API/watch-scope/RBAC/client contract and observe its exact User and Topic Operator containers with the bounded reads there. Missing or unresolved capability blocks Helm; do not infer a skip from `kafka.enabled=false`, a CSV alone or prepared values.
 
 - Keep the approved `OSAC_NAMESPACE`, `OSAC_CHART_DIR` and `VALUES_FILE` available in the installation shell. `OSAC_CHART_DIR` is the exact downloaded/extracted **0.4.0** chart path; `VALUES_FILE` is the complete prepared values file.
 
@@ -398,6 +398,15 @@ After evidence capture, the test owner retires only the approved test request th
 Verify the intended test request's retirement and expected owned-resource cleanup through the supported interfaces. Leave shared DiskImages, templates, service credentials, operators and infrastructure intact. A failed or unverified cleanup is not silently reported as completed.
 
 ### 7.2 Mandatory metering acceptance
+
+**Metering readiness observations — hard prerequisite, unconditional.** Before any acceptance work, and for every profile, observe each readiness item separately; there is no metering-disabled path:
+
+- Entity Operator pods Running, with both the User Operator and Topic Operator ready: `oc --request-timeout=30s get pods -n <KAFKA_CLUSTER_NAMESPACE> -l strimzi.io/name=<KAFKA_CLUSTER_NAME>-entity-operator`.
+- Metering `KafkaUser` reconciled: `oc --request-timeout=30s get kafkauser <METERING_KAFKAUSER> -n <KAFKA_CLUSTER_NAMESPACE> -o json | jq -e '(.status.observedGeneration == .metadata.generation) and any(.status.conditions[]?; .type == "Ready" and .status == "True")'` — expected `true`.
+- `KafkaTopic` CRs reconciled (`osac.metering.inference` and its dead-letter topic): the same `Ready=True` condition check per topic.
+- Metering workloads not crash-looping: `oc --request-timeout=30s get deploy,pods -n "$NS"` and review restarts/status for the metering Deployments.
+
+These observations establish only that the Strimzi operators reconcile the metering resources and the workloads run; they are not functional acceptance and not a passing result. A failed or unready observation blocks the acceptance work below — do not proceed on an unreconciled `KafkaUser`/`KafkaTopic` or a crash-looping metering Pod.
 
 > **TBD — Q-0013: production metering acceptance.** Metering is mandatory, but the release-qualified functional commands, observable/reporting contract, observation window and selected monitoring/alert criteria remain for the metering/service, Kafka, operations and QE owners to approve. This section is a non-executable acceptance shape, not an approved test or a default passing result. Until those choices and their evidence are supplied, record metering as **unresolved qualification**, not passed, skipped or disabled.
 

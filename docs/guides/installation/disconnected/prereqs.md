@@ -203,7 +203,7 @@ For each affected pool, record its current state separately: unpaused, observedG
 | --- | --- | --- |
 | `openshift-cert-manager-operator` | `stable-v1` | Core |
 | `ansible-automation-platform-operator` | `stable-2.6-cluster-scoped` | Core |
-| `amq-streams` | `stable` | Core package coverage; the mandatory same-cluster Strimzi metering capability is required independently of the Fulfillment Kafka selection; provider installation/adoption remains governed by Q-0012 |
+| `amq-streams` | `stable` | Core package coverage; the mandatory same-cluster Strimzi metering capability is required independently of the Fulfillment Kafka selection; AMQ Streams is the accepted production Kafka provider — installation/adoption follows §4.1 |
 | `kubevirt-hyperconverged`, `lvms-operator`, `metallb-operator` | Selected approved Doc 1 channels | Additional VMaaS coverage; package presence does not select installation |
 
 Check the selected packages and channels:
@@ -304,7 +304,7 @@ These are **installation selections**, not seven invented Helm values. Persist t
 | Database consumers | `dbInit.host`, `service.database.connection[]`; URL Secret key `url`; exact mounted keys/names come from rendered consumers |
 | External Kafka | Fulfillment bootstrap **and advertised broker** addresses, canonical TLS/SASL/ACL completion, credential and CA references; `service.kafka.connection[]` and `service.certs.caBundle`. Skipping its broker installation does not skip the separate metering Strimzi requirement. |
 | In-cluster Kafka | Intended Fulfillment `osac-kafka` namespace/cluster, storage selection and mirror-resident operand images; broker/user/ACL checks deferred to `operators.md`, never reported passed early. Mandatory metering capability is an additional post-setup requirement under §4.1. |
-| Mandatory metering | For every profile, an approved same-cluster Strimzi User/Topic Operator capability, actual metering coordinates/RBAC/client inputs, stable deployment identity and database configuration from the canonical metering guide; Q-0012 remains TBD. Run §4.1 only after provider setup, before Helm; no provider or namespace default is selected here. |
+| Mandatory metering | For every profile, an approved same-cluster Strimzi User/Topic Operator capability, actual metering coordinates/RBAC/client inputs, stable deployment identity and database configuration from the canonical metering guide; AMQ Streams is the accepted production provider, with the per-site coordinates/RBAC/client inputs owner-approved. Run §4.1 only after provider setup, before Helm; no provider or namespace default is selected here. |
 | Vault/OpenBao | Approved HTTPS `service.vault.endpoint`, namespace/mount/role/issuer/audience and Secret/CA references from the canonical secrets guide |
 | Production identity | Approved exact HTTPS issuer/hosts; discovery issuer equality, authorization/token/JWKS endpoints and nonempty signing keys; approved client/role evidence |
 | Dynamic storage | Existing provider: actual bound PVC **and consuming workload write/read**; LVMS selected: device approval now, live provider test in `operators.md` |
@@ -322,13 +322,87 @@ Record each applicable canonical identity check separately; a single observation
 
 ### 4.1 Mandatory metering provider checkpoint
 
-Metering is mandatory for OSAC **0.4.0**, for both `core` and `core-vmaas`. `kafka_provider` and `kafka.enabled` select the Fulfillment Kafka path; `external`/`false` does not suppress metering's `KafkaUser`/`KafkaTopic` resources or its required same-cluster Strimzi User Operator and Topic Operator. Use the [canonical metering configuration](../kafka-configuration.md#metering); Fulfillment credentials do not configure metering.
+Metering is mandatory for OSAC **0.4.0**, for both `core` and `core-vmaas`. AMQ Streams (Strimzi) is therefore a **mandatory prerequisite for OSAC installation**: the `osac-metering` subchart is an unconditional chart dependency (no `condition` key in `Chart.yaml`) and always renders a `KafkaUser` CR (`kafka.strimzi.io/v1`, SCRAM-SHA-512) and two `KafkaTopic` CRs (`kafka.strimzi.io/v1` — `osac.metering.inference` and its dead-letter topic, 3 partitions, 1 replica, 30-day retention). There is no `metering.enabled` toggle — metering is always active. Without a running Strimzi Entity Operator, the `KafkaUser` and `KafkaTopic` CRs sit unreconciled and metering fails silently. `kafka_provider` and `kafka.enabled` select the Fulfillment Kafka path; `external`/`false` does not suppress metering's `KafkaUser`/`KafkaTopic` resources or its required same-cluster Strimzi User Operator and Topic Operator. Use the [canonical metering configuration](../kafka-configuration.md#metering); Fulfillment credentials do not configure metering.
 
-> **TBD — Q-0012: production Strimzi/metering provider.** The Kafka/platform owners must approve the actual metering broker/cluster coordinates, same-cluster User/Topic Operator ownership and watch scope, served `kafka.strimzi.io/v1` APIs, credential-access RBAC, CA/authentication and availability/retention/recovery contract. Keep that provider decision open; do not select an interim cluster, namespace or broker. For the reference AMQ Streams installation, retain channel `stable`, Manual approval and the exact resolved-release compatibility review in `operators.md` (recorded steps and gates in [amq-streams.md](amq-streams.md)); a running Pod or floating channel alone is not that decision.
+> **Resolved — production Strimzi/metering provider (formerly Q-0012): AMQ Streams is the accepted production Kafka provider for OSAC.** Do not select another provider, an interim cluster or namespace. For each deployment, the Kafka/platform owners still approve the actual metering broker/cluster coordinates, same-cluster User/Topic Operator ownership and watch scope, served `kafka.strimzi.io/v1` APIs, credential-access RBAC, CA/authentication and availability/retention/recovery contract; those site bindings are per-deployment approvals, not an open product decision. For the reference AMQ Streams installation, retain channel `stable`, Manual approval and the exact resolved-release compatibility review in `operators.md`; a running Pod or floating channel alone is not that review.
+
+**Disconnected AMQ Streams installation — `oc` only.** The `osac-deps` chart is not installed in disconnected environments; install AMQ Streams manually through OLM. The default catalog sources are disabled disconnected, so the Subscription below must reference the **mirrored CatalogSource** recorded during the [mirroring handoff](README.md) (Doc 1) — never assume the default `redhat-operators` name. The operator namespace is a site decision; `<AMQ_NAMESPACE>` below is that choice.
+
+**Step 1 — create (or confirm) the operator namespace:**
+
+```bash
+oc create namespace <AMQ_NAMESPACE> --dry-run=client -o yaml | oc apply -f -
+```
+
+**Step 2 — create an OperatorGroup with AllNamespaces scope.** AMQ Streams must watch Kafka resources across namespaces; an empty `spec` (or omitting `spec.targetNamespaces`) gives AllNamespaces scope:
+
+```yaml
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: amq-streams-operatorgroup
+  namespace: <AMQ_NAMESPACE>
+spec: {}
+```
+
+Apply with `oc apply -f <filename>`.
+
+**Step 3 — create the Subscription.** Substitute `<MIRRORED_CATALOGSOURCE_NAME>` with the exact mirrored CatalogSource name recorded in the Doc 1 output:
+
+```yaml
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: amq-streams
+  namespace: <AMQ_NAMESPACE>
+spec:
+  name: amq-streams
+  channel: stable
+  source: <MIRRORED_CATALOGSOURCE_NAME>
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Manual
+```
+
+Apply with `oc apply -f <filename>`.
+
+**Step 4 — approve the InstallPlan and wait:**
+
+```bash
+# List pending InstallPlans
+oc get installplan -n <AMQ_NAMESPACE>
+
+# Approve (substitute the actual InstallPlan name)
+oc patch installplan <INSTALLPLAN_NAME> -n <AMQ_NAMESPACE> --type merge -p '{"spec":{"approved":true}}'
+
+# Wait for the CSV to succeed
+oc get csv -n <AMQ_NAMESPACE> -w
+```
+
+**Verification.** After installation, confirm the Strimzi APIs and the Entity Operator before proceeding:
+
+```bash
+# Confirm the Strimzi KafkaUser and KafkaTopic APIs are available
+oc api-resources --api-group=kafka.strimzi.io | grep -E 'kafkauser|kafkatopic'
+
+# Confirm Entity Operator pods are running
+oc get pods -n <KAFKA_CLUSTER_NAMESPACE> -l strimzi.io/name=<KAFKA_CLUSTER_NAME>-entity-operator
+```
+
+Both the User Operator and the Topic Operator must be in `Running` state before proceeding.
+
+**What OSAC metering expects from the Kafka cluster.** The chart defaults assume TLS + SCRAM-SHA-512; verify the Kafka cluster configuration is compatible:
+
+- TLS enabled — the metering deployment mounts a CA bundle through `KAFKA_TLS_CA_CERT`; metering TLS trust uses the shared OSAC CA, not the Strimzi cluster CA.
+- SCRAM-SHA-512 authentication — the chart creates a `KafkaUser` with this mechanism; the metering deployment reads `KAFKA_SASL_USERNAME` and `KAFKA_SASL_PASSWORD_FILE`.
+- Two topics reconciled by the Topic Operator — `osac.metering.inference` and its dead-letter topic.
+
+If the Kafka cluster uses a different authentication mechanism or does not support SCRAM-SHA-512, adjust the cluster accordingly; there is no metering opt-out.
+
+> Recorded reference evidence (Phase 1, 2026-10-31, deviations.md #3): the reference disconnected deployment installed `amqstreams.v3.2.2-5` on channel `stable` in namespace `osac-kafka` with OwnNamespace scope, a mirrored CatalogSource that retained the `redhat-operators` name, and resourceVersion-preconditioned InstallPlan approval. That record is evidence for the compatibility decision, not the generic procedure above.
 
 **Ordering:** declare this required capability during prerequisite selection, but run the live observations below only **after** the chosen AMQ Streams/Strimzi provider has been installed or owner-approved for adoption through Phase 1 setup, and **before** the OSAC Helm install. The in-cluster Kafka live-gate deferral above includes this mandatory Strimzi capability even when Fulfillment Kafka is external; the external Fulfillment service must still satisfy its own earlier canonical contract. A deferred metering check is required-post-setup, not ready or skipped. Do not require future metering `KafkaUser`/`KafkaTopic` objects, credential-copy outputs or an OSAC workload to perform this checkpoint; those generated objects stay Phase 2-owned. `installation.md` §2 calls this checkpoint after preparation.
 
-In the same approved Kubernetes cluster as OSAC, have the provider owner resolve the exact current Pod name, namespace, UID and container for **each** operator role from the approved current workload/ownership and watch-scope contract. The two roles may share a Pod; do not require two separate Deployments. The `METERING_USER_OPERATOR_*` and `METERING_TOPIC_OPERATOR_*` parameters below are protected diagnostic inputs, not Helm values. Do not select a first list item, match a name substring or substitute an arbitrary healthy container. Until Q-0012 is resolved and those bindings are approved, stop the dependent Helm installation; filling parameter names is not provider approval.
+In the same approved Kubernetes cluster as OSAC, have the provider owner resolve the exact current Pod name, namespace, UID and container for **each** operator role from the approved current workload/ownership and watch-scope contract. The two roles may share a Pod; do not require two separate Deployments. The `METERING_USER_OPERATOR_*` and `METERING_TOPIC_OPERATOR_*` parameters below are protected diagnostic inputs, not Helm values. Do not select a first list item, match a name substring or substitute an arbitrary healthy container. Until those site bindings are approved, stop the dependent Helm installation; filling parameter names is not provider approval.
 
 ```bash
 set -o pipefail
@@ -338,7 +412,7 @@ oc --request-timeout=30s get pod "${METERING_TOPIC_OPERATOR_POD:?Resolve the app
 
 Expected local result for each independent read: `true` and exit status zero. Missing inputs, failed/denied API reads, a changed UID, a terminating/non-Running Pod or a missing/non-ready/non-running selected container stop the dependent install; use the responsible provider owner, not a public fallback, broader permissions or automatic InstallPlan approval. Keep only approved per-check metadata outside protected runtime context.
 
-**Why:** these observations establish only that the owner-qualified User and Topic Operator containers are currently running/ready in the intended cluster. They do not prove watch-scope correctness, successful user/topic reconciliation, broker authentication, metering collection or reporting. Keep the Q-0012 owner/API/RBAC/client contract separate, re-review replacement Pods after rescheduling, and complete actual functional metering acceptance in `installation.md` §7.2 after Phase 2; separate reads are not a locked snapshot.
+**Why:** these observations establish only that the owner-qualified User and Topic Operator containers are currently running/ready in the intended cluster. They do not prove watch-scope correctness, successful user/topic reconciliation, broker authentication, metering collection or reporting. Keep the site's owner/API/RBAC/client contract separate, re-review replacement Pods after rescheduling, and complete actual functional metering acceptance in `installation.md` §7.2 after Phase 2; separate reads are not a locked snapshot.
 
 ## 5. Prepare the release chart and values
 

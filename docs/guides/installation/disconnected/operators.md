@@ -576,7 +576,7 @@ Record the canonical service-owner handoff and each rendered credential/CA-refer
 
 - External: consume the prerequisite canonical-service handoff; skip AMQ installation, broker creation and probe-user creation.
 
-- In-cluster: after storage readiness, the Kafka owner supplies approved complete broker/NodePool operands and verifies every broker/operator/helper image against Doc 1. The canonical listener example assumes an existing broker; it is not a complete new-cluster manifest. The recorded reference AMQ Streams installation, verification gates and runtime requirements are in [amq-streams.md](amq-streams.md).
+- In-cluster: after storage readiness, the Kafka owner supplies approved complete broker/NodePool operands and verifies every broker/operator/helper image against Doc 1. The canonical listener example assumes an existing broker; it is not a complete new-cluster manifest. The mandatory AMQ Streams prerequisite, its disconnected installation procedure and runtime requirements are in [prereqs.md §4.1](prereqs.md#41-mandatory-metering-provider-checkpoint).
 
 - Reference coordinates are `osac-kafka/osac-kafka`; retain any approved override in `kafka.clusterNamespace` and `kafka.clusterName`.
 

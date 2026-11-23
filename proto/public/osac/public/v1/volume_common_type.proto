@@ -1,0 +1,39 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "buf/validate/validate.proto";
+
+// Type of the workload that owns a volume.
+enum VolumeOwnerType {
+  // Owner type is unknown or has not been specified.
+  VOLUME_OWNER_TYPE_UNSPECIFIED = 0;
+
+  // The volume is owned by a ComputeInstance.
+  VOLUME_OWNER_TYPE_COMPUTE_INSTANCE = 1;
+}
+
+// Owning workload of a volume. Volumes created through the private API on
+// behalf of a workload carry this reference so that the volume's lifecycle
+// is bound to its owner.
+message VolumeOwner {
+  // Type of the owning workload.
+  VolumeOwnerType type = 1 [(buf.validate.field).enum.defined_only = true];
+
+  // Identifier of the owning workload record (for a ComputeInstance, its
+  // identifier, for example "ci-...").
+  string reference = 2 [(buf.validate.field).string.min_len = 1];
+}

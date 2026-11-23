@@ -14,7 +14,11 @@ from tests.e2e.caas.conftest import (  # noqa: F401
     ssh_public_key_path,
 )
 from tests.e2e.core.grpc_client import PUBLIC_API, GRPCClient
-from tests.e2e.core.helpers import registered_ssh_key_secret, wait_for_tenant_default_networking_ready
+from tests.e2e.core.helpers import (
+    registered_ssh_key_secret,
+    wait_for_grpc_security_group_ready,
+    wait_for_tenant_default_networking_ready,
+)
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import env
@@ -74,11 +78,13 @@ def _default_network(client: GRPCClient) -> dict[str, str]:
     # The tenant default SecurityGroup has no ingress by default, so the SSH
     # helper Pod cannot reach a VM on the default Subnet. Open it for the test
     # (an update of an existing resource, not a new networking resource).
+    wait_for_grpc_security_group_ready(grpc=client, sg_id=group["id"])
     client.update_security_group_rules(
         sg_id=group["id"],
         ingress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
         egress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
     )
+    wait_for_grpc_security_group_ready(grpc=client, sg_id=group["id"])
     return {
         "label": "default",
         "vnet_id": vnet_id,

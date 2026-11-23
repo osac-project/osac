@@ -61,7 +61,7 @@ var _ = Describe("Notifications tenant isolation", Label("notifications"), func(
 				Spec: privatev1.NotificationSpec_builder{
 					Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT,
 					Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
-					Type:     "osac.notification.announcement",
+					Type:     "osac.notification.announcement.maintenance",
 					Scope:    privatev1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
 					Title:    "Tenant A only",
 				}.Build(),

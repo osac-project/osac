@@ -16,7 +16,9 @@ package servers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"regexp"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
@@ -28,6 +30,17 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+// notificationKindSegments maps NotificationKind to the <kind> segment of
+// osac.notification.<kind>.<name>.
+var notificationKindSegments = map[privatev1.NotificationKind]string{
+	privatev1.NotificationKind_NOTIFICATION_KIND_EVENT:        "event",
+	privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT: "announcement",
+}
+
+// notificationTypePattern is osac.notification.<kind>.<name> with a nonempty
+// lowercase name of letters, digits, and underscores.
+var notificationTypePattern = regexp.MustCompile(`^osac\.notification\.([a-z]+)\.([a-z0-9_]+)$`)
 
 // PrivateNotificationsServerBuilder builds PrivateNotificationsServer instances.
 type PrivateNotificationsServerBuilder struct {
@@ -153,6 +166,9 @@ func (s *PrivateNotificationsServer) validateCreate(object *privatev1.Notificati
 	if spec.GetTitle() == "" {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.title' is required")
 	}
+	if err := validateNotificationType(spec.GetKind(), spec.GetType()); err != nil {
+		return err
+	}
 
 	if spec.GetKind() == privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT {
 		if spec.GetScope() == privatev1.NotificationScope_NOTIFICATION_SCOPE_UNSPECIFIED {
@@ -172,6 +188,36 @@ func (s *PrivateNotificationsServer) validateCreate(object *privatev1.Notificati
 	}
 	if spec.GetEvent() == nil || spec.GetEvent().GetId() == "" || spec.GetEvent().GetSource() == "" {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.event' with id and source is required for inbox notifications")
+	}
+	return nil
+}
+
+func notificationKindSegment(kind privatev1.NotificationKind) (string, error) {
+	segment, ok := notificationKindSegments[kind]
+	if !ok {
+		return "", fmt.Errorf("unsupported notification kind %v", kind)
+	}
+	return segment, nil
+}
+
+// validateNotificationType requires osac.notification.<kind>.<name> with <kind>
+// matching spec.kind and <name> nonempty [a-z0-9_]+.
+func validateNotificationType(kind privatev1.NotificationKind, typeValue string) error {
+	if typeValue == "" {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.type' is required")
+	}
+	kindSegment, err := notificationKindSegment(kind)
+	if err != nil {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.kind' is required")
+	}
+	matches := notificationTypePattern.FindStringSubmatch(typeValue)
+	if matches == nil {
+		return grpcstatus.Error(grpccodes.InvalidArgument,
+			"field 'spec.type' must match osac.notification.<kind>.<name>")
+	}
+	if matches[1] != kindSegment {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.type' kind segment must be %q", kindSegment)
 	}
 	return nil
 }

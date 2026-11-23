@@ -692,7 +692,7 @@ type NotificationSpec struct {
 	Kind NotificationKind `protobuf:"varint,1,opt,name=kind,proto3,enum=osac.private.v1.NotificationKind" json:"kind,omitempty"`
 	// Severity of the notification.
 	Severity NotificationSeverity `protobuf:"varint,2,opt,name=severity,proto3,enum=osac.private.v1.NotificationSeverity" json:"severity,omitempty"`
-	// Event type string. Example: osac.notification.event.resource_created.
+	// Type string in the form osac.notification.<kind>.<name>.
 	Type string `protobuf:"bytes,3,opt,name=type,proto3" json:"type,omitempty"`
 	// Producer event for an inbox notification.
 	Event *NotificationEventReference `protobuf:"bytes,4,opt,name=event,proto3" json:"event,omitempty"`
@@ -889,7 +889,7 @@ type NotificationSpec_builder struct {
 	Kind NotificationKind
 	// Severity of the notification.
 	Severity NotificationSeverity
-	// Event type string. Example: osac.notification.event.resource_created.
+	// Type string in the form osac.notification.<kind>.<name>.
 	Type string
 	// Producer event for an inbox notification.
 	Event *NotificationEventReference

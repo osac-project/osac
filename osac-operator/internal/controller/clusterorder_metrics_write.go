@@ -90,7 +90,10 @@ func (r *ClusterOrderReconciler) reconcileClusterMetricsWrite(
 	hc *hypershiftv1beta1.HostedCluster,
 ) (ctrl.Result, error) {
 	if !r.MetricsWrite.Enabled {
-		return ctrl.Result{}, nil
+		// The flag only stops new identities. It must not strand an identity
+		// that was issued while it was on, so an existing Certificate, issued
+		// Secret or tenant entry is withdrawn on every reconcile.
+		return r.withdrawClusterMetricsWrite(ctx, instance, hc)
 	}
 	if hc == nil || !hostedClusterControlPlaneIsAvailable(hc) {
 		return ctrl.Result{}, nil
@@ -203,8 +206,19 @@ func (r *ClusterOrderReconciler) ensureMetricsWriteCertificate(
 	if commonName == hc.GetName() {
 		return nil
 	}
-	// The order name outlived the hosted cluster it named. Replace the
-	// identity rather than silently writing metrics under the old name.
+	// The order name outlived the hosted cluster it named. The old identity
+	// keeps working until its Certificate is replaced, so record its serial
+	// first: a held copy must not keep writing under the previous cluster name.
+	serial, err := r.issuedCertificateSerial(ctx, certificateName)
+	if err != nil {
+		return err
+	}
+	if serial != "" {
+		if err := r.appendRevokedSerial(ctx, serial); err != nil {
+			return err
+		}
+	}
+	// The new spec has to be signed, so update rather than delete.
 	desired.SetResourceVersion(existing.GetResourceVersion())
 	if err := r.Client.Update(ctx, desired); err != nil {
 		return fmt.Errorf("update client Certificate %s: %w", key, err)
@@ -302,36 +316,74 @@ func (r *ClusterOrderReconciler) applyTenantMonitoringConfig(
 
 // revokeClusterMetricsWrite withdraws the tenant identity in the order the
 // proxy relies on: record the serial, delete the Certificate, then remove the
-// tenant's remote-write entry. It reports whether teardown may continue.
+// tenant's remote-write entry and its Secrets. It reports whether teardown may
+// continue. It runs whether or not the feature is still enabled, because an
+// identity issued while the flag was on must not outlive the flag.
 func (r *ClusterOrderReconciler) revokeClusterMetricsWrite(
 	ctx context.Context,
 	instance *v1alpha1.ClusterOrder,
 ) (bool, ctrl.Result, error) {
-	if !r.MetricsWrite.Enabled {
+	if !r.metricsWriteArtifactsPossible() {
 		return true, ctrl.Result{}, nil
 	}
+	ns, err := r.findNamespace(ctx, instance)
+	if err != nil {
+		return false, ctrl.Result{}, err
+	}
+	if ns == nil {
+		return r.withdrawTenantIdentity(ctx, instance, nil, true)
+	}
+	hc, err := r.findHostedCluster(ctx, instance, ns.GetName())
+	if err != nil {
+		return false, ctrl.Result{}, err
+	}
+	return r.withdrawTenantIdentity(ctx, instance, hc, true)
+}
+
+// withdrawClusterMetricsWrite unwinds an identity while the order still exists
+// and the feature is disabled. Unlike teardown it keeps the order alive until
+// the tenant cluster is reachable, so the entry and Secrets are removed rather
+// than left behind.
+func (r *ClusterOrderReconciler) withdrawClusterMetricsWrite(
+	ctx context.Context,
+	instance *v1alpha1.ClusterOrder,
+	hc *hypershiftv1beta1.HostedCluster,
+) (ctrl.Result, error) {
+	done, result, err := r.withdrawTenantIdentity(ctx, instance, hc, false)
+	if err != nil || !done {
+		return result, err
+	}
+	return ctrl.Result{}, nil
+}
+
+// metricsWriteArtifactsPossible reports whether the operator was configured
+// with the observability namespace and the denylist it writes. Without them no
+// identity was ever issued and there is nothing to revoke.
+func (r *ClusterOrderReconciler) metricsWriteArtifactsPossible() bool {
+	return r.MetricsWrite.Namespace != "" && r.MetricsWrite.RevocationConfigMap != ""
+}
+
+// withdrawTenantIdentity performs the four withdrawal steps. allowUnreachable
+// is set during teardown, where a departing cluster must not block the order;
+// the live path requeues instead so the tenant entry is actually removed.
+func (r *ClusterOrderReconciler) withdrawTenantIdentity(
+	ctx context.Context,
+	instance *v1alpha1.ClusterOrder,
+	hc *hypershiftv1beta1.HostedCluster,
+	allowUnreachable bool,
+) (bool, ctrl.Result, error) {
 	log := ctrllog.FromContext(ctx).WithValues("clusterorder", instance.GetName())
 	requeue := ctrl.Result{RequeueAfter: r.StatusPollInterval}
+	if !r.metricsWriteArtifactsPossible() {
+		return true, ctrl.Result{}, nil
+	}
 	certificateName := metricswrite.CertificateName(instance.GetName())
 
 	// 1. Read the serial from the issued Secret before the Certificate (and
 	// with it the Secret) is deleted: the Secret is the only record.
-	serial := ""
-	issued := &corev1.Secret{}
-	err := r.apiReader.Get(ctx, client.ObjectKey{
-		Namespace: r.MetricsWrite.Namespace,
-		Name:      certificateName,
-	}, issued)
-	switch {
-	case apierrors.IsNotFound(err):
-		// Already gone: nothing to denylist, but the rest still has to run.
-	case err != nil:
-		return false, ctrl.Result{}, fmt.Errorf("get issued client Secret %s: %w", certificateName, err)
-	default:
-		serial, err = metricswrite.ParseSerial(issued.Data[metricswrite.CertKey])
-		if err != nil {
-			return false, ctrl.Result{}, fmt.Errorf("read serial from issued client Secret %s: %w", certificateName, err)
-		}
+	serial, err := r.issuedCertificateSerial(ctx, certificateName)
+	if err != nil {
+		return false, ctrl.Result{}, err
 	}
 
 	// 2. Record the serial before the Certificate is deleted.
@@ -352,18 +404,7 @@ func (r *ClusterOrderReconciler) revokeClusterMetricsWrite(
 			r.MetricsWrite.Namespace, certificateName, err)
 	}
 
-	// 4. Remove the tenant's remote-write entry while the cluster is reachable.
-	ns, err := r.findNamespace(ctx, instance)
-	if err != nil {
-		return false, ctrl.Result{}, err
-	}
-	if ns == nil {
-		return true, ctrl.Result{}, nil
-	}
-	hc, err := r.findHostedCluster(ctx, instance, ns.GetName())
-	if err != nil {
-		return false, ctrl.Result{}, err
-	}
+	// 4. Remove the tenant's entry and Secrets while the cluster is reachable.
 	if hc == nil {
 		return true, ctrl.Result{}, nil
 	}
@@ -372,12 +413,21 @@ func (r *ClusterOrderReconciler) revokeClusterMetricsWrite(
 		return false, ctrl.Result{}, err
 	}
 	if guest == nil || !reachable {
-		// The identity is already revoked; a departing cluster must not block
-		// the order's teardown.
-		log.Info("tenant cluster is not reachable; skipping remote-write removal")
-		return true, ctrl.Result{}, nil
+		if allowUnreachable {
+			log.Info("tenant cluster is not reachable; skipping remote-write removal")
+			return true, ctrl.Result{}, nil
+		}
+		log.Info("tenant cluster is not reachable; will retry remote-write removal")
+		return false, requeue, nil
 	}
-	if err := removeTenantMonitoringEntry(ctx, guest); err != nil {
+	if err := removeTenantMonitoringEntry(ctx, guest, hc.GetName()); err != nil {
+		if isTransientTenantError(err) {
+			log.Info("tenant cluster is not accepting writes yet", "error", err.Error())
+			return false, requeue, nil
+		}
+		return false, ctrl.Result{}, err
+	}
+	if err := removeTenantMetricsSecrets(ctx, guest); err != nil {
 		if isTransientTenantError(err) {
 			log.Info("tenant cluster is not accepting writes yet", "error", err.Error())
 			return false, requeue, nil
@@ -387,31 +437,84 @@ func (r *ClusterOrderReconciler) revokeClusterMetricsWrite(
 	return true, ctrl.Result{}, nil
 }
 
-func (r *ClusterOrderReconciler) appendRevokedSerial(ctx context.Context, serial string) error {
-	configMap := &corev1.ConfigMap{}
-	key := client.ObjectKey{Namespace: r.MetricsWrite.Namespace, Name: r.MetricsWrite.RevocationConfigMap}
-	if err := r.apiReader.Get(ctx, key, configMap); err != nil {
-		return fmt.Errorf("get write revocation ConfigMap %s: %w", key, err)
+// issuedCertificateSerial reads the serial of the identity cert-manager wrote,
+// returning an empty string when the Secret no longer exists.
+func (r *ClusterOrderReconciler) issuedCertificateSerial(
+	ctx context.Context,
+	certificateName string,
+) (string, error) {
+	issued := &corev1.Secret{}
+	err := r.apiReader.Get(ctx, client.ObjectKey{
+		Namespace: r.MetricsWrite.Namespace,
+		Name:      certificateName,
+	}, issued)
+	if apierrors.IsNotFound(err) {
+		return "", nil
 	}
-	current := configMap.Data[metricswrite.RevocationKey]
-	updated, err := metricswrite.AppendSerial(current, serial)
 	if err != nil {
-		return fmt.Errorf("record revoked serial %s: %w", serial, err)
+		return "", fmt.Errorf("get issued client Secret %s: %w", certificateName, err)
 	}
-	if updated == current {
-		return nil
+	serial, err := metricswrite.ParseSerial(issued.Data[metricswrite.CertKey])
+	if err != nil {
+		return "", fmt.Errorf("read serial from issued client Secret %s: %w", certificateName, err)
 	}
-	if configMap.Data == nil {
-		configMap.Data = map[string]string{}
-	}
-	configMap.Data[metricswrite.RevocationKey] = updated
-	if err := r.Client.Update(ctx, configMap); err != nil {
-		return fmt.Errorf("update write revocation ConfigMap %s: %w", key, err)
-	}
-	return nil
+	return serial, nil
 }
 
-func removeTenantMonitoringEntry(ctx context.Context, guest kubernetes.Interface) error {
+// appendRevokedSerial adds a serial to the shared denylist. The ConfigMap is
+// created when it is missing: a missing denylist must not block or skip
+// revocation. Appends are idempotent, and a create or update race with another
+// replica is retried once against the stored object.
+func (r *ClusterOrderReconciler) appendRevokedSerial(ctx context.Context, serial string) error {
+	if !r.metricsWriteArtifactsPossible() {
+		return errors.New("write revocation ConfigMap is not configured")
+	}
+	key := client.ObjectKey{Namespace: r.MetricsWrite.Namespace, Name: r.MetricsWrite.RevocationConfigMap}
+	for attempt := 0; attempt < 2; attempt++ {
+		configMap := &corev1.ConfigMap{}
+		err := r.apiReader.Get(ctx, key, configMap)
+		if apierrors.IsNotFound(err) {
+			initial, appendErr := metricswrite.AppendSerial("", serial)
+			if appendErr != nil {
+				return fmt.Errorf("record revoked serial %s: %w", serial, appendErr)
+			}
+			created := &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace},
+				Data:       map[string]string{metricswrite.RevocationKey: initial},
+			}
+			if createErr := r.Client.Create(ctx, created); apierrors.IsAlreadyExists(createErr) {
+				continue
+			} else if createErr != nil {
+				return fmt.Errorf("create write revocation ConfigMap %s: %w", key, createErr)
+			}
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("get write revocation ConfigMap %s: %w", key, err)
+		}
+		current := configMap.Data[metricswrite.RevocationKey]
+		updated, appendErr := metricswrite.AppendSerial(current, serial)
+		if appendErr != nil {
+			return fmt.Errorf("record revoked serial %s: %w", serial, appendErr)
+		}
+		if updated == current {
+			return nil
+		}
+		if configMap.Data == nil {
+			configMap.Data = map[string]string{}
+		}
+		configMap.Data[metricswrite.RevocationKey] = updated
+		if updateErr := r.Client.Update(ctx, configMap); apierrors.IsConflict(updateErr) {
+			continue
+		} else if updateErr != nil {
+			return fmt.Errorf("update write revocation ConfigMap %s: %w", key, updateErr)
+		}
+		return nil
+	}
+	return fmt.Errorf("record revoked serial %s in %s: concurrent update", serial, key)
+}
+
+func removeTenantMonitoringEntry(ctx context.Context, guest kubernetes.Interface, clusterName string) error {
 	configMaps := guest.CoreV1().ConfigMaps(metricswrite.MonitoringNamespace)
 	existing, err := configMaps.Get(ctx, metricswrite.MonitoringConfigName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
@@ -421,7 +524,7 @@ func removeTenantMonitoringEntry(ctx context.Context, guest kubernetes.Interface
 		return fmt.Errorf("get tenant %s ConfigMap: %w", metricswrite.MonitoringConfigName, err)
 	}
 	current := existing.Data[metricswrite.MonitoringConfigKey]
-	updated, err := metricswrite.RemoveMonitoringEntry([]byte(current))
+	updated, err := metricswrite.RemoveMonitoringEntry([]byte(current), clusterName)
 	if err != nil {
 		return err
 	}
@@ -434,6 +537,29 @@ func removeTenantMonitoringEntry(ctx context.Context, guest kubernetes.Interface
 	existing.Data[metricswrite.MonitoringConfigKey] = string(updated)
 	if _, err := configMaps.Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
 		return fmt.Errorf("update tenant %s ConfigMap: %w", metricswrite.MonitoringConfigName, err)
+	}
+	return nil
+}
+
+// removeTenantMetricsSecrets deletes the three Secrets the reconciler
+// installed, after their references have left the monitoring config. Each
+// Secret is read first so withdrawing from a cluster that never received an
+// identity issues no writes at all.
+func removeTenantMetricsSecrets(ctx context.Context, guest kubernetes.Interface) error {
+	secrets := guest.CoreV1().Secrets(metricswrite.MonitoringNamespace)
+	for _, name := range []string{
+		metricswrite.CABundleSecretName,
+		metricswrite.ClientCertSecretName,
+		metricswrite.ClientKeySecretName,
+	} {
+		if _, err := secrets.Get(ctx, name, metav1.GetOptions{}); apierrors.IsNotFound(err) {
+			continue
+		} else if err != nil {
+			return fmt.Errorf("get tenant Secret %s/%s: %w", metricswrite.MonitoringNamespace, name, err)
+		}
+		if err := secrets.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete tenant Secret %s/%s: %w", metricswrite.MonitoringNamespace, name, err)
+		}
 	}
 	return nil
 }

@@ -174,12 +174,72 @@ func tenantMonitoringConfigMap(config string) *corev1.ConfigMap {
 func tenantMonitoringConfig() string {
 	return `enableUserWorkload: true
 prometheusK8s:
+  externalLabels:
+    cluster: prod-east
+    managed_by: osac
+    site: east
   remoteWrite:
     - name: tenant-feed
       url: https://other.example.com/api/v1/receive
     - name: osac
       url: https://stale.example.com/api/v1/receive
 `
+}
+
+// tenantMetricsSecrets returns the three Secrets the reconciler installs, so a
+// withdrawal can be asserted to remove them.
+func tenantMetricsSecrets() []*corev1.Secret {
+	return metricswrite.NewClientSecrets(
+		metricsWriteTestOrder, []byte("ca"), []byte("cert"), []byte("key"),
+	).All()
+}
+
+func guestWithTenantState(config string) *k8sfake.Clientset {
+	secrets := tenantMetricsSecrets()
+	objects := make([]runtime.Object, 0, len(secrets)+1)
+	objects = append(objects, tenantMonitoringConfigMap(config))
+	for _, secret := range secrets {
+		objects = append(objects, secret)
+	}
+	return k8sfake.NewSimpleClientset(objects...)
+}
+
+func revocationConfigMap(revoked string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      metricsWriteTestConfig().RevocationConfigMap,
+			Namespace: metricsWriteTestNamespace,
+		},
+		Data: map[string]string{metricswrite.RevocationKey: revoked},
+	}
+}
+
+func metricsWriteTestNamespaceObject() *corev1.Namespace {
+	return &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{
+		Name:   "clusters-prod-east",
+		Labels: map[string]string{osacClusterOrderNameLabel: metricsWriteTestOrder},
+	}}
+}
+
+func expectNoGuestMutations(guest *k8sfake.Clientset) {
+	for _, action := range guest.Actions() {
+		switch action.GetVerb() {
+		case "create", "update", "patch", "delete", "deletecollection":
+			Fail("unexpected guest " + action.GetVerb() + " on " + action.GetResource().Resource)
+		}
+	}
+}
+
+func expectTenantSecretsGone(guest kubernetes.Interface, ctx context.Context) {
+	for _, name := range []string{
+		metricswrite.CABundleSecretName,
+		metricswrite.ClientCertSecretName,
+		metricswrite.ClientKeySecretName,
+	} {
+		_, err := guest.CoreV1().Secrets(metricswrite.MonitoringNamespace).
+			Get(ctx, name, metav1.GetOptions{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "tenant Secret %s", name)
+	}
 }
 
 // metricsWriteScheme registers the cert-manager kinds as unstructured so the
@@ -225,22 +285,159 @@ var _ = Describe("ClusterOrder tenant remote write", func() {
 		ctx = context.Background()
 	})
 
-	It("is a no-op when tenant remote write is disabled", func() {
+	It("is a no-op when tenant remote write was never issued", func() {
 		hub := fake.NewClientBuilder().WithScheme(metricsWriteScheme()).Build()
 		guest := k8sfake.NewSimpleClientset()
-		reconciler := newMetricsWriteReconciler(hub, MetricsWriteConfig{}, guest, true, true)
+		cfg := metricsWriteTestConfig()
+		cfg.Enabled = false
+		reconciler := newMetricsWriteReconciler(hub, cfg, guest, true, true)
 
 		result, err := reconciler.reconcileClusterMetricsWrite(ctx, metricsWriteTestInstance(), metricsWriteTestHostedCluster())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(BeZero())
+		expectNoGuestMutations(guest)
 
 		revoked, _, err := reconciler.revokeClusterMetricsWrite(ctx, metricsWriteTestInstance())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(revoked).To(BeTrue())
-		Expect(guest.Actions()).To(BeEmpty())
+		expectNoGuestMutations(guest)
 
 		existing := newMetricsWriteCertificate()
 		Expect(apierrors.IsNotFound(hub.Get(ctx, metricsWriteCertificateKey(), existing))).To(BeTrue())
+		// No serial was ever issued, so the denylist must not be created.
+		stored := &corev1.ConfigMap{}
+		Expect(apierrors.IsNotFound(hub.Get(ctx, client.ObjectKey{
+			Namespace: metricsWriteTestNamespace,
+			Name:      cfg.RevocationConfigMap,
+		}, stored))).To(BeTrue())
+	})
+
+	It("withdraws an issued identity when tenant remote write is turned off", func() {
+		hub := fake.NewClientBuilder().
+			WithScheme(metricsWriteScheme()).
+			WithObjects(
+				revocationConfigMap("aa"),
+				newMetricsWriteCertificate(),
+				issuedClientSecret(),
+				metricsWriteTestHostedCluster(),
+				metricsWriteTestNamespaceObject(),
+			).
+			Build()
+		guest := guestWithTenantState(tenantMonitoringConfig())
+		cfg := metricsWriteTestConfig()
+		cfg.Enabled = false
+		reconciler := newMetricsWriteReconciler(hub, cfg, guest, true, true)
+
+		result, err := reconciler.reconcileClusterMetricsWrite(
+			ctx, metricsWriteTestInstance(), metricsWriteTestHostedCluster())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeZero())
+
+		stored := &corev1.ConfigMap{}
+		Expect(hub.Get(ctx, client.ObjectKey{
+			Namespace: metricsWriteTestNamespace,
+			Name:      cfg.RevocationConfigMap,
+		}, stored)).To(Succeed())
+		Expect(stored.Data[metricswrite.RevocationKey]).To(Equal("aa\n5eed"))
+		Expect(apierrors.IsNotFound(hub.Get(
+			ctx, metricsWriteCertificateKey(), newMetricsWriteCertificate()))).To(BeTrue())
+
+		configMap, err := guest.CoreV1().ConfigMaps(metricswrite.MonitoringNamespace).
+			Get(ctx, metricswrite.MonitoringConfigName, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		config := configMap.Data[metricswrite.MonitoringConfigKey]
+		Expect(config).To(ContainSubstring("name: tenant-feed"))
+		Expect(config).NotTo(ContainSubstring("name: osac"))
+		Expect(config).NotTo(ContainSubstring("managed_by: osac"))
+		Expect(config).NotTo(ContainSubstring("cluster: prod-east"))
+		Expect(config).To(ContainSubstring("site: east"))
+		expectTenantSecretsGone(guest, ctx)
+	})
+
+	It("revokes an issued identity when deletion runs with tenant remote write off", func() {
+		hub := fake.NewClientBuilder().
+			WithScheme(metricsWriteScheme()).
+			WithObjects(
+				revocationConfigMap("aa"),
+				newMetricsWriteCertificate(),
+				issuedClientSecret(),
+				metricsWriteTestHostedCluster(),
+				metricsWriteTestNamespaceObject(),
+			).
+			Build()
+		guest := guestWithTenantState(tenantMonitoringConfig())
+		cfg := metricsWriteTestConfig()
+		cfg.Enabled = false
+		reconciler := newMetricsWriteReconciler(hub, cfg, guest, true, true)
+
+		revoked, _, err := reconciler.revokeClusterMetricsWrite(ctx, metricsWriteTestInstance())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(revoked).To(BeTrue())
+
+		stored := &corev1.ConfigMap{}
+		Expect(hub.Get(ctx, client.ObjectKey{
+			Namespace: metricsWriteTestNamespace,
+			Name:      cfg.RevocationConfigMap,
+		}, stored)).To(Succeed())
+		Expect(stored.Data[metricswrite.RevocationKey]).To(Equal("aa\n5eed"))
+		Expect(apierrors.IsNotFound(hub.Get(
+			ctx, metricsWriteCertificateKey(), newMetricsWriteCertificate()))).To(BeTrue())
+		expectTenantSecretsGone(guest, ctx)
+	})
+
+	It("creates the denylist when the revocation ConfigMap does not exist yet", func() {
+		hub := fake.NewClientBuilder().
+			WithScheme(metricsWriteScheme()).
+			WithObjects(
+				newMetricsWriteCertificate(),
+				issuedClientSecret(),
+				metricsWriteTestHostedCluster(),
+				metricsWriteTestNamespaceObject(),
+			).
+			Build()
+		guest := k8sfake.NewSimpleClientset()
+		cfg := metricsWriteTestConfig()
+		cfg.Enabled = false
+		reconciler := newMetricsWriteReconciler(hub, cfg, guest, true, true)
+
+		revoked, _, err := reconciler.revokeClusterMetricsWrite(ctx, metricsWriteTestInstance())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(revoked).To(BeTrue())
+
+		stored := &corev1.ConfigMap{}
+		Expect(hub.Get(ctx, client.ObjectKey{
+			Namespace: metricsWriteTestNamespace,
+			Name:      cfg.RevocationConfigMap,
+		}, stored)).To(Succeed())
+		Expect(stored.Data[metricswrite.RevocationKey]).To(Equal("5eed"))
+	})
+
+	It("does not duplicate a serial that is already denylisted", func() {
+		hub := fake.NewClientBuilder().
+			WithScheme(metricsWriteScheme()).
+			WithObjects(
+				revocationConfigMap("aa\n5eed"),
+				newMetricsWriteCertificate(),
+				issuedClientSecret(),
+				metricsWriteTestHostedCluster(),
+				metricsWriteTestNamespaceObject(),
+			).
+			Build()
+		guest := k8sfake.NewSimpleClientset()
+		cfg := metricsWriteTestConfig()
+		cfg.Enabled = false
+		reconciler := newMetricsWriteReconciler(hub, cfg, guest, true, true)
+
+		revoked, _, err := reconciler.revokeClusterMetricsWrite(ctx, metricsWriteTestInstance())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(revoked).To(BeTrue())
+
+		stored := &corev1.ConfigMap{}
+		Expect(hub.Get(ctx, client.ObjectKey{
+			Namespace: metricsWriteTestNamespace,
+			Name:      cfg.RevocationConfigMap,
+		}, stored)).To(Succeed())
+		Expect(stored.Data[metricswrite.RevocationKey]).To(Equal("aa\n5eed"))
 	})
 
 	It("waits for the write CA issuer before creating a client Certificate", func() {
@@ -308,14 +505,14 @@ var _ = Describe("ClusterOrder tenant remote write", func() {
 		Expect(guest.Actions()).To(BeEmpty())
 	})
 
-	It("replaces a Certificate that names a different hosted cluster", func() {
+	It("denylists the old serial before replacing a Certificate that renames the cluster", func() {
 		existing := newMetricsWriteCertificate()
 		Expect(unstructured.SetNestedField(existing.Object, "stale-cluster", "spec", "commonName")).To(Succeed())
 		hub := fake.NewClientBuilder().
 			WithScheme(metricsWriteScheme()).
-			WithObjects(newMetricsWriteIssuer(true), existing).
+			WithObjects(newMetricsWriteIssuer(true), existing, issuedClientSecret(), revocationConfigMap("aa")).
 			Build()
-		guest := k8sfake.NewSimpleClientset(tenantMonitoringConfigMap(""), issuedClientSecret())
+		guest := guestWithTenantState(tenantMonitoringConfig())
 		reconciler := newMetricsWriteReconciler(hub, metricsWriteTestConfig(), guest, true, true)
 
 		_, err := reconciler.reconcileClusterMetricsWrite(ctx, metricsWriteTestInstance(), metricsWriteTestHostedCluster())
@@ -326,6 +523,14 @@ var _ = Describe("ClusterOrder tenant remote write", func() {
 		commonName, _, err := unstructured.NestedString(certificate.Object, "spec", "commonName")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(commonName).To(Equal(metricsWriteTestCluster))
+
+		// The replaced identity must not keep writing under the old name.
+		stored := &corev1.ConfigMap{}
+		Expect(hub.Get(ctx, client.ObjectKey{
+			Namespace: metricsWriteTestNamespace,
+			Name:      metricsWriteTestConfig().RevocationConfigMap,
+		}, stored)).To(Succeed())
+		Expect(stored.Data[metricswrite.RevocationKey]).To(Equal("aa\n5eed"))
 	})
 
 	It("writes the client identity and the remote-write entry to the tenant cluster", func() {
@@ -452,7 +657,7 @@ var _ = Describe("ClusterOrder tenant remote write", func() {
 			}).
 			Build()
 
-		guest := k8sfake.NewSimpleClientset(tenantMonitoringConfigMap(tenantMonitoringConfig()))
+		guest := guestWithTenantState(tenantMonitoringConfig())
 		guest.PrependReactor("update", "configmaps", func(k8stesting.Action) (bool, runtime.Object, error) {
 			certificate := newMetricsWriteCertificate()
 			if apierrors.IsNotFound(hub.Get(ctx, metricsWriteCertificateKey(), certificate)) {
@@ -484,6 +689,9 @@ var _ = Describe("ClusterOrder tenant remote write", func() {
 		config := configMap.Data[metricswrite.MonitoringConfigKey]
 		Expect(config).To(ContainSubstring("name: tenant-feed"))
 		Expect(config).NotTo(ContainSubstring("name: osac"))
+		Expect(config).NotTo(ContainSubstring("managed_by: osac"))
+		Expect(config).NotTo(ContainSubstring("cluster: prod-east"))
+		expectTenantSecretsGone(guest, ctx)
 	})
 
 	It("still deletes the Certificate and removes the entry when the issued Secret is gone", func() {

@@ -116,9 +116,11 @@ func MergeMonitoringConfig(current []byte, opts MonitoringOptions) ([]byte, erro
 	return out, nil
 }
 
-// RemoveMonitoringEntry removes only the osac remoteWrite entry. Other entries
+// RemoveMonitoringEntry removes only the osac remoteWrite entry plus the
+// externalLabels this reconciler set (cluster when it still names this cluster,
+// managed_by when it still names osac). Other entries, other writers' labels
 // and every other key stay untouched.
-func RemoveMonitoringEntry(current []byte) ([]byte, error) {
+func RemoveMonitoringEntry(current []byte, clusterName string) ([]byte, error) {
 	doc, err := decode(current)
 	if err != nil {
 		return nil, err
@@ -130,25 +132,36 @@ func RemoveMonitoringEntry(current []byte) ([]byte, error) {
 	if prometheus == nil || prometheus.Kind != yaml.MappingNode {
 		return current, nil
 	}
-	entries := mappingValue(prometheus, "remoteWrite")
-	if entries == nil || entries.Kind != yaml.SequenceNode {
-		return current, nil
-	}
-	kept := entries.Content[:0]
 	changed := false
-	for _, entry := range entries.Content {
-		if scalarValue(entry, "name") == RemoteWriteName {
-			changed = true
-			continue
+	entries := mappingValue(prometheus, "remoteWrite")
+	if entries != nil && entries.Kind == yaml.SequenceNode {
+		kept := entries.Content[:0]
+		for _, entry := range entries.Content {
+			if scalarValue(entry, "name") == RemoteWriteName {
+				changed = true
+				continue
+			}
+			kept = append(kept, entry)
 		}
-		kept = append(kept, entry)
+		if len(kept) == 0 && changed {
+			_ = deleteKey(prometheus, "remoteWrite")
+		} else {
+			entries.Content = kept
+		}
+	}
+	labels := mappingValue(prometheus, "externalLabels")
+	if labels != nil && labels.Kind == yaml.MappingNode {
+		if scalarValue(labels, "managed_by") == RemoteWriteName {
+			_ = deleteKey(labels, "managed_by")
+			changed = true
+		}
+		if clusterName != "" && scalarValue(labels, "cluster") == clusterName {
+			_ = deleteKey(labels, "cluster")
+			changed = true
+		}
 	}
 	if !changed {
 		return current, nil
-	}
-	entries.Content = kept
-	if len(entries.Content) == 0 {
-		_ = deleteKey(prometheus, "remoteWrite")
 	}
 	out, err := yaml.Marshal(doc)
 	if err != nil {

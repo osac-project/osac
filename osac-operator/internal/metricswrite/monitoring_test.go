@@ -294,7 +294,7 @@ prometheusK8s:
     - name: osac
       url: ` + testWriteURL + `
 `)
-	out, err := RemoveMonitoringEntry(current)
+	out, err := RemoveMonitoringEntry(current, "prod-east")
 	if err != nil {
 		t.Fatalf("remove: %v", err)
 	}
@@ -315,6 +315,54 @@ prometheusK8s:
 	}
 }
 
+func TestRemoveMonitoringEntryDropsOnlyTheLabelsOSACSet(t *testing.T) {
+	current := []byte(`
+prometheusK8s:
+  externalLabels:
+    cluster: prod-east
+    managed_by: osac
+    site: east
+  remoteWrite:
+    - name: osac
+      url: ` + testWriteURL + `
+`)
+	out, err := RemoveMonitoringEntry(current, "prod-east")
+	if err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	root := decodeDocument(t, out)
+	labels := mappingAt(t, root, "prometheusK8s", "externalLabels")
+	for _, name := range []string{"cluster", "managed_by"} {
+		if value, exists := labels[name]; exists {
+			t.Errorf("externalLabels.%s survived removal: %v", name, value)
+		}
+	}
+	if got := labels["site"]; got != "east" {
+		t.Errorf("externalLabels.site = %v, want east", got)
+	}
+}
+
+func TestRemoveMonitoringEntryKeepsLabelsAnotherWriterSet(t *testing.T) {
+	current := []byte(`
+prometheusK8s:
+  externalLabels:
+    cluster: shared
+    managed_by: another-writer
+`)
+	out, err := RemoveMonitoringEntry(current, "prod-east")
+	if err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	root := decodeDocument(t, out)
+	labels := mappingAt(t, root, "prometheusK8s", "externalLabels")
+	if got := labels["cluster"]; got != "shared" {
+		t.Errorf("externalLabels.cluster = %v, want shared", got)
+	}
+	if got := labels["managed_by"]; got != "another-writer" {
+		t.Errorf("externalLabels.managed_by = %v, want another-writer", got)
+	}
+}
+
 func TestRemoveMonitoringEntryDeletesEmptyRemoteWriteList(t *testing.T) {
 	current := []byte(`
 prometheusK8s:
@@ -322,7 +370,7 @@ prometheusK8s:
     - name: osac
       url: ` + testWriteURL + `
 `)
-	out, err := RemoveMonitoringEntry(current)
+	out, err := RemoveMonitoringEntry(current, "prod-east")
 	if err != nil {
 		t.Fatalf("remove: %v", err)
 	}
@@ -334,7 +382,7 @@ prometheusK8s:
 }
 
 func TestRemoveMonitoringEntryLeavesEmptyDocumentAlone(t *testing.T) {
-	out, err := RemoveMonitoringEntry(nil)
+	out, err := RemoveMonitoringEntry(nil, "prod-east")
 	if err != nil {
 		t.Fatalf("remove: %v", err)
 	}
@@ -344,7 +392,7 @@ func TestRemoveMonitoringEntryLeavesEmptyDocumentAlone(t *testing.T) {
 }
 
 func TestRemoveMonitoringEntryRejectsMalformedDocument(t *testing.T) {
-	if _, err := RemoveMonitoringEntry([]byte("just a string")); err == nil {
+	if _, err := RemoveMonitoringEntry([]byte("just a string"), "prod-east"); err == nil {
 		t.Fatal("remove succeeded, want a parse error")
 	}
 }

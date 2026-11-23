@@ -60,7 +60,7 @@ configurable through OSAC Helm values:
 | ----- | ------- | --------------------------------- |
 | Redis | Session cache and task queue for AAP controller | AAP operator env var `RELATED_IMAGE_REDIS` |
 | PostgreSQL | Database for AAP controller and hub | AAP operator env var `RELATED_IMAGE_POSTGRES` |
-| AAP Controller (awx-ee) | Default execution environment | `RELATED_IMAGE_EE` in AWX database |
+| AAP Controller (awx-ee) | Default execution environment | `RELATED_IMAGE_EE` AAP operator env var |
 | AAP Hub (galaxy-ng) | Automation content hub | AAP operator env var `RELATED_IMAGE_HUB` |
 
 Selected OSAC execution-environment image to mirror: `ghcr.io/osac-project/osac-aap:0.0.45`.

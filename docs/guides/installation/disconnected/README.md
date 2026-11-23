@@ -16,7 +16,7 @@
 
 Category-specific guides for mirroring OSAC images and dependencies into a disconnected (air-gapped) mirror registry.
 
-> **Baseline**: this guide targets OSAC v0.0.62 on OpenShift Container
+> **Baseline**: this guide targets OSAC v0.4.0 on OpenShift Container
 > Platform 4.22.
 
 OSAC disconnected installation requires mirroring container images from

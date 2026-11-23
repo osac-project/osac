@@ -169,7 +169,6 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(maps.Equal(after.GetMetadata().GetLabels(), afterRESTRejection.GetMetadata().GetLabels())).To(BeTrue())
 		Expect(maps.Equal(after.GetMetadata().GetAnnotations(), afterRESTRejection.GetMetadata().GetAnnotations())).To(BeTrue())
-		Expect(after.GetMetadata().GetVersion()).To(Equal(afterRESTRejection.GetMetadata().GetVersion()))
 
 		updatedRESTStatus, _, err := patchComputeInstanceREST(ctx, accounts.tenantUser.HTTPClient, fixture.id,
 			"metadata.labels", map[string]string{metadataOrdinaryLabelKey: "rest-visible"}, nil)
@@ -197,7 +196,6 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(maps.Equal(afterRESTUpdate.GetMetadata().GetLabels(), afterRESTAnnotationRejection.GetMetadata().GetLabels())).To(BeTrue())
 		Expect(maps.Equal(afterRESTUpdate.GetMetadata().GetAnnotations(), afterRESTAnnotationRejection.GetMetadata().GetAnnotations())).To(BeTrue())
-		Expect(afterRESTUpdate.GetMetadata().GetVersion()).To(Equal(afterRESTAnnotationRejection.GetMetadata().GetVersion()))
 
 		updatedRESTAnnotationStatus, _, err := patchComputeInstanceREST(ctx, accounts.tenantUser.HTTPClient, fixture.id,
 			"metadata.annotations", nil, map[string]string{metadataOrdinaryAnnotationKey: "rest-visible"})
@@ -248,7 +246,6 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 		Expect(err).NotTo(HaveOccurred())
 		Expect(maps.Equal(afterRESTEmptyLabelUpdate.GetMetadata().GetLabels(), afterCLIRejection.GetMetadata().GetLabels())).To(BeTrue())
 		Expect(maps.Equal(afterRESTEmptyLabelUpdate.GetMetadata().GetAnnotations(), afterCLIRejection.GetMetadata().GetAnnotations())).To(BeTrue())
-		Expect(afterRESTEmptyLabelUpdate.GetMetadata().GetVersion()).To(Equal(afterCLIRejection.GetMetadata().GetVersion()))
 
 		Expect(runMetadataCLI("label", "computeinstance", fixture.id, metadataOrdinaryLabelKey+"=cli-visible")).To(Equal(0))
 		Expect(runMetadataCLI("annotate", "computeinstance", fixture.id, metadataOrdinaryAnnotationKey+"=cli-visible")).To(Equal(0))

@@ -1,5 +1,5 @@
 import { Code, ConnectError } from '@connectrpc/connect';
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -9,14 +9,6 @@ import { ComputeInstanceState } from '@osac/types';
 import VmDetails from './VmDetails';
 import type { MockTransportOverrides } from '../../../test-utils/createMockConnectTransport';
 import { renderWithProviders } from '../../../test-utils/TestProviders';
-
-vi.mock('./VmDetailsActionButtons', () => ({
-  default: ({ onOpenConsole }: { onOpenConsole: VoidFunction }) => (
-    <button type="button" onClick={onOpenConsole}>
-      Open console
-    </button>
-  ),
-}));
 
 vi.mock('./VmDetailsSections', () => ({
   default: () => <div>VM detail sections</div>,
@@ -48,6 +40,11 @@ const vm = {
   status: { state: ComputeInstanceState.RUNNING },
 } as ComputeInstance;
 
+const deletingVm = {
+  ...vm,
+  status: { ...vm.status, state: ComputeInstanceState.DELETING },
+} as ComputeInstance;
+
 const instanceType = {
   id: 'standard-4-8',
   metadata: { name: 'Standard 4 vCPU / 8 GiB' },
@@ -63,6 +60,76 @@ const renderDetails = (
   });
 
 describe('VmDetails', () => {
+  it.each(['tenant-admin', 'tenant-user'] as const)(
+    'shows one page-top deletion warning and preserves action guards for %s',
+    (role) => {
+      const view = renderWithProviders(<VmDetails vm={deletingVm} />, {
+        apiFixtures: { instanceTypes: [instanceType] },
+        session: { role },
+      });
+
+      const liveRegion = within(view.container).getByRole('list');
+      expect(liveRegion).toHaveAttribute('aria-live', 'polite');
+      const warning = within(liveRegion).getByRole('listitem');
+      expect(within(liveRegion).getAllByRole('listitem')).toHaveLength(1);
+      expect(within(warning).getByText('Virtual machine deletion in progress')).toBeInTheDocument();
+      expect(
+        within(warning).getByText('Information on this page may be outdated.'),
+      ).toBeInTheDocument();
+      expect(
+        warning.compareDocumentPosition(screen.getByRole('heading', { name: 'web-01' })) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(screen.getByText('VM detail sections')).toBeInTheDocument();
+      for (const name of ['Open console', 'Start', 'Stop', 'Restart']) {
+        expect(screen.getByRole('button', { name })).toBeDisabled();
+      }
+      expect(screen.getByRole('button', { name: 'Delete' })).toHaveAttribute(
+        'aria-disabled',
+        'true',
+      );
+    },
+  );
+
+  it.each([
+    ComputeInstanceState.UNSPECIFIED,
+    ComputeInstanceState.STARTING,
+    ComputeInstanceState.RUNNING,
+    ComputeInstanceState.FAILED,
+    ComputeInstanceState.STOPPING,
+    ComputeInstanceState.STOPPED,
+    ComputeInstanceState.PAUSED,
+    undefined,
+  ])('does not show a deletion warning in state %s', (state) => {
+    const view = renderDetails(undefined, {
+      ...vm,
+      status: state === undefined ? undefined : { ...vm.status, state },
+    } as ComputeInstance);
+
+    const liveRegion = within(view.container).getByRole('list');
+    expect(liveRegion).toHaveAttribute('aria-live', 'polite');
+    expect(liveRegion).toBeEmptyDOMElement();
+    expect(screen.getByText('VM detail sections')).toBeInTheDocument();
+  });
+
+  it('preserves the live region as the deletion warning appears and disappears', () => {
+    const view = renderDetails();
+    const liveRegion = within(view.container).getByRole('list');
+    expect(liveRegion).toHaveAttribute('aria-live', 'polite');
+    expect(liveRegion).toBeEmptyDOMElement();
+
+    view.rerender(<VmDetails vm={deletingVm} />);
+    expect(within(view.container).getByRole('list')).toBe(liveRegion);
+    expect(within(liveRegion).getAllByRole('listitem')).toHaveLength(1);
+    expect(
+      within(liveRegion).getByText('Virtual machine deletion in progress'),
+    ).toBeInTheDocument();
+
+    view.rerender(<VmDetails vm={vm} />);
+    expect(within(view.container).getByRole('list')).toBe(liveRegion);
+    expect(liveRegion).toBeEmptyDOMElement();
+  });
+
   it('renders the continuous VM details page without a tab strip', () => {
     renderDetails();
 

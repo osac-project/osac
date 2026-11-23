@@ -1,0 +1,50 @@
+# Build context: the osac repository root.
+#   podman build -f tests/conformance/Containerfile -t osac-conformance:dev .
+#   docker build -f tests/conformance/Containerfile -t osac-conformance:dev .
+
+FROM registry.k8s.io/kubectl:v1.32.1@sha256:6ae337221866ae69380cfa08e2b38fa113fd5044cfb5b7a7662f5b0028be23b6 AS kubectl
+
+# The builder carries the compilers needed to build source distributions on
+# architectures without a manylinux wheel.
+FROM registry.access.redhat.com/ubi9/python-312:latest AS builder
+
+# The base image runs as UID 1001, which cannot write the work directory that
+# the build creates as root. Build as root here only; the runtime stage drops
+# back to UID 1001.
+USER 0
+
+WORKDIR /opt/osac
+
+COPY pyproject.toml ./
+COPY tests ./tests
+RUN python3 -m pip install --no-cache-dir --prefix=/runtime .
+
+# The runtime is the minimal UBI 9 Python base, not a builder image.
+FROM registry.access.redhat.com/ubi9/python-312-minimal:latest
+
+# The suite reads its own image digest from the container runtime socket. Any
+# runtime that serves the Podman or Docker unix API works; mount the socket and
+# a results directory the image UID can write, for example:
+#   podman run --rm --userns=keep-id:uid=1001,gid=1001 \
+#     -v "$XDG_RUNTIME_DIR/podman/podman.sock:/run/podman/podman.sock" \
+#     -v "$PWD/results:/results" osac-conformance:dev
+#   docker run --rm --user 1001 -v /var/run/docker.sock:/var/run/docker.sock \
+#     -v "$PWD/results:/results" osac-conformance:dev
+# Set OSAC_CONFORMANCE_SUITE_IMAGE_DIGEST to skip the socket lookup entirely.
+# Run as root only to install; the entrypoint runs as UID 1001.
+USER 0
+
+COPY --from=builder --chown=1001:0 /runtime/ /opt/app-root/
+COPY --from=kubectl /bin/kubectl /usr/local/bin/kubectl
+# Ship the conformance test tree at /tests so the default ``--tree tests``
+# resolves without depending on the working directory. The tree root is a
+# directory of tests, not a package: with its own __init__.py pytest imports
+# it as ``tests.*`` and resolves that against the installed package instead.
+COPY --chown=1001:0 tests/conformance/tests /tests
+RUN rm -f /tests/__init__.py && mkdir -p /results && chown 1001:0 /results
+
+WORKDIR /
+
+USER 1001
+
+ENTRYPOINT ["osac-conformance"]

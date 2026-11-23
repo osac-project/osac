@@ -1,4 +1,5 @@
 import { Route, Routes } from 'react-router-dom';
+import { Code, ConnectError } from '@connectrpc/connect';
 import { screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -24,18 +25,46 @@ const vm = {
   status: { state: ComputeInstanceState.RUNNING },
 } as ComputeInstance;
 
-const renderPage = () =>
+const renderPage = (role: 'tenant-admin' | 'tenant-user' = 'tenant-user') =>
   renderWithProviders(
     <Routes>
       <Route path="/vms/:id/console" element={<VmConsolePage />} />
     </Routes>,
-    { routerEntries: ['/vms/vm-1/console'] },
+    { routerEntries: ['/vms/vm-1/console'], session: { role } },
   );
 
 describe('VmConsolePage', () => {
   beforeEach(() => {
     mocks.useGetResource.mockReset();
   });
+
+  it.each(['tenant-admin', 'tenant-user'] as const)(
+    'does not render a cached VM console after access is denied for %s',
+    async (role) => {
+      const actual =
+        await vi.importActual<typeof import('../../api/use-resource')>('../../api/use-resource');
+      mocks.useGetResource.mockImplementation(
+        (...args: Parameters<typeof actual.useGetResource>) => {
+          if (args[0] === ComputeInstances) {
+            return {
+              data: { object: vm },
+              error: new ConnectError('Permission denied', Code.PermissionDenied),
+              isLoading: false,
+              refetch: vi.fn(),
+            };
+          }
+          return actual.useGetResource(...args);
+        },
+      );
+
+      renderPage(role);
+
+      expect(screen.queryByText('Console for vm-1')).not.toBeInTheDocument();
+      expect(
+        screen.getByRole('heading', { name: 'Could not load virtual machine' }),
+      ).toBeInTheDocument();
+    },
+  );
 
   it('loads the VM using the route id and renders the console', () => {
     mocks.useGetResource.mockReturnValue({

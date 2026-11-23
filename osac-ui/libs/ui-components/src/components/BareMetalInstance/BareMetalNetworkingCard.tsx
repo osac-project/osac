@@ -11,18 +11,12 @@ import {
 } from '@patternfly/react-core';
 import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 
-import { ExternalIPAttachments } from '@osac/types';
+import { ExternalIPAttachments, SecurityGroups, Subnets, VirtualNetworks } from '@osac/types';
 import type { BareMetalInstance, ExternalIPAttachment } from '@osac/types';
 
 import { type CelFilter, escapeCelStringLiteral } from '../../api/cel';
 import { useListResource } from '../../api/use-resource';
-import {
-  formatResourceIdsForReview,
-  resourceDisplayName,
-  useSecurityGroups,
-  useSubnets,
-  useVirtualNetworks,
-} from '../../api/v1/networking';
+import { formatResourceIdsForReview, resourceDisplayName } from '../../api/v1/networking';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
 import { SubtleContent } from '../SubtleContent/SubtleContent';
@@ -34,9 +28,24 @@ interface Props {
 const BareMetalNetworkingCard = ({ instance }: Props) => {
   const { t } = useTranslation();
 
-  const { data: virtualNetworks = [], isLoading: vnLoading, error: vnError } = useVirtualNetworks();
-  const { data: subnets = [], isLoading: subnetLoading, error: subnetError } = useSubnets();
-  const { data: securityGroups = [], isLoading: sgLoading, error: sgError } = useSecurityGroups();
+  const {
+    data: virtualNetworksResponse,
+    isLoading: vnLoading,
+    error: vnError,
+  } = useListResource(VirtualNetworks);
+  const virtualNetworks = virtualNetworksResponse?.items;
+  const {
+    data: subnetsResponse,
+    isLoading: subnetLoading,
+    error: subnetError,
+  } = useListResource(Subnets);
+  const subnets = subnetsResponse?.items;
+  const {
+    data: securityGroupsResponse,
+    isLoading: sgLoading,
+    error: sgError,
+  } = useListResource(SecurityGroups);
+  const securityGroups = securityGroupsResponse?.items;
 
   const externalIpAttachmentFilter = useMemo((): CelFilter<ExternalIPAttachment> => {
     const id = escapeCelStringLiteral(instance.id);
@@ -67,11 +76,11 @@ const BareMetalNetworkingCard = ({ instance }: Props) => {
     return networkAttachments.map((attachment, index) => {
       const status = networkAttachmentStatuses[index];
 
-      const subnet = subnets.find((s) => s.id === attachment.subnet?.id);
-      const vn = virtualNetworks.find((v) => v.id === subnet?.spec?.virtualNetwork?.id);
+      const subnet = subnets?.find((s) => s.id === attachment.subnet?.id);
+      const vn = virtualNetworks?.find((v) => v.id === subnet?.spec?.virtualNetwork?.id);
       const sgNames = formatResourceIdsForReview(
         attachment.securityGroups?.map((sg) => sg.id ?? '') ?? [],
-        securityGroups,
+        securityGroups ?? [],
       );
 
       return {

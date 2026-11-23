@@ -1148,7 +1148,7 @@ printf 'new Kind credentials and unrelated context\\n'
         self.assertEqual(len(runs), 4)
         self.assertLess(builds[0], runs[0])
         self.assertEqual(shlex.split(commands[builds[0]])[-3:], ["ginkgo", "build", "it"])
-        self.assertIn("--timeout 1h15m", commands[runs[0]])
+        self.assertIn("--timeout 1h30m", commands[runs[0]])
         self.assertIn("--skip 'Networking with operator|ComputeInstance storage handoff'", commands[runs[0]])
 
     def test_fulfillment_service_only_phase_runs_without_the_operator(self):

@@ -946,7 +946,7 @@
 
     - name: Verify endpoint1 tenant was deleted
       vars:
-        _ep1_window: "{{ _diffep_post_ep1.json[_diffep_mark_ep1 | int:] }}"
+        _ep1_window: "{{ _diffep_post_ep1.json[_diffep_mark_ep1 | int :] }}"
         _tenant_deletes: >-
           {{
             _ep1_window
@@ -962,7 +962,7 @@
 
     - name: Verify endpoint2 was NOT touched
       vars:
-        _ep2_window: "{{ _diffep_post_ep2.json[_diffep_mark_ep2 | int:] }}"
+        _ep2_window: "{{ _diffep_post_ep2.json[_diffep_mark_ep2 | int :] }}"
       ansible.builtin.assert:
         that:
           - _ep2_window | length == 0

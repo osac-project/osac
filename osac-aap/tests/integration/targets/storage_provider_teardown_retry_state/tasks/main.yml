@@ -84,6 +84,7 @@
         kubectl config set-context limited --cluster=kind --user=limited \
           --namespace=osac-system --kubeconfig="$KC"
         kubectl config use-context limited --kubeconfig="$KC"
+      changed_when: true
 
     - name: Verify get works with limited kubeconfig
       ansible.builtin.shell: |
@@ -206,18 +207,30 @@
     OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
   tasks:
     - name: Delete RoleBinding
-      ansible.builtin.shell: |
-        kubectl delete rolebinding osac-teardown-limited -n osac-system --ignore-not-found
+      kubernetes.core.k8s:
+        state: absent
+        api_version: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        name: osac-teardown-limited
+        namespace: osac-system
       failed_when: false
 
     - name: Delete Role
-      ansible.builtin.shell: |
-        kubectl delete role osac-teardown-limited -n osac-system --ignore-not-found
+      kubernetes.core.k8s:
+        state: absent
+        api_version: rbac.authorization.k8s.io/v1
+        kind: Role
+        name: osac-teardown-limited
+        namespace: osac-system
       failed_when: false
 
     - name: Delete ServiceAccount
-      ansible.builtin.shell: |
-        kubectl delete sa osac-teardown-limited -n osac-system --ignore-not-found
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: ServiceAccount
+        name: osac-teardown-limited
+        namespace: osac-system
       failed_when: false
 
     - name: Remove limited kubeconfig
@@ -246,3 +259,27 @@
         name: vast-tenant-config-test-retrystate-be-retry
         namespace: osac-system
       failed_when: false
+
+    - name: Check temporary access resources were removed
+      kubernetes.core.k8s_info:
+        api_version: "{{ item.api_version }}"
+        kind: "{{ item.kind }}"
+        name: osac-teardown-limited
+        namespace: osac-system
+      loop:
+        - api_version: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+        - api_version: rbac.authorization.k8s.io/v1
+          kind: Role
+        - api_version: v1
+          kind: ServiceAccount
+      register: _remaining_access_resources
+
+    - name: Assert temporary access resources are absent
+      ansible.builtin.assert:
+        that:
+          - item.resources | length == 0
+        fail_msg: "Temporary {{ item.item.kind }} was not removed"
+      loop: "{{ _remaining_access_resources.results }}"
+      loop_control:
+        label: "{{ item.item.kind }}"

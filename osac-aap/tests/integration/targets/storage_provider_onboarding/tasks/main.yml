@@ -583,8 +583,8 @@
 
     - name: Count tenant-manager POSTs per array across both runs
       vars:
-        _window_one: "{{ _obmulti_post_calls.results[0].json[_obmulti_mark_one | int:] }}"
-        _window_two: "{{ _obmulti_post_calls.results[1].json[_obmulti_mark_two | int:] }}"
+        _window_one: "{{ _obmulti_post_calls.results[0].json[_obmulti_mark_one | int :] }}"
+        _window_two: "{{ _obmulti_post_calls.results[1].json[_obmulti_mark_two | int :] }}"
       ansible.builtin.set_fact:
         _obmulti_mgr_posts_one: >-
           {% set _n = [] -%}

@@ -9,7 +9,7 @@ resource-reference workflows.
 
 - Cross-component pytest suites live under `tests/e2e/`, not in the external `osac-test-infra` checkout; that repository owns infrastructure backends, not suites.
 - Put service-owned tests in their service-tier directory. Cross-service
-  networking tests live in `tests/e2e/networking/{vmaas,bmaas,stretched}/`.
+  networking tests live in `tests/e2e/networking/{vmaas,bmaas,stretched,storage}/`.
 - Test-infra selects networking suites by directory through `TEST_SUITE`;
   do not add backend-specific pytest markers. Standard service runs select
   different directories and therefore skip these suites.
@@ -55,6 +55,7 @@ status and pool accounting, not provider IPAM visibility; see the canonical
 | VMaaS/CaaS/BMaaS/storage/reference lifecycles | QE deployed E2E: collect and run the affected service/tier under `tests/e2e/` with real dependencies |
 | Netris VMaaS networking and billing | Whole ordered lifecycle: `uv run pytest -n 0 -x tests/e2e/networking/vmaas/test_vmaas_networking.py` |
 | Netris BMaaS connectivity/isolation | `uv run pytest -n 0 tests/e2e/networking/bmaas` against its real backend |
+| Storage over tenant SNAT | `uv run pytest -n 0 -x tests/e2e/networking/storage/test_storage_nat.py` with `OSAC_STORAGE_NFS_SERVER`, `OSAC_STORAGE_NFS_EXPORT`, `OSAC_STORAGE_SSH_HOST`, `OSAC_STORAGE_SSH_IDENTITY`, and `OSAC_STORAGE_LOG_PATH`; needs the lab NFS endpoint and a routed pool |
 | Stretched networking | `uv run pytest -n 0 tests/e2e/networking/stretched` against its real backends |
 | Natural bare-metal CaaS teardown | `uv run pytest -n 0 tests/e2e/caas/sanity/test_cluster_create.py::test_cluster_create`; two-NodeSet coverage is in `caas/regression/test_cluster_node_sets.py` |
 

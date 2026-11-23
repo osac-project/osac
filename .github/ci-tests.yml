@@ -64,7 +64,7 @@
 - id: Integration test (fulfillment-service)
   group: integration
   kind: it-fulfillment-service
-  timeout: 90  # ginkgo --timeout 1h15m (Makefile) + ~15m for install, setup and log collection
+  timeout: 120  # Kind setup, image builds, four serial test phases, and log collection.
   filters: [code, integration-tests-fulfillment-service]
 - id: Integration test (osac-operator)
   group: integration

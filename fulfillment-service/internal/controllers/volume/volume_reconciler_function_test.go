@@ -230,7 +230,7 @@ var _ = Describe("buildSpec", func() {
 })
 
 var _ = Describe("setDefaults", func() {
-	It("sets CREATING state when status is unspecified", func() {
+	It("sets PENDING state when status is unspecified", func() {
 		t := &task{
 			volume: privatev1.Volume_builder{
 				Id: "vol-defaults-1",
@@ -240,7 +240,7 @@ var _ = Describe("setDefaults", func() {
 		t.setDefaults()
 
 		Expect(t.volume.GetStatus().GetState()).To(
-			Equal(privatev1.VolumeState_VOLUME_STATE_CREATING),
+			Equal(privatev1.VolumeState_VOLUME_STATE_PENDING),
 		)
 	})
 
@@ -274,7 +274,7 @@ var _ = Describe("setDefaults", func() {
 
 		Expect(t.volume.HasStatus()).To(BeTrue())
 		Expect(t.volume.GetStatus().GetState()).To(
-			Equal(privatev1.VolumeState_VOLUME_STATE_CREATING),
+			Equal(privatev1.VolumeState_VOLUME_STATE_PENDING),
 		)
 	})
 })
@@ -428,7 +428,7 @@ var _ = Describe("update", func() {
 			task := &task{r: &function{logger: logger, hubCache: hubs}, volume: volume}
 			err := task.update(context.Background())
 			Expect(err).To(MatchError("standalone hub lookup"))
-			Expect(volume.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_CREATING))
+			Expect(volume.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_PENDING))
 			Expect(volume.GetStatus().GetStateTransitionTime()).NotTo(BeNil())
 		},
 		Entry("legitimate placeholder node", map[string]string{"osac.io/node": "osac-volume-registration-pending"}),

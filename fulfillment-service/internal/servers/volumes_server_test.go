@@ -153,9 +153,9 @@ var _ = Describe("Public volumes server", func() {
 			Expect(object.GetSpec().GetAccessMode()).
 				To(Equal(publicv1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE))
 
-			// Status state is visible; the private server stamped CREATING.
+			// Status state is visible; the private server stamped PENDING.
 			Expect(object.GetStatus().GetState()).
-				To(Equal(publicv1.VolumeState_VOLUME_STATE_CREATING))
+				To(Equal(publicv1.VolumeState_VOLUME_STATE_PENDING))
 
 			// The internal routing fields (provider, protocol, hub, vendor_volume_id) are not part of
 			// the public Volume type at all, so they cannot leak. This is enforced at compile time by
@@ -187,7 +187,7 @@ var _ = Describe("Public volumes server", func() {
 			createVolumeViaPrivate("filter-vol")
 
 			listRequest := &publicv1.VolumesListRequest{}
-			listRequest.SetFilter("this.status.state == 1") // VOLUME_STATE_CREATING
+			listRequest.SetFilter("this.status.state == 6") // VOLUME_STATE_PENDING
 			response, err := publicServer.List(ctx, listRequest)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetItems()).ToNot(BeEmpty())
@@ -253,7 +253,7 @@ var _ = Describe("Public volumes server", func() {
 			return response.GetObject()
 		}
 
-		// TC-C1: Create with valid input returns a public Volume in CREATING state.
+		// TC-C1: Create with valid input returns a public Volume in PENDING state.
 		It("Creates a volume with valid input", func() {
 			vol := createVolumeViaPublic("analytics-data")
 			Expect(vol.GetId()).ToNot(BeEmpty())
@@ -263,14 +263,14 @@ var _ = Describe("Public volumes server", func() {
 			Expect(vol.GetSpec().GetAccessMode()).To(Equal(
 				publicv1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE))
 			Expect(vol.GetStatus().GetState()).To(Equal(
-				publicv1.VolumeState_VOLUME_STATE_CREATING))
+				publicv1.VolumeState_VOLUME_STATE_PENDING))
 		})
 
 		// TC-C1a: Create carrying a spoofed status stores no fabricated fact.
 		It("Drops a caller-supplied status on create", func() {
 			// The insert is not checked by the metering source contract, so a caller-supplied
 			// status must never reach the stored object: the stored state is the
-			// system-written CREATING one, and the spoofed message is dropped.
+			// system-written PENDING one, and the spoofed message is dropped.
 			response, err := server.Create(ctx, publicv1.VolumesCreateRequest_builder{
 				Object: publicv1.Volume_builder{
 					Metadata: publicv1.Metadata_builder{
@@ -290,7 +290,7 @@ var _ = Describe("Public volumes server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			object := response.GetObject()
 			Expect(object.GetStatus().GetState()).To(Equal(
-				publicv1.VolumeState_VOLUME_STATE_CREATING))
+				publicv1.VolumeState_VOLUME_STATE_PENDING))
 			Expect(object.GetStatus().GetMessage()).To(BeEmpty())
 		})
 

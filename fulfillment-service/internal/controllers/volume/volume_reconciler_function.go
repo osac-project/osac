@@ -261,7 +261,7 @@ func (t *task) setDefaults() {
 		t.volume.SetStatus(&privatev1.VolumeStatus{})
 	}
 	if t.volume.GetStatus().GetState() == privatev1.VolumeState_VOLUME_STATE_UNSPECIFIED {
-		t.volume.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_CREATING)
+		t.volume.GetStatus().SetState(privatev1.VolumeState_VOLUME_STATE_PENDING)
 		t.volume.GetStatus().SetStateTransitionTime(controllers.NowTruncated())
 	}
 }

@@ -117,3 +117,12 @@ diagnostics for maintainers investigating suite runtime or fixture costs: they
 include captured output and failures, not only timings. Fixtures called inside
 an `It` remain part of its body, build and deployment time sit outside suite
 runtime, and runtime savings require comparable deployed runs, not unit tests.
+
+The same make targets also emit Ginkgo JUnit reports, gated on the
+`JUNIT_REPORT_DIR` variable (empty by default, in both the installer and the
+CaaS integration Makefiles): one `<phase>.xml` file per phase, with the same
+stale-report clearing as the JSON reports. CI sets the variable and merges the
+phase files into the single `junit.xml` at the root of the run's
+`osac-logs-it-<suite>-<run_id>` log bundle, which the ci-observe monitoring
+reads; the phases of one suite share Ginkgo's suite description, so each
+merged `<testsuite>` name carries the phase file's stem.

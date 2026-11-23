@@ -16,7 +16,6 @@ syntax = "proto3";
 package osac.public.v1;
 
 import "google/protobuf/timestamp.proto";
-import "osac/public/v1/add_on_operator_type.proto";
 import "osac/public/v1/baremetal_instance_catalog_item_type.proto";
 import "osac/public/v1/baremetal_instance_template_type.proto";
 import "osac/public/v1/baremetal_instance_type.proto";
@@ -87,28 +86,27 @@ message AuditRecord {
 
   // Typed reference to the object affected by the action, when applicable.
   oneof target_object {
-    BareMetalInstanceLocalReference bare_metal_instance = 8;
-    ClusterLocalReference cluster = 10;
-    ClusterTemplateReference cluster_template = 11;
-    ClusterVersionReference cluster_version = 12;
-    ComputeInstanceLocalReference compute_instance = 13;
-    ComputeInstanceTemplateReference compute_instance_template = 14;
-    DiskImageReference disk_image = 15;
-    InstanceTypeReference instance_type = 16;
-    RoleReference role = 18;
-    SecretReference secret = 20;
-    SubnetLocalReference subnet = 24;
-    VirtualNetworkLocalReference virtual_network = 25;
-    SecurityGroupLocalReference security_group = 26;
-    UserReference target_user = 27;
-    ClusterCatalogItemReference cluster_catalog_item = 28;
-    ComputeInstanceCatalogItemReference compute_instance_catalog_item = 29;
-    BareMetalInstanceTemplateReference bare_metal_instance_template = 30;
-    BareMetalInstanceCatalogItemReference bare_metal_instance_catalog_item = 31;
-    ExternalIPPoolReference external_ip_pool = 35;
-    StorageTierReference storage_tier = 39;
-    ServiceAccountReference service_account = 42;
-    AddOnOperatorReference add_on_operator = 7;
+    BareMetalInstanceLocalReference bare_metal_instance = 21;
+    ClusterLocalReference cluster = 22;
+    ClusterTemplateReference cluster_template = 23;
+    ClusterVersionReference cluster_version = 24;
+    ComputeInstanceLocalReference compute_instance = 25;
+    ComputeInstanceTemplateReference compute_instance_template = 26;
+    DiskImageReference disk_image = 27;
+    InstanceTypeReference instance_type = 28;
+    RoleReference role = 29;
+    SecretReference secret = 30;
+    SubnetLocalReference subnet = 31;
+    VirtualNetworkLocalReference virtual_network = 32;
+    SecurityGroupLocalReference security_group = 33;
+    UserReference target_user = 34;
+    ClusterCatalogItemReference cluster_catalog_item = 35;
+    ComputeInstanceCatalogItemReference compute_instance_catalog_item = 36;
+    BareMetalInstanceTemplateReference bare_metal_instance_template = 37;
+    BareMetalInstanceCatalogItemReference bare_metal_instance_catalog_item = 38;
+    ExternalIPPoolReference external_ip_pool = 39;
+    StorageTierReference storage_tier = 40;
+    ServiceAccountReference service_account = 41;
   }
 
   // Outcome of the action, such as success or failure.

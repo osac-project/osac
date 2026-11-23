@@ -53,3 +53,15 @@ var _ = Describe("CLI root --project flag", func() {
 		Expect(names).To(ContainElement("project"))
 	})
 })
+
+var _ = Describe("CLI MaaS subscription command", func() {
+	It("registers provider-admin subscription management", func() {
+		cmd, err := Root()
+		Expect(err).NotTo(HaveOccurred())
+		var names []string
+		for _, sub := range cmd.Commands() {
+			names = append(names, sub.Name())
+		}
+		Expect(names).To(ContainElement("subscription"))
+	})
+})

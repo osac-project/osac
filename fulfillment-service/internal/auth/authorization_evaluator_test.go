@@ -930,8 +930,8 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 		)
 	})
 
-	Describe("Cloud Provider Admin model authorization", func() {
-		It("allows model management only to the Cloud Provider Admin role", func(ctx context.Context) {
+	Describe("Cloud Provider Admin MaaS catalog authorization", func() {
+		It("allows model and subscription management only to the Cloud Provider Admin role", func(ctx context.Context) {
 			evaluator, err := NewEvaluator().AddEmergencyServiceAccounts([]string{}).Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -947,6 +947,8 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 			admin := makeUser([]any{"cloud-provider-admin"})
 			ordinaryUser := makeUser([]any{"user"})
 			tenantAdmin := makeUser([]any{"tenant-admin"})
+			tenantReader := makeUser([]any{"tenant-reader"})
+			cloudProviderReader := makeUser([]any{"cloud-provider-reader"})
 			methods := []string{
 				"/osac.public.v1.Models/Create",
 				"/osac.public.v1.Models/Delete",
@@ -954,6 +956,11 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				"/osac.public.v1.Models/List",
 				"/osac.public.v1.Models/ListPlacementClusters",
 				"/osac.public.v1.Models/Update",
+				"/osac.public.v1.Subscriptions/Create",
+				"/osac.public.v1.Subscriptions/Delete",
+				"/osac.public.v1.Subscriptions/Get",
+				"/osac.public.v1.Subscriptions/List",
+				"/osac.public.v1.Subscriptions/Update",
 			}
 
 			for _, method := range methods {
@@ -962,8 +969,10 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				Expect(decision.Allowed).To(BeTrue(), "CPA on %q", method)
 
 				for role, authContext := range map[string]*AuthContext{
-					"ordinary user": ordinaryUser,
-					"tenant admin":  tenantAdmin,
+					"ordinary user":         ordinaryUser,
+					"tenant admin":          tenantAdmin,
+					"tenant reader":         tenantReader,
+					"cloud provider reader": cloudProviderReader,
 				} {
 					decision, err := evaluator.Evaluate(ctx, authContext, method)
 					Expect(err).ToNot(HaveOccurred())

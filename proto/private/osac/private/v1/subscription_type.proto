@@ -1,0 +1,258 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "buf/validate/validate.proto";
+import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
+import "google/protobuf/timestamp.proto";
+import "osac/private/v1/condition_status_type.proto";
+import "osac/private/v1/metadata_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+
+// Subscription is a MaaS entitlement that binds identity subjects to models
+// with token rate limits and a priority. Its associated OSAC Tenant scopes the
+// supplied users and groups; only Cloud Provider Admins manage this object.
+//
+// It maps to the MaaSSubscription Kubernetes object. It is not an OLM
+// Subscription, an AAP license subscription, or OSAC Metal as a Service.
+message Subscription {
+  option (buf.validate.message).cel = {
+    id: "subscription.id_matches_metadata_name"
+    message: "id must match metadata.name"
+    expression: "this.id == this.metadata.name"
+  };
+
+  // Unique identifier. It must match metadata.name.
+  string id = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+
+  // Name and metadata for this subscription.
+  Metadata metadata = 2 [(buf.validate.field).required = true];
+
+  // Desired entitlement configuration.
+  SubscriptionSpec spec = 3 [(buf.validate.field).required = true];
+
+  // Observed status reported by MaaS. This field is read-only.
+  SubscriptionStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Desired state of a MaaS Subscription.
+message SubscriptionSpec {
+  // Identity subjects entitled by this subscription.
+  SubscriptionOwner owner = 1;
+
+  // Models this subscription applies to, with optional per-model rate limits.
+  repeated SubscriptionModelRef model_refs = 2;
+
+  // Relative priority among subscriptions (higher wins when policies conflict).
+  int32 priority = 3;
+
+  // The OSAC Tenant that scopes this subscription's users and groups. Required
+  // on create and immutable once set.
+  SubscriptionOrganization organization = 4;
+
+  // Metadata for token attribution and metering.
+  TokenMetadata token_metadata = 5;
+
+  // Scheduling priority for inference under this subscription. When unset, no
+  // InferenceObjective is created.
+  optional int32 inference_priority = 6;
+
+  // Guardrail policies attached to every model accessed through this
+  // subscription.
+  repeated GuardrailAttachment guardrails = 7;
+}
+
+// SubscriptionOrganization identifies the OSAC Tenant associated with a
+// subscription.
+message SubscriptionOrganization {
+  // Tenant identifier. It is required and immutable once set.
+  string id = 1 [(buf.validate.field).string = {min_len: 1, max_len: 253}];
+}
+
+// SubscriptionOwner names the groups and users that own the entitlement.
+message SubscriptionOwner {
+  // External identity provider or Kubernetes group names.
+  repeated string groups = 1;
+
+  // User identifiers, for example service account names.
+  repeated string users = 2;
+}
+
+// SubscriptionModelRef references a model and optional token rate limits.
+message SubscriptionModelRef {
+  // Model name (DNS-1123 label).
+  string name = 1 [(buf.validate.field).string = {
+    min_len: 1
+    max_len: 63
+    pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+  }];
+
+  // Model namespace. Empty means the subscription's MaaS namespace. Reads
+  // return the effective namespace.
+  string namespace = 2;
+
+  // Token rate limits for this model. Required unless unlimited is true.
+  // Must be empty when unlimited is true.
+  repeated TokenRateLimit token_rate_limits = 3;
+
+  // Access without a token budget. Mutually exclusive with token_rate_limits.
+  bool unlimited = 4;
+
+  // Cost per token, when set.
+  BillingRate billing_rate = 5;
+
+  // Guardrails for this model within the subscription.
+  repeated GuardrailAttachment guardrails = 6;
+
+  // Output enrichment from MaaSModelRef annotations. Ignored on write.
+  string display_name = 7;
+
+  // Output enrichment from MaaSModelRef annotations. Ignored on write.
+  string description = 8;
+
+  // Output-only ID of the Models API object this reference names, when it
+  // matches the model's MaaSModelRef in the subscription namespace.
+  string model_id = 9 [(buf.validate.field) = {
+    ignore: IGNORE_IF_ZERO_VALUE
+    string: {
+      max_len: 63
+      pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+    }
+  }];
+}
+
+// TokenRateLimit caps token usage over a time window.
+message TokenRateLimit {
+  // Maximum tokens allowed in the window. MaaS accepts values from 1 to 1e9.
+  int64 limit = 1 [(buf.validate.field).int64 = {gte: 1, lte: 1000000000}];
+
+  // Window duration, for example "1m", "30s", or "2h". At most 8784h.
+  string window = 2 [
+    (buf.validate.field).string.pattern = "^[1-9]\\d{0,3}(s|m|h)$",
+    (buf.validate.field).cel = {
+      id: "token_rate_limit.window.max"
+      message: "window must be at most 8784h (366 days)"
+      expression: "!this.matches('^[1-9][0-9]{0,3}h$') || int(this.substring(0, size(this) - 1)) <= 8784"
+    }
+  ];
+}
+
+// BillingRate defines cost per token.
+message BillingRate {
+  string per_token = 1;
+}
+
+// TokenMetadata contains metadata for token attribution and metering.
+message TokenMetadata {
+  // Legacy organization ID for metering when organization.id is unset.
+  string organization_id = 1;
+  string cost_center = 2;
+  map<string, string> labels = 3;
+}
+
+// GuardrailAttachment attaches an AIGuardrail policy by name.
+message GuardrailAttachment {
+  // Name of the AIGuardrail in the tenant namespace.
+  string ref_name = 1;
+  // Selected check names; empty means all checks in the policy.
+  repeated string checks = 2;
+}
+
+// Observed state of a MaaS Subscription.
+message SubscriptionStatus {
+  // Controller-reported phase (for example "Active"). Empty until reconciled.
+  string phase = 1;
+  // Controller conditions (Ready, SpecPriorityDuplicate, ...).
+  repeated SubscriptionCondition conditions = 2;
+  // Per referenced model reconciliation status.
+  repeated ResourceRefStatus model_ref_statuses = 3;
+  // Per generated TokenRateLimitPolicy status.
+  repeated TokenRateLimitStatus token_rate_limit_statuses = 4;
+}
+
+// One entry of a Kubernetes-style status.conditions list.
+message SubscriptionCondition {
+  // Condition type as defined by the owning controller.
+  string type = 1;
+  // Whether the object is in the condition.
+  ConditionStatus status = 2 [(buf.validate.field).enum.defined_only = true];
+  // Last time the condition changed from one status to another.
+  google.protobuf.Timestamp last_transition_time = 3;
+  // Machine-readable reason in CamelCase, when the controller provides one.
+  optional string reason = 4;
+  // Human-readable detail for debugging.
+  optional string message = 5;
+  // Generation of the object the condition was computed for; zero when unknown.
+  int64 observed_generation = 6;
+}
+
+// ResourceRefStatus is the state of one referenced or generated object.
+message ResourceRefStatus {
+  string name = 1;
+  string namespace = 2;
+  bool ready = 3;
+  string reason = 4;
+  string message = 5;
+}
+
+// TokenRateLimitStatus reports a generated policy and its model.
+message TokenRateLimitStatus {
+  ResourceRefStatus ref = 1;
+  string model = 2;
+}
+
+// AuthPolicy is a MaaSAuthPolicy managed with a subscription.
+message AuthPolicy {
+  // Resource name (equals metadata.name on the CR).
+  string id = 1;
+  Metadata metadata = 2;
+  // Groups entitled by this policy.
+  repeated string subject_groups = 3;
+  // Users entitled by this policy.
+  repeated string subject_users = 4;
+  // Models this policy grants.
+  repeated AuthPolicyModelRef model_refs = 5;
+  // Controller phase (for example "Active").
+  string phase = 6;
+  // Controller conditions.
+  repeated SubscriptionCondition conditions = 7;
+}
+
+// AuthPolicyModelRef references a MaaSModelRef granted by an AuthPolicy.
+message AuthPolicyModelRef {
+  string name = 1;
+  string namespace = 2;
+}
+
+// ModelRegistration is a MaaSModelRef's catalog status for a referenced model.
+message ModelRegistration {
+  string name = 1;
+  string namespace = 2;
+  // Pending, Ready, Unhealthy, Failed, or Invalid.
+  string phase = 3;
+  // Endpoint when Ready; empty otherwise.
+  string endpoint = 4;
+  repeated SubscriptionCondition conditions = 5;
+}

@@ -212,14 +212,6 @@ is_csi if {
   role in csi_client_roles
 }
 
-# Reader restrictions apply only when no other role grants access.
-default is_cloud_provider_admin = false
-is_cloud_provider_admin if {
-  input.auth.identity.authnMethod == "jwt"
-  some role in subject_realm_roles
-  role == "cloud-provider-admin"
-}
-
 # Cloud Provider Admins can use the provider-wide model-management API.
 models_admin_methods := {
   "/osac.public.v1.Models/Create",
@@ -228,6 +220,15 @@ models_admin_methods := {
   "/osac.public.v1.Models/List",
   "/osac.public.v1.Models/ListPlacementClusters",
   "/osac.public.v1.Models/Update",
+}
+
+# Cloud Provider Admins manage provider-wide MaaS subscriptions.
+subscriptions_admin_methods := {
+  "/osac.public.v1.Subscriptions/Create",
+  "/osac.public.v1.Subscriptions/Delete",
+  "/osac.public.v1.Subscriptions/Get",
+  "/osac.public.v1.Subscriptions/List",
+  "/osac.public.v1.Subscriptions/Update",
 }
 
 default is_reader_only = false
@@ -494,6 +495,11 @@ legacy_allow if {
 legacy_allow if {
   is_cloud_provider_admin
   grpc_method in models_admin_methods
+}
+
+legacy_allow if {
+  is_cloud_provider_admin
+  grpc_method in subscriptions_admin_methods
 }
 
 # Reader access is the reviewed read-only subset of existing client grants.

@@ -114,6 +114,8 @@ var sharedHandlers = []string{
 	"public/v1.RegisterJsonWebKeySetHandler",
 	"public/v1.RegisterStorageTiersHandler",
 	"public/v1.RegisterSelfSubjectAccessReviewsHandler",
+	"public/v1.RegisterModelsHandler",
+	"public/v1.RegisterSubscriptionsHandler",
 	"private/v1.RegisterCapabilitiesHandler",
 	"private/v1.RegisterBillingProviderStatusesHandler",
 	"private/v1.RegisterEventsHandler",
@@ -133,6 +135,8 @@ var sharedHandlers = []string{
 	"private/v1.RegisterRoleBindingsHandler",
 	"private/v1.RegisterServiceAccountsHandler",
 	"private/v1.RegisterSelfSubjectAccessReviewsHandler",
+	"private/v1.RegisterModelsHandler",
+	"private/v1.RegisterSubscriptionsHandler",
 }
 
 var _ = Describe("buildHandlerList", func() {

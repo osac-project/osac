@@ -248,7 +248,7 @@ esac
 
 needs_flow_setup=false
 case "$PW_TEST_PATH" in
-  *vmaas*|*e2e-tests*|*src/generic*) needs_flow_setup=true ;;
+  *vmaas*|*e2e-tests*|generic|generic/*|*/generic|*/generic/*) needs_flow_setup=true ;;
 esac
 case "$PW_PROJECT" in
   *vmaas*|vm-flow*|tenant*|disk-image*|instance-type*|storage-tier*|catalog*)

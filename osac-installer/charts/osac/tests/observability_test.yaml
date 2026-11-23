@@ -509,7 +509,7 @@ tests:
           value: osac
       - equal:
           path: metadata.annotations["helm.sh/hook"]
-          value: pre-upgrade
+          value: pre-upgrade,pre-delete
       - equal:
           path: metadata.annotations["helm.sh/hook-weight"]
           value: "0"
@@ -541,7 +541,7 @@ tests:
           of: ClusterRole
       - equal:
           path: metadata.annotations["helm.sh/hook"]
-          value: pre-upgrade
+          value: pre-upgrade,pre-delete
       - equal:
           path: rules[0].resources
           value: [namespaces]

@@ -6,8 +6,15 @@ The osac-observability namespace is not owned by Helm (see
 observability-pre-install-validate.yaml): the prerequisite gate creates and
 labels it, so disabling observability must undo only the label. The namespace,
 the admin's Secret and the Receive and Compactor PVCs stay in place, and a
-re-enable finds them intact. This Job has only the pre-upgrade event, so a fresh
-disabled install neither creates nor runs it.
+re-enable finds them intact.
+
+pre-upgrade handles the disable, and pre-delete runs the same Job on
+`helm uninstall`. Helm v3.22 executes pre-delete hooks from the release record
+written by the last install or upgrade, not from a re-render, so this Job runs
+on uninstall only when that revision was rendered with observability disabled;
+a release last rendered with observability enabled never stored this hook and
+keeps the label with its namespace, Secret and PVCs. A fresh disabled install
+stores the hook without running it.
 */ -}}
 apiVersion: v1
 kind: ServiceAccount
@@ -17,7 +24,7 @@ metadata:
   labels:
     {{- include "osac.labels" . | nindent 4 }}
   annotations:
-    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook": pre-upgrade,pre-delete
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 ---
@@ -28,7 +35,7 @@ metadata:
   labels:
     {{- include "osac.labels" . | nindent 4 }}
   annotations:
-    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook": pre-upgrade,pre-delete
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 rules:
@@ -44,7 +51,7 @@ metadata:
   labels:
     {{- include "osac.labels" . | nindent 4 }}
   annotations:
-    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook": pre-upgrade,pre-delete
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 roleRef:
@@ -64,7 +71,7 @@ metadata:
   labels:
     {{- include "osac.labels" . | nindent 4 }}
   annotations:
-    "helm.sh/hook": pre-upgrade
+    "helm.sh/hook": pre-upgrade,pre-delete
     "helm.sh/hook-weight": "0"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:

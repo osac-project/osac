@@ -112,11 +112,25 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 		bmi = newBMI(attachments)
 		handoffComplete(bmi)
 		reconciler.NetworkingEnabled = false
+		bmi.Status.NetworkAttachmentStatuses = []v1alpha1.BareMetalNetworkAttachmentStatus{{
+			SubnetRef: "subnet-1", Interface: "data-0", MACAddress: "aa:bb:cc:dd:ee:ff",
+		}}
 		_, err := reconciler.reconcileIPDiscovery(ctx, bmi)
 		Expect(err).NotTo(HaveOccurred())
-		cond := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
-		Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-		Expect(cond.Reason).To(Equal("Skipped"))
+		// Disabled mode should complete every network stage.
+		for _, conditionType := range []v1alpha1.BareMetalInstanceConditionType{
+			v1alpha1.HostConditionNetworkAttachmentsReady,
+			v1alpha1.HostConditionNetworkHandoffComplete,
+			v1alpha1.HostConditionIPDiscoveryComplete,
+		} {
+			cond := bmi.GetStatusCondition(conditionType)
+			Expect(cond).NotTo(BeNil(), string(conditionType))
+			Expect(cond.Status).To(Equal(metav1.ConditionTrue), string(conditionType))
+			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProvisioningDisabled), string(conditionType))
+		}
+		Expect(bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete).Message).
+			To(Equal("IP lease discovery is disabled; no lease was queried"))
+		Expect(bmi.Status.NetworkAttachmentStatuses).To(BeNil())
 	})
 
 	It("mirrors the accepted DHCP lease of the NetworkAttachment", func() {

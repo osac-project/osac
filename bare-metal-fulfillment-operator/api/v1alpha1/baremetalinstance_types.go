@@ -233,8 +233,8 @@ const (
 	// provide a valid MAC for the selected network interface.
 	HostConditionReasonSelectedPortMACUnavailable = "SelectedPortMACUnavailable"
 
-	// HostConditionReasonNetworkAttachmentFailed indicates the network attachment
-	// reached a final failed state.
+	// HostConditionReasonNetworkAttachmentFailed indicates network attachment
+	// provisioning failed.
 	HostConditionReasonNetworkAttachmentFailed = "NetworkAttachmentFailed"
 
 	HostConditionReasonPoweringOff          = "PoweringOff"
@@ -242,6 +242,9 @@ const (
 	HostConditionReasonNetworkHandoffFailed = "NetworkHandoffFailed"
 	HostConditionReasonLeasePending         = "LeasePending"
 	HostConditionReasonIPDiscoveryFailed    = "IPDiscoveryFailed"
+	HostConditionReasonPowerOffFailed       = "PowerOffFailed"
+	HostConditionReasonDetaching            = "Detaching"
+	HostConditionReasonProvisioningDisabled = "ProvisioningDisabled"
 )
 
 // HostSelectorSpec defines host selection constraints.

@@ -16,11 +16,16 @@ package oauth
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/ghttp"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
 
 var _ = Describe("OAuth discovery tool", func() {
@@ -121,6 +126,37 @@ var _ = Describe("OAuth discovery tool", func() {
 			Expect(serverMetadata.AuthorizationEndpoint).To(Equal("https://example.com/auth/authorize"))
 			Expect(serverMetadata.DeviceAuthorizationEndpoint).To(Equal("https://example.com/auth/device"))
 			Expect(serverMetadata.ScopesSupported).To(Equal([]string{"openid", "profile", "email"}))
+		})
+
+		It("closes its idle TLS connection when discovery finishes", func() {
+			closed := make(chan struct{}, 1)
+			discoveryServer := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"issuer":"https://example.com","token_endpoint":"https://example.com/token"}`))
+			}))
+			discoveryServer.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+				if state == http.StateClosed {
+					closed <- struct{}{}
+				}
+			}
+			discoveryServer.StartTLS()
+			DeferCleanup(discoveryServer.Close)
+			caPool, err := trust.NewCertPool().
+				SetLogger(logger).
+				AddCertificate(discoveryServer.Certificate()).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			tool, err := NewDiscoveryTool().
+				SetLogger(logger).
+				SetIssuer(discoveryServer.URL).
+				SetCaPool(caPool).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			metadata, err := tool.Discover(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(metadata.TokenEndpoint).To(Equal("https://example.com/token"))
+			Eventually(closed, time.Second).Should(Receive())
 		})
 
 		It("Falls back to OIDC endpoint when OAuth endpoint returns 404", func() {

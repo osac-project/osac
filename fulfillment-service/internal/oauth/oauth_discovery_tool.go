@@ -142,6 +142,10 @@ func (b *DiscoveryToolBuilder) Build() (result *DiscoveryTool, err error) {
 // Discover discovers endpoints from the configured issuer URL using the well-known configuration endpoints. This
 // implements the discovery process defined in RFC 8414 for OAuth and the OpenID Connect Discovery 1.0 specification.
 func (t *DiscoveryTool) Discover(ctx context.Context) (result *ServerMetadata, err error) {
+	// The discovery transport is separate from the client's token transport.
+	// Release its idle connections after both discovery endpoints have had a chance to run.
+	defer t.httpClient.CloseIdleConnections()
+
 	result, err = t.discover(ctx, "oauth-authorization-server")
 	if err == nil {
 		t.logger.DebugContext(

@@ -18,18 +18,19 @@
 -- must drain Task 3 writers before this migration runs; this migration runs at service startup before that instance
 -- begins serving requests.
 
+create function osac_5424_is_full_reference_field(field_name text)
+returns boolean as $$
+  select field_name = any(array[
+    'add_on_operators', 'baremetal_instance_type', 'catalog_item', 'default_value', 'disk_image',
+    'instance_type', 'items', 'locked', 'pool', 'reference', 'role', 'ssh_key', 'template', 'users', 'version'
+  ]::text[])
+$$ language sql immutable;
+
 create function osac_5424_rewrite_reference_tenants(value jsonb, owner_tenant text, json_path text, field_name text)
 returns jsonb as $$
 declare
   result jsonb;
-  object_key text;
-  child jsonb;
-  array_index integer;
   selected_tenant text;
-  reference_fields text[] := array[
-    'add_on_operators', 'baremetal_instance_type', 'catalog_item', 'default_value', 'disk_image',
-    'instance_type', 'items', 'locked', 'pool', 'reference', 'role', 'ssh_key', 'template', 'users', 'version'
-  ];
 begin
   -- Any and Value payloads are user-controlled JSON, not protobuf reference messages.
   if field_name in ('default', 'template_parameters') then
@@ -39,7 +40,7 @@ begin
   if jsonb_typeof(value) = 'object' then
     -- Restrict conversion to fields whose protobuf type is one of the full-reference messages. Requiring only
     -- an id/name shape is unsafe because template parameters and generic JSON may contain the same keys.
-    if value ? 'shared' and field_name = any(reference_fields) then
+    if value ? 'shared' and osac_5424_is_full_reference_field(field_name) then
       if (value - 'id' - 'name' - 'project' - 'tenant' - 'shared') <> '{}'::jsonb then
         raise exception 'unrecognized shared full-reference fields at %: %', json_path, value;
       end if;
@@ -65,26 +66,30 @@ begin
       return value - 'shared';
     end if;
 
-    result := '{}'::jsonb;
-    for object_key, child in
-      select entry.key, entry.value from jsonb_each(value) as entry
-    loop
-      result := result || jsonb_build_object(
-        object_key,
-        osac_5424_rewrite_reference_tenants(child, owner_tenant, json_path || '.' || object_key, object_key)
-      );
-    end loop;
+    select coalesce(
+      jsonb_object_agg(
+        entry.key,
+        osac_5424_rewrite_reference_tenants(
+          entry.value, owner_tenant, json_path || '.' || entry.key, entry.key
+        )
+      ),
+      '{}'::jsonb
+    )
+    into result
+    from jsonb_each(value) as entry;
     return result;
   elsif jsonb_typeof(value) = 'array' then
-    result := '[]'::jsonb;
-    array_index := 0;
-    for child in select item.value from jsonb_array_elements(value) as item
-    loop
-      result := result || jsonb_build_array(
-        osac_5424_rewrite_reference_tenants(child, owner_tenant, json_path || '[' || array_index || ']', field_name)
-      );
-      array_index := array_index + 1;
-    end loop;
+    select coalesce(
+      jsonb_agg(
+        osac_5424_rewrite_reference_tenants(
+          item.value, owner_tenant, json_path || '[' || (item.ordinality - 1) || ']', field_name
+        )
+        order by item.ordinality
+      ),
+      '[]'::jsonb
+    )
+    into result
+    from jsonb_array_elements(value) with ordinality as item(value, ordinality);
     return result;
   end if;
 
@@ -95,34 +100,29 @@ $$ language plpgsql;
 create function osac_5424_has_shared_reference(value jsonb, field_name text)
 returns boolean as $$
 declare
-  object_key text;
-  child jsonb;
-  reference_fields text[] := array[
-    'add_on_operators', 'baremetal_instance_type', 'catalog_item', 'default_value', 'disk_image',
-    'instance_type', 'items', 'locked', 'pool', 'reference', 'role', 'ssh_key', 'template', 'users', 'version'
-  ];
+  result boolean;
 begin
   if field_name in ('default', 'template_parameters') then
     return false;
   end if;
 
   if jsonb_typeof(value) = 'object' then
-    if value ? 'shared' and field_name = any(reference_fields) then
+    if value ? 'shared' and osac_5424_is_full_reference_field(field_name) then
       return true;
     end if;
-    for object_key, child in select entry.key, entry.value from jsonb_each(value) as entry
-    loop
-      if osac_5424_has_shared_reference(child, object_key) then
-        return true;
-      end if;
-    end loop;
+    select exists (
+      select 1
+      from jsonb_each(value) as entry
+      where osac_5424_has_shared_reference(entry.value, entry.key)
+    ) into result;
+    return result;
   elsif jsonb_typeof(value) = 'array' then
-    for child in select item.value from jsonb_array_elements(value) as item
-    loop
-      if osac_5424_has_shared_reference(child, field_name) then
-        return true;
-      end if;
-    end loop;
+    select exists (
+      select 1
+      from jsonb_array_elements(value) as item
+      where osac_5424_has_shared_reference(item.value, field_name)
+    ) into result;
+    return result;
   end if;
   return false;
 end;
@@ -171,16 +171,31 @@ begin
       execute format('alter table %I.%I disable trigger enforce_metering_fields', target.schema_name, target.table_name);
     end if;
 
+    -- The selector predicate finds every row needing conversion. Verify converted rows from RETURNING in the same
+    -- statement, so startup does not perform a second full-table scan.
+    affected_id := null;
     if target.is_change_log then
       execute format(
-        'update %I.%I set data = osac_5424_rewrite_reference_tenants(data, coalesce(data->>''tenant'', ''''), ''$'', '''') where osac_5424_has_shared_reference(data, '''')',
+        'with updated as (
+           update %I.%I
+           set data = osac_5424_rewrite_reference_tenants(data, coalesce(data->>''tenant'', ''''), ''$'', '''')
+           where osac_5424_has_shared_reference(data, '''')
+           returning id::text, data
+         )
+         select id from updated where osac_5424_has_shared_reference(data, '''') limit 1',
         target.schema_name, target.table_name
-      );
+      ) into affected_id;
     else
       execute format(
-        'update %I.%I set data = osac_5424_rewrite_reference_tenants(data, tenant, ''$'', '''') where osac_5424_has_shared_reference(data, '''')',
+        'with updated as (
+           update %I.%I
+           set data = osac_5424_rewrite_reference_tenants(data, tenant, ''$'', '''')
+           where osac_5424_has_shared_reference(data, '''')
+           returning id::text, data
+         )
+         select id from updated where osac_5424_has_shared_reference(data, '''') limit 1',
         target.schema_name, target.table_name
-      );
+      ) into affected_id;
     end if;
 
     if target.has_change_trigger then
@@ -189,35 +204,7 @@ begin
     if target.has_metering_trigger then
       execute format('alter table %I.%I enable trigger enforce_metering_fields', target.schema_name, target.table_name);
     end if;
-  end loop;
 
-  -- The service startup path runs all migrations before constructing its gRPC server. Refuse to complete this
-  -- migration if a selector remains, so the field can only be removed after an explicit zero-residual check.
-  for target in
-    select
-      n.nspname as schema_name,
-      c.relname as table_name
-    from pg_catalog.pg_class c
-    join pg_catalog.pg_namespace n on n.oid = c.relnamespace
-    where n.nspname = 'public'
-      and c.relkind in ('r', 'p')
-      and exists (
-        select 1 from pg_catalog.pg_attribute a
-        where a.attrelid = c.oid and a.attname = 'data' and a.atttypid = 'jsonb'::regtype
-          and not a.attisdropped
-      )
-      and (
-        c.relname = 'changes'
-        or exists (
-          select 1 from pg_catalog.pg_attribute a
-          where a.attrelid = c.oid and a.attname = 'tenant' and not a.attisdropped
-        )
-      )
-  loop
-    execute format(
-      'select id::text from %I.%I where osac_5424_has_shared_reference(data, '''') limit 1',
-      target.schema_name, target.table_name
-    ) into affected_id;
     if affected_id is not null then
       raise exception 'shared full-reference selector remains in %.% row %',
         target.schema_name, target.table_name, affected_id;
@@ -228,3 +215,4 @@ $$;
 
 drop function osac_5424_has_shared_reference(jsonb, text);
 drop function osac_5424_rewrite_reference_tenants(jsonb, text, text, text);
+drop function osac_5424_is_full_reference_field(text);

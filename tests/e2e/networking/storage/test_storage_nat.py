@@ -62,8 +62,12 @@ def _run(vm: dict[str, str], command: str, identity: str, timeout: int = 180) ->
 def _mount_and_write(vm: dict[str, str], endpoint: StorageEndpoint, identity: str, marker: str) -> str:
     output, status = _run(vm, ensure_nfs_client_command(), identity, timeout=300)
     assert status == 0, f"NFS client setup failed on {vm['name']}: {output!r}"
+    # A second mount would reuse the existing NFS connection and produce no
+    # new SYN, so the server log would have no new source address. Unmount
+    # first; the test's evidence is the new connection.
     command = (
-        f"{mount_command(endpoint, MOUNTPOINT)} || mountpoint -q {MOUNTPOINT}"
+        f"sudo umount {MOUNTPOINT} 2>/dev/null || true; "
+        f"{mount_command(endpoint, MOUNTPOINT)}"
         f" && {write_probe_file_command(MOUNTPOINT, marker)}"
     )
     output, status = _run(vm, command, identity, timeout=120)

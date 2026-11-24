@@ -45,7 +45,11 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 			Spec:       newTestComputeInstanceSpec("test_template"),
 		}
 		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
-		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+		DeferCleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			Expect(k8sClient.Delete(cleanupCtx, instance)).To(Succeed())
+		})
 		instance.Status.DesiredConfigVersion = "old"
 		instance.Status.ProvisionConfigVersion = "old"
 		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
@@ -98,7 +102,11 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 			Spec:       newTestComputeInstanceSpec("test_template"),
 		}
 		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
-		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+		DeferCleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			Expect(k8sClient.Delete(cleanupCtx, instance)).To(Succeed())
+		})
 		instance.Status.DesiredConfigVersion = "old"
 		instance.Status.ProvisionConfigVersion = "old"
 		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
@@ -160,13 +168,15 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 		}
 		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 		DeferCleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
 			current := &osacv1alpha1.ComputeInstance{}
-			err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(instance), current)
+			err := k8sClient.Get(cleanupCtx, client.ObjectKeyFromObject(instance), current)
 			if apierrors.IsNotFound(err) {
 				return
 			}
 			Expect(err).NotTo(HaveOccurred())
-			Expect(k8sClient.Delete(context.Background(), current)).To(Succeed())
+			Expect(k8sClient.Delete(cleanupCtx, current)).To(Succeed())
 		})
 
 		clock := clocktesting.NewFakeClock(time.Date(2026, 10, 1, 12, 0, 0, 123000000, time.UTC))

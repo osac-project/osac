@@ -61,8 +61,7 @@ func provisionConfig(t *testing.T) provisionAAPConfig {
 	cfg := provisionAAPConfig{base: strings.TrimRight(read("URL"), "/"), token: read("TOKEN"),
 		org: id("ORG_ID"), project: id("PROJECT_ID"), template: id("TEMPLATE_ID"),
 		revision: read("SOURCE_REVISION"), digest: read("EE_DIGEST")}
-	u, err := url.Parse(cfg.base)
-	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+	if !validProvisionBaseURL(cfg.base) {
 		t.Fatal("AAP URL must be an HTTPS API base without userinfo, query or fragment")
 	}
 	if !regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`).MatchString(cfg.revision) {
@@ -77,13 +76,18 @@ func provisionConfig(t *testing.T) provisionAAPConfig {
 	return cfg
 }
 
+func validProvisionBaseURL(base string) bool {
+	u, err := url.Parse(base)
+	return err == nil && u.Scheme == "https" && u.Host != "" && u.User == nil && !strings.ContainsAny(base, "?#")
+}
+
 // provisionAAPHTTP uses trusted TLS and never includes response bodies or URLs in errors.
 type provisionAAPHTTP struct {
 	cfg  provisionAAPConfig
 	http *http.Client
 }
 
-func (h provisionAAPHTTP) request(ctx context.Context, method, path string, into any) (int, error) {
+func (h provisionAAPHTTP) request(ctx context.Context, method, path string, into any) (status int, err error) {
 	req, err := http.NewRequestWithContext(ctx, method, h.cfg.base+"/v2/"+path, nil)
 	if err != nil {
 		return 0, errors.New("construct AAP contract request")
@@ -93,7 +97,11 @@ func (h provisionAAPHTTP) request(ctx context.Context, method, path string, into
 	if err != nil {
 		return 0, errors.New("AAP contract transport failed (details withheld)")
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil && err == nil {
+			err = errors.New("close AAP contract response body failed (details withheld)")
+		}
+	}()
 	if resp.StatusCode == http.StatusNotFound {
 		return resp.StatusCode, nil
 	}
@@ -282,13 +290,13 @@ func runProvisionScenario(t *testing.T, h provisionAAPHTTP, scenario string) {
 		Task: "provision", Manager: v1alpha1.NetworkJobManagerNone, Kind: "ComputeInstance", APIID: runID,
 		Template: strconv.Itoa(h.cfg.template), Accept: networktask.AcceptNoOutput,
 		Vars: map[string]any{"fixture_run": runID, "fixture_case": scenario, "fixture_attempt": 1}}
-	run := func() networktask.Outcome {
+	run := func(runCtx context.Context) networktask.Outcome {
 		t.Helper()
 		current := &v1alpha1.ComputeInstance{}
-		if err := kube.Get(ctx, client.ObjectKeyFromObject(instance), current); err != nil {
+		if err := kube.Get(runCtx, client.ObjectKeyFromObject(instance), current); err != nil {
 			t.Fatal("read fixture status")
 		}
-		out, err := engine.Run(ctx, current, req)
+		out, err := engine.Run(runCtx, current, req)
 		if id, parseErr := strconv.Atoi(out.Entry.JobID); parseErr == nil && id > 0 {
 			knownJobs[id] = true
 		}
@@ -297,7 +305,10 @@ func runProvisionScenario(t *testing.T, h provisionAAPHTTP, scenario string) {
 		}
 		return out
 	}
-	first := launchProvisionAttempt(t, ctx, clock, run, 1)
+	first, err := launchProvisionAttempt(ctx, clock, run, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
 	job := waitProvisionAttempt(t, ctx, h, api, first, runID, scenario, 1)
 	wantStatus := "failed"
 	wantReason, wantMessage := "InvalidResult", "Internal error"
@@ -310,7 +321,7 @@ func runProvisionScenario(t *testing.T, h provisionAAPHTTP, scenario string) {
 	if job.Status != wantStatus {
 		t.Fatal("fixture returned an unexpected AAP terminal state")
 	}
-	failed := run()
+	failed := run(ctx)
 	wantFailure := &v1alpha1.NetworkJobFailure{
 		Reason: wantReason, Message: wantMessage, Attempt: 1,
 		ObservedAt: metav1.NewTime(clock.Now().UTC().Truncate(time.Second)),
@@ -330,7 +341,10 @@ func runProvisionScenario(t *testing.T, h provisionAAPHTTP, scenario string) {
 	checkpoint := failed.LastFailure.DeepCopy()
 	clock.Step(failed.RequeueAfter)
 	req.Vars["fixture_attempt"] = 2
-	second := launchProvisionAttempt(t, ctx, clock, run, 2)
+	second, err := launchProvisionAttempt(ctx, clock, run, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
 	stored := &v1alpha1.ComputeInstance{}
 	if err := kube.Get(ctx, client.ObjectKeyFromObject(instance), stored); err != nil {
 		t.Fatal("read retry reservation")
@@ -342,7 +356,7 @@ func runProvisionScenario(t *testing.T, h provisionAAPHTTP, scenario string) {
 	if job := waitProvisionAttempt(t, ctx, h, api, second, runID, scenario, 2); job.Status != "successful" {
 		t.Fatal("second fixture attempt did not succeed")
 	}
-	succeeded := run()
+	succeeded := run(ctx)
 	if err := kube.Get(ctx, client.ObjectKeyFromObject(instance), stored); err != nil {
 		t.Fatal("read successful status")
 	}
@@ -354,120 +368,141 @@ func runProvisionScenario(t *testing.T, h provisionAAPHTTP, scenario string) {
 func (h provisionAAPHTTP) cleanup(
 	ctx context.Context, api *aap.Client, runID string, labels []string, knownJobs map[int]bool,
 ) error {
-	// Include returned IDs even if AAP ignored launch labels, and recover lost responses by label.
+	// Preserve all recovery labels if any job cannot be discovered or removed.
+	// Known job IDs still receive independent ownership checks and cleanup.
+	var cleanupErrors []error
 	for _, label := range labels {
 		jobs, err := api.ListJobsByLabel(ctx, label)
 		if err != nil {
-			return errors.New("list run-owned jobs failed (details withheld)")
+			cleanupErrors = append(cleanupErrors, errors.New("list run-owned jobs failed (details withheld)"))
+			continue
 		}
 		for _, job := range jobs {
 			knownJobs[job.ID] = true
 		}
 	}
 	for id := range knownJobs {
-		job, err := api.GetJob(ctx, strconv.Itoa(id))
-		if err != nil {
-			var notFound *aap.NotFoundError
-			if errors.As(err, &notFound) {
-				continue
-			}
-			return errors.New("read cleanup job failed (details withheld)")
-		}
-		vars, err := fixtureVars(job)
-		if err != nil || vars["fixture_run"] != runID ||
-			job.ProjectID != h.cfg.project || job.Playbook != provisionFixturePlaybook {
-			return errors.New("refusing to clean up a job without matching run ownership")
-		}
-		switch job.Status {
-		case "successful", "failed", "error", "canceled":
-		default:
-			if err := api.CancelJob(ctx, strconv.Itoa(id)); err != nil {
-				var notAllowed *aap.MethodNotAllowedError
-				if !errors.As(err, &notAllowed) {
-					return errors.New("cancel run-owned job failed (details withheld)")
-				}
-			}
-			if _, err := waitProvisionJob(ctx, api, strconv.Itoa(id)); err != nil {
-				return err
-			}
-		}
-		path := fmt.Sprintf("jobs/%d/", id)
-		if _, err := h.request(ctx, http.MethodDelete, path, nil); err != nil {
-			return err
-		}
-		for {
-			status, err := h.request(ctx, http.MethodGet, path, nil)
-			if err != nil {
-				return err
-			}
-			if status == http.StatusNotFound {
-				break
-			}
-			select {
-			case <-ctx.Done():
-				return errors.New("job deletion deadline exceeded")
-			case <-time.After(time.Second):
-			}
+		if err := h.cleanupJob(ctx, api, runID, id); err != nil {
+			cleanupErrors = append(cleanupErrors, err)
 		}
 	}
+	if len(cleanupErrors) != 0 {
+		return errors.Join(cleanupErrors...)
+	}
 	for _, label := range labels {
-		var page struct {
-			Count   int
-			Results []struct {
-				ID           int
-				Name         string
-				Organization int
+		if err := h.cleanupLabel(ctx, label); err != nil {
+			cleanupErrors = append(cleanupErrors, err)
+		}
+	}
+	return errors.Join(cleanupErrors...)
+}
+
+func (h provisionAAPHTTP) cleanupJob(ctx context.Context, api *aap.Client, runID string, id int) error {
+	job, err := api.GetJob(ctx, strconv.Itoa(id))
+	if err != nil {
+		var notFound *aap.NotFoundError
+		if errors.As(err, &notFound) {
+			return nil
+		}
+		return errors.New("read cleanup job failed (details withheld)")
+	}
+	vars, err := fixtureVars(job)
+	if err != nil || vars["fixture_run"] != runID ||
+		job.ProjectID != h.cfg.project || job.Playbook != provisionFixturePlaybook {
+		return errors.New("refusing to clean up a job without matching run ownership")
+	}
+	switch job.Status {
+	case "successful", "failed", "error", "canceled":
+	default:
+		if err := api.CancelJob(ctx, strconv.Itoa(id)); err != nil {
+			var notAllowed *aap.MethodNotAllowedError
+			if !errors.As(err, &notAllowed) {
+				return errors.New("cancel run-owned job failed (details withheld)")
 			}
 		}
-		query := url.Values{"name": {label}, "organization": {strconv.Itoa(h.cfg.org)}}
-		path := "labels/?" + query.Encode()
-		if err := h.get(ctx, path, &page); err != nil {
+		if _, err := waitProvisionJob(ctx, api, strconv.Itoa(id)); err != nil {
 			return err
 		}
-		if page.Count > 1 {
-			return errors.New("refusing ambiguous label cleanup")
-		}
-		for _, item := range page.Results {
-			if item.Name != label || item.Organization != h.cfg.org {
-				return errors.New("refusing label cleanup without matching ownership")
-			}
-			if _, err := h.request(ctx, http.MethodDelete, fmt.Sprintf("labels/%d/", item.ID), nil); err != nil {
-				return err
-			}
-		}
-		if err := h.get(ctx, path, &page); err != nil {
+	}
+	path := fmt.Sprintf("jobs/%d/", id)
+	if _, err := h.request(ctx, http.MethodDelete, path, nil); err != nil {
+		return err
+	}
+	for {
+		status, err := h.request(ctx, http.MethodGet, path, nil)
+		if err != nil {
 			return err
 		}
-		if page.Count != 0 {
-			return errors.New("run label remains after cleanup")
+		if status == http.StatusNotFound {
+			return nil
 		}
+		select {
+		case <-ctx.Done():
+			return errors.New("job deletion deadline exceeded")
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+func (h provisionAAPHTTP) cleanupLabel(ctx context.Context, label string) error {
+	var page struct {
+		Count   int
+		Results []struct {
+			ID           int
+			Name         string
+			Organization int
+		}
+	}
+	query := url.Values{"name": {label}, "organization": {strconv.Itoa(h.cfg.org)}}
+	path := "labels/?" + query.Encode()
+	if err := h.get(ctx, path, &page); err != nil {
+		return err
+	}
+	if page.Count > 1 {
+		return errors.New("refusing ambiguous label cleanup")
+	}
+	for _, item := range page.Results {
+		if item.Name != label || item.Organization != h.cfg.org {
+			return errors.New("refusing label cleanup without matching ownership")
+		}
+		if _, err := h.request(ctx, http.MethodDelete, fmt.Sprintf("labels/%d/", item.ID), nil); err != nil {
+			return err
+		}
+	}
+	if err := h.get(ctx, path, &page); err != nil {
+		return err
+	}
+	if page.Count != 0 {
+		return errors.New("run label remains after cleanup")
 	}
 	return nil
 }
 
 func launchProvisionAttempt(
-	t *testing.T, ctx context.Context, clock *clocktesting.FakeClock, run func() networktask.Outcome, attempt int,
-) networktask.Outcome {
-	t.Helper()
+	ctx context.Context, clock *clocktesting.FakeClock, run func(context.Context) networktask.Outcome, attempt int,
+) (networktask.Outcome, error) {
 	deadline, stop := context.WithTimeout(ctx, 5*time.Minute)
 	defer stop()
 	lastPoll := time.Now()
-	out := run()
+	out := run(deadline)
 	for out.Entry.JobID == "" {
 		select {
 		case <-deadline.Done():
-			t.Fatal("AAP launch/label recovery exceeded deadline")
+			return networktask.Outcome{}, fmt.Errorf("AAP launch/label recovery exceeded deadline: %w", deadline.Err())
 		case <-time.After(time.Second):
 		}
 		now := time.Now()
 		clock.Step(now.Sub(lastPoll))
 		lastPoll = now
-		out = run()
+		out = run(deadline)
+	}
+	if deadline.Err() != nil {
+		return networktask.Outcome{}, fmt.Errorf("AAP launch/label recovery exceeded deadline: %w", deadline.Err())
 	}
 	if out.Entry.State != v1alpha1.NetworkJobStateRunning || out.Entry.Attempt != int32(attempt) {
-		t.Fatal("expected persisted Running launch")
+		return networktask.Outcome{}, errors.New("expected persisted Running launch")
 	}
-	return out
+	return out, nil
 }
 
 func waitProvisionAttempt(
@@ -494,10 +529,14 @@ func TestLaunchProvisionAttemptAdvancesRecoveryClock(t *testing.T) {
 			start := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC).Add(2 * time.Minute)
 			clock := clocktesting.NewFakeClock(start)
 			calls := 0
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
-			run := func() networktask.Outcome {
+			run := func(runCtx context.Context) networktask.Outcome {
 				calls++
+				launchDeadline, ok := runCtx.Deadline()
+				if !ok || time.Until(launchDeadline) > 5*time.Minute {
+					t.Fatal("launch callback did not receive a bounded context")
+				}
 				entry := v1alpha1.NetworkJobStatus{State: v1alpha1.NetworkJobStateRunning, Attempt: 2}
 				if recoverLaunch && calls == 1 {
 					return networktask.Outcome{Entry: entry}
@@ -508,7 +547,10 @@ func TestLaunchProvisionAttemptAdvancesRecoveryClock(t *testing.T) {
 				entry.JobID = "101"
 				return networktask.Outcome{Entry: entry}
 			}
-			out := launchProvisionAttempt(t, ctx, clock, run, 2)
+			out, err := launchProvisionAttempt(ctx, clock, run, 2)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if out.Entry.JobID != "101" {
 				t.Fatal("launch recovery lost the job")
 			}

@@ -33,7 +33,6 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/onsi/gomega/ghttp"
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -1326,10 +1325,15 @@ func (t *Tool) KeycloakAdminRequest(ctx context.Context, method, path string, in
 	}
 	tlsConfig := tlsconfig.NewClientTLSConfig()
 	tlsConfig.RootCAs = t.caPool.Pool()
+	// This helper runs once per Keycloak admin call, so release the pooled idle connections when it returns.
+	// The suite makes hundreds of these calls, and leaving them open is what exhausts the proxy in front of
+	// Keycloak during a long run.
+	transport := &http.Transport{
+		TLSClientConfig: tlsConfig,
+	}
+	defer transport.CloseIdleConnections()
 	httpClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig,
-		},
+		Transport: transport,
 	}
 	var body io.Reader
 	if input != nil {
@@ -1407,10 +1411,15 @@ func (t *Tool) KeycloakAdminRequestForRealm(ctx context.Context, realm, method, 
 	}
 	tlsConfig := tlsconfig.NewClientTLSConfig()
 	tlsConfig.RootCAs = t.caPool.Pool()
+	// This helper runs once per Keycloak admin call, so release the pooled idle connections when it returns.
+	// The suite makes hundreds of these calls, and leaving them open is what exhausts the proxy in front of
+	// Keycloak during a long run.
+	transport := &http.Transport{
+		TLSClientConfig: tlsConfig,
+	}
+	defer transport.CloseIdleConnections()
 	httpClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig,
-		},
+		Transport: transport,
 	}
 	var body io.Reader
 	if input != nil {
@@ -1474,39 +1483,48 @@ func (t *Tool) makeGrpcConn(addr string, tokenSource auth.TokenSource) (result *
 	return
 }
 
+// viewTransport rewrites the request address and adds a bearer token. It forwards CloseIdleConnections to the
+// transport underneath, because http.Client.CloseIdleConnections only reaches a round tripper that implements
+// it: a plain function round tripper would silently make the call a no-op.
+type viewTransport struct {
+	addr        string
+	tokenSource auth.TokenSource
+	base        *http.Transport
+}
+
+// RoundTrip replaces the scheme and host, so that users of the client only need to provide the path, then adds
+// the token if there is a token source available, and forwards the request.
+func (v *viewTransport) RoundTrip(request *http.Request) (response *http.Response, err error) {
+	request.URL.Scheme = "https"
+	request.URL.Host = v.addr
+	if v.tokenSource != nil {
+		token, tokenErr := v.tokenSource.Token(request.Context())
+		if tokenErr != nil {
+			return nil, tokenErr
+		}
+		request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.Access))
+	}
+	return v.base.RoundTrip(request)
+}
+
+// CloseIdleConnections releases the idle connections of the wrapped transport.
+func (v *viewTransport) CloseIdleConnections() {
+	v.base.CloseIdleConnections()
+}
+
 // makeHttpClient creates an HTTP client that automatically adds the scheme, host and token to the request. Users of the
 // client only need to provide the URL path, and other headers as needed.
 func (t *Tool) makeHttpClient(addr string, tokenSource auth.TokenSource) *http.Client {
 	tlsConfig := tlsconfig.NewClientTLSConfig()
 	tlsConfig.RootCAs = t.caPool.Pool()
-	transport := &http.Transport{
-		TLSClientConfig: tlsConfig,
-	}
-	tripper := ghttp.RoundTripperFunc(
-		func(request *http.Request) (response *http.Response, err error) {
-			// Replace the scheme and host, so that users of the client only need to provide the path:
-			request.URL.Scheme = "https"
-			request.URL.Host = addr
-
-			// Add the token if there is a token source available:
-			if tokenSource != nil {
-				token, err := tokenSource.Token(request.Context())
-				if err != nil {
-					return nil, err
-				}
-				request.Header.Set(
-					"Authorization",
-					fmt.Sprintf("Bearer %s", token.Access),
-				)
-			}
-
-			// Forward the request:
-			response, err = transport.RoundTrip(request)
-			return
-		},
-	)
 	return &http.Client{
-		Transport: tripper,
+		Transport: &viewTransport{
+			addr:        addr,
+			tokenSource: tokenSource,
+			base: &http.Transport{
+				TLSClientConfig: tlsConfig,
+			},
+		},
 	}
 }
 
@@ -1948,6 +1966,9 @@ func (v *ToolView) Close() error {
 		return nil
 	}
 	closeClient := func(client *http.Client) error {
+		if client != nil {
+			client.CloseIdleConnections()
+		}
 		return nil
 	}
 	return errors.Join(

@@ -39,7 +39,7 @@ var _ = DescribeMigration("Seed the shared Tenant default Role", func() {
 		Expect(tool.Migrate(ctx, 153)).To(Succeed())
 
 		tenant := &privatev1.Tenant{}
-		Expect(protojson.Unmarshal(readData(ctx, "shared"), tenant)).To(Succeed())
+		Expect((protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(readData(ctx, "shared"), tenant)).To(Succeed())
 		ref := tenant.GetSpec().GetDefaultRole()
 		var roleID string
 		Expect(conn.QueryRow(ctx, "select id from roles where tenant = 'shared' and name = 'tenant-user'").
@@ -47,7 +47,6 @@ var _ = DescribeMigration("Seed the shared Tenant default Role", func() {
 		Expect(ref.GetId()).To(Equal(roleID))
 		Expect(ref.GetName()).To(Equal("tenant-user"))
 		Expect(ref.GetTenant()).To(Equal("shared"))
-		Expect(ref.GetShared()).To(BeTrue())
 		Expect(readData(ctx, "system")).To(MatchJSON(systemBefore))
 		Expect(readData(ctx, "acme")).To(MatchJSON(acmeBefore))
 	})
@@ -57,7 +56,7 @@ var _ = DescribeMigration("Seed the shared Tenant default Role", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(tool.Migrate(ctx, 153)).To(Succeed())
 		tenant := &privatev1.Tenant{}
-		Expect(protojson.Unmarshal(readData(ctx, "shared"), tenant)).To(Succeed())
+		Expect((protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal(readData(ctx, "shared"), tenant)).To(Succeed())
 		Expect(tenant.GetSpec().GetDomains()).To(Equal([]string{"example.com"}))
 		Expect(tenant.GetSpec().HasDefaultRole()).To(BeTrue())
 	})

@@ -262,25 +262,23 @@ func (s *PrivateTenantsServer) prepareDefaultRole(ctx context.Context, current, 
 }
 
 func (s *PrivateTenantsServer) resolveDefaultRole(ctx context.Context, tenant string, ref *privatev1.RoleReference) (*privatev1.Role, error) {
-	refTenant, shared := ref.GetTenant(), ref.GetShared()
-	scope, err := selectedReferenceScope(referenceScope{tenant: tenant}, refTenant, shared, ref.GetProject())
-	if err != nil {
-		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "%s: %s", defaultRoleField, grpcstatus.Convert(err).Message())
-	}
+	refTenant := ref.GetTenant()
+	scope := selectedReferenceScope(referenceScope{tenant: tenant}, refTenant, ref.GetProject())
 	if scope.tenant != tenant && scope.tenant != auth.SharedTenant {
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "%s must reference a Role in the Tenant or shared", defaultRoleField)
 	}
 
 	id, name := ref.GetId(), ref.GetName()
-	allowSharedRole := refTenant == "" && !shared && scope.tenant != auth.SharedTenant
+	allowSharedRole := refTenant == "" && scope.tenant != auth.SharedTenant
 	if id == "" {
 		if name == "" {
 			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "%s must specify an ID or name", defaultRoleField)
 		}
-		id, err = s.lookupDefaultRoleID(ctx, scope, name, allowSharedRole)
+		resolvedID, err := s.lookupDefaultRoleID(ctx, scope, name, allowSharedRole)
 		if err != nil {
 			return nil, err
 		}
+		id = resolvedID
 	}
 
 	// Keep Role deletion serialized with the Tenant write in this transaction.

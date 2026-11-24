@@ -123,3 +123,39 @@ describe('OSACWizardFooter', () => {
     await waitFor(() => expect(submitButton).toBeEnabled());
   });
 });
+
+describe('OSACWizardFooter submission gate', () => {
+  it('disables the submit button while the form has no changes', () => {
+    renderWithProviders(
+      <Formik<{ name: string }>
+        initialValues={{ name: 'unchanged' }}
+        onSubmit={() => Promise.resolve()}
+      >
+        <FieldValidationProvider>
+          <Wizard
+            navAriaLabel="Wizard steps"
+            startIndex={2}
+            footer={
+              <OSACWizardFooter
+                onCancel={vi.fn()}
+                stepHasErrors={() => false}
+                disableSubmitWhenPristine
+                error={undefined}
+              />
+            }
+          >
+            <WizardStep id="general" name="General">
+              <div />
+            </WizardStep>
+            <WizardStep id="review" name="Review">
+              <div />
+            </WizardStep>
+          </Wizard>
+        </FieldValidationProvider>
+      </Formik>,
+      { routerEntries: ['/'] },
+    );
+
+    expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled();
+  });
+});

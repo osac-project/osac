@@ -198,6 +198,8 @@ import type {
   StorageTiersUpdateResponse,
   TenantsCreateRequest,
   TenantsCreateResponse,
+  TenantsUpdateRequest,
+  TenantsUpdateResponse,
 } from '@osac/types/private';
 import {
   BareMetalInstanceTypesCreateResponseSchema,
@@ -574,6 +576,7 @@ export type MockTransportOverrides = {
     req: IdentityProvidersUpdateRequest,
   ) => IdentityProvidersUpdateResponse;
   onTenantCreate?: (req: TenantsCreateRequest) => TenantsCreateResponse;
+  onTenantUpdate?: (req: TenantsUpdateRequest) => TenantsUpdateResponse;
   onTenantList?: () => never;
   onStorageBackendList?: (
     req: StorageBackendsListRequest,
@@ -601,7 +604,9 @@ export type MockTransportOverrides = {
   onExternalIPPoolUpdate?: (req: ExternalIPPoolsUpdateRequest) => ExternalIPPoolsUpdateResponse;
   onStorageTierList?: (
     req: StorageTiersListRequest,
-  ) => MessageInitShape<typeof StorageTiersListResponseSchema>;
+  ) =>
+    | MessageInitShape<typeof StorageTiersListResponseSchema>
+    | Promise<MessageInitShape<typeof StorageTiersListResponseSchema>>;
   onPublicStorageTierList?: (
     req: PublicStorageTiersListRequest,
   ) => MessageInitShape<typeof PublicStorageTiersListResponseSchema>;
@@ -740,7 +745,7 @@ export const createMockConnectTransport = (
   const storageBackends = [...(fixtures.storageBackends ?? [])];
   const privateExternalIpPools = [...(fixtures.privateExternalIpPools ?? [])];
   const externalIpPools = [...(fixtures.externalIpPools ?? [])];
-  const storageTiers = fixtures.storageTiers ?? [];
+  const storageTiers = [...(fixtures.storageTiers ?? [])];
   const publicStorageTiers = fixtures.publicStorageTiers ?? [];
   const roles = fixtures.roles ?? [];
   const roleBindingsFixtures = fixtures.roleBindings ?? [];
@@ -1226,12 +1231,14 @@ export const createMockConnectTransport = (
           if (overrides.onStorageTierList) {
             return overrides.onStorageTierList(req);
           }
-          const items = storageTiers.filter((item) =>
-            matchesStorageTierActiveFilter(req.filter, item.status?.state, item.spec?.protocol),
+          const items = storageTiers.filter(
+            (item) =>
+              matchesStorageTierActiveFilter(req.filter, item.status?.state, item.spec?.protocol) &&
+              matchesNameContainsFilter(req.filter, item.metadata?.name),
           );
           return {
-            items,
-            size: items.length,
+            items: req.limit === 0 ? [] : items,
+            size: req.limit === 0 ? 0 : items.length,
             total: items.length,
           };
         },
@@ -1263,6 +1270,10 @@ export const createMockConnectTransport = (
         delete: (req) => {
           if (overrides.onStorageTierDelete) {
             return overrides.onStorageTierDelete(req);
+          }
+          const index = storageTiers.findIndex((tier) => tier.id === req.id);
+          if (index !== -1) {
+            storageTiers.splice(index, 1);
           }
           return {};
         },
@@ -1412,6 +1423,8 @@ export const createMockConnectTransport = (
             },
           };
         },
+        update: (req) =>
+          overrides.onTenantUpdate?.(req) ?? ({ object: req.object } as TenantsUpdateResponse),
         delete: () => ({}),
       });
 

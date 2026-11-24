@@ -329,6 +329,13 @@ func (s *PrivateTenantsServer) Delete(ctx context.Context,
 	if err = s.rejectDeleteWhileResourcesExist(ctx, request.GetId()); err != nil {
 		return
 	}
+	// The tenant's unsent quota warnings reference the tenant with a foreign key
+	// and have no API of their own. Remove them here, when the deletion is
+	// accepted, so they cannot block the final removal of the tenant row. For
+	// tenants the identifier is the name.
+	if err = s.deleteQuotaOutbox(ctx, request.GetId()); err != nil {
+		return
+	}
 	getResponse, getErr := s.dao.Get().SetId(request.GetId()).Do(ctx)
 	// Delete the break-glass secret before generic.Delete so its project and
 	// tenant FKs cannot deadlock teardown (projects cannot be removed while
@@ -421,6 +428,18 @@ func (s *PrivateTenantsServer) deleteSecretByID(ctx context.Context, tenant *pri
 			slog.String("secret_id", id),
 			slog.Any("error", err))
 	}
+}
+
+// deleteQuotaOutbox removes the tenant's unsent quota warnings. The outbox rows
+// reference the tenant with a foreign key and have no API of their own, so they
+// are removed in the Tenants/Delete transaction: leaving them behind would keep
+// the tenant from being archived after its finalizers are gone.
+func (s *PrivateTenantsServer) deleteQuotaOutbox(ctx context.Context, tenant string) error {
+	return deleteQuotaOutboxRows(ctx, s.logger,
+		`delete from quota_outbox where tenant = $1`, []any{tenant},
+		fmt.Sprintf("failed to delete tenant '%s'", tenant),
+		slog.String("tenant", tenant),
+	)
 }
 
 func (s *PrivateTenantsServer) clearStaleBreakGlassCredentialsSecretRef(ctx context.Context,

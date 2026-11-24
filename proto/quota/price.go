@@ -425,7 +425,7 @@ func plannedCreate(
 	plannedMessage := dynamicpb.NewMessage(descriptor.(protoreflect.MessageDescriptor))
 
 	fields := map[string]protoreflect.Value{}
-	for _, target := range sortedKeys(creates.Set) {
+	for _, target := range SortedKeys(creates.Set) {
 		value, source, ok, err := navigate(item.Message(), creates.Set[target])
 		if err != nil {
 			return PlannedCreate{}, nil, err

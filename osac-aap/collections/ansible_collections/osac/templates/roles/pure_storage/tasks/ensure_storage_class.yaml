@@ -100,6 +100,8 @@
         _pure_api_token: "{{ _pure_hub_secret.resources[0].data.api_token | b64decode }}"
         _pure_mgmt_endpoint: "{{ _pure_hub_secret.resources[0].data.mgmt_endpoint | b64decode }}"
         _pure_nfs_endpoint: "{{ _pure_hub_secret.resources[0].data.nfs_endpoint | b64decode }}"
+        _pure_nfs_server: "{{ _pure_hub_secret.resources[0].data.nfs_server | b64decode }}"
+        _pure_nfs_policy: "{{ _pure_hub_secret.resources[0].data.nfs_policy | b64decode }}"
       no_log: true
 
     # ── Create CSI Secret on tenant cluster ──
@@ -161,14 +163,19 @@
               osac.openshift.io/tier: "{{ item.name }}"
           provisioner: "{{ pure_storage_csi_provisioner }}"
           parameters:
-            backend: "{{ _pure_nfs_endpoint }}"
-            nfs_version: "{{ pure_storage_nfs_version }}"
+            backend: pure_file
+            pure_nfs_server: "{{ _pure_nfs_server }}"
+            pure_nfs_policy: "{{ _pure_nfs_policy }}"
+            pure_fb_hard_limit_enabled: "true"
             csi.storage.k8s.io/provisioner-secret-name: "{{ _pure_csi_secret_name }}"
             csi.storage.k8s.io/provisioner-secret-namespace: "{{ tenant_namespace }}"
             csi.storage.k8s.io/controller-expand-secret-name: "{{ _pure_csi_secret_name }}"
             csi.storage.k8s.io/controller-expand-secret-namespace: "{{ tenant_namespace }}"
             csi.storage.k8s.io/node-publish-secret-name: "{{ _pure_csi_secret_name }}"
             csi.storage.k8s.io/node-publish-secret-namespace: "{{ tenant_namespace }}"
+          mountOptions:
+            - "{{ pure_storage_nfs_version }}"
+            - tcp
           reclaimPolicy: Delete
           allowVolumeExpansion: true
           volumeBindingMode: Immediate
@@ -195,5 +202,7 @@
         _pure_api_token: ""
         _pure_mgmt_endpoint: ""
         _pure_nfs_endpoint: ""
+        _pure_nfs_server: ""
+        _pure_nfs_policy: ""
         _pure_hub_secret: {}
       no_log: true

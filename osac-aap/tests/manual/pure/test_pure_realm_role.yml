@@ -1,0 +1,121 @@
+---
+# Manual test for osac.service.pure_realm role
+#
+# Tests the role directly without going through playbook_osac_provision_pure_realms.yml
+#
+# Usage:
+#   1. Create tests/manual/realms.yaml with your realm configuration
+#   2. Set environment variables:
+#      export PUREFB_API="T-pure-admin-token"
+#      export PUREFB_URL="https://10.3.11.50"
+#      export OSAC_STORAGE_CONFIG_NAMESPACE="osac-system"
+#   3. Run:
+#      ansible-playbook tests/manual/test_pure_realm_role.yml
+
+- name: Test osac.service.pure_realm role
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    realms_config_file: "{{ playbook_dir }}/realms.yaml"
+    fb_url: "{{ lookup('env', 'PUREFB_URL') }}"
+
+  pre_tasks:
+    - name: Validate required environment variables
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'PUREFB_API') | length > 0
+          - lookup('env', 'PUREFB_URL') | length > 0
+          - lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE') | length > 0
+        fail_msg: >-
+          Required environment variables missing. Set:
+          PUREFB_API (array admin token), PUREFB_URL (array mgmt endpoint),
+          OSAC_STORAGE_CONFIG_NAMESPACE (K8s namespace for Secrets)
+
+    - name: Check if realms.yaml exists
+      ansible.builtin.stat:
+        path: "{{ realms_config_file }}"
+      register: _realms_file
+
+    - name: Fail if realms.yaml is missing
+      ansible.builtin.fail:
+        msg: >-
+          Realms configuration file not found at {{ realms_config_file }}.
+          Create it with your realm definitions. See samples/pure_realms_extra_vars.yml for format.
+      when: not _realms_file.stat.exists
+
+    - name: Load realm configuration from realms.yaml
+      ansible.builtin.include_vars:
+        file: "{{ realms_config_file }}"
+
+    - name: Validate realms list is not empty
+      ansible.builtin.assert:
+        that:
+          - realms is defined
+          - realms | length > 0
+        fail_msg: "realms.yaml must define at least one realm"
+
+    - name: Show realms to be tested
+      ansible.builtin.debug:
+        msg:
+          - "FlashBlade: {{ fb_url }}"
+          - "Target namespace: {{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE') }}"
+          - "Realms to provision: {{ realms | map(attribute='name') | list }}"
+
+    - name: Confirm before proceeding
+      ansible.builtin.pause:
+        prompt: |
+
+          This will provision/update {{ realms | length }} realm(s) on {{ fb_url }}
+
+          If realms already exist, the role will be idempotent (skip existing resources).
+
+          Press ENTER to continue, or Ctrl+C then 'a' to abort
+      when: not (auto_approve | default(false) | bool)
+
+  tasks:
+    - name: Provision each realm
+      ansible.builtin.include_role:
+        name: osac.service.pure_realm
+      vars:
+        realm: "{{ item }}"
+        pure_realm_fb_url: "{{ fb_url }}"
+      loop: "{{ realms }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+  post_tasks:
+    - name: Verify Secrets were created for all realms
+      kubernetes.core.k8s_info:
+        kind: Secret
+        namespace: "{{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE') }}"
+        name: "pure-realm-{{ item.name }}"
+      register: _realm_secrets_check
+      loop: "{{ realms }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Show verification results
+      ansible.builtin.debug:
+        msg: "{{ result }}"
+      vars:
+        result: >-
+          {% if item.resources | length > 0 -%}
+          Secret 'pure-realm-{{ item.item.name }}' exists with {{ item.resources[0].data.keys() | list | length }} data fields
+          {%- else -%}
+          Secret 'pure-realm-{{ item.item.name }}' NOT found
+          {%- endif %}
+      loop: "{{ _realm_secrets_check.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Test Summary
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════"
+          - "ROLE TEST COMPLETE"
+          - "════════════════════════════════════════"
+          - "Realms tested: {{ realms | map(attribute='name') | list }}"
+          - "Secrets verified: {{ _realm_secrets_check.results | selectattr('resources', 'defined') | selectattr('resources', '!=', []) | list | length }}/{{ realms | length }}"
+          - "Next step: Test playbook_osac_provision_pure_realms.yml"
+          - "════════════════════════════════════════"

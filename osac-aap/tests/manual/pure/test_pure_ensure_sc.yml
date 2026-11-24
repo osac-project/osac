@@ -1,0 +1,97 @@
+---
+# Test Pure Storage ensure_storage_class.yaml
+# Prerequisites: Run test_pure_setup.yml first to allocate a Realm
+
+- name: Test Pure Storage Ensure StorageClass
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    test_namespace: osac-system
+    test_tenant: test-pure-tenant
+    test_tenant_uid: test-uid-12345
+    test_backend_id: be-pure-test
+
+  tasks:
+    - name: Verify hub Secret exists (from setup)
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "pure-tenant-config-{{ test_tenant }}-{{ test_backend_id }}"
+        namespace: "{{ test_namespace }}"
+      register: _hub_secret_check
+
+    - name: Fail if hub Secret is missing
+      ansible.builtin.fail:
+        msg: "Hub Secret not found. Run test_pure_setup.yml first!"
+      when: _hub_secret_check.resources | length == 0
+
+    - name: Show Realm allocation
+      ansible.builtin.debug:
+        msg: "Allocated Realm: {{ _hub_secret_check.resources[0].metadata.labels['osac.openshift.io/pure-realm'] }}"
+
+    - name: Run ensure_storage_class through dispatcher
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: ensure_storage_class
+        storage_provider_provisioning_target: vmaas
+        tenant_name: "{{ test_tenant }}"
+        tenant_uid: "{{ test_tenant_uid }}"
+        tenant_namespace: "{{ test_namespace }}"
+        storage_provider_tiers:
+          - name: default
+            protocol: nfs
+            provider: pure
+            backend_id: "{{ test_backend_id }}"
+          - name: fast
+            protocol: nfs
+            provider: pure
+            backend_id: "{{ test_backend_id }}"
+        storage_provider_backend_connections:
+          "{{ test_backend_id }}":
+            endpoint: "10.3.11.50"
+
+    - name: Check StorageClasses were created
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        label_selectors:
+          - "osac.openshift.io/tenant={{ test_tenant }}"
+      register: _storage_classes
+
+    - name: Show created StorageClasses
+      ansible.builtin.debug:
+        msg: "StorageClasses: {{ _storage_classes.resources | map(attribute='metadata.name') | list }}"
+
+    - name: Assert StorageClasses were created
+      ansible.builtin.assert:
+        that:
+          - _storage_classes.resources | length == 2
+        fail_msg: "Expected 2 StorageClasses, got {{ _storage_classes.resources | length }}"
+        success_msg: "Both StorageClasses created"
+
+    - name: Check CSI Secret was created
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pure-csi-secret
+        namespace: "{{ test_namespace }}"
+      register: _csi_secret
+
+    - name: Assert CSI Secret exists
+      ansible.builtin.assert:
+        that:
+          - _csi_secret.resources | length == 1
+        fail_msg: "CSI Secret not found"
+        success_msg: "CSI Secret created"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════"
+          - "ENSURE_STORAGE_CLASS TEST PASSED"
+          - "   - CSI Secret created with FlashBlade credentials"
+          - "   - StorageClasses created"
+          - "   - Pure CSI driver will create filesystems on-demand when PVCs are provisioned"
+          - "════════════════════════════════════════"

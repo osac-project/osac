@@ -1,0 +1,214 @@
+# Pure node plugin, standalone, with kubelet registration (no OSAC meta-driver).
+# Derived from osac-csi-driver/charts/csi-driver/templates/pure-node.yaml; adds
+# --mode=standalone, the node-driver-registrar sidecar and the RBAC the node
+# plugin needs for StorageNodeInitiator/PureVolume.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pure-csi-node-multipath
+  namespace: osac-csi
+data:
+  multipath.conf: |
+    defaults {
+        user_friendly_names yes
+        find_multipaths yes
+    }
+    blacklist {
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pure-csi-mountshim
+  namespace: osac-csi
+data:
+  mount: |
+    #!/bin/sh
+    exec /usr/bin/nsenter -t 1 -m -- /bin/mount "$@"
+  umount: |
+    #!/bin/sh
+    exec /usr/bin/nsenter -t 1 -m -- /bin/umount "$@"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pure-csi-node-sa
+  namespace: osac-csi
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pure-csi-node-role
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "persistentvolumes"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "update", "patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csinodes"]
+    verbs: ["get", "list"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.purestorage.com"]
+    resources: ["purevolumes", "storagenodeinitiators"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pure-csi-node-binding
+subjects:
+  - kind: ServiceAccount
+    name: pure-csi-node-sa
+    namespace: osac-csi
+roleRef:
+  kind: ClusterRole
+  name: pure-csi-node-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: pure-csi-node
+  namespace: osac-csi
+  labels:
+    app.kubernetes.io/name: pure-csi-node
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pure-csi-node
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pure-csi-node
+    spec:
+      serviceAccountName: pure-csi-node-sa
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      hostPID: true
+      containers:
+        - name: pure-csi-node
+          image: docker.io/portworx/px-pure-csi-driver:26.2.2
+          args:
+            - "--plugin=node"
+            - "--mode=standalone"
+            - "--endpoint=$(CSI_ENDPOINT)"
+          env:
+            - name: CSI_ENDPOINT
+              value: "unix:///csi/csi.sock"
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: CSI_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: CLUSTER_UUID
+              value: "osac-test-cluster"
+            - name: PURE_DISCOVERY_CONF
+              value: "/config/pure.json"
+          securityContext:
+            privileged: true
+            runAsUser: 0
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: kubelet-dir
+              mountPath: /var/lib/kubelet
+              mountPropagation: Bidirectional
+            - name: pure-config
+              mountPath: /config
+              readOnly: true
+            - name: dev-dir
+              mountPath: /dev
+            - name: sys-dir
+              mountPath: /sys
+            - name: multipath-conf
+              mountPath: /etc/multipath.conf
+              subPath: multipath.conf
+              readOnly: true
+            - name: iscsi-dir
+              mountPath: /etc/iscsi
+              readOnly: true
+            - name: mount-shim
+              mountPath: /usr/local/bin/mount
+              subPath: mount
+              readOnly: true
+            - name: mount-shim
+              mountPath: /usr/local/bin/umount
+              subPath: umount
+              readOnly: true
+            - name: host-run
+              mountPath: /run
+        - name: csi-node-driver-registrar
+          image: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.12.0
+          args:
+            - "--csi-address=/csi/csi.sock"
+            - "--kubelet-registration-path=/var/lib/kubelet/plugins/pxd.portworx.com/csi.sock"
+            - "--v=5"
+          env:
+            - name: KUBE_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+      volumes:
+        - name: socket-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/pxd.portworx.com
+            type: DirectoryOrCreate
+        - name: kubelet-dir
+          hostPath:
+            path: /var/lib/kubelet
+            type: Directory
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+        - name: pure-config
+          secret:
+            secretName: pure-csi-credentials
+            items:
+              - key: pure.json
+                path: pure.json
+        - name: dev-dir
+          hostPath:
+            path: /dev
+        - name: sys-dir
+          hostPath:
+            path: /sys
+        - name: multipath-conf
+          configMap:
+            name: pure-csi-node-multipath
+            items:
+              - key: multipath.conf
+                path: multipath.conf
+        - name: iscsi-dir
+          hostPath:
+            path: /etc/iscsi
+            type: DirectoryOrCreate
+        - name: mount-shim
+          configMap:
+            name: pure-csi-mountshim
+            defaultMode: 0755
+            items:
+              - key: mount
+                path: mount
+              - key: umount
+                path: umount
+        - name: host-run
+          hostPath:
+            path: /run
+            type: Directory

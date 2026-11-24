@@ -1,0 +1,28 @@
+---
+# Pure FlashBlade Realms Configuration
+#
+# This file defines Realms to be provisioned on the FlashBlade array.
+# Used by test_pure_realm_role.yml and playbook_osac_provision_pure_realms.yml
+#
+# Format matches samples/pure_realms_extra_vars.yml
+
+# FlashBlade management endpoint (can be overridden by PUREFB_URL env var)
+fb_url: "https://10.3.11.50"
+
+# Disable certificate validation for self-signed certs
+pure_realm_validate_certs: false
+
+# List of Realms to provision
+realms:
+  - name: danni-test-1
+    # Data-plane subnet (also used as NFS export policy client restriction)
+    subnet_prefix: "172.16.17.0/24"
+    subnet_vlan: 2500
+    subnet_gateway: "172.16.17.1"
+    # Data VIP (NFS endpoint + cert common name)
+    interface_address: "172.16.17.11"
+    # Realm-scoped DNS configuration
+    dns_domain: "massopen.cloud"
+    dns_nameservers:
+      - 172.16.17.1
+

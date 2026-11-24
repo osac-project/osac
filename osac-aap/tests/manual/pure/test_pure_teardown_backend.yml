@@ -1,0 +1,104 @@
+---
+# Test Pure Storage teardown_backend.yaml
+# Prerequisites: Run test_pure_setup.yml first to create hub Secret
+# Tests: Realm release (hub Secret deletion), idempotency
+
+- name: Test Pure Storage Teardown Backend
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    test_namespace: osac-system
+    test_tenant: test-pure-tenant
+    test_tenant_uid: test-uid-12345
+    test_backend_id: be-pure-test
+
+  tasks:
+    - name: Verify hub Secret exists before teardown
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "pure-tenant-config-{{ test_tenant }}-{{ test_backend_id }}"
+        namespace: "{{ test_namespace }}"
+      register: _hub_secret_before
+
+    - name: Show Realm allocation before teardown
+      when: _hub_secret_before.resources | length > 0
+      ansible.builtin.debug:
+        msg: "Realm before teardown: {{ _hub_secret_before.resources[0].metadata.labels['osac.openshift.io/pure-realm'] }}"
+
+    - name: Run teardown_backend through dispatcher
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: teardown_backend
+        storage_provider_provisioning_target: vmaas
+        tenant_name: "{{ test_tenant }}"
+        tenant_uid: "{{ test_tenant_uid }}"
+        tenant_namespace: "{{ test_namespace }}"
+        storage_provider_tiers:
+          - name: default
+            protocol: nfs
+            provider: pure
+            backend_id: "{{ test_backend_id }}"
+        storage_provider_backend_connections:
+          "{{ test_backend_id }}":
+            endpoint: "10.3.11.50"
+
+    - name: Verify hub Secret was deleted
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "pure-tenant-config-{{ test_tenant }}-{{ test_backend_id }}"
+        namespace: "{{ test_namespace }}"
+      register: _hub_secret_after
+
+    - name: Assert hub Secret was deleted
+      ansible.builtin.assert:
+        that:
+          - _hub_secret_after.resources | length == 0
+        fail_msg: "Hub Secret still exists after teardown"
+        success_msg: "Hub Secret deleted (Realm released)"
+
+    - name: Test idempotency - run teardown again
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: teardown_backend
+        storage_provider_provisioning_target: vmaas
+        tenant_name: "{{ test_tenant }}"
+        tenant_uid: "{{ test_tenant_uid }}"
+        tenant_namespace: "{{ test_namespace }}"
+        storage_provider_tiers:
+          - name: default
+            protocol: nfs
+            provider: pure
+            backend_id: "{{ test_backend_id }}"
+        storage_provider_backend_connections:
+          "{{ test_backend_id }}":
+            endpoint: "10.3.11.50"
+
+    - name: Verify Secret still deleted after second run
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "pure-tenant-config-{{ test_tenant }}-{{ test_backend_id }}"
+        namespace: "{{ test_namespace }}"
+      register: _hub_secret_final
+
+    - name: Assert idempotency
+      ansible.builtin.assert:
+        that:
+          - _hub_secret_final.resources | length == 0
+        fail_msg: "Idempotency failed"
+        success_msg: "Idempotency: second teardown succeeded"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════"
+          - "TEARDOWN_BACKEND TEST PASSED"
+          - "   - Hub Secret deleted (Realm released back to pool)"
+          - "   - Idempotent (second run succeeded)"
+          - "   - No filesystems deleted (CSI driver manages them)"
+          - "════════════════════════════════════════"

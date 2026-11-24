@@ -1,9 +1,9 @@
 ---
 # Pure-specific defaults — all use pure_storage_ prefix.
 
-# CSI provisioner name — native Portworx Pure CSI driver for POC
-# (upstream PSO, not the OSAC shim)
-pure_storage_csi_provisioner: "pure-csi"
+# CSI provisioner name — native Portworx Pure CSI driver
+# Uses pxd.portworx.com (Portworx driver name)
+pure_storage_csi_provisioner: "pxd.portworx.com"
 
 # Hub Secret prefix for per-tenant Pure config
 pure_storage_tenant_config_secret_prefix: "pure-tenant-config-"
@@ -18,7 +18,7 @@ pure_storage_csi_credential_secret_name: "pure-csi-credentials"
 # Realm-scoped resource naming conventions
 # Format: {{ realm_name }}::{{ suffix }}
 pure_storage_nfs_server_suffix: "nfs-server"
-pure_storage_export_policy_suffix: "nfs-export"
+pure_storage_export_policy_suffix: "export-policy"
 
 # Default NFS version for mount options
 pure_storage_nfs_version: "nfsvers=4.1"

@@ -1,0 +1,126 @@
+# Pure controller, standalone (no OSAC meta-driver).
+# Derived from osac-csi-driver/charts/csi-backends/templates/pure-controller.yaml,
+# with the provisioner/attacher sidecars that the meta-driver would otherwise run.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: pure-csi-controller-sa
+  namespace: osac-csi-backends
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pure-csi-controller-role
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "update"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["list", "watch", "create", "update", "patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["csinodes", "nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments/status"]
+    verbs: ["patch"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.purestorage.com"]
+    resources: ["purevolumes", "puresnapshots", "storagenodeinitiators"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: pure-csi-controller-binding
+subjects:
+  - kind: ServiceAccount
+    name: pure-csi-controller-sa
+    namespace: osac-csi-backends
+roleRef:
+  kind: ClusterRole
+  name: pure-csi-controller-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pure-csi-controller
+  namespace: osac-csi-backends
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: pure-csi-controller
+  template:
+    metadata:
+      labels:
+        app: pure-csi-controller
+    spec:
+      serviceAccountName: pure-csi-controller-sa
+      containers:
+        - name: pure-csi-driver
+          image: docker.io/portworx/px-pure-csi-driver:26.2.2
+          args:
+            - "--endpoint=unix:///csi/csi.sock"
+            - "--plugin=controller"
+            - "--mode=standalone"
+          env:
+            - name: NAMESPACE
+              value: "osac-csi"
+            - name: POD_NAMESPACE
+              value: "osac-csi"
+            - name: CLUSTER_UUID
+              value: "osac-test-cluster"
+            - name: PX_SECRETS_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+            - name: pure-config
+              mountPath: /pure.json
+              subPath: pure.json
+              readOnly: true
+        - name: csi-provisioner
+          image: registry.k8s.io/sig-storage/csi-provisioner:v5.1.0
+          args:
+            - "--csi-address=/csi/csi.sock"
+            - "--v=5"
+            - "--timeout=120s"
+            - "--feature-gates=Topology=false"
+            - "--extra-create-metadata"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+        - name: csi-attacher
+          image: registry.k8s.io/sig-storage/csi-attacher:v4.7.0
+          args:
+            - "--csi-address=/csi/csi.sock"
+            - "--v=5"
+          volumeMounts:
+            - name: socket-dir
+              mountPath: /csi
+      volumes:
+        - name: socket-dir
+          emptyDir: {}
+        - name: pure-config
+          secret:
+            secretName: pure-csi-credentials

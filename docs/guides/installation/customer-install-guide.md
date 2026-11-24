@@ -623,7 +623,10 @@ With the Netris Fabric Manager, also note:
   configure a non-empty `lbVip` share in the Subnet address plan for CaaS.
 - ICMP SecurityGroup rules need the registration capability
   `security_group_icmp`. Netris declares it, although its SecurityGroup tasks
-  are no-ops. `cudn_evpn` does not, because a NetworkPolicy cannot match ICMP,
+  are no-ops. Netris also declares `security_group_physical_noop`, because its
+  physical SecurityGroup creation and attachment binding are documented
+  no-ops; bare-metal ports are therefore not filtered by SecurityGroups.
+  `cudn_evpn` does not declare `security_group_icmp`, because a NetworkPolicy cannot match ICMP,
   so a NetworkClass with Netris and `cudn_evpn` rejects ICMP: the fulfillment
   API answers `InvalidArgument` with "use protocol all, which includes ICMP".
   A NetworkClass with Netris alone (`k8sManager` empty) accepts ICMP.
@@ -1526,7 +1529,7 @@ it again. The installer registers `cudn_evpn` itself, and, with
 `global.networking.fabricManager: netris`, also the Netris Fabric Manager
 (`ConfigMap` `osac-network-fabric-manager-netris`: name `netris`, `ansible_role`
 `osac.templates.netris`, `network_types` `evpn`, `capabilities`
-`eastWestEthernet,security_group_icmp`, `immutable`). For `netris`, skip this procedure.
+`eastWestEthernet,security_group_icmp,security_group_physical_noop`, `immutable`). For `netris`, skip this procedure.
 
 **Procedure**
 
@@ -1565,7 +1568,11 @@ it again. The installer registers `cudn_evpn` itself, and, with
      `security_group_icmp`, which the manager declares only if its
      `create_security_group` handles `icmp` rules. The NetworkClass accepts
      ICMP rules only when every manager declares it, and `cudn_evpn` does not.
-     Acme declares it, as in the FM guide's example. An unknown value fails
+     `security_group_physical_noop`, which the manager declares only if its
+     physical SecurityGroup creation and attachment binding are a documented
+     no-op; those ports stay unfiltered. It does not replace
+     `security_group_icmp`. Acme declares only `security_group_icmp`, as in
+     the FM guide's example. An unknown value fails
      the `NetworkClass`.
    - An optional key (`capabilities`, `network_types`, `description`) with an
      empty value counts as absent. Any other `data` key, such as the typo

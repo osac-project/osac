@@ -80,7 +80,8 @@ var _ = Describe("Networking with operator", Label(networkingOperatorLabel), fun
 		Expect(netris.Data["name"]).To(Equal("netris"))
 		Expect(netris.Data["ansible_role"]).To(Equal("osac.templates.netris"))
 		Expect(netris.Data["network_types"]).To(Equal("evpn"))
-		Expect(netris.Data["capabilities"]).To(Equal("eastWestEthernet,security_group_icmp"))
+		Expect(netris.Data["capabilities"]).To(
+			Equal("eastWestEthernet,security_group_icmp,security_group_physical_noop"))
 
 		By("checking the Kubernetes Manager registration that the osac chart renders for the profile")
 		cudn := &corev1.ConfigMap{}

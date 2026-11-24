@@ -143,6 +143,7 @@ func expectNetworkClassFailed(name, message string) {
 	Expect(status).NotTo(HaveKey("networkManagers"), "a Failed NetworkClass resolves no manager: %v", status)
 	Expect(status).NotTo(HaveKey("networkType"), "a Failed NetworkClass has no network type: %v", status)
 	Expect(status).NotTo(HaveKey("securityGroupIcmp"), "a Failed NetworkClass records no capability: %v", status)
+	Expect(status).NotTo(HaveKey("securityGroupPhysicalNoop"), "a Failed NetworkClass records no capability: %v", status)
 	expectNoJobs(nc)
 }
 
@@ -173,6 +174,14 @@ func expectSecurityGroupICMP(nc *unstructured.Unstructured, want bool) {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(found).To(BeTrue(), "a resolved NetworkClass records status.securityGroupIcmp: %v", nc.Object["status"])
 	Expect(got).To(Equal(want), "status.securityGroupIcmp")
+}
+
+// expectSecurityGroupPhysicalNoop checks the derived status.securityGroupPhysicalNoop of a resolved NetworkClass.
+func expectSecurityGroupPhysicalNoop(nc *unstructured.Unstructured, want bool) {
+	got, found, err := unstructured.NestedBool(nc.Object, "status", "securityGroupPhysicalNoop")
+	Expect(err).NotTo(HaveOccurred())
+	Expect(found).To(BeTrue(), "a resolved NetworkClass records status.securityGroupPhysicalNoop: %v", nc.Object["status"])
+	Expect(got).To(Equal(want), "status.securityGroupPhysicalNoop")
 }
 
 // skipResolutionWhenDisabled skips a resolution spec on an operator deployed
@@ -248,6 +257,7 @@ var _ = Describe("NetworkClass resolution "+
 		)
 		Expect(nc.Object["status"]).NotTo(HaveKey("jobs"), "resolution runs no job")
 		expectSecurityGroupICMP(nc, false)
+		expectSecurityGroupPhysicalNoop(nc, true)
 	})
 
 	It("resolves the chart-rendered Netris registration alone with security_group_icmp", func() {
@@ -255,6 +265,7 @@ var _ = Describe("NetworkClass resolution "+
 		createNetworkClass(ncName, "netris", "", false)
 		nc := expectNetworkClassReady(ncName, "netris", netrisAnsibleRole, "", "", "")
 		expectSecurityGroupICMP(nc, true)
+		expectSecurityGroupPhysicalNoop(nc, true)
 	})
 
 	It("records security_group_icmp when both registrations declare it", func() {
@@ -271,6 +282,17 @@ var _ = Describe("NetworkClass resolution "+
 			"evpn",
 		)
 		expectSecurityGroupICMP(nc, true)
+		expectSecurityGroupPhysicalNoop(nc, false)
+	})
+
+	It("records security_group_physical_noop when the Fabric Manager declares it", func() {
+		skipResolutionWhenDisabled()
+		createRegistration(fabricRegistration(fabricCM, fabricName, map[string]string{
+			"capabilities": "security_group_physical_noop"}))
+		createNetworkClass(ncName, fabricName, "", false)
+		nc := expectNetworkClassReady(ncName, fabricName, "acme.network.fabric_"+fabricName, "", "", "")
+		expectSecurityGroupPhysicalNoop(nc, true)
+		expectSecurityGroupICMP(nc, false)
 	})
 
 	It("resolves a Fabric Manager alone, accepts an empty key as absent and leaves the network type empty", func() {
@@ -400,6 +422,18 @@ var _ = Describe("NetworkClass resolution "+
 						operatorNamespace,
 						cm,
 						"eastWestEthernet",
+					)
+				}},
+		),
+		Entry(
+			"security_group_physical_noop on a Kubernetes Manager",
+			invalidCase{k8s: map[string]string{"capabilities": "security_group_physical_noop"}, k8sName: true,
+				message: func(_, _, _, cm string) string {
+					return fmt.Sprintf(
+						"ConfigMap %s/%s: unknown capability %q",
+						operatorNamespace,
+						cm,
+						"security_group_physical_noop",
 					)
 				}},
 		),

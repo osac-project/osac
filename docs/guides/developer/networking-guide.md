@@ -301,6 +301,11 @@ curl -fsS $CURL_FLAGS -X POST -H "Authorization: Bearer $TOKEN" \
 > forms `tcp`, `udp`, `all`. With provider networking enabled, `PROTOCOL_ICMP`
 > works only where every network manager declares `security_group_icmp`;
 > otherwise the API returns InvalidArgument. `PROTOCOL_ALL` includes ICMP.
+>
+> `security_group_physical_noop` is derived status, not an API switch. When the
+> selected Fabric Manager declares it,
+> `NetworkClass.status.security_group_physical_noop` is true, SecurityGroups are
+> still stored and validated, and physical ports remain unfiltered.
 
 The example above allows inbound SSH (port 22), HTTP (port 80), and HTTPS (port 443)
 from any IPv4 address, and permits all outbound traffic.

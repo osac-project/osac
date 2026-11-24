@@ -53,6 +53,9 @@ const (
 	CapabilityEastWestEthernet = "eastWestEthernet"
 	// CapabilitySecurityGroupICMP means the manager's create_security_group accepts icmp rules.
 	CapabilitySecurityGroupICMP = "security_group_icmp"
+	// CapabilitySecurityGroupPhysicalNoop means the Fabric Manager's physical
+	// SecurityGroup task or attachment binding is a documented no-op.
+	CapabilitySecurityGroupPhysicalNoop = "security_group_physical_noop"
 	// NetworkTypeEVPN is the only network type of this release.
 	NetworkTypeEVPN = "evpn"
 )
@@ -80,7 +83,11 @@ var (
 	ansibleRolePattern = regexp.MustCompile(`^[a-z0-9_]+\.[a-z0-9_]+\.[a-z0-9_]+$`)
 
 	validCapabilities = map[ManagerType]map[string]bool{
-		FabricManager:     {CapabilityEastWestEthernet: true, CapabilitySecurityGroupICMP: true},
+		FabricManager: {
+			CapabilityEastWestEthernet:          true,
+			CapabilitySecurityGroupICMP:         true,
+			CapabilitySecurityGroupPhysicalNoop: true,
+		},
 		KubernetesManager: {CapabilitySecurityGroupICMP: true},
 	}
 	validNetworkTypes = map[string]bool{NetworkTypeEVPN: true}
@@ -265,6 +272,12 @@ func (r *Resolution) SecurityGroupICMP() bool {
 		return false
 	}
 	return r.Kubernetes == nil || r.Kubernetes.HasCapability(CapabilitySecurityGroupICMP)
+}
+
+// SecurityGroupPhysicalNoop reports whether the resolved Fabric Manager declares
+// security_group_physical_noop.
+func (r *Resolution) SecurityGroupPhysicalNoop() bool {
+	return r.Fabric.HasCapability(CapabilitySecurityGroupPhysicalNoop)
 }
 
 // Resolve resolves the managers a NetworkClass selects (contract §4.2).

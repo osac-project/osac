@@ -105,6 +105,8 @@ var _ = BeforeEach(func() {
 
 	// Create a context:
 	ctx = context.Background()
+	// Direct server calls carry the subject the authentication interceptor normally adds.
+	ctx = auth.ContextWithSubject(ctx, &auth.Subject{User: "test-user"})
 
 	// Prepare the database pool:
 	db, err := server.NewInstance().Build()
@@ -125,6 +127,7 @@ var _ = BeforeEach(func() {
 	Expect(err).ToNot(HaveOccurred())
 
 	// Start a transaction and add it to the context:
+	ctx = database.TxManagerIntoContext(ctx, tm)
 	suiteTx, err = tm.Begin(ctx)
 	Expect(err).ToNot(HaveOccurred())
 	DeferCleanup(func() {

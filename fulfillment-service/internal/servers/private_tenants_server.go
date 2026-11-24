@@ -208,6 +208,17 @@ func (s *PrivateTenantsServer) Create(ctx context.Context,
 	if tenant == "" {
 		metadata.SetTenant(name)
 	}
+	// Reuse is serialized before validation or any tenant mutation. The lock remains held by
+	// this request transaction through the tenant INSERT.
+	if err = database.CheckTenantIdentityReusable(ctx, name); err != nil {
+		if errors.Is(err, database.ErrTenantIdentityRetained) {
+			err = failedPreconditionWithReason(tenantIdentityRetainedReason,
+				"tenant name is reserved by a previous deleted tenant")
+		} else {
+			err = grpcstatus.Error(grpccodes.Internal, "failed to check tenant identity")
+		}
+		return
+	}
 
 	if err = s.validateBreakGlassCredentialsSecret(ctx, object, false); err != nil {
 		return
@@ -225,6 +236,11 @@ func (s *PrivateTenantsServer) Create(ctx context.Context,
 
 func (s *PrivateTenantsServer) Update(ctx context.Context,
 	request *privatev1.TenantsUpdateRequest) (response *privatev1.TenantsUpdateResponse, err error) {
+	if id := request.GetObject().GetId(); id != "" {
+		if err = database.LockTenantIdentity(ctx, id); err != nil {
+			return
+		}
+	}
 	// Only validate the break-glass Secret reference when the update actually
 	// touches it. Running the lookup for partial updates that omit the field
 	// would perform a needless Secret resolution and mutate the request object,
@@ -324,6 +340,17 @@ func (s *PrivateTenantsServer) lookupDefaultRoleID(ctx context.Context, scope re
 
 func (s *PrivateTenantsServer) Delete(ctx context.Context,
 	request *privatev1.TenantsDeleteRequest) (response *privatev1.TenantsDeleteResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return
+	}
+	defer tx.ReportError(&err)
+	if request.GetId() != "" {
+		if err = database.LockTenantIdentity(ctx, request.GetId()); err != nil {
+			return
+		}
+	}
+
 	// Lock the Tenant, so the guard and the creates in the tenant, which lock it too, run one after the other.
 	if err = s.rejectDeleteWhileResourcesExist(ctx, request.GetId()); err != nil {
 		return
@@ -346,17 +373,37 @@ func (s *PrivateTenantsServer) Delete(ctx context.Context,
 			return
 		}
 	}
+	subject := auth.SubjectFromContext(ctx)
+	if subject.User != "" {
+		var actor string
+		if err = tx.QueryRow(ctx, `select set_config('osac.tenant_deletion_actor', $1, true)`, subject.User).Scan(&actor); err != nil {
+			return
+		}
+	}
 	err = s.generic.Delete(ctx, request, &response)
+	if err != nil {
+		return
+	}
 	return
 }
 
 func (s *PrivateTenantsServer) Signal(ctx context.Context,
 	request *privatev1.TenantsSignalRequest) (response *privatev1.TenantsSignalResponse, err error) {
+	if request.GetId() != "" {
+		if err = database.LockTenantIdentity(ctx, request.GetId()); err != nil {
+			return
+		}
+	}
 	err = s.generic.Signal(ctx, request, &response)
 	return
 }
 
-const breakGlassCredentialsSecretName = "break-glass-credentials"
+const (
+	breakGlassCredentialsSecretName = "break-glass-credentials"
+	// tenantIdentityRetainedReason is the stable ErrorInfo reason for a reserved deleted tenant name,
+	// independent of whether the prior tenant retained billing history.
+	tenantIdentityRetainedReason = "TENANT_IDENTITY_RETAINED"
+)
 
 // breakGlassCredentialsSecretField is the update-mask path guarding break-glass
 // Secret reference validation on partial updates.

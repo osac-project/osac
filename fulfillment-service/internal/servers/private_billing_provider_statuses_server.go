@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/billing"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -84,7 +85,12 @@ func (b *PrivateBillingProviderStatusesServerBuilder) Build() (result *PrivateBi
 // account-list request with a short timeout. Account and health reads bypass the pricing breaker by design (6878
 // design section 4.6), so an open pricing breaker does not turn the status UNAVAILABLE.
 func (s *PrivateBillingProviderStatusesServer) Get(ctx context.Context,
-	request *privatev1.BillingProviderStatusesGetRequest) (*privatev1.BillingProviderStatusesGetResponse, error) {
+	request *privatev1.BillingProviderStatusesGetRequest) (response *privatev1.BillingProviderStatusesGetResponse, err error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.ReportError(&err)
 	status := privatev1.BillingProviderStatus_builder{
 		UsageDeliveryState: privatev1.BillingUsageDeliveryState_BILLING_USAGE_DELIVERY_STATE_UNKNOWN,
 	}.Build()
@@ -100,12 +106,12 @@ func (s *PrivateBillingProviderStatusesServer) Get(ctx context.Context,
 		privatev1.BillingProviderCapability_BILLING_PROVIDER_CAPABILITY_PRICING,
 	})
 	// This server reports the two states instead of failing, so it reads the provider directly.
-	adapter, err := s.provider.Adapter()
-	if err == nil {
-		err = adapter.HealthCheck(ctx)
+	adapter, probeErr := s.provider.Adapter()
+	if probeErr == nil {
+		probeErr = adapter.HealthCheck(ctx)
 	}
 	s.mu.Lock()
-	if err == nil {
+	if probeErr == nil {
 		s.lastCheck = time.Now()
 	}
 	lastCheck := s.lastCheck
@@ -113,8 +119,8 @@ func (s *PrivateBillingProviderStatusesServer) Get(ctx context.Context,
 	if !lastCheck.IsZero() {
 		status.SetLastSuccessfulCheck(timestamppb.New(lastCheck))
 	}
-	if err != nil {
-		reason := probeReason(err)
+	if probeErr != nil {
+		reason := probeReason(probeErr)
 		s.logger.WarnContext(ctx, "Billing provider probe failed", slog.String("reason", string(reason)))
 		status.SetState(privatev1.BillingProviderState_BILLING_PROVIDER_STATE_UNAVAILABLE)
 		status.SetMessage(probeMessage(reason))

@@ -20,13 +20,18 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/packages"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
-	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 const (
@@ -40,7 +45,7 @@ func Cmd() *cobra.Command {
 	runner := &runnerContext{}
 	result := &cobra.Command{
 		Use:     "billingproviderstatus [FLAG...]",
-		Aliases: []string{"billing-provider-status"},
+		Aliases: []string{"billingproviderstatuses", packages.PublicV1 + ".BillingProviderStatus", packages.PrivateV1 + ".BillingProviderStatus"},
 		Short:   shortHelp,
 		Long:    longHelp,
 		Example: example,
@@ -71,22 +76,31 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
 	defer conn.Close()
-	response, err := publicv1.NewBillingProviderStatusesClient(conn).Get(
-		ctx, publicv1.BillingProviderStatusesGetRequest_builder{}.Build())
+	console := terminal.ConsoleFromContext(ctx)
+	response, err := privatev1.NewBillingProviderStatusesClient(conn).Get(ctx, &privatev1.BillingProviderStatusesGetRequest{})
 	if err != nil {
 		return fmt.Errorf("failed to get billing provider status: %w", err)
 	}
-	return render(ctx, terminal.ConsoleFromContext(ctx), c.format, response.GetObject())
+	if !response.HasObject() {
+		return fmt.Errorf("no object returned by billing provider status Get")
+	}
+	return render(ctx, console, c.format, response.GetObject())
 }
 
 // render writes the status as a table, JSON or YAML.
-func render(ctx context.Context, console *terminal.Console, format string,
-	status *publicv1.BillingProviderStatus) error {
+func render(ctx context.Context, console *terminal.Console, format string, status proto.Message) error {
 	if format == formatTable {
-		renderTable(console, status)
-		return nil
+		switch status := status.(type) {
+		case *privatev1.BillingProviderStatus:
+			return renderTable(console, status)
+		}
+		return fmt.Errorf("unexpected billing provider status type %T", status)
 	}
-	data, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(status)
+	object, err := anypb.New(status)
+	if err != nil {
+		return fmt.Errorf("failed to encode billing provider status: %w", err)
+	}
+	data, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(object)
 	if err != nil {
 		return fmt.Errorf("failed to encode billing provider status: %w", err)
 	}
@@ -102,25 +116,44 @@ func render(ctx context.Context, console *terminal.Console, format string,
 	return nil
 }
 
-// renderTable writes the status fields as aligned key/value rows.
-func renderTable(console *terminal.Console, status *publicv1.BillingProviderStatus) {
+type statusEnum interface {
+	~int32
+	String() string
+}
+
+// renderTable uses the same columns for both API versions without registering a collection layout.
+func renderTable[S, C, U statusEnum](console *terminal.Console, status interface {
+	GetState() S
+	GetProviderKey() string
+	GetMessage() string
+	GetSupportedCapabilities() []C
+	GetLastSuccessfulCheck() *timestamppb.Timestamp
+	GetUsageDeliveryState() U
+}) error {
 	capabilities := make([]string, 0, len(status.GetSupportedCapabilities()))
 	for _, capability := range status.GetSupportedCapabilities() {
-		capabilities = append(capabilities, strings.TrimPrefix(capability.String(), "BILLING_PROVIDER_CAPABILITY_"))
+		capabilities = append(capabilities, enumLabel(capability, "BILLING_PROVIDER_CAPABILITY_"))
 	}
 	lastCheck := "-"
-	if status.HasLastSuccessfulCheck() {
-		lastCheck = status.GetLastSuccessfulCheck().AsTime().Format(time.RFC3339)
+	if timestamp := status.GetLastSuccessfulCheck(); timestamp != nil {
+		lastCheck = timestamp.AsTime().Format(time.RFC3339Nano)
 	}
 	writer := tabwriter.NewWriter(console, 0, 0, 2, ' ', 0)
-	fmt.Fprintf(writer, "State:\t%s\n", strings.TrimPrefix(status.GetState().String(), "BILLING_PROVIDER_STATE_"))
-	fmt.Fprintf(writer, "Provider:\t%s\n", orDash(status.GetProviderKey()))
-	fmt.Fprintf(writer, "Message:\t%s\n", orDash(status.GetMessage()))
-	fmt.Fprintf(writer, "Capabilities:\t%s\n", orDash(strings.Join(capabilities, ", ")))
-	fmt.Fprintf(writer, "Last successful check:\t%s\n", lastCheck)
-	fmt.Fprintf(writer, "Usage delivery:\t%s\n",
-		strings.TrimPrefix(status.GetUsageDeliveryState().String(), "BILLING_USAGE_DELIVERY_STATE_"))
-	writer.Flush()
+	fmt.Fprintln(writer, "STATE\tPROVIDER\tMESSAGE\tCAPABILITIES\tLAST-SUCCESSFUL-CHECK\tUSAGE-DELIVERY")
+	fmt.Fprintln(writer, strings.Join([]string{
+		enumLabel(status.GetState(), "BILLING_PROVIDER_STATE_"),
+		orDash(status.GetProviderKey()), orDash(status.GetMessage()),
+		orDash(strings.Join(capabilities, ",")), lastCheck,
+		enumLabel(status.GetUsageDeliveryState(), "BILLING_USAGE_DELIVERY_STATE_"),
+	}, "\t"))
+	return writer.Flush()
+}
+
+func enumLabel[E statusEnum](value E, prefix string) string {
+	if label, ok := strings.CutPrefix(value.String(), prefix); ok {
+		return label
+	}
+	return fmt.Sprintf("UNKNOWN:%d", value)
 }
 
 // orDash replaces an empty value with a dash for table output.
@@ -128,7 +161,12 @@ func orDash(value string) string {
 	if value == "" {
 		return "-"
 	}
-	return value
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, value)
 }
 
 const shortHelp = `Show the billing provider status`

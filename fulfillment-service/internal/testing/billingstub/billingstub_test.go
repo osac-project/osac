@@ -19,7 +19,10 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,6 +40,9 @@ var ctx = context.Background()
 const (
 	testCredential    = "tok"
 	testAuthorization = "Bearer sent"
+
+	// requestDeadline bounds one helper exchange so a wedged handler fails the spec instead of hanging it.
+	requestDeadline = 10 * time.Second
 )
 
 // fixture is the same JSON format billingfake.Load reads.
@@ -76,6 +82,23 @@ func load(data string) billingfake.Scenario {
 	return s
 }
 
+// requestJSON exercises the wire contract independently of the adapter's decoder. The request context carries a
+// deadline, so both the exchange and the response read return instead of blocking on a stalled handler.
+func requestJSON(stub *billingstub.Stub, method, path, body string) (int, map[string]any) {
+	GinkgoHelper()
+	requestCtx, cancel := context.WithTimeout(ctx, requestDeadline)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, method, stub.URL()+"/api/v2/external"+path, strings.NewReader(body))
+	Expect(err).ToNot(HaveOccurred())
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	Expect(err).ToNot(HaveOccurred())
+	defer func() { _ = response.Body.Close() }()
+	var data map[string]any
+	Expect(json.NewDecoder(response.Body).Decode(&data)).To(Succeed())
+	return response.StatusCode, data
+}
+
 var _ = Describe("Billing stub", func() {
 	It("serves the shared fixture to the real M360 adapter", func() {
 		stub, adapter := start(load(fixture))
@@ -91,8 +114,8 @@ var _ = Describe("Billing stub", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(next.Accounts).To(HaveLen(1))
 		Expect(next.Next).To(BeEmpty())
-		// The normalized state stays UNKNOWN until the status mapping rule is decided; the raw value is exposed.
-		Expect(next.Accounts[0].State).To(Equal(billing.AccountUnknown))
+		// A lone INACTIVE status (no ApprovalStatus) wins over the missing signal; the raw value is still exposed.
+		Expect(next.Accounts[0].State).To(Equal(billing.AccountInactive))
 		Expect(next.Accounts[0].RawStatus).To(Equal("Inactive"))
 
 		account, err := adapter.GetAccount(ctx, billing.NewAccountRef("a1"))
@@ -224,7 +247,98 @@ var _ = Describe("Billing stub", func() {
 		Expect(body.Message).ToNot(BeEmpty())
 	})
 
-	It("rejects and records every write with 405", func() {
+	DescribeTable("observes manual remediation with only TLS GET requests through the real adapter",
+		func(localValue string) {
+			scenario := billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "a1", RawStatus: "Active"}}}
+			stub := billingstub.New(scenario)
+			caPEM, err := stub.StartTLS("127.0.0.1:0", "127.0.0.1")
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(stub.Close)
+			roots := x509.NewCertPool()
+			Expect(roots.AppendCertsFromPEM(caPEM)).To(BeTrue())
+			adapter, err := m360.New(billing.Config{
+				BaseURL: stub.URL() + "/api/v2/external", Credential: testCredential, RootCAs: roots,
+			}).Build()
+			Expect(err).ToNot(HaveOccurred())
+			input := billing.AccountCorrelationInput{
+				Adapter: adapter, AccountID: "ba-1", Ref: billing.NewAccountRef("a1"), LocalValue: localValue,
+				LocalDuplicate: func(context.Context, string, string) (bool, error) { return false, nil },
+			}
+			pending, err := billing.ResolveAccountCorrelationID(ctx, input)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(pending.Value).ToNot(BeEmpty())
+			Expect(pending.ProviderMatches).To(BeZero())
+			if localValue != "" {
+				Expect(pending.Value).To(Equal(localValue))
+			}
+			value, present, err := adapter.CorrelationValue(ctx, input.Ref)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(value).To(BeEmpty())
+			Expect(present).To(BeFalse(), "OSAC must not change the provider")
+			// External administration is represented by replacing the scenario, never by an OSAC write.
+			scenario.Accounts[0].ExternalID = pending.Value
+			stub.SetScenario(scenario)
+			scenario.Accounts[0].ExternalID = "caller changed its copy"
+			input.LocalValue = pending.Value
+			connected, err := billing.ResolveAccountCorrelationID(ctx, input)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(connected).To(Equal(billing.Resolution{Value: pending.Value, ProviderMatches: 1}))
+			Expect(stub.Requests()).To(HaveLen(5), "two reads per resolution plus the unchanged-value read")
+			Expect(stub.Requests()).To(HaveEach(HaveField("Method", http.MethodGet)))
+			Expect(stub.Writes()).To(BeEmpty())
+		},
+		Entry("generated local token", ""),
+		Entry("retained padded token", " local correlation\t"),
+	)
+
+	It("keeps concurrent account reads and request snapshots isolated within one stub", func() {
+		accounts := make([]billingfake.AccountSpec, 8)
+		for i := range accounts {
+			accounts[i].ID = fmt.Sprintf("account-%d", i)
+			accounts[i].ExternalID = "correlation-" + accounts[i].ID
+		}
+		stub, _ := start(billingfake.Scenario{Accounts: accounts})
+		var wg sync.WaitGroup
+		for _, account := range accounts {
+			wg.Go(func() {
+				defer GinkgoRecover()
+				_, body := requestJSON(stub, http.MethodGet, "/accounts/"+account.ID, "")
+				Expect(body["data"]).To(HaveKeyWithValue("ExternalId", account.ExternalID))
+				requests := stub.Requests()
+				requests[0].Method = "caller changed snapshot"
+			})
+		}
+		wg.Wait()
+		Expect(stub.Succeeded("GetAccount")).To(Equal(len(accounts)))
+		Expect(stub.Requests()).To(HaveEach(HaveField("Method", http.MethodGet)))
+	})
+
+	It("keeps q as substring search and leaves exact matching and page walking to the adapter", func() {
+		accounts := make([]billingfake.AccountSpec, 21)
+		for i := range accounts {
+			accounts[i] = billingfake.AccountSpec{ID: fmt.Sprintf("a%d", i), Name: "EXT candidate", ExternalID: "ext-other"}
+		}
+		accounts[20].ExternalID = "ext"
+		stub, adapter := start(billingfake.Scenario{Accounts: accounts})
+		_, body := requestJSON(stub, http.MethodGet, "/accounts?q=EXT&size=100", "")
+		Expect(body["data"]).To(HaveKeyWithValue("size", float64(20)))
+		Expect(body["data"]).To(HaveKeyWithValue("last", false))
+		Expect(body["data"].(map[string]any)["content"]).To(HaveLen(20))
+		first, err := adapter.ListAccounts(ctx, billing.AccountFilter{ExternalID: "ext"}, billing.Page{Size: 100})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(first.Accounts).To(BeEmpty(), "substring hits must not become exact correlation matches")
+		Expect(first.Next).To(Equal("1"))
+		second, err := adapter.ListAccounts(ctx, billing.AccountFilter{ExternalID: "ext"}, billing.Page{Token: first.Next})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(second.Accounts).To(HaveLen(1))
+		Expect(second.Accounts[0].Ref.ID()).To(Equal("a20"))
+		Expect(second.Next).To(BeEmpty())
+		query, err := url.ParseQuery(stub.Requests()[1].Query)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(query.Get("size")).To(Equal("20"))
+	})
+
+	It("rejects and records unimplemented writes with 405", func() {
 		stub, _ := start(load(fixture))
 
 		for _, method := range []string{http.MethodPut, http.MethodPatch, http.MethodPost, http.MethodDelete} {
@@ -236,6 +350,8 @@ var _ = Describe("Billing stub", func() {
 			Expect(response.StatusCode).To(Equal(http.StatusMethodNotAllowed))
 		}
 		Expect(stub.Writes()).To(HaveLen(4))
+		_, read := requestJSON(stub, http.MethodGet, "/accounts/a1", "")
+		Expect(read["data"]).To(HaveKeyWithValue("ExternalId", "ext"))
 	})
 
 	It("records the Authorization header of each request", func() {

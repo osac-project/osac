@@ -357,7 +357,54 @@ func expectStaleTypedWriteRejected(t finalizerTarget, update typedUpdater) {
 	t.expectFinalizerConflict(ctx, err, finalizerController)
 }
 
+func verifyAssignmentDeleteUnsupported() {
+	GinkgoHelper()
+	f := newFinalizerAssignmentFixture(false)
+	for _, object := range []*privatev1.TenantBillingAssignment{f.current, f.history} {
+		_, err := f.private.Delete(f.caller, privatev1.TenantBillingAssignmentsDeleteRequest_builder{Id: object.GetId()}.Build())
+		Expect(status.Code(err)).To(Equal(codes.Unimplemented),
+			"private assignment Delete is now supported: replace the descriptor-only case with full CAS/lifecycle coverage")
+	}
+	f.expectUnchanged()
+	Expect(f.fake.Calls()).To(BeEmpty())
+}
+
 var _ = Describe("typed finalizer updates", func() {
+	Describe("descriptor-only assignment lifecycle", func() {
+		It("keeps Delete unsupported without mutating current or closed history", verifyAssignmentDeleteUnsupported)
+
+		DescribeTable("rejects a private finalizer mask without changing any stored field or calling the provider",
+			func(mask *fieldmaskpb.FieldMask) {
+				f := newFinalizerAssignmentFixture(false)
+				object := withFinalizers(f.current).(*privatev1.TenantBillingAssignment)
+				var changes int
+				Expect(testPool.QueryRow(f.caller, `select count(*) from changes`).Scan(&changes)).To(Succeed())
+				_, err := billingRPC(f.caller, f.private.Update, privatev1.TenantBillingAssignmentsUpdateRequest_builder{
+					Object: object, UpdateMask: mask,
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+				Expect(status.Convert(err).Message()).To(ContainSubstring("only atomic spec.billing_account is writable"))
+				f.expectUnchanged()
+				var after int
+				Expect(testPool.QueryRow(f.caller, `select count(*) from changes`).Scan(&after)).To(Succeed())
+				Expect(after).To(Equal(changes), "a rejected mask must not write any resource")
+				Expect(f.fake.Calls()).To(BeEmpty())
+			},
+			Entry("finalizers only", finalizersMask()),
+			Entry("finalizers and the writable account", finalizerMaskOf("metadata.finalizers", "spec.billing_account")),
+		)
+
+		It("rejects private updates to closed history before provider I/O", func() {
+			f := newFinalizerAssignmentFixture(false)
+			_, err := billingRPC(f.caller, f.private.Update, privatev1.TenantBillingAssignmentsUpdateRequest_builder{
+				Object: withFinalizers(f.history).(*privatev1.TenantBillingAssignment), UpdateMask: finalizersMask(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+			f.expectUnchanged()
+			Expect(f.fake.Calls()).To(BeEmpty())
+		})
+	})
+
 	Describe("private wrappers with their own update path", func() {
 		// Volumes merges the request into the stored object, ignoring metadata paths, before the generic update.
 		It("rejects a stale finalizer write through the Volumes server", func() {
@@ -399,6 +446,22 @@ var _ = Describe("typed finalizer updates", func() {
 			for _, c := range slices.Concat(publicFinalizerCases(), catalogItemFinalizerCases()) {
 				covered[string(protoreflect.FullName(c.service).Name())] = true
 			}
+			for _, c := range descriptorOnlyFinalizerCases() {
+				c.verify()
+				covered[string(protoreflect.FullName(c.service).Name())] = true
+			}
+			// Finalizers only matter for a resource that can be deleted. A public service whose private counterpart has
+			// no Delete method never needs a finalizer case; every other public Update is still checked below.
+			noPrivateDelete := map[string]bool{}
+			privatePackage := (privatev1.EventType)(0).Descriptor().FullName().Parent()
+			protoregistry.GlobalFiles.RangeFilesByPackage(privatePackage, func(file protoreflect.FileDescriptor) bool {
+				services := file.Services()
+				for i := range services.Len() {
+					service := services.Get(i)
+					noPrivateDelete[string(service.Name())] = service.Methods().ByName("Delete") == nil
+				}
+				return true
+			})
 			unimplemented := map[string]func() error{
 				"Tenants": func() error {
 					server, err := NewTenantsServer().
@@ -425,6 +488,7 @@ var _ = Describe("typed finalizer updates", func() {
 					name := string(service.Name())
 					switch {
 					case service.Methods().ByName("Update") == nil || covered[name]:
+					case noPrivateDelete[name]:
 					case unimplemented[name] != nil:
 						Expect(status.Code(unimplemented[name]())).To(Equal(codes.Unimplemented),
 							"the public %s server implements Update now, so it needs a case", name)

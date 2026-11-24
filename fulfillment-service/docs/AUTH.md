@@ -321,7 +321,8 @@ auth:
 ```
 
 The controller's service account (`service-account-osac-controller`) is listed as an admin service
-account in the authorization policy, granting it full access to all API methods.
+account in the authorization policy, granting it full access to all methods the policy allows;
+feature-specific methods are documented with their feature.
 
 > **Note**: The fulfillment service no longer uses Kubernetes service accounts (`controller` or
 > `client`) for internal authentication. All service-to-service communication now uses OAuth client
@@ -558,7 +559,7 @@ from the `tenants` field of the subject, which the authentication interceptor po
 JWT token claims (see [Subject Resolution](#subject-resolution)).
 
 - **Assignable Tenants**: All tenants from the subject
-- **Default Tenant**: First tenant from the subject. When the subject has access to all tenants
+- **Default Tenant**: First assignable tenant. When the subject has access to all tenants
   (e.g., an admin with the universal set `["*"]`), the default tenant is `shared` because a
   universal set cannot be stored as the tenant of an object. For tenant-scoped resource types that
   cannot be placed in the `shared` tenant, admin users must explicitly specify `metadata.tenant`
@@ -629,8 +630,8 @@ according to the different needs.
 
 The authorization policy distinguishes between the following subject categories:
 
-1. **Admin Subjects**: Users with full access to all API methods. An account is considered admin if
-   it matches any of:
+1. **Admin Subjects**: full access to all methods the policy allows; feature-specific methods are
+   documented with their feature. An account is considered admin if it matches any of:
    - **Emergency service accounts**: Kubernetes service accounts for emergency access when the
      identity provider is unavailable (e.g., `system:serviceaccount:<namespace>:admin`)
    - **Admin service accounts**: OAuth service accounts registered as admins
@@ -688,7 +689,9 @@ The authorization policy allows:
    - Service accounts: `Create`, `Get`, `List`, `Update`, `Delete`, `RegenerateSecret`
 
 5. **Admin Users**:
-   - All methods (full access)
+   - full access to all methods the policy allows; feature-specific methods are documented with their feature.
+
+[Billing methods, contracts and CLI](../internal/billing/README.md)
 
 ### Authorization Levels
 
@@ -703,7 +706,8 @@ The fulfillment service implements a comprehensive authorization model that comb
 
 **Tenancy:** Universal tenant access (`*` - all tenants)
 
-**Permissions:** Full access to all methods (see `is_admin` rule in `authz.rego`)
+**Permissions:** full access to all methods the policy allows; feature-specific methods are
+documented with their feature.
 
 #### 2. Tenant Admin (`is_tenant_admin`)
 
@@ -931,7 +935,7 @@ The fulfillment service uses built-in gRPC interceptors for authentication and a
 2. **Authorization checks**:
    - Is service account authenticated? ✅ Yes
    - Is the subject in `admin_service_accounts`? ✅ Yes
-   - **Result**: Authorized ✅ (admins can access everything)
+    - **Result**: Authorized ✅ (admins have full access to all methods the policy allows; feature-specific methods are documented with their feature)
 3. **Tenancy**:
    - Tenants: `["*"]` (universal)
    - Processes the request with full access to all tenants
@@ -973,7 +977,7 @@ reads roles from the `realm_access.roles` claim in JWT tokens.
    - Emergency K8s service accounts (e.g., `system:serviceaccount:<namespace>:admin`)
    - OAuth admin service accounts (e.g., `service-account-osac-admin`, `service-account-osac-controller`)
    - Users in admin groups (e.g., the `admins` group)
-   - Have full access to all operations
+    - full access to all methods the policy allows; feature-specific methods are documented with their feature.
 
 2. **Tenant Admin Users**:
    - Users with the `tenant-admin` realm role
@@ -1114,9 +1118,9 @@ Test that authorization rules are working:
    - Login with a user that has the `tenant-admin` realm role
    - Verify access to user management: `osac get user`
 
-3. **Test as an admin** (should have full access):
+3. **Test as an admin** (should have access to methods the policy allows):
    - Login with an admin service account using client credentials flow
-   - Verify access to all methods including private APIs
+   - Verify access to methods allowed by the admin policy, including documented private methods
 
 ## Troubleshooting
 

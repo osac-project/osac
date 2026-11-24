@@ -1,4 +1,5 @@
 {
+  "@type": "type.googleapis.com/osac.public.v1.BillingProviderStatus",
   "state": "BILLING_PROVIDER_STATE_NOT_CONFIGURED",
   "usage_delivery_state": "BILLING_USAGE_DELIVERY_STATE_UNKNOWN"
 }

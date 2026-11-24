@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"sync/atomic"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
@@ -38,8 +39,19 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
+
+type captureAssignmentUpdate struct {
+	privatev1.UnimplementedTenantBillingAssignmentsServer
+	requests chan *privatev1.TenantBillingAssignmentsUpdateRequest
+}
+
+func (s *captureAssignmentUpdate) Update(_ context.Context, req *privatev1.TenantBillingAssignmentsUpdateRequest) (*privatev1.TenantBillingAssignmentsUpdateResponse, error) {
+	s.requests <- req
+	return privatev1.TenantBillingAssignmentsUpdateResponse_builder{Object: req.GetObject()}.Build(), nil
+}
 
 var _ = Describe("Edit command", func() {
 	var (
@@ -90,6 +102,7 @@ var _ = Describe("Edit command", func() {
 			SetLogger(logger).
 			SetConnection(conn).
 			AddPackage("osac.public.v1", 0).
+			AddPackage("osac.private.v1", 0).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
@@ -99,6 +112,45 @@ var _ = Describe("Edit command", func() {
 
 	JustBeforeEach(func() {
 		server.Start()
+	})
+
+	Describe("editing a billing assignment", func() {
+		var requests chan *privatev1.TenantBillingAssignmentsUpdateRequest
+
+		BeforeEach(func() {
+			requests = make(chan *privatev1.TenantBillingAssignmentsUpdateRequest, 1)
+			privatev1.RegisterTenantBillingAssignmentsServer(server.Registrar(), &captureAssignmentUpdate{requests: requests})
+			helper = reflectionHelper.Lookup("tenantbillingassignment")
+			Expect(helper).NotTo(BeNil())
+		})
+
+		const originalReference = `{"id":"old-id","name":"old-name"}`
+		DescribeTable("sends an atomic replacement or an explicitly empty no-change mask",
+			func(specCtx SpecContext, reference, id, name string, paths []string) {
+				ctx, cancel := context.WithTimeout(specCtx, 5*time.Second)
+				defer cancel()
+				runner := &runnerContext{helper: helper, console: console}
+				parse := func(reference string) proto.Message {
+					object, err := runner.parseJson([]byte(`{"id":"assignment-id","spec":{"billing_account":` + reference + `}}`))
+					Expect(err).NotTo(HaveOccurred())
+					return object
+				}
+				edited := parse(reference)
+				updated, err := runner.update(ctx, parse(originalReference), edited)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(proto.Equal(updated, edited)).To(BeTrue())
+				var request *privatev1.TenantBillingAssignmentsUpdateRequest
+				Expect(requests).To(Receive(&request))
+				Expect(request.GetUpdateMask()).NotTo(BeNil())
+				Expect(request.GetUpdateMask().GetPaths()).To(Equal(paths))
+				account := request.GetObject().GetSpec().GetBillingAccount()
+				Expect(account.GetId()).To(Equal(id))
+				Expect(account.GetName()).To(Equal(name))
+			},
+			Entry("by ID with the old name removed", `{"id":"new-id"}`, "new-id", "", []string{"spec.billing_account"}),
+			Entry("by name with the old ID removed", `{"name":"new-name"}`, "", "new-name", []string{"spec.billing_account"}),
+			Entry("unchanged", originalReference, "old-id", "old-name", []string(nil)),
+		)
 	})
 
 	Describe("update", func() {

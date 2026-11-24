@@ -70,7 +70,7 @@ per resource purely through Go generics plus protobuf reflection over the resour
 
 `TxInterceptor.UnaryServer`
 ([`internal/database/database_tx_interceptor.go`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/database/database_tx_interceptor.go))
-wraps every unary gRPC call: it begins a transaction before the handler runs, injects it into the
+normally wraps unary gRPC calls: it begins a transaction before the handler runs, injects it into the
 context (`TxIntoContext`), and commits or rolls back in a deferred block after the handler returns.
 Any code downstream retrieves the current transaction with
 `database.TxFromContext(ctx)` instead of receiving it as a parameter.
@@ -100,6 +100,30 @@ by the type system. A handler that panics is rolled back before the panic propag
 
 Use `Tx.OnCommit` for work that must only happen once a change is stored, such as logging it. It
 never runs after a rollback or a failed commit.
+
+**Provider-backed billing RPCs use that same ordinary transaction.** Account discovery
+(`BillingAccounts.List`) includes its full inventory, unseen sweep, requested page and private mapping
+before the outer commit. `Tx.OnCommit` opens freshness only after that commit; a page, mapping or
+commit failure leaves both rows and freshness unchanged. A transaction-finish callback keeps the local
+discovery admission held across the commit-to-publication gap and releases it on either outcome; this
+is the only production consumer of `OnTxFinish`. Assignment Create, Update and private Signal
+read an unlocked snapshot, then gather bounded read-only provider evidence before any business locks.
+Finalization locks tenant → the complete original selected/previous account set in SQL id order →
+current interval, rereads material inputs and merges observations before token/interval writes. One
+database clock sample after I/O and locks, clamped to all history and the current tenant's
+`creation_timestamp`, closes and opens contiguous intervals.
+There are no billing nested transactions, durable operation leases or remote account writes. A bounded
+provider read may occupy a pooled connection; cancellation releases admission and the request transaction.
+All billing handlers report their final RPC error, including mapping failures.
+
+The billing tables use the same metadata columns and private protobuf JSON body as other objects.
+Their provider-observation columns are read-only projections for existing indexes, constraints and
+selectors, not a second writable model. Account Spec is empty and provider observations are nested in
+Status; assignments retain canonical typed tenant/account references and timestamped interval
+history. Billing deliberately has no generic change trigger or controller: discovery, assignment
+mutation and private Signal do not enqueue billing object events. Generic outbox behavior for other
+objects is unchanged. Billing also keeps no durable operation-lease table: no runtime consumer
+acquires, reserves or fences a billing operation, so there is nothing to expire or reap.
 
 ### Event delivery and reconciliation recovery
 

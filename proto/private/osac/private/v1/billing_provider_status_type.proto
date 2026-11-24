@@ -19,6 +19,7 @@ import "cleanapi/cleanapi.proto";
 import "google/protobuf/timestamp.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).private = true;
 
 // Reachability of the account API probed by the billing adapter, not the health of pricing or usage delivery.
 enum BillingProviderState {

@@ -502,6 +502,8 @@ appear in the public API.
 |----------|------------------------------------------------------------------|
 | `Signal` | Notifies the controller that the object may need reconciliation. |
 
+[Billing API and CLI](../internal/billing/README.md)
+
 In general, services should not have any additional ad-hoc methods beyond those listed above. There
 are some existing exceptions, and the project will work to remove them over time.
 

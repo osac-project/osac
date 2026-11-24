@@ -61,6 +61,7 @@ type ReferenceValidatorBuilder struct {
 	logger                         *slog.Logger
 	registerer                     prometheus.Registerer
 	excludedReferencePathsByMethod map[string]map[string]struct{}
+	emptyUpdateMaskNoOpMethods     map[string]struct{}
 }
 
 // ReferenceValidator is a gRPC interceptor that validates resource references in Create and Update
@@ -71,6 +72,7 @@ type ReferenceValidator struct {
 	logger                         *slog.Logger
 	registry                       map[protoreflect.FullName]ReferenceLookupFunc
 	excludedReferencePathsByMethod map[string]map[string]struct{}
+	emptyUpdateMaskNoOpMethods     map[string]struct{}
 	sealed                         atomic.Bool
 	validationTotal                *prometheus.CounterVec
 	validationDuration             *prometheus.HistogramVec
@@ -116,6 +118,22 @@ func (b *ReferenceValidatorBuilder) SetExcludedReferencePaths(
 	return b
 }
 
+// SetEmptyUpdateMaskNoOpMethods marks Update methods whose handler treats an explicitly present, empty
+// update mask as a validated no-op. For those methods the interceptor skips reference resolution of the
+// request body, because an empty mask selects no fields and the handler will not use them. An absent
+// mask, a non-empty mask, and Create requests keep normal validation.
+func (b *ReferenceValidatorBuilder) SetEmptyUpdateMaskNoOpMethods(
+	methods []string,
+) *ReferenceValidatorBuilder {
+	if b.emptyUpdateMaskNoOpMethods == nil {
+		b.emptyUpdateMaskNoOpMethods = make(map[string]struct{}, len(methods))
+	}
+	for _, method := range methods {
+		b.emptyUpdateMaskNoOpMethods[method] = struct{}{}
+	}
+	return b
+}
+
 // Build uses the data stored in the builder to create and configure a new interceptor.
 func (b *ReferenceValidatorBuilder) Build() (result *ReferenceValidator, err error) {
 	if b.logger == nil {
@@ -155,6 +173,7 @@ func (b *ReferenceValidatorBuilder) Build() (result *ReferenceValidator, err err
 		logger:                         b.logger,
 		registry:                       make(map[protoreflect.FullName]ReferenceLookupFunc),
 		excludedReferencePathsByMethod: b.excludedReferencePathsByMethod,
+		emptyUpdateMaskNoOpMethods:     b.emptyUpdateMaskNoOpMethods,
 		validationTotal:                validationTotal,
 		validationDuration:             validationDuration,
 	}
@@ -188,6 +207,12 @@ func (v *ReferenceValidator) UnaryServer(ctx context.Context, request any, info 
 	}
 	if err := validateCanonicalUpdateMask(request); err != nil {
 		return nil, err
+	}
+	if _, ok := v.emptyUpdateMaskNoOpMethods[info.FullMethod]; ok &&
+		strings.HasSuffix(info.FullMethod, "/Update") && hasExplicitEmptyUpdateMask(request) {
+		// An explicitly empty mask selects no fields, and the owning handler answers this
+		// request as a validated no-op, so an unselected stale reference is not resolved.
+		return handler(ctx, request)
 	}
 	if strings.HasSuffix(info.FullMethod, "/Update") && isMetadataOnlyUpdate(request) {
 		return handler(ctx, request)
@@ -281,6 +306,17 @@ func updateMaskFromMessage(message proto.Message) (*fieldmaskpb.FieldMask, bool)
 	}
 	mask, ok := request.Get(field).Message().Interface().(*fieldmaskpb.FieldMask)
 	return mask, ok
+}
+
+// hasExplicitEmptyUpdateMask reports whether the request carries a present, empty update mask. An
+// absent mask is not empty: it keeps the request body selected for reference validation.
+func hasExplicitEmptyUpdateMask(request any) bool {
+	message, ok := request.(proto.Message)
+	if !ok {
+		return false
+	}
+	mask, ok := updateMaskFromMessage(message)
+	return ok && len(mask.GetPaths()) == 0
 }
 
 func updateObjectDescriptor(request protoreflect.MessageDescriptor) protoreflect.MessageDescriptor {

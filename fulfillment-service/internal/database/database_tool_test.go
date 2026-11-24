@@ -14,11 +14,13 @@ language governing permissions and limitations under the License.
 package database
 
 import (
+	"context"
 	neturl "net/url"
 	"os"
 	"path/filepath"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/pflag"
 )
@@ -38,6 +40,80 @@ var _ = Describe("Database tool", func() {
 		tmpDir, err = os.MkdirTemp("", "*.test")
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(os.RemoveAll, tmpDir)
+	})
+
+	Describe("Normalized billing schema and nonpublication", func() {
+		var checker Tool
+
+		BeforeEach(func(ctx context.Context) {
+			instance, err := server.NewInstance().Build()
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(instance.Close)
+			url, err := instance.Url(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			checker, err = NewTool().SetLogger(logger).SetURL(url).Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		It("validates the normalized objects without requiring billing enqueue triggers", func(ctx context.Context) {
+			Expect(checker.CheckSchema(ctx)).To(Succeed())
+		})
+
+		It("classifies deleted tenant identities as minimal non-object storage", func(ctx context.Context) {
+			pool, err := checker.Pool(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(pool.Close)
+			implementation := checker.(*tool)
+			columns, err := implementation.fetchColumns(ctx, pool, "deleted_tenant_identities")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(columns).To(Equal(map[string]string{
+				"tenant_name":        "text",
+				"tenant_created_at":  "timestamp with time zone",
+				"deletion_timestamp": "timestamp with time zone",
+				"deleted_by":         "text",
+				"finalized_at":       "timestamp with time zone",
+				"billing_retained":   "boolean",
+			}))
+			Expect(implementation.checkPrimaryKey(ctx, pool, "deleted_tenant_identities", "tenant_name")).To(BeZero())
+			var forbidden int
+			Expect(pool.QueryRow(ctx, `select
+				(select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+				 where n.nspname = 'public' and c.relname in
+				 ('active_deleted_tenant_identities', 'archived_deleted_tenant_identities')) +
+				(select count(*) from pg_trigger t join pg_proc p on p.oid = t.tgfoid
+				 where t.tgrelid = 'deleted_tenant_identities'::regclass and not t.tgisinternal
+				 and (t.tgname in ('enqueue_change', 'materialize_active_objects')
+				      or p.proname in ('enqueue_change', 'materialize_active_objects'))) +
+				(select count(*) from pg_constraint where conrelid = 'deleted_tenant_identities'::regclass
+				 and contype = 'f' and confrelid = 'tenants'::regclass)
+			`).Scan(&forbidden)).To(Succeed())
+			Expect(forbidden).To(BeZero(), "identity evidence must not acquire resource companions, publication or a live FK")
+			objects, err := implementation.listObjectTables(ctx, pool)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(objects).ToNot(ContainElement("deleted_tenant_identities"))
+			Expect(objects).To(ContainElements("tenants", "billing_accounts", "tenant_billing_assignments"))
+			Expect(checker.CheckSchema(ctx)).To(Succeed())
+		})
+
+		DescribeTable("detects bounded billing drift while retaining nonbilling requirements",
+			func(ctx context.Context, mutation string) {
+				pool, err := checker.Pool(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				DeferCleanup(pool.Close)
+				_, err = pool.Exec(ctx, mutation)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(checker.CheckSchema(ctx)).ToNot(Succeed())
+			},
+			Entry("billing account metadata", `alter table billing_accounts drop column labels`),
+			Entry("assignment metadata", `alter table tenant_billing_assignments drop column labels`),
+			Entry("account publication", `create trigger enqueue_change after insert on billing_accounts
+				for each row execute function enqueue_change()`),
+			Entry("assignment publication", `create trigger enqueue_change after insert on tenant_billing_assignments
+				for each row execute function enqueue_change()`),
+			Entry("nonbilling enqueue requirement", `drop trigger enqueue_change on tenants`),
+			Entry("assignment live tenant foreign key", `alter table tenant_billing_assignments
+				add constraint assignment_tenant_drift_fk foreign key (tenant) references tenants (name)`),
+		)
 	})
 
 	Describe("URL configuration via builder methods", func() {

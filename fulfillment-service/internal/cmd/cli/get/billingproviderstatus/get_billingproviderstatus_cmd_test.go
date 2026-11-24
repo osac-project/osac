@@ -25,28 +25,28 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
-	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 var _ = Describe("render", func() {
-	available := func() *publicv1.BillingProviderStatus {
-		return publicv1.BillingProviderStatus_builder{
-			State:       publicv1.BillingProviderState_BILLING_PROVIDER_STATE_AVAILABLE,
+	available := func() *privatev1.BillingProviderStatus {
+		return privatev1.BillingProviderStatus_builder{
+			State:       privatev1.BillingProviderState_BILLING_PROVIDER_STATE_AVAILABLE,
 			ProviderKey: "m360",
-			SupportedCapabilities: []publicv1.BillingProviderCapability{
-				publicv1.BillingProviderCapability_BILLING_PROVIDER_CAPABILITY_PRICING,
+			SupportedCapabilities: []privatev1.BillingProviderCapability{
+				privatev1.BillingProviderCapability_BILLING_PROVIDER_CAPABILITY_PRICING,
 			},
 			LastSuccessfulCheck: timestamppb.New(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
-			UsageDeliveryState:  publicv1.BillingUsageDeliveryState_BILLING_USAGE_DELIVERY_STATE_UNKNOWN,
+			UsageDeliveryState:  privatev1.BillingUsageDeliveryState_BILLING_USAGE_DELIVERY_STATE_UNKNOWN,
 		}.Build()
 	}
-	notConfigured := func() *publicv1.BillingProviderStatus {
-		return publicv1.BillingProviderStatus_builder{
-			State:              publicv1.BillingProviderState_BILLING_PROVIDER_STATE_NOT_CONFIGURED,
-			UsageDeliveryState: publicv1.BillingUsageDeliveryState_BILLING_USAGE_DELIVERY_STATE_UNKNOWN,
+	notConfigured := func() *privatev1.BillingProviderStatus {
+		return privatev1.BillingProviderStatus_builder{
+			State:              privatev1.BillingProviderState_BILLING_PROVIDER_STATE_NOT_CONFIGURED,
+			UsageDeliveryState: privatev1.BillingUsageDeliveryState_BILLING_USAGE_DELIVERY_STATE_UNKNOWN,
 		}.Build()
 	}
-	run := func(format string, status *publicv1.BillingProviderStatus) string {
+	run := func(format string, status *privatev1.BillingProviderStatus) string {
 		buffer := &bytes.Buffer{}
 		console, err := terminal.NewConsole().SetLogger(logger).SetStdout(buffer).Build()
 		Expect(err).ToNot(HaveOccurred())
@@ -56,23 +56,19 @@ var _ = Describe("render", func() {
 
 	It("renders a readable table without enum prefixes", func() {
 		output := run("table", available())
-		Expect(output).To(MatchRegexp(`State:\s+AVAILABLE`))
-		Expect(output).To(MatchRegexp(`Provider:\s+m360`))
-		Expect(output).To(MatchRegexp(`Capabilities:\s+PRICING`))
-		Expect(output).To(MatchRegexp(`Usage delivery:\s+UNKNOWN`))
+		Expect(output).To(MatchRegexp(`(?m)^AVAILABLE\s+m360\s+-\s+PRICING\s+2026-01-02T03:04:05Z\s+UNKNOWN$`))
 		Expect(output).ToNot(ContainSubstring("BILLING_"))
 	})
 
 	It("shows dashes for what a disabled deployment does not have", func() {
 		output := run("table", notConfigured())
-		Expect(output).To(MatchRegexp(`State:\s+NOT_CONFIGURED`))
-		Expect(output).To(MatchRegexp(`Provider:\s+-`))
-		Expect(output).To(MatchRegexp(`Last successful check:\s+-`))
+		Expect(output).To(MatchRegexp(`(?m)^NOT_CONFIGURED\s+-\s+-\s+-\s+-\s+UNKNOWN$`))
 	})
 
 	It("renders JSON with the API field names and omits an absent last check", func() {
 		output := run("json", notConfigured())
 		Expect(output).To(MatchJSON(`{
+			"@type": "type.googleapis.com/osac.private.v1.BillingProviderStatus",
 			"state": "BILLING_PROVIDER_STATE_NOT_CONFIGURED",
 			"usage_delivery_state": "BILLING_USAGE_DELIVERY_STATE_UNKNOWN"
 		}`))
@@ -86,7 +82,7 @@ var _ = Describe("render", func() {
 
 	// Golden files live in testdata/. Regenerate with UPDATE_GOLDEN=1 and review the diff.
 	DescribeTable("matches the golden output",
-		func(format string, status func() *publicv1.BillingProviderStatus, name string) {
+		func(format string, status func() *privatev1.BillingProviderStatus, name string) {
 			output := run(format, status())
 			path := filepath.Join("testdata", name)
 			if os.Getenv("UPDATE_GOLDEN") != "" {

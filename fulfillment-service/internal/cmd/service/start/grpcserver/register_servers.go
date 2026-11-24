@@ -25,6 +25,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
+	"github.com/osac-project/osac/fulfillment-service/internal/billing"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	"github.com/osac-project/osac/fulfillment-service/internal/servers"
@@ -64,6 +65,33 @@ type ResourceServers struct {
 	PrivateComputeInstancesServer privatev1.ComputeInstancesServer
 	PrivateSecretsServer          privatev1.SecretsServer
 	HubClientProvider             servers.HubClientProvider
+}
+
+// registerBillingResourceServers registers the private billing APIs separately from the ordinary resource servers
+// because the provider is constructed by the caller. Unsupported CRUD methods use generated Unimplemented scaffolds
+// and are denied by the closed billing authorization allow-list.
+func registerBillingResourceServers(ctx context.Context, registrar grpc.ServiceRegistrar, logger *slog.Logger,
+	provider *billing.Provider) error {
+	logger.InfoContext(ctx, "Creating billing accounts servers")
+	privateBillingAccountsServer, err := servers.NewPrivateBillingAccountsServer().
+		SetLogger(logger).
+		SetProvider(provider).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private billing accounts server: %w", err)
+	}
+	privatev1.RegisterBillingAccountsServer(registrar, privateBillingAccountsServer)
+
+	logger.InfoContext(ctx, "Creating tenant billing assignments servers")
+	privateTenantBillingAssignmentsServer, err := servers.NewPrivateTenantBillingAssignmentsServer().
+		SetLogger(logger).
+		SetProvider(provider).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create private tenant billing assignments server: %w", err)
+	}
+	privatev1.RegisterTenantBillingAssignmentsServer(registrar, privateTenantBillingAssignmentsServer)
+	return nil
 }
 
 // RegisterResourceServers constructs and registers every filterable resource's public and private server onto

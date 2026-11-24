@@ -20,6 +20,7 @@ import "google/api/annotations.proto";
 import "osac/private/v1/billing_provider_status_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).private = true;
 option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
 
 message BillingProviderStatusesGetRequest {}

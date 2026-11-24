@@ -1,6 +1,2 @@
-State:                  NOT_CONFIGURED
-Provider:               -
-Message:                -
-Capabilities:           -
-Last successful check:  -
-Usage delivery:         UNKNOWN
+STATE           PROVIDER  MESSAGE  CAPABILITIES  LAST-SUCCESSFUL-CHECK  USAGE-DELIVERY
+NOT_CONFIGURED  -         -        -             -                      UNKNOWN

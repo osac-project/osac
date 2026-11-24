@@ -1,4 +1,5 @@
 {
+  "@type": "type.googleapis.com/osac.public.v1.BillingProviderStatus",
   "last_successful_check": "2026-01-02T03:04:05Z",
   "provider_key": "m360",
   "state": "BILLING_PROVIDER_STATE_AVAILABLE",

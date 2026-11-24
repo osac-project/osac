@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clocktesting "k8s.io/utils/clock/testing"
+	kubevirtv1 "kubevirt.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -544,6 +545,28 @@ var _ = Describe("ComputeInstance public retry projection", func() {
 		expectReason(osacv1alpha1.ReasonDeleting)
 		Expect(instance.Status.LastProvisioningFailure).To(BeNil())
 		Expect(instance.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseDeleting))
+	})
+
+	It("clears retry after success when the existing VM has no printable status yet", func() {
+		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
+		result := reconcileOK()
+		clock.Step(result.RequeueAfter)
+		reconcileOK()
+		expectReason("RetryRunning")
+		vm := &kubevirtv1.VirtualMachine{ObjectMeta: metav1.ObjectMeta{
+			Name: instance.Name, Namespace: "default",
+			Labels: map[string]string{osacComputeInstanceNameLabel: instance.Name},
+		}}
+		Expect(k8sClient.Create(ctx, vm)).To(Succeed())
+		DeferCleanup(func() { Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, vm))).To(Succeed()) })
+		Eventually(func() error {
+			return testMcManager.GetLocalManager().GetClient().Get(ctx, client.ObjectKeyFromObject(vm), &kubevirtv1.VirtualMachine{})
+		}, 5*time.Second, 10*time.Millisecond).Should(Succeed())
+		fake.finish(computeInstanceProvisionTask, "successful", `{}`)
+		reconcileOK()
+		expectReason(osacv1alpha1.ReasonWaitingForVM)
+		Expect(instance.Status.LastProvisioningFailure).To(BeNil())
+		Expect(instance.Status.Jobs[0].LastFailure).To(BeNil())
 	})
 
 	It("does not publish a failure when the engine's checkpoint write conflicts", func() {

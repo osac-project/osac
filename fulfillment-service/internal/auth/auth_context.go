@@ -64,6 +64,12 @@ func SubjectFromContext(ctx context.Context) *Subject {
 	}
 }
 
+// SubjectPresent extracts the subject from the context when present.
+func SubjectPresent(ctx context.Context) (*Subject, bool) {
+	subject, ok := ctx.Value(subjectContextKey).(*Subject)
+	return subject, ok
+}
+
 // IsControllerServiceAccount reports whether the authenticated caller is the
 // fulfillment controller service account. This is intentionally narrower than
 // IsAdmin: it is used only for controller-owned lifecycle operations that must

@@ -83,6 +83,12 @@ func Cmd() *cobra.Command {
 		nil,
 		architectureFlagHelp,
 	)
+	flags.StringVar(
+		&runner.pullSecret,
+		"pull-secret",
+		"",
+		pullSecretFlagHelp,
+	)
 	return result
 }
 
@@ -93,6 +99,7 @@ type runnerContext struct {
 	sourceRef     string
 	guestOsFamily string
 	architecture  []string
+	pullSecret    string
 }
 
 func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
@@ -132,6 +139,14 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		architectures[i] = arch
 	}
 
+	var pullSecretRef *publicv1.SecretReference
+	if c.pullSecret != "" {
+		pullSecretRef, err = fieldutil.ParsePullSecretFlag(c.pullSecret)
+		if err != nil {
+			return err
+		}
+	}
+
 	conn, err := cfg.Connect(ctx, cmd.Flags())
 	if err != nil {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
@@ -140,17 +155,21 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	client := publicv1.NewDiskImagesClient(conn)
 
+	specBuilder := publicv1.DiskImageSpec_builder{
+		SourceType:    sourceType,
+		SourceRef:     c.sourceRef,
+		GuestOsFamily: guestOsFamily,
+		Architecture:  architectures,
+	}
+	if pullSecretRef != nil {
+		specBuilder.PullSecret = pullSecretRef
+	}
 	diskImage := publicv1.DiskImage_builder{
 		Id: c.name,
 		Metadata: publicv1.Metadata_builder{
 			Name: c.name,
 		}.Build(),
-		Spec: publicv1.DiskImageSpec_builder{
-			SourceType:    sourceType,
-			SourceRef:     c.sourceRef,
-			GuestOsFamily: guestOsFamily,
-			Architecture:  architectures,
-		}.Build(),
+		Spec: specBuilder.Build(),
 	}.Build()
 
 	response, err := client.Create(ctx, publicv1.DiskImagesCreateRequest_builder{
@@ -191,6 +210,12 @@ To create a Windows image:
 {{ bt 3 }}shell
 {{ binary }} create diskimage --name windows-2022 --source-ref quay.io/containerdisks/windows:2022 --guest-os-family windows --architecture amd64
 {{ bt 3 }}
+
+To create an image that pulls from a private registry:
+
+{{ bt 3 }}shell
+{{ binary }} create diskimage --name private-rhel --source-ref registry.example.com/rhel:9 --architecture amd64 --pull-secret registry-creds
+{{ bt 3 }}
 `
 
 const nameFlagHelp = `
@@ -216,4 +241,11 @@ _GUEST_OS_FAMILY_ - Guest operating system family. Valid values: {{ bt }}linux{{
 const architectureFlagHelp = `
 _ARCHITECTURE_ - CPU architecture supported by this disk image. Repeatable. Valid values:
 {{ bt }}amd64{{ bt }}, {{ bt }}arm64{{ bt }}, {{ bt }}s390x{{ bt }}.
+`
+
+const pullSecretFlagHelp = `
+_NAME_ or {{ bt }}name=<name>[,project=<project>][,shared=true]{{ bt }} - Optional
+pull Secret of type {{ bt }}pull-secret{{ bt }} used when downloading the image
+from a private registry. A bare name selects the tenant's unnamed project.
+Omit for public images that need no credentials.
 `

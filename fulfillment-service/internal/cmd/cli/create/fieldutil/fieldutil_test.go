@@ -64,6 +64,33 @@ var _ = Describe("ParseSSHKeyFlag", func() {
 	)
 })
 
+var _ = Describe("ParsePullSecretFlag", func() {
+	It("parses a bare name", func() {
+		ref, err := ParsePullSecretFlag("registry-creds")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ref.GetName()).To(Equal("registry-creds"))
+		Expect(ref.GetShared()).To(BeFalse())
+	})
+
+	It("parses a shared selector", func() {
+		ref, err := ParsePullSecretFlag("name=provider-pull,shared=true")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ref.GetName()).To(Equal("provider-pull"))
+		Expect(ref.GetShared()).To(BeTrue())
+	})
+
+	It("rejects unknown keys", func() {
+		_, err := ParsePullSecretFlag("name=registry-creds,tenant=acme")
+		Expect(err).To(MatchError(
+			`invalid --pull-secret value "name=registry-creds,tenant=acme": unknown key "tenant"`))
+	})
+
+	It("rejects an empty value", func() {
+		_, err := ParsePullSecretFlag("")
+		Expect(err).To(MatchError(`invalid --pull-secret value "": value is empty`))
+	})
+})
+
 var _ = Describe("parseField", func() {
 	DescribeTable("valid inputs",
 		func(input, expectedKey, expectedValue string) {

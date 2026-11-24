@@ -25,7 +25,7 @@ import (
 
 func formatDiskImage(di *publicv1.DiskImage) string {
 	var buf bytes.Buffer
-	renderDiskImage(&buf, di)
+	Expect(renderDiskImage(&buf, di)).To(Succeed())
 	return buf.String()
 }
 

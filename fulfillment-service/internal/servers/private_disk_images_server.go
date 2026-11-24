@@ -48,8 +48,9 @@ var _ privatev1.DiskImagesServer = (*PrivateDiskImagesServer)(nil)
 type PrivateDiskImagesServer struct {
 	privatev1.UnimplementedDiskImagesServer
 
-	logger  *slog.Logger
-	generic *GenericServer[*privatev1.DiskImage]
+	logger     *slog.Logger
+	generic    *GenericServer[*privatev1.DiskImage]
+	secretsDao *dao.GenericDAO[*privatev1.Secret]
 }
 
 func NewPrivateDiskImagesServer() *PrivateDiskImagesServerBuilder {
@@ -106,9 +107,19 @@ func (b *PrivateDiskImagesServerBuilder) Build() (result *PrivateDiskImagesServe
 		return
 	}
 
+	secretsDao, err := dao.NewGenericDAO[*privatev1.Secret]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		SetMetricsRegisterer(b.metricsRegisterer).
+		Build()
+	if err != nil {
+		return
+	}
+
 	result = &PrivateDiskImagesServer{
-		logger:  b.logger,
-		generic: generic,
+		logger:     b.logger,
+		generic:    generic,
+		secretsDao: secretsDao,
 	}
 	return
 }
@@ -116,12 +127,20 @@ func (b *PrivateDiskImagesServerBuilder) Build() (result *PrivateDiskImagesServe
 func (s *PrivateDiskImagesServer) List(ctx context.Context,
 	request *privatev1.DiskImagesListRequest) (response *privatev1.DiskImagesListResponse, err error) {
 	err = s.generic.List(ctx, request, &response)
+	if err != nil {
+		return
+	}
+	redactDiskImagePullSecrets(ctx, s.logger, s.secretsDao, response.GetItems())
 	return
 }
 
 func (s *PrivateDiskImagesServer) Get(ctx context.Context,
 	request *privatev1.DiskImagesGetRequest) (response *privatev1.DiskImagesGetResponse, err error) {
 	err = s.generic.Get(ctx, request, &response)
+	if err != nil {
+		return
+	}
+	redactDiskImagePullSecret(ctx, s.logger, s.secretsDao, response.GetObject())
 	return
 }
 
@@ -155,7 +174,11 @@ func (s *PrivateDiskImagesServer) Create(ctx context.Context,
 		spec.SetGuestOsFamily(privatev1.GuestOSFamily_GUEST_OS_FAMILY_LINUX)
 	}
 
-	err = s.generic.Create(ctx, request, &response)
+	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response, s.prepareDiskImagePullSecret)
+	if err != nil {
+		return
+	}
+	redactDiskImagePullSecret(ctx, s.logger, s.secretsDao, response.GetObject())
 	return
 }
 
@@ -170,15 +193,19 @@ func (s *PrivateDiskImagesServer) Update(ctx context.Context,
 	getRequest := &privatev1.DiskImagesGetRequest{}
 	getRequest.SetId(id)
 	var getResponse *privatev1.DiskImagesGetResponse
+	// Use the DAO-backed get (without redaction) so merge/clear logic sees the
+	// stored pull_secret even when the caller cannot discover it.
 	err = s.generic.Get(ctx, getRequest, &getResponse)
 	if err != nil {
 		return
 	}
-
 	existing := getResponse.GetObject()
 
 	merged := cloneDiskImage(existing)
-	applyDiskImageUpdate(merged, request.GetObject(), request.GetUpdateMask())
+	err = applyDiskImageUpdate(merged, request.GetObject(), request.GetUpdateMask())
+	if err != nil {
+		return
+	}
 
 	err = validateDiskImageImmutability(merged, existing)
 	if err != nil {
@@ -206,8 +233,31 @@ func (s *PrivateDiskImagesServer) Update(ctx context.Context,
 	request.SetObject(merged)
 	request.GetObject().GetMetadata().SetVersion(clientVersion)
 
-	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, s.validateArchitectureUpdate)
+	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, s.prepareDiskImageUpdate)
+	if err != nil {
+		return
+	}
+	redactDiskImagePullSecret(ctx, s.logger, s.secretsDao, response.GetObject())
 	return
+}
+
+func (s *PrivateDiskImagesServer) prepareDiskImagePullSecret(
+	ctx context.Context, _, candidate *privatev1.DiskImage,
+) error {
+	return resolveAndCanonicalizeDiskImagePullSecret(ctx, s.secretsDao, candidate)
+}
+
+func (s *PrivateDiskImagesServer) prepareDiskImageUpdate(
+	ctx context.Context, current, candidate *privatev1.DiskImage,
+) error {
+	// An unchanged reference was validated when it was set. Re-resolving it
+	// applies caller visibility to a value the caller did not supply.
+	if !proto.Equal(current.GetSpec().GetPullSecret(), candidate.GetSpec().GetPullSecret()) {
+		if err := resolveAndCanonicalizeDiskImagePullSecret(ctx, s.secretsDao, candidate); err != nil {
+			return err
+		}
+	}
+	return s.validateArchitectureUpdate(ctx, current, candidate)
 }
 
 // validateArchitectureUpdate runs on the final candidate while GenericServer holds the image
@@ -256,7 +306,7 @@ func cloneDiskImage(di *privatev1.DiskImage) *privatev1.DiskImage {
 	return proto.Clone(di).(*privatev1.DiskImage)
 }
 
-func applyDiskImageUpdate(base, update *privatev1.DiskImage, mask *fieldmaskpb.FieldMask) {
+func applyDiskImageUpdate(base, update *privatev1.DiskImage, mask *fieldmaskpb.FieldMask) error {
 	if mask == nil || len(mask.GetPaths()) == 0 {
 		proto.Merge(base, update)
 		// proto.Merge appends repeated fields instead of replacing them.
@@ -264,7 +314,13 @@ func applyDiskImageUpdate(base, update *privatev1.DiskImage, mask *fieldmaskpb.F
 		if update.GetSpec() != nil && len(update.GetSpec().GetArchitecture()) > 0 {
 			base.GetSpec().SetArchitecture(update.GetSpec().GetArchitecture())
 		}
-		return
+		// proto.Merge merges SecretReference field-by-field, which can keep a
+		// stored id when the update only supplies a name. Replace the whole
+		// reference whenever the update sets pull_secret.
+		if update.GetSpec() != nil && update.GetSpec().GetPullSecret() != nil {
+			replaceDiskImagePullSecret(base, update.GetSpec().GetPullSecret())
+		}
+		return nil
 	}
 	for _, path := range mask.GetPaths() {
 		switch path {
@@ -294,8 +350,24 @@ func applyDiskImageUpdate(base, update *privatev1.DiskImage, mask *fieldmaskpb.F
 				base.GetSpec().SetDeprecation(dep)
 			}
 			dep.SetObsolescenceTimestamp(update.GetSpec().GetDeprecation().GetObsolescenceTimestamp())
+		case "spec.pull_secret":
+			replaceDiskImagePullSecret(base, update.GetSpec().GetPullSecret())
+		default:
+			if strings.HasPrefix(path, "spec.pull_secret.") {
+				return grpcstatus.Errorf(grpccodes.InvalidArgument,
+					"update_mask path %q is not supported; use 'spec.pull_secret'", path)
+			}
 		}
 	}
+	return nil
+}
+
+func replaceDiskImagePullSecret(base *privatev1.DiskImage, ref *privatev1.SecretReference) {
+	if isEmptySecretReference(ref) {
+		base.GetSpec().ClearPullSecret()
+		return
+	}
+	base.GetSpec().SetPullSecret(proto.Clone(ref).(*privatev1.SecretReference))
 }
 
 func validateDiskImageImmutability(merged, existing *privatev1.DiskImage) error {

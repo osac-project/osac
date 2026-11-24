@@ -43,17 +43,6 @@ func registerReferenceLookups(
 	}
 	references.RegisterPlatformScopedDAOLookup(validator, "osac.private.v1.BillingAccountReference", billingAccountsDAO)
 
-	tenantsDAO, err := dao.NewGenericDAO[*privatev1.Tenant]().
-		SetLogger(logger).
-		SetTenancyLogic(tenancyLogic).
-		SetMetricsRegisterer(metricsRegisterer).
-		Build()
-	if err != nil {
-		return fmt.Errorf("failed to create Tenant DAO for reference lookups: %w", err)
-	}
-	references.RegisterPlatformScopedDAOLookup(validator, "osac.private.v1.TenantReference", tenantsDAO)
-	references.RegisterPlatformScopedDAOLookup(validator, "osac.public.v1.TenantReference", tenantsDAO)
-
 	// Networking references
 	virtualNetworksDAO, err := dao.NewGenericDAO[*privatev1.VirtualNetwork]().
 		SetLogger(logger).

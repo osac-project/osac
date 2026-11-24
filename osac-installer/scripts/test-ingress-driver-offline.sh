@@ -216,6 +216,14 @@ rc=$(uninstall_rc "$WORK/s9b" '' "$WORK/bin:/usr/bin:/bin")
 unset HELM_VALUES_ERROR
 if ! ok "$rc"; then pass "9b uninstall fails on a values lookup error"; else fail "9b uninstall fails on a values lookup error (rc=$rc)"; fi
 
+# ---------------------------------------------------------------- 9c
+# A missing release must not stop the uninstall (regression: errexit ended
+# the recipe at the lookup before the missing-release branch could run).
+export HELM_VALUES_ERROR="Error: release: not found"
+rc=$(uninstall_rc "$WORK/s9c" '' "$WORK/bin:/usr/bin:/bin")
+unset HELM_VALUES_ERROR
+if ok "$rc"; then pass "9c uninstall succeeds when no release exists"; else fail "9c uninstall succeeds when no release exists (rc=$rc)"; fi
+
 # ---------------------------------------------------------------- 10
 rc=$(run_make "$WORK/s10" -- install-osac)
 if ok "$rc" && ! grep -q "get endpointslices" "$WORK/s10/logs/oc.log" \

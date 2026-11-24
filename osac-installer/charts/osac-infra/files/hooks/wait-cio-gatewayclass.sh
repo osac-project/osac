@@ -21,6 +21,8 @@ if oc get subscription -A --request-timeout=30s -o jsonpath='{range .items[*]}{.
   exit 1
 fi
 
+HEARTBEAT=/tmp/heartbeat
+touch "$HEARTBEAT"
 deadline=$(( SECONDS + TIMEOUT_SECONDS ))
 while :; do
   conditions=$(kubectl get gatewayclass "${GATEWAYCLASS_NAME}" \
@@ -36,5 +38,6 @@ while :; do
     echo "last conditions: ${conditions:-<absent>}"
     exit 1
   fi
+  touch "$HEARTBEAT"
   sleep 10
 done

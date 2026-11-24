@@ -119,12 +119,14 @@ spec:
             capabilities:
               drop:
                 - ALL
-          # The wait loop must keep iterating; a hung CLI call is the only
-          # silent-stall mode left after --request-timeout, and this probe
-          # restarts the container so the loop resumes.
+          # Liveness is polling progress, not process existence: the script
+          # touches /tmp/heartbeat (a writable emptyDir) on every loop
+          # iteration, and the probe fails when the loop has not made
+          # progress within the window. --request-timeout bounds each CLI
+          # call; this catches anything that still stalls the loop.
           livenessProbe:
             exec:
-              command: ["/bin/bash", "-c", "kill -0 1"]
+              command: ["/bin/bash", "-c", "test $(( $(date +%s) - $(stat -c %Y /tmp/heartbeat) )) -lt 90"]
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3

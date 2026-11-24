@@ -1050,7 +1050,8 @@ uninstall-osac: validate-ns ## Uninstall OSAC instance (PLATFORM= PROFILE= NS= r
 # BEFORE uninstalling (the release is gone afterwards), keep the default
 # envoy/kind path free of any oc dependency, and fail loudly instead of
 # silently skipping when gatewayapi cleanup is required but oc is missing.
-	@values_out=$$(helm get values osac --namespace $(NS) -o json 2>&1); values_rc=$$?; \
+	@values_out=""; values_rc=0; \
+	values_out=$$(helm get values osac --namespace $(NS) -o json 2>&1) || values_rc=$$?; \
 	if [ $$values_rc -eq 0 ]; then \
 		if echo "$$values_out" | grep -q '"driver":"gatewayapi"'; then driver=gatewayapi; else driver=; fi; \
 	elif echo "$$values_out" | grep -qi 'no release\|not found'; then \

@@ -9,7 +9,9 @@
     kind: StorageClass
     name: "{{ _fixture_retained_sc.metadata.name }}"
 
-- name: Seed the retained StorageClass fixture without the managed-by label
+# Matching without the ownership label exercises the exact-name lookup.
+# Drift with the label exercises the old delete-and-recreate path.
+- name: Seed the retained StorageClass fixture
   kubernetes.core.k8s:
     state: present
     definition:
@@ -18,8 +20,9 @@
       metadata:
         name: "{{ _fixture_retained_sc.metadata.name }}"
         labels: >-
-          {{ _fixture_retained_sc.metadata.labels | dict2items
-             | rejectattr('key', 'equalto', 'app.kubernetes.io/managed-by') | items2dict }}
+          {{ _fixture_retained_sc.metadata.labels if _sc_case.drift else
+             (_fixture_retained_sc.metadata.labels | dict2items
+              | rejectattr('key', 'equalto', 'app.kubernetes.io/managed-by') | items2dict) }}
       provisioner: "{{ _fixture_retained_sc.provisioner }}"
       parameters: >-
         {{ _fixture_retained_sc.parameters
@@ -101,6 +104,9 @@
     that:
       - _sc_case_after.results[1].resources | length == 1
       - _sc_case_after.results[1].resources[0].parameters == _fixture_sibling_sc.parameters
+      - _sc_case_after.results[1].resources[0].provisioner == 'csi.trident.netapp.io'
+      - _sc_case_after.results[1].resources[0].reclaimPolicy == 'Delete'
+      - _sc_case_after.results[1].resources[0].volumeBindingMode == 'WaitForFirstConsumer'
       - _sc_case_after.results[1].resources[0].metadata.uid != _fixture_sibling_sc.metadata.uid
   when: not _sc_case.drift and _sc_case.sibling_missing
 

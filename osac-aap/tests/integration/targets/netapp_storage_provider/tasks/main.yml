@@ -575,6 +575,8 @@
             _scs.results[0].resources[0].parameters['backendType'] == 'ontap-san'
           - >-
             _scs.results[0].resources[0].provisioner == 'csi.trident.netapp.io'
+          - _scs.results[0].resources[0].reclaimPolicy == 'Delete'
+          - _scs.results[0].resources[0].volumeBindingMode == 'WaitForFirstConsumer'
           - >-
             _scs.results[1].resources[0].metadata.labels['osac.openshift.io/storage-tier'] == 'silver'
           - "'storagePools' not in _scs.results[1].resources[0].parameters"
@@ -1731,6 +1733,9 @@
           - _shared_scs.results[0].resources[0].parameters['backendType'] == 'ontap-san'
           - _shared_scs.results[0].resources[0].parameters['selector'] == 'performance=extreme'
           - _shared_scs.results[0].resources[0].parameters['storagePools'] == 'osiscsibackend:.*'
+          - _shared_scs.results[0].resources[0].provisioner == 'csi.trident.netapp.io'
+          - _shared_scs.results[0].resources[0].reclaimPolicy == 'Delete'
+          - _shared_scs.results[0].resources[0].volumeBindingMode == 'WaitForFirstConsumer'
           - _shared_scs.results[1].resources[0].parameters['backendType'] == 'ontap-san'
           - _shared_scs.results[1].resources[0].parameters['selector'] == 'performance=value'
           - _shared_scs.results[1].resources[0].parameters['storagePools'] == 'osiscsibackend:.*'

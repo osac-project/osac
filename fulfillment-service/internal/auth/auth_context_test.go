@@ -39,6 +39,17 @@ var _ = Describe("Subject inside context", func() {
 		}).To(PanicWith("failed to get subject from context"))
 	})
 
+	It("SubjectPresent reports absence without panicking", func() {
+		subject, ok := SubjectPresent(context.Background())
+		Expect(ok).To(BeFalse())
+		Expect(subject).To(BeNil())
+
+		want := &Subject{User: "u"}
+		got, ok := SubjectPresent(ContextWithSubject(context.Background(), want))
+		Expect(ok).To(BeTrue())
+		Expect(got).To(BeIdenticalTo(want))
+	})
+
 	Describe("controller service account detection", func() {
 		It("recognizes the fulfillment controller identity", func() {
 			ctx := ContextWithSubject(context.Background(), &Subject{User: "service-account-osac-controller"})

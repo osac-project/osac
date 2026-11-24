@@ -16,6 +16,7 @@ package servers
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -282,6 +283,65 @@ var _ = Describe("Notifications server", func() {
 			Expect(status.Code(err)).To(Equal(codes.NotFound))
 		})
 
+		It("Pages through private List results beyond one DAO page", func() {
+			// Shrink the private page size so a small fixture still crosses a page boundary.
+			previousPageSize := notificationPrivateListPageSize
+			notificationPrivateListPageSize = 2
+			DeferCleanup(func() {
+				notificationPrivateListPageSize = previousPageSize
+			})
+
+			const total = 5
+			createdIDs := make([]string, 0, total)
+			for i := range total {
+				created, err := privateServer.Create(ctx, privatev1.NotificationsCreateRequest_builder{
+					Object: inboxObject(callerUser, fmt.Sprintf("evt-page-%02d", i)),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				createdIDs = append(createdIDs, created.GetObject().GetId())
+			}
+
+			all, err := server.List(ctx, publicv1.NotificationsListRequest_builder{
+				Limit: new(int32(notificationListMaxLimit)),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(all.GetTotal()).To(BeNumerically(">=", int32(total)))
+			listedIDs := make([]string, 0, len(all.GetItems()))
+			for _, item := range all.GetItems() {
+				listedIDs = append(listedIDs, item.GetId())
+			}
+			Expect(listedIDs).To(ContainElements(createdIDs))
+
+			defaults, err := server.List(ctx, &publicv1.NotificationsListRequest{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(defaults.GetTotal()).To(Equal(all.GetTotal()))
+			Expect(defaults.GetSize()).To(BeNumerically("<=", notificationListDefaultLimit))
+
+			page, err := server.List(ctx, publicv1.NotificationsListRequest_builder{
+				Offset: new(int32(2)),
+				Limit:  new(int32(2)),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(page.GetTotal()).To(Equal(all.GetTotal()))
+			Expect(page.GetSize()).To(Equal(int32(2)))
+			Expect(page.GetItems()).To(HaveLen(2))
+		})
+
+		It("Returns count-only when limit is explicitly 0", func() {
+			_, err := privateServer.Create(ctx, privatev1.NotificationsCreateRequest_builder{
+				Object: inboxObject(callerUser, "evt-count-only"),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			list, err := server.List(ctx, publicv1.NotificationsListRequest_builder{
+				Limit: new(int32(0)),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(list.GetTotal()).To(BeNumerically(">=", int32(1)))
+			Expect(list.GetSize()).To(Equal(int32(0)))
+			Expect(list.GetItems()).To(BeEmpty())
+		})
+
 		It("Hides other users' inbox rows from List/Get/Update/Delete", func() {
 			other, err := privateServer.Create(ctx, privatev1.NotificationsCreateRequest_builder{
 				Object: inboxObject("other-user", "evt-other"),
@@ -322,6 +382,34 @@ var _ = Describe("Notifications server", func() {
 
 			_, err = server.Delete(ctx, publicv1.NotificationsDeleteRequest_builder{Id: otherID}.Build())
 			Expect(status.Code(err)).To(Equal(codes.NotFound))
+		})
+
+		It("Lets platform admins List their users' inbox rows", func() {
+			other, err := privateServer.Create(ctx, privatev1.NotificationsCreateRequest_builder{
+				Object: inboxObject("other-user", "evt-admin-list"),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+
+			adminCtx := auth.ContextWithSubject(ctx, &auth.Subject{
+				User:    "platform-admin",
+				Tenants: auth.AllTenants,
+			})
+			list, err := server.List(adminCtx, publicv1.NotificationsListRequest_builder{
+				Limit: new(int32(notificationListMaxLimit)),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			ids := make([]string, 0, len(list.GetItems()))
+			for _, item := range list.GetItems() {
+				ids = append(ids, item.GetId())
+			}
+			Expect(ids).To(ContainElement(other.GetObject().GetId()))
+		})
+
+		It("Rejects an invalid List filter", func() {
+			_, err := server.List(ctx, publicv1.NotificationsListRequest_builder{
+				Filter: new(`true) || (true`),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		})
 
 		It("Rejects announcement Delete for tenant users", func() {

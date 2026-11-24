@@ -16,7 +16,10 @@ package servers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"math"
+	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
@@ -145,20 +148,141 @@ func (b *NotificationsServerBuilder) Build() (result *NotificationsServer, err e
 	return
 }
 
+// notificationPrivateListPageSize is the private List page size. Tests may shrink it.
+var notificationPrivateListPageSize int32 = 1000
+
+// Public List uses the same default and max page sizes as the DAO.
+const (
+	notificationListDefaultLimit int32 = 100
+	notificationListMaxLimit     int32 = 1000
+)
+
 // List returns notifications visible under tenancy, recipient, and resource rules.
-// Visibility filtering runs before offset/limit so size/total describe the public set.
 func (s *NotificationsServer) List(ctx context.Context,
 	request *publicv1.NotificationsListRequest) (response *publicv1.NotificationsListResponse, err error) {
-	privateRequest := &privatev1.NotificationsListRequest{}
-	privateRequest.SetFilter(request.GetFilter())
-	privateRequest.SetOrder(request.GetOrder())
+	offset := request.GetOffset()
+	limit := request.GetLimit()
+	if offset < 0 || limit < 0 {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "offset and limit must be non-negative")
+	}
 
-	privateResponse, err := s.delegate.List(ctx, privateRequest)
+	filter, err := s.listFilterForCaller(ctx, request.GetFilter())
 	if err != nil {
 		return nil, err
 	}
 
-	privateItems := privateResponse.GetItems()
+	countOnly := request.HasLimit() && limit == 0
+	pageLimit := limit
+	switch {
+	case countOnly:
+		pageLimit = 0
+	case !request.HasLimit():
+		pageLimit = notificationListDefaultLimit
+	case limit > notificationListMaxLimit:
+		pageLimit = notificationListMaxLimit
+	}
+
+	var page []*privatev1.Notification
+	if !countOnly {
+		page = make([]*privatev1.Notification, 0, pageLimit)
+	}
+	var total int32
+
+	for privateOffset := int32(0); ; {
+		privateRequest := &privatev1.NotificationsListRequest{}
+		privateRequest.SetFilter(filter)
+		privateRequest.SetOrder(request.GetOrder())
+		privateRequest.SetOffset(privateOffset)
+		privateRequest.SetLimit(notificationPrivateListPageSize)
+
+		privateResponse, listErr := s.delegate.List(ctx, privateRequest)
+		if listErr != nil {
+			return nil, listErr
+		}
+		privateItems := privateResponse.GetItems()
+		for _, item := range s.visibleForCaller(ctx, privateItems) {
+			if !countOnly && total >= offset && int32(len(page)) < pageLimit { // #nosec G115 -- bounded by page
+				page = append(page, item)
+			}
+			if total == math.MaxInt32 {
+				s.logger.ErrorContext(ctx, "Notification visible total overflow")
+				return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to list notifications")
+			}
+			total++
+		}
+
+		if int32(len(privateItems)) < notificationPrivateListPageSize { // #nosec G115 -- bounded by page
+			break
+		}
+		privateOffset, err = nextDAOOffset(privateOffset, notificationPrivateListPageSize)
+		if err != nil {
+			s.logger.ErrorContext(ctx, "Notification private List pagination overflow",
+				slog.Any("error", err),
+			)
+			return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to list notifications")
+		}
+	}
+
+	if countOnly {
+		response = &publicv1.NotificationsListResponse{}
+		response.SetSize(0)
+		response.SetTotal(total)
+		response.SetItems(nil)
+		return
+	}
+
+	publicItems := make([]*publicv1.Notification, len(page))
+	for i, privateItem := range page {
+		publicItem := &publicv1.Notification{}
+		err = s.outMapper.Copy(ctx, privateItem, publicItem)
+		if err != nil {
+			s.logger.ErrorContext(
+				ctx,
+				"Failed to map private notification to public",
+				slog.Any("error", err),
+			)
+			return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process notifications")
+		}
+		publicItems[i] = publicItem
+	}
+
+	response = &publicv1.NotificationsListResponse{}
+	response.SetSize(int32(len(publicItems))) // #nosec G115 -- bounded by page size
+	response.SetTotal(total)
+	response.SetItems(publicItems)
+	return
+}
+
+// listFilterForCaller adds a recipient clause for normal users.
+// Platform and tenant admins omit that clause.
+func (s *NotificationsServer) listFilterForCaller(ctx context.Context, userFilter string) (string, error) {
+	if userFilter != "" {
+		if err := validateCELSyntax(userFilter); err != nil {
+			return "", grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %s", err)
+		}
+	}
+	if s.callerSeesAllInbox(ctx) {
+		return userFilter, nil
+	}
+	subject, ok := auth.SubjectPresent(ctx)
+	if !ok {
+		return userFilter, nil
+	}
+
+	recipientClause := fmt.Sprintf(
+		"this.spec.kind == %d || this.spec.recipient_id == %s",
+		int32(privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT),
+		strconv.Quote(subject.User),
+	)
+	if userFilter == "" {
+		return recipientClause, nil
+	}
+	return fmt.Sprintf("(%s) && (%s)", userFilter, recipientClause), nil
+}
+
+// visibleForCaller returns notifications the caller may see by recipient and resource.
+func (s *NotificationsServer) visibleForCaller(ctx context.Context,
+	privateItems []*privatev1.Notification) []*privatev1.Notification {
 	candidates := make([]*privatev1.Notification, 0, len(privateItems))
 	for _, privateItem := range privateItems {
 		if !s.isRecipientVisible(ctx, privateItem) {
@@ -190,49 +314,15 @@ func (s *NotificationsServer) List(ctx context.Context,
 		visibleFlags = failClosedResourceFlags(resources)
 	}
 
-	eligible := make([]*privatev1.Notification, 0, len(candidates))
+	filtered := make([]*privatev1.Notification, 0, len(candidates))
 	for i, privateItem := range candidates {
 		if privateItem.GetSpec().GetKind() != privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT &&
 			!visibleFlags[i] {
 			continue
 		}
-		eligible = append(eligible, privateItem)
+		filtered = append(filtered, privateItem)
 	}
-
-	total := int32(len(eligible)) // #nosec G115 -- bounded by result set
-	offset := request.GetOffset()
-	limit := request.GetLimit()
-	if offset < 0 || limit < 0 {
-		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "offset and limit must be non-negative")
-	}
-	if offset > total {
-		offset = total
-	}
-	paged := eligible[offset:]
-	if limit > 0 && int32(len(paged)) > limit { // #nosec G115 -- bounded by result set
-		paged = paged[:limit]
-	}
-
-	publicItems := make([]*publicv1.Notification, len(paged))
-	for i, privateItem := range paged {
-		publicItem := &publicv1.Notification{}
-		err = s.outMapper.Copy(ctx, privateItem, publicItem)
-		if err != nil {
-			s.logger.ErrorContext(
-				ctx,
-				"Failed to map private notification to public",
-				slog.Any("error", err),
-			)
-			return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to process notifications")
-		}
-		publicItems[i] = publicItem
-	}
-
-	response = &publicv1.NotificationsListResponse{}
-	response.SetSize(int32(len(publicItems))) // #nosec G115 -- bounded by page size
-	response.SetTotal(total)
-	response.SetItems(publicItems)
-	return
+	return filtered
 }
 
 // Get returns one notification by id.
@@ -496,12 +586,19 @@ func (s *NotificationsServer) isRecipientVisible(ctx context.Context,
 	if s.callerSeesAllInbox(ctx) {
 		return true
 	}
-	return spec.GetRecipientId() == auth.SubjectFromContext(ctx).User
+	subject, ok := auth.SubjectPresent(ctx)
+	if !ok {
+		return false
+	}
+	return spec.GetRecipientId() == subject.User
 }
 
 // callerSeesAllInbox reports whether the caller may see every inbox row in their tenancy.
 func (s *NotificationsServer) callerSeesAllInbox(ctx context.Context) bool {
-	subject := auth.SubjectFromContext(ctx)
+	subject, ok := auth.SubjectPresent(ctx)
+	if !ok {
+		return false
+	}
 	if !subject.Tenants.Finite() {
 		return true
 	}

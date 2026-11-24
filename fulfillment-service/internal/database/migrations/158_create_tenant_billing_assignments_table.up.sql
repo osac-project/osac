@@ -12,7 +12,8 @@
 --
 
 -- Assignments retain interval history: reassignment closes the active row and inserts a new one, and rows are never
--- deleted. The tenant column has no live-tenant foreign key so that history survives tenant deletion.
+-- deleted. A write-time trigger validates live tenant references; the tenant column has no foreign key so history
+-- survives physical tenant deletion.
 begin;
 
 create table tenant_billing_assignments (
@@ -128,6 +129,32 @@ $$ language plpgsql;
 create trigger check_tenant_billing_assignment_data
   before insert or update on tenant_billing_assignments
   for each row execute function validate_tenant_billing_assignment_data();
+
+-- New writes must refer to a live tenant. A key-share lock serializes assignment writes with tenant deletion while
+-- allowing already-retained assignment rows to outlive their tenant.
+create function check_tenant_billing_assignment_tenant_ref() returns trigger as $$
+declare
+  live_tenant text;
+begin
+  select t.name into live_tenant
+  from tenants t
+  where t.name = new.tenant
+    and t.deletion_timestamp = 'epoch'::timestamptz
+  for key share;
+
+  if not found then
+    raise exception using
+      errcode = 'Z0002',
+      message = format('tenant ''%s'' does not exist or is deleting', new.tenant);
+  end if;
+
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger check_tenant_billing_assignment_tenant_ref
+  before insert or update of tenant on tenant_billing_assignments
+  for each row execute function check_tenant_billing_assignment_tenant_ref();
 
 create function check_tenant_billing_assignment_account_ref() returns trigger as $$
 declare

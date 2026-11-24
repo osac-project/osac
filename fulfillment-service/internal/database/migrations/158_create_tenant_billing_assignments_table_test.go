@@ -143,7 +143,26 @@ var _ = DescribeMigration("Create tenant billing assignments table", func() {
 	It("keeps interval history for a tenant that no longer exists", func(ctx context.Context) {
 		Expect(tool.Migrate(ctx, 158)).To(Succeed())
 		seed(ctx)
-		Expect(insert(ctx, "asg-1", "tenant-gone", "ba-1", "")).To(Succeed())
+		createTenant(ctx, "tenant-gone")
+		rejectStatement(ctx, "Z0002", "", insertBillingAssignment, "missing", "missing-tenant",
+			billingAssignmentData("missing-tenant", "ba-1", ""))
+		Expect(insert(ctx, "asg-1", "tenant-gone", "ba-1", "2026-04-01T00:00:00Z")).To(Succeed())
+		rejectStatement(ctx, "Z0002", "", `update tenant_billing_assignments
+			set tenant = 'missing-tenant', annotations = jsonb_build_object('osac.openshift.io/tenant', 'missing-tenant')
+			where id = 'asg-1'`)
+		_, err := conn.Exec(ctx, `update tenants set deletion_timestamp = '2026-03-02Z' where name = 'tenant-gone'`)
+		Expect(err).NotTo(HaveOccurred())
+		rejectStatement(ctx, "Z0002", "", insertBillingAssignment, "during-delete", "tenant-gone",
+			billingAssignmentData("tenant-gone", "ba-1", ""))
+		_, err = conn.Exec(ctx, `delete from projects where tenant = 'tenant-gone';
+			delete from tenants where name = 'tenant-gone'`)
+		Expect(err).NotTo(HaveOccurred())
+		var retained int
+		Expect(conn.QueryRow(ctx, `select count(*) from tenant_billing_assignments
+			where id = 'asg-1' and tenant = 'tenant-gone'`).Scan(&retained)).To(Succeed())
+		Expect(retained).To(Equal(1), "physical deletion does not remove assignment history")
+		rejectStatement(ctx, "Z0002", "", insertBillingAssignment, "after-delete", "tenant-gone",
+			billingAssignmentData("tenant-gone", "ba-1", ""))
 		var count int
 		Expect(conn.QueryRow(ctx, `select count(*) from pg_constraint where contype = 'f'
 			and conrelid = 'tenant_billing_assignments'::regclass and confrelid = 'tenants'::regclass`).

@@ -9,7 +9,7 @@ export const getRoleBindingSpec = (
 ): MessageInitShape<typeof RoleBindingSpecSchema> => ({
   role: {
     name: values.role,
-    shared: true,
+    tenant: 'shared',
   },
   users: values.users.map((u) => ({ name: u })),
 });

@@ -361,7 +361,7 @@ func (t *task) syncToIDP(ctx context.Context) error {
 		}
 		config := &idp.TenantConfig{
 			Name:                    tenantName,
-			Enabled:                 new(!t.isBuiltin()),
+			Enabled:                 new(tenantName != auth.SharedTenant),
 			CreateBreakGlassAccount: tenantName != auth.SharedTenant,
 			Domains:                 t.tenant.GetSpec().GetDomains(),
 			BreakGlassPassword:      breakGlassPassword,
@@ -578,8 +578,7 @@ func (t *task) removeFinalizer() {
 	}
 }
 
-// isBuiltin returns true if the tenant is a builtin tenant that should not be user-accessible in the
-// identity provider. Builtin tenants like "shared" and "system" are created disabled.
+// isBuiltin returns true if the tenant is a builtin tenant like "shared" and "system".
 func (t *task) isBuiltin() bool {
 	name := t.tenant.GetMetadata().GetName()
 	return name == auth.SharedTenant || name == auth.SystemTenant

@@ -312,7 +312,7 @@ var _ = Describe("Table renderer", func() {
 			"ID", "NAME", "TENANT", "ACCOUNT", "STATE", "EFFECTIVE-FROM", "EFFECTIVE-TO", "MESSAGE",
 		}
 		// An inventory of existing files cannot detect a missing domain layout.
-		DescribeTable("Requires all four billing collection layouts and their domain headers",
+		DescribeTable("Requires both private billing collection layouts and their domain headers",
 			func(filename string, headers []string) {
 				data, err := tablesFS.ReadFile("tables/" + filename)
 				Expect(err).NotTo(HaveOccurred())
@@ -324,9 +324,7 @@ var _ = Describe("Table renderer", func() {
 				}
 				Expect(actual).To(Equal(headers))
 			},
-			Entry("public account", "osac.public.v1.BillingAccount.yaml", accountHeaders),
 			Entry("private account", "osac.private.v1.BillingAccount.yaml", accountHeaders),
-			Entry("public assignment", "osac.public.v1.TenantBillingAssignment.yaml", assignmentHeaders),
 			Entry("private assignment", "osac.private.v1.TenantBillingAssignment.yaml", assignmentHeaders),
 		)
 

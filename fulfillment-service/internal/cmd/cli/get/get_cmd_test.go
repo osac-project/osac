@@ -52,7 +52,7 @@ import (
 // server. Dynamic wire messages avoid generated server doubles for singleton
 // services. Removing child registrations selects generic dispatch only;
 // unrelated child commands remain registered in production.
-func executeGenericGet(private bool, invoke func(string, proto.Message, proto.Message) error, args ...string) (string, error) {
+func executeGenericGet(invoke func(string, proto.Message, proto.Message) error, args ...string) (string, error) {
 	server := testing.NewServer(grpc.UnknownServiceHandler(func(_ any, stream grpc.ServerStream) error {
 		defer GinkgoRecover()
 		path, ok := grpc.MethodFromServerStream(stream)
@@ -79,7 +79,7 @@ func executeGenericGet(private bool, invoke func(string, proto.Message, proto.Me
 	Expect(err).NotTo(HaveOccurred())
 	settings.SetAddress(server.Address())
 	settings.SetPlaintext(true)
-	settings.SetPrivate(private)
+	settings.SetPrivate(true)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	ctx = config.ProjectIntoContext(config.TenantIntoContext(ctx, "p2-tenant"), "p2-project")
@@ -98,13 +98,11 @@ func executeGenericGet(private bool, invoke func(string, proto.Message, proto.Me
 // output. Terminal table sanitization has separate renderer coverage.
 const structuredAttributionToken = "  p6-token\t\n\x1b\"quoted\"  "
 
-func genericBillingItem(private bool, kind string, index int) map[string]any {
+func genericBillingItem(kind string, index int) map[string]any {
 	metadata := map[string]any{
 		"name": fmt.Sprintf("billing-name-%d", index), "tenant": "p2-tenant",
-		"labels": map[string]any{"env": "test"},
-	}
-	if private {
-		metadata["finalizers"] = []any{"p6-test-finalizer"}
+		"labels":     map[string]any{"env": "test"},
+		"finalizers": []any{"p6-test-finalizer"},
 	}
 	item := map[string]any{"id": fmt.Sprintf("billing-id-%d", index), "metadata": metadata}
 	if kind == "billingaccount" {
@@ -114,14 +112,11 @@ func genericBillingItem(private bool, kind string, index int) map[string]any {
 			"provider_key": "m360", "display_name": "Provider display label", "base_currency": "USD",
 			"state": "BILLING_ACCOUNT_STATE_ACTIVE", "state_observation_timestamp": "2026-01-01T00:00:00Z",
 			"external_billing_account_id": structuredAttributionToken,
-		}
-		if private {
-			status["provider_account_reference"] = "provider-native-reference"
+			"provider_account_reference":  "provider-native-reference",
 		}
 		item["status"] = status
 	} else {
 		item["spec"] = map[string]any{
-			"tenant":          map[string]any{"id": "p2-tenant", "name": "customer"},
 			"billing_account": map[string]any{"id": "account-id", "name": "ba-stable-name"},
 		}
 		status := map[string]any{
@@ -137,10 +132,10 @@ func genericBillingItem(private bool, kind string, index int) map[string]any {
 	return item
 }
 
-func populateGenericBillingResponse(response proto.Message, private bool, kind string, start, count, total int) error {
+func populateGenericBillingResponse(response proto.Message, kind string, start, count, total int) error {
 	items := make([]any, count)
 	for i := range items {
-		items[i] = genericBillingItem(private, kind, start+i)
+		items[i] = genericBillingItem(kind, start+i)
 	}
 	data, err := json.Marshal(map[string]any{"items": items, "size": count, "total": total})
 	if err != nil {
@@ -157,157 +152,152 @@ var _ = Describe("Get command", func() {
 	})
 
 	Describe("generic billing command", func() {
-		for _, private := range []bool{false, true} {
-			pkg := packages.PublicV1
-			if private {
-				pkg = packages.PrivateV1
+		pkg := packages.PrivateV1
+		for _, kind := range []string{"billingaccount", "tenantbillingassignment"} {
+			service, objectName := "BillingAccounts", "BillingAccount"
+			if kind == "tenantbillingassignment" {
+				service, objectName = "TenantBillingAssignments", "TenantBillingAssignment"
 			}
-			for _, kind := range []string{"billingaccount", "tenantbillingassignment"} {
-				service, objectName := "BillingAccounts", "BillingAccount"
-				if kind == "tenantbillingassignment" {
-					service, objectName = "TenantBillingAssignments", "TenantBillingAssignment"
-				}
-				for _, format := range []string{outputFormatJson, outputFormatYaml} {
-					DescribeTable(pkg+" "+kind+" "+format+" uses List-only Any item cardinality and descriptor visibility",
-						func(count int) {
-							var calls atomic.Int32
-							stdout, err := executeGenericGet(private, func(method string, request, response proto.Message) error {
-								calls.Add(1)
-								Expect(method).To(Equal("/"+pkg+"."+service+"/List"), "keyed billing must not invoke the account Get scaffold")
-								message := request.ProtoReflect()
-								Expect(message.Get(message.Descriptor().Fields().ByName("offset")).Int()).To(BeZero())
-								return populateGenericBillingResponse(response, private, kind, 0, count, count)
-							}, kind, "billing-id-0", `second"key`, "--output="+format)
-							Expect(err).NotTo(HaveOccurred())
-							Expect(calls.Load()).To(Equal(int32(1)))
-							var value any
-							if format == outputFormatJson {
-								Expect(json.Unmarshal([]byte(stdout), &value)).To(Succeed())
-							} else {
-								Expect(yaml.Unmarshal([]byte(stdout), &value)).To(Succeed())
-							}
-							var values []any
-							if count == 1 {
-								values = []any{value}
-							} else {
-								var ok bool
-								values, ok = value.([]any)
-								Expect(ok).To(BeTrue(), "zero/many must be sequences, never size/total/items envelopes")
-							}
-							Expect(values).To(HaveLen(count))
-							for i, value := range values {
-								expected := genericBillingItem(private, kind, i)
-								expected["@type"] = "type.googleapis.com/" + pkg + "." + objectName
-								Expect(value).To(Equal(expected), "private descriptors retain their fields; public descriptors omit native identity and finalizers")
-							}
-						},
-						Entry("zero", 0), Entry("one", 1), Entry("many", 2),
-					)
-				}
-
-				DescribeTable(pkg+" "+kind+" reaches domain tables and the generic empty message",
+			for _, format := range []string{outputFormatJson, outputFormatYaml} {
+				DescribeTable(pkg+" "+kind+" "+format+" uses List-only Any item cardinality and descriptor visibility",
 					func(count int) {
 						var calls atomic.Int32
-						stdout, err := executeGenericGet(private, func(method string, _, response proto.Message) error {
+						stdout, err := executeGenericGet(func(method string, request, response proto.Message) error {
 							calls.Add(1)
-							Expect(method).To(Equal("/" + pkg + "." + service + "/List"))
-							return populateGenericBillingResponse(response, private, kind, 0, count, count)
-						}, kind)
-						Expect(err).NotTo(HaveOccurred())
-						Expect(calls.Load()).To(Equal(int32(1)))
-						if count == 0 {
-							Expect(stdout).To(ContainSubstring("There are no objects matching the given criteria."))
-							return
-						}
-						Expect(stdout).To(ContainSubstring("billing-id-0"))
-						Expect(stdout).To(ContainSubstring("billing-name-0"))
-						Expect(stdout).To(MatchRegexp(`\bNAME\b`))
-						Expect(stdout).NotTo(ContainSubstring("provider-native-reference"))
-						if kind == "billingaccount" {
-							Expect(stdout).NotTo(MatchRegexp(`\bTENANT\b`))
-							Expect(stdout).To(ContainSubstring("ACTIVE"))
-						} else {
-							Expect(stdout).To(MatchRegexp(`\bTENANT\b`))
-							Expect(stdout).To(ContainSubstring("PENDING"))
-							Expect(stdout).To(ContainSubstring("manual remediation required"))
-						}
-					},
-					Entry("empty", 0), Entry("one", 1),
-				)
-
-				DescribeTable(pkg+" "+kind+" carries keys and domain CEL unchanged on the first page",
-					func(history bool) {
-						filter := `this.status.state == 1 && this.status.state_observation_timestamp >= timestamp("2026-01-01T00:00:00Z") && this.metadata.labels["env"] == "test"`
-						if kind == "tenantbillingassignment" {
-							filter = `this.status.connection_state == 1 && this.status.effective_from_timestamp >= timestamp("2026-01-01T00:00:00Z") && this.metadata.labels["env"] == "test" && `
-							if history {
-								filter += `has(this.status.effective_to_timestamp)`
-							} else {
-								filter += `!has(this.status.effective_to_timestamp)`
-							}
-						}
-						filter = "(" + filter + `) || this.metadata.tenant == "other-tenant"`
-						expected := `(this.id in ["first", "two\"quoted"] || this.metadata.name in ["first", "two\"quoted"]) && (` + filter + `)`
-						if kind == "tenantbillingassignment" {
-							expected = `this.metadata.tenant == "p2-tenant" && (` + expected + `)`
-						}
-						var calls atomic.Int32
-						stdout, err := executeGenericGet(private, func(method string, request, response proto.Message) error {
-							calls.Add(1)
-							Expect(method).To(Equal("/" + pkg + "." + service + "/List"))
+							Expect(method).To(Equal("/"+pkg+"."+service+"/List"), "keyed billing must not invoke the account Get scaffold")
 							message := request.ProtoReflect()
-							fields := message.Descriptor().Fields()
-							Expect(message.Get(fields.ByName("filter")).String()).To(Equal(expected))
-							return populateGenericBillingResponse(response, private, kind, 0, 1, 2)
-						}, kind, "first", `two"quoted`, "--output=json", "--filter="+filter)
+							Expect(message.Get(message.Descriptor().Fields().ByName("offset")).Int()).To(BeZero())
+							return populateGenericBillingResponse(response, kind, 0, count, count)
+						}, kind, "billing-id-0", `second"key`, "--output="+format)
 						Expect(err).NotTo(HaveOccurred())
 						Expect(calls.Load()).To(Equal(int32(1)))
 						var value any
-						Expect(json.Unmarshal([]byte(stdout), &value)).To(Succeed())
-						var values []any
-						if list, ok := value.([]any); ok {
-							values = list
+						if format == outputFormatJson {
+							Expect(json.Unmarshal([]byte(stdout), &value)).To(Succeed())
 						} else {
-							values = []any{value}
+							Expect(yaml.Unmarshal([]byte(stdout), &value)).To(Succeed())
 						}
-						Expect(values).To(HaveLen(1))
+						var values []any
+						if count == 1 {
+							values = []any{value}
+						} else {
+							var ok bool
+							values, ok = value.([]any)
+							Expect(ok).To(BeTrue(), "zero/many must be sequences, never size/total/items envelopes")
+						}
+						Expect(values).To(HaveLen(count))
+						for i, value := range values {
+							expected := genericBillingItem(kind, i)
+							expected["@type"] = "type.googleapis.com/" + pkg + "." + objectName
+							Expect(value).To(Equal(expected), "private descriptors retain their fields; public descriptors omit native identity and finalizers")
+						}
 					},
-					Entry("current", false), Entry("history", true),
+					Entry("zero", 0), Entry("one", 1), Entry("many", 2),
 				)
+			}
 
-				for _, format := range []string{outputFormatTable, outputFormatJson, outputFormatYaml} {
-					It(pkg+" "+kind+" "+format+" buffers actual command stdout when the first List request fails", func() {
-						var calls atomic.Int32
-						stdout, err := executeGenericGet(private, func(method string, _, _ proto.Message) error {
-							calls.Add(1)
-							Expect(method).To(Equal("/" + pkg + "." + service + "/List"))
-							return grpcstatus.Error(codes.Internal, "p6 billing List failed")
-						}, kind, "--output="+format)
-						Expect(calls.Load()).To(Equal(int32(1)))
-						Expect(stdout).To(BeEmpty(), "no billing inventory may escape the real console path")
-						Expect(err).To(MatchError(ContainSubstring("p6 billing List failed")))
-					})
-				}
+			DescribeTable(pkg+" "+kind+" reaches domain tables and the generic empty message",
+				func(count int) {
+					var calls atomic.Int32
+					stdout, err := executeGenericGet(func(method string, _, response proto.Message) error {
+						calls.Add(1)
+						Expect(method).To(Equal("/" + pkg + "." + service + "/List"))
+						return populateGenericBillingResponse(response, kind, 0, count, count)
+					}, kind)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(calls.Load()).To(Equal(int32(1)))
+					if count == 0 {
+						Expect(stdout).To(ContainSubstring("There are no objects matching the given criteria."))
+						return
+					}
+					Expect(stdout).To(ContainSubstring("billing-id-0"))
+					Expect(stdout).To(ContainSubstring("billing-name-0"))
+					Expect(stdout).To(MatchRegexp(`\bNAME\b`))
+					Expect(stdout).NotTo(ContainSubstring("provider-native-reference"))
+					if kind == "billingaccount" {
+						Expect(stdout).NotTo(MatchRegexp(`\bTENANT\b`))
+						Expect(stdout).To(ContainSubstring("ACTIVE"))
+					} else {
+						Expect(stdout).To(MatchRegexp(`\bTENANT\b`))
+						Expect(stdout).To(ContainSubstring("PENDING"))
+						Expect(stdout).To(ContainSubstring("manual remediation required"))
+					}
+				},
+				Entry("empty", 0), Entry("one", 1),
+			)
+
+			DescribeTable(pkg+" "+kind+" carries keys and domain CEL unchanged on the first page",
+				func(history bool) {
+					filter := `this.status.state == 1 && this.status.state_observation_timestamp >= timestamp("2026-01-01T00:00:00Z") && this.metadata.labels["env"] == "test"`
+					if kind == "tenantbillingassignment" {
+						filter = `this.status.connection_state == 1 && this.status.effective_from_timestamp >= timestamp("2026-01-01T00:00:00Z") && this.metadata.labels["env"] == "test" && `
+						if history {
+							filter += `has(this.status.effective_to_timestamp)`
+						} else {
+							filter += `!has(this.status.effective_to_timestamp)`
+						}
+					}
+					filter = "(" + filter + `) || this.metadata.tenant == "other-tenant"`
+					expected := `(this.id in ["first", "two\"quoted"] || this.metadata.name in ["first", "two\"quoted"]) && (` + filter + `)`
+					if kind == "tenantbillingassignment" {
+						expected = `this.metadata.tenant == "p2-tenant" && (` + expected + `)`
+					}
+					var calls atomic.Int32
+					stdout, err := executeGenericGet(func(method string, request, response proto.Message) error {
+						calls.Add(1)
+						Expect(method).To(Equal("/" + pkg + "." + service + "/List"))
+						message := request.ProtoReflect()
+						fields := message.Descriptor().Fields()
+						Expect(message.Get(fields.ByName("filter")).String()).To(Equal(expected))
+						return populateGenericBillingResponse(response, kind, 0, 1, 2)
+					}, kind, "first", `two"quoted`, "--output=json", "--filter="+filter)
+					Expect(err).NotTo(HaveOccurred())
+					Expect(calls.Load()).To(Equal(int32(1)))
+					var value any
+					Expect(json.Unmarshal([]byte(stdout), &value)).To(Succeed())
+					var values []any
+					if list, ok := value.([]any); ok {
+						values = list
+					} else {
+						values = []any{value}
+					}
+					Expect(values).To(HaveLen(1))
+				},
+				Entry("current", false), Entry("history", true),
+			)
+
+			for _, format := range []string{outputFormatTable, outputFormatJson, outputFormatYaml} {
+				It(pkg+" "+kind+" "+format+" buffers actual command stdout when the first List request fails", func() {
+					var calls atomic.Int32
+					stdout, err := executeGenericGet(func(method string, _, _ proto.Message) error {
+						calls.Add(1)
+						Expect(method).To(Equal("/" + pkg + "." + service + "/List"))
+						return grpcstatus.Error(codes.Internal, "p6 billing List failed")
+					}, kind, "--output="+format)
+					Expect(calls.Load()).To(Equal(int32(1)))
+					Expect(stdout).To(BeEmpty(), "no billing inventory may escape the real console path")
+					Expect(err).To(MatchError(ContainSubstring("p6 billing List failed")))
+				})
 			}
 		}
 
-		It("has no public Signal descriptor and preserves descriptor-specific field visibility", func() {
-			_, err := protoregistry.GlobalFiles.FindDescriptorByName("osac.public.v1.BillingAccountSignal")
-			Expect(err).To(HaveOccurred())
-			for _, pkg := range []string{packages.PublicV1, packages.PrivateV1} {
-				descriptor, err := protoregistry.GlobalFiles.FindDescriptorByName(protoreflect.FullName(pkg + ".BillingAccount"))
-				Expect(err).NotTo(HaveOccurred())
-				fields := descriptor.(protoreflect.MessageDescriptor).Fields()
-				status := fields.ByName("status").Message().Fields()
-				metadata := fields.ByName("metadata").Message().Fields()
-				if pkg == packages.PublicV1 {
-					Expect(status.ByName("provider_account_reference")).To(BeNil())
-					Expect(metadata.ByName("finalizers")).To(BeNil())
-				} else {
-					Expect(status.ByName("provider_account_reference")).NotTo(BeNil())
-					Expect(metadata.ByName("finalizers")).NotTo(BeNil())
-				}
+		It("has no public billing descriptors and preserves private field visibility", func() {
+			for _, name := range []protoreflect.FullName{
+				"osac.public.v1.BillingAccount",
+				"osac.public.v1.BillingAccountSignal",
+				"osac.public.v1.BillingProviderStatus",
+				"osac.public.v1.TenantBillingAssignment",
+			} {
+				_, err := protoregistry.GlobalFiles.FindDescriptorByName(name)
+				Expect(err).To(HaveOccurred(), string(name))
 			}
+			descriptor, err := protoregistry.GlobalFiles.FindDescriptorByName("osac.private.v1.BillingAccount")
+			Expect(err).NotTo(HaveOccurred())
+			fields := descriptor.(protoreflect.MessageDescriptor).Fields()
+			status := fields.ByName("status").Message().Fields()
+			metadata := fields.ByName("metadata").Message().Fields()
+			Expect(status.ByName("provider_account_reference")).NotTo(BeNil())
+			Expect(metadata.ByName("finalizers")).NotTo(BeNil())
 		})
 	})
 
@@ -335,86 +325,81 @@ var _ = Describe("Get command", func() {
 	})
 
 	Describe("billing status subcommand uses one empty Get", func() {
-		for _, private := range []bool{false, true} {
-			pkg := packages.PublicV1
-			if private {
-				pkg = packages.PrivateV1
-			}
-			for _, format := range []string{outputFormatTable, outputFormatJson, outputFormatYaml} {
-				DescribeTable(pkg+" "+format+" preserves singleton payload presence without identity/metadata",
-					func(shape string) {
-						var calls atomic.Int32
-						stdout, err := executeGenericGet(private, func(method string, request, response proto.Message) error {
-							calls.Add(1)
-							Expect(method).To(Equal("/"+pkg+".BillingProviderStatuses/Get"), "never List, Watch, or a keyed fallback")
-							Expect(request.ProtoReflect().Descriptor().Fields().Len()).To(BeZero())
-							Expect(proto.Size(request)).To(BeZero())
-							if shape != "absent" {
-								res := response.ProtoReflect()
-								object := res.Mutable(res.Descriptor().Fields().ByName("object")).Message()
-								Expect(object.Descriptor().Fields().ByName("id")).To(BeNil())
-								Expect(object.Descriptor().Fields().ByName("metadata")).To(BeNil())
-								if shape == "payload" {
-									fields := object.Descriptor().Fields()
-									state := fields.ByName("state")
-									object.Set(state, protoreflect.ValueOfEnum(state.Enum().Values().ByName("BILLING_PROVIDER_STATE_NOT_CONFIGURED").Number()))
-									object.Set(fields.ByName("message"), protoreflect.ValueOfString("p2 singleton payload"))
-								}
-							}
-							return nil
-						}, "billingproviderstatus", "--output="+format)
-						Expect(calls.Load()).To(Equal(int32(1)), "actual generic command must invoke Get, not merely offer a discovery capability")
-						if shape == "absent" {
-							Expect(err).To(HaveOccurred())
-							Expect(stdout).To(BeEmpty())
-							return
-						}
-						Expect(err).NotTo(HaveOccurred())
-						Expect(stdout).NotTo(BeEmpty())
-						if format == outputFormatTable {
-							Expect(stdout).NotTo(MatchRegexp(`\b(ID|NAME|TENANT|DELETING)\b`))
-							Expect(strings.Fields(strings.Split(strings.TrimSpace(stdout), "\n")[0])).To(Equal([]string{
-								"STATE", "PROVIDER", "MESSAGE", "CAPABILITIES", "LAST-SUCCESSFUL-CHECK", "USAGE-DELIVERY",
-							}))
-							if shape == "payload" {
-								Expect(stdout).To(ContainSubstring("p2 singleton payload"))
-							}
-						} else {
-							var value map[string]any
-							if format == outputFormatJson {
-								Expect(json.Unmarshal([]byte(stdout), &value)).To(Succeed())
-							} else {
-								Expect(yaml.Unmarshal([]byte(stdout), &value)).To(Succeed())
-							}
-							expected := map[string]any{"@type": "type.googleapis.com/" + pkg + ".BillingProviderStatus"}
-							if shape == "payload" {
-								expected["state"] = "BILLING_PROVIDER_STATE_NOT_CONFIGURED"
-								expected["message"] = "p2 singleton payload"
-							}
-							Expect(value).To(Equal(expected))
-						}
-					},
-					Entry("present NOT_CONFIGURED payload", "payload"), Entry("present empty object", "empty"), Entry("absent object", "absent"),
-				)
-			}
-
-			DescribeTable(pkg+" rejects singleton keys and explicitly supplied flags before RPC",
-				func(extra []string) {
+		pkg := packages.PrivateV1
+		for _, format := range []string{outputFormatTable, outputFormatJson, outputFormatYaml} {
+			DescribeTable(pkg+" "+format+" preserves singleton payload presence without identity/metadata",
+				func(shape string) {
 					var calls atomic.Int32
-					args := append([]string{"billingproviderstatus"}, extra...)
-					stdout, err := executeGenericGet(private, func(string, proto.Message, proto.Message) error {
+					stdout, err := executeGenericGet(func(method string, request, response proto.Message) error {
 						calls.Add(1)
-						return grpcstatus.Error(codes.Internal, "singleton validation reached RPC")
-					}, args...)
-					Expect(err).To(HaveOccurred())
-					Expect(calls.Load()).To(BeZero())
-					Expect(stdout).To(BeEmpty())
+						Expect(method).To(Equal("/"+pkg+".BillingProviderStatuses/Get"), "never List, Watch, or a keyed fallback")
+						Expect(request.ProtoReflect().Descriptor().Fields().Len()).To(BeZero())
+						Expect(proto.Size(request)).To(BeZero())
+						if shape != "absent" {
+							res := response.ProtoReflect()
+							object := res.Mutable(res.Descriptor().Fields().ByName("object")).Message()
+							Expect(object.Descriptor().Fields().ByName("id")).To(BeNil())
+							Expect(object.Descriptor().Fields().ByName("metadata")).To(BeNil())
+							if shape == "payload" {
+								fields := object.Descriptor().Fields()
+								state := fields.ByName("state")
+								object.Set(state, protoreflect.ValueOfEnum(state.Enum().Values().ByName("BILLING_PROVIDER_STATE_NOT_CONFIGURED").Number()))
+								object.Set(fields.ByName("message"), protoreflect.ValueOfString("p2 singleton payload"))
+							}
+						}
+						return nil
+					}, "billingproviderstatus", "--output="+format)
+					Expect(calls.Load()).To(Equal(int32(1)), "actual generic command must invoke Get, not merely offer a discovery capability")
+					if shape == "absent" {
+						Expect(err).To(HaveOccurred())
+						Expect(stdout).To(BeEmpty())
+						return
+					}
+					Expect(err).NotTo(HaveOccurred())
+					Expect(stdout).NotTo(BeEmpty())
+					if format == outputFormatTable {
+						Expect(stdout).NotTo(MatchRegexp(`\b(ID|NAME|TENANT|DELETING)\b`))
+						Expect(strings.Fields(strings.Split(strings.TrimSpace(stdout), "\n")[0])).To(Equal([]string{
+							"STATE", "PROVIDER", "MESSAGE", "CAPABILITIES", "LAST-SUCCESSFUL-CHECK", "USAGE-DELIVERY",
+						}))
+						if shape == "payload" {
+							Expect(stdout).To(ContainSubstring("p2 singleton payload"))
+						}
+					} else {
+						var value map[string]any
+						if format == outputFormatJson {
+							Expect(json.Unmarshal([]byte(stdout), &value)).To(Succeed())
+						} else {
+							Expect(yaml.Unmarshal([]byte(stdout), &value)).To(Succeed())
+						}
+						expected := map[string]any{"@type": "type.googleapis.com/" + pkg + ".BillingProviderStatus"}
+						if shape == "payload" {
+							expected["state"] = "BILLING_PROVIDER_STATE_NOT_CONFIGURED"
+							expected["message"] = "p2 singleton payload"
+						}
+						Expect(value).To(Equal(expected))
+					}
 				},
-				Entry("key", []string{"invented-id"}), Entry("explicit empty filter", []string{"--filter="}),
-				Entry("explicit filter", []string{"--filter=true"}), Entry("explicit false watch", []string{"--watch=false"}),
-				Entry("watch", []string{"--watch"}), Entry("invalid format", []string{"--output=invalid"}),
+				Entry("present NOT_CONFIGURED payload", "payload"), Entry("present empty object", "empty"), Entry("absent object", "absent"),
 			)
 		}
+
+		DescribeTable(pkg+" rejects singleton keys and explicitly supplied flags before RPC",
+			func(extra []string) {
+				var calls atomic.Int32
+				args := append([]string{"billingproviderstatus"}, extra...)
+				stdout, err := executeGenericGet(func(string, proto.Message, proto.Message) error {
+					calls.Add(1)
+					return grpcstatus.Error(codes.Internal, "singleton validation reached RPC")
+				}, args...)
+				Expect(err).To(HaveOccurred())
+				Expect(calls.Load()).To(BeZero())
+				Expect(stdout).To(BeEmpty())
+			},
+			Entry("key", []string{"invented-id"}), Entry("explicit empty filter", []string{"--filter="}),
+			Entry("explicit filter", []string{"--filter=true"}), Entry("explicit false watch", []string{"--watch=false"}),
+			Entry("watch", []string{"--watch"}), Entry("invalid format", []string{"--output=invalid"}),
+		)
 	})
 
 	DescribeTable("singleton structured output has truthful shape",

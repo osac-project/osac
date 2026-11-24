@@ -14,14 +14,29 @@ language governing permissions and limitations under the License.
 package delete
 
 import (
+	"context"
+
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/spf13/cobra"
 )
 
+func privateCompletionCommand() *cobra.Command {
+	logger, err := logging.NewLogger().SetWriter(GinkgoWriter).Build()
+	Expect(err).NotTo(HaveOccurred())
+	settings, err := config.NewSettings().SetLogger(logger).SetDir(GinkgoT().TempDir()).Build()
+	Expect(err).NotTo(HaveOccurred())
+	settings.SetPrivate(true)
+	command := &cobra.Command{}
+	command.SetContext(config.SettingsIntoContext(context.Background(), settings))
+	return command
+}
+
 var _ = Describe("Delete command", func() {
 	It("includes billing collections but excludes singleton status from delete completion", func() {
-		completed, directive := completeObjectTypes(nil, nil, "")
+		completed, directive := completeObjectTypes(privateCompletionCommand(), nil, "")
 		Expect(directive).To(Equal(cobra.ShellCompDirectiveNoFileComp))
 		Expect(completed).To(ContainElements("billingaccount", "billingaccounts", "tenantbillingassignment", "tenantbillingassignments"))
 		for _, absent := range []string{"billingproviderstatus", "billingproviderstatuses", "billing-accounts", "tenant-billing-assignments", "billing-provider-status", "tba"} {

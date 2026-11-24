@@ -22,6 +22,23 @@ inputs:
 runs:
   using: composite
   steps:
+  # The later steps run with working-directory set, but a shell cannot even
+  # start in a directory absent from the checkout -- the runner then fails the
+  # step with a bare "No such file or directory" that tells the contributor
+  # nothing. The checkout of an integration-test leg is the pull request's head
+  # (so in-cluster jobs fetch that same revision), while the workflow itself
+  # comes from the merge ref, so a branch based on an older main can predate
+  # the module directory its leg tests. Fail before installing anything, with
+  # the rebase spelled out.
+  - name: Check the module directory
+    shell: bash
+    env:
+      MODULE_DIR: ${{ inputs.working-directory }}
+    run: |
+      if [ ! -d "$MODULE_DIR" ]; then
+        echo "::error title=Module directory missing::$MODULE_DIR does not exist in the checked-out commit. The branch is probably based on an older main -- rebase it so this leg's module is present."
+        exit 1
+      fi
   - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16  # v6
     with:
       go-version: '1.27.1'

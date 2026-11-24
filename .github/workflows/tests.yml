@@ -244,7 +244,16 @@ jobs:
           kubectl describe pods -n osac > it-logs/pod-descriptions.txt 2>&1
       - name: Merge JUnit reports
         if: inputs.kind == 'it-caas' && always()
-        run: python3 .github/scripts/merge_junit.py it-junit it-logs/junit.xml
+        # The merge script belongs to the workflow's revision, but the checkout
+        # is the pull request's head, so a branch based on an older main can
+        # predate the script. The tests have already passed at this point:
+        # skip the monitoring merge with a warning instead of failing the job.
+        run: |
+          if [ ! -f .github/scripts/merge_junit.py ]; then
+            echo "::warning::.github/scripts/merge_junit.py is not in the checked-out commit (branch based on an older main?); skipping the JUnit merge"
+            exit 0
+          fi
+          python3 .github/scripts/merge_junit.py it-junit it-logs/junit.xml
       - if: inputs.kind == 'it-caas' && always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
@@ -322,7 +331,14 @@ jobs:
           fi
       - name: Merge JUnit reports
         if: inputs.kind == 'it-fulfillment-service' && always()
-        run: python3 .github/scripts/merge_junit.py it-junit it-logs/junit.xml
+        # Skip when the head checkout predates the script (older-main branch);
+        # see the it-caas leg for the full rationale.
+        run: |
+          if [ ! -f .github/scripts/merge_junit.py ]; then
+            echo "::warning::.github/scripts/merge_junit.py is not in the checked-out commit (branch based on an older main?); skipping the JUnit merge"
+            exit 0
+          fi
+          python3 .github/scripts/merge_junit.py it-junit it-logs/junit.xml
       - if: inputs.kind == 'it-fulfillment-service' && always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
@@ -400,7 +416,14 @@ jobs:
           kubectl describe pods -n osac > it-logs/pod-descriptions.txt 2>&1
       - name: Merge JUnit reports
         if: inputs.kind == 'it-osac-operator' && always()
-        run: python3 .github/scripts/merge_junit.py it-junit it-logs/junit.xml
+        # Skip when the head checkout predates the script (older-main branch);
+        # see the it-caas leg for the full rationale.
+        run: |
+          if [ ! -f .github/scripts/merge_junit.py ]; then
+            echo "::warning::.github/scripts/merge_junit.py is not in the checked-out commit (branch based on an older main?); skipping the JUnit merge"
+            exit 0
+          fi
+          python3 .github/scripts/merge_junit.py it-junit it-logs/junit.xml
       - if: inputs.kind == 'it-osac-operator' && always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
@@ -494,7 +517,14 @@ jobs:
           kubectl describe pods -n osac > it-logs/pod-descriptions.txt 2>&1
       - name: Merge JUnit reports
         if: inputs.kind == 'it-bare-metal-fulfillment-operator' && always()
-        run: python3 .github/scripts/merge_junit.py it-junit it-logs/junit.xml
+        # Skip when the head checkout predates the script (older-main branch);
+        # see the it-caas leg for the full rationale.
+        run: |
+          if [ ! -f .github/scripts/merge_junit.py ]; then
+            echo "::warning::.github/scripts/merge_junit.py is not in the checked-out commit (branch based on an older main?); skipping the JUnit merge"
+            exit 0
+          fi
+          python3 .github/scripts/merge_junit.py it-junit it-logs/junit.xml
       - if: inputs.kind == 'it-bare-metal-fulfillment-operator' && always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:

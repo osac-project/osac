@@ -59,7 +59,11 @@ metadata:
     "helm.sh/hook-weight": "15"
 spec:
   backoffLimit: 5
-  activeDeadlineSeconds: 1800
+  # 40 minutes: on GitHub-hosted runners, openbao has been observed crash
+  # looping for roughly half an hour (five restarts) before stabilizing, which
+  # pushed Keycloak readiness past the previous 30-minute deadline and failed
+  # integration runs whose images and cluster had already built successfully.
+  activeDeadlineSeconds: 2400
   ttlSecondsAfterFinished: 3600
   template:
     metadata:

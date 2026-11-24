@@ -16,10 +16,26 @@ define kind-load-image
 	fi
 endef
 
+# GitHub-hosted runners intermittently fail container builds on transient
+# network errors: registry.access.redhat.com answers manifest HEAD requests
+# with 403 (rate limiting of shared runner egress IPs), proxy.golang.org
+# resets connections mid-download (see osac-test-infra#543) and blob reads
+# end with "unexpected EOF". BuildKit caches completed steps, so a retry only
+# repeats the failed one; deterministic failures (a broken Containerfile, an
+# unsatisfiable dependency) still fail once the retries are exhausted.
 define kind-container-build
 	@if [ "$(KIND_RUNTIME_REQUIRED)" = "true" ]; then \
-		$(KIND_RUNTIME_CMD) container build $(1); \
+		build_cmd="$(KIND_RUNTIME_CMD) container build"; \
 	else \
-		$(CONTAINER_TOOL) build $(1); \
-	fi
+		build_cmd="$(CONTAINER_TOOL) build"; \
+	fi; \
+	for attempt in 1 2 3; do \
+		if $$build_cmd $(1); then exit 0; fi; \
+		if [ "$$attempt" -lt 3 ]; then \
+			echo "WARNING: container build attempt $$attempt/3 failed; retrying in 30s" >&2; \
+			sleep 30; \
+		fi; \
+	done; \
+	echo 'ERROR: container build failed after 3 attempts' >&2; \
+	exit 1
 endef

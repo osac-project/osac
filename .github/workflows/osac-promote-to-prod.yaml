@@ -156,7 +156,7 @@ jobs:
     - name: Log in to Konflux cluster
       uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
       with:
-        openshift_server_url: https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443
+        openshift_server_url: ${{ vars.KONFLUX_API_URL }}
         openshift_token: ${{ secrets.KONFLUX_SA_TOKEN }}
         namespace: osac-tenant
 
@@ -321,7 +321,7 @@ jobs:
     - name: Log in to Konflux cluster
       uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
       with:
-        openshift_server_url: https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443
+        openshift_server_url: ${{ vars.KONFLUX_API_URL }}
         openshift_token: ${{ secrets.KONFLUX_SA_TOKEN }}
         namespace: osac-tenant
 
@@ -537,7 +537,7 @@ jobs:
     - name: Log in to Konflux cluster
       uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
       with:
-        openshift_server_url: https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443
+        openshift_server_url: ${{ vars.KONFLUX_API_URL }}
         openshift_token: ${{ secrets.KONFLUX_SA_TOKEN }}
         namespace: osac-tenant
 
@@ -749,7 +749,7 @@ jobs:
     - name: Log in to Konflux cluster
       uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
       with:
-        openshift_server_url: https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443
+        openshift_server_url: ${{ vars.KONFLUX_API_URL }}
         openshift_token: ${{ secrets.KONFLUX_SA_TOKEN }}
         namespace: osac-tenant
 
@@ -951,7 +951,7 @@ jobs:
     - name: Log in to Konflux cluster
       uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
       with:
-        openshift_server_url: https://api.kflux-prd-rh02.0fk9.p1.openshiftapps.com:6443
+        openshift_server_url: ${{ vars.KONFLUX_API_URL }}
         openshift_token: ${{ secrets.KONFLUX_SA_TOKEN }}
         namespace: osac-tenant
 

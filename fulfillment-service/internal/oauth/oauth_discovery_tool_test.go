@@ -68,6 +68,23 @@ var _ = Describe("OAuth discovery tool", func() {
 			Expect(err).To(MatchError("issuer is mandatory"))
 			Expect(tool).To(BeNil())
 		})
+
+		It("Keeps the default connection pooling settings", func() {
+			// A bare transport would leave IdleConnTimeout at zero, so each tool would hold its connections
+			// open until the server closed them. Callers create one tool per login, and the accumulated
+			// connections are what exhausts the proxy in front of the issuer during a long test run.
+			tool, err := NewDiscoveryTool().
+				SetLogger(logger).
+				SetIssuer("https://example.com").
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			transport, ok := tool.httpClient.Transport.(*http.Transport)
+			Expect(ok).To(BeTrue())
+			Expect(transport.IdleConnTimeout).To(Equal(http.DefaultTransport.(*http.Transport).IdleConnTimeout))
+			Expect(transport.MaxIdleConns).To(Equal(http.DefaultTransport.(*http.Transport).MaxIdleConns))
+			Expect(transport.MaxIdleConnsPerHost).To(Equal(http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost))
+			Expect(transport.ResponseHeaderTimeout).To(Equal(http.DefaultTransport.(*http.Transport).ResponseHeaderTimeout))
+		})
 	})
 
 	Describe("Discovery", func() {

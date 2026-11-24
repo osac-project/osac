@@ -17,7 +17,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 	"google.golang.org/grpc/codes"
@@ -25,6 +24,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -149,24 +149,7 @@ func (p *UserProvisioner) Provision(ctx context.Context, username, tenant string
 // - Contain only lowercase letters (a-z), digits (0-9), and hyphens (-)
 // - Not start or end with a hyphen
 func sanitizeForDNS1123(username string) string {
-	// Convert to lowercase
-	result := strings.ToLower(username)
-
-	// Replace any character that isn't [a-z0-9-] with a hyphen
-	var sanitized strings.Builder
-	for _, r := range result {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			sanitized.WriteRune(r)
-		} else {
-			sanitized.WriteRune('-')
-		}
-	}
-	result = sanitized.String()
-
-	// Trim leading and trailing hyphens
-	result = strings.Trim(result, "-")
-
-	return result
+	return utils.SanitizeDNS1123Name(username, 0, nil)
 }
 
 var _ auth.UserProvisioner = (*UserProvisioner)(nil)

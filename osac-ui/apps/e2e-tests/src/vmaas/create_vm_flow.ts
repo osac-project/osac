@@ -1,12 +1,6 @@
 import { type Page, expect, test } from '@playwright/test';
 import { access } from 'node:fs/promises';
 
-import {
-  catalogTestData,
-  instanceTypeTestData,
-  storageTierTestData,
-  tenantNameOrSkip,
-} from './test_data';
 import { VmCreatePage } from '../../../../libs/locators/vms';
 import { expectComputeInstanceCatalogItem } from '../../../../libs/osac-cli/src/compute_instance';
 import {
@@ -25,6 +19,12 @@ import {
   expectVmDetailsPage,
   waitForVmToBeRunning,
 } from '../../../../libs/test-utils/src/vms.page';
+import {
+  catalogTestData,
+  instanceTypeTestData,
+  storageTierTestData,
+  tenantNameOrSkip,
+} from '../shared/test_data';
 
 export interface CreateVmFromCatalogOptions {
   progressLabel: string;

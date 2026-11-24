@@ -12,9 +12,11 @@ export interface OsacCommandResult {
 
 const cliPath = process.env.OSAC_CLI_PATH ?? 'osac';
 
-const cliPrefix = process.env.OSAC_CLI_CONFIG ? ['--config', process.env.OSAC_CLI_CONFIG] : [];
-
-export const runOsacCommand = async (args: readonly string[]): Promise<OsacCommandResult> => {
+export const runOsacCommand = async (
+  args: readonly string[],
+  config = process.env.OSAC_CLI_CONFIG,
+): Promise<OsacCommandResult> => {
+  const cliPrefix = config ? ['--config', config] : [];
   try {
     const result = await execFileAsync(cliPath, [...cliPrefix, ...args], {
       env: { ...process.env, NO_COLOR: '1' },

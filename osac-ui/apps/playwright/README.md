@@ -221,6 +221,10 @@ The creation and VM portion of the full-flow journey runs in this order:
    `ComputeInstance` reaches `Running`, and the VM appears in both the tenant
    VM list and its details page.
 
+The tenant, infrastructure, and catalog item specs live in
+`apps/e2e-tests/src/generic/`. Their projects are dependencies and teardowns
+of the VM specs in `apps/e2e-tests/src/vmaas/`.
+
 The full-flow projects run in this order:
 
 1. `vmaas-full-flow-pre-resource` creates the infrastructure resources, catalog

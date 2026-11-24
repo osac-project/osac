@@ -134,6 +134,25 @@ message SubnetStatus {
   // The fulfillment-service controller randomly selects a hub from available hubs and stores the hub ID here.
   // This tracks which hub cluster the Subnet CR is deployed to for reconciliation and cleanup.
   string hub = 3 [(cleanapi.field).private = true];
+
+  // Address layout recorded by the networking controller. Private so
+  // Fulfillment can allocate CaaS guest ingress from the committed LB VIP
+  // ranges without recomputing the Subnet plan.
+  SubnetIPAM ipam = 6 [
+    (google.api.field_behavior) = OUTPUT_ONLY,
+    (cleanapi.field).private = true
+  ];
+}
+
+// The immutable address layout computed for a Subnet by the networking
+// controller. It is shared internally with Fulfillment for CaaS allocation.
+message SubnetIPAM {
+  option (cleanapi.message).private = true;
+
+  string gateway_ipv4 = 1;
+  repeated string overlay_ipv4_cidrs = 2;
+  repeated string physical_ipv4_cidrs = 3;
+  repeated string lb_vip_ipv4_cidrs = 4;
 }
 
 // Lifecycle states for Subnet resources.

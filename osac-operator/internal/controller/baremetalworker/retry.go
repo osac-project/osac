@@ -20,6 +20,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
@@ -69,7 +70,7 @@ var backoffSchedules = map[FailureCategory]backoffSchedule{
 // ClassifyFailure maps a LastFailureReason string to a FailureCategory.
 func ClassifyFailure(reason string) FailureCategory {
 	switch reason {
-	case eventReasonAgentRegistrationTimeout:
+	case eventReasonAgentRegistrationTimeout, eventReasonRegistryAccessTimeout:
 		return FailureCategoryAgentTimeout
 	case "NoHostAvailable", "ResourceExhausted":
 		return FailureCategoryResource
@@ -111,6 +112,12 @@ func (r *Reconciler) handleFailedWorkers(
 		if !gone {
 			return nil
 		}
+		if w.RegistryProbePrepared {
+			if err := r.cleanupFailedWorkerRegistryProbe(ctx, co, *w); err != nil {
+				log.Error(err, "failed worker registry probe cleanup is pending", "worker", w.Name)
+				continue
+			}
+		}
 		log.Info("confirmed failed incarnation cleanup", "worker", w.Name, "bmiID", w.BareMetalInstance.ID)
 		w.AttemptCount++
 		category := ClassifyFailure(w.LastFailureReason)
@@ -119,6 +126,10 @@ func (r *Reconciler) handleFailedWorkers(
 		retryTime := metav1.NewTime(now.Add(backoff))
 		w.NextRetryTime = &retryTime
 		w.BareMetalInstance.ID = ""
+		w.Agent = nil
+		w.RegistrationDeadline = nil
+		w.RegistryProbePrepared = false
+		w.RegistryAccessReady = nil
 		// Only confirmed old-incarnation absence makes a new reservation safe to
 		// cancel. Unknown Create outcomes never pass this cleanup checkpoint.
 		w.BMICreateState = v1alpha1.WorkerBMICreateStateReserved
@@ -133,6 +144,27 @@ func (r *Reconciler) handleFailedWorkers(
 		return nil
 	}
 	return nil
+}
+
+func (r *Reconciler) cleanupFailedWorkerRegistryProbe(
+	ctx context.Context, order *v1alpha1.ClusterOrder, worker v1alpha1.WorkerStatus,
+) error {
+	names, err := workerRegistryProbeNamesFor(order, worker.Name, worker.AttemptCount)
+	if err != nil {
+		return err
+	}
+	resolver := r.registryProbeGuestResolver
+	if resolver == nil {
+		resolver = hostedClusterRegistryProbeResolver{management: r.Client}
+	}
+	guest, err := resolver.Resolve(ctx, order)
+	if err != nil {
+		return fmt.Errorf("resolve guest API: %w", err)
+	}
+	if err := guest.client.CoreV1().ConfigMaps(names.namespace).Delete(ctx, names.configMap, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete worker registry probe ConfigMap: %w", err)
+	}
+	return cleanupWorkerRegistryProbeCredentials(ctx, guest.client, names)
 }
 
 func hasFailedIncarnations(workers []v1alpha1.WorkerStatus) bool {
@@ -163,7 +195,7 @@ func (r *Reconciler) retryFailedWorker(
 	if !res.IsZero() {
 		return res, nil
 	}
-	log.Info("created replacement BMI for failed worker", "name", prev.Name, "attempt", prev.AttemptCount, "id", bmi.GetId())
+	log.Info("created replacement BMI for failed worker", jsonNameField, prev.Name, "attempt", prev.AttemptCount, "id", bmi.GetId())
 	workerCreated(prev, bmi.GetMetadata().GetName(), bmi.GetId())
 	r.recorder.Eventf(co, nil, corev1.EventTypeNormal, eventReasonWorkerRetry, "RetryWorker",
 		"worker %s: retry attempt %d", prev.Name, prev.AttemptCount)

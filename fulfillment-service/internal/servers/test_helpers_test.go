@@ -189,6 +189,12 @@ func seedClusterTenantDefaultNetworking(ctx context.Context, tenant, project str
 		Status: privatev1.SubnetStatus_builder{
 			State: privatev1.SubnetState_SUBNET_STATE_READY,
 			Hub:   "network-hub-a",
+			Ipam: privatev1.SubnetIPAM_builder{
+				GatewayIpv4:       "10.200.0.1",
+				OverlayIpv4Cidrs:  []string{"10.200.0.0/25"},
+				PhysicalIpv4Cidrs: []string{"10.200.0.128/26"},
+				LbVipIpv4Cidrs:    []string{"10.200.0.192/26"},
+			}.Build(),
 		}.Build(),
 	}.Build()).Do(ctx)
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())

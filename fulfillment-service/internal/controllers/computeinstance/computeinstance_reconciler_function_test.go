@@ -1508,6 +1508,11 @@ type fakeWorkloadNetworkingCleanup struct {
 	err        error
 }
 
+func (f *fakeWorkloadNetworkingCleanup) CleanupExternalAccess(_ context.Context, workloadID string) (bool, error) {
+	f.workloadID = workloadID
+	return f.complete, f.err
+}
+
 func (f *fakeWorkloadNetworkingCleanup) Cleanup(_ context.Context, workloadID string) (bool, error) {
 	f.calls++
 	f.workloadID = workloadID

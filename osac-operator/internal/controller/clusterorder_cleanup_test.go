@@ -185,7 +185,7 @@ var _ = Describe("reconcileAutoExternalIPCleanup", func() {
 		Expect(reconcile().RequeueAfter).To(Equal(pollInterval))
 		assertParentHeld()
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(eia), eia)).To(Succeed())
-		Expect(eia.DeletionTimestamp).NotTo(BeNil())
+		Expect(eia.DeletionTimestamp).To(BeNil())
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(eip), eip)).To(Succeed())
 		Expect(eip.DeletionTimestamp).To(BeNil())
 
@@ -194,9 +194,24 @@ var _ = Describe("reconcileAutoExternalIPCleanup", func() {
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(eip), eip)).To(Succeed())
 		Expect(eip.DeletionTimestamp).To(BeNil())
 
-		eia.Finalizers = nil
-		Expect(k8sClient.Update(ctx, eia)).To(Succeed())
-		waitForIndexedClientObjectGone(eia)
+		// Fulfillment requests the child deletes in dependency order.
+		Expect(k8sClient.Delete(ctx, eia)).To(Succeed())
+		Expect(reconcile().RequeueAfter).To(Equal(pollInterval))
+		assertParentHeld()
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(eip), eip)).To(Succeed())
+		Expect(eip.DeletionTimestamp).To(BeNil())
+
+		currentEIA := &v1alpha1.ExternalIPAttachment{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(eia), currentEIA)).To(Succeed())
+		currentEIA.Finalizers = nil
+		Expect(k8sClient.Update(ctx, currentEIA)).To(Succeed())
+		waitForIndexedClientObjectGone(currentEIA)
+		Expect(reconcile().RequeueAfter).To(Equal(pollInterval))
+		assertParentHeld()
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(eip), eip)).To(Succeed())
+		Expect(eip.DeletionTimestamp).To(BeNil())
+
+		Expect(k8sClient.Delete(ctx, eip)).To(Succeed())
 		Expect(reconcile().RequeueAfter).To(Equal(pollInterval))
 		assertParentHeld()
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(eip), eip)).To(Succeed())
@@ -204,9 +219,11 @@ var _ = Describe("reconcileAutoExternalIPCleanup", func() {
 
 		Expect(reconcile().RequeueAfter).To(Equal(pollInterval))
 		assertParentHeld()
-		eip.Finalizers = nil
-		Expect(k8sClient.Update(ctx, eip)).To(Succeed())
-		waitForIndexedClientObjectGone(eip)
+		currentEIP := &v1alpha1.ExternalIP{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(eip), currentEIP)).To(Succeed())
+		currentEIP.Finalizers = nil
+		Expect(k8sClient.Update(ctx, currentEIP)).To(Succeed())
+		waitForIndexedClientObjectGone(currentEIP)
 		_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
 		Expect(err).NotTo(HaveOccurred())
 		getErr := k8sClient.Get(ctx, key, &v1alpha1.ClusterOrder{})
@@ -289,7 +306,7 @@ var _ = Describe("reconcileAutoExternalIPCleanup", func() {
 	})
 
 	Context("ExternalIPAttachment cleanup", func() {
-		It("deletes auto-provisioned EIAs targeting this cluster and requeues", func() {
+		It("waits for Fulfillment to delete auto-provisioned EIAs targeting this cluster", func() {
 			eia := newAutoEIA(clusterUUID)
 			Expect(k8sClient.Create(ctx, eia)).To(Succeed())
 
@@ -300,11 +317,10 @@ var _ = Describe("reconcileAutoExternalIPCleanup", func() {
 			Expect(done).To(BeFalse())
 			Expect(result.RequeueAfter).To(Equal(pollInterval))
 
-			// EIA should have a deletion timestamp or be gone
+			// Fulfillment owns the record and must request its deletion.
 			remaining := listEIAs()
-			for _, e := range remaining {
-				Expect(e.DeletionTimestamp).NotTo(BeNil())
-			}
+			Expect(remaining).To(HaveLen(1))
+			Expect(remaining[0].DeletionTimestamp).To(BeNil())
 		})
 
 		It("does not delete EIAs targeting a different cluster", func() {
@@ -354,7 +370,7 @@ var _ = Describe("reconcileAutoExternalIPCleanup", func() {
 	})
 
 	Context("ExternalIP cleanup", func() {
-		It("deletes auto-provisioned EIPs for this cluster after EIAs are gone and requeues", func() {
+		It("waits for Fulfillment to delete auto-provisioned EIPs for this cluster", func() {
 			eip := newAutoEIP(clusterUUID)
 			Expect(k8sClient.Create(ctx, eip)).To(Succeed())
 
@@ -366,9 +382,8 @@ var _ = Describe("reconcileAutoExternalIPCleanup", func() {
 			Expect(result.RequeueAfter).To(Equal(pollInterval))
 
 			remaining := listEIPs()
-			for _, e := range remaining {
-				Expect(e.DeletionTimestamp).NotTo(BeNil())
-			}
+			Expect(remaining).To(HaveLen(1))
+			Expect(remaining[0].DeletionTimestamp).To(BeNil())
 		})
 
 		It("does not delete EIPs labeled for a different cluster", func() {
@@ -438,7 +453,7 @@ var _ = Describe("reconcileAutoExternalIPCleanup", func() {
 	})
 
 	Context("phased ordering", func() {
-		It("waits for EIAs to be gone before deleting EIPs", func() {
+		It("waits for Fulfillment to remove EIAs and EIPs in dependency order", func() {
 			eia := newAutoEIA(clusterUUID)
 			Expect(k8sClient.Create(ctx, eia)).To(Succeed())
 			eip := newAutoEIP(clusterUUID)
@@ -447,16 +462,48 @@ var _ = Describe("reconcileAutoExternalIPCleanup", func() {
 			r := newReconciler(networkingNS, eia, eip)
 			co := newClusterOrder(clusterUUID)
 
-			// First call: EIA phase — EIA gets deleted, EIP untouched
+			// The controller only observes Fulfillment-owned child deletion.
 			done, result, err := r.reconcileAutoExternalIPCleanup(ctx, co)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(done).To(BeFalse())
 			Expect(result.RequeueAfter).To(Equal(pollInterval))
 
-			// EIP must not be deleted yet
+			// Neither child is deleted by the operator.
+			eiaList := listEIAs()
+			Expect(eiaList).To(HaveLen(1))
+			Expect(eiaList[0].DeletionTimestamp).To(BeNil())
 			eipList := listEIPs()
 			Expect(eipList).To(HaveLen(1))
 			Expect(eipList[0].DeletionTimestamp).To(BeNil())
+
+			Expect(k8sClient.Delete(ctx, &eiaList[0])).To(Succeed())
+			currentEIA := &v1alpha1.ExternalIPAttachment{}
+			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(&eiaList[0]), currentEIA); err == nil {
+				currentEIA.Finalizers = nil
+				Expect(k8sClient.Update(ctx, currentEIA)).To(Succeed())
+				waitForIndexedClientObjectGone(currentEIA)
+			} else {
+				Expect(apierrors.IsNotFound(err)).To(BeTrue())
+			}
+			done, result, err = r.reconcileAutoExternalIPCleanup(ctx, co)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(done).To(BeFalse())
+			Expect(result.RequeueAfter).To(Equal(pollInterval))
+			Expect(k8sClient.Delete(ctx, &eipList[0])).To(Succeed())
+			currentEIP := &v1alpha1.ExternalIP{}
+			if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(&eipList[0]), currentEIP); err == nil {
+				currentEIP.Finalizers = nil
+				Expect(k8sClient.Update(ctx, currentEIP)).To(Succeed())
+				waitForIndexedClientObjectGone(currentEIP)
+			} else {
+				Expect(apierrors.IsNotFound(err)).To(BeTrue())
+				waitForIndexedClientObjectGone(&eipList[0])
+			}
+
+			done, result, err = r.reconcileAutoExternalIPCleanup(ctx, co)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(done).To(BeTrue())
+			Expect(result.RequeueAfter).To(BeZero())
 		})
 
 		It("returns done=true when both EIAs and EIPs are gone", func() {

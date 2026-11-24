@@ -83,7 +83,7 @@ var _ = Describe("BareMetalWorker tenant safety", Label("baremetalworker"), func
 			Spec: osacv1alpha1.ClusterOrderSpec{
 				TemplateID: "test", PullSecret: `{"auths":{}}`,
 				NodeRequests:      []osacv1alpha1.NodeRequest{{NodeSet: "bm-standard", NumberOfNodes: count, FabricInterface: "data-0", BareMetal: &osacv1alpha1.BareMetalNodeSpec{InstanceType: "bm-standard"}}},
-				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{SubnetRef: "my-subnet", SecurityGroupRefs: []string{"sg-default"}},
+				NetworkAttachment: &osacv1alpha1.ClusterNetworkAttachment{SubnetRef: "subnet-id", SecurityGroupRefs: []string{"sg-id"}},
 			},
 		}
 	}

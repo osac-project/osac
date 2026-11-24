@@ -149,7 +149,8 @@ func rejectDeleteIfReferenced[O lifecycleResource](
 //  1. Tenant (lockTenantForCreate).
 //  2. NetworkClass (lockNetworkClass): shared for VirtualNetwork and Cluster creates, exclusive for ExternalIPPool
 //     creates and address plan writes.
-//  3. Parent VirtualNetwork, then the child record.
+//  3. Cluster, then its NetworkAttachment Subnet; for creates and updates that
+//     also take the network parents, VirtualNetwork precedes Subnet.
 //  4. ExternalIPPool, then ExternalIP.
 //  5. Target workload, then ExternalIP, then ExternalIPAttachment.
 //  6. Records of one kind by ID ascending.

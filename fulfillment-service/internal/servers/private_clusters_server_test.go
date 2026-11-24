@@ -676,6 +676,12 @@ var _ = Describe("Private clusters server", func() {
 				Status: privatev1.SubnetStatus_builder{
 					State: privatev1.SubnetState_SUBNET_STATE_READY,
 					Hub:   "network-hub-a",
+					Ipam: privatev1.SubnetIPAM_builder{
+						GatewayIpv4:       "10.0.10.1",
+						OverlayIpv4Cidrs:  []string{"10.0.10.0/25"},
+						PhysicalIpv4Cidrs: []string{"10.0.10.128/26"},
+						LbVipIpv4Cidrs:    []string{"10.0.10.192/26"},
+					}.Build(),
 				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
@@ -1118,6 +1124,25 @@ var _ = Describe("Private clusters server", func() {
 			clusterID := response.GetObject().GetId()
 			Expect(response.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeTrue())
 			Expect(response.GetObject().GetSpec().GetSupportsAutomaticCaasEndpoints()).To(BeTrue())
+			Expect(response.GetObject().GetSpec().GetIngressAllocatedAddress()).To(Equal("10.0.10.192"))
+
+			second, err := server.Create(ctx, privatev1.ClustersCreateRequest_builder{Object: privatev1.Cluster_builder{
+				Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("deferred-second-%s", uuid.New()[24:32])}.Build(),
+				Spec: privatev1.ClusterSpec_builder{
+					Template: privatev1.ClusterTemplateReference_builder{Id: "acme.templates.caas-capable"}.Build(),
+				}.Build(),
+			}.Build()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(second.GetObject().GetSpec().GetIngressAllocatedAddress()).To(Equal("10.0.10.193"),
+				"guest ingress allocation was reused within the Subnet")
+
+			autoGroups, err := server.securityGroupsDao.List().SetFilter(fmt.Sprintf(
+				"this.metadata.labels['%s'] == '%s' && this.metadata.labels['%s'] == '%s'",
+				autoCreatedForLabel, clusterID, autoCreatedKindLabel, "cluster",
+			)).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(autoGroups.GetItems()).To(HaveLen(1))
+			Expect(autoGroups.GetItems()[0].GetMetadata().GetCreator()).To(Equal(systemCreator))
 
 			eipDao, err := dao.NewGenericDAO[*privatev1.ExternalIP]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
 			Expect(err).ToNot(HaveOccurred())
@@ -1147,6 +1172,8 @@ var _ = Describe("Private clusters server", func() {
 			eipList, err = eipDao.List().SetFilter(filter).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(eipList.GetItems()).To(BeEmpty())
+			_, err = server.Delete(ctx, privatev1.ClustersDeleteRequest_builder{Id: second.GetObject().GetId()}.Build())
+			Expect(err).ToNot(HaveOccurred())
 		})
 
 		It("keeps automatic ExternalIPs while an attachment finalizer holds public deletion", func() {

@@ -23,6 +23,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
@@ -135,6 +136,9 @@ func (r *ExternalIPReconciler) remove(ctx context.Context, eip *v1alpha1.Externa
 		if err != nil || used {
 			return false, waitResult(), err
 		}
+	}
+	if controllerutil.ContainsFinalizer(eip, clusterEndpointDNSFinalizer) {
+		return false, waitResult(), nil
 	}
 	input := cleanupInput(eip)
 	return runCleanup(ctx, r.Engine, eip, kindExternalIP,

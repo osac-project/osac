@@ -1307,6 +1307,15 @@ func (r *BareMetalInstanceReconciler) triggerRestart(ctx context.Context, bareMe
 func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMetalInstance *v1alpha1.BareMetalInstance) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 	log.Info("Deleting BareMetalInstance")
+	if controllerutil.ContainsFinalizer(bareMetalInstance, bareMetalInstanceCaaSAgentCleanupFinalizer) {
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseDeleting
+		log.Info("Waiting for osac-operator CaaS Agent cleanup before host teardown")
+		pollInterval := r.ManagementRecheckIntervalDuration
+		if pollInterval <= 0 {
+			pollInterval = DefaultManagementRecheckIntervalDuration
+		}
+		return ctrl.Result{RequeueAfter: pollInterval}, nil
+	}
 	if controllerutil.ContainsFinalizer(bareMetalInstance, bareMetalInstanceOSACNetworkingFinalizer) {
 		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseDeleting
 		log.Info("Waiting for osac-operator ExternalIP cleanup before host teardown")

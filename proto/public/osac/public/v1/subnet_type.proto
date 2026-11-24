@@ -125,6 +125,7 @@ message SubnetStatus {
 
   // Explanation when compute instances are not supported on this subnet.
   string compute_instance_unsupported_reason = 5 [(google.api.field_behavior) = OUTPUT_ONLY];
+
 }
 
 // Lifecycle states for Subnet resources.

@@ -126,6 +126,7 @@ var _ = It("uses a UID precondition when deleting an Agent", func() {
 	agent.SetNamespace(co.Namespace)
 	agent.SetUID("old")
 	agent.SetLabels(map[string]string{workerNameLabel: w.Name})
+	w.Agent = &v1alpha1.WorkerAgentReference{Name: agent.GetName(), UID: string(agent.GetUID())}
 	ctx := context.Background()
 	Expect(r.Create(ctx, agent)).To(Succeed())
 	kube := r.Client
@@ -156,6 +157,7 @@ var _ = It("preserves the retry category for a bound failed worker", func() {
 	w.LastFailureTime = &past
 	agent := &unstructured.Unstructured{Object: map[string]interface{}{"status": map[string]interface{}{"debugInfo": map[string]interface{}{"state": "installed"}}}}
 	agent.SetName("bound")
+	agent.SetUID("bound-uid")
 	Expect(r.requestCleanupAgent(context.Background(), co, &w, agent)).To(Succeed())
 	Expect(w.LastFailureReason).To(Equal(eventReasonAgentRegistrationTimeout), "cleanup changed retry category/history: %+v", w)
 	Expect(w.LastFailureTime.Equal(&past)).To(BeTrue(), "cleanup changed retry category/history: %+v", w)
@@ -282,6 +284,7 @@ var _ = Describe("Agent cleanup before BMI deletion", func() {
 				kept := r.reconcileTeardownWorkers(context.Background(), co, []v1alpha1.WorkerStatus{w})
 				Expect(kept).To(HaveLen(1), "old Agent bypassed: workers=%+v deletes=%d", kept, fc.deletes)
 				Expect(fc.deletes).To(Equal(0), "old Agent bypassed: workers=%+v deletes=%d", kept, fc.deletes)
+				w = kept[0]
 			}
 			latest := &unstructured.Unstructured{}
 			latest.SetGroupVersionKind(agentGVK)

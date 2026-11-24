@@ -55,11 +55,11 @@ func requestedBareMetalWorkersByNodeSet(co *v1alpha1.ClusterOrder) map[string]in
 func (r *Reconciler) listNodePools(ctx context.Context, namespace, clusterOrderName string) (*unstructured.UnstructuredList, error) {
 	nodePoolList := &unstructured.UnstructuredList{}
 	nodePoolList.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "hypershift.openshift.io", Version: "v1beta1", Kind: "NodePoolList",
+		Group: "hypershift.openshift.io", Version: v1beta1APIVersion, Kind: "NodePoolList",
 	})
 	if err := r.List(ctx, nodePoolList,
 		client.InNamespace(namespace),
-		client.MatchingLabels{"osac.openshift.io/clusterorder": clusterOrderName},
+		client.MatchingLabels{legacyClusterOrderLabel: clusterOrderName},
 	); err != nil {
 		return nil, fmt.Errorf("listing nodepools for %s: %w", clusterOrderName, err)
 	}

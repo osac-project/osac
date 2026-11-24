@@ -52,6 +52,12 @@ import (
 
 const objectPrefix = "bmi-"
 
+const caasAgentCleanupFinalizer = "osac.openshift.io/caas-agent-cleanup"
+
+const clusterAPIIDAnnotation = "osac.openshift.io/cluster-api-id"
+
+const clusterOrderUUIDLabel = "osac.openshift.io/clusterorder-uuid"
+
 const userDataSecretSuffix = "-user-data"
 
 const userDataSecretKey = "userdata"
@@ -443,6 +449,15 @@ func (t *task) delete(ctx context.Context) (err error) {
 		privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
 	if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.bareMetalInstance.GetId()); err != nil {
 		return err
+	}
+	if !slices.Contains(t.bareMetalInstance.GetMetadata().GetFinalizers(), caasAgentCleanupFinalizer) &&
+		controllerutil.ContainsFinalizer(object, caasAgentCleanupFinalizer) {
+		base := object.DeepCopy()
+		controllerutil.RemoveFinalizer(object, caasAgentCleanupFinalizer)
+		if err = t.hubClient.Patch(ctx, object,
+			clnt.MergeFromWithOptions(base, clnt.MergeFromWithOptimisticLock{})); err != nil {
+			return fmt.Errorf("remove CaaS cleanup finalizer from hub BareMetalInstance: %w", err)
+		}
 	}
 
 	if object.GetDeletionTimestamp() == nil {
@@ -1119,6 +1134,18 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 		object.Annotations = make(map[string]string)
 	}
 	object.Annotations[annotations.Tenant] = t.bareMetalInstance.GetMetadata().GetTenant()
+	if clusterID := t.bareMetalInstance.GetMetadata().GetAnnotations()[clusterAPIIDAnnotation]; clusterID != "" {
+		object.Annotations[clusterAPIIDAnnotation] = clusterID
+		object.Labels[clusterOrderUUIDLabel] = t.bareMetalInstance.GetMetadata().GetLabels()[clusterOrderUUIDLabel]
+	} else {
+		delete(object.Annotations, clusterAPIIDAnnotation)
+		delete(object.Labels, clusterOrderUUIDLabel)
+	}
+	if slices.Contains(t.bareMetalInstance.GetMetadata().GetFinalizers(), caasAgentCleanupFinalizer) {
+		controllerutil.AddFinalizer(object, caasAgentCleanupFinalizer)
+	} else {
+		controllerutil.RemoveFinalizer(object, caasAgentCleanupFinalizer)
+	}
 
 	// The API materializes the Template; the catalog reference is provenance only.
 	templateID := t.bareMetalInstance.GetSpec().GetTemplate().GetId()

@@ -351,6 +351,11 @@ func (e *Engine) launch(ctx context.Context, obj v1alpha1.NetworkTaskObject, req
 		if err := req.BeforeLaunch(); err != nil {
 			return Outcome{}, err
 		}
+		// BeforeLaunch may enrich the status entry with launch input that must
+		// survive the subsequent JobID write (for example, a DNS address).
+		if stored := FindJob(obj.GetNetworkJobs(), req.Task, req.Manager); stored != nil {
+			entry = *stored
+		}
 	}
 	// The status update is conditional on the resourceVersion the object was
 	// read at: a conflict, or a stale cached object, launches nothing.

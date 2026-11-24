@@ -43,6 +43,11 @@ import (
 
 const bareMetalInstanceUserDataMaxBytes = 64 * 1024
 
+const (
+	clusterAPIIDAnnotation    = "osac.openshift.io/cluster-api-id"
+	caasAgentCleanupFinalizer = "osac.openshift.io/caas-agent-cleanup"
+)
+
 func validateBareMetalUserData(userData []byte) error {
 	if len(userData) > bareMetalInstanceUserDataMaxBytes {
 		return fmt.Errorf("size %d exceeds the maximum of %d bytes", len(userData), bareMetalInstanceUserDataMaxBytes)
@@ -74,6 +79,7 @@ type PrivateBareMetalInstancesServer struct {
 	virtualNetworksDao      *dao.GenericDAO[*privatev1.VirtualNetwork]
 	networkClassesDao       *dao.GenericDAO[*privatev1.NetworkClass]
 	securityGroupsDao       *dao.GenericDAO[*privatev1.SecurityGroup]
+	clustersDao             *dao.GenericDAO[*privatev1.Cluster]
 	diskImagesDao           *dao.GenericDAO[*privatev1.DiskImage]
 	externalIPPoolDao       *dao.GenericDAO[*privatev1.ExternalIPPool]
 	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
@@ -201,6 +207,11 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		return
 	}
 
+	clustersDao, err := newGuardDAO[*privatev1.Cluster](b.logger)
+	if err != nil {
+		return
+	}
+
 	diskImagesDao, err := dao.NewGenericDAO[*privatev1.DiskImage]().
 		SetLogger(b.logger).
 		SetTenancyLogic(b.tenancyLogic).
@@ -273,6 +284,7 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		virtualNetworksDao:      virtualNetworksDao,
 		networkClassesDao:       networkClassesDao,
 		securityGroupsDao:       securityGroupsDao,
+		clustersDao:             clustersDao,
 		diskImagesDao:           diskImagesDao,
 		externalIPPoolDao:       externalIPPoolDao,
 		externalIPDao:           externalIPDao,
@@ -410,6 +422,9 @@ func (s *PrivateBareMetalInstancesServer) prepareCreate(ctx context.Context, can
 		if err = validateNetworkingHubReferences(canonicalHubID, hubReferences...); err != nil {
 			return
 		}
+	}
+	if err = s.validateCaaSWorkerCreate(ctx, candidate); err != nil {
+		return nil, err
 	}
 
 	if ref := candidate.GetSpec().GetDiskImage(); ref != nil {

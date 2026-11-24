@@ -24,8 +24,10 @@ rules:
   - secrets
   verbs:
   - create
+  - delete
   - get
   - list
+  - update
   - watch
 # Only read the OpenShift-managed ingress trust bundle (no Secret access).
 # ClusterOrder management Route probes use it independently of ignition trust.
@@ -60,6 +62,8 @@ rules:
   resources:
   - pods
   verbs:
+  - create
+  - delete
   - get
   - list
   - watch
@@ -99,6 +103,22 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - agent-install.openshift.io
+  resources:
+  - nmstateconfigs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - capi-provider.agent-install.openshift.io
+  resources:
+  - agentmachines
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - hypershift.openshift.io

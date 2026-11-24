@@ -36,6 +36,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/utils"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
@@ -345,6 +346,17 @@ func (s *PrivateClustersServer) Get(ctx context.Context,
 }
 
 func (s *PrivateClustersServer) Create(ctx context.Context, request *privatev1.ClustersCreateRequest) (response *privatev1.ClustersCreateResponse, err error) {
+	// The CaaS automatic SecurityGroup and ingress allocation are created in
+	// prepareCreate, before the generic DAO would normally assign an ID. Assign
+	// the server-owned Cluster ID now so all transaction-owned records can use
+	// the same stable owner key.
+	if request.GetObject() == nil || request.GetObject().GetId() == "" {
+		request = proto.Clone(request).(*privatev1.ClustersCreateRequest)
+		if request.GetObject() == nil {
+			request.SetObject(&privatev1.Cluster{})
+		}
+		request.GetObject().SetId(uuid.New())
+	}
 	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response, func(ctx context.Context, _ *privatev1.Cluster, candidate *privatev1.Cluster) error {
 		return s.prepareCreate(ctx, candidate)
 	})
@@ -433,6 +445,9 @@ func (s *PrivateClustersServer) prepareCreate(ctx context.Context, candidate *pr
 		return
 	}
 	if err = s.validateClusterNATGatewayReady(ctx, candidate); err != nil {
+		return
+	}
+	if err = s.prepareAutomaticClusterNetworking(ctx, candidate); err != nil {
 		return
 	}
 	nodeSetStatus := make(map[string]*privatev1.ClusterNodeSetStatus, len(spec.GetNodeSets()))
@@ -535,6 +550,14 @@ func (s *PrivateClustersServer) prepareUpdatedCluster(ctx context.Context, curre
 	if err := validateClusterNetworkAttachmentImmutability(current, candidate, request.GetUpdateMask()); err != nil {
 		return err
 	}
+	if candidateAddress := candidate.GetSpec().GetIngressAllocatedAddress(); candidateAddress != "" &&
+		candidateAddress != current.GetSpec().GetIngressAllocatedAddress() {
+		return grpcstatus.Error(grpccodes.InvalidArgument,
+			"spec.ingress_allocated_address is assigned by Fulfillment and cannot be changed")
+	}
+	// The address is server-owned and absent from public Cluster specs. Keep
+	// the stored value when an update candidate omits it.
+	candidate.GetSpec().SetIngressAllocatedAddress(current.GetSpec().GetIngressAllocatedAddress())
 	if err := validateClusterTemplateImmutability(current, candidate, request.GetUpdateMask()); err != nil {
 		return err
 	}
@@ -686,9 +709,18 @@ func (s *PrivateClustersServer) Delete(ctx context.Context,
 	if id == "" {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "identifier is mandatory")
 	}
+	// Cluster updates lock the Cluster before validating and locking the
+	// NetworkAttachment Subnet. Delete follows the same order so a concurrent
+	// security-group update cannot deadlock while it waits for the Cluster row.
 	cluster, err := lockLifecycleResource(ctx, s.generic.dao, id, "Cluster")
 	if err != nil {
 		return
+	}
+	subnetID := refKey(cluster.GetSpec().GetNetworkAttachment().GetSubnet())
+	if subnetID != "" {
+		if _, err = lockRecord(ctx, s.subnetsDao, subnetID); err != nil && grpcstatus.Code(err) != grpccodes.NotFound {
+			return nil, err
+		}
 	}
 	if err = s.lifecycle.rejectManualAttachmentDelete(ctx, "Cluster", id, cluster.GetMetadata()); err != nil {
 		return
@@ -1167,6 +1199,18 @@ func clusterSecurityGroupsMissing(att *privatev1.ClusterNetworkAttachment) bool 
 	return att == nil || len(att.GetSecurityGroups()) == 0
 }
 
+func hasNameOnlySecurityGroup(att *privatev1.ClusterNetworkAttachment) bool {
+	if att == nil {
+		return false
+	}
+	for _, ref := range att.GetSecurityGroups() {
+		if ref != nil && ref.GetId() == "" && refKey(ref) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // applyDefaultNetworkAttachment completes singular network_attachment at Create time.
 // Missing fields come from tenant defaults, while supplied fields are preserved.
 func (s *PrivateClustersServer) applyDefaultNetworkAttachment(ctx context.Context,
@@ -1188,8 +1232,49 @@ func (s *PrivateClustersServer) applyDefaultNetworkAttachment(ctx context.Contex
 	spec := cluster.GetSpec()
 	project := cluster.GetMetadata().GetProject()
 	attachment := spec.GetNetworkAttachment()
-	if attachment != nil && refKey(attachment.GetSubnet()) != "" && !clusterSecurityGroupsMissing(attachment) {
-		return nil
+	if attachment != nil && refKey(attachment.GetSubnet()) != "" {
+		// Catalog/template defaults and older clients may supply local names
+		// even when the reference is otherwise complete. Resolve every supplied
+		// name and persist the immutable API IDs so the ClusterOrder projection
+		// can find the corresponding Kubernetes Subnet by its stable label.
+		if attachment.GetSubnet().GetId() == "" || hasNameOnlySecurityGroup(attachment) {
+			resolvedSubnet, resolveErr := resolveNetworkingReference(ctx, s.subnetsDao,
+				cluster.GetMetadata(), attachment.GetSubnet(), "subnet", grpccodes.NotFound, false)
+			if resolveErr != nil {
+				if grpcstatus.Code(resolveErr) == grpccodes.NotFound {
+					return grpcstatus.Errorf(grpccodes.InvalidArgument,
+						"spec.network_attachment: subnet '%s' does not exist", refKey(attachment.GetSubnet()))
+				}
+				return resolveErr
+			}
+			if err := validateResolvedSubnetReady(resolvedSubnet, refKey(attachment.GetSubnet()), " in spec.network_attachment"); err != nil {
+				return err
+			}
+			attachment.SetSubnet(privatev1.SubnetLocalReference_builder{Id: resolvedSubnet.GetId()}.Build())
+			virtualNetworkID := refKey(resolvedSubnet.GetSpec().GetVirtualNetwork())
+			for i, sgRef := range attachment.GetSecurityGroups() {
+				if sgRef.GetId() != "" {
+					continue
+				}
+				sg, resolveErr := resolveNetworkingReference(ctx, s.securityGroupsDao,
+					cluster.GetMetadata(), sgRef, "security group", grpccodes.NotFound, true)
+				if resolveErr != nil {
+					if grpcstatus.Code(resolveErr) == grpccodes.NotFound {
+						return grpcstatus.Errorf(grpccodes.InvalidArgument,
+							"spec.network_attachment.security_groups[%d]: security group '%s' does not exist", i, refKey(sgRef))
+					}
+					return resolveErr
+				}
+				if err := validateResolvedSecurityGroup(sg, refKey(sgRef),
+					fmt.Sprintf(" in spec.network_attachment.security_groups[%d]", i), virtualNetworkID); err != nil {
+					return err
+				}
+				attachment.GetSecurityGroups()[i] = privatev1.SecurityGroupLocalReference_builder{Id: sg.GetId()}.Build()
+			}
+		}
+		if !clusterSecurityGroupsMissing(attachment) {
+			return nil
+		}
 	}
 	if attachment == nil {
 		attachment = privatev1.ClusterNetworkAttachment_builder{}.Build()
@@ -1359,12 +1444,37 @@ func (s *PrivateClustersServer) validateNetworkAttachmentState(ctx context.Conte
 	}
 
 	subnet, err := resolveNetworkingReference(ctx, s.subnetsDao, cluster.GetMetadata(), subnetRef,
-		"subnet", grpccodes.NotFound, true)
+		"subnet", grpccodes.NotFound, false)
 	if err != nil {
 		if grpcstatus.Code(err) == grpccodes.NotFound {
 			return grpcstatus.Errorf(grpccodes.InvalidArgument,
 				"spec.network_attachment: subnet '%s' does not exist", subnetKey)
 		}
+		return err
+	}
+	virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
+	if virtualNetworkID == "" {
+		return grpcstatus.Errorf(grpccodes.Internal,
+			"spec.network_attachment: subnet '%s' has no virtual network reference", subnetKey)
+	}
+	// Cluster creation follows the networking parent-before-child lock order:
+	// VirtualNetwork first, then Subnet, then SecurityGroups. The Subnet lock
+	// serializes CaaS ingress allocations before the Cluster itself is stored.
+	virtualNetwork, err := lockRecord(ctx, s.virtualNetworksDao, virtualNetworkID)
+	if err != nil {
+		return err
+	}
+	if virtualNetwork.GetMetadata().HasDeletionTimestamp() {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"VirtualNetwork '%s' is being deleted", virtualNetworkID)
+	}
+	if cluster.GetSpec().GetSupportsAutomaticCaasEndpoints() && s.settings.ProvisioningEnabled &&
+		virtualNetwork.GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"VirtualNetwork '%s' is not READY", virtualNetworkID)
+	}
+	subnet, err = lockRecord(ctx, s.subnetsDao, subnet.GetId())
+	if err != nil {
 		return err
 	}
 	if err := validateResolvedSubnetReady(subnet, subnetKey, " in spec.network_attachment"); err != nil {
@@ -1375,12 +1485,6 @@ func (s *PrivateClustersServer) validateNetworkAttachmentState(ctx context.Conte
 		id:           subnet.GetId(),
 		hubID:        subnet.GetStatus().GetHub(),
 	}}
-
-	virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
-	if virtualNetworkID == "" {
-		return grpcstatus.Errorf(grpccodes.Internal,
-			"spec.network_attachment: subnet '%s' has no virtual network reference", subnetKey)
-	}
 
 	// Use the subnet's VirtualNetwork as the expected owner for every SecurityGroup.
 	for i, sgRef := range att.GetSecurityGroups() {

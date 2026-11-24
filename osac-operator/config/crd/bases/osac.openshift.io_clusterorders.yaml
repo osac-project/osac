@@ -62,6 +62,13 @@ spec:
                 maxItems: 32
                 minItems: 1
                 type: array
+              ingressAllocatedAddress:
+                description: |-
+                  IngressAllocatedAddress is the Fulfillment-assigned guest MetalLB address.
+                  The ClusterOrder controller validates it against the Subnet's recorded
+                  load-balancer VIP range and never allocates or releases it.
+                format: ipv4
+                type: string
               network:
                 description: Network contains cluster networking configuration.
                 properties:
@@ -90,7 +97,7 @@ spec:
                 properties:
                   securityGroupRefs:
                     description: |-
-                      SecurityGroupRefs lists SecurityGroup CR names to apply to the cluster's
+                      SecurityGroupRefs lists Fulfillment API IDs of SecurityGroups to apply to the cluster's
                       network attachment. All security groups must belong to the same virtual
                       network as the subnet.
                     items:
@@ -98,7 +105,7 @@ spec:
                     type: array
                   subnetRef:
                     description: |-
-                      SubnetRef is the name of the Subnet CR that the cluster connects to.
+                      SubnetRef is the Fulfillment API ID of the Subnet CR that the cluster connects to.
                       The subnet must be in Ready state at creation time.
                     maxLength: 253
                     minLength: 1
@@ -221,6 +228,10 @@ spec:
                 && self.supportsAutomaticCaaSEndpoints) || (has(self.supportsAutomaticCaaSEndpoints)
                 == has(oldSelf.supportsAutomaticCaaSEndpoints) && (!has(self.supportsAutomaticCaaSEndpoints)
                 || self.supportsAutomaticCaaSEndpoints == oldSelf.supportsAutomaticCaaSEndpoints))
+            - message: ingressAllocatedAddress is immutable after creation
+              rule: has(self.ingressAllocatedAddress) == has(oldSelf.ingressAllocatedAddress)
+                && (!has(self.ingressAllocatedAddress) || self.ingressAllocatedAddress
+                == oldSelf.ingressAllocatedAddress)
           status:
             description: ClusterOrderStatus defines the observed state of ClusterOrder
             properties:
@@ -481,10 +492,6 @@ spec:
                 description: FulfillmentTrustBundleHash is the hash of the last synchronized
                   fulfillment trust bundle.
                 type: string
-              ingressAllocatedAddress:
-                description: IngressAllocatedAddress is the Fabric Manager-reserved
-                  guest ingress address.
-                type: string
               ingressDNSHostedClusterName:
                 description: |-
                   IngressDNSHostedClusterName records the HostedCluster name used for ingress
@@ -508,6 +515,12 @@ spec:
                       format: int32
                       minimum: 0
                       type: integer
+                    inputAddress:
+                      description: |-
+                        InputAddress records the address supplied to an endpoint DNS publication
+                        job. It is retained through completion so a later reconcile cannot mistake
+                        a result for an address that changed while the job was running.
+                      type: string
                     jobID:
                       description: JobID is the AAP job ID; empty until AAP returned
                         it.
@@ -723,11 +736,6 @@ spec:
                   Populated by the BareMetalWorkerReconciler.
                 format: int32
                 type: integer
-              taskInput:
-                description: TaskInput is the persisted input used to release the
-                  Fabric Manager ingress reservation.
-                type: object
-                x-kubernetes-preserve-unknown-fields: true
               upgradeObservation:
                 description: |-
                   UpgradeObservation reports the control-plane component's observed version
@@ -774,6 +782,21 @@ spec:
                   description: WorkerStatus holds the lifecycle state of a single
                     CaaS-managed worker resource.
                   properties:
+                    agent:
+                      description: |-
+                        Agent records the exact Assisted Agent incarnation selected for this BMI.
+                        The reconciler persists it before approval, binding, or NodePool labels.
+                      properties:
+                        name:
+                          minLength: 1
+                          type: string
+                        uid:
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      - uid
+                      type: object
                     attemptCount:
                       description: AttemptCount tracks how many times this worker
                         slot has been provisioned.
@@ -782,11 +805,9 @@ spec:
                     attemptStartedAt:
                       description: |-
                         AttemptStartedAt is the durable start of the current provisioning attempt.
-                        It is recorded before the first BMI Create and survives lost acknowledgements,
-                        so the agent registration timeout is measured from the attempt, not from the
-                        parent ClusterOrder or an unrelated failure timestamp. It is not refreshed on
-                        errors or re-observation, and is cleared only after the old attempt's cleanup
-                        completes.
+                        It is recorded before the first BMI Create and survives lost acknowledgements.
+                        AgentRegistrationTimeout uses RegistrationDeadline instead, because its clock
+                        starts only after the networking prerequisites have been observed.
                       format: date-time
                       type: string
                     bareMetalInstance:
@@ -871,6 +892,75 @@ spec:
                         Used to determine when attemptCount can be reset after MinHealthyDuration.
                       format: date-time
                       type: string
+                    registrationDeadline:
+                      description: |-
+                        RegistrationDeadline is the persisted Agent registration deadline derived
+                        from network handoff, management publication, and API DNS publication.
+                      format: date-time
+                      type: string
+                    registryAccessReady:
+                      description: |-
+                        RegistryAccessReady records the OSAC worker-side image-pull probe. The
+                        probe runs after network handoff and the accepted DHCP lease, before Agent
+                        approval or NodePool selection.
+                      properties:
+                        lastTransitionTime:
+                          description: |-
+                            lastTransitionTime is the last time the condition transitioned from one status to another.
+                            This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                          format: date-time
+                          type: string
+                        message:
+                          description: |-
+                            message is a human readable message indicating details about the transition.
+                            This may be an empty string.
+                          maxLength: 32768
+                          type: string
+                        observedGeneration:
+                          description: |-
+                            observedGeneration represents the .metadata.generation that the condition was set based upon.
+                            For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                            with respect to the current state of the instance.
+                          format: int64
+                          minimum: 0
+                          type: integer
+                        reason:
+                          description: |-
+                            reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                            Producers of specific condition types may define expected values and meanings for this field,
+                            and whether the values are considered a guaranteed API.
+                            The value should be a CamelCase string.
+                            This field may not be empty.
+                          maxLength: 1024
+                          minLength: 1
+                          pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                          type: string
+                        status:
+                          description: status of the condition, one of True, False,
+                            Unknown.
+                          enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                          type: string
+                        type:
+                          description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                          maxLength: 316
+                          pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                          type: string
+                      required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                      type: object
+                    registryProbePrepared:
+                      description: |-
+                        RegistryProbePrepared records that this BMI create attempt included the
+                        OSAC-owned worker registry probe in discovery Ignition. It lets existing
+                        workers without that attempt marker retain their supported legacy path.
+                      type: boolean
                   required:
                   - attemptCount
                   - creationTimestamp

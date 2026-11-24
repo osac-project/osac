@@ -24,7 +24,8 @@ type bmiState struct {
 }
 
 const (
-	systemBMITemplateID = "osac.templates.bm_host_provisioning"
+	systemBMITemplateID    = "osac.templates.bm_host_provisioning"
+	clusterAPIIDAnnotation = "osac.openshift.io/cluster-api-id"
 )
 
 // errBMICreateRejected marks a BMI Create the fulfillment service definitively
@@ -88,7 +89,7 @@ func (r *Reconciler) ensureBMI(
 
 // findBMIByName re-lists BMIs and returns the one matching the given name.
 func (r *Reconciler) findBMIByName(ctx context.Context, co *v1alpha1.ClusterOrder, tenant, filter, name string) (*privatev1.BareMetalInstance, error) {
-	ctrllog.FromContext(ctx).Info("BMI create returned AlreadyExists, re-listing", "name", name)
+	ctrllog.FromContext(ctx).Info("BMI create returned AlreadyExists, re-listing", jsonNameField, name)
 	refreshed, err := r.fulfillment.ListBareMetalInstances(ctx, filter)
 	if err != nil {
 		return nil, fmt.Errorf("re-listing BMIs after AlreadyExists: %w", err)
@@ -123,22 +124,25 @@ func (r *Reconciler) buildBMICreateRequest(
 	workerName string, image *privatev1.DiskImageReference, ignitionRaw string,
 ) (*privatev1.BareMetalInstance, error) {
 	labels := map[string]string{clusterOrderLabel: co.Name}
-	annotations := map[string]string{ownerReferenceAnnotation: fmt.Sprintf("ClusterOrder/%s", co.Name)}
+	annotations := map[string]string{
+		ownerReferenceAnnotation: fmt.Sprintf("ClusterOrder/%s", co.Name),
+		clusterAPIIDAnnotation:   cluster.GetId(),
+	}
 
 	var netAttachments []*privatev1.BareMetalNetworkAttachment
-	if na := co.Spec.NetworkAttachment; na != nil && na.SubnetRef != "" {
+	if na := co.Spec.NetworkAttachment; r.NetworkingProvisioningEnabled && na != nil && na.SubnetRef != "" {
 		if nodeSet.FabricInterface == "" {
 			return nil, fmt.Errorf("node request %q has no stored fabric interface for network attachment", nodeSet.NodeSet)
 		}
 		fabricInterface := nodeSet.FabricInterface
 		sgRefs := make([]*privatev1.SecurityGroupLocalReference, 0, len(na.SecurityGroupRefs))
 		for _, sg := range na.SecurityGroupRefs {
-			sgRefs = append(sgRefs, privatev1.SecurityGroupLocalReference_builder{Name: sg}.Build())
+			sgRefs = append(sgRefs, privatev1.SecurityGroupLocalReference_builder{Id: sg}.Build())
 		}
 		primary := true
 		netAttachments = []*privatev1.BareMetalNetworkAttachment{
 			privatev1.BareMetalNetworkAttachment_builder{
-				Subnet:         privatev1.SubnetLocalReference_builder{Name: na.SubnetRef}.Build(),
+				Subnet:         privatev1.SubnetLocalReference_builder{Id: na.SubnetRef}.Build(),
 				SecurityGroups: sgRefs,
 				Interface:      &fabricInterface,
 				Primary:        &primary,

@@ -712,7 +712,7 @@ var _ = Describe("update tenant annotation", func() {
 		Expect(createdCR.Spec.NetworkAttachment.SecurityGroupRefs).To(Equal([]string{"sg-allow-ssh", "sg-allow-http"}))
 	})
 
-	It("should use GetName() not ID for SubnetRef and SecurityGroupRefs when both are set", func() {
+	It("should use API IDs for SubnetRef and SecurityGroupRefs when both are set", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
 
@@ -770,9 +770,9 @@ var _ = Describe("update tenant annotation", func() {
 
 		createdCR := list.Items[0]
 		Expect(createdCR.Spec.NetworkAttachment).ToNot(BeNil())
-		// Must use CR name, not UUID — the CRD documents these fields as CR names
-		Expect(createdCR.Spec.NetworkAttachment.SubnetRef).To(Equal("my-subnet"))
-		Expect(createdCR.Spec.NetworkAttachment.SecurityGroupRefs).To(Equal([]string{"sg-allow-ssh", "sg-allow-http"}))
+		// ClusterOrder references are Fulfillment API IDs; CR names are not stable contracts.
+		Expect(createdCR.Spec.NetworkAttachment.SubnetRef).To(Equal("subnet-uuid-1234"))
+		Expect(createdCR.Spec.NetworkAttachment.SecurityGroupRefs).To(Equal([]string{"sg-uuid-1111", "sg-uuid-2222"}))
 	})
 
 	It("should leave ClusterOrder networkAttachment nil when network_attachment is absent", func() {
@@ -1897,7 +1897,7 @@ func newTaskForDelete(clusterID, hubID string, hubCache controllers.HubCache) *t
 	f := &function{
 		logger:            logger,
 		hubCache:          hubCache,
-		networkingCleanup: &fakeWorkloadNetworkingCleanup{complete: true},
+		networkingCleanup: &fakeWorkloadNetworkingCleanup{complete: true, externalAccessComplete: true},
 	}
 
 	return &task{
@@ -1907,10 +1907,18 @@ func newTaskForDelete(clusterID, hubID string, hubCache controllers.HubCache) *t
 }
 
 type fakeWorkloadNetworkingCleanup struct {
-	complete   bool
-	calls      int
-	workloadID string
-	err        error
+	complete               bool
+	externalAccessComplete bool
+	calls                  int
+	externalAccessCalls    int
+	workloadID             string
+	err                    error
+}
+
+func (f *fakeWorkloadNetworkingCleanup) CleanupExternalAccess(_ context.Context, workloadID string) (bool, error) {
+	f.externalAccessCalls++
+	f.workloadID = workloadID
+	return f.externalAccessComplete, f.err
 }
 
 func (f *fakeWorkloadNetworkingCleanup) Cleanup(_ context.Context, workloadID string) (bool, error) {
@@ -2061,18 +2069,31 @@ var _ = Describe("delete", func() {
 	It("should retain the finalizer while automatic networking resources are terminating", func() {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
+		order := &osacv1alpha1.ClusterOrder{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       "order-delete-id",
+				Namespace:  "test-ns",
+				Labels:     map[string]string{labels.ClusterOrderUuid: clusterID},
+				Finalizers: []string{"osac.openshift.io/external-access"},
+			},
+		}
+		hubClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(order).Build()
 		hubCache := controllers.NewMockHubCache(ctrl)
 		hubCache.EXPECT().Get(gomock.Any(), hubID).Return(&controllers.HubEntry{
-			Namespace: "test-ns", Client: fake.NewClientBuilder().WithScheme(scheme).Build(),
+			Namespace: "test-ns", Client: hubClient,
 		}, nil)
 		t := newTaskForDelete(clusterID, hubID, hubCache)
-		cleanup := &fakeWorkloadNetworkingCleanup{}
+		cleanup := &fakeWorkloadNetworkingCleanup{externalAccessComplete: false}
 		t.r.networkingCleanup = cleanup
 
-		Expect(t.delete(ctx)).To(MatchError(ContainSubstring("automatic workload networking resources are still terminating")))
-		Expect(cleanup.calls).To(Equal(1))
+		Expect(t.delete(ctx)).To(Succeed())
+		Expect(cleanup.externalAccessCalls).To(Equal(1))
+		Expect(cleanup.calls).To(Equal(0), "the ClusterOrder must remain until external access is gone")
 		Expect(cleanup.workloadID).To(Equal(clusterID))
 		Expect(hasFinalizer(t.cluster)).To(BeTrue())
+		remaining := &osacv1alpha1.ClusterOrder{}
+		Expect(hubClient.Get(ctx, clnt.ObjectKeyFromObject(order), remaining)).To(Succeed())
+		Expect(remaining.DeletionTimestamp).To(BeNil())
 	})
 
 	It("should remove finalizer when hub cache returns ErrHubNotFound", func() {

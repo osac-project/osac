@@ -262,7 +262,7 @@ func (w *bmiConflictWriter) Patch(ctx context.Context, obj client.Object, p clie
 
 var _ = Describe("BMI observation preserves newer references", func() {
 	for _, conflict := range []bool{false, true} {
-		for _, mutation := range []string{"id", "name", "phase"} {
+		for _, mutation := range []string{"id", jsonNameField, "phase"} {
 			It(strings.Join([]string{mutation, map[bool]string{true: "conflict", false: "stale"}[conflict]}, "/"), func() {
 				r, fc, co := bmiStageHarness(workerPhaseWaitingForAgent, "old-id")
 				kube := r.Client
@@ -273,7 +273,7 @@ var _ = Describe("BMI observation preserves newer references", func() {
 					switch mutation {
 					case "id":
 						latest.Status.Workers[0].BareMetalInstance.ID = "new-id"
-					case "name":
+					case jsonNameField:
 						latest.Status.Workers[0].BareMetalInstance.Name = "new-name"
 					case "phase":
 						latest.Status.Workers[0].Phase = workerPhaseDeleting

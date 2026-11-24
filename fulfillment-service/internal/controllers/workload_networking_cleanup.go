@@ -33,15 +33,18 @@ import (
 const (
 	workloadAutoCreatedLabel        = "osac.openshift.io/auto-created"
 	workloadAutoCreatedForLabel     = "osac.openshift.io/auto-created-for"
+	workloadAutoCreatedKindLabel    = "osac.openshift.io/auto-created-kind"
 	workloadAutoProvisionedLabel    = "osac.openshift.io/auto-provisioned"
 	workloadAutoProvisionedForLabel = "osac.openshift.io/auto-provisioned-for"
 	workloadSystemCreator           = "system"
 )
 
-// WorkloadNetworkingCleanup removes automatic ExternalIPAttachments before their
-// automatic ExternalIPs. It reports complete only after finalizers have removed
-// both kinds of resources.
+// WorkloadNetworkingCleanup removes Fulfillment-owned automatic networking
+// resources. External access is cleaned before deleting the workload's hub CR;
+// for Clusters, the automatic SecurityGroup is cleaned after the ClusterOrder
+// and its workers have completed teardown.
 type WorkloadNetworkingCleanup interface {
+	CleanupExternalAccess(ctx context.Context, workloadID string) (complete bool, err error)
 	Cleanup(ctx context.Context, workloadID string) (complete bool, err error)
 }
 
@@ -55,9 +58,15 @@ type externalIPsCleanupClient interface {
 	Delete(context.Context, *privatev1.ExternalIPsDeleteRequest, ...grpc.CallOption) (*privatev1.ExternalIPsDeleteResponse, error)
 }
 
+type securityGroupsCleanupClient interface {
+	List(context.Context, *privatev1.SecurityGroupsListRequest, ...grpc.CallOption) (*privatev1.SecurityGroupsListResponse, error)
+	Delete(context.Context, *privatev1.SecurityGroupsDeleteRequest, ...grpc.CallOption) (*privatev1.SecurityGroupsDeleteResponse, error)
+}
+
 type workloadNetworkingCleanup struct {
-	attachments externalIPAttachmentsCleanupClient
-	externalIPs externalIPsCleanupClient
+	attachments    externalIPAttachmentsCleanupClient
+	externalIPs    externalIPsCleanupClient
+	securityGroups securityGroupsCleanupClient
 }
 
 // NewWorkloadNetworkingCleanup creates the shared cleanup path used by workload
@@ -65,12 +74,30 @@ type workloadNetworkingCleanup struct {
 // cleanup reports complete.
 func NewWorkloadNetworkingCleanup(connection grpc.ClientConnInterface) WorkloadNetworkingCleanup {
 	return &workloadNetworkingCleanup{
-		attachments: privatev1.NewExternalIPAttachmentsClient(connection),
-		externalIPs: privatev1.NewExternalIPsClient(connection),
+		attachments:    privatev1.NewExternalIPAttachmentsClient(connection),
+		externalIPs:    privatev1.NewExternalIPsClient(connection),
+		securityGroups: privatev1.NewSecurityGroupsClient(connection),
 	}
 }
 
 func (c *workloadNetworkingCleanup) Cleanup(ctx context.Context, workloadID string) (bool, error) {
+	if workloadID == "" {
+		return false, errors.New("workload identifier is mandatory for networking cleanup")
+	}
+	if c.securityGroups == nil {
+		return false, errors.New("networking cleanup clients are not configured")
+	}
+	complete, err := c.CleanupExternalAccess(ctx, workloadID)
+	if err != nil || !complete {
+		return complete, err
+	}
+	return c.cleanupAutomaticClusterSecurityGroups(ctx, workloadID)
+}
+
+// CleanupExternalAccess removes automatic ExternalIPAttachments and
+// ExternalIPs before the workload's hub CR is deleted. For a Cluster, the
+// ClusterOrder still exists to remove public DNS holds from its attachments.
+func (c *workloadNetworkingCleanup) CleanupExternalAccess(ctx context.Context, workloadID string) (bool, error) {
 	if workloadID == "" {
 		return false, errors.New("workload identifier is mandatory for networking cleanup")
 	}
@@ -102,7 +129,11 @@ func (c *workloadNetworkingCleanup) Cleanup(ctx context.Context, workloadID stri
 		return false, nil
 	}
 
-	return c.cleanupExternalIPs(ctx, workloadID, filter)
+	complete, err := c.cleanupExternalIPs(ctx, workloadID, filter)
+	if err != nil || !complete {
+		return complete, err
+	}
+	return true, nil
 }
 
 func (c *workloadNetworkingCleanup) cleanupExternalIPs(ctx context.Context, workloadID, filter string) (bool, error) {
@@ -161,6 +192,59 @@ func (c *workloadNetworkingCleanup) cleanupExternalIPs(ctx context.Context, work
 	return true, nil
 }
 
+func (c *workloadNetworkingCleanup) cleanupAutomaticClusterSecurityGroups(
+	ctx context.Context,
+	clusterID string,
+) (bool, error) {
+	filter := automaticClusterSecurityGroupFilter(clusterID)
+	response, err := c.securityGroups.List(ctx, privatev1.SecurityGroupsListRequest_builder{
+		Filter: &filter,
+	}.Build())
+	if err != nil {
+		return false, fmt.Errorf("failed to list automatic SecurityGroups for Cluster %s: %w", clusterID, err)
+	}
+	pending := false
+	for _, group := range response.GetItems() {
+		if group.GetMetadata().GetCreator() != workloadSystemCreator {
+			continue
+		}
+		pending = true
+		if group.GetMetadata().HasDeletionTimestamp() {
+			continue
+		}
+		_, err := c.securityGroups.Delete(ctx, privatev1.SecurityGroupsDeleteRequest_builder{
+			Id: group.GetId(),
+		}.Build())
+		if err != nil {
+			switch status.Code(err) {
+			case codes.NotFound:
+				continue
+			case codes.FailedPrecondition:
+				// A retained worker or another dependency still uses the group.
+				continue
+			default:
+				return false, fmt.Errorf("failed to delete automatic SecurityGroup %s for Cluster %s: %w",
+					group.GetId(), clusterID, err)
+			}
+		}
+	}
+	if !pending {
+		return true, nil
+	}
+	remaining, err := c.securityGroups.List(ctx, privatev1.SecurityGroupsListRequest_builder{
+		Filter: &filter,
+	}.Build())
+	if err != nil {
+		return false, fmt.Errorf("failed to verify automatic SecurityGroup cleanup for Cluster %s: %w", clusterID, err)
+	}
+	for _, group := range remaining.GetItems() {
+		if group.GetMetadata().GetCreator() == workloadSystemCreator {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func automaticWorkloadNetworkFilter(workloadID string) string {
 	id := strconv.Quote(workloadID)
 	return fmt.Sprintf(
@@ -170,6 +254,14 @@ func automaticWorkloadNetworkFilter(workloadID string) string {
 		"this.metadata.labels['"+workloadAutoProvisionedLabel+"'] == 'true'",
 		"this.metadata.labels['"+workloadAutoProvisionedForLabel+"'] == "+id,
 	)
+}
+
+func automaticClusterSecurityGroupFilter(clusterID string) string {
+	id := strconv.Quote(clusterID)
+	return fmt.Sprintf("%s && %s && %s",
+		"this.metadata.labels['"+workloadAutoCreatedLabel+"'] == 'true'",
+		"this.metadata.labels['"+workloadAutoCreatedForLabel+"'] == "+id,
+		"this.metadata.labels['"+workloadAutoCreatedKindLabel+"'] == 'cluster'")
 }
 
 // ReconcileWorkloadNetworkingCleanup keeps the workload finalizer in place and

@@ -265,12 +265,11 @@ var _ = Describe("Billing account final API contract", func() {
 				field(d, "id", 1, protoreflect.StringKind)
 				field(d, "metadata", 2, protoreflect.MessageKind)
 				spec := field(d, "spec", 3, protoreflect.MessageKind).Message()
-				Expect(spec.Fields().Len()).To(Equal(2))
-				for i, name := range []protoreflect.Name{"tenant", "billing_account"} {
-					f := field(spec, name, protoreflect.FieldNumber(i+1), protoreflect.MessageKind)
-					Expect(proto.GetExtension(f.Options(), annotations.E_FieldBehavior)).To(ContainElement(annotations.FieldBehavior_REQUIRED))
-				}
-				for _, name := range []protoreflect.Name{"tenant_id", "billing_account_id"} {
+				Expect(spec.Fields().Len()).To(Equal(1))
+				billingAccount := field(spec, "billing_account", 2, protoreflect.MessageKind)
+				Expect(proto.GetExtension(billingAccount.Options(), annotations.E_FieldBehavior)).
+					To(ContainElement(annotations.FieldBehavior_REQUIRED))
+				for _, name := range []protoreflect.Name{"tenant", "tenant_id", "billing_account_id"} {
 					Expect(spec.ReservedNames().Has(name)).To(BeTrue())
 				}
 				s := field(d, "status", 4, protoreflect.MessageKind)
@@ -295,65 +294,54 @@ var _ = Describe("Billing account final API contract", func() {
 				Expect(statusType.ReservedNames().Has("effective_to")).To(BeTrue())
 			})
 
-			for _, target := range []struct{ field, reference string }{
-				{"tenant", "TenantReference"}, {"billing_account", "BillingAccountReference"},
-			} {
-				Describe(target.reference, func() {
-					reference := func() protoreflect.MessageDescriptor {
-						spec := field(layer.assignment.ProtoReflect().Descriptor(), "spec", 3, protoreflect.MessageKind).Message()
-						var number protoreflect.FieldNumber = 1
-						if target.field == "billing_account" {
-							number = 2
-						}
-						return field(spec, protoreflect.Name(target.field), number, protoreflect.MessageKind).Message()
-					}
-					It("has only id/name fields in its target type file, without scope selectors", func() {
-						d := reference()
-						Expect(d.Name()).To(Equal(protoreflect.Name(target.reference)))
-						Expect(d.ParentFile().Path()).To(HaveSuffix("/" + target.field + "_type.proto"))
-						Expect(d.Fields().Len()).To(Equal(2))
-						field(d, "id", 1, protoreflect.StringKind)
-						field(d, "name", 2, protoreflect.StringKind)
-					})
-					DescribeTable("validates supplied names and requires at least one identity", func(id, name string, valid bool) {
-						d := reference()
-						m := dynamicpb.NewMessage(d)
-						m.Set(d.Fields().ByName("id"), protoreflect.ValueOfString(id))
-						m.Set(d.Fields().ByName("name"), protoreflect.ValueOfString(name))
-						err := protovalidate.Validate(m)
-						if valid {
-							Expect(err).ToNot(HaveOccurred())
-						} else {
-							Expect(err).To(HaveOccurred())
-						}
-					},
-						Entry("neither", "", "", false),
-						Entry("opaque id only", "opaque/id", "", true),
-						Entry("name only", "", "a", true),
-						Entry("both syntactically valid", "opaque/id", "account-a", true),
-						Entry("63-character name", "", strings.Repeat("a", 63), true),
-						Entry("uppercase", "id", "Account", false),
-						Entry("leading hyphen", "id", "-account", false),
-						Entry("trailing hyphen", "id", "account-", false),
-						Entry("dotted", "id", "account.example", false),
-						Entry("too long", "id", strings.Repeat("a", 64), false),
-					)
-				})
-			}
-
-			It("requires both assignment reference messages", func() {
-				spec := field(layer.assignment.ProtoReflect().Descriptor(), "spec", 3, protoreflect.MessageKind).Message()
-				for _, supplied := range []protoreflect.Name{"", "tenant", "billing_account"} {
-					m := dynamicpb.NewMessage(spec)
-					if supplied != "" {
-						f := spec.Fields().ByName(supplied)
-						Expect(f).ToNot(BeNil())
-						Expect(f.Kind()).To(Equal(protoreflect.MessageKind))
-						r := m.Mutable(f).Message()
-						r.Set(r.Descriptor().Fields().ByName("id"), protoreflect.ValueOfString("id"))
-					}
-					Expect(protovalidate.Validate(m)).To(HaveOccurred())
+			Describe("BillingAccountReference", func() {
+				reference := func() protoreflect.MessageDescriptor {
+					spec := field(layer.assignment.ProtoReflect().Descriptor(), "spec", 3, protoreflect.MessageKind).Message()
+					return field(spec, "billing_account", 2, protoreflect.MessageKind).Message()
 				}
+				It("has only id/name fields in its target type file, without scope selectors", func() {
+					d := reference()
+					Expect(d.Name()).To(Equal(protoreflect.Name("BillingAccountReference")))
+					Expect(d.ParentFile().Path()).To(HaveSuffix("/billing_account_type.proto"))
+					Expect(d.Fields().Len()).To(Equal(2))
+					field(d, "id", 1, protoreflect.StringKind)
+					field(d, "name", 2, protoreflect.StringKind)
+				})
+				DescribeTable("validates supplied names and requires at least one identity", func(id, name string, valid bool) {
+					d := reference()
+					m := dynamicpb.NewMessage(d)
+					m.Set(d.Fields().ByName("id"), protoreflect.ValueOfString(id))
+					m.Set(d.Fields().ByName("name"), protoreflect.ValueOfString(name))
+					err := protovalidate.Validate(m)
+					if valid {
+						Expect(err).ToNot(HaveOccurred())
+					} else {
+						Expect(err).To(HaveOccurred())
+					}
+				},
+					Entry("neither", "", "", false),
+					Entry("opaque id only", "opaque/id", "", true),
+					Entry("name only", "", "a", true),
+					Entry("both syntactically valid", "opaque/id", "account-a", true),
+					Entry("63-character name", "", strings.Repeat("a", 63), true),
+					Entry("uppercase", "id", "Account", false),
+					Entry("leading hyphen", "id", "-account", false),
+					Entry("trailing hyphen", "id", "account-", false),
+					Entry("dotted", "id", "account.example", false),
+					Entry("too long", "id", strings.Repeat("a", 64), false),
+				)
+			})
+
+			It("requires the billing account reference", func() {
+				spec := field(layer.assignment.ProtoReflect().Descriptor(), "spec", 3, protoreflect.MessageKind).Message()
+				Expect(protovalidate.Validate(dynamicpb.NewMessage(spec))).To(HaveOccurred())
+				account := spec.Fields().ByName("billing_account")
+				Expect(account).ToNot(BeNil())
+				Expect(account.Kind()).To(Equal(protoreflect.MessageKind))
+				m := dynamicpb.NewMessage(spec)
+				r := m.Mutable(account).Message()
+				r.Set(r.Descriptor().Fields().ByName("id"), protoreflect.ValueOfString("id"))
+				Expect(protovalidate.Validate(m)).To(Succeed())
 			})
 
 			It("exposes only the approved methods and keeps Signal private", func() {

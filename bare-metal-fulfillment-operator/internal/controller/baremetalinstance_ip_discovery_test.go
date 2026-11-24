@@ -108,13 +108,10 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 		Expect(bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)).To(BeNil())
 	})
 
-	It("skips when networking provisioning is disabled", func() {
+	It("marks provisioning disabled when no attachment was acquired", func() {
 		bmi = newBMI(attachments)
 		handoffComplete(bmi)
 		reconciler.NetworkingEnabled = false
-		bmi.Status.NetworkAttachmentStatuses = []v1alpha1.BareMetalNetworkAttachmentStatus{{
-			SubnetRef: "subnet-1", Interface: "data-0", MACAddress: "aa:bb:cc:dd:ee:ff",
-		}}
 		_, err := reconciler.reconcileIPDiscovery(ctx, bmi)
 		Expect(err).NotTo(HaveOccurred())
 		// Disabled mode should complete every network stage.
@@ -131,6 +128,21 @@ var _ = Describe("BareMetalInstance IP Discovery", func() {
 		Expect(bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete).Message).
 			To(Equal("IP lease discovery is disabled; no lease was queried"))
 		Expect(bmi.Status.NetworkAttachmentStatuses).To(BeNil())
+	})
+
+	It("preserves acquired attachment status when networking is disabled", func() {
+		bmi = newBMI(attachments)
+		handoffComplete(bmi)
+		reconciler.NetworkingEnabled = false
+		bmi.Status.NetworkAttachmentStatuses = []v1alpha1.BareMetalNetworkAttachmentStatus{{
+			SubnetRef: "subnet-1", Interface: "data-0", MACAddress: "aa:bb:cc:dd:ee:ff",
+		}}
+		_, err := reconciler.reconcileIPDiscovery(ctx, bmi)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(bmi.Status.NetworkAttachmentStatuses).To(Equal([]v1alpha1.BareMetalNetworkAttachmentStatus{{
+			SubnetRef: "subnet-1", Interface: "data-0", MACAddress: "aa:bb:cc:dd:ee:ff",
+		}}))
+		Expect(bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)).To(BeNil())
 	})
 
 	It("mirrors the accepted DHCP lease of the NetworkAttachment", func() {

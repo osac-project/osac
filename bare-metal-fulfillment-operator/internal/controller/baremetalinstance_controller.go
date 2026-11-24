@@ -472,7 +472,10 @@ func (r *BareMetalInstanceReconciler) reconcileManagement(ctx context.Context, b
 	if result, err := r.reconcileNetworkProvisionAndDiscovery(ctx, bareMetalInstance); err != nil || !result.IsZero() {
 		return result, err
 	}
-	if bareMetalInstance.Status.Phase == v1alpha1.BareMetalInstancePhaseFailed {
+	// Stop only for terminal network-provision failures. A stale Failed phase from
+	// a retryable power-status error must not block GetPowerState on the next pass.
+	if isTerminalNetworkProvisionFailure(bareMetalInstance) {
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
 		return ctrl.Result{}, nil
 	}
 	// A retrying provision attempt is still in flight: power management and
@@ -673,7 +676,9 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 	}
 
 	if !r.NetworkingEnabled {
-		setNetworkingProvisioningDisabled(bareMetalInstance)
+		if !networkAttachmentAcquired(bareMetalInstance) {
+			setNetworkingProvisioningDisabled(bareMetalInstance)
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -704,8 +709,6 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
-	bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
-
 	// 3) Power-cycle so the OS re-DHCPs on the tenant network (single default route).
 	result, rbErr := r.reconcileNetworkHandoffPowerCycle(ctx, bareMetalInstance)
 	if rbErr != nil {
@@ -716,7 +719,9 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseProgressing
 		return result, nil
 	}
-	if bareMetalInstance.Status.Phase == v1alpha1.BareMetalInstancePhaseFailed {
+	handoffCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
+	if handoffCond != nil && handoffCond.Reason == v1alpha1.HostConditionReasonNetworkHandoffFailed {
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
 		return ctrl.Result{}, nil
 	}
 
@@ -747,6 +752,38 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 func isFinalNetworkAttachmentFailure(reason string) bool {
 	return reason == v1alpha1.HostConditionReasonTemplateFailed ||
 		reason == v1alpha1.HostConditionReasonNetworkAttachmentFailed
+}
+
+// isTerminalNetworkProvisionFailure reports a durable provision/networking
+// failure that must keep the instance Failed. Power-sync failures are excluded
+// so a recovered management backend can clear a stale Failed phase.
+func isTerminalNetworkProvisionFailure(bmi *v1alpha1.BareMetalInstance) bool {
+	provision := bmi.GetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete)
+	if provision != nil && provision.Status != metav1.ConditionTrue &&
+		!v1alpha1.IsProvisionRetrying(provision) {
+		return true
+	}
+	handoff := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
+	if handoff != nil && handoff.Reason == v1alpha1.HostConditionReasonNetworkHandoffFailed {
+		return true
+	}
+	netCond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+	if netCond != nil && netCond.Status != metav1.ConditionTrue &&
+		isFinalNetworkAttachmentFailure(netCond.Reason) {
+		return true
+	}
+	ipCond := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
+	if ipCond != nil && ipCond.Status != metav1.ConditionTrue &&
+		(ipCond.Reason == v1alpha1.HostConditionReasonTemplateFailed ||
+			ipCond.Reason == v1alpha1.HostConditionReasonIPDiscoveryFailed) {
+		return true
+	}
+	allocated := bmi.GetStatusCondition(v1alpha1.HostConditionAllocated)
+	if allocated != nil && allocated.Status != metav1.ConditionTrue &&
+		allocated.Reason == v1alpha1.HostConditionReasonSelectedPortMACUnavailable {
+		return true
+	}
+	return false
 }
 
 func (r *BareMetalInstanceReconciler) recordBMIEvent(
@@ -856,9 +893,6 @@ func networkHandoffPendingMessage(
 	powerStatus *management.PowerStatus,
 	getErr error,
 ) string {
-	if target == management.PowerOn {
-		return "Waiting for host power-on to complete"
-	}
 	if errors.Is(setErr, management.ErrTransitioning) {
 		return "Management backend reports a power transition in progress"
 	}
@@ -902,11 +936,9 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffPowerCycle(
 
 	if !r.NetworkingEnabled {
 		log.Info("Networking provisioning disabled, skipping network-handoff reboot")
-		setNetworkingProvisioningDisabled(bmi)
-		return ctrl.Result{}, nil
-	}
-
-	if bmi.Status.Phase == v1alpha1.BareMetalInstancePhaseFailed {
+		if !networkAttachmentAcquired(bmi) {
+			setNetworkingProvisioningDisabled(bmi)
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -914,58 +946,49 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffPowerCycle(
 	if handoffCond != nil && handoffCond.Status == metav1.ConditionTrue {
 		return ctrl.Result{}, nil
 	}
-
-	if handoffCond == nil || (handoffCond.Status != metav1.ConditionFalse &&
-		(handoffCond.Status != metav1.ConditionUnknown ||
-			(handoffCond.Reason != v1alpha1.HostConditionReasonPoweringOn &&
-				handoffCond.Reason != v1alpha1.HostConditionReasonProgressing))) {
-		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-			metav1.ConditionFalse, v1alpha1.HostConditionReasonPoweringOff,
-			"Starting the network handoff power cycle")
-		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+	if handoffCond != nil && handoffCond.Reason == v1alpha1.HostConditionReasonNetworkHandoffFailed {
+		return ctrl.Result{}, nil
 	}
 
-	if handoffCond.Status == metav1.ConditionUnknown &&
-		handoffCond.Reason == v1alpha1.HostConditionReasonProgressing {
-		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-			metav1.ConditionUnknown, v1alpha1.HostConditionReasonPoweringOn,
-			"Waiting for host power-on to complete")
-		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+	target, stepReason, validStep := management.PowerOff, v1alpha1.HostConditionReasonPoweringOff, false
+	if handoffCond != nil && handoffCond.Status == metav1.ConditionFalse {
+		target, stepReason, validStep = networkHandoffPowerStep(handoffCond.Reason)
 	}
-
-	target, stepReason, validStep := networkHandoffPowerStep(handoffCond.Reason)
 	if !validStep {
+		// Persist PoweringOff and issue SetPower(Off) in this same pass.
 		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
 			metav1.ConditionFalse, v1alpha1.HostConditionReasonPoweringOff,
 			"Starting the network handoff power cycle")
-		return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
+		target, stepReason = management.PowerOff, v1alpha1.HostConditionReasonPoweringOff
+		handoffCond = bmi.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
 	}
 
 	if r.ManagementClient == nil {
-		if handoffCond.Reason == v1alpha1.HostConditionReasonPoweringOn {
-			r.markNetworkHandoffPowerOnPending(bmi, "management client is not configured")
-		} else {
-			r.failNetworkHandoff(bmi, "management client is not configured")
-		}
+		r.failNetworkHandoff(bmi, "management client is not configured")
 		return ctrl.Result{}, nil
 	}
 
 	setErr := r.ManagementClient.SetPowerState(ctx, bmi.Spec.ExternalHostID, target)
 	if setErr != nil && !errors.Is(setErr, management.ErrTransitioning) {
-		if target != management.PowerOn {
-			r.failNetworkHandoff(bmi, fmt.Sprintf("SetPowerState(%s) failed: %v", target, setErr))
-			return ctrl.Result{}, nil
-		}
-		r.markNetworkHandoffPowerOnPending(bmi, fmt.Sprintf("SetPowerState(%s) failed: %v", target, setErr))
+		r.failNetworkHandoff(bmi, fmt.Sprintf("SetPowerState(%s) failed: %v", target, setErr))
 		return ctrl.Result{}, nil
 	}
 
 	powerStatus, getErr := r.ManagementClient.GetPowerState(ctx, bmi.Spec.ExternalHostID)
 	if getErr == nil && powerStatus != nil && !powerStatus.IsTransitioning && powerStatus.State == target {
 		if target == management.PowerOff {
+			// Off confirmed: request On now, then wait on the next pass for On.
+			onErr := r.ManagementClient.SetPowerState(ctx, bmi.Spec.ExternalHostID, management.PowerOn)
+			if onErr != nil && !errors.Is(onErr, management.ErrTransitioning) {
+				r.failNetworkHandoff(bmi, fmt.Sprintf("SetPowerState(%s) failed: %v", management.PowerOn, onErr))
+				return ctrl.Result{}, nil
+			}
+			message := "Waiting for host power-on to complete"
+			if errors.Is(onErr, management.ErrTransitioning) {
+				message = networkHandoffPendingMessage(management.PowerOn, onErr, nil, nil)
+			}
 			bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-				metav1.ConditionUnknown, v1alpha1.HostConditionReasonProgressing,
-				"Host is off; waiting to confirm power-on")
+				metav1.ConditionFalse, v1alpha1.HostConditionReasonPoweringOn, message)
 			return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
 		}
 		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
@@ -975,31 +998,17 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffPowerCycle(
 
 	deadline := networkHandoffDeadline(bmi, handoffCond)
 	if !deadline.IsZero() && !time.Now().Before(deadline) {
-		diagnostic := networkHandoffTimeoutDiagnostic(target, powerStatus, getErr)
-		if target == management.PowerOn {
-			r.markNetworkHandoffPowerOnPending(bmi, diagnostic)
-		} else {
-			r.failNetworkHandoff(bmi, diagnostic)
-		}
+		r.failNetworkHandoff(bmi, networkHandoffTimeoutDiagnostic(target, powerStatus, getErr))
 		return ctrl.Result{}, nil
 	}
 
 	message := networkHandoffPendingMessage(target, setErr, powerStatus, getErr)
-	// Keep power-on Unknown so its timeout starts after the host is observed off.
-	pendingStatus := metav1.ConditionFalse
-	if target == management.PowerOn {
-		pendingStatus = metav1.ConditionUnknown
-	}
-	bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete, pendingStatus, stepReason, message)
+	bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete, metav1.ConditionFalse, stepReason, message)
 	log.V(1).Info("Network handoff power step is pending", "host", bmi.Spec.ExternalHostID, "target", target)
 	return ctrl.Result{RequeueAfter: r.ManagementRecheckIntervalDuration}, nil
 }
 
 func networkHandoffDeadline(bmi *v1alpha1.BareMetalInstance, handoffCond *metav1.Condition) time.Time {
-	if handoffCond != nil && handoffCond.Reason == v1alpha1.HostConditionReasonPoweringOn &&
-		!handoffCond.LastTransitionTime.IsZero() {
-		return handoffCond.LastTransitionTime.Add(networkHandoffTimeout)
-	}
 	readyCond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 	if readyCond != nil && !readyCond.LastTransitionTime.IsZero() {
 		return readyCond.LastTransitionTime.Add(networkHandoffTimeout)
@@ -1017,13 +1026,19 @@ func (r *BareMetalInstanceReconciler) failNetworkHandoff(bmi *v1alpha1.BareMetal
 	r.recordBMIEvent(bmi, corev1.EventTypeWarning, v1alpha1.HostConditionReasonNetworkHandoffFailed, diagnostic)
 }
 
-func (r *BareMetalInstanceReconciler) markNetworkHandoffPowerOnPending(
-	bmi *v1alpha1.BareMetalInstance, diagnostic string,
-) {
-	bmi.Status.Phase = v1alpha1.BareMetalInstancePhaseFailed
-	bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete, metav1.ConditionUnknown,
-		v1alpha1.HostConditionReasonPoweringOn, "Waiting for host power-on to complete")
-	r.recordBMIEvent(bmi, corev1.EventTypeWarning, v1alpha1.HostConditionReasonNetworkHandoffFailed, diagnostic)
+// interruptNetworkHandoffForDeletion clears an in-flight handoff so deletion
+// only waits for the host to be off, not for a create-path power-on to finish.
+func interruptNetworkHandoffForDeletion(bmi *v1alpha1.BareMetalInstance) {
+	handoff := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
+	if handoff == nil || handoff.Status == metav1.ConditionTrue {
+		return
+	}
+	if handoff.Reason == v1alpha1.HostConditionReasonNetworkHandoffFailed {
+		return
+	}
+	bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
+		metav1.ConditionFalse, v1alpha1.HostConditionReasonNetworkHandoffFailed,
+		"Network handoff was interrupted by deletion")
 }
 
 // reconcileNetworkOffboardShutdown powers off the host during deletion BEFORE
@@ -1042,6 +1057,8 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkOffboardShutdown(
 		return ctrl.Result{}, nil
 	}
 
+	interruptNetworkHandoffForDeletion(bmi)
+
 	if r.ManagementClient == nil {
 		return r.failNetworkOffboardPowerOff(ctx, bmi, errors.New("management client is not configured"))
 	}
@@ -1056,14 +1073,6 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkOffboardShutdown(
 		return r.waitForNetworkOffboardPowerState(bmi)
 	}
 	if powerStatus.State == management.PowerOff && !powerStatus.IsTransitioning {
-		if networkHandoffPowerOnPending(bmi) {
-			// A pending power-on may complete after this power-off observation. Keep
-			// finalizers until it settles so the host cannot be reused early.
-			bmi.SetStatusCondition(v1alpha1.HostConditionNetworkOffboardComplete,
-				metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
-				"Waiting for the handoff power-on to settle before network cleanup")
-			return ctrl.Result{RequeueAfter: networkRetryInterval}, nil
-		}
 		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkOffboardComplete,
 			metav1.ConditionTrue, "Succeeded",
 			"Host powered off; safe to move port to provisioning network")
@@ -1076,13 +1085,6 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkOffboardShutdown(
 		return r.waitForNetworkOffboardPowerState(bmi)
 	}
 
-	// The host is on, so power it off before network cleanup.
-	if networkHandoffPowerOnPending(bmi) {
-		// The host is on, so record that deletion interrupted the handoff.
-		bmi.SetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete,
-			metav1.ConditionFalse, v1alpha1.HostConditionReasonNetworkHandoffFailed,
-			"Network handoff was interrupted by deletion")
-	}
 	if err := r.ManagementClient.SetPowerState(ctx, bmi.Spec.ExternalHostID, management.PowerOff); err != nil {
 		if errors.Is(err, management.ErrTransitioning) {
 			return r.waitForNetworkOffboardPowerState(bmi)
@@ -1103,12 +1105,6 @@ func (r *BareMetalInstanceReconciler) waitForNetworkOffboardPowerState(
 		metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
 		"Waiting for a stable host power state before network cleanup")
 	return ctrl.Result{RequeueAfter: networkRetryInterval}, nil
-}
-
-func networkHandoffPowerOnPending(bmi *v1alpha1.BareMetalInstance) bool {
-	handoff := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
-	return handoff != nil && handoff.Status != metav1.ConditionTrue &&
-		handoff.Reason == v1alpha1.HostConditionReasonPoweringOn
 }
 
 func (r *BareMetalInstanceReconciler) failNetworkOffboardPowerOff(
@@ -1332,9 +1328,8 @@ func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMe
 	var done bool
 	var err error
 
-	// Read the attachment once and share it with shutdown and cleanup. A late
-	// attachment is handled on the next pass, after the host is powered off.
-	// Keep finalizers while an earlier Create may still commit.
+	// Read the attachment once and share it with shutdown and cleanup. NotFound
+	// finishes ownership only when create cannot still produce an attachment.
 	observedAttachment, err := r.getNetworkAttachmentForDeletion(ctx, bareMetalInstance)
 	if err != nil {
 		return ctrl.Result{}, err

@@ -140,11 +140,11 @@ var _ = Describe("DeriveProvisioningProgress", func() {
 				condFalse(HostConditionNetworkHandoffComplete, HostConditionReasonPoweringOn),
 			},
 			ProvisioningProgress{State: StateInProgress, Step: StepNetworkSetupHandoff}),
-		Entry("NetworkAttachmentsReady False+Detaching -> cleanup pending, not failed",
+		Entry("NetworkAttachmentsReady False+NetworkDetaching -> cleanup pending, not failed",
 			[]metav1.Condition{
 				condTrue(HostConditionAllocated),
 				condTrue(HostConditionProvisionTemplateComplete),
-				condFalse(HostConditionNetworkAttachmentsReady, HostConditionReasonDetaching),
+				condFalse(HostConditionNetworkAttachmentsReady, HostConditionReasonNetworkDetaching),
 			},
 			ProvisioningProgress{State: StateInProgress, Step: StepNetworkSetupAttachment}),
 		Entry("IPDiscoveryComplete False+LeasePending -> lease pending, not failed",

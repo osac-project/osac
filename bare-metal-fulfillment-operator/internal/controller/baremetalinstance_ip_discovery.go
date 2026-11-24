@@ -65,7 +65,9 @@ func (r *BareMetalInstanceReconciler) reconcileIPDiscovery(
 
 	if !r.NetworkingEnabled {
 		log.Info("Networking provisioning disabled, skipping IP discovery")
-		setNetworkingProvisioningDisabled(bareMetalInstance)
+		if !networkAttachmentAcquired(bareMetalInstance) {
+			setNetworkingProvisioningDisabled(bareMetalInstance)
+		}
 		return ctrl.Result{}, nil
 	}
 

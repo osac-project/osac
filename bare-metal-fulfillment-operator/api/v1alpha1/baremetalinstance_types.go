@@ -243,7 +243,7 @@ const (
 	HostConditionReasonLeasePending         = "LeasePending"
 	HostConditionReasonIPDiscoveryFailed    = "IPDiscoveryFailed"
 	HostConditionReasonPowerOffFailed       = "PowerOffFailed"
-	HostConditionReasonDetaching            = "Detaching"
+	HostConditionReasonNetworkDetaching     = "NetworkDetaching"
 	HostConditionReasonProvisioningDisabled = "ProvisioningDisabled"
 )
 

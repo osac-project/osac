@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -47,6 +48,12 @@ const (
 
 	networkAttachmentCreateRejectedMessage = "Network attachment create was rejected"
 	networkAttachmentCleanupMessage        = "Waiting for network attachment cleanup"
+	networkAttachmentCreatingMessage       = "Creating the network attachment"
+
+	// networkAttachmentCreateVisibilityTimeout bounds how long deletion waits for
+	// a Create that was requested but not yet observed. After this window the
+	// create is treated as never committed so the host can be released.
+	networkAttachmentCreateVisibilityTimeout = 2 * time.Minute
 )
 
 // errSelectedPortMACUnavailable marks a selected port whose MAC address the
@@ -91,71 +98,62 @@ func networkAttachmentKey(
 	}, true
 }
 
-// networkAttachmentKeys returns the current interface key and legacy BMI-only key.
-func networkAttachmentKeys(bmi *v1alpha1.BareMetalInstance) []client.ObjectKey {
-	attachment := primaryNetworkAttachment(bmi)
-	if attachment == nil {
-		return nil
-	}
-	current, ok := networkAttachmentKey(bmi, attachment)
-	if !ok {
-		return nil
-	}
-	keys := []client.ObjectKey{current}
-	legacy := client.ObjectKey{
-		Namespace: current.Namespace,
-		Name: opv1alpha1.NetworkAttachmentName(
-			opv1alpha1.NetworkAttachmentTargetBareMetalInstance, bmi.Labels[bareMetalInstanceIDLabel], ""),
-	}
-	if legacy != current {
-		keys = append(keys, legacy)
-	}
-	return keys
-}
-
 // getNetworkAttachmentForDeletion reads the attachment once per deletion pass.
-// It skips the read when BMF has no network finalizer, networking is disabled,
-// or no attachment is requested.
+// It skips the read when BMF has no network finalizer or no attachment is
+// requested. Cleanup stays independent of NetworkingEnabled so owned
+// attachments are still deleted after the flag is flipped off.
 func (r *BareMetalInstanceReconciler) getNetworkAttachmentForDeletion(
 	ctx context.Context, bmi *v1alpha1.BareMetalInstance,
 ) (*opv1alpha1.NetworkAttachment, error) {
 	if !controllerutil.ContainsFinalizer(bmi, BareMetalInstanceNetworkingFinalizer) ||
-		!r.NetworkingEnabled || !r.networkingRequested(bmi) {
+		!r.networkingRequested(bmi) {
 		return nil, nil
 	}
-	for _, key := range networkAttachmentKeys(bmi) {
-		na, err := r.getNetworkAttachment(ctx, key)
-		if err != nil || na != nil {
-			return na, err
-		}
+	attachment := primaryNetworkAttachment(bmi)
+	if attachment == nil {
+		return nil, nil
 	}
-	return nil, nil
+	key, ok := networkAttachmentKey(bmi, attachment)
+	if !ok {
+		return nil, nil
+	}
+	return r.getNetworkAttachment(ctx, key)
 }
 
-// networkAttachmentMayExist reports whether deletion must wait for an attachment.
-func networkAttachmentMayExist(bmi *v1alpha1.BareMetalInstance) bool {
+// networkAttachmentAcquired reports that the instance already selected a port
+// MAC or progressed past create, so disabled-mode must not erase status.
+func networkAttachmentAcquired(bmi *v1alpha1.BareMetalInstance) bool {
+	for _, status := range bmi.Status.NetworkAttachmentStatuses {
+		if status.MACAddress != "" || status.IPAddress != "" {
+			return true
+		}
+	}
 	ready := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-	if ready != nil {
-		if ready.Status == metav1.ConditionTrue && ready.Reason == "Succeeded" {
-			return true
-		}
-		if ready.Reason == v1alpha1.HostConditionReasonProgressing ||
-			networkAttachmentCreateMayHaveSucceeded(ready) {
-			return true
-		}
+	if ready == nil {
 		return false
 	}
-	handoff := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
-	ipDiscovery := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
-	return (handoff != nil && handoff.Status == metav1.ConditionTrue && handoff.Reason == "Succeeded") ||
-		(ipDiscovery != nil && ipDiscovery.Status == metav1.ConditionTrue && ipDiscovery.Reason == "Succeeded")
+	switch ready.Reason {
+	case "Succeeded", v1alpha1.HostConditionReasonProgressing,
+		v1alpha1.HostConditionReasonNetworkDetaching,
+		v1alpha1.HostConditionReasonNetworkAttachmentFailed:
+		return true
+	default:
+		return false
+	}
 }
 
-func networkAttachmentCreateMayHaveSucceeded(ready *metav1.Condition) bool {
-	// An unknown result may still commit after a retry was rejected.
-	return ready != nil && ready.Status == metav1.ConditionUnknown &&
-		(ready.Reason == v1alpha1.HostConditionReasonProgressing ||
-			ready.Reason == v1alpha1.HostConditionReasonNetworkAttachmentFailed)
+// networkAttachmentMayExist reports that deletion must keep ownership because
+// a Create was requested and may still produce an attachment. A recorded MAC
+// alone is not enough: MAC is persisted before any Create is sent.
+func networkAttachmentMayExist(bmi *v1alpha1.BareMetalInstance) bool {
+	ready := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+	if ready == nil || ready.Reason != v1alpha1.HostConditionReasonProgressing {
+		return false
+	}
+	if ready.LastTransitionTime.IsZero() {
+		return true
+	}
+	return time.Now().Before(ready.LastTransitionTime.Add(networkAttachmentCreateVisibilityTimeout))
 }
 
 func setNetworkingProvisioningDisabled(bmi *v1alpha1.BareMetalInstance) {
@@ -234,7 +232,9 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 
 	if !r.NetworkingEnabled {
 		log.Info("Networking provisioning disabled, skipping network attachment provisioning")
-		setNetworkingProvisioningDisabled(bareMetalInstance)
+		if !networkAttachmentAcquired(bareMetalInstance) {
+			setNetworkingProvisioningDisabled(bareMetalInstance)
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -325,10 +325,6 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkAttachmentCreation(
 ) (ctrl.Result, error) {
 	tenant := bmi.Annotations[tenantAnnotation]
 	if tenant == "" {
-		if networkAttachmentMayExist(bmi) {
-			// Preserve unresolved create state so deletion keeps host ownership.
-			return ctrl.Result{RequeueAfter: networkRetryInterval}, nil
-		}
 		setNetworkAttachmentsReady(bmi, metav1.ConditionFalse, v1alpha1.HostConditionReasonTemplateFailed,
 			fmt.Sprintf("the BareMetalInstance has no %s annotation", tenantAnnotation))
 		return ctrl.Result{}, nil
@@ -345,6 +341,7 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkAttachmentCreation(
 		if err != nil {
 			return ctrl.Result{}, err
 		}
+		// Persist the MAC before Create so a retry does not re-query inventory.
 		status.MACAddress = mac
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
@@ -353,11 +350,12 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkAttachmentCreation(
 		ready.ObservedGeneration == bmi.Generation {
 		return ctrl.Result{}, nil
 	}
-	createMayHaveSucceeded := networkAttachmentCreateMayHaveSucceeded(ready)
-	if ready == nil || (ready.Reason != v1alpha1.HostConditionReasonProgressing && !createMayHaveSucceeded) {
-		// Record the create before sending it so deletion keeps host ownership.
-		setNetworkAttachmentsReady(bmi, metav1.ConditionFalse,
-			v1alpha1.HostConditionReasonProgressing, "Network attachment provisioning is in progress")
+	// Persist create intent before Create so deletion can tell "never sent"
+	// (MAC only) from "create outcome unknown" (Progressing), even when Create
+	// returns a transient error after the request may have been accepted.
+	if ready == nil || ready.Reason != v1alpha1.HostConditionReasonProgressing {
+		setNetworkAttachmentsReady(bmi, metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
+			networkAttachmentCreatingMessage)
 		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
 	na := &opv1alpha1.NetworkAttachment{
@@ -382,20 +380,19 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkAttachmentCreation(
 		},
 	}
 	if err := r.Create(ctx, na); err != nil && !apierrors.IsAlreadyExists(err) {
-		if apierrors.IsBadRequest(err) || apierrors.IsInvalid(err) ||
-			apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+		if apierrors.IsBadRequest(err) || apierrors.IsInvalid(err) {
 			logf.FromContext(ctx).Error(err, "NetworkAttachment create was rejected", "networkAttachment", key.Name)
-			status := metav1.ConditionFalse
-			if createMayHaveSucceeded {
-				status = metav1.ConditionUnknown
-			}
-			setNetworkAttachmentCreateRejected(bmi, status)
+			setNetworkAttachmentCreateRejected(bmi)
 			r.recordBMIEvent(bmi, corev1.EventTypeWarning,
 				v1alpha1.HostConditionReasonNetworkAttachmentFailed, networkAttachmentCreateRejectedMessage)
 			return ctrl.Result{}, nil
 		}
-		setNetworkAttachmentsReady(bmi, metav1.ConditionUnknown,
-			v1alpha1.HostConditionReasonProgressing, "Waiting for the network attachment")
+		if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+			logf.FromContext(ctx).Error(err, "NetworkAttachment create authorization failed", "networkAttachment", key.Name)
+			setNetworkAttachmentsReady(bmi, metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
+				"Waiting for NetworkAttachment create authorization")
+			return ctrl.Result{RequeueAfter: networkRetryInterval}, nil
+		}
 		return ctrl.Result{}, fmt.Errorf("create NetworkAttachment %s: %w", key.Name, err)
 	}
 	logf.FromContext(ctx).Info("Created NetworkAttachment", "networkAttachment", key.Name)
@@ -404,8 +401,8 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkAttachmentCreation(
 	return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 }
 
-func setNetworkAttachmentCreateRejected(bmi *v1alpha1.BareMetalInstance, status metav1.ConditionStatus) {
-	setNetworkAttachmentsReady(bmi, status, v1alpha1.HostConditionReasonNetworkAttachmentFailed,
+func setNetworkAttachmentCreateRejected(bmi *v1alpha1.BareMetalInstance) {
+	setNetworkAttachmentsReady(bmi, metav1.ConditionFalse, v1alpha1.HostConditionReasonNetworkAttachmentFailed,
 		networkAttachmentCreateRejectedMessage)
 	if condition := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady); condition != nil {
 		condition.ObservedGeneration = bmi.Generation
@@ -426,7 +423,8 @@ func (r *BareMetalInstanceReconciler) failSelectedPortMAC(
 }
 
 // reconcileNetworkingDeletion deletes the attachment observed this pass and
-// waits for cleanup. An absent read cannot rule out a Create that may still commit.
+// waits for cleanup. NotFound releases ownership only when create cannot still
+// produce an attachment; otherwise ownership is retained for a later pass.
 func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 	ctx context.Context,
 	bareMetalInstance *v1alpha1.BareMetalInstance,
@@ -438,39 +436,39 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 		return ctrl.Result{}, true, nil
 	}
 
-	if attachment := primaryNetworkAttachment(bareMetalInstance); attachment != nil && r.NetworkingEnabled {
-		if observedAttachment != nil {
-			key := client.ObjectKeyFromObject(observedAttachment)
-			na := observedAttachment
-			if na.DeletionTimestamp.IsZero() {
-				log.Info("Deleting NetworkAttachment", "networkAttachment", key.Name)
-				if err := r.Delete(ctx, na); err != nil && !apierrors.IsNotFound(err) {
-					return ctrl.Result{}, false, fmt.Errorf("delete NetworkAttachment %s: %w", key.Name, err)
-				}
-			} else if len(na.Finalizers) == 1 && na.Finalizers[0] == BareMetalInstanceNetworkingFinalizer {
-				ready := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-				if ready == nil || ready.Reason != v1alpha1.HostConditionReasonDetaching {
-					setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse,
-						v1alpha1.HostConditionReasonDetaching, networkAttachmentCleanupMessage)
-					return ctrl.Result{RequeueAfter: networkRetryInterval}, false, nil
-				}
-				// The networking controller has finished the Fabric cleanup.
-				base := na.DeepCopy()
-				controllerutil.RemoveFinalizer(na, BareMetalInstanceNetworkingFinalizer)
-				if err := r.Patch(ctx, na, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil &&
-					!apierrors.IsNotFound(err) {
-					return ctrl.Result{}, false, fmt.Errorf("remove finalizer from NetworkAttachment %s: %w", key.Name, err)
-				}
+	if observedAttachment != nil {
+		key := client.ObjectKeyFromObject(observedAttachment)
+		na := observedAttachment
+		if na.DeletionTimestamp.IsZero() {
+			log.Info("Deleting NetworkAttachment", "networkAttachment", key.Name)
+			if err := r.Delete(ctx, na); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, false, fmt.Errorf("delete NetworkAttachment %s: %w", key.Name, err)
 			}
-			setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse,
-				v1alpha1.HostConditionReasonDetaching, networkAttachmentCleanupMessage)
-			return ctrl.Result{RequeueAfter: networkRetryInterval}, false, nil
+		} else if len(na.Finalizers) == 1 && na.Finalizers[0] == BareMetalInstanceNetworkingFinalizer {
+			ready := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
+			if ready == nil || ready.Reason != v1alpha1.HostConditionReasonNetworkDetaching {
+				setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse,
+					v1alpha1.HostConditionReasonNetworkDetaching, networkAttachmentCleanupMessage)
+				return ctrl.Result{RequeueAfter: networkRetryInterval}, false, nil
+			}
+			// The networking controller has finished the Fabric cleanup.
+			base := na.DeepCopy()
+			controllerutil.RemoveFinalizer(na, BareMetalInstanceNetworkingFinalizer)
+			if err := r.Patch(ctx, na, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil &&
+				!apierrors.IsNotFound(err) {
+				return ctrl.Result{}, false, fmt.Errorf("remove finalizer from NetworkAttachment %s: %w", key.Name, err)
+			}
 		}
-		if networkAttachmentMayExist(bareMetalInstance) {
-			setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse,
-				v1alpha1.HostConditionReasonProgressing, "Waiting for network attachment cleanup")
-			return ctrl.Result{RequeueAfter: networkRetryInterval}, false, nil
-		}
+		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse,
+			v1alpha1.HostConditionReasonNetworkDetaching, networkAttachmentCleanupMessage)
+		return ctrl.Result{RequeueAfter: networkRetryInterval}, false, nil
+	}
+
+	if networkAttachmentMayExist(bareMetalInstance) {
+		// Keep Progressing so LastTransitionTime (visibility deadline) is stable.
+		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse,
+			v1alpha1.HostConditionReasonProgressing, networkAttachmentCleanupMessage)
+		return ctrl.Result{RequeueAfter: networkRetryInterval}, false, nil
 	}
 
 	return r.removeNetworkingFinalizer(ctx, bareMetalInstance)

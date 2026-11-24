@@ -146,6 +146,18 @@ For detailed workflows, annotation reference, and troubleshooting, see [CLEANAPI
 
 ### ComputeInstance provisioning failure status
 
+Active retry is identified by the existing `Provisioned` condition being
+`False` with reason `RetryScheduled` (backoff) or `RetryRunning` (running retry
+with a durable failure checkpoint). Do not infer retry from failure presence:
+terminal `ProvisioningFailed` status retains a failure too. The condition
+uses fixed lifecycle messages and does not expose provider job text.
+
+Legacy backoff entries without a checkpoint report `RetryScheduled` with no
+failure object. Legacy running entries without a checkpoint retain ordinary
+progress regardless of attempt count. Reconciliation preserves the original
+failure observation time through controller restart and status-write conflicts;
+persisted success also replays removal after a failed clearing write.
+
 `ComputeInstance.status.last_provisioning_failure` is an optional, system-owned
 object returned to callers who can read the instance through Get or List.
 It contains the latest failure's `reason`, fixed public `message`, `attempt`,

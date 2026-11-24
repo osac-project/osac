@@ -26,6 +26,7 @@ import (
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -136,6 +137,69 @@ var _ = Describe("ComputeInstance storage handoff", Ordered, Label(computeStorag
 		resolvedTier := instance.GetSpec().GetBootDisk().GetStorageTier()
 		Expect(resolvedTier.GetId()).To(Equal(fixture.tierIDs[0]))
 		Expect(resolvedTier.GetName()).To(Equal(fixture.tierNames[0]))
+	})
+
+	It("retains retry diagnostics through public feedback and clears them before infrastructure readiness", func(ctx context.Context) {
+		fixture.addClass(ctx, 0)
+		fixture.addClass(ctx, 1)
+		created := fixture.createInstance(ctx)
+		id := created.GetId()
+		first := waitComputeStorageLaunch(ctx, id, "osac-create-compute-instance")
+		instances := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
+		var observed *publicv1.ComputeInstance
+		waitStatus := func(reason string, failed bool, ready bool) {
+			GinkgoHelper()
+			Eventually(func(g Gomega) {
+				response, err := instances.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+				g.Expect(err).NotTo(HaveOccurred())
+				observed = response.GetObject()
+				g.Expect(observed.GetStatus().GetConditions()).To(ContainElement(Satisfy(func(c *publicv1.ComputeInstanceCondition) bool {
+					want := publicv1.ConditionStatus_CONDITION_STATUS_FALSE
+					if ready {
+						want = publicv1.ConditionStatus_CONDITION_STATUS_TRUE
+					}
+					return c.GetType() == publicv1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED && c.GetStatus() == want && c.GetReason() == reason
+				})))
+				g.Expect(observed.GetStatus().HasLastProvisioningFailure()).To(Equal(failed))
+				g.Expect(observed.GetStatus().GetStateTransitionTime()).NotTo(BeNil())
+				if !ready {
+					g.Expect(observed.GetStatus().GetState()).To(Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
+				}
+			}, time.Minute, time.Second).Should(Succeed())
+		}
+		waitStatus("WaitingForVM", false, false)
+		initialTransition := proto.Clone(observed.GetStatus().GetStateTransitionTime())
+		computeStorageRecorderRequest(ctx, fmt.Sprintf("complete/%d", first.ID), map[string]any{
+			"status": "failed", "artifacts": map[string]any{
+				"osac_error": map[string]any{"message": "fixture-private-provider-detail", "retryable": true},
+			},
+		})
+		waitStatus("RetryScheduled", true, false)
+		failure := proto.Clone(observed.GetStatus().GetLastProvisioningFailure()).(*publicv1.ComputeInstanceProvisioningFailure)
+		Expect(failure.GetReason()).To(Equal(publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_REPORTED))
+		Expect(failure.GetMessage()).To(Equal("Provisioning failed."))
+		Expect(failure.GetAttempt()).To(Equal(int32(1)))
+		Expect(failure.GetObservedAt()).NotTo(BeNil())
+		Expect(proto.Equal(observed.GetStatus().GetStateTransitionTime(), initialTransition)).To(BeTrue())
+		second := waitComputeStorageLaunchAfter(ctx, id, "osac-create-compute-instance", first.ID, 5*time.Minute)
+		waitStatus("RetryRunning", true, false)
+		Expect(proto.Equal(observed.GetStatus().GetLastProvisioningFailure(), failure)).To(BeTrue())
+		Expect(proto.Equal(observed.GetStatus().GetStateTransitionTime(), initialTransition)).To(BeTrue())
+		computeStorageRecorderRequest(ctx, fmt.Sprintf("complete/%d", second.ID), map[string]any{"status": "successful"})
+		waitStatus("WaitingForVM", false, false)
+		Expect(proto.Equal(observed.GetStatus().GetStateTransitionTime(), initialTransition)).To(BeTrue())
+		var cr *osacv1alpha1.ComputeInstance
+		Eventually(func(g Gomega) {
+			cr = getComputeStorageInstance(ctx, g, id)
+			g.Expect(cr.Status.Jobs).To(ContainElement(Satisfy(func(j osacv1alpha1.NetworkJobStatus) bool {
+				return j.Task == "provision" && j.State == osacv1alpha1.NetworkJobStateSucceeded && j.LastFailure == nil
+			})))
+		}, time.Minute, time.Second).Should(Succeed())
+		setComputeStorageVMPhase(ctx, cr, "Provisioning")
+		waitStatus("ProvisioningStorage", false, false)
+		Expect(proto.Equal(observed.GetStatus().GetStateTransitionTime(), initialTransition)).To(BeTrue())
+		setComputeStorageVMPhase(ctx, cr, "Running")
+		waitStatus("InfrastructureReady", false, true)
 	})
 
 	DescribeTable("blocks the VM job until each disk tier has exactly one class", func(ctx context.Context, matches int) {

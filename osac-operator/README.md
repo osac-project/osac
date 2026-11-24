@@ -29,6 +29,31 @@ custom resources and reconciles them to their desired state:
 - **Volume** (`vol`) — provisions block storage on vendor arrays via the
   VendorProvisioner interface (vendor CSI controllers).
 
+## ComputeInstance provisioning status
+
+The `Provisioned` condition reports `False/RetryScheduled` during retry
+backoff and `False/RetryRunning` while a retry with a saved failure is running.
+`status.lastProvisioningFailure` retains only the latest failure: its reason,
+fixed public message, failed attempt number and original observation time.
+The failed attempt number can differ from the current job's attempt number.
+Provider messages and operational job details are not public diagnostics.
+
+A terminal job failure reports `False/ProvisioningFailed` and retains its
+diagnostics. Job success clears the failure and retry reason, while
+`WaitingForVM` or `ProvisioningStorage` continues until the existing
+infrastructure check reports `True/InfrastructureReady`. Deletion and a new
+configuration clear the old failure without changing retry policy or power
+state semantics.
+
+The provision job checkpoint survives status conflicts and controller restart;
+reconciliation replays the same failure time or successful clearing. Legacy
+`Retrying` entries without a checkpoint report `RetryScheduled` without failure
+details. Running entries without a checkpoint keep ordinary progress, even
+when their attempt number is greater than one.
+
+Feedback synchronizes these values through the existing Fulfillment API.
+See [API status ownership](../fulfillment-service/docs/API.md#computeinstance-provisioning-failure-status).
+
 ## Configuration
 
 When connected to Fulfillment, the operator compares

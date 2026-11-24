@@ -31,6 +31,8 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/util/retry"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -314,4 +316,40 @@ func waitComputeStorageLaunchAfter(ctx context.Context, id, template string, aft
 		found = matches[0]
 	}, timeout, time.Second).Should(Succeed())
 	return found
+}
+
+func setComputeStorageVMPhase(ctx context.Context, instance *osacv1alpha1.ComputeInstance, phase string) {
+	GinkgoHelper()
+	ref := instance.Status.VirtualMachineReference
+	Expect(ref).NotTo(BeNil())
+	namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: ref.Namespace}}
+	if err := tool.KubeClient().Create(ctx, namespace); err != nil {
+		Expect(apierrors.IsAlreadyExists(err)).To(BeTrue(), "create fixture workload namespace: %v", err)
+	}
+	vm := &unstructured.Unstructured{}
+	vm.SetGroupVersionKind(schema.GroupVersionKind{Group: "kubevirt.io", Version: "v1", Kind: "VirtualMachine"})
+	key := crclient.ObjectKey{Namespace: ref.Namespace, Name: ref.KubeVirtVirtualMachineName}
+	err := tool.KubeClient().Get(ctx, key, vm)
+	if apierrors.IsNotFound(err) {
+		vm.SetName(key.Name)
+		vm.SetNamespace(key.Namespace)
+		vm.SetLabels(map[string]string{"osac.openshift.io/computeinstance": instance.Name})
+		vm.SetAnnotations(instance.GetAnnotations())
+		Expect(tool.KubeClient().Create(ctx, vm)).To(Succeed())
+		DeferCleanup(func(cleanupCtx context.Context) {
+			Expect(crclient.IgnoreNotFound(tool.KubeClient().Delete(cleanupCtx, vm))).To(Succeed())
+		})
+	} else {
+		Expect(err).NotTo(HaveOccurred())
+	}
+	Expect(retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := tool.KubeClient().Get(ctx, key, vm); err != nil {
+			return err
+		}
+		if err := unstructured.SetNestedField(vm.Object, phase, "status", "printableStatus"); err != nil {
+			return err
+		}
+		// Kind's existing permissive VM fixture has no status subresource.
+		return tool.KubeClient().Update(ctx, vm)
+	})).To(Succeed())
 }

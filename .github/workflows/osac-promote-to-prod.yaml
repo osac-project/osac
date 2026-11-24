@@ -1299,5 +1299,9 @@ jobs:
         # message.
         if [[ "${HEADER_TEXT}" != ":white_check_mark:"* ]]; then
           echo "::error::Production promotion of ${VERSION} is incomplete: image=${IMAGE_TEXT}, chart=${CHART_TEXT}" >&2
+          # The chart jobs report success to GitHub even when they fail, so
+          # "Re-run failed jobs" would only rerun this notification and reuse
+          # the old outputs.
+          echo "::error::To retry, use Re-run all jobs or dispatch this workflow again, not Re-run failed jobs." >&2
           exit 1
         fi

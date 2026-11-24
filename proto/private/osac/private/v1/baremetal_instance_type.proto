@@ -227,13 +227,9 @@ message BareMetalInstanceStatus {
   ];
 
   // Name of the assigned host from external inventory. Used by Fulfillment to
-  // protect host references held by FabricDomains.
+  // protect host references held by FabricDomains. BMF assigns a host once and
+  // does not reassign after failure, so a non-empty projected value is current.
   string external_host_name = 10 [(cleanapi.field).private = true];
-
-  // True after Fulfillment has synchronized external_host_name from the
-  // bare-metal fulfillment operator. Existing records remain false until the
-  // controller observes their operator object; delete guards fail closed until then.
-  bool external_host_name_synchronized = 11 [(cleanapi.field).private = true];
 }
 
 // Runtime networking state for a single bare metal network attachment.

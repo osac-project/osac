@@ -96,13 +96,6 @@ recovery through the real Kubernetes API; test finalizers and persisted launch
 claims hold cleanup at checkpoints, and no AAP or real provider runs. Inspect the
 deployed suite's fixtures.
 
-For BareMetalInstance, the cleanup controller only observes automatic
-ExternalIPAttachments and ExternalIPs; Fulfillment owns their deletion. The Kind
-case holds the BMI finalizer while those CRs remain, then issues test-controlled
-child delete requests to simulate Fulfillment's ordered requests. It verifies
-the operator's observation and finalizer behavior, not the deployed Fulfillment
-API ordering.
-
 Run this leg through the installer's Kind target with the operator suite
 (repository-root `make -C osac-installer help`), on a dedicated cluster with environment configs
 kept out of the repository; see

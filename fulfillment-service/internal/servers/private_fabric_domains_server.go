@@ -286,10 +286,12 @@ func (s *PrivateFabricDomainsServer) lockFabricDomainServerHosts(
 	for i, host := range hosts {
 		quotedHosts[i] = strconv.Quote(host)
 	}
-	filter := "this.metadata.tenant == " + strconv.Quote(domain.GetMetadata().GetTenant()) +
-		" && this.status.external_host_name_synchronized == true && this.status.external_host_name in [" +
+	domainMeta := domain.GetMetadata()
+	filter := "this.metadata.tenant == " + strconv.Quote(domainMeta.GetTenant()) +
+		" && this.metadata.project == " + strconv.Quote(domainMeta.GetProject()) +
+		" && this.status.external_host_name in [" +
 		strings.Join(quotedHosts, ", ") + "]"
-	// Resolve requested hosts in one tenant-filtered inventory pass, then lock and revalidate the matches.
+	// Resolve requested hosts in one project-filtered inventory pass, then lock and revalidate the matches.
 	err := forEachMatchingRecord(ctx, s.guards.bareMetalInstances, filter, func(instance *privatev1.BareMetalInstance) {
 		host := instance.GetStatus().GetExternalHostName()
 		if matchedIDs[host] != "" && matchedIDs[host] != instance.GetId() {
@@ -327,9 +329,10 @@ func (s *PrivateFabricDomainsServer) lockFabricDomainServerHosts(
 	}
 	for _, host := range hosts {
 		instance := instancesByID[matchedIDs[host]]
-		if instance.GetMetadata().GetTenant() != domain.GetMetadata().GetTenant() ||
-			!instance.GetStatus().GetExternalHostNameSynchronized() ||
-			instance.GetStatus().GetExternalHostName() != host || instance.GetMetadata().HasDeletionTimestamp() {
+		instanceMeta := instance.GetMetadata()
+		if instanceMeta.GetTenant() != domainMeta.GetTenant() ||
+			instanceMeta.GetProject() != domainMeta.GetProject() ||
+			instance.GetStatus().GetExternalHostName() != host || instanceMeta.HasDeletionTimestamp() {
 			return invalidFabricDomainServer(host)
 		}
 		if refKey(instance.GetStatus().GetCluster()) != "" || instance.GetStatus().GetNodeSet() != "" {
@@ -342,5 +345,5 @@ func (s *PrivateFabricDomainsServer) lockFabricDomainServerHosts(
 
 func invalidFabricDomainServer(host string) error {
 	return grpcstatus.Errorf(grpccodes.InvalidArgument,
-		"FabricDomain server %s is not a bare-metal host of this tenant", host)
+		"FabricDomain server %s is not a bare-metal host of this project", host)
 }

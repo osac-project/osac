@@ -2230,7 +2230,7 @@ var _ = Describe("Private bare metal instances server", func() {
 
 		})
 
-		It("leaves automatic attachment creation and deletion cleanup to the BMI controller", func() {
+		It("leaves automatic attachment creation to the ready BareMetalInstance reconciler and cleans up an unattached ExternalIP", func() {
 			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("deferred-%s", uuid.NewString()[:8])}.Build(),
@@ -2252,6 +2252,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(eipList.GetItems()).To(HaveLen(1))
 			Expect(eipList.GetItems()[0].GetMetadata().GetLabels()[autoCreatedKindLabel]).To(Equal("bare_metal_instance"))
+			Expect(eipList.GetItems()[0].GetSpec().GetPool().GetTenant()).To(Equal(auth.SharedTenant))
 			Expect(eipList.GetItems()[0].GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(bmiID))
 			Expect(eipList.GetItems()[0].GetMetadata().GetAnnotations()["osac.openshift.io/tenant"]).To(Equal(testTenant))
 
@@ -2265,7 +2266,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			eipList, err = eipDao.List().SetFilter(filter).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(eipList.GetItems()).To(HaveLen(1))
+			Expect(eipList.GetItems()).To(BeEmpty())
 		})
 
 		It("Rejects PATCH that changes auto_external_ip_attachment", func() {

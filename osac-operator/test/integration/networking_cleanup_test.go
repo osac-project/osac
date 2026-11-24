@@ -210,22 +210,6 @@ spec:
 					}
 				}
 				ip, attachment := owned[0], owned[1]
-				assertParentHeld := func(g Gomega) {
-					current, getErr := cleanupGet(parent)
-					g.Expect(getErr).NotTo(HaveOccurred())
-					g.Expect(current.GetDeletionTimestamp()).NotTo(BeNil())
-					g.Expect(current.GetFinalizers()).To(ContainElement(workload.finalizer))
-				}
-				assertPreserved := func(g Gomega) {
-					for _, original := range preserved {
-						current, getErr := cleanupGet(original)
-						g.Expect(getErr).NotTo(HaveOccurred())
-						g.Expect(current.GetUID()).To(Equal(original.GetUID()))
-						g.Expect(current.GetDeletionTimestamp()).To(BeNil(), "%s/%s must be preserved",
-							original.GetKind(), original.GetName())
-						g.Expect(current.GetFinalizers()).To(ContainElement(networkCleanupTestFinalizer))
-					}
-				}
 
 				By("waiting for the deployed controller's parent finalizer")
 				Eventually(func(g Gomega) {
@@ -253,21 +237,7 @@ spec:
 				output, err := exec.Command("kubectl", "delete", workload.kind, name,
 					"-n", operatorNamespace, "--wait=false").CombinedOutput()
 				Expect(err).NotTo(HaveOccurred(), string(output))
-				switch workload.kind {
-				case "BareMetalInstance":
-					By("confirming the BMI cleanup controller observes but does not delete networking resources")
-					Consistently(func(g Gomega) {
-						currentAttachment, getErr := cleanupGet(attachment)
-						g.Expect(getErr).NotTo(HaveOccurred())
-						g.Expect(currentAttachment.GetDeletionTimestamp()).To(BeNil())
-						currentIP, getErr := cleanupGet(ip)
-						g.Expect(getErr).NotTo(HaveOccurred())
-						g.Expect(currentIP.GetDeletionTimestamp()).To(BeNil())
-						assertParentHeld(g)
-					}, 35*time.Second, 2*time.Second).Should(Succeed())
-					By("simulating Fulfillment requesting deletion of the BMI ExternalIPAttachment")
-					cleanupRequestDelete(attachment)
-				case "ComputeInstance":
+				if workload.kind == "ComputeInstance" {
 					By("Fulfillment requesting deletion of the ComputeInstance attachment")
 					cleanupRequestDelete(attachment)
 				}
@@ -276,6 +246,23 @@ spec:
 					g.Expect(getErr).NotTo(HaveOccurred())
 					g.Expect(current.GetDeletionTimestamp()).NotTo(BeNil())
 				}, 2*time.Minute, time.Second).Should(Succeed())
+
+				assertParentHeld := func(g Gomega) {
+					current, getErr := cleanupGet(parent)
+					g.Expect(getErr).NotTo(HaveOccurred())
+					g.Expect(current.GetDeletionTimestamp()).NotTo(BeNil())
+					g.Expect(current.GetFinalizers()).To(ContainElement(workload.finalizer))
+				}
+				assertPreserved := func(g Gomega) {
+					for _, original := range preserved {
+						current, getErr := cleanupGet(original)
+						g.Expect(getErr).NotTo(HaveOccurred())
+						g.Expect(current.GetUID()).To(Equal(original.GetUID()))
+						g.Expect(current.GetDeletionTimestamp()).To(BeNil(), "%s/%s must be preserved",
+							original.GetKind(), original.GetName())
+						g.Expect(current.GetFinalizers()).To(ContainElement(networkCleanupTestFinalizer))
+					}
+				}
 				By("holding attachment cleanup across the controller's polling interval")
 				if workload.kind == "BareMetalInstance" && marker == "auto-created" {
 					By("restarting the manager while attachment cleanup is waiting on its finalizer")
@@ -298,8 +285,8 @@ spec:
 				By("finishing attachment provider cleanup and observing EIP deletion")
 				cleanupRelease(attachment)
 				Eventually(func() (bool, error) { return cleanupAbsent(attachment) }, time.Minute, time.Second).Should(BeTrue())
-				if workload.kind == "ComputeInstance" || workload.kind == "BareMetalInstance" {
-					By("simulating Fulfillment requesting deletion of the workload ExternalIP")
+				if workload.kind == "ComputeInstance" {
+					By("Fulfillment requesting deletion of the ComputeInstance ExternalIP")
 					cleanupRequestDelete(ip)
 				}
 				Eventually(func(g Gomega) {

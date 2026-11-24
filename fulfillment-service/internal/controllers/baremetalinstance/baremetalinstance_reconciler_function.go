@@ -50,11 +50,7 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
-const (
-	objectPrefix                         = "bmi-"
-	operatorDeleteValidatedReason        = "OperatorDeleteValidated"
-	operatorHostValidatedForDeleteReason = "OperatorHostValidatedForDelete"
-)
+const objectPrefix = "bmi-"
 
 const userDataSecretSuffix = "-user-data"
 
@@ -387,18 +383,16 @@ func (t *task) delete(ctx context.Context) (err error) {
 		return nil
 	}
 
-	if !t.deleteHostStateWasValidated() {
-		t.updateCondition(
-			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
-			privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
-	}
 	err = t.getHub(ctx)
 	if err != nil {
 		if errors.Is(err, controllers.ErrHubNotFound) {
-			if err = t.validateMissingOperatorObjectForDelete(ctx); err != nil {
-				return controllers.RequeueAtInterval(err, time.Second)
+			if err = t.rejectDeleteIfProjectedHostReferenced(ctx); err != nil {
+				return controllers.RequeueAfter(err, time.Second)
 			}
 			t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING, nil)
+			t.updateCondition(
+				privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+				privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
 			if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.bareMetalInstance.GetId()); err != nil {
 				return err
 			}
@@ -413,10 +407,13 @@ func (t *task) delete(ctx context.Context) (err error) {
 		return
 	}
 	if object == nil {
-		if err = t.validateMissingOperatorObjectForDelete(ctx); err != nil {
-			return controllers.RequeueAtInterval(err, time.Second)
+		if err = t.rejectDeleteIfProjectedHostReferenced(ctx); err != nil {
+			return controllers.RequeueAfter(err, time.Second)
 		}
 		t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING, nil)
+		t.updateCondition(
+			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+			privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
 		t.r.logger.DebugContext(
 			ctx,
 			"Bare metal instance doesn't exist",
@@ -429,62 +426,37 @@ func (t *task) delete(ctx context.Context) (err error) {
 		return
 	}
 	t.syncNetworkReady(object)
+	// Recheck the live CR host before DELETING. The API already rejects deletes
+	// when the host is projected; this covers the race where delete is accepted
+	// before status projection catches up. Stay out of DELETING while a
+	// FabricDomain still lists the host so the tenant can delete the
+	// FabricDomain and retry without a billing DELETING state. BMF assigns
+	// ExternalHostName once and does not reassign after failure.
 	if err = t.rejectDeleteIfFabricDomainReferencesHost(ctx, object); err != nil {
-		return controllers.RequeueAtInterval(err, time.Second)
+		return controllers.RequeueAfter(err, time.Second)
 	}
-	if !t.operatorHostValidationMatches(object) {
-		t.recordOperatorHostValidation(object)
-		return controllers.RequeueAtInterval(errors.New("persisting validated operator host state before deletion"), time.Second)
-	}
-	// Keep the BMI CR live until Fulfillment removes its automatic
-	// ExternalIPAttachment and ExternalIP. Setting deletionTimestamp starts BMF
-	// offboarding, which powers off the host and removes its NetworkAttachment;
-	// starting that teardown while automatic access remains would leave those
-	// dependent resources active against a workload already being torn down.
+	t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING, nil)
+	t.updateCondition(
+		privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
+		privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "", "")
 	if err = controllers.ReconcileWorkloadNetworkingCleanup(ctx, t.r.networkingCleanup, t.bareMetalInstance.GetId()); err != nil {
 		return err
 	}
 
-	// Cleanup may take several reconciliations. Re-read and revalidate the BMI
-	// immediately before the resource-version-fenced delete so a host assignment
-	// or other operator update during cleanup cannot be overlooked.
-	object, err = t.getKubeObject(ctx)
-	if err != nil {
-		return err
-	}
-	if object == nil {
-		if err = t.validateMissingOperatorObjectForDelete(ctx); err != nil {
-			return controllers.RequeueAtInterval(err, time.Second)
-		}
-		t.removeFinalizer()
-		return nil
-	}
-	t.syncNetworkReady(object)
-	if err = t.rejectDeleteIfFabricDomainReferencesHost(ctx, object); err != nil {
-		return controllers.RequeueAtInterval(err, time.Second)
-	}
-	if !t.operatorHostValidationMatches(object) {
-		t.recordOperatorHostValidation(object)
-		return controllers.RequeueAtInterval(errors.New("persisting validated operator host state before deletion"), time.Second)
-	}
-
-	// The API rejects known references before accepting Delete. Keep status out
-	// of DELETING until both live-host checks pass and automatic networking is
-	// removed, so a reference discovered during revalidation does not leave the
-	// BMI reported as DELETING while tenant action is still required.
-	t.setState(privatev1.BareMetalInstanceState_BARE_METAL_INSTANCE_STATE_DELETING, nil)
 	if object.GetDeletionTimestamp() == nil {
+		// Fence an empty-to-assigned host update that races with the check above.
 		resourceVersion := object.GetResourceVersion()
 		err = t.hubClient.Delete(ctx, object, clnt.Preconditions{
 			ResourceVersion: &resourceVersion,
 		})
 		if err != nil {
+			// k8s Conflict is not a gRPC Aborted conflict; wrap so the reconciler
+			// schedules a retry instead of waiting for sync/watch alone.
+			if apierrors.IsConflict(err) {
+				return controllers.RequeueAtInterval(err, time.Second)
+			}
 			return
 		}
-		t.updateCondition(
-			privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
-			privatev1.ConditionStatus_CONDITION_STATUS_FALSE, operatorDeleteValidatedReason,
-			"Operator host state was validated before deletion")
 		t.r.logger.DebugContext(
 			ctx,
 			"Deleted bare metal instance",
@@ -499,6 +471,7 @@ func (t *task) delete(ctx context.Context) (err error) {
 			slog.String("name", object.GetName()),
 		)
 	}
+
 	// Kubernetes deletion is asynchronous, and the fulfillment event stream does
 	// not observe the BMFO object's finalizer progress. Keep this BMI queued until
 	// getKubeObject reports that the BMFO object is gone, then remove the
@@ -507,96 +480,49 @@ func (t *task) delete(ctx context.Context) (err error) {
 }
 
 // rejectDeleteIfFabricDomainReferencesHost checks the live host before deleting
-// it. BMF assigns ExternalHostName once and does not select a replacement host
-// after provisioning failure. The resourceVersion precondition on Delete fences
-// the initial empty-to-assigned host update if it races with this check.
+// the operator object. The API already rejects deletes for projected hosts.
 func (t *task) rejectDeleteIfFabricDomainReferencesHost(
 	ctx context.Context, object *bmfov1alpha1.BareMetalInstance,
 ) error {
-	if host := object.Spec.ExternalHostName; host != "" {
-		return t.rejectDeleteIfHostReferenced(ctx, host)
+	host := object.Spec.ExternalHostName
+	if host == "" {
+		return nil
+	}
+	if err := t.rejectDeleteIfHostReferenced(ctx, host); err != nil {
+		// Project the live host so a retry hits the API guard immediately.
+		t.bareMetalInstance.GetStatus().SetExternalHostName(host)
+		return err
 	}
 	return nil
 }
 
-// validateMissingOperatorObjectForDelete requires evidence before allowing a
-// missing operator object to complete deletion. A host assignment is not
-// required: a confirmed empty host is safe to delete. A projected or
-// checkpointed host is checked again; an empty host is accepted only with a
-// persisted checkpoint or successful fenced-delete condition.
-func (t *task) validateMissingOperatorObjectForDelete(ctx context.Context) error {
+func (t *task) rejectDeleteIfProjectedHostReferenced(ctx context.Context) error {
 	host := t.bareMetalInstance.GetStatus().GetExternalHostName()
-	if host != "" {
-		return t.rejectDeleteIfHostReferenced(ctx, host)
-	}
-	if t.deleteHostStateWasValidated() {
+	if host == "" {
 		return nil
 	}
-	if t.hubId == "" {
-		return nil
-	}
-	message := "deletion is waiting for the operator host assignment to be confirmed"
-	t.updateCondition(
-		privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
-		privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "HostAssignmentUnknown", message)
-	return errors.New(message)
-}
-
-func (t *task) deleteHostStateWasValidated() bool {
-	for _, condition := range t.bareMetalInstance.GetStatus().GetConditions() {
-		if condition.GetType() == privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY &&
-			condition.GetStatus() == privatev1.ConditionStatus_CONDITION_STATUS_FALSE &&
-			(condition.GetReason() == operatorHostValidatedForDeleteReason ||
-				condition.GetReason() == operatorDeleteValidatedReason) {
-			return true
-		}
-	}
-	return false
-}
-
-func (t *task) operatorHostValidationMatches(object *bmfov1alpha1.BareMetalInstance) bool {
-	if !t.deleteHostStateWasValidated() {
-		return false
-	}
-	status := t.bareMetalInstance.GetStatus()
-	if object.Spec.ExternalHostName == "" {
-		return !status.GetExternalHostNameSynchronized()
-	}
-	return status.GetExternalHostNameSynchronized() &&
-		status.GetExternalHostName() == object.Spec.ExternalHostName
-}
-
-func (t *task) recordOperatorHostValidation(object *bmfov1alpha1.BareMetalInstance) {
-	if object.Spec.ExternalHostName != "" {
-		t.bareMetalInstance.GetStatus().SetExternalHostName(object.Spec.ExternalHostName)
-		t.bareMetalInstance.GetStatus().SetExternalHostNameSynchronized(true)
-	} else {
-		// Preserve the last assigned host while marking the current empty value
-		// as observed for this delete attempt.
-		t.bareMetalInstance.GetStatus().SetExternalHostNameSynchronized(false)
-	}
-	t.updateCondition(
-		privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
-		privatev1.ConditionStatus_CONDITION_STATUS_FALSE, operatorHostValidatedForDeleteReason,
-		"Operator host state was validated before deletion")
+	return t.rejectDeleteIfHostReferenced(ctx, host)
 }
 
 func (t *task) rejectDeleteIfHostReferenced(ctx context.Context, host string) error {
-	filter := fmt.Sprintf("this.metadata.tenant == %q && %q in this.spec.servers",
-		t.bareMetalInstance.GetMetadata().GetTenant(), host)
+	metadata := t.bareMetalInstance.GetMetadata()
+	filter := fmt.Sprintf(
+		"this.metadata.tenant == %q && this.metadata.project == %q && %q in this.spec.servers",
+		metadata.GetTenant(), metadata.GetProject(), host)
 	limit := int32(1)
 	response, err := t.r.fabricDomainsClient.List(ctx, privatev1.FabricDomainsListRequest_builder{
 		Filter: &filter,
 		Limit:  &limit,
 	}.Build())
 	if err != nil {
-		return fmt.Errorf("failed to check FabricDomain references for host %q: %w", host, err)
+		return fmt.Errorf("failed to check FabricDomain references for BareMetalInstance %q: %w",
+			t.bareMetalInstance.GetId(), err)
 	}
 	if len(response.GetItems()) == 0 {
 		return nil
 	}
-	message := fmt.Sprintf("Deletion is waiting for FabricDomain %q to release host %q.",
-		response.GetItems()[0].GetId(), host)
+	message := fmt.Sprintf("Deletion is waiting for FabricDomain %q to release the host.",
+		response.GetItems()[0].GetId())
 	t.updateCondition(
 		privatev1.BareMetalInstanceConditionType_BARE_METAL_INSTANCE_CONDITION_TYPE_READY,
 		privatev1.ConditionStatus_CONDITION_STATUS_FALSE, "FabricDomainReference", message)
@@ -776,14 +702,10 @@ func (t *task) syncStatus(object *bmfov1alpha1.BareMetalInstance) {
 	if object == nil {
 		return
 	}
+	// BMF assigns ExternalHostName once. Project it when present; keep the last
+	// value if the CR briefly reports empty during allocation.
 	if object.Spec.ExternalHostName != "" {
 		t.bareMetalInstance.GetStatus().SetExternalHostName(object.Spec.ExternalHostName)
-		t.bareMetalInstance.GetStatus().SetExternalHostNameSynchronized(true)
-	} else {
-		// An empty value can mean allocation is still in progress. Keep the last
-		// known host for delete checks and leave creation/delete synchronization
-		// false until the operator reports a concrete current assignment.
-		t.bareMetalInstance.GetStatus().SetExternalHostNameSynchronized(false)
 	}
 
 	powerSynced := object.GetStatusCondition(bmfov1alpha1.HostConditionPowerSynced)

@@ -35,8 +35,7 @@ import (
 
 const bareMetalInstanceCleanupFinalizer = "osac.openshift.io/baremetalinstance-cleanup"
 
-// BareMetalInstanceCleanupReconciler holds BareMetalInstance deletion until
-// Fulfillment has removed its automatically created networking resources.
+// BareMetalInstanceCleanupReconciler removes automatically created networking resources before a BareMetalInstance is deleted.
 type BareMetalInstanceCleanupReconciler struct {
 	client.Client
 	bareMetalInstanceNamespace string
@@ -76,8 +75,7 @@ func (r *BareMetalInstanceCleanupReconciler) SetupWithManager(mgr mcmanager.Mana
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalips,verbs=get;list;delete
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalipattachments,verbs=get;list;delete
 
-// Reconcile guards BareMetalInstance deletion until Fulfillment removes its
-// automatically created networking resources.
+// Reconcile guards BareMetalInstance deletion until its automatically created networking resources are gone.
 func (r *BareMetalInstanceCleanupReconciler) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.Result, error) {
 	if request.Namespace != r.bareMetalInstanceNamespace {
 		return ctrl.Result{}, nil
@@ -106,13 +104,10 @@ func (r *BareMetalInstanceCleanupReconciler) Reconcile(ctx context.Context, requ
 		controllerutil.RemoveFinalizer(bmi, bareMetalInstanceCleanupFinalizer)
 		return ctrl.Result{}, r.Update(ctx, bmi)
 	}
-	remains, err := automaticExternalAccessRemains(ctx, r.Client, r.networkingNamespace,
-		autoExternalIPOwner{kind: bareMetalInstanceOwner, id: id})
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if remains {
-		return ctrl.Result{RequeueAfter: r.pollInterval}, nil
+	done, result, err := reconcileAutoExternalIPCleanup(ctx, r.Client, r.networkingNamespace,
+		autoExternalIPOwner{kind: bareMetalInstanceOwner, id: id}, r.pollInterval)
+	if err != nil || !done {
+		return result, err
 	}
 	controllerutil.RemoveFinalizer(bmi, bareMetalInstanceCleanupFinalizer)
 	return ctrl.Result{}, r.Update(ctx, bmi)

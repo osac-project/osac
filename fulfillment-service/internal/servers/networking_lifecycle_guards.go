@@ -88,10 +88,17 @@ func rejectDeleteIfReferenced[O lifecycleResource](
 	parentMetadata *privatev1.Metadata,
 	references func(O) bool,
 ) error {
+	const pageSize int32 = 1000
 	var dependentCount int
 	firstDependentID := ""
 	firstDependentName := ""
-	err := forEachRecord(ctx, dependentDao, func(dependent O) {
+	err := forEachDAOPage(ctx, pageSize, func(ctx context.Context, offset, limit int32) ([]O, error) {
+		page, err := dependentDao.List().SetLimit(limit).SetOffset(offset).Do(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return page.GetItems(), nil
+	}, func(dependent O) {
 		if !references(dependent) {
 			return
 		}
@@ -105,6 +112,10 @@ func rejectDeleteIfReferenced[O lifecycleResource](
 		}
 	})
 	if err != nil {
+		if errors.Is(err, ErrDAOOffsetOverflow) {
+			return grpcstatus.Errorf(grpccodes.Internal,
+				"too many %s records to check %s references", dependentKind, parentKind)
+		}
 		if logger != nil {
 			logger.ErrorContext(ctx, "Failed to check networking dependents",
 				slog.String("parent_kind", parentKind),

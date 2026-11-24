@@ -32,7 +32,7 @@ var _ = Describe("Private fabric domains server", func() {
 		server, err = NewPrivateFabricDomainsServer().SetLogger(logger).SetAttributionLogic(attribution).SetTenancyLogic(tenancy).Build()
 		Expect(err).ToNot(HaveOccurred())
 		object = privatev1.FabricDomain_builder{
-			Metadata: privatev1.Metadata_builder{Name: "test-domain"}.Build(),
+			Metadata: privatev1.Metadata_builder{Name: "test-domain", Project: "project-a"}.Build(),
 			Spec: privatev1.FabricDomainSpec_builder{
 				Type:           privatev1.FabricDomainType_FABRIC_DOMAIN_TYPE_ETHERNET_EW,
 				VirtualNetwork: "test-network", Servers: []string{"server-a"},
@@ -60,9 +60,11 @@ var _ = Describe("Private fabric domains server", func() {
 		}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		_, err = fixtureDAO[*privatev1.VirtualNetwork]().Create().SetObject(privatev1.VirtualNetwork_builder{
-			Id:       "test-network",
-			Metadata: privatev1.Metadata_builder{Name: "test-network", Tenant: testTenant, Finalizers: []string{"test/cleanup"}}.Build(),
-			Spec:     privatev1.VirtualNetworkSpec_builder{Ipv4Cidr: new("10.0.0.0/16")}.Build(),
+			Id: "test-network",
+			Metadata: privatev1.Metadata_builder{
+				Name: "test-network", Tenant: testTenant, Project: "project-a", Finalizers: []string{"test/cleanup"},
+			}.Build(),
+			Spec: privatev1.VirtualNetworkSpec_builder{Ipv4Cidr: new("10.0.0.0/16")}.Build(),
 			Status: privatev1.VirtualNetworkStatus_builder{
 				State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
 				Hub:   "hub-a",
@@ -73,8 +75,7 @@ var _ = Describe("Private fabric domains server", func() {
 			Id:       "fabric-domain-server-a",
 			Metadata: privatev1.Metadata_builder{Name: "fabric-domain-server-a", Tenant: testTenant, Project: "project-a"}.Build(),
 			Status: privatev1.BareMetalInstanceStatus_builder{
-				ExternalHostName:             "server-a",
-				ExternalHostNameSynchronized: true,
+				ExternalHostName: "server-a",
 			}.Build(),
 		}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
@@ -99,7 +100,7 @@ var _ = Describe("Private fabric domains server", func() {
 			object.GetSpec().SetServers([]string{host})
 			_, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
 			Expect(err).To(MatchError(grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"FabricDomain server %s is not a bare-metal host of this tenant", host)))
+				"FabricDomain server %s is not a bare-metal host of this project", host)))
 			domains, err := fixtureDAO[*privatev1.FabricDomain]().List().Do(ctx)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(domains.GetItems()).To(BeEmpty())
@@ -113,7 +114,7 @@ var _ = Describe("Private fabric domains server", func() {
 					Id:       "foreign-bmi",
 					Metadata: privatev1.Metadata_builder{Name: "foreign-bmi", Tenant: "other-tenant"}.Build(),
 					Status: privatev1.BareMetalInstanceStatus_builder{
-						ExternalHostName: host, ExternalHostNameSynchronized: true,
+						ExternalHostName: host,
 					}.Build(),
 				}.Build(),
 			).Do(ctx)
@@ -121,7 +122,7 @@ var _ = Describe("Private fabric domains server", func() {
 			object.GetSpec().SetServers([]string{host})
 			_, err = server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
 			Expect(err).To(MatchError(grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"FabricDomain server %s is not a bare-metal host of this tenant", host)))
+				"FabricDomain server %s is not a bare-metal host of this project", host)))
 		})
 
 		It("does not accept a BMI that has started deletion", func() {
@@ -138,42 +139,49 @@ var _ = Describe("Private fabric domains server", func() {
 
 			_, err = server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
 			Expect(err).To(MatchError(grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"FabricDomain server server-a is not a bare-metal host of this tenant")))
+				"FabricDomain server server-a is not a bare-metal host of this project")))
 		})
 
-		It("does not accept a host until its status projection is synchronized", func() {
+		It("does not accept a host from another project in the same tenant", func() {
+			seedProject("project-b")
+			const host = "other-project-host"
 			_, err := fixtureDAO[*privatev1.BareMetalInstance]().Create().SetObject(
 				privatev1.BareMetalInstance_builder{
-					Id:       "unsynchronized-bmi",
-					Metadata: privatev1.Metadata_builder{Name: "unsynchronized-bmi", Tenant: testTenant}.Build(),
+					Id: "other-project-bmi",
+					Metadata: privatev1.Metadata_builder{
+						Name: "other-project-bmi", Tenant: testTenant, Project: "project-b",
+					}.Build(),
 					Status: privatev1.BareMetalInstanceStatus_builder{
-						ExternalHostName: "not-yet-synchronized",
+						ExternalHostName: host,
 					}.Build(),
 				}.Build(),
 			).Do(ctx)
 			Expect(err).NotTo(HaveOccurred())
-			object.GetSpec().SetServers([]string{"not-yet-synchronized"})
+			object.GetSpec().SetServers([]string{host})
 			_, err = server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
 			Expect(err).To(MatchError(grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"FabricDomain server not-yet-synchronized is not a bare-metal host of this tenant")))
+				"FabricDomain server %s is not a bare-metal host of this project", host)))
 		})
 
 		It("rejects a Cluster worker host with the design message", func() {
 			const host = "worker-host"
 			_, err := fixtureDAO[*privatev1.Cluster]().Create().SetObject(privatev1.Cluster_builder{
-				Id:       "worker-cluster",
-				Metadata: privatev1.Metadata_builder{Name: "worker-cluster", Tenant: testTenant}.Build(),
+				Id: "worker-cluster",
+				Metadata: privatev1.Metadata_builder{
+					Name: "worker-cluster", Tenant: testTenant, Project: "project-a",
+				}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).NotTo(HaveOccurred())
 			_, err = fixtureDAO[*privatev1.BareMetalInstance]().Create().SetObject(
 				privatev1.BareMetalInstance_builder{
-					Id:       "worker-bmi",
-					Metadata: privatev1.Metadata_builder{Name: "worker-bmi", Tenant: testTenant}.Build(),
+					Id: "worker-bmi",
+					Metadata: privatev1.Metadata_builder{
+						Name: "worker-bmi", Tenant: testTenant, Project: "project-a",
+					}.Build(),
 					Status: privatev1.BareMetalInstanceStatus_builder{
-						ExternalHostName:             host,
-						ExternalHostNameSynchronized: true,
-						Cluster:                      privatev1.ClusterLocalReference_builder{Id: "worker-cluster"}.Build(),
-						NodeSet:                      new("compute"),
+						ExternalHostName: host,
+						Cluster:          privatev1.ClusterLocalReference_builder{Id: "worker-cluster"}.Build(),
+						NodeSet:          new("compute"),
 					}.Build(),
 				}.Build(),
 			).Do(ctx)
@@ -218,10 +226,10 @@ var _ = Describe("Private fabric domains server", func() {
 			)
 		})
 
-		It("accepts deletion with an unsynchronized host for live controller validation", func() {
+		It("accepts deletion before host projection so the reconciler can check the live CR", func() {
 			_, err := fixtureDAO[*privatev1.FabricDomain]().Create().SetObject(privatev1.FabricDomain_builder{
-				Id:       "legacy-host-domain",
-				Metadata: privatev1.Metadata_builder{Name: "legacy-host-domain", Tenant: testTenant}.Build(),
+				Id:       "race-host-domain",
+				Metadata: privatev1.Metadata_builder{Name: "race-host-domain", Tenant: testTenant}.Build(),
 				Spec:     privatev1.FabricDomainSpec_builder{Servers: []string{"server-a"}}.Build(),
 			}.Build()).Do(ctx)
 			Expect(err).NotTo(HaveOccurred())
@@ -230,7 +238,6 @@ var _ = Describe("Private fabric domains server", func() {
 			bmi, err := bmiDAO.Get().SetId("fabric-domain-server-a").Do(ctx)
 			Expect(err).NotTo(HaveOccurred())
 			bmi.GetObject().GetStatus().SetExternalHostName("")
-			bmi.GetObject().GetStatus().SetExternalHostNameSynchronized(false)
 			bmi.GetObject().GetMetadata().SetFinalizers([]string{"test/finalizer"})
 			_, err = bmiDAO.Update().SetObject(bmi.GetObject()).Do(ctx)
 			Expect(err).NotTo(HaveOccurred())
@@ -249,7 +256,6 @@ var _ = Describe("Private fabric domains server", func() {
 			bmi, err := bmiDAO.Get().SetId("fabric-domain-server-a").Do(ctx)
 			Expect(err).NotTo(HaveOccurred())
 			bmi.GetObject().GetStatus().SetExternalHostName("")
-			bmi.GetObject().GetStatus().SetExternalHostNameSynchronized(false)
 			_, err = bmiDAO.Update().SetObject(bmi.GetObject()).Do(ctx)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -257,26 +263,6 @@ var _ = Describe("Private fabric domains server", func() {
 				Id: "fabric-domain-server-a",
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
-		})
-
-		It("matches host names containing backslashes in the filtered lookup", func() {
-			const host = `server\name`
-			bmiDAO := fixtureDAO[*privatev1.BareMetalInstance]()
-			bmi, err := bmiDAO.Get().SetId("fabric-domain-server-a").Do(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			bmi.GetObject().GetStatus().SetExternalHostName(host)
-			bmi.GetObject().GetStatus().SetExternalHostNameSynchronized(true)
-			_, err = bmiDAO.Update().SetObject(bmi.GetObject()).Do(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			object.GetSpec().SetServers([]string{host})
-			created, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
-			Expect(err).NotTo(HaveOccurred())
-
-			_, err = bmiServer.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
-				Id: "fabric-domain-server-a",
-			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err).To(MatchError(ContainSubstring(created.GetObject().GetId())))
 		})
 
 		It("keeps a deleting FabricDomain as a dependency until its record is removed", func() {
@@ -323,29 +309,59 @@ var _ = Describe("Private fabric domains server", func() {
 			Expect(err).NotTo(HaveOccurred())
 		})
 
-		It("blocks references from another project in the same tenant", func() {
+		It("ignores references from another project in the same tenant", func() {
 			seedProject("project-b")
-			_, err := fixtureDAO[*privatev1.VirtualNetwork]().Create().SetObject(privatev1.VirtualNetwork_builder{
-				Id: "test-network-project-b",
-				Metadata: privatev1.Metadata_builder{
-					Name: "test-network-project-b", Tenant: testTenant, Project: "project-b",
+			_, err := fixtureDAO[*privatev1.FabricDomain]().Create().SetObject(
+				privatev1.FabricDomain_builder{
+					Id: "other-project-domain",
+					Metadata: privatev1.Metadata_builder{
+						Name: "other-project-domain", Tenant: testTenant, Project: "project-b",
+					}.Build(),
+					Spec: privatev1.FabricDomainSpec_builder{Servers: []string{"server-a"}}.Build(),
 				}.Build(),
-				Spec: privatev1.VirtualNetworkSpec_builder{Ipv4Cidr: new("10.1.0.0/16")}.Build(),
-				Status: privatev1.VirtualNetworkStatus_builder{
-					State: privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
-					Hub:   "hub-a",
-				}.Build(),
-			}.Build()).Do(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			object.GetMetadata().SetProject("project-b")
-			object.GetSpec().SetVirtualNetwork("test-network-project-b")
-			created, err := server.Create(ctx, privatev1.FabricDomainsCreateRequest_builder{Object: object}.Build())
+			).Do(ctx)
 			Expect(err).NotTo(HaveOccurred())
 			_, err = bmiServer.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
 				Id: "fabric-domain-server-a",
 			}.Build())
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
-			Expect(err).To(MatchError(ContainSubstring(created.GetObject().GetId())))
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("returns success when deletion was already accepted", func() {
+			bmiDAO := fixtureDAO[*privatev1.BareMetalInstance]()
+			bmi, err := bmiDAO.Get().SetId("fabric-domain-server-a").Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			bmi.GetObject().GetMetadata().SetFinalizers([]string{"test/finalizer"})
+			_, err = bmiDAO.Update().SetObject(bmi.GetObject()).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = bmiServer.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
+				Id: "fabric-domain-server-a",
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+
+			// Simulate the reconciler projecting the live host after delete was accepted.
+			bmi, err = bmiDAO.Get().SetId("fabric-domain-server-a").Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(bmi.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
+			bmi.GetObject().GetStatus().SetExternalHostName("server-a")
+			_, err = bmiDAO.Update().SetObject(bmi.GetObject()).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = fixtureDAO[*privatev1.FabricDomain]().Create().SetObject(
+				privatev1.FabricDomain_builder{
+					Id: "late-domain",
+					Metadata: privatev1.Metadata_builder{
+						Name: "late-domain", Tenant: testTenant, Project: "project-a",
+					}.Build(),
+					Spec: privatev1.FabricDomainSpec_builder{Servers: []string{"server-a"}}.Build(),
+				}.Build(),
+			).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = bmiServer.Delete(ctx, privatev1.BareMetalInstancesDeleteRequest_builder{
+				Id: "fabric-domain-server-a",
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
 		})
 	})
 

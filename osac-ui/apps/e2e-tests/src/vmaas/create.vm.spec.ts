@@ -1,13 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { access } from 'node:fs/promises';
 
-import {
-  catalogTestData,
-  instanceTypeTestData,
-  storageTierTestData,
-  tenantNameOrSkip,
-  vmTestName,
-} from './test_data';
 import { VmCreatePage } from '../../../../libs/locators/vms';
 import { expectComputeInstanceCatalogItem } from '../../../../libs/osac-cli/src/compute_instance';
 import {
@@ -30,6 +23,13 @@ import {
   openVmsPage,
   waitForVmToBeRunning,
 } from '../../../../libs/test-utils/src/vms.page';
+import {
+  catalogTestData,
+  instanceTypeTestData,
+  storageTierTestData,
+  tenantNameOrSkip,
+  vmTestName,
+} from '../shared/test_data';
 
 const vmName = vmTestName;
 const cloudInit = '#cloud-config\nruncmd:\n  - echo vm-e2e';

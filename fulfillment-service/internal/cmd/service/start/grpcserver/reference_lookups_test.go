@@ -484,6 +484,40 @@ var _ = Describe("RegisterReferenceLookups", func() {
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
 		Expect(grpcstatus.Convert(err).Message()).To(Equal("a role reference must specify an ID or name"))
 	})
+
+	It("resolves a Tenant default Role by name and ignores an out-of-mask Role through gRPC", func() {
+		client := privatev1.NewTenantsClient(conn)
+		response, err := client.Create(ctx, privatev1.TenantsCreateRequest_builder{
+			Object: privatev1.Tenant_builder{
+				Metadata: privatev1.Metadata_builder{Name: "grpc-default-role"}.Build(),
+				Spec: privatev1.TenantSpec_builder{
+					DefaultRole: privatev1.RoleReference_builder{Name: "tenant-user"}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		canonical := response.GetObject().GetSpec().GetDefaultRole()
+		Expect(canonical.GetId()).NotTo(BeEmpty())
+		Expect(canonical.GetTenant()).To(Equal(auth.SharedTenant))
+
+		id := response.GetObject().GetId()
+		_, err = client.Update(ctx, privatev1.TenantsUpdateRequest_builder{
+			Object: privatev1.Tenant_builder{
+				Id: id,
+				Spec: privatev1.TenantSpec_builder{
+					Domains:     []string{"example.com"},
+					DefaultRole: privatev1.RoleReference_builder{Name: "missing-default-role"}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.domains"}},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+
+		stored, err := client.Get(ctx, privatev1.TenantsGetRequest_builder{Id: id}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(stored.GetObject().GetSpec().GetDomains()).To(Equal([]string{"example.com"}))
+		Expect(proto.Equal(stored.GetObject().GetSpec().GetDefaultRole(), canonical)).To(BeTrue())
+	})
 })
 
 type referenceUse struct {

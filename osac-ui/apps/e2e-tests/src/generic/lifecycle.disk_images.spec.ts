@@ -1,6 +1,5 @@
 import { test } from '@playwright/test';
 
-import { diskImageNameOrSkip, diskImagesTestData } from './test_data';
 import {
   expectDiskImageLifecycle,
   openDiskImageDetails,
@@ -9,6 +8,7 @@ import {
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import { openDiskImagesPage } from '../../../../libs/test-utils/src/main.page';
+import { diskImageNameOrSkip, diskImagesTestData } from '../shared/test_data';
 
 test(`exercises lifecycle transitions for ${diskImagesTestData.name}`, async ({ page }) => {
   // Allow remote login and lifecycle updates to complete.

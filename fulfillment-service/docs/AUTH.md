@@ -19,6 +19,7 @@ and configure the necessary mappings and authorization rules.
 2. [Installing Keycloak](#installing-keycloak)
 3. [Keycloak Configuration](#keycloak-configuration)
 4. [Fulfillment Service Configuration](#fulfillment-service-configuration)
+   - [Service-account credential lifecycle](#service-account-credential-lifecycle)
 5. [User and Group Mapping](#user-and-group-mapping)
 6. [Tenancy Logic](#tenancy-logic)
 7. [Authorization Configuration](#authorization-configuration)
@@ -361,6 +362,38 @@ Secrets API and authorizes rotation and deletion. The client credential is store
 Secret referenced by the service account's status.
 The Fulfillment controller reads the IDP credentials from
 `/etc/fulfillment-controller/idp`; no `realm-admin` grant is required.
+
+#### Service-account credential lifecycle
+
+For tenant administration, CLI usage, and workload authentication, see the
+[Tenant Service Accounts Guide](../../docs/guides/tenant-service-accounts.md). The
+[service-account reconciler](../internal/controllers/serviceaccount/service_account_reconciler_function.go)
+owns asynchronous Keycloak provisioning, credential publication, rotation, and cleanup.
+
+The controller creates a tenant-scoped Secret containing `client_id` and `client_secret` and sets
+`status.client_secret` to reference it. The account becomes `READY` only after that Secret is
+available. Registration credentials are kept separately in a system-scoped Secret; do not expose
+that Secret to tenant workloads.
+
+Before rotating a client secret, the controller persists a generated replacement and its rotation
+generation alongside the current registration token in the system-scoped Secret. It applies that
+staged secret to Keycloak using the registration token, persists any returned registration token,
+and publishes the replacement to the tenant credential Secret. Rotation is marked complete only
+after publication. Retries reuse the staged replacement, and repeated `RegenerateSecret` requests
+while rotation is pending or retrying reuse the same rotation. The private REST route is
+`POST /api/private/v1/service_accounts/{id}/regenerate_secret`.
+
+If rotation fails before the existing credential is affected, the account can remain `READY` with
+an explanatory `status.message`. If the Keycloak update may have applied without successful
+publication, or Keycloak reports a missing client, the account becomes `FAILED` while the controller
+retries. The installer-managed Client Policy described above allows retries to reuse the stored
+registration token without granting broad client-management permissions.
+
+If `status.message` reports a Keycloak client without recoverable registration credentials, a
+platform administrator must identify the exact client belonging to the affected tenant/account and
+obtain approval before removing it from Keycloak. Do not remove unrelated clients or delete Secrets
+as a workaround. Once that orphaned client is removed, reconciliation retries provisioning or
+completes pending account deletion.
 
 ### 6. Trusted Token Issuers
 

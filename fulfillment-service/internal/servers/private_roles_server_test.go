@@ -14,24 +14,35 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
+	"fmt"
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Private roles server", func() {
-	var rolesServer *PrivateRolesServer
+	var (
+		rolesServer       *PrivateRolesServer
+		permissionCatalog *catalog.Catalog
+	)
 
 	BeforeEach(func() {
 		var err error
 
-		permissionCatalog, err := catalog.Build(protoregistry.GlobalFiles)
+		permissionCatalog, err = catalog.Build(protoregistry.GlobalFiles)
 		Expect(err).ToNot(HaveOccurred())
 
 		rolesServer, err = NewPrivateRolesServer().
@@ -41,6 +52,178 @@ var _ = Describe("Private roles server", func() {
 			SetPermissionCatalog(permissionCatalog).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
+	})
+
+	Describe("Deleting a referenced Role", func() {
+		const roleName = "test-default-role"
+		referencedStatus := status.New(codes.FailedPrecondition, "Role is still referenced by a Tenant default role or RoleBinding").Proto()
+		var (
+			roleID   string
+			tenants  *PrivateTenantsServer
+			bindings *PrivateRoleBindingsServer
+		)
+
+		BeforeEach(func() {
+			var err error
+			tenants, err = NewPrivateTenantsServer().
+				SetLogger(logger).SetTenancyLogic(tenancy).SetAttributionLogic(attribution).Build()
+			Expect(err).NotTo(HaveOccurred())
+			bindings, err = NewPrivateRoleBindingsServer().
+				SetLogger(logger).SetTenancyLogic(tenancy).SetAttributionLogic(attribution).Build()
+			Expect(err).NotTo(HaveOccurred())
+
+			role, err := rolesServer.Create(ctx, privatev1.RolesCreateRequest_builder{
+				Object: privatev1.Role_builder{
+					Metadata: privatev1.Metadata_builder{Name: roleName, Tenant: auth.SharedTenant}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			roleID = role.GetObject().GetId()
+		})
+
+		setDefault := func(ctx context.Context, ref *privatev1.RoleReference) error {
+			_, err := tenants.Update(ctx, privatev1.TenantsUpdateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Id:   testTenant,
+					Spec: privatev1.TenantSpec_builder{DefaultRole: ref}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{defaultRoleField}},
+			}.Build())
+			return err
+		}
+		setTenantDefault := func(ctx context.Context) error {
+			return setDefault(ctx, privatev1.RoleReference_builder{Id: roleID}.Build())
+		}
+		createBinding := func(ctx context.Context, tenant, name string) (*privatev1.RoleBindingsCreateResponse, error) {
+			return bindings.Create(ctx, privatev1.RoleBindingsCreateRequest_builder{
+				Object: privatev1.RoleBinding_builder{
+					Metadata: privatev1.Metadata_builder{Name: name, Tenant: tenant}.Build(),
+					Spec: privatev1.RoleBindingSpec_builder{
+						Role: privatev1.RoleReference_builder{Id: roleID}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+		}
+		deleteRole := func(ctx context.Context) error {
+			_, err := rolesServer.Delete(ctx, privatev1.RolesDeleteRequest_builder{Id: roleID}.Build())
+			return err
+		}
+		insertFinalizingBinding := func() {
+			_, err := suiteTx.Exec(ctx, `
+				insert into role_bindings (id, name, tenant, deletion_timestamp, data)
+				values ('pending-binding', 'pending-binding', $1, now(),
+				        jsonb_build_object('spec', jsonb_build_object('role', jsonb_build_object('id', $2::text))))
+			`, testTenant, roleID)
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		It("blocks a Role used as a Tenant default until the default is cleared", func() {
+			Expect(setTenantDefault(ctx)).To(Succeed())
+			Expect(status.Convert(deleteRole(ctx)).Proto()).To(Equal(referencedStatus))
+
+			Expect(setDefault(ctx, nil)).To(Succeed())
+			Expect(deleteRole(ctx)).To(Succeed())
+		})
+
+		It("blocks a Role used by an active RoleBinding until the binding is deleted", func() {
+			binding, err := createBinding(ctx, testTenant, "active-binding")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(status.Convert(deleteRole(ctx)).Proto()).To(Equal(referencedStatus))
+
+			_, err = bindings.Delete(ctx, privatev1.RoleBindingsDeleteRequest_builder{Id: binding.GetObject().GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(deleteRole(ctx)).To(Succeed())
+		})
+
+		It("blocks a Role used by a RoleBinding awaiting finalization", func() {
+			insertFinalizingBinding()
+			Expect(status.Convert(deleteRole(ctx)).Proto()).To(Equal(referencedStatus))
+		})
+
+		It("returns an error when the only blocker is in another tenant", func() {
+			_, err := tenants.Create(ctx, privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: privatev1.Metadata_builder{Name: "hidden-tenant"}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			_, err = createBinding(ctx, "hidden-tenant", "hidden-binding")
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(status.Convert(deleteRole(ctx)).Proto()).To(Equal(referencedStatus))
+
+			visibility, err := auth.NewVisibility().AddVisibleTenants(testTenant, auth.SharedTenant).Build()
+			Expect(err).NotTo(HaveOccurred())
+			scopedTenancy := auth.NewMockTenancyLogic(ctrl)
+			scopedTenancy.EXPECT().DetermineVisibility(gomock.Any()).Return(visibility, nil).AnyTimes()
+			public, err := NewRolesServer().
+				SetLogger(logger).SetTenancyLogic(scopedTenancy).SetAttributionLogic(attribution).
+				SetPermissionCatalog(permissionCatalog).Build()
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = public.Delete(ctx, publicv1.RolesDeleteRequest_builder{Id: roleID}.Build())
+			Expect(status.Convert(err).Proto()).To(Equal(referencedStatus))
+		})
+
+		const racingBinding = "racing-binding"
+		createRacingBinding := func(ctx context.Context) error {
+			_, err := createBinding(ctx, testTenant, racingBinding)
+			return err
+		}
+		type committedState struct {
+			roleExists        bool
+			tenantReferences  bool
+			bindingReferences bool
+		}
+
+		DescribeTable("serializes reference writes with Role Delete",
+			func(specCtx SpecContext, first, second func(context.Context) error, secondCode codes.Code, want committedState) {
+				Expect(suiteTx.End(ctx)).To(Succeed())
+				suiteTx = nil
+
+				secondErr := runRoleDeleteRace(specCtx, first, second)
+				Expect(status.Code(secondErr)).To(Equal(secondCode), "%v", secondErr)
+
+				readCtx := database.TxManagerIntoContext(specCtx, tm)
+				_, err := database.WithNewTx(readCtx, func(ctx context.Context) (struct{}, error) {
+					_, err := rolesServer.Get(ctx, privatev1.RolesGetRequest_builder{Id: roleID}.Build())
+					if want.roleExists {
+						Expect(err).NotTo(HaveOccurred())
+					} else {
+						Expect(status.Code(err)).To(Equal(codes.NotFound), "%v", err)
+					}
+
+					tenant, err := tenants.Get(ctx, privatev1.TenantsGetRequest_builder{Id: testTenant}.Build())
+					Expect(err).NotTo(HaveOccurred())
+					defaultRole := tenant.GetObject().GetSpec().GetDefaultRole()
+					if want.tenantReferences {
+						Expect(defaultRole.GetId()).To(Equal(roleID))
+					} else {
+						Expect(defaultRole).To(BeNil())
+					}
+
+					filter := fmt.Sprintf("this.metadata.name == %q", racingBinding)
+					list, err := bindings.List(ctx, privatev1.RoleBindingsListRequest_builder{Filter: &filter}.Build())
+					Expect(err).NotTo(HaveOccurred())
+					if want.bindingReferences {
+						Expect(list.GetItems()).To(HaveLen(1))
+						Expect(list.GetItems()[0].GetSpec().GetRole().GetId()).To(Equal(roleID))
+					} else {
+						Expect(list.GetItems()).To(BeEmpty())
+					}
+					return struct{}{}, nil
+				})
+				Expect(err).NotTo(HaveOccurred())
+			},
+			Entry("Tenant reference commits first", setTenantDefault, deleteRole, codes.FailedPrecondition,
+				committedState{roleExists: true, tenantReferences: true}),
+			Entry("RoleBinding commits first", createRacingBinding, deleteRole, codes.FailedPrecondition,
+				committedState{roleExists: true, bindingReferences: true}),
+			Entry("Role Delete wins over the Tenant update", deleteRole, setTenantDefault, codes.FailedPrecondition,
+				committedState{}),
+			Entry("Role Delete wins over the RoleBinding create", deleteRole, createRacingBinding, codes.InvalidArgument,
+				committedState{}),
+		)
 	})
 
 	Describe("Creation", func() {
@@ -505,3 +688,57 @@ var _ = Describe("Private roles server", func() {
 		})
 	})
 })
+
+// runRoleDeleteRace commits the first request only after the second is waiting
+// for a lock in the spec's isolated database.
+func runRoleDeleteRace(ctx SpecContext, first, second func(context.Context) error) error {
+	GinkgoHelper()
+	const applicationName = "role-delete-race"
+
+	raceCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	txCtx := database.TxManagerIntoContext(raceCtx, tm)
+	result := make(chan error, 1)
+	_, err := database.WithNewTx(txCtx, func(firstCtx context.Context) (struct{}, error) {
+		if err := first(firstCtx); err != nil {
+			return struct{}{}, err
+		}
+
+		DeferCleanup(func() {
+			Eventually(result).WithTimeout(5 * time.Second).Should(BeClosed())
+		})
+		go func() {
+			defer close(result)
+			result <- tm.Run(raceCtx, func(secondCtx context.Context) error {
+				tx, err := database.TxFromContext(secondCtx)
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec(secondCtx, "select set_config('application_name', $1, true)", applicationName)
+				if err != nil {
+					return err
+				}
+				return second(secondCtx)
+			})
+		}()
+
+		Eventually(func() (bool, error) {
+			var waiting bool
+			err := testPool.QueryRow(raceCtx, `
+				select exists (
+					select 1 from pg_stat_activity
+					where datname = current_database()
+					  and application_name = $1
+					  and wait_event_type = 'Lock'
+				)
+			`, applicationName).Scan(&waiting)
+			return waiting, err
+		}).WithContext(raceCtx).Should(BeTrue(), "the second request should wait for the first transaction")
+		return struct{}{}, nil
+	})
+	Expect(err).NotTo(HaveOccurred(), "the first request should commit")
+
+	var secondErr error
+	Eventually(result).WithContext(raceCtx).Should(Receive(&secondErr))
+	return secondErr
+}

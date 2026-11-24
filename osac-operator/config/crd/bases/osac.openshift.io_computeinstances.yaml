@@ -252,6 +252,18 @@ spec:
                   - Template-specific parameters not covered by explicit fields (e.g., exposed_ports)
                   - Custom parameters defined by specific templates
                 type: string
+              userDataFulfillmentSecretRef:
+                description: UserDataFulfillmentSecretRef references user data fetched
+                  by the provisioning job.
+                properties:
+                  id:
+                    description: ID is the canonical fulfillment Secret identifier.
+                    maxLength: 64
+                    minLength: 1
+                    type: string
+                required:
+                - id
+                type: object
               userDataSecretRef:
                 description: UserDataSecretRef references cloud-init user data
                 properties:
@@ -290,6 +302,12 @@ spec:
             - message: networkAttachments are immutable after creation
               rule: has(self.networkAttachments) == has(oldSelf.networkAttachments)
                 && (!has(self.networkAttachments) || self.networkAttachments == oldSelf.networkAttachments)
+            - message: user data Secret references are mutually exclusive
+              rule: '!(has(self.userDataSecretRef) && has(self.userDataFulfillmentSecretRef))'
+            - message: userDataFulfillmentSecretRef is immutable
+              rule: has(self.userDataFulfillmentSecretRef) == has(oldSelf.userDataFulfillmentSecretRef)
+                && (!has(self.userDataFulfillmentSecretRef) || self.userDataFulfillmentSecretRef
+                == oldSelf.userDataFulfillmentSecretRef)
           status:
             description: status defines the observed state of ComputeInstance
             properties:

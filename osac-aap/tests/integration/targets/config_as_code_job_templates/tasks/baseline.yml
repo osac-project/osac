@@ -18,6 +18,7 @@
   gather_facts: false
   vars:
     aap_prefix: osac-it
+    aap_fulfillment_reader_issuer_url: https://keycloak.example.test/realms/osac
     aap_organization_name: osac-it-org
     aap_project_name: osac-it-project
     aap_ee_image: ghcr.io/osac-project/osac-aap:latest
@@ -64,6 +65,34 @@
           {{ cac_fabric_tasks | map('replace', '_', '-') | map('regex_replace', '^', aap_prefix ~ '-') | list }}
         cac_generic_templates: >-
           {{ controller_templates | selectattr('playbook', 'equalto', cac_generic_playbook) | list }}
+
+    - name: Verify the protected credential belongs only to the ComputeInstance create template
+      ansible.builtin.assert:
+        that:
+          - >-
+            cac_by_name[aap_prefix ~ '-create-compute-instance'].credentials
+            == controller_credential_types | map(attribute='name') | list
+            == [aap_fulfillment_reader_credential_name]
+          - cac_by_name[aap_prefix ~ '-create-compute-instance'].prevent_instance_group_fallback
+          - not cac_by_name[aap_prefix ~ '-create-compute-instance'].ask_credential_on_launch
+          - >-
+            controller_templates | selectattr('credentials', 'defined')
+            | selectattr('credentials', 'contains', aap_fulfillment_reader_credential_name) | list | length == 1
+          - >-
+            aap_fulfillment_reader_credential_type.inputs.fields
+            | selectattr('id', 'equalto', 'client_secret') | map(attribute='secret') | list == [true]
+          - "'tower.filename' in aap_fulfillment_reader_credential_type.injectors"
+          - "'/etc/ca-bundle/bundle.pem' in aap_fulfillment_reader_credential_type.injectors"
+
+    - name: Verify the ComputeInstance create template leaves credentials unset without an issuer
+      vars:
+        aap_fulfillment_reader_issuer_url: ''
+      ansible.builtin.assert:
+        that:
+          - controller_credential_types == []
+          - >-
+            (controller_templates | selectattr('name', 'equalto', aap_prefix ~ '-create-compute-instance') | first).credentials
+            | default(omit) == omit
 
     - name: Show the networking job templates
       ansible.builtin.debug:

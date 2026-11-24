@@ -81,6 +81,7 @@ class OsacCLI:
         additional_disks: list[dict[str, Any]] | None = None,
         run_strategy: str = "Always",
         user_data_secret_ref: str | None = None,
+        user_data_secret: str | None = None,
         instance_type: str | None = None,
         ssh_key: str | None = None,
         external_ip_attachment: bool = False,
@@ -177,6 +178,8 @@ class OsacCLI:
 
         if user_data_secret_ref is not None:
             args.extend(["--user-data", user_data_secret_ref])
+        if user_data_secret is not None:
+            args.extend(["--user-data-secret", user_data_secret])
         if ssh_key is not None:
             args.extend(["--ssh-key", ssh_key])
         if external_ip_attachment:

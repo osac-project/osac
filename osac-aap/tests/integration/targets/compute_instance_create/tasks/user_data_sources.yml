@@ -1,0 +1,119 @@
+---
+- name: Verify ComputeInstance user data against the Kind Kubernetes API
+  hosts: localhost
+  gather_facts: false
+  vars:
+    template_parameters: {}
+    vm_network_labels: {}
+    vm_template_spec: {}
+    compute_instance_name: "osac-userdata-{{ scenario }}"
+    compute_instance_target_namespace: computeinstance-test-vm-work
+    source_namespace: osac-system
+    expected_key: "{{ 'Unattend.xml' if guest_os_family == 'windows' else 'userdata' }}"
+    destination_name: "{{ compute_instance_name }}-{{ 'sysprep' if guest_os_family == 'windows' else 'user-data' }}"
+    staging_name: "{{ compute_instance_name }}-staging"
+    local_ref: >-
+      {{
+        {'userDataSecretRef': {'name': '' if scenario == 'empty-name' else staging_name}}
+        if scenario in ['inline', 'ambiguous', 'empty-name'] else {}
+      }}
+    api_ref: >-
+      {{
+        {'userDataFulfillmentSecretRef': {'id': '' if scenario == 'empty-id' else 'canonical-fixture-id'}}
+        if scenario in ['direct', 'ambiguous', 'empty-id'] else {}
+      }}
+    compute_instance:
+      metadata:
+        namespace: "{{ source_namespace }}"
+        annotations:
+          osac.openshift.io/tenant: integration-tenant
+      spec: >-
+        {{
+          {'vcpus': 2, 'memoryGiB': 4, 'bootDisk': {'sizeGiB': 20}, 'image': {'sourceRef': 'example.invalid/fixture'}}
+          | combine(local_ref, api_ref)
+        }}
+    source_userdata: "{{ lookup('ansible.builtin.env', 'OSAC_TEST_USERDATA') }}"
+    default_arg_specs:
+      exposed_ports: 22/tcp
+    default_spec:
+      bootDisk:
+        sizeGiB: 20
+      image:
+        sourceRef: example.invalid/fixture
+      runStrategy: Always
+    default_vm_labels: {}
+
+  tasks:
+    - name: Validate the user data reference using the VM role
+      ansible.builtin.include_role:
+        name: osac.templates.ocp_virt_vm
+        tasks_from: create_validate.yaml
+
+    - name: Exercise the selected Secret source and destination
+      block:
+        - name: Create the management-cluster staging Secret for inline data
+          when: scenario == 'inline'
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: Secret
+              metadata:
+                name: "{{ staging_name }}"
+                namespace: "{{ source_namespace }}"
+              data:
+                userdata: "{{ source_userdata | b64encode }}"
+          no_log: true
+
+        - name: Create the workload Secret using the VM role
+          ansible.builtin.include_role:
+            name: osac.templates.ocp_virt_vm
+            tasks_from: create_secrets.yaml
+
+        - name: Read the workload Secret from Kubernetes
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: "{{ destination_name }}"
+            namespace: "{{ compute_instance_target_namespace }}"
+          register: destination_secret
+          no_log: true
+
+        - name: Verify that the payload was copied unchanged
+          when: scenario != 'none'
+          ansible.builtin.assert:
+            that:
+              - destination_secret.resources | length == 1
+              - destination_secret.resources[0].data == {expected_key: (source_userdata | b64encode)}
+          no_log: true
+
+        - name: Verify that the VM volume refers to the workload Secret
+          when: scenario != 'none'
+          ansible.builtin.assert:
+            that:
+              - >-
+                (vm_template_spec.volumes[0].sysprep.secret.name if guest_os_family == 'windows'
+                 else vm_template_spec.volumes[0].cloudInitNoCloud.secretRef.name) == destination_name
+        - name: Verify that no user data leaves the VM spec and workload unchanged
+          when: scenario == 'none'
+          ansible.builtin.assert:
+            that:
+              - destination_secret.resources | length == 0
+              - vm_template_spec.volumes | default([]) | length == 0
+      always:
+        - name: Delete the test workload Secret
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: "{{ destination_name }}"
+            namespace: "{{ compute_instance_target_namespace }}"
+
+        - name: Delete the test staging Secret
+          when: scenario == 'inline'
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: "{{ staging_name }}"
+            namespace: "{{ source_namespace }}"

@@ -109,6 +109,27 @@ func deleteTenantInNamespace(ctx context.Context, namespace, name string) {
 }
 
 var _ = Describe("ComputeInstance Controller", func() {
+	It("rejects ambiguous user data sources and changes to the Fulfillment Secret reference", func(ctx SpecContext) {
+		resource := &osacv1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: "user-data-source-validation", Namespace: "default"},
+			Spec:       newTestComputeInstanceSpec("test_template"),
+		}
+		resource.Spec.UserDataFulfillmentSecretRef = &osacv1alpha1.FulfillmentSecretReference{ID: "user-data-id"}
+		resource.Spec.UserDataSecretRef = &corev1.LocalObjectReference{Name: "local-secret"}
+		Expect(k8sClient.Create(ctx, resource)).To(MatchError(ContainSubstring("mutually exclusive")))
+
+		resource.Spec.UserDataSecretRef = nil
+		Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+		DeferCleanup(k8sClient.Delete, resource)
+
+		updated := resource.DeepCopy()
+		updated.Spec.UserDataFulfillmentSecretRef.ID = "another-id"
+		Expect(k8sClient.Update(ctx, updated)).To(MatchError(ContainSubstring("userDataFulfillmentSecretRef is immutable")))
+
+		updated = resource.DeepCopy()
+		updated.Spec.UserDataFulfillmentSecretRef = nil
+		Expect(k8sClient.Update(ctx, updated)).To(MatchError(ContainSubstring("userDataFulfillmentSecretRef is immutable")))
+	})
 	Context("When reconciling a resource", func() {
 		const resourceName = "test-resource"
 		const namespaceName = "default"

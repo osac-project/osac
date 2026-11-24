@@ -95,6 +95,7 @@ ROLE_SCENARIO_TESTS=(
   "caas_core_lifecycle:install"
   "caas_core_lifecycle:delete"
   "compute_instance_create:sysprep_secret_copy"
+  "compute_instance_create:user_data_sources"
   "compute_instance_create:volume_id_validation"
   "compute_instance_create:volume_id_annotations"
   "compute_instance_create:storage_tier_mapping"
@@ -196,7 +197,11 @@ for entry in "${ROLE_SCENARIO_TESTS[@]}"; do
     if [ "$entry" = "compute_instance_create:volume_id_annotations" ]; then
       export ANSIBLE_JINJA2_NATIVE=true
     fi
-    run_ansible_playbook "targets/${role}/tasks/${scenario}.yml" -e "@common_vars.yml" -v
+    if [ "$entry" = "compute_instance_create:user_data_sources" ]; then
+      "${ANSIBLE_PYTHON_INTERPRETER}" targets/compute_instance_create/files/user_data_api.py
+    else
+      run_ansible_playbook "targets/${role}/tasks/${scenario}.yml" -e "@common_vars.yml" -v
+    fi
   ); then
     echo "  ✓ Passed"
     PASSED+=("$role:$scenario")

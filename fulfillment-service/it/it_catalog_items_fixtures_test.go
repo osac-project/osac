@@ -1148,11 +1148,16 @@ func ensureTenantDefaultNetworkingFixture(ctx context.Context, tenant, project s
 		networkID = network.GetObject().GetId()
 	}
 
+	// AlreadyExists reuse after skipping live-tenant Delete may leave the
+	// resource READY; new creates still pass through PENDING first.
 	Eventually(func() privatev1.VirtualNetworkState {
 		r, e := networks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: networkID}.Build())
 		Expect(e).NotTo(HaveOccurred())
 		return r.GetObject().GetStatus().GetState()
-	}, time.Minute, time.Second).Should(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
+	}, time.Minute, time.Second).Should(Or(
+		Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING),
+		Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY),
+	))
 	waitForNetworkingCR(ctx, listNetworkingCR(
 		tool.KubeClient(),
 		labels.VirtualNetworkUuid,
@@ -1221,7 +1226,10 @@ func ensureTenantDefaultNetworkingFixture(ctx context.Context, tenant, project s
 		r, e := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
 		Expect(e).NotTo(HaveOccurred())
 		return r.GetObject().GetStatus().GetState()
-	}, time.Minute, time.Second).Should(Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
+	}, time.Minute, time.Second).Should(Or(
+		Equal(privatev1.SubnetState_SUBNET_STATE_PENDING),
+		Equal(privatev1.SubnetState_SUBNET_STATE_READY),
+	))
 	waitForNetworkingCR(ctx, listNetworkingCR(
 		tool.KubeClient(),
 		labels.SubnetUuid,
@@ -1288,7 +1296,10 @@ func ensureTenantDefaultNetworkingFixture(ctx context.Context, tenant, project s
 		r, e := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
 		Expect(e).NotTo(HaveOccurred())
 		return r.GetObject().GetStatus().GetState()
-	}, time.Minute, time.Second).Should(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING))
+	}, time.Minute, time.Second).Should(Or(
+		Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING),
+		Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY),
+	))
 	waitForNetworkingCR(ctx, listNetworkingCR(
 		tool.KubeClient(),
 		labels.SecurityGroupUuid,
@@ -1351,6 +1362,13 @@ func cleanupIncompleteTenantDefaultNetworkingFixture(
 	networkResponse, err := networks.List(ctx, privatev1.VirtualNetworksListRequest_builder{Filter: &networkFilter}.Build())
 	Expect(err).NotTo(HaveOccurred())
 	if len(networkResponse.GetItems()) == 0 {
+		return
+	}
+	// Same rule as scheduleTenantDefaultNetworkingFixtureCleanup: the tenant
+	// reconciler owns defaults while the Tenant is live, so Delete never finishes.
+	live, liveErr := tenantIsLive(ctx, tenant)
+	Expect(liveErr).NotTo(HaveOccurred())
+	if live {
 		return
 	}
 	manager, managerErr := newTestDefaultNetworkingManager()

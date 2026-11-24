@@ -1,6 +1,7 @@
 package servers
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -15,7 +16,7 @@ var errClusterIngressAllocationExhausted = errors.New("subnet load-balancer VIP 
 // selectClusterIngressAddress selects the first unused eligible address in
 // ascending order from the Subnet's committed LB VIP ranges.
 func selectClusterIngressAddress(
-	subnetCIDR string,
+	ctx context.Context, subnetCIDR string,
 	ipam *privatev1.SubnetIPAM,
 	used map[string]struct{},
 ) (string, error) {
@@ -36,7 +37,7 @@ func selectClusterIngressAddress(
 	reserved = append(reserved, netip.PrefixFrom(lastIPv4Address(subnet), 32))
 
 	gateway, err := netip.ParseAddr(ipam.GetGatewayIpv4())
-	if err != nil || !gateway.Is4() {
+	if err != nil || !gateway.Is4() || !subnet.Contains(gateway) {
 		return "", fmt.Errorf("subnet IPAM has an invalid IPv4 gateway")
 	}
 	reserved = append(reserved, netip.PrefixFrom(gateway, 32))
@@ -65,6 +66,20 @@ func selectClusterIngressAddress(
 	for _, addressRange := range lbRanges {
 		last := lastIPv4Address(addressRange)
 		for address := addressRange.Addr(); address.IsValid() && address.Compare(last) <= 0; address = address.Next() {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			jumped := false
+			for _, blocked := range reserved {
+				if blocked.Contains(address) {
+					address = lastIPv4Address(blocked)
+					jumped = true
+					break
+				}
+			}
+			if jumped {
+				continue
+			}
 			if _, exists := used[address.String()]; !exists && !addressInRanges(address, reserved) {
 				return address.String(), nil
 			}

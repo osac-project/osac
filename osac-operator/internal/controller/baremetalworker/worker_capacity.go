@@ -67,6 +67,9 @@ func (r *Reconciler) reconcileWorkerLifecycle(
 		}
 		return workerBoundaryRequeue(), nil
 	}
+	if err := r.cleanupRetiringWorkerRegistryProbes(ctx, co); err != nil {
+		return ctrl.Result{}, err
+	}
 	failed := co.DeepCopy()
 	if err := r.handleFailedWorkers(ctx, failed); err != nil {
 		// Publish failure summaries without advancing to another external action.
@@ -156,7 +159,7 @@ func (r *Reconciler) reconcileWorkerCreation(
 		if _, due := selectDueSlot(co, time.Now()); due != nil {
 			return false, workerBoundaryRequeue(), nil
 		}
-		res, err = r.reconcileDueWorkerCreation(ctx, co, cluster, workerCreationInputs{}, observed)
+		res, err = r.reconcileDueWorkerCreationReadiness(ctx, co, cluster, observed)
 		return false, res, err
 	}
 	expected := co.DeepCopy()
@@ -177,6 +180,20 @@ func (r *Reconciler) reconcileWorkerCreation(
 		return false, workerBoundaryRequeue(), nil
 	}
 	return r.reconcileDueWorkerCapacity(ctx, co, cluster, inputs, observed)
+}
+
+// reconcileDueWorkerCreationReadiness keeps the readiness-only path free of
+// external BMI dispatch. A retry can become due at any point after readiness
+// observation; it must return to the input-resolving path for every worker
+// mode, including BMaaS orders whose image is intentionally optional.
+func (r *Reconciler) reconcileDueWorkerCreationReadiness(
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
+	observed *workerObservation,
+) (ctrl.Result, error) {
+	if _, due := selectDueSlot(co, time.Now()); due != nil {
+		return workerBoundaryRequeue(), nil
+	}
+	return r.reconcileDueWorkerCreation(ctx, co, cluster, workerCreationInputs{}, observed)
 }
 
 // refreshWorkerReadiness reports current discovery-ignition evidence for an
@@ -255,9 +272,11 @@ func (r *Reconciler) reconcileDueWorkerCreation(
 		}
 		return ctrl.Result{}, nil
 	}
-	if inputs.image == nil && co.Spec.SupportsAutomaticCaaSEndpoints && r.NetworkingProvisioningEnabled {
+	if inputs.image == nil && co.Spec.SupportsAutomaticCaaSEndpoints {
 		// A retry can become due after the readiness-only guard ran. Do not
-		// dispatch probe preparation or BMI creation without resolved inputs.
+		// dispatch BMI creation without the ClusterVersion image resolved. The
+		// CaaS worker path requires the image even when provider networking is
+		// disabled (the registry probe is the only networking-specific part).
 		return workerBoundaryRequeue(), nil
 	}
 	return r.createSelectedWorker(ctx, co, cluster, nr, prev, inputs, observed)
@@ -275,7 +294,8 @@ func selectDueSlot(co *v1alpha1.ClusterOrder, now time.Time) (*v1alpha1.NodeRequ
 		}
 		for _, prev := range plan.selected {
 			if prev.NodeSet != nr.NodeSet || prev.BareMetalInstance.ID != "" ||
-				(prev.Phase == workerPhaseFailed && !isRetryDue(prev, now)) {
+				(prev.Phase == workerPhaseFailed &&
+					(prev.NextRetryTime == nil || !isRetryDue(prev, now))) {
 				continue
 			}
 			candidate := prev
@@ -305,6 +325,16 @@ func (r *Reconciler) createSelectedWorker(
 		return ctrl.Result{}, err
 	}
 	ignitionRaw := string(inputs.ignition)
+	// Recover a BMI accepted before its Create response or identity checkpoint
+	// was observed. Probe preparation must not block name recovery on the guest
+	// API; a prepared attempt retains its durable probe identity.
+	recovered, err := r.recoverSelectedWorker(ctx, co, cluster, prev, observed)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if recovered {
+		return workerBoundaryRequeue(), nil
+	}
 	// Persist the durable attempt origin before the first external Create for this
 	// attempt. A lost acknowledgement or lost identity write then recovers the same
 	// clock instead of restarting it, and no provider call happens inside this
@@ -318,24 +348,11 @@ func (r *Reconciler) createSelectedWorker(
 		return workerBoundaryRequeue(), nil
 	}
 	if co.Spec.SupportsAutomaticCaaSEndpoints && r.NetworkingProvisioningEnabled {
-		image := workerRegistryProbeImage(co, prev)
-		if image == "" {
-			return ctrl.Result{}, fmt.Errorf("ClusterOrder has no ClusterVersion release image for worker registry probe")
-		}
-		credentials, result, err := r.prepareWorkerRegistryProbe(ctx, co, prev, image, nr.FabricInterface)
+		var result ctrl.Result
+		var err error
+		ignitionRaw, result, err = r.prepareSelectedWorkerRegistryProbe(ctx, co, prev, nr.FabricInterface, ignitionRaw)
 		if err != nil || !result.IsZero() {
 			return result, err
-		}
-		ignitionRaw, err = injectWorkerRegistryProbeIgnition(ignitionRaw, credentials, workerRegistryPullSecret(co))
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		if !prev.RegistryProbePrepared {
-			prev.RegistryProbePrepared = true
-			if err := r.writeSelectedWorker(ctx, co, prev); err != nil {
-				return ctrl.Result{}, err
-			}
-			return workerBoundaryRequeue(), nil
 		}
 	}
 	// Only this invocation's Reserved -> Attempted transition can be undone
@@ -372,6 +389,89 @@ func (r *Reconciler) createSelectedWorker(
 	}
 	// Observe the external action next time, even if its response was a no-op.
 	return workerBoundaryRequeue(), nil
+}
+
+func (r *Reconciler) prepareSelectedWorkerRegistryProbe(
+	ctx context.Context, co *v1alpha1.ClusterOrder, worker *v1alpha1.WorkerStatus,
+	interfaceName, ignitionRaw string,
+) (string, ctrl.Result, error) {
+	image := workerRegistryProbeImage(co, worker)
+	if image == "" {
+		err := fmt.Errorf("ClusterOrder has no ClusterVersion release image for worker registry probe")
+		if writeErr := r.recordRegistryProbePreparationFailure(ctx, co, worker, image, err); writeErr != nil {
+			return ignitionRaw, ctrl.Result{}, writeErr
+		}
+		return ignitionRaw, workerBoundaryRequeue(), nil
+	}
+	if worker.RegistryProbeImage == "" {
+		worker.RegistryProbeImage = image
+	}
+	credentials, result, err := r.prepareWorkerRegistryProbe(ctx, co, worker, image, interfaceName)
+	if err != nil {
+		if writeErr := r.recordRegistryProbePreparationFailure(ctx, co, worker, image, err); writeErr != nil {
+			return ignitionRaw, ctrl.Result{}, writeErr
+		}
+		return ignitionRaw, workerBoundaryRequeue(), nil
+	}
+	if !result.IsZero() {
+		return ignitionRaw, result, nil
+	}
+	ignitionRaw, err = injectWorkerRegistryProbeIgnition(ignitionRaw, credentials, workerRegistryPullSecret(co))
+	if err != nil {
+		if writeErr := r.recordRegistryProbePreparationFailure(ctx, co, worker, image, err); writeErr != nil {
+			return ignitionRaw, ctrl.Result{}, writeErr
+		}
+		return ignitionRaw, workerBoundaryRequeue(), nil
+	}
+	if !worker.RegistryProbePrepared {
+		worker.RegistryProbePrepared = true
+		if err := r.writeSelectedWorker(ctx, co, worker); err != nil {
+			return ignitionRaw, ctrl.Result{}, err
+		}
+		return ignitionRaw, workerBoundaryRequeue(), nil
+	}
+	return ignitionRaw, ctrl.Result{}, nil
+}
+
+func (r *Reconciler) recordRegistryProbePreparationFailure(
+	ctx context.Context, co *v1alpha1.ClusterOrder, worker *v1alpha1.WorkerStatus,
+	image string, cause error,
+) error {
+	worker.Phase = workerPhaseFailed
+	worker.RegistryProbePrepared = true
+	worker.RegistryProbeImage = image
+	worker.LastFailureReason = eventReasonRegistryProbePreparationFailed
+	worker.LastFailureMessage = cause.Error()
+	now := metav1.Now()
+	worker.LastFailureTime = &now
+	// Keep BMICreateState unchanged: an Attempted state records an unknown
+	// external Create outcome and must not be re-armed by probe failure.
+	worker.NextRetryTime = nil
+	return r.writeSelectedWorker(ctx, co, worker)
+}
+
+func (r *Reconciler) recoverSelectedWorker(
+	ctx context.Context, co *v1alpha1.ClusterOrder, cluster *privatev1.Cluster,
+	worker *v1alpha1.WorkerStatus, observed *workerObservation,
+) (bool, error) {
+	if worker.BareMetalInstance.ID != "" {
+		return false, nil
+	}
+	bmi, nameErr := observed.exactOwnedName(co, cluster.GetMetadata().GetTenant(), worker.BareMetalInstance.Name)
+	if nameErr != nil {
+		return false, r.rejectWorkerIdentity(co, nameErr.Error())
+	}
+	if bmi == nil {
+		return false, nil
+	}
+	if err := checkBMIRecoveryCandidate(bmi); err != nil {
+		return false, err
+	}
+	workerCreated(worker, worker.BareMetalInstance.Name, bmi.GetId())
+	if err := r.writeSelectedWorker(ctx, co, worker); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // recordBMICreateAttempt fences Create against cancellation on the same

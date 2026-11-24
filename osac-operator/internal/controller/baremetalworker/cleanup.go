@@ -31,6 +31,14 @@ func (r *Reconciler) cleanupWorker(ctx context.Context, co *v1alpha1.ClusterOrde
 		return false, err
 	}
 	if w.BareMetalInstance.ID == "" {
+		if co.Spec.SupportsAutomaticCaaSEndpoints && workerRegistryProbeMayExist(*w, r.NetworkingProvisioningEnabled) {
+			if err := r.cleanupFailedWorkerRegistryProbe(ctx, co, *w); err != nil {
+				return false, fmt.Errorf("cleaning reserved worker %s registry probe: %w", w.Name, err)
+			}
+			w.RegistryProbePrepared = false
+			w.RegistryProbeImage = ""
+			w.AttemptStartedAt = nil
+		}
 		if w.BMICreateState == v1alpha1.WorkerBMICreateStateReserved {
 			// Only the authoritative journal can prove no Create was authorized.
 			// The caller's optimistic removal competes with the Attempted write;
@@ -75,8 +83,14 @@ func (r *Reconciler) cleanupWorker(ctx context.Context, co *v1alpha1.ClusterOrde
 				return finalizer == caasAgentCleanupFinalizer
 			},
 		))
+		annotations := updated.GetMetadata().GetAnnotations()
+		if annotations == nil {
+			annotations = map[string]string{}
+			updated.GetMetadata().SetAnnotations(annotations)
+		}
+		annotations[caasTeardownHandoffAnnotation] = co.Name + "/" + w.Name
 		_, err := updater.UpdateBareMetalInstance(ctx, updated, &fieldmaskpb.FieldMask{
-			Paths: []string{"metadata.finalizers"},
+			Paths: []string{"metadata.finalizers", "metadata.annotations"},
 		})
 		if err != nil {
 			return false, fmt.Errorf("removing CaaS worker cleanup finalizer for BMI %s: %w",

@@ -46,10 +46,11 @@ const (
 	// managementStateAnnotation / managementStateUnmanaged mirror the values the other osac
 	// controllers honor (controller.ManagementStateUnmanaged = "unmanaged"; the annotation const
 	// there is unexported). Kept in sync by the management-state skip test.
-	managementStateAnnotation = "osac.openshift.io/management-state"
-	managementStateUnmanaged  = "unmanaged"
-	bmWorkerFinalizer         = "osac.openshift.io/baremetalworker-finalizer"
-	caasAgentCleanupFinalizer = "osac.openshift.io/caas-agent-cleanup"
+	managementStateAnnotation     = "osac.openshift.io/management-state"
+	managementStateUnmanaged      = "unmanaged"
+	bmWorkerFinalizer             = "osac.openshift.io/baremetalworker-finalizer"
+	caasAgentCleanupFinalizer     = "osac.openshift.io/caas-agent-cleanup"
+	caasTeardownHandoffAnnotation = "osac.openshift.io/caas-teardown-handoff"
 )
 
 // Reconciler is the bare-metal worker reconciler (BareMetalWorkerReconciler). It watches

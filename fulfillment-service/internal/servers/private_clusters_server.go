@@ -673,6 +673,25 @@ func (s *PrivateClustersServer) prepareUpdatedClusterReferences(ctx context.Cont
 			return err
 		}
 	}
+	if candidate.GetSpec().GetSupportsAutomaticCaasEndpoints() &&
+		!current.GetMetadata().HasDeletionTimestamp() {
+		attachment := candidate.GetSpec().GetNetworkAttachment()
+		if attachment != nil && refKey(attachment.GetSubnet()) != "" {
+			subnet, err := resolveNetworkingReference(ctx, s.subnetsDao, candidate.GetMetadata(),
+				attachment.GetSubnet(), "subnet", grpccodes.NotFound, false)
+			if err != nil {
+				return err
+			}
+			virtualNetworkID := refKey(subnet.GetSpec().GetVirtualNetwork())
+			if virtualNetworkID == "" {
+				return grpcstatus.Errorf(grpccodes.InvalidArgument,
+					"spec.network_attachment.subnet '%s' has no VirtualNetwork", subnet.GetId())
+			}
+			if err := s.createAutomaticClusterSecurityGroup(ctx, candidate, subnet, virtualNetworkID); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 

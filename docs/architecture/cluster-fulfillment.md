@@ -398,11 +398,18 @@ detachment before deleting the Agent or its BMI.
 A BMI Delete response is only a request. Deletion metadata causes a wait, and
 only fresh Get NotFound confirms the recorded incarnation is absent. Until then,
 retry retains the Failed phase and old ID; retirement retains the slot and ID.
-Confirmed retry cleanup increments the attempt and sets a deadline once, clears
+Confirmed retry cleanup increments the monotonic `AttemptCount` identity and
+the resettable `RetryCount` backoff history, then sets a deadline once, clears
 the old ID, attempt origin and ReadySince, and keeps the reserved name for a
-distinct successor incarnation. Interrupted Create recovery checks current
-ownership and liveness; foreign, ambiguous or deleting name-recovery candidates
-cannot become replacements.
+distinct successor incarnation. A worker that remains Ready for
+`MinHealthyDuration` clears only `RetryCount`; `AttemptCount` is never reset,
+so attempt-scoped probe resources retain their identity. Interrupted Create
+recovery checks current ownership and liveness; foreign, ambiguous or deleting
+name-recovery candidates cannot become replacements.
+
+Worker registry-probe cleanup treats a definitively deleted HostedCluster or
+HostedControlPlane namespace as completed guest-side cleanup. A missing
+kubeconfig Secret while those guest resources still exist remains retryable.
 
 Each provisioning attempt has one durable registration clock.
 `status.workers[].attemptStartedAt` is persisted with the reservation, and before

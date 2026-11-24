@@ -3158,10 +3158,10 @@ reconciles the `ConfigMap` from those values.
 - Networking in a connected deployment, with one `NetworkClass`, IPv4 only.
   Provider networking supports VMaaS and the standard CaaS endpoint lifecycle
   only with a Fabric Manager that passes the networking conformance suite
-  profiles for each enabled service against this OSAC release. For CaaS, the
-  verification must include `reserve_cluster_ingress_ip` and
-  `release_cluster_ingress_ip`. Until the conformance suite covers those tasks,
-  the provider's lab verification stands in for it (see part 6 of the
+  profiles for each enabled service against this OSAC release. CaaS guest
+  ingress allocation is Fulfillment-owned; the Fabric Manager transports the
+  guest MetalLB L2 traffic and does not reserve or release the VIP. The
+  provider's lab verification covers the Fabric boundary (see part 6 of the
   [Fabric Manager Guide](../networking/customer-fabric-manager-guide.md#6-verify-in-a-lab-and-go-live)).
   OSAC does not enforce this.
 

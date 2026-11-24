@@ -240,7 +240,7 @@ def test_delete_clears_generated_root_device_hint(tmp_path):
 
     assert result.returncode == 0, result.stdout
     patches = json_patch_operations(state)
-    assert len(patches) == 1
+    assert len(patches) == 2
     assert patches[0]["kind"] == "BareMetalHost"
     assert patches[0]["name"] == "test-bmh"
     remove_paths = [
@@ -250,6 +250,12 @@ def test_delete_clears_generated_root_device_hint(tmp_path):
         "/spec/rootDeviceHints",
         "/metadata/annotations/osac.openshift.io~1fallback-root-device",
     ]
+    assert any(
+        op["path"] == "/metadata/annotations/osac.openshift.io~1metal3-cleanup-required"
+        for patch in patches
+        for op in patch["patch"]
+        if op["op"] == "remove"
+    )
     patched = state["resources"][BMH_KEY]
     assert "rootDeviceHints" not in patched["spec"]
     assert "osac.openshift.io/fallback-root-device" not in patched["metadata"]["annotations"]
@@ -270,7 +276,7 @@ def test_delete_clears_legacy_root_device_hint(tmp_path):
 
     assert result.returncode == 0, result.stdout
     patches = json_patch_operations(state)
-    assert len(patches) == 1
+    assert len(patches) == 2
     remove_paths = [
         op["path"] for op in patches[0]["patch"] if op["op"] == "remove"
     ]
@@ -278,6 +284,12 @@ def test_delete_clears_legacy_root_device_hint(tmp_path):
         "/spec/rootDeviceHints",
         "/metadata/annotations/osac.openshift.io~1fallback-root-device",
     ]
+    assert any(
+        op["path"] == "/metadata/annotations/osac.openshift.io~1metal3-cleanup-required"
+        for patch in patches
+        for op in patch["patch"]
+        if op["op"] == "remove"
+    )
     patched = state["resources"][BMH_KEY]
     assert "rootDeviceHints" not in patched["spec"]
     assert "osac.openshift.io/fallback-root-device" not in patched["metadata"]["annotations"]
@@ -297,10 +309,17 @@ def test_delete_clears_generated_root_device_hint_changed_after_provisioning(tmp
     )
 
     assert result.returncode == 0, result.stdout
-    assert len(json_patch_operations(state)) == 1
+    patches = json_patch_operations(state)
+    assert len(patches) == 2
     patched = state["resources"][BMH_KEY]
     assert "rootDeviceHints" not in patched["spec"]
     assert "osac.openshift.io/fallback-root-device" not in patched["metadata"]["annotations"]
+    assert any(
+        op["path"] == "/metadata/annotations/osac.openshift.io~1metal3-cleanup-required"
+        for patch in patches
+        for op in patch["patch"]
+        if op["op"] == "remove"
+    )
 
 
 def test_delete_keeps_root_device_hint_without_the_annotation(tmp_path):
@@ -314,7 +333,13 @@ def test_delete_keeps_root_device_hint_without_the_annotation(tmp_path):
     )
 
     assert result.returncode == 0, result.stdout
-    assert json_patch_operations(state) == []
+    patches = json_patch_operations(state)
+    assert len(patches) == 1
+    assert any(
+        op["path"] == "/metadata/annotations/osac.openshift.io~1metal3-cleanup-required"
+        for op in patches[0]["patch"]
+        if op["op"] == "remove"
+    )
     assert state["resources"][BMH_KEY]["spec"]["rootDeviceHints"] == {"serialNumber": "SER-42"}
 
 

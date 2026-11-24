@@ -1,7 +1,10 @@
-{{- if .Values.service.enabled }}
+{{- if .Values.global.services.caas.enabled }}
 {{- $name := printf "%s-caas-dns-guard" (include "osac.fullname" .) -}}
 {{- $values := fromYaml (toYaml .Values) -}}
-{{- $settings := dig "aap" "instanceGroups" "clusterFulfillment" "config" dict $values -}}
+{{- $settings := dict -}}
+{{- if .Values.aap.instanceGroups.clusterFulfillment.enabled }}
+{{- $settings = dig "aap" "instanceGroups" "clusterFulfillment" "config" dict $values -}}
+{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -105,6 +108,10 @@ spec:
             - pipefail
             - -c
             - |
+              if python3 /scripts/validate-caas-dns-settings.py --check-unchanged >/dev/null 2>&1; then
+                echo "CaaS DNS settings are unchanged; skipping the live Cluster check."
+                exit 0
+              fi
               {{- include "osac.fulfillmentAccessTokenFunction" . | nindent 14 }}
               AUTH_TOKEN=$(get_fulfillment_access_token 2>/dev/null || true)
               export AUTH_TOKEN
@@ -168,6 +175,7 @@ spec:
         - name: ca-bundle
           configMap:
             name: {{ .Values.service.certs.caBundle.configMap | required "service.certs.caBundle.configMap is required" }}
+            optional: true
             items:
               - key: bundle.pem
                 path: bundle.pem

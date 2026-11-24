@@ -425,7 +425,16 @@ split_argv() {
 render_osac_chart_offline() {
     local placeholder_token="$1"
     shift
-    local err bridged bridged_err_file differing
+    local err original_err bridged bridged_err_file differing
+    # Validate caller-provided values, especially preflight.mode, before the
+    # report override below. Otherwise an invalid caller mode can be hidden by
+    # --set preflight.mode=report and fail only after installation starts.
+    if ! original_err=$(helm template "$@" --set validation.enabled=false 2>&1 >/dev/null); then
+        if [[ "${original_err}" == *"preflight.mode"* ]]; then
+            offline_render_error "${original_err}"
+            return 1
+        fi
+    fi
     # The preflight reads cluster state at install time. Offline validation
     # checks values and templates only, so unknown live checks must be
     # reported without blocking this render.

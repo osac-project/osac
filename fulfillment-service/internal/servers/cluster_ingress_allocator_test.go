@@ -1,6 +1,7 @@
 package servers
 
 import (
+	"context"
 	"errors"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -18,7 +19,7 @@ var _ = Describe("cluster ingress address allocation", func() {
 			LbVipIpv4Cidrs:    []string{"10.0.0.0/24"},
 		}.Build()
 
-		got, err := selectClusterIngressAddress("10.0.0.0/24", ipam, map[string]struct{}{
+		got, err := selectClusterIngressAddress(context.Background(), "10.0.0.0/24", ipam, map[string]struct{}{
 			"10.0.0.192": {},
 		})
 		Expect(err).NotTo(HaveOccurred())
@@ -30,7 +31,7 @@ var _ = Describe("cluster ingress address allocation", func() {
 			GatewayIpv4:    "192.0.2.1",
 			LbVipIpv4Cidrs: []string{"192.0.2.0/30"},
 		}.Build()
-		_, err := selectClusterIngressAddress("192.0.2.0/30", ipam, map[string]struct{}{
+		_, err := selectClusterIngressAddress(context.Background(), "192.0.2.0/30", ipam, map[string]struct{}{
 			"192.0.2.0": {},
 			"192.0.2.1": {},
 			"192.0.2.2": {},
@@ -45,7 +46,7 @@ var _ = Describe("cluster ingress address allocation", func() {
 			GatewayIpv4:    "192.0.2.1",
 			LbVipIpv4Cidrs: []string{"198.51.100.0/24"},
 		}.Build()
-		_, err := selectClusterIngressAddress("192.0.2.0/24", ipam, nil)
+		_, err := selectClusterIngressAddress(context.Background(), "192.0.2.0/24", ipam, nil)
 		Expect(err).To(HaveOccurred())
 	})
 })

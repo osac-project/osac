@@ -22,6 +22,10 @@ rules:
   - ""
   resources:
   - secrets
+  # The controller reconciles tenant ClusterOrder namespaces and dynamically
+  # created per-order probe namespaces. A static RoleBinding cannot enumerate
+  # that namespace set; keep this grant limited to the owned probe names in
+  # controller code and validate tenant/owner references before mutation.
   verbs:
   - create
   - delete
@@ -61,6 +65,8 @@ rules:
   - ""
   resources:
   - pods
+  # Probe Pods are created in dynamic ClusterOrder namespaces; see the Secret
+  # rule above for why this remains a cluster role rather than a fixed Role.
   verbs:
   - create
   - delete

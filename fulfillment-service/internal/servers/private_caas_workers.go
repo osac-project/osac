@@ -37,15 +37,15 @@ func (s *PrivateBareMetalInstancesServer) validateCaaSWorkerCreate(
 		return err
 	}
 	networkEnabled := s.settings.ProvisioningEnabled
-	if err := s.lockCaaSWorkerSubnet(ctx, instance, cluster, networkEnabled); err != nil {
-		return err
-	}
 	lockedCluster, err := lockRecord(ctx, s.clustersDao, clusterID)
 	if err != nil {
 		return err
 	}
 	cluster = lockedCluster
 	if err := validateCaaSWorkerClusterIdentity(instance, cluster, clusterID); err != nil {
+		return err
+	}
+	if err := s.lockCaaSWorkerSubnet(ctx, instance, cluster, networkEnabled); err != nil {
 		return err
 	}
 	if err := validateCaaSWorkerNodeSet(instance, cluster); err != nil {
@@ -99,8 +99,7 @@ func (s *PrivateBareMetalInstancesServer) lockCaaSWorkerSubnet(
 	if attachment == nil || refKey(attachment.GetSubnet()) == "" {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "worker has a network attachment but its Cluster does not")
 	}
-	// The shared lock order is Subnet before Cluster. Cluster delete takes
-	// the same parent lock before setting its deletion timestamp.
+	// Cluster delete takes the parent Cluster lock before the Subnet lock.
 	_, err := lockRecord(ctx, s.subnetsDao, refKey(attachment.GetSubnet()))
 	return err
 }

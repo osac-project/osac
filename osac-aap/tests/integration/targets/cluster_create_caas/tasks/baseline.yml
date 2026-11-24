@@ -71,7 +71,7 @@
           - install_step_cluster_network_default is not defined
           - install_step_worker_network_default is defined
           - install_step_worker_network_default.name == "osac.service.worker_network"
-          - install_step_worker_network_default.tasks_from == "main.yml"
+          - install_step_worker_network_default.tasks_from == "main"
           - install_step_external_access_default is defined
           - install_step_external_access_default.name == "ci.steps.external_access"
           - install_step_external_access_default.tasks_from == "create.yaml"

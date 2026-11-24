@@ -36,8 +36,9 @@
 // when this invocation entered with Reserved and persisted its Attempted intent.
 // A later rejection cannot erase an earlier unknown outcome or legacy uncertainty.
 // Teardown can cancel that re-armed reservation; the standard failed-worker
-// machinery owns attempt counting and backoff (WorkersFailed and counts converge
-// with its arming write, one boundary later). The checkpoint issues one atomic
+// machinery owns the monotonic attempt identity and resettable retry/backoff
+// history (WorkersFailed and counts converge with its arming write, one boundary
+// later). The checkpoint issues one atomic
 // conditional JSON Patch with tests for the observed ClusterOrder UID and complete
 // selected worker entry, then replaces only that entry. It performs no post-Create
 // Get, resourceVersion test or local retry. Target drift/removal/reordering and
@@ -54,6 +55,9 @@
 // authoritatively, waits for owner-driven detach, deletes with UID/resourceVersion
 // preconditions, and waits for Agent removal before requesting BMI deletion.
 // Deleting metadata means wait; only BMI Get NotFound releases a recorded ID.
+// Worker probe cleanup treats an authoritatively deleted guest control plane as
+// completed guest-side cleanup, while a missing kubeconfig Secret with a live
+// guest remains retryable.
 // Failed callers then initialize one retry checkpoint; retiring callers remove
 // the exact slot. Unknown ID-less reservations recover by owned name or remain
 // blocked, including during finalization. Bound-worker remediation is not owned

@@ -33,7 +33,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
@@ -69,6 +68,12 @@ func (r *ClusterOrderReconciler) reconcileManagementRegistryProbe(
 	message := managementRegistryProbeReadyMessage(image)
 	condition := apimeta.FindStatusCondition(order.Status.Conditions, registryAccessReadyCondition)
 	if condition != nil && condition.Status == metav1.ConditionTrue && condition.Message == message {
+		// Success is persisted by the outer ClusterOrder reconcile before this
+		// path runs again. Only then remove the Pod and Secret evidence.
+		cleaned, result, err := r.cleanupManagementRegistryProbe(ctx, order)
+		if err != nil || !cleaned {
+			return false, result, err
+		}
 		return true, ctrl.Result{}, nil
 	}
 
@@ -98,7 +103,7 @@ func (r *ClusterOrderReconciler) reconcileManagementRegistryProbe(
 		return false, ctrl.Result{}, fmt.Errorf("management registry probe Pod %s is not owned by ClusterOrder %s", key, order.Name)
 	}
 	wantPullSecret := clusterOrderPullSecret(order) != ""
-	hasPullSecret := len(probe.Spec.ImagePullSecrets) > 0
+	hasPullSecret := managementRegistryProbeHasPullSecret(order, probe)
 	if len(probe.Spec.Containers) != 1 || probe.Spec.Containers[0].Image != image || wantPullSecret != hasPullSecret {
 		if err := r.Delete(ctx, probe); err != nil && !apierrors.IsNotFound(err) {
 			return false, ctrl.Result{}, fmt.Errorf("delete stale management registry probe Pod: %w", err)
@@ -113,15 +118,7 @@ func (r *ClusterOrderReconciler) reconcileManagementRegistryProbe(
 	if containerStatus != nil && containerStatus.ImageID != "" {
 		order.SetStatusCondition(registryAccessReadyCondition, metav1.ConditionTrue,
 			message, "ManagementImagePulled")
-		if err := r.Delete(ctx, probe); err != nil && !apierrors.IsNotFound(err) {
-			ctrllog.FromContext(ctx).Error(err, "failed to delete completed management registry probe Pod")
-			return false, ctrl.Result{RequeueAfter: time.Second}, nil
-		}
-		if err := r.deleteManagementRegistryPullSecret(ctx, order); err != nil {
-			ctrllog.FromContext(ctx).Error(err, "failed to delete management registry probe pull Secret")
-			return false, ctrl.Result{RequeueAfter: time.Second}, nil
-		}
-		// Persist the evidence before the next pass starts the core install.
+		// Persist the evidence before the next pass removes the probe resources.
 		return false, ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
@@ -133,6 +130,19 @@ func (r *ClusterOrderReconciler) reconcileManagementRegistryProbe(
 			fmt.Sprintf("Management image source is still pulling %s", image), "ProbePending")
 	}
 	return false, ctrl.Result{RequeueAfter: registryProbeWait}, nil
+}
+
+func managementRegistryProbeHasPullSecret(order *v1alpha1.ClusterOrder, probe *corev1.Pod) bool {
+	if order == nil || probe == nil {
+		return false
+	}
+	wanted := managementRegistryProbePullSecretName(order)
+	for _, reference := range probe.Spec.ImagePullSecrets {
+		if reference.Name == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *ClusterOrderReconciler) retryFailedManagementRegistryProbe(
@@ -163,9 +173,11 @@ func (r *ClusterOrderReconciler) cleanupManagementRegistryProbe(
 			return false, ctrl.Result{}, fmt.Errorf("get management registry probe Pod for deletion: %w", err)
 		}
 	} else {
-		if managementRegistryProbeOwnedBy(order, probe) && probe.DeletionTimestamp.IsZero() {
-			if err := r.Delete(ctx, probe); err != nil && !apierrors.IsNotFound(err) {
-				return false, ctrl.Result{}, fmt.Errorf("delete management registry probe Pod: %w", err)
+		if managementRegistryProbeOwnedBy(order, probe) {
+			if probe.DeletionTimestamp.IsZero() {
+				if err := r.Delete(ctx, probe); err != nil && !apierrors.IsNotFound(err) {
+					return false, ctrl.Result{}, fmt.Errorf("delete management registry probe Pod: %w", err)
+				}
 			}
 			return false, ctrl.Result{RequeueAfter: registryProbeWait}, nil
 		}
@@ -199,28 +211,6 @@ func managementRegistryProbeSecretOwnedBy(order *v1alpha1.ClusterOrder, secret *
 	}
 	owner := metav1.GetControllerOf(secret)
 	return owner != nil && owner.UID == order.UID && owner.Name == order.Name
-}
-
-func (r *ClusterOrderReconciler) deleteManagementRegistryPullSecret(
-	ctx context.Context, order *v1alpha1.ClusterOrder,
-) error {
-	key := client.ObjectKey{Namespace: order.Namespace, Name: managementRegistryProbePullSecretName(order)}
-	secret := &corev1.Secret{}
-	if err := r.Get(ctx, key, secret); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("get management registry pull Secret for deletion: %w", err)
-	}
-	if secret.Annotations[tenantAnnotation] != order.Annotations[tenantAnnotation] ||
-		secret.Annotations[ownerReferenceAnnotation] != "ClusterOrder/"+order.Name ||
-		!managementRegistryProbeSecretOwnedBy(order, secret) {
-		return fmt.Errorf("management registry pull Secret %s is not owned by ClusterOrder %s", key, order.Name)
-	}
-	if err := r.Delete(ctx, secret); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete management registry pull Secret: %w", err)
-	}
-	return nil
 }
 
 func clusterOrderRegistryProbeImage(order *v1alpha1.ClusterOrder) string {
@@ -313,7 +303,7 @@ func parseClusterOrderPullSecret(order *v1alpha1.ClusterOrder) (string, error) {
 }
 
 func managementRegistryProbePod(order *v1alpha1.ClusterOrder, name, image string) *corev1.Pod {
-	labels := map[string]string{registryProbeLabel: "true", osacClusterOrderNameLabel: order.Name}
+	labels := map[string]string{registryProbeLabel: labelValueTrue, osacClusterOrderNameLabel: order.Name}
 	if clusterID := order.Labels[osacClusterOrderIDLabel]; clusterID != "" {
 		labels[osacClusterOrderIDLabel] = clusterID
 	}
@@ -352,7 +342,7 @@ func managementRegistryProbePod(order *v1alpha1.ClusterOrder, name, image string
 
 func managementRegistryProbeOwnedBy(order *v1alpha1.ClusterOrder, probe *corev1.Pod) bool {
 	if order == nil || probe == nil || probe.Namespace != order.Namespace ||
-		probe.Labels[registryProbeLabel] != "true" || probe.Labels[osacClusterOrderNameLabel] != order.Name ||
+		probe.Labels[registryProbeLabel] != labelValueTrue || probe.Labels[osacClusterOrderNameLabel] != order.Name ||
 		probe.Annotations[tenantAnnotation] != order.Annotations[tenantAnnotation] ||
 		probe.Annotations[ownerReferenceAnnotation] != "ClusterOrder/"+order.Name {
 		return false

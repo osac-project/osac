@@ -75,7 +75,8 @@ var _ = Describe("reconcileAutoExternalIPCleanup", func() {
 				GenerateName: "test-eia-",
 				Namespace:    networkingNS,
 				Labels: map[string]string{
-					autoProvisionedLabel: labelValueTrue,
+					autoProvisionedLabel:    labelValueTrue,
+					autoProvisionedForLabel: clusterID,
 				},
 			},
 			Spec: v1alpha1.ExternalIPAttachmentSpec{

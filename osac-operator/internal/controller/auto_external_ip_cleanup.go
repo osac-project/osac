@@ -180,7 +180,10 @@ func listAutoExternalIPAttachments(
 	for i := range list.Items {
 		attachment := &list.Items[i]
 		if !owner.matchesAttachment(attachment) ||
-			(attachment.Labels[autoCreatedLabel] != labelValueTrue && attachment.Labels[autoProvisionedLabel] != labelValueTrue) {
+			(attachment.Labels[autoCreatedLabel] != labelValueTrue ||
+				attachment.Labels[autoCreatedForLabel] != owner.id) &&
+				(attachment.Labels[autoProvisionedLabel] != labelValueTrue ||
+					attachment.Labels[autoProvisionedForLabel] != owner.id) {
 			continue
 		}
 		attachments = append(attachments, *attachment.DeepCopy())

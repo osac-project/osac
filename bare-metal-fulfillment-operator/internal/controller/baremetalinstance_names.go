@@ -64,3 +64,7 @@ const bareMetalInstanceOSACNetworkingFinalizer = "osac.openshift.io/baremetalins
 // bareMetalInstanceCaaSAgentCleanupFinalizer is owned by osac-operator. CaaS
 // workers keep it until their associated Assisted Agent is authoritatively gone.
 const bareMetalInstanceCaaSAgentCleanupFinalizer = "osac.openshift.io/caas-agent-cleanup"
+
+// bareMetalInstanceCaaSTeardownHandoffAnnotation is written atomically with
+// removal of the CaaS finalizer. BMF requires it before host offboarding.
+const bareMetalInstanceCaaSTeardownHandoffAnnotation = "osac.openshift.io/caas-teardown-handoff"

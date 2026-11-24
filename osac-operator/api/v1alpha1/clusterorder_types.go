@@ -398,6 +398,11 @@ type ClusterOrderStatus struct {
 	// when publication only partially completed.
 	// +kubebuilder:validation:Optional
 	IngressDNSHostedClusterName string `json:"ingressDNSHostedClusterName,omitempty"`
+	// IngressDNSBaseDomain records the base domain supplied to the bootstrap
+	// ingress DNS publication. It is persisted before the first publication so
+	// cleanup can remove records after the HostedCluster and endpoint URLs vanish.
+	// +kubebuilder:validation:Optional
+	IngressDNSBaseDomain string `json:"ingressDNSBaseDomain,omitempty"`
 
 	// Jobs tracks ClusterOrder Fabric Manager and guest endpoint tasks.
 	// +kubebuilder:validation:Optional
@@ -525,8 +530,14 @@ type WorkerStatus struct {
 	// +kubebuilder:validation:Required
 	CreationTimestamp metav1.Time `json:"creationTimestamp"`
 
-	// AttemptCount tracks how many times this worker slot has been provisioned.
+	// AttemptCount is the monotonic identity of this worker slot's provisioning
+	// incarnation. It is used in names for attempt-scoped resources and must not
+	// be reset after a healthy interval.
 	AttemptCount int32 `json:"attemptCount"`
+	// RetryCount tracks resettable failure/backoff history. Unlike AttemptCount,
+	// it may be cleared after a sustained healthy interval.
+	// +kubebuilder:validation:Optional
+	RetryCount int32 `json:"retryCount,omitempty"`
 
 	// AttemptStartedAt is the durable start of the current provisioning attempt.
 	// It is recorded before the first BMI Create and survives lost acknowledgements.
@@ -551,6 +562,12 @@ type WorkerStatus struct {
 	// workers without that attempt marker retain their supported legacy path.
 	// +kubebuilder:validation:Optional
 	RegistryProbePrepared bool `json:"registryProbePrepared,omitempty"`
+	// RegistryProbeImage is the release image embedded in this worker attempt's
+	// probe Ignition. It remains stable if the desired ClusterOrder image changes
+	// while the worker is already booting.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=512
+	RegistryProbeImage string `json:"registryProbeImage,omitempty"`
 
 	// LastFailureReason is a machine-readable reason for the last failure
 	// (e.g. AgentRegistrationTimeout).
@@ -570,7 +587,7 @@ type WorkerStatus struct {
 	NextRetryTime *metav1.Time `json:"nextRetryTime,omitempty"`
 
 	// ReadySince is when the worker first transitioned to Ready after the most recent retry.
-	// Used to determine when attemptCount can be reset after MinHealthyDuration.
+	// Used to determine when RetryCount can be reset after MinHealthyDuration.
 	// +kubebuilder:validation:Optional
 	ReadySince *metav1.Time `json:"readySince,omitempty"`
 }

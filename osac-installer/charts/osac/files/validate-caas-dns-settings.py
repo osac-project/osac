@@ -93,6 +93,14 @@ def main() -> int:
         print("ERROR: installer release namespace is unavailable", file=sys.stderr)
         return 1
     proposed = {field: os.environ.get(field, "") for field in FIELDS}
+    if len(sys.argv) > 1 and sys.argv[1] == "--check-unchanged":
+        try:
+            previous = read_previous_settings(namespace)
+        except Exception:
+            return 2
+        if previous is not None and not changed_settings(previous, proposed):
+            return 0
+        return 2
     try:
         previous = read_previous_settings(namespace)
         if previous is not None and not changed_settings(previous, proposed):

@@ -2086,7 +2086,9 @@ var _ = Describe("delete", func() {
 		cleanup := &fakeWorkloadNetworkingCleanup{externalAccessComplete: false}
 		t.r.networkingCleanup = cleanup
 
-		Expect(t.delete(ctx)).To(Succeed())
+		err := t.delete(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(controllers.IsRequeueable(err)).To(BeTrue())
 		Expect(cleanup.externalAccessCalls).To(Equal(1))
 		Expect(cleanup.calls).To(Equal(0), "the ClusterOrder must remain until external access is gone")
 		Expect(cleanup.workloadID).To(Equal(clusterID))

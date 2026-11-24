@@ -492,6 +492,12 @@ spec:
                 description: FulfillmentTrustBundleHash is the hash of the last synchronized
                   fulfillment trust bundle.
                 type: string
+              ingressDNSBaseDomain:
+                description: |-
+                  IngressDNSBaseDomain records the base domain supplied to the bootstrap
+                  ingress DNS publication. It is persisted before the first publication so
+                  cleanup can remove records after the HostedCluster and endpoint URLs vanish.
+                type: string
               ingressDNSHostedClusterName:
                 description: |-
                   IngressDNSHostedClusterName records the HostedCluster name used for ingress
@@ -798,8 +804,10 @@ spec:
                       - uid
                       type: object
                     attemptCount:
-                      description: AttemptCount tracks how many times this worker
-                        slot has been provisioned.
+                      description: |-
+                        AttemptCount is the monotonic identity of this worker slot's provisioning
+                        incarnation. It is used in names for attempt-scoped resources and must not
+                        be reset after a healthy interval.
                       format: int32
                       type: integer
                     attemptStartedAt:
@@ -889,7 +897,7 @@ spec:
                     readySince:
                       description: |-
                         ReadySince is when the worker first transitioned to Ready after the most recent retry.
-                        Used to determine when attemptCount can be reset after MinHealthyDuration.
+                        Used to determine when RetryCount can be reset after MinHealthyDuration.
                       format: date-time
                       type: string
                     registrationDeadline:
@@ -955,12 +963,25 @@ spec:
                       - status
                       - type
                       type: object
+                    registryProbeImage:
+                      description: |-
+                        RegistryProbeImage is the release image embedded in this worker attempt's
+                        probe Ignition. It remains stable if the desired ClusterOrder image changes
+                        while the worker is already booting.
+                      maxLength: 512
+                      type: string
                     registryProbePrepared:
                       description: |-
                         RegistryProbePrepared records that this BMI create attempt included the
                         OSAC-owned worker registry probe in discovery Ignition. It lets existing
                         workers without that attempt marker retain their supported legacy path.
                       type: boolean
+                    retryCount:
+                      description: |-
+                        RetryCount tracks resettable failure/backoff history. Unlike AttemptCount,
+                        it may be cleared after a sustained healthy interval.
+                      format: int32
+                      type: integer
                   required:
                   - attemptCount
                   - creationTimestamp

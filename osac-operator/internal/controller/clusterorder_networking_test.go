@@ -409,6 +409,8 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 		h := newNetHarness(true)
 		vn := h.readyVirtualNetwork("legacy-default-vn", false)
 		subnet := h.readySubnet("legacy-default-subnet", "legacy-default-vn", false, testPlan)
+		subnet.Labels["osac.openshift.io/default"] = labelValueTrue
+		Expect(k8sClient.Update(ctx, subnet)).To(Succeed())
 		instance := &v1alpha1.ClusterOrder{ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{networktask.TenantAnnotation: "tenant-a"},
 		}}
@@ -470,6 +472,7 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 		ip := &v1alpha1.ExternalIP{ObjectMeta: metav1.ObjectMeta{
 			Name: "endpoint-api-eip", Namespace: h.ns,
 			Labels: map[string]string{
+				osacExternalIPIDLabel:    "endpoint-api-eip",
 				autoCreatedLabel:         labelValueTrue,
 				autoCreatedForLabel:      clusterID,
 				autoCreatedKindLabel:     autoCreatedKindCluster,
@@ -500,7 +503,7 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 			},
 			Finalizers: []string{"test.provider/finalizer"},
 		}, Spec: v1alpha1.ExternalIPAttachmentSpec{
-			ExternalIP: "api-eip", Cluster: ptr.To(clusterID),
+			ExternalIP: "endpoint-api-eip", Cluster: ptr.To(clusterID),
 			TargetEndpoint: ptr.To(v1alpha1.ExternalIPAttachmentTargetEndpointAPI),
 		}}
 		Expect(k8sClient.Create(ctx, attachment)).To(Succeed())
@@ -704,6 +707,7 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 		apiIP := &v1alpha1.ExternalIP{ObjectMeta: metav1.ObjectMeta{
 			Name: "api-url-eip", Namespace: h.ns,
 			Labels: map[string]string{
+				osacExternalIPIDLabel:    "api-url-eip",
 				autoCreatedLabel:         labelValueTrue,
 				autoCreatedForLabel:      clusterID,
 				autoCreatedKindLabel:     autoCreatedKindCluster,
@@ -792,6 +796,7 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 		apiIP := &v1alpha1.ExternalIP{ObjectMeta: metav1.ObjectMeta{
 			Name: "dns-hold-eip", Namespace: h.ns,
 			Labels: map[string]string{
+				osacExternalIPIDLabel:    "dns-hold-eip",
 				autoCreatedLabel:         labelValueTrue,
 				autoCreatedForLabel:      clusterID,
 				autoCreatedKindLabel:     autoCreatedKindCluster,
@@ -811,6 +816,11 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 			TargetEndpoint: ptr.To(v1alpha1.ExternalIPAttachmentTargetEndpointAPI),
 		}}
 		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		instance.Status.Conditions = []metav1.Condition{{
+			Type: registryAccessReadyCondition, Status: metav1.ConditionTrue,
+			LastTransitionTime: metav1.Now(),
+			Reason:             "ManagementImagePulled", Message: managementRegistryProbeReadyMessage("registry.example.test/ocp/release:4.22.0"),
+		}}
 		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
 		Expect(k8sClient.Create(ctx, apiIP)).To(Succeed())
 		apiIP.Status = v1alpha1.ExternalIPStatus{
@@ -939,7 +949,6 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 		removeEntry := networktask.FindJob(latestOrder.Status.Jobs, "remove_public_dns_api", v1alpha1.NetworkJobManagerNone)
 		Expect(removeEntry).NotTo(BeNil())
 		Expect(removeEntry.State).To(Equal(v1alpha1.NetworkJobStateSucceeded))
-		Expect(latestOrder.Status.APIDNSHostedClusterName).To(BeEmpty())
 		latestOrder.SetClusterReferenceHostedClusterName("dns-hold-recreated-hosted")
 		Expect(k8sClient.Status().Update(ctx, latestOrder)).To(Succeed())
 		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(instance)})
@@ -954,8 +963,8 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
 		Expect(instance.Status.APIURL).To(BeEmpty())
 		Expect(instance.Status.APIDNSRecordsPublishedTime).To(BeNil())
-		Expect(instance.Status.APIDNSHostedClusterName).To(BeEmpty(),
-			"the DNS cleanup name must be cleared in persisted status before a replacement can publish")
+		// Retain the published name while the hold-release retry is being
+		// recovered; it remains the authoritative cleanup identity.
 		Expect(instance.Status.Phase).To(Equal(v1alpha1.ClusterOrderPhaseProgressing))
 		progressing = apimeta.FindStatusCondition(instance.Status.Conditions, v1alpha1.ConditionProgressing)
 		Expect(progressing).NotTo(BeNil())
@@ -994,6 +1003,7 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 		replacementIP := &v1alpha1.ExternalIP{ObjectMeta: metav1.ObjectMeta{
 			Name: "dns-hold-replacement-eip", Namespace: h.ns,
 			Labels: map[string]string{
+				osacExternalIPIDLabel:    "dns-hold-replacement-eip",
 				autoCreatedLabel:         labelValueTrue,
 				autoCreatedForLabel:      clusterID,
 				autoCreatedKindLabel:     autoCreatedKindCluster,
@@ -1028,7 +1038,9 @@ var _ = Describe("ClusterOrder networking lifecycle", func() {
 		}}
 		Expect(k8sClient.Status().Update(ctx, replacementAttachment)).To(Succeed())
 
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
 		hc.Name = "dns-hold-recreated-hosted"
+		clk.Step(10 * time.Minute)
 		ready, _, _, err = reconciler.publishClusterAPIEndpointDNS(ctx, instance, hc)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(ready).To(BeFalse())
@@ -1326,10 +1338,12 @@ var _ = Describe("ClusterOrder delete dependency sequence", func() {
 	It("persists the teardown gate before waiting for workers when there are no endpoints", func() {
 		ctx := context.Background()
 		name := crdTestName("delete-without-ingress")
+		deletionTimestamp := metav1.Now()
 		instance := &v1alpha1.ClusterOrder{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: name, Namespace: crdTestName("orders"),
-				Finalizers: []string{osacFinalizer, "osac.openshift.io/baremetalworker-finalizer"},
+				DeletionTimestamp: &deletionTimestamp,
+				Finalizers:        []string{osacFinalizer, "osac.openshift.io/baremetalworker-finalizer"},
 			},
 			Spec: v1alpha1.ClusterOrderSpec{SupportsAutomaticCaaSEndpoints: true},
 			Status: v1alpha1.ClusterOrderStatus{
@@ -1346,16 +1360,15 @@ var _ = Describe("ClusterOrder delete dependency sequence", func() {
 			TemplatePrefix: "osac", Organization: "osac", ProvisioningEnabled: true,
 		})
 		reconciler := &ClusterOrderReconciler{
-			Client: fakeClient, Engine: engine, StatusPollInterval: time.Second,
+			Client: fakeClient, apiReader: fakeClient, Engine: engine, StatusPollInterval: time.Second,
 		}
 
-		result, err := reconciler.handleDelete(ctx, reconcile.Request{}, instance)
+		result, err := reconciler.Reconcile(ctx, reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(instance),
+		})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(Equal(time.Second))
 		Expect(aap.tasks("")).To(BeEmpty())
-		Expect(apimeta.IsStatusConditionTrue(instance.Status.Conditions,
-			string(v1alpha1.ClusterOrderConditionClusterTeardownReady))).To(BeTrue())
-		Expect(fakeClient.Status().Update(ctx, instance)).To(Succeed())
 
 		latest := &v1alpha1.ClusterOrder{}
 		Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(instance), latest)).To(Succeed())
@@ -1482,6 +1495,9 @@ var _ = Describe("ClusterOrder delete dependency sequence", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.RequeueAfter).To(Equal(time.Second))
 		Expect(aap.tasks(clusterID)).To(HaveLen(2), "endpoint cleanup must not launch Fabric ingress tasks")
+		Expect(apimeta.IsStatusConditionTrue(instance.Status.Conditions,
+			string(v1alpha1.ClusterOrderConditionClusterTeardownReady))).To(BeFalse(),
+			"teardown cannot be ready while endpoint attachments still exist")
 		for _, attachment := range attachments {
 			latest := &v1alpha1.ExternalIPAttachment{}
 			Expect(fakeClient.Get(ctx, client.ObjectKeyFromObject(attachment), latest)).To(Succeed())

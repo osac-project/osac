@@ -8,7 +8,7 @@
       tasks_from: main.yaml
     install_step_worker_network_default:
       name: osac.service.worker_network
-      tasks_from: main.yml
+      tasks_from: main
     install_step_external_access_default:
       name: osac.templates.ocp_small
       tasks_from: noop.yaml

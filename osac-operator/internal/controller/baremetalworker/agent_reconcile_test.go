@@ -474,6 +474,7 @@ var _ = It("applies inclusive timeout, retry and healthy-reset clock boundaries"
 
 	ready := newWorkerStatus("standard", "standard", "ready", "ready-id", workerPhaseReady)
 	ready.AttemptCount = 1
+	ready.RetryCount = 1
 	ready.ReadySince = &origin
 	for _, tt := range []struct {
 		name string
@@ -481,14 +482,17 @@ var _ = It("applies inclusive timeout, retry and healthy-reset clock boundaries"
 		want int32
 	}{
 		{"just before healthy threshold", base.Add(minHealthyDuration - time.Second), 1},
-		{"exact healthy threshold", base.Add(minHealthyDuration), 0},
-		{"just after healthy threshold", base.Add(minHealthyDuration + time.Second), 0},
+		{"exact healthy threshold", base.Add(minHealthyDuration), 1},
+		{"just after healthy threshold", base.Add(minHealthyDuration + time.Second), 1},
 	} {
 		By(tt.name)
 		func() {
 			workers := []v1alpha1.WorkerStatus{ready}
 			resetHealthyWorkers(ctrllog.FromContext(context.Background()), co, workers, tt.now)
 			Expect(workers[0].AttemptCount).To(Equal(tt.want), "attemptCount=%d want %d", workers[0].AttemptCount, tt.want)
+			if tt.name != "just before healthy threshold" {
+				Expect(workers[0].RetryCount).To(Equal(int32(0)))
+			}
 		}()
 	}
 })

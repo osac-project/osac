@@ -92,8 +92,12 @@ BMHs for both sets, and BMIT sharing across sets stays unit coverage. Natural
 teardown verifies worker ownership, waits for the exact BMIs, then
 ClusterOrder, then independent InfraEnv absence — API errors, terminating
 objects and empty status are not absence. No lifecycle hooks or finalizers are
-removed; legacy cleanup-enabled waits do not prove natural teardown. Retry
-sleep budgets are not production SLAs. Preserve JUnit, lifecycle and cleanup
+removed; legacy cleanup-enabled waits do not prove natural teardown. The
+ClusterOrder wait allows 751 attempts at ten-second intervals to cover the
+AAP delete playbook's 720 ten-second HostedCluster wait plus a five-minute
+observation margin. InfraEnv garbage collection retains its separate 60
+attempts at five-second intervals. These are test budgets, not production SLAs;
+API calls and diagnostics add time. Preserve JUnit, lifecycle and cleanup
 evidence before teardown.
 
 `tests/e2e/conftest.py` fixtures supply hub, API, CLI, image/template,

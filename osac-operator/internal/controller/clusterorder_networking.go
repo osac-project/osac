@@ -54,23 +54,24 @@ const (
 	fieldExternalIP              = "external_ip"
 	guestClusterAPITimeout       = 15 * time.Second
 
-	endpointReasonProvisioningDisabled = "ProvisioningDisabled"
-	endpointReasonAsExpected           = "AsExpected"
-	endpointReasonProgressing          = "EndpointsProgressing"
-	endpointReasonExternalAccessFailed = "ExternalAccessFailed"
-	endpointReasonIngressAllocation    = "IngressAllocationFailed"
-	endpointReasonGuestIngressFailed   = "GuestIngressFailed"
-	endpointReasonGuestIngressProgress = "GuestIngressProgressing"
-	endpointReasonDNSPublishFailed     = "DNSPublishFailed"
-	endpointReasonEndpointsPublished   = "EndpointsPublished"
-	clusterEndpointDNSFinalizer        = "osac.openshift.io/cluster-endpoint-dns-finalizer"
-	endpointDNSPrewriteRejection       = "Cluster endpoint DNS publication rejected before DNS writes"
-	endpointProbeGracePollIntervals    = 3
-	publishPublicDNSAPITask            = "publish_public_dns_api"
-	publishPublicDNSIngressTask        = "publish_public_dns_ingress"
-	endpointMessageWaitingForAPIIP     = "Waiting for the API ExternalIP attachment"
-	endpointMessageWaitingForIngressIP = "Waiting for the ingress ExternalIP attachment"
-	endpointMessageWaitingForGuestAPI  = "Waiting for the guest API to become usable"
+	endpointReasonProvisioningDisabled         = "ProvisioningDisabled"
+	endpointReasonAsExpected                   = "AsExpected"
+	endpointReasonProgressing                  = "EndpointsProgressing"
+	endpointReasonExternalAccessFailed         = "ExternalAccessFailed"
+	endpointReasonIngressAllocation            = "IngressAllocationFailed"
+	endpointReasonGuestIngressFailed           = "GuestIngressFailed"
+	endpointReasonGuestIngressProgress         = "GuestIngressProgressing"
+	endpointReasonDNSPublishFailed             = "DNSPublishFailed"
+	endpointReasonEndpointsPublished           = "EndpointsPublished"
+	clusterEndpointDNSFinalizer                = "osac.openshift.io/cluster-endpoint-dns-finalizer"
+	endpointDNSPrewriteRejection               = "Cluster endpoint DNS publication rejected before DNS writes"
+	endpointProbeGracePollIntervals            = 3
+	publishPublicDNSAPITask                    = "publish_public_dns_api"
+	publishPublicDNSIngressTask                = "publish_public_dns_ingress"
+	endpointMessageWaitingForAPIIP             = "Waiting for the API ExternalIP attachment"
+	endpointMessageWaitingForIngressIP         = "Waiting for the ingress ExternalIP attachment"
+	endpointMessageWaitingForGuestAPI          = "Waiting for the guest API to become usable"
+	endpointMessageWaitingForCurrentDNSAddress = "Waiting to republish ingress DNS for the current address"
 )
 
 var errClusterEndpointTenantMismatch = errors.New("cluster endpoint tenant mismatch")
@@ -493,6 +494,14 @@ func (r *ClusterOrderReconciler) publishClusterAPIEndpointDNS(
 	if !apiDNS.Succeeded() {
 		return false, endpointReasonProgressing, endpointJobMessage(apiDNS, "Publishing API DNS records"), nil
 	}
+	current, err := r.endpointDNSPublicationAddressCurrent(ctx, instance, autoCreatedEndpointAPI,
+		publishPublicDNSAPITask, apiIP, true)
+	if err != nil {
+		return false, endpointReasonProgressing, "Checking the current API DNS address", err
+	}
+	if !current {
+		return false, endpointReasonProgressing, "Waiting to republish API DNS for the current address", nil
+	}
 	markEndpointDNSPublishedAddress(instance, autoCreatedEndpointAPI, apiIP)
 	if instance.Status.APIDNSRecordsPublishedTime == nil {
 		now := metav1.NewTime(time.Now())
@@ -526,6 +535,14 @@ func (r *ClusterOrderReconciler) publishClusterIngressBootstrapDNS(
 	if !ingressReady || ingressIP == "" {
 		return false, endpointReasonProgressing, endpointMessageWaitingForIngressIP, nil
 	}
+	hostedClusterName, nameError := endpointDNSHostedClusterNameForPublication(
+		instance, hc, autoCreatedEndpointIngress)
+	if nameError != "" {
+		return false, endpointReasonDNSPublishFailed, nameError, nil
+	}
+	if err := r.persistIngressDNSPublicationIdentity(ctx, instance, hc.Name, hc.Spec.DNS.BaseDomain); err != nil {
+		return false, endpointReasonProgressing, "Persisting ingress DNS publication identity", err
+	}
 
 	held, err := r.ensureAutomaticIngressExternalIPDNSHold(ctx, instance, ingressIP)
 	if err != nil {
@@ -534,14 +551,9 @@ func (r *ClusterOrderReconciler) publishClusterIngressBootstrapDNS(
 	if !held {
 		return false, endpointReasonProgressing, endpointMessageWaitingForIngressIP, nil
 	}
-	hostedClusterName, nameError := endpointDNSHostedClusterNameForPublication(
-		instance, hc, autoCreatedEndpointIngress)
-	if nameError != "" {
-		return false, endpointReasonDNSPublishFailed, nameError, nil
-	}
 	r.markEndpointDNSRemovalForNextPublication(instance, autoCreatedEndpointIngress, ingressIP)
 	if !r.endpointDNSJobAddressCurrent(instance, publishPublicDNSIngressTask, ingressIP) {
-		return false, endpointReasonProgressing, "Waiting to republish ingress DNS for the current address", nil
+		return false, endpointReasonProgressing, endpointMessageWaitingForCurrentDNSAddress, nil
 	}
 	instance.SetClusterReferenceHostedClusterName(hc.Name)
 	ingressDNS, err := r.runClusterEndpointJob(ctx, instance, "publish_public_dns_ingress", map[string]any{
@@ -561,6 +573,14 @@ func (r *ClusterOrderReconciler) publishClusterIngressBootstrapDNS(
 	if !ingressDNS.Succeeded() {
 		return false, endpointReasonProgressing,
 			endpointJobMessage(ingressDNS, "Publishing ingress bootstrap DNS record"), nil
+	}
+	current, err := r.endpointDNSPublicationAddressCurrent(ctx, instance, autoCreatedEndpointIngress,
+		publishPublicDNSIngressTask, ingressIP, false)
+	if err != nil {
+		return false, endpointReasonProgressing, "Checking the current ingress bootstrap DNS address", err
+	}
+	if !current {
+		return false, endpointReasonProgressing, endpointMessageWaitingForCurrentDNSAddress, nil
 	}
 	markEndpointDNSPublishedAddress(instance, autoCreatedEndpointIngress, ingressIP)
 	return true, endpointReasonAsExpected, "Ingress bootstrap DNS record is published", nil
@@ -595,7 +615,7 @@ func (r *ClusterOrderReconciler) publishClusterIngressEndpointDNS(
 	}
 	r.markEndpointDNSRemovalForNextPublication(instance, autoCreatedEndpointIngress, ingressIP)
 	if !r.endpointDNSJobAddressCurrent(instance, publishPublicDNSIngressTask, ingressIP) {
-		return false, endpointReasonProgressing, "Waiting to republish ingress DNS for the current address", nil
+		return false, endpointReasonProgressing, endpointMessageWaitingForCurrentDNSAddress, nil
 	}
 	instance.SetClusterReferenceHostedClusterName(hc.Name)
 	ingressDNS, err := r.runClusterEndpointJob(ctx, instance, "publish_public_dns_ingress", map[string]any{
@@ -614,6 +634,14 @@ func (r *ClusterOrderReconciler) publishClusterIngressEndpointDNS(
 	}
 	if !ingressDNS.Succeeded() {
 		return false, endpointReasonProgressing, endpointJobMessage(ingressDNS, "Publishing ingress DNS record"), nil
+	}
+	current, err := r.endpointDNSPublicationAddressCurrent(ctx, instance, autoCreatedEndpointIngress,
+		publishPublicDNSIngressTask, ingressIP, true)
+	if err != nil {
+		return false, endpointReasonProgressing, "Checking the current ingress DNS address", err
+	}
+	if !current {
+		return false, endpointReasonProgressing, endpointMessageWaitingForCurrentDNSAddress, nil
 	}
 	markEndpointDNSPublishedAddress(instance, autoCreatedEndpointIngress, ingressIP)
 	if hc.Spec.DNS.BaseDomain != "" {
@@ -795,6 +823,7 @@ func (r *ClusterOrderReconciler) clusterEndpointSubnet(
 				for i := range allSubnets.Items {
 					candidate := allSubnets.Items[i]
 					if candidate.GetAnnotations()[networktask.TenantAnnotation] != tenant ||
+						candidate.GetLabels()["osac.openshift.io/default"] != labelValueTrue ||
 						!isReady(&candidate) || candidate.Status.IPAM == nil {
 						continue
 					}
@@ -883,6 +912,26 @@ func (r *ClusterOrderReconciler) externalEndpointReady(
 	if len(attachments.Items) == 0 {
 		return false, address, "", nil
 	}
+	var ips v1alpha1.ExternalIPList
+	if err := r.List(ctx, &ips, client.InNamespace(r.NetworkingNamespace), client.MatchingLabels{
+		autoCreatedLabel:         labelValueTrue,
+		autoCreatedForLabel:      clusterID,
+		autoCreatedKindLabel:     autoCreatedKindCluster,
+		autoCreatedEndpointLabel: endpoint,
+	}); err != nil {
+		return false, "", "", fmt.Errorf("list automatic ExternalIP for %s: %w", endpoint, err)
+	}
+	activeIPs := ips.Items[:0]
+	for i := range ips.Items {
+		if ips.Items[i].DeletionTimestamp.IsZero() {
+			activeIPs = append(activeIPs, ips.Items[i])
+		}
+	}
+	ips.Items = activeIPs
+	if len(ips.Items) != 1 || ips.Items[0].Status.Address != address ||
+		attachments.Items[0].Spec.ExternalIP != ips.Items[0].Labels[osacExternalIPIDLabel] {
+		return false, address, "", nil
+	}
 	attachment := &attachments.Items[0]
 	if !attachment.DeletionTimestamp.IsZero() {
 		return false, "", "", nil
@@ -911,6 +960,13 @@ func (r *ClusterOrderReconciler) externalEndpointAddressReady(
 	}); err != nil {
 		return false, "", "", fmt.Errorf("list automatic ExternalIP for %s endpoint: %w", endpoint, err)
 	}
+	activeIPs := ips.Items[:0]
+	for i := range ips.Items {
+		if ips.Items[i].DeletionTimestamp.IsZero() {
+			activeIPs = append(activeIPs, ips.Items[i])
+		}
+	}
+	ips.Items = activeIPs
 	if len(ips.Items) > 1 {
 		return false, "", "", fmt.Errorf("multiple automatic ExternalIPs for ClusterOrder %q endpoint %q", instance.Name, endpoint)
 	}
@@ -1104,6 +1160,31 @@ func (r *ClusterOrderReconciler) endpointDNSJobAddressCurrent(
 	return false
 }
 
+func (r *ClusterOrderReconciler) endpointDNSPublicationAddressCurrent(
+	ctx context.Context, instance *v1alpha1.ClusterOrder, endpoint, task, expected string,
+	attached bool,
+) (bool, error) {
+	ready := false
+	current := ""
+	var failure string
+	var err error
+	if attached {
+		ready, current, failure, err = r.externalEndpointReady(ctx, instance, endpoint)
+	} else {
+		ready, current, failure, err = r.externalEndpointAddressReady(ctx, instance, endpoint)
+	}
+	if err != nil {
+		return false, err
+	}
+	if !ready || failure != "" || current != expected {
+		if r.Engine != nil {
+			r.Engine.MarkForRerun(instance, task, v1alpha1.NetworkJobManagerNone)
+		}
+		return false, nil
+	}
+	return r.endpointDNSJobAddressCurrent(instance, task, current), nil
+}
+
 func setEndpointDNSJobInputAddress(instance *v1alpha1.ClusterOrder, task, address string) error {
 	entry := networktask.FindJob(instance.Status.Jobs, task, v1alpha1.NetworkJobManagerNone)
 	if entry == nil {
@@ -1143,6 +1224,21 @@ func setEndpointDNSHostedClusterName(instance *v1alpha1.ClusterOrder, endpoint, 
 	case autoCreatedEndpointIngress:
 		instance.Status.IngressDNSHostedClusterName = name
 	}
+}
+
+func (r *ClusterOrderReconciler) persistIngressDNSPublicationIdentity(
+	ctx context.Context, instance *v1alpha1.ClusterOrder, hostedClusterName, baseDomain string,
+) error {
+	if instance.Status.IngressDNSHostedClusterName == hostedClusterName && instance.Status.IngressDNSBaseDomain == baseDomain {
+		return nil
+	}
+	base := instance.DeepCopy()
+	instance.Status.IngressDNSHostedClusterName = hostedClusterName
+	instance.Status.IngressDNSBaseDomain = baseDomain
+	if err := r.Status().Patch(ctx, instance, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+		return fmt.Errorf("persist ingress DNS publication identity: %w", err)
+	}
+	return nil
 }
 
 // endpointDNSHostedClusterNameForPublication pins each DNS publication to the
@@ -1233,6 +1329,7 @@ func (r *ClusterOrderReconciler) reconcileDeletingAutomaticEndpointDNS(
 	}
 	apiDNSHostedClusterName := instance.Status.APIDNSHostedClusterName
 	ingressDNSHostedClusterName := instance.Status.IngressDNSHostedClusterName
+	ingressDNSBaseDomain := instance.Status.IngressDNSBaseDomain
 	dnsRemoved, result, err := r.removePublishedClusterDNSForEndpoints(ctx, instance, endpoints...)
 	if err != nil || !dnsRemoved {
 		return true, result, err
@@ -1240,13 +1337,17 @@ func (r *ClusterOrderReconciler) reconcileDeletingAutomaticEndpointDNS(
 	statusBase := instance.DeepCopy()
 	statusBase.Status.APIDNSHostedClusterName = apiDNSHostedClusterName
 	statusBase.Status.IngressDNSHostedClusterName = ingressDNSHostedClusterName
+	statusBase.Status.IngressDNSBaseDomain = ingressDNSBaseDomain
 	for _, endpoint := range endpoints {
 		switch endpoint {
 		case autoCreatedEndpointAPI:
 			instance.Status.APIURL = ""
 			instance.Status.APIDNSRecordsPublishedTime = nil
+			instance.Status.APIDNSHostedClusterName = ""
 		case autoCreatedEndpointIngress:
 			instance.Status.ConsoleURL = ""
+			instance.Status.IngressDNSHostedClusterName = ""
+			instance.Status.IngressDNSBaseDomain = ""
 		}
 	}
 	if instance.Status.Phase == v1alpha1.ClusterOrderPhaseReady {
@@ -1303,6 +1404,16 @@ func (r *ClusterOrderReconciler) reconcileDeletingAutomaticAPIExternalIPDNS(
 		removed, result, err := r.removePublishedClusterDNSForEndpoints(ctx, instance, autoCreatedEndpointAPI)
 		if err != nil || !removed {
 			return true, result, err
+		}
+		statusBase := instance.DeepCopy()
+		if r.Engine != nil {
+			r.Engine.MarkForRerun(instance, publishPublicDNSAPITask, v1alpha1.NetworkJobManagerNone)
+		}
+		instance.Status.APIDNSHostedClusterName = ""
+		instance.Status.APIURL = ""
+		instance.Status.APIDNSRecordsPublishedTime = nil
+		if err := r.Status().Patch(ctx, instance, client.MergeFromWithOptions(statusBase, client.MergeFromWithOptimisticLock{})); err != nil {
+			return true, ctrl.Result{}, fmt.Errorf("persist API DNS publication invalidation: %w", err)
 		}
 		base := ip.DeepCopy()
 		controllerutil.RemoveFinalizer(ip, clusterEndpointDNSFinalizer)
@@ -1378,7 +1489,13 @@ func (r *ClusterOrderReconciler) removeBootstrapIngressDNS(
 		publish.State == v1alpha1.NetworkJobStateFailed && publish.Attempt == 1 &&
 		strings.HasPrefix(publish.Message, endpointDNSPrewriteRejection) {
 		// The only failure marked this way is returned before DNS provider writes.
+		base := instance.DeepCopy()
+		r.Engine.MarkForRerun(instance, publishPublicDNSIngressTask, v1alpha1.NetworkJobManagerNone)
 		setEndpointDNSHostedClusterName(instance, autoCreatedEndpointIngress, "")
+		instance.Status.IngressDNSBaseDomain = ""
+		if err := r.Status().Patch(ctx, instance, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+			return false, ctrl.Result{}, fmt.Errorf("persist ingress DNS publication invalidation: %w", err)
+		}
 		return true, ctrl.Result{}, nil
 	}
 	// The ExternalIP hold is installed before the first publish job is
@@ -1387,12 +1504,19 @@ func (r *ClusterOrderReconciler) removeBootstrapIngressDNS(
 	// attempt without requiring a live HostedCluster.
 	if publish == nil {
 		setEndpointDNSHostedClusterName(instance, autoCreatedEndpointIngress, "")
+		instance.Status.IngressDNSBaseDomain = ""
 		return true, ctrl.Result{}, nil
 	}
 	if remove := networktask.FindJob(instance.Status.Jobs,
 		"remove_public_dns_ingress", v1alpha1.NetworkJobManagerNone); remove != nil &&
 		remove.State == v1alpha1.NetworkJobStateSucceeded {
+		base := instance.DeepCopy()
+		r.Engine.MarkForRerun(instance, publishPublicDNSIngressTask, v1alpha1.NetworkJobManagerNone)
 		setEndpointDNSHostedClusterName(instance, autoCreatedEndpointIngress, "")
+		instance.Status.IngressDNSBaseDomain = ""
+		if err := r.Status().Patch(ctx, instance, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
+			return false, ctrl.Result{}, fmt.Errorf("persist ingress DNS publication invalidation: %w", err)
+		}
 		return true, ctrl.Result{}, nil
 	}
 	baseDomain, err := r.clusterEndpointDNSBaseDomain(ctx, instance)
@@ -1422,10 +1546,11 @@ func (r *ClusterOrderReconciler) removeBootstrapIngressDNS(
 	// hold so the next publication cannot reuse the completed remove state.
 	base := instance.DeepCopy()
 	r.Engine.MarkForRerun(instance, publishPublicDNSIngressTask, v1alpha1.NetworkJobManagerNone)
+	setEndpointDNSHostedClusterName(instance, autoCreatedEndpointIngress, "")
+	instance.Status.IngressDNSBaseDomain = ""
 	if err := r.Status().Patch(ctx, instance, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil {
 		return false, ctrl.Result{}, fmt.Errorf("persist ingress DNS publication invalidation: %w", err)
 	}
-	setEndpointDNSHostedClusterName(instance, autoCreatedEndpointIngress, "")
 	return true, ctrl.Result{}, nil
 }
 
@@ -1616,6 +1741,9 @@ func (r *ClusterOrderReconciler) removePublishedClusterDNSForEndpoints(
 	}
 	for _, spec := range specs {
 		setEndpointDNSHostedClusterName(instance, spec.endpoint, "")
+		if spec.endpoint == autoCreatedEndpointIngress {
+			instance.Status.IngressDNSBaseDomain = ""
+		}
 	}
 	return true, ctrl.Result{}, nil
 }
@@ -1646,6 +1774,9 @@ func (r *ClusterOrderReconciler) clusterEndpointDNSBaseDomain(
 func clusterEndpointDNSBaseDomainFromStatus(instance *v1alpha1.ClusterOrder) string {
 	if instance == nil {
 		return ""
+	}
+	if instance.Status.IngressDNSBaseDomain != "" {
+		return instance.Status.IngressDNSBaseDomain
 	}
 	for _, endpoint := range []struct {
 		url    string

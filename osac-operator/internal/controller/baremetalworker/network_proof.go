@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -65,6 +66,25 @@ func (r *Reconciler) freshWorkerNetworkProof(
 			o.networkAttachmentsByID[worker.BareMetalInstance.ID] = append(
 				o.networkAttachmentsByID[worker.BareMetalInstance.ID], attachment)
 		}
+	}
+	// The hub lease is the final authority for the accepted address. Re-read
+	// the matching BMI after the attachment observation so a lease-only update
+	// cannot be hidden by an unchanged NetworkAttachment generation.
+	hubBMI := o.hubBMIs[worker.BareMetalInstance.ID]
+	if hubBMI == nil {
+		return workerNetworkProof{}, false, nil
+	}
+	var latestHub bmfov1alpha1.BareMetalInstance
+	if err := r.apiReader.Get(ctx, client.ObjectKey{Namespace: hubBMI.Namespace, Name: hubBMI.Name}, &latestHub); err != nil {
+		if apierrors.IsNotFound(err) {
+			return workerNetworkProof{}, false, nil
+		}
+		return workerNetworkProof{}, false, err
+	}
+	if latestHub.Labels["osac.openshift.io/baremetalinstance-uuid"] != worker.BareMetalInstance.ID {
+		return workerNetworkProof{}, false, nil
+	} else {
+		o.hubBMIs[worker.BareMetalInstance.ID] = &latestHub
 	}
 	return r.workerNetworkProof(ctx, co, worker, o)
 }
@@ -176,6 +196,7 @@ func selectedWorkerNetworkAttachmentReady(
 	attachment *v1alpha1.NetworkAttachment, interfaceName, subnetRef string,
 ) bool {
 	if attachment == nil || attachment.Spec.Interface.Type != v1alpha1.NetworkInterfacePhysical ||
+		!attachment.DeletionTimestamp.IsZero() ||
 		attachment.Spec.Interface.Name != interfaceName || attachment.Spec.Subnet != subnetRef ||
 		attachment.Spec.Interface.MACAddress == "" {
 		return false
@@ -293,6 +314,9 @@ func registrationDeadline(
 		if apiRecordsPublished.After(latest) {
 			latest = *apiRecordsPublished
 		}
+	}
+	if worker.AttemptStartedAt != nil && worker.AttemptStartedAt.After(latest) {
+		latest = worker.AttemptStartedAt.Time
 	}
 	deadline := metav1.NewTime(latest.Add(agentRegistrationTimeout))
 	if worker.RegistrationDeadline != nil && !deadline.After(worker.RegistrationDeadline.Time) {

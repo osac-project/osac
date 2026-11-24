@@ -29,6 +29,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
+	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -37,12 +38,20 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	kubernetesfake "k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
+	"k8s.io/utils/ptr"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/osac-project/osac/osac-operator/api/v1alpha1"
 )
 
 type registryProbeGuestResolverFunc func(context.Context, *v1alpha1.ClusterOrder) (registryProbeGuestAPI, error)
+
+func mustWorkerRegistryProbeNames(order *v1alpha1.ClusterOrder, worker *v1alpha1.WorkerStatus) workerRegistryProbeNames {
+	names, err := workerRegistryProbeNamesFor(order, worker.Name, worker.AttemptCount)
+	ExpectWithOffset(1, err).NotTo(HaveOccurred())
+	return names
+}
 
 func (f registryProbeGuestResolverFunc) Resolve(
 	ctx context.Context, order *v1alpha1.ClusterOrder,
@@ -88,10 +97,12 @@ var _ = Describe("CaaS worker registry probe", func() {
 	It("uses the management API VIP while preserving the published callback URL", func() {
 		order := newOrder()
 		requestReceived := make(chan string, 1)
+		responseWriteErr := make(chan error, 1)
 		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			requestReceived <- r.Host + r.URL.Path
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"apiVersion":"v1","kind":"NamespaceList","metadata":{},"items":[]}`))
+			_, err := w.Write([]byte(`{"apiVersion":"v1","kind":"NamespaceList","metadata":{},"items":[]}`))
+			responseWriteErr <- err
 		}))
 		defer server.Close()
 		order.Status.APIURL = server.URL
@@ -137,6 +148,35 @@ var _ = Describe("CaaS worker registry probe", func() {
 		_, err = guest.client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(<-requestReceived).To(Equal(strings.TrimPrefix(server.URL, "https://") + "/api/v1/namespaces"))
+		Expect(<-responseWriteErr).NotTo(HaveOccurred())
+	})
+
+	It("reports guest disappearance only after management-side confirmation", func() {
+		order := newOrder()
+		scheme := runtime.NewScheme()
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+		Expect(hypershiftv1beta1.AddToScheme(scheme)).To(Succeed())
+
+		missingGuest := clientfake.NewClientBuilder().WithScheme(scheme).Build()
+		_, err := (hostedClusterRegistryProbeResolver{management: missingGuest}).Resolve(ctx, order)
+		Expect(errors.Is(err, ErrRegistryProbeGuestGone)).To(BeTrue(), "missing guest namespace must be authoritative: %v", err)
+
+		liveGuest := clientfake.NewClientBuilder().WithScheme(scheme).WithObjects(
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "caas-cluster"}},
+			&hypershiftv1beta1.HostedCluster{ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "caas"}},
+		).Build()
+		_, err = (hostedClusterRegistryProbeResolver{management: liveGuest}).Resolve(ctx, order)
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, ErrRegistryProbeGuestGone)).To(BeFalse(), "missing Secret with live guest must remain retryable: %v", err)
+
+		deletingGuest := clientfake.NewClientBuilder().WithScheme(scheme).WithObjects(
+			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "caas-cluster"}},
+			&hypershiftv1beta1.HostedCluster{ObjectMeta: metav1.ObjectMeta{
+				Name: "cluster", Namespace: "caas", DeletionTimestamp: ptr.To(metav1.Now()), Finalizers: []string{"test"},
+			}},
+		).Build()
+		_, err = (hostedClusterRegistryProbeResolver{management: deletingGuest}).Resolve(ctx, order)
+		Expect(errors.Is(err, ErrRegistryProbeGuestGone)).To(BeTrue(), "deleting guest must be authoritative: %v", err)
 	})
 
 	DescribeTable("builds a management API URL from the published endpoint",
@@ -151,7 +191,7 @@ var _ = Describe("CaaS worker registry probe", func() {
 	)
 
 	It("rejects a missing or URL-shaped management endpoint", func() {
-		for _, endpoint := range []string{"", "https://192.168.40.240:6443", "192.168.40.240/path"} {
+		for _, endpoint := range []string{"", "https://192.168.40.240:6443", "192.168.40.240/path", "api.example.test:+6443", "[192.168.40.240"} {
 			_, err := registryProbeManagementAPIURL(endpoint)
 			Expect(err).To(HaveOccurred())
 		}
@@ -191,6 +231,16 @@ var _ = Describe("CaaS worker registry probe", func() {
 		Expect(configMap.Data[workerRegistryProbeStatusKey]).To(Equal("ready"))
 	})
 
+	It("treats an already-gone guest as completed cleanup", func() {
+		order := newOrder()
+		worker := newWorker()
+		r := &Reconciler{registryProbeGuestResolver: registryProbeGuestResolverFunc(func(context.Context, *v1alpha1.ClusterOrder) (registryProbeGuestAPI, error) {
+			return registryProbeGuestAPI{}, ErrRegistryProbeGuestGone
+		})}
+
+		Expect(r.cleanupFailedWorkerRegistryProbe(ctx, order, *worker)).To(Succeed())
+	})
+
 	It("issues only a bounded token for the per-worker ConfigMap reporter", func() {
 		order := newOrder()
 		worker := newWorker()
@@ -222,6 +272,85 @@ var _ = Describe("CaaS worker registry probe", func() {
 		Expect(order.Status.Workers).To(BeEmpty(), "the token must not be written to ClusterOrder status")
 	})
 
+	It("resets a retained result when a fresh attempt reuses a probe name", func() {
+		order := newOrder()
+		worker := newWorker()
+		kube := kubernetesfake.NewSimpleClientset()
+		names := mustWorkerRegistryProbeNames(order, worker)
+		Expect(ensureWorkerRegistryProbeResources(ctx, kube, order, names, image)).To(Succeed())
+		configMap, err := kube.CoreV1().ConfigMaps(names.namespace).Get(ctx, names.configMap, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		configMap.Data[workerRegistryProbeRequestKey] = workerRegistryProbeRequestedValue
+		configMap.Data[workerRegistryProbeStatusKey] = "ready"
+		_, err = kube.CoreV1().ConfigMaps(names.namespace).Update(ctx, configMap, metav1.UpdateOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		kube.PrependReactor("create", "serviceaccounts", func(action clienttesting.Action) (bool, runtime.Object, error) {
+			if action.GetSubresource() != "token" {
+				return false, nil, nil
+			}
+			return true, &authenticationv1.TokenRequest{Status: authenticationv1.TokenRequestStatus{
+				Token: "short-lived-worker-token", ExpirationTimestamp: metav1.NewTime(time.Now().Add(workerRegistryProbeTokenLifetime)),
+			}}, nil
+		})
+		r := &Reconciler{registryProbeGuestResolver: registryProbeGuestResolverFunc(func(context.Context, *v1alpha1.ClusterOrder) (registryProbeGuestAPI, error) {
+			return registryProbeGuestAPI{client: kube, apiURL: order.Status.APIURL, caData: []byte("test-ca")}, nil
+		})}
+
+		_, result, err := r.prepareWorkerRegistryProbe(ctx, order, worker, image, "eno1")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(BeZero())
+		configMap, err = kube.CoreV1().ConfigMaps(names.namespace).Get(ctx, names.configMap, metav1.GetOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(configMap.Data[workerRegistryProbeRequestKey]).To(Equal("false"))
+		Expect(configMap.Data[workerRegistryProbeStatusKey]).To(Equal("pending"))
+	})
+
+	It("cleans all retained probe incarnations for a retiring worker", func() {
+		order := newOrder()
+		worker := newWorker()
+		kube := kubernetesfake.NewSimpleClientset()
+		for _, attempt := range []int32{0, 1} {
+			worker.AttemptCount = attempt
+			names := mustWorkerRegistryProbeNames(order, worker)
+			Expect(ensureWorkerRegistryProbeResources(ctx, kube, order, names, image)).To(Succeed())
+		}
+
+		Expect(cleanupWorkerRegistryProbeForWorker(ctx, kube, order, worker.Name)).To(Succeed())
+		for _, attempt := range []int32{0, 1} {
+			worker.AttemptCount = attempt
+			names := mustWorkerRegistryProbeNames(order, worker)
+			_, err := kube.CoreV1().ConfigMaps(names.namespace).Get(ctx, names.configMap, metav1.GetOptions{})
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "attempt %d ConfigMap remains", attempt)
+			_, err = kube.RbacV1().Roles(names.namespace).Get(ctx, names.role, metav1.GetOptions{})
+			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "attempt %d Role remains", attempt)
+		}
+	})
+
+	It("cleans the prior attempt after a healthy counter reset", func() {
+		order := newOrder()
+		worker := newWorker()
+		worker.Phase = workerPhaseReady
+		worker.RegistryProbePrepared = true
+		worker.ReadySince = ptr.To(metav1.NewTime(time.Now().Add(-minHealthyDuration - time.Minute)))
+		worker.AttemptCount = 1
+		worker.RetryCount = 1
+		kube := kubernetesfake.NewSimpleClientset()
+		attemptOne := mustWorkerRegistryProbeNames(order, worker)
+		Expect(ensureWorkerRegistryProbeResources(ctx, kube, order, attemptOne, image)).To(Succeed())
+		workers := []v1alpha1.WorkerStatus{*worker}
+		resetHealthyWorkers(ctrllog.FromContext(ctx), order, workers, time.Now())
+		Expect(workers[0].AttemptCount).To(Equal(int32(1)))
+		Expect(workers[0].RetryCount).To(Equal(int32(0)))
+
+		r := &Reconciler{registryProbeGuestResolver: registryProbeGuestResolverFunc(func(context.Context, *v1alpha1.ClusterOrder) (registryProbeGuestAPI, error) {
+			return registryProbeGuestAPI{client: kube, apiURL: order.Status.APIURL, caData: []byte("test-ca")}, nil
+		})}
+		workers[0].RegistryProbePrepared = true
+		Expect(r.cleanupFailedWorkerRegistryProbe(ctx, order, workers[0])).To(Succeed())
+		_, err := kube.CoreV1().ConfigMaps(attemptOne.namespace).Get(ctx, attemptOne.configMap, metav1.GetOptions{})
+		Expect(apierrors.IsNotFound(err)).To(BeTrue(), "healthy attempt ConfigMap was retained")
+	})
+
 	It("retries guest API setup after a temporary outage", func() {
 		order := newOrder()
 		worker := newWorker()
@@ -245,7 +374,7 @@ var _ = Describe("CaaS worker registry probe", func() {
 
 		_, result, err := r.prepareWorkerRegistryProbe(ctx, order, worker, image, "eno1")
 		Expect(err).To(HaveOccurred())
-		Expect(result.RequeueAfter).To(Equal(workerRegistryProbePollInterval))
+		Expect(result).To(BeZero())
 
 		credentials, result, err := r.prepareWorkerRegistryProbe(ctx, order, worker, image, "eno1")
 		Expect(err).NotTo(HaveOccurred())

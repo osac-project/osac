@@ -97,6 +97,9 @@ func (r *Reconciler) reconcileObservedAgents(
 	if o.agents != nil {
 		before := append([]v1alpha1.WorkerStatus(nil), workers...)
 		if _, err := r.matchAndBindAgents(ctx, co, o.agents, workers, r.workerMACResolver(o), o); err != nil {
+			if !workerSlicesEqual(before, workers) {
+				return workers, workerBoundaryRequeue(), nil
+			}
 			return nil, ctrl.Result{}, err
 		}
 		if !workerSlicesEqual(before, workers) {
@@ -174,6 +177,9 @@ func (r *Reconciler) matchAndBindAgents(
 			}
 		}
 		if co.Spec.SupportsAutomaticCaaSEndpoints && w.Agent == nil {
+			if w.RegistrationDeadline != nil && !time.Now().Before(w.RegistrationDeadline.Time) {
+				continue
+			}
 			uid := string(association.agent.GetUID())
 			if uid == "" {
 				return bound, fmt.Errorf("agent %s has no UID for durable worker correlation", association.agent.GetName())
@@ -272,7 +278,7 @@ func (r *Reconciler) workerNetworkConfigReady(
 		// legacy approval path there; CaaS deployments install the CRD and use
 		// the gate.
 		if meta.IsNoMatchError(err) {
-			return true, nil
+			return false, nil
 		}
 		return false, err
 	}
@@ -326,6 +332,9 @@ func (r *Reconciler) bindAgent(
 		if !ready || !proof.bindingReady || !agentMatchesWorkerLease(latest, proof.mac, proof.leaseAddress) {
 			return errAgentLeaseChanged
 		}
+	}
+	if worker != nil && worker.RegistrationDeadline != nil && !time.Now().Before(worker.RegistrationDeadline.Time) {
+		return errAgentLeaseChanged
 	}
 	// CAP-Agent may have claimed the established worker since our discovery
 	// snapshot. Its deployment/ignition binding is authoritative; do not undo it.

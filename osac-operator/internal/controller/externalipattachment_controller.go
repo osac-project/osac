@@ -263,10 +263,21 @@ func (r *ExternalIPAttachmentReconciler) clusterIngressDestination(
 			}
 			return false
 		})
+		if len(matches) > 1 {
+			defaultMatches := make([]*v1alpha1.Subnet, 0, 1)
+			for _, subnet := range matches {
+				if subnet.GetLabels()["osac.openshift.io/default"] == labelValueTrue && isReady(subnet) {
+					defaultMatches = append(defaultMatches, subnet)
+				}
+			}
+			if len(defaultMatches) == 1 {
+				matches = defaultMatches
+			}
+		}
 		if len(matches) == 0 {
 			matches = selectMatches(func(subnet *v1alpha1.Subnet) bool {
 				return subnet.GetAnnotations()[networktask.TenantAnnotation] == tenant &&
-					subnet.GetLabels()["osac.openshift.io/default"] == "true" && isReady(subnet)
+					subnet.GetLabels()["osac.openshift.io/default"] == labelValueTrue && isReady(subnet)
 			})
 		}
 	}

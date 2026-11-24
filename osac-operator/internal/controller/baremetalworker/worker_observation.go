@@ -112,7 +112,7 @@ func (r *Reconciler) observeWorkerResources(ctx context.Context, co *v1alpha1.Cl
 				o.hubBMIs[id] = item
 			}
 		}
-		if r.NetworkingProvisioningEnabled {
+		if r.NetworkingProvisioningEnabled && co.DeletionTimestamp.IsZero() {
 			attachments := &v1alpha1.NetworkAttachmentList{}
 			if err := reader.List(ctx, attachments, client.InNamespace(r.networkingNamespace)); err != nil {
 				return nil, ctrl.Result{}, fmt.Errorf("observing worker NetworkAttachments: %w", err)
@@ -172,7 +172,7 @@ func (r *Reconciler) recordReadyCAPAgents(
 		if err != nil || !found || name == "" {
 			continue
 		}
-		agentUID, found, err := unstructured.NestedString(machine.Object, "status", "agentRef", "uid")
+		agentUID, agentUIDFound, err := unstructured.NestedString(machine.Object, "status", "agentRef", "uid")
 		if err != nil {
 			continue
 		}
@@ -187,7 +187,7 @@ func (r *Reconciler) recordReadyCAPAgents(
 			}
 			// Older CAP-Agent versions expose only name/namespace in status.agentRef.
 			// In that case, the AgentMachine ownership label is the instance identity.
-			if !found || agentUID == "" {
+			if !agentUIDFound || agentUID == "" {
 				if agent.GetLabels()["agentMachineRef"] != machine.GetName() {
 					continue
 				}

@@ -179,7 +179,8 @@ func NewClusterOrderReconciler(
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalipattachments,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=osac.openshift.io,resources=externalips,verbs=get;list;watch;delete;patch;update
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
-// +kubebuilder:rbac:groups="",resources=pods;secrets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -406,13 +407,14 @@ func (r *ClusterOrderReconciler) patchStatusWithRetry(ctx context.Context, key c
 		latest.Status.APIURL = computed.APIURL
 		latest.Status.ConsoleURL = computed.ConsoleURL
 		latest.Status.APIDNSRecordsPublishedTime = computed.APIDNSRecordsPublishedTime
+		latest.Status.IngressDNSBaseDomain = computed.IngressDNSBaseDomain
 		// Workers[] and its aggregate counts are owned by the BareMetalWorkerReconciler.
 		// Leave them from the fresh read so a concurrent worker status update is preserved.
 		for _, c := range computed.Conditions {
-			if c.Type == v1alpha1.ConditionFulfillmentServiceUnavailable && workerUnavailable &&
-				c.Status != metav1.ConditionTrue {
-				// This condition is owned by the worker reconciler. Do not let a
-				// stale ClusterOrder snapshot clear a newer transport outage.
+			if c.Type == v1alpha1.ConditionFulfillmentServiceUnavailable {
+				// This condition is owned by the worker reconciler. Preserve the
+				// value from the fresh read in both directions; a stale computed
+				// snapshot must not reintroduce or clear a transport outage.
 				continue
 			}
 			if c.Type == v1alpha1.ConditionWorkersFailed ||
@@ -624,6 +626,8 @@ func (r *ClusterOrderReconciler) mapAutomaticAttachmentToCluster(ctx context.Con
 	orders := &v1alpha1.ClusterOrderList{}
 	if err := r.List(ctx, orders, client.InNamespace(r.ClusterOrderNamespace),
 		client.MatchingLabels{osacClusterOrderIDLabel: clusterID}); err != nil {
+		ctrllog.FromContext(ctx).Error(err, "failed to map automatic attachment to ClusterOrder",
+			"attachment", attachment.Name, "clusterID", clusterID)
 		return nil
 	}
 	requests := make([]reconcile.Request, 0, len(orders.Items))
@@ -648,6 +652,8 @@ func (r *ClusterOrderReconciler) mapAutomaticExternalIPToCluster(ctx context.Con
 	orders := &v1alpha1.ClusterOrderList{}
 	if err := r.List(ctx, orders, client.InNamespace(r.ClusterOrderNamespace),
 		client.MatchingLabels{osacClusterOrderIDLabel: clusterID}); err != nil {
+		ctrllog.FromContext(ctx).Error(err, "failed to map automatic ExternalIP to ClusterOrder",
+			"externalIP", ip.Name, "clusterID", clusterID)
 		return nil
 	}
 	requests := make([]reconcile.Request, 0, len(orders.Items))

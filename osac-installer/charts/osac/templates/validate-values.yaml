@@ -8,12 +8,15 @@
 {{- $values := fromYaml (toYaml .Values) -}}
 {{- $clusterConfig := dig "aap" "instanceGroups" "clusterFulfillment" "config" dict $values -}}
 {{- $externalDomain := get $clusterConfig "EXTERNAL_ACCESS_BASE_DOMAIN" | default "" -}}
-{{- $clusterDomain := .Values.global.clusterDomain | default "" -}}
-{{- if and (eq $clusterDomain "") (.Capabilities.APIVersions.Has "config.openshift.io/v1/Ingress") -}}
+{{- $clusterDomain := "" -}}
+{{- if .Capabilities.APIVersions.Has "config.openshift.io/v1/Ingress" -}}
 {{- $ingress := lookup "config.openshift.io/v1" "Ingress" "" "cluster" -}}
 {{- if $ingress -}}
 {{- $clusterDomain = $ingress.spec.domain | default "" -}}
 {{- end -}}
+{{- end -}}
+{{- if eq $clusterDomain "" -}}
+{{- $clusterDomain = .Values.global.clusterDomain | default "" -}}
 {{- end -}}
 {{- $defaultHostedDomain := "" -}}
 {{- if ne $clusterDomain "" -}}

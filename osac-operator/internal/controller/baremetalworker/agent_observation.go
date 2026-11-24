@@ -140,7 +140,7 @@ func deriveWorkerPhaseWithCAP(
 		return workerPhaseWaitingForAgent
 	}
 	capReady := false
-	if co != nil && isCAPAgentWorkerBinding(agent, co, workerName) && capAgentReady != nil {
+	if co != nil && agent.GetDeletionTimestamp().IsZero() && isCAPAgentWorkerBinding(agent, co, workerName) && capAgentReady != nil {
 		capReady = capAgentReady[agent.GetNamespace()+"/"+agent.GetName()] == string(agent.GetUID())
 	}
 	if agentInstalled(agent) || capReady {

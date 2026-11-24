@@ -32,11 +32,13 @@ import (
 	"strings"
 	"time"
 
+	hypershiftv1beta1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/utils/ptr"
@@ -56,6 +58,8 @@ const (
 	workerRegistryProbeImageKey         = "image"
 	workerRegistryProbeReasonKey        = "reason"
 	workerRegistryProbeMessageKey       = "message"
+	workerRegistryProbeWorkerLabel      = "osac.openshift.io/registry-probe-worker"
+	workerRegistryProbePendingStatus    = "pending"
 	workerRegistryProbeTokenLifetime    = time.Hour
 	workerRegistryProbePollInterval     = 10 * time.Second
 )
@@ -70,8 +74,15 @@ type registryProbeGuestResolver interface {
 	Resolve(context.Context, *v1alpha1.ClusterOrder) (registryProbeGuestAPI, error)
 }
 
+// ErrRegistryProbeGuestGone means the guest control plane was authoritatively
+// removed before probe cleanup completed. Cleanup callers may treat it as
+// successful because guest-side probe resources no longer exist; active probe
+// preparation and result reconciliation must continue to surface it.
+var ErrRegistryProbeGuestGone = errors.New("registry probe guest cluster is gone")
+
 type hostedClusterRegistryProbeResolver struct {
-	management client.Reader
+	management    client.Reader
+	authoritative client.Reader
 }
 
 const (
@@ -94,7 +105,14 @@ func registryProbeManagementAPIURL(apiEndpoint string) (string, error) {
 	if err != nil {
 		// Production status stores the management VIP without a port. Keep
 		// accepting an IPv6 literal without a port for completeness.
-		host = strings.Trim(endpoint, "[]")
+		if strings.HasPrefix(endpoint, "[") || strings.HasSuffix(endpoint, "]") {
+			if !strings.HasPrefix(endpoint, "[") || !strings.HasSuffix(endpoint, "]") {
+				return "", fmt.Errorf("ClusterOrder APIEndpoint has an invalid host")
+			}
+			host = strings.TrimSuffix(strings.TrimPrefix(endpoint, "["), "]")
+		} else {
+			host = endpoint
+		}
 		if strings.Contains(endpoint, ":") && net.ParseIP(host) == nil {
 			return "", fmt.Errorf("ClusterOrder APIEndpoint has an invalid port")
 		}
@@ -102,6 +120,11 @@ func registryProbeManagementAPIURL(apiEndpoint string) (string, error) {
 	}
 	if host == "" || port == "" {
 		return "", fmt.Errorf("ClusterOrder APIEndpoint is missing host or port")
+	}
+	for _, digit := range port {
+		if digit < '0' || digit > '9' {
+			return "", fmt.Errorf("ClusterOrder APIEndpoint has an invalid port")
+		}
 	}
 	parsedPort, err := strconv.Atoi(port)
 	if err != nil || parsedPort < 1 || parsedPort > 65535 {
@@ -121,6 +144,15 @@ func (r hostedClusterRegistryProbeResolver) Resolve(
 	hcpNamespace := ref.Namespace + "-" + ref.HostedClusterName
 	secret := &corev1.Secret{}
 	if err := r.management.Get(ctx, client.ObjectKey{Namespace: hcpNamespace, Name: workerRegistryProbeKubeconfigSecret}, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			gone, verifyErr := r.guestGone(ctx, ref, hcpNamespace)
+			if verifyErr != nil {
+				return registryProbeGuestAPI{}, fmt.Errorf("verify HostedCluster registry probe guest after kubeconfig disappearance: %w", verifyErr)
+			}
+			if gone {
+				return registryProbeGuestAPI{}, ErrRegistryProbeGuestGone
+			}
+		}
 		return registryProbeGuestAPI{}, fmt.Errorf("read HostedControlPlane registry probe kubeconfig: %w", err)
 	}
 	data := secret.Data["kubeconfig"]
@@ -177,6 +209,36 @@ func (r hostedClusterRegistryProbeResolver) Resolve(
 	}, nil
 }
 
+// guestGone confirms that a missing kubeconfig is caused by guest teardown,
+// rather than a transient or partial Secret failure. The HostedCluster and its
+// HostedControlPlane namespace are authoritative management-side evidence.
+func (r hostedClusterRegistryProbeResolver) guestGone(
+	ctx context.Context, ref *v1alpha1.ClusterOrderClusterReferenceType, hcpNamespace string,
+) (bool, error) {
+	if ref == nil || ref.Namespace == "" || ref.HostedClusterName == "" {
+		return false, fmt.Errorf("HostedCluster reference is unavailable")
+	}
+	reader := r.authoritative
+	if reader == nil {
+		reader = r.management
+	}
+	namespace := &corev1.Namespace{}
+	if err := reader.Get(ctx, client.ObjectKey{Name: hcpNamespace}, namespace); err != nil {
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("read HostedControlPlane namespace: %w", err)
+	}
+	hostedCluster := &hypershiftv1beta1.HostedCluster{}
+	if err := reader.Get(ctx, client.ObjectKey{Namespace: ref.Namespace, Name: ref.HostedClusterName}, hostedCluster); err != nil {
+		if apierrors.IsNotFound(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("read HostedCluster: %w", err)
+	}
+	return !hostedCluster.DeletionTimestamp.IsZero(), nil
+}
+
 func validateRegistryProbeAPIURL(value string) error {
 	parsed, err := url.Parse(value)
 	if err != nil || parsed.Scheme != httpsScheme || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
@@ -198,6 +260,7 @@ func equalProbeStringSets(left, right []string) bool {
 
 type workerRegistryProbeNames struct {
 	namespace      string
+	workerName     string
 	configMap      string
 	serviceAccount string
 	role           string
@@ -226,6 +289,7 @@ func workerRegistryProbeNamesFor(order *v1alpha1.ClusterOrder, workerName string
 	suffix := hex.EncodeToString(sum[:8])
 	return workerRegistryProbeNames{
 		namespace:      workerRegistryProbeNamespaceName(clusterID),
+		workerName:     workerName,
 		configMap:      "worker-" + suffix,
 		serviceAccount: "registry-probe-" + suffix,
 		role:           "registry-probe-" + suffix,
@@ -246,20 +310,18 @@ func (r *Reconciler) prepareWorkerRegistryProbe(
 	}
 	resolver := r.registryProbeGuestResolver
 	if resolver == nil {
-		resolver = hostedClusterRegistryProbeResolver{management: r.Client}
+		resolver = hostedClusterRegistryProbeResolver{management: r.Client, authoritative: r.apiReader}
 	}
 	guest, err := resolver.Resolve(ctx, order)
 	if err != nil {
-		return workerRegistryProbeCredentials{}, ctrl.Result{RequeueAfter: workerRegistryProbePollInterval}, err
+		return workerRegistryProbeCredentials{}, ctrl.Result{}, err
 	}
 	names, err := workerRegistryProbeNamesFor(order, worker.Name, worker.AttemptCount)
 	if err != nil {
 		return workerRegistryProbeCredentials{}, ctrl.Result{}, err
 	}
-	if !worker.RegistryProbePrepared {
-		if err := resetWorkerRegistryProbeConfigMap(ctx, guest.client, order, names, image); err != nil {
-			return workerRegistryProbeCredentials{}, ctrl.Result{}, err
-		}
+	if err := resetWorkerRegistryProbeConfigMap(ctx, guest.client, order, names, image); err != nil {
+		return workerRegistryProbeCredentials{}, ctrl.Result{}, err
 	}
 	if err := ensureWorkerRegistryProbeResources(ctx, guest.client, order, names, image); err != nil {
 		return workerRegistryProbeCredentials{}, ctrl.Result{}, err
@@ -283,7 +345,7 @@ func (r *Reconciler) prepareWorkerRegistryProbe(
 		ctx, names.serviceAccount, request, metav1.CreateOptions{},
 	)
 	if err != nil {
-		return workerRegistryProbeCredentials{}, ctrl.Result{RequeueAfter: workerRegistryProbePollInterval},
+		return workerRegistryProbeCredentials{}, ctrl.Result{},
 			fmt.Errorf("issue short-lived worker registry probe token: %w", err)
 	}
 	now := time.Now()
@@ -313,7 +375,7 @@ func ensureWorkerRegistryProbeResources(
 	tenant := tenantOf(order)
 	clusterID := order.Labels[clusterOrderIDLabel]
 	owner := "ClusterOrder/" + order.Name
-	meta := workerRegistryProbeObjectMeta(clusterID, tenant, owner)
+	meta := workerRegistryProbeObjectMeta(clusterID, tenant, owner, names.workerName)
 	if err := ensureWorkerRegistryProbeNamespace(ctx, kube, names.namespace, clusterID, tenant, owner); err != nil {
 		return err
 	}
@@ -329,9 +391,9 @@ func ensureWorkerRegistryProbeResources(
 	return ensureWorkerRegistryProbeConfigMap(ctx, kube, order, names, meta, tenant, owner, clusterID, image)
 }
 
-func workerRegistryProbeObjectMeta(clusterID, tenant, owner string) metav1.ObjectMeta {
+func workerRegistryProbeObjectMeta(clusterID, tenant, owner, workerName string) metav1.ObjectMeta {
 	return metav1.ObjectMeta{
-		Labels: map[string]string{clusterOrderIDLabel: clusterID},
+		Labels: map[string]string{clusterOrderIDLabel: clusterID, workerRegistryProbeWorkerLabel: workerName},
 		Annotations: map[string]string{
 			tenantAnnotationKey: tenant, ownerReferenceAnnotation: owner,
 		},
@@ -448,7 +510,7 @@ func ensureWorkerRegistryProbeConfigMap(
 	if apierrors.IsNotFound(err) {
 		cm = &corev1.ConfigMap{ObjectMeta: *meta.DeepCopy(), Data: map[string]string{
 			workerRegistryProbeRequestKey: "false",
-			workerRegistryProbeStatusKey:  "pending",
+			workerRegistryProbeStatusKey:  workerRegistryProbePendingStatus,
 			workerRegistryProbeImageKey:   image,
 		}}
 		cm.Name = names.configMap
@@ -475,19 +537,22 @@ func resetWorkerRegistryProbeConfigMap(
 	if err != nil {
 		return fmt.Errorf("read worker registry probe ConfigMap for reset: %w", err)
 	}
-	if cm.Data[workerRegistryProbeImageKey] != image {
-		return fmt.Errorf("worker registry probe ConfigMap image does not match ClusterVersion release image")
-	}
 	if cm.Annotations[tenantAnnotationKey] != tenantOf(order) ||
 		cm.Annotations[ownerReferenceAnnotation] != "ClusterOrder/"+order.Name ||
 		cm.Labels[clusterOrderIDLabel] != order.Labels[clusterOrderIDLabel] {
 		return fmt.Errorf("worker registry probe ConfigMap ownership does not match ClusterOrder")
 	}
+	if cm.Data[workerRegistryProbeImageKey] != image {
+		if err := kube.CoreV1().ConfigMaps(names.namespace).Delete(ctx, names.configMap, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete stale worker registry probe ConfigMap: %w", err)
+		}
+		return nil
+	}
 	if cm.Data[workerRegistryProbeStatusKey] != "ready" {
 		return nil
 	}
 	cm.Data[workerRegistryProbeRequestKey] = "false"
-	cm.Data[workerRegistryProbeStatusKey] = "pending"
+	cm.Data[workerRegistryProbeStatusKey] = workerRegistryProbePendingStatus
 	delete(cm.Data, workerRegistryProbeReasonKey)
 	delete(cm.Data, workerRegistryProbeMessageKey)
 	if _, err := kube.CoreV1().ConfigMaps(names.namespace).Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
@@ -716,9 +781,14 @@ url=$(cat "$dir/url")
 image=$(cat "$dir/image")
 ca="$dir/ca.crt"
 curl_config="$dir/curl.conf"
+tenant_device=$(cat "$dir/interface" 2>/dev/null || true)
+curl_interface=()
+if [ -n "$tenant_device" ]; then
+  curl_interface=(--interface "$tenant_device")
+fi
 
 for ((attempt=0; attempt<360; attempt++)); do
-  response=$(curl --silent --show-error --max-time 10 --cacert "$ca" --config "$curl_config" "$url" 2>/dev/null) || response=""
+  response=$(curl "${curl_interface[@]}" --silent --show-error --max-time 10 --cacert "$ca" --config "$curl_config" "$url" 2>/dev/null) || response=""
   if printf '%s' "$response" | grep -Eq '"request"[[:space:]]*:[[:space:]]*"requested"'; then
     break
   fi
@@ -736,7 +806,7 @@ else
   result="$dir/failure.json"
 fi
 
-curl --silent --show-error --fail-with-body --max-time 20 --cacert "$ca" \
+curl "${curl_interface[@]}" --silent --show-error --fail-with-body --max-time 20 --cacert "$ca" \
   --config "$curl_config" --header 'Content-Type: application/merge-patch+json' \
   --request PATCH --data-binary "@$result" "$url"
 `
@@ -800,16 +870,140 @@ func requestWorkerRegistryProbe(ctx context.Context, kube kubernetes.Interface, 
 	return configMap, nil
 }
 
-func cleanupWorkerRegistryProbeCredentials(ctx context.Context, kube kubernetes.Interface, names workerRegistryProbeNames) error {
+func cleanupWorkerRegistryProbeCredentials(
+	ctx context.Context, kube kubernetes.Interface, order *v1alpha1.ClusterOrder, names workerRegistryProbeNames,
+) error {
 	var errs []error
-	if err := kube.RbacV1().RoleBindings(names.namespace).Delete(ctx, names.roleBinding, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		errs = append(errs, fmt.Errorf("delete worker registry probe RoleBinding: %w", err))
+	tenant, owner := tenantOf(order), "ClusterOrder/"+order.Name
+	validate := func(object metav1.Object) error {
+		if object.GetAnnotations()[tenantAnnotationKey] != tenant || object.GetAnnotations()[ownerReferenceAnnotation] != owner ||
+			object.GetLabels()[clusterOrderIDLabel] != order.Labels[clusterOrderIDLabel] {
+			return fmt.Errorf("worker registry probe object %s ownership does not match ClusterOrder", object.GetName())
+		}
+		return nil
 	}
-	if err := kube.RbacV1().Roles(names.namespace).Delete(ctx, names.role, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		errs = append(errs, fmt.Errorf("delete worker registry probe Role: %w", err))
+	if object, err := kube.RbacV1().RoleBindings(names.namespace).Get(ctx, names.roleBinding, metav1.GetOptions{}); err == nil {
+		if err := validate(object); err != nil {
+			errs = append(errs, err)
+		} else if err := kube.RbacV1().RoleBindings(names.namespace).Delete(ctx, names.roleBinding, probeDeleteOptions(object)); err != nil && !apierrors.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("delete worker registry probe RoleBinding: %w", err))
+		}
+	} else if !apierrors.IsNotFound(err) {
+		errs = append(errs, fmt.Errorf("read worker registry probe RoleBinding: %w", err))
 	}
-	if err := kube.CoreV1().ServiceAccounts(names.namespace).Delete(ctx, names.serviceAccount, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		errs = append(errs, fmt.Errorf("delete worker registry probe ServiceAccount: %w", err))
+	if object, err := kube.RbacV1().Roles(names.namespace).Get(ctx, names.role, metav1.GetOptions{}); err == nil {
+		if err := validate(object); err != nil {
+			errs = append(errs, err)
+		} else if err := kube.RbacV1().Roles(names.namespace).Delete(ctx, names.role, probeDeleteOptions(object)); err != nil && !apierrors.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("delete worker registry probe Role: %w", err))
+		}
+	} else if !apierrors.IsNotFound(err) {
+		errs = append(errs, fmt.Errorf("read worker registry probe Role: %w", err))
+	}
+	if object, err := kube.CoreV1().ServiceAccounts(names.namespace).Get(ctx, names.serviceAccount, metav1.GetOptions{}); err == nil {
+		if err := validate(object); err != nil {
+			errs = append(errs, err)
+		} else if err := kube.CoreV1().ServiceAccounts(names.namespace).Delete(ctx, names.serviceAccount, probeDeleteOptions(object)); err != nil && !apierrors.IsNotFound(err) {
+			errs = append(errs, fmt.Errorf("delete worker registry probe ServiceAccount: %w", err))
+		}
+	} else if !apierrors.IsNotFound(err) {
+		errs = append(errs, fmt.Errorf("read worker registry probe ServiceAccount: %w", err))
+	}
+	return errors.Join(errs...)
+}
+
+func probeDeleteOptions(object metav1.Object) metav1.DeleteOptions {
+	if object.GetUID() == "" {
+		return metav1.DeleteOptions{}
+	}
+	uid := object.GetUID()
+	return metav1.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}
+}
+
+func cleanupWorkerRegistryProbeForWorker(
+	ctx context.Context, kube kubernetes.Interface, order *v1alpha1.ClusterOrder, workerName string,
+) error {
+	if kube == nil || order == nil || workerName == "" {
+		return fmt.Errorf("worker registry probe cleanup identity is incomplete")
+	}
+	selector := labels.Set{
+		clusterOrderIDLabel:            order.Labels[clusterOrderIDLabel],
+		workerRegistryProbeWorkerLabel: workerName,
+	}.AsSelector().String()
+	tenant := tenantOf(order)
+	owner := "ClusterOrder/" + order.Name
+	var errs []error
+	owned := func(object metav1.Object) error {
+		if object.GetLabels()[clusterOrderIDLabel] != order.Labels[clusterOrderIDLabel] ||
+			object.GetAnnotations()[tenantAnnotationKey] != tenant ||
+			object.GetAnnotations()[ownerReferenceAnnotation] != owner {
+			return fmt.Errorf("worker registry probe object %s ownership does not match ClusterOrder", object.GetName())
+		}
+		return nil
+	}
+	configMaps, err := kube.CoreV1().ConfigMaps(workerRegistryProbeNamespaceName(order.Labels[clusterOrderIDLabel])).List(
+		ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		errs = append(errs, fmt.Errorf("list worker registry probe ConfigMaps: %w", err))
+	} else {
+		for i := range configMaps.Items {
+			object := &configMaps.Items[i]
+			if err := owned(object); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if err := kube.CoreV1().ConfigMaps(object.Namespace).Delete(ctx, object.Name, probeDeleteOptions(object)); err != nil && !apierrors.IsNotFound(err) {
+				errs = append(errs, fmt.Errorf("delete worker registry probe ConfigMap %s: %w", object.Name, err))
+			}
+		}
+	}
+	roles, err := kube.RbacV1().Roles(workerRegistryProbeNamespaceName(order.Labels[clusterOrderIDLabel])).List(
+		ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		errs = append(errs, fmt.Errorf("list worker registry probe Roles: %w", err))
+	} else {
+		for i := range roles.Items {
+			object := &roles.Items[i]
+			if err := owned(object); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if err := kube.RbacV1().Roles(object.Namespace).Delete(ctx, object.Name, probeDeleteOptions(object)); err != nil && !apierrors.IsNotFound(err) {
+				errs = append(errs, fmt.Errorf("delete worker registry probe Role %s: %w", object.Name, err))
+			}
+		}
+	}
+	bindings, err := kube.RbacV1().RoleBindings(workerRegistryProbeNamespaceName(order.Labels[clusterOrderIDLabel])).List(
+		ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		errs = append(errs, fmt.Errorf("list worker registry probe RoleBindings: %w", err))
+	} else {
+		for i := range bindings.Items {
+			object := &bindings.Items[i]
+			if err := owned(object); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if err := kube.RbacV1().RoleBindings(object.Namespace).Delete(ctx, object.Name, probeDeleteOptions(object)); err != nil && !apierrors.IsNotFound(err) {
+				errs = append(errs, fmt.Errorf("delete worker registry probe RoleBinding %s: %w", object.Name, err))
+			}
+		}
+	}
+	accounts, err := kube.CoreV1().ServiceAccounts(workerRegistryProbeNamespaceName(order.Labels[clusterOrderIDLabel])).List(
+		ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		errs = append(errs, fmt.Errorf("list worker registry probe ServiceAccounts: %w", err))
+	} else {
+		for i := range accounts.Items {
+			object := &accounts.Items[i]
+			if err := owned(object); err != nil {
+				errs = append(errs, err)
+				continue
+			}
+			if err := kube.CoreV1().ServiceAccounts(object.Namespace).Delete(ctx, object.Name, probeDeleteOptions(object)); err != nil && !apierrors.IsNotFound(err) {
+				errs = append(errs, fmt.Errorf("delete worker registry probe ServiceAccount %s: %w", object.Name, err))
+			}
+		}
 	}
 	return errors.Join(errs...)
 }
@@ -823,7 +1017,7 @@ func (r *Reconciler) reconcileWorkerRegistryProbeResult(
 	}
 	resolver := r.registryProbeGuestResolver
 	if resolver == nil {
-		resolver = hostedClusterRegistryProbeResolver{management: r.Client}
+		resolver = hostedClusterRegistryProbeResolver{management: r.Client, authoritative: r.apiReader}
 	}
 	guest, err := resolver.Resolve(ctx, order)
 	if err != nil {
@@ -842,7 +1036,7 @@ func (r *Reconciler) reconcileWorkerRegistryProbeResult(
 		readyMessage := workerRegistryProbeReadyMessage(image)
 		wasReady := workerRegistryProbeConditionReady(worker, image)
 		updateWorkerRegistryProbeCondition(worker, metav1.ConditionTrue, "ImagePulled", readyMessage)
-		if err := cleanupWorkerRegistryProbeCredentials(ctx, guest.client, names); err != nil {
+		if err := cleanupWorkerRegistryProbeCredentials(ctx, guest.client, order, names); err != nil {
 			return false, err
 		}
 		return wasReady, nil
@@ -864,7 +1058,7 @@ func (r *Reconciler) reconcileWorkerRegistryProbeResult(
 			r.recorder.Eventf(order, nil, corev1.EventTypeWarning, eventReasonRegistryAccessFailed,
 				"CheckWorkerRegistryAccess", "worker %s: %s", worker.Name, fullMessage)
 		}
-		if err := cleanupWorkerRegistryProbeCredentials(ctx, guest.client, names); err != nil {
+		if err := cleanupWorkerRegistryProbeCredentials(ctx, guest.client, order, names); err != nil {
 			return false, err
 		}
 		return false, nil
@@ -878,6 +1072,9 @@ func (r *Reconciler) reconcileWorkerRegistryProbeResult(
 func workerRegistryProbeImage(order *v1alpha1.ClusterOrder, worker *v1alpha1.WorkerStatus) string {
 	if order == nil || worker == nil {
 		return ""
+	}
+	if worker.RegistryProbeImage != "" {
+		return worker.RegistryProbeImage
 	}
 	for _, request := range order.Spec.NodeRequests {
 		if request.NodeSet == worker.NodeSet && request.ReleaseImage != "" {

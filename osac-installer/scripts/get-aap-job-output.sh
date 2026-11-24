@@ -5,7 +5,12 @@
 set -euo pipefail
 
 JOB_ID="${1:-}"
-OSAC_NS="osac"
+OSAC_NS="${NS:-osac}"
+# Bound both connection setup and response transfer. Override these values for
+# unusually slow AAP environments without allowing a stalled request to hang
+# the diagnostic script indefinitely.
+AAP_CURL_CONNECT_TIMEOUT="${AAP_CURL_CONNECT_TIMEOUT:-10}"
+AAP_CURL_MAX_TIME="${AAP_CURL_MAX_TIME:-120}"
 
 if [[ -z "$JOB_ID" ]]; then
     echo "Usage: $0 <job-id>"
@@ -119,7 +124,8 @@ fetch_aap_json() {
     # than in kubectl exec arguments, which are retained in API audit URIs.
     printf 'user = "admin:%s"\n' "$escaped_password" | \
         kubectl exec -i -n "$OSAC_NS" "$CONTROLLER_POD" -- \
-        curl -s --config - "$url" 2>/dev/null
+        curl -sS --connect-timeout "$AAP_CURL_CONNECT_TIMEOUT" \
+            --max-time "$AAP_CURL_MAX_TIME" --config - "$url" 2>/dev/null
 }
 
 # Fetch job details via exec

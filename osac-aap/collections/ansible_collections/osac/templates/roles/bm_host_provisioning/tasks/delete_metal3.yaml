@@ -36,13 +36,23 @@
           ansible.builtin.set_fact:
             bmh_has_image: "{{ bmh_info.spec.image is defined and bmh_info.spec.image.url is defined and bmh_info.spec.image.url | length > 0 }}"
 
+        - name: Detect interrupted Metal3 cleanup
+          ansible.builtin.set_fact:
+            bmh_cleanup_required: >-
+              {{ bmh_has_image | bool or
+                 (bmh_info.metadata.annotations | default({})).get('osac.openshift.io/metal3-cleanup-required', '') == 'true' or
+                 bmh_info.spec.networkData is defined or
+                 bmh_info.spec.userData is defined or
+                 bmh_info.spec.metaData is defined or
+                 (bmh_info.metadata.annotations | default({})).get('osac.openshift.io/fallback-root-device', '') | length > 0 }}
+
         - name: Skip deprovisioning when no image is set
           when: not (bmh_has_image | bool)
           ansible.builtin.debug:
             msg: "BMH {{ bmh_namespace }}/{{ bmh_name }} has no image set, skipping deprovisioning"
 
         - name: Patch BareMetalHost to remove image, networkData, userData, and metaData
-          when: bmh_has_image | bool
+          when: bmh_cleanup_required | bool
           kubernetes.core.k8s:
             api_version: metal3.io/v1alpha1
             kind: BareMetalHost
@@ -50,6 +60,9 @@
             name: "{{ bmh_name }}"
             state: present
             definition:
+              metadata:
+                annotations:
+                  osac.openshift.io/metal3-cleanup-required: "true"
               spec:
                 image: null
                 networkData: null
@@ -57,7 +70,7 @@
                 metaData: null
 
         - name: Wait for BMH to reach available or ready state
-          when: bmh_has_image | bool
+          when: bmh_cleanup_required | bool
           kubernetes.core.k8s_info:
             api_version: metal3.io/v1alpha1
             kind: BareMetalHost
@@ -83,7 +96,7 @@
             generated_root_hints_annotation: >-
               {{ bmh_deprovision_status.resources[0].metadata.annotations['osac.openshift.io/fallback-root-device'] | default('') }}
           when:
-            - bmh_has_image | bool
+            - bmh_cleanup_required | bool
             - generated_root_hints_annotation | length > 0
             - bmh_deprovision_status.resources[0].spec.rootDeviceHints | default({}) | length > 0
           kubernetes.core.k8s_json_patch:
@@ -98,7 +111,7 @@
                 path: /metadata/annotations/osac.openshift.io~1fallback-root-device
 
         - name: Delete networkData Secret
-          when: bmh_has_image | bool
+          when: bmh_cleanup_required | bool
           kubernetes.core.k8s:
             api_version: v1
             kind: Secret
@@ -107,7 +120,7 @@
             state: absent
 
         - name: Delete userData Secret
-          when: bmh_has_image | bool
+          when: bmh_cleanup_required | bool
           kubernetes.core.k8s:
             api_version: v1
             kind: Secret
@@ -116,13 +129,24 @@
             state: absent
 
         - name: Delete metaData Secret
-          when: bmh_has_image | bool
+          when: bmh_cleanup_required | bool
           kubernetes.core.k8s:
             api_version: v1
             kind: Secret
             namespace: "{{ bmh_namespace }}"
             name: "{{ bmh_name }}-meta-data"
             state: absent
+
+        - name: Clear Metal3 cleanup marker
+          when: bmh_cleanup_required | bool
+          kubernetes.core.k8s_json_patch:
+            api_version: metal3.io/v1alpha1
+            kind: BareMetalHost
+            namespace: "{{ bmh_namespace }}"
+            name: "{{ bmh_name }}"
+            patch:
+              - op: remove
+                path: /metadata/annotations/osac.openshift.io~1metal3-cleanup-required
 
     - name: Metal3 deprovisioning completed
       ansible.builtin.debug:

@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"slices"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -336,7 +337,20 @@ func (t *task) update(ctx context.Context) error {
 			t.r.logger.WarnContext(ctx, "Private and stored network attachments differ; preserving stored network attachment on existing ClusterOrder",
 				slog.String("namespace", object.GetNamespace()), slog.String("name", object.GetName()))
 		}
-		spec.NetworkAttachment = object.Spec.NetworkAttachment
+		if object.Spec.NetworkAttachment != nil {
+			spec.NetworkAttachment = object.Spec.NetworkAttachment.DeepCopy()
+		} else {
+			spec.NetworkAttachment = nil
+		}
+		if t.cluster.GetSpec().GetSupportsAutomaticCaasEndpoints() && spec.NetworkAttachment != nil {
+			autoGroup, groupErr := t.automaticClusterSecurityGroupID(ctx)
+			if groupErr != nil {
+				return fmt.Errorf("resolving automatic Cluster SecurityGroup for existing ClusterOrder: %w", groupErr)
+			}
+			if !slices.Contains(spec.NetworkAttachment.SecurityGroupRefs, autoGroup) {
+				spec.NetworkAttachment.SecurityGroupRefs = append(spec.NetworkAttachment.SecurityGroupRefs, autoGroup)
+			}
+		}
 		update := object.DeepCopy()
 		update.Spec = spec
 		if update.Annotations == nil {
@@ -667,10 +681,10 @@ func (t *task) delete(ctx context.Context) (err error) {
 	// for the post-ClusterOrder cleanup below.
 	externalAccessComplete, cleanupErr := t.r.networkingCleanup.CleanupExternalAccess(ctx, t.cluster.GetId())
 	if cleanupErr != nil {
-		return cleanupErr
+		return controllers.RequeueAfter(cleanupErr, time.Second)
 	}
 	if !externalAccessComplete {
-		return nil
+		return controllers.RequeueAfterNetworkingCleanup()
 	}
 
 	// Delete the K8S object:

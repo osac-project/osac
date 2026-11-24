@@ -1316,6 +1316,16 @@ func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMe
 		}
 		return ctrl.Result{RequeueAfter: pollInterval}, nil
 	}
+	if bareMetalInstance.Annotations["osac.openshift.io/cluster-api-id"] != "" &&
+		bareMetalInstance.Annotations[bareMetalInstanceCaaSTeardownHandoffAnnotation] == "" {
+		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseDeleting
+		log.Info("Waiting for osac-operator CaaS teardown handoff before host teardown")
+		pollInterval := r.ManagementRecheckIntervalDuration
+		if pollInterval <= 0 {
+			pollInterval = DefaultManagementRecheckIntervalDuration
+		}
+		return ctrl.Result{RequeueAfter: pollInterval}, nil
+	}
 	if controllerutil.ContainsFinalizer(bareMetalInstance, bareMetalInstanceOSACNetworkingFinalizer) {
 		bareMetalInstance.Status.Phase = v1alpha1.BareMetalInstancePhaseDeleting
 		log.Info("Waiting for osac-operator ExternalIP cleanup before host teardown")

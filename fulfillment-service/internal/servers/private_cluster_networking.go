@@ -72,7 +72,7 @@ func (s *PrivateClustersServer) prepareAutomaticClusterNetworking(
 			return grpcstatus.Errorf(grpccodes.Internal,
 				"failed to check existing guest ingress allocations for Subnet '%s'", subnet.GetId())
 		}
-		address, err := selectClusterIngressAddress(subnet.GetSpec().GetIpv4Cidr(),
+		address, err := selectClusterIngressAddress(ctx, subnet.GetSpec().GetIpv4Cidr(),
 			subnet.GetStatus().GetIpam(), used)
 		if err != nil {
 			if errors.Is(err, errClusterIngressAllocationExhausted) {
@@ -96,20 +96,31 @@ func (s *PrivateClustersServer) clusterIngressAddressesInUse(
 	filter := fmt.Sprintf("this.spec.network_attachment.subnet.id == %q", subnetID)
 	const pageSize int32 = 500
 	used := make(map[string]struct{})
-	err := forEachDAOPage(ctx, pageSize, func(ctx context.Context, offset, limit int32) ([]*privatev1.Cluster, error) {
-		clusters, err := s.generic.dao.List().SetFilter(filter).SetOffset(offset).SetLimit(limit).Do(ctx)
+	lastID := ""
+	for {
+		pageFilter := filter
+		if lastID != "" {
+			pageFilter = fmt.Sprintf("(%s) && this.id > %q", filter, lastID)
+		}
+		clusters, err := s.generic.dao.List().SetFilter(pageFilter).SetLimit(pageSize).Do(ctx)
 		if err != nil {
 			return nil, err
 		}
-		return clusters.GetItems(), nil
-	}, func(cluster *privatev1.Cluster) {
-		address := cluster.GetSpec().GetIngressAllocatedAddress()
-		if address != "" {
-			used[address] = struct{}{}
+		items := clusters.GetItems()
+		for _, cluster := range items {
+			address := cluster.GetSpec().GetIngressAllocatedAddress()
+			if address != "" {
+				used[address] = struct{}{}
+			}
 		}
-	})
-	if err != nil {
-		return nil, err
+		if len(items) < int(pageSize) {
+			break
+		}
+		nextID := items[len(items)-1].GetId()
+		if nextID == "" || nextID == lastID {
+			return nil, fmt.Errorf("cluster ingress allocation scan did not advance")
+		}
+		lastID = nextID
 	}
 	return used, nil
 }
@@ -120,6 +131,27 @@ func (s *PrivateClustersServer) createAutomaticClusterSecurityGroup(
 	subnet *privatev1.Subnet,
 	virtualNetworkID string,
 ) error {
+	groupName := automaticSecurityGroupPrefix + cluster.GetId()
+	filter := fmt.Sprintf("this.metadata.name == %q && this.metadata.tenant == %q", groupName,
+		cluster.GetMetadata().GetTenant())
+	existing, err := s.securityGroupsDao.List().SetFilter(filter).SetLimit(2).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("checking automatic Cluster SecurityGroup: %w", err)
+	}
+	if len(existing.GetItems()) > 1 {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"multiple automatic Cluster SecurityGroups exist for Cluster '%s'", cluster.GetId())
+	}
+	if len(existing.GetItems()) == 1 {
+		group := existing.GetItems()[0]
+		labels := group.GetMetadata().GetLabels()
+		if group.GetMetadata().GetCreator() != systemCreator || labels[autoCreatedLabel] != "true" ||
+			labels[autoCreatedForLabel] != cluster.GetId() || labels[autoCreatedKindLabel] != "cluster" {
+			return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+				"automatic Cluster SecurityGroup for Cluster '%s' has invalid ownership metadata", cluster.GetId())
+		}
+		return nil
+	}
 	subnetCIDR := subnet.GetSpec().GetIpv4Cidr()
 	port80, port443 := int32(80), int32(443)
 	allProtocolsFromSubnet := privatev1.SecurityRule_builder{

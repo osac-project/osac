@@ -70,14 +70,10 @@ def agents_matching_selected_macs(agents, selected_macs):
     result = []
     covered = set()
     for agent in agents or []:
-        matches = {
-            str(interface["macAddress"]).lower().replace("-", ":")
-            for interface in agent_network_interfaces(agent, selected_macs)
-            if interface["selected"]
-        }
-        if len(matches) != 1:
+        selected = [interface for interface in agent_network_interfaces(agent, selected_macs) if interface["selected"]]
+        if len(selected) != 1:
             continue
-        mac = next(iter(matches))
+        mac = str(selected[0]["macAddress"]).lower().replace("-", ":")
         if mac in covered:
             continue
         covered.add(mac)

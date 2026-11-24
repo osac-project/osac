@@ -1,6 +1,6 @@
 interfaces:
 {% for interface in nmstate_interfaces %}
-  - name: {{ interface.name }}
+  - name: {{ interface.name | to_json }}
     type: ethernet
     state: {{ 'up' if interface.selected else 'down' }}
     ipv4:

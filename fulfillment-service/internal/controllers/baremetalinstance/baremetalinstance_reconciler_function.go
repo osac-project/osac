@@ -54,6 +54,8 @@ const objectPrefix = "bmi-"
 
 const caasAgentCleanupFinalizer = "osac.openshift.io/caas-agent-cleanup"
 
+const caasTeardownHandoffAnnotation = "osac.openshift.io/caas-teardown-handoff"
+
 const clusterAPIIDAnnotation = "osac.openshift.io/cluster-api-id"
 
 const clusterOrderUUIDLabel = "osac.openshift.io/clusterorder-uuid"
@@ -1140,9 +1142,13 @@ func (t *task) mutateBMI(ctx context.Context, object *bmfov1alpha1.BareMetalInst
 	if clusterID := t.bareMetalInstance.GetMetadata().GetAnnotations()[clusterAPIIDAnnotation]; clusterID != "" {
 		object.Annotations[clusterAPIIDAnnotation] = clusterID
 		object.Labels[clusterOrderUUIDLabel] = t.bareMetalInstance.GetMetadata().GetLabels()[clusterOrderUUIDLabel]
+		if handoff := t.bareMetalInstance.GetMetadata().GetAnnotations()[caasTeardownHandoffAnnotation]; handoff != "" {
+			object.Annotations[caasTeardownHandoffAnnotation] = handoff
+		}
 	} else {
 		delete(object.Annotations, clusterAPIIDAnnotation)
 		delete(object.Labels, clusterOrderUUIDLabel)
+		delete(object.Annotations, caasTeardownHandoffAnnotation)
 	}
 	if slices.Contains(t.bareMetalInstance.GetMetadata().GetFinalizers(), caasAgentCleanupFinalizer) {
 		controllerutil.AddFinalizer(object, caasAgentCleanupFinalizer)

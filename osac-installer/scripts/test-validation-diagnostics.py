@@ -186,7 +186,10 @@ class ValidationDiagnosticsTests(unittest.TestCase):
                 self.assert_private(result.stdout + result.stderr)
                 self.assertIn("offline chart rendering failed", result.stderr)
                 self.assertIn("no cluster changes", result.stderr)
-                self.assertEqual(len(calls.read_text().splitlines()), 2 if retry else 1)
+                # The gate first validates caller-supplied schema values with
+                # preflight disabled, then performs its report-mode render;
+                # the NetBox retry adds one more render.
+                self.assertEqual(len(calls.read_text().splitlines()), 3 if retry else 2)
 
     def test_offline_render_error_reports_template_location_without_message(self):
         """Check a template check failure names its location, not its value."""

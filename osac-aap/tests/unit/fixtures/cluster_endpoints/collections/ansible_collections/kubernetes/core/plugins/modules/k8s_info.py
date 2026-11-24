@@ -51,7 +51,13 @@ def main() -> None:
         resources = [{"data": {"kubeconfig": base64.b64encode(kubeconfig).decode()}}]
     elif kind == "Pod":
         validate_api_server()
-        resources = [{"status": {"phase": "Running"}}]
+        resources = [{
+            "metadata": {},
+            "status": {
+                "phase": "Running",
+                "conditions": [{"type": "Ready", "status": "True"}],
+            },
+        }]
     elif kind == "Service":
         validate_api_server()
         address = os.environ["OSAC_TEST_INGRESS_ADDRESS"]

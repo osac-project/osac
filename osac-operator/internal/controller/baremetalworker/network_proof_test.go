@@ -162,6 +162,13 @@ var _ = It("requires handoff and an accepted lease before worker binding", func(
 	Expect(ready).To(BeTrue())
 	Expect(proof.bindingReady).To(BeFalse(), "unready NetworkAttachment unexpectedly became bindable")
 	attachment.Status.Conditions[0].Status = metav1.ConditionTrue
+	attachment.Generation = 1
+	attachment.Status.Conditions[0].ObservedGeneration = 0
+	proof, ready, err = r.workerNetworkProof(context.Background(), co, worker, observation)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(ready).To(BeTrue())
+	Expect(proof.bindingReady).To(BeFalse(), "stale zero ObservedGeneration unexpectedly became bindable")
+	attachment.Status.Conditions[0].ObservedGeneration = attachment.Generation
 	privateBMI := observation.byID[proofBMIID]
 	privateBMI.GetStatus().GetNetworkAttachmentStatuses()[0].SetIpAddress("192.0.2.99")
 	proof, ready, err = r.workerNetworkProof(context.Background(), co, worker, observation)

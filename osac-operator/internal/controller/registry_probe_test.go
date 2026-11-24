@@ -90,7 +90,7 @@ var _ = Describe("CaaS management registry probe", func() {
 		Expect(stored.Data[corev1.DockerConfigJsonKey]).To(Equal([]byte("unrelated")))
 	})
 
-	It("waits for the management kubelet pull, records its image, and removes probe credentials", func() {
+	It("waits for the management kubelet pull and removes evidence after status persists", func() {
 		order := newOrder()
 		reconciler, c := newReconciler(order)
 
@@ -131,7 +131,20 @@ var _ = Describe("CaaS management registry probe", func() {
 		Expect(condition.Message).To(ContainSubstring("Management image source"))
 		Expect(condition.Message).To(ContainSubstring(order.Spec.ReleaseImage))
 		Expect(condition.Message).NotTo(ContainSubstring("fake-secret"))
+		Expect(c.Get(ctx, podKey, &corev1.Pod{})).To(Succeed(), "pull evidence must remain until status is persisted")
+		Expect(c.Get(ctx, secretKey, &corev1.Secret{})).To(Succeed(), "pull credentials must remain until status is persisted")
+
+		ready, result, err = reconciler.reconcileManagementRegistryProbe(ctx, order)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ready).To(BeFalse())
+		Expect(result.RequeueAfter).To(Equal(registryProbeWait))
 		Expect(apierrors.IsNotFound(c.Get(ctx, podKey, &corev1.Pod{}))).To(BeTrue())
+		Expect(c.Get(ctx, secretKey, &corev1.Secret{})).To(Succeed())
+
+		ready, result, err = reconciler.reconcileManagementRegistryProbe(ctx, order)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(ready).To(BeFalse())
+		Expect(result.RequeueAfter).To(Equal(time.Second))
 		Expect(apierrors.IsNotFound(c.Get(ctx, secretKey, &corev1.Secret{}))).To(BeTrue())
 
 		ready, _, err = reconciler.reconcileManagementRegistryProbe(ctx, order)

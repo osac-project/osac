@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import sys
 
 import pytest
 
@@ -54,6 +55,21 @@ def test_unchanged_settings_are_allowed_with_live_clusters() -> None:
     guard.validate_settings(settings(), settings(), live_clusters=True)
 
 
+def test_unchanged_check_mode_does_not_need_live_credentials(monkeypatch) -> None:
+    monkeypatch.setenv("RELEASE_NAMESPACE", "osac")
+    for field, value in settings().items():
+        monkeypatch.setenv(field, value)
+    monkeypatch.setattr(guard, "read_previous_settings", lambda _namespace: settings())
+    monkeypatch.setattr(guard, "has_live_clusters", lambda: pytest.fail("live check was called"))
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT), "--check-unchanged"])
+    assert guard.main() == 0
+
+
+def test_hook_checks_unchanged_settings_before_token_acquisition() -> None:
+    hook = (SCRIPT.parents[1] / "templates/hooks/validate-caas-dns-settings.yaml").read_text()
+    assert hook.index("--check-unchanged") < hook.index("get_fulfillment_access_token")
+
+
 def test_missing_previous_settings_with_live_clusters_fails_closed() -> None:
     with pytest.raises(RuntimeError, match="previous CaaS DNS settings"):
         guard.validate_settings(None, settings(), live_clusters=True)
@@ -94,3 +110,10 @@ def test_live_cluster_probe_uses_private_api_and_bearer_token(monkeypatch) -> No
     assert guard.has_live_clusters() is True
     assert seen["url"].startswith("https://fulfillment-internal-api:8001/api/private/v1/clusters?")
     assert seen["auth"] == "Bearer test-token"
+
+
+def test_live_cluster_probe_fails_closed_without_credentials(monkeypatch) -> None:
+    monkeypatch.delenv("FULFILLMENT_URL", raising=False)
+    monkeypatch.delenv("AUTH_TOKEN", raising=False)
+    with pytest.raises(RuntimeError, match="credentials"):
+        guard.has_live_clusters()

@@ -168,6 +168,9 @@ var _ = DescribeMigration("Backfill full-reference tenant selectors", func() {
 			err := tool.Migrate(ctx, 153)
 			Expect(err).To(HaveOccurred())
 			Expect(strings.ToLower(err.Error())).To(ContainSubstring(message))
+			Expect(err.Error()).To(ContainSubstring(`public.changes:$.data.spec.version`))
+			Expect(err.Error()).NotTo(ContainSubstring(`version-id`))
+			Expect(err.Error()).NotTo(ContainSubstring(`tenant-a`))
 		},
 		Entry("shared=true with another explicit tenant",
 			`{"spec":{"version":{"id":"version-id","tenant":"tenant-a","shared":true}}}`,

@@ -42,26 +42,25 @@ begin
     -- an id/name shape is unsafe because template parameters and generic JSON may contain the same keys.
     if value ? 'shared' and osac_5424_is_full_reference_field(field_name) then
       if (value - 'id' - 'name' - 'project' - 'tenant' - 'shared') <> '{}'::jsonb then
-        raise exception 'unrecognized shared full-reference fields at %: %', json_path, value;
+        raise exception 'unrecognized shared full-reference fields at %', json_path;
       end if;
       if jsonb_typeof(value->'shared') <> 'boolean' then
-        raise exception 'shared selector is not a boolean at %: %', json_path, value;
+        raise exception 'shared selector is not a boolean at %', json_path;
       end if;
       if value ? 'tenant' and jsonb_typeof(value->'tenant') <> 'string' then
-        raise exception 'tenant selector is not a string at %: %', json_path, value;
+        raise exception 'tenant selector is not a string at %', json_path;
       end if;
 
       selected_tenant := value->>'tenant';
       if value->'shared' = 'true'::jsonb then
         if coalesce(selected_tenant, '') not in ('', 'shared') then
-          raise exception 'shared=true conflicts with tenant "%" at %', selected_tenant, json_path;
+          raise exception 'shared=true conflicts with tenant at %', json_path;
         end if;
         return jsonb_set(value - 'shared', '{tenant}', '"shared"'::jsonb, true);
       end if;
 
       if coalesce(selected_tenant, '') <> '' and selected_tenant is distinct from owner_tenant then
-        raise exception 'shared=false tenant "%" does not match owning tenant "%" at %',
-          selected_tenant, owner_tenant, json_path;
+        raise exception 'shared=false tenant does not match owning tenant at %', json_path;
       end if;
       return value - 'shared';
     end if;
@@ -178,23 +177,23 @@ begin
       execute format(
         'with updated as (
            update %I.%I
-           set data = osac_5424_rewrite_reference_tenants(data, coalesce(data->>''tenant'', ''''), ''$'', '''')
+           set data = osac_5424_rewrite_reference_tenants(data, coalesce(data->>''tenant'', ''''), %L, '''')
            where osac_5424_has_shared_reference(data, '''')
            returning id::text, osac_5424_has_shared_reference(data, '''') as has_shared
          )
          select id from updated where has_shared limit 1',
-        target.schema_name, target.table_name
+        target.schema_name, target.table_name, format('%I.%I:$', target.schema_name, target.table_name)
       ) into affected_id;
     else
       execute format(
         'with updated as (
            update %I.%I
-           set data = osac_5424_rewrite_reference_tenants(data, tenant, ''$'', '''')
+           set data = osac_5424_rewrite_reference_tenants(data, tenant, %L, '''')
            where osac_5424_has_shared_reference(data, '''')
            returning id::text, osac_5424_has_shared_reference(data, '''') as has_shared
          )
          select id from updated where has_shared limit 1',
-        target.schema_name, target.table_name
+        target.schema_name, target.table_name, format('%I.%I:$', target.schema_name, target.table_name)
       ) into affected_id;
     end if;
 
@@ -206,8 +205,8 @@ begin
     end if;
 
     if affected_id is not null then
-      raise exception 'shared full-reference selector remains in %.% row %',
-        target.schema_name, target.table_name, affected_id;
+      raise exception 'shared full-reference selector remains in %.%',
+        target.schema_name, target.table_name;
     end if;
   end loop;
 end;

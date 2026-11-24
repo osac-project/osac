@@ -701,15 +701,18 @@ func (t *Tool) simulateOIDCLogin(ctx context.Context, clientID, callbackBase, re
 	}
 
 	// Do NOT auto-follow redirects — we drive each hop manually so we can detect
-	// KC login forms and submit credentials.
+	// KC login forms and submit credentials. Clone the default transport so idle
+	// connections are reaped: one login happens per MCP spec, and a bare
+	// transport would keep this client's connections open for the rest of the run.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{
+		RootCAs:    t.caPool.Pool(),
+		MinVersion: tls.VersionTLS12,
+	}
+	defer transport.CloseIdleConnections()
 	httpClient := &http.Client{
-		Jar: jar,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				RootCAs:    t.caPool.Pool(),
-				MinVersion: tls.VersionTLS12,
-			},
-		},
+		Jar:       jar,
+		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

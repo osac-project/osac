@@ -1505,9 +1505,10 @@ func (t *Tool) makeGrpcConn(addr string, tokenSource auth.TokenSource) (result *
 func (t *Tool) makeHttpClient(addr string, tokenSource auth.TokenSource) *http.Client {
 	tlsConfig := tlsconfig.NewClientTLSConfig()
 	tlsConfig.RootCAs = t.caPool.Pool()
-	transport := &http.Transport{
-		TLSClientConfig: tlsConfig,
-	}
+	// Keep the default dial, keep-alive and connection pooling settings: a bare transport would never reap
+	// idle connections, and the tool builds several clients that live for the whole suite.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tlsConfig
 	tripper := ghttp.RoundTripperFunc(
 		func(request *http.Request) (response *http.Response, err error) {
 			// Replace the scheme and host, so that users of the client only need to provide the path:

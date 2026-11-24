@@ -2,8 +2,8 @@
 # The BMaaS NetBox suite of a pull request, as a run of its own.
 #
 # What runs here: what e2e-pr-bmaas.yml does with the same arguments, plus
-# `inventory-backend: netbox` — nothing else. `tier: full` selects the
-# sanity + regression variant (policy entry e2e-bmaas-netbox-full).
+# `inventory-backend: netbox` — nothing else. The sanity + regression cohort
+# has a suite of its own: e2e-pr-bmaas-netbox-full.yml.
 #
 # Who starts it: the decision of e2e-pr.yml (osac-ci), by hand through the
 # E2E comment or /test. The policy names this file for the suite
@@ -38,12 +38,6 @@ on:
         description: The pull request number
         required: true
         type: string
-      tier:
-        description: >-
-          "full" when the BMaaS NetBox sanity + regression variant started this run, empty for sanity tests
-        required: false
-        type: string
-        default: ""
       # The decision sends these two with every suite. They are not used: `verify` reads the author and association from
       # the pull request, so a dispatch cannot claim to be a member.
       fork-pr-author:
@@ -79,7 +73,6 @@ jobs:
       id-token: write
     uses: ./.github/workflows/e2e-bmaas-full-install.yml
     with:
-      tier: ${{ inputs.tier }}
       repo: ${{ inputs.repo }}
       sha: ${{ inputs.sha }}
       pr-number: ${{ inputs.pr-number }}
@@ -91,3 +84,4 @@ jobs:
       # Without it the run still passes, it just leaves no telemetry.
       CI_OBSERVE_OTLP_PASSWORD: ${{ secrets.CI_OBSERVE_OTLP_PASSWORD }}
       OSAC_CI_APP_ID: ${{ secrets.OSAC_CI_APP_ID }}
+      OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}

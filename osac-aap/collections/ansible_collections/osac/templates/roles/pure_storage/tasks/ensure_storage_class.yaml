@@ -133,16 +133,18 @@
               osac.openshift.io/storage-backend-id: "{{ _pure_backend_id }}"
           type: Opaque
           stringData:
-            pure.json: |
-              {
-                "FlashBlades": [
-                  {
-                    "MgmtEndPoint": "{{ _pure_mgmt_endpoint }}",
-                    "NFSEndPoint": "{{ _pure_nfs_endpoint }}",
-                    "APIToken": "{{ _pure_api_token }}"
-                  }
-                ]
-              }
+            pure.json: >-
+              {{
+                {
+                  "FlashBlades": [
+                    {
+                      "MgmtEndPoint": _pure_mgmt_endpoint,
+                      "NFSEndPoint": _pure_nfs_endpoint,
+                      "APIToken": _pure_api_token
+                    }
+                  ]
+                } | to_json
+              }}
       no_log: true
 
     # ── Create StorageClasses per tier ──

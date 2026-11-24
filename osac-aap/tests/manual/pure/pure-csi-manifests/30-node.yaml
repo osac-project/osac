@@ -202,7 +202,7 @@ spec:
         - name: mount-shim
           configMap:
             name: pure-csi-mountshim
-            defaultMode: 0755
+            defaultMode: 493  # 0755; decimal because yamllint forbids implicit octal
             items:
               - key: mount
                 path: mount

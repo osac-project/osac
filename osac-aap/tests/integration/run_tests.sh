@@ -340,6 +340,8 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
     # baseline.yml entrypoint) and needs the mock FlashBlade server that
     # setup_test_env.sh starts under this same STORAGE_TESTS_ENABLED gate.
     "pure_storage_setup"
+    "pure_storage_ensure_sc"
+    "pure_storage_multi_tenant"
     # Playbook-level wiring tests for osac.service.csi_driver_install (stub the
     # real Helm install via csi_driver_install_override, run the real
     # storage_provider dispatch after it) -- share this gate/mock server since
@@ -352,7 +354,7 @@ if [ "${STORAGE_TESTS_ENABLED:-}" = "true" ]; then
     # rest of STORAGE_TESTS -- setup_test_env.sh's "local TLS OCI registry" section
     # (same STORAGE_TESTS_ENABLED gate) packages and pushes the real
     # osac-csi-driver/charts/{csi-driver,csi-backends} charts at versions
-    # 0.1.0/0.1.1, so this no longer needs a real oci://ghcr.io/osac-project/charts
+    # 0.1.0/0.1.0/0.1.1, so this no longer needs a real oci://ghcr.io/osac-project/charts
     # release tag (none has been cut yet -- OSAC-3290 Risk Assessment item 1).
     # Does not need the mock VMS server itself -- csi_driver_install never calls
     # the VAST VMS API directly -- but shares this array/gate since it now shares

@@ -1,0 +1,351 @@
+---
+# Integration test for Pure FlashBlade multi-tenant isolation.
+#
+# Covers:
+# - Two tenants (tenant-a, tenant-b) on the same FlashBlade
+# - Each tenant uses a different Realm (realm-a, realm-b)
+# - Realm-scoped tokens provide isolation
+# - StorageClasses use correct Realm-scoped resource names
+# - CSI Secrets contain correct realm-scoped tokens
+#
+# Requires: kind cluster with osac-system, mock FlashBlade server on
+# 127.0.0.1:18444 (started by setup_test_env.sh).
+#
+# WARNING: every credential value below is a PLACEHOLDER. Never insert real
+# credentials into this file.
+
+# ── Prepare ──
+- name: "Pure Storage Multi-Tenant - Prepare"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Reset the mock FlashBlade
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
+      ansible.builtin.uri:
+        url: "https://{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}/_reset"
+        validate_certs: false
+        method: GET
+
+    # Create two Realms on the same FlashBlade for two different tenants
+    - name: Seed Realm resources for tenant-a (realm-a)
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
+      ansible.builtin.uri:
+        url: "https://{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}/_seed"
+        validate_certs: false
+        method: POST
+        body_format: json
+        body:
+          resource: "{{ item.resource }}"
+          name: "{{ item.name }}"
+      loop:
+        - resource: realms
+          name: realm-a
+        - resource: servers
+          name: "realm-a::nfs-server"
+        - resource: nfs-export-policies
+          name: "realm-a::export-policy"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Seed Realm resources for tenant-b (realm-b)
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
+      ansible.builtin.uri:
+        url: "https://{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}/_seed"
+        validate_certs: false
+        method: POST
+        body_format: json
+        body:
+          resource: "{{ item.resource }}"
+          name: "{{ item.name }}"
+      loop:
+        - resource: realms
+          name: realm-b
+        - resource: servers
+          name: "realm-b::nfs-server"
+        - resource: nfs-export-policies
+          name: "realm-b::export-policy"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Create hub Secret for tenant-a
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pure-tenant-config-tenant-a-be-pure
+            namespace: osac-system
+            labels:
+              osac.openshift.io/tenant: tenant-a
+              osac.openshift.io/pure-realm: realm-a
+              app.kubernetes.io/managed-by: osac-aap
+          stringData:
+            realm_name: realm-a
+            api_token: "{{ pure_test_realm_token_a | default('PLACEHOLDER_DO_NOT_USE_token_a') }}"
+            mgmt_endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+            nfs_endpoint: "{{ pure_test_nfs_endpoint | default('192.0.2.20') }}"
+            nfs_server: "realm-a::nfs-server"
+            nfs_policy: "realm-a::export-policy"
+            storage_provider_type: pure
+            tenant_uid_hash: test-uid-hash-a
+
+    - name: Create hub Secret for tenant-b
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pure-tenant-config-tenant-b-be-pure
+            namespace: osac-system
+            labels:
+              osac.openshift.io/tenant: tenant-b
+              osac.openshift.io/pure-realm: realm-b
+              app.kubernetes.io/managed-by: osac-aap
+          stringData:
+            realm_name: realm-b
+            api_token: "{{ pure_test_realm_token_b | default('PLACEHOLDER_DO_NOT_USE_token_b') }}"
+            mgmt_endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+            nfs_endpoint: "{{ pure_test_nfs_endpoint | default('192.0.2.20') }}"
+            nfs_server: "realm-b::nfs-server"
+            nfs_policy: "realm-b::export-policy"
+            storage_provider_type: pure
+            tenant_uid_hash: test-uid-hash-b
+
+    - name: Delete existing resources from previous run
+      kubernetes.core.k8s:
+        state: absent
+        api_version: "{{ item.api }}"
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace | default(omit) }}"
+      loop:
+        - {api: "storage.k8s.io/v1", kind: StorageClass, name: pure-nfs-tenant-a-default}
+        - {api: "storage.k8s.io/v1", kind: StorageClass, name: pure-nfs-tenant-b-default}
+        - {api: v1, kind: Secret, name: pure-csi-secret-be-pure-a, namespace: tenant-a-ns}
+        - {api: v1, kind: Secret, name: pure-csi-secret-be-pure-b, namespace: tenant-b-ns}
+        - {api: v1, kind: Namespace, name: tenant-a-ns}
+        - {api: v1, kind: Namespace, name: tenant-b-ns}
+      failed_when: false
+
+# ── Test: Provision tenant-a ──
+- name: "Pure Storage Multi-Tenant - Provision tenant-a"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    pure_storage_config_namespace: osac-system
+    tenant_namespace: tenant-a-ns
+    storage_provider_action: ensure_storage_class
+    storage_provider_provisioning_target: vmaas
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: pure
+        backend_id: be-pure
+    storage_provider_backend_connections:
+      be-pure:
+        endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+
+  pre_tasks:
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Run ensure_storage_class for tenant-a
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        tenant_name: tenant-a
+        tenant_uid: test-uid-tenant-a
+
+    - name: Read tenant-a StorageClass
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: pure-nfs-tenant-a-default
+      register: _sc_a
+
+    - name: Assert tenant-a StorageClass uses realm-a resources
+      vars:
+        _params: "{{ _sc_a.resources[0].parameters }}"
+      ansible.builtin.assert:
+        that:
+          - _params.pure_nfs_server == 'realm-a::nfs-server'
+          - _params.pure_nfs_policy == 'realm-a::export-policy'
+        fail_msg: "Tenant-a StorageClass doesn't use realm-a resources"
+        success_msg: "Tenant-a StorageClass uses realm-a resources"
+
+    - name: Read tenant-a CSI Secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pure-csi-secret-be-pure
+        namespace: tenant-a-ns
+      register: _csi_a
+
+    - name: Parse tenant-a pure.json
+      ansible.builtin.set_fact:
+        _pure_json_a: "{{ _csi_a.resources[0].data['pure.json'] | b64decode | from_json }}"
+
+    - name: Assert tenant-a CSI Secret has realm-a token
+      ansible.builtin.assert:
+        that:
+          - _csi_a.resources | length == 1
+          - _pure_json_a.FlashBlades[0].MgmtEndPoint is defined
+        fail_msg: "Tenant-a CSI Secret incorrect"
+        success_msg: "Tenant-a CSI Secret created with realm-a credentials"
+
+# ── Test: Provision tenant-b ──
+- name: "Pure Storage Multi-Tenant - Provision tenant-b"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    pure_storage_config_namespace: osac-system
+    tenant_namespace: tenant-b-ns
+    storage_provider_action: ensure_storage_class
+    storage_provider_provisioning_target: vmaas
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: pure
+        backend_id: be-pure
+    storage_provider_backend_connections:
+      be-pure:
+        endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+
+  pre_tasks:
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Run ensure_storage_class for tenant-b
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        tenant_name: tenant-b
+        tenant_uid: test-uid-tenant-b
+
+    - name: Read tenant-b StorageClass
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: pure-nfs-tenant-b-default
+      register: _sc_b
+
+    - name: Assert tenant-b StorageClass uses realm-b resources
+      vars:
+        _params: "{{ _sc_b.resources[0].parameters }}"
+      ansible.builtin.assert:
+        that:
+          - _params.pure_nfs_server == 'realm-b::nfs-server'
+          - _params.pure_nfs_policy == 'realm-b::export-policy'
+        fail_msg: "Tenant-b StorageClass doesn't use realm-b resources"
+        success_msg: "Tenant-b StorageClass uses realm-b resources"
+
+    - name: Read tenant-b CSI Secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pure-csi-secret-be-pure
+        namespace: tenant-b-ns
+      register: _csi_b
+
+    - name: Parse tenant-b pure.json
+      ansible.builtin.set_fact:
+        _pure_json_b: "{{ _csi_b.resources[0].data['pure.json'] | b64decode | from_json }}"
+
+    - name: Assert tenant-b CSI Secret has realm-b token
+      ansible.builtin.assert:
+        that:
+          - _csi_b.resources | length == 1
+          - _pure_json_b.FlashBlades[0].MgmtEndPoint is defined
+        fail_msg: "Tenant-b CSI Secret incorrect"
+        success_msg: "Tenant-b CSI Secret created with realm-b credentials"
+
+# ── Test: Verify isolation ──
+- name: "Pure Storage Multi-Tenant - Verify isolation"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Verify tenant-a and tenant-b use different Realms
+      ansible.builtin.assert:
+        that:
+          - "'realm-a' != 'realm-b'"
+        fail_msg: "Realms are the same - no isolation"
+        success_msg: "Tenants use different Realms for isolation"
+
+    - name: Read all StorageClasses with Pure provider
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        label_selectors:
+          - "osac.openshift.io/storage-provider=pure"
+      register: _all_scs
+
+    - name: Assert both tenants have separate StorageClasses
+      ansible.builtin.assert:
+        that:
+          - _all_scs.resources | length == 2
+          - _all_scs.resources | selectattr('metadata.name', 'equalto', 'pure-nfs-tenant-a-default') | list | length == 1
+          - _all_scs.resources | selectattr('metadata.name', 'equalto', 'pure-nfs-tenant-b-default') | list | length == 1
+        fail_msg: "StorageClass isolation check failed"
+        success_msg: "Both tenants have separate StorageClasses"
+
+    - name: Extract tenant-a and tenant-b StorageClasses
+      ansible.builtin.set_fact:
+        _sc_a: "{{ _all_scs.resources | selectattr('metadata.name', 'equalto', 'pure-nfs-tenant-a-default') | list | first }}"
+        _sc_b: "{{ _all_scs.resources | selectattr('metadata.name', 'equalto', 'pure-nfs-tenant-b-default') | list | first }}"
+
+    - name: Verify tenant-a StorageClass doesn't reference realm-b
+      ansible.builtin.assert:
+        that:
+          - "'realm-b' not in _sc_a.parameters.pure_nfs_server"
+          - "'realm-b' not in _sc_a.parameters.pure_nfs_policy"
+          - "'realm-a' in _sc_a.parameters.pure_nfs_server"
+          - "'realm-a' in _sc_a.parameters.pure_nfs_policy"
+        fail_msg: "Tenant-a StorageClass references wrong Realm"
+        success_msg: "Tenant-a StorageClass isolation verified"
+
+    - name: Verify tenant-b StorageClass doesn't reference realm-a
+      ansible.builtin.assert:
+        that:
+          - "'realm-a' not in _sc_b.parameters.pure_nfs_server"
+          - "'realm-a' not in _sc_b.parameters.pure_nfs_policy"
+          - "'realm-b' in _sc_b.parameters.pure_nfs_server"
+          - "'realm-b' in _sc_b.parameters.pure_nfs_policy"
+        fail_msg: "Tenant-b StorageClass references wrong Realm"
+        success_msg: "Tenant-b StorageClass isolation verified"
+
+    - name: Verify CSI Secrets are in separate namespaces
+      ansible.builtin.assert:
+        that:
+          - "'tenant-a-ns' != 'tenant-b-ns'"
+        fail_msg: "CSI Secrets are in the same namespace"
+        success_msg: "CSI Secrets are isolated in separate namespaces"
+
+# ── Cleanup ──
+- name: "Pure Storage Multi-Tenant - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete test resources
+      kubernetes.core.k8s:
+        state: absent
+        api_version: "{{ item.api }}"
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace | default(omit) }}"
+      loop:
+        - {api: "storage.k8s.io/v1", kind: StorageClass, name: pure-nfs-tenant-a-default}
+        - {api: "storage.k8s.io/v1", kind: StorageClass, name: pure-nfs-tenant-b-default}
+        - {api: v1, kind: Namespace, name: tenant-a-ns}
+        - {api: v1, kind: Namespace, name: tenant-b-ns}
+        - {api: v1, kind: Secret, name: pure-tenant-config-tenant-a-be-pure, namespace: osac-system}
+        - {api: v1, kind: Secret, name: pure-tenant-config-tenant-b-be-pure, namespace: osac-system}
+      failed_when: false

@@ -52,7 +52,7 @@
         - resource: servers
           name: "ps-realm::nfs-server"
         - resource: nfs-export-policies
-          name: "ps-realm::nfs-export"
+          name: "ps-realm::export-policy"
       loop_control:
         label: "{{ item.name }}"
 
@@ -171,7 +171,7 @@
         that:
           - (_ps_secret.resources[0].data.realm_name | b64decode) == 'ps-realm'
           - (_ps_secret.resources[0].data.nfs_server | b64decode) == 'ps-realm::nfs-server'
-          - (_ps_secret.resources[0].data.nfs_policy | b64decode) == 'ps-realm::nfs-export'
+          - (_ps_secret.resources[0].data.nfs_policy | b64decode) == 'ps-realm::export-policy'
         fail_msg: "Hub Secret does not record the Realm-qualified resource names"
         success_msg: "Hub Secret records the Realm-qualified resource names"
 
@@ -180,7 +180,7 @@
         that:
           - storage_provider_tenant_configs['be-pure'].realm_name == 'ps-realm'
           - storage_provider_tenant_configs['be-pure'].nfs_server == 'ps-realm::nfs-server'
-          - storage_provider_tenant_configs['be-pure'].nfs_policy == 'ps-realm::nfs-export'
+          - storage_provider_tenant_configs['be-pure'].nfs_policy == 'ps-realm::export-policy'
         fail_msg: >-
           Dispatcher tenant config:
           {{ storage_provider_tenant_configs['be-pure'] | default('absent') }}
@@ -286,7 +286,7 @@
              'nfs_server', 'realm_name', 'storage_provider_type', 'tenant_uid_hash']
           - (_ps_secret_rerun.resources[0].data.realm_name | b64decode) == 'ps-realm'
           - (_ps_secret_rerun.resources[0].data.nfs_server | b64decode) == 'ps-realm::nfs-server'
-          - (_ps_secret_rerun.resources[0].data.nfs_policy | b64decode) == 'ps-realm::nfs-export'
+          - (_ps_secret_rerun.resources[0].data.nfs_policy | b64decode) == 'ps-realm::export-policy'
           - (_ps_secret_rerun.resources[0].data.tenant_uid_hash | b64decode) == 'rerun-ui'
         fail_msg: >-
           Hub Secret after re-onboarding:
@@ -298,7 +298,7 @@
         that:
           - storage_provider_tenant_configs['be-pure'].realm_name == 'ps-realm'
           - storage_provider_tenant_configs['be-pure'].nfs_server == 'ps-realm::nfs-server'
-          - storage_provider_tenant_configs['be-pure'].nfs_policy == 'ps-realm::nfs-export'
+          - storage_provider_tenant_configs['be-pure'].nfs_policy == 'ps-realm::export-policy'
         fail_msg: >-
           Dispatcher tenant config after re-onboarding:
           {{ storage_provider_tenant_configs['be-pure'] | default('absent') }}
@@ -591,7 +591,7 @@
           - _ps_realm_resources.results[0].json['items']
             | selectattr('name', 'equalto', 'ps-realm::nfs-server') | list | length == 1
           - _ps_realm_resources.results[1].json['items']
-            | selectattr('name', 'equalto', 'ps-realm::nfs-export') | list | length == 1
+            | selectattr('name', 'equalto', 'ps-realm::export-policy') | list | length == 1
         fail_msg: "Setup incorrectly modified Realm-owned resources"
         success_msg: "Realm server and export policy remain untouched (pre-provisioned)"
       when: not (pure_test_skip_mock_calls | default(false) | bool)

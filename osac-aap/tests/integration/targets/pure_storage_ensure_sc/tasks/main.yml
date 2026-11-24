@@ -1,0 +1,316 @@
+---
+# Integration test for Pure FlashBlade ensure_storage_class action.
+#
+# Covers StorageClass creation with Realm-scoped resource names, CSI Secret
+# format validation, and multi-tier support (default, fast).
+#
+# Requires: kind cluster with osac-system, mock FlashBlade server on
+# 127.0.0.1:18444 (started by setup_test_env.sh), and a pre-existing hub
+# Secret from setup.yaml.
+#
+# WARNING: every credential value below is a PLACEHOLDER. Never insert real
+# credentials into this file.
+
+# ── Prepare ──
+- name: "Pure Storage ensure_storage_class - Prepare"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Reset the mock FlashBlade
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
+      ansible.builtin.uri:
+        url: "https://{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}/_reset"
+        validate_certs: false
+        method: GET
+
+    - name: Seed the Realm-owned FlashBlade resources
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
+      ansible.builtin.uri:
+        url: "https://{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}/_seed"
+        validate_certs: false
+        method: POST
+        body_format: json
+        body:
+          resource: "{{ item.resource }}"
+          name: "{{ item.name }}"
+      loop:
+        - resource: realms
+          name: ps-realm-esc
+        - resource: servers
+          name: "ps-realm-esc::nfs-server"
+        - resource: nfs-export-policies
+          name: "ps-realm-esc::export-policy"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Create the hub Secret for ensure_storage_class test
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pure-tenant-config-ps-esc-be-pure
+            namespace: osac-system
+            labels:
+              osac.openshift.io/tenant: ps-esc
+              osac.openshift.io/pure-realm: ps-realm-esc
+              app.kubernetes.io/managed-by: osac-aap
+          stringData:
+            realm_name: ps-realm-esc
+            api_token: "{{ pure_test_realm_token | default('PLACEHOLDER_DO_NOT_USE_realm_token') }}"
+            mgmt_endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+            nfs_endpoint: "{{ pure_test_nfs_endpoint | default('192.0.2.20') }}"
+            nfs_server: "ps-realm-esc::nfs-server"
+            nfs_policy: "ps-realm-esc::export-policy"
+            storage_provider_type: pure
+            tenant_uid_hash: test-uid-hash-esc
+
+    - name: Delete StorageClasses and CSI Secret from previous run
+      kubernetes.core.k8s:
+        state: absent
+        api_version: "{{ item.api }}"
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace | default(omit) }}"
+      loop:
+        - {api: "storage.k8s.io/v1", kind: StorageClass, name: pure-nfs-ps-esc-default}
+        - {api: "storage.k8s.io/v1", kind: StorageClass, name: pure-nfs-ps-esc-fast}
+        - {api: v1, kind: Secret, name: pure-csi-secret-be-pure, namespace: osac-system}
+      failed_when: false
+
+# ── Test: Create StorageClasses with multiple tiers ──
+- name: "Pure Storage ensure_storage_class - Multi-tier test"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    pure_storage_config_namespace: osac-system
+    tenant_namespace: osac-system
+    storage_provider_action: ensure_storage_class
+    storage_provider_provisioning_target: vmaas
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: pure
+        backend_id: be-pure
+      - name: fast
+        protocol: nfs
+        provider: pure
+        backend_id: be-pure
+    storage_provider_backend_connections:
+      be-pure:
+        endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+
+  pre_tasks:
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Run the ensure_storage_class dispatch
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        tenant_name: ps-esc
+        tenant_uid: test-uid-ps-esc
+
+    - name: Read the CSI Secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pure-csi-secret-be-pure
+        namespace: osac-system
+      register: _csi_secret
+
+    - name: Assert CSI Secret was created
+      ansible.builtin.assert:
+        that:
+          - _csi_secret.resources | length == 1
+        fail_msg: "CSI Secret not created"
+        success_msg: "CSI Secret created"
+
+    - name: Assert CSI Secret has correct labels
+      vars:
+        _labels: "{{ _csi_secret.resources[0].metadata.labels }}"
+      ansible.builtin.assert:
+        that:
+          - _labels['osac.openshift.io/tenant'] == 'ps-esc'
+          - _labels['osac.openshift.io/storage-provider'] == 'pure'
+          - _labels['osac.openshift.io/storage-backend-id'] == 'be-pure'
+          - _labels['app.kubernetes.io/managed-by'] == 'osac-aap'
+        fail_msg: "CSI Secret labels incorrect"
+        success_msg: "CSI Secret labels correct"
+
+    - name: Assert CSI Secret contains pure.json
+      ansible.builtin.assert:
+        that:
+          - _csi_secret.resources[0].data['pure.json'] is defined
+        fail_msg: "CSI Secret missing pure.json key"
+        success_msg: "CSI Secret has pure.json key"
+
+    - name: Parse and validate pure.json format
+      ansible.builtin.set_fact:
+        _pure_json: "{{ _csi_secret.resources[0].data['pure.json'] | b64decode | from_json }}"
+
+    - name: Assert pure.json has correct structure
+      ansible.builtin.assert:
+        that:
+          - _pure_json.FlashBlades is defined
+          - _pure_json.FlashBlades | length == 1
+          - _pure_json.FlashBlades[0].MgmtEndPoint is defined
+          - _pure_json.FlashBlades[0].NFSEndPoint is defined
+          - _pure_json.FlashBlades[0].APIToken is defined
+        fail_msg: "pure.json structure incorrect: {{ _pure_json }}"
+        success_msg: "pure.json structure correct"
+
+    - name: Read the default StorageClass
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: pure-nfs-ps-esc-default
+      register: _sc_default
+
+    - name: Read the fast StorageClass
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: pure-nfs-ps-esc-fast
+      register: _sc_fast
+
+    - name: Assert both StorageClasses were created
+      ansible.builtin.assert:
+        that:
+          - _sc_default.resources | length == 1
+          - _sc_fast.resources | length == 1
+        fail_msg: "Not all StorageClasses created"
+        success_msg: "Both StorageClasses created"
+
+    - name: Assert default StorageClass has correct provisioner
+      ansible.builtin.assert:
+        that:
+          - _sc_default.resources[0].provisioner == 'pxd.portworx.com'
+        fail_msg: "Provisioner is {{ _sc_default.resources[0].provisioner }}"
+        success_msg: "Correct provisioner: pxd.portworx.com"
+
+    - name: Assert default StorageClass has Realm-scoped parameters
+      vars:
+        _params: "{{ _sc_default.resources[0].parameters }}"
+      ansible.builtin.assert:
+        that:
+          - _params.backend == 'pure_file'
+          - _params.pure_nfs_server == 'ps-realm-esc::nfs-server'
+          - _params.pure_nfs_policy == 'ps-realm-esc::export-policy'
+          - _params.pure_fb_hard_limit_enabled == 'true'
+          - _params['csi.storage.k8s.io/provisioner-secret-name'] == 'pure-csi-secret-be-pure'
+          - _params['csi.storage.k8s.io/provisioner-secret-namespace'] == 'osac-system'
+        fail_msg: "StorageClass parameters incorrect: {{ _params }}"
+        success_msg: "StorageClass parameters correct with Realm-scoped names"
+
+    - name: Assert default StorageClass has correct mount options
+      vars:
+        _mount_opts: "{{ _sc_default.resources[0].mountOptions }}"
+      ansible.builtin.assert:
+        that:
+          - "'nfsvers=4.1' in _mount_opts"
+          - "'tcp' in _mount_opts"
+        fail_msg: "Mount options incorrect: {{ _mount_opts }}"
+        success_msg: "Mount options correct"
+
+    - name: Assert default StorageClass has correct labels
+      vars:
+        _labels: "{{ _sc_default.resources[0].metadata.labels }}"
+      ansible.builtin.assert:
+        that:
+          - _labels['osac.openshift.io/tenant'] == 'ps-esc'
+          - _labels['osac.openshift.io/storage-provider'] == 'pure'
+          - _labels['osac.openshift.io/storage-backend-id'] == 'be-pure'
+          - _labels['osac.openshift.io/tier'] == 'default'
+          - _labels['app.kubernetes.io/managed-by'] == 'osac-aap'
+        fail_msg: "StorageClass labels incorrect"
+        success_msg: "StorageClass labels correct"
+
+    - name: Assert fast StorageClass has correct tier label
+      vars:
+        _labels: "{{ _sc_fast.resources[0].metadata.labels }}"
+      ansible.builtin.assert:
+        that:
+          - _labels['osac.openshift.io/tier'] == 'fast'
+        fail_msg: "Fast tier label incorrect"
+        success_msg: "Fast tier label correct"
+
+    - name: Assert fast StorageClass has same Realm-scoped parameters
+      vars:
+        _params: "{{ _sc_fast.resources[0].parameters }}"
+      ansible.builtin.assert:
+        that:
+          - _params.pure_nfs_server == 'ps-realm-esc::nfs-server'
+          - _params.pure_nfs_policy == 'ps-realm-esc::export-policy'
+        fail_msg: "Fast StorageClass parameters incorrect"
+        success_msg: "Fast StorageClass uses same Realm-scoped resources"
+
+# ── Test: Idempotency ──
+- name: "Pure Storage ensure_storage_class - Idempotency test"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    pure_storage_config_namespace: osac-system
+    tenant_namespace: osac-system
+    storage_provider_action: ensure_storage_class
+    storage_provider_provisioning_target: vmaas
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: pure
+        backend_id: be-pure
+      - name: fast
+        protocol: nfs
+        provider: pure
+        backend_id: be-pure
+    storage_provider_backend_connections:
+      be-pure:
+        endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+
+  tasks:
+    - name: Run ensure_storage_class again (idempotency check)
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        tenant_name: ps-esc
+        tenant_uid: test-uid-ps-esc
+
+    - name: Verify StorageClasses still exist
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        label_selectors:
+          - "osac.openshift.io/tenant=ps-esc"
+      register: _sc_check
+
+    - name: Assert both StorageClasses still exist after re-run
+      ansible.builtin.assert:
+        that:
+          - _sc_check.resources | length == 2
+        fail_msg: "Idempotency failed - StorageClasses changed"
+        success_msg: "Idempotency verified - no duplicate creation"
+
+# ── Cleanup ──
+- name: "Pure Storage ensure_storage_class - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete test resources
+      kubernetes.core.k8s:
+        state: absent
+        api_version: "{{ item.api }}"
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ item.namespace | default(omit) }}"
+      loop:
+        - {api: "storage.k8s.io/v1", kind: StorageClass, name: pure-nfs-ps-esc-default}
+        - {api: "storage.k8s.io/v1", kind: StorageClass, name: pure-nfs-ps-esc-fast}
+        - {api: v1, kind: Secret, name: pure-csi-secret-be-pure, namespace: osac-system}
+        - {api: v1, kind: Secret, name: pure-tenant-config-ps-esc-be-pure, namespace: osac-system}
+      failed_when: false

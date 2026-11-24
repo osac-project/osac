@@ -25,4 +25,3 @@ realms:
     dns_domain: "massopen.cloud"
     dns_nameservers:
       - 172.16.17.1
-

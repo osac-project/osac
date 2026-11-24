@@ -75,6 +75,11 @@ if [[ -z "${version}" ]]; then
   )
 fi
 
+# RPM does not allow '-' in Version, so the pre-release suffix of a tag such as
+# fulfillment-service/v0.4.0-rc.5 becomes the RPM pre-release separator '~'.
+# Ordering stays correct: 0.4.0~rc.5 < 0.4.0 < 0.4.0^1.gabc1234.
+version="${version//-/\~}"
+
 # Calculate the date for the changelog entry in the format required by RPM:
 date=$(date +'%a %b %d %Y')
 

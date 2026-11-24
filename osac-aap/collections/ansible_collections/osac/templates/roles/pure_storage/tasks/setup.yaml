@@ -229,6 +229,9 @@
             kind: Secret
             name: "{{ _pure_selected_realm_secret }}"
             namespace: "{{ pure_storage_config_namespace }}"
+          module_defaults:
+            kubernetes.core.k8s_info:
+              kubeconfig: "{{ none }}"
           register: _pure_realm_secret
           no_log: true
 

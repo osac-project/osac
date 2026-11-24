@@ -83,6 +83,9 @@ func fullSecret() *corev1.Secret {
 	return hubSecret("acme", "be-001")
 }
 
+// fixtureManagerPassword is a fake test credential, not a real secret.
+const fixtureManagerPassword = "fixture-password"
+
 // hubSecret returns a complete VAST hub Secret for a tenant and backend.
 func hubSecret(tenant, backendID string) *corev1.Secret {
 	return &corev1.Secret{
@@ -97,7 +100,7 @@ func hubSecret(tenant, backendID string) *corev1.Secret {
 		},
 		Data: map[string][]byte{
 			secretKeyManagerUsername: []byte("osac-acme"),
-			secretKeyManagerPassword: []byte("s3cret"),
+			secretKeyManagerPassword: []byte(fixtureManagerPassword),
 			secretKeyVastEndpoint:    []byte("vms.example.com"),
 			secretKeyVipPoolName:     []byte("osac-shared"),
 			secretKeyTenantUIDHash:   []byte("abc123"),

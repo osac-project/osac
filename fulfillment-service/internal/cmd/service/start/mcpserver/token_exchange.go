@@ -56,32 +56,25 @@ var (
 )
 
 type loggingTokenExchanger struct {
-	delegate expiringTokenExchanger
+	delegate TokenExchanger
 	logger   *slog.Logger
 }
 
-func withTokenExchangeLogging(delegate expiringTokenExchanger, logger *slog.Logger) TokenExchanger {
+func withTokenExchangeLogging(delegate TokenExchanger, logger *slog.Logger) TokenExchanger {
 	return &loggingTokenExchanger{delegate: delegate, logger: logger}
 }
 
 func (e *loggingTokenExchanger) Exchange(
 	ctx context.Context, subjectToken string, subject *jwt.Token,
 ) (string, error) {
-	token, _, err := e.ExchangeWithExpiration(ctx, subjectToken, subject)
-	return token, err
-}
-
-func (e *loggingTokenExchanger) ExchangeWithExpiration(
-	ctx context.Context, subjectToken string, subject *jwt.Token,
-) (string, time.Time, error) {
-	token, expiration, err := e.delegate.ExchangeWithExpiration(ctx, subjectToken, subject)
-	if err != nil && e.logger != nil {
+	token, err := e.delegate.Exchange(ctx, subjectToken, subject)
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) && e.logger != nil {
 		e.logger.WarnContext(ctx, "MCP token exchange failed",
 			slog.String("request_id", toolRequestIDFromContext(ctx)),
 			slog.String("reason_category", tokenExchangeFailureCategory(err)),
 		)
 	}
-	return token, expiration, err
+	return token, err
 }
 
 func tokenExchangeFailureCategory(err error) string {

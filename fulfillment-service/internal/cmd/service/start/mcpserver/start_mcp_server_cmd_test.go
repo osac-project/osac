@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync/atomic"
 	"time"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
@@ -738,6 +739,39 @@ var testExchanger = TokenExchangerFunc(func(_ context.Context, _ string, _ *jwt.
 	return "api-bearer-value", nil
 })
 
+type blockingFailingExpiringTokenExchanger struct {
+	started chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+	err     error
+}
+
+func (e *blockingFailingExpiringTokenExchanger) ExchangeWithExpiration(
+	_ context.Context, _ string, _ *jwt.Token,
+) (string, time.Time, error) {
+	e.calls.Add(1)
+	select {
+	case e.started <- struct{}{}:
+	default:
+	}
+	<-e.release
+	return "", time.Time{}, e.err
+}
+
+type observedDoneContext struct {
+	context.Context
+	observed chan struct{}
+}
+
+// Done signals that the cache caller has reached its wait after joining the shared exchange.
+func (c observedDoneContext) Done() <-chan struct{} {
+	select {
+	case c.observed <- struct{}{}:
+	default:
+	}
+	return c.Context.Done()
+}
+
 var _ = Describe("forwardAPIToken", func() {
 	It("Adds only the exchanged API bearer token to outgoing gRPC metadata", func() {
 		ctx := context.Background()
@@ -763,9 +797,9 @@ var _ = Describe("forwardAPIToken", func() {
 	It("logs a safe exchange failure reason correlated with the tool error", func() {
 		var output bytes.Buffer
 		logger := slog.New(slog.NewJSONHandler(&output, nil))
-		exchanger := withTokenExchangeLogging(&expiringTestTokenExchanger{
+		exchanger := withTokenExchangeLogging(newCachingTokenExchanger(&expiringTestTokenExchanger{
 			responses: []expiringTestTokenExchangeResponse{{err: errOAuthTokenExchangeCallerPermissionsChanged}},
-		}, logger)
+		}), logger)
 		req := &mcp.CallToolRequest{
 			Extra: &mcp.RequestExtra{
 				TokenInfo: &sdkauth.TokenInfo{
@@ -786,6 +820,101 @@ var _ = Describe("forwardAPIToken", func() {
 		Expect(output.String()).To(ContainSubstring(`"reason_category":"caller_permissions_mismatch"`))
 		Expect(output.String()).NotTo(ContainSubstring("sensitive-subject-token"))
 		Expect(output.String()).NotTo(ContainSubstring("OAuth token exchange changed the caller permissions"))
+	})
+
+	It("logs a correlated failure for every caller sharing a failed cached exchange", func() {
+		delegate := &blockingFailingExpiringTokenExchanger{
+			started: make(chan struct{}, 1),
+			release: make(chan struct{}),
+			err:     errOAuthTokenExchangeCallerPermissionsChanged,
+		}
+		var output bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&output, nil))
+		exchanger := withTokenExchangeLogging(newCachingTokenExchanger(delegate), logger)
+		subject := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{"sub": "user-1"})
+		request := func() *mcp.CallToolRequest {
+			return &mcp.CallToolRequest{
+				Extra: &mcp.RequestExtra{
+					TokenInfo: &sdkauth.TokenInfo{
+						Extra: map[string]any{
+							exchangeTokenExtraKey: apiTokenSource(func(ctx context.Context) (string, error) {
+								return exchanger.Exchange(ctx, "shared-mcp-token", subject)
+							}),
+						},
+					},
+				},
+			}
+		}
+
+		results := make(chan error, 2)
+		go func() {
+			_, err := forwardAPIToken(context.Background(), request())
+			results <- err
+		}()
+		Eventually(delegate.started).Should(Receive())
+
+		followerReady := make(chan struct{}, 1)
+		followerCtx := observedDoneContext{Context: context.Background(), observed: followerReady}
+		go func() {
+			_, err := forwardAPIToken(followerCtx, request())
+			results <- err
+		}()
+		Eventually(followerReady).Should(Receive())
+		close(delegate.release)
+
+		firstError := <-results
+		secondError := <-results
+		Expect(firstError).To(HaveOccurred())
+		Expect(secondError).To(HaveOccurred())
+		firstID := decodeToolError(firstError).RequestID
+		secondID := decodeToolError(secondError).RequestID
+		Expect(firstID).NotTo(BeEmpty())
+		Expect(secondID).NotTo(Equal(firstID))
+		Expect(output.String()).To(ContainSubstring(`"request_id":"` + firstID + `"`))
+		Expect(output.String()).To(ContainSubstring(`"request_id":"` + secondID + `"`))
+		Expect(output.String()).To(ContainSubstring(`"reason_category":"caller_permissions_mismatch"`))
+		Expect(delegate.calls.Load()).To(Equal(int32(1)))
+	})
+
+	It("does not log a canceled cache waiter as an exchange failure", func() {
+		delegate := &blockingTestTokenExchanger{
+			started: make(chan struct{}),
+			release: make(chan struct{}),
+		}
+		var output bytes.Buffer
+		logger := slog.New(slog.NewJSONHandler(&output, nil))
+		cache := newCachingTokenExchanger(delegate).(*cachingTokenExchanger)
+		exchanger := withTokenExchangeLogging(cache, logger)
+		subject := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+			"sub": "user-1", "exp": float64(time.Now().Add(time.Minute).Unix()),
+		})
+		request := &mcp.CallToolRequest{
+			Extra: &mcp.RequestExtra{
+				TokenInfo: &sdkauth.TokenInfo{
+					Extra: map[string]any{
+						exchangeTokenExtraKey: apiTokenSource(func(ctx context.Context) (string, error) {
+							return exchanger.Exchange(ctx, "canceled-mcp-token", subject)
+						}),
+					},
+				},
+			},
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		results := make(chan error, 1)
+		go func() {
+			_, err := forwardAPIToken(ctx, request)
+			results <- err
+		}()
+		Eventually(delegate.started).Should(BeClosed())
+		cancel()
+		Expect(<-results).To(HaveOccurred())
+		close(delegate.release)
+		Eventually(func() bool {
+			_, ok := cache.cachedToken(cachingTokenKey("canceled-mcp-token"), time.Now())
+			return ok
+		}).Should(BeTrue())
+		Expect(output.String()).To(BeEmpty())
 	})
 
 	It("Fails closed when the request has no Extra", func() {

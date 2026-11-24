@@ -259,12 +259,6 @@ var _ = Describe("tokenExchangeFailureCategory", func() {
 			Expect(tokenExchangeFailureCategory(testCase.err)).To(Equal(testCase.category))
 		}
 	})
-
-	It("preserves the expiring exchanger contract used by the token cache", func() {
-		exchanger := withTokenExchangeLogging(&expiringTestTokenExchanger{}, nil)
-		_, ok := exchanger.(expiringTokenExchanger)
-		Expect(ok).To(BeTrue())
-	})
 })
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

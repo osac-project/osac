@@ -255,7 +255,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 		return err
 	}
 	if expiringExchanger, ok := exchanger.(expiringTokenExchanger); ok {
-		exchanger = withTokenExchangeLogging(expiringExchanger, c.logger)
+		exchanger = withTokenExchangeLogging(newCachingTokenExchanger(expiringExchanger), c.logger)
 	}
 
 	// Calculate the user agent:

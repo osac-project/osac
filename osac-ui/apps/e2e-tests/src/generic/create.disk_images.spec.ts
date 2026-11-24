@@ -1,6 +1,5 @@
 import { test } from '@playwright/test';
 
-import { diskImageNameOrSkip, diskImagesTestData } from './test_data';
 import {
   createDiskImage,
   expectDiskImageListed,
@@ -10,6 +9,7 @@ import {
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import { openDiskImagesPage } from '../../../../libs/test-utils/src/main.page';
+import { diskImageNameOrSkip, diskImagesTestData } from '../shared/test_data';
 
 test(`creates disk image ${diskImagesTestData.name} from Infrastructure`, async ({ page }) => {
   // Allow remote login, navigation, and disk image creation to complete.

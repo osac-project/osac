@@ -1,7 +1,6 @@
 import { test } from '@playwright/test';
 import { access, rm } from 'node:fs/promises';
 
-import { catalogOwnershipFilePath, catalogTestData } from './test_data';
 import {
   deleteCatalogItem,
   expectCatalogItemNotListed,
@@ -9,6 +8,7 @@ import {
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import { openCatalogPage } from '../../../../libs/test-utils/src/main.page';
+import { catalogOwnershipFilePath, catalogTestData } from '../shared/test_data';
 
 test('deletes a catalog item through the Catalog UI', async ({ page }) => {
   test.setTimeout(180_000);

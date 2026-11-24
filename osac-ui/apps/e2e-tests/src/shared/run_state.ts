@@ -1,7 +1,9 @@
 import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
-import { rm } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+
+import type { TenantIdentity } from '../../../../libs/test-utils/src/tenants.page';
 
 export interface VmaasFullFlowRunState {
   catalogTestRunId: string;
@@ -16,6 +18,40 @@ if (!/^[0-9]+$/.test(testInstance)) {
 
 const runStateFile = path.join(tmpdir(), `osac-vmaas-full-flow-state-${testInstance}.json`);
 const runIdPattern = /^[a-z0-9]{1,32}$/i;
+
+const tenantRunStateFile = (runId: string): string => {
+  if (!runIdPattern.test(runId)) {
+    throw new Error('Invalid VMaaS tenant run ID.');
+  }
+  return path.join(tmpdir(), `osac-vmaas-tenant-${testInstance}-${runId}.json`);
+};
+
+/** Record the identity returned by the successful browser Create request. */
+export const writeTenantRunState = async (runId: string, tenant: TenantIdentity): Promise<void> => {
+  await writeFile(tenantRunStateFile(runId), `${JSON.stringify(tenant)}\n`, { mode: 0o600 });
+};
+
+export const readTenantRunState = async (runId: string): Promise<TenantIdentity | undefined> => {
+  try {
+    const tenant = JSON.parse(await readFile(tenantRunStateFile(runId), 'utf8')) as TenantIdentity;
+    if (
+      typeof tenant?.id !== 'string' ||
+      typeof tenant.creationTimestamp !== 'string' ||
+      !Number.isFinite(Date.parse(tenant.creationTimestamp))
+    ) {
+      throw new Error('Invalid VMaaS tenant run state.');
+    }
+    return tenant;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined;
+    }
+    throw error;
+  }
+};
+
+export const removeTenantRunState = (runId: string): Promise<void> =>
+  rm(tenantRunStateFile(runId), { force: true });
 
 const validateRunState = (value: unknown): VmaasFullFlowRunState => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {

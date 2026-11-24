@@ -1,6 +1,5 @@
 import { test } from '@playwright/test';
 
-import { storageTierNameOrSkip, storageTierTestData } from './test_data';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import {
@@ -13,6 +12,7 @@ import {
   openCreateStorageTierPage,
   openStorageTierListPage,
 } from '../../../../libs/test-utils/src/storage.page';
+import { storageTierNameOrSkip, storageTierTestData } from '../shared/test_data';
 
 test('creates a storage tier from Storage > Storage Tiers', async ({ page }) => {
   test.setTimeout(120_000);

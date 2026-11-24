@@ -641,6 +641,32 @@
       when: not (pure_test_skip_mock_calls | default(false) | bool)
 
 
+# ── Re-seed pool for backend scoping test ──
+# Earlier tests reset the pool to 1-2 Realms for their scenarios.
+# Backend scoping needs all 3 Realms (2 for backend A, 1 for backend B).
+- name: "Pure Storage Setup - Re-seed pool for backend scoping"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Re-seed the Realm pool ConfigMap with all 3 Realms
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: pure-realm-pool
+            namespace: osac-system
+          data:
+            PURE_REALM_POOL: |
+              [
+                {"realm_name":"ps-realm","secret_name":"pure-realm-ps-realm"},
+                {"realm_name":"ps-realm-a2","secret_name":"pure-realm-ps-realm-a2"},
+                {"realm_name":"ps-realm-b","secret_name":"pure-realm-ps-realm-b"}
+              ]
+
+
 # ── Test: Backend scoping ──
 - name: "Pure Storage Setup - Backend scoping"
   hosts: localhost

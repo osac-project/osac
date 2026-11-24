@@ -43,7 +43,7 @@ const storageTierFilteredEmptyState = (page: Page) =>
   page.getByRole('heading', { name: 'No storage tiers match your filters', level: 2 });
 
 const storageTierSearchInput = (page: Page) =>
-  page.getByRole('searchbox', { name: 'Search storage tiers', exact: true });
+  page.getByRole('textbox', { name: 'Search storage tiers', exact: true });
 
 const storageTierSearchActive = async (page: Page): Promise<boolean> => {
   const urlSearch = new URL(page.url()).searchParams.get('search');

@@ -46,7 +46,7 @@ export const StorageTiersListPage = () => {
 
   const filter = useMemo(() => buildStorageTierListFilter(search.trim()), [search]);
 
-  const { data, isLoading, error } = useListResource(StorageTiers, { filter });
+  const { data, isLoading, isPlaceholderData, error } = useListResource(StorageTiers, { filter });
 
   const { data: totalsData, error: totalsError } = useListResource(StorageTiers, {
     limit: 0,
@@ -150,7 +150,7 @@ export const StorageTiersListPage = () => {
           </ListPageToolbar>
         </StackItem>
         <StackItem>
-          <ListPageBody isLoading={isLoading} error={error}>
+          <ListPageBody isLoading={isLoading || isPlaceholderData} error={error}>
             {showEmptyState ? (
               emptyState
             ) : (

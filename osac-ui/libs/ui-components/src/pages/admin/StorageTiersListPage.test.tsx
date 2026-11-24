@@ -54,6 +54,12 @@ const mixedTier = makeTier('tier-2', 'mixed', StorageProtocol.BLOCK, [
 const defaultTiers = [singleBackendTier, mixedTier];
 const defaultBackends = [backendA, backendB, backendUnused];
 
+interface StorageTierListResponse {
+  items: StorageTier[];
+  size: number;
+  total: number;
+}
+
 const renderPage = (
   tiers: StorageTier[] = defaultTiers,
   backends: StorageBackend[] = defaultBackends,
@@ -189,6 +195,53 @@ describe('StorageTiersListPage', () => {
     expect(screen.getByText('Try a different search term.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Clear all filters' })).toBeInTheDocument();
     expect(screen.queryByText('No storage tiers are available yet.')).not.toBeInTheDocument();
+  });
+
+  it('hides filtered placeholder rows until an unfiltered response resolves', async () => {
+    localStorage.setItem(getViewTypePrefKey('storage-tiers'), 'list');
+    let resolveUnfiltered: ((response: StorageTierListResponse) => void) | undefined;
+
+    const { user } = renderWithProviders(<StorageTiersListPage />, {
+      apiFixtures: { storageBackends: defaultBackends },
+      routerEntries: ['/admin/infrastructure/storage/tiers?search=fast'],
+      transportOverrides: {
+        onStorageTierList: (request) => {
+          if (request.limit === 0) {
+            return { items: [], size: 0, total: defaultTiers.length };
+          }
+          if (request.filter?.includes('fast')) {
+            return { items: [singleBackendTier], size: 1, total: 1 };
+          }
+          return new Promise<StorageTierListResponse>((resolve) => {
+            resolveUnfiltered = resolve;
+          });
+        },
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('link', { name: 'fast' })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Clear all filters' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('grid', { name: 'Storage tiers' })).not.toBeInTheDocument();
+    });
+
+    if (!resolveUnfiltered) {
+      throw new Error('The unfiltered storage-tier request did not start.');
+    }
+    resolveUnfiltered({
+      items: defaultTiers,
+      size: defaultTiers.length,
+      total: defaultTiers.length,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('grid', { name: 'Storage tiers' })).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'mixed' })).toBeInTheDocument();
+    });
   });
 
   it('renders the search input', async () => {

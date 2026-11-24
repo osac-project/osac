@@ -591,7 +591,9 @@ export type MockTransportOverrides = {
   onExternalIPPoolUpdate?: (req: ExternalIPPoolsUpdateRequest) => ExternalIPPoolsUpdateResponse;
   onStorageTierList?: (
     req: StorageTiersListRequest,
-  ) => MessageInitShape<typeof StorageTiersListResponseSchema>;
+  ) =>
+    | MessageInitShape<typeof StorageTiersListResponseSchema>
+    | Promise<MessageInitShape<typeof StorageTiersListResponseSchema>>;
   onPublicStorageTierList?: (
     req: PublicStorageTiersListRequest,
   ) => MessageInitShape<typeof PublicStorageTiersListResponseSchema>;

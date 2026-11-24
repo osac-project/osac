@@ -463,6 +463,15 @@ jobs:
           done
           echo "=== Pod descriptions ==="
           kubectl describe pods -n osac > it-logs/pod-descriptions.txt 2>&1
+      - name: Merge JUnit reports
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator' && always()
+        run: python3 .github/scripts/merge_junit.py it-junit it-logs/junit.xml
+      - if: inputs.kind == 'it-bare-metal-fulfillment-operator' && always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: osac-logs-it-bmf-${{ github.run_id }}${{ inputs.artifact_suffix }}
+          path: it-logs
+          retention-days: 30
       # --- integration test: osac-aap
       - name: Checkout
         if: inputs.kind == 'it-osac-aap'

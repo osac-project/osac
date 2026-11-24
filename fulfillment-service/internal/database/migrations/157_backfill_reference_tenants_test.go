@@ -61,7 +61,7 @@ var _ = DescribeMigration("Backfill full-reference tenant selectors", func() {
 			values ('selector-archived-object', now(), now(), 'system', '{"reference":{"id":"archived-object-reference","shared":true}}')`)
 		Expect(err).ToNot(HaveOccurred())
 
-		Expect(tool.Migrate(ctx, 154)).To(Succeed())
+		Expect(tool.Migrate(ctx, 157)).To(Succeed())
 
 		const expected = `{
 			"spec": {
@@ -165,7 +165,7 @@ var _ = DescribeMigration("Backfill full-reference tenant selectors", func() {
 	DescribeTable("rejects selectors that conflict with stored ownership",
 		func(ctx context.Context, data, message string) {
 			insertCluster(ctx, data)
-			err := tool.Migrate(ctx, 154)
+			err := tool.Migrate(ctx, 157)
 			Expect(err).To(HaveOccurred())
 			Expect(strings.ToLower(err.Error())).To(ContainSubstring(message))
 			Expect(err.Error()).To(ContainSubstring(`public.changes:$.data.spec.version`))

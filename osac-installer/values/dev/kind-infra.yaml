@@ -59,6 +59,12 @@ cliJobPodSecurityContext:
 caIssuer:
   enabled: true
 
+# Kind installs trust-manager without its default CA package, so a Bundle
+# that requests the public roots would never sync.
+certs:
+  caBundle:
+    useDefaultCAs: false
+
 # --- Keycloak ---
 keycloak:
   enabled: true

@@ -117,17 +117,20 @@ func (b *DiscoveryToolBuilder) Build() (result *DiscoveryTool, err error) {
 		}
 	}
 
-	// Create the HTTP client:
-	httpClient := &http.Client{
-		Timeout: 30 * time.Second,
-	}
+	// Create the HTTP client. Clone http.DefaultTransport rather than starting from a bare struct literal, so
+	// proxy support, dial/keep-alive timeouts and connection pooling defaults are preserved. Without the idle
+	// timeout every discovery tool keeps its connections open until the server closes them, and callers that
+	// build one per login accumulate them until the proxy in front of the issuer refuses new connections.
 	tlsConfig := tlsconfig.NewClientTLSConfig()
 	tlsConfig.RootCAs = caPool.Pool()
 	if b.insecure {
 		tlsConfig.InsecureSkipVerify = true
 	}
-	httpClient.Transport = &http.Transport{
-		TLSClientConfig: tlsConfig,
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tlsConfig
+	httpClient := &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: transport,
 	}
 
 	// Create and populate the object:

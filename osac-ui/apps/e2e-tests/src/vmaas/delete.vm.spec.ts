@@ -1,7 +1,6 @@
 import { test } from '@playwright/test';
 import { access } from 'node:fs/promises';
 
-import { tenantNameOrSkip, vmTestName } from './test_data';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import {
@@ -16,6 +15,7 @@ import {
   selectVmListView,
   waitForVmToBeDeleted,
 } from '../../../../libs/test-utils/src/vms.page';
+import { tenantNameOrSkip, vmTestName } from '../shared/test_data';
 
 test(`deletes VM ${vmTestName}`, async ({ page }) => {
   test.setTimeout(300_000);

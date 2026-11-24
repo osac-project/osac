@@ -16,9 +16,15 @@ SLACK_SECTION_LIMIT = 2800
 FAILED_ICON = "\U0001f534"  # Red circle.
 INCOMPLETE_ICON = "\U0001f7e1"  # Yellow circle.
 PASSED_ICON = "\U0001f7e2"  # Green circle.
-# Diagnostic artifact prefixes are produced by workflows/tests.yml.
+# Diagnostic artifact prefixes are produced by workflows/tests.yml. The
+# integration-test bundles carry the caller run's id (flake detection
+# repeats every suite inside one campaign run), the installer's log
+# artifact does not.
 DIAGNOSTIC_PREFIXES = {
-    ("integration", "Integration test (fulfillment-service)"): "logs",
+    ("integration", "Integration test (fulfillment-service)"): "osac-logs-it-fulfillment-{run_id}",
+    ("integration", "Integration test (osac-operator)"): "osac-logs-it-operator-{run_id}",
+    ("integration", "Integration test (bare-metal-fulfillment-operator)"): "osac-logs-it-bmf-{run_id}",
+    ("integration", "Integration test (CaaS)"): "osac-logs-it-caas-{run_id}",
     ("integration", "Integration test (osac-installer)"): "osac-installer-logs",
 }
 
@@ -329,6 +335,7 @@ def suite_logs(suite: dict[str, Any], report: dict[str, Any]) -> dict[int, list[
     prefix = DIAGNOSTIC_PREFIXES.get((suite["group"], suite["suite"]))
     if not prefix:
         return {}
+    prefix = prefix.format(run_id=report["run"]["run_id"])
     logs = {}
     for artifact in report["artifacts"]:
         match = re.fullmatch(

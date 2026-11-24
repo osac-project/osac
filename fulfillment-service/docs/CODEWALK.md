@@ -1,11 +1,10 @@
 # Codewalk: request lifecycle
 
-This document explains how four parts of the fulfillment service fit together: why there is a
-single data model instead of the usual DTO/domain/persistence split, how the gRPC transaction
-interceptor works and why it exists, how a `Create` call turns into a Kubernetes custom resource on
-a workload cluster, and how tenant and project deletion proceeds through child cleanup while
-finalizers are retained. Read this after [docs/API.md](API.md), which covers the public/private API
-split referenced throughout.
+This document explains why the fulfillment service uses a single data model, how the gRPC
+transaction interceptor works, when request validation runs, how a `Create` call turns into a
+Kubernetes custom resource on a workload cluster, and how tenant and project deletion proceeds
+through child cleanup while finalizers are retained. Read this after [docs/API.md](API.md), which
+covers the public/private API split referenced throughout.
 
 File paths below link to `main`; if you're reading this from a different branch or commit, the
 line numbers in the linked files may have moved.
@@ -142,6 +141,17 @@ for latency, but every controller is written to tolerate a missed or replayed wa
 relist will eventually re-deliver the same state. Here it means the interesting failure mode isn't
 "lost update" (the periodic sync heals that) but "stale until the next sync", bounded by
 `syncInterval` when synchronization is enabled.
+
+## Request validation
+
+The gRPC [Protovalidate interceptor](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/validation/protovalidate_interceptor.go)
+checks `Create` requests against their protobuf constraints before invoking the handler.
+
+For `Update`, the interceptor leaves protobuf validation to the server. When a request includes
+`update_mask`, [`GenericServer`](https://github.com/osac-project/osac/blob/main/fulfillment-service/internal/servers/generic_server.go)
+copies the stored object, applies the selected fields, and validates the merged result before saving
+it. Required fields outside the mask keep their stored values and are validated with the updated
+fields.
 
 ## End-to-end flow: `Create` for a `BareMetalInstance`
 

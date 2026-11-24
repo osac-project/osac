@@ -132,62 +132,6 @@
             success_msg: "Role correctly rejected tier with missing fields"
 
 # ──────────────────────────────────────────────────────────────
-# Test 4: Invalid protocol -- error path
-# Expected: role fails with protocol not in allowed list message
-# ──────────────────────────────────────────────────────────────
-- name: Test storage_provider -- invalid protocol (should fail)
-  hosts: localhost
-  gather_facts: false
-
-  pre_tasks:
-    - name: Clear any structured failure artifact from earlier scenarios
-      ansible.builtin.set_fact:
-        osac_storage_provider_failures: []
-
-  tasks:
-    - name: Run invalid-protocol failure test
-      block:
-        - name: Attempt with invalid protocol 'ftp' (expected to fail)
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
-          vars:
-            storage_provider_tiers:
-              - name: default
-                protocol: ftp
-                provider: vast
-                backend_id: be-test
-            storage_provider_action: setup
-            tenant_name: "tenant-acme"
-            tenant_namespace: "osac-tenants"
-
-        - name: This task should not be reached -- role should have failed
-          ansible.builtin.fail:
-            msg: "Role did not fail as expected when protocol is invalid"
-
-      rescue:
-        - name: Verify role failed for invalid protocol
-          ansible.builtin.assert:
-            that:
-              - >-
-                'unsupported protocol' in (ansible_failed_result.msg | default('') | lower)
-            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
-            success_msg: "Role correctly rejected invalid protocol"
-
-        - name: Verify structured failure artifact was emitted for unsupported protocol
-          ansible.builtin.assert:
-            that:
-              - osac_storage_provider_failures is defined
-              - osac_storage_provider_failures | length > 0
-              - osac_storage_provider_failures[0].reason == 'unsupported_protocol'
-              - "'default' in osac_storage_provider_failures[0].tiers"
-              - "'unsupported protocol' in (osac_storage_provider_failures[0].message | lower)"
-              - osac_storage_provider_failures[0].backend_ids == ['be-test']
-            fail_msg: >-
-              osac_storage_provider_failures was not set as expected:
-              {{ osac_storage_provider_failures | default('undefined') }}
-            success_msg: "Structured failure artifact correctly recorded the unsupported protocol"
-
-# ──────────────────────────────────────────────────────────────
 # Test 5: Provider backend pairs derivation
 # Expected: role derives _provider_backend_pairs from tiers,
 #   normalizes provider names, deduplicates, and sorts;
@@ -927,70 +871,6 @@
             success_msg: "Structured failure artifact correctly recorded the incomplete backend connection"
 
 # ──────────────────────────────────────────────────────────────
-# Test 19: Two tiers sharing a backend_id both have unsupported protocols -- error path
-# Expected: role fails on the loop task for both tiers simultaneously (Ansible loops evaluate
-# every item rather than stopping at the first failure), and the structured
-# osac_storage_provider_failures artifact records both tier names while deduping their shared
-# backend_id to a single entry.
-# ──────────────────────────────────────────────────────────────
-- name: Test storage_provider -- two tiers simultaneously fail protocol validation (should fail)
-  hosts: localhost
-  gather_facts: false
-
-  pre_tasks:
-    - name: Clear any structured failure artifact from earlier scenarios
-      ansible.builtin.set_fact:
-        osac_storage_provider_failures: []
-
-  tasks:
-    - name: Run simultaneous-protocol-failure test
-      block:
-        - name: Attempt with two tiers sharing a backend_id, both using an unsupported protocol (expected to fail)
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
-          vars:
-            storage_provider_tiers:
-              - name: gold
-                protocol: ftp
-                provider: vast
-                backend_id: be-001
-              - name: silver
-                protocol: ftp
-                provider: vast
-                backend_id: be-001
-            storage_provider_action: setup
-            tenant_name: "tenant-acme"
-            tenant_namespace: "osac-tenants"
-
-        - name: This task should not be reached -- role should have failed
-          ansible.builtin.fail:
-            msg: "Role did not fail as expected when two tiers both use an unsupported protocol"
-
-      rescue:
-        - name: Verify role failed for both tiers with unsupported protocols
-          ansible.builtin.assert:
-            that:
-              - >-
-                'unsupported protocol' in (ansible_failed_result.msg | default('') | lower)
-            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
-            success_msg: "Role correctly rejected both tiers with unsupported protocols"
-
-        - name: Verify structured failure artifact records both simultaneously-failing tiers
-          ansible.builtin.assert:
-            that:
-              - osac_storage_provider_failures is defined
-              - osac_storage_provider_failures | length > 0
-              - osac_storage_provider_failures[0].reason == 'unsupported_protocol'
-              - "'gold' in osac_storage_provider_failures[0].tiers"
-              - "'silver' in osac_storage_provider_failures[0].tiers"
-              - osac_storage_provider_failures[0].tiers | length == 2
-              - osac_storage_provider_failures[0].backend_ids == ['be-001']
-            fail_msg: >-
-              osac_storage_provider_failures did not correctly record both simultaneously-failing tiers:
-              {{ osac_storage_provider_failures | default('undefined') }}
-            success_msg: "Structured failure artifact correctly recorded both tiers and deduped the shared backend_id"
-
-# ──────────────────────────────────────────────────────────────
 # Test 20: VAST tier dispatched without a backend_id -- error path
 # Expected: role fails because VAST credential resolution requires every dispatched tier to
 # reference a backend_id, and emits a structured osac_storage_provider_failures artifact
@@ -1047,70 +927,8 @@
             success_msg: "Structured failure artifact correctly recorded the missing backend_id"
 
 # ──────────────────────────────────────────────────────────────
-# Test 21: Invalid protocol dispatched via ensure_storage_class -- error path
-# Expected: role fails with the same structured unsupported_protocol artifact as Test 4,
-# so the protocol check also covers ensure_storage_class.
-# ──────────────────────────────────────────────────────────────
-- name: Test storage_provider -- invalid protocol via ensure_storage_class (should fail)
-  hosts: localhost
-  gather_facts: false
-
-  pre_tasks:
-    - name: Clear any structured failure artifact from earlier scenarios
-      ansible.builtin.set_fact:
-        osac_storage_provider_failures: []
-
-  tasks:
-    - name: Run invalid-protocol-via-ensure_storage_class failure test
-      block:
-        - name: Attempt with invalid protocol 'ftp' via the ensure_storage_class action (expected to fail)
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
-          vars:
-            storage_provider_tiers:
-              - name: default
-                protocol: ftp
-                provider: vast
-                backend_id: be-test
-            storage_provider_action: ensure_storage_class
-            tenant_name: "tenant-acme"
-            tenant_namespace: "osac-tenants"
-
-        - name: This task should not be reached -- role should have failed
-          ansible.builtin.fail:
-            msg: "Role did not fail as expected when protocol is invalid via ensure_storage_class"
-
-      rescue:
-        - name: Verify role failed for invalid protocol via ensure_storage_class
-          ansible.builtin.assert:
-            that:
-              - >-
-                'unsupported protocol' in (ansible_failed_result.msg | default('') | lower)
-            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
-            success_msg: "Role correctly rejected invalid protocol via ensure_storage_class"
-
-        - name: Verify structured failure artifact was emitted for unsupported protocol via ensure_storage_class
-          ansible.builtin.assert:
-            that:
-              - osac_storage_provider_failures is defined
-              - osac_storage_provider_failures | length > 0
-              - osac_storage_provider_failures[0].reason == 'unsupported_protocol'
-              - "'default' in osac_storage_provider_failures[0].tiers"
-              - "'unsupported protocol' in (osac_storage_provider_failures[0].message | lower)"
-            fail_msg: >-
-              osac_storage_provider_failures was not set as expected:
-              {{ osac_storage_provider_failures | default('undefined') }}
-            success_msg: "Structured failure artifact correctly recorded the unsupported protocol via ensure_storage_class"
-
-# ──────────────────────────────────────────────────────────────
-# Test 22: Empty-string protocol (the UNSPECIFIED-derived shape) -- error path, defense in depth
-# Expected: role fails at the dispatcher-level required-fields check (main.yaml), NOT at the
-# unsupported_protocol structured-failure check. fulfillment-service now rejects
-# STORAGE_PROTOCOL_UNSPECIFIED at Create and Update (proto not_in:[0]), so an empty-string protocol
-# should no longer originate from a validly-created tier; this keeps the AAP-side guard honest
-# however an empty/missing protocol arrives. Dispatched via ensure_storage_class -- the action
-# Test 21 proves now enforces the closed-set check -- to confirm the empty-string case is
-# intercepted even earlier than that, at the dispatcher level.
+# Test 22: Empty-string protocol -- error path
+# Expected: role fails at the dispatcher-level required-fields check.
 # ──────────────────────────────────────────────────────────────
 - name: Test storage_provider -- empty-string protocol from UNSPECIFIED (should fail)
   hosts: localhost
@@ -1137,15 +955,14 @@
             msg: "Role did not fail as expected when protocol is an empty string"
 
       rescue:
-        - name: Verify role failed at the dispatcher-level required-fields check, not the unsupported_protocol check
+        - name: Verify role failed at the dispatcher-level required-fields check
           ansible.builtin.assert:
             that:
               - >-
                 'must have' in (ansible_failed_result.msg | default(''))
                 or 'One or more items failed' in (ansible_failed_result.msg | default(''))
-              - "'unsupported protocol' not in (ansible_failed_result.msg | default('') | lower)"
             fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
-            success_msg: "Role correctly rejected the empty-string protocol at the dispatcher level, not the unsupported_protocol check"
+            success_msg: "Role correctly rejected the empty-string protocol at the dispatcher level"
 
 # ──────────────────────────────────────────────────────────────
 # Test 23: Integer-coerced credentials pass validation (OSAC-4254)

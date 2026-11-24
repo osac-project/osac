@@ -286,8 +286,8 @@ enforcement.
 
 **Dispatcher pattern:** `osac.service.storage_provider` validates inputs (tier list,
 tier-name DNS labels, unique tier names, QoS name length and derived
-`qos_policy`, `tenant_namespace`, `storage_provider_action`, and each tier's
-protocol against the target role's `meta/osac.yaml` `supported_protocols`), then
+`qos_policy`, `tenant_namespace`, and `storage_provider_action`; the fulfillment
+API already restricts tier protocols to `nfs` and `block`), then
 dispatches to `osac.templates.{provider}_storage` via a `_dispatch_provider.yaml`
 wrapper (Ansible does not support `loop:` on `include_role`).
 

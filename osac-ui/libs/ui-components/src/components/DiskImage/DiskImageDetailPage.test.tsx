@@ -196,16 +196,16 @@ describe('DiskImageDetailPage', () => {
     expect(screen.queryByRole('button', { name: 'Delete' })).not.toBeInTheDocument();
   });
 
-  it('shows Reactivate and Delete buttons, not Deprecate or Obsolete, for an OBSOLETE image', async () => {
+  it('shows Deprecate, Reactivate, and Delete buttons, not Obsolete, for an OBSOLETE image', async () => {
     renderAt('/admin/infrastructure/disk-images/disk-3', { diskImages: [obsoleteImage] });
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'centos-9' })).toBeInTheDocument();
     });
 
+    expect(screen.getByRole('button', { name: 'Deprecate' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reactivate' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Deprecate' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Obsolete' })).not.toBeInTheDocument();
   });
 

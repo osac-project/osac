@@ -33,7 +33,7 @@ HEARTBEAT=/tmp/heartbeat
 touch "$HEARTBEAT"
 deadline=$(( SECONDS + TIMEOUT_SECONDS ))
 while :; do
-  conditions=$(kubectl get gatewayclass "${GATEWAYCLASS_NAME}" --request-timeout=30s \
+  conditions=$(oc get gatewayclass "${GATEWAYCLASS_NAME}" --request-timeout=30s \
     -o jsonpath='{range .status.conditions[*]}{.type}={.status}{" "}{end}' 2>/dev/null || true)
   echo "GatewayClass ${GATEWAYCLASS_NAME}: ${conditions:-not found yet}"
   if [[ "${conditions}" == *"Accepted=True"* ]] \

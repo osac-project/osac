@@ -22,9 +22,7 @@ message TestTargetReference {
   string id = 1;
   string name = 2;
   string project = 3;
-  reserved 4;
-  reserved "shared";
-  string tenant = 5;
+  string tenant = 4;
 }
 
 // Local reference for same-tenant/project lookups.

@@ -93,8 +93,6 @@ message BareMetalInstanceCatalogItemReference {
   string id = 1;
   string name = 2;
   string project = 3;
-  reserved 4;
-  reserved "shared";
   // Tenant where the referenced object lives. If omitted, the owner tenant is used.
-  string tenant = 5;
+  string tenant = 4;
 }

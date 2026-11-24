@@ -81,9 +81,7 @@ message ExternalIPPoolReference {
   string id = 1;
   string name = 2;
   string project = 3;
-  reserved 4;
-  reserved "shared";
   // ExternalIPPools live in the "shared" tenant and are platform-scoped. A name
   // reference can omit tenant; an ID reference needs no selector.
-  string tenant = 5;
+  string tenant = 4;
 }

@@ -489,7 +489,11 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			case "Get":
 				_, err = server.Get(ctx, privatev1.TenantBillingAssignmentsGetRequest_builder{Id: assignmentID}.Build())
 			}
-			Expect(raceTx.returnedEmptyPage).To(BeTrue())
+			// An empty metadata tenant is rejected before the assignment page is read, so only the
+			// methods that list assignments observe the disappearing row.
+			if method != "Create" {
+				Expect(raceTx.returnedEmptyPage).To(BeTrue())
+			}
 			return struct{}{}, err
 		}, struct{}{})
 		Expect(status.Code(err)).To(Equal(code))
@@ -746,7 +750,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			st, ok := status.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(st.Code()).To(Equal(codes.InvalidArgument), "%v", err)
-			Expect(st.Message()).To(ContainSubstring("does not exist or is deleting"))
+			Expect(st.Message()).To(ContainSubstring("metadata.tenant does not reference an existing tenant"))
 
 			// Tenant deletion closes the active interval; a later update must reject that historical interval.
 			_, err = testPool.Exec(ctx, `update tenants set deletion_timestamp = now() where name = $1`, testTenant)
@@ -1151,7 +1155,9 @@ var _ = Describe("Private tenant billing assignments server", func() {
 					Scan(&state, &observedAt)).To(Succeed())
 				Expect(state).To(Equal(mapBillingAccountState(injectedState).String()),
 					"the older assignment read must not overwrite the newer observation")
-				Expect(observedAt.Equal(concurrentAt.Truncate(time.Microsecond))).To(BeTrue(),
+				// The projection rounds to microseconds, so compare at that precision: an overwrite by the
+				// older read would move the observation back by the provider latency, far beyond it.
+				Expect(observedAt).To(BeTemporally("~", concurrentAt, time.Microsecond),
 					"the observation time must never move backwards")
 				Expect(fake.Count("SetCorrelationValue")).To(BeZero())
 				var correlation string
@@ -1301,8 +1307,28 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			}.Build())
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 			Expect(fake.Calls()).To(HaveLen(calls))
-		}, Entry("reference leaf", "spec.billing_account.id"), Entry("tenant", "metadata.tenant"),
+		}, Entry("tenant", "metadata.tenant"),
 			Entry("metadata", "metadata"), Entry("status", "status"), Entry("status leaf", "status.message"))
+
+		It("accepts a reference leaf mask as one atomic reference replacement", func() {
+			var accounts []billingfake.AccountSpec
+			first := newAccount(&accounts, "first", "first", "ACTIVE")
+			second := newAccount(&accounts, "second", "second", "ACTIVE")
+			server := build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider())
+			created, err := billingRPC(adminCtx(), server.Create, createRequest(testTenant, first, "leaf-mask"))
+			Expect(err).NotTo(HaveOccurred())
+			updated, err := billingRPC(adminCtx(), server.Update, privatev1.TenantBillingAssignmentsUpdateRequest_builder{
+				Object: privatev1.TenantBillingAssignment_builder{
+					Id: created.GetObject().GetId(),
+					Spec: privatev1.TenantBillingAssignmentSpec_builder{
+						BillingAccount: privatev1.BillingAccountReference_builder{Id: second}.Build(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.billing_account.id"}},
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(updated.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(second))
+		})
 
 		It("revalidates an unchanged interval without rewriting its metadata or version", func() {
 			var accounts []billingfake.AccountSpec
@@ -1859,7 +1885,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			var finalErr error
 			Eventually(result, 5*time.Second).Should(Receive(&finalErr))
 			Expect(status.Code(finalErr)).To(Equal(codes.InvalidArgument))
-			Expect(status.Convert(finalErr).Message()).To(ContainSubstring("does not exist or is deleting"))
+			Expect(status.Convert(finalErr).Message()).To(ContainSubstring("metadata.tenant does not reference an existing tenant"))
 			Expect(fake.Count("ListAccounts")).To(Equal(1), "provider resolution completed after the delete")
 			var count int
 			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())

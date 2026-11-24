@@ -508,7 +508,7 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 		Expect(page.GetItems()[0].GetMetadata().GetTenant()).To(Equal("billing-c"))
 	})
 
-	It("commits billing create/update/close/replacement without enqueue while Tenant INSERT/UPDATE enqueue", func() {
+	It("commits billing create/update/close/replacement and publishes each write while Tenant INSERT/UPDATE enqueue", func() {
 		// Hold a separate physical connection so post-commit observations cannot accidentally reuse the writer session.
 		reader, err := pool.Acquire(ctx)
 		Expect(err).NotTo(HaveOccurred())
@@ -520,7 +520,7 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 		Expect(tx.QueryRow(ctx, `select count(*) from pg_trigger t join pg_proc p on p.oid=t.tgfoid
 			where not t.tgisinternal and t.tgrelid in ('billing_accounts'::regclass,'tenant_billing_assignments'::regclass)
 			and (t.tgname='enqueue_change' or p.proname='enqueue_change')`).Scan(&triggerCount)).To(Succeed())
-		Expect(triggerCount).To(BeZero())
+		Expect(triggerCount).To(Equal(2), "both billing tables publish their changes")
 		account, err := accounts.Create().SetObject(accountObject("published-never", nil)).Do(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		account.GetObject().GetStatus().SetExternalBillingAccountId("canonical-token")
@@ -559,11 +559,11 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 		Expect(err).NotTo(HaveOccurred())
 		var count int
 		Expect(tx.QueryRow(ctx, `select count(*) from changes where "table" in ('billing_accounts','tenant_billing_assignments')`).Scan(&count)).To(Succeed())
-		Expect(count).To(BeZero())
+		Expect(count).To(Equal(5), "each billing write publishes a change")
 		Expect(tx.End(ctx)).To(Succeed())
 		tx = nil
 		Expect(reader.QueryRow(ctx, `select count(*) from changes where "table" in ('billing_accounts','tenant_billing_assignments')`).Scan(&count)).To(Succeed())
-		Expect(count).To(BeZero(), "committed billing writes, no publisher running")
+		Expect(count).To(Equal(5), "committed billing writes are published")
 		var ops []string
 		Expect(reader.QueryRow(ctx, `select array_agg(op order by op) from changes
 			where "table"='tenants' and data->>'id'='billing-a'`).Scan(&ops)).To(Succeed())

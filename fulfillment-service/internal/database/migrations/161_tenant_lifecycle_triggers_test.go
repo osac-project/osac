@@ -113,7 +113,8 @@ var _ = DescribeMigration("Tenant lifecycle triggers", func() {
 		var deletion, finalized, effectiveTo, deletedBy *string
 		var message string
 		var billingRetained bool
-		Expect(conn.QueryRow(ctx, `select d.deletion_timestamp::text, d.finalized_at::text, d.deleted_by,
+		Expect(conn.QueryRow(ctx, `select
+			to_char(d.deletion_timestamp at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'), d.finalized_at::text, d.deleted_by,
 			d.billing_retained, h.data->'status'->>'effective_to_timestamp', h.data#>>'{status,message}'
 			from deleted_tenant_identities d join tenant_billing_assignments h on h.tenant = d.tenant_name
 			where d.tenant_name = 'direct-delete'`).
@@ -129,8 +130,8 @@ var _ = DescribeMigration("Tenant lifecycle triggers", func() {
 	It("closes billing history already left open by tenants deletion-marked before the upgrade", func(ctx context.Context) {
 		_, err := conn.Exec(ctx, `
 			insert into tenants (id, name, tenant, creation_timestamp, deletion_timestamp, data) values
-				('predeleted', 'predeleted', 'predeleted', '2026-01-01Z', '2026-01-02Z', '{}'),
-				('empty-deleted', 'empty-deleted', 'empty-deleted', '2026-01-01Z', '2026-01-02Z', '{}'),
+				('predeleted', 'predeleted', 'predeleted', '2026-01-01Z', 'epoch', '{}'),
+				('empty-deleted', 'empty-deleted', 'empty-deleted', '2026-01-01Z', 'epoch', '{}'),
 				('live', 'live', 'live', '2026-01-01Z', 'epoch', '{}'),
 				('reuse', 'reuse', 'reuse', '2026-01-01Z', 'epoch', '{}');
 			insert into billing_accounts (id, name, tenant, data) values
@@ -156,7 +157,9 @@ var _ = DescribeMigration("Tenant lifecycle triggers", func() {
 				    'ba-' || left(encode(sha256(convert_to('live-account', 'UTF8')), 'hex'), 60))),
 				  'status', jsonb_build_object('connection_state',
 				    'TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED',
-				    'effective_from_timestamp','2026-01-01T00:00:00Z')));`)
+				    'effective_from_timestamp','2026-01-01T00:00:00Z')));
+			-- Seed the pre-upgrade state: an interval open while its tenant is already deletion-marked.
+			update tenants set deletion_timestamp = '2026-01-02Z' where id in ('predeleted', 'empty-deleted');`)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(tool.Migrate(ctx, 161)).To(Succeed())
 

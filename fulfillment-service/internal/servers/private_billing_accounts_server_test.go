@@ -1081,7 +1081,7 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(server.lastDiscoveryFailure).To(BeZero())
 	},
 		Entry("unknown field with a healthy provider", "", `this.state == 1`),
-		Entry("private field with a failing provider", "walk", `this.status.provider_account_reference == "unused"`),
+		Entry("unknown field with a failing provider", "walk", `this.no_such_field == "unused"`),
 		Entry("non-Boolean filter when the adapter failed to initialize", "adapter", `this.status.display_name`),
 	)
 
@@ -1113,7 +1113,7 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(state).To(Equal(privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE.String()))
 	})
 
-	It("does not enqueue account creates, observation updates or sweeps while retaining nonbilling enqueue", func() {
+	It("enqueues account creates, observation updates and absence sweeps without suppressing nonbilling enqueue", func() {
 		var before, after int
 		Expect(testPool.QueryRow(ctx, `select count(*) from changes`).Scan(&before)).To(Succeed())
 		server := build(billingfake.New(billingfake.Scenario{}).Provider())
@@ -1124,7 +1124,7 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(billingStore(ctx, server, accounts, start.Add(time.Second))).To(Succeed())
 		Expect(billingStore(ctx, server, nil, start.Add(2*time.Second))).To(Succeed())
 		Expect(testPool.QueryRow(ctx, `select count(*) from changes`).Scan(&after)).To(Succeed())
-		Expect(after).To(Equal(before), "no publisher runs in this PostgreSQL fixture to hide billing changes")
+		Expect(after).To(Equal(before+3), "account create, observation update and absence sweep each publish")
 		control, err := dao.NewGenericDAO[*privatev1.ServiceAccount]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
 		Expect(err).ToNot(HaveOccurred())
 		_, err = database.WithNewTx(ctx, func(ctx context.Context) (struct{}, error) {
@@ -1135,7 +1135,7 @@ var _ = Describe("Private billing accounts server", func() {
 		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(testPool.QueryRow(ctx, `select count(*) from changes`).Scan(&after)).To(Succeed())
-		Expect(after).To(Equal(before + 1))
+		Expect(after).To(Equal(before+4), "nonbilling enqueue still publishes")
 	})
 
 	It("stores duplicate provider external IDs without reserving them and reflects corrections", func() {

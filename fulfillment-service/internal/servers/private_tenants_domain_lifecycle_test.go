@@ -22,6 +22,7 @@ import (
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -41,7 +42,11 @@ var _ = Describe("Billed tenant domain lifecycle", func() {
 		// Exercise request-sized commits and rollback, rather than inspecting only an uncommitted suite transaction.
 		Expect(suiteTx.End(ctx)).To(Succeed())
 		suiteTx = nil
-		ctx = database.TxManagerIntoContext(context.Background(), tm)
+		// Tenant Delete records the accepted deletion actor, so the request context needs a subject.
+		ctx = auth.ContextWithSubject(
+			database.TxManagerIntoContext(context.Background(), tm),
+			&auth.Subject{User: "test-user", Tenants: auth.AllTenants},
+		)
 	})
 
 	run := func(body func(context.Context) error) error {

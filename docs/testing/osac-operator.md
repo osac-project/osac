@@ -20,7 +20,7 @@ The CI job runs the installer's Kind target with the operator suite
 | Component integration | Deployed `test/integration/` | Installed operator, API, CRDs, console proxy, networking, worker RBAC, startup without LVMS/TopoLVM | No AAP/provider/infra; some tests remove finalizers to bypass provider boundaries. |
 | Component integration (CI) | Installer Kind target, operator suite | Thin Kind install, Fulfillment client disabled | Same provider limits; installation settings need separate deployed coverage. |
 | Component integration ([DEV] [OSAC-6685](https://redhat.atlassian.net/browse/OSAC-6685)) | Installer Kind target, compute-storage suite | Real Fulfillment APIs/PostgreSQL, installed storage and ComputeInstance controllers, and target StorageClass lookup | AAP is a recording double; tenant compute readiness is supplied by the fixture. No provider or VM execution; see the [fulfillment-service guide](fulfillment-service.md#computeinstance-disk-handoff-osac-6685) for the boundary. |
-| Component integration ([DEV] [OSAC-7603](https://redhat.atlassian.net/browse/OSAC-7603)) | Installer Kind target, `SUITE=bmf` | Installed BMF and OSAC controllers, Kubernetes persistence, and a test-controlled AAP recorder for BMaaS handoff, DHCP discovery, and cleanup | BareMetalHost/power and Fabric outcomes are simulated; no real Metal3, Fabric, Ironic, BMC, hardware, or Fulfillment ExternalIP API. Automatic ExternalIP gating remains a [follow-up gap](https://redhat.atlassian.net/browse/OSAC-7619). |
+| Component integration ([DEV] [OSAC-7603](https://redhat.atlassian.net/browse/OSAC-7603)) | Installer Kind target, `SUITE=bmf` | Installed BMF and OSAC controllers, Kubernetes persistence, and a test-controlled AAP recorder for BMaaS handoff, DHCP discovery, and cleanup | BareMetalHost/power and Fabric outcomes are simulated; no real Metal3, Fabric, Ironic, BMC, hardware, or Fulfillment ExternalIP API. Deployed automatic ExternalIP feedback remains a gap under [OSAC-7619](https://redhat.atlassian.net/browse/OSAC-7619). |
 | Contract | `test/contract/` | Helm RBAC templates vs permission contract | No deployed operator/provider. |
 | E2E | `../tests/e2e/` | Cross-component fulfillment journeys | Environment/provider-dependent. |
 
@@ -126,3 +126,5 @@ approved fix and a dedicated owner/ticket (unresolved). Bound-worker cleanup
 waits for owner-driven detachment; no Machine/CAP-Agent hooks or NodePool
 replicas are manipulated to force cleanup. No new environment is required for
 local status-projection or cleanup-policy changes.
+
+BMaaS controller and automatic ExternalIPAttachment coverage is tracked by [OSAC-7619](https://redhat.atlassian.net/browse/OSAC-7619).

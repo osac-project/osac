@@ -19,6 +19,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -108,6 +110,44 @@ var _ = Describe("Public bare metal instance types", func() {
 		Expect(object.GetSpec().GetHardware().GetCpu().GetCores()).To(Equal(int32(16)))
 		Expect(object.GetSpec().GetHardware().GetMemory().GetTotalGb()).To(Equal(int64(64)))
 		Expect(object.GetSpec().GetHardware().GetCpu().GetArchitecture()).To(Equal("amd64"))
+	})
+
+	It("rejects a bare metal instance type without a fabric port before persistence", func() {
+		name := fmt.Sprintf("it-pub-bm-no-fabric-%s", uuid.New())
+		_, err := privateClient.Create(ctx, privatev1.BareMetalInstanceTypesCreateRequest_builder{
+			Object: privatev1.BareMetalInstanceType_builder{
+				Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+				Spec: privatev1.BareMetalInstanceTypeSpec_builder{
+					Hardware: privatev1.BareMetalHardwareSpec_builder{
+						Cpu: privatev1.BareMetalCPUSpec_builder{
+							Cores:          4,
+							Architecture:   "amd64",
+							ThreadsPerCore: 2,
+						}.Build(),
+						Memory: privatev1.BareMetalMemorySpec_builder{TotalGb: 16}.Build(),
+						NetworkPorts: []*privatev1.BareMetalNetworkPortSpec{
+							privatev1.BareMetalNetworkPortSpec_builder{
+								Name: "management-0", Role: "management", Type: "Ethernet", Speed: "1Gbps",
+							}.Build(),
+						},
+					}.Build(),
+					HostLabelSelector: privatev1.BareMetalLabelSelector_builder{
+						MatchLabels: map[string]string{
+							"hardware.example.com/cpu-cores": "4",
+							"hardware.example.com/memory-gb": "16",
+						},
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+
+		filter := fmt.Sprintf("this.metadata.name == %q", name)
+		listed, listErr := privateClient.List(ctx, privatev1.BareMetalInstanceTypesListRequest_builder{
+			Filter: &filter,
+		}.Build())
+		Expect(listErr).NotTo(HaveOccurred())
+		Expect(listed.GetItems()).To(BeEmpty(), "invalid instance type must not persist")
 	})
 
 	It("Can filter bare metal instance types by metadata", func() {

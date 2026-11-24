@@ -72,6 +72,20 @@ def _describe_external_ip(item: dict[str, Any]) -> str:
     return f"{metadata.get('name', '?')} ({item.get('id', '?')}, tenant {metadata.get('tenant', '?')})"
 
 
+def _has_public_network_ready(grpc: GRPCClient, bmi_id: str, tenant_ip: str) -> bool:
+    status = grpc.get_baremetal_instance(bmi_id=bmi_id).get("object", {}).get("status", {})
+    network_ready = any(
+        condition.get("type") == "BARE_METAL_INSTANCE_CONDITION_TYPE_NETWORK_READY"
+        and condition.get("status") == "CONDITION_STATUS_TRUE"
+        for condition in status.get("conditions", [])
+    )
+    discovered_primary_ip = any(
+        attachment.get("primary") is True and attachment.get("ipAddress") == tenant_ip
+        for attachment in status.get("networkAttachmentStatuses", [])
+    )
+    return network_ready and discovered_primary_ip
+
+
 @pytest.fixture(scope="module", autouse=True)
 def _guest_snapshot_source(k8s_hub_client: K8sClient, bmh_namespace: str) -> Iterator[None]:
     """Let a failure snapshot read the network state of the BMIs this class has recorded so far, and the hosts."""
@@ -264,6 +278,15 @@ class TestBmaasNetworking:
                 description=f"BMI {bmi['name']} tenant IP assignment",
                 resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
                 resource_id=bmi["cr"],
+            )
+            poll_until(
+                fn=lambda b=bmi: _has_public_network_ready(grpc=grpc, bmi_id=b["id"], tenant_ip=b["ip"]),
+                until=lambda ready: ready,
+                retries=60,
+                delay=5,
+                description=f"{bmi['name']} public NETWORK_READY and DHCP address feedback",
+                resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+                resource_id=bmi["id"],
             )
 
             ext_host = k8s_hub_client.get_baremetal_instance_external_host_id(name=bmi["cr"])

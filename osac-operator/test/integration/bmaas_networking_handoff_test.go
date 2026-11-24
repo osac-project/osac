@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
@@ -110,13 +111,15 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 			}, 5*time.Second, time.Second).Should(Succeed())
 			patchBMAASHostPower(fixture.host, true)
 
-			By("querying DHCP only after BMF records NetworkHandoffComplete")
-			query := waitForAAPTemplate(bmaasQueryTemplate)
+			By("waiting for BMF to persist NetworkHandoffComplete after power feedback")
 			Eventually(func(g Gomega) {
 				bmi := getBMAASObject("BareMetalInstance", fixture.id)
 				condition := findNetworkingCondition(bmi, "NetworkHandoffComplete")
 				g.Expect(condition).To(HaveKeyWithValue("status", "True"))
 			}, readyTimeout, time.Second).Should(Succeed())
+
+			By("querying DHCP only after BMF records NetworkHandoffComplete")
+			query := waitForAAPTemplate(bmaasQueryTemplate)
 			completeAAPJob(query, "successful", map[string]any{
 				"osac_result": map[string]any{"dhcp_lease": map[string]any{
 					"ip_address": "192.0.2.25", "mac_address": bmaasSelectedMAC,
@@ -166,6 +169,37 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 			}, readyTimeout, time.Second).Should(Succeed())
 		})
 
+		It("fails the handoff after its 15-minute power-cycle deadline", func() {
+			fixture := newBMAASFixture("handoff-deadline", "noop", "Always")
+			waitForBMAASHostAssignment(fixture)
+			waitForBMAASAttachment(fixture)
+			apply := waitForAAPTemplate(bmaasApplyTemplate)
+			completeAAPJob(apply, "successful", nil)
+
+			By("waiting for attachment readiness and an in-progress handoff")
+			assertState := func(g Gomega) {
+				bmi := getBMAASObject("BareMetalInstance", fixture.id)
+				g.Expect(findNetworkingCondition(bmi, "NetworkAttachmentsReady")).
+					To(HaveKeyWithValue("status", "True"))
+				handoff := findNetworkingCondition(bmi, "NetworkHandoffComplete")
+				g.Expect(handoff).NotTo(BeNil())
+				g.Expect(handoff).To(HaveKeyWithValue("status", "False"))
+			}
+			Eventually(assertState, readyTimeout, time.Second).Should(Succeed())
+			backdateBMAASCondition(fixture.id, "NetworkAttachmentsReady", 16*time.Minute)
+
+			By("reporting a terminal NetworkHandoffFailed condition after the expired deadline")
+			assertState = func(g Gomega) {
+				bmi := getBMAASObject("BareMetalInstance", fixture.id)
+				handoff := findNetworkingCondition(bmi, "NetworkHandoffComplete")
+				g.Expect(handoff).To(HaveKeyWithValue("status", "False"))
+				g.Expect(handoff).To(HaveKeyWithValue("reason", "NetworkHandoffFailed"))
+				g.Expect(handoff["message"]).To(ContainSubstring("within 15 minutes"))
+				g.Expect(bmi.Object["status"]).To(HaveKeyWithValue("phase", "Failed"))
+			}
+			Eventually(assertState, readyTimeout, time.Second).Should(Succeed())
+		})
+
 		It("reports a terminal DHCP query failure while preserving NetworkAttachment readiness", func() {
 			fixture := newBMAASFixture("query-failure", "noop", "Always")
 			query := completeApplyAndWaitForQuery(fixture)
@@ -202,6 +236,51 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 				g.Expect(ipReady["message"]).To(ContainSubstring("DHCP service unavailable"))
 				g.Expect(bmi.Object["status"]).To(HaveKeyWithValue("phase", "Progressing"))
 			}, readyTimeout, time.Second).Should(Succeed())
+		})
+
+		It("records LeaseNotFound after ten minutes and keeps DHCP discovery pending", func() {
+			fixture := newBMAASFixture("lease-not-found", "noop", "Always")
+			query := completeApplyAndWaitForQuery(fixture)
+			backdateBMAASCondition(fixture.id, "NetworkHandoffComplete", 11*time.Minute)
+
+			By("reporting LeasePending with NetworkAttachment readiness intact")
+			assertState := func(g Gomega) {
+				bmi := getBMAASObject("BareMetalInstance", fixture.id)
+				g.Expect(findNetworkingCondition(bmi, "NetworkAttachmentsReady")).
+					To(HaveKeyWithValue("status", "True"))
+				ipReady := findNetworkingCondition(bmi, "IPDiscoveryComplete")
+				g.Expect(ipReady).To(HaveKeyWithValue("status", "False"))
+				g.Expect(ipReady).To(HaveKeyWithValue("reason", "LeasePending"))
+				g.Expect(ipReady["message"]).To(ContainSubstring("No DHCP lease was found 10 minutes after handoff"))
+			}
+			Eventually(assertState, readyTimeout, time.Second).Should(Succeed())
+
+			By("recording the warning event while the DHCP query job remains active")
+			assertState = func(g Gomega) {
+				output, err := runKubectl("get", "events", "-n", operatorNamespace,
+					"--field-selector", "involvedObject.name="+fixture.id+",reason=LeaseNotFound", "-o", "json")
+				g.Expect(err).NotTo(HaveOccurred())
+				var events struct {
+					Items []struct {
+						Type   string `json:"type"`
+						Reason string `json:"reason"`
+					} `json:"items"`
+				}
+				g.Expect(json.Unmarshal(output, &events)).To(Succeed())
+				g.Expect(events.Items).NotTo(BeEmpty())
+				g.Expect(events.Items[0].Type).To(Equal("Warning"))
+				g.Expect(events.Items[0].Reason).To(Equal("LeaseNotFound"))
+			}
+			Eventually(assertState, readyTimeout, time.Second).Should(Succeed())
+			Consistently(func(g Gomega) {
+				jobs := getAAPTemplatesByName(bmaasQueryTemplate)
+				g.Expect(jobs).To(HaveLen(1))
+				g.Expect(jobs[0].ID).To(Equal(query.ID))
+				g.Expect(jobs[0].Status).To(Equal("running"))
+				bmi := getBMAASObject("BareMetalInstance", fixture.id)
+				g.Expect(findNetworkingCondition(bmi, "IPDiscoveryComplete")).
+					To(HaveKeyWithValue("reason", "LeasePending"))
+			}, 5*time.Second, time.Second).Should(Succeed())
 		})
 
 		It("keeps BMF and OSAC cleanup finalizers while a Fabric delete fails", func() {
@@ -484,6 +563,52 @@ func patchBMAASInstance(id, patch string) {
 	_, err := kubectl("", "patch", resourceOf("BareMetalInstance"), id, "-n", operatorNamespace,
 		"--type=merge", "-p", patch)
 	Expect(err).NotTo(HaveOccurred())
+}
+
+func backdateBMAASCondition(id, conditionType string, age time.Duration) {
+	GinkgoHelper()
+	for attempt := 0; attempt < 5; attempt++ {
+		bmi := getBMAASObject("BareMetalInstance", id)
+		resourceVersion, found, err := unstructured.NestedString(bmi.Object, "metadata", "resourceVersion")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(found).To(BeTrue(), "metadata.resourceVersion must be present")
+		conditions, found, err := unstructured.NestedSlice(bmi.Object, "status", "conditions")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(found).To(BeTrue())
+		updated := false
+		for _, value := range conditions {
+			condition, ok := value.(map[string]any)
+			Expect(ok).To(BeTrue())
+			if condition["type"] != conditionType {
+				continue
+			}
+			condition["lastTransitionTime"] = time.Now().Add(-age).UTC().Format(time.RFC3339)
+			updated = true
+			break
+		}
+		Expect(updated).To(BeTrue(), "condition %s must exist on BareMetalInstance %s", conditionType, id)
+		status, found, err := unstructured.NestedMap(bmi.Object, "status")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(found).To(BeTrue())
+		status["conditions"] = conditions
+		patch, err := json.Marshal(map[string]any{
+			"metadata": map[string]string{"resourceVersion": resourceVersion},
+			"status":   status,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = kubectl("", "patch", resourceOf("BareMetalInstance"), id, "-n", operatorNamespace,
+			"--subresource=status", "--type=merge", "-p", string(patch))
+		if err == nil {
+			return
+		}
+		if !strings.Contains(strings.ToLower(err.Error()), "conflict") {
+			Expect(err).NotTo(HaveOccurred())
+		}
+	}
+	Fail(fmt.Sprintf(
+		"failed to update BareMetalInstance %s condition %s after repeated resourceVersion conflicts",
+		id, conditionType,
+	))
 }
 
 func appendBMAASFinalizer(id, finalizer string) {

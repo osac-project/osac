@@ -219,7 +219,8 @@ See [BMF cleanup setup and boundaries](testing/bare-metal-fulfillment-operator.m
 
 ### BMaaS network handoff (OSAC-7603)
 
-See the [BMF component suite guide](testing/bare-metal-fulfillment-operator.md#test-tiers) for the deployed BMF/OSAC boundary, including its provider-networking-disabled phase and the automatic ExternalIP gap tracked by [OSAC-7619](https://redhat.atlassian.net/browse/OSAC-7619).
+See the [BMF component suite guide](testing/bare-metal-fulfillment-operator.md#test-tiers) for the deployed BMF/OSAC boundary, including its provider-networking-disabled phase and the deployed automatic ExternalIP feedback gap tracked by [OSAC-7619](https://redhat.atlassian.net/browse/OSAC-7619).
+See the [BMaaS networking coverage matrix](testing/bmaas-networking-testplan.md) for OSAC-7619 test evidence, boundaries, and gaps.
 
 ### R03 unified worker cleanup implementation checkpoint
 

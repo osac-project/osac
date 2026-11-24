@@ -16,7 +16,7 @@ suite (repository-root `make -C osac-installer help`, `.github/workflows/`).
 | Unit | Co-located Go unit tests | Allocation, lifecycle, client and provider logic in isolation | Kubernetes and provider APIs mocked. |
 | Envtest | `internal/controller/` | Kubernetes API, etcd, OSAC and static Metal3 CRDs | Metal3 controller, Ironic/BMC, hardware and some provider clients faked. |
 | Component integration | Deployed `test/integration/` | Deployed operator, CRDs, API, pool/instance flows, status | Static `BareMetalHost` state and simulated transitions; no real Metal3 operator, Ironic, BMC or hardware. |
-| Component integration (CI) | Installer Kind target, `SUITE=bmf` | BMF-only suite, then deployed BMF and OSAC controllers against a capture-only AAP service | Static Metal3 state and Fabric outcomes; no real Metal3, Fabric, Ironic, BMC or hardware. Automatic ExternalIP gating is a [follow-up gap](https://redhat.atlassian.net/browse/OSAC-7619). |
+| Component integration (CI) | Installer Kind target, `SUITE=bmf` | BMF-only suite, then deployed BMF and OSAC controllers against a capture-only AAP service | Static Metal3 state and Fabric outcomes; no real Metal3, Fabric, Ironic, BMC or hardware. Deployed automatic ExternalIP feedback remains a gap under [OSAC-7619](https://redhat.atlassian.net/browse/OSAC-7619). |
 | Contract | None dedicated | No real provider boundary | Static Metal3 CRDs, patched status and simulated transitions do not exercise a real contract; follow [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) for qualifying coverage. |
 | E2E | Cross-component suites | Fulfillment-to-operator journeys where available | Real hardware and providers remain environment-dependent. |
 
@@ -62,3 +62,5 @@ The Kind suite stops at static Metal3 resources and simulated provider status.
 Changes to the real Metal3/Ironic/BMC/provider boundary must add qualifying
 coverage under [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843) or its
 contract-test follow-up; extending the static-fixture suite alone is insufficient.
+
+BMaaS handoff and cleanup coverage is tracked by [OSAC-7619](https://redhat.atlassian.net/browse/OSAC-7619).

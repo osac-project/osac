@@ -182,6 +182,75 @@ var _ = Describe("BareMetalInstance cleanup automatic external access", func() {
 		}).Should(Satisfy(apierrors.IsNotFound))
 	})
 
+	DescribeTable("waits for a ready Always endpoint with a primary address before requesting an attachment",
+		func(phase bmfov1alpha1.BareMetalInstancePhaseType, runStrategy bmfov1alpha1.BareMetalInstanceRunStrategy,
+			primary bool, address string) {
+			bmiNamespace, networkNamespace := newNamespaces()
+			bmi := newReadyBMI(bmiNamespace, bmfov1alpha1.RunStrategyAlways)
+			persisted := &bmfov1alpha1.BareMetalInstance{}
+			Expect(indexedClient.Get(ctx, client.ObjectKeyFromObject(bmi), persisted)).To(Succeed())
+			persisted.Status.Phase = phase
+			persisted.Status.RunStrategy = runStrategy
+			persisted.Status.NetworkAttachmentStatuses = []bmfov1alpha1.BareMetalNetworkAttachmentStatus{{
+				Primary: primary, IPAddress: address,
+			}}
+			expectedAttachments := append(
+				[]bmfov1alpha1.BareMetalNetworkAttachmentStatus(nil),
+				persisted.Status.NetworkAttachmentStatuses...,
+			)
+			Expect(k8sClient.Status().Update(ctx, persisted)).To(Succeed())
+			Eventually(func(g Gomega) {
+				current := &bmfov1alpha1.BareMetalInstance{}
+				g.Expect(indexedClient.Get(ctx, client.ObjectKeyFromObject(bmi), current)).To(Succeed())
+				g.Expect(current.Status.Phase).To(Equal(phase))
+				g.Expect(current.Status.RunStrategy).To(Equal(runStrategy))
+				g.Expect(current.Status.NetworkAttachmentStatuses).To(Equal(expectedAttachments))
+			}, 5*time.Second, 100*time.Millisecond).Should(Succeed())
+
+			ip := &osacv1alpha1.ExternalIP{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "auto-eip", Namespace: networkNamespace,
+					Labels: map[string]string{
+						autoCreatedLabel: labelValueTrue, autoCreatedForLabel: "bmi-1",
+						autoCreatedKindLabel: autoExternalIPKindLabel(bareMetalInstanceOwner), externalIPUUIDLabel: "eip-1",
+					},
+					Annotations: map[string]string{tenantAnnotation: "tenant-1"},
+				},
+				Spec: osacv1alpha1.ExternalIPSpec{Pool: "pool-1"},
+			}
+			Expect(k8sClient.Create(ctx, ip)).To(Succeed())
+			ip.Status = osacv1alpha1.ExternalIPStatus{Address: "192.0.2.10", Conditions: allocatedConditions("192.0.2.10")}
+			Expect(k8sClient.Status().Update(ctx, ip)).To(Succeed())
+			eventuallyIndexedExternalIP(ip)
+
+			autoAttach := true
+			fulfillmentBMI := privatev1.BareMetalInstance_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: "tenant-1"}.Build(),
+				Spec:     privatev1.BareMetalInstanceSpec_builder{AutoExternalIpAttachment: &autoAttach}.Build(),
+			}.Build()
+			instancesClient := &testBareMetalInstancesGetter{
+				response: privatev1.BareMetalInstancesGetResponse_builder{Object: fulfillmentBMI}.Build(),
+			}
+			attachmentsClient := &testExternalIPAttachmentsClient{}
+			reconciler := NewBareMetalInstanceCleanupReconciler(indexedClient, bmiNamespace, networkNamespace)
+			reconciler.BareMetalInstancesClient = instancesClient
+			reconciler.ExternalIPAttachmentsClient = attachmentsClient
+			request := ctrl.Request{NamespacedName: types.NamespacedName{Name: bmi.Name, Namespace: bmi.Namespace}}
+
+			_, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			eventuallyCleanupFinalizer(bmi)
+			result, err := reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(automaticExternalAccessRecheck))
+			Expect(attachmentsClient.created).To(BeEmpty())
+		},
+		Entry("progressing", bmfov1alpha1.BareMetalInstancePhaseProgressing, bmfov1alpha1.RunStrategyAlways, true, "192.0.2.12"),
+		Entry("halted", bmfov1alpha1.BareMetalInstancePhaseReady, bmfov1alpha1.RunStrategyHalted, true, "192.0.2.12"),
+		Entry("without an address", bmfov1alpha1.BareMetalInstancePhaseReady, bmfov1alpha1.RunStrategyAlways, true, ""),
+		Entry("without a primary address", bmfov1alpha1.BareMetalInstancePhaseReady, bmfov1alpha1.RunStrategyAlways, false, "192.0.2.12"),
+	)
+
 	It("rechecks a Fulfillment readiness race after thirty seconds", func() {
 		bmiNamespace, networkNamespace := newNamespaces()
 		bmi := newReadyBMI(bmiNamespace, bmfov1alpha1.RunStrategyAlways)

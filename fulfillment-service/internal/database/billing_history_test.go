@@ -53,7 +53,6 @@ var _ = Describe("Billing history boundaries", func() {
 			_, err = tx.Exec(ctx, `insert into tenant_billing_assignments (id, name, tenant, annotations, data)
 				values ($1, $1, 'billing-history', '{"osac.openshift.io/tenant":"billing-history"}',
 				jsonb_build_object('spec', jsonb_build_object(
-				  'tenant', jsonb_build_object('id','billing-history','name','billing-history'),
 				  'billing_account', jsonb_build_object('id','billing-account','name',
 				    'ba-' || left(encode(sha256(convert_to('billing-account', 'UTF8')), 'hex'), 60))),
 				  'status', jsonb_build_object('connection_state',

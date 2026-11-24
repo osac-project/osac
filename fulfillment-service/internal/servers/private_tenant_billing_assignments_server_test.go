@@ -746,7 +746,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			st, ok := status.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(st.Code()).To(Equal(codes.InvalidArgument), "%v", err)
-			Expect(st.Message()).To(ContainSubstring("spec.tenant does not reference an existing tenant"))
+			Expect(st.Message()).To(ContainSubstring("does not exist or is deleting"))
 
 			// Tenant deletion closes the active interval; a later update must reject that historical interval.
 			_, err = testPool.Exec(ctx, `update tenants set deletion_timestamp = now() where name = $1`, testTenant)
@@ -1859,7 +1859,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			var finalErr error
 			Eventually(result, 5*time.Second).Should(Receive(&finalErr))
 			Expect(status.Code(finalErr)).To(Equal(codes.InvalidArgument))
-			Expect(status.Convert(finalErr).Message()).To(ContainSubstring("spec.tenant does not reference an existing tenant"))
+			Expect(status.Convert(finalErr).Message()).To(ContainSubstring("does not exist or is deleting"))
 			Expect(fake.Count("ListAccounts")).To(Equal(1), "provider resolution completed after the delete")
 			var count int
 			Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
@@ -2436,7 +2436,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 				account := newAccount(&accounts, "", "", "ACTIVE")
 				fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
 				request := createRequest(otherTenant, account, "spoofed")
-				request.GetObject().GetMetadata().SetTenant(testTenant)
+				// The metadata tenant is the only tenant identity, so a caller scoped to another tenant is rejected.
 				server := build(fake.Provider())
 				_, err := billingRPC(scopedCtx(tenants), server.Create, request)
 				Expect(status.Code(err)).To(Equal(codes.PermissionDenied))

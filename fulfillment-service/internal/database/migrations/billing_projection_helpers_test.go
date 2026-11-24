@@ -100,6 +100,15 @@ func rejectStatement(ctx context.Context, code, constraint, query string, args .
 	return pgErr
 }
 
+// rejectTriggerStatement is rejectStatement for trigger-raised errors: those carry a message but no constraint
+// name, so the message is what the migration guarantees.
+func rejectTriggerStatement(ctx context.Context, code, message, query string, args ...any) *pgconn.PgError {
+	GinkgoHelper()
+	pgErr := rejectStatement(ctx, code, "", query, args...)
+	Expect(pgErr.Message).To(Equal(message))
+	return pgErr
+}
+
 // Billing inserts deliberately write the standard DAO column set, not the projected business columns. Full
 // protobuf/GenericDAO round trips are owned by the integrating DAO suite.
 const insertBillingAccount = `insert into billing_accounts (id, name, tenant, creator, data)

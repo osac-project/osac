@@ -33,7 +33,6 @@ var _ = DescribeMigration("Tenant lifecycle triggers", func() {
 			insert into tenant_billing_assignments (id, name, tenant, annotations, data)
 				values ('interval', 'assignment', 'billed', '{"osac.openshift.io/tenant":"billed"}',
 				jsonb_build_object('spec', jsonb_build_object(
-				  'tenant', jsonb_build_object('id','billed','name','billed'),
 				  'billing_account', jsonb_build_object('id','account','name',
 				    'ba-' || left(encode(sha256(convert_to('account', 'UTF8')), 'hex'), 60))),
 				  'status', jsonb_build_object('connection_state',
@@ -55,7 +54,9 @@ var _ = DescribeMigration("Tenant lifecycle triggers", func() {
 		var deletedBy *string
 		var finalizedAt *string
 		var billingRetained bool
-		Expect(conn.QueryRow(ctx, `select t.deletion_timestamp::text, h.data->'status'->>'effective_to_timestamp',
+		Expect(conn.QueryRow(ctx, `select
+			to_char(t.deletion_timestamp at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+			h.data->'status'->>'effective_to_timestamp',
 			h.data#>>'{status,message}', d.deleted_by, d.finalized_at::text, d.billing_retained
 		from tenants t join tenant_billing_assignments h on h.tenant = t.tenant
 			join deleted_tenant_identities d on d.tenant_name = t.name where t.id = 'billed'`).
@@ -94,7 +95,6 @@ var _ = DescribeMigration("Tenant lifecycle triggers", func() {
 				values ('direct-interval', 'direct-assignment', 'direct-delete',
 				'{"osac.openshift.io/tenant":"direct-delete"}',
 				jsonb_build_object('spec', jsonb_build_object(
-				  'tenant', jsonb_build_object('id','direct-delete','name','direct-delete'),
 				  'billing_account', jsonb_build_object('id','direct-account','name',
 				    'ba-' || left(encode(sha256(convert_to('direct-account', 'UTF8')), 'hex'), 60))),
 				  'status', jsonb_build_object('connection_state',
@@ -144,7 +144,6 @@ var _ = DescribeMigration("Tenant lifecycle triggers", func() {
 				('predeleted-interval', 'predeleted-assignment', 'predeleted',
 				'{"osac.openshift.io/tenant":"predeleted"}',
 				jsonb_build_object('spec', jsonb_build_object(
-				  'tenant', jsonb_build_object('id','predeleted','name','predeleted'),
 				  'billing_account', jsonb_build_object('id','released-account','name',
 				    'ba-' || left(encode(sha256(convert_to('released-account', 'UTF8')), 'hex'), 60))),
 				  'status', jsonb_build_object('connection_state',
@@ -153,7 +152,6 @@ var _ = DescribeMigration("Tenant lifecycle triggers", func() {
 				('live-interval', 'live-assignment', 'live',
 				'{"osac.openshift.io/tenant":"live"}',
 				jsonb_build_object('spec', jsonb_build_object(
-				  'tenant', jsonb_build_object('id','live','name','live'),
 				  'billing_account', jsonb_build_object('id','live-account','name',
 				    'ba-' || left(encode(sha256(convert_to('live-account', 'UTF8')), 'hex'), 60))),
 				  'status', jsonb_build_object('connection_state',
@@ -163,7 +161,9 @@ var _ = DescribeMigration("Tenant lifecycle triggers", func() {
 		Expect(tool.Migrate(ctx, 161)).To(Succeed())
 
 		var deletion, effectiveTo, effectiveToTimestamp *string
-		Expect(conn.QueryRow(ctx, `select t.deletion_timestamp::text, h.data->'status'->>'effective_to_timestamp',
+		Expect(conn.QueryRow(ctx, `select
+			to_char(t.deletion_timestamp at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+			h.data->'status'->>'effective_to_timestamp',
 			h.data#>>'{status,effective_to_timestamp}'
 			from tenants t join tenant_billing_assignments h on h.tenant = t.name
 			where t.id = 'predeleted'`).
@@ -195,7 +195,6 @@ var _ = DescribeMigration("Tenant lifecycle triggers", func() {
 			values ('reuse-interval', 'reuse-assignment', 'reuse',
 			'{"osac.openshift.io/tenant":"reuse"}',
 			jsonb_build_object('spec', jsonb_build_object(
-			  'tenant', jsonb_build_object('id','reuse','name','reuse'),
 			  'billing_account', jsonb_build_object('id','released-account','name',
 			    'ba-' || left(encode(sha256(convert_to('released-account', 'UTF8')), 'hex'), 60))),
 			  'status', jsonb_build_object('connection_state',

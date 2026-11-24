@@ -85,18 +85,18 @@ var _ = DescribeMigration("Create billing accounts table", func() {
 	It("rejects invalid provider observation payloads", func(ctx context.Context) {
 		Expect(tool.Migrate(ctx, 157)).To(Succeed())
 		validStatus := `"state":"BILLING_ACCOUNT_STATE_ACTIVE","state_observation_timestamp":"2026-03-01T01:02:03.000004Z"`
-		rejectStatement(ctx, "23514", "invalid billing account payload", insertBillingAccount,
+		rejectTriggerStatement(ctx, "23514", "invalid billing account payload", insertBillingAccount,
 			"unknown-field", billingAccountName("unknown-field"), `{"spec":{},"status":{`+validStatus+`},"extra":true}`)
-		rejectStatement(ctx, "23514", "invalid billing account field type", insertBillingAccount,
+		rejectTriggerStatement(ctx, "23514", "invalid billing account field type", insertBillingAccount,
 			"wrong-type", billingAccountName("wrong-type"), `{"spec":{},"status":{"provider_key":7,`+validStatus+`}}`)
-		rejectStatement(ctx, "23514", "invalid billing account status", insertBillingAccount,
+		rejectTriggerStatement(ctx, "23514", "invalid billing account status", insertBillingAccount,
 			"wrong-state", billingAccountName("wrong-state"), `{"spec":{},"status":{"provider_key":"m360",
 			"provider_account_reference":"native","state":"OTHER","state_observation_timestamp":"2026-03-01T01:02:03Z"}}`)
-		rejectStatement(ctx, "23514", "invalid protobuf billing timestamp", insertBillingAccount,
+		rejectTriggerStatement(ctx, "23514", "invalid protobuf billing timestamp", insertBillingAccount,
 			"wrong-timestamp", billingAccountName("wrong-timestamp"), `{"spec":{},"status":{"provider_key":"m360",
 			"provider_account_reference":"native","state":"BILLING_ACCOUNT_STATE_ACTIVE",
 			"state_observation_timestamp":"2026-03-01 01:02:03Z"}}`)
-		rejectStatement(ctx, "23514", "inconsistent billing account insert", `insert into billing_accounts
+		rejectTriggerStatement(ctx, "23514", "inconsistent billing account insert", `insert into billing_accounts
 			(id, name, creator, data) values ('wrong-creator', $1, 'request-principal', $2::jsonb)`,
 			billingAccountName("wrong-creator"), billingAccountData("wrong-creator", nil))
 	})
@@ -136,13 +136,13 @@ var _ = DescribeMigration("Create billing accounts table", func() {
 			billingAccountData("immutable", &token))
 		Expect(err).ToNot(HaveOccurred())
 
-		rejectStatement(ctx, "23514", "immutable billing account identity", `update billing_accounts set data =
+		rejectTriggerStatement(ctx, "23514", "immutable billing account identity", `update billing_accounts set data =
 			jsonb_set(data, '{status,provider_key}', '"another"') where id = 'immutable'`)
-		rejectStatement(ctx, "23514", "immutable billing account identity", `update billing_accounts set data =
+		rejectTriggerStatement(ctx, "23514", "immutable billing account identity", `update billing_accounts set data =
 			jsonb_set(data, '{status,provider_account_reference}', '"another"') where id = 'immutable'`)
-		rejectStatement(ctx, "23514", "established billing attribution is immutable", `update billing_accounts set data =
+		rejectTriggerStatement(ctx, "23514", "established billing attribution is immutable", `update billing_accounts set data =
 			jsonb_set(data, '{status,external_billing_account_id}', '"exact"') where id = 'immutable'`)
-		rejectStatement(ctx, "23514", "established billing attribution is immutable", `update billing_accounts set data =
+		rejectTriggerStatement(ctx, "23514", "established billing attribution is immutable", `update billing_accounts set data =
 			data #- '{status,external_billing_account_id}' where id = 'immutable'`)
 
 		_, err = conn.Exec(ctx, `update billing_accounts set data = jsonb_set(data, '{status,display_name}', '"Updated"')

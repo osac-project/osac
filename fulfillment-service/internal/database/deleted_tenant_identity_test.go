@@ -120,7 +120,7 @@ var _ = Describe("Deleted tenant identities", Ordered, ContinueOnFailure, func()
 			 "state":"BILLING_ACCOUNT_STATE_ACTIVE","state_observation_timestamp":"2026-01-01T00:00:00Z"}}');
 			insert into tenant_billing_assignments (id,name,tenant,annotations,data) values ('history','history','billed',
 			 '{"osac.openshift.io/tenant":"billed"}', jsonb_build_object('spec', jsonb_build_object(
-			 'tenant', jsonb_build_object('id','billed','name','billed'), 'billing_account', jsonb_build_object(
+			 'billing_account', jsonb_build_object(
 			 'id','account','name','ba-' || left(encode(sha256(convert_to('account','UTF8')), 'hex'),60))),
 				 'status', jsonb_build_object('connection_state','TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED',
 				 'effective_from_timestamp','2026-01-01T00:00:00Z','effective_to_timestamp','2026-02-01T00:00:00Z')))`)

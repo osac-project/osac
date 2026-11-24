@@ -44,11 +44,11 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 		Expect(version).To(Equal(159))
 		_, err := conn.Exec(ctx, `
 			insert into tenants (id, name, tenant, creation_timestamp, deletion_timestamp, finalizers, data) values
-			 ('pending', 'pending', 'pending', '2026-01-01Z', '2026-03-01Z', '{cleanup}', '{}'),
-			 ('empty', 'empty', 'empty', '2026-01-01Z', '2026-03-01Z', '{}', '{}'),
+			 ('pending', 'pending', 'pending', '2026-01-01Z', 'epoch', '{cleanup}', '{}'),
+			 ('empty', 'empty', 'empty', '2026-01-01Z', 'epoch', '{}', '{}'),
 			 ('active', 'active', 'active', '2026-03-01Z', 'epoch', '{}', '{}'),
 			 ('reused', 'reused', 'reused', '2026-03-01Z', 'epoch', '{}', '{}'),
-			 ('reused-deleting', 'reused-deleting', 'reused-deleting', '2026-03-01Z', '2026-04-01Z', '{}', '{}');
+			 ('reused-deleting', 'reused-deleting', 'reused-deleting', '2026-03-01Z', 'epoch', '{}', '{}');
 			insert into billing_accounts (id, name, tenant, data) values
 			 ('account', 'ba-' || left(encode(sha256(convert_to('account', 'UTF8')), 'hex'), 60), 'system',
 			  '{"spec":{},"status":{"provider_key":"m360","provider_account_reference":"native",
@@ -56,7 +56,7 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 			    "state_observation_timestamp":"2026-01-01T00:00:00Z"}}');
 			insert into tenant_billing_assignments (id, name, tenant, annotations, data)
 			select t, 'same-name', t, jsonb_build_object('osac.openshift.io/tenant', t),
-			 jsonb_build_object('spec', jsonb_build_object('tenant', jsonb_build_object('id', t, 'name', t),
+			 jsonb_build_object('spec', jsonb_build_object(
 			  'billing_account', jsonb_build_object('id', 'account', 'name',
 			   'ba-' || left(encode(sha256(convert_to('account', 'UTF8')), 'hex'), 60))),
 			  'status', jsonb_build_object('connection_state', 'TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_PENDING',
@@ -68,6 +68,12 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 		_, err = conn.Exec(ctx, `insert into tenant_billing_assignments (id, name, tenant, annotations, data)
 		 select 'current', name, tenant, annotations, data #- '{status,effective_to_timestamp}'
 		 from tenant_billing_assignments where id = 'pending'`)
+		Expect(err).NotTo(HaveOccurred())
+		// History is written while its tenant is still live: later inserts for a deleting tenant are rejected now.
+		_, err = conn.Exec(ctx, `
+			update tenants set deletion_timestamp = '2026-03-01Z'::timestamptz where id in ('pending', 'empty');
+			update tenants set deletion_timestamp = '2026-04-01Z'::timestamptz where id = 'reused-deleting';
+		`)
 		Expect(err).NotTo(HaveOccurred())
 		addArchive(ctx, "legacy-id", "gone", "2025-01-01Z", "2025-02-01Z", "2025-02-02Z")
 		addArchive(ctx, "old-id", "repeated", "2024-01-01Z", "2024-02-01Z", "2024-02-02Z")

@@ -35,17 +35,19 @@ var _ = DescribeMigration("Release finalized tenant domains", func() {
 				('live', 'live', 'live', '{}', '{"spec":{"domains":["live.example.com"]}}'),
 				('pending', 'pending', 'pending', '{cleanup}', '{"spec":{"domains":["pending.example.com"]}}'),
 				('complete', 'complete', 'complete', '{}', '{"spec":{"domains":["complete.example.com"]}}');
-			update tenants set deletion_timestamp = now() where id in ('pending', 'complete');
 		`)
 		Expect(err).ToNot(HaveOccurred())
 		_, err = conn.Exec(ctx, `insert into billing_accounts (id, name, tenant, data)
 			values ($1, $2, 'system', $3::jsonb)`,
 			"account", billingAccountName("account"), billingAccountData("account", nil))
 		Expect(err).ToNot(HaveOccurred())
+		// History is written while its tenant is still live: later inserts for a deleting tenant are rejected now.
 		_, err = conn.Exec(ctx, `insert into tenant_billing_assignments
 			(id, name, tenant, annotations, data) values ($1, $2, $3, $4::jsonb, $5::jsonb)`,
 			"history", "history", "complete", `{"osac.openshift.io/tenant":"complete"}`,
 			billingAssignmentData("complete", "account", "2026-04-01T00:00:00Z"))
+		Expect(err).ToNot(HaveOccurred())
+		_, err = conn.Exec(ctx, `update tenants set deletion_timestamp = now() where id in ('pending', 'complete')`)
 		Expect(err).ToNot(HaveOccurred())
 	})
 

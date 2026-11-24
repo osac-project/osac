@@ -197,7 +197,7 @@ wheels = [
 [[package]]
 name = "osac-e2e"
 version = "0.1.0"
-source = { editable = "." }
+source = { virtual = "." }
 dependencies = [
     { name = "pynetbox" },
     { name = "pytest" },

@@ -1,6 +1,5 @@
 import { test } from '@playwright/test';
 
-import { storageTierNameOrSkip, storageTierTestData } from './test_data';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import { openStorageTiersPage } from '../../../../libs/test-utils/src/main.page';
@@ -9,6 +8,7 @@ import {
   ensureStorageTierExists,
   expectStorageTierNotListed,
 } from '../../../../libs/test-utils/src/storage.page';
+import { storageTierNameOrSkip, storageTierTestData } from '../shared/test_data';
 
 test('deletes the requested storage tier', async ({ page }) => {
   // Allow creation when needed, the deletion wait, and UI actions to complete.

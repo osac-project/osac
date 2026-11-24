@@ -1,6 +1,5 @@
 import { test } from '@playwright/test';
 
-import { diskImageNameOrSkip, diskImagesTestData } from './test_data';
 import {
   deleteDiskImage,
   ensureDiskImageExists,
@@ -11,6 +10,7 @@ import {
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import { openDiskImagesPage } from '../../../../libs/test-utils/src/main.page';
+import { diskImageNameOrSkip, diskImagesTestData } from '../shared/test_data';
 
 test(`deletes disk image ${diskImagesTestData.name}`, async ({ page }) => {
   // Allow image creation when needed, deletion, login, and UI actions to complete.

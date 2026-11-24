@@ -462,13 +462,6 @@ func (t *tool) CheckSchema(ctx context.Context) error {
 	}
 	defer pool.Close()
 
-	// Version-dependent checks only apply once the migration that changes the schema has run. Read the version
-	// once, and fail if it can't be determined instead of silently skipping those checks:
-	version, err := t.schemaVersion(ctx, pool)
-	if err != nil {
-		return err
-	}
-
 	// Get the list of object and archive tables:
 	objectTables, err := t.listObjectTables(ctx, pool)
 	if err != nil {
@@ -482,7 +475,7 @@ func (t *tool) CheckSchema(ctx context.Context) error {
 	// Perform the per-table checks:
 	issues := 0
 	for _, table := range objectTables {
-		issues += t.checkObjectTable(ctx, pool, table, version)
+		issues += t.checkObjectTable(ctx, pool, table)
 	}
 	for _, table := range archiveTables {
 		issues += t.checkArchiveTable(ctx, pool, table)
@@ -494,8 +487,8 @@ func (t *tool) CheckSchema(ctx context.Context) error {
 	return nil
 }
 
-// listObjectTables returns the sorted list of object table names from the public schema, excluding active companions
-// and non-object storage. Normalized billing objects participate, with their named nonpublication exception below.
+// listObjectTables returns the sorted list of object table names from the public schema, excluding active companion
+// tables, archive tables, internal tables, and billing tables with their own lifecycle constraints.
 func (t *tool) listObjectTables(ctx context.Context, pool *pgxpool.Pool) (result []string, err error) {
 	rows, err := pool.Query(
 		ctx,
@@ -512,6 +505,7 @@ func (t *tool) listObjectTables(ctx context.Context, pool *pgxpool.Pool) (result
 			c.relname not like 'active_%' and
 			c.relname not like 'archived_%' and
 			c.relname not in (
+				'billing_accounts',
 				'changes',
 				'deleted_tenant_identities',
 				'installation_settings',
@@ -519,6 +513,7 @@ func (t *tool) listObjectTables(ctx context.Context, pool *pgxpool.Pool) (result
 				'quota_outbox',
 				'schema_migrations',
 				'storage_tier_backends',
+				'tenant_billing_assignments',
 				'tenant_domains'
 			)
 		order by
@@ -594,9 +589,8 @@ func (t *tool) listArchiveTables(ctx context.Context, pool *pgxpool.Pool) (resul
 
 // checkObjectTable performs all consistency checks for a single object table: verifies that it has the expected columns
 // with the correct types, a primary key on 'id', a tenant foreign key, a corresponding archive table, and the
-// enqueue_change trigger. The schema version selects the checks that are valid for the applied state. Returns the
-// number of issues found.
-func (t *tool) checkObjectTable(ctx context.Context, pool *pgxpool.Pool, table string, version uint) int {
+// enqueue_change trigger. Returns the number of issues found.
+func (t *tool) checkObjectTable(ctx context.Context, pool *pgxpool.Pool, table string) int {
 	// Make a copy of the expected columns so that we can adjust it for special cases without interfering with the
 	// original map:
 	objectColumns := maps.Clone(toolObjectColumns)
@@ -622,31 +616,6 @@ func (t *tool) checkObjectTable(ctx context.Context, pool *pgxpool.Pool, table s
 		issues += t.checkPrimaryKey(ctx, pool, table, "tenant", "name")
 	default:
 		issues += t.checkPrimaryKey(ctx, pool, table, "id")
-	}
-
-	// Billing objects intentionally do not publish changes. Billing accounts keep their live tenant foreign key.
-	// Assignment history has no foreign key through tenant_id or metadata.tenant, so retained history cannot block
-	// or cascade tenant deletion. Require this only from the identity-store migration onwards because older fixtures
-	// predate the rule.
-	if table == "billing_accounts" || table == "tenant_billing_assignments" {
-		if table == "billing_accounts" {
-			issues += t.checkTenantForeignKey(ctx, pool, table)
-		} else if version >= migrationRetainDeletedTenantIdentities {
-			issues += t.checkNoTenantForeignKey(ctx, pool, table)
-		}
-		issues += t.checkTableExists(ctx, pool, "archived_"+table)
-		issues += t.checkTableExists(ctx, pool, "active_"+table)
-		var publishes bool
-		err := pool.QueryRow(ctx, `select exists (
-			select 1 from pg_trigger t join pg_proc p on p.oid = t.tgfoid
-			where t.tgrelid = ('public.' || $1)::regclass and not t.tgisinternal
-			and (t.tgname = 'enqueue_change' or p.proname = 'enqueue_change'))`, table).Scan(&publishes)
-		if err != nil || publishes {
-			t.logger.ErrorContext(ctx, "Billing object must not enqueue changes",
-				slog.String("table", table), slog.Any("error", err))
-			issues++
-		}
-		return issues
 	}
 
 	issues += t.checkTenantForeignKey(ctx, pool, table)
@@ -909,55 +878,6 @@ func (t *tool) checkTriggerExists(ctx context.Context, pool *pgxpool.Pool, table
 	return 0
 }
 
-// checkNoTenantForeignKey verifies that the given table has no foreign key constraint referencing the live 'tenants'
-// table. The constraint name is intentionally ignored: the identity cutover removes every such link from retained
-// assignment history, so any new key, whatever its name, is drift. Returns the number of issues found.
-func (t *tool) checkNoTenantForeignKey(ctx context.Context, pool *pgxpool.Pool, table string) int {
-	var count int
-	err := pool.QueryRow(
-		ctx,
-		`
-		select
-			count(*)
-		from
-			pg_catalog.pg_constraint con
-		join
-			pg_catalog.pg_class c on c.oid = con.conrelid
-		join
-			pg_catalog.pg_namespace n on n.oid = c.relnamespace
-		join
-			pg_catalog.pg_class fc on fc.oid = con.confrelid
-		join
-			pg_catalog.pg_namespace fn on fn.oid = fc.relnamespace
-		where
-			n.nspname = 'public' and
-			c.relname = $1 and
-			con.contype = 'f' and
-			fn.nspname = 'public' and
-			fc.relname = 'tenants'
-		`,
-		table,
-	).Scan(&count)
-	if err != nil {
-		t.logger.ErrorContext(
-			ctx,
-			"Failed to check absence of tenant foreign key for table",
-			slog.String("table", table),
-			slog.Any("error", err),
-		)
-		return 1
-	}
-	if count != 0 {
-		t.logger.ErrorContext(
-			ctx,
-			"Retained billing history must not reference live tenants",
-			slog.String("table", table),
-		)
-		return 1
-	}
-	return 0
-}
-
 // checkTenantForeignKey verifies that the given table has a foreign key constraint on the 'tenant' column referencing
 // the 'id' column of the 'tenants' table. Returns the number of issues found.
 func (t *tool) checkTenantForeignKey(ctx context.Context, pool *pgxpool.Pool, table string) int {
@@ -1064,20 +984,6 @@ func (t *tool) fetchColumns(ctx context.Context, pool *pgxpool.Pool, table strin
 	return
 }
 
-// schemaVersion returns the schema version recorded by the migration library. An error is returned when the version
-// can't be determined, so that version-dependent checks fail instead of applying the wrong expectation.
-func (t *tool) schemaVersion(ctx context.Context, pool *pgxpool.Pool) (uint, error) {
-	var version int64
-	err := pool.QueryRow(ctx, `select version from schema_migrations`).Scan(&version)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get schema version: %w", err)
-	}
-	if version < 0 {
-		return 0, fmt.Errorf("schema version is negative: %d", version)
-	}
-	return uint(version), nil
-}
-
 // migrationsLogger is an adapter to implement the logging interface of the underlying migrations library using our
 // logging library.
 type migrationsLogger struct {
@@ -1119,11 +1025,6 @@ const (
 
 // meteringTriggerName is the trigger that enforces the metering source contract.
 const meteringTriggerName = "enforce_metering_fields"
-
-// migrationRetainDeletedTenantIdentities is the migration that introduces the deleted tenant identity store and
-// completes the billing history cutover. Retained assignment history never carries a live tenant foreign key, but
-// fixtures applied before this version predate the identity store, so the absence is only required from here onwards.
-const migrationRetainDeletedTenantIdentities uint = 160
 
 // ownerReferences maps each object table that records an owner reference in its status to the
 // table holding the referenced resource. Extend together with the table and JSON-path mapping

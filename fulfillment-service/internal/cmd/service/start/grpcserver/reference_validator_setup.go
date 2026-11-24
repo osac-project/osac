@@ -45,9 +45,6 @@ import (
 // tenant-only SSH-key contract, validate key material, and store canonical
 // Secret references. Update exclusions also leave immutable-field handling to
 // the merged candidate rather than resolving a replacement in the interceptor.
-// A billing assignment Update with an explicitly empty mask selects nothing and
-// its handler answers a validated no-op, so the stale body reference is not
-// resolved either.
 // Other references continue through the interceptor's registered lookups.
 func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, registerer prometheus.Registerer) (*references.ReferenceValidator, error) {
 	validator, err := references.NewReferenceValidator().SetLogger(logger).SetMetricsRegisterer(registerer).
@@ -65,7 +62,6 @@ func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, regis
 		SetExcludedReferencePaths(bareMetalInstanceSSHKeyMethods(), "object.spec.ssh_key").
 		SetExcludedReferencePaths(clusterSshKeyMethods(), "object.spec.ssh_key").
 		SetExcludedReferencePaths(clusterTemplateSshKeyMethods(), "object.spec_defaults.ssh_key").
-		SetEmptyUpdateMaskNoOpMethods(tenantBillingAssignmentUpdateMethods()).
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reference validator: %w", err)

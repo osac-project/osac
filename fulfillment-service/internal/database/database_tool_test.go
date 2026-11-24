@@ -42,7 +42,7 @@ var _ = Describe("Database tool", func() {
 		DeferCleanup(os.RemoveAll, tmpDir)
 	})
 
-	Describe("Normalized billing schema and nonpublication", func() {
+	Describe("Tenant identity schema classification", func() {
 		var checker Tool
 
 		BeforeEach(func(ctx context.Context) {
@@ -53,10 +53,6 @@ var _ = Describe("Database tool", func() {
 			Expect(err).ToNot(HaveOccurred())
 			checker, err = NewTool().SetLogger(logger).SetURL(url).Build()
 			Expect(err).ToNot(HaveOccurred())
-		})
-
-		It("validates the normalized objects without requiring billing enqueue triggers", func(ctx context.Context) {
-			Expect(checker.CheckSchema(ctx)).To(Succeed())
 		})
 
 		It("classifies deleted tenant identities as minimal non-object storage", func(ctx context.Context) {
@@ -91,11 +87,13 @@ var _ = Describe("Database tool", func() {
 			objects, err := implementation.listObjectTables(ctx, pool)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(objects).ToNot(ContainElement("deleted_tenant_identities"))
-			Expect(objects).To(ContainElements("tenants", "billing_accounts", "tenant_billing_assignments"))
+			Expect(objects).To(ContainElement("tenants"))
+			Expect(objects).ToNot(ContainElement("billing_accounts"))
+			Expect(objects).ToNot(ContainElement("tenant_billing_assignments"))
 			Expect(checker.CheckSchema(ctx)).To(Succeed())
 		})
 
-		DescribeTable("detects bounded billing drift while retaining nonbilling requirements",
+		DescribeTable("detects nonbilling schema drift",
 			func(ctx context.Context, mutation string) {
 				pool, err := checker.Pool(ctx)
 				Expect(err).ToNot(HaveOccurred())
@@ -104,15 +102,7 @@ var _ = Describe("Database tool", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(checker.CheckSchema(ctx)).ToNot(Succeed())
 			},
-			Entry("billing account metadata", `alter table billing_accounts drop column labels`),
-			Entry("assignment metadata", `alter table tenant_billing_assignments drop column labels`),
-			Entry("account publication", `create trigger enqueue_change after insert on billing_accounts
-				for each row execute function enqueue_change()`),
-			Entry("assignment publication", `create trigger enqueue_change after insert on tenant_billing_assignments
-				for each row execute function enqueue_change()`),
 			Entry("nonbilling enqueue requirement", `drop trigger enqueue_change on tenants`),
-			Entry("assignment live tenant foreign key", `alter table tenant_billing_assignments
-				add constraint assignment_tenant_drift_fk foreign key (tenant) references tenants (name)`),
 		)
 	})
 

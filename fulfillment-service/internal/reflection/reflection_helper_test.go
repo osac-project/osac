@@ -24,36 +24,12 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	grpcstatus "google.golang.org/grpc/status"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/reflect/protodesc"
-	"google.golang.org/protobuf/reflect/protoreflect"
-	"google.golang.org/protobuf/reflect/protoregistry"
-	"google.golang.org/protobuf/types/descriptorpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/packages"
 	"github.com/osac-project/osac/fulfillment-service/internal/testing"
-	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
-
-var _ = Describe("Billing assignment edit masks", func() {
-	DescribeTable("selects the whole billing account but keeps unrelated changed paths", func(object proto.Message) {
-		original := proto.Clone(object)
-		Expect(protojson.Unmarshal([]byte(`{"metadata":{"tenant":"t"},"spec":{"billing_account":{"id":"a","name":"a"}}}`), original)).To(Succeed())
-		edited := proto.Clone(object)
-		Expect(protojson.Unmarshal([]byte(`{"metadata":{"tenant":"new-t"},"spec":{"billing_account":{"name":"new-a"}}}`), edited)).To(Succeed())
-		mask, err := computeUpdateMask(original, edited)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(mask.GetPaths()).To(ConsistOf("spec.billing_account", "metadata.tenant"))
-		mask, err = computeUpdateMask(edited, proto.Clone(edited))
-		Expect(err).NotTo(HaveOccurred())
-		Expect(mask).NotTo(BeNil())
-		Expect(mask.GetPaths()).To(BeEmpty())
-	},
-		Entry("private", &privatev1.TenantBillingAssignment{}),
-	)
-})
 
 type testTenantKey struct{}
 
@@ -65,66 +41,6 @@ func testTenantFromContext(ctx context.Context) string {
 
 func testTenantIntoContext(ctx context.Context, tenant string) context.Context {
 	return context.WithValue(ctx, testTenantKey{}, tenant)
-}
-
-// Clone registered names, not the global registries. Both the valid control and
-// malformed variants have real registered request/response counterparts, so an
-// unregistered-type guard alone cannot satisfy the shape-rejection assertions.
-func cloneRegisteredService(name protoreflect.FullName, change func(*descriptorpb.FileDescriptorProto)) protoreflect.ServiceDescriptor {
-	original, err := protoregistry.GlobalFiles.FindDescriptorByName(name)
-	Expect(err).NotTo(HaveOccurred())
-	file := protodesc.ToFileDescriptorProto(original.ParentFile())
-	change(file)
-	descriptor, err := protodesc.NewFile(file, protoregistry.GlobalFiles)
-	Expect(err).NotTo(HaveOccurred())
-	service := descriptor.Services().ByName(original.Name())
-	for i := range service.Methods().Len() {
-		method := service.Methods().Get(i)
-		for _, message := range []protoreflect.MessageDescriptor{method.Input(), method.Output()} {
-			_, err := protoregistry.GlobalTypes.FindMessageByName(message.FullName())
-			Expect(err).NotTo(HaveOccurred(), "fixture must have a registered counterpart for %s", message.FullName())
-		}
-	}
-	return service
-}
-
-func setGetResponseObjectShape(file *descriptorpb.FileDescriptorProto, shape string) {
-	var responseName string
-	for _, method := range file.Service[0].Method {
-		if method.GetName() == "Get" {
-			responseName = method.GetOutputType()
-		}
-	}
-	for _, message := range file.MessageType {
-		if "."+file.GetPackage()+"."+message.GetName() != responseName {
-			continue
-		}
-		for i, field := range message.Field {
-			if field.GetName() != "object" {
-				continue
-			}
-			switch shape {
-			case "missing":
-				message.Field = append(message.Field[:i], message.Field[i+1:]...)
-			case "scalar":
-				field.Type, field.TypeName = descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum(), nil
-			case "repeated":
-				field.Label = descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum()
-			case "map":
-				message.NestedType = append(message.NestedType, &descriptorpb.DescriptorProto{
-					Name: proto.String("ObjectEntry"), Options: &descriptorpb.MessageOptions{MapEntry: proto.Bool(true)},
-					Field: []*descriptorpb.FieldDescriptorProto{
-						{Name: proto.String("key"), Number: proto.Int32(1), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
-						{Name: proto.String("value"), Number: proto.Int32(2), Type: descriptorpb.FieldDescriptorProto_TYPE_STRING.Enum()},
-					},
-				})
-				field.Label = descriptorpb.FieldDescriptorProto_LABEL_REPEATED.Enum()
-				field.TypeName = proto.String(responseName + ".ObjectEntry")
-			}
-			return
-		}
-	}
-	Fail("fixture response has no object field")
 }
 
 type testProjectKey struct{}
@@ -162,39 +78,6 @@ var _ = Describe("Reflection helper", func() {
 		)
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(connection.Close)
-	})
-
-	Describe("billing scope configuration", func() {
-		for _, pkg := range []string{packages.PublicV1, packages.PrivateV1} {
-			DescribeTable(pkg+" classifies the existing descriptors without changing discovery",
-				func(name string, tenant, project bool) {
-					helper, err := NewHelper().SetLogger(logger).SetConnection(connection).
-						AddPackage(pkg, 0).Build()
-					Expect(err).NotTo(HaveOccurred())
-					object := helper.Lookup(name)
-					Expect(object).NotTo(BeNil())
-					Expect(object.IsTenantScoped()).To(Equal(tenant))
-					Expect(object.IsProjectScoped()).To(Equal(project))
-					Expect(object.UseGetForStructuredOutput()).To(BeFalse(), "billing keys must remain List predicates")
-				},
-				Entry("ordinary cluster control", "cluster", true, true),
-				Entry("tenant-only service-account control", "serviceaccount", true, false),
-			)
-		}
-		DescribeTable("private billing descriptors retain their scope classification",
-			func(name string, tenant, project bool) {
-				helper, err := NewHelper().SetLogger(logger).SetConnection(connection).
-					AddPackage(packages.PrivateV1, 0).Build()
-				Expect(err).NotTo(HaveOccurred())
-				object := helper.Lookup(name)
-				Expect(object).NotTo(BeNil())
-				Expect(object.IsTenantScoped()).To(Equal(tenant))
-				Expect(object.IsProjectScoped()).To(Equal(project))
-				Expect(object.UseGetForStructuredOutput()).To(BeFalse(), "billing keys must remain List predicates")
-			},
-			Entry("system-global account", "billingaccount", false, false),
-			Entry("tenant-only assignment", "tenantbillingassignment", true, false),
-		)
 	})
 
 	Describe("Creation", func() {

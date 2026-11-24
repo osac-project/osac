@@ -25,13 +25,3 @@ func billingAssignmentMethods() []string {
 		privatev1.TenantBillingAssignments_Update_FullMethodName,
 	}
 }
-
-// tenantBillingAssignmentUpdateMethods returns the Update methods whose handler treats an explicitly
-// present, empty update mask as a validated no-op without provider calls. Nothing is selected, so the
-// stale request body is not resolved; Create and updates selecting spec.billing_account keep the
-// ordinary reference validation.
-func tenantBillingAssignmentUpdateMethods() []string {
-	return []string{
-		privatev1.TenantBillingAssignments_Update_FullMethodName,
-	}
-}

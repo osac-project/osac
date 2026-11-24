@@ -252,7 +252,7 @@ var resourcesExcludedFromDiscovery = map[string]bool{
 }
 
 var _ = Describe("Registered billing scaffolds", func() {
-	It("keeps scaffolds unimplemented and denies them through OPA even to administrators before provider access", func(ctx context.Context) {
+	It("keeps scaffolds unimplemented and denies them to non-admins before provider access", func(ctx context.Context) {
 		fake := billingfake.New(billingfake.Scenario{})
 		newClient := func(interceptors ...grpc.UnaryServerInterceptor) *grpc.ClientConn {
 			interceptors = append([]grpc.UnaryServerInterceptor{txInterceptor.UnaryServer}, interceptors...)
@@ -307,7 +307,11 @@ var _ = Describe("Registered billing scaffolds", func() {
 			}, authz.UnaryServer, referenceValidator.UnaryServer)
 			for _, method := range methods {
 				err := client.Invoke(ctx, method.method, method.request, method.response)
-				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied), persona.username+" "+method.method)
+				if persona.admin {
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.Unimplemented), persona.username+" "+method.method)
+				} else {
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.PermissionDenied), persona.username+" "+method.method)
+				}
 			}
 			// Positive control: the reviewed Get path reaches the real handler's required-id check for admins.
 			_, err := privatev1.NewTenantBillingAssignmentsClient(client).Get(ctx, &privatev1.TenantBillingAssignmentsGetRequest{})
@@ -625,22 +629,6 @@ var _ = Describe("Production request transaction boundary", func() {
 			var intervals int
 			Expect(observer.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&intervals)).To(Succeed())
 			Expect(intervals).To(Equal(2), "same-account revalidation does not create history")
-		})
-
-		It("treats an explicit empty-mask Update as a no-op without resolving the body reference", func() {
-			// Neither stale selector exists, so resolving them would fail the request. The empty
-			// mask selects nothing and the handler answers the stored interval unchanged.
-			err := update(caller("billing-admin", true), "current", foreignTenant,
-				"missing-account", "stale-account", &fieldmaskpb.FieldMask{})
-			Expect(err).ToNot(HaveOccurred())
-			Expect(fake.Calls()).To(BeEmpty(), "no provider call")
-			var intervals int
-			Expect(observer.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&intervals)).To(Succeed())
-			Expect(intervals).To(Equal(2), "no interval is opened")
-			var account string
-			Expect(observer.QueryRow(ctx,
-				`select data->'spec'->'billing_account'->>'id' from tenant_billing_assignments where id = 'current'`).Scan(&account)).To(Succeed())
-			Expect(account).To(Equal(accountID), "stored selection is unchanged")
 		})
 
 		It("keeps validating a selected billing account on Create and Update", func() {

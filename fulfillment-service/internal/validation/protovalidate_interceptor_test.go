@@ -662,14 +662,14 @@ var _ = Describe("Protovalidate interceptor", func() {
 			Expect(status.Message()).To(ContainSubstring("validation failed"))
 		})
 
-		It("Rejects create request with missing credentials", func() {
+		It("Rejects OSAC-managed Pure when backend credentials are missing", func() {
 			request := privatev1.StorageBackendsCreateRequest_builder{
 				Object: privatev1.StorageBackend_builder{
 					Metadata: privatev1.Metadata_builder{
 						Name: "my-backend",
 					}.Build(),
 					Spec: privatev1.StorageBackendSpec_builder{
-						Provider: "vast",
+						Provider: "pure",
 						Endpoint: "https://storage.example.com",
 					}.Build(),
 				}.Build(),

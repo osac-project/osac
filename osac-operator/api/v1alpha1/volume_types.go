@@ -50,7 +50,8 @@ type VolumeOwner struct {
 }
 
 // DiskImageReference identifies a DiskImage catalog object that a volume is
-// provisioned from.
+// provisioned from. It follows the OSAC fullResourceReference standard and
+// is copied verbatim from the ComputeInstance spec.
 type DiskImageReference struct {
 	// ID is the fulfillment record identifier of the DiskImage.
 	// +kubebuilder:validation:Required
@@ -64,6 +65,12 @@ type DiskImageReference struct {
 	// Project is the DiskImage project, carried for observability.
 	// +kubebuilder:validation:Optional
 	Project string `json:"project,omitempty"`
+
+	// Shared marks a shared-tenant DiskImage reference, carried verbatim
+	// from the ComputeInstance spec; it is not interpreted here — the
+	// reference resolves by ID.
+	// +kubebuilder:validation:Optional
+	Shared bool `json:"shared,omitempty"`
 }
 
 // VolumeTarget records where an owned volume's storage is provisioned.
@@ -126,7 +133,10 @@ type VolumeSpec struct {
 	Topology *VolumeTopology `json:"topology,omitempty"`
 
 	// Owner identifies the fulfillment workload that owns this volume.
-	// Empty for volumes that no workload owns. Immutable after creation.
+	// Set only by the VMaaS provisioning path; CaaS volumes are owned by
+	// their CaaS cluster, for which a dedicated owner type is future
+	// work — today this field distinguishes VMaaS volumes only. Immutable
+	// after creation.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="owner is immutable"
 	Owner *VolumeOwner `json:"owner,omitempty"`

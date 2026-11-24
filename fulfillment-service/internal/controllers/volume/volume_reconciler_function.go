@@ -518,9 +518,7 @@ func protoOwnerToCRD(source *privatev1.VolumeOwner) *osacv1alpha1.VolumeOwner {
 }
 
 // protoDiskImageToCRD converts the proto DiskImageReference to the CRD
-// DiskImageReference. Only the identifier and the observability fields are
-// carried; the catalog-side shared and tenant selectors are deliberately
-// not projected onto the CRD.
+// DiskImageReference, carrying the reference verbatim.
 func protoDiskImageToCRD(source *privatev1.DiskImageReference) *osacv1alpha1.DiskImageReference {
 	if source == nil {
 		return nil
@@ -529,6 +527,7 @@ func protoDiskImageToCRD(source *privatev1.DiskImageReference) *osacv1alpha1.Dis
 		ID:      source.GetId(),
 		Name:    source.GetName(),
 		Project: source.GetProject(),
+		Shared:  source.GetShared(),
 	}
 }
 

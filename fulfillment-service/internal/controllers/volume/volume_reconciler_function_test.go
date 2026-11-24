@@ -266,6 +266,7 @@ var _ = Describe("buildSpec", func() {
 			ID:      "img-1",
 			Name:    "fedora",
 			Project: "project-1",
+			Shared:  true,
 		}))
 		Expect(spec.Target).To(Equal(&osacv1alpha1.VolumeTarget{
 			DiskKey:        "boot",

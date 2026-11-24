@@ -98,6 +98,12 @@ spec:
                   project:
                     description: Project is the DiskImage project, carried for observability.
                     type: string
+                  shared:
+                    description: |-
+                      Shared marks a shared-tenant DiskImage reference, carried verbatim
+                      from the ComputeInstance spec; it is not interpreted here — the
+                      reference resolves by ID.
+                    type: boolean
                 required:
                 - id
                 type: object
@@ -107,7 +113,10 @@ spec:
               owner:
                 description: |-
                   Owner identifies the fulfillment workload that owns this volume.
-                  Empty for volumes that no workload owns. Immutable after creation.
+                  Set only by the VMaaS provisioning path; CaaS volumes are owned by
+                  their CaaS cluster, for which a dedicated owner type is future
+                  work — today this field distinguishes VMaaS volumes only. Immutable
+                  after creation.
                 properties:
                   reference:
                     description: Reference is the fulfillment record identifier of

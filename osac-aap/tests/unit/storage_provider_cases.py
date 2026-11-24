@@ -48,8 +48,8 @@ def discover_cases(roles=ROLES, contracts=CONTRACTS, dispatch_name=DISPATCH_NAME
             continue
         canonical = role.resolve().name
         assert canonical in contracts, f"Uncovered storage provider: {role.name} ({canonical}); add a fixture contract"
-        protocols = meta.get("capabilities", {}).get("supported_protocols")
-        assert protocols, f"Provider {role.name} must declare supported_protocols"
+        protocols = contracts[canonical].get("protocols")
+        assert protocols, f"Missing protocol fixture: {canonical}"
         assert set(protocols) <= {"block", "nfs"}, f"Uncovered protocols for {role.name}: {protocols}"
         metadata[canonical] = meta
         for alias in (role.name, role.name.removesuffix("_storage")):
@@ -63,7 +63,7 @@ def discover_cases(roles=ROLES, contracts=CONTRACTS, dispatch_name=DISPATCH_NAME
         canonical = (roles / dispatched).resolve().name
         assert canonical in contracts, f"Uncovered dispatch provider: {provider} -> {canonical}"
         assert "provisioner" in contracts[canonical], f"Missing emitted-class contract: {canonical}"
-        protocols = tuple(metadata[canonical]["capabilities"]["supported_protocols"])
+        protocols = tuple(contracts[canonical]["protocols"])
         if "nfs" in protocols:
             assert "nfs_parameters" in contracts[canonical], f"Missing NFS fixture contract: {canonical}"
         cases.extend(ProviderCase(provider, canonical, mode, protocols) for mode in contracts[canonical]["modes"])

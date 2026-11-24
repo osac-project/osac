@@ -10,8 +10,6 @@ description: >
 template_type: storage_provider
 implementation_strategy: lvms
 capabilities:
-  supported_protocols:
-    - block
   provisioning_targets:
     - vmaas
     - caas

@@ -58,10 +58,10 @@ def test_nfs_only_discovery_does_not_require_block(tmp_path):
     metadata = tmp_path / "nfs_only_storage/meta"
     metadata.mkdir(parents=True)
     (metadata / "osac.yaml").write_text(yaml.safe_dump({
-        "template_type": "storage_provider", "capabilities": {"supported_protocols": ["nfs"]},
+        "template_type": "storage_provider",
     }))
     cases = discover_cases(tmp_path, {"nfs_only_storage": {
-        "modes": ["default"], "provisioner": "fixture.nfs", "nfs_parameters": {},
+        "modes": ["default"], "protocols": ["nfs"], "provisioner": "fixture.nfs", "nfs_parameters": {},
     }}, dispatch_name="""
     {% set _csi_managed = [] -%}
     {% set _clean = _current_provider | replace('-', '_') -%}
@@ -70,6 +70,13 @@ def test_nfs_only_discovery_does_not_require_block(tmp_path):
     assert cases
     assert all(case.protocols == ("nfs",) for case in cases)
     assert not [case for case in cases if "block" in case.protocols]
+
+
+def test_missing_protocol_fixture_fails_coverage():
+    contracts = copy.deepcopy(CONTRACTS)
+    contracts["lvms_storage"].pop("protocols")
+    with pytest.raises(AssertionError, match="Missing protocol fixture: lvms_storage"):
+        discover_cases(contracts=contracts)
 
 
 @pytest.fixture(scope="module", params=BLOCK_CREATORS, ids=lambda case: case.id)

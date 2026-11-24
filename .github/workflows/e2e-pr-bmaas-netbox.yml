@@ -36,6 +36,12 @@ on:
         description: The pull request number
         required: true
         type: string
+      tier:
+        description: >-
+          "full" when the BMaaS NetBox sanity + regression variant started this run, empty for sanity tests
+        required: false
+        type: string
+        default: ""
       # The decision sends these two with every suite. They are not used: `verify` reads the author and association from
       # the pull request, so a dispatch cannot claim to be a member.
       fork-pr-author:
@@ -71,6 +77,7 @@ jobs:
       id-token: write
     uses: ./.github/workflows/e2e-bmaas-full-install.yml
     with:
+      tier: ${{ inputs.tier }}
       repo: ${{ inputs.repo }}
       sha: ${{ inputs.sha }}
       pr-number: ${{ inputs.pr-number }}

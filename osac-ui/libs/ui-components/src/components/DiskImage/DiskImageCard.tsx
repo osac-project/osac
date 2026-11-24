@@ -17,7 +17,7 @@ import ListPageCard from '@osac/ui-components/components/Page/ListPageCard';
 import OsacCardFooterRow from '@osac/ui-components/components/Primitives/OsacCardFooterRow';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField';
 
-import { DISK_IMAGE_NAME_PREVIEW_LENGTH, architectureLabels, guestOsFamilyLabels } from './utils';
+import { architectureLabels, guestOsFamilyLabels } from './utils';
 import { useTranslation } from '../../hooks/useTranslation';
 import { Timestamp } from '../Primitives/Timestamp';
 
@@ -42,7 +42,6 @@ const DiskImageCard = ({ diskImage, tenants }: DiskImageCardProps) => {
         <ResourceNameField
           resource={diskImage}
           detailsUrl={`/admin/infrastructure/disk-images/${diskImage.id}`}
-          maxCharsDisplayed={DISK_IMAGE_NAME_PREVIEW_LENGTH}
         />
       }
       icon={<RhUiStorageIcon />}

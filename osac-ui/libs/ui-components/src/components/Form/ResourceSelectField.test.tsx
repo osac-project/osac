@@ -268,7 +268,7 @@ describe('ResourceSelectField', () => {
     expect(screen.getByRole('combobox')).toHaveValue('globex (custom)');
   });
 
-  it('renders option details provided by the caller', async () => {
+  it('renders option details as a PatternFly description under the label', async () => {
     const { user } = renderSelect({
       tenants: [makeTenant('t-1', 'acme'), makeTenant('t-2', 'globex')],
       getOptionDescription: (item) => `ID: ${item.id}`,
@@ -276,9 +276,12 @@ describe('ResourceSelectField', () => {
 
     await waitFor(() => expect(screen.getByLabelText(/^Tenant/)).not.toBeDisabled());
     await user.click(screen.getByLabelText(/^Tenant/));
-    await user.click(screen.getByRole('option', { name: 'globex · ID: t-2' }));
+    const option = await screen.findByRole('option', { name: /globex/ });
+    expect(option.querySelector('.pf-v6-c-menu__item-description')).toHaveTextContent('ID: t-2');
+    await user.click(option);
 
-    expect(screen.getByRole('combobox')).toHaveValue('globex · ID: t-2');
+    // Closed toggle shows the label only, not the description.
+    expect(screen.getByRole('combobox')).toHaveValue('globex');
   });
 
   it('keeps distinct ids for the typeahead select and toggle', async () => {

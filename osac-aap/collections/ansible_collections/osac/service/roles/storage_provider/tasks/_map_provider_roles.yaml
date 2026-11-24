@@ -1,0 +1,13 @@
+---
+# Maps each provider in _unique_providers to its osac.templates role.
+# netapp and pure tiers are served by the OSAC CSI driver role.
+
+- name: Map each provider to its template role
+  ansible.builtin.set_fact:
+    _provider_roles: >-
+      {% set _roles = {} -%}
+      {% for _p in _unique_providers -%}
+      {% set _ = _roles.update({_p: 'osac_csi_storage' if _p in ['netapp', 'pure']
+                                else (_p if _p.endswith('_storage') else _p ~ '_storage')}) -%}
+      {% endfor -%}
+      {{ _roles }}

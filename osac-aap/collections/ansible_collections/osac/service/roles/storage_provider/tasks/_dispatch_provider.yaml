@@ -81,16 +81,15 @@
   block:
     - name: "Include provider storage role"
       ansible.builtin.include_role:
-        name: >-
-          {% set _clean = _current_provider | replace('-', '_') -%}
-          {% set _csi_managed = ['netapp', 'pure'] -%}
-          {% set _role = 'osac_csi_storage' if _clean in _csi_managed else (_clean if _clean.endswith('_storage') else (_clean ~ '_storage')) -%}
-          osac.templates.{{ _role }}
+        name: "osac.templates.{{ _provider_roles[_current_provider] }}"
         tasks_from: "{{ _dispatch_action }}"
         public: true
       vars:
         _provider_tiers: "{{ _computed_provider_tiers }}"
         _provider_backend_connections: "{{ _computed_provider_backend_connections }}"
+        # Hub Secret for this tenant and backend: <provider>-tenant-config-<tenant>-<backend_id>.
+        _hub_secret_name: >-
+          {{ _current_provider | replace('_', '-') }}-tenant-config-{{ tenant_name }}-{{ _current_backend_id }}
 
 - name: "Accumulate tenant config after dispatch (setup only)"
   ansible.builtin.set_fact:

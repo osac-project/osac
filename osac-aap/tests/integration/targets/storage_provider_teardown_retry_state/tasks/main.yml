@@ -6,8 +6,7 @@
     tenant_name: test-retrystate
     tenant_namespace: osac-system
     tenant_uid: "test-uid-retrystate"
-    vast_storage_validate_certs: false
-    storage_provider_config_namespace: osac-system
+    storage_provider_validate_certs: false
     storage_provider_backend_connections:
       be-retry:
         endpoint: "127.0.0.1:18443"
@@ -20,7 +19,6 @@
         provider: vast
   environment:
     VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
   tasks:
     - name: Reset mock VMS state
       ansible.builtin.uri:
@@ -118,8 +116,7 @@
     tenant_name: test-retrystate
     tenant_namespace: osac-system
     tenant_uid: "test-uid-retrystate"
-    vast_storage_validate_certs: false
-    storage_provider_config_namespace: osac-system
+    storage_provider_validate_certs: false
     storage_provider_backend_connections:
       be-retry:
         endpoint: "127.0.0.1:18443"
@@ -133,7 +130,6 @@
   environment:
     K8S_AUTH_KUBECONFIG: "/tmp/osac_limited_kubeconfig"
     KUBECONFIG: "/tmp/osac_limited_kubeconfig"
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
   tasks:
     - name: Run teardown with list-denied kubeconfig
       block:
@@ -189,8 +185,7 @@
     tenant_name: test-retrystate
     tenant_namespace: osac-system
     tenant_uid: "test-uid-retrystate"
-    vast_storage_validate_certs: false
-    storage_provider_config_namespace: osac-system
+    storage_provider_validate_certs: false
     storage_provider_backend_connections:
       be-retry:
         endpoint: "127.0.0.1:18443"
@@ -203,7 +198,6 @@
         provider: vast
   environment:
     VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
   tasks:
     - name: Delete RoleBinding
       ansible.builtin.shell: |

@@ -32,7 +32,6 @@
                 provider: vast
                 backend_id: "test-backend"
             storage_provider_action: setup
-            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -158,7 +157,6 @@
                 provider: vast
                 backend_id: be-test
             storage_provider_action: setup
-            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -220,7 +218,6 @@
                 provider: lvms
                 backend_id: be-c
             storage_provider_action: setup
-            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -508,43 +505,6 @@
             success_msg: "Role correctly rejected invalid input"
 
 # ──────────────────────────────────────────────────────────────
-# Test 11b: Invalid DNS label tenant_name -- error path
-# Expected: role fails with tenant_name DNS label validation message
-# ──────────────────────────────────────────────────────────────
-- name: Test storage_provider -- invalid DNS label tenant_name (should fail)
-  hosts: localhost
-  gather_facts: false
-
-  tasks:
-    - name: Run invalid-dns-label-tenant-name failure test
-      block:
-        - name: Attempt with tenant_name containing uppercase and invalid characters (expected to fail)
-          ansible.builtin.include_role:
-            name: osac.service.storage_provider
-          vars:
-            storage_provider_tiers:
-              - name: default
-                protocol: nfs
-                provider: vast
-                backend_id: be-test
-            storage_provider_action: setup
-            tenant_name: "Invalid_Name!"
-            tenant_namespace: "osac-tenants"
-
-        - name: This task should not be reached -- role should have failed
-          ansible.builtin.fail:
-            msg: "Dispatcher unexpectedly accepted invalid tenant input"
-
-      rescue:
-        - name: Verify role failed with expected tenant_name DNS label message
-          ansible.builtin.assert:
-            that:
-              - "'tenant_name' in ansible_failed_result.msg"
-              - "'not a valid DNS label' in ansible_failed_result.msg"
-            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
-            success_msg: "Role correctly rejected invalid tenant_name DNS label"
-
-# ──────────────────────────────────────────────────────────────
 # Test 12: Missing tenant_namespace -- error path
 # Expected: role fails with tenant_namespace required message
 # ──────────────────────────────────────────────────────────────
@@ -737,7 +697,6 @@
                     max_reads_bw_mbps: 100
                     max_writes_bw_mbps: 100
             storage_provider_action: setup
-            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -789,7 +748,6 @@
                 backend_id: "acme-backend"
                 qos_policy: "Invalid Policy!"
             storage_provider_action: setup
-            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -811,78 +769,6 @@
               though the caller supplied a deliberately invalid qos_policy.
               Got: {{ ansible_failed_result.msg | default('unknown error') }}
             success_msg: "Tier without qos_limits correctly discarded the caller's qos_policy without validating it"
-
-# ──────────────────────────────────────────────────────────────
-# Test 16: VAST tiers dispatched together reference different backend_ids -- error path
-# Expected: role fails because VAST credential resolution supports exactly one backend_id
-# per role invocation (OSAC-1992 Task 6), and emits a structured osac_storage_provider_failures
-# artifact identifying both tiers and both backend_ids involved.
-# ──────────────────────────────────────────────────────────────
-- name: Test storage_provider -- VAST tiers reference multiple backend_ids (should fail)
-  hosts: localhost
-  gather_facts: false
-
-  pre_tasks:
-    - name: Clear any structured failure artifact from earlier scenarios
-      ansible.builtin.set_fact:
-        osac_storage_provider_failures: []
-
-  tasks:
-    - name: Run ambiguous-backend-association failure test
-      block:
-        - name: Attempt with two VAST tiers pointing at different backend_ids (expected to fail)
-          ansible.builtin.include_role:
-            name: osac.templates.vast_storage
-            tasks_from: setup
-          vars:
-            _provider_tiers:
-              - name: gold
-                protocol: nfs
-                provider: vast
-                backend_id: be-001
-              - name: silver
-                protocol: nfs
-                provider: vast
-                backend_id: be-002
-            _provider_backend_connections:
-              be-001:
-                endpoint: vast-1.example.com
-                username: admin
-                password: mock-backend-password
-              be-002:
-                endpoint: vast-2.example.com
-                username: admin
-                password: mock-backend-password
-            tenant_name: "tenant-acme"
-            tenant_namespace: "osac-tenants"
-
-        - name: This task should not be reached -- role should have failed
-          ansible.builtin.fail:
-            msg: "Role did not fail as expected when VAST tiers reference multiple backend_ids"
-
-      rescue:
-        - name: Verify role failed for ambiguous backend association
-          ansible.builtin.assert:
-            that:
-              - "'Expected exactly one backend_id' in (ansible_failed_result.msg | default(''))"
-            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
-            success_msg: "Role correctly rejected tiers referencing multiple backend_ids"
-
-        - name: Verify structured failure artifact was emitted for ambiguous backend association
-          ansible.builtin.assert:
-            that:
-              - osac_storage_provider_failures is defined
-              - osac_storage_provider_failures | length > 0
-              - osac_storage_provider_failures[0].reason == 'ambiguous_backend_association'
-              - "'gold' in osac_storage_provider_failures[0].tiers"
-              - "'silver' in osac_storage_provider_failures[0].tiers"
-              - "'be-001' in osac_storage_provider_failures[0].backend_ids"
-              - "'be-002' in osac_storage_provider_failures[0].backend_ids"
-              - "'expected exactly one backend_id' in (osac_storage_provider_failures[0].message | lower)"
-            fail_msg: >-
-              osac_storage_provider_failures was not set as expected:
-              {{ osac_storage_provider_failures | default('undefined') }}
-            success_msg: "Structured failure artifact correctly recorded both tiers and backend_ids"
 
 # ──────────────────────────────────────────────────────────────
 # Test 17: VAST tier's backend_id has no entry in storage_backend_connections -- error path
@@ -913,7 +799,6 @@
                 backend_id: be-999
             storage_provider_backend_connections: {}
             storage_provider_action: setup
-            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -976,7 +861,6 @@
                 username: admin
                 password: ""
             storage_provider_action: setup
-            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -1039,7 +923,6 @@
                 provider: vast
                 backend_id: be-001
             storage_provider_action: setup
-            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -1130,9 +1013,7 @@
 # ──────────────────────────────────────────────────────────────
 # Test 21: Invalid protocol dispatched via ensure_storage_class -- error path
 # Expected: role fails with the same structured unsupported_protocol artifact as Test 4,
-# proving the closed-set protocol check (factored into _validate_tier_protocols.yaml) is
-# also enforced on the ensure_storage_class action -- the dominant action for cluster-storage
-# reconcile, which previously had no protocol validation of its own at all.
+# so the protocol check also covers ensure_storage_class.
 # ──────────────────────────────────────────────────────────────
 - name: Test storage_provider -- invalid protocol via ensure_storage_class (should fail)
   hosts: localhost
@@ -1156,7 +1037,6 @@
                 provider: vast
                 backend_id: be-test
             storage_provider_action: ensure_storage_class
-            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -1264,7 +1144,6 @@
                 username: 12345
                 password: 123456
             storage_provider_action: setup
-            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -1316,7 +1195,6 @@
                 username: "admin"
                 password: "mock-admin-password"
             storage_provider_action: setup
-            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-acme"
             tenant_namespace: "osac-tenants"
 
@@ -1366,7 +1244,6 @@
                 username: "admin"
                 password: "not-a-real-credential"
             storage_provider_action: setup
-            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-null-ep"
             tenant_namespace: "osac-tenants"
 
@@ -1411,7 +1288,6 @@
                 username: null
                 password: "not-a-real-credential"
             storage_provider_action: setup
-            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-null-user"
             tenant_namespace: "osac-tenants"
 
@@ -1456,7 +1332,6 @@
                 username: "admin"
                 password: null
             storage_provider_action: setup
-            storage_provider_config_namespace: "osac-system"
             tenant_name: "tenant-null-pw"
             tenant_namespace: "osac-tenants"
 
@@ -1566,8 +1441,12 @@
     tenant_name: provider-routing-test
     _all_tenant_configs: {}
     _dispatch_action: setup
+    _unique_providers: [netapp, pure]
 
   tasks:
+    - name: Map providers to template roles
+      ansible.builtin.include_tasks: ../tasks/_map_provider_roles.yaml
+
     - name: Dispatch CSI-managed providers through their shared storage role
       ansible.builtin.include_tasks: ../tasks/_dispatch_provider.yaml
       loop:

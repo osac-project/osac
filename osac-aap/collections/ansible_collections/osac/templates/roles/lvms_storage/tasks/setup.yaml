@@ -5,15 +5,6 @@
 # advance from Stage 1 (StorageBackendReady) to Stage 2 (ensure_storage_class).
 # Deleted by teardown_backend when the tenant is removed.
 
-- name: Assert _provider_tiers is defined and non-empty
-  ansible.builtin.assert:
-    that:
-      - _provider_tiers is defined
-      - _provider_tiers | length > 0
-    fail_msg: >-
-      _provider_tiers must be provided by the service role dispatcher.
-      This role should not be called directly — use osac.service.storage_provider.
-
 - name: Create hub lifecycle marker Secret for tenant
   kubernetes.core.k8s:
     state: present
@@ -21,7 +12,7 @@
       apiVersion: v1
       kind: Secret
       metadata:
-        name: "{{ lvms_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _current_backend_id }}"
+        name: "{{ _hub_secret_name }}"
         namespace: "{{ storage_provider_config_namespace }}"
         labels:
           osac.openshift.io/tenant: "{{ tenant_name }}"

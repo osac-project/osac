@@ -8,13 +8,6 @@ vast_storage_csi_provisioner_map:
   nfs: "csi.vastdata.com"
   block: "block.csi.vastdata.com"
 
-# K8s Secret on hub cluster that stores per-tenant VAST config
-# (namespace is storage_provider_config_namespace from osac.service.storage_provider)
-vast_storage_tenant_config_secret_prefix: "vast-tenant-config-"
-
-# TLS certificate validation for VAST VMS API calls.
-vast_storage_validate_certs: "{{ lookup('env', 'VAST_VALIDATE_CERTS') | default('true', true) | bool }}"
-
 # Per-tenant VIP pool, referenced by CONVENTION: osac-<tenant>-vippool.
 # OSAC reuses the pool if it already exists (pre-created by the cloud admin or a
 # prior run). If it is missing and vast_storage_vip_pool_supernet is set, OSAC

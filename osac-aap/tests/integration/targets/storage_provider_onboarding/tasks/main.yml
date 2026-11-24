@@ -53,11 +53,9 @@
 
   environment:
     VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
     _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
-    storage_provider_config_namespace: osac-system
     tenant_name: "test-onboard"
     tenant_namespace: "osac-system"
     tenant_uid: "test-uid-12345"
@@ -72,7 +70,7 @@
         endpoint: "127.0.0.1:18443"
         username: "admin"
         password: "{{ _mock_vast_password }}"
-    vast_storage_validate_certs: false
+    storage_provider_validate_certs: false
 
   tasks:
     - name: Run storage provider setup
@@ -259,11 +257,7 @@
   hosts: localhost
   gather_facts: false
 
-  environment:
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
-
   vars:
-    storage_provider_config_namespace: osac-system
     tenant_name: "test-lvms-onboard"
     tenant_namespace: "osac-system"
     tenant_uid: "test-lvms-uid-12345"
@@ -395,11 +389,9 @@
 
   environment:
     VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
     _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
-    storage_provider_config_namespace: osac-system
     tenant_name: "test-obmulti"
     tenant_namespace: "osac-system"
     tenant_uid: "test-uid-obmulti"
@@ -422,7 +414,7 @@
         endpoint: "127.0.0.1:18445"
         username: "admin"
         password: "{{ _mock_vast_password }}"
-    vast_storage_validate_certs: false
+    storage_provider_validate_certs: false
 
   tasks:
     - name: Run setup for both backends

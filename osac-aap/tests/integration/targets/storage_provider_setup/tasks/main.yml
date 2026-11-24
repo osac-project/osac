@@ -10,10 +10,8 @@
 
   environment:
     VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
-    storage_provider_config_namespace: osac-system
     tenant_name: "test-setup"
     tenant_namespace: "osac-system"
     tenant_uid: "test-uid-setup"
@@ -35,7 +33,7 @@
         password: "mock-admin-password"
     storage_provider_action: setup
     storage_provider_provisioning_target: vmaas
-    vast_storage_validate_certs: false
+    storage_provider_validate_certs: false
 
   tasks:
     - name: Run storage provider setup
@@ -69,11 +67,7 @@
   hosts: localhost
   gather_facts: false
 
-  environment:
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
-
   vars:
-    storage_provider_config_namespace: osac-system
     tenant_name: "test-setup"
 
   tasks:
@@ -186,10 +180,8 @@
 
   environment:
     VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
-    storage_provider_config_namespace: osac-system
     tenant_name: "test-setup"
     tenant_namespace: "osac-system"
     tenant_uid: "test-uid-setup"
@@ -209,7 +201,7 @@
         password: "mock-admin-password"
     storage_provider_action: setup
     storage_provider_provisioning_target: vmaas
-    vast_storage_validate_certs: false
+    storage_provider_validate_certs: false
 
   tasks:
     - name: Call storage_provider role with setup action (second run)
@@ -246,11 +238,7 @@
   hosts: localhost
   gather_facts: false
 
-  environment:
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
-
   vars:
-    storage_provider_config_namespace: osac-system
     tenant_name: "test-setup"
 
   tasks:

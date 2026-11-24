@@ -1,25 +1,13 @@
 ---
-# Test-local stand-in for osac.service.storage_provider's per-provider dispatch
-# (_dispatch_provider.yaml). The service dispatcher currently routes the
-# `netapp` product key to osac.templates.osac_csi_storage, so these tests call
-# osac.templates.netapp_storage directly with the same inputs the dispatcher
-# hands a provider role:
-#   _provider_tiers               — the tiers whose provider is `netapp`
-#   _provider_backend_connections — only the connections those tiers reference
-# and collect the same outputs the dispatcher publishes
-# (storage_provider_tenant_configs keyed by provider, and
+# Stand-in for the dispatcher's per-provider dispatch: the dispatcher routes
+# `netapp` to osac_csi_storage, so these tests call netapp_storage directly
+# with the dispatcher's inputs (_provider_tiers, _provider_backend_connections)
+# and publish its outputs (storage_provider_tenant_configs keyed by provider,
 # storage_provider_storage_class_names).
 #
 # Inputs (play or include vars): storage_provider_action, storage_provider_tiers,
-# storage_provider_backend_connections, tenant_name.
-
-- name: Validate tenant_name is a valid DNS label
-  ansible.builtin.fail:
-    msg: >-
-      tenant_name is not a valid DNS label. Must be 1-63 lowercase
-      alphanumeric characters or hyphens, cannot start or end with a hyphen.
-  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
-  no_log: true
+# storage_provider_backend_connections, tenant_name, and optionally
+# storage_provider_validate_certs.
 
 - name: Reset provider role outputs from previous invocations
   ansible.builtin.set_fact:

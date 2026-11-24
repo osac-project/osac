@@ -1,8 +1,4 @@
 ---
-# Hub Secret prefix for per-tenant lifecycle markers
-# (namespace is storage_provider_config_namespace from osac.service.storage_provider).
-lvms_storage_tenant_config_secret_prefix: "lvms-tenant-config-"
-
 # topolvm StorageClass provisioner name.
 lvms_storage_provisioner: "topolvm.io"
 

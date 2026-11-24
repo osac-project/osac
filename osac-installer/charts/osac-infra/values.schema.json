@@ -4,6 +4,21 @@
   "description": "Configuration values for OSAC shared infrastructure (Phase 2)",
   "type": "object",
   "properties": {
+    "certs": {
+      "type": "object",
+      "properties": {
+        "caBundle": {
+          "type": "object",
+          "properties": {
+            "useDefaultCAs": {
+              "type": "boolean",
+              "default": true,
+              "description": "Include the public root CAs in the trust bundle. AAP workers use the bundle as their whole trust store."
+            }
+          }
+        }
+      }
+    },
     "hookResources": {
       "type": "object",
       "description": "Resource requests and limits applied to every cliImage hook Job. These hooks invoke `oc`, whose peak memory scales with the cluster's CRD count because of API discovery caching, so the limit is shared rather than set per hook. Raise the memory limit on clusters with unusually large CRD counts.",

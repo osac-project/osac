@@ -350,14 +350,16 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
         },
     ) == [sc_name]
 
-    # 4. Evaluate netapp_storage_validate_certs default and CA bundle fail-fast conditions.
-    defaults = _load_yaml(NETAPP_ROLE_DIR / "defaults" / "main.yaml")
-    monkeypatch.delenv("NETAPP_VALIDATE_CERTS", raising=False)
-    assert _render(defaults["netapp_storage_validate_certs"], {}) is True
-    monkeypatch.setenv("NETAPP_VALIDATE_CERTS", "false")
-    assert _render(defaults["netapp_storage_validate_certs"], {}) is False
-    monkeypatch.setenv("NETAPP_VALIDATE_CERTS", "unexpected")
-    assert _render(defaults["netapp_storage_validate_certs"], {}) is True
+    # 4. Evaluate the storage_provider_validate_certs default and CA bundle fail-fast conditions.
+    defaults = _load_yaml(
+        NETAPP_ROLE_DIR.parent.parent.parent / "service" / "roles" / "storage_provider" / "defaults" / "main.yaml"
+    )
+    monkeypatch.delenv("OSAC_STORAGE_VALIDATE_CERTS", raising=False)
+    assert _render(defaults["storage_provider_validate_certs"], {}) is True
+    monkeypatch.setenv("OSAC_STORAGE_VALIDATE_CERTS", "false")
+    assert _render(defaults["storage_provider_validate_certs"], {}) is False
+    monkeypatch.setenv("OSAC_STORAGE_VALIDATE_CERTS", "unexpected")
+    assert _render(defaults["storage_provider_validate_certs"], {}) is True
 
     ca_task = _find_task(
         block_tasks,
@@ -374,7 +376,7 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
 
     rendered_ca_b64 = _render(
         ca_expr,
-        {"netapp_storage_validate_certs": True, "storage_provider_ca_bundle_path": str(ca_file)},
+        {"storage_provider_validate_certs": True, "storage_provider_ca_bundle_path": str(ca_file)},
     )
     assert rendered_ca_b64 == base64.b64encode(ca_pem.encode("utf-8")).decode("ascii")
     assert (
@@ -382,7 +384,7 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
             ca_fail_when,
             {
                 "_netapp_is_shared_tbc": False,
-                "netapp_storage_validate_certs": True,
+                "storage_provider_validate_certs": True,
                 "_trusted_ca_b64": rendered_ca_b64,
             },
         )
@@ -395,7 +397,7 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
         missing_ca_b64 = _render(
             ca_expr,
             {
-                "netapp_storage_validate_certs": True,
+                "storage_provider_validate_certs": True,
                 "storage_provider_ca_bundle_path": str(missing_or_empty),
             },
         )
@@ -405,7 +407,7 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
                 ca_fail_when,
                 {
                     "_netapp_is_shared_tbc": False,
-                    "netapp_storage_validate_certs": True,
+                    "storage_provider_validate_certs": True,
                     "_trusted_ca_b64": missing_ca_b64,
                 },
             )
@@ -416,7 +418,7 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
             ca_fail_when,
             {
                 "_netapp_is_shared_tbc": False,
-                "netapp_storage_validate_certs": False,
+                "storage_provider_validate_certs": False,
                 "_trusted_ca_b64": "",
             },
         )
@@ -1978,7 +1980,7 @@ def test_netapp_consumes_svm_preparation_without_hub_secrets_or_ontap_http():
     defaults_text = (NETAPP_ROLE_DIR / "defaults" / "main.yaml").read_text(encoding="utf-8")
     assert "netapp_storage_config_namespace" not in defaults_text
     assert "netapp_storage_ca_bundle_path" not in defaults_text
-    assert "netapp_storage_validate_certs:" in defaults_text
+    assert "validate_certs" not in defaults_text
 
     for yaml_file in NETAPP_ROLE_DIR.rglob("*.yaml"):
         content = yaml_file.read_text(encoding="utf-8")
@@ -2385,14 +2387,14 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
         )
         is False
     )
-    # When netapp_storage_validate_certs is True and CA bundle path is missing, do not short-circuit
+    # When storage_provider_validate_certs is True and CA bundle path is missing, do not short-circuit
     # even if existing TBC has no trustedCACertificate.
     assert (
         _render(
             all_exist_expr,
             {
                 **dedicated_only_vars,
-                "netapp_storage_validate_certs": True,
+                "storage_provider_validate_certs": True,
                 "storage_provider_ca_bundle_path": "/nonexistent/ca-bundle.pem",
             },
         )
@@ -2453,82 +2455,11 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
                     assert "ansible.builtin.set_stats" not in sub_task
                     assert "set_stats" not in sub_task
 
-    # Verify _validate_tiers.yaml and teardown_backend.yaml share strict string backend_id checks
-    # and teardown_backend.yaml does not leave _netapp_backend_ids in play scope.
-    validate_tiers_tasks = _load_yaml(NETAPP_ROLE_DIR / "tasks" / "_validate_tiers.yaml")
-    tier_bid_when = _find_task(
-        validate_tiers_tasks, "Fail if any dispatched tier is missing backend_id"
-    )["when"]
-    teardown_backend_tasks = _load_yaml(NETAPP_ROLE_DIR / "tasks" / "teardown_backend.yaml")
-    teardown_bid_when = _find_task(
-        teardown_backend_tasks, "Fail if any dispatched tier has an invalid backend_id"
-    )["when"]
-    for when_expr in (tier_bid_when, teardown_bid_when):
-        assert _render_when(when_expr, {"_provider_tiers": [{"name": "gold"}]}) is True
-        assert (
-            _render_when(when_expr, {"_provider_tiers": [{"name": "gold", "backend_id": "   "}]})
-            is True
-        )
-        assert (
-            _render_when(when_expr, {"_provider_tiers": [{"name": "gold", "backend_id": 123}]})
-            is True
-        )
-        assert (
-            _render_when(
-                when_expr, {"_provider_tiers": [{"name": "gold", "backend_id": "netapp-be-1"}]}
-            )
-            is False
-        )
-    assert all(
-        "_netapp_backend_ids" not in task.get("ansible.builtin.set_fact", {})
-        for task in teardown_backend_tasks
-    )
-
-    # Verify tenant_name DNS label guard is centralized in osac.service.storage_provider
-    # and not duplicated in netapp_storage task files.
-    dispatcher_tasks = _load_yaml(
-        NETAPP_ROLE_DIR.parent.parent.parent
-        / "service"
-        / "roles"
-        / "storage_provider"
-        / "tasks"
-        / "main.yaml"
-    )
-    tier_tenant_task = _find_task(
-        dispatcher_tasks, "Validate tenant_name is a valid DNS label"
-    )
-    assert tier_tenant_task.get("no_log") is True
-    assert "{{" not in tier_tenant_task["ansible.builtin.fail"]["msg"]
-    tier_tenant_when = tier_tenant_task["when"]
-    for invalid_tenant in ("", "-bad", "bad-", "Bad_Tenant", "a" * 64):
-        assert _render_when(tier_tenant_when, {"tenant_name": invalid_tenant}) is True
-    for valid_tenant in ("a", "acme-01"):
-        assert _render_when(tier_tenant_when, {"tenant_name": valid_tenant}) is False
-    assert all(
-        task.get("name") != "Validate tenant_name is a valid DNS label"
-        for task in validate_tiers_tasks
-    )
-    assert all(
-        task.get("name") != "Validate tenant_name is a valid DNS label"
-        for task in teardown_backend_tasks
-    )
-
-    tier_proto_when = _find_task(
-        validate_tiers_tasks, "Fail if any tier protocol is unsupported by the ONTAP provider"
-    )["when"]
-    assert (
-        _render_when(tier_proto_when, {"_provider_tiers": [{"name": "gold", "protocol": "nfs"}]})
-        is True
-    )
-    assert (
-        _render_when(
-            tier_proto_when, {"_provider_tiers": [{"name": "gold", "protocol": "block"}]}
-        )
-        is False
-    )
+    # The dispatcher validates tiers; the role checks only its own settings.
+    settings_tasks = _load_yaml(NETAPP_ROLE_DIR / "tasks" / "_validate_settings.yaml")
 
     tier_san_when = _find_task(
-        validate_tiers_tasks, "Fail if sanType is not a valid Trident SAN transport"
+        settings_tasks, "Fail if sanType is not a valid Trident SAN transport"
     )["when"]
     for bad_san in ("", "nfs", "smb"):
         assert _render_when(tier_san_when, {"netapp_storage_san_type": bad_san}) is True
@@ -2536,39 +2467,14 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
         assert _render_when(tier_san_when, {"netapp_storage_san_type": valid_san}) is False
 
     tier_ns_when = _find_task(
-        validate_tiers_tasks, "Fail if the CSI operator namespace is empty"
+        settings_tasks, "Fail if the CSI operator namespace is empty"
     )["when"]
     assert _render_when(tier_ns_when, {"netapp_storage_csi_operator_namespace": ""}) is True
     assert _render_when(tier_ns_when, {}) is True
     assert _render_when(tier_ns_when, {"netapp_storage_csi_operator_namespace": "trident"}) is False
 
-    # Tier names must be complete DNS labels (a trailing newline is rejected).
-    tier_name_when = _find_task(
-        validate_tiers_tasks, "Fail if any dispatched tier name is not a complete DNS label"
-    )["when"]
-    for bad_tiers in (
-        [{"name": "gold\n"}],
-        [{"name": "Gold"}],
-        [{"name": "-gold"}],
-        [{"name": "a" * 64}],
-        [{"name": 7}],
-        [{}],
-        [{"name": "gold"}, {"name": "silver "}],
-    ):
-        assert _render_when(tier_name_when, {"_provider_tiers": bad_tiers}) is True, bad_tiers
-    assert (
-        _render_when(
-            tier_name_when, {"_provider_tiers": [{"name": "gold"}, {"name": "tier-2"}]}
-        )
-        is False
-    )
-
     # Verify teardown_cluster_storage.yaml CRD/TBC/CSI Secret ordering guards and always cleanup.
     teardown_cluster_tasks = _load_yaml(NETAPP_ROLE_DIR / "tasks" / "teardown_cluster_storage.yaml")
-    assert all(
-        task.get("name") != "Validate tenant_name is a valid DNS label"
-        for task in teardown_cluster_tasks
-    )
 
     # The dependency guard runs before any deletion and counts PVs/PVCs that
     # belong to the tenant's NetApp storage (and only those).

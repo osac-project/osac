@@ -23,26 +23,13 @@
   gather_facts: true
 
   tasks:
-    # Every vast_storage_* var below must be a fact (set_fact), not a play var
-    # or an `environment:` block: the imported playbook below runs in a
-    # separate play, and only host facts -- not play-level vars -- cross that
-    # boundary. `environment:` is a stricter trap than vars: -- it only wraps
-    # module subprocess execution, so it never affects lookup('env', ...)
-    # calls at all (those read the controller process's real OS environment
-    # directly), even within the SAME play. storage_provider_config_namespace's
-    # default is exactly such a lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
-    # expression, so an `environment:` block setting that var name is silently
-    # a no-op -- discovered via this test's own hub Secret creation failing
-    # with "Namespace is required for v1.Secret" (an empty
-    # storage_provider_config_namespace) despite the (ineffective) environment:
-    # block appearing to set it.
-    - name: Set vast_storage_* config as cross-play facts
+    # Facts, not play vars: only host facts reach the imported playbook's play.
+    # The config namespace and cert flag come from .storage_env.
+    - name: Set VAST and CSI driver install config as cross-play facts
       ansible.builtin.set_fact:
-        vast_storage_validate_certs: false
         vast_storage_vip_pool_name: "osac-test-pool"
         vast_storage_vip_pool_ip_ranges: '[["10.0.0.10","10.0.0.50"]]'
         vast_storage_vip_pool_subnet_cidr: "24"
-        storage_provider_config_namespace: "osac-system"
         csi_driver_install_enabled: true
         csi_driver_install_lvms_storage_class_enabled: true
     - name: Delete any pre-existing hub Secret (clean slate)

@@ -35,9 +35,9 @@ storage_provider_backend_connections:
     endpoint: "${VAST_BACKEND_ENDPOINT}"
     username: "${VAST_BACKEND_USERNAME}"
     password: "${VAST_BACKEND_PASSWORD}"
+    # Set to false for a mock server or a self-signed certificate.
+    validate_certs: ${OSAC_STORAGE_VALIDATE_CERTS}
 vast_tenant_prefix: "osac-test-"
-# TLS validation — set to false for mock server or self-signed cert testing
-vast_validate_certs: ${VAST_VALIDATE_CERTS}
 
 # Per-tenant VIP pool configuration (supernet for self-created dedicated pools)
 vast_vip_pool_supernet: "${VAST_VIP_POOL_SUPERNET}"

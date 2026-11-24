@@ -16,10 +16,10 @@
 #   3. ensure_storage_class: creates CSI Secret + TBC (managementLIF from the
 #      prepared SVM, virtual-pool labels osac_backend + tier with no invalid
 #      'name' field, defaults for encryption and the prepared qosPolicy, and
-#      trustedCACertificate when netapp_storage_validate_certs
+#      trustedCACertificate when storage_provider_validate_certs
 #      is true) + per-tier StorageClasses bound via parameters.selector,
 #      short-circuits on the second run when all resources exist, and omits
-#      trustedCACertificate when netapp_storage_validate_certs is false.
+#      trustedCACertificate when storage_provider_validate_certs is false.
 #      Successive calls that each name some of the tenant's tiers build the TBC
 #      up pool by pool: a call keeps the pools of the tiers it does not name
 #      and their positions, rebuilds a changed tier in place, and short-circuits
@@ -27,8 +27,7 @@
 #      conflict, a server-side apply of another pool list without force and a
 #      patch carrying an outdated resourceVersion.
 #   4. ensure_storage_class: fails fast when the TBC enters phase Failed.
-#   5. teardown_backend: rejects tiers missing backend_id and succeeds as a
-#      retention no-op for valid tiers.
+#   5. teardown_backend: succeeds as a retention no-op.
 #   6. teardown_cluster_storage: refuses to remove anything while a PVC uses a
 #      tenant StorageClass, then removes TBC + SCs + CSI Secret, including
 #      labeled resources no longer derivable from the dispatched tiers.
@@ -479,7 +478,7 @@
           - _tbc.resources[0].spec.svm == _t_svm_name
           - _tbc.resources[0].spec.credentials.name == 'netapp-csi-' ~ _t_assignment_key
           - _tbc.resources[0].spec.storage | length == 2
-          # trustedCACertificate comes from the mounted cluster CA bundle when netapp_storage_validate_certs is true.
+          # trustedCACertificate comes from the mounted cluster CA bundle when storage_provider_validate_certs is true.
           - _tbc.resources[0].spec.trustedCACertificate == _mock_ca_b64
           # Regression guard: Trident's OntapStorageDriverPool has NO 'name' field;
           # virtual pools must be matched via labels (osac_backend + tier).
@@ -622,11 +621,11 @@
       register: _tbc_with_cert
       no_log: true
 
-    - name: Re-run ensure_storage_class with netapp_storage_validate_certs=false on the existing TBC
+    - name: Re-run ensure_storage_class with storage_provider_validate_certs=false on the existing TBC
       ansible.builtin.include_tasks: dispatch.yaml
       vars:
         storage_provider_action: ensure_storage_class
-        netapp_storage_validate_certs: false
+        storage_provider_validate_certs: false
 
     - name: Read back the updated TBC
       kubernetes.core.k8s_info:
@@ -648,8 +647,8 @@
         success_msg: "trustedCACertificate removed from the existing TBC in place"
       no_log: true
 
-    # ── Cert validation override: netapp_storage_validate_certs=false omits trustedCACertificate ──
-    - name: Delete TBC to test netapp_storage_validate_certs=false recreation
+    # ── Cert validation override: storage_provider_validate_certs=false omits trustedCACertificate ──
+    - name: Delete TBC to test storage_provider_validate_certs=false recreation
       kubernetes.core.k8s:
         state: absent
         api_version: trident.netapp.io/v1
@@ -658,13 +657,13 @@
         namespace: trident
       no_log: true
 
-    - name: Re-run ensure_storage_class with netapp_storage_validate_certs=false
+    - name: Re-run ensure_storage_class with storage_provider_validate_certs=false
       ansible.builtin.include_tasks: dispatch.yaml
       vars:
         storage_provider_action: ensure_storage_class
-        netapp_storage_validate_certs: false
+        storage_provider_validate_certs: false
 
-    - name: Read back recreated TBC when netapp_storage_validate_certs=false
+    - name: Read back recreated TBC when storage_provider_validate_certs=false
       kubernetes.core.k8s_info:
         api_version: trident.netapp.io/v1
         kind: TridentBackendConfig
@@ -673,25 +672,25 @@
       register: _tbc_no_cert
       no_log: true
 
-    - name: Assert trustedCACertificate is omitted when netapp_storage_validate_certs is false
+    - name: Assert trustedCACertificate is omitted when storage_provider_validate_certs is false
       ansible.builtin.assert:
         that:
           - _tbc_no_cert.resources | length == 1
           - _tbc_no_cert.resources[0].spec.trustedCACertificate | default('', true) | length == 0
-        fail_msg: "trustedCACertificate should be omitted when netapp_storage_validate_certs is false"
-        success_msg: "trustedCACertificate omitted when netapp_storage_validate_certs is false"
+        fail_msg: "trustedCACertificate should be omitted when storage_provider_validate_certs is false"
+        success_msg: "trustedCACertificate omitted when storage_provider_validate_certs is false"
       no_log: true
 
-    # ── Fail-closed check: netapp_storage_validate_certs=true with missing CA bundle ──
+    # ── Fail-closed check: storage_provider_validate_certs=true with missing CA bundle ──
     # Retain the Bound TBC without trustedCACertificate so the short-circuit gate
     # is also tested against a missing CA bundle path (must not short-circuit).
-    - name: Attempt ensure_storage_class with netapp_storage_validate_certs=true and missing CA bundle
+    - name: Attempt ensure_storage_class with storage_provider_validate_certs=true and missing CA bundle
       block:
         - name: Call storage_provider ensure_storage_class with missing CA bundle path
           ansible.builtin.include_tasks: dispatch.yaml
           vars:
             storage_provider_action: ensure_storage_class
-            netapp_storage_validate_certs: true
+            storage_provider_validate_certs: true
             storage_provider_ca_bundle_path: "{{ playbook_dir }}/../../../certs/nonexistent-ca.pem"
       rescue:
         - name: Record missing CA bundle failure
@@ -702,7 +701,7 @@
       ansible.builtin.assert:
         that:
           - _missing_ca_bundle_failed | default(false) | bool
-        fail_msg: "ensure_storage_class must fail closed when netapp_storage_validate_certs is true and CA bundle is missing"
+        fail_msg: "ensure_storage_class must fail closed when storage_provider_validate_certs is true and CA bundle is missing"
         success_msg: "ensure_storage_class failed closed on missing CA bundle"
 
 # ── Test 3 (tier subsets): successive ensure_storage_class calls that each name some tiers ──
@@ -1181,7 +1180,7 @@
         success_msg: "Role failed fast on the Failed TBC"
       no_log: true
 
-# ── Test 5: teardown_backend validates tiers and retains ONTAP resources ──
+# ── Test 5: teardown_backend retains ONTAP resources ──
 - name: "ONTAP Storage Provider - Teardown backend retains resources"
   hosts: localhost
   gather_facts: false
@@ -1199,30 +1198,6 @@
         endpoint: "https://10.46.246.90"
 
   tasks:
-    - name: Attempt teardown_backend with a tier missing backend_id
-      block:
-        - name: Call netapp_storage teardown_backend directly with missing backend_id
-          ansible.builtin.include_role:
-            name: osac.templates.netapp_storage
-            tasks_from: teardown_backend
-          vars:
-            _provider_tiers:
-              - name: gold
-                protocol: block
-                provider: netapp
-      rescue:
-        - name: Record missing backend_id rejection on teardown_backend
-          ansible.builtin.set_fact:
-            _missing_backend_id_teardown_rejected: >-
-              {{ 'must provide a non-empty string backend_id' in (ansible_failed_result.msg | default('')) }}
-
-    - name: Assert teardown_backend rejected tier missing backend_id
-      ansible.builtin.assert:
-        that:
-          - _missing_backend_id_teardown_rejected | default(false) | bool
-        fail_msg: "teardown_backend should reject tiers missing a valid backend_id"
-        success_msg: "teardown_backend rejected tier missing backend_id"
-
     - name: Call storage_provider role with teardown_backend action
       ansible.builtin.include_tasks: dispatch.yaml
       vars:

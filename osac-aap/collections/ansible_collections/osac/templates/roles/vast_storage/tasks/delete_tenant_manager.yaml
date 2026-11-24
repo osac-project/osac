@@ -4,11 +4,11 @@
 # ignore_errors throughout — best-effort cleanup, resources may already be deleted.
 #
 # Requires in scope (set by teardown.yaml before calling this file):
-#   vast_endpoint              — VMS API hostname
-#   vast_username / vast_password — admin credentials
-#   vast_storage_validate_certs — TLS validation flag
-#   storage_provider_api_timeout   — API timeout (seconds)
-#   tenant_name                — play-level var
+#   vast_endpoint                   — VMS API hostname
+#   vast_username / vast_password   — admin credentials
+#   storage_provider_validate_certs — TLS validation flag
+#   storage_provider_api_timeout    — API timeout (seconds)
+#   tenant_name                     — play-level var
 
 - name: Authenticate to VAST VMS as admin for manager cleanup
   ansible.builtin.uri:
@@ -18,7 +18,7 @@
     body:
       username: "{{ vast_username }}"
       password: "{{ vast_password }}"
-    validate_certs: "{{ vast_storage_validate_certs }}"
+    validate_certs: "{{ storage_provider_validate_certs }}"
     timeout: "{{ storage_provider_api_timeout | int }}"
     status_code: [200, 201]
   register: _vast_admin_auth
@@ -46,7 +46,7 @@
         method: GET
         headers:
           Authorization: "Bearer {{ _vast_admin_auth.json.access }}"
-        validate_certs: "{{ vast_storage_validate_certs }}"
+        validate_certs: "{{ storage_provider_validate_certs }}"
         timeout: "{{ storage_provider_api_timeout | int }}"
         status_code: [200]
       register: _vast_manager_lookup
@@ -63,7 +63,7 @@
         method: DELETE
         headers:
           Authorization: "Bearer {{ _vast_admin_auth.json.access }}"
-        validate_certs: "{{ vast_storage_validate_certs }}"
+        validate_certs: "{{ storage_provider_validate_certs }}"
         timeout: "{{ storage_provider_api_timeout | int }}"
         status_code: [200, 204, 404]
       register: _vast_manager_delete_result
@@ -77,7 +77,7 @@
         method: GET
         headers:
           Authorization: "Bearer {{ _vast_admin_auth.json.access }}"
-        validate_certs: "{{ vast_storage_validate_certs }}"
+        validate_certs: "{{ storage_provider_validate_certs }}"
         timeout: "{{ storage_provider_api_timeout | int }}"
         status_code: [200]
       register: _vast_role_lookup
@@ -93,7 +93,7 @@
         method: DELETE
         headers:
           Authorization: "Bearer {{ _vast_admin_auth.json.access }}"
-        validate_certs: "{{ vast_storage_validate_certs }}"
+        validate_certs: "{{ storage_provider_validate_certs }}"
         timeout: "{{ storage_provider_api_timeout | int }}"
         status_code: [200, 204, 404]
       register: _vast_role_delete_result

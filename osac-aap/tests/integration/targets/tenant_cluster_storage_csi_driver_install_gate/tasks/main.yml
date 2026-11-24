@@ -48,17 +48,9 @@
   gather_facts: true
 
   tasks:
-    # Must be facts (set_fact), not an `environment:` block: the imported playbook below
-    # runs in a separate play, and only host facts -- not play-level vars -- cross that
-    # boundary. `environment:` is a stricter trap than vars: -- it only wraps module
-    # subprocess execution and never affects lookup('env', ...) calls at all (those read
-    # the controller process's real OS environment directly), even within the SAME play.
-    # storage_provider_config_namespace/vast_storage_validate_certs' defaults are exactly such
-    # lookup('env', ...) expressions.
-    - name: Set vast_storage_* config as cross-play facts
+    # Facts, not play vars: only host facts reach the imported playbook's play.
+    - name: Set CSI driver install config as cross-play facts
       ansible.builtin.set_fact:
-        storage_provider_config_namespace: "osac-system"
-        vast_storage_validate_certs: false
         csi_driver_install_enabled: true
         csi_driver_install_lvms_storage_class_enabled: false
     - name: Delete any pre-existing test resources (clean slate)
@@ -395,12 +387,9 @@
   gather_facts: true
 
   tasks:
-    # Must be facts (set_fact), not an `environment:` block -- see the Tenant case
-    # Setup play above for why.
-    - name: Set vast_storage_* config as cross-play facts
+    # Facts, not play vars: see the Tenant case Setup play.
+    - name: Set CSI driver install config as cross-play facts
       ansible.builtin.set_fact:
-        storage_provider_config_namespace: "osac-system"
-        vast_storage_validate_certs: false
         csi_driver_install_enabled: true
         csi_driver_install_lvms_storage_class_enabled: true
 

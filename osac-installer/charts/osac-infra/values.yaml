@@ -281,3 +281,6 @@ certs:
     name: default-ca
   caBundle:
     configMap: ca-bundle
+    # Include the public root CAs. AAP workers point SSL_CERT_FILE at this
+    # bundle, so it replaces their system trust store.
+    useDefaultCAs: true

@@ -3,8 +3,7 @@
   hosts: localhost
   gather_facts: false
   vars:
-    vast_storage_validate_certs: false
-    storage_provider_config_namespace: osac-system
+    storage_provider_validate_certs: false
     tenant_name: test-nolog
     tenant_namespace: osac-system
     storage_provider_backend_connections:
@@ -19,7 +18,6 @@
         provider: vast
   environment:
     VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
   tasks:
     - name: Run setup (will fail and trigger rollback)
       block:

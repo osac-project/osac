@@ -7,7 +7,7 @@
     state: absent
     api_version: v1
     kind: Secret
-    name: "{{ lvms_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _current_backend_id }}"
+    name: "{{ _hub_secret_name }}"
     namespace: "{{ storage_provider_config_namespace }}"
   register: _lvms_teardown_secret_result
   failed_when: false

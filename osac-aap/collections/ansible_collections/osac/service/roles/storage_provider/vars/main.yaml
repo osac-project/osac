@@ -1,0 +1,6 @@
+---
+# Seconds, for provider management API calls.
+storage_provider_api_timeout: 30
+
+# Mounted by the operations IG pod specs; also the SSL_CERT_FILE path there.
+storage_provider_ca_bundle_path: /etc/ca-bundle/bundle.pem

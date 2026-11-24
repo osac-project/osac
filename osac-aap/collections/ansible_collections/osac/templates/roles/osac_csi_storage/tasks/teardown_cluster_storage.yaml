@@ -17,13 +17,6 @@
       CaaS tenant clusters, not to the hub cluster.
   when: _remote_kubeconfig is not defined or _remote_kubeconfig | length == 0
 
-- name: Assert _provider_tiers is defined and non-empty
-  ansible.builtin.assert:
-    that:
-      - _provider_tiers is defined
-      - _provider_tiers | length > 0
-    fail_msg: _provider_tiers must be provided by the service role dispatcher.
-
 - name: Find all tenant OSAC CSI StorageClasses by label selector
   kubernetes.core.k8s_info:
     kubeconfig: "{{ _remote_kubeconfig }}"

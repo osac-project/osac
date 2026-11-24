@@ -11,13 +11,6 @@
 # Idempotent: Helm upgrade --install is a no-op when the release is unchanged;
 # existing StorageClasses and the credential Secret are left untouched.
 
-- name: Assert _provider_tiers is defined and non-empty
-  ansible.builtin.assert:
-    that:
-      - _provider_tiers is defined
-      - _provider_tiers | length > 0
-    fail_msg: _provider_tiers must be provided by the service role dispatcher.
-
 - name: Fail when called without a guest-cluster kubeconfig (hub path unsupported)
   ansible.builtin.fail:
     msg: >-

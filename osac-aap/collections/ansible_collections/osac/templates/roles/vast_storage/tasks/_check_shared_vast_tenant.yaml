@@ -6,7 +6,7 @@
 #   tenant_name                       — tenant to check
 #   _vast_backend_id                  — current backend to exclude from check
 #   vast_endpoint                     — endpoint to match against
-#   storage_provider_config_namespace     — namespace where hub Secrets live
+#   storage_provider_config_namespace — namespace where hub Secrets live
 #
 # OUTPUT:
 #   _vast_skip_tenant_delete: true    — Other backends share this tenant/endpoint, skip cleanup

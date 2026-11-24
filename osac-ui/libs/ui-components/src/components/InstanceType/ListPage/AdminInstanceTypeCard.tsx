@@ -19,8 +19,6 @@ import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import AdminInstanceTypeActionsMenu from '../AdminInstanceTypeActionsMenu';
 import InstanceTypeLifecycleLabel from '../InstanceTypeLifecycleLabel';
 
-const INSTANCE_TYPE_NAME_PREVIEW_LENGTH = 32;
-
 interface AdminInstanceTypeCardProps {
   instanceType: PrivateInstanceType;
 }
@@ -36,7 +34,6 @@ const AdminInstanceTypeCard = ({ instanceType }: AdminInstanceTypeCardProps) => 
         <ResourceNameField
           resource={instanceType}
           detailsUrl={detailsUrl}
-          maxCharsDisplayed={INSTANCE_TYPE_NAME_PREVIEW_LENGTH}
           subTitle={instanceType.spec?.description}
         />
       }

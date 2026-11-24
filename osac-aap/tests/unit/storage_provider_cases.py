@@ -30,7 +30,7 @@ class ProviderCase:
 
 
 def discover_cases(roles=ROLES, contracts=CONTRACTS, dispatch_name=DISPATCH_NAME):
-    metadata = {}
+    provider_roles = set()
     assignments = [assignment for assignment in Environment().parse(dispatch_name).find_all(nodes.Assign)
                    if isinstance(assignment.target, nodes.Name) and assignment.target.name == "_csi_managed"]
     assert len(assignments) == 1, "Uncovered dispatcher managed-provider expression"
@@ -51,10 +51,10 @@ def discover_cases(roles=ROLES, contracts=CONTRACTS, dispatch_name=DISPATCH_NAME
         protocols = contracts[canonical].get("protocols")
         assert protocols, f"Missing protocol fixture: {canonical}"
         assert set(protocols) <= {"block", "nfs"}, f"Uncovered protocols for {role.name}: {protocols}"
-        metadata[canonical] = meta
+        provider_roles.add(canonical)
         for alias in (role.name, role.name.removesuffix("_storage")):
             candidates.add(alias.replace("_", "-"))
-    assert set(metadata) == set(contracts), "Stale or missing storage provider fixture contracts"
+    assert provider_roles == set(contracts), "Stale or missing storage provider fixture contracts"
     cases = []
     for provider in sorted(candidates):
         templar = Templar(loader=DataLoader(), variables={"_current_provider": provider.replace("-", "_")})

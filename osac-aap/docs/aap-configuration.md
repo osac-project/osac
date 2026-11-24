@@ -11,9 +11,10 @@ environment, or pass `storage_provider_block_fstype` to Ansible. The explicit
 variable takes precedence. The value must be a nonempty string supported by the
 target driver and is passed unchanged, without trimming or an allowlist.
 
-Only new native block classes consume this setting. Changing it does not alter
-existing classes or migrate data. NFS, OSAC CSI File-policy classes (including
-optional local CSI classes), and teardown do not consume it.
+Only new native block classes consume this setting. Changing it does not change
+the filesystem settings on existing classes or migrate data. NFS, classes that
+use the OSAC CSI driver (including optional local CSI classes), and teardown do
+not consume it.
 
 For deployment configuration, see the
 [installer Helm example](../../osac-installer/docs/aap-configuration.md#block-storageclass-filesystem-type).

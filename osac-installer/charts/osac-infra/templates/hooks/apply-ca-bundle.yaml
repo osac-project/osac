@@ -229,7 +229,7 @@ spec:
               value: {{ .Release.Revision | quote }}
             {{- end }}
             - name: USE_DEFAULT_CAS
-              value: {{ ternary "true" "false" (or (.Values.certs.caBundle.useDefaultCAs | default false) .Values.keycloak.route.publicIngress) | quote }}
+              value: {{ ne (toString .Values.certs.caBundle.useDefaultCAs) "false" | quote }}
             - name: INCLUDE_INGRESS_CA
               value: {{ .Values.keycloak.route.publicIngress | quote }}
           volumeMounts:

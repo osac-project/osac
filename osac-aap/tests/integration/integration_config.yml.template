@@ -19,9 +19,9 @@
 #    if-unset check and a separate export instead.
 #
 # 3. Render with envsubst restricted to exactly this file's VAST_* variable
-#    names, not bare envsubst on the whole file -- unrestricted envsubst would
-#    also expand any other dollar-prefixed variable that happens to be set in
-#    the calling shell or CI environment.
+#    names plus OSAC_STORAGE_VALIDATE_CERTS, not bare envsubst on the whole
+#    file -- unrestricted envsubst would also expand any other dollar-prefixed
+#    variable that happens to be set in the calling shell or CI environment.
 #
 # WARNING: NEVER commit integration_config.yml with real credentials.
 #
@@ -35,8 +35,8 @@ storage_provider_backend_connections:
     endpoint: "${VAST_BACKEND_ENDPOINT}"
     username: "${VAST_BACKEND_USERNAME}"
     password: "${VAST_BACKEND_PASSWORD}"
-    # Set to false for a mock server or a self-signed certificate.
-    validate_certs: ${OSAC_STORAGE_VALIDATE_CERTS}
+# Set to false for a mock server or a self-signed certificate.
+storage_provider_validate_certs: ${OSAC_STORAGE_VALIDATE_CERTS}
 vast_tenant_prefix: "osac-test-"
 
 # Per-tenant VIP pool configuration (supernet for self-created dedicated pools)

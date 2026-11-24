@@ -32,7 +32,8 @@
       Must be 1-63 characters, lowercase alphanumeric and hyphens only,
       no leading or trailing hyphens.
   loop: "{{ storage_provider_tiers }}"
-  when: item.name is not defined or not (item.name | regex_search('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'))
+  # \Z, not $: $ also matches before a trailing newline.
+  when: item.name is not defined or not (item.name | regex_search('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z'))
 
 # A tier name can be a valid 1-63 char DNS label on its own yet still be unusable: tiers
 # with configured qos_limits get a derived qos_policy of '<name>-qos' below, which must

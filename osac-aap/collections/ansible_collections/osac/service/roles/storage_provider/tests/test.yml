@@ -470,6 +470,42 @@
             success_msg: "Role correctly rejected invalid input"
 
 # ──────────────────────────────────────────────────────────────
+# Test 9b: Tier name with a trailing newline -- error path
+# Expected: role fails with DNS label validation message
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- tier name with trailing newline (should fail)
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Run trailing-newline tier name failure test
+      block:
+        - name: Attempt with tier name 'gold' plus a trailing newline (expected to fail)
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_tiers:
+              - name: "gold\n"
+                protocol: nfs
+                provider: vast
+            storage_provider_action: setup
+            tenant_name: "tenant-acme"
+            tenant_namespace: "osac-tenants"
+
+        - name: This task should not be reached -- role should have failed
+          ansible.builtin.fail:
+            msg: "Role did not fail as expected when tier name ends in a newline"
+
+      rescue:
+        - name: Verify role failed with expected DNS label message
+          ansible.builtin.assert:
+            that:
+              - >-
+                'not a valid DNS label' in (ansible_failed_result.results | default([]) | map(attribute='msg') | join(' '))
+            fail_msg: "Role failed but with unexpected message: {{ ansible_failed_result.msg | default('unknown') }}"
+            success_msg: "Role correctly rejected a trailing-newline tier name"
+
+# ──────────────────────────────────────────────────────────────
 # Test 11: Missing tenant_name -- error path
 # Expected: role fails with tenant_name required message
 # ──────────────────────────────────────────────────────────────

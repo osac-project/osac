@@ -935,12 +935,13 @@ jobs:
             # normally, so create one from this commit's own .tekton template.
             # If this job is re-run, reuse a fallback build that is still
             # running or already succeeded; only a failed one is started again.
-            # Returns False, with a warning, if anything about that fails.
+            # Returns the name of the fallback run to follow, or None, with a
+            # warning, if anything about that fails.
             try:
                 for existing in fallback_runs():
                     if not existing.get("status", {}).get("completionTime") or run_succeeded_status(existing) == "True":
                         print(f"[{COMPONENT}] Reusing fallback build {existing['metadata']['name']}", flush=True)
-                        return True
+                        return existing["metadata"]["name"]
                 url = (
                     f"https://api.github.com/repos/{GITHUB_REPOSITORY}/contents/"
                     f".tekton/{COMPONENT}/release.yaml?ref={COMMIT_SHA}"
@@ -964,12 +965,12 @@ jobs:
                 rendered = re.sub(r"\{\{\s*(\w+)\s*\}\}", lambda m: values.get(m.group(1), m.group(0)), template)
                 if re.search(r"\{\{.*?\}\}", rendered):
                     print(f"::warning::{COMPONENT}: the PipelineRun template has placeholders this job cannot fill, no fallback build")
-                    return False
+                    return None
                 converted = run_oc(["create", "--dry-run=client", "-o", "json", "-f", "-"], rendered)
                 run = json.loads(converted.stdout)
                 if run.get("kind") != "PipelineRun":
                     print(f"::warning::{COMPONENT}: template is not a PipelineRun, no fallback build")
-                    return False
+                    return None
                 meta = run["metadata"]
                 meta.pop("name", None)
                 meta["generateName"] = f"{COMPONENT}-on-release-fallback-"
@@ -977,40 +978,42 @@ jobs:
                 run["spec"].pop("workspaces", None)
                 if "unused" in json.dumps(run):
                     print(f"::warning::{COMPONENT}: the template uses the git-auth secret outside its workspace, no fallback build")
-                    return False
+                    return None
                 cancel_unfinished_paced_runs()
                 created = run_oc(["create", "-n", NAMESPACE, "-f", "-", "-o", "name"], json.dumps(run))
                 print(f"[{COMPONENT}] Started fallback build {created.stdout.strip()}", flush=True)
-                return True
+                return created.stdout.strip().split("/")[-1]
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError, KeyError) as e:
                 detail = (getattr(e, "stderr", "") or str(e)).strip().splitlines()[:1]
                 print(f"::warning::{COMPONENT}: could not start a fallback build: {detail}")
-                return False
+                return None
 
-        def fallback_build_failed():
+        def fallback_build_failed(name):
+            # Follow the run start_fallback_build chose, not whichever fallback
+            # run is newest: an older run being reused may sit next to a newer
+            # failed one.
             try:
-                runs = fallback_runs()
+                out = run_oc(["get", "pipelinerun", name, "-n", NAMESPACE, "-o", "json"])
             except subprocess.CalledProcessError:
                 return False
-            return bool(runs) and run_succeeded_status(runs[-1]) == "False"
+            return run_succeeded_status(json.loads(out.stdout)) == "False"
 
         deadline = time.time() + TIMEOUT_SECONDS
         found = None
-        fallback_started = False
+        fallback_name = None
         while time.time() < deadline:
             found = find_component()
             if found:
                 break
-            if fallback_started:
-                if fallback_build_failed():
+            if fallback_name:
+                if fallback_build_failed(fallback_name):
                     print(f"::error::The fallback Konflux build for {COMPONENT} failed")
                     sys.exit(1)
             else:
                 failed, title = check_run_failed()
                 if failed:
-                    if "start failure" in title.lower() and start_fallback_build():
-                        fallback_started = True
-                    else:
+                    fallback_name = start_fallback_build() if "start failure" in title.lower() else None
+                    if not fallback_name:
                         print(f"::error::Konflux build for {COMPONENT} failed (confirmed via its own GitHub check-run: {title or 'no title'}) -- not waiting out the remaining timeout")
                         sys.exit(1)
             describe_pending_state()

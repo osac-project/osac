@@ -1,0 +1,27 @@
+argument_specs:
+  main:
+    short_description: Configure CaaS worker tenant networking before install
+    options:
+      worker_network_cluster_order:
+        type: dict
+        required: true
+      worker_network_infraenv_name:
+        type: str
+        required: true
+      worker_network_namespace:
+        type: str
+        required: true
+      worker_network_expected_workers:
+        type: int
+        required: true
+      worker_network_cluster_id:
+        type: str
+        required: true
+      worker_network_poll_retries:
+        type: int
+        required: false
+        default: 360
+      worker_network_poll_delay:
+        type: int
+        required: false
+        default: 10

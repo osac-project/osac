@@ -10,14 +10,18 @@ global:
   networking:
     provisioningEnabled: false
     fabricManager: agentless_net
-    k8sManager: cudn_evpn
+    # CaaS workers use the Fabric Manager/BMaaS path.  The Kubernetes
+    # cudn_evpn manager is VMaaS-only and requires the separate EVPN host
+    # networking prerequisite (NMState/FRR plus the tenant VTEP).
+    k8sManager: ""
   services:
     caas:
       enabled: true
-    # CaaS-over-BMaaS registers the RHCOS DiskImage through the VMaaS-owned
-    # DiskImages API even though it does not provision VMaaS instances.
+    # CaaS-over-BMaaS does not provision VMaaS instances or use the VMaaS
+    # cudn_evpn Kubernetes Manager.  Keeping VMaaS disabled avoids requiring
+    # the separate EVPN host-networking/VTEP prerequisite.
     vmaas:
-      enabled: true
+      enabled: false
     # CaaS requires BMaaS API endpoints, and this profile runs the BMF
     # operator with the Metal3 provider configured below.
     bmaas:
@@ -186,14 +190,6 @@ aap:
 # --- Validation ---
 validation:
   enabled: true
-
-# --- Install preflight ---
-# vmaas is enabled above only for the DiskImages API; this profile's cluster
-# has no OpenShift Virtualization (infra.yaml: cnv.enabled=false), so the
-# VMaaS prerequisite check cannot pass here.
-preflight:
-  skip:
-    kubevirt-crds: "caas-ci enables vmaas for the DiskImages API only; no VMs are provisioned"
 
 # --- Bare Metal Fulfillment Operator ---
 # BMaaS is enabled; the BMF operator manages virtual BareMetalHost resources

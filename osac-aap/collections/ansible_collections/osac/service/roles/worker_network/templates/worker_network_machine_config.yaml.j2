@@ -1,0 +1,36 @@
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: {{ worker_network_cluster_order.metadata.name }}-worker-network
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    storage:
+      files:
+        - path: /usr/local/bin/osac-worker-network-config
+          mode: 493
+          overwrite: true
+          contents:
+            source: data:text/plain;charset=utf-8;base64,{{ lookup('ansible.builtin.template', 'worker_network_machine_config.sh.j2') | b64encode }}
+    systemd:
+      units:
+        - name: osac-worker-network-config.service
+          enabled: true
+          contents: |
+            [Unit]
+            Description=OSAC CaaS worker tenant network configuration
+            Wants=NetworkManager.service
+            After=NetworkManager.service
+            Before=network-online.target
+
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/local/bin/osac-worker-network-config
+            Restart=on-failure
+            RestartSec=10s
+            TimeoutStartSec=30min
+            RemainAfterExit=yes
+
+            [Install]
+            WantedBy=multi-user.target

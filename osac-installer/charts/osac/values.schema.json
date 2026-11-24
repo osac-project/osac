@@ -1433,7 +1433,7 @@
                   "properties": {
                     "DNS_CLASS": {
                       "type": "string",
-                      "description": "Fully-qualified Ansible role name of the DNS driver. dns.route53.dns manages Route 53 records; dns.noop.dns skips external DNS for environments that do not manage DNS records.",
+                      "description": "Fully-qualified Ansible role name of the DNS driver. dns.route53.dns manages Route 53 records; dns.noop.dns skips external DNS. Cannot change while any Cluster exists.",
                       "enum": [
                         "dns.noop.dns",
                         "dns.route53.dns"
@@ -1441,7 +1441,7 @@
                     },
                     "DNS_ZONE": {
                       "type": "string",
-                      "description": "DNS zone to operate in (defaults to EXTERNAL_ACCESS_BASE_DOMAIN)"
+                      "description": "DNS zone to operate in (defaults to EXTERNAL_ACCESS_BASE_DOMAIN). Cannot change while any Cluster exists."
                     },
                     "SERVER_SSH_BASTION_HOST": {
                       "type": "string",
@@ -1465,7 +1465,7 @@
                     },
                     "EXTERNAL_ACCESS_BASE_DOMAIN": {
                       "type": "string",
-                      "description": "Base domain for external access DNS records"
+                      "description": "Base domain for external access DNS records. Must equal HOSTED_CLUSTER_BASE_DOMAIN and cannot change while any Cluster exists."
                     },
                     "EXTERNAL_ACCESS_SUPPORTED_BASE_DOMAINS": {
                       "type": "string",
@@ -1477,7 +1477,7 @@
                     },
                     "HOSTED_CLUSTER_BASE_DOMAIN": {
                       "type": "string",
-                      "description": "Base domain for hosted clusters"
+                      "description": "Base domain for hosted clusters. For CaaS it must equal EXTERNAL_ACCESS_BASE_DOMAIN."
                     },
                     "HOSTED_CLUSTER_CONTROLLER_AVAILABILITY_POLICY": {
                       "type": "string",

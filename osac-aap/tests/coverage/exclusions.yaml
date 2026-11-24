@@ -26,10 +26,6 @@
 
 # Existing-session ingress cases assert no /api/auth request; the no_log
 # include_role skip is not visible to the task coverage callback.
-- gap: "when-never-false osac/templates/roles/netris/tasks/reserve_cluster_ingress_ip.yaml: Log in to Netris"
-  reason: "covered by path-ingress-reserve-existing-session; no_log hides the skipped include from coverage"
-- gap: "when-never-false osac/templates/roles/netris/tasks/release_cluster_ingress_ip.yaml: Log in to Netris"
-  reason: "covered by path-ingress-release-existing-session; no_log hides the skipped include from coverage"
 
 # Python branches no input of the public functions reaches.
 - gap: "python-line plugins/module_utils/netris_external_ip.py:143"

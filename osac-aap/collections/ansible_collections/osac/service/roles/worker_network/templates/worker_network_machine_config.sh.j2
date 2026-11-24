@@ -1,0 +1,42 @@
+#!/usr/bin/bash
+set -euo pipefail
+
+tenant_device=""
+selected_macs="{{ worker_network_selected_macs | map('lower') | join(' ') }}"
+for attempt in $(seq 1 180); do
+  while read -r device; do
+    case "$device" in br-*|ovs-*|ovn-*|cni*|lo) continue ;; esac
+    mac="$(nmcli -g GENERAL.HWADDR device show "$device" 2>/dev/null | head -n1 | tr '[:upper:]' '[:lower:]')"
+    for selected_mac in $selected_macs; do
+      if [ "$mac" = "${selected_mac,,}" ]; then
+        tenant_device="$device"
+        break 2
+      fi
+    done
+  done < <(nmcli -t -f DEVICE,TYPE device status | awk -F: '$2 == "ethernet" {print $1}')
+  [ -n "$tenant_device" ] && break
+  sleep 1
+done
+
+[ -n "$tenant_device" ] || exit 1
+connection="$(nmcli -g GENERAL.CONNECTION device show "$tenant_device" | head -n1)"
+[ -n "$connection" ] || exit 1
+for device in $(nmcli -t -f DEVICE,TYPE device status | awk -F: '$2 == "ethernet" {print $1}'); do
+  device_connection="$(nmcli -g GENERAL.CONNECTION device show "$device" | head -n1)"
+  [ -n "$device_connection" ] || continue
+  if [ "$device" = "$tenant_device" ]; then
+    if ! nmcli connection modify "$device_connection" ipv4.never-default no ipv4.route-metric 10; then
+      echo "Failed to configure the selected tenant connection $device_connection" >&2
+      exit 1
+    fi
+  else
+    if ! nmcli connection modify "$device_connection" ipv4.never-default yes ipv4.route-metric 100; then
+      echo "Failed to configure the non-tenant connection $device_connection" >&2
+      exit 1
+    fi
+  fi
+  if ! nmcli connection up "$device_connection"; then
+    echo "Failed to activate NetworkManager connection $device_connection" >&2
+    exit 1
+  fi
+done

@@ -456,6 +456,9 @@ func (t *task) delete(ctx context.Context) (err error) {
 		controllerutil.RemoveFinalizer(object, caasAgentCleanupFinalizer)
 		if err = t.hubClient.Patch(ctx, object,
 			clnt.MergeFromWithOptions(base, clnt.MergeFromWithOptimisticLock{})); err != nil {
+			if apierrors.IsConflict(err) {
+				return controllers.RequeueAtInterval(err, time.Second)
+			}
 			return fmt.Errorf("remove CaaS cleanup finalizer from hub BareMetalInstance: %w", err)
 		}
 	}

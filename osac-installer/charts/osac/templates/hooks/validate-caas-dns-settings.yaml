@@ -1,0 +1,176 @@
+{{- if .Values.service.enabled }}
+{{- $name := printf "%s-caas-dns-guard" (include "osac.fullname" .) -}}
+{{- $values := fromYaml (toYaml .Values) -}}
+{{- $settings := dig "aap" "instanceGroups" "clusterFulfillment" "config" dict $values -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade,pre-rollback
+    "helm.sh/hook-weight": "-30"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade,pre-rollback
+    "helm.sh/hook-weight": "-30"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["cluster-fulfillment-ig"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade,pre-rollback
+    "helm.sh/hook-weight": "-30"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-script
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade,pre-rollback
+    "helm.sh/hook-weight": "-20"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+data:
+  validate-caas-dns-settings.py: |
+{{ .Files.Get "files/validate-caas-dns-settings.py" | indent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-upgrade,pre-rollback
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-output-log-policy": hook-failed
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  template:
+    metadata:
+      labels:
+        {{- include "osac.labels" . | nindent 8 }}
+      annotations:
+        openshift.io/required-scc: restricted-v2
+    spec:
+      serviceAccountName: {{ $name }}
+      securityContext:
+        runAsNonRoot: true
+        {{- if not (.Capabilities.APIVersions.Has "security.openshift.io/v1") }}
+        runAsUser: 1000
+        fsGroup: 1000
+        {{- end }}
+      containers:
+        - name: validate-caas-dns-settings
+          image: {{ .Values.cliImage }}
+          command:
+            - /bin/bash
+            - -euo
+            - pipefail
+            - -c
+            - |
+              {{- include "osac.fulfillmentAccessTokenFunction" . | nindent 14 }}
+              AUTH_TOKEN=$(get_fulfillment_access_token 2>/dev/null || true)
+              export AUTH_TOKEN
+              exec python3 /scripts/validate-caas-dns-settings.py
+          env:
+            - name: HOME
+              value: /tmp
+            - name: RELEASE_NAMESPACE
+              value: {{ .Release.Namespace | quote }}
+            - name: EXTERNAL_ACCESS_BASE_DOMAIN
+              value: {{ (get $settings "EXTERNAL_ACCESS_BASE_DOMAIN" | default "") | quote }}
+            - name: HOSTED_CLUSTER_BASE_DOMAIN
+              value: {{ (get $settings "HOSTED_CLUSTER_BASE_DOMAIN" | default "") | quote }}
+            - name: DNS_ZONE
+              value: {{ (get $settings "DNS_ZONE" | default "") | quote }}
+            - name: DNS_CLASS
+              value: {{ (get $settings "DNS_CLASS" | default "dns.route53.dns") | quote }}
+            - name: FULFILLMENT_URL
+              value: https://fulfillment-internal-api:8001
+            - name: FULFILLMENT_CA_FILE
+              value: /etc/ca-bundle/bundle.pem
+            {{- include "osac.fulfillmentAuthEnvOptional" . | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: ca-bundle
+              mountPath: /etc/ca-bundle
+              readOnly: true
+            {{- include "osac.fulfillmentAuthVolumeMount" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            exec:
+              command: ["/bin/bash", "-c", "kill -0 1"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            exec:
+              command: ["/bin/bash", "-c", "kill -0 1"]
+            initialDelaySeconds: 1
+            periodSeconds: 5
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: scripts
+          configMap:
+            name: {{ $name }}-script
+        - name: ca-bundle
+          configMap:
+            name: {{ .Values.service.certs.caBundle.configMap | required "service.certs.caBundle.configMap is required" }}
+            items:
+              - key: bundle.pem
+                path: bundle.pem
+        {{- include "osac.fulfillmentAuthVolumeOptional" . | nindent 8 }}
+      restartPolicy: Never
+{{- end }}

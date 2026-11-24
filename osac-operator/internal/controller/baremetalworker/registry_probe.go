@@ -28,6 +28,7 @@ import (
 	"net/url"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -94,10 +95,17 @@ func registryProbeManagementAPIURL(apiEndpoint string) (string, error) {
 		// Production status stores the management VIP without a port. Keep
 		// accepting an IPv6 literal without a port for completeness.
 		host = strings.Trim(endpoint, "[]")
+		if strings.Contains(endpoint, ":") && net.ParseIP(host) == nil {
+			return "", fmt.Errorf("ClusterOrder APIEndpoint has an invalid port")
+		}
 		port = "6443"
 	}
 	if host == "" || port == "" {
 		return "", fmt.Errorf("ClusterOrder APIEndpoint is missing host or port")
+	}
+	parsedPort, err := strconv.Atoi(port)
+	if err != nil || parsedPort < 1 || parsedPort > 65535 {
+		return "", fmt.Errorf("ClusterOrder APIEndpoint has an invalid port")
 	}
 	return (&url.URL{Scheme: httpsScheme, Host: net.JoinHostPort(host, port)}).String(), nil
 }

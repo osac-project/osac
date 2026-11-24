@@ -6,7 +6,7 @@
 # environment variables pointing at fixtures/netris/fake_netris.py (a stateful
 # in-process fake of the Netris controller, started here as a background
 # process). Checks:
-#   - lifecycle: all 21 tasks of the Fabric set run once with valid input and
+#   - lifecycle: all 19 contract tasks of the Fabric set run once with valid input and
 #     publish their contract result, or nothing for the documented no-ops;
 #   - VirtualNetwork / Subnet: result keys, VNIs, V-Net gateway, EVPN and plain
 #     Subnet physical-range DHCP at creation and on rerun;
@@ -15,8 +15,8 @@
 #     on an EVPN Subnet, DHCP lease lookup by MAC, ports moved back on delete;
 #   - ExternalIPPool / ExternalIP / ExternalIPAttachment / NATGateway names,
 #     /32 address, refused deletes on an address mismatch;
-#   - FabricDomain and ClusterOrder ingress reservation/release using the
-#     Subnet's recorded LB VIP range;
+#   - FabricDomain tasks; CaaS guest ingress allocation is Fulfillment-owned
+#     and no ingress reservation task is dispatched to this manager;
 #   - ordered, absent-tolerant deletes and the VNIs freed last;
 #   - 5xx is retryable, 4xx is final, error messages carry no response body
 #     and no cookie;
@@ -47,7 +47,6 @@
       eipa: 9c8b7a6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d
       natgw: 1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d
       fd: 6e1d2c3b-4a59-4f68-8b7a-9c0d1e2f3a4b
-      cluster_order: 9f8e7d6c-5b4a-4321-8765-4c3b2a109876
     nf_vpc_name: "osac-vn-{{ nf_ids.vn }}"
     nf_sn_name: "osac-sn-{{ nf_ids.subnet }}"
     nf_vn_cidr: 10.20.0.0/16
@@ -210,19 +209,6 @@
         metadata: {name: fd, namespace: osac-networking, uid: "{{ nf_uid }}", generation: 1}
         spec: {type: ethernet_ew, servers: [server-a, server-b]}
       virtual_network: "{{ nf_vn_res }}"
-    nf_ingress_job:
-      task: "{{ nf_task }}"
-      cluster_id: "{{ nf_ids.cluster_order }}"
-      tenant: "{{ nf_tenant }}"
-      resource:
-        apiVersion: osac.openshift.io/v1alpha1
-        kind: ClusterOrder
-        id: "{{ nf_ids.cluster_order }}"
-        metadata: {name: cluster, namespace: clusters, uid: "{{ nf_uid }}", generation: 1}
-        spec: {networkAttachment: {subnetRef: "{{ nf_subnet_res.metadata.name }}"}}
-      subnet: "{{ nf_subnet_res }}"
-      virtual_network: "{{ nf_vn_res }}"
-      ipam: "{{ nf_ipam }}"
     # Fixtures the fake serves: a registered bare-metal host with two fabric
     # ports on the provisioning V-Net, two servers for a FabricDomain.
     nf_seed_host:
@@ -270,11 +256,9 @@
       - delete_nat_gateway
       - create_fabric_domain
       - delete_fabric_domain
-      - reserve_cluster_ingress_ip
-      - release_cluster_ingress_ip
     nf_overlay: {type: overlay}
     nf_physical: {type: physical, name: eth1, mac_address: "{{ nf_mac }}"}
-    # The 21 tasks, in an order that gives each its parents. The fake hands out
+    # The 19 tasks, in an order that gives each its parents. The fake hands out
     # IDs from fixed counters after a reset, so results are exact.
     nf_lifecycle:
       - {name: create_virtual_network, task: create_virtual_network, job: nf_vn_job, evpn: true,
@@ -292,9 +276,6 @@
       - {name: attach_external_ip, task: attach_external_ip, job: nf_eipa_job, result: {}}
       - {name: create_nat_gateway, task: create_nat_gateway, job: nf_natgw_job, result: {}}
       - {name: create_fabric_domain, task: create_fabric_domain, job: nf_fd_job, result: {backend_id: "601"}}
-      - {name: reserve_cluster_ingress_ip, task: reserve_cluster_ingress_ip, job: nf_ingress_job,
-         result: {cluster_ingress: {address: 10.20.1.32}}}
-      - {name: release_cluster_ingress_ip, task: release_cluster_ingress_ip, job: nf_ingress_job, result: {}}
       - {name: delete_nat_gateway, task: delete_nat_gateway, job: nf_natgw_job, result: {}}
       - {name: detach_external_ip, task: detach_external_ip, job: nf_eipa_job, result: {}}
       - {name: delete_external_ip, task: delete_external_ip, job: nf_eip_job, result: {}}

@@ -573,6 +573,63 @@ class ManifestsTest(unittest.TestCase):
 
 
 class AapSettingsTest(unittest.TestCase):
+    def test_caas_base_domains_must_match_before_render(self):
+        result = helm(
+            {
+                "global": {"services": {"caas": {"enabled": True}}},
+                "aap": {
+                    "instanceGroups": {
+                        "clusterFulfillment": {
+                            "config": {
+                                "EXTERNAL_ACCESS_BASE_DOMAIN": "public.example.test",
+                                "HOSTED_CLUSTER_BASE_DOMAIN": "hosted.example.test",
+                            }
+                        }
+                    }
+                },
+            }
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("EXTERNAL_ACCESS_BASE_DOMAIN must equal", result.stderr)
+        self.assertIn("HOSTED_CLUSTER_BASE_DOMAIN", result.stderr)
+
+    def test_caas_dns_upgrade_guard_uses_running_fulfillment_and_config(self):
+        docs = render(
+            {
+                "global": {"services": {"caas": {"enabled": True}}},
+                "aap": {
+                    "instanceGroups": {
+                        "clusterFulfillment": {
+                            "enabled": True,
+                            "config": {
+                                "EXTERNAL_ACCESS_BASE_DOMAIN": "clusters.example.test",
+                                "HOSTED_CLUSTER_BASE_DOMAIN": "clusters.example.test",
+                                "DNS_ZONE": "example.test",
+                                "DNS_CLASS": "dns.route53.dns",
+                            },
+                        }
+                    }
+                },
+            }
+        )
+        job = find(docs, "Job", "osac-caas-dns-guard")
+        self.assertEqual(job["metadata"]["annotations"]["helm.sh/hook"], "pre-upgrade,pre-rollback")
+        self.assertEqual(job["spec"]["template"]["spec"]["serviceAccountName"], "osac-caas-dns-guard")
+        role = find(docs, "Role", "osac-caas-dns-guard")
+        self.assertEqual(role["rules"], [{
+            "apiGroups": [""],
+            "resources": ["configmaps"],
+            "resourceNames": ["cluster-fulfillment-ig"],
+            "verbs": ["get"],
+        }])
+        container = job["spec"]["template"]["spec"]["containers"][0]
+        external_domain = next(
+            entry["value"] for entry in container["env"] if entry["name"] == "EXTERNAL_ACCESS_BASE_DOMAIN"
+        )
+        self.assertEqual(external_domain, "clusters.example.test")
+        script = find(docs, "ConfigMap", "osac-caas-dns-guard-script")["data"]["validate-caas-dns-settings.py"]
+        self.assertIn("/api/private/v1/clusters", script)
+
     def test_network_fulfillment_settings_written_verbatim(self):
         ca = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
         docs = render(
@@ -732,11 +789,11 @@ class AapSettingsTest(unittest.TestCase):
 
         rejected = {
             "NETRIS_VALIDATE_CERTS": ["", "flase", "no"],
-            "NETRIS_CONTROLLER_URL": ["http://netris.example.com", "https://netris.example.com/a b"],
+            "NETRIS_CONTROLLER_URL": ["ftp://netris.example.com", "https://netris.example.com/a b"],
         }
         messages = {
             "NETRIS_VALIDATE_CERTS": 'NETRIS_VALIDATE_CERTS must be "true" or "false"',
-            "NETRIS_CONTROLLER_URL": "NETRIS_CONTROLLER_URL must be an https:// URL",
+            "NETRIS_CONTROLLER_URL": "NETRIS_CONTROLLER_URL must be an http(s):// URL",
         }
         for key, values in rejected.items():
             for value in values:

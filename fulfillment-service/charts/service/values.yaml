@@ -93,7 +93,10 @@ ingress:
     restRequestTimeout: "300s"
     jwksRequestTimeout: "10s"
     # ConfigMap (keyed ca.crt) for BackendTLSPolicy upstream validation.
-    backendCaConfigMap: osac-backend-ca
+    # Empty defaults to osac-backend-ca-<release-namespace>: the trust-manager
+    # Bundle that materializes it is cluster-scoped and names its target
+    # ConfigMaps after itself, so the default must be unique per release.
+    backendCaConfigMap: ""
     # trust-manager Bundle source: the ClusterIssuer CA Secret (in trust-manager's
     # namespace). Defaults to certs.issuerRef.name; set when the CA Secret of the
     # ClusterIssuer is named differently.

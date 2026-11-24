@@ -238,7 +238,10 @@ service:
       restRequestTimeout: "300s"
       jwksRequestTimeout: "10s"
       # ConfigMap (keyed ca.crt) for BackendTLSPolicy upstream validation.
-      backendCaConfigMap: osac-backend-ca
+      # Empty defaults to osac-backend-ca-<release-namespace> in the service
+      # chart (the Bundle is cluster-scoped; the name must be unique per
+      # release).
+      backendCaConfigMap: ""
       # trust-manager Bundle source: the ClusterIssuer CA Secret. Defaults to
       # service.certs.issuerRef.name when empty.
       backendCaSecret: ""

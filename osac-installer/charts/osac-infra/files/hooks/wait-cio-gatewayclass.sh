@@ -13,7 +13,7 @@ set -euo pipefail
 GATEWAYCLASS_NAME="${GATEWAYCLASS_NAME:?GATEWAYCLASS_NAME must be set}"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-900}"
 
-if oc get subscription -A -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+if oc get subscription -A --request-timeout=30s -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
   | grep -qx 'servicemesh'; then
   echo "ERROR: a 'servicemesh' Subscription exists on this cluster."
   echo "The CIO-managed Gateway API and OpenShift Service Mesh are mutually"

@@ -17,6 +17,9 @@ keyed ca.crt (see backend-ca-bundle.yaml); the hostname is the backend serving-c
 SAN.
 */}}
 {{- if eq .Values.ingress.driver "gatewayapi" }}
+{{- /* Same resolved name as backend-ca-bundle.yaml: the trust-manager Bundle
+names its target ConfigMap after itself. */}}
+{{- $caName := .Values.ingress.gatewayapi.backendCaConfigMap | default (printf "osac-backend-ca-%s" .Release.Namespace) }}
 {{- range $svc := list "grpc-server" "rest-gateway" "console-proxy" }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
@@ -33,7 +36,7 @@ spec:
     caCertificateRefs:
     - group: ""
       kind: ConfigMap
-      name: {{ $.Values.ingress.gatewayapi.backendCaConfigMap }}
+      name: {{ $caName }}
     hostname: fulfillment-{{ $svc }}.{{ $.Release.Namespace }}.svc.cluster.local
 {{- end }}
 {{- end }}

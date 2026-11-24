@@ -21,6 +21,9 @@ scripts/gateway-bridge.sh maintains the EndpointSlices against the ready gateway
 Pod IPs with the installer's admin credentials.
 */}}
 {{- if and (eq .Values.ingress.driver "gatewayapi") .Values.ingress.gatewayapi.gatewayAddress }}
+{{- $addr := .Values.ingress.gatewayapi.gatewayAddress }}
+{{- /* Kubernetes requires the slice addressType to match the addresses. */}}
+{{- $addrType := "IPv4" }}{{- if regexMatch ":" $addr }}{{- $addrType = "IPv6" }}{{- end }}
 {{- range $b := list (dict "svc" "fulfillment-api" "portName" "external-api") (dict "svc" "fulfillment-internal-api" "portName" "internal-api") }}
 ---
 apiVersion: discovery.k8s.io/v1
@@ -30,7 +33,7 @@ metadata:
   name: {{ $b.svc }}-gateway
   labels:
     kubernetes.io/service-name: {{ $b.svc }}
-addressType: IPv4
+addressType: {{ $addrType }}
 endpoints:
 - addresses:
   - {{ $.Values.ingress.gatewayapi.gatewayAddress | quote }}

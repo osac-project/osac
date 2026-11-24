@@ -115,9 +115,19 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+            runAsNonRoot: true
             capabilities:
               drop:
                 - ALL
+          # The wait loop must keep iterating; a hung CLI call is the only
+          # silent-stall mode left after --request-timeout, and this probe
+          # restarts the container so the loop resumes.
+          livenessProbe:
+            exec:
+              command: ["/bin/bash", "-c", "kill -0 1"]
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             {{- toYaml .Values.hookResources | nindent 12 }}
           command:

@@ -78,7 +78,10 @@ case "\$1" in
     exit 0 ;;
   uninstall|template|dependency) exit 0 ;;
   get)
-    if [ "\$2" = "values" ]; then printf '%s\n' "\${HELM_VALUES_JSON:-\{\}}"; exit 0; fi
+    if [ "\$2" = "values" ]; then
+      if [ -n "\${HELM_VALUES_ERROR:-}" ]; then echo "\$HELM_VALUES_ERROR" >&2; exit 1; fi
+      printf '%s\n' "\${HELM_VALUES_JSON:-\{\}}"
+    fi
     exit 0 ;;
 esac
 echo "UNEXPECTED helm call: \$*" >&2
@@ -88,6 +91,16 @@ STUB
 chmod +x "$WORK/bin/oc" "$WORK/bin/helm"
 bash -n "$WORK/bin/oc" && bash -n "$WORK/bin/helm" || { echo "stub syntax error"; exit 1; }
 cp "$WORK/bin/helm" "$WORK/bin-nooc/helm"
+# A controlled PATH for the no-oc scenarios: only the tools the recipes
+# actually need, symlinked from the current PATH, never including a real
+# oc (which may live in /usr/bin on some machines and defeat the scenario).
+mkdir -p "$WORK/essentials"
+# type -P, not command -v: an interactive alias (grep -> ugrep here) would
+# otherwise produce a broken relative symlink and break the scenario.
+for tool in bash sh env grep sed awk cat cut head tail printf sleep mkdir chmod sort make dirname basename uname date readlink ls tr; do
+  tool_path=$(type -P "$tool" 2>/dev/null) && ln -sf "$tool_path" "$WORK/essentials/$tool"
+done
+NO_OC_PATH="$WORK/bin-nooc:$WORK/essentials"
 
 # A digest-pinned dummy chart ref skips helm-osac-deps (whose recipe clears
 # charts/osac/charts) so the test cannot disturb the working tree's built
@@ -140,6 +153,13 @@ if ! ok "$rc" && log_has "$WORK/s3" "set the ingress driver with INGRESS_DRIVER"
   pass "3 EXTRA_HELM_ARGS driver override rejected"
 else fail "3 EXTRA_HELM_ARGS driver override rejected (rc=$rc)"; fi
 
+# ---------------------------------------------------------------- 3b
+rc=$(run_make "$WORK/s3b" -- install-osac EXTRA_HELM_ARGS="--set service.httpCorsAllowedOrigins[0]=https://x,service.ingress.driver=gatewayapi")
+if ! ok "$rc" && log_has "$WORK/s3b" "set the ingress driver with INGRESS_DRIVER" \
+   && { [ ! -f "$WORK/s3b/logs/helm.log" ] || helm_not "$WORK/s3b" "upgrade --install"; }; then
+  pass "3b comma-joined driver override rejected"
+else fail "3b comma-joined driver override rejected (rc=$rc)"; fi
+
 # ---------------------------------------------------------------- 4
 rc=$(run_make "$WORK/s4" -- install-osac INGRESS_DRIVER=gatewayapi EXTRA_HELM_ARGS="--set service.ingress.gatewayapi.gatewayAddress=1.2.3.4")
 if ! ok "$rc" && log_has "$WORK/s4" "gatewayAddress"; then
@@ -170,15 +190,16 @@ uninstall_rc() { # <dir> <values-json> <path>
   local dir="$1" values="$2" path="$3"
   mkdir -p "$dir/logs"
   env -u KUBECONFIG GW_LOG_DIR="$dir/logs" HELM_VALUES_JSON="$values" \
+    HELM_VALUES_ERROR="${HELM_VALUES_ERROR:-}" \
     PATH="$path" make uninstall-osac PLATFORM=openshift PROFILE=vmaas-ci NS=gwtest \
     > "$dir/out.log" 2>&1
   echo $?
 }
 
-rc=$(uninstall_rc "$WORK/s7" '{"ingress":{"driver":"envoy"}}' "$WORK/bin-nooc:/usr/bin:/bin")
+rc=$(uninstall_rc "$WORK/s7" '{"ingress":{"driver":"envoy"}}' "$NO_OC_PATH")
 if ok "$rc"; then pass "7 envoy uninstall succeeds without oc"; else fail "7 envoy uninstall succeeds without oc (rc=$rc)"; fi
 
-rc=$(uninstall_rc "$WORK/s8" '{"ingress":{"driver":"gatewayapi"}}' "$WORK/bin-nooc:/usr/bin:/bin")
+rc=$(uninstall_rc "$WORK/s8" '{"ingress":{"driver":"gatewayapi"}}' "$NO_OC_PATH")
 if ! ok "$rc" && grep -q "oc is not available" "$WORK/s8/out.log" \
    && grep -q "oc delete endpointslice" "$WORK/s8/out.log"; then
   pass "8 gatewayapi uninstall without oc fails with manual steps"
@@ -188,6 +209,12 @@ rc=$(uninstall_rc "$WORK/s9" '{"ingress":{"driver":"gatewayapi"}}' "$WORK/bin:/u
 if ok "$rc" && grep -q "delete endpointslice.*fulfillment-api-gateway" "$WORK/s9/logs/oc.log"; then
   pass "9 gatewayapi uninstall removes bridge slices with oc"
 else fail "9 gatewayapi uninstall removes bridge slices with oc (rc=$rc)"; fi
+
+# ---------------------------------------------------------------- 9b
+export HELM_VALUES_ERROR="Error: Kubernetes cluster unreachable"
+rc=$(uninstall_rc "$WORK/s9b" '' "$WORK/bin:/usr/bin:/bin")
+unset HELM_VALUES_ERROR
+if ! ok "$rc"; then pass "9b uninstall fails on a values lookup error"; else fail "9b uninstall fails on a values lookup error (rc=$rc)"; fi
 
 # ---------------------------------------------------------------- 10
 rc=$(run_make "$WORK/s10" -- install-osac)

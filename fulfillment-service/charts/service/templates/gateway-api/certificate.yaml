@@ -40,4 +40,6 @@ spec:
   secretName: fulfillment-api-tls
   privateKey:
     rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
 {{- end }}

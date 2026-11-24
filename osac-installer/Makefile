@@ -222,7 +222,9 @@ INGRESS_DRIVER_HELM_ARGS := $(if $(filter gatewayapi,$(INGRESS_DRIVER)),--set se
 ifneq ($(filter $(INGRESS_DRIVER),envoy gatewayapi),$(INGRESS_DRIVER))
 $(error INGRESS_DRIVER must be envoy or gatewayapi)
 endif
-ifneq ($(strip $(filter service.ingress.driver=%,$(EXTRA_HELM_ARGS))),)
+# findstring, not filter: an override can hide inside a comma-joined
+# --set value, where make word-splitting never sees it as a word.
+ifneq (,$(findstring service.ingress.driver=,$(EXTRA_HELM_ARGS)))
 $(error set the ingress driver with INGRESS_DRIVER=, not EXTRA_HELM_ARGS --set service.ingress.driver)
 endif
 ifeq ($(INGRESS_DRIVER),gatewayapi)
@@ -231,10 +233,10 @@ ifneq ($(PLATFORM),openshift)
 $(error INGRESS_DRIVER=gatewayapi requires PLATFORM=openshift (the CIO-managed Gateway API))
 endif
 endif
-ifneq ($(strip $(filter service.ingress.gatewayapi.gatewayAddress=%,$(EXTRA_HELM_ARGS))),)
+ifneq (,$(findstring service.ingress.gatewayapi.gatewayAddress=,$(EXTRA_HELM_ARGS)))
 $(error gatewayAddress (chart-managed static slices) cannot be combined with INGRESS_DRIVER=gatewayapi (installer-managed bridge); leave gatewayAddress empty)
 endif
-ifneq ($(strip $(filter service.ingress.gatewayapi.%,$(EXTRA_HELM_ARGS))),)
+ifneq (,$(findstring service.ingress.gatewayapi.,$(EXTRA_HELM_ARGS)))
 $(error configure the gatewayapi driver with GATEWAY_NAME/GATEWAY_NAMESPACE/GATEWAY_CLASS_NAME, not EXTRA_HELM_ARGS service.ingress.gatewayapi.*)
 endif
 endif
@@ -1021,6 +1023,7 @@ endif
 			exit 1; }; \
 		bash scripts/gateway-bridge.sh "$(NS)" "$(GATEWAY_NAMESPACE)" "$(GATEWAY_NAME)-$(GATEWAY_CLASS_NAME)" & bridge_pid=$$!; \
 	fi; \
+	rc=0; \
 	helm upgrade --install osac "$${OSAC_CHART_OCI_REF:-$(OSAC_CHART)}" $${OSAC_CHART_OCI_VERSION:+--version "$${OSAC_CHART_OCI_VERSION}"} \
 		-f $(INSTANCE_VALUES) $${INSTANCE_VALUES_EXTRA} \
 		--namespace $(NS) --create-namespace \
@@ -1029,7 +1032,7 @@ endif
 		$(INSTANCE_HELM_ARGS) \
 		$(INGRESS_DRIVER_HELM_ARGS) \
 		$${ARGV[@]+"$${ARGV[@]}"} $(OSAC_HELM_FORCE_CONFLICTS) $(REMOTE_CLUSTER_HELM_ARGS) \
-		$(INSTALL_HELM_TARGET) --wait --timeout 40m; rc=$$?; \
+		$(INSTALL_HELM_TARGET) --wait --timeout 40m || rc=$$?; \
 	if [ -n "$${bridge_pid:-}" ]; then \
 		if [ $$rc -eq 0 ]; then \
 			wait $${bridge_pid} || { echo "ERROR: the gateway bridge failed; in-cluster callers cannot reach the APIs through the selectorless Services" >&2; rc=1; }; \
@@ -1047,10 +1050,13 @@ uninstall-osac: validate-ns ## Uninstall OSAC instance (PLATFORM= PROFILE= NS= r
 # BEFORE uninstalling (the release is gone afterwards), keep the default
 # envoy/kind path free of any oc dependency, and fail loudly instead of
 # silently skipping when gatewayapi cleanup is required but oc is missing.
-	@if helm get values osac --namespace $(NS) -o json 2>/dev/null | grep -q '"driver":"gatewayapi"'; then \
-		driver=gatewayapi; \
-	else \
+	@values_out=$$(helm get values osac --namespace $(NS) -o json 2>&1); values_rc=$$?; \
+	if [ $$values_rc -eq 0 ]; then \
+		if echo "$$values_out" | grep -q '"driver":"gatewayapi"'; then driver=gatewayapi; else driver=; fi; \
+	elif echo "$$values_out" | grep -qi 'no release\|not found'; then \
 		driver=; \
+	else \
+		echo "ERROR: could not read the osac release values; not uninstalling blind: $$values_out" >&2; exit 1; \
 	fi; \
 	helm uninstall osac --namespace $(NS) --ignore-not-found; \
 	if [ "$$driver" = "gatewayapi" ]; then \

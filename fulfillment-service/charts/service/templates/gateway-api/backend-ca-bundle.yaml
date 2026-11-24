@@ -26,10 +26,15 @@ ingress.gatewayapi.backendCaSecret when it differs from the issuer name.
 */}}
 {{- if and (eq .Values.ingress.driver "gatewayapi") (eq .Values.certs.issuerRef.kind "ClusterIssuer") }}
 {{- $caSecret := .Values.ingress.gatewayapi.backendCaSecret | default .Values.certs.issuerRef.name }}
+{{- /* Bundle is cluster-scoped and names its target ConfigMaps after itself, so
+the default name carries the release namespace: two releases on one cluster
+would otherwise fight over the same Bundle. An explicit backendCaConfigMap
+wins unchanged. */}}
+{{- $caName := .Values.ingress.gatewayapi.backendCaConfigMap | default (printf "osac-backend-ca-%s" .Release.Namespace) }}
 apiVersion: trust.cert-manager.io/v1alpha1
 kind: Bundle
 metadata:
-  name: {{ .Values.ingress.gatewayapi.backendCaConfigMap }}
+  name: {{ $caName }}
 spec:
   sources:
   - secret:

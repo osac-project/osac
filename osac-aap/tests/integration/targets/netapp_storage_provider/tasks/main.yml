@@ -18,10 +18,9 @@
 #      'name' field, defaults for encryption and the prepared qosPolicy, and
 #      trustedCACertificate when netapp_storage_validate_certs
 #      is true) + per-tier StorageClasses bound via parameters.selector,
-#      short-circuits on the second run when all resources exist, and omits
+#      skips rewriting a matching TBC on the second run, and omits
 #      trustedCACertificate when netapp_storage_validate_certs is false.
-#      Matching classes stay untouched, missing classes are created, and
-#      immutable parameter drift blocks all class creation for that backend.
+#      A managed label on a StorageClass used by a PVC is repaired in place.
 #      Successive calls that each name some of the tenant's tiers build the TBC
 #      up pool by pool: a call keeps the pools of the tiers it does not name
 #      and their positions, rebuilds a changed tier in place, and short-circuits
@@ -40,8 +39,8 @@
 #      names.
 #   8. Shared-TBC ensure_storage_class (Bound TBC): creates per-tier
 #      StorageClasses with selector and storagePools without creating OSAC
-#      TBCs/Secrets, applies the same drift handling as Dedicated-SVM mode,
-#      and uses the dotted spec.backendName fallback for a new class.
+#      TBCs/Secrets. A changed backend pin is rejected on an existing class
+#      while a new tier gets the dotted spec.backendName fallback.
 #   9. Shared-TBC ensure_storage_class (NotFound TBC): fails and creates no
 #      StorageClass when the customer TBC cannot be read, and creates the
 #      StorageClass with storagePools once the TBC is Bound.
@@ -381,7 +380,7 @@
         fail_msg: "Dedicated-SVM setup must reject a QoS tier with no prepared policy group"
         success_msg: "Dedicated-SVM setup rejected QoS tier with no prepared policy group"
 
-# ── Test 3: ensure_storage_class creates TBC + SCs, then short-circuits ──
+# ── Test 3: ensure_storage_class creates TBC + SCs and repairs class labels ──
 - name: "ONTAP Storage Provider - Ensure storage classes"
   hosts: localhost
   gather_facts: false
@@ -598,37 +597,35 @@
         success_msg: "storage_provider_storage_class_names output correct"
       no_log: true
 
-    # ── Short-circuit: second run when all resources exist ──
-    - name: Re-run ensure_storage_class (should short-circuit)
+    - name: Re-run ensure_storage_class with matching resources
       ansible.builtin.include_tasks: dispatch.yaml
       vars:
         storage_provider_action: ensure_storage_class
 
-    - name: Assert the output is stable across the short-circuit run
+    - name: Read the gold StorageClass after the unchanged run
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ _sc_gold }}"
+      register: _gold_repeat
+
+    - name: Assert the matching class and output are stable across runs
       ansible.builtin.assert:
         that:
-          - _netapp_all_sc_exist | bool
+          - _netapp_dedicated_backends_ready | bool
+          - _gold_repeat.resources[0].metadata.uid == _scs.results[0].resources[0].metadata.uid
+          - _gold_repeat.resources[0].metadata.resourceVersion == _scs.results[0].resources[0].metadata.resourceVersion
           - storage_provider_storage_class_names | length == 2
           - >-
             storage_provider_storage_class_names | map(attribute='name') | list | sort
             == [_sc_gold, _sc_silver] | sort
-        fail_msg: "Short-circuit run lost or changed the output fact"
-        success_msg: "Short-circuit run preserved the output fact"
       no_log: true
 
-    - name: Verify Dedicated-SVM StorageClass ensure cases
+    - name: Repair a label on a Dedicated-SVM StorageClass used by a claim
       ansible.builtin.include_tasks: storageclass_ensure_case.yaml
       vars:
-        _fixture_sibling_sc: "{{ _scs.results[0].resources[0] }}"
-        _fixture_retained_sc: "{{ _scs.results[1].resources[0] }}"
-      loop:
-        - {name: matching, drift: false, sibling_missing: false}
-        - {name: drift, drift: true, sibling_missing: false}
-        - {name: drift with missing sibling, drift: true, sibling_missing: true}
-        - {name: matching with missing sibling, drift: false, sibling_missing: true}
-      loop_control:
-        loop_var: _sc_case
-        label: "{{ _sc_case.name }}"
+        _fixture_sc: "{{ _scs.results[0].resources[0] }}"
+        _expect_immutable_conflict: false
 
     # ── Cert validation override on an existing TBC: the CA set above is removed in place ──
     - name: Read the TBC UID before disabling certificate validation
@@ -992,10 +989,10 @@
       register: _subset_tbc_repeat
       no_log: true
 
-    - name: Assert the repeated gold call short-circuited and left both pools as they were
+    - name: Assert the repeated gold call skipped the TBC write and kept both pools
       ansible.builtin.assert:
         that:
-          - _netapp_all_sc_exist | bool
+          - _netapp_dedicated_backends_ready | bool
           - _subset_tbc_repeat.resources[0].spec.storage == [_t_gold_pool, _t_silver_pool]
           - >-
             _subset_tbc_repeat.resources[0].metadata.resourceVersion
@@ -1025,7 +1022,7 @@
     - name: Assert the changed gold pool was rebuilt in place next to the unchanged silver pool
       ansible.builtin.assert:
         that:
-          - not (_netapp_all_sc_exist | bool)
+          - not (_netapp_dedicated_backends_ready | bool)
           - _subset_tbc_changed.resources[0].metadata.uid == _subset_tbc_gold.resources[0].metadata.uid
           - _subset_tbc_changed.resources[0].spec.storage | length == 2
           - >-
@@ -1769,20 +1766,6 @@
         success_msg: "No per-tenant TBC or CSI Secret created in Shared-TBC mode"
       no_log: true
 
-    - name: Verify Shared-TBC StorageClass ensure cases
-      ansible.builtin.include_tasks: storageclass_ensure_case.yaml
-      vars:
-        _fixture_sibling_sc: "{{ _shared_scs.results[0].resources[0] }}"
-        _fixture_retained_sc: "{{ _shared_scs.results[1].resources[0] }}"
-      loop:
-        - {name: matching, drift: false, sibling_missing: false}
-        - {name: drift, drift: true, sibling_missing: false}
-        - {name: drift with missing sibling, drift: true, sibling_missing: true}
-        - {name: matching with missing sibling, drift: false, sibling_missing: true}
-      loop_control:
-        loop_var: _sc_case
-        label: "{{ _sc_case.name }}"
-
     - name: Update customer-fc TBC to dotted spec.backendName and clear status.backendInfo.backendName
       kubernetes.core.k8s:
         state: present
@@ -1814,20 +1797,31 @@
       changed_when: true
       no_log: true
 
-    - name: Run ensure_storage_class for a new tier with a multi-key pool_selector
-      ansible.builtin.include_tasks: dispatch.yaml
+    - name: Check whether the new tier already has a class
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ _sc_highwrite }}"
+      register: _highwrite_before
+
+    - name: Request a new backend pin for a class in use and create a missing sibling tier
+      ansible.builtin.include_tasks: storageclass_ensure_case.yaml
       vars:
-        storage_provider_action: ensure_storage_class
+        _fixture_sc: "{{ _shared_scs.results[0].resources[0] }}"
+        _expect_immutable_conflict: true
+        _highwrite_tier:
+          name: highwrite
+          protocol: block
+          provider: netapp
+          backend_id: netapp-shared-1
+          provider_config:
+            profile: shared-fc
+            pool_selector:
+              zone: az1
+              performance: highwrite
         storage_provider_tiers:
-          - name: highwrite
-            protocol: block
-            provider: netapp
-            backend_id: netapp-shared-1
-            provider_config:
-              profile: shared-fc
-              pool_selector:
-                zone: az1
-                performance: highwrite
+          - "{{ _highwrite_tier | combine({'name': 'extreme'}) }}"
+          - "{{ _highwrite_tier }}"
 
     - name: Read back the highwrite StorageClass
       kubernetes.core.k8s_info:
@@ -1840,6 +1834,7 @@
     - name: Assert the new StorageClass uses the sorted selector and escaped dotted backendName
       ansible.builtin.assert:
         that:
+          - _highwrite_before.resources | length == 0
           - _highwrite_sc.resources | length == 1
           - _highwrite_sc.resources[0].parameters['selector'] == 'performance=highwrite;zone=az1'
           - _highwrite_sc.resources[0].parameters['storagePools'] == 'osiscsi\\.backend\\.v1:.*'

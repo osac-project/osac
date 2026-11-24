@@ -383,10 +383,15 @@ Each dispatched `backend_id` uses exactly one of two modes, selected by its
   customer TBCs or Secrets. Bandwidth QoS belongs to the customer's virtual pools, so
   tiers with non-zero `qos_limits.static_limits` are rejected.
 
-In both modes, `ensure_storage_class` checks the immutable parameters of all
-requested StorageClasses for a backend before creating any missing class. It
-leaves existing classes untouched. If the parameters conflict, the job names
-the affected classes and stops StorageClass creation for that backend.
+In both modes, the direct `netapp_storage` role creates missing StorageClasses
+and patches each existing class at its original name. For example, it repairs a
+managed tier label in place, preserving the class UID and PVC references. If
+the desired patch also changes an immutable field such as the Trident selector,
+Kubernetes rejects the entire patch for that class, including the label change.
+A merge patch retains unrequested parameter keys. If the returned class still
+has different routing parameters, ensure reports that class as failed. Other
+tiers in the same loop can still reconcile. The service dispatcher's `netapp`
+route uses `osac_csi_storage`.
 
 `teardown_cluster_storage` removes only OSAC-managed resources
 (`app.kubernetes.io/managed-by=osac-aap`) and refuses to remove anything while a

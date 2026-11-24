@@ -1,120 +1,84 @@
 ---
-# Called in both tenancy modes on the disposable Kind fixture. The sibling
-# is dispatched first so a per-tier check-and-create loop would create it
-# before finding drift in the retained class.
-- name: Remove the retained StorageClass fixture before seeding this case
-  kubernetes.core.k8s:
-    state: absent
-    api_version: storage.k8s.io/v1
-    kind: StorageClass
-    name: "{{ _fixture_retained_sc.metadata.name }}"
-
-# Matching without the ownership label exercises the exact-name lookup.
-# Drift with the label exercises the old delete-and-recreate path.
-- name: Seed the retained StorageClass fixture
+- name: Create a PVC referencing the existing StorageClass
   kubernetes.core.k8s:
     state: present
     definition:
-      apiVersion: storage.k8s.io/v1
-      kind: StorageClass
+      apiVersion: v1
+      kind: PersistentVolumeClaim
       metadata:
-        name: "{{ _fixture_retained_sc.metadata.name }}"
-        labels: >-
-          {{ _fixture_retained_sc.metadata.labels if _sc_case.drift else
-             (_fixture_retained_sc.metadata.labels | dict2items
-              | rejectattr('key', 'equalto', 'app.kubernetes.io/managed-by') | items2dict) }}
-      provisioner: "{{ _fixture_retained_sc.provisioner }}"
-      parameters: >-
-        {{ _fixture_retained_sc.parameters
-           | combine({'selector': 'fixture=drift'} if _sc_case.drift else {}) }}
-      reclaimPolicy: "{{ _fixture_retained_sc.reclaimPolicy }}"
-      volumeBindingMode: "{{ _fixture_retained_sc.volumeBindingMode }}"
-  register: _sc_case_seeded
-  no_log: true
+        namespace: default
+        name: "{{ _fixture_sc.metadata.name }}-claim"
+      spec:
+        storageClassName: "{{ _fixture_sc.metadata.name }}"
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 1Gi
+  register: _fixture_claim
 
-- name: Remove the sibling StorageClass fixture for the missing-sibling case
-  kubernetes.core.k8s:
-    state: absent
-    api_version: storage.k8s.io/v1
-    kind: StorageClass
-    name: "{{ _fixture_sibling_sc.metadata.name }}"
-  when: _sc_case.sibling_missing
-
-- name: Reset the captured ensure failure
-  ansible.builtin.set_fact:
-    _sc_case_error: ""
-
-- name: Exercise direct NetApp StorageClass ensure
+- name: Exercise in-place StorageClass reconciliation with a PVC
   block:
-    - name: Dispatch ensure_storage_class for both tiers
-      ansible.builtin.include_tasks: dispatch.yaml
+    - name: Introduce drift in a managed label
+      kubernetes.core.k8s:
+        state: patched
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "{{ _fixture_sc.metadata.name }}"
+            labels:
+              osac.openshift.io/storage-tier: incorrect
+      register: _drifted_sc
+
+    - name: Reconcile the requested tiers
+      block:
+        - name: Dispatch ensure_storage_class
+          ansible.builtin.include_tasks: dispatch.yaml
+          vars:
+            storage_provider_action: ensure_storage_class
+
+        - name: Require the requested class update to be compatible on success
+          ansible.builtin.assert:
+            that: not _expect_immutable_conflict
+
+      rescue:
+        - name: Require the Kubernetes parameter validation error for the conflicting class
+          ansible.builtin.assert:
+            that:
+              - _expect_immutable_conflict
+              - _fixture_sc.metadata.name in ansible_failed_result.msg
+              - "'updates to parameters are forbidden' in ansible_failed_result.msg"
+
+    - name: Read back the class and its claim
+      kubernetes.core.k8s_info:
+        api_version: "{{ item.apiVersion }}"
+        kind: "{{ item.kind }}"
+        name: "{{ item.metadata.name }}"
+        namespace: "{{ item.metadata.namespace | default(omit) }}"
+      loop: "{{ [_fixture_sc, _fixture_claim.result] }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      register: _after_ensure
+
+    - name: Check class and claim identity and the atomic outcome of the patch
+      ansible.builtin.assert:
+        that:
+          - _class.metadata.uid == _fixture_sc.metadata.uid
+          - _class.parameters == _fixture_sc.parameters
+          - _class.metadata.labels['osac.openshift.io/storage-tier'] == _expected_tier_label
+          - not _expect_immutable_conflict or _class.metadata.resourceVersion == _drifted_sc.result.metadata.resourceVersion
+          - _claim.metadata.uid == _fixture_claim.result.metadata.uid
+          - _claim.spec.storageClassName == _class.metadata.name
       vars:
-        storage_provider_action: ensure_storage_class
-  rescue:
-    - name: Capture the ensure_storage_class failure
-      ansible.builtin.set_fact:
-        _sc_case_error: "{{ ansible_failed_result.msg | default('ensure_storage_class failed without a message') }}"
-      no_log: true
+        _class: "{{ _after_ensure.results[0].resources[0] }}"
+        _claim: "{{ _after_ensure.results[1].resources[0] }}"
+        _expected_tier_label: "{{ 'incorrect' if _expect_immutable_conflict else _fixture_sc.metadata.labels['osac.openshift.io/storage-tier'] }}"
 
-- name: Read the requested StorageClasses after ensure
-  kubernetes.core.k8s_info:
-    api_version: storage.k8s.io/v1
-    kind: StorageClass
-    name: "{{ item }}"
-  loop:
-    - "{{ _fixture_retained_sc.metadata.name }}"
-    - "{{ _fixture_sibling_sc.metadata.name }}"
-  register: _sc_case_after
-  no_log: true
-
-- name: Assert the retained StorageClass was preserved without writes
-  ansible.builtin.assert:
-    that:
-      - _sc_case_after.results[0].resources | length == 1
-      - _sc_case_after.results[0].resources[0].metadata.uid == _sc_case_seeded.result.metadata.uid
-      - _sc_case_after.results[0].resources[0].metadata.resourceVersion == _sc_case_seeded.result.metadata.resourceVersion
-      - _sc_case_after.results[0].resources[0].parameters == _sc_case_seeded.result.parameters
-    fail_msg: "The existing StorageClass changed during ensure"
-
-- name: Assert drift reports the class name without parameter values
-  ansible.builtin.assert:
-    that:
-      - >-
-        _sc_case_error == 'Existing NetApp StorageClasses have conflicting immutable parameters: '
-        ~ _fixture_retained_sc.metadata.name
-        ~ '. Use the configuration that matches the existing classes or plan a migration.'
-    fail_msg: "Ensure did not report immutable parameter drift with the class name alone"
-  when: _sc_case.drift
-
-- name: Assert a missing sibling was left absent on drift
-  ansible.builtin.assert:
-    that: _sc_case_after.results[1].resources | length == 0
-  when: _sc_case.drift and _sc_case.sibling_missing
-
-- name: Assert an existing sibling was left untouched
-  ansible.builtin.assert:
-    that:
-      - _sc_case_after.results[1].resources | length == 1
-      - _sc_case_after.results[1].resources[0].metadata.uid == _fixture_sibling_sc.metadata.uid
-      - _sc_case_after.results[1].resources[0].metadata.resourceVersion == _fixture_sibling_sc.metadata.resourceVersion
-  when: not _sc_case.sibling_missing
-
-- name: Assert a missing sibling was created when the retained class matched
-  ansible.builtin.assert:
-    that:
-      - _sc_case_after.results[1].resources | length == 1
-      - _sc_case_after.results[1].resources[0].parameters == _fixture_sibling_sc.parameters
-      - _sc_case_after.results[1].resources[0].provisioner == 'csi.trident.netapp.io'
-      - _sc_case_after.results[1].resources[0].reclaimPolicy == 'Delete'
-      - _sc_case_after.results[1].resources[0].volumeBindingMode == 'WaitForFirstConsumer'
-      - _sc_case_after.results[1].resources[0].metadata.uid != _fixture_sibling_sc.metadata.uid
-  when: not _sc_case.drift and _sc_case.sibling_missing
-
-- name: Assert successful ensure returned both StorageClass names
-  ansible.builtin.assert:
-    that:
-      - _sc_case_error == ""
-      - >-
-        storage_provider_storage_class_names | map(attribute='name') | sort ==
-        [_fixture_retained_sc.metadata.name, _fixture_sibling_sc.metadata.name] | sort
-  when: not _sc_case.drift
+  always:
+    - name: Remove the test claim before the teardown cases
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: PersistentVolumeClaim
+        namespace: default
+        name: "{{ _fixture_sc.metadata.name }}-claim"

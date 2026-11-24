@@ -193,23 +193,27 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
         "cluster-mgmt"
     )
 
-    # 2. Render the StorageClass parameters for both tenancy modes.
-    desired_params_task = _find_task(block_tasks, "Build desired NetApp StorageClass parameters per tier")
-    desired_params_expr = desired_params_task["ansible.builtin.set_fact"]["_netapp_sc_desired_params"]
-    dedicated_params = _render(
-        desired_params_expr,
-        {
-            "_netapp_is_shared_tbc": False,
-            "_backend_tiers": [{"name": "gold"}],
-            "_tbc_name": "netapp-0000000000000001",
-        },
-    )
-    assert dedicated_params["gold"] == {
+    # Render the parameters used by the native StorageClass task in both modes.
+    reconcile = _find_task(block_tasks, "Reconcile the per-tier StorageClasses")["block"][0]
+    manifest_params = reconcile["kubernetes.core.k8s"]["definition"]["parameters"]
+    dedicated = {
+        **reconcile["vars"],
+        "_netapp_is_shared_tbc": False,
+        "_tbc_name": "netapp-0000000000000001",
+        "item": "gold",
+    }
+    dedicated_sc_params = _render(manifest_params, dedicated)
+    assert dedicated_sc_params == {
         "backendType": "ontap-san",
         "selector": "osac_backend=netapp-0000000000000001;tier=gold",
     }
 
-    # Shared-TBC selectors sort keys, and storagePools pins to the escaped backend name.
+    desired_params_task = _find_task(
+        block_tasks, "Build desired Shared-TBC StorageClass parameters per tier"
+    )
+    desired_params_expr = desired_params_task["ansible.builtin.set_fact"][
+        "_netapp_shared_sc_desired_params"
+    ]
     shared_tier = {
         "name": "gold",
         "provider_config": {
@@ -217,13 +221,19 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
             "pool_selector": {"z_tier": "fast", "a_env": "prod"},
         },
     }
-    shared_vars = {
-        "_netapp_is_shared_tbc": True,
-        "_backend_tiers": [shared_tier],
-        "_netapp_profile_backend_names": {"gold-prof": "trident.shared-san.01"},
-    }
-    shared_params = _render(desired_params_expr, shared_vars)
-    assert shared_params["gold"] == {
+    rendered_desired_with_bname = _render(
+        desired_params_expr,
+        {
+            "_assignment_key": "0000000000000001",
+            "_backend_tiers": [shared_tier],
+            "_netapp_profile_backend_names": {"gold-prof": "trident.shared-san.01"},
+        },
+    )
+    rendered_shared_with_bname = _render(
+        manifest_params,
+        {**dedicated, "_netapp_is_shared_tbc": True, "_netapp_shared_sc_desired_params": rendered_desired_with_bname},
+    )
+    assert rendered_shared_with_bname == {
         "backendType": "ontap-san",
         "selector": "a_env=prod;z_tier=fast",
         "storagePools": r"trident\.shared-san\.01:.*",
@@ -234,7 +244,8 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
     assert "storagePools" in _render(
         desired_params_expr,
         {
-            **shared_vars,
+            "_assignment_key": "0000000000000001",
+            "_backend_tiers": [shared_tier],
             "_netapp_profile_backend_names": {"gold-prof": ""},
         },
     )["gold"]
@@ -247,39 +258,17 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
         )
         is True
     )
-    # 3. Classify every tier before creation, including an earlier missing sibling.
-    plan_task = _find_task(block_tasks, "Classify missing and conflicting NetApp StorageClasses")
-    plan_expr = plan_task["ansible.builtin.set_fact"]["_netapp_sc_plan"]
-    gold_name = "netapp-0000000000000001-24d7f03d8dc3c366"
-    silver_name = "netapp-0000000000000001-78cde64c3e47f2cb"
-    for desired, conflicting in (
-        (dedicated_params, {"backendType": "ontap-san", "selector": "osac_backend=old;tier=gold"}),
-        (shared_params, {"backendType": "ontap-san", "selector": "a_env=prod;z_tier=fast"}),
+    # The module can return success with no object (a create race), or with
+    # extra live routing parameters that a merge patch left in place.
+    for result, failed in (
+        ({"result": {"parameters": dedicated_sc_params}}, False),
+        ({"result": {"parameters": {**dedicated_sc_params, "storagePools": "other:.*"}}}, True),
+        ({"result": {}}, True),
+        ({"failed": True}, True),
     ):
-        variables = {
-            "_assignment_key": "0000000000000001",
-            "_backend_tiers": [{"name": "silver"}, {"name": "gold"}],
-            "_netapp_sc_desired_params": desired,
-        }
-        for live_params, conflicting_names in (
-            (desired["gold"], []),
-            (conflicting, [gold_name]),
-        ):
-            plan = _render(
-                plan_expr,
-                {
-                    **variables,
-                    "_netapp_sc_checks": {
-                        "resources": [{"metadata": {"name": gold_name}, "parameters": live_params}],
-                    },
-                },
-            )
-            assert plan == {
-                "missing": [{"name": silver_name, "tier": "silver"}],
-                "conflicting": conflicting_names,
-            }
+        assert _render_when(reconcile["failed_when"], {**dedicated, "_netapp_sc_write": result}) is failed
 
-    # 4. Evaluate netapp_storage_validate_certs default and CA bundle fail-fast conditions.
+    # 3. Evaluate netapp_storage_validate_certs default and CA bundle fail-fast conditions.
     defaults = _load_yaml(NETAPP_ROLE_DIR / "defaults" / "main.yaml")
     monkeypatch.delenv("NETAPP_VALIDATE_CERTS", raising=False)
     assert _render(defaults["netapp_storage_validate_certs"], {}) is True
@@ -583,14 +572,12 @@ def test_netapp_tbc_write_keeps_pools_of_tiers_not_in_the_dispatch():
     assert len(_render(include_task["loop"], {})) > 1
     fail_task = _find_task(backend_block, fail_name)
     assert fail_task.get("no_log") is True
-    assert (
-        _render_when(fail_task["when"], {"_netapp_is_shared_tbc": False, "_tbc_written": False})
-        is True
-    )
-    assert (
-        _render_when(fail_task["when"], {"_netapp_is_shared_tbc": False, "_tbc_written": True})
-        is False
-    )
+    dedicated = {"_netapp_is_shared_tbc": False, "_netapp_dedicated_backends_ready": False}
+    assert _render_when(fail_task["when"], {**dedicated, "_tbc_written": False}) is True
+    assert _render_when(fail_task["when"], {**dedicated, "_tbc_written": True}) is False
+    ready = {**dedicated, "_netapp_dedicated_backends_ready": True}
+    assert _render_when(include_task["when"], ready) is False
+    assert _render_when(fail_task["when"], {**ready, "_tbc_written": False}) is False
     assert _render_when(fail_task["when"], {"_netapp_is_shared_tbc": True}) is False
     task_names = [task.get("name") for task in backend_block]
     assert (
@@ -762,6 +749,7 @@ def _run_tbc_write(tmp_path, current_storage, competing_writes, dispatched_tier)
                         "netapp_storage_csi_operator_namespace": "trident",
                         "netapp_storage_san_type": "iscsi",
                         "_netapp_is_shared_tbc": False,
+                        "_netapp_dedicated_backends_ready": False,
                         "_tbc_name": _TBC_STAND_IN_NAME,
                         "_assignment_key": "0000000000000001",
                         "_management_lif": "192.0.2.10",
@@ -1667,7 +1655,7 @@ def test_netapp_dual_mode_validation_and_shared_tbc_contracts():
         "Write the TridentBackendConfig, retrying when another writer changes it first",
     ):
         dedicated_when = _find_task(block_tasks, dedicated_task_name)["when"]
-        assert _render_when(dedicated_when, {"_netapp_is_shared_tbc": False}) is True
+        assert _render_when(dedicated_when, {"_netapp_is_shared_tbc": False, "_netapp_dedicated_backends_ready": False}) is True
         assert _render_when(dedicated_when, {"_netapp_is_shared_tbc": True}) is False
 
     # Wait for TBC to become Bound must set failed_when: false so timeout reaches explicit fail task
@@ -1824,8 +1812,8 @@ def test_netapp_dual_mode_validation_and_shared_tbc_contracts():
         "_tbc_update",
         "_tbc_written",
         "_shared_tbc_lookups",
-        "_netapp_sc_desired_params",
-        "_netapp_sc_plan",
+        "_netapp_shared_sc_desired_params",
+        "_netapp_sc_write",
     ):
         assert fact_name in cleared_facts
     # The runtime password fact is dropped (null), not overwritten with a literal.
@@ -1928,9 +1916,8 @@ def test_netapp_consumes_svm_preparation_without_hub_secrets_or_ontap_http():
 
 
 def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
-    """Render ensure_storage_class.yaml dedicated/shared partitioning, expected
-    selectors, and _netapp_all_sc_exist short-circuit evaluation via Templar, and
-    verify no task file emits set_stats.
+    """Render backend partitioning, output entries and Dedicated-SVM readiness,
+    and verify no task file emits set_stats.
     """
     ensure_tasks = _load_yaml(NETAPP_ROLE_DIR / "tasks" / "ensure_storage_class.yaml")
     subset_task = _find_task(
@@ -1989,27 +1976,18 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
 
     expected_task = _find_task(
         ensure_tasks,
-        "Build expected StorageClass names, selectors, TBC names, and CSI Secret names",
+        "Build expected Dedicated-SVM TridentBackendConfig and CSI Secret names",
     )
-    expected_vars = {
-        **entries_vars,
-        "_netapp_expected_sc_entries": sc_entries,
-        "_netapp_dedicated_assignment_keys": ded_keys,
-    }
-    sc_names = _render(expected_task["ansible.builtin.set_fact"]["_netapp_expected_sc_names"], expected_vars)
-    sc_selectors = _render(
-        expected_task["ansible.builtin.set_fact"]["_netapp_expected_sc_selectors"], expected_vars
-    )
+    expected_vars = {"_netapp_dedicated_assignment_keys": ded_keys}
     tbc_names = _render(
         expected_task["ansible.builtin.set_fact"]["_netapp_expected_tbc_names"], expected_vars
     )
     csi_names = _render(
         expected_task["ansible.builtin.set_fact"]["_netapp_expected_csi_secret_names"], expected_vars
     )
-    assert len(sc_names) == 2
+    assert [entry["tier"] for entry in sc_entries] == [tier["name"] for tier in tiers]
     assert len(tbc_names) == 1
     assert len(csi_names) == 1
-    assert sc_selectors[sc_names[1]] == ""
 
     trident_crd_fail_when = _find_task(
         ensure_tasks, "Fail if Trident is not installed on the target cluster"
@@ -2043,10 +2021,10 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
 
     all_exist_expr = _find_task(
         ensure_tasks,
-        "Determine if all StorageClasses, Bound TridentBackendConfigs, and CSI Secrets already exist",
-    )["ansible.builtin.set_fact"]["_netapp_all_sc_exist"]
+        "Check whether the Dedicated-SVM backends already match the requested configuration",
+    )["ansible.builtin.set_fact"]["_netapp_dedicated_backends_ready"]
 
-    # When Shared-TBC backends are present, _netapp_all_sc_exist must be False so
+    # When Shared-TBC backends are present, _netapp_dedicated_backends_ready must be False so
     # _ensure_storage_class_backend.yaml runs customer TBC validation and storagePools checks.
     expected_tbc_spec = {
         "storageDriverName": "ontap-san",
@@ -2068,22 +2046,8 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
         "_provider_backend_connections": conns,
         "_netapp_backend_ids": backend_ids,
         "_netapp_dedicated_backend_ids": dedicated_ids,
-        "_netapp_expected_sc_names": sc_names,
-        "_netapp_expected_sc_selectors": sc_selectors,
         "_netapp_expected_tbc_names": tbc_names,
         "_netapp_expected_csi_secret_names": csi_names,
-        "_netapp_sc_checks": {
-            "resources": [
-                {
-                    "metadata": {"name": sc_names[0]},
-                    "parameters": {"backendType": "ontap-san", "selector": sc_selectors[sc_names[0]]},
-                },
-                {
-                    "metadata": {"name": sc_names[1]},
-                    "parameters": {"backendType": "ontap-san", "selector": "a=1;z=2"},
-                },
-            ]
-        },
         "_netapp_tbc_checks": {
             "resources": [
                 {
@@ -2111,7 +2075,6 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
     dedicated_only_vars = {
         **mixed_exist_vars,
         "_netapp_backend_ids": ["ded-1"],
-        "_netapp_expected_sc_names": [sc_names[0]],
     }
     assert _render(all_exist_expr, dedicated_only_vars) is True
 
@@ -2324,20 +2287,6 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
             },
         )
         is False
-    )
-    ensure_block = _find_task(
-        ensure_tasks, "Provision TridentBackendConfig and StorageClasses on target cluster"
-    )["block"]
-    reconcile_csi_task = _find_task(
-        ensure_block, "Reconcile Dedicated-SVM CSI Secrets before short-circuiting"
-    )
-    assert reconcile_csi_task.get("no_log") is True
-    assert (
-        _render_when(
-            reconcile_csi_task["when"],
-            {"_netapp_all_sc_exist": True, "_netapp_dedicated_backend_ids": ["ded-1"]},
-        )
-        is True
     )
     assert (
         _render(

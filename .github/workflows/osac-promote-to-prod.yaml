@@ -677,7 +677,10 @@ jobs:
         set -euo pipefail
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        git add -A
+        # Stage tracked files only. The re-login above leaves an untracked
+        # kubeconfig.yaml (with the service-account token) in the workspace,
+        # which a blanket "git add -A" would commit and push in the tag.
+        git add -u
         if git diff --cached --quiet; then
           echo "::error::No chart stamping changes staged -- refusing to push" >&2
           exit 1

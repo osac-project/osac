@@ -128,7 +128,7 @@ class InventoryBackend(Protocol):
         Returns:
         - the set of BareMetalInstance CR uids, plus
         - a per-backend claim map (metal3: BMH name → consumerRef; netbox:
-          device name → ``status/osac_instance_id``).
+          device id → ``status/osac_instance_id``).
 
         Opaque — compare for equality only, never interpret the contents.
         """
@@ -246,12 +246,17 @@ class NetBoxInventory:
         return HostRef(namespace=bmh_ns, name=bmh_name)
 
     def count_available(self) -> int:
-        # Free-device query convention: managed, staged, and unclaimed.
-        return len(
-            self.netbox.list_devices(
-                status="staged", custom_fields={"osac_managed": True, "osac_instance_id__empty": True}
-            )
-        )
+        # Free-device query convention plus the suite's host selector: count
+        # only what the operator can allocate to the suite's instance type
+        # (it queries the selector's custom fields as cf_<key>). Counting a
+        # staged device with a different host_type would overstate capacity
+        # and break the exhaustion test.
+        custom_fields: dict[str, Any] = {
+            "osac_managed": True,
+            "osac_instance_id__empty": True,
+            **self.default_host_selector(),
+        }
+        return len(self.netbox.list_devices(status="staged", custom_fields=custom_fields))
 
     def default_host_selector(self) -> dict[str, str]:
         # The netbox equivalent of the BMH host-type label: the host_type
@@ -295,7 +300,8 @@ class NetBoxInventory:
         claims: dict[str, Any] = {}
         for device in self.netbox.list_devices(custom_fields={"osac_managed": True}):
             instance_id = device.get("custom_fields", {}).get("osac_instance_id") or ""
-            claims[device["name"]] = f"{_status_value(device.get('status'))}/{instance_id}"
+            # Key by device id: names are only unique per NetBox site.
+            claims[str(device["id"])] = f"{_status_value(device.get('status'))}/{instance_id}"
         return ({cr["metadata"]["uid"] for cr in crs}, claims)
 
     def close(self) -> None:
@@ -383,10 +389,14 @@ def netbox_settings_from_bmf(*, k8s: K8sClient, namespace: str) -> NetBoxSetting
     Precedence and pairing rules:
     - ``OSAC_NETBOX_*`` env vars are local-debugging / external-NetBox
       overrides; each wins when set.
-    - The URL and token Secrets are read only when their overrides are unset.
+    - URL Secret: read only when the ``OSAC_NETBOX_URL`` override is unset.
+    - Token Secret: read only when the URL comes from the deployed config.
+      An override URL never receives the deployed token — the same boundary
+      as the CA Secret — so ``OSAC_NETBOX_TOKEN`` must be set explicitly for
+      an override URL.
     - The CA Secret applies only when the URL comes from the deployed config;
-      an override URL uses system roots unless ``OSAC_NETBOX_CA_FILE`` is set,
-      so the deployed NetBox's private CA never leaks into an external
+      an override URL uses system roots unless ``OSAC_NETBOX_CA_FILE`` is
+      set, so the deployed NetBox's private CA never leaks into an external
       connection.
     - The osac-management-config cross-check is cluster-scoped and read
       best-effort in every mode.
@@ -415,6 +425,14 @@ def netbox_settings_from_bmf(*, k8s: K8sClient, namespace: str) -> NetBoxSetting
                 f"(key {_INVENTORY_CONFIG_KEY}) does not set allowInsecureHTTP"
             )
     if not token:
+        if not url_from_secret:
+            # The deployed token pairs with the deployed URL, exactly like
+            # the CA Secret: an override URL must never receive it.
+            raise RuntimeError(
+                "OSAC_NETBOX_URL is set but OSAC_NETBOX_TOKEN is not: the deployed NetBox token is "
+                f"not sent to an overridden URL. Set OSAC_NETBOX_TOKEN explicitly (Secret {_NETBOX_TOKEN_SECRET} "
+                "pairs with the deployed URL only)."
+            )
         token = _required_secret_value(k8s, namespace=namespace, name=_NETBOX_TOKEN_SECRET, key=_NETBOX_TOKEN_KEY)
 
     ca_pem: str | None = None

@@ -9,6 +9,7 @@ overrides) lives in the inventory fixture layer (`inventory.py`), not here.
 from __future__ import annotations
 
 import contextlib
+import functools
 import os
 import tempfile
 from typing import Any
@@ -33,6 +34,11 @@ def _status_value(status: object) -> str:
     return value if isinstance(value, str) else ""
 
 
+# A stalled NetBox must fail the request, not hang the suite: requests has
+# no default timeout and pynetbox 7.8 passes none. (connect, read) seconds.
+_REQUEST_TIMEOUT = (10, 30)
+
+
 class NetBoxClient:
     """NetBox device reads on top of pynetbox.
 
@@ -41,6 +47,8 @@ class NetBoxClient:
       - temp CA bundle file when ``ca_pem`` is given,
       - disabled verification when ``insecure`` is set,
       - default system verification otherwise.
+    - Every request has a finite timeout — a stalled NetBox fails the
+      request instead of hanging the suite.
     - The API token is applied per request by pynetbox and must never
       appear in logs or exceptions.
     """
@@ -53,6 +61,10 @@ class NetBoxClient:
         self._ca_file: str | None = None
         if api is None:
             session = requests.Session()
+            # requests has no default timeout and pynetbox 7.8 passes none;
+            # binding it on Session.request covers every request pynetbox
+            # makes through the session.
+            session.request = functools.partial(session.request, timeout=_REQUEST_TIMEOUT)
             if ca_pem is not None:
                 fd, self._ca_file = tempfile.mkstemp(prefix="osac-netbox-ca-", suffix=".pem")
                 with os.fdopen(fd, "w") as handle:
@@ -78,7 +90,9 @@ class NetBoxClient:
 
         The token travels in the Authorization header, never the URL, but
         response bodies and request payloads are dropped to guarantee no
-        credential or tenant data leaks through exception messages.
+        credential or tenant data leaks through exception messages. The
+        ``from None`` at the raise sites keeps the RequestError (response
+        body included) out of the exception chain for the same reason.
         """
         req = getattr(exc, "req", None)
         status = getattr(req, "status_code", "?")
@@ -91,7 +105,7 @@ class NetBoxClient:
         try:
             device = self._api.dcim.devices.get(device_id)
         except pynetbox.RequestError as exc:
-            raise self._error("get_device_status", exc) from exc
+            raise self._error("get_device_status", exc) from None
         if device is None:
             return ""
         return _status_value(getattr(device, "status", ""))
@@ -101,7 +115,7 @@ class NetBoxClient:
         try:
             device = self._api.dcim.devices.get(device_id)
         except pynetbox.RequestError as exc:
-            raise self._error("get_device", exc) from exc
+            raise self._error("get_device", exc) from None
         if device is None:
             raise RuntimeError(f"NetBox device {device_id} was not found")
         return device.serialize()
@@ -126,4 +140,4 @@ class NetBoxClient:
         try:
             return [device.serialize() for device in self._api.dcim.devices.filter(**filters)]
         except pynetbox.RequestError as exc:
-            raise self._error("list_devices", exc) from exc
+            raise self._error("list_devices", exc) from None

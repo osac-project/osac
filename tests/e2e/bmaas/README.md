@@ -32,7 +32,9 @@ editable or unset; do not lock it).
 `metal3` (default) or `netbox`.
 
 - Selection is env-var-only — the cluster's configured inventory `type` is
-  not consulted, so one cluster can be tested against either backend.
+  not consulted for test routing. The operator allocates only from its
+  configured `type`, so `OSAC_INVENTORY_BACKEND` must match it on the
+  cluster under test.
 - The abstraction covers the inventory layer only (free-host counts, claim,
   release).
 - Once a host is allocated, the operator hands over to BMH/metal3 in every
@@ -58,8 +60,10 @@ debug/external-NetBox overrides that win when set:
 
 Secret pairing rules:
 
-- URL and token Secrets: read only when their `OSAC_NETBOX_*` overrides are
-  unset.
+- URL Secret: read only when `OSAC_NETBOX_URL` is unset.
+- Token Secret: read only when the URL comes from the deployed config — an
+  override URL never receives the deployed token; set `OSAC_NETBOX_TOKEN`
+  explicitly for an external NetBox.
 - CA Secret: applies only when the URL comes from the deployed config — an
   override URL uses system roots unless `OSAC_NETBOX_CA_FILE` is set, so the
   deployed NetBox's private CA never leaks into an external connection.

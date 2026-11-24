@@ -17,6 +17,12 @@ interface OsacRoleBinding {
   };
 }
 
+interface BreakGlassSecret {
+  id?: string;
+  metadata?: { name?: string; tenant?: string };
+  data?: { username?: string; password?: string };
+}
+
 /** Parse the first resource from the CLI's JSON list or object response. */
 const parseResource = <T>(stdout: string, description: string): T => {
   const parsed: unknown = JSON.parse(stdout);
@@ -31,6 +37,39 @@ const parseResource = <T>(stdout: string, description: string): T => {
     return parsed as T;
   }
   throw new Error(`The CLI returned an unexpected response while getting ${description}.`);
+};
+
+/** Read break-glass credentials for the tenant created by this run. */
+export const getTenantBreakGlassCredentials = async (
+  tenantName: string,
+  secretId: string,
+  config: string,
+): Promise<{ username: string; password: string }> => {
+  try {
+    const result = await runOsacCommand(['get', 'secrets', secretId, '--output', 'json'], config);
+    if (result.exitCode !== 0) {
+      throw new Error('The private OSAC CLI request failed.');
+    }
+    const secret = parseResource<BreakGlassSecret>(result.stdout, 'the break-glass secret');
+    const username = Buffer.from(secret.data?.username ?? '', 'base64').toString('utf8');
+    const password = Buffer.from(secret.data?.password ?? '', 'base64').toString('utf8');
+    if (
+      secret.id !== secretId ||
+      secret.metadata?.tenant !== tenantName ||
+      secret.metadata?.name !== 'break-glass-credentials' ||
+      username !== `${tenantName}-osac-break-glass` ||
+      !password ||
+      /[\r\n]/.test(password)
+    ) {
+      throw new Error('The break-glass secret does not match the test tenant.');
+    }
+    return { username, password };
+  } catch {
+    // CLI output and malformed JSON can contain the credential values.
+    throw new Error(
+      'Could not read the test tenant credentials using the private OSAC CLI config.',
+    );
+  }
 };
 
 /** Read a tenant-admin user through the private CLI API. */

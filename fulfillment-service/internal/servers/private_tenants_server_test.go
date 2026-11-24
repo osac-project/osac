@@ -26,7 +26,9 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/validation"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -56,6 +58,154 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 			SetTenancyLogic(tenancy).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
+	})
+
+	Describe("Tenant default Role", func() {
+		const (
+			sharedRoleName = "test-shared-default"
+			localRoleName  = "test-local-default"
+			sharedRoleID   = "test-shared-role"
+			localRoleID    = "test-local-role"
+			foreignRoleID  = "test-foreign-role"
+			foreignTenant  = "foreign-tenant"
+		)
+
+		updateRequest := func(tenant, path string, spec *privatev1.TenantSpec) *privatev1.TenantsUpdateRequest {
+			return privatev1.TenantsUpdateRequest_builder{
+				Object:     privatev1.Tenant_builder{Id: tenant, Spec: spec}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{path}},
+			}.Build()
+		}
+		setDefault := func(tenant string, ref *privatev1.RoleReference) (*privatev1.TenantsUpdateResponse, error) {
+			return tenantsServer.Update(ctx, updateRequest(tenant, defaultRoleField,
+				privatev1.TenantSpec_builder{DefaultRole: ref}.Build()))
+		}
+		readSpec := func(tenant string) *privatev1.TenantSpec {
+			response, err := tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenant}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			return response.GetObject().GetSpec()
+		}
+
+		BeforeEach(func() {
+			_, err := tenantsServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: privatev1.Metadata_builder{Name: foreignTenant}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			_, err = suiteTx.Exec(ctx, `
+				insert into roles (id, name, tenant, data)
+				values ($1, $2, $3, '{}'), ($4, $5, $6, '{}'), ($7, 'test-foreign-default', $8, '{}')
+			`, sharedRoleID, sharedRoleName, auth.SharedTenant, localRoleID, localRoleName, testTenant,
+				foreignRoleID, foreignTenant)
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		DescribeTable("stores the canonical selection",
+			func(tenant string, selector, want privatev1.RoleReference_builder) {
+				response, err := setDefault(tenant, selector.Build())
+				Expect(err).NotTo(HaveOccurred())
+				Expect(proto.Equal(response.GetObject().GetSpec().GetDefaultRole(), want.Build())).To(BeTrue())
+				Expect(proto.Equal(readSpec(tenant).GetDefaultRole(), want.Build())).To(BeTrue())
+			},
+			Entry("selects a local name", testTenant,
+				privatev1.RoleReference_builder{Name: localRoleName},
+				privatev1.RoleReference_builder{Id: localRoleID, Name: localRoleName, Tenant: testTenant}),
+			Entry("falls back to the shared name on a local miss", testTenant,
+				privatev1.RoleReference_builder{Name: sharedRoleName},
+				privatev1.RoleReference_builder{Id: sharedRoleID, Name: sharedRoleName, Tenant: auth.SharedTenant, Shared: true}),
+			Entry("selects an explicitly shared name", testTenant,
+				privatev1.RoleReference_builder{Name: sharedRoleName, Shared: true},
+				privatev1.RoleReference_builder{Id: sharedRoleID, Name: sharedRoleName, Tenant: auth.SharedTenant, Shared: true}),
+			Entry("selects an explicitly scoped name", testTenant,
+				privatev1.RoleReference_builder{Name: localRoleName, Tenant: testTenant},
+				privatev1.RoleReference_builder{Id: localRoleID, Name: localRoleName, Tenant: testTenant}),
+			Entry("sets the shared Tenant default by shared Role ID", auth.SharedTenant,
+				privatev1.RoleReference_builder{Id: sharedRoleID},
+				privatev1.RoleReference_builder{Id: sharedRoleID, Name: sharedRoleName, Tenant: auth.SharedTenant, Shared: true}),
+		)
+
+		DescribeTable("preserves the stored default after rejecting a selection",
+			func(tenant string, selector privatev1.RoleReference_builder, want grpccodes.Code) {
+				initial, err := setDefault(tenant, privatev1.RoleReference_builder{Id: sharedRoleID}.Build())
+				Expect(err).NotTo(HaveOccurred())
+				_, err = setDefault(tenant, selector.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(want), "%v", err)
+				Expect(proto.Equal(readSpec(tenant).GetDefaultRole(), initial.GetObject().GetSpec().GetDefaultRole())).To(BeTrue())
+			},
+			Entry("empty reference", testTenant, privatev1.RoleReference_builder{}, grpccodes.InvalidArgument),
+			Entry("missing ID", testTenant, privatev1.RoleReference_builder{Id: "missing"}, grpccodes.FailedPrecondition),
+			Entry("missing name", testTenant, privatev1.RoleReference_builder{Name: "missing"}, grpccodes.FailedPrecondition),
+			Entry("explicit local name cannot fall back to shared", testTenant,
+				privatev1.RoleReference_builder{Name: sharedRoleName, Tenant: testTenant}, grpccodes.FailedPrecondition),
+			Entry("foreign scope", testTenant,
+				privatev1.RoleReference_builder{Id: foreignRoleID, Tenant: foreignTenant}, grpccodes.InvalidArgument),
+			Entry("foreign ID without a tenant selector", testTenant,
+				privatev1.RoleReference_builder{Id: foreignRoleID}, grpccodes.InvalidArgument),
+			Entry("conflicting selectors", testTenant,
+				privatev1.RoleReference_builder{Id: sharedRoleID, Tenant: testTenant, Shared: true}, grpccodes.InvalidArgument),
+			Entry("scope mismatch", testTenant,
+				privatev1.RoleReference_builder{Id: sharedRoleID, Tenant: testTenant}, grpccodes.InvalidArgument),
+			Entry("project mismatch", testTenant,
+				privatev1.RoleReference_builder{Id: localRoleID, Project: "other-project"}, grpccodes.InvalidArgument),
+			Entry("name mismatch", testTenant,
+				privatev1.RoleReference_builder{Id: sharedRoleID, Name: "another-role"}, grpccodes.InvalidArgument),
+			Entry("shared Tenant rejects a non-shared Role ID", auth.SharedTenant,
+				privatev1.RoleReference_builder{Id: localRoleID}, grpccodes.InvalidArgument),
+			Entry("shared Tenant rejects an explicit non-shared scope", auth.SharedTenant,
+				privatev1.RoleReference_builder{Name: localRoleName, Tenant: testTenant}, grpccodes.InvalidArgument),
+		)
+
+		It("rejects a deleting Role", func() {
+			initial, err := setDefault(testTenant, privatev1.RoleReference_builder{Id: sharedRoleID}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			_, err = suiteTx.Exec(ctx, "update roles set deletion_timestamp = now() where id = $1", localRoleID)
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = setDefault(testTenant, privatev1.RoleReference_builder{Id: localRoleID}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("is being deleted"))
+			Expect(proto.Equal(readSpec(testTenant).GetDefaultRole(), initial.GetObject().GetSpec().GetDefaultRole())).To(BeTrue())
+		})
+
+		It("validates a masked name against the stored ID", func() {
+			initial, err := setDefault(testTenant, privatev1.RoleReference_builder{Id: localRoleID}.Build())
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = tenantsServer.Update(ctx, updateRequest(testTenant, "spec.default_role.name",
+				privatev1.TenantSpec_builder{
+					DefaultRole: privatev1.RoleReference_builder{Name: sharedRoleName}.Build(),
+				}.Build()))
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(proto.Equal(readSpec(testTenant).GetDefaultRole(), initial.GetObject().GetSpec().GetDefaultRole())).To(BeTrue())
+		})
+
+		It("updates domains while ignoring an empty Role reference outside the mask", func() {
+			initial, err := setDefault(testTenant, privatev1.RoleReference_builder{Id: localRoleID}.Build())
+			Expect(err).NotTo(HaveOccurred())
+
+			_, err = tenantsServer.Update(ctx, updateRequest(testTenant, "spec.domains", privatev1.TenantSpec_builder{
+				Domains:     []string{"example.com"},
+				DefaultRole: &privatev1.RoleReference{},
+			}.Build()))
+			Expect(err).NotTo(HaveOccurred())
+			spec := readSpec(testTenant)
+			Expect(spec.GetDomains()).To(Equal([]string{"example.com"}))
+			Expect(proto.Equal(spec.GetDefaultRole(), initial.GetObject().GetSpec().GetDefaultRole())).To(BeTrue())
+		})
+
+		DescribeTable("clears the stored default",
+			func(tenant string) {
+				_, err := setDefault(tenant, privatev1.RoleReference_builder{Id: sharedRoleID}.Build())
+				Expect(err).NotTo(HaveOccurred())
+
+				_, err = setDefault(tenant, nil)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(readSpec(tenant).HasDefaultRole()).To(BeFalse())
+			},
+			Entry("ordinary Tenant", testTenant),
+			Entry("shared Tenant", auth.SharedTenant),
+		)
 	})
 
 	It("Creates a tenant", func() {
@@ -695,6 +845,174 @@ var _ = Describe("Private tenants server (Tenant API)", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(got.GetObject().GetSpec().GetExternalBillingId()).To(Equal("acct-1"))
 		})
+	})
+
+	It("Deletes the quota outbox with the accepted delete and archives the tenant after quota cleanup", func() {
+		limitsServer, err := NewPrivateQuotaLimitsServer().
+			SetLogger(logger).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		thresholdsServer, err := NewPrivateQuotaThresholdsServer().
+			SetLogger(logger).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		requestsServer, err := NewPrivateQuotaLimitRequestsServer().
+			SetLogger(logger).
+			SetAttributionLogic(attribution).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+
+		// The lifecycle finalizer keeps the accepted delete soft, like a live
+		// tenant whose reconciler still has to run:
+		createResponse, err := tenantsServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+			Object: privatev1.Tenant_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:       "quota-tenant",
+					Finalizers: []string{finalizers.TenantLifecycle},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		tenantID := createResponse.GetObject().GetId()
+
+		projectsDao, err := dao.NewGenericDAO[*privatev1.Project]().
+			SetLogger(logger).
+			SetTenancyLogic(tenancy).
+			Build()
+		Expect(err).ToNot(HaveOccurred())
+		_, err = projectsDao.Create().SetObject(privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "team",
+				Tenant: "quota-tenant",
+			}.Build(),
+		}.Build()).Do(ctx)
+		Expect(err).ToNot(HaveOccurred())
+
+		// Quota rows in every scope: a tenant override, a project limit, a
+		// project threshold and a pending limit request:
+		override, err := limitsServer.Create(ctx, privatev1.QuotaLimitsCreateRequest_builder{
+			Object: privatev1.QuotaLimit_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: "quota-tenant"}.Build(),
+				Spec: privatev1.QuotaLimitSpec_builder{
+					Dimension: "compute.vcpus",
+					Value:     proto.Int64(10),
+					Scope:     privatev1.QuotaScope_QUOTA_SCOPE_TENANT.Enum(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		projectLimit, err := limitsServer.Create(ctx, privatev1.QuotaLimitsCreateRequest_builder{
+			Object: privatev1.QuotaLimit_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: "quota-tenant", Project: "team"}.Build(),
+				Spec: privatev1.QuotaLimitSpec_builder{
+					Dimension: "compute.vcpus",
+					Value:     proto.Int64(4),
+					Scope:     privatev1.QuotaScope_QUOTA_SCOPE_PROJECT.Enum(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		threshold, err := thresholdsServer.Create(ctx, privatev1.QuotaThresholdsCreateRequest_builder{
+			Object: privatev1.QuotaThreshold_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: "quota-tenant", Project: "team"}.Build(),
+				Spec: privatev1.QuotaThresholdSpec_builder{
+					Dimension: "compute.vcpus",
+					Percent:   int32Ptr(3),
+					Scope:     privatev1.QuotaScope_QUOTA_SCOPE_PROJECT.Enum(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		limitRequest, err := requestsServer.Create(ctx, privatev1.QuotaLimitRequestsCreateRequest_builder{
+			Object: privatev1.QuotaLimitRequest_builder{
+				Metadata: privatev1.Metadata_builder{Tenant: "quota-tenant"}.Build(),
+				Spec:     privatev1.QuotaLimitRequestSpec_builder{Dimension: "compute.vcpus", RequestedValue: proto.Int64(20)}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// An unsent quota warning, which has no API of its own:
+		tx, err := database.TxFromContext(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = tx.Exec(ctx,
+			`insert into quota_outbox (tenant, project, dimension, data) values ($1, '', 'compute.vcpus', '{}')`,
+			"quota-tenant")
+		Expect(err).ToNot(HaveOccurred())
+
+		// Accept the tenant deletion:
+		_, err = tenantsServer.Delete(ctx, privatev1.TenantsDeleteRequest_builder{
+			Id: tenantID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// The unsent warnings are gone with the accepted delete:
+		var outboxCount int
+		err = tx.QueryRow(ctx,
+			`select count(*) from quota_outbox where tenant = $1`, "quota-tenant").Scan(&outboxCount)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(outboxCount).To(Equal(0))
+
+		// The tenant reconciler deletes the tenant's quota rows through the
+		// quota API before the projects are archived:
+		for _, limitID := range []string{override.GetObject().GetId(), projectLimit.GetObject().GetId()} {
+			_, err = limitsServer.Delete(ctx, privatev1.QuotaLimitsDeleteRequest_builder{Id: limitID}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		}
+		_, err = thresholdsServer.Delete(ctx, privatev1.QuotaThresholdsDeleteRequest_builder{
+			Id: threshold.GetObject().GetId(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		_, err = requestsServer.Delete(ctx, privatev1.QuotaLimitRequestsDeleteRequest_builder{
+			Id: limitRequest.GetObject().GetId(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		// With the quota rows gone the projects can be archived, child projects
+		// before the root project they reference, like the project reconciler
+		// orders them:
+		projects, err := projectsServer.List(ctx, privatev1.ProjectsListRequest_builder{
+			Filter: new("this.metadata.tenant == 'quota-tenant'"),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(projects.GetItems()).To(HaveLen(2))
+		for _, project := range projects.GetItems() {
+			if project.GetMetadata().GetName() == "" {
+				continue
+			}
+			_, err = projectsServer.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{
+				Id: project.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		}
+		for _, project := range projects.GetItems() {
+			if project.GetMetadata().GetName() != "" {
+				continue
+			}
+			_, err = projectsServer.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{
+				Id: project.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+		}
+
+		// Clearing the finalizer archives the tenant, which the quota foreign
+		// keys used to block:
+		deleting, err := tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenantID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		clearing := proto.Clone(deleting.GetObject()).(*privatev1.Tenant)
+		clearing.GetMetadata().SetFinalizers(nil)
+		_, err = tenantsServer.Update(ctx, privatev1.TenantsUpdateRequest_builder{
+			Object:     clearing,
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.finalizers"}},
+			Lock:       true,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		_, err = tenantsServer.Get(ctx, privatev1.TenantsGetRequest_builder{Id: tenantID}.Build())
+		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 	})
 
 })

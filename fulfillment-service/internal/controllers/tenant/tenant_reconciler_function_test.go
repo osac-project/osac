@@ -1440,6 +1440,105 @@ var _ = Describe("Deletion", func() {
 		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.TenantLifecycle))
 	})
 
+	It("deletes the tenant's quota rows before requesting project deletion", func() {
+		deletionTimestamp := timestamppb.New(time.Now())
+		tenant := privatev1.Tenant_builder{
+			Id: "org-123",
+			Metadata: privatev1.Metadata_builder{
+				Name:              "test-org",
+				Finalizers:        []string{finalizers.TenantLifecycle},
+				DeletionTimestamp: deletionTimestamp,
+			}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				State:         privatev1.TenantState_TENANT_STATE_SYNCED,
+				IdpTenantName: "test-org",
+			}.Build(),
+		}.Build()
+		limit := privatev1.QuotaLimit_builder{
+			Id: "limit-456",
+			Metadata: privatev1.Metadata_builder{
+				Name:   "compute-vcpus",
+				Tenant: "test-org",
+			}.Build(),
+		}.Build()
+		mockLimitsClient := NewMockQuotaLimitsClient(ctrl)
+		mockThresholdsClient := NewMockQuotaThresholdsClient(ctrl)
+		mockRequestsClient := NewMockQuotaLimitRequestsClient(ctrl)
+		reconciler.quotaLimitsClient = mockLimitsClient
+		reconciler.quotaThresholdsClient = mockThresholdsClient
+		reconciler.quotaLimitRequestsClient = mockRequestsClient
+
+		quotaFilter := `this.metadata.tenant == "test-org"`
+		mockLimitsClient.EXPECT().List(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, req *privatev1.QuotaLimitsListRequest, _ ...grpc.CallOption) (*privatev1.QuotaLimitsListResponse, error) {
+				Expect(req.GetFilter()).To(Equal(quotaFilter))
+				return privatev1.QuotaLimitsListResponse_builder{
+					Items: []*privatev1.QuotaLimit{limit},
+					Size:  1,
+					Total: 1,
+				}.Build(), nil
+			})
+		mockLimitsClient.EXPECT().Delete(gomock.Any(), gomock.Any()).DoAndReturn(
+			func(_ context.Context, req *privatev1.QuotaLimitsDeleteRequest, _ ...grpc.CallOption) (*privatev1.QuotaLimitsDeleteResponse, error) {
+				Expect(req.GetId()).To(Equal("limit-456"))
+				return privatev1.QuotaLimitsDeleteResponse_builder{}.Build(), nil
+			})
+		mockThresholdsClient.EXPECT().List(gomock.Any(), gomock.Any()).
+			Return(privatev1.QuotaThresholdsListResponse_builder{}.Build(), nil)
+		mockRequestsClient.EXPECT().List(gomock.Any(), gomock.Any()).
+			Return(privatev1.QuotaLimitRequestsListResponse_builder{}.Build(), nil)
+
+		task := &task{r: reconciler, tenant: tenant}
+		err := task.delete(ctx)
+		Expect(err).To(MatchError(ContainSubstring("tenant quota rows are still pending deletion")))
+		var retryable interface{ RequeueAfter() time.Duration }
+		Expect(errors.As(err, &retryable)).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(defaultRetryTimeout))
+		Expect(tenant.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.TenantLifecycle))
+	})
+
+	It("completes deletion when the tenant's quota rows are gone", func() {
+		deletionTimestamp := timestamppb.New(time.Now())
+		tenant := privatev1.Tenant_builder{
+			Id: "org-123",
+			Metadata: privatev1.Metadata_builder{
+				Name:              "test-org",
+				Finalizers:        []string{finalizers.TenantLifecycle},
+				DeletionTimestamp: deletionTimestamp,
+			}.Build(),
+			Status: privatev1.TenantStatus_builder{
+				State:         privatev1.TenantState_TENANT_STATE_SYNCED,
+				IdpTenantName: "test-org",
+			}.Build(),
+		}.Build()
+		mockLimitsClient := NewMockQuotaLimitsClient(ctrl)
+		mockThresholdsClient := NewMockQuotaThresholdsClient(ctrl)
+		mockRequestsClient := NewMockQuotaLimitRequestsClient(ctrl)
+		reconciler.quotaLimitsClient = mockLimitsClient
+		reconciler.quotaThresholdsClient = mockThresholdsClient
+		reconciler.quotaLimitRequestsClient = mockRequestsClient
+
+		mockLimitsClient.EXPECT().List(gomock.Any(), gomock.Any()).
+			Return(privatev1.QuotaLimitsListResponse_builder{}.Build(), nil)
+		mockThresholdsClient.EXPECT().List(gomock.Any(), gomock.Any()).
+			Return(privatev1.QuotaThresholdsListResponse_builder{}.Build(), nil)
+		mockRequestsClient.EXPECT().List(gomock.Any(), gomock.Any()).
+			Return(privatev1.QuotaLimitRequestsListResponse_builder{}.Build(), nil)
+		mockProjectsClient.EXPECT().
+			List(gomock.Any(), gomock.Any()).
+			Return(privatev1.ProjectsListResponse_builder{Total: 0}.Build(), nil).
+			Times(2)
+		mockClient.EXPECT().
+			DeleteTenant(gomock.Any(), "test-org").
+			Return(nil).
+			Times(1)
+
+		task := &task{r: reconciler, tenant: tenant}
+		err := task.delete(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(tenant.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.TenantLifecycle))
+	})
+
 	It("should delete IDP tenant by metadata name when not synced", func() {
 		deletionTimestamp := timestamppb.New(time.Now())
 		tenant := privatev1.Tenant_builder{

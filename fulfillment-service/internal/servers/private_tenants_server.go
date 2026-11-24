@@ -33,6 +33,8 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+const defaultRoleField = "spec.default_role"
+
 type PrivateTenantsServerBuilder struct {
 	logger            *slog.Logger
 	attributionLogic  auth.AttributionLogic
@@ -49,6 +51,7 @@ type PrivateTenantsServer struct {
 	generic    *GenericServer[*privatev1.Tenant]
 	dao        *dao.GenericDAO[*privatev1.Tenant]
 	secretsDao *dao.GenericDAO[*privatev1.Secret]
+	rolesDao   *dao.GenericDAO[*privatev1.Role]
 	guards     *networkingGuards
 }
 
@@ -129,6 +132,13 @@ func (b *PrivateTenantsServerBuilder) Build() (result *PrivateTenantsServer, err
 	if err != nil {
 		return
 	}
+	rolesDao, err := dao.NewGenericDAO[*privatev1.Role]().
+		SetLogger(b.logger).
+		SetTenancyLogic(b.tenancyLogic).
+		Build()
+	if err != nil {
+		return
+	}
 
 	// Create and populate the object:
 	guards, err := newNetworkingGuards(b.logger)
@@ -141,6 +151,7 @@ func (b *PrivateTenantsServerBuilder) Build() (result *PrivateTenantsServer, err
 		generic:    generic,
 		dao:        tenantsDao,
 		secretsDao: secretsDao,
+		rolesDao:   rolesDao,
 	}
 	return
 }
@@ -204,7 +215,7 @@ func (s *PrivateTenantsServer) Create(ctx context.Context,
 
 	// Domain validation is now handled by protovalidate in the interceptor
 	// Delegate to the generic server:
-	err = s.generic.Create(ctx, request, &response)
+	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response, s.prepareDefaultRole)
 	if err != nil {
 		return
 	}
@@ -225,7 +236,7 @@ func (s *PrivateTenantsServer) Update(ctx context.Context,
 	}
 	// Domain validation is now handled by protovalidate after update_mask merge in generic server
 	// Delegate to the generic server:
-	err = s.generic.Update(ctx, request, &response)
+	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, s.prepareDefaultRole)
 	if err != nil {
 		return
 	}
@@ -236,10 +247,93 @@ func (s *PrivateTenantsServer) Update(ctx context.Context,
 	return
 }
 
+func (s *PrivateTenantsServer) prepareDefaultRole(ctx context.Context, current, candidate *privatev1.Tenant) error {
+	ref := candidate.GetSpec().GetDefaultRole()
+	if ref == nil || proto.Equal(current.GetSpec().GetDefaultRole(), ref) {
+		return nil
+	}
+
+	role, err := s.resolveDefaultRole(ctx, candidate.GetMetadata().GetTenant(), ref)
+	if err != nil {
+		return err
+	}
+	canonicalizeResourceReference(ref, role)
+	return nil
+}
+
+func (s *PrivateTenantsServer) resolveDefaultRole(ctx context.Context, tenant string, ref *privatev1.RoleReference) (*privatev1.Role, error) {
+	refTenant, shared := ref.GetTenant(), ref.GetShared()
+	scope, err := selectedReferenceScope(referenceScope{tenant: tenant}, refTenant, shared, ref.GetProject())
+	if err != nil {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "%s: %s", defaultRoleField, grpcstatus.Convert(err).Message())
+	}
+	if scope.tenant != tenant && scope.tenant != auth.SharedTenant {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "%s must reference a Role in the Tenant or shared", defaultRoleField)
+	}
+
+	id, name := ref.GetId(), ref.GetName()
+	allowSharedRole := refTenant == "" && !shared && scope.tenant != auth.SharedTenant
+	if id == "" {
+		if name == "" {
+			return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "%s must specify an ID or name", defaultRoleField)
+		}
+		id, err = s.lookupDefaultRoleID(ctx, scope, name, allowSharedRole)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Keep Role deletion serialized with the Tenant write in this transaction.
+	role, err := getShareLockedReferenceResource(ctx, s.rolesDao, id)
+	if err != nil {
+		return nil, resourceLookupError(err, "Role", id, " in "+defaultRoleField, grpccodes.FailedPrecondition)
+	}
+	if err := validateDefaultRoleTarget(role, scope, name, allowSharedRole); err != nil {
+		return nil, err
+	}
+	return role, nil
+}
+
+func validateDefaultRoleTarget(role *privatev1.Role, scope referenceScope, name string, allowSharedRole bool) error {
+	metadata := role.GetMetadata()
+	roleTenant := metadata.GetTenant()
+	inAllowedTenant := roleTenant == scope.tenant || (allowSharedRole && roleTenant == auth.SharedTenant)
+	inSelectedProject := scope.project == "" || scope.project == metadata.GetProject()
+	switch {
+	case !inAllowedTenant || !inSelectedProject:
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s Role is outside the selected scope", defaultRoleField)
+	case name != "" && name != metadata.GetName():
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "%s ID and name identify different Roles", defaultRoleField)
+	case metadata.HasDeletionTimestamp():
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition, "Role %q in %s is being deleted", role.GetId(), defaultRoleField)
+	}
+	return nil
+}
+
+func (s *PrivateTenantsServer) lookupDefaultRoleID(ctx context.Context, scope referenceScope, name string, allowSharedFallback bool) (string, error) {
+	lookup := references.NewScopedDAOLookupFunc(s.rolesDao)
+	result, err := lookup(ctx, scope.tenant, scope.project, "", name)
+	var notFound interface{ IsNotFound() bool }
+	if allowSharedFallback && errors.As(err, &notFound) && notFound.IsNotFound() {
+		result, err = lookup(ctx, auth.SharedTenant, scope.project, "", name)
+	}
+	if err != nil {
+		return "", resourceLookupError(err, "Role", name, " in "+defaultRoleField, grpccodes.FailedPrecondition)
+	}
+	return result.ID, nil
+}
+
 func (s *PrivateTenantsServer) Delete(ctx context.Context,
 	request *privatev1.TenantsDeleteRequest) (response *privatev1.TenantsDeleteResponse, err error) {
 	// Lock the Tenant, so the guard and the creates in the tenant, which lock it too, run one after the other.
 	if err = s.rejectDeleteWhileResourcesExist(ctx, request.GetId()); err != nil {
+		return
+	}
+	// The tenant's unsent quota warnings reference the tenant with a foreign key
+	// and have no API of their own. Remove them here, when the deletion is
+	// accepted, so they cannot block the final removal of the tenant row. For
+	// tenants the identifier is the name.
+	if err = s.deleteQuotaOutbox(ctx, request.GetId()); err != nil {
 		return
 	}
 	getResponse, getErr := s.dao.Get().SetId(request.GetId()).Do(ctx)
@@ -334,6 +428,18 @@ func (s *PrivateTenantsServer) deleteSecretByID(ctx context.Context, tenant *pri
 			slog.String("secret_id", id),
 			slog.Any("error", err))
 	}
+}
+
+// deleteQuotaOutbox removes the tenant's unsent quota warnings. The outbox rows
+// reference the tenant with a foreign key and have no API of their own, so they
+// are removed in the Tenants/Delete transaction: leaving them behind would keep
+// the tenant from being archived after its finalizers are gone.
+func (s *PrivateTenantsServer) deleteQuotaOutbox(ctx context.Context, tenant string) error {
+	return deleteQuotaOutboxRows(ctx, s.logger,
+		`delete from quota_outbox where tenant = $1`, []any{tenant},
+		fmt.Sprintf("failed to delete tenant '%s'", tenant),
+		slog.String("tenant", tenant),
+	)
 }
 
 func (s *PrivateTenantsServer) clearStaleBreakGlassCredentialsSecretRef(ctx context.Context,

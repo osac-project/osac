@@ -8,7 +8,7 @@ import { AUTH_FILE } from './src/auth-file';
 import {
   readVmaasFullFlowRunState,
   writeVmaasFullFlowRunState,
-} from '../e2e-tests/src/vmaas/run_state';
+} from '../e2e-tests/src/shared/run_state';
 
 const baseURL = process.env.OSAC_UI_BASE_URL;
 if (!baseURL) {
@@ -103,7 +103,10 @@ if (flowMode !== 'delete' && fullFlowProjectRequested && !process.argv.includes(
 // package, instead of relying on everyone remembering src/*.spec.ts is ignored.
 const scratchDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'scratch');
 fs.mkdirSync(scratchDir, { recursive: true });
-const vmaasDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../e2e-tests/src/vmaas');
+const e2eDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../e2e-tests/src');
+const genericDir = path.join(e2eDir, 'generic');
+const vmaasDir = path.join(e2eDir, 'vmaas');
+const networkingDir = path.join(e2eDir, 'networking');
 const preResourceBaseCreateTestMatch =
   /create\.(instance_type|disk_images|storage_tier|tenant)\.spec\.ts/;
 const preResourceCatalogCreateTestMatch = /create\.catalog\.spec\.ts/;
@@ -178,14 +181,14 @@ export default defineConfig({
     },
     {
       name: 'tenant',
-      testDir: vmaasDir,
+      testDir: genericDir,
       testMatch: tenantTestMatch,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       teardown: flowMode === 'full' ? 'tenant-delete' : undefined,
     },
     {
       name: 'vmaas-full-flow-pre-resource-base',
-      testDir: vmaasDir,
+      testDir: genericDir,
       testMatch: preResourceBaseCreateTestMatch,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
@@ -193,7 +196,7 @@ export default defineConfig({
     },
     {
       name: 'vmaas-full-flow-pre-resource',
-      testDir: vmaasDir,
+      testDir: genericDir,
       testMatch: preResourceTestMatch,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
@@ -268,73 +271,73 @@ export default defineConfig({
     },
     {
       name: 'vmaas-full-flow-pre-resource-delete',
-      testDir: vmaasDir,
+      testDir: genericDir,
       testMatch: preResourceDeleteTestMatch,
       fullyParallel: false,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
       name: 'storage-tier',
-      testDir: vmaasDir,
+      testDir: genericDir,
       testMatch: storageTierTestMatch,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       teardown: flowMode === 'full' ? 'storage-tier-delete' : undefined,
     },
     {
       name: 'storage-tier-delete',
-      testDir: vmaasDir,
+      testDir: genericDir,
       testMatch: /delete\.storage_tier\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
       name: 'instance-type',
-      testDir: vmaasDir,
+      testDir: genericDir,
       testMatch: instanceTypeTestMatch,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       teardown: flowMode === 'full' ? 'instance-type-delete' : undefined,
     },
     {
       name: 'instance-type-lifecycle',
-      testDir: vmaasDir,
+      testDir: genericDir,
       testMatch: /lifecycle\.instance_type\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       dependencies: ['instance-type'],
     },
     {
       name: 'instance-type-delete',
-      testDir: vmaasDir,
+      testDir: genericDir,
       testMatch: /delete\.instance_type\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
       name: 'tenant-delete',
-      testDir: vmaasDir,
+      testDir: genericDir,
       testMatch: /delete\.tenant\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
       name: 'disk-image',
-      testDir: vmaasDir,
+      testDir: genericDir,
       testMatch: diskImageTestMatch,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       teardown: flowMode === 'full' ? 'disk-image-delete' : undefined,
     },
     {
       name: 'disk-image-lifecycle',
-      testDir: vmaasDir,
+      testDir: genericDir,
       testMatch: /lifecycle\.disk_images\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       dependencies: ['disk-image'],
     },
     {
       name: 'disk-image-delete',
-      testDir: vmaasDir,
+      testDir: genericDir,
       testMatch: /delete\.disk_images\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
     {
       name: 'catalog',
-      testDir: vmaasDir,
+      testDir: genericDir,
       testMatch: catalogTestMatch,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
       dependencies: flowMode === 'delete' ? [] : ['disk-image', 'instance-type'],
@@ -342,8 +345,39 @@ export default defineConfig({
     },
     {
       name: 'catalog-delete',
-      testDir: vmaasDir,
+      testDir: genericDir,
       testMatch: /delete\.catalog\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+    },
+    {
+      // Networking suite. The pool project provisions the External IP pool the
+      // tenant flows allocate from. It deliberately has no teardown: a
+      // dependency's teardown would run before the dependent project uses the
+      // pool. `external-ip-delete` removes the External IP and, when the suite
+      // provisioned it, the pool.
+      name: 'external-ip-pool',
+      testDir: networkingDir,
+      testMatch: /create\.external_ip_pool\.spec\.ts/,
+      fullyParallel: false,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+    },
+    {
+      // One worker keeps files in order: create, then isolation and list
+      // against the created resource, then the teardown. fullyParallel alone
+      // only serializes tests inside a file, not files against each other.
+      name: 'external-ip',
+      testDir: networkingDir,
+      testMatch: /(?:create|isolation|list)\.external_ip\.spec\.ts/,
+      fullyParallel: false,
+      workers: 1,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: ['external-ip-pool'],
+      teardown: 'external-ip-delete',
+    },
+    {
+      name: 'external-ip-delete',
+      testDir: networkingDir,
+      testMatch: /delete\.external_ip\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
   ],

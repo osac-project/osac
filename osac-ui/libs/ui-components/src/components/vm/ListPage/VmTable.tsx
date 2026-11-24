@@ -53,10 +53,7 @@ export const VmTable = ({ vms }: VmTableProps) => {
           return (
             <Tr key={vm.id}>
               <Td dataLabel={columnLabels.name}>
-                <ResourceNameField
-                  resource={vm}
-                  detailsUrl={locked ? undefined : `/vms/${encodeURIComponent(vm.id)}`}
-                />
+                <ResourceNameField resource={vm} detailsUrl={`/vms/${encodeURIComponent(vm.id)}`} />
               </Td>
               <Td dataLabel={columnLabels.status}>
                 <VmStatusLabel state={state} />

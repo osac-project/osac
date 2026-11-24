@@ -21,6 +21,14 @@ jobs:
     workflow: e2e-pr-vmaas.yml  # a run of its own, started by the decision (see CI.md)
     filters: [vmaas-outside-known-safe]
     filters_any: [e2e-code, e2e-suite]
+  e2e-vmaas-full:
+    kind: e2e
+    check: "E2E / VMaaS Full Install"
+    suite: vmaas-full
+    manual_only: true
+    variant_of: vmaas
+    tier: full
+    label: "VMaaS Full Install · sanity + regression"
   e2e-caas:
     kind: e2e
     check: "E2E / CaaS Full Install"
@@ -46,6 +54,14 @@ jobs:
     workflow: e2e-pr-bmaas.yml  # a run of its own, started by the decision (see CI.md)
     filters: [bmaas-outside-known-safe]
     filters_any: [e2e-code, e2e-suite]
+  e2e-bmaas-full:
+    kind: e2e
+    check: "E2E / BMaaS Full Install"
+    suite: bmaas-full
+    manual_only: true
+    variant_of: bmaas
+    tier: full
+    label: "BMaaS Full Install · sanity + regression"
   # Netris suites use a real lab, so they are started only by hand and do not block the E2E check.
   e2e-bmaas-netris:
     kind: e2e

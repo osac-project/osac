@@ -1,13 +1,15 @@
+import type { MessageInitShape } from '@bufbuild/protobuf';
 import type { TFunction } from 'i18next';
 
-import type { BareMetalInstance } from '@osac/types';
-import { BareMetalInstanceState } from '@osac/types';
-
 import {
-  type BareMetalPowerAction,
-  type PatchBareMetalInstanceInput,
-  usePatchBareMetalInstance,
-} from '../../api/v1/baremetal-instance';
+  type BareMetalInstance,
+  BareMetalInstanceRunStrategy,
+  BareMetalInstanceSchema,
+  BareMetalInstanceState,
+  BareMetalInstances,
+} from '@osac/types';
+
+import { useUpdateResource } from '../../api/use-resource';
 import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
 import { useToast } from '../Toast/useToast';
@@ -34,10 +36,29 @@ const getBmActionErrorTitle = (t: TFunction, action: BareMetalPowerAction, name:
   }
 };
 
+type BareMetalPowerAction = 'start' | 'stop' | 'restart';
+
+type PatchBareMetalInstanceInput =
+  | { id: string; action: 'start' | 'stop' }
+  | { id: string; action: 'restart'; currentTrigger: bigint };
+
+const buildPatchBody = (
+  input: PatchBareMetalInstanceInput,
+): MessageInitShape<typeof BareMetalInstanceSchema> => {
+  switch (input.action) {
+    case 'start':
+      return { spec: { runStrategy: BareMetalInstanceRunStrategy.ALWAYS } };
+    case 'stop':
+      return { spec: { runStrategy: BareMetalInstanceRunStrategy.HALTED } };
+    case 'restart':
+      return { spec: { restartTrigger: input.currentTrigger + 1n } };
+  }
+};
+
 export const useBareMetalActions = (instance: BareMetalInstance) => {
   const { t } = useTranslation();
   const { addToast } = useToast();
-  const patch = usePatchBareMetalInstance();
+  const patch = useUpdateResource(BareMetalInstances);
 
   const name = instance.metadata?.name ?? instance.id;
   const state = instance.status?.state;
@@ -47,21 +68,25 @@ export const useBareMetalActions = (instance: BareMetalInstance) => {
   const canDelete = state !== BareMetalInstanceState.DELETING;
 
   const mutateWithToast = (input: PatchBareMetalInstanceInput) => {
-    patch.mutate(input, {
-      onSuccess: () => {
-        addToast({
-          variant: 'success',
-          title: getBmActionSuccessTitle(t, input.action, name),
-        });
+    const body = buildPatchBody(input);
+    patch.mutate(
+      { object: { id: input.id, ...body } },
+      {
+        onSuccess: () => {
+          addToast({
+            variant: 'success',
+            title: getBmActionSuccessTitle(t, input.action, name),
+          });
+        },
+        onError: (error) => {
+          addToast({
+            variant: 'danger',
+            title: getBmActionErrorTitle(t, input.action, name),
+            description: getErrorMessage(error),
+          });
+        },
       },
-      onError: (error) => {
-        addToast({
-          variant: 'danger',
-          title: getBmActionErrorTitle(t, input.action, name),
-          description: getErrorMessage(error),
-        });
-      },
-    });
+    );
   };
 
   const start = () => {

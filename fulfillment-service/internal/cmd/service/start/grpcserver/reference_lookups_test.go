@@ -112,6 +112,16 @@ var _ = Describe("RegisterReferenceLookups", func() {
 			typeName: "osac.public.v1.SecretReference",
 		})).To(BeTrue())
 		Expect(isHandlerOwnedReferenceUse(referenceUse{
+			method:   publicv1.DiskImages_Create_FullMethodName,
+			path:     "object.spec.pull_secret",
+			typeName: "osac.public.v1.SecretReference",
+		})).To(BeTrue())
+		Expect(isHandlerOwnedReferenceUse(referenceUse{
+			method:   privatev1.DiskImages_Update_FullMethodName,
+			path:     "object.spec.pull_secret",
+			typeName: "osac.private.v1.SecretReference",
+		})).To(BeTrue())
+		Expect(isHandlerOwnedReferenceUse(referenceUse{
 			method:   publicv1.ComputeInstances_Create_FullMethodName,
 			path:     "object.spec.other",
 			typeName: "osac.public.v1.SecretReference",
@@ -545,6 +555,9 @@ func isHandlerOwnedReferenceUse(use referenceUse) bool {
 			return true
 		}
 		if slices.Contains(clusterTemplateSshKeyMethods(), use.method) && use.path == "object.spec_defaults.ssh_key" {
+			return true
+		}
+		if slices.Contains(diskImagePullSecretMethods(), use.method) && use.path == "object.spec.pull_secret" {
 			return true
 		}
 		return slices.Contains(catalogAuthoringMethods(), use.method) &&

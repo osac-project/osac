@@ -62,6 +62,13 @@ var _ = Describe("Create diskimage flag registration", func() {
 		Expect(flag).NotTo(BeNil())
 		Expect(flag.Usage).To(ContainSubstring("architecture"))
 	})
+
+	It("should register --pull-secret flag", func() {
+		cmd := Cmd()
+		flag := cmd.Flags().Lookup("pull-secret")
+		Expect(flag).NotTo(BeNil())
+		Expect(flag.Usage).To(ContainSubstring("pull"))
+	})
 })
 
 var _ = Describe("Enum parsing", func() {

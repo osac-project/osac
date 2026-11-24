@@ -25,7 +25,7 @@ import (
 
 func formatDiskImage(di *publicv1.DiskImage) string {
 	var buf bytes.Buffer
-	renderDiskImage(&buf, di)
+	Expect(renderDiskImage(&buf, di)).To(Succeed())
 	return buf.String()
 }
 
@@ -169,5 +169,44 @@ var _ = Describe("Disk image rendering", func() {
 		Expect(output).NotTo(ContainSubstring("Deprecated At:"))
 		Expect(output).NotTo(ContainSubstring("Obsolete At:"))
 	})
+
+	DescribeTable("renders pull secret",
+		func(ref *publicv1.SecretReference, wantValue string, omit bool) {
+			di := publicv1.DiskImage_builder{
+				Id: "with-pull",
+				Metadata: publicv1.Metadata_builder{
+					Name: "with-pull",
+				}.Build(),
+				Spec: publicv1.DiskImageSpec_builder{
+					SourceType: publicv1.SourceType_SOURCE_TYPE_REGISTRY,
+					SourceRef:  "quay.io/test:v1",
+					Architecture: []publicv1.Architecture{
+						publicv1.Architecture_ARCHITECTURE_AMD64,
+					},
+					Lifecycle:  publicv1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
+					PullSecret: ref,
+				}.Build(),
+			}.Build()
+
+			output := formatDiskImage(di)
+			if omit {
+				Expect(output).NotTo(ContainSubstring("Pull Secret:"))
+				return
+			}
+			Expect(output).To(ContainSubstring("Pull Secret:"))
+			Expect(output).To(ContainSubstring(wantValue))
+		},
+		Entry("absent", nil, "", true),
+		Entry("name only", publicv1.SecretReference_builder{Name: "registry-creds"}.Build(),
+			"registry-creds", false),
+		Entry("name and project", publicv1.SecretReference_builder{
+			Name: "registry-creds", Project: "creds",
+		}.Build(), "registry-creds (project creds)", false),
+		Entry("shared name", publicv1.SecretReference_builder{
+			Name: "provider-pull", Shared: true,
+		}.Build(), "provider-pull (shared)", false),
+		Entry("id only", publicv1.SecretReference_builder{Id: "sec-123"}.Build(),
+			"sec-123", false),
+	)
 
 })

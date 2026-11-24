@@ -45,6 +45,9 @@ import (
 // tenant-only SSH-key contract, validate key material, and store canonical
 // Secret references. Update exclusions also leave immutable-field handling to
 // the merged candidate rather than resolving a replacement in the interceptor.
+// DiskImage pull_secret is resolved by the private DiskImages handler (type
+// SECRET_TYPE_PULL_SECRET, clear/preserve semantics, redaction); leave that
+// path to the handler rather than a generic SecretReference interceptor lookup.
 // Other references continue through the interceptor's registered lookups.
 func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, registerer prometheus.Registerer) (*references.ReferenceValidator, error) {
 	validator, err := references.NewReferenceValidator().SetLogger(logger).SetMetricsRegisterer(registerer).
@@ -62,6 +65,7 @@ func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, regis
 		SetExcludedReferencePaths(bareMetalInstanceSSHKeyMethods(), "object.spec.ssh_key").
 		SetExcludedReferencePaths(clusterSshKeyMethods(), "object.spec.ssh_key").
 		SetExcludedReferencePaths(clusterTemplateSshKeyMethods(), "object.spec_defaults.ssh_key").
+		SetExcludedReferencePaths(diskImagePullSecretMethods(), "object.spec.pull_secret").
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reference validator: %w", err)
@@ -204,5 +208,17 @@ func computeInstanceSSHKeyMethods() []string {
 		privatev1.ComputeInstances_Create_FullMethodName,
 		publicv1.ComputeInstances_Update_FullMethodName,
 		privatev1.ComputeInstances_Update_FullMethodName,
+	}
+}
+
+// diskImagePullSecretMethods covers Create/Update fields whose pull-secret
+// SecretReferences are resolved and canonicalized by the private DiskImages
+// handler (including empty clear and preserve-on-unrelated-update).
+func diskImagePullSecretMethods() []string {
+	return []string{
+		publicv1.DiskImages_Create_FullMethodName,
+		privatev1.DiskImages_Create_FullMethodName,
+		publicv1.DiskImages_Update_FullMethodName,
+		privatev1.DiskImages_Update_FullMethodName,
 	}
 }

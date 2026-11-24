@@ -169,7 +169,7 @@
           'channel': 'stable',
           'namespace': 'trident-operator',
           'operator_group': 'trident-operator-group',
-          'install_plan_approval': 'Manual',
+          'install_plan_approval': 'Automatic',
           'catalog_source': 'certified-operators',
           'catalog_namespace': 'openshift-marketplace',
           'trident_namespace': lookup('env', 'NETAPP_CSI_OPERATOR_NAMESPACE') | default('trident', true)
@@ -185,7 +185,7 @@
           'namespace': lookup('env', 'VAST_CSI_OPERATOR_NAMESPACE') | default('vast-csi-system', true),
           'package': 'vast-csi-operator',
           'channel': 'stable',
-          'install_plan_approval': 'Manual',
+          'install_plan_approval': 'Automatic',
           'catalog_source': 'certified-operators',
           'catalog_namespace': 'openshift-marketplace'
         }
@@ -461,7 +461,7 @@
                 name: "{{ storage_provider_csi_driver_matrix.netapp.installer.namespace }}"
 
         # The certified Trident CSV supports AllNamespaces only. Isolate its
-        # Subscription from unrelated Manual InstallPlans in openshift-operators.
+        # Subscription from unrelated operator InstallPlans in openshift-operators.
         - name: Ensure the Trident AllNamespaces OperatorGroup exists
           kubernetes.core.k8s:
             state: present
@@ -529,7 +529,7 @@
                   tags: [provider_csi_driver_install]
               tags: [provider_csi_driver_install]
 
-            - name: Resolve and approve the initial Trident operator InstallPlan
+            - name: Wait for OLM to install the selected Trident operator automatically
               ansible.builtin.include_tasks:
                 file: install_pinned_olm_operator.yaml
                 apply:

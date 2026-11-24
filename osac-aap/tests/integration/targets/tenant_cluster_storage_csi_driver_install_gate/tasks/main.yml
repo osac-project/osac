@@ -881,19 +881,19 @@
       ansible.builtin.set_fact:
         _native_csi_install_log: "{{ _native_csi_install_log_content.content | b64decode }}"
 
-    - name: Assert NetApp and VAST selected their stable Manual OLM subscriptions
+    - name: Assert NetApp and VAST selected automatic stable OLM subscriptions
       ansible.builtin.assert:
         that:
           - "'native_csi_driver_install' in _native_csi_install_log"
           - "'drivers=[\"csi.trident.netapp.io\"]' in _native_csi_install_log"
           - "'package=trident-operator' in _native_csi_install_log"
           - "'channel=stable' in _native_csi_install_log"
-          - "'install-plan-approval=Manual' in _native_csi_install_log"
+          - "'install-plan-approval=Automatic' in _native_csi_install_log"
           - "'providers=[\"netapp\"]' in _native_csi_install_log"
           - "'drivers=[\"block.csi.vastdata.com\", \"csi.vastdata.com\"]' in _native_csi_install_log"
           - "'package=vast-csi-operator' in _native_csi_install_log"
-        fail_msg: "Native provider installers did not use the stable Manual OLM policy: {{ _native_csi_install_log }}"
-        success_msg: "Native provider installers selected the latest stable bundle with Manual initial approval"
+        fail_msg: "Native provider installers did not use the stable Automatic OLM policy: {{ _native_csi_install_log }}"
+        success_msg: "Native provider installers selected the latest stable bundle with automatic approval"
 
     - name: Read Trident CSIDriver registration
       kubernetes.core.k8s_info:
@@ -1619,7 +1619,7 @@
               ansible.builtin.assert:
                 that:
                   - >-
-                    'must be pending and match the required stable Manual policy' in
+                    'must be pending and match the required stable Automatic policy' in
                     ((ansible_failed_result.msg | default('')) ~ ' ' ~
                      (ansible_failed_result.results | default([]) | selectattr('msg', 'defined')
                       | map(attribute='msg') | join(' ')))

@@ -7,7 +7,7 @@
         storage_provider_olm_subscription_installer
         == storage_provider_csi_driver_matrix[storage_provider_olm_subscription_provider].installer
       - storage_provider_olm_subscription_installer.method == 'olm'
-      - storage_provider_olm_subscription_installer.install_plan_approval == 'Manual'
+      - storage_provider_olm_subscription_installer.install_plan_approval == 'Automatic'
       - storage_provider_olm_subscription_name == storage_provider_olm_subscription_package
       - storage_provider_olm_subscription_name == storage_provider_olm_subscription_installer.package
       - storage_provider_olm_subscription_namespace == storage_provider_olm_subscription_installer.namespace
@@ -20,7 +20,7 @@
           'source': storage_provider_olm_subscription_installer.catalog_source,
           'sourceNamespace': storage_provider_olm_subscription_installer.catalog_namespace
         }
-    fail_msg: "The OLM Subscription must use its provider's stable certified channel and Manual approval"
+    fail_msg: "The OLM Subscription must use its provider's stable certified channel and Automatic approval"
 
 - name: Read any existing provider OLM Subscription before installation
   kubernetes.core.k8s_info:
@@ -82,14 +82,11 @@
         'startingCSV' not in _storage_provider_existing_olm_subscription.resources[0].spec
     fail_msg: >-
       Existing provider Subscription '{{ storage_provider_olm_subscription_namespace }}/{{ storage_provider_olm_subscription_name }}'
-      must be pending and match the required stable Manual policy. It was left unchanged.
+      must be pending and match the required stable Automatic policy. It was left unchanged.
 
-- name: Set an existing provider Subscription to the initial-install policy
+- name: Set an existing provider Subscription to the automatic stable-channel policy
   when:
     - _storage_provider_existing_olm_subscription.resources | length > 0
-    - >-
-      _storage_provider_existing_olm_subscription.resources[0].status.installedCSV
-      | default('', true) | length == 0
     - _storage_provider_existing_olm_subscription_owned | default(false) | bool
   kubernetes.core.k8s:
     state: patched

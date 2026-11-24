@@ -3,7 +3,7 @@
 # Used by the explicit Tenant/VMaaS driver action and the opt-in legacy CaaS
 # ClusterOrder path in ensure_storage_class.yaml.
 # Existing required CSIDrivers are left untouched. A missing driver triggers an
-# initial Manual InstallPlan approval for the latest bundle resolved by OLM.
+# OLM Subscription with Automatic approval for the latest stable-channel bundle.
 #
 # Requires:
 #   _vast_required_protocols      — list of unique protocols from caller (e.g. ['nfs', 'block'])
@@ -145,7 +145,7 @@
         storage_provider_olm_subscription_provider: vast
         storage_provider_olm_subscription_installer: "{{ storage_provider_csi_driver_matrix.vast.installer }}"
 
-    - name: Resolve and approve the initial VAST operator InstallPlan
+    - name: Wait for OLM to install the selected VAST operator automatically
       ansible.builtin.include_tasks:
         file: "{{ role_path }}/../../../service/roles/storage_provider/tasks/install_pinned_olm_operator.yaml"
         apply:

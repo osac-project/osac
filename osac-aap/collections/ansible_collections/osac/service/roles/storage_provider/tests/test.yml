@@ -95,7 +95,7 @@
                   channel: preview
                   namespace: trident-operator
                   operator_group: trident-operator-group
-                  install_plan_approval: Manual
+                  install_plan_approval: Automatic
                   catalog_source: certified-operators
                   catalog_namespace: openshift-marketplace
                   trident_namespace: trident
@@ -108,7 +108,7 @@
                   namespace: vast-csi-system
                   package: vast-csi-operator
                   channel: stable
-                  install_plan_approval: Manual
+                  install_plan_approval: Automatic
                   catalog_source: certified-operators
                   catalog_namespace: openshift-marketplace
               lvms: {}

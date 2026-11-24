@@ -60,9 +60,9 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
     Operators installed here are left for that runner's cluster teardown. The
     test creates a disposable copy of the Stage 2 template with launch-time tag
     selection enabled, leaving the production template unchanged. The first
-    launch starts from a clean provider state and lets OLM select the current
-    stable-channel bundle. The second launch verifies registered CSI drivers
-    and their Subscriptions are not modified.
+    launch starts from a clean provider state and lets OLM select and automatically
+    install the current stable-channel bundle. The second launch verifies registered
+    CSI drivers and their Subscriptions are not modified.
     """
     for operator in _OPERATORS:
         assert not _resource_exists(
@@ -172,6 +172,7 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
                     until=lambda item, operator=operator: (
                         item.get("spec", {}).get("source") == "certified-operators"
                         and str(item.get("status", {}).get("installedCSV") or "").startswith(f"{operator['package']}.")
+                        and item.get("status", {}).get("currentCSV") == item.get("status", {}).get("installedCSV")
                         and not any(
                             condition.get("type") == "ResolutionFailed" and condition.get("status") == "True"
                             for condition in item.get("status", {}).get("conditions", [])
@@ -186,12 +187,15 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
                 spec = subscription.get("spec", {})
                 installed_csv = subscription.get("status", {}).get("installedCSV", "")
                 assert spec.get("channel") == "stable"
-                assert spec.get("installPlanApproval") == "Manual"
+                assert spec.get("installPlanApproval") == "Automatic"
                 assert spec.get("name") == operator["package"]
                 assert spec.get("source") == "certified-operators"
                 assert spec.get("sourceNamespace") == "openshift-marketplace"
                 assert "startingCSV" not in spec, "OLM must select the current stable-channel bundle"
                 assert installed_csv.startswith(f"{operator['package']}.")
+                assert subscription.get("status", {}).get("currentCSV") == installed_csv, (
+                    f"OLM did not install the current stable-channel CSV for {operator['package']}"
+                )
 
                 csv = poll_until(
                     fn=lambda operator=operator, installed_csv=installed_csv: k8s_hub_client.get_json(
@@ -224,14 +228,10 @@ def test_stage2_installs_missing_native_csi_operators_and_skips_existing(
                     for plan in package_plans
                     if installed_csv in plan.get("spec", {}).get("clusterServiceVersionNames", [])
                 ]
-                assert any(plan.get("spec", {}).get("approved") is True for plan in initial_plans), (
-                    f"No approved initial InstallPlan contains installed CSV {installed_csv}"
+                assert initial_plans, f"No initial InstallPlan contains installed CSV {installed_csv}"
+                assert all(plan.get("spec", {}).get("approved") is True for plan in initial_plans), (
+                    f"OLM did not automatically approve the initial InstallPlan for {operator['package']}"
                 )
-                assert not any(
-                    installed_csv not in plan.get("spec", {}).get("clusterServiceVersionNames", [])
-                    and plan.get("spec", {}).get("approved") is True
-                    for plan in package_plans
-                ), f"Manual approval must leave later {operator['package']} plans unapproved"
 
                 for driver in operator["drivers"]:
                     assert _resource_exists(k8s=k8s_hub_client, resource="csidriver", name=driver), (

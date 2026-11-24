@@ -4,6 +4,11 @@ This document describes the conventions and rules that govern the design of the 
 API. Read it before adding or modifying any `.proto` file, service implementation, or REST
 transcoding annotation.
 
+This is a guide to general API conventions, not a reference for individual objects or services. The
+exact contracts should be defined in the protobuf definitions and feature guides. Mentions of
+specific object types or services here are only examples of general rules or notable exceptions to
+them.
+
 The API is defined using gRPC and protocol buffers. Refer to the API in terms of gRPC services,
 methods, and protobuf messages. Avoid describing it as a set of HTTP+JSON endpoints, except when
 REST transcoding is the specific topic.
@@ -13,19 +18,26 @@ API. Do not use "resource" for this purpose.
 
 ## Public and private APIs
 
-The proto contract lives in the **top-level `proto/` module**, not
-under `fulfillment-service/`. The API has two variants:
+The proto contract lives in the **top-level `proto/` module**, not under `fulfillment-service/`. The
+API has two variants:
 
-- `proto/private/osac/private/v1/` contains the **private API** (editable source of truth), reserved for system administrators and controllers. This is the full API with all implementation details.
-- `proto/public/osac/public/v1/` contains the **public API** (generated, never edit manually), intended for regular users. This is automatically generated from the private API.
+- `proto/private/osac/private/v1/` contains the **private API** (editable source of truth), reserved
+  for system administrators and controllers. This is the full API with all implementation details.
 
-**IMPORTANT**: Only edit files in `proto/private/`. `proto/public/` and `proto/gen/` are fully generated and will be overwritten (`make -C proto generate`).
+- `proto/public/osac/public/v1/` contains the **public API** (generated, never edit manually),
+  intended for regular users. This is automatically generated from the private API.
+
+**IMPORTANT**: Only edit files in `proto/private/`. `proto/public/` and `proto/gen/` are fully
+generated and will be overwritten (`make -C proto generate`).
 
 ### How Public is Generated from Private
 
-The public API is automatically generated from the private API using the [`protoc-gen-cleanapi`](https://github.com/jhernand/protoc-gen-cleanapi) plugin. Elements marked with cleanapi annotations are filtered out during generation:
+The public API is automatically generated from the private API using the
+[`protoc-gen-cleanapi`](https://github.com/jhernand/protoc-gen-cleanapi) plugin. Elements marked
+with cleanapi annotations are filtered out during generation:
 
 **Field-level**: Fields marked with `[(cleanapi.field).private = true]` are removed
+
 ```protobuf
 import "cleanapi/annotations.proto";
 
@@ -38,7 +50,9 @@ message Cluster {
 }
 ```
 
-**Message-level**: Messages marked with `option (cleanapi.message).private = true` are entirely removed
+**Message-level**: Messages marked with `option (cleanapi.message).private = true` are entirely
+removed
+
 ```protobuf
 message InternalDebugInfo {
   option (cleanapi.message).private = true;
@@ -46,19 +60,29 @@ message InternalDebugInfo {
 }
 ```
 
-**Method-level**: RPC methods marked with `option (cleanapi.method).private = true` are removed from the service. This is commonly used for the `Signal` RPC that controllers use to notify the service of state changes.
+**Method-level**: RPC methods marked with `option (cleanapi.method).private = true` are removed from
+the service. This is commonly used for the `Signal` RPC that controllers use to notify the service
+of state changes.
 
-**File-level**: Entire proto files can be marked private with `option (cleanapi.file).private = true`. All messages, enums, and services in that file are removed from the public API. Example: `volume_type.proto` is entirely private because volumes are managed internally by the CSI driver.
+**File-level**: Entire proto files can be marked private with `option (cleanapi.file).private =
+true`. All messages, enums, and services in that file are removed from the public API. Example:
+`volume_type.proto` is entirely private because volumes are managed internally by the CSI driver.
 
-**HTTP route mapping**: Service files use `option (cleanapi.file).http_route_prefix_map = "private:fulfillment"` to rewrite HTTP routes from `/api/private/v1/` to `/api/fulfillment/v1/` in the public API.
+**HTTP route mapping**: Service files use `option (cleanapi.file).http_route_prefix_map =
+"private:fulfillment"` to rewrite HTTP routes from `/api/private/v1/` to `/api/fulfillment/v1/` in
+the public API.
 
-The public API must always be a strict subset of the private API. The private API may contain services, methods, messages, and fields that do not appear in the public API, but the reverse is never allowed. Public protos must never import private protos, and vice versa.
+The public API must always be a strict subset of the private API. The private API may contain
+services, methods, messages, and fields that do not appear in the public API, but the reverse is
+never allowed. Public protos must never import private protos, and vice versa.
 
 ### Field Numbering for Private Fields
 
-**Always place private-only fields at the end of the message.** This preserves field numbering compatibility between public and private protos.
+**Always place private-only fields at the end of the message.** This preserves field numbering
+compatibility between public and private protos.
 
 Good:
+
 ```protobuf
 message Cluster {
   // Public fields use low numbers
@@ -73,6 +97,7 @@ message Cluster {
 ```
 
 Bad:
+
 ```protobuf
 message Cluster {
   string id = 1;
@@ -83,9 +108,15 @@ message Cluster {
 
 ### Documentation Requirements
 
-Both APIs must be documented with documentation comments in the `.proto` files. **All comments in private protos are copied to the public protos**, so write comments with the public API consumer in mind, not internal implementation details.
+Documentation should be written for users of the API, not for developers of the system. It should
+not contain implementation details that are irrelevant to API consumers.
+
+Both APIs must be documented with documentation comments in the `.proto` files. **All comments in
+private protos are copied to the public protos**, so write comments with the public API consumer in
+mind, not internal implementation details.
 
 Good:
+
 ```protobuf
 message Cluster {
   // Unique identifier for this cluster.
@@ -95,6 +126,7 @@ message Cluster {
 ```
 
 Bad:
+
 ```protobuf
 message Cluster {
   // DB primary key, auto-generated by the DAO layer
@@ -102,7 +134,9 @@ message Cluster {
 }
 ```
 
-Private fields can have comments that describe internal details (they won't appear in the public proto):
+Private fields can have comments that describe internal details (they won't appear in the public
+proto):
+
 ```protobuf
   // Internal node identifier used by the provisioning system.
   string internal_node_id = 2 [(cleanapi.field).private = true];
@@ -110,12 +144,40 @@ Private fields can have comments that describe internal details (they won't appe
 
 For detailed workflows, annotation reference, and troubleshooting, see [CLEANAPI.md](CLEANAPI.md).
 
+### ComputeInstance provisioning failure status
+
+`ComputeInstance.status.last_provisioning_failure` is an optional, system-owned
+object returned to callers who can read the instance through Get or List.
+It contains the latest failure's `reason`, fixed public `message`, `attempt`,
+and `observed_at` timestamp. The `attempt` field is the number of the provisioning
+attempt that failed. The first attempt is numbered 1. This can differ from the
+attempt currently running as a retry. The observation time does not advance when
+the same failure is read again. No failure history or provider log text is exposed.
+
+The field is absent when no failure is retained. Clearing removes the object
+rather than replacing it with empty values. Provisioning success clears the
+failure independently of infrastructure readiness; it does not by itself set
+`Provisioned=True` or change the metered VM power state. The reason identifies
+the observed source, not a new retry policy. Provider-reported failures use
+`Provisioning failed.`, timeouts use `The provisioning attempt timed out.`, and
+other sources use `Internal error`.
+
+Public Update rejects explicit `status` masks and all descendants, including
+`status.last_provisioning_failure` and its fields, with `InvalidArgument`.
+The stored failure is unchanged by attempts to set, replace, or clear it.
+Public Create ignores supplied status. A maskless public update infers only
+writable fields, so an echoed or modified failure object is ignored; updates
+masked to writable spec or metadata fields also preserve observed status.
+Trusted private updates can replace the failure or clear it with an explicit
+`status.last_provisioning_failure` mask and an absent field.
+
 ## File organization
 
 Each object type is defined across two files:
 
 - `<type>_type.proto` contains the message definition of the object itself, along with its `Spec`,
   `Status`, conditions, enums, and any other messages that are specific to that type.
+
 - `<type>s_service.proto` (plural) contains the gRPC service definition and the request and response
   messages for each method.
 
@@ -156,47 +218,18 @@ The `Metadata` message is shared by all object types and contains the following 
 | `creation_timestamp`   | `google.protobuf.Timestamp`  | Time the object was created.                     |
 | `deletion_timestamp`   | `google.protobuf.Timestamp`  | Time the object was marked for deletion.         |
 | `creator`              | `string`                     | Identity that created the object.                |
-| `name`                 | `string`                     | Required, immutable identifier (RFC 1123 DNS label format). Unique within its scope and immutable after creation. |
+| `name`                 | `string`                     | Unique and immutable object name.                |
 | `tenant`               | `string`                     | Tenant that owns the object.                     |
-| `labels`               | `map<string, string>`        | Indexed key-value pairs for organizing objects. Public API responses omit administrator-only reserved keys; see [Administrator-only metadata](#administrator-only-metadata). |
-| `annotations`          | `map<string, string>`        | Arbitrary user-controlled metadata, plus administrator-only reserved keys on the private API. Public API responses omit reserved keys; see [Administrator-only metadata](#administrator-only-metadata). |
+| `labels`               | `map<string, string>`        | Indexed key-value pairs for organizing objects.  |
+| `annotations`          | `map<string, string>`        | Arbitrary user-controlled metadata.              |
 | `version`              | `int32`                      | Auto-incremented on every change.                |
 
 The private API adds a `finalizers` field (`repeated string`) that is not exposed in the public API.
 
-### Administrator-only metadata
+### Object names
 
-Labels and annotations whose key domain is exactly `admin.osac.openshift.io` or a dot-delimited
-subdomain of it are reserved for system use. Matching is case-sensitive and applies to the domain
-before the slash. For example, `admin.osac.openshift.io/managed` and
-`controller.admin.osac.openshift.io/source` are reserved. Similar-looking keys such as
-`fakeadmin.osac.openshift.io/managed`, `admin.osac.openshift.io.example/managed`, and the
-slashless key `admin.osac.openshift.io` do not match this reserved namespace. The operational keys
-`osac.openshift.io/tenant` and `osac.openshift.io/owner-reference` are also outside this reserved
-namespace; their existing ownership and validation rules still apply.
-
-The private API returns and accepts reserved metadata under the caller's existing authorization.
-The public API omits reserved entries from object metadata and event payloads for every caller,
-regardless of tenant role. A public Create or Update request that supplies any reserved label or
-annotation is rejected atomically with `InvalidArgument` and the message
-`Label or annotation is reserved for use by the system.` The error does not include the submitted
-key or value. See [Filter expressions — reserved metadata](FILTER.md#reserved-metadata) for the
-corresponding List and Watch filter rules, and the
-[metadata administrator guide](../../docs/guides/admin/metadata.md) for permissions and CLI examples.
-
-On Update, an explicitly selected `metadata.labels` or `metadata.annotations` field is a whole-map
-replacement. On the private API, keys omitted from that selected map are removed; an empty map
-or an omitted selected map clears it, and an empty string is still a value. On the public API, the
-replacement applies to ordinary entries only: stored reserved entries are retained even when
-omitted or when the selected map is empty or omitted. An unselected map is unchanged. Behavior for
-updates without a mask remains resource-specific; public updates preserve stored reserved entries
-on those paths as well. Use an explicit map path when the resource supports it and the request must
-clearly replace or clear a map.
-
-### Resource names
-
-Every object must have a `metadata.name`. The name is **mandatory** at creation time, **immutable**
-after creation, and **unique** within its scope.
+Every object must have a `metadata.name`. The name is mandatory at creation time, immutable after
+creation, and **unique** within its scope.
 
 #### Format
 
@@ -212,16 +245,26 @@ The proto validation rule is:
 min_len: 1, max_len: 63, pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
 ```
 
-Valid names: `my-cluster`, `prod-net-01`, `a`, `web-3`
+Examples of valid names:
 
-Invalid names: `My-Cluster` (uppercase), `-starts-with-hyphen` (leading hyphen),
-`ends-with-hyphen-` (trailing hyphen), `has_underscores` (underscores),
-`name-that-is-way-too-long-and-exceeds-the-sixty-three-character-maximum-allowed` (too long),
-`""` (empty)
+- `my-cluster`
+- `prod-net-01`
+- `a`
+- `web-3`
+
+Examples of invalid names:
+
+| Name | Reason |
+|---|---|
+| `My-Cluster` | Uppercase |
+| `-starts-with-hyphen` | Leading hyphen |
+| `ends-with-hyphen-` | Trailing hyphen |
+| `has_underscores` | Underscores |
+| `name-that-is-way-too-long-and-exceeds-the-sixty-three-character-maximum-allowed` | Too long |
 
 #### Uniqueness
 
-Names are unique per (tenant, project, resource type). Two different resource types may have objects
+Names are unique per (tenant, project, object type). Two different object types may have objects
 with the same name within the same tenant and project, but two objects of the same type cannot.
 A name remains reserved while the object exists, including while deletion is pending (between
 `deletion_timestamp` being set and archival completing).
@@ -230,14 +273,7 @@ A name remains reserved while the object exists, including while deletion is pen
 
 Once an object is created, its `metadata.name` cannot be changed. For services that expose `Update`,
 requests that include `metadata.name` in the field mask are accepted only if the value is identical
-to the existing name. The public networking services `VirtualNetworks`, `Subnets`, `ExternalIPs`,
-`ExternalIPAttachments`, and `NATGateways` remain create/read/delete-only. `SecurityGroups` has a
-temporary OSAC-5679 exception: its public `Update` operation replaces the complete ingress and egress
-rule lists, while preserving the ID, name, parent VirtualNetwork, metadata, and status. The public
-server fixes the field mask to those two rule lists; callers cannot use this operation to update
-other networking fields. This is a scoped extension to the immutable target contract in the
-OSAC-1433 unified networking design. Private APIs retain their separate update operations for
-controller status and feedback.
+to the existing name.
 
 #### Error responses
 
@@ -258,6 +294,13 @@ Not every unique-index violation is `AlreadyExists`. Ordinary per-object name un
 is gone. Consumers must match on the gRPC status code rather than assuming every uniqueness
 conflict is `AlreadyExists`.
 
+<a id="administrator-only-metadata"></a>
+### Labels and annotations
+
+Labels and annotations whose key domain is `admin.osac.openshift.io` or one of its subdomains are
+reserved for system use. They can be viewed or edited only via the private API.
+See the [metadata guide](../../docs/guides/admin/metadata.md) for reserved-key and update rules.
+
 ### Spec and status ownership
 
 The `spec` and `status` fields have strict ownership rules:
@@ -270,39 +313,6 @@ The `spec` and `status` fields have strict ownership rules:
   the system. Users do not have permission to modify `status`. The system updates `status` to
   reflect the current state of the object, which may differ from what the user requested in `spec`
   while changes are being applied.
-
-### ComputeInstance public update semantics
-
-The public `ComputeInstances` update enforces the following rules on its request
-object and field mask. They are scoped to this service; other resource servers
-do not necessarily follow them.
-
-- **Public status is read-only.** The whole `status` and every `status.*` mask
-  path are rejected with `InvalidArgument`, including whitespace and double-dot
-  normalized spellings. Status values carried incidentally in the request
-  object are ignored. Controller-reported state, transition times, conditions,
-  and feedback such as network-attachment status are written only through the
-  private API.
-- **Omitted mask infers supplied fields.** With no `update_mask`, paths are
-  inferred from the populated direct children of `spec` and the permitted
-  metadata fields. Omitted fields stay unchanged; clearing a scalar or an empty
-  map requires an explicit mask path.
-- **Explicit mask selects writable fields only.** Permitted metadata paths are
-  `labels` and `annotations`; spec paths are
-  accepted and validated by the field-path compiler. Any other root — including
-  `name`, `tenant`, and `project`, which are server-assigned and immutable once
-  the object is created, and private metadata such as `version`, timestamps,
-  and finalizers — is rejected. The tenant is determined from the authenticated
-  caller and cannot be moved by an update.
-- **Targeted maps are atomic.** A mask selecting `metadata.labels` or
-  `metadata.annotations` replaces that map's ordinary entries, and an explicit
-  empty map clears them; reserved system-owned entries are retained. An
-  untargeted map stays unchanged.
-- **Explicit empty mask is a no-op.** It still runs the version and validation
-  checks but persists no changes.
-
-System-owned metadata and status feedback remain writable only through the
-private `ComputeInstances` API, which controllers and system components use.
 
 ### Annotations vs spec/status fields
 
@@ -331,16 +341,6 @@ All proto fields that have constraints (required, min/max length, format, etc.) 
 `buf.validate` rules. The protovalidate library enforces these constraints at runtime, rejecting
 invalid requests with `InvalidArgument` errors that include field-level violation details.
 
-### Validation flow
-
-- **Create requests**: Validated by protovalidate interceptor before reaching server handlers
-- **Update requests on update-capable services**: Server validates the merged object after applying `update_mask`
-  - Interceptor skips validation to avoid false errors on partial objects
-  - Server merges request fields (per mask) with database object
-  - Server validates the complete merged result with protovalidate
-
-This ensures validation always runs on the actual final state, not partial input.
-
 ### Standard constraints
 
 Common validation patterns:
@@ -364,7 +364,7 @@ string name = 1 [(buf.validate.field).cel = {
 }];
 ```
 
-**Message-level CEL** - validates across fields or with resource-specific logic:
+**Message-level CEL** - validates across fields or with object-type-specific logic:
 ```protobuf
 message Project {
   option (buf.validate.message).cel = {
@@ -378,11 +378,14 @@ message Project {
 
 ### Overriding embedded validation
 
-To skip standard validation on an embedded message and apply resource-specific rules:
+To skip standard validation on an embedded message and apply object-type-specific rules:
+
 1. Use `ignore: IGNORE_ALWAYS` on the field to skip its embedded validation
+
 2. Add message-level CEL to validate with custom logic
 
-Example (Projects allow dots in names, other resources don't):
+Example (projects allow dots in names, other object types don't):
+
 ```protobuf
 message Project {
   option (buf.validate.message).cel = {
@@ -393,14 +396,15 @@ message Project {
 }
 ```
 
-Refer to the [protovalidate documentation](https://github.com/bufbuild/protovalidate) for full CEL syntax.
+Refer to the [protovalidate documentation](https://github.com/bufbuild/protovalidate) for full CEL
+syntax.
 
 ### When not to use protovalidate
 
 Constraints that require external state (database lookups, existence checks, uniqueness) cannot be
 expressed in proto annotations and must be implemented in server logic. Examples:
 
-- Resource name uniqueness (requires database query)
+- Object name uniqueness (requires database query)
 - Foreign key validation (requires checking if referenced object exists)
 - Quota enforcement (requires tenant-level state)
 - Custom business rules that depend on multiple objects or system state
@@ -483,13 +487,13 @@ are the intentional exception: they expose the four CRUD methods that do not mut
 object (`Create`, `List`, `Get`, and `Delete`) and omit `Update` entirely. The private versions of
 those services still expose `Update` for controller status and feedback.
 
-| Method   | Purpose                            |
-|----------|------------------------------------|
-| `Create` | Creates a new object.              |
+| Method   | Purpose                             |
+|----------|-------------------------------------|
+| `Create` | Creates a new object.               |
 | `List`   | Returns a filtered list of objects. |
-| `Get`    | Returns a single object by `id`.   |
-| `Update` | Partially updates an object when the service supports mutation. |
-| `Delete` | Deletes an object by `id`.         |
+| `Get`    | Returns a single object by `id`.    |
+| `Update` | Updates an object.                  |
+| `Delete` | Deletes an object by `id`.          |
 
 Services of the private API must additionally declare a `Signal` method. This method must never
 appear in the public API.
@@ -623,10 +627,10 @@ message ThingsUpdateResponse {
     if it has one.
 
 For the `metadata.labels` and `metadata.annotations` map rules, including reserved-entry handling,
-see [Administrator-only metadata](#administrator-only-metadata). The REST gateway normally builds
-the update mask from fields present in the JSON body. Unmasked-update behavior otherwise remains
-resource-specific; an explicit metadata map path makes the intended replacement or clear explicit
-where that resource supports the path.
+see [Replacing maps, masks, and locks](../../docs/guides/admin/metadata.md#replacing-maps-masks-and-locks).
+The REST gateway normally builds the update mask from fields present in the JSON body.
+Unmasked-update behavior otherwise remains object-type-specific; an explicit metadata map path
+makes the intended replacement or clear explicit where that object type supports the path.
 
 ### Delete
 
@@ -661,119 +665,6 @@ message ThingsSignalRequest {
 
 message ThingsSignalResponse {}
 ```
-
-### Service accounts
-
-`ServiceAccounts` manages machine identities in the caller's tenant. The account ID and status are
-server-controlled. The name is unique within the tenant and remains
-reserved while deletion is pending. Updates may change labels. Display names and descriptions are
-not supported for service accounts. Projects are not supported.
-
-`Create` returns the account in `PENDING` before its Keycloak client is provisioned. The controller
-provisions the client asynchronously and creates a tenant-scoped Secret containing both `client_id`
-and `client_secret`. `status.client_secret` references that Secret, and `status.state` becomes
-`READY` only after the Secret is available. Tenant administrators can read the Secret with
-`Secrets/Get`; ordinary client users receive `PERMISSION_DENIED`. Secret data is omitted from list
-and mutation responses. Dry-run creation creates no account, client, or Secret.
-`status.message` explains a `FAILED` provisioning state and reports rotation errors while automatic
-retry is in progress. A rotation failure leaves the account `READY` while its existing credential
-remains usable. If the Keycloak update may have applied but the replacement credential could not be
-published, or Keycloak reports that the client is missing, the controller marks the account
-`FAILED` until it is usable again. If a Keycloak client exists without recoverable registration
-credentials, remove that client from Keycloak; the controller then retries provisioning or completes
-deletion.
-
-Role assignments are managed through tenant-scoped RoleBindings; service accounts do not accept
-role references. A binding can include service-account IDs in `spec.service_accounts`. Fulfillment
-checks the current active bindings for each managed-token request, so removing a binding revokes
-that grant on the next request. Roles embedded in a managed account's JWT do not grant API access.
-The shared Role catalog includes `tenant-admin`, `tenant-automation`, and `tenant-idp-manager`.
-`osac-csi-driver` is stored in the system tenant and is visible to cloud administrators only.
-Migration 139 seeds `tenant-idp-manager`; migration 145 seeds `tenant-automation` and
-`osac-csi-driver`. Migration 141 creates the ServiceAccount tables.
-
-Tenant admins can request secret rotation with `RegenerateSecret`. The action records a pending
-rotation and returns an empty response. Callers can watch the referenced Secret or poll `Secrets/Get`
-until its `client_secret` changes. Before updating Keycloak,
-the controller stores a generated replacement client secret and the current registration token in the
-system-scoped registration Secret. It uses that token to authorize the Keycloak client-secret update,
-persists any returned registration token, and then publishes the replacement through the tenant-scoped
-credential Secret. The controller records rotation progress privately and marks rotation complete
-only after publication. The installer configures a Keycloak Client Policy to disable
-registration-token rotation for these updates, so retries can reuse the stored token and staged
-secret. Repeated requests while a rotation is pending or retrying return that rotation instead of
-starting another one. Rotation has no grace period: the old secret stops working when the Keycloak
-update applies, while already-issued tokens retain their normal expiry.
-
-`RegenerateSecret` is available to tenant admins for accounts in their tenant. Its REST route is
-`POST /api/fulfillment/v1/service_accounts/{id}/regenerate_secret`; the private route is
-`POST /api/private/v1/service_accounts/{id}/regenerate_secret`.
-
-### CLI
-
-Service-account create, get, list, edit, and delete use the generic `osac` commands. Edit opens the
-resource in the configured editor. Secret rotation uses `osac regenerate`:
-
-```shell
-osac create -f service-account.json
-osac get serviceaccounts batch-worker -o json
-osac get serviceaccounts --filter "this.metadata.labels['team'] == 'data'" -o json
-osac edit serviceaccounts batch-worker
-osac delete serviceaccounts batch-worker
-osac regenerate serviceaccount batch-worker
-```
-
-For administrator and workload procedures, see the
-[Tenant Service Accounts guide](../../docs/guides/tenant-service-accounts.md).
-
-The create file uses the public type URL and tenant-owned fields:
-
-```json
-{
-  "@type": "type.googleapis.com/osac.public.v1.ServiceAccount",
-  "metadata": {
-    "name": "batch-worker",
-    "labels": { "team": "data" }
-  }
-}
-```
-
-Generic `osac create` reports the created account; provisioning then completes asynchronously.
-After the account is `READY`, tenant admins can read the credential Secret by following the ID in
-`status.client_secret`, for example with `osac get secrets <client-secret-id> -o json`; the
-Secret's byte values are base64-encoded in JSON. The API Create and RegenerateSecret responses do not
-return secret bytes. `osac regenerate serviceaccount`
-waits for rotation to complete, reads the replacement through `Secrets/Get`, and emits the new
-`client_id` and `client_secret` once as JSON. Treat that output as a credential and keep it out of
-source files, shell history, and logs.
-
-Get and list output the account and its tenant-scoped Secret reference, never credential bytes.
-Updates may change `metadata.labels`. `ServiceAccountSpec` has no role grants. To grant API
-access, create a RoleBinding whose `spec.role.id` is a catalog role ID and whose
-`spec.service_accounts` includes the service-account ID. To revoke that grant, delete its
-RoleBinding. Use a separate binding per account when you want revocation to be a single
-non-interactive delete:
-
-```json
-{
-  "@type": "type.googleapis.com/osac.public.v1.RoleBinding",
-  "metadata": { "name": "batch-worker-automation" },
-  "spec": {
-    "role": { "id": "<tenant-automation-role-id>" },
-    "service_accounts": [{ "id": "<service-account-id>" }]
-  }
-}
-```
-
-```shell
-osac create -f service-account-role-binding.json
-osac delete rolebindings batch-worker-automation
-```
-
-An ordinary service-account user cannot read raw Secrets or watch managed Events. Its API calls
-are limited to the role on its active tenant RoleBinding. A tenant admin can retrieve the
-service-account credential through the authorized `Secrets/Get` API; do not expose that operation
-or the CLI's one-time credential output to the service-account workload itself.
 
 ## REST transcoding
 
@@ -868,44 +759,49 @@ There are two kinds of references:
 
 ### Full references
 
-Full references can point to objects in another project or a caller-visible tenant. During the
-compatibility period they contain both the new `tenant` selector and the legacy `shared` selector:
+Full references can point to objects in another project or tenant:
 
 ```protobuf
 message ClusterTemplateReference {
   string id = 1;
   string name = 2;
   string project = 3;
-  bool shared = 4;
   string tenant = 5;
 }
 ```
 
 | Field     | Description |
-|-----------|-------------|
-| `id`      | Unique identifier of the referenced object. |
+|-----------|-----------------------------------------------|
+| `tenant`  | Tenant where the referenced object lives.     |
+| `project` | Project where the refrenced object lives.     |
+| `id`      | Unique identifier of the referenced object.   |
 | `name`    | Human-readable name of the referenced object. |
-| `project` | Project used for name lookups. When omitted, the tenant's default project is used. |
-| `shared`  | Legacy selector. When `tenant` is empty, `true` selects `shared` for name lookups. ID lookups retain their existing owner/shared validation during the compatibility period. |
-| `tenant`  | Tenant where the referenced object lives. When non-empty, ID and name lookups require that tenant. When omitted, legacy scope rules apply. The caller must be allowed to see the selected tenant. |
 
-Callers may supply `id`, `name`, or both. When both are provided they must refer to the same
-object; otherwise the server returns `InvalidArgument`. The server auto-populates whichever field
-is missing after a successful lookup.
+When used as inputs supplied by the caller:
 
-Full references are used when the target object may live outside the caller's project — for
-example, cluster templates, catalog items, host types, instance types, IP pools, roles, and users.
-Public responses retain the reference field for system-tenant objects but omit its `id`, `name`,
-`project`, `tenant`, and `shared` values.
+- `tenant` is optional, and by default the server will use the tenant that the caller belongs to.
 
-ExternalIPPools live in the `shared` tenant. Because pools are platform-scoped, a name reference can
-omit the tenant selector. To select the tenant explicitly, set `tenant: "shared"` (or the legacy
-`shared: true` during the compatibility period). An ID reference needs neither selector.
+- `project` is optional, and by default the server will use the default project of the tenant.
+
+- Callers may supply only `id`, only `name`, or both. The server checks that they are consistent,
+  and populates the missing fields accordingly.
+
+When used as outputs returned by the server:
+
+- Resolved references normally include `id` and `name`. The `tenant` and `project` fields may remain
+  empty when they are not needed to select the object.
+
+- Public responses retain references to system-tenant objects but omit their `id`, `name`,
+  `project`, `tenant`, and `shared` values. User references that cannot be safely resolved are also
+  redacted.
+
+The `shared` boolean field is equivalent to setting `tenant` to `shared`, it is now deprecated
+and will be removed soon.
 
 ### Local references
 
-Local references are scoped to the same tenant and project as the parent object. They have only
-two fields:
+Local references are restricted to the same tenant and project as the containing object. They have
+only two fields:
 
 ```protobuf
 message VirtualNetworkLocalReference {
@@ -914,12 +810,16 @@ message VirtualNetworkLocalReference {
 }
 ```
 
-As with full references, callers may supply `id`, `name`, or both, and the server auto-populates
-the other.
+When used as inputs supplied by the caller:
 
-Local references are used when the target is always co-located — for example, a `Subnet`
-referencing its parent `VirtualNetwork`, or a `ComputeNetworkAttachment` referencing a `Subnet` and
-`SecurityGroup`.
+- Callers may supply `id`, `name`, or both. The server checks that they are consistent and populates
+  the missing fields accordingly.
+
+When used as outputs returned by the server:
+
+- `id` will always be populated.
+
+- `name` will always be populated.
 
 ### Naming convention
 
@@ -934,18 +834,24 @@ In the JSON representation used by the REST gateway, reference fields are nested
 ```json
 {
   "spec": {
-    "template": { "name": "sandbox" },
-    "version": { "name": "4-17-0" }
+    "template": {
+      "name": "sandbox"
+    },
+    "version": {
+      "name": "4-17-0"
+    }
   }
 }
 ```
 
-For local references the format is identical but without `project`, `tenant`, and `shared`:
+For local references the format is identical but without `project` and `tenant`:
 
 ```json
 {
   "spec": {
-    "virtual_network": { "name": "my-vnet" }
+    "virtual_network": {
+      "name": "my-vnet"
+    }
   }
 }
 ```
@@ -954,10 +860,16 @@ Repeated references (e.g., security groups in a network attachment) are arrays o
 
 ```json
 {
-  "subnet": { "name": "my-subnet" },
+  "subnet": {
+    "name": "my-subnet"
+  },
   "security_groups": [
-    { "name": "sg-web" },
-    { "name": "sg-ssh" }
+    {
+      "name": "sg-web"
+    },
+    {
+      "name": "sg-ssh"
+    }
   ]
 }
 ```
@@ -969,7 +881,10 @@ To reference an object by name in a different project within the same tenant, se
 ```json
 {
   "spec": {
-    "template": { "name": "shared-tpl", "project": "templates" }
+    "template": {
+      "project": "my-things",
+      "name": "my-template"
+    }
   }
 }
 ```
@@ -979,57 +894,16 @@ To reference an object by name in another caller-visible tenant, set `tenant`. F
 ```json
 {
   "spec": {
-    "template": { "name": "tenant-template", "tenant": "development", "project": "templates" }
-  }
-}
-```
-
-To reference an object in the shared tenant, set `tenant` to `shared`:
-
-```json
-{
-  "spec": {
-    "template": { "name": "sandbox", "tenant": "shared" }
+    "template": {
+      "tenant": "shared",
+      "name": "shared-template"
+    }
   }
 }
 ```
 
 During the compatibility period, `shared: true` remains accepted when `tenant` is empty. If both
 selectors are set, `shared: true` is valid only with `tenant: "shared"`.
-
-### Server-side validation and resolution
-
-The server validates references on `Create` and `Update`. A gRPC interceptor handles most
-reference fields. For each field it handles, the interceptor:
-
-1. Determines the lookup scope from the reference and its owner. A non-empty `tenant` selects the
-   target tenant for both ID and name lookups. Without it, name lookups use the owner tenant unless
-   the legacy `shared` selector is true; ID lookups retain their existing owner/shared checks. For
-   name lookups, `project` selects the target project.
-2. Looks up the referenced object by `id` or `name`.
-3. If both `id` and `name` are provided, verifies they refer to the same object.
-4. Fills in whichever of `id` or `name` the caller omitted.
-
-For an `Update` with a non-empty mask containing only `status` or `status.*`
-paths, the interceptor does not revalidate references in the unchanged
-`object.spec`. References in `object.status` are still validated. `Create`,
-spec or mixed updates, and updates with an empty mask validate spec references.
-
-Some references are validated by the object's handler after the complete object to be saved is
-known.
-
-For invalid references found by the interceptor, the server returns `InvalidArgument` with
-`google.rpc.BadRequest` details. Each `FieldViolation` names the reference field (e.g.,
-`object.spec.network_attachments[0].subnet`).
-
-## Documentation
-
-All elements of the public API (services, methods, messages, fields, enums, and enum values) must
-have documentation comments in the `.proto` files. The private API must also be documented for all
-new additions, because in the future the public API will be generated from the private API.
-
-Documentation should be written for users of the API, not for developers of the system. It should
-not contain implementation details that are irrelevant to API consumers.
 
 ## Additional rules
 

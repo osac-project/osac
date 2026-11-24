@@ -16,7 +16,9 @@ isolated browser with simulated responses.
 ```text
 apps/e2e-tests/
 ├── src/
-│   └── vmaas/                  current VMaaS flows and VMaaS test data
+│   ├── generic/                tenant, infrastructure, and catalog administration tests
+│   ├── shared/                 resource configuration and run state used by both suites
+│   └── vmaas/                  VM creation, deletion, resize, and power actions
 ├── helper-tests/               isolated helper regression tests
 ├── run_scripts/
 │   ├── prepare-setup-for-ui-run.sh  install and validate prerequisites
@@ -35,12 +37,11 @@ libs/
 └── osac-cli/                   OSAC CLI helpers used by UI flows
 ```
 
-The only committed suite currently under `src/` is `vmaas/`. For a new
-non-VMaaS journey, add a feature directory directly under `src/`, for example
-`src/projects/`, `src/tenants/`, or `src/networking/`. Do not put unrelated
-tests in `src/vmaas/` and do not put committed tests in
-`apps/playwright/scratch/`; `scratch/` is gitignored and reserved for
-throwaway manual verification.
+Add platform-wide UI tests under `src/generic/` and VM-specific journeys under
+`src/vmaas/`. The VMaaS full flow runs the generic setup and cleanup specs
+through Playwright project dependencies and teardowns. Committed tests belong
+here. The gitignored `apps/playwright/scratch/` directory is for throwaway
+manual verification.
 
 Use one `.spec.ts` file per focused journey. Keep reusable flow code beside
 the feature when it is feature-specific; move genuinely shared behavior to
@@ -49,19 +50,13 @@ CSS or DOM selectors in a test.
 
 ## Adding a non-VMaaS test
 
-Adding a file under `src/` is not enough for Playwright to run it. Register a
-project in `apps/playwright/playwright.config.ts`:
+Register a project with a focused spec pattern in `apps/playwright/playwright.config.ts`:
 
 ```ts
-const projectsDir = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../e2e-tests/src/projects',
-);
-
 {
   name: 'projects',
-  testDir: projectsDir,
-  testMatch: /\.spec\.ts/,
+  testDir: genericDir,
+  testMatch: /projects\.spec\.ts$/,
   use: { ...devices['Desktop Chrome'], storageState: AUTH_FILE },
   dependencies: ['setup'],
 }
@@ -116,9 +111,8 @@ nearest existing page helper and locator for the feature being tested.
 - Keep passwords, tokens, cookies, and generated credentials out of source,
   logs, screenshots, traces, and videos. The setup project already disables
   trace/video while entering the real password.
-- Keep test data in the feature directory. `extravars.yaml` and the
-  `run-ui-e2e.sh` flow tags are currently VMaaS-specific; a non-VMaaS suite
-  should normally use its own safe environment variables or fixtures instead.
+- Keep feature-specific data with the tests that use it. `extravars.yaml`
+  supplies the existing generic resource projects and the VMaaS flows.
 
 ## Prepare and run
 
@@ -142,22 +136,25 @@ export OSAC_UI_BASE_URL=https://osac-ui.example.test
 export OSAC_ADMIN_USERNAME=<keycloak-test-user>
 read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD
 
-# Confirm discovery without running tests.
+# Discover the full VMaaS suite and its generic prerequisite and cleanup tests.
 pnpm --filter @osac/playwright exec playwright test \
-  --project=projects --list
+  --project=vmaas-all-full-flows --list
 
-# Run the new project against the live deployment.
+# Discover all generic resource tests through their existing projects.
 pnpm --filter @osac/playwright exec playwright test \
-  --project=projects --reporter=line
+  --project=tenant --project=disk-image-lifecycle \
+  --project=instance-type-lifecycle --project=storage-tier --project=catalog --list
 
 # Typecheck the persisted E2E package.
 pnpm --filter @osac/e2e-tests run typecheck
 ```
 
-The `prepare-setup-for-ui-run.sh` and `run-ui-e2e.sh` scripts are convenient
-for the existing VMaaS flows and their prerequisite checks. For a new
-non-VMaaS project, direct Playwright commands are clearer unless the runner is
-deliberately extended with a new flow and its prerequisites.
+Use `run-ui-e2e.sh --tag=vmaas_all` for the full VMaaS suite or select the
+generic resource flows with `full_tenant`, `full_disk_image`,
+`full_instance_type`, and `full_storage-tier`. See the
+[browser harness setup](../playwright/README.md#setup) for live credentials and
+CLI setup. To exercise disk image or instance type state transitions, select
+`--project=disk-image-lifecycle` or `--project=instance-type-lifecycle`.
 
 Before submitting UI changes, also run the workspace checks required by
 [`osac-ui/AGENTS.md`](../../AGENTS.md):
@@ -167,3 +164,24 @@ pnpm run typecheck
 pnpm lint
 pnpm test
 ```
+
+## Temporary VMaaS tenant setup workaround
+
+On deployments affected by [OSAC-7988](https://redhat.atlassian.net/browse/OSAC-7988)
+and [OSAC-7989](https://redhat.atlassian.net/browse/OSAC-7989), set
+`OSAC_E2E_TENANT_BOOTSTRAP_CONFIG` to the directory of an authenticated private
+OSAC CLI session for the same deployment. The private session must be allowed
+to read the new test tenant's break-glass Secret. The other steps continue to
+use the ordinary browser and CLI test identities.
+
+```bash
+OSAC_E2E_TENANT_BOOTSTRAP_CONFIG="$private_osac_cli_config" OSAC_VM_FLOW_MODE=full \
+  pnpm --filter @osac/playwright exec playwright test \
+  --project=vmaas-all-full-flows --workers=1 --reporter=line
+```
+
+This skips the `shared` tenant status check and the credentials dialog
+assertions. The flow creates a fresh tenant, verifies that both `system` and
+the new tenant are `Synced`, and uses the exact break-glass Secret ID returned
+by the browser's deployment. Teardown uses the recorded tenant identity to
+clean up a tenant created by this run if credential setup fails.

@@ -1,6 +1,5 @@
 import { test } from '@playwright/test';
 
-import { instanceTypeNameOrSkip, instanceTypeTestData } from './test_data';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import {
@@ -10,6 +9,7 @@ import {
   openCreateInstanceTypePage,
 } from '../../../../libs/test-utils/src/instance_types.page';
 import { openInstanceTypesPage } from '../../../../libs/test-utils/src/main.page';
+import { instanceTypeNameOrSkip, instanceTypeTestData } from '../shared/test_data';
 
 test('creates an instance type from Infrastructure', async ({ page }) => {
   // Allow login and page navigation to complete on a remote cluster.

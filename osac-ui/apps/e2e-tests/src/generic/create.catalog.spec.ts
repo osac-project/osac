@@ -1,7 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { access, writeFile } from 'node:fs/promises';
 
-import { catalogOwnershipFilePath, catalogTestData } from './test_data';
 import { CatalogCreatePage } from '../../../../libs/locators/catalog';
 import {
   expectCatalogItemListed,
@@ -12,6 +11,7 @@ import { selectOption } from '../../../../libs/test-utils/src/general/form_contr
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
 import { openCatalogPage } from '../../../../libs/test-utils/src/main.page';
+import { catalogOwnershipFilePath, catalogTestData } from '../shared/test_data';
 
 test('creates a catalog item through the Catalog UI and lists it in Catalog', async ({ page }) => {
   test.setTimeout(180_000);

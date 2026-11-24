@@ -199,10 +199,6 @@ type UpgradeObservation struct {
 	// Message explains a failed component's result without including provider
 	// output.
 	Message string `json:"message,omitempty"`
-	// BaselineTransitionTime is the NodePool UpdatingVersion transition before AAP
-	// stamped the attempt. It is compared only with another NodePool time and is
-	// unused for control-plane observations.
-	BaselineTransitionTime *metav1.Time `json:"baselineTransitionTime,omitempty"`
 }
 
 type UpgradeObservationState string

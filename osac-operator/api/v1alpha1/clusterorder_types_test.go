@@ -57,6 +57,22 @@ var _ = Describe("ClusterOrder upgrade contract", func() {
 		}
 	})
 
+	It("keeps provider baseline timestamps out of upgrade observations", func() {
+		data, err := os.ReadFile("../../config/crd/bases/osac.openshift.io_clusterorders.yaml")
+		Expect(err).NotTo(HaveOccurred())
+		var crd apiextensionsv1.CustomResourceDefinition
+		Expect(yaml.Unmarshal(data, &crd)).To(Succeed())
+		Expect(crd.Spec.Versions).NotTo(BeEmpty())
+
+		status := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["status"]
+		controlPlane := status.Properties["upgradeObservation"].Properties
+		nodeSet := status.Properties["nodeRequests"].Items.Schema.Properties["upgradeObservation"].Properties
+		Expect(controlPlane).To(HaveKey("attemptID"))
+		Expect(nodeSet).To(HaveKey("attemptID"))
+		Expect(controlPlane).NotTo(HaveKey("baselineTransitionTime"))
+		Expect(nodeSet).NotTo(HaveKey("baselineTransitionTime"))
+	})
+
 	It("preserves the config hash of an order with an empty node image", func() {
 		spec := v1alpha1.ClusterOrderSpec{NodeRequests: []v1alpha1.NodeRequest{{
 			NodeSet: "workers", NumberOfNodes: 3,

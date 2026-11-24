@@ -516,7 +516,10 @@ jobs:
         needs.resolve-and-verify.outputs.image-ready != 'true' ||
         needs.promote-image.result == 'success'
       )
-    environment: production
+    # No environment: production here. This job only stamps hostnames and
+    # pushes a marker tag, nothing reaches the registry. The reviewer gates
+    # stay on promote-image and release-prod-chart, the two jobs that
+    # publish, so a promotion asks for two approvals, not three.
     runs-on: osac-ci
     # continue-on-error mirrors stamp-and-release-charts' own stance:
     # charts are new/unproven enough here that a stamping failure
@@ -1289,3 +1292,12 @@ jobs:
         curl -sf --max-time 15 -X POST "${SLACK_WEBHOOK_URL}" \
           -H "Content-Type: application/json" \
           -d @"$PAYLOAD"
+
+        # stamp-prod-chart, wait-for-prod-chart-build and release-prod-chart
+        # use continue-on-error, so the run reads green even when the chart
+        # never published. Fail here so the run status matches the Slack
+        # message.
+        if [[ "${HEADER_TEXT}" != ":white_check_mark:"* ]]; then
+          echo "::error::Production promotion of ${VERSION} is incomplete: image=${IMAGE_TEXT}, chart=${CHART_TEXT}" >&2
+          exit 1
+        fi

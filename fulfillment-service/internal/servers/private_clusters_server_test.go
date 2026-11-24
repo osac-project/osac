@@ -5638,7 +5638,7 @@ var _ = Describe("Private clusters server", func() {
 					"storage": {
 						Size: proto.Int32(1),
 						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
-							Id: "acme-bmit-id", Shared: true,
+							Id: "acme-bmit-id", Tenant: "shared",
 						}.Build(),
 					},
 				}
@@ -5662,7 +5662,7 @@ var _ = Describe("Private clusters server", func() {
 					"storage": {
 						Size: proto.Int32(1),
 						BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
-							Id: "acme-bmit-id", Shared: true,
+							Id: "acme-bmit-id", Tenant: "shared",
 						}.Build(),
 					},
 				})
@@ -5975,7 +5975,7 @@ var _ = Describe("Private clusters server", func() {
 				candidate.GetSpec().GetNodeSets()["storage"] = privatev1.ClusterNodeSet_builder{
 					Size: proto.Int32(1),
 					BaremetalInstanceType: privatev1.BareMetalInstanceTypeReference_builder{
-						Id: "acme-bmit-id", Shared: true,
+						Id: "acme-bmit-id", Tenant: "shared",
 					}.Build(),
 				}.Build()
 				withStorage := updateCandidate(candidate)

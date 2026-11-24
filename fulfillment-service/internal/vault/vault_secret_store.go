@@ -24,6 +24,7 @@ import (
 	"regexp"
 
 	vaultapi "github.com/hashicorp/vault/api"
+	grpcstatus "google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/trust"
 )
@@ -185,8 +186,7 @@ func (s *VaultSecretStore) Store(ctx context.Context, tenant, project, name stri
 		if err != nil {
 			s.logger.ErrorContext(ctx, "Failed to store secret in vault",
 				slog.String("tenant", tenant),
-				slog.String("path", secretPath),
-				slog.Any("error", err),
+				slog.String("error_code", grpcstatus.Code(ToGrpcError(err)).String()),
 			)
 			return fmt.Errorf("failed to store secret in vault: %w", err)
 		}

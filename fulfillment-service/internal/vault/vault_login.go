@@ -59,6 +59,14 @@ type vaultAuthData struct {
 	LeaseDuration int    `json:"lease_duration"`
 }
 
+type vaultLoginStatusError struct {
+	statusCode int
+}
+
+func (e *vaultLoginStatusError) Error() string {
+	return fmt.Sprintf("vault login returned status %d", e.statusCode)
+}
+
 // loginToVault performs a JWT auth login against a Vault endpoint. It sends the given JWT to
 // {vaultAddress}/v1/auth/{mountPath}/login with the specified namespace header, and returns
 // the client token and lease duration.
@@ -94,13 +102,13 @@ func loginToVault(
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		return "", 0, &vaultLoginStatusError{statusCode: resp.StatusCode}
+	}
+
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to read vault response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", 0, fmt.Errorf("vault login returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var loginResp vaultLoginResponse

@@ -14,9 +14,11 @@ language governing permissions and limitations under the License.
 package vault
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -24,6 +26,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 var _ = Describe("ServiceTenantTokenSource", func() {
@@ -283,6 +287,8 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 		})
 
 		It("returns error when keycloak fails", func() {
+			const clientSecret = "test-oauth-credential-marker"
+			const responseMarker = "test-oauth-response-marker"
 			var keycloakServer *httptest.Server
 			mux := http.NewServeMux()
 			mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
@@ -295,24 +301,34 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 			mux.HandleFunc("/protocol/openid-connect/token", func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusBadRequest)
-				w.Write([]byte(`{"error": "invalid_client", "error_description": "Invalid client credentials"}`))
+				json.NewEncoder(w).Encode(map[string]string{
+					"error":             "invalid_client",
+					"error_description": responseMarker,
+				})
 			})
 			keycloakServer = httptest.NewServer(mux)
 			DeferCleanup(keycloakServer.Close)
 
+			var logs bytes.Buffer
 			source, err := NewServiceTenantTokenSource().
-				SetLogger(logger).
+				SetLogger(slog.New(slog.NewTextHandler(&logs, nil))).
 				SetVaultAddress("http://localhost:8200").
 				SetParentNamespace("osac").
 				SetKeycloakIssuerURL(keycloakServer.URL).
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret("secret").
+				SetKeycloakClientSecret(clientSecret).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
 			_, err = source.VaultToken(ctx, "tenant-a")
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("keycloak"))
+			Expect(logs.String()).To(ContainSubstring("msg=\"Failed to obtain Keycloak token for Vault\" tenant=tenant-a\n"))
+			Expect(logs.String()).NotTo(ContainSubstring(clientSecret))
+			Expect(logs.String()).NotTo(ContainSubstring(responseMarker))
+			status := grpcstatus.Convert(ToGrpcError(err))
+			Expect(status.Code()).To(Equal(grpccodes.Internal))
+			Expect(status.Message()).To(Equal("vault operation failed"))
 		})
 
 		It("returns error when vault login fails", func() {
@@ -321,12 +337,13 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 
 			vaultServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusForbidden)
-				w.Write([]byte(`{"errors":["permission denied"]}`))
+				w.Write([]byte(`{"errors":["vault-login-body-marker"]}`))
 			}))
 			DeferCleanup(vaultServer.Close)
 
+			var logs bytes.Buffer
 			source, err := NewServiceTenantTokenSource().
-				SetLogger(logger).
+				SetLogger(slog.New(slog.NewTextHandler(&logs, nil))).
 				SetVaultAddress(vaultServer.URL).
 				SetParentNamespace("osac").
 				SetKeycloakIssuerURL(keycloakServer.URL).
@@ -337,7 +354,12 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 
 			_, err = source.VaultToken(ctx, "tenant-a")
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("vault"))
+			Expect(err.Error()).NotTo(ContainSubstring("vault-login-body-marker"))
+			Expect(logs.String()).To(ContainSubstring("msg=\"Failed to log in to Vault\" tenant=tenant-a http_status=403\n"))
+			Expect(logs.String()).NotTo(ContainSubstring("vault-login-body-marker"))
+			status := grpcstatus.Convert(ToGrpcError(err))
+			Expect(status.Code()).To(Equal(grpccodes.Internal))
+			Expect(status.Message()).To(Equal("vault operation failed"))
 		})
 
 		It("is safe for concurrent access", func() {

@@ -886,7 +886,7 @@ jobs:
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired,
                      FileNotFoundError, json.JSONDecodeError):
                 print(f"::warning::check-run lookup for {COMPONENT} failed, will retry", flush=True)
-                return False
+                return False, ""
             for check_run in data.get("check_runs", []):
                 if check_run.get("name") == check_name and check_run.get("status") == "completed":
                     conclusion = check_run.get("conclusion") or ""

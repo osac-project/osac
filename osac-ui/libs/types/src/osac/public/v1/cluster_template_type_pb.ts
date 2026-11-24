@@ -25,7 +25,7 @@ import type { ClusterVersionReference } from "./cluster_version_type_pb";
 import { file_osac_public_v1_cluster_version_type } from "./cluster_version_type_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_public_v1_metadata_type } from "./metadata_type_pb";
-import type { SecretLocalReference } from "./secret_type_pb";
+import type { SecretLocalReference, SecretReference } from "./secret_type_pb";
 import { file_osac_public_v1_secret_type } from "./secret_type_pb";
 import type { Message } from "@bufbuild/protobuf";
 
@@ -33,7 +33,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/cluster_template_type.proto.
  */
 export const file_osac_public_v1_cluster_template_type: GenFile = /*@__PURE__*/
-  fileDesc("Cipvc2FjL3B1YmxpYy92MS9jbHVzdGVyX3RlbXBsYXRlX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIooCCg9DbHVzdGVyVGVtcGxhdGUSCgoCaWQYASABKAkSKgoIbWV0YWRhdGEYAiABKAsyGC5vc2FjLnB1YmxpYy52MS5NZXRhZGF0YRINCgV0aXRsZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRJGCgpwYXJhbWV0ZXJzGAUgAygLMjIub3NhYy5wdWJsaWMudjEuQ2x1c3RlclRlbXBsYXRlUGFyYW1ldGVyRGVmaW5pdGlvbhJCCg1zcGVjX2RlZmF1bHRzGAcgASgLMisub3NhYy5wdWJsaWMudjEuQ2x1c3RlclRlbXBsYXRlU3BlY0RlZmF1bHRzSgQIBhAHUglub2RlX3NldHMinQEKIkNsdXN0ZXJUZW1wbGF0ZVBhcmFtZXRlckRlZmluaXRpb24SDAoEbmFtZRgBIAEoCRINCgV0aXRsZRgCIAEoCRITCgtkZXNjcmlwdGlvbhgDIAEoCRIQCghyZXF1aXJlZBgEIAEoCBIMCgR0eXBlGAUgASgJEiUKB2RlZmF1bHQYBiABKAsyFC5nb29nbGUucHJvdG9idWYuQW55Ip4CChtDbHVzdGVyVGVtcGxhdGVTcGVjRGVmYXVsdHMSGwoOc3NoX3B1YmxpY19rZXkYAiABKAlIAIgBARI0CgduZXR3b3JrGAQgASgLMh4ub3NhYy5wdWJsaWMudjEuQ2x1c3Rlck5ldHdvcmtIAYgBARI4Cgd2ZXJzaW9uGAUgASgLMicub3NhYy5wdWJsaWMudjEuQ2x1c3RlclZlcnNpb25SZWZlcmVuY2USQAoScHVsbF9zZWNyZXRfc2VjcmV0GAYgASgLMiQub3NhYy5wdWJsaWMudjEuU2VjcmV0TG9jYWxSZWZlcmVuY2VCEQoPX3NzaF9wdWJsaWNfa2V5QgoKCF9uZXR3b3JrSgQIARACUgtwdWxsX3NlY3JldCJVChhDbHVzdGVyVGVtcGxhdGVSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIPCgdwcm9qZWN0GAMgASgJEg4KBnNoYXJlZBgEIAEoCGIGcHJvdG8z", [file_google_protobuf_any, file_osac_public_v1_cluster_common_type, file_osac_public_v1_cluster_version_type, file_osac_public_v1_metadata_type, file_osac_public_v1_secret_type]);
+  fileDesc("Cipvc2FjL3B1YmxpYy92MS9jbHVzdGVyX3RlbXBsYXRlX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIogDCg9DbHVzdGVyVGVtcGxhdGUSCgoCaWQYASABKAkSKgoIbWV0YWRhdGEYAiABKAsyGC5vc2FjLnB1YmxpYy52MS5NZXRhZGF0YRINCgV0aXRsZRgDIAEoCRITCgtkZXNjcmlwdGlvbhgEIAEoCRJGCgpwYXJhbWV0ZXJzGAUgAygLMjIub3NhYy5wdWJsaWMudjEuQ2x1c3RlclRlbXBsYXRlUGFyYW1ldGVyRGVmaW5pdGlvbhJCCg1zcGVjX2RlZmF1bHRzGAcgASgLMisub3NhYy5wdWJsaWMudjEuQ2x1c3RlclRlbXBsYXRlU3BlY0RlZmF1bHRzEkcKDGNhcGFiaWxpdGllcxgIIAMoCzIxLm9zYWMucHVibGljLnYxLkNsdXN0ZXJUZW1wbGF0ZS5DYXBhYmlsaXRpZXNFbnRyeRozChFDYXBhYmlsaXRpZXNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAg6AjgBSgQIBhAHUglub2RlX3NldHMinQEKIkNsdXN0ZXJUZW1wbGF0ZVBhcmFtZXRlckRlZmluaXRpb24SDAoEbmFtZRgBIAEoCRINCgV0aXRsZRgCIAEoCRITCgtkZXNjcmlwdGlvbhgDIAEoCRIQCghyZXF1aXJlZBgEIAEoCBIMCgR0eXBlGAUgASgJEiUKB2RlZmF1bHQYBiABKAsyFC5nb29nbGUucHJvdG9idWYuQW55IrYCChtDbHVzdGVyVGVtcGxhdGVTcGVjRGVmYXVsdHMSMAoHc3NoX2tleRgHIAEoCzIfLm9zYWMucHVibGljLnYxLlNlY3JldFJlZmVyZW5jZRI0CgduZXR3b3JrGAQgASgLMh4ub3NhYy5wdWJsaWMudjEuQ2x1c3Rlck5ldHdvcmtIAIgBARI4Cgd2ZXJzaW9uGAUgASgLMicub3NhYy5wdWJsaWMudjEuQ2x1c3RlclZlcnNpb25SZWZlcmVuY2USQAoScHVsbF9zZWNyZXRfc2VjcmV0GAYgASgLMiQub3NhYy5wdWJsaWMudjEuU2VjcmV0TG9jYWxSZWZlcmVuY2VCCgoIX25ldHdvcmtKBAgBEAJKBAgCEANSC3B1bGxfc2VjcmV0Ug5zc2hfcHVibGljX2tleSJVChhDbHVzdGVyVGVtcGxhdGVSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIPCgdwcm9qZWN0GAMgASgJEg4KBnRlbmFudBgEIAEoCWIGcHJvdG8z", [file_google_protobuf_any, file_osac_public_v1_cluster_common_type, file_osac_public_v1_cluster_version_type, file_osac_public_v1_metadata_type, file_osac_public_v1_secret_type]);
 
 /**
  * A cluster template defines a type of cluster that can be created by the user. Note that the user doesn't create these
@@ -90,6 +90,18 @@ export type ClusterTemplate = Message<"osac.public.v1.ClusterTemplate"> & {
    * @generated from field: osac.public.v1.ClusterTemplateSpecDefaults spec_defaults = 7;
    */
   specDefaults?: ClusterTemplateSpecDefaults | undefined;
+
+  /**
+   * Capabilities supported by this template, keyed by their stable capability
+   * name. Consumers can use these declarations to discover supported behavior
+   * without depending on template IDs. A missing or false capability is not
+   * supported.
+   * `supports_automatic_caas_endpoints` indicates that clusters created from
+   * this template use the automatic API and ingress ExternalIP lifecycle.
+   *
+   * @generated from field: map<string, bool> capabilities = 8;
+   */
+  capabilities: { [key: string]: boolean };
 };
 
 /**
@@ -191,11 +203,14 @@ export const ClusterTemplateParameterDefinitionSchema: GenMessage<ClusterTemplat
  */
 export type ClusterTemplateSpecDefaults = Message<"osac.public.v1.ClusterTemplateSpecDefaults"> & {
   /**
-   * Default SSH public key installed on cluster worker nodes.
+   * Default Secret reference for the cluster's registered SSH public key.
    *
-   * @generated from field: optional string ssh_public_key = 2;
+   * When set, clusters created from this template will use this key unless the
+   * user provides an explicit `ssh_key` reference.
+   *
+   * @generated from field: osac.public.v1.SecretReference ssh_key = 7;
    */
-  sshPublicKey?: string | undefined;
+  sshKey?: SecretReference | undefined;
 
   /**
    * Default cluster networking configuration.
@@ -254,9 +269,11 @@ export type ClusterTemplateReference = Message<"osac.public.v1.ClusterTemplateRe
   project: string;
 
   /**
-   * @generated from field: bool shared = 4;
+   * Tenant where the referenced object lives. If omitted, the owner tenant is used.
+   *
+   * @generated from field: string tenant = 4;
    */
-  shared: boolean;
+  tenant: string;
 };
 
 /**

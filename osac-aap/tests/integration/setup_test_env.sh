@@ -254,14 +254,13 @@ CSIEOF
 
   SERVER_READY_FB=0
   for i in $(seq 1 10); do
-    if curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:18444/_calls 2>/dev/null | grep -q '^2'; then
-      # Verify the listener is owned by the process we just started
-      LISTENER_PID=$(lsof -ti:18444 2>/dev/null | head -n1)
-      if [ "${LISTENER_PID}" = "${MOCK_FLASHBLADE_PID}" ]; then
-        echo "Mock FlashBlade server ready on port 18444 (PID: ${MOCK_FLASHBLADE_PID})"
-        SERVER_READY_FB=1
-        break
-      fi
+    # Check that port 18444 is owned by our mock process and responds successfully
+    PORT_OWNER=$(lsof -ti:18444 2>/dev/null || true)
+    if [ "${PORT_OWNER}" = "${MOCK_FLASHBLADE_PID}" ] && \
+       curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:18444/_calls 2>/dev/null | grep -q '^2'; then
+      echo "Mock FlashBlade server ready on port 18444 (PID: ${MOCK_FLASHBLADE_PID})"
+      SERVER_READY_FB=1
+      break
     fi
     sleep 1
   done

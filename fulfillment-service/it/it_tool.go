@@ -37,7 +37,6 @@ import (
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
-	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -1258,31 +1257,6 @@ func (t *Tool) createUserServiceAccounts(ctx context.Context) error {
 		}
 	}
 	return nil
-}
-
-func (t *Tool) makeKubernetesTokenSource(ctx context.Context, sa, namespace string) (result auth.TokenSource, err error) {
-	response, err := t.kubeClientSet.CoreV1().ServiceAccounts(namespace).CreateToken(
-		ctx,
-		sa,
-		&authenticationv1.TokenRequest{
-			Spec: authenticationv1.TokenRequestSpec{
-				ExpirationSeconds: new(int64(3600)),
-			},
-		},
-		metav1.CreateOptions{},
-	)
-	if err != nil {
-		err = fmt.Errorf("failed to create token for service account '%s': %w", sa, err)
-		return
-	}
-	token := &auth.Token{
-		Access: response.Status.Token,
-	}
-	result, err = auth.NewStaticTokenSource().
-		SetLogger(t.logger).
-		SetToken(token).
-		Build()
-	return
 }
 
 func (t *Tool) makeKeycloakTokenSource(ctx context.Context, username, password string) (result auth.TokenSource, err error) {

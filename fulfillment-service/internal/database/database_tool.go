@@ -488,7 +488,7 @@ func (t *tool) CheckSchema(ctx context.Context) error {
 }
 
 // listObjectTables returns the sorted list of object table names from the public schema, excluding active companion
-// tables, archive tables, internal tables, and billing tables with their own lifecycle constraints.
+// tables, archive tables, and internal storage tables.
 func (t *tool) listObjectTables(ctx context.Context, pool *pgxpool.Pool) (result []string, err error) {
 	rows, err := pool.Query(
 		ctx,
@@ -505,7 +505,6 @@ func (t *tool) listObjectTables(ctx context.Context, pool *pgxpool.Pool) (result
 			c.relname not like 'active_%' and
 			c.relname not like 'archived_%' and
 			c.relname not in (
-				'billing_accounts',
 				'changes',
 				'deleted_tenant_identities',
 				'installation_settings',
@@ -513,7 +512,6 @@ func (t *tool) listObjectTables(ctx context.Context, pool *pgxpool.Pool) (result
 				'quota_outbox',
 				'schema_migrations',
 				'storage_tier_backends',
-				'tenant_billing_assignments',
 				'tenant_domains'
 			)
 		order by
@@ -618,7 +616,7 @@ func (t *tool) checkObjectTable(ctx context.Context, pool *pgxpool.Pool, table s
 		issues += t.checkPrimaryKey(ctx, pool, table, "id")
 	}
 
-	issues += t.checkTenantForeignKey(ctx, pool, table)
+	issues += t.checkTenantReference(ctx, pool, table)
 	issues += t.checkTableExists(ctx, pool, "archived_"+table)
 	issues += t.checkEnqueueChangeTrigger(ctx, pool, table)
 	issues += t.checkOwnerReferenceTriggers(ctx, pool, table)
@@ -878,9 +876,10 @@ func (t *tool) checkTriggerExists(ctx context.Context, pool *pgxpool.Pool, table
 	return 0
 }
 
-// checkTenantForeignKey verifies that the given table has a foreign key constraint on the 'tenant' column referencing
-// the 'id' column of the 'tenants' table. Returns the number of issues found.
-func (t *tool) checkTenantForeignKey(ctx context.Context, pool *pgxpool.Pool, table string) int {
+// checkTenantReference verifies that the table's 'tenant' column references a live tenant. Most object tables use the
+// standard foreign key; history tables that must outlive tenants can provide the standard check_tenant_reference
+// trigger instead. Returns the number of issues found.
+func (t *tool) checkTenantReference(ctx context.Context, pool *pgxpool.Pool, table string) int {
 	constraint := table + "_tenant_fk"
 	var count int
 	row := pool.QueryRow(
@@ -924,10 +923,13 @@ func (t *tool) checkTenantForeignKey(ctx context.Context, pool *pgxpool.Pool, ta
 		)
 		return 1
 	}
+	if count == 0 {
+		return t.checkTriggerExists(ctx, pool, table, tenantReferenceTriggerName)
+	}
 	if count != 1 {
 		t.logger.ErrorContext(
 			ctx,
-			"Object table is missing the tenant foreign key constraint",
+			"Object table has an invalid tenant reference contract",
 			slog.String("table", table),
 			slog.String("constraint", constraint),
 		)
@@ -1016,6 +1018,10 @@ var toolFilePathParameters = []string{
 // enqueueChangeTriggerName is the trigger that copies object-table writes into the changes table for the event
 // publisher.
 const enqueueChangeTriggerName = "enqueue_change"
+
+// tenantReferenceTriggerName marks object tables that validate live tenant references on writes but retain rows after
+// the tenant is physically deleted.
+const tenantReferenceTriggerName = "check_tenant_reference"
 
 // Names of the triggers that enforce the owner-reference attribution contract.
 const (

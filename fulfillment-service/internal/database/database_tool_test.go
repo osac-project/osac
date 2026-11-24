@@ -88,12 +88,12 @@ var _ = Describe("Database tool", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(objects).ToNot(ContainElement("deleted_tenant_identities"))
 			Expect(objects).To(ContainElement("tenants"))
-			Expect(objects).ToNot(ContainElement("billing_accounts"))
-			Expect(objects).ToNot(ContainElement("tenant_billing_assignments"))
+			Expect(objects).To(ContainElement("billing_accounts"))
+			Expect(objects).To(ContainElement("tenant_billing_assignments"))
 			Expect(checker.CheckSchema(ctx)).To(Succeed())
 		})
 
-		DescribeTable("detects nonbilling schema drift",
+		DescribeTable("detects schema drift",
 			func(ctx context.Context, mutation string) {
 				pool, err := checker.Pool(ctx)
 				Expect(err).ToNot(HaveOccurred())
@@ -102,6 +102,9 @@ var _ = Describe("Database tool", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(checker.CheckSchema(ctx)).ToNot(Succeed())
 			},
+			Entry("billing account metadata", `alter table billing_accounts drop column labels`),
+			Entry("billing account enqueue trigger", `drop trigger enqueue_change on billing_accounts`),
+			Entry("billing assignment tenant-reference trigger", `drop trigger check_tenant_reference on tenant_billing_assignments`),
 			Entry("nonbilling enqueue requirement", `drop trigger enqueue_change on tenants`),
 		)
 	})

@@ -15,7 +15,6 @@
 -- 'data'.
 --
 -- Accounts are not tenant-scoped resources: their metadata tenant is fixed to 'system' and their project is empty.
--- They deliberately publish no changes, so this migration installs no enqueue trigger.
 --
 -- Adding the tenant foreign key takes a lock on the pre-existing 'tenants' table, so the wait is bounded instead of
 -- stalling a rolling upgrade behind tenant writers.
@@ -181,5 +180,9 @@ create table archived_billing_accounts (
 
 create trigger materialize_active_objects after insert or update of deletion_timestamp on billing_accounts
   for each row execute function materialize_active_objects();
+
+create trigger enqueue_change
+  after insert or update or delete on billing_accounts
+  for each row execute function enqueue_change();
 
 commit;

@@ -165,23 +165,23 @@ var _ = DescribeMigration("Create billing accounts table", func() {
 		Expect(active).To(BeFalse())
 	})
 
-	It("keeps billing writes unpublished", func(ctx context.Context) {
+	It("publishes billing account writes", func(ctx context.Context) {
 		Expect(tool.Migrate(ctx, 157)).To(Succeed())
 		var before, after int
 		Expect(conn.QueryRow(ctx, `select count(*) from changes`).Scan(&before)).To(Succeed())
-		_, err := conn.Exec(ctx, insertBillingAccount, "unpublished", billingAccountName("unpublished"),
-			billingAccountData("unpublished", nil))
+		_, err := conn.Exec(ctx, insertBillingAccount, "published", billingAccountName("published"),
+			billingAccountData("published", nil))
 		Expect(err).ToNot(HaveOccurred())
-		_, err = conn.Exec(ctx, `update billing_accounts set data = jsonb_set(data, '{status,display_name}', '"Update"')
-			where id = 'unpublished'`)
+		_, err = conn.Exec(ctx, `update billing_accounts set data = jsonb_set(data, '{status,display_name}', '"Updated"')
+			where id = 'published'`)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(conn.QueryRow(ctx, `select count(*) from changes`).Scan(&after)).To(Succeed())
-		Expect(after).To(Equal(before))
+		Expect(after).To(Equal(before+2), "one event is emitted for insert and one for update")
 		var triggers int
 		Expect(conn.QueryRow(ctx, `select count(*) from pg_trigger t join pg_proc p on p.oid = t.tgfoid
 			where t.tgrelid = 'billing_accounts'::regclass and p.proname = 'enqueue_change'
 			and not t.tgisinternal`).Scan(&triggers)).To(Succeed())
-		Expect(triggers).To(BeZero())
+		Expect(triggers).To(Equal(1))
 	})
 
 })

@@ -152,7 +152,7 @@ begin
 end;
 $$ language plpgsql;
 
-create trigger check_tenant_billing_assignment_tenant_ref
+create trigger check_tenant_reference
   before insert or update of tenant on tenant_billing_assignments
   for each row execute function check_tenant_billing_assignment_tenant_ref();
 
@@ -254,5 +254,9 @@ create table archived_tenant_billing_assignments (
 
 create trigger materialize_active_objects after insert or update of deletion_timestamp on tenant_billing_assignments
   for each row execute function materialize_active_objects();
+
+create trigger enqueue_change
+  after insert or update or delete on tenant_billing_assignments
+  for each row execute function enqueue_change();
 
 commit;

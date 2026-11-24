@@ -168,6 +168,10 @@ var _ = DescribeMigration("Create tenant billing assignments table", func() {
 			and conrelid = 'tenant_billing_assignments'::regclass and confrelid = 'tenants'::regclass`).
 			Scan(&count)).To(Succeed())
 		Expect(count).To(BeZero(), "retained history must not reference live tenants")
+		Expect(conn.QueryRow(ctx, `select count(*) from pg_trigger
+			where tgrelid = 'tenant_billing_assignments'::regclass and tgname = 'check_tenant_reference'
+			and not tgisinternal`).Scan(&count)).To(Succeed())
+		Expect(count).To(Equal(1), "new assignment writes must validate live tenant references")
 	})
 
 	It("indexes JSON interval fields and enforces current-interval uniqueness", func(ctx context.Context) {
@@ -231,7 +235,7 @@ var _ = DescribeMigration("Create tenant billing assignments table", func() {
 			'{spec,tenant}', '"tenant-a"') where id = 'current'`)
 	})
 
-	It("keys the active companion on deletion and publishes no changes", func(ctx context.Context) {
+	It("keys the active companion on deletion and publishes changes", func(ctx context.Context) {
 		Expect(tool.Migrate(ctx, 158)).To(Succeed())
 		seed(ctx)
 		Expect(insert(ctx, "closed", "tenant-a", "ba-1", "2026-04-01T00:00:00Z")).To(Succeed())
@@ -244,14 +248,19 @@ var _ = DescribeMigration("Create tenant billing assignments table", func() {
 
 		var before, after int
 		Expect(conn.QueryRow(ctx, `select count(*) from changes`).Scan(&before)).To(Succeed())
-		Expect(insert(ctx, "unpublished", "tenant-a", "ba-2", "2026-05-01T00:00:00Z")).To(Succeed())
+		Expect(insert(ctx, "published", "tenant-a", "ba-1", "")).To(Succeed())
 		Expect(conn.QueryRow(ctx, `select count(*) from changes`).Scan(&after)).To(Succeed())
-		Expect(after).To(Equal(before))
+		Expect(after).To(Equal(before+1), "one event is emitted for insert")
+		_, err := conn.Exec(ctx, `update tenant_billing_assignments set data = jsonb_set(data,
+			'{status,message}', '"updated"'), version = version + 1 where id = 'published'`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(conn.QueryRow(ctx, `select count(*) from changes`).Scan(&after)).To(Succeed())
+		Expect(after).To(Equal(before+2), "one more event is emitted for update")
 		var triggers int
 		Expect(conn.QueryRow(ctx, `select count(*) from pg_trigger t join pg_proc p on p.oid = t.tgfoid
 			where t.tgrelid = 'tenant_billing_assignments'::regclass and p.proname = 'enqueue_change'
 			and not t.tgisinternal`).Scan(&triggers)).To(Succeed())
-		Expect(triggers).To(BeZero())
+		Expect(triggers).To(Equal(1))
 
 		Expect(tool.CheckSchema(ctx)).To(Succeed())
 	})

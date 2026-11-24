@@ -53,17 +53,10 @@ const clusterVersions = [
 ];
 
 const makeAttempt = (
-  component: 'controlPlane' | 'nodeSetId',
   state: ClusterUpgradeState,
   targetVersion = '4.18.0',
 ): ClusterUpgradeHistoryEntry =>
   create(ClusterUpgradeHistoryEntrySchema, {
-    component: {
-      target:
-        component === 'controlPlane'
-          ? { case: 'controlPlane', value: {} }
-          : { case: 'nodeSetId', value: 'worker' },
-    },
     sourceVersion: '4.17.0',
     targetVersion,
     state,
@@ -127,14 +120,9 @@ describe('ClustersTable observed versions', () => {
   });
 
   it.each([ClusterUpgradeState.PENDING, ClusterUpgradeState.PROGRESSING])(
-    'shows observed to target for an active control-plane attempt in state %s',
+    'shows observed to target for an active cluster attempt in state %s',
     (state) => {
-      renderTable([
-        makeCluster('c-upgrading', 'desired-4.18', '4.17.0', [
-          makeAttempt('nodeSetId', ClusterUpgradeState.PROGRESSING),
-          makeAttempt('controlPlane', state),
-        ]),
-      ]);
+      renderTable([makeCluster('c-upgrading', 'desired-4.18', '4.17.0', [makeAttempt(state)])]);
 
       expect(clusterRow('c-upgrading').getByText('OpenShift 4.17.0 → 4.18.0')).toBeInTheDocument();
       const status = clusterRow('c-upgrading').getByText('Upgrade in progress');
@@ -143,33 +131,18 @@ describe('ClustersTable observed versions', () => {
     },
   );
 
-  it('does not show a control-plane transition for a node-set-only attempt', () => {
-    renderTable([
-      makeCluster('c-node-only', 'desired-4.18', '4.17.0', [
-        makeAttempt('nodeSetId', ClusterUpgradeState.PROGRESSING),
-      ]),
-    ]);
-
-    expect(clusterRow('c-node-only').getByText('OpenShift 4.17.0')).toBeInTheDocument();
-    expect(clusterRow('c-node-only').queryByText(/→/)).not.toBeInTheDocument();
-    expect(clusterRow('c-node-only').queryByText('Upgrade in progress')).not.toBeInTheDocument();
-  });
-
   it.each([
     ClusterUpgradeState.TIMED_OUT,
     ClusterUpgradeState.SUCCEEDED,
     ClusterUpgradeState.FAILED,
-  ])('uses the latest control-plane state and hides the transition in state %s', (state) => {
+  ])('uses the latest cluster state and hides the transition in state %s', (state) => {
     renderTable(
       [
         makeCluster(
           'c-done',
           'desired-4.18',
           state === ClusterUpgradeState.SUCCEEDED ? '4.18.0' : '4.17.0',
-          [
-            makeAttempt('controlPlane', state),
-            makeAttempt('controlPlane', ClusterUpgradeState.PROGRESSING, '4.16.0'),
-          ],
+          [makeAttempt(state), makeAttempt(ClusterUpgradeState.PROGRESSING, '4.16.0')],
         ),
       ],
       [...clusterVersions, makeClusterVersion('4.18.0', ClusterVersionState.ACTIVE)],

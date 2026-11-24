@@ -21,7 +21,7 @@ import ClusterSettingsSection from './ClusterSettingsSection';
 import ClusterUpgradeHistoryModal from './ClusterUpgradeHistoryModal';
 import ClusterVersionControls from './ClusterVersionControls';
 import { useTranslation } from '../../../hooks/useTranslation';
-import { getControlPlaneUpgradeHistory } from '../ListPage/clusterDisplay';
+import { getClusterUpgradeHistory } from '../ListPage/clusterDisplay';
 
 interface ClusterConfigurationCardProps {
   cluster: Cluster;
@@ -30,7 +30,7 @@ interface ClusterConfigurationCardProps {
 export const ClusterConfigurationCard = ({ cluster }: ClusterConfigurationCardProps) => {
   const { t } = useTranslation();
   const [clusterHistoryOpen, setClusterHistoryOpen] = useState(false);
-  const upgradeHistory = getControlPlaneUpgradeHistory(cluster);
+  const upgradeHistory = getClusterUpgradeHistory(cluster);
 
   return (
     <Card variant="secondary" aria-label={t('Cluster version')}>

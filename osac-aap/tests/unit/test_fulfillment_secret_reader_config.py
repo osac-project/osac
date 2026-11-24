@@ -6,6 +6,7 @@ import yaml
 from ansible.parsing.dataloader import DataLoader
 from ansible.plugins.loader import lookup_loader
 from ansible.template import Templar
+from ansible_collections.osac.service.plugins.test.fulfillment_api_url import fulfillment_api_url
 
 
 CONFIG_AS_CODE = (
@@ -78,3 +79,29 @@ def test_registers_fulfillment_secret_reader_credential(controller_config, monke
 def test_omits_reader_credentials_without_a_fulfillment_issuer(controller_config):
     assert controller_config.template("{{ controller_credential_types }}") == []
     assert controller_config.template("{{ controller_credentials }}") == []
+
+
+@pytest.mark.parametrize(
+    ("url", "accepted"),
+    [
+        (API_URL, True),
+        ("https://[2001:db8::1]:8001/", True),
+        ("https://fulfillment.example/route", False),
+        ("https://fulfillment.example?query=1", False),
+        ("https://fulfillment.example#", False),
+        ("https://user@fulfillment.example", False),
+        ("https://fulfillment.example:invalid", False),
+        ("https://fulfillment.example:65536", False),
+        ("https://fulfillment example", False),
+        ("http://fulfillment.example", False),
+        ("", False),
+    ],
+)
+def test_bootstrap_requires_fulfillment_api_listener_root(controller_config, monkeypatch, url, accepted):
+    controller_config.environment.tests["osac.service.fulfillment_api_url"] = fulfillment_api_url
+    monkeypatch.setenv("OSAC_AAP_SECRET_READER_API_URL", url)
+    tasks = yaml.safe_load((CONFIG_AS_CODE / "roles/aap/tasks/main.yml").read_text())
+    [validation] = [task for task in tasks if task["name"] == "Validate Fulfillment Secret reader configuration"]
+    conditions = validation["block"][1]["ansible.builtin.assert"]["that"]
+    [condition] = [condition for condition in conditions if "aap_fulfillment_reader_api_url" in condition]
+    assert controller_config.template("{{ " + condition + " }}") is accepted

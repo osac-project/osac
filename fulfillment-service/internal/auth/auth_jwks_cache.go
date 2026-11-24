@@ -187,6 +187,21 @@ func (b *JwksCacheBuilder) SetRoot(value string) *JwksCacheBuilder {
 	return b
 }
 
+func normalizeIssuerURL(issuerURL string) (string, error) {
+	issuerURL = strings.TrimSpace(issuerURL)
+	if issuerURL == "" {
+		return "", errors.New("invalid empty issuer URL")
+	}
+	parsed, err := url.Parse(issuerURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid issuer URL '%s': %w", issuerURL, err)
+	}
+	if parsed.Scheme != "https" {
+		return "", fmt.Errorf("issuer URL '%s' must use the HTTPS scheme", issuerURL)
+	}
+	return parsed.String(), nil
+}
+
 // Build uses the data stored in the builder to create and configure a new interceptor.
 func (b *JwksCacheBuilder) Build() (result JwksCache, err error) {
 	// Check parameters:
@@ -210,22 +225,10 @@ func (b *JwksCacheBuilder) Build() (result JwksCache, err error) {
 	// Check the list of issuers provided by the caller:
 	issuersInfo := map[string]*jwksCacheIssuerInfo{}
 	for _, issuerUrl := range b.issuerUrls {
-		issuerUrl = strings.TrimSpace(issuerUrl)
-		if issuerUrl == "" {
-			err = errors.New("invalid empty issuer URL")
-			return
-		}
-		var parsed *url.URL
-		parsed, err = url.Parse(issuerUrl)
+		issuerUrl, err = normalizeIssuerURL(issuerUrl)
 		if err != nil {
-			err = fmt.Errorf("invalid issuer URL '%s': %w", issuerUrl, err)
 			return
 		}
-		if parsed.Scheme != "https" {
-			err = fmt.Errorf("issuer URL '%s' must use the HTTPS scheme", issuerUrl)
-			return
-		}
-		issuerUrl = parsed.String()
 		issuersInfo[issuerUrl] = &jwksCacheIssuerInfo{
 			issuerUrl: issuerUrl,
 		}

@@ -2,8 +2,10 @@
 """Check service-account management credentials and Keycloak permissions."""
 
 import json
+import os
 from pathlib import Path
 import subprocess
+import tempfile
 import textwrap
 
 INSTALLER = Path(__file__).resolve().parents[1]
@@ -16,6 +18,93 @@ def render(chart, *args):
         ["helm", "template", "test", str(chart), *args],
         check=True, capture_output=True, text=True, timeout=120,
     ).stdout.split("\n---\n")
+
+
+def check_reader_reconciliation(infra, reader):
+    hooks = infra / "files/hooks"
+    # The test drives the real hook with stubs for Kubernetes and Keycloak.
+    stub = textwrap.dedent(r"""
+        #!/usr/bin/env python3
+        import base64
+        import json
+        import os
+        from pathlib import Path
+        import sys
+
+        state = Path(os.environ["READER_TEST_STATE"])
+        args = sys.argv[1:]
+        secret = state / "secret"
+        if Path(sys.argv[0]).name == "oc":
+            if args[0] == "get":
+                print("42 " + (secret.read_text() if secret.exists() else ""), end="")
+            else:
+                patch = json.load(sys.stdin)
+                assert patch["metadata"]["resourceVersion"] == "42"
+                if os.environ.get("READER_TEST_CONFLICT"):
+                    sys.exit(1)
+                assert not secret.exists()
+                secret.write_text(patch["data"]["osac-aap-secret-reader"])
+            sys.exit()
+
+        url = next(arg for arg in args if arg.startswith("https://"))
+        method = args[args.index("--request") + 1] if "--request" in args else "GET"
+        with (state / "calls").open("a") as calls:
+            print(f"{method} {url}", file=calls)
+        if url.endswith("/token"):
+            print('{"access_token":"fixture-admin-token"}')
+            sys.exit()
+
+        header = Path(args[args.index("--header") + 1][1:]).read_text()
+        assert header == "Authorization: Bearer fixture-admin-token\n"
+        if url.endswith("/clients") and method == "GET":
+            clients = [{"clientId": "osac-aap-secret-reader", "id": "reader-id"}]
+            print(json.dumps(clients if os.environ.get("READER_TEST_EXISTING") else []))
+        elif "--data-binary" in args:
+            client = json.load(sys.stdin)
+            assert client.pop("secret") == base64.b64decode(secret.read_text()).decode()
+            (state / "client").write_text(json.dumps(client))
+        elif method == "GET":
+            scopes = {
+                "client-scopes": ["basic", "profile", "osac-api", "service_account"],
+                "default-client-scopes": ["basic", "profile"],
+                "optional-client-scopes": ["service_account"],
+            }
+            print(json.dumps([{"name": name, "id": name + "-id"} for name in scopes[url.rsplit("/", 1)[-1]]]))
+    """).lstrip()
+
+    with tempfile.TemporaryDirectory() as directory:
+        state = Path(directory)
+        for name in ("oc", "curl"):
+            command = state / name
+            command.write_text(stub)
+            command.chmod(0o700)
+        env = {
+            **os.environ,
+            "PATH": directory + os.pathsep + os.environ["PATH"],
+            "REALM_RAW_PATH": str(infra / "files/realm.json"),
+            "READER_TEST_STATE": directory,
+        }
+        hook = ["bash", str(hooks / "reconcile-aap-reader-client.sh")]
+        calls = state / "calls"
+        result = subprocess.run(hook, env={**env, "READER_TEST_CONFLICT": "1"}, capture_output=True, timeout=30)
+        assert result.returncode != 0 and not calls.exists()
+
+        subprocess.run(hook, env=env, check=True, timeout=30)
+        stored_secret = (state / "secret").read_text()
+        assert len(stored_secret) == 32
+        assert json.loads((state / "client").read_text()) == {key: value for key, value in reader.items() if key != "secret"}
+
+        subprocess.run(hook, env={**env, "READER_TEST_EXISTING": "1"}, check=True, timeout=30)
+        assert (state / "secret").read_text() == stored_secret
+        clients = "https://keycloak:443/admin/realms/osac/clients"
+        requests = calls.read_text().splitlines()
+        assert f"POST {clients}" in requests
+        assert f"PUT {clients}/reader-id" in requests
+        assert requests[-3:] == [
+            f"DELETE {clients}/reader-id/optional-client-scopes/service_account-id",
+            f"PUT {clients}/reader-id/default-client-scopes/osac-api-id",
+            f"PUT {clients}/reader-id/default-client-scopes/service_account-id",
+        ]
 
 
 def check():
@@ -115,6 +204,25 @@ def check():
     reader_user = next(u for u in realm["users"] if u["username"] == "service-account-" + reader_id)
     assert reader_user["serviceAccountClientId"] == reader_id
     assert not any(reader_user.get(field) for field in ("groups", "clientRoles", "realmRoles"))
+
+    infra = INSTALLER / "charts/osac-infra"
+    production_docs = render(infra, "--set", "keycloak.realmOverwrite=false")
+    reader_hook = next(
+        d for d in production_docs
+        if "kind: Job\n" in d and "  name: osac-infra-reconcile-aap-reader\n" in d
+    )
+    assert not any("  name: keycloak-set-passwords\n" in d for d in production_docs)
+    assert "helm.sh/hook: post-install,post-upgrade" in reader_hook
+    assert 'helm.sh/hook-weight: "16"' in reader_hook
+    assert "name: keycloak-realm" in reader_hook
+    assert "secretName: keycloak-admin-credentials" in reader_hook
+    publication_hook = next(
+        d for d in production_docs if "kind: Job\n" in d and "  name: osac-infra-create-creds\n" in d
+    )
+    assert 'helm.sh/hook-weight: "17"' in publication_hook
+    external_docs = render(infra, "--set", "keycloak.enabled=false")
+    assert not any("osac-infra-reconcile-aap-reader" in d for d in external_docs)
+    check_reader_reconciliation(infra, reader)
 
     platform = INSTALLER / "charts/osac"
     values = str(platform / "ci/default-values.yaml")

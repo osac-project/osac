@@ -28,6 +28,8 @@ is_aap_secret_reader_client if {
 aap_secret_read_allowed if {
   is_aap_secret_reader_client
   not is_managed_service_account_candidate
+  data.aap_secret_reader_issuer != ""
+  input.auth.identity.iss == data.aap_secret_reader_issuer
   input.auth.identity.client_id == aap_secret_reader_client_id
   subject_name == concat("", ["service-account-", aap_secret_reader_client_id])
   grpc_method == "/osac.private.v1.Secrets/Get"

@@ -45,6 +45,7 @@ func ExtractAuthContext(token *jwt.Token) (*AuthContext, error) {
 		authContext.Groups = claimAsAnySlice(claims, "groups")
 	} else {
 		authContext.AuthMethod = "jwt"
+		authContext.Issuer, _ = claims["iss"].(string)
 		authContext.AuthorizedParty, _ = claims["azp"].(string)
 		authContext.ClientID, _ = claims["client_id"].(string)
 

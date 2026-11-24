@@ -53,6 +53,7 @@ case "${args}" in
   *"-o jsonpath="*osac-admin*)      printf '%s' "$(printf 'admin-secret' | base64)" ;;
   *"-o jsonpath="*osac-csi-driver*) printf '%s' "$(printf 'csi-driver-secret' | base64)" ;;
   *"-o jsonpath="*osac-ui-backend*) printf '%s' "$(printf 'ui-backend-secret' | base64)" ;;
+  *"-o jsonpath="*osac-aap-secret-reader*) printf '1 %s' "$(printf 'aap-reader-fixture' | base64)" ;;
   *"create secret"*)                exit 0 ;;
   *"get secret"*)                   exit 1 ;;  # existence check: force the "generate" branch
   *)                                exit 0 ;;

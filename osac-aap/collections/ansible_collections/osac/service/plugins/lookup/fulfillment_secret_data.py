@@ -8,11 +8,11 @@ from ansible.errors import AnsibleError
 from ansible.plugins.lookup import LookupBase
 from ansible_collections.osac.service.plugins.lookup.fulfillment_token import (
     HTTPRequestError,
-    _parse_https_url,
     _request_json,
     fulfillment_ca_file,
     get_access_token_from_environment,
 )
+from ansible_collections.osac.service.plugins.module_utils.fulfillment_url import parse_fulfillment_api_url
 
 # A REST response expands the gRPC message's bytes fields to base64.
 _MAX_SECRET_RESPONSE_BYTES = 6 * 1024 * 1024
@@ -37,11 +37,7 @@ def _read_secret(url: str, token: str) -> dict:
 
 def _get_secret_data(secret_id: str, data_key: str) -> dict:
     try:
-        endpoint, _ = _parse_https_url(
-            os.environ.get("OSAC_FULFILLMENT_INTERNAL_API_URL", ""), "Fulfillment internal API URL"
-        )
-        if endpoint.path not in ("", "/"):
-            raise AnsibleError("The Fulfillment internal API URL must identify the listener root.")
+        endpoint = parse_fulfillment_api_url(os.environ.get("OSAC_FULFILLMENT_INTERNAL_API_URL", ""))
         if not isinstance(secret_id, str) or not secret_id or secret_id in (".", "..") or "/" in secret_id:
             raise AnsibleError("The Fulfillment Secret ID is invalid.")
         path = f"/api/private/v1/secrets/{quote(secret_id, safe='')}"

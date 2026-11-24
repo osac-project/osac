@@ -22,8 +22,10 @@
         that:
           - aap_fulfillment_reader_secret_configured
           - aap_fulfillment_reader_issuer_url is match('^https://')
-          - aap_fulfillment_reader_api_url is match('^https://')
-        fail_msg: AAP bootstrap requires the dedicated Fulfillment reader credential and HTTPS issuer and API URLs.
+          - aap_fulfillment_reader_api_url is osac.service.fulfillment_api_url
+        fail_msg: >-
+          AAP bootstrap requires the dedicated Fulfillment reader credential, an HTTPS issuer URL,
+          and an HTTPS private API listener root with no credentials, query, or fragment.
 
 - name: OSAC AAP
   ansible.builtin.include_role:

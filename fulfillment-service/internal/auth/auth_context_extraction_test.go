@@ -22,6 +22,7 @@ import (
 var _ = Describe("Auth context extraction", func() {
 	It("maps tenant-scoped OAuth client credentials to a tenant subject", func() {
 		token := &jwt.Token{Claims: jwt.MapClaims{
+			"iss":         "https://keycloak.example/realms/osac",
 			"client_id":   "osac-sa-tenant-account",
 			"osac_tenant": "tenant-a",
 		}}
@@ -29,6 +30,7 @@ var _ = Describe("Auth context extraction", func() {
 		result, err := ExtractAuthContext(token)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(result.AuthMethod).To(Equal("jwt"))
+		Expect(result.Issuer).To(Equal("https://keycloak.example/realms/osac"))
 		Expect(result.Username).To(Equal("osac-sa-tenant-account"))
 		Expect(result.Organization).To(Equal([]any{"tenant-a"}))
 	})

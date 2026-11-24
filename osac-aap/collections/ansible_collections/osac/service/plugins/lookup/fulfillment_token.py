@@ -15,11 +15,12 @@ import threading
 from pathlib import Path
 from time import monotonic
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote_plus, urlencode, urlsplit, urlunsplit
+from urllib.parse import quote_plus, urlencode, urlunsplit
 from urllib.request import HTTPSHandler, HTTPRedirectHandler, Request, build_opener
 
 from ansible.errors import AnsibleError
 from ansible.plugins.lookup import LookupBase
+from ansible_collections.osac.service.plugins.module_utils.fulfillment_url import parse_https_url
 
 _TOKEN_CACHE: dict[str, tuple[str, float]] = {}
 _TOKEN_CACHE_LOCK = threading.Lock()
@@ -37,28 +38,6 @@ class HTTPRequestError(AnsibleError):
 class _NoRedirectHandler(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
-
-
-def _parse_https_url(raw_url: str, label: str):
-    try:
-        parsed = urlsplit(raw_url.strip())
-        hostname = parsed.hostname
-        port = parsed.port
-    except ValueError:
-        raise AnsibleError(f"{label} is not a valid HTTPS URL.") from None
-
-    if (
-        parsed.scheme.lower() != "https"
-        or not parsed.netloc
-        or not hostname
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise AnsibleError(f"{label} must be an HTTPS URL without credentials, query, or fragment.")
-
-    return parsed, (hostname.lower(), port if port is not None else 443)
 
 
 def _normalized_issuer(parsed, origin: tuple[str, int]) -> tuple[tuple[str, int], str]:
@@ -113,7 +92,7 @@ def _request_json(
 def _get_access_token(
     issuer_url: str, client_id: str, client_secret: str, ca_file: str, *, force_refresh: bool = False
 ) -> str:
-    issuer, issuer_origin = _parse_https_url(issuer_url, "Fulfillment issuer URL")
+    issuer, issuer_origin = parse_https_url(issuer_url, "Fulfillment issuer URL")
     cache_material = "\0".join((issuer_url.strip(), client_id, client_secret, ca_file)).encode()
     cache_key = hashlib.sha256(cache_material).hexdigest()
 
@@ -143,7 +122,7 @@ def _get_access_token(
         if not isinstance(discovered_issuer, str) or not isinstance(token_endpoint, str):
             raise AnsibleError("Keycloak issuer metadata is missing required endpoints.")
 
-        parsed_metadata_issuer, metadata_origin = _parse_https_url(
+        parsed_metadata_issuer, metadata_origin = parse_https_url(
             discovered_issuer, "Discovered issuer URL"
         )
         if _normalized_issuer(parsed_metadata_issuer, metadata_origin) != _normalized_issuer(
@@ -151,7 +130,7 @@ def _get_access_token(
         ):
             raise AnsibleError("Discovered Keycloak issuer does not match the configured issuer.")
 
-        parsed_token_endpoint, token_origin = _parse_https_url(
+        parsed_token_endpoint, token_origin = parse_https_url(
             token_endpoint, "Discovered token endpoint"
         )
         if token_origin != issuer_origin or not parsed_token_endpoint.path:

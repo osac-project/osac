@@ -123,6 +123,7 @@ rules:
   - keycloak-client-secrets
   verbs:
   - get
+  - patch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -149,6 +150,10 @@ metadata:
 data:
   resolve-realm-secrets.sh: |
 {{ $.Files.Get "files/hooks/resolve-realm-secrets.sh" | indent 4 }}
+  ensure-aap-reader-secret.sh: |
+{{ $.Files.Get "files/hooks/ensure-aap-reader-secret.sh" | indent 4 }}
+  reconcile-aap-reader-client.sh: |
+{{ $.Files.Get "files/hooks/reconcile-aap-reader-client.sh" | indent 4 }}
 ---
 apiVersion: v1
 kind: Secret

@@ -92,18 +92,48 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 	Describe("AAP Secret reader", func() {
 		const clientID = "osac-aap-secret-reader"
 		const getSecret = "/osac.private.v1.Secrets/Get"
+		const issuer = "https://keycloak.example/realms/osac"
+		const otherIssuer = "https://another-keycloak.example/realms/osac"
 
 		var evaluator *OPAAuthorizationEvaluator
 		var identity *AuthContext
 
 		BeforeEach(func() {
-			var err error
-			evaluator, err = NewEvaluator().Build()
+			readerIssuer, err := ResolveAAPSecretReaderIssuer([]string{issuer}, "")
+			Expect(err).NotTo(HaveOccurred())
+			evaluator, err = NewEvaluator().SetAAPSecretReaderIssuer(readerIssuer).Build()
 			Expect(err).NotTo(HaveOccurred())
 			identity = &AuthContext{
-				AuthMethod: "jwt", AuthorizedParty: clientID, ClientID: clientID,
+				AuthMethod: "jwt", Issuer: issuer, AuthorizedParty: clientID, ClientID: clientID,
 				Username: "service-account-" + clientID,
 			}
+		})
+
+		DescribeTable("selects the grant issuer from configured OIDC issuers",
+			func(trusted []string, configured, expected string) {
+				selected, err := ResolveAAPSecretReaderIssuer(trusted, configured)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(selected).To(Equal(expected))
+			},
+			Entry("no OIDC issuers", nil, "", ""),
+			Entry("one trusted issuer", []string{issuer}, "", issuer),
+			Entry("duplicate entries", []string{issuer, " " + issuer + " "}, "", issuer),
+			Entry("several issuers without a selection", []string{issuer, otherIssuer}, "", ""),
+			Entry("explicit selection among several issuers", []string{issuer, otherIssuer}, otherIssuer, otherIssuer),
+		)
+
+		It("rejects an explicit selection outside the trusted issuers", func() {
+			_, err := ResolveAAPSecretReaderIssuer([]string{issuer}, otherIssuer)
+			Expect(err).To(MatchError("AAP Secret reader issuer must be one of the trusted token issuers"))
+		})
+
+		It("denies the reader when no issuer is configured", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().Build()
+			Expect(err).NotTo(HaveOccurred())
+			identity.Issuer = ""
+			decision, err := evaluator.Evaluate(ctx, identity, getSecret)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(decision.Allowed).To(BeFalse())
 		})
 
 		It("allows private Get with visibility across the deployment", func(ctx context.Context) {
@@ -150,6 +180,11 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				i.Username = "service-account-another-client"
 			}),
 			Entry("missing client credentials claim", func(i *AuthContext) { i.ClientID = "" }),
+			Entry("missing issuer claim", func(i *AuthContext) { i.Issuer = "" }),
+			Entry("different issuer even with an admin group", func(i *AuthContext) {
+				i.Issuer = otherIssuer
+				i.Groups = []any{"admins"}
+			}),
 			Entry("wrong username", func(i *AuthContext) { i.Username = "ordinary-user" }),
 			Entry("managed service account", func(i *AuthContext) { i.ManagedServiceAccountCandidate = true }),
 			Entry("admin group without client credentials claim", func(i *AuthContext) {

@@ -323,7 +323,7 @@ export const BareMetalAcceleratorSpecSchema: GenMessage<BareMetalAcceleratorSpec
  * Reference to a BareMetalInstanceType resource.
  *
  * BareMetalInstanceType is platform-scoped and always lives in the shared tenant, so callers
- * must set shared = true and must not set project; the server rejects any other combination.
+ * must select the shared tenant and must not set project; the server rejects any other combination.
  *
  * @generated from message osac.public.v1.BareMetalInstanceTypeReference
  */

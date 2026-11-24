@@ -186,7 +186,7 @@ class DiskImageReference(Base):
     id: str | None = None
     name: str | None = None
     project: str | None = None
-    shared: bool | None = None
+    tenant: str | None = None
 
 
 class ComputeInstanceDisk(Base):

@@ -10,6 +10,7 @@ from find_template_roles import (
     AddOnOperatorTemplate,
     ClusterTemplate,
     ClusterTemplateSpecDefaults,
+    ComputeInstanceTemplateSpecDefaults,
     Collection,
     FilterModule,
     Metadata,
@@ -449,6 +450,15 @@ class TestMetadataTemplateTypes:
         assert dumped["metadata"] == {"name": "ocp-small", "tenant": "shared"}
         assert dumped["spec_defaults"] == {
             "pull_secret_secret": {"name": "shared-pull-secret"}
+        }
+
+    def test_compute_instance_disk_image_reference_uses_tenant(self):
+        defaults = ComputeInstanceTemplateSpecDefaults.model_validate(
+            {"disk_image": {"name": "rhel", "tenant": "shared"}}
+        )
+
+        assert defaults.model_dump(mode="json", exclude_none=True) == {
+            "disk_image": {"name": "rhel", "tenant": "shared"}
         }
 
     def test_cluster_template_capabilities_are_published_from_role_metadata(self):

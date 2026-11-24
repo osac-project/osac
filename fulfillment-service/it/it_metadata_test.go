@@ -25,6 +25,7 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -540,9 +541,21 @@ var _ = Describe("reserved metadata privacy fixtures", Label("metadata"), func()
 			}.Build(),
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
+		bindingID := binding.GetObject().GetId()
 		DeferCleanup(func(cleanupCtx context.Context) {
-			_, deleteErr := roleBindings.Delete(cleanupCtx, privatev1.RoleBindingsDeleteRequest_builder{Id: binding.GetObject().GetId()}.Build())
-			Expect(deleteErr).NotTo(HaveOccurred())
+			_, deleteErr := roleBindings.Delete(cleanupCtx, privatev1.RoleBindingsDeleteRequest_builder{Id: bindingID}.Build())
+			if grpcstatus.Code(deleteErr) == grpccodes.NotFound {
+				return
+			}
+			Expect(deleteErr).NotTo(HaveOccurred(), "delete fixture RoleBinding %s", bindingID)
+
+			// The Role remains in use until the RoleBinding's finalizer completes.
+			waitCtx, cancel := context.WithTimeout(cleanupCtx, time.Minute)
+			defer cancel()
+			Eventually(waitCtx, func(g Gomega) {
+				_, getErr := roleBindings.Get(waitCtx, privatev1.RoleBindingsGetRequest_builder{Id: bindingID}.Build())
+				g.Expect(grpcstatus.Code(getErr)).To(Equal(grpccodes.NotFound), "get fixture RoleBinding %s: %v", bindingID, getErr)
+			}).WithPolling(time.Second).Should(Succeed())
 		})
 		fixtures = append(fixtures,
 			struct {

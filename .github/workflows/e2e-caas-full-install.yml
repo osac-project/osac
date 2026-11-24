@@ -76,7 +76,7 @@ on:
         required: false
         default: ""
       test-marker:
-        description: "pytest -m marker expression (e.g. sanity, regression). Empty runs all."
+        description: "pytest -m marker expression. Empty selects the marker matching test-suite."
         required: false
         default: ""
       test-infra-ref:
@@ -112,6 +112,8 @@ jobs:
           inputs.sha != '' && inputs.tier == 'full' && 'sanity or regression or requires_caas or reference_common' ||
           inputs.sha != '' && 'sanity' ||
           inputs.test-marker != '' && inputs.test-marker ||
+          inputs.test-suite == 'caas/regression' && 'regression' ||
+          inputs.test-suite == 'caas/sanity' && 'sanity' ||
           'sanity or regression or requires_caas or reference_common'
         }}
       # osac-installer now lives as a subdirectory of this same monorepo checkout

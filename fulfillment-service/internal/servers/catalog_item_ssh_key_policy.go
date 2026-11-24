@@ -46,7 +46,7 @@ func validateCatalogItemSSHKeyPolicy(
 		if ref == nil {
 			return nil, nil
 		}
-		if err := validateTenantScopedSSHKeyReference(ref); err != nil {
+		if err := validateTenantScopedSSHKeyReference(ref, scope.tenant); err != nil {
 			return nil, err
 		}
 		resolved, resolveErr := resolveLockedResourceInScope(

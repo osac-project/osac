@@ -11,6 +11,9 @@
 {{- if not .Values.netbox.url }}
 {{- fail "netbox.url is required when netbox.enabled is true" }}
 {{- end }}
+{{- if regexMatch "^([A-Za-z][A-Za-z0-9+.-]*:)?//[^/?#]*@|^[^/?#]*@" .Values.netbox.url }}
+{{- fail "netbox.url must not include credentials" }}
+{{- end }}
 {{- if not .Values.netbox.tokenSecretKey }}
 {{- fail "netbox.tokenSecretKey is required when netbox.enabled is true" }}
 {{- end }}
@@ -60,4 +63,5 @@ stringData:
         caFile: "/etc/osac/secrets/netbox-ca/ca.crt"
         {{- end }}
         clientAllowInsecureHTTP: {{ .Values.netbox.clientAllowInsecureHTTP }}
+        enableBMCCertificateVerification: {{ .Values.netbox.enableBMCCertificateVerification }}
 {{- end }}

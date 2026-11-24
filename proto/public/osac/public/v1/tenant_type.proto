@@ -17,6 +17,7 @@ package osac.public.v1;
 
 import "buf/validate/validate.proto";
 import "osac/public/v1/metadata_type.proto";
+import "osac/public/v1/role_type.proto";
 import "osac/public/v1/secret_type.proto";
 
 // A tenant groups resources and users for a customer or business unit.
@@ -79,4 +80,9 @@ message TenantSpec {
   // existing Secret; the referenced Secret must exist. The secret data must contain `username` and
   // `password` entries.
   SecretLocalReference break_glass_credentials_secret = 2;
+
+  // Role selected for onboarding. It must belong to this tenant or to shared.
+  // An unset value on an ordinary tenant inherits the shared tenant's selection.
+  // An unset value on shared means there is no platform default.
+  RoleReference default_role = 4;
 }

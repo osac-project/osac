@@ -51,7 +51,7 @@ status and pool accounting, not provider IPAM visibility; see the canonical
 
 | Area | Required tier and command |
 |---|---|
-| Shared helpers, cleanup, reference oracles and failure/telemetry plugins | DEV Unit: `uv run pytest -n 0 tests/unit`; collect every affected deployed suite |
+| Shared helpers, cleanup, reference oracles and failure/telemetry plugins | Collect affected deployed suites; run focused existing checks when behavior changes |
 | VMaaS/CaaS/BMaaS/storage/reference lifecycles | QE deployed E2E: collect and run the affected service/tier under `tests/e2e/` with real dependencies |
 | Netris VMaaS networking and billing | Whole ordered lifecycle: `uv run pytest -n 0 -x tests/e2e/networking/vmaas/test_vmaas_networking.py` |
 | Netris BMaaS connectivity/isolation | `uv run pytest -n 0 tests/e2e/networking/bmaas` against its real backend |
@@ -94,8 +94,9 @@ gate input and authorization requirements; do not perform rotation in the test.
 
 ## Validation
 
-Reuse the owning suite's `conftest.py` and `tests/e2e/core/` helpers; helper
-logic tests belong in `tests/unit/`, without cluster credentials.
+Reuse the owning suite's `conftest.py` and `tests/e2e/core/` helpers. Validate
+helper changes through relevant existing checks; do not introduce a separate
+helper-unit harness for routine E2E changes.
 
 ### Local checks
 
@@ -104,13 +105,11 @@ Use the root `pyproject.toml` environment through uv. From the repository root:
 ```bash
 uv run ruff check tests/e2e/
 uv run ruff format --check tests/e2e/
-uv run pytest -n 0 tests/unit
 uv run pytest --collect-only tests/e2e/<suite>/
 ```
 
-Replace `<suite>` with the affected suite; shared fixture changes require
-collecting every affected suite. Units and collection do not prove deployed
-provisioning or cleanup.
+Replace `<suite>` with the affected suite; shared fixture changes may affect
+several suites. Collection does not prove deployed provisioning or cleanup.
 
 ### Deployed selection
 

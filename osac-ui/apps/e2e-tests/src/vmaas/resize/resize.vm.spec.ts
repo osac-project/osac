@@ -30,7 +30,7 @@ import {
   resizeInstanceTypeTestData,
   resizeVmTestName,
   tenantNameOrSkip,
-} from '../test_data';
+} from '../../shared/test_data';
 
 test.setTimeout(900_000);
 useResizeVmLifecycle();

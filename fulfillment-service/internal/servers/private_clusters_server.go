@@ -543,13 +543,15 @@ func (s *PrivateClustersServer) prepareUpdatedCluster(ctx context.Context, curre
 	if err := s.prepareUpdatedClusterNodeSets(ctx, current, candidate, mask, sizeOnlyNodeSets); err != nil {
 		return err
 	}
-	mergeClusterUpgradeHistory(current, candidate, mask)
+	mergeClusterUpgradeHistory(current, candidate, mask,
+		request.GetObject().GetStatus().GetUpgradeAttemptId(),
+		request.GetObject().GetStatus().GetActiveUpgradeAttempt(), resolvedTarget)
 	preserveNodeSetVersions(current, candidate)
 	initializeAddedNodeSetVersions(current, candidate)
 	if err := s.prepareClusterVersionChange(ctx, current, candidate, mask, resolvedTarget); err != nil {
 		return err
 	}
-	advanceClusterUpgradeAfterControlPlaneSuccess(current, candidate)
+	advanceClusterUpgradeAfterControlPlaneSuccess(candidate)
 	if err := s.validateUpdatedClusterSpec(ctx, current, candidate, mask); err != nil {
 		return err
 	}
@@ -589,6 +591,7 @@ func initializeAddedNodeSetVersions(current, candidate *privatev1.Cluster) {
 			statuses[name] = status
 		}
 		status.SetVersion(cloneMessage(selectedVersion))
+		status.SetObservedVersion("")
 	}
 }
 
@@ -1566,7 +1569,9 @@ func (s *PrivateClustersServer) autoProvisionExternalIPs(ctx context.Context, cl
 				Creator: systemCreator,
 			}.Build(),
 			Spec: privatev1.ExternalIPSpec_builder{
-				Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetId()}.Build(),
+				Pool: privatev1.ExternalIPPoolReference_builder{
+					Id: pool.GetId(), Tenant: pool.GetMetadata().GetTenant(),
+				}.Build(),
 			}.Build(),
 			Status: privatev1.ExternalIPStatus_builder{
 				State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,

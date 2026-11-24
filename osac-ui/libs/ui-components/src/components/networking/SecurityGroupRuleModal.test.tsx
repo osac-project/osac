@@ -5,13 +5,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { Protocol, type SecurityGroup } from '@osac/types';
 
 import { SecurityGroupRuleModal } from './SecurityGroupRuleModal';
-import * as networkingApi from '../../api/v1/networking';
+import * as resourceApi from '../../api/use-resource';
 
-vi.mock('../../api/v1/networking', async (importOriginal) => {
-  const actual = await importOriginal<typeof networkingApi>();
+vi.mock('../../api/use-resource', async (importOriginal) => {
+  const actual = await importOriginal<typeof resourceApi>();
   return {
     ...actual,
-    useUpdateSecurityGroup: vi.fn(),
+    useUpdateResource: vi.fn(),
   };
 });
 
@@ -30,11 +30,11 @@ describe('SecurityGroupRuleModal', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useUpdateResource).mockReturnValue({
       mutateAsync,
       isPending: false,
       error: null,
-    } as unknown as ReturnType<typeof networkingApi.useUpdateSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useUpdateResource>);
   });
 
   it('renders "Add rule" title in add mode', () => {
@@ -134,11 +134,11 @@ describe('SecurityGroupRuleModal', () => {
   it('prevents dismissal and another save while the update is pending', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
-    vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useUpdateResource).mockReturnValue({
       mutateAsync,
       isPending: true,
       error: null,
-    } as unknown as ReturnType<typeof networkingApi.useUpdateSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useUpdateResource>);
 
     render(
       <SecurityGroupRuleModal
@@ -176,11 +176,11 @@ describe('SecurityGroupRuleModal', () => {
   it('keeps an in-flight rule save open when editing becomes unavailable', () => {
     const onClose = vi.fn();
     const reason = 'Rules cannot be edited while the security group is updating.';
-    vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useUpdateResource).mockReturnValue({
       mutateAsync,
       isPending: true,
       error: null,
-    } as unknown as ReturnType<typeof networkingApi.useUpdateSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useUpdateResource>);
 
     const view = render(
       <SecurityGroupRuleModal
@@ -193,11 +193,11 @@ describe('SecurityGroupRuleModal', () => {
     );
     expect(onClose).not.toHaveBeenCalled();
 
-    vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useUpdateResource).mockReturnValue({
       mutateAsync,
       isPending: false,
       error: null,
-    } as unknown as ReturnType<typeof networkingApi.useUpdateSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useUpdateResource>);
     view.rerender(
       <SecurityGroupRuleModal
         onClose={onClose}
@@ -225,19 +225,19 @@ describe('SecurityGroupRuleModal', () => {
       />
     );
 
-    vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useUpdateResource).mockReturnValue({
       mutateAsync,
       isPending: true,
       error: null,
-    } as unknown as ReturnType<typeof networkingApi.useUpdateSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useUpdateResource>);
     const view = render(modal());
 
     const message = 'Security group is being updated. Try again after it is ready.';
-    vi.mocked(networkingApi.useUpdateSecurityGroup).mockReturnValue({
+    vi.mocked(resourceApi.useUpdateResource).mockReturnValue({
       mutateAsync,
       isPending: false,
       error: new Error(message),
-    } as unknown as ReturnType<typeof networkingApi.useUpdateSecurityGroup>);
+    } as unknown as ReturnType<typeof resourceApi.useUpdateResource>);
     view.rerender(modal());
 
     expect(onClose).not.toHaveBeenCalled();

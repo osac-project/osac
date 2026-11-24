@@ -52,6 +52,10 @@
   kind: ui-unit
   # not `code`: that filter leaves osac-ui out on purpose, so an osac-ui-only change runs just this leg
   filters: [ui]
+- id: Unit tests (E2E workflow policy)
+  group: unit
+  kind: e2e-workflow-policy
+  filters: [unit-tests-e2e-policy]
 - id: Unit tests (osac-installer)
   group: unit
   kind: helm-unit
@@ -64,7 +68,7 @@
 - id: Integration test (fulfillment-service)
   group: integration
   kind: it-fulfillment-service
-  timeout: 90  # ginkgo --timeout 1h15m (Makefile) + ~15m for install, setup and log collection
+  timeout: 120  # Kind setup, image builds, four serial test phases, and log collection.
   filters: [code, integration-tests-fulfillment-service]
 - id: Integration test (osac-operator)
   group: integration

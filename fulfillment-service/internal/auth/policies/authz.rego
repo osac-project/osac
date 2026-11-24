@@ -357,11 +357,14 @@ client_permission_methods := {
     "/osac.public.v1.Volumes/Get",
     "/osac.public.v1.Volumes/List",
     "/osac.public.v1.Volumes/Update",
+    # Tenant users read their quota usage.
+    "/osac.public.v1.QuotaUsage/Get",
 }
 
 # Service-account grants use a deliberately bounded copy of the current public
 # client methods. Private methods and methods with broader information exposure
-# are excluded; adding a new API method does not grant it automatically.
+# are excluded; the methods are enumerated here, and every addition is a
+# deliberate grant.
 managed_automation_methods := {method |
   some method in client_permission_methods
   startswith(method, "/osac.public.v1.")
@@ -432,6 +435,22 @@ managed_tenant_admin_methods := {
   "/osac.public.v1.ServiceAccounts/Delete",
   "/osac.public.v1.ServiceAccounts/RegenerateSecret",
   "/osac.public.v1.Secrets/Get",
+  # Tenant admins manage their tenant's quota: project limits, thresholds, and limit requests.
+  "/osac.public.v1.QuotaLimits/Create",
+  "/osac.public.v1.QuotaLimits/Delete",
+  "/osac.public.v1.QuotaLimits/Get",
+  "/osac.public.v1.QuotaLimits/List",
+  "/osac.public.v1.QuotaLimits/Update",
+  "/osac.public.v1.QuotaThresholds/Create",
+  "/osac.public.v1.QuotaThresholds/Delete",
+  "/osac.public.v1.QuotaThresholds/Get",
+  "/osac.public.v1.QuotaThresholds/List",
+  "/osac.public.v1.QuotaThresholds/Update",
+  "/osac.public.v1.QuotaLimitRequests/Create",
+  "/osac.public.v1.QuotaLimitRequests/Delete",
+  "/osac.public.v1.QuotaLimitRequests/Get",
+  "/osac.public.v1.QuotaLimitRequests/List",
+  "/osac.public.v1.QuotaLimitRequests/Update",
 }
 
 managed_csi_methods := {
@@ -537,6 +556,21 @@ legacy_allow if {
     "/osac.public.v1.RoleBindings/List",
     "/osac.public.v1.RoleBindings/Update",
     "/osac.public.v1.RoleBindings/Delete",
+    "/osac.public.v1.QuotaLimits/Create",
+    "/osac.public.v1.QuotaLimits/Delete",
+    "/osac.public.v1.QuotaLimits/Get",
+    "/osac.public.v1.QuotaLimits/List",
+    "/osac.public.v1.QuotaLimits/Update",
+    "/osac.public.v1.QuotaThresholds/Create",
+    "/osac.public.v1.QuotaThresholds/Delete",
+    "/osac.public.v1.QuotaThresholds/Get",
+    "/osac.public.v1.QuotaThresholds/List",
+    "/osac.public.v1.QuotaThresholds/Update",
+    "/osac.public.v1.QuotaLimitRequests/Create",
+    "/osac.public.v1.QuotaLimitRequests/Delete",
+    "/osac.public.v1.QuotaLimitRequests/Get",
+    "/osac.public.v1.QuotaLimitRequests/List",
+    "/osac.public.v1.QuotaLimitRequests/Update",
   }
 }
 
@@ -672,6 +706,37 @@ subject_user = input.auth.identity.username if {
 subject_user = split(input.auth.identity.user.username, ":")[3] if {
   input.auth.identity.authnMethod == "serviceaccount"
 }
+
+service_account_namespace := split(input.auth.identity.user.username, ":")[2] if {
+  input.auth.identity.authnMethod == "serviceaccount"
+}
+
+# Resolve the principal's home tenant independently of which tenants are visible.
+default subject_tenant := ""
+subject_tenant := "system" if {
+  is_admin
+}
+subject_tenant := "system" if {
+  is_csi
+}
+subject_tenant := input.auth.identity.managed_service_account_tenant if {
+  is_managed_service_account_valid
+}
+subject_tenant := service_account_namespace if {
+  not is_admin
+}
+subject_tenant := tenant if {
+  not is_admin
+  not is_csi
+  not is_managed_service_account_candidate
+  input.auth.identity.authnMethod == "jwt"
+  organizations := {org | some org in subject_tenants}
+  count(organizations) == 1
+  some tenant in organizations
+  is_string(tenant)
+  not tenant in {"", "*", "shared"}
+}
+
 subject_tenant_result = ["*"] if {
   is_admin
 }
@@ -707,8 +772,7 @@ subject_tenant_result = subject_tenants if {
   input.auth.identity.authnMethod == "jwt"
   not is_managed_service_account_candidate
 }
-subject_tenant_result = [split(input.auth.identity.user.username, ":")[2]] if {
+subject_tenant_result = [service_account_namespace] if {
   not is_admin
   not is_csi
-  input.auth.identity.authnMethod == "serviceaccount"
 }

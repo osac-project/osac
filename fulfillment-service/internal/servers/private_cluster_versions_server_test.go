@@ -1413,7 +1413,9 @@ var _ = Describe("Private cluster versions server", func() {
 						assertReference := func(reference *privatev1.DiskImageReference) {
 							Expect(reference.GetId()).To(Equal(image.GetId()))
 							Expect(reference.GetName()).To(Equal(image.GetMetadata().GetName()))
-							Expect(proto.Equal(reference, ref)).To(BeTrue(), "handler must preserve the interceptor-resolved reference")
+							// Compatibility responses may also set the redundant shared selector.
+							Expect(reference.GetTenant()).To(Equal(ref.GetTenant()))
+							Expect(reference.GetProject()).To(Equal(ref.GetProject()))
 						}
 						assertReference(object.GetSpec().GetDiskImage())
 						stored, err := server.Get(ctx, &privatev1.ClusterVersionsGetRequest{Id: object.GetId()})

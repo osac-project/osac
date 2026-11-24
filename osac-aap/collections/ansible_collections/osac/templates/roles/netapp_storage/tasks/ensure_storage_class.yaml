@@ -162,11 +162,19 @@
       {% set _epools = (_espec.storage | default([], true)) -%}
       {% set _pools_present = namespace(ok=true) -%}
       {% for _pool in _pools -%}
-      {% if _pool not in _epools -%}
+      {% set _current_pool = _epools | selectattr('labels.osac_backend', 'defined')
+                                    | selectattr('labels.osac_backend', 'equalto', _tbc_name)
+                                    | selectattr('labels.tier', 'defined')
+                                    | selectattr('labels.tier', 'equalto', _pool.labels.tier)
+                                    | first | default(none) -%}
+      {% if _pool != _current_pool -%}
       {% set _pools_present.ok = false -%}
       {% endif -%}
       {% endfor -%}
-      {% if (_espec.storageDriverName | default('') == 'ontap-san')
+      {% if (_espec.version | default(none) == 1)
+            and (_espec.useREST | default(none) is sameas true)
+            and (_espec.deletionPolicy | default('') == 'delete')
+            and (_espec.storageDriverName | default('') == 'ontap-san')
             and (_espec.backendName | default('') == _tbc_name)
             and (_espec.sanType | default('') == _san)
             and (_espec.managementLIF | default('') == _lif)

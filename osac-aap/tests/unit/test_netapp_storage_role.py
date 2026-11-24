@@ -2024,9 +2024,11 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
         "Check whether the Dedicated-SVM backends already match the requested configuration",
     )["ansible.builtin.set_fact"]["_netapp_dedicated_backends_ready"]
 
-    # When Shared-TBC backends are present, _netapp_dedicated_backends_ready must be False so
-    # _ensure_storage_class_backend.yaml runs customer TBC validation and storagePools checks.
+    # Mixed-mode dispatches still use the full backend reconciliation path.
     expected_tbc_spec = {
+        "version": 1,
+        "useREST": True,
+        "deletionPolicy": "delete",
         "storageDriverName": "ontap-san",
         "backendName": tbc_names[0],
         "sanType": "fcp",
@@ -2086,33 +2088,40 @@ def test_netapp_ensure_short_circuit_checks_tbc_and_csi_secret():
         "defaults": {"encryption": "true"},
     }
 
-    def _exist_vars_with_storage(storage: list[dict]) -> dict:
+    def _exist_vars_with_spec(**overrides) -> dict:
         return {
             **dedicated_only_vars,
             "_netapp_tbc_checks": {
                 "resources": [
                     {
                         "metadata": {"name": tbc_names[0]},
-                        "spec": {**expected_tbc_spec, "storage": storage},
+                        "spec": {**expected_tbc_spec, **overrides},
                         "status": {"phase": "Bound"},
                     }
                 ]
             },
         }
 
+    for field, value in (("useREST", False), ("deletionPolicy", "retain"), ("version", 2)):
+        assert _render(all_exist_expr, _exist_vars_with_spec(**{field: value})) is False
+
+    gold_pool = expected_tbc_spec["storage"][0]
+    stale_gold = {**gold_pool, "defaults": {"encryption": "true"}}
+    # The writer rebuilds the first matching pool in place and leaves later pools alone.
+    assert _render(all_exist_expr, _exist_vars_with_spec(storage=[stale_gold, gold_pool])) is False
     assert (
         _render(
             all_exist_expr,
-            _exist_vars_with_storage([other_tier_pool, *expected_tbc_spec["storage"]]),
+            _exist_vars_with_spec(storage=[other_tier_pool, gold_pool]),
         )
         is True
     )
-    assert _render(all_exist_expr, _exist_vars_with_storage([other_tier_pool])) is False
+    assert _render(all_exist_expr, _exist_vars_with_spec(storage=[other_tier_pool])) is False
     assert (
         _render(
             all_exist_expr,
-            _exist_vars_with_storage(
-                [
+            _exist_vars_with_spec(
+                storage=[
                     other_tier_pool,
                     {
                         "labels": {"osac_backend": tbc_names[0], "tier": "ded-gold"},

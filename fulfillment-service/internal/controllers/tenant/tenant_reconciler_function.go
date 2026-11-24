@@ -19,6 +19,9 @@ language governing permissions and limitations under the License.
 //go:generate mockgen -destination=security_groups_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 SecurityGroupsClient
 //go:generate mockgen -destination=external_ips_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 ExternalIPsClient
 //go:generate mockgen -destination=nat_gateways_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 NATGatewaysClient
+//go:generate mockgen -destination=quota_limits_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 QuotaLimitsClient
+//go:generate mockgen -destination=quota_thresholds_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 QuotaThresholdsClient
+//go:generate mockgen -destination=quota_limit_requests_client_mock.go -package=tenant github.com/osac-project/osac/proto/gen/osac/private/v1 QuotaLimitRequestsClient
 
 package tenant
 
@@ -140,48 +143,54 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		provisioningEnabled = *b.provisioningEnabled
 	}
 	result = &function{
-		provisioningEnabled:   provisioningEnabled,
-		hubCache:              b.hubCache,
-		hubsClient:            privatev1.NewHubsClient(b.connection),
-		logger:                b.logger,
-		tenantsClient:         privatev1.NewTenantsClient(b.connection),
-		projectsClient:        privatev1.NewProjectsClient(b.connection),
-		usersClient:           privatev1.NewUsersClient(b.connection),
-		networkClassesClient:  privatev1.NewNetworkClassesClient(b.connection),
-		virtualNetworksClient: privatev1.NewVirtualNetworksClient(b.connection),
-		subnetsClient:         privatev1.NewSubnetsClient(b.connection),
-		securityGroupsClient:  privatev1.NewSecurityGroupsClient(b.connection),
-		externalIPsClient:     privatev1.NewExternalIPsClient(b.connection),
-		natGatewaysClient:     privatev1.NewNATGatewaysClient(b.connection),
-		secretsClient:         privatev1.NewSecretsClient(b.connection),
-		idpManager:            b.idpManager,
-		vaultLifecycle:        b.vaultLifecycle,
-		defaultNetwork:        b.defaultNetwork,
-		maskCalculator:        masks.NewCalculator().Build(),
+		provisioningEnabled:      provisioningEnabled,
+		hubCache:                 b.hubCache,
+		hubsClient:               privatev1.NewHubsClient(b.connection),
+		logger:                   b.logger,
+		tenantsClient:            privatev1.NewTenantsClient(b.connection),
+		projectsClient:           privatev1.NewProjectsClient(b.connection),
+		usersClient:              privatev1.NewUsersClient(b.connection),
+		networkClassesClient:     privatev1.NewNetworkClassesClient(b.connection),
+		virtualNetworksClient:    privatev1.NewVirtualNetworksClient(b.connection),
+		subnetsClient:            privatev1.NewSubnetsClient(b.connection),
+		securityGroupsClient:     privatev1.NewSecurityGroupsClient(b.connection),
+		externalIPsClient:        privatev1.NewExternalIPsClient(b.connection),
+		natGatewaysClient:        privatev1.NewNATGatewaysClient(b.connection),
+		quotaLimitsClient:        privatev1.NewQuotaLimitsClient(b.connection),
+		quotaThresholdsClient:    privatev1.NewQuotaThresholdsClient(b.connection),
+		quotaLimitRequestsClient: privatev1.NewQuotaLimitRequestsClient(b.connection),
+		secretsClient:            privatev1.NewSecretsClient(b.connection),
+		idpManager:               b.idpManager,
+		vaultLifecycle:           b.vaultLifecycle,
+		defaultNetwork:           b.defaultNetwork,
+		maskCalculator:           masks.NewCalculator().Build(),
 	}
 	return
 }
 
 // function is the implementation of the reconciler function.
 type function struct {
-	provisioningEnabled   bool
-	hubCache              controllers.HubCache
-	hubsClient            privatev1.HubsClient
-	logger                *slog.Logger
-	tenantsClient         privatev1.TenantsClient
-	projectsClient        privatev1.ProjectsClient
-	usersClient           privatev1.UsersClient
-	networkClassesClient  privatev1.NetworkClassesClient
-	virtualNetworksClient privatev1.VirtualNetworksClient
-	subnetsClient         privatev1.SubnetsClient
-	securityGroupsClient  privatev1.SecurityGroupsClient
-	externalIPsClient     privatev1.ExternalIPsClient
-	natGatewaysClient     privatev1.NATGatewaysClient
-	secretsClient         privatev1.SecretsClient
-	defaultNetwork        defaultnetworking.Manager
-	idpManager            *idp.TenantManager
-	vaultLifecycle        vault.LifecycleClient
-	maskCalculator        *masks.Calculator
+	provisioningEnabled      bool
+	hubCache                 controllers.HubCache
+	hubsClient               privatev1.HubsClient
+	logger                   *slog.Logger
+	tenantsClient            privatev1.TenantsClient
+	projectsClient           privatev1.ProjectsClient
+	usersClient              privatev1.UsersClient
+	networkClassesClient     privatev1.NetworkClassesClient
+	virtualNetworksClient    privatev1.VirtualNetworksClient
+	subnetsClient            privatev1.SubnetsClient
+	securityGroupsClient     privatev1.SecurityGroupsClient
+	externalIPsClient        privatev1.ExternalIPsClient
+	natGatewaysClient        privatev1.NATGatewaysClient
+	quotaLimitsClient        privatev1.QuotaLimitsClient
+	quotaThresholdsClient    privatev1.QuotaThresholdsClient
+	quotaLimitRequestsClient privatev1.QuotaLimitRequestsClient
+	secretsClient            privatev1.SecretsClient
+	defaultNetwork           defaultnetworking.Manager
+	idpManager               *idp.TenantManager
+	vaultLifecycle           vault.LifecycleClient
+	maskCalculator           *masks.Calculator
 }
 
 // Run executes the reconciliation logic for the given tenant.
@@ -615,6 +624,21 @@ func (t *task) delete(ctx context.Context) error {
 		)
 	}
 
+	// Quota rows are tenant-owned and reference the tenant and its projects,
+	// including the root project, with foreign keys. Remove them before
+	// requesting project deletion so they cannot block project archival or the
+	// final removal of the tenant row.
+	pendingQuota, err := t.deleteTenantQuota(ctx)
+	if err != nil {
+		return err
+	}
+	if pendingQuota {
+		return controllers.RequeueAtInterval(
+			errors.New("tenant quota rows are still pending deletion"),
+			defaultRetryTimeout,
+		)
+	}
+
 	// Delete every project in the tenant. Project controllers enforce child-first
 	// archival, while this reconciler signals deleting projects again on each
 	// retry so parents continue after their children have been archived.
@@ -801,6 +825,99 @@ func (t *task) deleteTenantUsers(ctx context.Context) (bool, error) {
 			return err
 		},
 	})
+}
+
+// deleteTenantQuota lists and deletes the tenant's quota limits, thresholds and limit requests,
+// reading every page before deleting so a tenant with more rows than one page drains in a single
+// pass. The quota outbox is cleared by the tenants server when the deletion is accepted, because
+// it has no API.
+func (t *task) deleteTenantQuota(ctx context.Context) (bool, error) {
+	tenantName := t.tenant.GetMetadata().GetName()
+	filter := fmt.Sprintf("this.metadata.tenant == %q", tenantName)
+	pending := false
+
+	if t.r.quotaLimitsClient != nil {
+		deleted, err := controllers.CascadeDeleteAll(ctx, controllers.CascadeDeleteAllOptions[*privatev1.QuotaLimit]{
+			Filter: filter,
+			List: func(ctx context.Context, filter string, limit, offset int32) ([]*privatev1.QuotaLimit, int32, error) {
+				response, err := t.r.quotaLimitsClient.List(ctx, privatev1.QuotaLimitsListRequest_builder{
+					Filter: &filter, Limit: &limit, Offset: &offset,
+				}.Build())
+				if err != nil {
+					return nil, 0, fmt.Errorf("failed to list quota limits for tenant deletion: %w", err)
+				}
+				return response.GetItems(), response.GetTotal(), nil
+			},
+			Delete: func(ctx context.Context, id string) error {
+				_, err := t.r.quotaLimitsClient.Delete(ctx, privatev1.QuotaLimitsDeleteRequest_builder{Id: id}.Build())
+				return err
+			},
+			Signal: func(ctx context.Context, id string) error {
+				_, err := t.r.quotaLimitsClient.Signal(ctx, privatev1.QuotaLimitsSignalRequest_builder{Id: id}.Build())
+				return err
+			},
+		})
+		if err != nil {
+			return false, err
+		}
+		pending = pending || deleted
+	}
+
+	if t.r.quotaThresholdsClient != nil {
+		deleted, err := controllers.CascadeDeleteAll(ctx, controllers.CascadeDeleteAllOptions[*privatev1.QuotaThreshold]{
+			Filter: filter,
+			List: func(ctx context.Context, filter string, limit, offset int32) ([]*privatev1.QuotaThreshold, int32, error) {
+				response, err := t.r.quotaThresholdsClient.List(ctx, privatev1.QuotaThresholdsListRequest_builder{
+					Filter: &filter, Limit: &limit, Offset: &offset,
+				}.Build())
+				if err != nil {
+					return nil, 0, fmt.Errorf("failed to list quota thresholds for tenant deletion: %w", err)
+				}
+				return response.GetItems(), response.GetTotal(), nil
+			},
+			Delete: func(ctx context.Context, id string) error {
+				_, err := t.r.quotaThresholdsClient.Delete(ctx, privatev1.QuotaThresholdsDeleteRequest_builder{Id: id}.Build())
+				return err
+			},
+			Signal: func(ctx context.Context, id string) error {
+				_, err := t.r.quotaThresholdsClient.Signal(ctx, privatev1.QuotaThresholdsSignalRequest_builder{Id: id}.Build())
+				return err
+			},
+		})
+		if err != nil {
+			return false, err
+		}
+		pending = pending || deleted
+	}
+
+	if t.r.quotaLimitRequestsClient != nil {
+		deleted, err := controllers.CascadeDeleteAll(ctx, controllers.CascadeDeleteAllOptions[*privatev1.QuotaLimitRequest]{
+			Filter: filter,
+			List: func(ctx context.Context, filter string, limit, offset int32) ([]*privatev1.QuotaLimitRequest, int32, error) {
+				response, err := t.r.quotaLimitRequestsClient.List(ctx, privatev1.QuotaLimitRequestsListRequest_builder{
+					Filter: &filter, Limit: &limit, Offset: &offset,
+				}.Build())
+				if err != nil {
+					return nil, 0, fmt.Errorf("failed to list quota limit requests for tenant deletion: %w", err)
+				}
+				return response.GetItems(), response.GetTotal(), nil
+			},
+			Delete: func(ctx context.Context, id string) error {
+				_, err := t.r.quotaLimitRequestsClient.Delete(ctx, privatev1.QuotaLimitRequestsDeleteRequest_builder{Id: id}.Build())
+				return err
+			},
+			Signal: func(ctx context.Context, id string) error {
+				_, err := t.r.quotaLimitRequestsClient.Signal(ctx, privatev1.QuotaLimitRequestsSignalRequest_builder{Id: id}.Build())
+				return err
+			},
+		})
+		if err != nil {
+			return false, err
+		}
+		pending = pending || deleted
+	}
+
+	return pending, nil
 }
 
 // deleteTenantProjects requests deletion of every project in the tenant. Existing

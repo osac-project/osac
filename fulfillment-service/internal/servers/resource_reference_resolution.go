@@ -475,6 +475,10 @@ func getLockedReferenceResource[O dao.Object](ctx context.Context, resourceDao *
 	return executeReferenceGet(ctx, resourceDao.Get().SetId(id).SetLock(true))
 }
 
+func getShareLockedReferenceResource[O dao.Object](ctx context.Context, resourceDao *dao.GenericDAO[O], id string) (O, error) {
+	return executeReferenceGet(ctx, resourceDao.Get().SetId(id).SetShareLock(true))
+}
+
 func executeReferenceGet[O dao.Object](ctx context.Context, request *dao.GetRequest[O]) (O, error) {
 	response, err := request.Do(ctx)
 	if err != nil {

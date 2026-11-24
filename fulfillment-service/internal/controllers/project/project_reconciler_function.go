@@ -16,6 +16,8 @@ language governing permissions and limitations under the License.
 //go:generate mockgen -destination=users_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 UsersClient
 //go:generate mockgen -destination=project_memberships_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 ProjectMembershipsClient
 //go:generate mockgen -destination=secrets_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 SecretsClient
+//go:generate mockgen -destination=quota_limits_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 QuotaLimitsClient
+//go:generate mockgen -destination=quota_thresholds_client_mock.go -package=project github.com/osac-project/osac/proto/gen/osac/private/v1 QuotaThresholdsClient
 
 package project
 
@@ -108,6 +110,8 @@ func (b *FunctionBuilder) Build() (result *function, err error) {
 		tenantsClient:            privatev1.NewTenantsClient(b.connection),
 		projectMembershipsClient: privatev1.NewProjectMembershipsClient(b.connection),
 		secretsClient:            privatev1.NewSecretsClient(b.connection),
+		quotaLimitsClient:        privatev1.NewQuotaLimitsClient(b.connection),
+		quotaThresholdsClient:    privatev1.NewQuotaThresholdsClient(b.connection),
 		projectGroupManager:      b.projectGroupManager,
 		defaultNetwork:           b.defaultNetwork,
 		maskCalculator:           masks.NewCalculator().Build(),
@@ -122,6 +126,8 @@ type function struct {
 	tenantsClient            privatev1.TenantsClient
 	projectMembershipsClient privatev1.ProjectMembershipsClient
 	secretsClient            privatev1.SecretsClient
+	quotaLimitsClient        privatev1.QuotaLimitsClient
+	quotaThresholdsClient    privatev1.QuotaThresholdsClient
 	projectGroupManager      *idp.ProjectGroupManager
 	defaultNetwork           defaultnetworking.Manager
 	maskCalculator           *masks.Calculator
@@ -525,6 +531,22 @@ func (t *task) delete(ctx context.Context) error {
 		}
 	}
 
+	// Quota limits and thresholds are scoped to the project and reference it
+	// with a foreign key. Delete them before removing the project finalizer so
+	// they cannot prevent the project from being archived. Limit requests are
+	// tenant-scoped, so the tenant reconciler deletes them.
+	pendingQuota, err := t.deleteProjectQuota(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to delete project quota rows: %w", err)
+	}
+	if pendingQuota {
+		t.setPendingDeletion("Pending quota row deletion prior to project deletion", controllers.RequeueAtInterval(
+			errors.New("project quota rows are still pending deletion"),
+			projectChildDeleteRetryDelay,
+		))
+		return nil
+	}
+
 	// Default networking belongs to the tenant root project. The controller
 	// removes those resources through the authenticated controller identity;
 	// ordinary API callers remain blocked by the system-managed protection.
@@ -600,6 +622,77 @@ func (t *task) deleteProjectSecrets(ctx context.Context) (bool, error) {
 			return err
 		},
 	})
+}
+
+// deleteProjectQuota lists and deletes the quota limits and thresholds scoped to this project,
+// reading every page before deleting. The rows reference the project with a foreign key, so they
+// are removed before the project is archived. Limit requests are not listed here: they are
+// tenant-scoped, so the tenant reconciler owns them. The quota outbox is cleared by the projects
+// server when the deletion is accepted, because it has no API.
+func (t *task) deleteProjectQuota(ctx context.Context) (bool, error) {
+	projectName := t.project.GetMetadata().GetName()
+	tenant := t.project.GetMetadata().GetTenant()
+	filter := fmt.Sprintf(
+		"this.metadata.tenant == %q && this.metadata.project == %q",
+		tenant, projectName,
+	)
+	pending := false
+
+	if t.r.quotaLimitsClient != nil {
+		deleted, err := controllers.CascadeDeleteAll(ctx, controllers.CascadeDeleteAllOptions[*privatev1.QuotaLimit]{
+			Filter: filter,
+			List: func(ctx context.Context, filter string, limit, offset int32) ([]*privatev1.QuotaLimit, int32, error) {
+				response, err := t.r.quotaLimitsClient.List(ctx, privatev1.QuotaLimitsListRequest_builder{
+					Filter: &filter, Limit: &limit, Offset: &offset,
+				}.Build())
+				if err != nil {
+					return nil, 0, fmt.Errorf("failed to query for project quota limits: %w", err)
+				}
+				return response.GetItems(), response.GetTotal(), nil
+			},
+			Delete: func(ctx context.Context, id string) error {
+				_, err := t.r.quotaLimitsClient.Delete(ctx, privatev1.QuotaLimitsDeleteRequest_builder{Id: id}.Build())
+				return err
+			},
+			Signal: func(ctx context.Context, id string) error {
+				_, err := t.r.quotaLimitsClient.Signal(ctx, privatev1.QuotaLimitsSignalRequest_builder{Id: id}.Build())
+				return err
+			},
+		})
+		if err != nil {
+			return false, err
+		}
+		pending = pending || deleted
+	}
+
+	if t.r.quotaThresholdsClient != nil {
+		deleted, err := controllers.CascadeDeleteAll(ctx, controllers.CascadeDeleteAllOptions[*privatev1.QuotaThreshold]{
+			Filter: filter,
+			List: func(ctx context.Context, filter string, limit, offset int32) ([]*privatev1.QuotaThreshold, int32, error) {
+				response, err := t.r.quotaThresholdsClient.List(ctx, privatev1.QuotaThresholdsListRequest_builder{
+					Filter: &filter, Limit: &limit, Offset: &offset,
+				}.Build())
+				if err != nil {
+					return nil, 0, fmt.Errorf("failed to query for project quota thresholds: %w", err)
+				}
+				return response.GetItems(), response.GetTotal(), nil
+			},
+			Delete: func(ctx context.Context, id string) error {
+				_, err := t.r.quotaThresholdsClient.Delete(ctx, privatev1.QuotaThresholdsDeleteRequest_builder{Id: id}.Build())
+				return err
+			},
+			Signal: func(ctx context.Context, id string) error {
+				_, err := t.r.quotaThresholdsClient.Signal(ctx, privatev1.QuotaThresholdsSignalRequest_builder{Id: id}.Build())
+				return err
+			},
+		})
+		if err != nil {
+			return false, err
+		}
+		pending = pending || deleted
+	}
+
+	return pending, nil
 }
 
 // deleteProjectMemberships lists all ProjectMemberships scoped to this project, marks each for

@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/gobuffalo/flect"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -41,6 +42,34 @@ type CascadeDeleteItemsOptions[T CascadeResource] struct {
 	Items  []T
 	Delete func(context.Context, string) error
 	Signal func(context.Context, string) error
+}
+
+// CascadeDeleteAllOptions describes how to list and delete every child resource a filter
+// matches. The list function returns one page of the filter's results and the total number of
+// matching rows.
+type CascadeDeleteAllOptions[T CascadeResource] struct {
+	Filter string
+	List   func(ctx context.Context, filter string, limit, offset int32) (items []T, total int32, err error)
+	Delete func(ctx context.Context, id string) error
+	Signal func(ctx context.Context, id string) error
+}
+
+// CascadeDeleteAll lists every item the filter matches, in pages, deletes each one, and reports
+// whether any item is still pending. It lists all pages before deleting, so a tenant with more
+// rows than one page drains in a single pass.
+func CascadeDeleteAll[T CascadeResource](
+	ctx context.Context, options CascadeDeleteAllOptions[T]) (pending bool, err error) {
+	items, err := dao.DrainPages(ctx, func(ctx context.Context, limit, offset int32) ([]T, int32, error) {
+		return options.List(ctx, options.Filter, limit, offset)
+	})
+	if err != nil {
+		return false, err
+	}
+	return CascadeDeleteItems(ctx, CascadeDeleteItemsOptions[T]{
+		Items:  items,
+		Delete: options.Delete,
+		Signal: options.Signal,
+	})
 }
 
 // CascadeDeleteItems processes each listed child. It treats NotFound as success, signals

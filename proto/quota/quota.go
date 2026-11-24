@@ -24,7 +24,7 @@ specific language governing permissions and limitations under the License.
 //
 // Price() computes the full cost of one request: the dimensions and amounts it uses,
 // including what OSAC will create for it, with the larger-of rule applied on each
-// dimension. Links() exposes the created_for link descriptors for the usage query.
+// dimension.
 package quota
 
 import (
@@ -66,6 +66,10 @@ var kindsThatUseNothing = []string{
 	"NetworkClass",
 	"Project",
 	"ProjectMembership",
+	"QuotaDefaultLimit",
+	"QuotaLimit",
+	"QuotaLimitRequest",
+	"QuotaThreshold",
 	"Role",
 	"RoleBinding",
 	"Secret",
@@ -613,8 +617,9 @@ func newField(
 		if err != nil {
 			return nil, err
 		}
-		// A field link is only a parent reference: Links() emits nothing else for a
-		// field link, so a name prefix or labels here would be silently dropped.
+		// A field link is only a parent reference: the usage counter reads nothing
+		// else from a field link, so a name prefix or labels here would be silently
+		// dropped.
 		if createdFor.NamePrefix != "" || createdFor.IDLabel != "" || createdFor.KindLabel != "" {
 			return nil, fmt.Errorf(
 				"%s holds a field link, so it can carry no name prefix or labels", where,
@@ -740,7 +745,7 @@ func newCreates(
 			return nil, fmt.Errorf("%s counts through '%s', which isn't an integer field", where, creates.CountField)
 		}
 	}
-	for _, set := range sortedKeys(creates.Set) {
+	for _, set := range SortedKeys(creates.Set) {
 		source, err := resolveField(item, creates.Set[set])
 		if err != nil {
 			return nil, fmt.Errorf("%s has an invalid set path: %w", where, err)
@@ -851,7 +856,7 @@ func checkCreatesCycles(kinds []Kind) error {
 		state[kind] = done
 		return nil
 	}
-	for _, name := range sortedKeys(edges) {
+	for _, name := range SortedKeys(edges) {
 		if err := visit(name, nil); err != nil {
 			return err
 		}
@@ -904,6 +909,38 @@ func bracePaths(template string) ([]string, error) {
 		paths = append(paths, path)
 		rest = rest[start+end+1:]
 	}
+}
+
+// Field resolves a field path against the kind's message and returns the field it
+// names, so a consumer needs no descriptor walk of its own.
+func (k *Kind) Field(path string) (protoreflect.FieldDescriptor, error) {
+	descriptor, err := protoregistry.GlobalFiles.FindDescriptorByName(k.Message)
+	if err != nil {
+		return nil, err
+	}
+	message, ok := descriptor.(protoreflect.MessageDescriptor)
+	if !ok {
+		return nil, fmt.Errorf("kind message '%s' isn't a message", k.Message)
+	}
+	return resolveField(message, path)
+}
+
+// LinkTo returns the link the kind declares to the parent kind: the kind's own link, or
+// the link of the field that names it. The field's path is empty for a kind-level link.
+// A label link applies to every parent kind, because the kind label names the child.
+func (k *Kind) LinkTo(parent string) (*CreatedFor, string, error) {
+	if k.CreatedFor != nil &&
+		(k.CreatedFor.Parent == parent || k.CreatedFor.IDLabel != "") {
+		return k.CreatedFor, "", nil
+	}
+	for _, field := range k.Fields {
+		if field.CreatedFor != nil && field.CreatedFor.Parent == parent {
+			return field.CreatedFor, field.Path, nil
+		}
+	}
+	return nil, "", fmt.Errorf(
+		"kind '%s' has no created_for link to parent kind '%s'", k.Name, parent,
+	)
 }
 
 // resolveField resolves a proto field path against a message and returns the field it
@@ -961,9 +998,9 @@ func assignable(target, source protoreflect.FieldDescriptor) bool {
 	return true
 }
 
-// sortedKeys returns the keys of a map of strings, so validation and pricing walk
+// SortedKeys returns the keys of a map of strings, so validation and pricing walk
 // annotations in a stable order.
-func sortedKeys[V any](values map[string]V) []string {
+func SortedKeys[V any](values map[string]V) []string {
 	keys := make([]string, 0, len(values))
 	for key := range values {
 		keys = append(keys, key)

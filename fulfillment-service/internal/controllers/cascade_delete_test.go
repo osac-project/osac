@@ -17,6 +17,7 @@ package controllers
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -133,5 +134,94 @@ var _ = Describe("CascadeDeleteItems", func() {
 		})
 
 		Expect(err).To(MatchError(ContainSubstring("failed to delete project membership membership-1")))
+	})
+})
+
+var _ = Describe("CascadeDeleteAll", func() {
+	It("drains a listing larger than one page in a single pass", func() {
+		const total = 205
+		items := make([]*privatev1.Project, 0, total)
+		for i := 0; i < total; i++ {
+			items = append(items, cascadeTestProject(fmt.Sprintf("item-%03d", i), false))
+		}
+		var deleted []string
+		pending, err := CascadeDeleteAll(context.Background(), CascadeDeleteAllOptions[*privatev1.Project]{
+			List: func(_ context.Context, _ string, limit, offset int32) ([]*privatev1.Project, int32, error) {
+				// The whole listing drains before the first deletion, so one pass
+				// covers a tenant with more rows than a page:
+				Expect(deleted).To(BeEmpty())
+				end := offset + limit
+				if end > total {
+					end = total
+				}
+				return items[offset:end], total, nil
+			},
+			Delete: func(_ context.Context, id string) error {
+				deleted = append(deleted, id)
+				return nil
+			},
+		})
+
+		Expect(err).ToNot(HaveOccurred())
+		// Every deletion was requested, so the parent stays pending:
+		Expect(pending).To(BeTrue())
+		Expect(deleted).To(HaveLen(total))
+		Expect(deleted[0]).To(Equal("item-000"))
+		Expect(deleted[total-1]).To(Equal("item-204"))
+	})
+
+	It("refuses a page that holds more items than its total", func() {
+		_, err := CascadeDeleteAll(context.Background(), CascadeDeleteAllOptions[*privatev1.Project]{
+			List: func(context.Context, string, int32, int32) ([]*privatev1.Project, int32, error) {
+				return []*privatev1.Project{
+					cascadeTestProject("one", false),
+					cascadeTestProject("two", false),
+				}, 1, nil
+			},
+			Delete: func(context.Context, string) error {
+				Fail("Delete called for an invalid listing")
+				return nil
+			},
+		})
+
+		Expect(err).To(MatchError("the listing returned an invalid page"))
+	})
+
+	It("refuses a listing whose total changes between pages", func() {
+		var pages int
+		_, err := CascadeDeleteAll(context.Background(), CascadeDeleteAllOptions[*privatev1.Project]{
+			List: func(context.Context, string, int32, int32) ([]*privatev1.Project, int32, error) {
+				pages++
+				if pages == 1 {
+					return []*privatev1.Project{cascadeTestProject("one", false)}, 2, nil
+				}
+				return []*privatev1.Project{cascadeTestProject("two", false)}, 3, nil
+			},
+			Delete: func(context.Context, string) error {
+				Fail("Delete called for an inconsistent listing")
+				return nil
+			},
+		})
+
+		Expect(err).To(MatchError("the listing total changed while it was being read"))
+	})
+
+	It("refuses an empty page that leaves rows of the total unread", func() {
+		var pages int
+		_, err := CascadeDeleteAll(context.Background(), CascadeDeleteAllOptions[*privatev1.Project]{
+			List: func(context.Context, string, int32, int32) ([]*privatev1.Project, int32, error) {
+				pages++
+				if pages == 1 {
+					return []*privatev1.Project{cascadeTestProject("one", false)}, 2, nil
+				}
+				return nil, 2, nil
+			},
+			Delete: func(context.Context, string) error {
+				Fail("Delete called for an incomplete listing")
+				return nil
+			},
+		})
+
+		Expect(err).To(MatchError("the listing returned an incomplete page"))
 	})
 })

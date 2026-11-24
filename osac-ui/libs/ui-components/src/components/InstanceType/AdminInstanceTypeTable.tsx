@@ -8,13 +8,11 @@ import InstanceTypeLifecycleLabel from './InstanceTypeLifecycleLabel';
 import { useTranslation } from '../../hooks/useTranslation';
 import { Timestamp } from '../Primitives/Timestamp';
 
-const INSTANCE_TYPE_NAME_PREVIEW_LENGTH = 32;
-const NAME_COLUMN_WIDTH = 15;
-const LIFECYCLE_STATE_COLUMN_WIDTH = 15;
-const CPU_CORES_COLUMN_WIDTH = 15;
-const MEMORY_COLUMN_WIDTH = 15;
-const GPU_COLUMN_WIDTH = 15;
-const CREATED_COLUMN_WIDTH = 15;
+const NAME_COLUMN_WIDTH = 35;
+const LIFECYCLE_STATE_COLUMN_WIDTH = 10;
+const CPU_CORES_COLUMN_WIDTH = 10;
+const MEMORY_COLUMN_WIDTH = 10;
+const GPU_COLUMN_WIDTH = 10;
 
 interface AdminInstanceTypeTableProps {
   instanceTypes: PrivateInstanceType[];
@@ -32,7 +30,7 @@ const AdminInstanceTypeTable = ({ instanceTypes }: AdminInstanceTypeTableProps) 
           <Th width={CPU_CORES_COLUMN_WIDTH}>{t('vCPUs')}</Th>
           <Th width={MEMORY_COLUMN_WIDTH}>{t('Memory (GiB)')}</Th>
           <Th width={GPU_COLUMN_WIDTH}>{t('GPUs')}</Th>
-          <Th width={CREATED_COLUMN_WIDTH}>{t('Created')}</Th>
+          <Th>{t('Created')}</Th>
           <Th aria-label={t('Actions')} />
         </Tr>
       </Thead>
@@ -41,11 +39,10 @@ const AdminInstanceTypeTable = ({ instanceTypes }: AdminInstanceTypeTableProps) 
           const gpu = instanceType.spec?.gpu;
           return (
             <Tr key={instanceType.id}>
-              <Td dataLabel={t('Name')} modifier="truncate" width={NAME_COLUMN_WIDTH}>
+              <Td dataLabel={t('Name')} width={NAME_COLUMN_WIDTH}>
                 <ResourceNameField
                   resource={instanceType}
                   detailsUrl={`/admin/infrastructure/instance-types/${instanceType.id}`}
-                  maxCharsDisplayed={INSTANCE_TYPE_NAME_PREVIEW_LENGTH}
                   subTitle={instanceType.spec?.description}
                 />
               </Td>
@@ -61,7 +58,7 @@ const AdminInstanceTypeTable = ({ instanceTypes }: AdminInstanceTypeTableProps) 
               <Td dataLabel={t('GPUs')} width={GPU_COLUMN_WIDTH}>
                 {gpu?.count ?? '—'}
               </Td>
-              <Td dataLabel={t('Created')} width={CREATED_COLUMN_WIDTH}>
+              <Td dataLabel={t('Created')}>
                 <Timestamp value={instanceType.metadata?.creationTimestamp} />
               </Td>
               <Td dataLabel={t('Actions')} isActionCell>

@@ -51,10 +51,14 @@ describe('ComputeInstanceTypeField', () => {
     const { user } = renderField({ id: '', name: '' }, { apiFixtures: { instanceTypes } });
 
     await user.click(await screen.findByLabelText(/instance type/i));
-    await user.click(await screen.findByRole('option', { name: /large — 8 vCPUs, 32 GiB/ }));
+    const large = await screen.findByRole('option', { name: /^large\b/ });
+    expect(large.querySelector('.pf-v6-c-menu__item-description')).toHaveTextContent(
+      '8 vCPUs · 32 GiB',
+    );
+    await user.click(large);
 
     await waitFor(() => {
-      expect(screen.getByRole('combobox')).toHaveValue('large — 8 vCPUs, 32 GiB');
+      expect(screen.getByRole('combobox')).toHaveValue('large');
       expect(screen.getByRole('status')).toHaveTextContent('it-large|large');
     });
   });
@@ -79,7 +83,7 @@ describe('ComputeInstanceTypeField', () => {
     renderField({ id: 'it-small', name: 'small' }, { apiFixtures: { instanceTypes } });
 
     await waitFor(() => {
-      expect(screen.getByRole('combobox')).toHaveValue('small — 2 vCPUs, 8 GiB');
+      expect(screen.getByRole('combobox')).toHaveValue('small');
     });
   });
 

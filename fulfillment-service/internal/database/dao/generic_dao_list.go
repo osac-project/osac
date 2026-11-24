@@ -15,6 +15,7 @@ package dao
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -257,5 +258,43 @@ func (d *GenericDAO[O]) List() *ListRequest[O] {
 		request: request[O]{
 			dao: d,
 		},
+	}
+}
+
+// DrainPages lists every row the given page-listing function matches, draining page by
+// page until the listing's total is read. The listing function receives the page size and
+// the offset, and returns one page together with the total number of rows the listing
+// matches. It refuses the drift a listing can show while rows move under it: a page that
+// holds more items than its total counts, a total that changes between pages, and an
+// empty page that still leaves rows of the total unread.
+func DrainPages[T any](
+	ctx context.Context,
+	list func(ctx context.Context, limit, offset int32) (page []T, total int32, err error),
+) ([]T, error) {
+	const pageSize = 100
+	var items []T
+	var total int32
+	for offset := int32(0); ; {
+		page, pageTotal, listErr := list(ctx, pageSize, offset)
+		if listErr != nil {
+			return nil, listErr
+		}
+		if pageTotal < 0 || int64(len(page)) > int64(pageTotal) {
+			return nil, errors.New("the listing returned an invalid page")
+		}
+		if total == 0 {
+			total = pageTotal
+		} else if total != pageTotal {
+			return nil, errors.New("the listing total changed while it was being read")
+		}
+		items = append(items, page...)
+		if int64(len(items)) >= int64(total) {
+			return items, nil
+		}
+		if len(page) == 0 {
+			return nil, errors.New("the listing returned an incomplete page")
+		}
+		size := int32(len(page)) // #nosec G115 -- bounded by the requested page size
+		offset += size
 	}
 }

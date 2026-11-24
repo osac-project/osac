@@ -79,6 +79,8 @@ import {
   RoleBinding,
   Secret,
   SecurityGroup,
+  type SecurityGroupsDeleteRequest,
+  type SecurityGroupsDeleteResponse,
   SelfSubjectAccessReviews,
   SelfSubjectAccessReviewsCreateResponseSchema,
   ServiceTier,
@@ -196,6 +198,8 @@ import type {
   StorageTiersUpdateResponse,
   TenantsCreateRequest,
   TenantsCreateResponse,
+  TenantsUpdateRequest,
+  TenantsUpdateResponse,
 } from '@osac/types/private';
 import {
   BareMetalInstanceTypesCreateResponseSchema,
@@ -572,6 +576,7 @@ export type MockTransportOverrides = {
     req: IdentityProvidersUpdateRequest,
   ) => IdentityProvidersUpdateResponse;
   onTenantCreate?: (req: TenantsCreateRequest) => TenantsCreateResponse;
+  onTenantUpdate?: (req: TenantsUpdateRequest) => TenantsUpdateResponse;
   onTenantList?: () => never;
   onStorageBackendList?: (
     req: StorageBackendsListRequest,
@@ -678,6 +683,9 @@ export type MockTransportOverrides = {
     req: VirtualNetworksDeleteRequest,
   ) => VirtualNetworksDeleteResponse | Promise<VirtualNetworksDeleteResponse>;
   onSecurityGroupList?: (req: unknown) => void;
+  onSecurityGroupDelete?: (
+    req: SecurityGroupsDeleteRequest,
+  ) => SecurityGroupsDeleteResponse | Promise<SecurityGroupsDeleteResponse>;
   onNatGatewayList?: (req: NATGatewaysListRequest) => void;
   onNatGatewayCreate?: (
     req: NATGatewaysCreateRequest,
@@ -726,7 +734,7 @@ export const createMockConnectTransport = (
   const projectMemberships = fixtures.projectMemberships ?? [];
   const virtualNetworks = [...(fixtures.virtualNetworks ?? [])];
   const subnets = [...(fixtures.subnets ?? [])];
-  const securityGroups = fixtures.securityGroups ?? [];
+  const securityGroups = [...(fixtures.securityGroups ?? [])];
   const instanceTypes = fixtures.instanceTypes ?? [];
   const publicBaremetalInstanceTypes = fixtures.publicBaremetalInstanceTypes ?? [];
   const diskImages = fixtures.diskImages ?? [];
@@ -932,10 +940,13 @@ export const createMockConnectTransport = (
         list: (req) => {
           const items = virtualNetworks.filter(
             (item) =>
+              matchesIdInFilter(req.filter, item.id) &&
               matchesReadyStateFilter(req.filter, item.status?.state) &&
-              matchesVirtualNetworkScopeFilter(req.filter, undefined),
+              matchesVirtualNetworkScopeFilter(req.filter, undefined) &&
+              matchesNameContainsFilter(req.filter, item.metadata?.name) &&
+              matchesStatusStateInFilter(req.filter, item.status?.state),
           );
-          const total = virtualNetworks.length;
+          const total = items.length;
           if (req.limit === 0) {
             return { items: [], size: 0, total };
           }
@@ -997,9 +1008,24 @@ export const createMockConnectTransport = (
           const items = securityGroups.filter(
             (item) =>
               matchesReadyStateFilter(req.filter, item.status?.state) &&
-              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
+              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id) &&
+              matchesNameContainsFilter(req.filter, item.metadata?.name),
           );
-          return { items, size: items.length, total: items.length };
+          const total = items.length;
+          if (req.limit === 0) {
+            return { items: [], size: 0, total };
+          }
+          return { items, size: items.length, total };
+        },
+        delete: (req) => {
+          if (overrides.onSecurityGroupDelete) {
+            return overrides.onSecurityGroupDelete(req);
+          }
+          const index = securityGroups.findIndex((group) => group.id === req.id);
+          if (index !== -1) {
+            securityGroups.splice(index, 1);
+          }
+          return {};
         },
       });
 
@@ -1389,6 +1415,8 @@ export const createMockConnectTransport = (
             },
           };
         },
+        update: (req) =>
+          overrides.onTenantUpdate?.(req) ?? ({ object: req.object } as TenantsUpdateResponse),
         delete: () => ({}),
       });
 

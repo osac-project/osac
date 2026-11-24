@@ -27,6 +27,11 @@ override KIND_EXPERIMENTAL_PROVIDER := $(notdir $(CONTAINER_TOOL))
 LOG_LEVEL ?= info
 PROCS ?= 4
 GINKGO_ARGS ?= --label-filter=caas-it
+# Optional JUnit output: one file per ginkgo suite (<dir>/<prepare|cluster>.xml),
+# written only when the directory is set. CI passes it in and merges the files
+# into the run's single junit.xml log bundle.
+JUNIT_REPORT_DIR ?=
+junit-report = $(if $(strip $(JUNIT_REPORT_DIR)),--junit-report="$(abspath $(JUNIT_REPORT_DIR)/$(1).xml)")
 ifeq ($(origin PROJECT_URL),undefined)
 PROJECT_URL := $(or $(shell git -C "$(ROOT_DIR)" remote get-url origin 2>/dev/null),https://github.com/osac-project/osac.git)
 endif
@@ -117,12 +122,18 @@ test:
 	$(MAKE) run
 
 fixtures: _kubeconfig-check
+ifneq ($(strip $(JUNIT_REPORT_DIR)),)
+	rm -f "$(abspath $(JUNIT_REPORT_DIR)/prepare.xml)"
+endif
 	NS=osac KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT=8443 \
-	  ginkgo run --procs=1 --fail-on-empty --timeout=15m -v ./suites/prepare -- --log-level=$(LOG_LEVEL)
+	  ginkgo run --procs=1 --fail-on-empty --timeout=15m -v $(call junit-report,prepare) ./suites/prepare -- --log-level=$(LOG_LEVEL)
 
 run: _kubeconfig-check
+ifneq ($(strip $(JUNIT_REPORT_DIR)),)
+	rm -f "$(abspath $(JUNIT_REPORT_DIR)/cluster.xml)"
+endif
 	NS=osac KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT=8443 \
-	  ginkgo run --procs=$(PROCS) --fail-on-empty --timeout=45m -v $(GINKGO_ARGS) ./suites/cluster -- --log-level=$(LOG_LEVEL)
+	  ginkgo run --procs=$(PROCS) --fail-on-empty --timeout=45m -v $(call junit-report,cluster) $(GINKGO_ARGS) ./suites/cluster -- --log-level=$(LOG_LEVEL)
 
 # Log the host CLI into the prepared test installation as either seeded user.
 .PHONY: login-admin login-user

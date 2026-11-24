@@ -17,7 +17,6 @@ import ResourceNameField from '@osac/ui-components/components/Resource/ResourceN
 import BareMetalInstanceTypeDeleteModal from './BareMetalInstanceTypeDeleteModal';
 import { useTranslation } from '../../hooks/useTranslation';
 
-const NAME_PREVIEW_LENGTH = 32;
 const NAME_COLUMN_WIDTH = 20;
 const CPU_COLUMN_WIDTH = 20;
 const MEMORY_COLUMN_WIDTH = 15;
@@ -81,11 +80,10 @@ const AdminBareMetalInstanceTypeTable = ({
                 bareMetalInstanceType.spec?.hardware?.accelerators.length ?? 0;
               return (
                 <Tr key={bareMetalInstanceType.id}>
-                  <Td dataLabel={t('Name')} modifier="truncate" width={NAME_COLUMN_WIDTH}>
+                  <Td dataLabel={t('Name')} width={NAME_COLUMN_WIDTH}>
                     <ResourceNameField
                       resource={bareMetalInstanceType}
                       detailsUrl={`/admin/infrastructure/baremetal-instance-types/${bareMetalInstanceType.id}`}
-                      maxCharsDisplayed={NAME_PREVIEW_LENGTH}
                     />
                   </Td>
                   <Td dataLabel={t('CPU')} width={CPU_COLUMN_WIDTH}>

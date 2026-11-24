@@ -75,7 +75,6 @@ ImageSetConfiguration below:
 | `ghcr.io/osac-project/osac-operator` | ghcr.io | Core platform operator |
 | `ghcr.io/osac-project/fulfillment-service` | ghcr.io | Resource lifecycle and Volume API |
 | `ghcr.io/osac-project/envoy` | ghcr.io | OSAC Envoy build |
-| `docker.io/envoyproxy/envoy` | docker.io | Upstream Envoy control-plane dependency |
 | `ghcr.io/osac-project/osac-aap:0.0.48` | ghcr.io | AAP integration workload |
 | `ghcr.io/osac-project/osac-ui` | ghcr.io | Web console |
 | `ghcr.io/osac-project/bare-metal-fulfillment-operator` | ghcr.io | BMaaS fulfillment *(BMaaS only)* |

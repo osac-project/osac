@@ -85,7 +85,7 @@ and incremental updates.
   three VMaaS packages when VMaaS is selected, and MCE when BMaaS is
   selected.
 - Category B owns the single consolidated `additionalImages` list,
-  including both required Envoy references and both required AAP
+  including Envoy references and both required AAP
   references. BMF is included only for BMaaS.
 - Categories C-E identify VMaaS, BMaaS, and custom AAP images to append
   before the dry run.

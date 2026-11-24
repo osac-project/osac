@@ -19,6 +19,7 @@ import (
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/internal/networktask"
 	"github.com/osac-project/osac/osac-operator/pkg/aap"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type checkpointAAP struct {
@@ -465,6 +466,11 @@ var _ = Describe("ComputeInstance public retry projection", func() {
 		Expect(instance.Status.LastProvisioningFailure.Attempt).To(Equal(checkpoint.Attempt))
 		Expect(instance.Status.LastProvisioningFailure.ObservedAt.Time.Equal(checkpoint.ObservedAt.Time)).To(BeTrue())
 		Expect(checkpoint.ObservedAt.After(first.ObservedAt.Time)).To(BeTrue())
+		remote := privatev1.ComputeInstance_builder{Status: privatev1.ComputeInstanceStatus_builder{}.Build()}.Build()
+		Expect(syncComputeInstanceUpdate(ctx, instance, remote)).To(Succeed())
+		Expect(remote.GetStatus().GetLastProvisioningFailure()).NotTo(BeNil())
+		Expect(remote.GetStatus().GetLastProvisioningFailure().GetAttempt()).To(Equal(checkpoint.Attempt))
+		Expect(remote.GetStatus().GetLastProvisioningFailure().GetObservedAt().AsTime().Equal(checkpoint.ObservedAt.Time)).To(BeTrue())
 		clock.Step(result.RequeueAfter)
 		writes.when = func(ci *osacv1alpha1.ComputeInstance) bool {
 			c := ci.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)

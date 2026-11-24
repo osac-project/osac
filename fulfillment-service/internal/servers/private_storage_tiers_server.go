@@ -164,6 +164,10 @@ func (s *PrivateStorageTiersServer) Update(ctx context.Context,
 	}
 
 	requested := request.GetObject()
+	// An indexed mask can discard extra associations before candidate validation.
+	if err := validateTierBackendLimit(len(requested.GetSpec().GetBackends())); err != nil {
+		return nil, err
+	}
 	err = s.generic.UpdateWithValidation(ctx, request, &response, func(ctx context.Context, candidate, current *privatev1.StorageTier) error {
 		name := requested.GetMetadata().GetName()
 		if name != "" && name != current.GetMetadata().GetName() {
@@ -227,13 +231,20 @@ func (s *PrivateStorageTiersServer) validateBackends(ctx context.Context, spec *
 	return nil
 }
 
+func validateTierBackendLimit(count int) error {
+	if count > 1 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"only one backend association is supported in v0.1, but %d were provided", count)
+	}
+	return nil
+}
+
 func (s *PrivateStorageTiersServer) lookupTierBackend(ctx context.Context, backends []*privatev1.BackendAssociation, lock bool) (*privatev1.StorageBackendSpec, error) {
 	if len(backends) == 0 {
 		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.backends' is required and must not be empty")
 	}
-	if len(backends) > 1 {
-		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"only one backend association is supported in v0.1, but %d were provided", len(backends))
+	if err := validateTierBackendLimit(len(backends)); err != nil {
+		return nil, err
 	}
 	id := backends[0].GetBackendId()
 	if id == "" {

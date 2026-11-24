@@ -935,6 +935,33 @@ var _ = Describe("Password secret reference", func() {
 		Expect(err.Error()).To(ContainSubstring("there is no secret"))
 	})
 
+	It("rejects a non-VALUE Secret when adding the first VAST backend login", func() {
+		created, err := createBackend(nil)
+		Expect(err).NotTo(HaveOccurred())
+		id := created.GetObject().GetId()
+		_, err = server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+			Id:       "opaque-secret",
+			Metadata: privatev1.Metadata_builder{Name: "opaque-secret", Tenant: auth.SharedTenant}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_OPAQUE,
+		}.Build()).Do(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		credentials := privatev1.StorageBackendCredentials_builder{
+			Username:       "admin",
+			PasswordSecret: privatev1.SecretLocalReference_builder{Id: "opaque-secret"}.Build(),
+		}.Build()
+		_, err = server.Update(ctx, privatev1.StorageBackendsUpdateRequest_builder{
+			Object: privatev1.StorageBackend_builder{
+				Id: id, Spec: privatev1.StorageBackendSpec_builder{Credentials: credentials}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.credentials"}},
+		}.Build())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(status.Convert(err).Message()).To(ContainSubstring("VALUE"))
+		got, err := server.Get(ctx, privatev1.StorageBackendsGetRequest_builder{Id: id}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got.GetObject().GetSpec().HasCredentials()).To(BeFalse())
+	})
+
 	It("Rejects an empty password_secret reference", func() {
 		_, err := createBackend(privatev1.StorageBackendCredentials_builder{
 			Username:       "admin",

@@ -69,6 +69,10 @@ Validation rules:
   runtime path.
 - `password` and `passwordSecret` are mutually exclusive.
 
+Before attaching an endpoint-only VAST backend to an NFS tier in a running
+deployment, make sure the operator and AAP can use tenant-supplied VAST
+credentials. Creating the tier triggers tenant storage reconciliation.
+
 ### Rotation
 
 An OSAC-managed VAST backend can gain its first login or drop its last login

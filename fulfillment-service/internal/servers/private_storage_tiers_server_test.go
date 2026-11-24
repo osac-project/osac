@@ -389,6 +389,26 @@ var _ = Describe("Private storage tiers server", func() {
 			Expect(status.Code(err)).To(Equal(codes.NotFound))
 		})
 
+		It("rejects extra backend associations in an indexed update", func() {
+			created := createStorageTier()
+			_, err := server.Update(ctx, privatev1.StorageTiersUpdateRequest_builder{
+				Object: privatev1.StorageTier_builder{
+					Id: created.GetId(),
+					Spec: privatev1.StorageTierSpec_builder{Backends: []*privatev1.BackendAssociation{
+						privatev1.BackendAssociation_builder{BackendId: backendID, MaxReadBandwidthMbs: 2000}.Build(),
+						privatev1.BackendAssociation_builder{BackendId: backendID}.Build(),
+					}}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.backends.0"}},
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(status.Convert(err).Message()).To(ContainSubstring("only one backend association"))
+			got, err := server.Get(ctx, privatev1.StorageTiersGetRequest_builder{Id: created.GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.GetObject().GetSpec().GetBackends()[0].GetMaxReadBandwidthMbs()).
+				To(Equal(created.GetSpec().GetBackends()[0].GetMaxReadBandwidthMbs()))
+		})
+
 		It("allows a description edit on a historical tier with no backend associations", func() {
 			_, err := server.generic.dao.Create().SetObject(privatev1.StorageTier_builder{
 				Id:       "legacy-tier",

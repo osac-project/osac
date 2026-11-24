@@ -22,7 +22,7 @@ import (
 
 var _ = DescribeMigration("Create quota tables", func() {
 	BeforeEach(func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 153)).To(Succeed())
+		Expect(tool.Migrate(ctx, 154)).To(Succeed())
 		_, err := conn.Exec(ctx, `insert into tenants (id, name, tenant, creator, data)
             values ('q-tenant-a', 'q-tenant-a', 'q-tenant-a', 'system', '{}'),
                    ('q-tenant-b', 'q-tenant-b', 'q-tenant-b', 'system', '{}')`)

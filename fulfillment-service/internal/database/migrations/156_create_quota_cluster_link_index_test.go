@@ -20,13 +20,13 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = DescribeMigration("Create quota volume name pattern index", func() {
-	It("creates the volumes name pattern index", func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 154)).To(Succeed())
+var _ = DescribeMigration("Create quota cluster link index", func() {
+	It("creates the hosts cluster link index", func(ctx context.Context) {
+		Expect(tool.Migrate(ctx, 156)).To(Succeed())
 		var exists bool
 		Expect(conn.QueryRow(ctx,
 			`select exists (select 1 from pg_index
-			where indexrelid = 'volumes_by_name_pattern'::regclass)`).Scan(&exists)).To(Succeed())
+			where indexrelid = 'bare_metal_instances_by_cluster'::regclass)`).Scan(&exists)).To(Succeed())
 		Expect(exists).To(BeTrue())
 	})
 })

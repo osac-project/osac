@@ -61,3 +61,26 @@ and the image digest in .github/workflows/pre-commit.yaml).
     '''^BAG61F63105e0d3669/e066\+5C5DFBE2c127d395LBGG$''',  # x1
     '''^9c0b56bc-f941-f7a6-9f85-dcc3e9a8f7d6$''',  # x1
   ]
+
+[[allowlists]]
+  description = """
+RFC 6455 example Sec-WebSocket-Key in the osac-ui Go proxy's console WebSocket
+upgrade test (OSAC-8122). dGhlIHNhbXBsZSBub25jZQ== is the sample nonce from the
+opening-handshake example in section 1.3 of RFC 6455 ("the sample nonce"). The
+test asserts that the reverse proxy completes a real 101 upgrade and echoes
+bytes through the hijacked connection, so the constant is protocol
+documentation, not a credential for any OSAC system.
+
+Scoped by both path and exact value with condition = "AND": the same string
+elsewhere in the repository is still reported, as is any other secret in this
+file. The inline #gitleaks:allow marker next to the constant cannot be used
+because the CI secret gate (and the pre-commit hook, for consistency) runs with
+--ignore-gitleaks-allow, and CI loads this config from the base revision.
+"""
+  condition = "AND"
+  paths = [
+    '''^osac-ui/proxy/bridge/consolews_test\.go$''',
+  ]
+  regexes = [
+    '''^dGhlIHNhbXBsZSBub25jZQ==$''',
+  ]

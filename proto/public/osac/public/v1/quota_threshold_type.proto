@@ -1,0 +1,79 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "buf/validate/validate.proto";
+import "google/api/field_behavior.proto";
+import "osac/public/v1/metadata_type.proto";
+import "osac/public/v1/quota_limit_type.proto";
+
+// Represents a warning threshold of one quota dimension at one scope, a project or the whole
+// tenant.
+//
+// A threshold is a percent of the limit it watches: when the scope's usage of the dimension
+// reaches that percent of its limit, a warning is sent to the tenant. A threshold requires a
+// limit on the same dimension in the same scope or one above it, so a warning always has a limit
+// to be measured against.
+//
+// Tenant Admins set thresholds. One threshold exists per dimension per scope. The dimension and
+// scope are immutable; the percent can change. Clearing a threshold deletes it.
+message QuotaThreshold {
+  // Unique identifier of the threshold.
+  string id = 1;
+
+  // Metadata of the threshold. The tenant is required. The project names the scope: a named
+  // project watches that project, and the empty name, the tenant's default project and the root
+  // of the project tree, watches the whole tenant.
+  Metadata metadata = 2;
+
+  // Desired configuration of the threshold (user-specified).
+  QuotaThresholdSpec spec = 3;
+
+  // Current state of the threshold (system-provided, read-only).
+  QuotaThresholdStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Defines the desired configuration for a QuotaThreshold.
+message QuotaThresholdSpec {
+  // The quota dimension this threshold watches, such as `compute.vcpus`. Required and immutable
+  // after creation. Unique within the scope.
+  string dimension = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).string = {min_len: 1, max_len: 256}
+  ];
+
+  // The percentage of the limit at or above which a warning is sent, from 1 to 100. Required.
+  // When the `metadata.name` is omitted it is generated from the dimension. The value is
+  // mandatory: a threshold with no percent never warns.
+  optional int32 percent = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).int32 = {gte: 1, lte: 100}
+  ];
+
+  // The scope the threshold watches: the whole tenant, or the project the metadata names.
+  // Required and immutable after creation. A tenant scope keeps the empty project name and a
+  // project scope requires a named one.
+  optional QuotaScope scope = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum = {defined_only: true, not_in: [0]}
+  ];
+}
+
+// Represents the current state of a QuotaThreshold.
+message QuotaThresholdStatus {}

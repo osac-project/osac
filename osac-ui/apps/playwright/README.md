@@ -526,6 +526,45 @@ Use `--headed` when a graphical display is available. Run these commands from
 the `osac-ui/` workspace root; pass only the spec filename because the
 Playwright configuration already defines the VMaaS spec directory.
 
+### External IP (networking) flows
+
+`apps/e2e-tests/src/networking/` covers the tenant External IP management UI:
+list columns and states, create wizard validation, create, delete, tenant
+scoping, and the list error state. It reads environment variables rather than
+`extravars.yaml`:
+
+| Variable                                                              | Purpose                                                          |
+| --------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `OSAC_E2E_TENANT_NAME`                                                | Tenant whose break-glass credentials the flows log in with       |
+| `OSAC_TENANT_ADMIN_USERNAME` / `OSAC_TENANT_ADMIN_PASSWORD`           | Alternative to the credentials file                              |
+| `OSAC_EXT_IP_CIDR`                                                    | CIDR for the pool the suite creates and later deletes            |
+| `OSAC_EXT_IP_POOL`                                                    | Reuse an existing pool instead of creating one                   |
+| `OSAC_EXT_IP_PROJECT`                                                 | Optional project for the created External IP                     |
+| `OSAC_E2E_SECOND_TENANT_USERNAME` / `OSAC_E2E_SECOND_TENANT_PASSWORD` | Second tenant's admin; enables the cross-tenant denial assertion |
+| `OSAC_E2E_INSTANCE`                                                   | Run index appended to resource names, default `1`                |
+
+```bash
+export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
+export OSAC_ADMIN_USERNAME=<keycloak-user>
+export OSAC_E2E_TENANT_NAME=<tenant-name>
+export OSAC_EXT_IP_CIDR=172.27.9.0/24
+read -rs OSAC_ADMIN_PASSWORD && export OSAC_ADMIN_PASSWORD
+
+# Pool, then the tenant flows; the teardown deletes the External IP and the pool.
+pnpm --filter @osac/playwright exec playwright test --project=external-ip
+```
+
+The full variable table and the per-project commands are in
+[`apps/e2e-tests/README.md`](../e2e-tests/README.md#external-ip-networking-suite).
+Allocation is asynchronous: the create flow polls until the row shows
+`Allocated` and fails with the observed row text when the pool CIDR cannot be
+allocated on that cluster.
+
+A suite-created pool that a tenant uses for its `default-nat` address is
+**retained** by the teardown rather than deleted: the provider rejects deleting
+a pool with allocated addresses, so the run reports the pool and the reason
+instead of failing. Delete the tenant first, or remove the pool by hand.
+
 Optional:
 
 | Variable              | Description                                                                                                                                                                                                                                                                                       |

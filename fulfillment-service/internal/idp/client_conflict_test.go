@@ -26,6 +26,8 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 )
 
+const testTempPassword = "***REDACTED_SECRET_ASSIGNMENT***"
+
 // staticTokenSource is a trivial TokenSource for tests.
 type staticTokenSource struct{}
 
@@ -274,9 +276,10 @@ var _ = Describe("Client conflict handling", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			config := &TenantConfig{
-				Name:               "shared",
-				Enabled:            new(true),
-				BreakGlassPassword: "temp-password",
+				Name:                    "shared",
+				Enabled:                 new(true),
+				CreateBreakGlassAccount: true,
+				BreakGlassPassword:      testTempPassword,
 			}
 
 			credentials, err := tenantManager.CreateTenant(ctx, config)

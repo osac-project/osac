@@ -1,0 +1,143 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "buf/validate/validate.proto";
+import "cleanapi/cleanapi.proto";
+import "google/api/field_behavior.proto";
+import "osac/private/v1/metadata_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+
+// The scope a quota object covers: the whole tenant or one project.
+//
+// The scope is explicit in the spec and agrees with the metadata: a tenant scope keeps the empty
+// project name, and a project scope names its project. The empty project name is the tenant's
+// default project, the root of the project tree, so a scope with no project covers the whole
+// tenant.
+enum QuotaScope {
+  // The scope is unknown or has not been set.
+  QUOTA_SCOPE_UNSPECIFIED = 0;
+
+  // The scope covers the whole tenant, the default project and every named project together.
+  QUOTA_SCOPE_TENANT = 1;
+
+  // The scope covers the project the metadata names.
+  QUOTA_SCOPE_PROJECT = 2;
+}
+
+// Represents the limit of one quota dimension at one scope.
+//
+// A dimension is one thing a limit counts, such as `compute.vcpus` or `storage.fast.gib`. The
+// spec's `scope` says which scope: a tenant override caps the whole tenant, whose rows keep the
+// empty project name, the tenant's default project and the root of the project tree, and a project
+// limit caps the project the metadata names. The resolution order is: a project counts against its
+// project limit when one exists, and the tenant always counts against its override, else the
+// default limit, else 0.
+//
+// Cloud Provider Admins set tenant overrides; Tenant Admins set project limits. One limit exists
+// per dimension per scope. The dimension and scope are immutable; the value can change. Clearing a
+// limit deletes it, so the dimension falls back to the next scope in the resolution order.
+message QuotaLimit {
+  // Unique identifier of the limit.
+  string id = 1;
+
+  // Metadata of the limit, including name, tenant, and project.
+  Metadata metadata = 2;
+
+  // Desired configuration of the limit (user-specified).
+  QuotaLimitSpec spec = 3;
+
+  // Current state of the limit (system-provided, read-only).
+  QuotaLimitStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Defines the desired configuration for a QuotaLimit.
+message QuotaLimitSpec {
+  // The quota dimension this limit caps, such as `compute.vcpus` or `storage.fast.gib`. Required
+  // and immutable after creation. Unique within the limit's scope.
+  string dimension = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).string = {min_len: 1, max_len: 256}
+  ];
+
+  // The maximum amount of the dimension that the scope may hold. Zero refuses everything that adds
+  // to the dimension. When the `metadata.name` is omitted it is generated from the dimension.
+  // The value is mandatory: an omitted value must not silently become the zero that refuses
+  // everything.
+  optional int64 value = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).int64.gte = 0
+  ];
+
+  // The scope the limit caps: the whole tenant, or the project the metadata names. Required and
+  // immutable after creation. A tenant scope keeps the empty project name and a project scope
+  // requires a named one.
+  optional QuotaScope scope = 3 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).required = true,
+    (buf.validate.field).enum = {defined_only: true, not_in: [0]}
+  ];
+}
+
+// Represents the current state of a QuotaLimit.
+message QuotaLimitStatus {}
+
+// Represents the default limit of one quota dimension for all tenants.
+//
+// A default applies to every tenant that has no override for the dimension. A dimension with no
+// default has limit 0. Default limits belong to no tenant; only Cloud Provider Admins manage them.
+// One default exists per dimension: creating one for a dimension that already has one fails, an
+// update changes the value, and deleting clears the default. Approving a QuotaLimitRequest never
+// writes a default, it writes the requesting tenant's override.
+message QuotaDefaultLimit {
+  // Unique identifier of the default limit.
+  string id = 1;
+
+  // Metadata of the default limit. The tenant is always `shared`, the home of every
+  // platform-scoped kind, and the project is always empty.
+  Metadata metadata = 2;
+
+  // Desired configuration of the default limit (user-specified).
+  QuotaDefaultLimitSpec spec = 3;
+
+  // Current state of the default limit (system-provided, read-only).
+  QuotaDefaultLimitStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Defines the desired configuration for a QuotaDefaultLimit.
+message QuotaDefaultLimitSpec {
+  // The quota dimension this default caps, such as `compute.vcpus`. Required and immutable.
+  // Unique across all default limits.
+  string dimension = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).string = {min_len: 1, max_len: 256}
+  ];
+
+  // The maximum amount of the dimension that each tenant without an override may hold. When the
+  // `metadata.name` is omitted it is generated from the dimension. The value is mandatory: an
+  // omitted value must not silently become the zero that refuses everything.
+  optional int64 value = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).int64.gte = 0
+  ];
+}
+
+// Represents the current state of a QuotaDefaultLimit.
+message QuotaDefaultLimitStatus {}

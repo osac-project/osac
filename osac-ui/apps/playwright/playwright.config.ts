@@ -106,6 +106,7 @@ fs.mkdirSync(scratchDir, { recursive: true });
 const e2eDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '../e2e-tests/src');
 const genericDir = path.join(e2eDir, 'generic');
 const vmaasDir = path.join(e2eDir, 'vmaas');
+const networkingDir = path.join(e2eDir, 'networking');
 const preResourceBaseCreateTestMatch =
   /create\.(instance_type|disk_images|storage_tier|tenant)\.spec\.ts/;
 const preResourceCatalogCreateTestMatch = /create\.catalog\.spec\.ts/;
@@ -346,6 +347,37 @@ export default defineConfig({
       name: 'catalog-delete',
       testDir: genericDir,
       testMatch: /delete\.catalog\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+    },
+    {
+      // Networking suite. The pool project provisions the External IP pool the
+      // tenant flows allocate from. It deliberately has no teardown: a
+      // dependency's teardown would run before the dependent project uses the
+      // pool. `external-ip-delete` removes the External IP and, when the suite
+      // provisioned it, the pool.
+      name: 'external-ip-pool',
+      testDir: networkingDir,
+      testMatch: /create\.external_ip_pool\.spec\.ts/,
+      fullyParallel: false,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+    },
+    {
+      // One worker keeps files in order: create, then isolation and list
+      // against the created resource, then the teardown. fullyParallel alone
+      // only serializes tests inside a file, not files against each other.
+      name: 'external-ip',
+      testDir: networkingDir,
+      testMatch: /(?:create|isolation|list)\.external_ip\.spec\.ts/,
+      fullyParallel: false,
+      workers: 1,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      dependencies: ['external-ip-pool'],
+      teardown: 'external-ip-delete',
+    },
+    {
+      name: 'external-ip-delete',
+      testDir: networkingDir,
+      testMatch: /delete\.external_ip\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
   ],

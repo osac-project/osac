@@ -30,12 +30,43 @@ import (
 
 const userDataSecretDataKey = "userdata"
 
+// validateUserDataSecret requires the referenced Secret to be of type
+// SECRET_TYPE_USER_DATA. It is the policy for callers that have no disk image
+// to pair a guest OS family with.
 func validateUserDataSecret(
 	ctx context.Context,
 	logger *slog.Logger,
 	secretsDao *dao.GenericDAO[*privatev1.Secret],
 	secretStore vault.SecretStore,
 	ref *privatev1.SecretLocalReference,
+) (*privatev1.SecretLocalReference, error) {
+	return validateUserDataSecretOfTypes(ctx, logger, secretsDao, secretStore, ref,
+		[]privatev1.SecretType{privatev1.SecretType_SECRET_TYPE_USER_DATA}, referenceScope{})
+}
+
+// userDataSecretTypesForImage returns the Secret types that may supply user data for an
+// instance booting from the given image: SECRET_TYPE_USER_DATA for Linux images and
+// SECRET_TYPE_WINDOWS_USER_DATA for Windows images.
+func userDataSecretTypesForImage(diskImage *privatev1.DiskImage) []privatev1.SecretType {
+	if diskImage != nil &&
+		diskImage.GetSpec().GetGuestOsFamily() == privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS {
+		return []privatev1.SecretType{privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA}
+	}
+	return []privatev1.SecretType{privatev1.SecretType_SECRET_TYPE_USER_DATA}
+}
+
+// validateUserDataSecretOfTypes resolves a user_data_source.secret reference and
+// requires its type to be one of the types permitted by the caller. Every other
+// check still applies: the Secret must exist and be in scope, must not be shared,
+// and must carry a non-empty "userdata" entry within the size limit.
+func validateUserDataSecretOfTypes(
+	ctx context.Context,
+	logger *slog.Logger,
+	secretsDao *dao.GenericDAO[*privatev1.Secret],
+	secretStore vault.SecretStore,
+	ref *privatev1.SecretLocalReference,
+	allowed []privatev1.SecretType,
+	scope referenceScope,
 ) (*privatev1.SecretLocalReference, error) {
 	if ref == nil {
 		return nil, nil
@@ -44,7 +75,9 @@ func validateUserDataSecret(
 		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "user_data_source.secret must specify id or name")
 	}
 
-	resolved, err := references.NewDAOLookupFunc(secretsDao)(ctx, "", "", ref.GetId(), ref.GetName())
+	resolved, err := references.NewScopedDAOLookupFunc(secretsDao)(
+		ctx, scope.tenant, scope.project, ref.GetId(), ref.GetName(),
+	)
 	if err != nil {
 		var deniedErr *dao.ErrDenied
 		if errors.As(err, &deniedErr) {
@@ -69,7 +102,7 @@ func validateUserDataSecret(
 		return nil, grpcstatus.Errorf(grpccodes.Internal, "failed to resolve user_data_source.secret reference")
 	}
 	secret := secretResponse.GetObject()
-	if err := validateSecretType(secret, refKey(ref), "user_data_source.secret", privatev1.SecretType_SECRET_TYPE_USER_DATA); err != nil {
+	if err := validateSecretTypeOneOf(secret, refKey(ref), "user_data_source.secret", allowed); err != nil {
 		return nil, err
 	}
 	data := secret.GetData()

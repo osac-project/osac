@@ -5169,7 +5169,7 @@ var _ = Describe("Catalog materialized defaults", func() {
 		Entry("additional disk", true),
 	)
 
-	Describe("Windows user_data_source.inline validation on update", func() {
+	Describe("Windows user_data_source validation on update", func() {
 		var (
 			server   *PrivateComputeInstancesServer
 			subnetID string
@@ -5320,51 +5320,163 @@ var _ = Describe("Catalog materialized defaults", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
-		It("rejects invalid XML user_data_source.inline on update for a Windows instance", func() {
-			// Create a Windows instance with valid XML user_data_source.inline.
-			validXML := `<?xml version="1.0" encoding="utf-8"?><unattend><settings/></unattend>`
-			createResponse, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
-				Object: privatev1.ComputeInstance_builder{
+		DescribeTable("rejects a user-data Secret outside the ComputeInstance project",
+			func(byName bool) {
+				seedTenantProject(testTenant, "other-project")
+				secretResult, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("win-test-%s", uuid.NewString()[:8]),
+						Name:    fmt.Sprintf("win-cross-project-%s", uuid.NewString()[:8]),
+						Tenant:  testTenant,
+						Project: "other-project",
 					}.Build(),
-					Spec: privatev1.ComputeInstanceSpec_builder{
-						Template:       privatev1.ComputeInstanceTemplateReference_builder{Id: "win-template"}.Build(),
-						UserDataSource: privatev1.UserDataSource_builder{Inline: &validXML}.Build(),
-						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
-							privatev1.ComputeNetworkAttachment_builder{
-								Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
-							}.Build(),
-						},
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-			id := createResponse.GetObject().GetId()
+					Type: privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+					Data: map[string][]byte{userDataSecretDataKey: []byte("<unattend/>")},
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				secret := secretResult.GetObject()
 
-			// Update with invalid XML user_data_source.inline — should be rejected.
-			invalidXML := "not xml at all"
-			_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
-				Object: privatev1.ComputeInstance_builder{
-					Id: id,
-					Spec: privatev1.ComputeInstanceSpec_builder{
-						UserDataSource: privatev1.UserDataSource_builder{Inline: &invalidXML}.Build(),
+				ref := privatev1.SecretLocalReference_builder{Id: secret.GetId()}.Build()
+				if byName {
+					ref = privatev1.SecretLocalReference_builder{
+						Name: secret.GetMetadata().GetName(),
+					}.Build()
+				}
+
+				_, err = server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   fmt.Sprintf("win-cross-project-%s", uuid.NewString()[:8]),
+							Tenant: testTenant,
+						}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template:       privatev1.ComputeInstanceTemplateReference_builder{Id: "win-template"}.Build(),
+							UserDataSource: privatev1.UserDataSource_builder{Secret: ref}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+								}.Build(),
+							},
+						}.Build(),
 					}.Build(),
-				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"spec.user_data_source"},
-				},
-			}.Build())
-			Expect(err).To(HaveOccurred())
-			st, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(st.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(st.Message()).To(ContainSubstring("not well-formed XML"))
-		})
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("there is no secret"))
+			},
+			Entry("by ID", false),
+			Entry("by name", true),
+		)
+
+		DescribeTable("uses the stored ComputeInstance project when validating an updated Secret",
+			func(byName bool) {
+				seedTenantProject(testTenant, "other-project")
+				secretResult, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:    fmt.Sprintf("win-cross-project-%s", uuid.NewString()[:8]),
+						Tenant:  testTenant,
+						Project: "other-project",
+					}.Build(),
+					Type: privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+					Data: map[string][]byte{userDataSecretDataKey: []byte("<unattend/>")},
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				secret := secretResult.GetObject()
+
+				validXML := `<?xml version="1.0" encoding="utf-8"?><unattend><settings/></unattend>`
+				created, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name:   fmt.Sprintf("win-cross-project-%s", uuid.NewString()[:8]),
+							Tenant: testTenant,
+						}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template:       privatev1.ComputeInstanceTemplateReference_builder{Id: "win-template"}.Build(),
+							UserDataSource: privatev1.UserDataSource_builder{Inline: &validXML}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				ref := privatev1.SecretLocalReference_builder{Id: secret.GetId()}.Build()
+				if byName {
+					ref = privatev1.SecretLocalReference_builder{
+						Name: secret.GetMetadata().GetName(),
+					}.Build()
+				}
+				_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: created.GetObject().GetId(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							UserDataSource: privatev1.UserDataSource_builder{Secret: ref}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.user_data_source"}},
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("there is no secret"))
+
+				stored, err := server.generic.dao.Get().SetId(created.GetObject().GetId()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetSpec().GetUserDataSource().GetInline()).To(Equal(validXML))
+			},
+			Entry("by ID", false),
+			Entry("by name", true),
+		)
+
+		DescribeTable("rejects invalid XML user_data_source.inline on update for a Windows instance",
+			func(invalidXML, expectedMessage string) {
+				// Create a Windows instance with valid XML user_data_source.inline.
+				validXML := `<?xml version="1.0" encoding="utf-8"?><unattend><settings/></unattend>`
+				createResponse, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: fmt.Sprintf("win-test-%s", uuid.NewString()[:8]),
+						}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template:       privatev1.ComputeInstanceTemplateReference_builder{Id: "win-template"}.Build(),
+							UserDataSource: privatev1.UserDataSource_builder{Inline: &validXML}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				id := createResponse.GetObject().GetId()
+
+				// Update with invalid XML user_data_source.inline — should be rejected.
+				_, err = server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: id,
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							UserDataSource: privatev1.UserDataSource_builder{Inline: &invalidXML}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.user_data_source"},
+					},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				st, ok := grpcstatus.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(grpccodes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring(expectedMessage))
+				Expect(st.Message()).NotTo(ContainSubstring("xml-content-sentinel"))
+			},
+			Entry("plain text", "not xml at all", "not well-formed XML"),
+			Entry("forbidden literal character", "<!--xml-content-sentinel\x00--><root/>", "not well-formed XML"),
+			Entry("UTF-16 declaration", `<?xml version="1.0" encoding="UTF-16"?><root>xml-content-sentinel</root>`, "unsupported_encoding"),
+		)
 
 		It("accepts valid XML user_data_source.inline on update for a Windows instance", func() {
 			// Create a Windows instance with valid XML user_data_source.inline.
-			validXML := `<?xml version="1.0" encoding="utf-8"?><unattend><settings/></unattend>`
+			validXML := "\xef\xbb\xbf<?xml version=\"1.0\" encoding=\"utf-8\" ?><unattend><settings/></unattend>"
 			createResponse, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
 				Object: privatev1.ComputeInstance_builder{
 					Metadata: privatev1.Metadata_builder{
@@ -5382,10 +5494,11 @@ var _ = Describe("Catalog materialized defaults", func() {
 				}.Build(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+			Expect(createResponse.GetObject().GetSpec().GetUserDataSource().GetInline()).To(Equal(validXML))
 			id := createResponse.GetObject().GetId()
 
 			// Update with valid XML user_data_source.inline — should succeed.
-			updatedXML := `<?xml version="1.0" encoding="utf-8"?><unattend><settings pass="oobeSystem"/></unattend>`
+			updatedXML := `<?xml version="1.0" ?><unattend><a:b:c pass="oobeSystem"/></unattend>`
 			updateResponse, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
 				Object: privatev1.ComputeInstance_builder{
 					Id: id,
@@ -5475,6 +5588,298 @@ var _ = Describe("Catalog materialized defaults", func() {
 			diskImage.GetSpec().SetLifecycle(privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE)
 			_, err = server.diskImagesDao.Update().SetObject(diskImage).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
+		})
+
+		Context("legacy Secret type compatibility", func() {
+			createSecret := func(secretType privatev1.SecretType, tenant string,
+				data map[string][]byte) *privatev1.Secret {
+				result, err := server.secretsDao.Create().SetObject(privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   fmt.Sprintf("win-userdata-%s", uuid.NewString()[:8]),
+						Tenant: tenant,
+					}.Build(),
+					Type: secretType,
+					Data: data,
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				return result.GetObject()
+			}
+			createSecretRef := func(secret *privatev1.Secret) *privatev1.SecretLocalReference {
+				return privatev1.SecretLocalReference_builder{
+					Id:   secret.GetId(),
+					Name: secret.GetMetadata().GetName(),
+				}.Build()
+			}
+			createInstance := func(secret *privatev1.Secret, templateID,
+				diskImageID string) *privatev1.ComputeInstance {
+				result, err := server.generic.dao.Create().SetObject(privatev1.ComputeInstance_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   fmt.Sprintf("win-legacy-%s", uuid.NewString()[:8]),
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.ComputeInstanceSpec_builder{
+						Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
+						DiskImage:    privatev1.DiskImageReference_builder{Id: diskImageID}.Build(),
+						InstanceType: privatev1.InstanceTypeReference_builder{Id: "win-it"}.Build(),
+						UserDataSource: privatev1.UserDataSource_builder{
+							Secret: createSecretRef(secret),
+						}.Build(),
+						NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+							privatev1.ComputeNetworkAttachment_builder{
+								Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+							}.Build(),
+						},
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				return result.GetObject()
+			}
+			createLegacyWindowsInstance := func(secret *privatev1.Secret) *privatev1.ComputeInstance {
+				return createInstance(secret, "win-template", "win-disk-image")
+			}
+			updateSecret := func(instanceID string, ref *privatev1.SecretLocalReference) (
+				*privatev1.ComputeInstancesUpdateResponse, error) {
+				return server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: instanceID,
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							UserDataSource: privatev1.UserDataSource_builder{Secret: ref}.Build(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.user_data_source"},
+					},
+				}.Build())
+			}
+			fetchInstance := func(instanceID string) *privatev1.ComputeInstance {
+				stored, err := server.generic.dao.Get().SetId(instanceID).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				return stored.GetObject()
+			}
+			newLegacySecret := func() *privatev1.Secret {
+				return createSecret(privatev1.SecretType_SECRET_TYPE_USER_DATA, testTenant,
+					map[string][]byte{userDataSecretDataKey: []byte("#cloud-config")})
+			}
+
+			It("accepts an unchanged legacy USER_DATA Secret reference", func() {
+				secret := newLegacySecret()
+				instance := createLegacyWindowsInstance(secret)
+
+				response, err := updateSecret(instance.GetId(), createSecretRef(secret))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetUserDataSource().GetSecret().GetId()).
+					To(Equal(secret.GetId()))
+			})
+
+			It("accepts an unchanged legacy reference submitted by name", func() {
+				secret := newLegacySecret()
+				instance := createLegacyWindowsInstance(secret)
+
+				response, err := updateSecret(instance.GetId(),
+					privatev1.SecretLocalReference_builder{
+						Name: secret.GetMetadata().GetName(),
+					}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetUserDataSource().GetSecret().GetId()).
+					To(Equal(secret.GetId()))
+			})
+
+			It("accepts an unchanged WINDOWS_USER_DATA Secret on Windows", func() {
+				secret := createSecret(privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, testTenant,
+					map[string][]byte{userDataSecretDataKey: []byte("windows-user-data")})
+				instance := createLegacyWindowsInstance(secret)
+
+				response, err := updateSecret(instance.GetId(), createSecretRef(secret))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetUserDataSource().GetSecret().GetId()).
+					To(Equal(secret.GetId()))
+			})
+
+			It("accepts userdata of exactly the maximum size on a legacy reference", func() {
+				secret := createSecret(privatev1.SecretType_SECRET_TYPE_USER_DATA, testTenant,
+					map[string][]byte{
+						userDataSecretDataKey: []byte(strings.Repeat("x", bareMetalInstanceUserDataMaxBytes)),
+					})
+				instance := createLegacyWindowsInstance(secret)
+
+				response, err := updateSecret(instance.GetId(), createSecretRef(secret))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetUserDataSource().GetSecret().GetId()).
+					To(Equal(secret.GetId()))
+			})
+
+			It("rejects removing the Secret reference without mutating the instance", func() {
+				secret := newLegacySecret()
+				instance := createLegacyWindowsInstance(secret)
+
+				_, err := updateSecret(instance.GetId(), nil)
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(fetchInstance(instance.GetId()).GetSpec().GetUserDataSource().
+					GetSecret().GetId()).To(Equal(secret.GetId()))
+			})
+
+			It("rejects changing the reference to a missing Secret without mutating the instance",
+				func() {
+					secret := newLegacySecret()
+					instance := createLegacyWindowsInstance(secret)
+
+					_, err := updateSecret(instance.GetId(),
+						privatev1.SecretLocalReference_builder{Id: uuid.NewString()}.Build())
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+					Expect(fetchInstance(instance.GetId()).GetSpec().GetUserDataSource().
+						GetSecret().GetId()).To(Equal(secret.GetId()))
+				})
+
+			It("allows updating an unrelated field", func() {
+				secret := newLegacySecret()
+				instance := createLegacyWindowsInstance(secret)
+
+				response, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Id: instance.GetId(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							RunStrategy: privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
+						}.Build(),
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{
+						Paths: []string{"spec.run_strategy"},
+					},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetSpec().GetRunStrategy()).
+					To(Equal(privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS))
+			})
+
+			DescribeTable("validates an unchanged legacy Secret on full replacement",
+				func(mask *fieldmaskpb.FieldMask) {
+					secret := newLegacySecret()
+					instance := createLegacyWindowsInstance(secret)
+
+					response, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+						Object:     fetchInstance(instance.GetId()),
+						UpdateMask: mask,
+					}.Build())
+					Expect(err).ToNot(HaveOccurred())
+					Expect(response.GetObject().GetSpec().GetUserDataSource().GetSecret().GetId()).
+						To(Equal(secret.GetId()))
+				},
+				Entry("nil mask", nil),
+				Entry("empty mask", &fieldmaskpb.FieldMask{}),
+				Entry("spec.user_data_source.secret mask", &fieldmaskpb.FieldMask{
+					Paths: []string{"spec.user_data_source.secret"},
+				}),
+			)
+
+			DescribeTable("rejects an invalid unchanged legacy Secret on full replacement",
+				func(mask *fieldmaskpb.FieldMask) {
+					secret := createSecret(privatev1.SecretType_SECRET_TYPE_USER_DATA, testTenant,
+						map[string][]byte{"other": []byte("value")})
+					instance := createLegacyWindowsInstance(secret)
+
+					_, err := server.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+						Object:     fetchInstance(instance.GetId()),
+						UpdateMask: mask,
+					}.Build())
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+					Expect(err.Error()).To(ContainSubstring("non-empty 'userdata' entry"))
+				},
+				Entry("nil mask", nil),
+				Entry("empty mask", &fieldmaskpb.FieldMask{}),
+			)
+
+			It("rejects changing the Secret reference", func() {
+				secret := newLegacySecret()
+				instance := createLegacyWindowsInstance(secret)
+				replacement := createSecret(privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, testTenant,
+					map[string][]byte{userDataSecretDataKey: []byte("replacement")})
+
+				_, err := updateSecret(instance.GetId(), createSecretRef(replacement))
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("user_data_source.secret is immutable"))
+			})
+
+			DescribeTable("rejects an unchanged Secret outside the user-data types",
+				func(secretType privatev1.SecretType) {
+					secret := createSecret(secretType, testTenant,
+						map[string][]byte{userDataSecretDataKey: []byte("value")})
+					instance := createLegacyWindowsInstance(secret)
+
+					_, err := updateSecret(instance.GetId(), createSecretRef(secret))
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+					Expect(err.Error()).To(ContainSubstring("expected one of"))
+					Expect(err.Error()).To(ContainSubstring("SECRET_TYPE_WINDOWS_USER_DATA"))
+				},
+				Entry("SSH public key", privatev1.SecretType_SECRET_TYPE_SSH_PUBLIC_KEY),
+				Entry("opaque", privatev1.SecretType_SECRET_TYPE_OPAQUE),
+			)
+
+			It("rejects an unchanged reference when the Secret no longer exists", func() {
+				secret := newLegacySecret()
+				instance := createLegacyWindowsInstance(secret)
+				_, err := server.secretsDao.Delete().SetId(secret.GetId()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = updateSecret(instance.GetId(), createSecretRef(secret))
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("there is no secret"))
+			})
+
+			DescribeTable("still applies the remaining Secret checks",
+				func(tenant string, data map[string][]byte, expected string) {
+					secret := createSecret(privatev1.SecretType_SECRET_TYPE_USER_DATA, tenant, data)
+					instance := createLegacyWindowsInstance(secret)
+
+					_, err := updateSecret(instance.GetId(), createSecretRef(secret))
+					Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+					Expect(err.Error()).To(ContainSubstring(expected))
+				},
+				Entry("missing userdata entry",
+					testTenant,
+					map[string][]byte{"other": []byte("value")},
+					"non-empty 'userdata' entry"),
+				Entry("oversized userdata entry",
+					testTenant,
+					map[string][]byte{userDataSecretDataKey: []byte(strings.Repeat("x", bareMetalInstanceUserDataMaxBytes+1))},
+					"exceeds the maximum"),
+				Entry("shared tenant Secret",
+					auth.SharedTenant,
+					map[string][]byte{userDataSecretDataKey: []byte("#cloud-config")},
+					"there is no secret"),
+			)
+
+			It("rejects a WINDOWS_USER_DATA Secret on a Linux image", func() {
+				_, err := server.diskImagesDao.Create().SetObject(privatev1.DiskImage_builder{
+					Id: "compat-linux-disk-image",
+					Metadata: privatev1.Metadata_builder{
+						Name:   "compat-linux-disk-image",
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						Lifecycle:     privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE,
+						GuestOsFamily: privatev1.GuestOSFamily_GUEST_OS_FAMILY_LINUX,
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				_, err = server.templatesDao.Create().SetObject(privatev1.ComputeInstanceTemplate_builder{
+					Id: "compat-linux-template",
+					Metadata: privatev1.Metadata_builder{
+						Name:   "compat-linux-template",
+						Tenant: testTenant,
+					}.Build(),
+					SpecDefaults: privatev1.ComputeInstanceTemplateSpecDefaults_builder{
+						DiskImage: &privatev1.DiskImageReference{Id: "compat-linux-disk-image"},
+					}.Build(),
+				}.Build()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+
+				secret := createSecret(privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, testTenant,
+					map[string][]byte{userDataSecretDataKey: []byte("#cloud-config")})
+				instance := createInstance(secret, "compat-linux-template", "compat-linux-disk-image")
+
+				_, err = updateSecret(instance.GetId(), createSecretRef(secret))
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("expected SECRET_TYPE_USER_DATA"))
+			})
 		})
 	})
 })

@@ -15,6 +15,7 @@ To change a VM's InstanceType after creation, see [Resizing a VM](computeinstanc
 - [Step 2: Choose an instance type](#step-2-choose-an-instance-type)
 - [Register an SSH key](#register-an-ssh-key)
 - [Step 3: Create the ComputeInstance](#step-3-create-the-computeinstance)
+  - [User data: inline or Secret](#user-data-inline-or-secret)
 - [Step 4: Monitor the instance](#step-4-monitor-the-instance)
 - [Step 5: Access the console](#step-5-access-the-console)
 
@@ -460,9 +461,10 @@ curl -fsS $CURL_FLAGS -X POST -H "Authorization: Bearer $TOKEN" \
 ```
 
 > **Note:** The `--ssh-key` flag refers to a registered SSH public key Secret by name. The
-> `--user-data` field uses cloud-init format. The example
+> `--user-data` field in this Linux example uses cloud-init format. The example
 > above creates a user and disables password expiry, allowing you to log in via the VM
-> console. Adjust the username and password as needed.
+> console. Adjust the username and password as needed. Windows DiskImages use Unattend.xml
+> XML instead of cloud-init.
 >
 > The `--network-attachment` flag uses the format
 > `subnet=<subnet-id>[,security-groups=<sg-id1>,<sg-id2>]`. Security groups are optional.
@@ -482,6 +484,79 @@ To attach security groups via the API, add them to each network attachment:
   }
 ]
 ```
+
+### User data: inline or Secret
+
+The examples above provide user data inline. The `--user-data` flag takes the
+content itself, not a file path. You can instead create a Secret and reference
+it by name or ID. The `--user-data` and `--user-data-secret` flags are mutually
+exclusive; API requests set either `spec.user_data_source.inline` or
+`spec.user_data_source.secret`.
+
+For a Linux image, create a `user-data` Secret containing initialization data
+supported by that image, such as cloud-init YAML:
+
+```bash
+osac create secret --name linux-answer --type=user-data \
+  --from-file=userdata=/path/to/cloud-init.yaml
+```
+
+Then replace the inline `--user-data` option in the CLI example above with:
+
+```bash
+  --user-data-secret linux-answer
+```
+
+In gRPC or REST requests, set the following field inside `spec`:
+
+```json
+{
+  "user_data_source": {
+    "secret": {
+      "name": "linux-answer"
+    }
+  }
+}
+```
+
+For a Windows DiskImage, inline user data is already supported. OSAC checks it
+as UTF-8 XML 1.0 without DTDs; acceptance does not guarantee a usable Windows
+answer file. The catalog item's field policy still determines whether you can
+supply user data.
+
+You can also create a `windows-user-data` Secret from an `Unattend.xml` file.
+OSAC validates its XML before storing the Secret:
+
+```bash
+osac create secret \
+  --name windows-answer \
+  --type=windows-user-data \
+  --from-file=userdata=/path/to/Unattend.xml
+```
+
+Reference the Secret from a Windows ComputeInstance in the same way:
+
+```bash
+  --user-data-secret windows-answer
+```
+
+When a new Windows ComputeInstance uses a Secret source, it requires a
+`windows-user-data` Secret. Linux and unspecified images, and
+BareMetalInstances, continue to require `user-data`. The Secret must be
+tenant-local and in the same project as the ComputeInstance; shared and
+cross-project references are rejected. Responses contain the canonical Secret
+ID and name, but not its data.
+
+An existing Windows ComputeInstance that already references a legacy
+`user-data` Secret remains manageable while it retains that exact reference.
+OSAC still checks that the Secret exists, is accessible in the instance's
+project, contains `userdata`, and is within the size limit. New Windows
+ComputeInstances and inline-to-Secret updates require `windows-user-data`.
+Once a ComputeInstance uses a Secret source, that reference cannot be replaced
+or removed.
+
+For Windows Secret validation and lifecycle rules, see
+[Managing Secrets](../secrets-guide.md#windows-user-data-windows-user-data).
 
 ### Alternative: Create from a YAML file
 

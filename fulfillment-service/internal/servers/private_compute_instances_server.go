@@ -351,9 +351,6 @@ func (s *PrivateComputeInstancesServer) prepareCreate(ctx context.Context, candi
 	if err != nil {
 		return
 	}
-	if err = s.validateAndResolveUserDataSecret(ctx, spec, true); err != nil {
-		return
-	}
 	// Catalog rules were applied before the network attachment is resolved. Otherwise a locked network field
 	// could mistake a server-provided default for a caller override.
 	if err = s.resolveNetworkAttachments(ctx, candidate); err != nil {
@@ -370,7 +367,13 @@ func (s *PrivateComputeInstancesServer) prepareCreate(ctx context.Context, candi
 		return
 	}
 	warnings = append(warnings, diskImageWarnings...)
-	if err = s.validateWindowsUserData(ctx, candidate, diskImage); err != nil {
+	if err = s.validateAndResolveUserDataSecret(ctx, referenceScope{
+		tenant: candidate.GetMetadata().GetTenant(), project: candidate.GetMetadata().GetProject(),
+	}, spec, true,
+		userDataSecretTypesForImage(diskImage)); err != nil {
+		return
+	}
+	if err = validateWindowsUserData(candidate, diskImage); err != nil {
 		return
 	}
 	if err = s.validateSshPublicKey(ctx, candidate, diskImage); err != nil {
@@ -403,67 +406,26 @@ func (s *PrivateComputeInstancesServer) validateStorageTiers(ctx context.Context
 	return nil
 }
 
-// validateWindowsUserData enforces XML well-formedness on user data when the DiskImage's
-// guest OS family is Windows. For non-Windows images (or when no user data is present), this
-// is a no-op — Linux user_data_source.inline is treated as opaque content (existing behavior preserved).
+// validateWindowsUserData enforces XML well-formedness on inline user data when the
+// DiskImage's guest OS family is Windows. It is a no-op for non-Windows images and when
+// the user data comes from a Secret reference: Linux inline data is treated as opaque,
+// and Secret content is validated by the user-data Secret checks instead.
 //
-// Error messages for user_data_source.secret intentionally omit the secret content to prevent
-// leaking sensitive data (design §4.3).
-//
-// Implements IC-1 from design §5.
-func (s *PrivateComputeInstancesServer) validateWindowsUserData(
-	ctx context.Context,
+// Implements IC-1 from design section 5.
+func validateWindowsUserData(
 	ci *privatev1.ComputeInstance,
 	diskImage *privatev1.DiskImage,
 ) error {
 	if diskImage == nil || diskImage.GetSpec().GetGuestOsFamily() != privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS {
 		return nil
 	}
-
 	spec := ci.GetSpec()
-
-	// Validate inline user data.
-	if spec.GetUserDataSource().HasInline() {
-		if err := isPureXMLNoDTD([]byte(spec.GetUserDataSource().GetInline())); err != nil {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"user_data_source.inline is not well-formed XML: %s", err)
-		}
+	if !spec.GetUserDataSource().HasInline() {
 		return nil
 	}
-
-	// Validate user_data_source.secret content. The reference has already been resolved and
-	// canonicalized by validateAndResolveUserDataSecret; load the secret data to check
-	// its content format.
-	ref := spec.GetUserDataSource().GetSecret()
-	if ref == nil {
-		return nil
-	}
-
-	secretResponse, err := s.secretsDao.Get().SetId(ref.GetId()).Do(ctx)
-	if err != nil {
-		s.logger.ErrorContext(ctx, "Failed to load user_data_source.secret for XML validation", "error", err)
-		return grpcstatus.Errorf(grpccodes.Internal, "failed to validate user_data_source.secret content")
-	}
-	secret := secretResponse.GetObject()
-	data := secret.GetData()
-	if len(data) == 0 && secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
-		if s.secretStore == nil {
-			s.logger.ErrorContext(ctx, "Failed to load user_data_source.secret for XML validation: secret store isn't configured")
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate user_data_source.secret content")
-		}
-		metadata := secret.GetMetadata()
-		data, err = s.secretStore.Fetch(ctx, metadata.GetTenant(), metadata.GetProject(), metadata.GetName())
-		if err != nil {
-			s.logger.ErrorContext(ctx, "Failed to load user_data_source.secret value from store for XML validation", "error", err)
-			return grpcstatus.Errorf(grpccodes.Internal, "failed to validate user_data_source.secret content")
-		}
-	}
-
-	value := data[userDataSecretDataKey]
-	if err := isPureXMLNoDTD(value); err != nil {
+	if err := isPureXMLNoDTD([]byte(spec.GetUserDataSource().GetInline())); err != nil {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
-			"secret '%s' referenced by user_data_source.secret contains user data that is not well-formed XML",
-			refKey(ref))
+			"user_data_source.inline is not well-formed XML: %s", err)
 	}
 	return nil
 }
@@ -513,14 +475,9 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 			candidate.GetSpec().SetInstanceType(current.GetSpec().GetInstanceType())
 			return nil
 		}
-		if err := s.validateAndResolveUserDataSecret(
-			ctx,
-			candidate.GetSpec(),
-			updateIncludesField(request.GetUpdateMask(), "spec.user_data_source"),
-		); err != nil {
-			return err
-		}
-		if err := validateComputeInstanceImmutability(current, candidate, request.GetUpdateMask()); err != nil {
+		// Pin an existing user_data_source Secret reference to its stored identity
+		// before resolution, so the lookup cannot match a different Secret by name.
+		if err := validateComputeUserDataImmutability(current, candidate, request.GetUpdateMask()); err != nil {
 			return err
 		}
 		if updateIncludesField(request.GetUpdateMask(), "spec.user_data_source") {
@@ -532,9 +489,34 @@ func (s *PrivateComputeInstancesServer) Update(ctx context.Context,
 			if err != nil {
 				return err
 			}
-			if err := s.validateWindowsUserData(ctx, candidate, diskImage); err != nil {
+			// An instance created before Windows user data had its own Secret type may
+			// keep a SECRET_TYPE_USER_DATA reference. This exempts only that unchanged
+			// reference on a Windows image from the guest OS family to Secret type
+			// pairing; the resolution below still checks existence, scope, sharing, the
+			// "userdata" entry and its size. Delete this block and pass
+			// userDataSecretTypesForImage(diskImage) directly to retire the exemption.
+			allowedTypes := userDataSecretTypesForImage(diskImage)
+			storedSecret := current.GetSpec().GetUserDataSource().GetSecret()
+			if diskImage != nil &&
+				diskImage.GetSpec().GetGuestOsFamily() == privatev1.GuestOSFamily_GUEST_OS_FAMILY_WINDOWS &&
+				storedSecret != nil &&
+				sameSecretReference(storedSecret, candidate.GetSpec().GetUserDataSource().GetSecret()) {
+				allowedTypes = []privatev1.SecretType{
+					privatev1.SecretType_SECRET_TYPE_USER_DATA,
+					privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
+				}
+			}
+			if err := s.validateAndResolveUserDataSecret(ctx, referenceScope{
+				tenant: current.GetMetadata().GetTenant(), project: current.GetMetadata().GetProject(),
+			}, candidate.GetSpec(), true, allowedTypes); err != nil {
 				return err
 			}
+			if err := validateWindowsUserData(candidate, diskImage); err != nil {
+				return err
+			}
+		}
+		if err := validateComputeInstanceImmutability(current, candidate, request.GetUpdateMask()); err != nil {
+			return err
 		}
 		if updateIncludesField(request.GetUpdateMask(), "spec.network_attachments") {
 			if err := s.validateNetworkAttachmentsForUpdate(ctx, current, candidate); err != nil {
@@ -699,14 +681,16 @@ func onlyInstanceTypeMask(mask *fieldmaskpb.FieldMask) bool {
 
 func (s *PrivateComputeInstancesServer) validateAndResolveUserDataSecret(
 	ctx context.Context,
+	scope referenceScope,
 	spec *privatev1.ComputeInstanceSpec,
 	resolve bool,
+	allowed []privatev1.SecretType,
 ) error {
 	if !resolve || spec.GetUserDataSource().GetSecret() == nil {
 		return nil
 	}
-	resolved, err := validateUserDataSecret(
-		ctx, s.logger, s.secretsDao, s.secretStore, spec.GetUserDataSource().GetSecret(),
+	resolved, err := validateUserDataSecretOfTypes(
+		ctx, s.logger, s.secretsDao, s.secretStore, spec.GetUserDataSource().GetSecret(), allowed, scope,
 	)
 	if err != nil {
 		return err
@@ -1037,12 +1021,34 @@ func validateComputeTemplateImmutability(
 	}
 
 	// A Secret source is immutable once set. Inline content may be migrated to a Secret.
-	if updatingUserDataSource && existingSpec.GetUserDataSource().GetSecret() != nil &&
-		!sameSecretReference(existingSpec.GetUserDataSource().GetSecret(), newSpec.GetUserDataSource().GetSecret()) {
+	if err := validateComputeUserDataImmutability(current, candidate, updateMask); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateComputeUserDataImmutability rejects changes to an existing
+// user_data_source Secret reference and pins a matching name-only reference to
+// the stored identity. Callers run it before Secret resolution so an immutable
+// request is rejected without looking up the replacement reference.
+func validateComputeUserDataImmutability(
+	current, candidate *privatev1.ComputeInstance,
+	updateMask *fieldmaskpb.FieldMask,
+) error {
+	if !updateIncludesField(updateMask, "spec.user_data_source") {
+		return nil
+	}
+	storedSecret := current.GetSpec().GetUserDataSource().GetSecret()
+	if storedSecret == nil {
+		return nil
+	}
+	candidateUserData := candidate.GetSpec().GetUserDataSource()
+	if !sameSecretReference(storedSecret, candidateUserData.GetSecret()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"cannot change spec.user_data_source.secret: user_data_source.secret is immutable after creation")
 	}
-
+	candidateUserData.SetSecret(proto.Clone(storedSecret).(*privatev1.SecretLocalReference))
 	return nil
 }
 

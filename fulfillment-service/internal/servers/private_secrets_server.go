@@ -34,6 +34,8 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+const windowsUserDataSecretMaxBytes = 64 * 1024
+
 type PrivateSecretsServerBuilder struct {
 	logger            *slog.Logger
 	attributionLogic  auth.AttributionLogic
@@ -521,9 +523,12 @@ func (s *PrivateSecretsServer) validateSecretCreate(secret *privatev1.Secret) er
 	if secret.GetType() == privatev1.SecretType_SECRET_TYPE_UNSPECIFIED {
 		secret.SetType(privatev1.SecretType_SECRET_TYPE_OPAQUE)
 	}
-
 	switch secret.GetBackend() {
 	case privatev1.SecretBackend_SECRET_BACKEND_HUB:
+		if secret.GetType() == privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"secret type %s does not support the HUB backend", secret.GetType())
+		}
 		if err := s.validateHubSecretCreate(secret); err != nil {
 			return err
 		}
@@ -573,7 +578,8 @@ func (s *PrivateSecretsServer) validateSecretUpdate(_ context.Context,
 	if !dataUpdated {
 		return nil
 	}
-	if existingSecret.GetType() == privatev1.SecretType_SECRET_TYPE_USER_DATA {
+	if existingSecret.GetType() == privatev1.SecretType_SECRET_TYPE_USER_DATA ||
+		existingSecret.GetType() == privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'data' is immutable for secrets of type %s", existingSecret.GetType())
 	}
@@ -596,7 +602,7 @@ func validateSecretData(secretType privatev1.SecretType, data map[string][]byte)
 		key = ".dockerconfigjson"
 	case privatev1.SecretType_SECRET_TYPE_KUBECONFIG:
 		key = "kubeconfig"
-	case privatev1.SecretType_SECRET_TYPE_USER_DATA:
+	case privatev1.SecretType_SECRET_TYPE_USER_DATA, privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA:
 		key = "userdata"
 	case privatev1.SecretType_SECRET_TYPE_VALUE:
 		key = "value"
@@ -617,5 +623,42 @@ func validateSecretData(secretType privatev1.SecretType, data map[string][]byte)
 				"secret type %s has invalid data[%q]: %s", secretType, key, err)
 		}
 	}
+	if secretType == privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA {
+		return validateWindowsUserDataSecret(data[key], isPureXMLNoDTD)
+	}
 	return nil
+}
+
+// validateWindowsUserDataSecret checks size and XML after validateSecretData
+// has enforced the required non-empty userdata key.
+func validateWindowsUserDataSecret(value []byte, xmlValidator func([]byte) error) error {
+	if len(value) > windowsUserDataSecretMaxBytes {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"secret type %s data[%q] exceeds the maximum of %d bytes",
+			privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, userDataSecretDataKey,
+			windowsUserDataSecretMaxBytes)
+	}
+	if err := xmlValidator(value); err != nil {
+		return mapWindowsXMLValidationError(err)
+	}
+	return nil
+}
+
+func mapWindowsXMLValidationError(err error) error {
+	var xmlErr *xmlValidationError
+	if errors.As(err, &xmlErr) {
+		switch xmlErr.reason {
+		case xmlReasonInvalidUTF8, xmlReasonUnsupportedEncoding:
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"secret type %s data[%q] has an unsupported encoding; UTF-8 is required",
+				privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, userDataSecretDataKey)
+		case xmlReasonProhibitedDirective:
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"secret type %s data[%q] contains a prohibited XML directive",
+				privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, userDataSecretDataKey)
+		}
+	}
+	return grpcstatus.Errorf(grpccodes.InvalidArgument,
+		"secret type %s data[%q] is not well-formed XML",
+		privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, userDataSecretDataKey)
 }

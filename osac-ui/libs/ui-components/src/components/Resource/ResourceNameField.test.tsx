@@ -67,18 +67,13 @@ describe('ResourceNameField', () => {
       expect(screen.getByText('web-01')).toBeInTheDocument();
     });
 
-    it('truncates the title and subTitle when maxCharsDisplayed is set', () => {
-      renderResourceNameField({
-        resource: namedResource,
-        title: 'a very long piece of content',
-        subTitle: 'another very long subtitle',
-        maxCharsDisplayed: 10,
-      });
+    it('wraps long names instead of truncating by character count', () => {
+      const longName = 'instance-type-e2e-resize-cpu-up-memory-down';
 
-      const truncated = document.querySelectorAll('.pf-v6-c-truncate__text');
-      expect(truncated).toHaveLength(2);
-      expect(truncated[0]?.textContent).toBe('a very lon');
-      expect(truncated[1]?.textContent).toBe('another ve');
+      renderResourceNameField({ resource: { id: 'res-1', metadata: { name: longName } } });
+
+      expect(screen.getByText(longName)).toHaveClass('resource-name-field__clamped');
+      expect(document.querySelector('.pf-v6-c-truncate')).toBeNull();
     });
   });
 });

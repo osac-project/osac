@@ -17,7 +17,6 @@ package it
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"time"
 
@@ -56,8 +55,8 @@ var _ = Describe("Scoped VAST NFS preparation Secrets", Label("secrets", "vault"
 		baz := "it-vast-baz-" + uuid.New()[24:]
 		acmeData := []byte("schema_version: 1\nprovider: vast\nstorage_tenant: fixture-acme\n")
 		bazData := []byte("schema_version: 1\nprovider: vast\nstorage_tenant: fixture-baz\n")
-		acmeName := vastNFSFixtureName(acme, backend)
-		bazName := vastNFSFixtureName(baz, backend)
+		acmeName := acme + "--" + backend
+		bazName := baz + "--" + backend
 		Expect(bazName).NotTo(Equal(acmeName))
 		acmeID := createScopedVASTBundle(ctx, secrets, acmeName, acmeData)
 		bazID := createScopedVASTBundle(ctx, secrets, bazName, bazData)
@@ -102,7 +101,7 @@ var _ = Describe("Scoped VAST NFS preparation Secrets", Label("secrets", "vault"
 			)
 		}
 
-		absent := lookup(vastNFSFixtureName(acme, "vast-west"))
+		absent := lookup(acme + "--vast-west")
 		missing, err := controller.List(ctx, privatev1.SecretsListRequest_builder{Filter: &absent}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(missing.GetTotal()).To(BeZero())
@@ -117,11 +116,6 @@ var _ = Describe("Scoped VAST NFS preparation Secrets", Label("secrets", "vault"
 		Expect(grpcstatus.Code(err)).To(Equal(grpccodes.NotFound))
 	})
 })
-
-func vastNFSFixtureName(tenantName, backendName string) string {
-	digest := sha256.Sum256([]byte(tenantName + "/" + backendName))
-	return fmt.Sprintf("vast-nfs-%x", digest[:27])
-}
 
 func createScopedVASTBundle(ctx context.Context, secrets privatev1.SecretsClient, name string, data []byte) string {
 	GinkgoHelper()

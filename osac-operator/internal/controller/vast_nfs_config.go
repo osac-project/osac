@@ -19,7 +19,6 @@ package controller
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"io"
 	"strings"
@@ -71,7 +70,13 @@ func ResolveVASTNFSConfig(
 		return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS preparation requires a SecretsService client")
 	}
 
-	secretName := vastNFSSecretName(tenantName, backendName)
+	if strings.Contains(tenantName, "--") || strings.Contains(backendName, "--") {
+		return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS tenant and backend names cannot contain the reserved separator '--'")
+	}
+	secretName := tenantName + "--" + backendName
+	if len(secretName) > validation.DNS1123LabelMaxLength {
+		return VASTNFSConfig{}, status.Errorf(codes.FailedPrecondition, "VAST NFS Secret name <tenant>--<backend> exceeds %d characters", validation.DNS1123LabelMaxLength)
+	}
 	filter := fmt.Sprintf(
 		"this.metadata.tenant == %q && this.metadata.project == %q && this.metadata.name == %q",
 		vastNFSSecretOwner, "", secretName,
@@ -107,12 +112,6 @@ func ResolveVASTNFSConfig(
 		return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS preparation Secret must be OPAQUE")
 	}
 	return decodeVASTNFSConfig(secret.GetData()["config.yaml"], spec.GetEndpoint())
-}
-
-func vastNFSSecretName(tenantName, backendName string) string {
-	digest := sha256.Sum256([]byte(tenantName + "/" + backendName))
-	// The prefix and 54 hex digits fit the 63-character Secret name limit.
-	return fmt.Sprintf("vast-nfs-%x", digest[:27])
 }
 
 func matchesVASTNFSSecret(secret *privatev1.Secret, name string) bool {

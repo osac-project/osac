@@ -79,29 +79,14 @@ New tiers can be configured after a tenant is onboarded:
 
 ## VAST NFS preparation for CLaaS
 
-For the delegated VAST NFS path, the Cloud Provider Admin creates one OPAQUE
-bundle per OSAC tenant and VAST backend. Acme's Gold and Silver tiers can share
-one bundle when both select the registered backend named `vast-east`.
+Create one OPAQUE Secret per OSAC tenant and registered VAST backend. For
+example, the OSAC tenant `acme` shares one bundle across the `gold` and `silver`
+tiers when both use the backend `vast-east`.
 
-Store an OPAQUE Secret in the default project of the `system` tenant. Its name
-uses the first 54 lowercase hex characters of SHA-256 over
-`<tenant name>/<backend name>`, prefixed with `vast-nfs-`. This gives every pair
-a fixed-length name, including when both registered names are 63 characters.
-
-In the CSP-admin private API context, create the Secret from the YAML file.
-
-```shell
-tenant_name=acme
-backend_name=vast-east
-pair_digest=$(printf '%s/%s' "$tenant_name" "$backend_name" | sha256sum | cut -c1-54)
-osac --tenant system --project '' create secret \
-  --name "vast-nfs-$pair_digest" --type opaque \
-  --from-file=config.yaml=./acme-vast-east.yaml
-```
-
-The YAML file holds the credentials for the prepared VAST tenant, its export
-root and view policy, and the NFS data address. Store the VAST management
-address in the registered StorageBackend's endpoint.
+Save the example below as `vast-nfs.yaml`. Replace the sample VAST tenant
+name, credentials, and NFS settings with the values prepared for your tenant.
+`storage_tenant` is the tenant name in VAST. Store the VAST management address
+in the registered StorageBackend's endpoint.
 
 ```yaml
 schema_version: 1
@@ -118,6 +103,20 @@ options:
 ```
 
 A named VIP pool uses `options.vip_pool_name` in place of `endpoints.data`.
+
+Use the private API as a Cloud Provider Admin to create the Secret in the
+default project of the `system` tenant. Name it `<osac-tenant>--<registered-backend>`.
+For example, tenant `acme` and backend `vast-east` use `acme--vast-east`.
+Use your own names in the command below. Single hyphens are allowed in either
+name. Reserve the double hyphen for the separator and keep the full Secret
+name within 63 characters, including the separator.
+
+```shell
+osac --tenant system --project '' create secret \
+  --name acme--vast-east --type opaque \
+  --from-file=config.yaml=./vast-nfs.yaml
+```
+
 The Secret lookup uses the exact owner, default project and derived name.
 Labels can be used for organization.
 

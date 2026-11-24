@@ -35,7 +35,7 @@ const vastNFSFixtureBundle = "schema_version: 1\nprovider: vast\nstorage_tenant:
 	"endpoints:\n  data: acme-nfs.example.com\n" +
 	"options:\n  root_export: /acme/claas\n  view_policy: fixture-view-policy\n"
 
-const vastNFSFixtureName = "vast-nfs-fd9e866f0a49cdb899762530a3a8c1cb604b342c3de2ec733141e6"
+const vastNFSFixtureName = "acme--vast-east"
 
 const vastNFSFixtureFilter = "this.metadata.tenant == \"system\" && " +
 	"this.metadata.project == \"\" && this.metadata.name == \"" + vastNFSFixtureName + "\""
@@ -140,11 +140,11 @@ func TestResolveVASTNFSConfigNamesTenantBackendPairs(t *testing.T) {
 		backend string
 		want    string
 	}{
-		{tenant: "baz-corp", backend: "vast-east", want: "vast-nfs-105377b78e5bec44eb57340e960bb77b9abbcee1969f72710315a6"},
-		{tenant: "acme", backend: "vast-west", want: "vast-nfs-2af46cc8b569df881287d73d4b78aebae9431fbc668acdb6bc9465"},
-		{tenant: "a-b", backend: "c", want: "vast-nfs-4e84717d75bd540d02715af25a29b419f8c59fb0f5166490f97deb"},
-		{tenant: "a", backend: "b-c", want: "vast-nfs-b88f83c840abe581bdc67faf64ff9b84582b26c24d2ed146154dac"},
-		{tenant: strings.Repeat("a", 63), backend: strings.Repeat("b", 63), want: "vast-nfs-278079d66457fed9566a42a46de65395b054f6b14c1618c85e3386"},
+		{tenant: "baz-corp", backend: "vast-east", want: "baz-corp--vast-east"},
+		{tenant: "acme", backend: "vast-west", want: "acme--vast-west"},
+		{tenant: "acme-vast", backend: "east", want: "acme-vast--east"},
+		{tenant: "acme", backend: "vast-east", want: "acme--vast-east"},
+		{tenant: strings.Repeat("a", 60), backend: "b", want: strings.Repeat("a", 60) + "--b"},
 	} {
 		t.Run(tc.tenant+"/"+tc.backend, func(t *testing.T) {
 			backend := vastNFSFixtureBackend()
@@ -182,7 +182,7 @@ func TestResolveVASTNFSConfigRejectsMismatchedRecords(t *testing.T) {
 			f.listResult.GetItems()[0].GetMetadata().SetTenant("acme")
 		}, codes.FailedPrecondition, 0},
 		{"other backend in the default project", func(f *vastNFSTestSecrets) {
-			f.listResult.GetItems()[0].GetMetadata().SetName("vast-nfs-2af46cc8b569df881287d73d4b78aebae9431fbc668acdb6bc9465")
+			f.listResult.GetItems()[0].GetMetadata().SetName("acme--vast-west")
 		}, codes.FailedPrecondition, 0},
 		{"missing canonical ID", func(f *vastNFSTestSecrets) {
 			f.listResult.GetItems()[0].SetId("")
@@ -272,6 +272,9 @@ func TestResolveVASTNFSConfigRejectsInvalidSelection(t *testing.T) {
 	}{
 		{"missing tenant", "", func(*privatev1.StorageBackend) {}},
 		{"invalid tenant name", "acme/other", func(*privatev1.StorageBackend) {}},
+		{"reserved separator in tenant", "acme--vast", func(*privatev1.StorageBackend) {}},
+		{"reserved separator in backend", "acme", func(b *privatev1.StorageBackend) { b.GetMetadata().SetName("vast--east") }},
+		{"64-character Secret name", strings.Repeat("a", 61), func(b *privatev1.StorageBackend) { b.GetMetadata().SetName("b") }},
 		{"invalid backend name", "acme", func(b *privatev1.StorageBackend) { b.GetMetadata().SetName("vast/east") }},
 		{"missing backend name", "acme", func(b *privatev1.StorageBackend) { b.GetMetadata().SetName("") }},
 		{"missing backend endpoint", "acme", func(b *privatev1.StorageBackend) { b.GetSpec().SetEndpoint("") }},

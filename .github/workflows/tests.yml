@@ -166,7 +166,7 @@ jobs:
         if: inputs.kind == 'caas-unit'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
         with:
-          version: v3.22.0
+          version: v3.22.1
       - name: Check and test CaaS integration module
         if: inputs.kind == 'caas-unit'
         run: make -C tests/integration/caas check unit
@@ -187,7 +187,7 @@ jobs:
         if: inputs.kind == 'it-caas'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
         with:
-          version: v3.22.0
+          version: v3.22.1
       - name: Install Kind
         if: inputs.kind == 'it-caas'
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc  # v1
@@ -539,7 +539,7 @@ jobs:
         if: inputs.kind == 'it-osac-aap'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
         with:
-          version: v3.22.0
+          version: v3.22.1
 
       - name: Run integration tests
         if: inputs.kind == 'it-osac-aap'
@@ -583,7 +583,7 @@ jobs:
         if: inputs.kind == 'it-osac-installer'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
         with:
-          version: v3.22.0
+          version: v3.22.1
 
       - name: Install Kind
         if: inputs.kind == 'it-osac-installer'
@@ -762,7 +762,7 @@ jobs:
         if: inputs.kind == 'helm-unit'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
         with:
-          version: v3.22.0
+          version: v3.22.1
       - uses: ./.github/actions/setup-python
         if: inputs.kind == 'helm-unit'
       - name: Test preflight harness

@@ -24,6 +24,7 @@ interface ResourceWizardShellProps<TValues extends FormikValues, TStepId extends
   parentLabel: string;
   title: string;
   navAriaLabel: string;
+  startIndex?: number;
   onStepChange: (stepId: TStepId) => void;
   footer: NonNullable<WizardProps['footer']>;
   children: ReactNode;
@@ -37,6 +38,7 @@ const ResourceWizardShell = <TValues extends FormikValues, TStepId extends strin
   parentLabel,
   title,
   navAriaLabel,
+  startIndex,
   onStepChange,
   footer,
   children,
@@ -69,6 +71,7 @@ const ResourceWizardShell = <TValues extends FormikValues, TStepId extends strin
             <Wizard
               navAriaLabel={navAriaLabel}
               isVisitRequired
+              startIndex={startIndex}
               footer={footer}
               onStepChange={(_, step) => onStepChange(step.id as TStepId)}
             >

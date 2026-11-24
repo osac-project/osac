@@ -12,6 +12,7 @@ import type { Tenant } from '@osac/types/private';
 import ListPageCard from '@osac/ui-components/components/Page/ListPageCard';
 
 import TenantActionsMenu from './TenantActionsMenu';
+import TenantExternalBillingId from './TenantExternalBillingId';
 import TenantStatusLabel from './TenantStatusLabel';
 import { useTranslation } from '../../hooks/useTranslation';
 import { Timestamp } from '../Primitives/Timestamp';
@@ -38,6 +39,12 @@ const TenantCard = ({ tenant }: TenantCardProps) => {
             <DescriptionListTerm>{t('Domain')}</DescriptionListTerm>
             <DescriptionListDescription>
               {tenant.spec?.domains?.[0] ?? '—'}
+            </DescriptionListDescription>
+          </DescriptionListGroup>
+          <DescriptionListGroup>
+            <DescriptionListTerm>{t('External billing ID')}</DescriptionListTerm>
+            <DescriptionListDescription>
+              <TenantExternalBillingId tenant={tenant} />
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>

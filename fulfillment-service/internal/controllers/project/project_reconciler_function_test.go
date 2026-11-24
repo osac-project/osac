@@ -2109,5 +2109,147 @@ var _ = Describe("Deletion Cleanup", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(project.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
 		})
+
+		It("should delete the project's quota rows and requeue before archival", func() {
+			project := privatev1.Project_builder{
+				Id: "project-1",
+				Metadata: privatev1.Metadata_builder{
+					Name:       "test-project",
+					Tenant:     "acme",
+					Finalizers: []string{finalizers.Controller},
+				}.Build(),
+			}.Build()
+			limit := privatev1.QuotaLimit_builder{
+				Id: "limit-1",
+				Metadata: privatev1.Metadata_builder{
+					Name:    "compute-vcpus",
+					Tenant:  "acme",
+					Project: "test-project",
+				}.Build(),
+			}.Build()
+			threshold := privatev1.QuotaThreshold_builder{
+				Id: "threshold-1",
+				Metadata: privatev1.Metadata_builder{
+					Name:    "compute-vcpus",
+					Tenant:  "acme",
+					Project: "test-project",
+				}.Build(),
+			}.Build()
+			mockLimitsClient := NewMockQuotaLimitsClient(ctrl)
+			mockThresholdsClient := NewMockQuotaThresholdsClient(ctrl)
+			reconciler := *functionObj
+			reconciler.quotaLimitsClient = mockLimitsClient
+			reconciler.quotaThresholdsClient = mockThresholdsClient
+
+			// Expect query for children (returns 0)
+			mockClient.EXPECT().
+				List(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsListResponse{Size: 0}, nil)
+
+			// Expect query for memberships (returns 0)
+			mockProjectMembershipsClient.EXPECT().
+				List(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectMembershipsListResponse{}, nil)
+
+			quotaFilter := `this.metadata.tenant == "acme" && this.metadata.project == "test-project"`
+			mockLimitsClient.EXPECT().
+				List(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, req *privatev1.QuotaLimitsListRequest, _ ...grpc.CallOption) (*privatev1.QuotaLimitsListResponse, error) {
+					Expect(req.GetFilter()).To(Equal(quotaFilter))
+					return &privatev1.QuotaLimitsListResponse{
+						Items: []*privatev1.QuotaLimit{limit},
+						Total: 1,
+						Size:  1,
+					}, nil
+				})
+			mockLimitsClient.EXPECT().
+				Delete(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, req *privatev1.QuotaLimitsDeleteRequest, _ ...grpc.CallOption) (*privatev1.QuotaLimitsDeleteResponse, error) {
+					Expect(req.GetId()).To(Equal("limit-1"))
+					return &privatev1.QuotaLimitsDeleteResponse{}, nil
+				})
+			mockThresholdsClient.EXPECT().
+				List(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, req *privatev1.QuotaThresholdsListRequest, _ ...grpc.CallOption) (*privatev1.QuotaThresholdsListResponse, error) {
+					Expect(req.GetFilter()).To(Equal(quotaFilter))
+					return &privatev1.QuotaThresholdsListResponse{
+						Items: []*privatev1.QuotaThreshold{threshold},
+						Total: 1,
+						Size:  1,
+					}, nil
+				})
+			mockThresholdsClient.EXPECT().
+				Delete(gomock.Any(), gomock.Any()).
+				DoAndReturn(func(_ context.Context, req *privatev1.QuotaThresholdsDeleteRequest, _ ...grpc.CallOption) (*privatev1.QuotaThresholdsDeleteResponse, error) {
+					Expect(req.GetId()).To(Equal("threshold-1"))
+					return &privatev1.QuotaThresholdsDeleteResponse{}, nil
+				})
+
+			task := &task{
+				r:       &reconciler,
+				project: project,
+			}
+
+			err := task.delete(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(project.GetStatus().GetState()).To(Equal(privatev1.ProjectState_PROJECT_STATE_DELETING))
+			Expect(project.GetStatus().GetMessage()).To(Equal("Pending quota row deletion prior to project deletion"))
+			var retryable interface{ RequeueAfter() time.Duration }
+			Expect(errors.As(task.retryErr, &retryable)).To(BeTrue())
+			Expect(retryable.RequeueAfter()).To(Equal(projectChildDeleteRetryDelay))
+			Expect(project.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.Controller))
+		})
+
+		It("should archive the project once its quota rows are gone", func() {
+			project := privatev1.Project_builder{
+				Id: "project-1",
+				Metadata: privatev1.Metadata_builder{
+					Name:       "test-project",
+					Tenant:     "acme",
+					Finalizers: []string{finalizers.Controller},
+				}.Build(),
+			}.Build()
+			mockLimitsClient := NewMockQuotaLimitsClient(ctrl)
+			mockThresholdsClient := NewMockQuotaThresholdsClient(ctrl)
+			reconciler := *functionObj
+			reconciler.quotaLimitsClient = mockLimitsClient
+			reconciler.quotaThresholdsClient = mockThresholdsClient
+
+			// Expect query for children (returns 0)
+			mockClient.EXPECT().
+				List(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectsListResponse{Size: 0}, nil)
+
+			// Expect query for memberships (returns 0)
+			mockProjectMembershipsClient.EXPECT().
+				List(gomock.Any(), gomock.Any()).
+				Return(&privatev1.ProjectMembershipsListResponse{}, nil)
+
+			// The quota rows were archived by the previous pass.
+			mockLimitsClient.EXPECT().
+				List(gomock.Any(), gomock.Any()).
+				Return(&privatev1.QuotaLimitsListResponse{}, nil)
+			mockThresholdsClient.EXPECT().
+				List(gomock.Any(), gomock.Any()).
+				Return(&privatev1.QuotaThresholdsListResponse{}, nil)
+
+			// With the quota rows gone the Keycloak group deletion runs and the
+			// finalizer is removed, so the project can be archived.
+			mockIdpClient.EXPECT().
+				GetGroupIDByPath(gomock.Any(), "acme", "/test-project").
+				Return("project-group-id", nil)
+			mockIdpClient.EXPECT().
+				DeleteGroup(gomock.Any(), "acme", "project-group-id").
+				Return(nil)
+
+			task := &task{
+				r:       &reconciler,
+				project: project,
+			}
+
+			err := task.delete(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(project.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.Controller))
+		})
 	})
 })

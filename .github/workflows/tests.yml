@@ -20,7 +20,7 @@ on:  # yamllint disable-line rule:truthy
         description: >-
           Which tests: go-unit, caas-unit, ui-unit, metering-contract, it-caas, it-fulfillment-service, it-osac-operator,
           it-bare-metal-fulfillment-operator, it-osac-aap, it-osac-installer, helm-unit or
-          it-osac-installer-preflight-helm3/-helm322/-helm4
+          it-osac-installer-preflight-helm3/-helm322/-helm4 or e2e-workflow-policy
         required: true
         type: string
       dir:
@@ -56,6 +56,35 @@ jobs:
     env:
       KIND_EXPERIMENTAL_PROVIDER: docker
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'e2e-workflow-policy'
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'e2e-workflow-policy'
+        with:
+          repository: osac-project/osac-test-infra
+          # Keep this immutable so flake repetitions use the same runner policy.
+          ref: 622921ac820ff992a88327b925933595c8d552bd
+          path: osac-test-infra
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'e2e-workflow-policy'
+        with:
+          repository: osac-project/osac-ci
+          ref: c5ad0858e6a30ea99c7a2a4b0d4869580b3b655e
+          path: osac-ci
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python
+        if: inputs.kind == 'e2e-workflow-policy'
+      - name: Test E2E workflow selection and coverage contracts
+        if: inputs.kind == 'e2e-workflow-policy'
+        env:
+          OSAC_TEST_INFRA_DIR: ${{ github.workspace }}/osac-test-infra
+          PYTHONPATH: ${{ github.workspace }}/osac-ci/src
+        run: uv run --project osac-test-infra --with pydantic pytest -o addopts= -n 0 tests/workflow_policy/test_caas_full_variant.py tests/workflow_policy/test_caas_ci_suite_policy.py
+
       # --- unit tests of a Go module (fulfillment-service, osac-metering/...)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: inputs.kind == 'go-unit'
@@ -170,6 +199,7 @@ jobs:
           CONTAINER_TOOL: docker
           LOG_LEVEL: debug
           PROJECT_REPO: ${{ github.event.pull_request.head.repo.full_name || github.repository }}
+          JUNIT_REPORT_DIR: ${{ github.workspace }}/it-junit
         run: |
           echo '127.0.0.1 fulfillment-api.osac.svc.cluster.local fulfillment-internal-api.osac.svc.cluster.local keycloak.keycloak.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
           make -C osac-installer ensure-inotify
@@ -181,21 +211,46 @@ jobs:
         env:
           CONTAINER_TOOL: docker
           LOG_LEVEL: debug
+          JUNIT_REPORT_DIR: ${{ github.workspace }}/it-junit
         run: make -C tests/integration/caas run
       - name: Collect CaaS diagnostics
         if: inputs.kind == 'it-caas' && failure()
         run: |
-          log_dir=tests/integration/caas/logs
-          mkdir -p "$log_dir"
-          kind export logs "$log_dir" --name osac-dev-caas || true
-      - if: inputs.kind == 'it-caas' && failure()
+          export KUBECONFIG="$HOME/.kube/osac-dev-caas-kind.kubeconfig"
+          # The upload below takes this directory, so every gather below writes into it.
+          mkdir -p it-logs/kind
+          kind export logs it-logs/kind --name osac-dev-caas || true
+          # The suite's own cleanup exported the Kind cluster's logs next to its module.
+          if [ -d fulfillment-service/logs ]; then
+            cp -r fulfillment-service/logs it-logs/suite-cluster-logs
+          fi
+          {
+            echo "=== Pods ==="
+            kubectl get pods -n osac -o wide
+            echo "=== Deployments ==="
+            kubectl get deployments -n osac
+            echo "=== Events ==="
+            kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
+          } 2>&1 | tee it-logs/diagnostics.txt
+          echo "=== Collecting pod logs to files ==="
+          for pod in $(kubectl get pods -n osac -o jsonpath='{.items[*].metadata.name}'); do
+            echo "Collecting logs for $pod..."
+            kubectl logs -n osac "$pod" --all-containers --tail=500 --prefix > "it-logs/${pod}.log" 2>&1 || echo "Failed to get logs for $pod"
+            # Previous-container logs exist only where a pod's containers restarted; for the rest
+            # the failed call writes its error message into the file instead.
+            kubectl logs -n osac "$pod" --all-containers --previous --tail=500 --prefix > "it-logs/${pod}-previous.log" 2>&1 || true
+          done
+          echo "=== Pod descriptions ==="
+          kubectl describe pods -n osac > it-logs/pod-descriptions.txt 2>&1
+      - name: Merge JUnit reports
+        if: inputs.kind == 'it-caas' && always()
+        run: python3 .github/scripts/merge_junit.py it-junit it-logs/junit.xml
+      - if: inputs.kind == 'it-caas' && always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
-          name: caas-integration-logs${{ inputs.artifact_suffix }}
-          path: |
-            tests/integration/caas/logs
-            fulfillment-service/logs
-          retention-days: 7
+          name: osac-logs-it-caas-${{ github.run_id }}${{ inputs.artifact_suffix }}
+          path: it-logs
+          retention-days: 30
 
       # --- integration test: fulfillment-service
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -225,7 +280,8 @@ jobs:
         env:
           CONTAINER_TOOL: docker
           MCP_TEST_ENABLED: "true"
-          FULFILLMENT_IT_REPORT_DIR: ${{ github.workspace }}/fulfillment-service/logs/timings
+          FULFILLMENT_IT_REPORT_DIR: ${{ github.workspace }}/it-logs/timings
+          JUNIT_REPORT_DIR: ${{ github.workspace }}/it-junit
         run: |
           echo '127.0.0.1 fulfillment-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
           echo '127.0.0.1 fulfillment-internal-api.osac.svc.cluster.local' | sudo tee -a /etc/hosts >/dev/null
@@ -233,11 +289,11 @@ jobs:
           echo '127.0.0.1 mcp.osac.localhost' | sudo tee -a /etc/hosts >/dev/null
           make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=fulfillment
       - name: Collect diagnostic logs
-        if: inputs.kind == 'it-fulfillment-service' && always()
+        if: inputs.kind == 'it-fulfillment-service' && failure()
         run: |
           export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
           # The upload below takes this directory, so the diagnostics go to a file in it as well as to the log.
-          mkdir -p fulfillment-service/logs
+          mkdir -p it-logs
           {
             echo "=== Pods ==="
             kubectl get pods -n osac -o wide
@@ -249,13 +305,30 @@ jobs:
             kubectl logs -n osac -l 'app in (fulfillment-console-proxy,fulfillment-controller,fulfillment-grpc-server,fulfillment-rest-gateway,fulfillment-ingress-proxy)' --tail=100 --all-containers
             echo "=== Events ==="
             kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
-          } 2>&1 | tee fulfillment-service/logs/diagnostics.txt
+          } 2>&1 | tee it-logs/diagnostics.txt
+          echo "=== Collecting pod logs to files ==="
+          for pod in $(kubectl get pods -n osac -o jsonpath='{.items[*].metadata.name}'); do
+            echo "Collecting logs for $pod..."
+            kubectl logs -n osac "$pod" --all-containers --tail=500 --prefix > "it-logs/${pod}.log" 2>&1 || echo "Failed to get logs for $pod"
+            # Previous-container logs exist only where a pod's containers restarted; for the rest
+            # the failed call writes its error message into the file instead.
+            kubectl logs -n osac "$pod" --all-containers --previous --tail=500 --prefix > "it-logs/${pod}-previous.log" 2>&1 || true
+          done
+          echo "=== Pod descriptions ==="
+          kubectl describe pods -n osac > it-logs/pod-descriptions.txt 2>&1
+          # The suite's own cleanup exported the Kind cluster's logs next to its module.
+          if [ -d fulfillment-service/logs ]; then
+            cp -r fulfillment-service/logs it-logs/suite-cluster-logs
+          fi
+      - name: Merge JUnit reports
+        if: inputs.kind == 'it-fulfillment-service' && always()
+        run: python3 .github/scripts/merge_junit.py it-junit it-logs/junit.xml
       - if: inputs.kind == 'it-fulfillment-service' && always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
-          name: logs${{ inputs.artifact_suffix }}
-          path: fulfillment-service/logs
-          retention-days: 7
+          name: osac-logs-it-fulfillment-${{ github.run_id }}${{ inputs.artifact_suffix }}
+          path: it-logs
+          retention-days: 30
       # --- integration test: osac-operator
       - name: Checkout repository
         if: inputs.kind == 'it-osac-operator'
@@ -296,20 +369,44 @@ jobs:
         if: inputs.kind == 'it-osac-operator'
         env:
           CONTAINER_TOOL: docker
+          JUNIT_REPORT_DIR: ${{ github.workspace }}/it-junit
         run: make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator
 
       - name: Collect diagnostic logs
-        if: inputs.kind == 'it-osac-operator' && always()
+        if: inputs.kind == 'it-osac-operator' && failure()
         run: |
           export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
-          echo "=== Pods ==="
-          kubectl get pods -n osac -o wide
-          echo "=== Deployments ==="
-          kubectl get deployments -n osac
-          echo "=== Operator logs ==="
-          kubectl logs -n osac -l control-plane=controller-manager --tail=100
-          echo "=== Events ==="
-          kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
+          # The upload below takes this directory, so the diagnostics go to a file in it as well as to the log.
+          mkdir -p it-logs
+          {
+            echo "=== Pods ==="
+            kubectl get pods -n osac -o wide
+            echo "=== Deployments ==="
+            kubectl get deployments -n osac
+            echo "=== Operator logs ==="
+            kubectl logs -n osac -l control-plane=controller-manager --tail=100
+            echo "=== Events ==="
+            kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
+          } 2>&1 | tee it-logs/diagnostics.txt
+          echo "=== Collecting pod logs to files ==="
+          for pod in $(kubectl get pods -n osac -o jsonpath='{.items[*].metadata.name}'); do
+            echo "Collecting logs for $pod..."
+            kubectl logs -n osac "$pod" --all-containers --tail=500 --prefix > "it-logs/${pod}.log" 2>&1 || echo "Failed to get logs for $pod"
+            # Previous-container logs exist only where a pod's containers restarted; for the rest
+            # the failed call writes its error message into the file instead.
+            kubectl logs -n osac "$pod" --all-containers --previous --tail=500 --prefix > "it-logs/${pod}-previous.log" 2>&1 || true
+          done
+          echo "=== Pod descriptions ==="
+          kubectl describe pods -n osac > it-logs/pod-descriptions.txt 2>&1
+      - name: Merge JUnit reports
+        if: inputs.kind == 'it-osac-operator' && always()
+        run: python3 .github/scripts/merge_junit.py it-junit it-logs/junit.xml
+      - if: inputs.kind == 'it-osac-operator' && always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: osac-logs-it-operator-${{ github.run_id }}${{ inputs.artifact_suffix }}
+          path: it-logs
+          retention-days: 30
       # --- integration test: bare-metal-fulfillment-operator
       - name: Checkout repository
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
@@ -360,26 +457,50 @@ jobs:
         if: inputs.kind == 'it-bare-metal-fulfillment-operator'
         env:
           CONTAINER_TOOL: docker
+          JUNIT_REPORT_DIR: ${{ github.workspace }}/it-junit
         run: make -C osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=bmf
 
       - name: Collect diagnostic logs
-        if: inputs.kind == 'it-bare-metal-fulfillment-operator' && always()
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator' && failure()
         run: |
           export KUBECONFIG="$HOME/.kube/osac-dev-kind.kubeconfig"
-          echo "=== Pods ==="
-          kubectl get pods -n osac -o wide
-          echo "=== Deployments ==="
-          kubectl get deployments -n osac
-          echo "=== BMF operator logs ==="
-          kubectl logs -n osac -l app.kubernetes.io/name=bmf --tail=100
-          echo "=== BareMetalPools ==="
-          kubectl get baremetalpools -n osac -o yaml
-          echo "=== BareMetalInstances ==="
-          kubectl get baremetalinstances -n osac -o yaml
-          echo "=== BareMetalHosts ==="
-          kubectl get baremetalhosts -n osac -o yaml
-          echo "=== Events ==="
-          kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
+          # The upload below takes this directory, so the diagnostics go to a file in it as well as to the log.
+          mkdir -p it-logs
+          {
+            echo "=== Pods ==="
+            kubectl get pods -n osac -o wide
+            echo "=== Deployments ==="
+            kubectl get deployments -n osac
+            echo "=== BMF operator logs ==="
+            kubectl logs -n osac -l app.kubernetes.io/name=bmf --tail=100
+            echo "=== BareMetalPools ==="
+            kubectl get baremetalpools -n osac -o yaml
+            echo "=== BareMetalInstances ==="
+            kubectl get baremetalinstances -n osac -o yaml
+            echo "=== BareMetalHosts ==="
+            kubectl get baremetalhosts -n osac -o yaml
+            echo "=== Events ==="
+            kubectl get events -n osac --sort-by='.lastTimestamp' | tail -50
+          } 2>&1 | tee it-logs/diagnostics.txt
+          echo "=== Collecting pod logs to files ==="
+          for pod in $(kubectl get pods -n osac -o jsonpath='{.items[*].metadata.name}'); do
+            echo "Collecting logs for $pod..."
+            kubectl logs -n osac "$pod" --all-containers --tail=500 --prefix > "it-logs/${pod}.log" 2>&1 || echo "Failed to get logs for $pod"
+            # Previous-container logs exist only where a pod's containers restarted; for the rest
+            # the failed call writes its error message into the file instead.
+            kubectl logs -n osac "$pod" --all-containers --previous --tail=500 --prefix > "it-logs/${pod}-previous.log" 2>&1 || true
+          done
+          echo "=== Pod descriptions ==="
+          kubectl describe pods -n osac > it-logs/pod-descriptions.txt 2>&1
+      - name: Merge JUnit reports
+        if: inputs.kind == 'it-bare-metal-fulfillment-operator' && always()
+        run: python3 .github/scripts/merge_junit.py it-junit it-logs/junit.xml
+      - if: inputs.kind == 'it-bare-metal-fulfillment-operator' && always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
+        with:
+          name: osac-logs-it-bmf-${{ github.run_id }}${{ inputs.artifact_suffix }}
+          path: it-logs
+          retention-days: 30
       # --- integration test: osac-aap
       - name: Checkout
         if: inputs.kind == 'it-osac-aap'

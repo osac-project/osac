@@ -6,7 +6,6 @@ import { resourceNameSchema } from '@osac/ui-components/validation/resource-name
 
 import type { ClusterNodeSetRow } from './fields';
 import { buildCidrSchema } from '../../../validation/cidr-validation';
-import { isValidSshPublicKey } from '../../ProvisioningWizard/credentialValidation';
 import type { ProvisioningFieldValue } from '../../ProvisioningWizard/fields/provisioningFieldValue';
 import {
   clusterNetworkDoNotOverlapTest,
@@ -29,17 +28,7 @@ const buildClusterFieldDefinitions = (t: TFunction) => {
       id: yup.string().required(t('Select a catalog item')),
     }),
     metadataName: resourceNameSchema(t),
-    specSshPublicKey: lockedField(
-      yup
-        .string()
-        .test(
-          'ssh-public-key',
-          t(
-            'SSH public key must be in the form "[TYPE] key [[EMAIL]]". Supported types are ssh-rsa, ssh-ed25519, and ecdsa-sha2-nistp256/384/521.',
-          ),
-          (value) => isValidSshPublicKey(value),
-        ),
-    ),
+    specSshKey: lockedField(yup.string()),
     specVersionName: lockedField(yup.string().trim().required(t('Version is required'))),
     specNodeSetRows: lockedField(
       yup
@@ -85,7 +74,7 @@ export const buildClusterStepSchema = (
           name: fields.metadataName,
         }),
         spec: yup.object({
-          sshPublicKey: fields.specSshPublicKey,
+          sshKey: fields.specSshKey,
           pullSecretSecret: lockedField(yup.string().required(t('Pull secret is required'))),
         }),
       });

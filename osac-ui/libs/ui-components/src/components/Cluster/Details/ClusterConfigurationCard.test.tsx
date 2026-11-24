@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   ClusterNodeSetSchema,
+  ClusterNodeSetStatusSchema,
   ClusterSchema,
   ClusterState,
   ClusterUpgradeHistoryEntrySchema,
@@ -65,39 +66,23 @@ describe('ClusterConfigurationCard', () => {
       expect(heading.nextElementSibling?.tagName).toBe('HR');
     }
   });
-  it.each([false, true])(
-    'opens meaningful empty control-plane history (node-only: %s)',
-    async (nodeOnly) => {
-      const withoutHistory = clone(ClusterSchema, cluster);
-      if (nodeOnly && withoutHistory.status) {
-        withoutHistory.status.upgradeHistory = [
-          create(ClusterUpgradeHistoryEntrySchema, {
-            component: { target: { case: 'nodeSetId', value: 'workers' } },
-            state: ClusterUpgradeState.SUCCEEDED,
-            message: 'Worker-only history',
-          }),
-        ];
-      }
-      const { user } = renderWithProviders(<ClusterConfigurationCard cluster={withoutHistory} />);
-      const historyAction = screen.getByRole('button', { name: 'Upgrade history' });
-      expect(
-        screen.getByRole('heading', { name: 'Cluster version' }).closest('.pf-v6-c-card__header'),
-      ).toContainElement(historyAction);
-      expect(historyAction.closest('.pf-v6-c-card__actions')).not.toBeNull();
-      expect(screen.getByText('Current').closest('dt')).not.toContainElement(historyAction);
-      expect(screen.queryByText('Current version')).not.toBeInTheDocument();
-      await user.click(historyAction);
-      const dialog = screen.getByRole('dialog', { name: 'Upgrade history' });
-      expect(
-        within(dialog).getByText('No control plane upgrades have been recorded.'),
-      ).toBeInTheDocument();
-      expect(within(dialog).queryByRole('grid')).not.toBeInTheDocument();
-      expect(within(dialog).queryByText('Worker-only history')).not.toBeInTheDocument();
-      await user.click(within(dialog).getByRole('button', { name: 'Close' }));
-      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-      expect(historyAction).toHaveFocus();
-    },
-  );
+  it('opens meaningful empty cluster history', async () => {
+    const { user } = renderWithProviders(<ClusterConfigurationCard cluster={cluster} />);
+    const historyAction = screen.getByRole('button', { name: 'Upgrade history' });
+    expect(
+      screen.getByRole('heading', { name: 'Cluster version' }).closest('.pf-v6-c-card__header'),
+    ).toContainElement(historyAction);
+    expect(historyAction.closest('.pf-v6-c-card__actions')).not.toBeNull();
+    expect(screen.getByText('Current').closest('dt')).not.toContainElement(historyAction);
+    expect(screen.queryByText('Current version')).not.toBeInTheDocument();
+    await user.click(historyAction);
+    const dialog = screen.getByRole('dialog', { name: 'Upgrade history' });
+    expect(within(dialog).getByText('No cluster upgrades have been recorded.')).toBeInTheDocument();
+    expect(within(dialog).queryByRole('grid')).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(historyAction).toHaveFocus();
+  });
 
   it('keeps the loading explanation but no action until a real target is available', async () => {
     let resolveCatalog: (value: {
@@ -140,7 +125,6 @@ describe('ClusterConfigurationCard', () => {
     failed.status.observedVersion = '';
     failed.status.upgradeHistory = [
       create(ClusterUpgradeHistoryEntrySchema, {
-        component: { target: { case: 'controlPlane', value: {} } },
         state: ClusterUpgradeState.FAILED,
         message: 'The attempted upgrade failed',
       }),
@@ -196,7 +180,6 @@ describe('ClusterConfigurationCard', () => {
       }
       upgrading.status.upgradeHistory = [
         create(ClusterUpgradeHistoryEntrySchema, {
-          component: { target: { case: 'controlPlane', value: {} } },
           sourceVersion: '4.17.0',
           targetVersion: '4.18.0',
           state,
@@ -222,12 +205,10 @@ describe('ClusterConfigurationCard', () => {
     }
     upgraded.status.upgradeHistory = [
       create(ClusterUpgradeHistoryEntrySchema, {
-        component: { target: { case: 'controlPlane', value: {} } },
         targetVersion: '4.18.0',
         state: ClusterUpgradeState.SUCCEEDED,
       }),
       create(ClusterUpgradeHistoryEntrySchema, {
-        component: { target: { case: 'controlPlane', value: {} } },
         targetVersion: '4.16.0',
         state: ClusterUpgradeState.PROGRESSING,
         message: 'An older upgrade is still running',
@@ -259,7 +240,6 @@ describe('ClusterConfigurationCard', () => {
     }
     timedOut.status.upgradeHistory = [
       create(ClusterUpgradeHistoryEntrySchema, {
-        component: { target: { case: 'controlPlane', value: {} } },
         targetVersion: '4.18.0',
         state: ClusterUpgradeState.TIMED_OUT,
         message: 'Control plane upgrade timed out',
@@ -291,19 +271,12 @@ describe('ClusterConfigurationCard', () => {
     failed.spec.version = create(ClusterVersionReferenceSchema, { id: targetVersion.id });
     failed.status.upgradeHistory = [
       create(ClusterUpgradeHistoryEntrySchema, {
-        component: { target: { case: 'controlPlane', value: {} } },
         sourceVersion: '4.17.0',
         targetVersion: '4.18.0',
         state: ClusterUpgradeState.FAILED,
         message: 'The attempted upgrade failed',
       }),
       create(ClusterUpgradeHistoryEntrySchema, {
-        component: { target: { case: 'nodeSetId', value: 'workers' } },
-        targetVersion: '4.19.0',
-        state: ClusterUpgradeState.FAILED,
-      }),
-      create(ClusterUpgradeHistoryEntrySchema, {
-        component: { target: { case: 'controlPlane', value: {} } },
         sourceVersion: '4.17.0',
         targetVersion: '4.17.1',
         state: ClusterUpgradeState.FAILED,
@@ -337,19 +310,13 @@ describe('ClusterConfigurationCard', () => {
     expect(screen.queryByRole('option', { name: '4.18.0' })).not.toBeInTheDocument();
   });
 
-  it('shows control-plane upgrade history with current state, times, and messages', async () => {
+  it('shows whole-cluster upgrade history with current state, times, and messages', async () => {
     const upgrading = clone(ClusterSchema, cluster);
     if (!upgrading.status) {
       throw new Error('The cluster fixture needs status');
     }
     upgrading.status.upgradeHistory = [
       create(ClusterUpgradeHistoryEntrySchema, {
-        component: { target: { case: 'nodeSetId', value: 'workers' } },
-        state: ClusterUpgradeState.FAILED,
-        message: 'Workers failed',
-      }),
-      create(ClusterUpgradeHistoryEntrySchema, {
-        component: { target: { case: 'controlPlane', value: {} } },
         state: ClusterUpgradeState.PROGRESSING,
         sourceVersion: '4.17.0',
         targetVersion: '4.18.0',
@@ -357,7 +324,6 @@ describe('ClusterConfigurationCard', () => {
         message: 'Updating the control plane',
       }),
       create(ClusterUpgradeHistoryEntrySchema, {
-        component: { target: { case: 'controlPlane', value: {} } },
         state: ClusterUpgradeState.SUCCEEDED,
         sourceVersion: '4.16.0',
         targetVersion: '4.17.0',
@@ -383,7 +349,6 @@ describe('ClusterConfigurationCard', () => {
     expect(succeededStatus.closest('.pf-v6-c-label')).toBeNull();
     expect(succeededStatus.querySelector('.pf-v6-c-icon')).toBeInTheDocument();
     expect(within(history).getByText('Updating the control plane')).toBeInTheDocument();
-    expect(within(history).queryByText('Workers failed')).not.toBeInTheDocument();
     expect(within(history).getAllByRole('time')).toHaveLength(3);
     await user.click(within(history).getByRole('button', { name: 'Close' }));
     expect(screen.queryByRole('dialog', { name: 'Upgrade history' })).not.toBeInTheDocument();
@@ -397,7 +362,6 @@ describe('ClusterConfigurationCard', () => {
     failed.status.state = ClusterState.FAILED;
     failed.status.upgradeHistory = [
       create(ClusterUpgradeHistoryEntrySchema, {
-        component: { target: { case: 'controlPlane', value: {} } },
         state: ClusterUpgradeState.FAILED,
       }),
     ];
@@ -416,7 +380,7 @@ describe('ClusterConfigurationCard', () => {
       throw new Error('The cluster fixture needs spec and status');
     }
     observedSingleWorker.spec.nodeSets.workers = create(ClusterNodeSetSchema, { size: 2 });
-    observedSingleWorker.status.nodeSets.workers = create(ClusterNodeSetSchema, {
+    observedSingleWorker.status.nodeSets.workers = create(ClusterNodeSetStatusSchema, {
       size: 1,
       observedVersion: '4.17.0',
     });

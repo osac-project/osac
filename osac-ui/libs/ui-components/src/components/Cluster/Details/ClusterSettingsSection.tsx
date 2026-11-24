@@ -13,6 +13,7 @@ import type { Cluster } from '@osac/types';
 
 import { useTranslation } from '../../../hooks/useTranslation';
 import { displayValue } from '../../../utils/detailFormatters';
+import ResourceLink from '../../Resource/ResourceLink';
 
 const ClusterSettingsSection = ({ cluster }: { cluster: Cluster }) => {
   const { t } = useTranslation();
@@ -33,11 +34,16 @@ const ClusterSettingsSection = ({ cluster }: { cluster: Cluster }) => {
         >
           <DescriptionListGroup>
             <DescriptionListTerm>{t('SSH public key')}</DescriptionListTerm>
-            <DescriptionListDescription
-              className="cluster-details__ssh-key"
-              tabIndex={cluster.spec?.sshPublicKey?.trim() ? 0 : undefined}
-            >
-              {displayValue(cluster.spec?.sshPublicKey)}
+            <DescriptionListDescription className="cluster-details__ssh-key">
+              {cluster.spec?.sshKey?.id ? (
+                <ResourceLink
+                  basePath="/secrets"
+                  id={cluster.spec.sshKey.id}
+                  name={cluster.spec.sshKey.name || cluster.spec.sshKey.id}
+                />
+              ) : (
+                displayValue(cluster.spec?.sshKey?.name)
+              )}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>

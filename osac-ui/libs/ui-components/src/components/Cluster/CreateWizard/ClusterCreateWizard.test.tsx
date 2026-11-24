@@ -35,13 +35,7 @@ const clusterCatalogItem = create(ClusterCatalogItemSchema, {
     version: {
       behavior: { case: 'locked', value: { id: VERSION_ID, name: '4-17-0' } },
     },
-    sshPublicKey: {
-      behavior: {
-        case: 'locked',
-        value:
-          'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBJACfzqANDyW1ygNn0FWP7YBZ6XLt+XPGpSw5PyknOW user@host',
-      },
-    },
+    sshKey: { behavior: { case: 'locked', value: { name: 'tenant-ssh-key' } } },
     pullSecretSecret: {
       behavior: { case: 'locked', value: { id: PULL_SECRET_ID, name: 'my-pull-secret' } },
     },

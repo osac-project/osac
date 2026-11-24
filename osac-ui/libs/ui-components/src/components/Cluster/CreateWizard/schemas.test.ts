@@ -40,7 +40,7 @@ const emptyValues: ClusterWizardValues = {
   catalogItemReference: { name: '', id: '' },
   metadata: { name: '', project: '' },
   spec: {
-    sshPublicKey: provisioningFieldValue(''),
+    sshKey: provisioningFieldValue(''),
     pullSecretSecret: provisioningFieldValue(''),
     versionName: provisioningFieldValue(''),
     nodeSetRows: provisioningFieldValue([]),
@@ -135,27 +135,6 @@ describe('buildClusterStepSchema', () => {
       spec: {
         pullSecretSecret: {
           value: 'Pull secret is required',
-        },
-      },
-    });
-  });
-
-  it('rejects malformed ssh public key on general step', async () => {
-    const errors = await validateStep('general', {
-      ...emptyValues,
-      catalogItemReference: { name: clusterCatalogItem.title, id: clusterCatalogItem.id },
-      metadata: { name: 'my-cluster', project: '' },
-      spec: {
-        ...emptyValues.spec,
-        pullSecretSecret: provisioningFieldValue('foo'),
-        sshPublicKey: provisioningFieldValue('not-a-key'),
-      },
-    });
-    expect(errors).toEqual({
-      spec: {
-        sshPublicKey: {
-          value:
-            'SSH public key must be in the form "[TYPE] key [[EMAIL]]". Supported types are ssh-rsa, ssh-ed25519, and ecdsa-sha2-nistp256/384/521.',
         },
       },
     });

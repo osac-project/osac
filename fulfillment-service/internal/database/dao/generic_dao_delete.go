@@ -43,7 +43,7 @@ func (r *DeleteRequest[O]) SetId(value string) *DeleteRequest[O] {
 }
 
 // Do executes the delete operation and returns the response.
-func (r *DeleteRequest[O]) Do(ctx context.Context) (response *DeleteResponse, err error) {
+func (r *DeleteRequest[O]) Do(ctx context.Context) (response *DeleteResponse[O], err error) {
 	r.tx, err = database.TxFromContext(ctx)
 	if err != nil {
 		return
@@ -53,7 +53,7 @@ func (r *DeleteRequest[O]) Do(ctx context.Context) (response *DeleteResponse, er
 	return
 }
 
-func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, err error) {
+func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse[O], err error) {
 	// Check parameters:
 	if r.args.id == "" {
 		err = errors.New("object identifier is mandatory")
@@ -81,8 +81,8 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 	r.sql.params = append(r.sql.params, r.args.id)
 	fmt.Fprintf(&r.sql.filter, ` id = $%d`, len(r.sql.params))
 
-	// Set the deletion timestamp of the row and simultaneousyly retrieve the data, as we need it to fire the event
-	// later:
+	// Set the deletion timestamp of the row and simultaneously retrieve the data, as we need it to return the
+	// deleted object in the response:
 	var buffer strings.Builder
 	fmt.Fprintf(
 		&buffer,
@@ -156,7 +156,7 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 		err = r.translateError(ctx, tenant, err)
 		return
 	}
-	_, err = r.objectFromRow(storedObject{
+	object, err := r.objectFromRow(storedObject{
 		id:              r.args.id,
 		name:            name,
 		creationTs:      creationTs,
@@ -176,6 +176,9 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 
 	// If there are finalizers the object remains in the table with its deletion timestamp set:
 	if len(finalizers) > 0 {
+		response = &DeleteResponse[O]{
+			object: object,
+		}
 		return
 	}
 
@@ -197,7 +200,9 @@ func (r *DeleteRequest[O]) do(ctx context.Context) (response *DeleteResponse, er
 		return
 	}
 	// Create and return the response:
-	response = &DeleteResponse{}
+	response = &DeleteResponse[O]{
+		object: object,
+	}
 	return
 }
 
@@ -239,7 +244,14 @@ func (r *DeleteRequest[O]) translateError(ctx context.Context, tenant string, er
 }
 
 // DeleteResponse represents the result of a delete operation.
-type DeleteResponse struct {
+type DeleteResponse[O Object] struct {
+	object O
+}
+
+// GetObject returns the deleted object, as it was when the deletion was requested. If the
+// object had finalizers the object still exists and its deletion timestamp is set.
+func (r *DeleteResponse[O]) GetObject() O {
+	return r.object
 }
 
 // Delete creates and returns a new delete request.

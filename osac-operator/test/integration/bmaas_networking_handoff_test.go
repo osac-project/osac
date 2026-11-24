@@ -72,7 +72,7 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 			waitForBMAASHostAssignment(fixture)
 			provision := waitForAAPTemplate(bmaasProvisionTemplate)
 			Consistently(func(g Gomega) {
-				g.Expect(getAAPTemplates()).NotTo(ContainElement(bmaasApplyTemplate),
+				g.Expect(getAAPTemplatesWith(g)).NotTo(ContainElement(bmaasApplyTemplate),
 					"the Fabric apply must wait for BMF provisioning to finish")
 			}, 5*time.Second, time.Second).Should(Succeed())
 			completeAAPJob(provision, "successful", nil)
@@ -92,7 +92,7 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 			apply := waitForAAPTemplate(bmaasApplyTemplate)
 			patchBMAASInstance(fixture.id, `{"spec":{"runStrategy":"Always","restartTrigger":1}}`)
 			Consistently(func(g Gomega) {
-				bmh := getBMAASHost(fixture.host)
+				bmh := getBMAASHostWith(g, fixture.host)
 				online, found, readErr := unstructured.NestedBool(bmh.Object, "spec", "online")
 				g.Expect(readErr).NotTo(HaveOccurred())
 				g.Expect(found).To(BeTrue(), "spec.online must be present")
@@ -106,14 +106,14 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 			completeAAPJob(apply, "successful", nil)
 			waitForBMAASHostOnline(fixture.host)
 			Consistently(func(g Gomega) {
-				g.Expect(getAAPTemplates()).NotTo(ContainElement(bmaasQueryTemplate),
+				g.Expect(getAAPTemplatesWith(g)).NotTo(ContainElement(bmaasQueryTemplate),
 					"the DHCP query must wait for NetworkHandoffComplete")
 			}, 5*time.Second, time.Second).Should(Succeed())
 			patchBMAASHostPower(fixture.host, true)
 
 			By("waiting for BMF to persist NetworkHandoffComplete after power feedback")
 			Eventually(func(g Gomega) {
-				bmi := getBMAASObject("BareMetalInstance", fixture.id)
+				bmi := getBMAASObjectWith(g, "BareMetalInstance", fixture.id)
 				condition := findNetworkingCondition(bmi, "NetworkHandoffComplete")
 				g.Expect(condition).To(HaveKeyWithValue("status", "True"))
 			}, readyTimeout, time.Second).Should(Succeed())
@@ -164,7 +164,7 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 			})
 
 			Eventually(func(g Gomega) {
-				bmi := getBMAASObject("BareMetalInstance", fixture.id)
+				bmi := getBMAASObjectWith(g, "BareMetalInstance", fixture.id)
 				condition := findNetworkingCondition(bmi, "NetworkAttachmentsReady")
 				g.Expect(condition).To(HaveKeyWithValue("status", "False"))
 				g.Expect(condition).To(HaveKeyWithValue("reason", "NetworkAttachmentFailed"))
@@ -182,7 +182,7 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 
 			By("waiting for attachment readiness and an in-progress handoff")
 			assertState := func(g Gomega) {
-				bmi := getBMAASObject("BareMetalInstance", fixture.id)
+				bmi := getBMAASObjectWith(g, "BareMetalInstance", fixture.id)
 				g.Expect(findNetworkingCondition(bmi, "NetworkAttachmentsReady")).
 					To(HaveKeyWithValue("status", "True"))
 				handoff := findNetworkingCondition(bmi, "NetworkHandoffComplete")
@@ -194,7 +194,7 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 
 			By("reporting a terminal NetworkHandoffFailed condition after the expired deadline")
 			assertState = func(g Gomega) {
-				bmi := getBMAASObject("BareMetalInstance", fixture.id)
+				bmi := getBMAASObjectWith(g, "BareMetalInstance", fixture.id)
 				handoff := findNetworkingCondition(bmi, "NetworkHandoffComplete")
 				g.Expect(handoff).To(HaveKeyWithValue("status", "False"))
 				g.Expect(handoff).To(HaveKeyWithValue("reason", "NetworkHandoffFailed"))
@@ -212,7 +212,7 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 			})
 
 			Eventually(func(g Gomega) {
-				bmi := getBMAASObject("BareMetalInstance", fixture.id)
+				bmi := getBMAASObjectWith(g, "BareMetalInstance", fixture.id)
 				networkReady := findNetworkingCondition(bmi, "NetworkAttachmentsReady")
 				g.Expect(networkReady).To(HaveKeyWithValue("status", "True"))
 				ipReady := findNetworkingCondition(bmi, "IPDiscoveryComplete")
@@ -232,7 +232,7 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 			})
 
 			Eventually(func(g Gomega) {
-				bmi := getBMAASObject("BareMetalInstance", fixture.id)
+				bmi := getBMAASObjectWith(g, "BareMetalInstance", fixture.id)
 				g.Expect(findNetworkingCondition(bmi, "NetworkAttachmentsReady")).To(HaveKeyWithValue("status", "True"))
 				ipReady := findNetworkingCondition(bmi, "IPDiscoveryComplete")
 				g.Expect(ipReady).To(HaveKeyWithValue("status", "False"))
@@ -249,7 +249,7 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 
 			By("reporting LeasePending with NetworkAttachment readiness intact")
 			assertState := func(g Gomega) {
-				bmi := getBMAASObject("BareMetalInstance", fixture.id)
+				bmi := getBMAASObjectWith(g, "BareMetalInstance", fixture.id)
 				g.Expect(findNetworkingCondition(bmi, "NetworkAttachmentsReady")).
 					To(HaveKeyWithValue("status", "True"))
 				ipReady := findNetworkingCondition(bmi, "IPDiscoveryComplete")
@@ -277,11 +277,11 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 			}
 			Eventually(assertState, readyTimeout, time.Second).Should(Succeed())
 			Consistently(func(g Gomega) {
-				jobs := getAAPTemplatesByName(bmaasQueryTemplate)
+				jobs := getAAPTemplatesByNameWith(g, bmaasQueryTemplate)
 				g.Expect(jobs).To(HaveLen(1))
 				g.Expect(jobs[0].ID).To(Equal(query.ID))
 				g.Expect(jobs[0].Status).To(Equal("running"))
-				bmi := getBMAASObject("BareMetalInstance", fixture.id)
+				bmi := getBMAASObjectWith(g, "BareMetalInstance", fixture.id)
 				g.Expect(findNetworkingCondition(bmi, "IPDiscoveryComplete")).
 					To(HaveKeyWithValue("reason", "LeasePending"))
 			}, 5*time.Second, time.Second).Should(Succeed())
@@ -298,16 +298,16 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 			By("powering off the host before starting network cleanup")
 			waitForBMAASHostOffline(fixture.host)
 			Consistently(func(g Gomega) {
-				host := getBMAASHost(fixture.host)
+				host := getBMAASHostWith(g, fixture.host)
 				poweredOn, found, readErr := unstructured.NestedBool(host.Object, "status", "poweredOn")
 				g.Expect(readErr).NotTo(HaveOccurred())
 				g.Expect(found).To(BeTrue(), "status.poweredOn must remain observable")
 				g.Expect(poweredOn).To(BeTrue(), "the test is withholding power-off confirmation")
 
-				attachment := getBMAASObject("NetworkAttachment", fixture.attachment)
+				attachment := getBMAASObjectWith(g, "NetworkAttachment", fixture.attachment)
 				g.Expect(attachment.GetDeletionTimestamp()).To(BeNil(),
 					"network cleanup must wait for observed host power-off")
-				g.Expect(getAAPTemplatesByName(bmaasDeleteTemplate)).To(BeEmpty(),
+				g.Expect(getAAPTemplatesByNameWith(g, bmaasDeleteTemplate)).To(BeEmpty(),
 					"Fabric delete must wait for observed host power-off")
 			}, 5*time.Second, time.Second).Should(Succeed())
 			patchBMAASHostPower(fixture.host, false)
@@ -318,7 +318,7 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 
 			By("waiting for OSAC to record the failed Fabric delete before checking retained ownership")
 			Eventually(func(g Gomega) {
-				attachment := getBMAASObject("NetworkAttachment", fixture.attachment)
+				attachment := getBMAASObjectWith(g, "NetworkAttachment", fixture.attachment)
 				jobs, found, readErr := unstructured.NestedSlice(attachment.Object, "status", "jobs")
 				g.Expect(readErr).NotTo(HaveOccurred())
 				g.Expect(found).To(BeTrue(), "status.jobs must record the Fabric cleanup")
@@ -338,20 +338,20 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 			}, readyTimeout, time.Second).Should(Succeed())
 
 			Eventually(func(g Gomega) {
-				attachment := getBMAASObject("NetworkAttachment", fixture.attachment)
+				attachment := getBMAASObjectWith(g, "NetworkAttachment", fixture.attachment)
 				g.Expect(attachment.GetDeletionTimestamp()).NotTo(BeNil())
 				g.Expect(attachment.GetFinalizers()).To(ContainElements(
 					"osac.openshift.io/networkattachment", bmaasNetworkingFinalizer,
 				))
-				bmi := getBMAASObject("BareMetalInstance", fixture.id)
+				bmi := getBMAASObjectWith(g, "BareMetalInstance", fixture.id)
 				g.Expect(bmi.GetFinalizers()).To(ContainElement(bmaasNetworkingFinalizer))
 				g.Expect(bmi.GetFinalizers()[len(bmi.GetFinalizers())-1]).To(Equal(bmaasFeedbackFinalizer))
-				bmh := getBMAASHost(fixture.host)
+				bmh := getBMAASHostWith(g, fixture.host)
 				consumer, found, mapErr := unstructured.NestedMap(bmh.Object, "spec", "consumerRef")
 				g.Expect(mapErr).NotTo(HaveOccurred())
 				g.Expect(found).To(BeTrue())
 				g.Expect(consumer).To(HaveKeyWithValue("name", string(bmi.GetUID())))
-				g.Expect(getAAPTemplatesByName(bmaasDeprovisionTemplate)).To(BeEmpty(),
+				g.Expect(getAAPTemplatesByNameWith(g, bmaasDeprovisionTemplate)).To(BeEmpty(),
 					"host deprovisioning must wait for network cleanup to succeed")
 			}, readyTimeout, time.Second).Should(Succeed())
 		})
@@ -371,7 +371,7 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 			waitForObjectAbsent("NetworkAttachment", fixture.attachment)
 
 			Eventually(func(g Gomega) {
-				bmi := getBMAASObject("BareMetalInstance", fixture.id)
+				bmi := getBMAASObjectWith(g, "BareMetalInstance", fixture.id)
 				g.Expect(bmi.GetFinalizers()).To(Equal([]string{bmaasFeedbackFinalizer}))
 			}, readyTimeout, time.Second).Should(Succeed())
 			Expect(getBMAASHost(fixture.host).Object["spec"]).NotTo(HaveKey("consumerRef"))
@@ -440,6 +440,7 @@ func newBMAASFixture(prefix, templateID, runStrategy string) bmaasFixture {
 	DeferCleanup(func() { cleanupBMAASFixture(fixture) })
 	createReadyPhysicalNetwork(fixture)
 	createBMAASHost(fixture)
+	trackAAPRecorderBMI(fixture.id)
 	createBMAASInstance(fixture, templateID, runStrategy)
 	return fixture
 }
@@ -655,7 +656,7 @@ func appendBMAASFinalizer(id, finalizer string) {
 
 func waitForBMAASHostAssignment(fixture bmaasFixture) {
 	Eventually(func(g Gomega) {
-		bmi := getBMAASObject("BareMetalInstance", fixture.id)
+		bmi := getBMAASObjectWith(g, "BareMetalInstance", fixture.id)
 		hostID, found, err := unstructured.NestedString(bmi.Object, "spec", "externalHostID")
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(found).To(BeTrue(), "spec.externalHostID must be present")
@@ -675,7 +676,7 @@ func waitForBMAASAttachment(fixture bmaasFixture) *unstructured.Unstructured {
 
 func waitForBMAASHostOnline(name string) {
 	Eventually(func(g Gomega) {
-		online, found, err := unstructured.NestedBool(getBMAASHost(name).Object, "spec", "online")
+		online, found, err := unstructured.NestedBool(getBMAASHostWith(g, name).Object, "spec", "online")
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(found).To(BeTrue(), "spec.online must be present")
 		g.Expect(online).To(BeTrue())
@@ -684,7 +685,7 @@ func waitForBMAASHostOnline(name string) {
 
 func waitForBMAASHostOffline(name string) {
 	Eventually(func(g Gomega) {
-		online, found, err := unstructured.NestedBool(getBMAASHost(name).Object, "spec", "online")
+		online, found, err := unstructured.NestedBool(getBMAASHostWith(g, name).Object, "spec", "online")
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(found).To(BeTrue(), "spec.online must be present")
 		g.Expect(online).To(BeFalse())
@@ -693,13 +694,13 @@ func waitForBMAASHostOffline(name string) {
 
 func waitForBMAASRebootAnnotation(name string) {
 	Eventually(func(g Gomega) {
-		g.Expect(getBMAASHost(name).GetAnnotations()).To(HaveKey("reboot.metal3.io"))
+		g.Expect(getBMAASHostWith(g, name).GetAnnotations()).To(HaveKey("reboot.metal3.io"))
 	}, readyTimeout, time.Second).Should(Succeed())
 }
 
 func waitForBMAASPhase(id, phase string) {
 	Eventually(func(g Gomega) {
-		bmi := getBMAASObject("BareMetalInstance", id)
+		bmi := getBMAASObjectWith(g, "BareMetalInstance", id)
 		currentPhase, found, err := unstructured.NestedString(bmi.Object, "status", "phase")
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(found).To(BeTrue(), "status.phase must be present")
@@ -728,16 +729,44 @@ func completeApplyAndLease(fixture bmaasFixture) {
 }
 
 func getBMAASHost(name string) *unstructured.Unstructured {
-	output, err := runKubectl("get", "baremetalhost", name, "-n", operatorNamespace, "-o", "json")
+	obj, err := readBMAASHost(name)
 	Expect(err).NotTo(HaveOccurred())
-	obj := &unstructured.Unstructured{}
-	Expect(json.Unmarshal(output, &obj.Object)).To(Succeed())
 	return obj
+}
+
+func getBMAASHostWith(g Gomega, name string) *unstructured.Unstructured {
+	obj, err := readBMAASHost(name)
+	if err != nil {
+		g.Expect(err).NotTo(HaveOccurred())
+		return &unstructured.Unstructured{}
+	}
+	return obj
+}
+
+func readBMAASHost(name string) (*unstructured.Unstructured, error) {
+	output, err := runKubectl("get", "baremetalhost", name, "-n", operatorNamespace, "-o", "json")
+	if err != nil {
+		return nil, err
+	}
+	obj := &unstructured.Unstructured{}
+	if err := json.Unmarshal(output, &obj.Object); err != nil {
+		return nil, err
+	}
+	return obj, nil
 }
 
 func getBMAASObject(kind, name string) *unstructured.Unstructured {
 	obj, err := getObject(kind, name)
 	Expect(err).NotTo(HaveOccurred())
+	return obj
+}
+
+func getBMAASObjectWith(g Gomega, kind, name string) *unstructured.Unstructured {
+	obj, err := getObject(kind, name)
+	if err != nil {
+		g.Expect(err).NotTo(HaveOccurred())
+		return &unstructured.Unstructured{}
+	}
 	return obj
 }
 
@@ -815,6 +844,21 @@ func resetAAPRecorder() {
 	Expect(err).NotTo(HaveOccurred(), "reset the test AAP recorder")
 }
 
+func trackAAPRecorderBMI(id string) {
+	// The filtered watch preserves event order without a post-launch GET; keep
+	// its RBAC limited to this fixture.
+	patch := fmt.Sprintf(
+		`{"rules":[{"apiGroups":["osac.openshift.io"],"resources":["baremetalinstances"],`+
+			`"verbs":["watch"],"resourceNames":[%q]}]}`,
+		id,
+	)
+	_, err := kubectl("", "patch", "role", aapRecorderName, "-n", operatorNamespace,
+		"--type=merge", "-p", patch)
+	Expect(err).NotTo(HaveOccurred(), "limit the AAP recorder watch to BareMetalInstance %s", id)
+	_, err = postAAPRecorder("track/"+id, []byte(`{}`))
+	Expect(err).NotTo(HaveOccurred(), "start the AAP recorder watch for BareMetalInstance %s", id)
+}
+
 func waitForAAPTemplate(template string) aapCapture {
 	return waitForAAPCapture(func(job aapCapture) bool {
 		return job.Template == template
@@ -848,9 +892,16 @@ print(urllib.request.urlopen(request).read().decode())
 		"--", "python3", "-c", script, path)
 }
 
-func getAAPTemplates() []string {
+func getAAPTemplatesWith(g Gomega) []string {
 	captures, err := readAAPCaptures()
-	Expect(err).NotTo(HaveOccurred())
+	if err != nil {
+		g.Expect(err).NotTo(HaveOccurred())
+		return nil
+	}
+	return aapTemplates(captures)
+}
+
+func aapTemplates(captures aapCaptures) []string {
 	templates := make([]string, 0, len(captures.Jobs))
 	for _, job := range captures.Jobs {
 		templates = append(templates, job.Template)
@@ -861,6 +912,19 @@ func getAAPTemplates() []string {
 func getAAPTemplatesByName(template string) []aapCapture {
 	captures, err := readAAPCaptures()
 	Expect(err).NotTo(HaveOccurred())
+	return aapTemplatesByName(captures, template)
+}
+
+func getAAPTemplatesByNameWith(g Gomega, template string) []aapCapture {
+	captures, err := readAAPCaptures()
+	if err != nil {
+		g.Expect(err).NotTo(HaveOccurred())
+		return nil
+	}
+	return aapTemplatesByName(captures, template)
+}
+
+func aapTemplatesByName(captures aapCaptures, template string) []aapCapture {
 	var matches []aapCapture
 	for _, job := range captures.Jobs {
 		if job.Template == template {

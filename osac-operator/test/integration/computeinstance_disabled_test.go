@@ -111,11 +111,6 @@ func installAAPRecorder() {
 		&rbacv1.Role{
 			TypeMeta:   metav1.TypeMeta{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role"},
 			ObjectMeta: metav1.ObjectMeta{Name: aapRecorderName, Namespace: operatorNamespace},
-			Rules: []rbacv1.PolicyRule{{
-				APIGroups: []string{"osac.openshift.io"},
-				Resources: []string{"baremetalinstances"},
-				Verbs:     []string{"get"},
-			}},
 		},
 		&rbacv1.RoleBinding{
 			TypeMeta:   metav1.TypeMeta{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding"},

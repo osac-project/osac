@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from collections.abc import Iterator
 from functools import partial
@@ -73,7 +74,15 @@ def _default_network(client: GRPCClient) -> dict[str, str]:
         ingress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
         egress=[{"protocol": "PROTOCOL_ALL", "ipv4_cidr": "0.0.0.0/0"}],
     )
-    wait_for_grpc_security_group_ready(grpc=client, sg_id=sg_id)
+    # The lab's fabric job can take just over the helper's 120s window.
+    for attempt in range(3):
+        try:
+            wait_for_grpc_security_group_ready(grpc=client, sg_id=sg_id)
+            break
+        except Exception:
+            if attempt == 2:
+                raise
+            time.sleep(5)
     return {
         "label": "default",
         "vnet_id": vnet_id,

@@ -127,84 +127,6 @@ func local_request_BillingAccounts_Create_0(ctx context.Context, marshaler runti
 	return msg, metadata, err
 }
 
-var filter_BillingAccounts_Update_0 = &utilities.DoubleArray{Encoding: map[string]int{"object": 0, "id": 1}, Base: []int{1, 2, 1, 0, 0}, Check: []int{0, 1, 2, 3, 2}}
-
-func request_BillingAccounts_Update_0(ctx context.Context, marshaler runtime.Marshaler, client BillingAccountsClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
-	var (
-		protoReq BillingAccountsUpdateRequest
-		metadata runtime.ServerMetadata
-		err      error
-	)
-	newReader, berr := utilities.IOReaderFactory(req.Body)
-	if berr != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", berr)
-	}
-	if err := marshaler.NewDecoder(newReader()).Decode(&protoReq.Object); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
-	if protoReq.UpdateMask == nil || len(protoReq.UpdateMask.GetPaths()) == 0 {
-		if fieldMask, err := runtime.FieldMaskFromRequestBody(newReader(), protoReq.Object); err != nil {
-			return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-		} else {
-			protoReq.UpdateMask = fieldMask
-		}
-	}
-	val, ok := pathParams["object.id"]
-	if !ok {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "object.id")
-	}
-	err = runtime.PopulateFieldFromPath(&protoReq, "object.id", val)
-	if err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "object.id", err)
-	}
-	if err := req.ParseForm(); err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
-	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_BillingAccounts_Update_0); err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
-	msg, err := client.Update(ctx, &protoReq, grpc.Header(&metadata.HeaderMD), grpc.Trailer(&metadata.TrailerMD))
-	return msg, metadata, err
-}
-
-func local_request_BillingAccounts_Update_0(ctx context.Context, marshaler runtime.Marshaler, server BillingAccountsServer, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
-	var (
-		protoReq BillingAccountsUpdateRequest
-		metadata runtime.ServerMetadata
-		err      error
-	)
-	newReader, berr := utilities.IOReaderFactory(req.Body)
-	if berr != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", berr)
-	}
-	if err := marshaler.NewDecoder(newReader()).Decode(&protoReq.Object); err != nil && !errors.Is(err, io.EOF) {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
-	if protoReq.UpdateMask == nil || len(protoReq.UpdateMask.GetPaths()) == 0 {
-		if fieldMask, err := runtime.FieldMaskFromRequestBody(newReader(), protoReq.Object); err != nil {
-			return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-		} else {
-			protoReq.UpdateMask = fieldMask
-		}
-	}
-	val, ok := pathParams["object.id"]
-	if !ok {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "missing parameter %s", "object.id")
-	}
-	err = runtime.PopulateFieldFromPath(&protoReq, "object.id", val)
-	if err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "type mismatch, parameter: %s, error: %v", "object.id", err)
-	}
-	if err := req.ParseForm(); err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
-	if err := runtime.PopulateQueryParameters(&protoReq, req.Form, filter_BillingAccounts_Update_0); err != nil {
-		return nil, metadata, status.Errorf(codes.InvalidArgument, "%v", err)
-	}
-	msg, err := server.Update(ctx, &protoReq)
-	return msg, metadata, err
-}
-
 func request_BillingAccounts_Delete_0(ctx context.Context, marshaler runtime.Marshaler, client BillingAccountsClient, req *http.Request, pathParams map[string]string) (proto.Message, runtime.ServerMetadata, error) {
 	var (
 		protoReq BillingAccountsDeleteRequest
@@ -306,26 +228,6 @@ func RegisterBillingAccountsHandlerServer(ctx context.Context, mux *runtime.Serv
 			return
 		}
 		forward_BillingAccounts_Create_0(annotatedContext, mux, outboundMarshaler, w, req, response_BillingAccounts_Create_0{resp.(*BillingAccountsCreateResponse)}, mux.GetForwardResponseOptions()...)
-	})
-	mux.Handle(http.MethodPatch, pattern_BillingAccounts_Update_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
-		ctx, cancel := context.WithCancel(req.Context())
-		defer cancel()
-		var stream runtime.ServerTransportStream
-		ctx = grpc.NewContextWithServerTransportStream(ctx, &stream)
-		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateIncomingContext(ctx, mux, req, "/osac.private.v1.BillingAccounts/Update", runtime.WithHTTPPathPattern("/api/private/v1/billing/accounts/{object.id}"))
-		if err != nil {
-			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		resp, md, err := local_request_BillingAccounts_Update_0(annotatedContext, inboundMarshaler, server, req, pathParams)
-		md.HeaderMD, md.TrailerMD = metadata.Join(md.HeaderMD, stream.Header()), metadata.Join(md.TrailerMD, stream.Trailer())
-		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
-		if err != nil {
-			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		forward_BillingAccounts_Update_0(annotatedContext, mux, outboundMarshaler, w, req, response_BillingAccounts_Update_0{resp.(*BillingAccountsUpdateResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	mux.Handle(http.MethodDelete, pattern_BillingAccounts_Delete_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
@@ -438,23 +340,6 @@ func RegisterBillingAccountsHandlerClient(ctx context.Context, mux *runtime.Serv
 		}
 		forward_BillingAccounts_Create_0(annotatedContext, mux, outboundMarshaler, w, req, response_BillingAccounts_Create_0{resp.(*BillingAccountsCreateResponse)}, mux.GetForwardResponseOptions()...)
 	})
-	mux.Handle(http.MethodPatch, pattern_BillingAccounts_Update_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
-		ctx, cancel := context.WithCancel(req.Context())
-		defer cancel()
-		inboundMarshaler, outboundMarshaler := runtime.MarshalerForRequest(mux, req)
-		annotatedContext, err := runtime.AnnotateContext(ctx, mux, req, "/osac.private.v1.BillingAccounts/Update", runtime.WithHTTPPathPattern("/api/private/v1/billing/accounts/{object.id}"))
-		if err != nil {
-			runtime.HTTPError(ctx, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		resp, md, err := request_BillingAccounts_Update_0(annotatedContext, inboundMarshaler, client, req, pathParams)
-		annotatedContext = runtime.NewServerMetadataContext(annotatedContext, md)
-		if err != nil {
-			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
-			return
-		}
-		forward_BillingAccounts_Update_0(annotatedContext, mux, outboundMarshaler, w, req, response_BillingAccounts_Update_0{resp.(*BillingAccountsUpdateResponse)}, mux.GetForwardResponseOptions()...)
-	})
 	mux.Handle(http.MethodDelete, pattern_BillingAccounts_Delete_0, func(w http.ResponseWriter, req *http.Request, pathParams map[string]string) {
 		ctx, cancel := context.WithCancel(req.Context())
 		defer cancel()
@@ -491,19 +376,10 @@ func (m response_BillingAccounts_Create_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 
-type response_BillingAccounts_Update_0 struct {
-	*BillingAccountsUpdateResponse
-}
-
-func (m response_BillingAccounts_Update_0) XXX_ResponseBody() interface{} {
-	return m.Object
-}
-
 var (
 	pattern_BillingAccounts_List_0   = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 2, 4}, []string{"api", "private", "v1", "billing", "accounts"}, ""))
 	pattern_BillingAccounts_Get_0    = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 2, 4, 1, 0, 4, 1, 5, 5}, []string{"api", "private", "v1", "billing", "accounts", "id"}, ""))
 	pattern_BillingAccounts_Create_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 2, 4}, []string{"api", "private", "v1", "billing", "accounts"}, ""))
-	pattern_BillingAccounts_Update_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 2, 4, 1, 0, 4, 1, 5, 5}, []string{"api", "private", "v1", "billing", "accounts", "object.id"}, ""))
 	pattern_BillingAccounts_Delete_0 = runtime.MustPattern(runtime.NewPattern(1, []int{2, 0, 2, 1, 2, 2, 2, 3, 2, 4, 1, 0, 4, 1, 5, 5}, []string{"api", "private", "v1", "billing", "accounts", "id"}, ""))
 )
 
@@ -511,6 +387,5 @@ var (
 	forward_BillingAccounts_List_0   = runtime.ForwardResponseMessage
 	forward_BillingAccounts_Get_0    = runtime.ForwardResponseMessage
 	forward_BillingAccounts_Create_0 = runtime.ForwardResponseMessage
-	forward_BillingAccounts_Update_0 = runtime.ForwardResponseMessage
 	forward_BillingAccounts_Delete_0 = runtime.ForwardResponseMessage
 )

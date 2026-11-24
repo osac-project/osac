@@ -342,6 +342,9 @@ var _ = Describe("actual Root billing acceptance", func() {
 				Expect(names).To(ContainElements("billingaccount", "billingaccounts", "tenantbillingassignment", "tenantbillingassignments"))
 			} else {
 				Expect(names).NotTo(ContainElements("billingproviderstatus", "billingproviderstatuses"))
+				if verb == "edit" {
+					Expect(names).NotTo(ContainElements("billingaccount", "billingaccounts"))
+				}
 			}
 		}
 	})

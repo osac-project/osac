@@ -35,7 +35,6 @@ const (
 	BillingAccounts_List_FullMethodName   = "/osac.private.v1.BillingAccounts/List"
 	BillingAccounts_Get_FullMethodName    = "/osac.private.v1.BillingAccounts/Get"
 	BillingAccounts_Create_FullMethodName = "/osac.private.v1.BillingAccounts/Create"
-	BillingAccounts_Update_FullMethodName = "/osac.private.v1.BillingAccounts/Update"
 	BillingAccounts_Delete_FullMethodName = "/osac.private.v1.BillingAccounts/Delete"
 )
 
@@ -51,8 +50,6 @@ type BillingAccountsClient interface {
 	Get(ctx context.Context, in *BillingAccountsGetRequest, opts ...grpc.CallOption) (*BillingAccountsGetResponse, error)
 	// Descriptor-only scaffold: not implemented or authorized. Does not create a local or provider account.
 	Create(ctx context.Context, in *BillingAccountsCreateRequest, opts ...grpc.CallOption) (*BillingAccountsCreateResponse, error)
-	// Descriptor-only scaffold: not implemented or authorized.
-	Update(ctx context.Context, in *BillingAccountsUpdateRequest, opts ...grpc.CallOption) (*BillingAccountsUpdateResponse, error)
 	// Descriptor-only scaffold: not implemented or authorized. Does not delete a local or provider account.
 	Delete(ctx context.Context, in *BillingAccountsDeleteRequest, opts ...grpc.CallOption) (*BillingAccountsDeleteResponse, error)
 }
@@ -95,16 +92,6 @@ func (c *billingAccountsClient) Create(ctx context.Context, in *BillingAccountsC
 	return out, nil
 }
 
-func (c *billingAccountsClient) Update(ctx context.Context, in *BillingAccountsUpdateRequest, opts ...grpc.CallOption) (*BillingAccountsUpdateResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(BillingAccountsUpdateResponse)
-	err := c.cc.Invoke(ctx, BillingAccounts_Update_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 func (c *billingAccountsClient) Delete(ctx context.Context, in *BillingAccountsDeleteRequest, opts ...grpc.CallOption) (*BillingAccountsDeleteResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(BillingAccountsDeleteResponse)
@@ -127,8 +114,6 @@ type BillingAccountsServer interface {
 	Get(context.Context, *BillingAccountsGetRequest) (*BillingAccountsGetResponse, error)
 	// Descriptor-only scaffold: not implemented or authorized. Does not create a local or provider account.
 	Create(context.Context, *BillingAccountsCreateRequest) (*BillingAccountsCreateResponse, error)
-	// Descriptor-only scaffold: not implemented or authorized.
-	Update(context.Context, *BillingAccountsUpdateRequest) (*BillingAccountsUpdateResponse, error)
 	// Descriptor-only scaffold: not implemented or authorized. Does not delete a local or provider account.
 	Delete(context.Context, *BillingAccountsDeleteRequest) (*BillingAccountsDeleteResponse, error)
 	mustEmbedUnimplementedBillingAccountsServer()
@@ -149,9 +134,6 @@ func (UnimplementedBillingAccountsServer) Get(context.Context, *BillingAccountsG
 }
 func (UnimplementedBillingAccountsServer) Create(context.Context, *BillingAccountsCreateRequest) (*BillingAccountsCreateResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Create not implemented")
-}
-func (UnimplementedBillingAccountsServer) Update(context.Context, *BillingAccountsUpdateRequest) (*BillingAccountsUpdateResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method Update not implemented")
 }
 func (UnimplementedBillingAccountsServer) Delete(context.Context, *BillingAccountsDeleteRequest) (*BillingAccountsDeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
@@ -231,24 +213,6 @@ func _BillingAccounts_Create_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
-func _BillingAccounts_Update_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(BillingAccountsUpdateRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(BillingAccountsServer).Update(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: BillingAccounts_Update_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(BillingAccountsServer).Update(ctx, req.(*BillingAccountsUpdateRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _BillingAccounts_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(BillingAccountsDeleteRequest)
 	if err := dec(in); err != nil {
@@ -285,10 +249,6 @@ var BillingAccounts_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Create",
 			Handler:    _BillingAccounts_Create_Handler,
-		},
-		{
-			MethodName: "Update",
-			Handler:    _BillingAccounts_Update_Handler,
 		},
 		{
 			MethodName: "Delete",

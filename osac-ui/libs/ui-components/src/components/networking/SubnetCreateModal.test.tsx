@@ -1,17 +1,20 @@
+import { type Transport, createRouterTransport } from '@connectrpc/connect';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { Subnet, SubnetState, VirtualNetwork, VirtualNetworkState } from '@osac/types';
+import type { SubnetsCreateRequest } from '@osac/types';
+import { Subnet, SubnetState, Subnets, VirtualNetwork, VirtualNetworkState } from '@osac/types';
 
 import { SubnetCreateModal } from './SubnetCreateModal';
-import * as networkingApi from '../../api/v1/networking';
+import * as resourceApi from '../../api/use-resource';
+import { renderWithProviders } from '../../test-utils/TestProviders';
 
-vi.mock('../../api/v1/networking', async (importOriginal) => {
-  const actual = await importOriginal<typeof networkingApi>();
+vi.mock('../../api/use-resource', async (importOriginal) => {
+  const actual = await importOriginal<typeof resourceApi>();
   return {
     ...actual,
-    useCreateSubnet: vi.fn(),
+    useCreateResource: vi.fn(),
   };
 });
 
@@ -73,10 +76,10 @@ describe('SubnetCreateModal', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(networkingApi.useCreateSubnet).mockReturnValue({
+    vi.mocked(resourceApi.useCreateResource).mockReturnValue({
       mutateAsync,
       error: null,
-    } as unknown as ReturnType<typeof networkingApi.useCreateSubnet>);
+    } as unknown as ReturnType<typeof resourceApi.useCreateResource>);
   });
 
   it('renders with Name and CIDR fields', () => {
@@ -140,9 +143,74 @@ describe('SubnetCreateModal', () => {
 
     await waitFor(() => {
       expect(mutateAsync).toHaveBeenCalledWith({
-        metadata: { name: 'subnet-new', project: 'foo' },
-        spec: { virtualNetwork: { name: 'prod-vn' }, ipv4Cidr: '10.0.2.0/24' },
+        object: {
+          metadata: { name: 'subnet-new', project: 'foo' },
+          spec: { virtualNetwork: { name: 'prod-vn' }, ipv4Cidr: '10.0.2.0/24' },
+        },
       });
     });
+  });
+
+  it('shows error alert when create response is missing an id', async () => {
+    const user = userEvent.setup();
+    mutateAsync.mockResolvedValue({ object: {} });
+
+    render(
+      <SubnetCreateModal
+        onClose={mockOnClose}
+        parentVN={mockParentVN}
+        existingSubnets={mockExistingSubnets}
+      />,
+    );
+
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'subnet-new');
+    await user.type(screen.getByRole('textbox', { name: 'IPv4 CIDR' }), '10.0.2.0/24');
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+
+    expect(await screen.findByText('Create response missing id')).toBeInTheDocument();
+    expect(mockOnClose).not.toHaveBeenCalled();
+  });
+
+  it('creates through the Subnets service without sending an Update', async () => {
+    const actual = await vi.importActual<typeof resourceApi>('../../api/use-resource');
+    vi.mocked(resourceApi.useCreateResource).mockImplementation(actual.useCreateResource);
+    let createRequest: SubnetsCreateRequest | undefined;
+    const methods: string[] = [];
+    const inner = createRouterTransport((router) => {
+      router.service(Subnets, {
+        create: (req) => {
+          createRequest = req;
+          return { object: { ...req.object, id: 'subnet-real' } };
+        },
+      });
+    });
+    const transport: Transport = {
+      ...inner,
+      unary(method, ...args) {
+        methods.push(method.name);
+        return inner.unary(method, ...args);
+      },
+    };
+    const { user } = renderWithProviders(
+      <SubnetCreateModal
+        onClose={mockOnClose}
+        parentVN={mockParentVN}
+        existingSubnets={mockExistingSubnets}
+      />,
+      { transport },
+    );
+
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'subnet-real');
+    await user.type(screen.getByRole('textbox', { name: 'IPv4 CIDR' }), '10.0.3.0/24');
+    await user.click(screen.getByRole('button', { name: 'Create' }));
+
+    await waitFor(() => expect(createRequest).toBeDefined());
+    expect(createRequest?.object?.metadata?.name).toBe('subnet-real');
+    expect(createRequest?.object?.metadata?.project).toBe('foo');
+    expect(createRequest?.object?.spec?.virtualNetwork?.name).toBe('prod-vn');
+    expect(createRequest?.object?.spec?.ipv4Cidr).toBe('10.0.3.0/24');
+    expect(methods).toEqual(['Create']);
+    expect(methods).not.toContain('Update');
+    await waitFor(() => expect(mockOnClose).toHaveBeenCalled());
   });
 });

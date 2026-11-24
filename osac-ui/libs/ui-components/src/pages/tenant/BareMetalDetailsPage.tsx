@@ -1,6 +1,7 @@
 import { useParams } from 'react-router-dom';
 
-import { useBareMetalInstance } from '@osac/ui-components/api/v1/baremetal-instance';
+import { BareMetalInstances } from '@osac/types';
+import { useGetResource } from '@osac/ui-components/api/use-resource';
 import BareMetalDetails from '@osac/ui-components/components/BareMetalInstance/BareMetalDetails';
 import { ResourceDetailsPageError } from '@osac/ui-components/components/Resource/ResourceDetailsPageError';
 import { ResourceDetailsPageLoading } from '@osac/ui-components/components/Resource/ResourceDetailsPageLoading';
@@ -9,7 +10,14 @@ import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 export const BareMetalDetailsPage = () => {
   const { t } = useTranslation();
   const { id } = useParams() as { id: string };
-  const { data: instance, isLoading, isError, error, refetch } = useBareMetalInstance(id);
+  const {
+    data: response,
+    isLoading,
+    isError,
+    error,
+    refetch,
+  } = useGetResource(BareMetalInstances, { id }, { enabled: Boolean(id) });
+  const instance = response?.object;
 
   if (isLoading) {
     return (

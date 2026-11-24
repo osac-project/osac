@@ -85,7 +85,7 @@ RETURN = """
   data:
     type: bool
     description:
-      - Returns the filtered list of addresses belonging to the network.
+      - Returns whether an address or a network passed as argument is in a network.
 
 """
 

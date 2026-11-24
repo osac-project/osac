@@ -1,8 +1,10 @@
 ---
-- name: Create user
-  ansible.controller.user:
+- name: Create User
+  user:
     username: testing_user
-    password: "{{ 65535 | random | to_uuid }}"
+    first_name: testing
+    last_name: user
+    password: password
 
 - name: Create Job Template
   job_template:
@@ -29,10 +31,9 @@
     object_id: "{{ job_template.id }}"
   register: result
 
-- name: Assert result is changed
-  ansible.builtin.assert:
+- assert:
     that:
-      - result.changed
+      - result is changed
 
 - name: Delete Role User Assigment
   role_user_assignment:
@@ -42,10 +43,9 @@
     state: absent
   register: result
 
-- name: Assert result is changed
-  ansible.builtin.assert:
+- assert:
     that:
-      - result.changed
+      - result is changed
 
 - name: Create Role Definition
   role_definition:
@@ -57,7 +57,7 @@
     description: role definition to launch job
     state: absent
 
-- name: Delete user
-  ansible.builtin.user:
-    name: testing_user
+- name: Delete User
+  user:
+    username: testing_user
     state: absent

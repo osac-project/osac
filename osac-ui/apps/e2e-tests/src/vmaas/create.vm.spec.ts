@@ -1,14 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { access } from 'node:fs/promises';
 
-import {
-  catalogTestData,
-  instanceTypeTestData,
-  storageTierTestData,
-  tenantNameOrSkip,
-  vmTestName,
-} from './test_data';
 import { VmCreatePage } from '../../../../libs/locators/vms';
+import { expectComputeInstanceCatalogItem } from '../../../../libs/osac-cli/src/compute_instance';
 import {
   launchCatalogItem,
   openCatalogItemDetails,
@@ -29,6 +23,13 @@ import {
   openVmsPage,
   waitForVmToBeRunning,
 } from '../../../../libs/test-utils/src/vms.page';
+import {
+  catalogTestData,
+  instanceTypeTestData,
+  storageTierTestData,
+  tenantNameOrSkip,
+  vmTestName,
+} from '../shared/test_data';
 
 const vmName = vmTestName;
 const cloudInit = '#cloud-config\nruncmd:\n  - echo vm-e2e';
@@ -69,16 +70,9 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
     `Select the published VM catalog item "${catalogTestData.name}"`,
     () => openCatalogItemDetails(page, catalogTestData.name),
   );
-  await testStep('catalog-launch', 'Click Launch instance', () => launchCatalogItem(page));
-
-  await testStep('catalog-launch', 'Verify the Catalog item wizard step', async () => {
-    const catalogCard = page
-      .locator(...VmCreatePage.catalogItemCards)
-      .filter({ hasText: catalogTestData.name })
-      .first();
-    await expect(catalogCard.locator(...VmCreatePage.catalogItemSelection)).toBeChecked();
-    await page.getByRole(...VmCreatePage.next).click();
-  });
+  const catalogItemId = await testStep('catalog-launch', 'Click Launch instance', () =>
+    launchCatalogItem(page, catalogTestData.name),
+  );
 
   const projectName = await testStep('catalog-launch', 'Set the project and VM name', async () => {
     const selectedProject = await selectOption(page, VmCreatePage.project, /.*/);
@@ -137,7 +131,9 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
   await testStep('catalog-launch', 'Verify the VM review page', async () => {
     await expect(page.getByRole(...VmCreatePage.configurationHeading)).toBeVisible();
     await expect(page.getByRole(...VmCreatePage.storageHeading)).toBeVisible();
-    await expect(page.getByText(catalogTestData.name, { exact: true })).toBeVisible();
+    await expect(
+      page.getByLabel('Configuration').getByText(catalogTestData.name, { exact: true }),
+    ).toBeVisible();
     await expect(page.getByText(projectName, { exact: true })).toBeVisible();
     await expect(page.getByText(vmName, { exact: true })).toBeVisible();
     await expect(
@@ -161,6 +157,10 @@ test('tenant creates a VM from the published catalog item', async ({ page }) => 
     await page.getByRole(...VmCreatePage.create).click();
     await expectVmDetailsPage(page, vmName);
   });
+
+  await testStep('catalog-launch', 'Verify the VM catalog reference', () =>
+    expectComputeInstanceCatalogItem(tenantName, vmName, catalogItemId),
+  );
 
   await testStep('catalog-launch', `Verify the VM "${vmName}" reaches Running`, () =>
     waitForVmToBeRunning(page, vmName),

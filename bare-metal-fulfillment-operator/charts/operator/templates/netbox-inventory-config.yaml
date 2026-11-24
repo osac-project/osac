@@ -11,6 +11,9 @@
 {{- if not .Values.netbox.url }}
 {{- fail "netbox.url is required when netbox.enabled is true" }}
 {{- end }}
+{{- if regexMatch "^([A-Za-z][A-Za-z0-9+.-]*:)?//[^/?#]*@|^[^/?#]*@" .Values.netbox.url }}
+{{- fail "netbox.url must not include credentials" }}
+{{- end }}
 {{- if not .Values.netbox.tokenSecretKey }}
 {{- fail "netbox.tokenSecretKey is required when netbox.enabled is true" }}
 {{- end }}
@@ -36,8 +39,8 @@
 {{- if not (or (hasPrefix "https://" $netboxURL) (hasPrefix "http://" $netboxURL)) }}
 {{- fail "netbox.url must start with http:// or https://" }}
 {{- end }}
-{{- if and (hasPrefix "http://" $netboxURL) (not .Values.netbox.allowInsecureHTTP) }}
-{{- fail "netbox.url uses HTTP; set netbox.allowInsecureHTTP=true to allow HTTP" }}
+{{- if and (hasPrefix "http://" $netboxURL) (not .Values.netbox.clientAllowInsecureHTTP) }}
+{{- fail "netbox.url uses HTTP; set netbox.clientAllowInsecureHTTP=true to allow HTTP" }}
 {{- end }}
 apiVersion: v1
 kind: Secret
@@ -59,5 +62,6 @@ stringData:
         {{- if .Values.netbox.caCert }}
         caFile: "/etc/osac/secrets/netbox-ca/ca.crt"
         {{- end }}
-        allowInsecureHTTP: {{ .Values.netbox.allowInsecureHTTP }}
+        clientAllowInsecureHTTP: {{ .Values.netbox.clientAllowInsecureHTTP }}
+        enableBMCCertificateVerification: {{ .Values.netbox.enableBMCCertificateVerification }}
 {{- end }}

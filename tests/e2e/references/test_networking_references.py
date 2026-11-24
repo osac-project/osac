@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import subprocess
 from collections.abc import Iterator
@@ -28,15 +27,9 @@ logger = logging.getLogger(__name__)
 
 
 @pytest.fixture
-def disabled_reference_mode(private_grpc: GRPCClient) -> None:
+def disabled_reference_mode(networking_provisioning_enabled: bool) -> None:
     """Require the installed disabled mode before creating a negative-contract pool."""
-    try:
-        response = private_grpc.call(service=f"{PRIVATE_API}.InstallationSettings/Get", data={}, emit_defaults=True)
-    except json.JSONDecodeError:
-        pytest.fail("InstallationSettings/Get returned malformed JSON", pytrace=False)
-    if not isinstance(response, dict) or type(response.get("networkingProvisioningEnabled")) is not bool:
-        pytest.fail("InstallationSettings/Get must return a boolean networkingProvisioningEnabled", pytrace=False)
-    if response["networkingProvisioningEnabled"]:
+    if networking_provisioning_enabled:
         pytest.skip("Disabled reference contract is not applicable: provider networking provisioning is enabled")
 
 

@@ -103,17 +103,14 @@ func reconcileAutomaticExternalIPAttachments(
 	}
 	waiting := false
 	for _, endpoint := range target.endpoints {
-		if !target.availableEndpoints[endpoint] {
-			waiting = true
-			continue
-		}
 		ip := ipsByEndpoint[endpoint]
 		if ip == nil || !ip.DeletionTimestamp.IsZero() {
 			waiting = true
 			continue
 		}
 
-		endpointWaiting, err := reconcileAutomaticExternalIPAttachment(ctx, attachmentsClient, ip, endpoint, target)
+		endpointWaiting, err := reconcileAutomaticExternalIPAttachment(
+			ctx, attachmentsClient, ip, endpoint, target, target.availableEndpoints[endpoint])
 		if err != nil {
 			return ctrl.Result{}, err
 		}
@@ -181,6 +178,7 @@ func reconcileAutomaticExternalIPAttachment(
 	ip *v1alpha1.ExternalIP,
 	endpoint string,
 	target automaticExternalIPAttachmentTarget,
+	endpointReady bool,
 ) (bool, error) {
 	state, _ := networkFeedback(ip, ip.Status.Conditions)
 	if state == networkFeedbackFailed {
@@ -209,6 +207,9 @@ func reconcileAutomaticExternalIPAttachment(
 	}
 	if existing != nil {
 		return false, validateAutomaticExternalIPAttachment(existing, expected, target)
+	}
+	if !endpointReady {
+		return true, nil
 	}
 
 	_, err = attachmentsClient.Create(ctx, privatev1.ExternalIPAttachmentsCreateRequest_builder{Object: expected}.Build())

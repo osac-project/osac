@@ -210,7 +210,7 @@ func foldAll(
 ) {
 	t.Helper()
 	ctx := context.Background()
-	f, err := fold.New(store, testenv.NewConsumer(t), logr.Discard())
+	f, err := fold.New(store, testenv.NewConsumer(t), logr.Discard(), "")
 	if err != nil {
 		t.Fatalf("creating fold: %v", err)
 	}
@@ -286,7 +286,7 @@ func foldAll(
 		if err != nil {
 			t.Fatalf("creating consumer: %v", err)
 		}
-		restarted, err := fold.New(store, consumer, logr.Discard())
+		restarted, err := fold.New(store, consumer, logr.Discard(), "")
 		if err != nil {
 			t.Fatalf("creating fold: %v", err)
 		}

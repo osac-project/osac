@@ -1,0 +1,86 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "buf/validate/validate.proto";
+import "google/api/field_behavior.proto";
+import "osac/public/v1/metadata_type.proto";
+
+// Lifecycle states for QuotaLimitRequest resources.
+//
+// A request starts PENDING. A review, an update that sets the state, then moves it: APPROVED sets
+// the requested limit for its tenant and dimension, and DENIED changes no limit. Both are
+// terminal: a new request replaces an old one.
+enum QuotaLimitRequestState {
+  // State is unknown or has not been determined yet.
+  QUOTA_LIMIT_REQUEST_STATE_UNSPECIFIED = 0;
+
+  // The request waits for a Cloud Provider Admin to approve or deny it.
+  QUOTA_LIMIT_REQUEST_STATE_PENDING = 1;
+
+  // The request was approved and its requested limit was set for the tenant and dimension.
+  QUOTA_LIMIT_REQUEST_STATE_APPROVED = 2;
+
+  // The request was denied. No limit changed.
+  QUOTA_LIMIT_REQUEST_STATE_DENIED = 3;
+}
+
+// Represents a tenant's request to raise the limit of one quota dimension.
+//
+// A Tenant Admin creates a request for their tenant and a dimension with the value they need. One
+// pending request exists per dimension per tenant. Approving the request sets a tenant override
+// with the requested value and marks the request approved. The built-in `shared` and `system`
+// tenants hold no quota state, so they cannot request limits.
+message QuotaLimitRequest {
+  // Unique identifier of the request.
+  string id = 1;
+
+  // Metadata of the request. The tenant is required and the project is always empty, the
+  // tenant's default project, because a request asks for a limit that covers the whole tenant.
+  Metadata metadata = 2;
+
+  // Desired configuration of the request (user-specified).
+  QuotaLimitRequestSpec spec = 3;
+
+  // Current state of the request (system-provided, read-only).
+  QuotaLimitRequestStatus status = 4 [(google.api.field_behavior) = OUTPUT_ONLY];
+}
+
+// Defines the desired configuration for a QuotaLimitRequest.
+message QuotaLimitRequestSpec {
+  // The quota dimension whose limit the request raises, such as `compute.vcpus`. Required and
+  // immutable after creation. When the `metadata.name` is omitted it is generated from the
+  // dimension.
+  string dimension = 1 [
+    (google.api.field_behavior) = REQUIRED,
+    (google.api.field_behavior) = IMMUTABLE,
+    (buf.validate.field).string = {min_len: 1, max_len: 256}
+  ];
+
+  // The limit value the tenant asks for. The value is mandatory: an omitted value must not
+  // silently become the zero that refuses everything.
+  optional int64 requested_value = 2 [
+    (buf.validate.field).required = true,
+    (buf.validate.field).int64.gte = 0
+  ];
+}
+
+// Represents the current state of a QuotaLimitRequest.
+message QuotaLimitRequestStatus {
+  // The review state of the request. Set to PENDING on creation, changed only by a review, an
+  // update that a Cloud Provider Admin makes to set the state.
+  QuotaLimitRequestState state = 1 [(google.api.field_behavior) = OUTPUT_ONLY];
+}

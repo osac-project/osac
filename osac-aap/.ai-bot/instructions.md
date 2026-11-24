@@ -36,7 +36,7 @@ runtime behavior:
 
 ## Validation Commands
 
-Run these before considering any change complete:
+Select relevant existing checks for changed playbooks, roles, plugins or charts:
 
 ```bash
 # Install dependencies (if not already done)
@@ -49,7 +49,7 @@ uv run ansible-lint
 ansible-playbook --syntax-check playbook_osac_<name>.yml
 
 # Pre-commit hooks (trailing whitespace, YAML lint, etc.)
-pre-commit run --all-files
+pre-commit run --files <changed-files>
 
 # Helm chart lint (only if charts/ was modified)
 helm lint charts/aap/

@@ -36,20 +36,18 @@ import (
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 )
 
-const testToken = "test-netbox-api-token"
+const testToken = "nbt_aaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 var (
-	testNetBoxV1Token                       = strings.Repeat("0", netBoxV1TokenLength)
-	testNetBoxV1TokenWithNBTPrefix          = "nbt_" + strings.Repeat("a", netBoxV1TokenLength-len("nbt_"))
-	testNetBoxV1TokenWithNBTPrefixAndPeriod = "nbt_" + strings.Repeat("a", 12) + "." + strings.Repeat("b", 23)
-	testNetBoxV2Token                       = "nbt_" + strings.Repeat("a", 12) + "." + strings.Repeat("b", 40)
+	testNetBoxHexToken       = strings.Repeat("0", 40)
+	testNetBoxV2TokenLongKey = "nbt_" + strings.Repeat("a", 32) + "." + strings.Repeat("b", 40)
 )
 
 var _ = Describe("NetBox client", func() {
 	Describe("endpoint normalization", func() {
 		DescribeTable("normalizes or rejects endpoints",
-			func(endpoint string, allowInsecureHTTP bool, want string, wantErr bool) {
-				got, err := normalizeEndpoint(endpoint, allowInsecureHTTP)
+			func(endpoint string, clientAllowInsecureHTTP bool, want string, wantErr bool) {
+				got, err := normalizeEndpoint(endpoint, clientAllowInsecureHTTP)
 				if wantErr {
 					Expect(err).To(HaveOccurred())
 					return
@@ -125,8 +123,8 @@ var _ = Describe("NetBox client", func() {
 
 	Describe("client configuration", func() {
 		DescribeTable("validates HTTP and token-file requirements",
-			func(endpoint string, allowInsecureHTTP, withToken bool, want error) {
-				config := Config{Endpoint: endpoint, AllowInsecureHTTP: allowInsecureHTTP}
+			func(endpoint string, clientAllowInsecureHTTP, withToken bool, want error) {
+				config := Config{Endpoint: endpoint, ClientAllowInsecureHTTP: clientAllowInsecureHTTP}
 				if withToken {
 					config.TokenFile = writeTestToken()
 				}
@@ -151,7 +149,7 @@ var _ = Describe("NetBox client", func() {
 		_, client := newTrustedClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			Expect(r.Method).To(Equal(http.MethodGet))
 			Expect(r.URL.Path).To(Equal("/api/dcim/devices/42/"))
-			Expect(r.Header.Get("Authorization")).To(Equal("Token " + testToken))
+			Expect(r.Header.Get("Authorization")).To(Equal(netBoxAuthorizationScheme + testToken))
 			w.Header().Set("ETag", etag)
 			writeJSON(w, http.StatusOK, json.RawMessage(deviceResponse(42, "host-42", "active")))
 		}))
@@ -165,20 +163,19 @@ var _ = Describe("NetBox client", func() {
 		Expect(snapshot.Device.CustomFields["osac_instance_id"]).To(Equal("instance-42"))
 	})
 
-	DescribeTable("uses the authorization scheme for the token format",
-		func(token, wantHeader string) {
+	DescribeTable("uses the Bearer authorization scheme",
+		func(token string) {
 			_, client := newTrustedClientWithToken(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				Expect(r.Header.Get("Authorization")).To(Equal(wantHeader))
+				Expect(r.Header.Get("Authorization")).To(Equal(netBoxAuthorizationScheme + token))
 				writeJSON(w, http.StatusOK, json.RawMessage(deviceResponse(42, "host-42", "active")))
 			}), token)
 
 			_, err := client.GetDevice(context.Background(), "42")
 			Expect(err).NotTo(HaveOccurred())
 		},
-		Entry("legacy v1 token", testNetBoxV1Token, "Token "+testNetBoxV1Token),
-		Entry("legacy v1 token with v2 prefix", testNetBoxV1TokenWithNBTPrefix, "Token "+testNetBoxV1TokenWithNBTPrefix),
-		Entry("legacy v1 token with v2 prefix and period", testNetBoxV1TokenWithNBTPrefixAndPeriod, "Token "+testNetBoxV1TokenWithNBTPrefixAndPeriod),
-		Entry("NetBox v2 token", testNetBoxV2Token, "Bearer "+testNetBoxV2Token),
+		Entry("v2 token", testToken),
+		Entry("40-character token", testNetBoxHexToken),
+		Entry("long key", testNetBoxV2TokenLongKey),
 	)
 
 	It("lists native interfaces for a device", func() {
@@ -208,12 +205,12 @@ var _ = Describe("NetBox client", func() {
 
 	It("encodes status and custom-field filters for device queries", func() {
 		longFieldName := strings.Repeat("x", 51)
-		freeDevice := strings.Replace(
-			deviceResponse(42, "host-42", "staged"),
-			`"custom_fields": {"osac_instance_id": "instance-42"}`,
-			`"custom_fields": {"osac_managed": true, "osac_instance_id": ""}`,
-			1,
-		)
+		freeDevicePayload, err := json.Marshal(DevicePayloadForTest(
+			42, "host-42", "staged",
+			map[string]interface{}{"osac_managed": true, "osac_instance_id": ""},
+		))
+		Expect(err).NotTo(HaveOccurred())
+		freeDevice := string(freeDevicePayload)
 		_, client := newTrustedClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			Expect(r.Method).To(Equal(http.MethodGet))
 			Expect(r.URL.Path).To(Equal("/api/dcim/devices/"))
@@ -227,7 +224,7 @@ var _ = Describe("NetBox client", func() {
 			Expect(query.Get("cf_" + longFieldName)).To(Equal("long-name"))
 			Expect(query.Get("limit")).To(Equal("100"))
 			Expect(query.Get("offset")).To(Equal("0"))
-			Expect(r.Header.Get("Authorization")).To(Equal("Token " + testToken))
+			Expect(r.Header.Get("Authorization")).To(Equal(netBoxAuthorizationScheme + testToken))
 			writeJSON(w, http.StatusOK, map[string]any{
 				"count":    1,
 				"next":     nil,
@@ -237,7 +234,7 @@ var _ = Describe("NetBox client", func() {
 		}))
 
 		var devices []Device
-		err := client.ForEachDevice(context.Background(), DeviceQuery{
+		err = client.ForEachDevice(context.Background(), DeviceQuery{
 			"status":                     "staged",
 			"cf_osac_managed":            "true",
 			"cf_osac_instance_id__empty": "true",
@@ -556,7 +553,7 @@ var _ = Describe("NetBox client", func() {
 			Expect(r.Method).To(Equal(http.MethodPatch))
 			Expect(r.URL.Path).To(Equal("/api/dcim/devices/42/"))
 			Expect(r.Header.Get("If-Match")).To(Equal(expectedETag))
-			Expect(r.Header.Get("Authorization")).To(Equal("Token " + testToken))
+			Expect(r.Header.Get("Authorization")).To(Equal(netBoxAuthorizationScheme + testToken))
 
 			var body map[string]any
 			Expect(json.NewDecoder(r.Body).Decode(&body)).To(Succeed())
@@ -705,9 +702,11 @@ var _ = Describe("NetBox client", func() {
 		}))
 		DeferCleanup(destination.Close)
 
-		_, client := newTrustedClient(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, destination.URL+"/api/dcim/devices/42/", http.StatusFound)
 		}))
+		DeferCleanup(server.Close)
+		client := newClientWithCAFile(server)
 		_, err := client.GetDevice(context.Background(), "42")
 		expectAPIError(err, ErrorKindRedirect, http.StatusFound)
 		Expect(destinationCalls.Load()).To(Equal(int32(0)))
@@ -747,6 +746,16 @@ var _ = Describe("NetBox client", func() {
 	)
 })
 
+// newClientWithCAFile builds a production client trusting the test server.
+func newClientWithCAFile(server *httptest.Server) *Client {
+	caFile := filepath.Join(GinkgoT().TempDir(), "netbox-ca.pem")
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	Expect(os.WriteFile(caFile, caPEM, 0o600)).To(Succeed())
+	client, err := New(Config{Endpoint: server.URL + "/", TokenFile: writeTestToken(), CAFile: caFile})
+	Expect(err).NotTo(HaveOccurred())
+	return client
+}
+
 func newTrustedClient(handler http.Handler) (*httptest.Server, *Client) {
 	return newTrustedClientWithToken(handler, testToken)
 }
@@ -754,14 +763,7 @@ func newTrustedClient(handler http.Handler) (*httptest.Server, *Client) {
 func newTrustedClientWithToken(handler http.Handler, token string) (*httptest.Server, *Client) {
 	server := httptest.NewTLSServer(ginkgoRequestHandler(handler))
 	DeferCleanup(server.Close)
-
-	caFile := filepath.Join(GinkgoT().TempDir(), "netbox-ca.pem")
-	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
-	Expect(os.WriteFile(caFile, caPEM, 0o600)).To(Succeed())
-
-	client, err := New(Config{Endpoint: server.URL + "/", TokenFile: writeToken(token), CAFile: caFile})
-	Expect(err).NotTo(HaveOccurred())
-	return server, client
+	return server, NewClientForTest(server.Client(), server.URL, token)
 }
 
 func ginkgoRequestHandler(handler http.Handler) http.Handler {
@@ -788,33 +790,10 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func deviceResponse(id int, name, status string) string {
-	return fmt.Sprintf(`{
-		"id": %d,
-		"url": "/api/dcim/devices/%d/",
-		"display": %q,
-		"name": %q,
-		"device_type": {
-			"id": 1,
-			"url": "/api/dcim/device-types/1/",
-			"display": "Test device type",
-			"manufacturer": {"id": 1, "url": "/api/dcim/manufacturers/1/", "display": "Test manufacturer", "name": "Test manufacturer", "slug": "test-manufacturer"},
-			"model": "Test model",
-			"slug": "test-device-type"
-		},
-		"role": {"id": 1, "url": "/api/dcim/device-roles/1/", "display": "Server", "name": "Server", "slug": "server", "_depth": 0},
-		"site": {"id": 1, "url": "/api/dcim/sites/1/", "display": "Test site", "name": "Test site", "slug": "test-site"},
-		"status": {"value": %q, "label": "Active"},
-		"custom_fields": {"osac_instance_id": "instance-42"},
-		"console_port_count": 0,
-		"console_server_port_count": 0,
-		"power_port_count": 0,
-		"power_outlet_count": 0,
-		"front_port_count": 0,
-		"rear_port_count": 0,
-		"device_bay_count": 0,
-		"module_bay_count": 0,
-		"inventory_item_count": 0
-	}`, id, id, name, name, status)
+	payload := DevicePayloadForTest(id, name, status, map[string]interface{}{"osac_instance_id": "instance-42"})
+	encoded, err := json.Marshal(payload)
+	Expect(err).NotTo(HaveOccurred())
+	return string(encoded)
 }
 
 func interfacePage(results ...map[string]any) map[string]any {

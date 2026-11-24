@@ -79,13 +79,20 @@ import {
   RoleBinding,
   Secret,
   SecurityGroup,
+  type SecurityGroupsDeleteRequest,
+  type SecurityGroupsDeleteResponse,
   SelfSubjectAccessReviews,
   SelfSubjectAccessReviewsCreateResponseSchema,
   ServiceTier,
   Subnet,
+  SubnetsDeleteRequest,
+  SubnetsDeleteResponse,
   SubnetsGetRequest,
   User,
   VirtualNetwork,
+  VirtualNetworksDeleteRequest,
+  VirtualNetworksDeleteResponse,
+  VirtualNetworksGetRequest,
   Volume,
   VolumesCreateRequest,
   VolumesCreateResponse,
@@ -191,6 +198,8 @@ import type {
   StorageTiersUpdateResponse,
   TenantsCreateRequest,
   TenantsCreateResponse,
+  TenantsUpdateRequest,
+  TenantsUpdateResponse,
 } from '@osac/types/private';
 import {
   BareMetalInstanceTypesCreateResponseSchema,
@@ -432,7 +441,7 @@ const matchesInstanceTypeActiveFilter = (
   return state === InstanceTypeState.ACTIVE;
 };
 
-const matchesDiskImageLifecycleFilter = (
+export const matchesDiskImageLifecycleFilter = (
   filter: string | undefined,
   lifecycle: number | undefined,
 ): boolean => {
@@ -492,6 +501,9 @@ const matchesStorageTierActiveFilter = (
 };
 
 export type MockTransportOverrides = {
+  onComputeInstanceCatalogItemGet?: () =>
+    | { object?: ComputeInstanceCatalogItem | undefined }
+    | Promise<{ object?: ComputeInstanceCatalogItem | undefined }>;
   onSelfSubjectAccessReview?: (
     req: SelfSubjectAccessReviewsCreateRequest,
   ) =>
@@ -564,6 +576,7 @@ export type MockTransportOverrides = {
     req: IdentityProvidersUpdateRequest,
   ) => IdentityProvidersUpdateResponse;
   onTenantCreate?: (req: TenantsCreateRequest) => TenantsCreateResponse;
+  onTenantUpdate?: (req: TenantsUpdateRequest) => TenantsUpdateResponse;
   onTenantList?: () => never;
   onStorageBackendList?: (
     req: StorageBackendsListRequest,
@@ -658,9 +671,21 @@ export type MockTransportOverrides = {
   onDiskImageCreate?: (req: DiskImagesCreateRequest) => DiskImagesCreateResponse;
   onDiskImageUpdate?: (req: DiskImagesUpdateRequest) => DiskImagesUpdateResponse;
   onDiskImageDelete?: (req: DiskImagesDeleteRequest) => DiskImagesDeleteResponse;
-  onSubnetGet?: (req: SubnetsGetRequest) => { object?: Subnet };
+  onSubnetGet?: (req: SubnetsGetRequest) => { object?: Subnet } | Promise<{ object?: Subnet }>;
   onSubnetList?: (req: unknown) => void;
+  onVirtualNetworkGet?: (
+    req: VirtualNetworksGetRequest,
+  ) => { object?: VirtualNetwork } | Promise<{ object?: VirtualNetwork }>;
+  onSubnetDelete?: (
+    req: SubnetsDeleteRequest,
+  ) => SubnetsDeleteResponse | Promise<SubnetsDeleteResponse>;
+  onVirtualNetworkDelete?: (
+    req: VirtualNetworksDeleteRequest,
+  ) => VirtualNetworksDeleteResponse | Promise<VirtualNetworksDeleteResponse>;
   onSecurityGroupList?: (req: unknown) => void;
+  onSecurityGroupDelete?: (
+    req: SecurityGroupsDeleteRequest,
+  ) => SecurityGroupsDeleteResponse | Promise<SecurityGroupsDeleteResponse>;
   onNatGatewayList?: (req: NATGatewaysListRequest) => void;
   onNatGatewayCreate?: (
     req: NATGatewaysCreateRequest,
@@ -707,9 +732,9 @@ export const createMockConnectTransport = (
   const identityProviders = fixtures.identityProviders ?? [];
   const projects = fixtures.projects ?? [];
   const projectMemberships = fixtures.projectMemberships ?? [];
-  const virtualNetworks = fixtures.virtualNetworks ?? [];
-  const subnets = fixtures.subnets ?? [];
-  const securityGroups = fixtures.securityGroups ?? [];
+  const virtualNetworks = [...(fixtures.virtualNetworks ?? [])];
+  const subnets = [...(fixtures.subnets ?? [])];
+  const securityGroups = [...(fixtures.securityGroups ?? [])];
   const instanceTypes = fixtures.instanceTypes ?? [];
   const publicBaremetalInstanceTypes = fixtures.publicBaremetalInstanceTypes ?? [];
   const diskImages = fixtures.diskImages ?? [];
@@ -744,9 +769,10 @@ export const createMockConnectTransport = (
         list: (req) => ({
           items: catalogItems.filter((item) => catalogItemMatchesListFilter(item, req.filter)),
         }),
-        get: (req) => ({
-          object: catalogItems.find((i) => i.id === req.id),
-        }),
+        get: (req) =>
+          overrides.onComputeInstanceCatalogItemGet?.() ?? {
+            object: catalogItems.find((i) => i.id === req.id),
+          },
         create: (req) => {
           if (overrides.onComputeInstanceCatalogItemCreate) {
             return overrides.onComputeInstanceCatalogItemCreate(req);
@@ -914,18 +940,36 @@ export const createMockConnectTransport = (
         list: (req) => {
           const items = virtualNetworks.filter(
             (item) =>
+              matchesIdInFilter(req.filter, item.id) &&
               matchesReadyStateFilter(req.filter, item.status?.state) &&
-              matchesVirtualNetworkScopeFilter(req.filter, undefined),
+              matchesVirtualNetworkScopeFilter(req.filter, undefined) &&
+              matchesNameContainsFilter(req.filter, item.metadata?.name) &&
+              matchesStatusStateInFilter(req.filter, item.status?.state),
           );
-          const total = virtualNetworks.length;
+          const total = items.length;
           if (req.limit === 0) {
             return { items: [], size: 0, total };
           }
           return { items, size: items.length, total };
         },
-        get: (req) => ({
-          object: virtualNetworks.find((i) => i.id === req.id),
-        }),
+        get: async (req) => {
+          if (overrides.onVirtualNetworkGet) {
+            return await overrides.onVirtualNetworkGet(req);
+          }
+          return {
+            object: virtualNetworks.find((i) => i.id === req.id),
+          };
+        },
+        delete: async (req) => {
+          if (overrides.onVirtualNetworkDelete) {
+            return overrides.onVirtualNetworkDelete(req);
+          }
+          const index = virtualNetworks.findIndex((item) => item.id === req.id);
+          if (index >= 0) {
+            virtualNetworks.splice(index, 1);
+          }
+          return {};
+        },
       });
 
       router.service(Subnets, {
@@ -938,13 +982,23 @@ export const createMockConnectTransport = (
           );
           return { items, size: items.length, total: items.length };
         },
-        get: (req) => {
+        get: async (req) => {
           if (overrides.onSubnetGet) {
-            return overrides.onSubnetGet(req);
+            return await overrides.onSubnetGet(req);
           }
           return {
             object: subnets.find((i) => i.id === req.id),
           };
+        },
+        delete: async (req) => {
+          if (overrides.onSubnetDelete) {
+            return overrides.onSubnetDelete(req);
+          }
+          const index = subnets.findIndex((item) => item.id === req.id);
+          if (index >= 0) {
+            subnets.splice(index, 1);
+          }
+          return {};
         },
       });
 
@@ -954,9 +1008,24 @@ export const createMockConnectTransport = (
           const items = securityGroups.filter(
             (item) =>
               matchesReadyStateFilter(req.filter, item.status?.state) &&
-              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id),
+              matchesVirtualNetworkScopeFilter(req.filter, item.spec?.virtualNetwork?.id) &&
+              matchesNameContainsFilter(req.filter, item.metadata?.name),
           );
-          return { items, size: items.length, total: items.length };
+          const total = items.length;
+          if (req.limit === 0) {
+            return { items: [], size: 0, total };
+          }
+          return { items, size: items.length, total };
+        },
+        delete: (req) => {
+          if (overrides.onSecurityGroupDelete) {
+            return overrides.onSecurityGroupDelete(req);
+          }
+          const index = securityGroups.findIndex((group) => group.id === req.id);
+          if (index !== -1) {
+            securityGroups.splice(index, 1);
+          }
+          return {};
         },
       });
 
@@ -1346,6 +1415,8 @@ export const createMockConnectTransport = (
             },
           };
         },
+        update: (req) =>
+          overrides.onTenantUpdate?.(req) ?? ({ object: req.object } as TenantsUpdateResponse),
         delete: () => ({}),
       });
 

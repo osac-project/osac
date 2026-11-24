@@ -36,8 +36,10 @@ import (
 // NATGateway Create ExternalIPs are resolved by the handler, by ID or by name within
 // the NATGateway's tenant and project, after checking that only the system may create
 // a NATGateway for a tenant-default VirtualNetwork.
-// RoleBinding handlers validate service-account references in the request's
-// tenant scope.
+// RoleBinding handlers resolve Role, User, and service-account references after the
+// binding tenant is assigned. An unqualified Role name must not be resolved
+// globally by the interceptor before that tenant is known.
+// Tenant default Roles are resolved after assignment and update-mask merging.
 // Workload ssh_key references are resolved by their private handlers after
 // tenant assignment and catalog/template defaults. Those handlers enforce the
 // tenant-only SSH-key contract, validate key material, and store canonical
@@ -55,7 +57,8 @@ func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, regis
 		SetExcludedReferencePaths(serviceAccountControllerSecretReferenceMethods(),
 			"object.status.client_secret", "object.status.registration_secret").
 		SetExcludedReferencePaths(natGatewayCreationMethods(), "object.spec.external_ip").
-		SetExcludedReferencePaths(roleBindingServiceAccountMethods(), "object.spec.service_accounts").
+		SetExcludedReferencePaths(roleBindingReferenceMethods(), "object.spec.role", "object.spec.users", "object.spec.service_accounts").
+		SetExcludedReferencePaths(tenantDefaultRoleMethods(), "object.spec.default_role").
 		SetExcludedReferencePaths(bareMetalInstanceSSHKeyMethods(), "object.spec.ssh_key").
 		SetExcludedReferencePaths(clusterSshKeyMethods(), "object.spec.ssh_key").
 		SetExcludedReferencePaths(clusterTemplateSshKeyMethods(), "object.spec_defaults.ssh_key").
@@ -87,12 +90,19 @@ func natGatewayCreationMethods() []string {
 	}
 }
 
-func roleBindingServiceAccountMethods() []string {
+func roleBindingReferenceMethods() []string {
 	return []string{
 		publicv1.RoleBindings_Create_FullMethodName,
 		privatev1.RoleBindings_Create_FullMethodName,
 		publicv1.RoleBindings_Update_FullMethodName,
 		privatev1.RoleBindings_Update_FullMethodName,
+	}
+}
+
+func tenantDefaultRoleMethods() []string {
+	return []string{
+		privatev1.Tenants_Create_FullMethodName,
+		privatev1.Tenants_Update_FullMethodName,
 	}
 }
 

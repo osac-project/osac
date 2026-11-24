@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MessageInitShape } from '@bufbuild/protobuf';
 import {
@@ -14,9 +15,9 @@ import { Formik } from 'formik';
 import type { TFunction } from 'i18next';
 import * as Yup from 'yup';
 
-import type { SecurityGroupSchema } from '@osac/types';
+import { SecurityGroupSchema, SecurityGroups, VirtualNetworks } from '@osac/types';
 
-import { useCreateSecurityGroup, useVirtualNetworks } from '../../api/v1/networking';
+import { useCreateResource, useListResource } from '../../api/use-resource';
 import OsacForm from '../../components/Form/OsacForm';
 import { SelectField } from '../../components/Form/SelectField';
 import { useTranslation } from '../../hooks/useTranslation';
@@ -50,8 +51,14 @@ export const SecurityGroupCreateModal = ({
 }: SecurityGroupCreateModalProps) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const createSecurityGroup = useCreateSecurityGroup();
-  const { data: virtualNetworks = [], isLoading, error: vnError } = useVirtualNetworks();
+  const createSecurityGroup = useCreateResource(SecurityGroups);
+  const [submitError, setSubmitError] = useState<unknown>(null);
+  const {
+    data: virtualNetworksResponse,
+    isLoading,
+    error: vnError,
+  } = useListResource(VirtualNetworks);
+  const virtualNetworks = virtualNetworksResponse?.items ?? [];
 
   const virtualNetworkOptions = virtualNetworks.map((vn) => ({
     value: vn.id,
@@ -69,6 +76,7 @@ export const SecurityGroupCreateModal = ({
       }}
       validationSchema={validationSchema(t)}
       onSubmit={async (values) => {
+        setSubmitError(null);
         try {
           const body: MessageInitShape<typeof SecurityGroupSchema> = {
             metadata: {
@@ -84,10 +92,13 @@ export const SecurityGroupCreateModal = ({
               egress: [],
             },
           };
-          const sg = await createSecurityGroup.mutateAsync(body);
-          navigate(`/networking/security-groups/${sg.id}`);
-        } catch {
-          // Error is surfaced via createSecurityGroup.error below
+          const response = await createSecurityGroup.mutateAsync({ object: body });
+          if (!response.object?.id) {
+            throw new Error('Create response missing id');
+          }
+          navigate(`/networking/security-groups/${response.object.id}`);
+        } catch (error) {
+          setSubmitError(error);
         }
       }}
     >
@@ -101,10 +112,10 @@ export const SecurityGroupCreateModal = ({
           <ModalHeader title={t('Create security group')} labelId="sg-create-modal-title" />
           <ModalBody>
             <Stack hasGutter>
-              {!!createSecurityGroup.error && (
+              {!!(submitError ?? createSecurityGroup.error) && (
                 <StackItem>
                   <Alert variant="danger" title={t('Error')} isInline>
-                    {getErrorMessage(createSecurityGroup.error)}
+                    {getErrorMessage(submitError ?? createSecurityGroup.error)}
                   </Alert>
                 </StackItem>
               )}

@@ -1,12 +1,13 @@
 import { type Page } from '@playwright/test';
 
+import { expectComputeInstanceDeleted } from '../../../../../libs/osac-cli/src/compute_instance';
 import { logProgress, testStep } from '../../../../../libs/test-utils/src/general/test_progress';
 import {
   deleteVmIfPresent,
   waitForVmConditionStatus,
 } from '../../../../../libs/test-utils/src/vms.page';
+import { instanceTypeTestData, resizeVmTestName, tenantName } from '../../shared/test_data';
 import { createVmFromCatalog } from '../create_vm_flow';
-import { instanceTypeTestData, resizeVmTestName } from '../test_data';
 
 /** Create the VM used by one resize scenario from the resize catalog blocks. */
 export const createResizeVm = async (page: Page, onCreationStarted?: () => void): Promise<void> => {
@@ -32,12 +33,37 @@ export const createResizeVm = async (page: Page, onCreationStarted?: () => void)
 
 /** Delete the VM created for the current resize scenario. */
 export const deleteResizeVm = async (page: Page): Promise<void> => {
-  const deleted = await testStep(
-    'resize-vm-delete',
-    `Delete VM "${resizeVmTestName}" if present`,
-    () => deleteVmIfPresent(page, resizeVmTestName),
-  );
-  if (!deleted) {
-    logProgress('resize-vm-delete', `VM "${resizeVmTestName}" is already absent.`);
+  const errors: unknown[] = [];
+  try {
+    const deleted = await testStep(
+      'resize-vm-delete',
+      `Delete VM "${resizeVmTestName}" if present`,
+      () => deleteVmIfPresent(page, resizeVmTestName),
+    );
+    if (!deleted) {
+      logProgress('resize-vm-delete', `VM "${resizeVmTestName}" is already absent.`);
+    }
+  } catch (error) {
+    errors.push(error);
+  }
+
+  try {
+    const currentTenant = tenantName;
+    if (!currentTenant) {
+      throw new Error('A tenant is required to verify VM deletion through the API.');
+    }
+    await testStep(
+      'resize-vm-delete',
+      `Verify VM "${resizeVmTestName}" is absent from the API`,
+      () => expectComputeInstanceDeleted(currentTenant, resizeVmTestName),
+    );
+  } catch (error) {
+    errors.push(error);
+  }
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, 'UI and API VM deletion checks failed.');
   }
 };

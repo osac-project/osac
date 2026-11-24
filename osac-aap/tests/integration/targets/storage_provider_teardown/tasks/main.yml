@@ -79,11 +79,13 @@
           apiVersion: v1
           kind: Secret
           metadata:
-            name: "vast-tenant-config-test-teardown"
+            name: "vast-tenant-config-test-teardown-be-test"
             namespace: "osac-system"
             labels:
               app.kubernetes.io/managed-by: osac-aap
               osac.openshift.io/tenant: "test-teardown"
+              osac.openshift.io/storage-provider: vast
+              osac.openshift.io/storage-backend-id: be-test
           type: Opaque
           stringData:
             vast_tenant_id: "1"
@@ -114,7 +116,7 @@
           parameters:
             vip_pool_name: "osac-test-pool"
             root_export: "/osac/test-teardown/default"
-            csi.storage.k8s.io/provisioner-secret-name: "vast-csi-test-teardown"
+            csi.storage.k8s.io/provisioner-secret-name: "vast-csi-test-teardown-be-test"
             csi.storage.k8s.io/provisioner-secret-namespace: "osac-system"
           reclaimPolicy: Delete
           volumeBindingMode: Immediate
@@ -147,7 +149,7 @@
           apiVersion: v1
           kind: Secret
           metadata:
-            name: "vast-csi-test-teardown"
+            name: "vast-csi-test-teardown-be-test"
             namespace: "osac-system"
             labels:
               app.kubernetes.io/managed-by: osac-aap
@@ -180,7 +182,7 @@
           driver: csi.vastdata.com
           deletionPolicy: Delete
           parameters:
-            csi.storage.k8s.io/snapshotter-secret-name: "vast-csi-test-teardown"
+            csi.storage.k8s.io/snapshotter-secret-name: "vast-csi-test-teardown-be-test"
             csi.storage.k8s.io/snapshotter-secret-namespace: "osac-system"
 
     - name: Verify all fixtures created
@@ -189,7 +191,7 @@
           kubernetes.core.k8s_info:
             api_version: v1
             kind: Secret
-            name: "vast-tenant-config-test-teardown"
+            name: "vast-tenant-config-test-teardown-be-test"
             namespace: "osac-system"
           register: _verify_hub
 
@@ -274,7 +276,7 @@
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Secret
-        name: "vast-csi-test-teardown"
+        name: "vast-csi-test-teardown-be-test"
         namespace: "osac-system"
       register: _td_csi
 
@@ -282,14 +284,14 @@
       ansible.builtin.assert:
         that:
           - _td_csi.resources | length == 0
-        fail_msg: "CSI Secret 'vast-csi-test-teardown' was not deleted"
+        fail_msg: "CSI Secret 'vast-csi-test-teardown-be-test' was not deleted"
         success_msg: "CSI Secret deleted"
 
     - name: Check hub Secret deleted (should be deleted when cleanup succeeds)
       kubernetes.core.k8s_info:
         api_version: v1
         kind: Secret
-        name: "vast-tenant-config-test-teardown"
+        name: "vast-tenant-config-test-teardown-be-test"
         namespace: "osac-system"
       register: _td_hub
 
@@ -297,7 +299,7 @@
       ansible.builtin.assert:
         that:
           - _td_hub.resources | length == 0
-        fail_msg: "Hub Secret 'vast-tenant-config-test-teardown' was not deleted (cleanup may have failed)"
+        fail_msg: "Hub Secret 'vast-tenant-config-test-teardown-be-test' was not deleted (cleanup may have failed)"
         success_msg: "Hub Secret deleted"
 
     - name: Check VolumeSnapshotClass CRD exists for verification
@@ -438,6 +440,310 @@
           Tenant DELETE paths: {{ _tenant_del_paths }}
         success_msg: "Correct: tenant deletion uses force_remove"
 
+# ── Test: Two-backend partial state (backend A's hub Secret missing) ──
+- name: "Storage Provider Teardown - Two-backend setup"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    mock_tenant_manager_password: "test-csi-password"
+
+  tasks:
+    - name: Reset mock VMS server for two-backend scenario
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_reset"
+        validate_certs: false
+        method: POST
+      failed_when: false
+
+    - name: Pre-seed mock VMS with tenant resources for two-backend teardown
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/api/{{ item.resource }}/"
+        method: POST
+        body_format: json
+        body: "{{ item.body }}"
+        validate_certs: false
+        status_code: [200, 201]
+      loop:
+        - resource: tenants
+          body:
+            name: "test-td-2be"
+            local_provider_id: 1
+        - resource: tenants
+          body:
+            name: "different-tenant"
+            local_provider_id: 2
+        - resource: managers
+          body:
+            username: "osac-test-td-2be"
+            roles: [1]
+      loop_control:
+        label: "{{ item.resource }}/{{ item.body.name | default(item.body.username | default('?')) }}"
+
+    - name: Create hub Secret for backend A (will be deleted before teardown)
+      no_log: true
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "vast-tenant-config-test-td-2be-be-a"
+            namespace: "osac-system"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "test-td-2be"
+              osac.openshift.io/storage-provider: vast
+              osac.openshift.io/storage-backend-id: be-a
+          type: Opaque
+          stringData:
+            vast_tenant_id: "1"
+            vast_local_provider_id: "1"
+            vip_pool_name: "osac-test-pool-a"
+            vast_endpoint: "127.0.0.1:18443"
+            storage_provider_type: "vast"
+            tenant_manager_name: "osac-test-td-2be-a"
+            tenant_manager_username: "osac-test-td-2be-a"
+            tenant_manager_password: "{{ mock_tenant_manager_password }}"
+            tenant_manager_id: "7"
+            tenant_role_id: "8"
+
+    - name: Create hub Secret for backend B (will remain until teardown runs)
+      no_log: true
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "vast-tenant-config-test-td-2be-be-b"
+            namespace: "osac-system"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "test-td-2be"
+              osac.openshift.io/storage-provider: vast
+              osac.openshift.io/storage-backend-id: be-b
+          type: Opaque
+          stringData:
+            vast_tenant_id: "1"
+            vast_local_provider_id: "1"
+            vip_pool_name: "osac-test-pool-b"
+            vast_endpoint: "127.0.0.1:18443"
+            storage_provider_type: "vast"
+            tenant_manager_name: "osac-test-td-2be-b"
+            tenant_manager_username: "osac-test-td-2be-b"
+            tenant_manager_password: "{{ mock_tenant_manager_password }}"
+            tenant_manager_id: "7"
+            tenant_role_id: "8"
+
+    - name: Create CSI Secret for backend A
+      no_log: true
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "vast-csi-test-td-2be-be-a"
+            namespace: "osac-system"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "test-td-2be"
+          type: Opaque
+          stringData:
+            username: "osac-test-td-2be-a"
+            password: "{{ mock_tenant_manager_password }}"
+            endpoint: "127.0.0.1:18443"
+            tenant: "test-td-2be"
+
+    - name: Create CSI Secret for backend B
+      no_log: true
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "vast-csi-test-td-2be-be-b"
+            namespace: "osac-system"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "test-td-2be"
+          type: Opaque
+          stringData:
+            username: "osac-test-td-2be-b"
+            password: "{{ mock_tenant_manager_password }}"
+            endpoint: "127.0.0.1:18443"
+            tenant: "test-td-2be"
+
+    - name: Create hub Secret for a different tenant (should not be touched)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "vast-tenant-config-different-tenant-be-x"
+            namespace: "osac-system"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "different-tenant"
+              osac.openshift.io/storage-provider: vast
+              osac.openshift.io/storage-backend-id: be-x
+          type: Opaque
+          stringData:
+            vast_tenant_id: "2"
+            vast_local_provider_id: "2"
+            vip_pool_name: "osac-other-pool"
+            vast_endpoint: "127.0.0.1:18443"
+            storage_provider_type: "vast"
+
+    - name: Delete backend A's hub Secret (simulating partial state)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-td-2be-be-a"
+        namespace: "osac-system"
+
+    - name: Verify backend A's hub Secret is gone
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-td-2be-be-a"
+        namespace: "osac-system"
+      register: _verify_a_gone
+
+    - name: Assert backend A's hub Secret was deleted
+      ansible.builtin.assert:
+        that:
+          - _verify_a_gone.resources | length == 0
+        fail_msg: "Backend A's hub Secret should be deleted before teardown"
+
+    - name: Verify backend B's hub Secret still exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-td-2be-be-b"
+        namespace: "osac-system"
+      register: _verify_b_present
+
+    - name: Assert backend B's hub Secret exists before teardown
+      ansible.builtin.assert:
+        that:
+          - _verify_b_present.resources | length == 1
+        fail_msg: "Backend B's hub Secret should exist before teardown"
+
+- name: "Storage Provider Teardown - Run teardown for both backends"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    vast_storage_config_namespace: osac-system
+    tenant_name: "test-td-2be"
+    tenant_namespace: "osac-system"
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: vast
+        backend_id: be-a
+      - name: default-b
+        protocol: nfs
+        provider: vast
+        backend_id: be-b
+    storage_provider_backend_connections:
+      be-a:
+        endpoint: "127.0.0.1:18443"
+        username: "admin"
+        password: "mock-admin-password"
+      be-b:
+        endpoint: "127.0.0.1:18443"
+        username: "admin"
+        password: "mock-admin-password"
+    storage_provider_provisioning_target: vmaas
+    vast_storage_validate_certs: false
+
+  tasks:
+    - name: Call storage_provider with teardown_cluster_storage for both backends
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: teardown_cluster_storage
+
+    - name: Call storage_provider with teardown_backend for both backends
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: teardown_backend
+
+- name: "Storage Provider Teardown - Verify two-backend partial state"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Check backend A's CSI Secret deleted (despite missing hub Secret)
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-csi-test-td-2be-be-a"
+        namespace: "osac-system"
+      register: _td_2be_csi_a
+
+    - name: Assert backend A's CSI Secret deleted
+      ansible.builtin.assert:
+        that:
+          - _td_2be_csi_a.resources | length == 0
+        fail_msg: "Backend A's CSI Secret should be deleted even when hub Secret was missing"
+        success_msg: "Backend A's CSI Secret correctly deleted despite missing hub Secret"
+
+    - name: Check backend B's hub Secret deleted
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-td-2be-be-b"
+        namespace: "osac-system"
+      register: _td_2be_hub_b
+
+    - name: Assert backend B's hub Secret deleted
+      ansible.builtin.assert:
+        that:
+          - _td_2be_hub_b.resources | length == 0
+        fail_msg: "Backend B's hub Secret should be deleted by teardown"
+        success_msg: "Backend B's hub Secret correctly deleted"
+
+    - name: Check backend B's CSI Secret deleted
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-csi-test-td-2be-be-b"
+        namespace: "osac-system"
+      register: _td_2be_csi_b
+
+    - name: Assert backend B's CSI Secret deleted
+      ansible.builtin.assert:
+        that:
+          - _td_2be_csi_b.resources | length == 0
+        fail_msg: "Backend B's CSI Secret should be deleted by teardown"
+        success_msg: "Backend B's CSI Secret correctly deleted"
+
+    - name: Check different-tenant Secret was NOT touched
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-different-tenant-be-x"
+        namespace: "osac-system"
+      register: _td_2be_other_tenant
+
+    - name: Assert different-tenant Secret untouched
+      ansible.builtin.assert:
+        that:
+          - _td_2be_other_tenant.resources | length == 1
+        fail_msg: "Teardown should not delete Secrets from different tenants"
+        success_msg: "Different-tenant Secret correctly preserved"
+
 # ── Cleanup: Best-effort removal of any remaining resources ──
 - name: "Storage Provider Teardown - Final cleanup"
   hosts: localhost
@@ -449,7 +755,7 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-tenant-config-test-teardown"
+        name: "vast-tenant-config-test-teardown-be-test"
         namespace: "osac-system"
       failed_when: false
 
@@ -477,6 +783,267 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-csi-test-teardown"
+        name: "vast-csi-test-teardown-be-test"
         namespace: "osac-system"
+      failed_when: false
+
+    - name: Delete two-backend test Secrets (safety net)
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item }}"
+        namespace: "osac-system"
+      loop:
+        - "vast-tenant-config-test-td-2be-be-a"
+        - "vast-tenant-config-test-td-2be-be-b"
+        - "vast-csi-test-td-2be-be-a"
+        - "vast-csi-test-td-2be-be-b"
+        - "vast-tenant-config-different-tenant-be-x"
+      failed_when: false
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Test: Different endpoints teardown (verify independent cleanup per array)
+# ══════════════════════════════════════════════════════════════════════════════
+
+- name: "Storage Provider Different-Endpoint Teardown - Setup"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+    vast_storage_config_namespace: osac-system
+    tenant_name: "test-td-diffep"
+    tenant_namespace: "osac-system"
+    tenant_uid: "test-uid-diffep"
+    _cluster_name: "test-cluster"
+
+  tasks:
+    - name: Reset both mock VMS servers
+      ansible.builtin.uri:
+        url: "https://{{ item }}/_reset"
+        validate_certs: false
+        method: POST
+      loop:
+        - "127.0.0.1:18443"
+        - "127.0.0.1:18445"
+      failed_when: false
+
+    - name: Setup backend A on endpoint1 (port 18443)
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: setup
+        storage_provider_tiers:
+          - name: tier-a
+            protocol: nfs
+            provider: vast
+            backend_id: be-a
+        storage_provider_backend_connections:
+          be-a:
+            endpoint: "127.0.0.1:18443"
+            username: "admin"
+            password: "{{ _mock_vast_password }}"
+        vast_storage_validate_certs: false
+
+    - name: Setup backend B on endpoint2 (port 18445)
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: setup
+        storage_provider_tiers:
+          - name: tier-b
+            protocol: nfs
+            provider: vast
+            backend_id: be-b
+        storage_provider_backend_connections:
+          be-b:
+            endpoint: "127.0.0.1:18445"
+            username: "admin"
+            password: "{{ _mock_vast_password }}"
+        vast_storage_validate_certs: false
+
+- name: "Storage Provider Different-Endpoint Teardown - Teardown backend A"
+  hosts: localhost
+  gather_facts: false
+
+  environment:
+    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
+
+  vars:
+    _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+    vast_storage_config_namespace: osac-system
+    tenant_name: "test-td-diffep"
+    tenant_namespace: "osac-system"
+    tenant_uid: "test-uid-diffep"
+
+  tasks:
+    - name: Record endpoint1 call log before teardown
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _diffep_pre_ep1
+
+    - name: Save endpoint1 call count
+      ansible.builtin.set_fact:
+        _diffep_mark_ep1: "{{ _diffep_pre_ep1.json | length }}"
+
+    - name: Record endpoint2 call log before teardown
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18445/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _diffep_pre_ep2
+
+    - name: Save endpoint2 call count
+      ansible.builtin.set_fact:
+        _diffep_mark_ep2: "{{ _diffep_pre_ep2.json | length }}"
+
+    - name: Teardown backend A (endpoint1)
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: teardown_backend
+        storage_provider_tiers:
+          - name: tier-a
+            protocol: nfs
+            provider: vast
+            backend_id: be-a
+        storage_provider_backend_connections:
+          be-a:
+            endpoint: "127.0.0.1:18443"
+            username: "admin"
+            password: "{{ _mock_vast_password }}"
+        vast_storage_validate_certs: false
+
+- name: "Storage Provider Different-Endpoint Teardown - Verify isolation"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Get endpoint1 calls during teardown
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18443/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _diffep_post_ep1
+
+    - name: Get endpoint2 calls during teardown
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18445/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _diffep_post_ep2
+
+    - name: Verify endpoint1 tenant was deleted
+      vars:
+        _ep1_window: "{{ _diffep_post_ep1.json[_diffep_mark_ep1 | int:] }}"
+        _tenant_deletes: >-
+          {{
+            _ep1_window
+            | selectattr('method', 'equalto', 'DELETE')
+            | selectattr('path', 'search', 'tenants/')
+            | list
+          }}
+      ansible.builtin.assert:
+        that:
+          - _tenant_deletes | length > 0
+        fail_msg: "Endpoint1 tenant should have been deleted (backend A was last on this array)"
+        success_msg: "Endpoint1 tenant correctly deleted"
+
+    - name: Verify endpoint2 was NOT touched
+      vars:
+        _ep2_window: "{{ _diffep_post_ep2.json[_diffep_mark_ep2 | int:] }}"
+      ansible.builtin.assert:
+        that:
+          - _ep2_window | length == 0
+        fail_msg: >-
+          Teardown of backend A (endpoint1) incorrectly made {{ _ep2_window | length }}
+          API calls to endpoint2. Different endpoints should be independent!
+        success_msg: "Endpoint2 correctly untouched by backend A teardown"
+
+    - name: Verify backend A hub Secret was deleted
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-td-diffep-be-a"
+        namespace: "osac-system"
+      register: _diffep_hub_a
+
+    - name: Assert backend A hub Secret deleted
+      ansible.builtin.assert:
+        that:
+          - _diffep_hub_a.resources | length == 0
+        fail_msg: "Backend A hub Secret should be deleted"
+        success_msg: "Backend A hub Secret correctly deleted"
+
+    - name: Verify backend B hub Secret still exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "vast-tenant-config-test-td-diffep-be-b"
+        namespace: "osac-system"
+      register: _diffep_hub_b
+
+    - name: Assert backend B hub Secret survived
+      ansible.builtin.assert:
+        that:
+          - _diffep_hub_b.resources | length == 1
+        fail_msg: "Backend B hub Secret should still exist (on different endpoint)"
+        success_msg: "Backend B hub Secret correctly preserved"
+
+- name: "Storage Provider Different-Endpoint Teardown - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
+
+  tasks:
+    - name: Teardown backend B
+      block:
+        - name: Run teardown for backend B
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: teardown_backend
+            tenant_name: "test-td-diffep"
+            tenant_namespace: "osac-system"
+            tenant_uid: "test-uid-diffep"
+            storage_provider_tiers:
+              - name: tier-b
+                protocol: nfs
+                provider: vast
+                backend_id: be-b
+            storage_provider_backend_connections:
+              be-b:
+                endpoint: "127.0.0.1:18445"
+                username: "admin"
+                password: "{{ _mock_vast_password }}"
+            vast_storage_validate_certs: false
+            vast_storage_config_namespace: osac-system
+      rescue:
+        - name: Teardown failed but continuing cleanup
+          ansible.builtin.debug:
+            msg: "Teardown failed but continuing with Secret cleanup"
+
+    - name: Delete any remaining Secrets
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item }}"
+        namespace: "osac-system"
+      loop:
+        - "vast-tenant-config-test-td-diffep-be-a"
+        - "vast-tenant-config-test-td-diffep-be-b"
       failed_when: false

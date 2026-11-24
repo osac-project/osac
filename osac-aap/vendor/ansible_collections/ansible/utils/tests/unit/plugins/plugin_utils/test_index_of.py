@@ -9,29 +9,17 @@ from __future__ import absolute_import, division, print_function
 
 __metaclass__ = type
 
-import re
 
 from unittest import TestCase
 
-from jinja2 import Environment
+from ansible.template import Templar
 
 from ansible_collections.ansible.utils.plugins.plugin_utils.index_of import index_of
 
 
-def jinja_match(value, pattern):
-    return re.match(pattern, value) is not None
-
-
-def jinja_search(value, pattern):
-    return re.search(pattern, value) is not None
-
-
 class TestIndexOfFilter(TestCase):
     def setUp(self):
-        env = Environment()
-        env.tests["match"] = jinja_match
-        env.tests["search"] = jinja_search
-        self._tests = env.tests
+        self._tests = Templar(loader=None).environment.tests
 
     def test_fail_no_qualfier(self):
         obj, test, value = [1, 2], "@@", 1
@@ -112,14 +100,14 @@ class TestIndexOfFilter(TestCase):
             ),
             (
                 [{"a": "abc"}, {"a": "def"}, {"a": "ghi"}, {"a": "jkl"}],
-                "match",
+                "ansible.builtin.match",
                 "^a",
                 "a",
                 0,
             ),
             (
                 [{"a": "abc"}, {"a": "def"}, {"a": "ghi"}, {"a": "jkl"}],
-                "search",
+                "ansible.builtin.search",
                 "e",
                 "a",
                 1,

@@ -1,6 +1,6 @@
 ---
-# Dispatches setup to each unique provider in the tier list.
-# Accumulates per-provider tenant configs into a single dict keyed by provider name.
+# Dispatches setup once per (provider, backend_id) pair in the tier list.
+# Accumulates per-backend tenant configs into a single dict keyed by backend_id.
 # Credential clearing happens in the always block.
 
 - name: Initialize tenant config accumulator
@@ -10,24 +10,24 @@
 - name: Deploy vendor CSI controllers on hub
   ansible.builtin.include_tasks: ensure_csi_backends.yaml
 
-- name: Dispatch setup to each provider
+- name: Dispatch setup to each provider backend pair
   block:
-    - name: Run setup per provider
+    - name: Run setup per provider backend pair
       ansible.builtin.include_tasks: _dispatch_provider.yaml
-      loop: "{{ _unique_providers }}"
+      loop: "{{ _provider_backend_pairs }}"
       loop_control:
-        loop_var: _current_provider
+        loop_var: _current_pair
 
     - name: Set merged tenant configs output
       ansible.builtin.set_fact:
         storage_provider_tenant_configs: "{{ _all_tenant_configs }}"
 
-    - name: Validate each provider produced a tenant config
+    - name: Validate each backend produced a tenant config
       ansible.builtin.fail:
         msg: >-
-          Provider '{{ item }}' did not set the required output fact
-          'storage_provider_tenant_config' after setup.
-      loop: "{{ _unique_providers }}"
+          Backend '{{ item.backend_id }}' (provider '{{ item.provider }}') did not set
+          the required output fact 'storage_provider_tenant_config' after setup.
+      loop: "{{ _provider_backend_pairs }}"
       loop_control:
         loop_var: item
-      when: item not in _all_tenant_configs
+      when: item.backend_id not in _all_tenant_configs

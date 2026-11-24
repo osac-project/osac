@@ -19,6 +19,7 @@ and configure the necessary mappings and authorization rules.
 2. [Installing Keycloak](#installing-keycloak)
 3. [Keycloak Configuration](#keycloak-configuration)
 4. [Fulfillment Service Configuration](#fulfillment-service-configuration)
+   - [Service-account credential lifecycle](#service-account-credential-lifecycle)
 5. [User and Group Mapping](#user-and-group-mapping)
 6. [Tenancy Logic](#tenancy-logic)
 7. [Authorization Configuration](#authorization-configuration)
@@ -362,6 +363,38 @@ Secret referenced by the service account's status.
 The Fulfillment controller reads the IDP credentials from
 `/etc/fulfillment-controller/idp`; no `realm-admin` grant is required.
 
+#### Service-account credential lifecycle
+
+For tenant administration, CLI usage, and workload authentication, see the
+[Tenant Service Accounts Guide](../../docs/guides/tenant-service-accounts.md). The
+[service-account reconciler](../internal/controllers/serviceaccount/service_account_reconciler_function.go)
+owns asynchronous Keycloak provisioning, credential publication, rotation, and cleanup.
+
+The controller creates a tenant-scoped Secret containing `client_id` and `client_secret` and sets
+`status.client_secret` to reference it. The account becomes `READY` only after that Secret is
+available. Registration credentials are kept separately in a system-scoped Secret; do not expose
+that Secret to tenant workloads.
+
+Before rotating a client secret, the controller persists a generated replacement and its rotation
+generation alongside the current registration token in the system-scoped Secret. It applies that
+staged secret to Keycloak using the registration token, persists any returned registration token,
+and publishes the replacement to the tenant credential Secret. Rotation is marked complete only
+after publication. Retries reuse the staged replacement, and repeated `RegenerateSecret` requests
+while rotation is pending or retrying reuse the same rotation. The private REST route is
+`POST /api/private/v1/service_accounts/{id}/regenerate_secret`.
+
+If rotation fails before the existing credential is affected, the account can remain `READY` with
+an explanatory `status.message`. If the Keycloak update may have applied without successful
+publication, or Keycloak reports a missing client, the account becomes `FAILED` while the controller
+retries. The installer-managed Client Policy described above allows retries to reuse the stored
+registration token without granting broad client-management permissions.
+
+If `status.message` reports a Keycloak client without recoverable registration credentials, a
+platform administrator must identify the exact client belonging to the affected tenant/account and
+obtain approval before removing it from Keycloak. Do not remove unrelated clients or delete Secrets
+as a workaround. Once that orphaned client is removed, reconciliation retries provisioning or
+completes pending account deletion.
+
 ### 6. Trusted Token Issuers
 
 The fulfillment service maintains a single list of trusted token issuers, configured via the
@@ -391,8 +424,9 @@ and tenant concepts.
 
 ### Subject Resolution
 
-The mapping from authentication details to the fulfillment service's internal `user` and `tenants`
-fields is performed by the service's built-in authentication and authorization interceptors.
+The fulfillment service's authentication and authorization interceptors set the subject's
+`user`, home `tenant`, and set of visible tenants (`tenants`). Tenancy logic adds `shared`
+to the visible tenants separately.
 
 For JWT-authenticated users, the `user` is taken from the `preferred_username` claim (falling back
 to `username` if not present). The `tenants` are resolved from the **`organization` claim** (from
@@ -400,18 +434,24 @@ Keycloak Organizations when the user belongs to an organization). This claim can
 - Array format: `["org-name"]`
 - Object format: `{"org-name": {"groups": [...]}}`
 
+For tenant users and tenant admins, a single Keycloak organization also identifies the home
+`tenant`. The home tenant is unset for anonymous callers and for tenant users or tenant
+admins without an unambiguous organization.
+
 Tenant-scoped service-account client-credentials tokens use `client_id` as the subject username and
-the single `osac_tenant` claim as the tenant. The controller configures these claims on each
-service-account client. OAuth client tokens without `osac_tenant` do not receive this fallback.
+use the tenant of the resolved Fulfillment service account as the home tenant. The controller
+configures `client_id` and `osac_tenant` claims on each service-account client. OAuth client tokens
+without `osac_tenant` do not receive this fallback.
 
 JWT users without an `organization` claim will have an empty tenant list and **cannot create objects**
 (they can only view objects in the `shared` tenant).
 
-For Kubernetes service accounts, the namespace is used as the tenant and the short service account
-name as the user.
+For non-admin Kubernetes service accounts, the namespace is used as the tenant and the short
+service account name as the user.
 
 For admin users (those matching `emergency_service_accounts`, `admin_service_accounts`, or
-`admin_groups`), the tenants are set to `["*"]` (universal), granting visibility to all tenants.
+`admin_groups`), the home tenant is `system` and `tenants` is set to `["*"]` (universal), granting
+visibility to all tenants. The legacy platform CSI client is also attributed to `system`.
 
 The authorization rules are implemented via the built-in Rego policy in the gRPC authorization
 interceptor.
@@ -757,8 +797,8 @@ The authorization system enforces several additional constraints beyond role-bas
 - **Fallback:** If user doesn't exist in database, creator = username (for service accounts)
 - **System Attribution:** Private API uses `"system"` as creator for all objects
 - **JIT Provisioning:** Regular users are automatically provisioned on first
-  access if they have exactly one tenant (excluding system/shared tenants).
-  Cloud Provider Admins with multiple tenants are excluded from this interceptor.
+  access in their home tenant. Provisioning is skipped for managed service accounts
+  and for subjects whose home tenant is unknown, `system`, or `shared`.
 
 The JIT provisioning interceptor (`grpc_jit_provisioning_interceptor.go`) runs after authentication and authorization, creating user records in the database for users who have been granted access.
 

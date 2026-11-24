@@ -1,0 +1,414 @@
+---
+# Integration tests for vippools module
+# These tests run against a real VAST system
+#
+# Configuration:
+# Set values in tests/integration/integration_config.yml
+
+# ====================
+# Setup
+# ====================
+
+- name: Check if credentials are available
+  ansible.builtin.set_fact:
+    has_credentials: "{{ (vast_vms | default('') | length > 0) and (vast_username | default('') | length > 0) and (vast_password | default('') | length > 0) }}"
+
+- name: Set test conditions
+  ansible.builtin.set_fact:
+    can_run_tests: "{{ has_credentials }}"
+
+# ====================
+# Cleanup - Remove existing test VIP pools if present
+# ====================
+
+- name: Clean up - ensure test VIP pool doesn't exist before starting
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_name }}"
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Clean up - ensure renamed test VIP pool doesn't exist
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_renamed }}"
+    state: absent
+  register: cleanup_result
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Create Tests
+# ====================
+
+- name: Test creating a VIP pool
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_name }}"
+    subnet_cidr_ipv6: "{{ test_vippool_subnet_cidr_ipv6 }}"
+    ip_ranges: "{{ test_vippool_ip_ranges }}"
+    enabled: false
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify VIP pool was created
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.vippools is defined
+      - result.vippools.name == test_vippool_name
+      - result.vippools.id is defined
+      - result.diff is defined
+      - result.diff.before == {}
+      - result.diff.after is defined
+  when: result is not skipped
+
+- name: Save VIP pool ID for later tests
+  ansible.builtin.set_fact:
+    test_vippool_id: "{{ result.vippools.id }}"
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Create
+# ====================
+
+- name: Test idempotency - create same VIP pool again
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_name }}"
+    subnet_cidr_ipv6: "{{ test_vippool_subnet_cidr_ipv6 }}"
+    ip_ranges: "{{ test_vippool_ip_ranges }}"
+    enabled: false
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify idempotency (should not change)
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.vippools is defined
+      - result.vippools.id == test_vippool_id
+  when: result is not skipped
+
+# ====================
+# Update Tests
+# ====================
+
+- name: Test updating VIP pool - enable
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_name }}"
+    enabled: true
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify VIP pool was updated
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.vippools is defined
+      - result.vippools.id == test_vippool_id
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after is defined
+  when: result is not skipped
+
+- name: Test update idempotency
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_name }}"
+    enabled: true
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify update idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Rename Tests
+# ====================
+
+- name: Test renaming VIP pool using ID parameter
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    id: "{{ test_vippool_id }}"
+    name: "{{ test_vippool_renamed }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify VIP pool was renamed
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.vippools is defined
+      - result.vippools.name == test_vippool_renamed
+      - result.vippools.id == test_vippool_id # ID should remain the same
+      - result.diff is defined
+      - result.diff.before.name == test_vippool_name
+      - result.diff.after.name == test_vippool_renamed
+  when: result is not skipped
+
+- name: Test rename idempotency
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    id: "{{ test_vippool_id }}"
+    name: "{{ test_vippool_renamed }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify rename idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.vippools.name == test_vippool_renamed
+  when: result is not skipped
+
+- name: Test lookup by new name after rename
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_renamed }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify lookup by new name works
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+      - result.vippools is defined
+      - result.vippools.id == test_vippool_id
+      - result.vippools.name == test_vippool_renamed
+  when: result is not skipped
+
+# ====================
+# Check Mode Tests - Update
+# ====================
+
+- name: Test check mode - update enabled
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_renamed }}"
+    enabled: false
+    state: present
+  check_mode: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify check mode reported changes
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.vippools is defined
+  when: result is not skipped
+
+- name: Verify check mode didn't actually make changes
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_renamed }}"
+    enabled: true
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify enabled unchanged by check mode
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Diff Mode Tests
+# ====================
+
+- name: Update VIP pool with diff mode
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_renamed }}"
+    enabled: false
+    state: present
+  diff: true
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify update diff output
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after is defined
+  when: result is not skipped
+
+# ====================
+# Delete Tests
+# ====================
+
+- name: Test deleting VIP pool
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_renamed }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify VIP pool was deleted
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.diff is defined
+      - result.diff.before is defined
+      - result.diff.after == {}
+  when: result is not skipped
+
+# ====================
+# Idempotency Tests - Delete
+# ====================
+
+- name: Test delete idempotency - delete again
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_renamed }}"
+    state: absent
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify delete idempotency
+  ansible.builtin.assert:
+    that:
+      - result is not changed
+  when: result is not skipped
+
+# ====================
+# Delete by ID Test
+# ====================
+
+- name: Create VIP pool for delete by ID test
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_name }}-delid"
+    subnet_cidr_ipv6: "{{ test_vippool_subnet_cidr_ipv6 }}"
+    ip_ranges: [["fec0:10::20", "fec0:10::24"]]
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Test delete by ID
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    id: "{{ result.vippools.id }}"
+    state: absent
+  register: delete_result
+  when: result is not skipped
+
+- name: Verify VIP pool was deleted by ID
+  ansible.builtin.assert:
+    that:
+      - delete_result is changed
+  when: delete_result is not skipped
+
+# ====================
+# Create vippool with role
+# ====================
+
+- name: Create vippool with role
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_name }}-role"
+    role: "{{ test_role }}"
+    subnet_cidr: 24
+    ip_ranges: [["192.168.99.1", "192.168.99.5"]]
+    state: present
+  register: result
+  when: can_run_tests | bool
+
+- name: Verify vippool was created with role
+  ansible.builtin.assert:
+    that:
+      - result is changed
+      - result.vippools is defined
+      - result.vippools.role == test_role
+  when: result is not skipped
+
+- name: Clean up test vippool with role
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_name }}-role"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+# ====================
+# Error Handling Tests
+# ====================
+
+- name: Test error handling - neither name nor ID provided
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    subnet_cidr_ipv6: "{{ test_vippool_subnet_cidr_ipv6 }}"
+    ip_ranges: "{{ test_vippool_ip_ranges }}"
+    state: present
+  register: result
+  when: can_run_tests | bool
+  ignore_errors: true
+
+- name: Verify error was caught
+  ansible.builtin.assert:
+    that:
+      - result is failed
+      - "'name' in result.msg or 'id' in result.msg"
+  when: result is not skipped
+
+# ====================
+# Cleanup
+# ====================
+
+- name: Final cleanup - remove test VIP pool if it exists
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_name }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove renamed test VIP pool if it exists
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_renamed }}"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Final cleanup - remove delid test VIP pool if it exists
+  vastdata.vms.vippools:
+    vms: "{{ vms_auth }}"
+    name: "{{ test_vippool_name }}-delid"
+    state: absent
+  when: can_run_tests | bool
+  failed_when: false
+
+- name: Skip message when no credentials
+  ansible.builtin.debug:
+    msg: |
+      Skipping vippools integration tests - credentials not configured.
+
+      To enable integration tests, set credentials in:
+        tests/integration/integration_config.yml
+
+      Example:
+        vast_vms: "vast-vms.example.com"
+        vast_username: "admin"
+        vast_password: "password"
+
+      Then run: ansible-test integration vippools -v
+  when: not (can_run_tests | bool)

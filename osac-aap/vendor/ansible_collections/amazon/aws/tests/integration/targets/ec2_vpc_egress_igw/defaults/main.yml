@@ -1,2 +1,0 @@
----
-vpc_cidr: "10.{{ 256 | random(seed=resource_prefix) }}.64.0/22"

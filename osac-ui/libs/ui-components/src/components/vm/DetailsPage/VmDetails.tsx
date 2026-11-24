@@ -1,5 +1,6 @@
 import {
   Alert,
+  AlertGroup,
   Divider,
   Flex,
   FlexItem,
@@ -8,12 +9,11 @@ import {
   StackItem,
 } from '@patternfly/react-core';
 
-import { type ComputeInstance, InstanceTypes } from '@osac/types';
+import { type ComputeInstance, ComputeInstanceState, DiskImages, InstanceTypes } from '@osac/types';
 import { useGetResource } from '@osac/ui-components/api/use-resource';
 
 import VmDetailsActionButtons from './VmDetailsActionButtons';
 import VmDetailsSections from './VmDetailsSections';
-import { useDiskImage } from '../../../api/v1/disk-image';
 import { useTranslation } from '../../../hooks/useTranslation';
 import { getErrorMessage } from '../../../utils/error';
 import { VmStatusLabel } from '../../../VmStatusLabel';
@@ -26,6 +26,8 @@ interface Props {
 const VmDetails = ({ vm }: Props) => {
   const { t } = useTranslation();
   const id = vm.spec?.instanceType?.id;
+  const diskImageId = vm.spec?.diskImage?.id;
+  const isDeleting = vm.status?.state === ComputeInstanceState.DELETING;
   const {
     data: instanceType,
     isLoading: isInstanceTypeLoading,
@@ -35,7 +37,7 @@ const VmDetails = ({ vm }: Props) => {
     data: diskImage,
     isLoading: isDiskImageLoading,
     error: diskImageError,
-  } = useDiskImage(vm.spec?.diskImage?.id);
+  } = useGetResource(DiskImages, { id: diskImageId }, { enabled: !!diskImageId });
   const openConsole = () => {
     window.open(`/vms/${encodeURIComponent(vm.id)}/console`, '_blank', 'noopener,noreferrer');
   };
@@ -88,6 +90,15 @@ const VmDetails = ({ vm }: Props) => {
           <StackItem>
             <Divider />
           </StackItem>
+          {isDeleting ? (
+            <StackItem>
+              <AlertGroup isLiveRegion>
+                <Alert variant="warning" title={t('Virtual machine deletion in progress')} isInline>
+                  {t('Information on this page may be outdated.')}
+                </Alert>
+              </AlertGroup>
+            </StackItem>
+          ) : null}
         </Stack>
       </PageSection>
 
@@ -95,7 +106,7 @@ const VmDetails = ({ vm }: Props) => {
         vm={vm}
         instanceType={instanceType?.object}
         isInstanceTypeLoading={isInstanceTypeLoading}
-        diskImage={diskImage}
+        diskImage={diskImage?.object}
         isDiskImageLoading={isDiskImageLoading}
       />
     </>

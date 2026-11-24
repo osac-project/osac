@@ -10,6 +10,13 @@
     msg: "tenant_name '{{ tenant_name }}' is not a valid DNS label."
   when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
 
+# Outside the rescue-guarded block below: resolving the backend_id is a contract
+# check against the dispatched tiers, not a target-cluster operation, so a
+# failure here must surface rather than be reported as "target cluster
+# unreachable".
+- name: Resolve the backend_id this dispatch is scoped to
+  ansible.builtin.include_tasks: _resolve_backend_id.yaml
+
 - name: Clean up cluster-side K8s resources
   block:
     - name: Find all tenant StorageClasses by label
@@ -59,7 +66,7 @@
         state: absent
         api_version: v1
         kind: Secret
-        name: "vast-csi-{{ tenant_name }}"
+        name: "vast-csi-{{ tenant_name }}-{{ _vast_backend_id }}"
         namespace: "{{ tenant_namespace }}"
       ignore_errors: true  # noqa: ignore-errors
       no_log: true

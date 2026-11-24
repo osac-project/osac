@@ -156,7 +156,9 @@ func createAutomaticExternalIPs(ctx context.Context, logger *slog.Logger, settin
 				Creator: systemCreator,
 			}.Build(),
 			Spec: privatev1.ExternalIPSpec_builder{
-				Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetId()}.Build(),
+				Pool: privatev1.ExternalIPPoolReference_builder{
+					Id: pool.GetId(), Tenant: pool.GetMetadata().GetTenant(),
+				}.Build(),
 			}.Build(),
 			Status: privatev1.ExternalIPStatus_builder{
 				State: privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING,

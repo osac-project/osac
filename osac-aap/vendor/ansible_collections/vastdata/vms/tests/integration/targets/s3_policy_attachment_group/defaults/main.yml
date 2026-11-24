@@ -1,0 +1,31 @@
+---
+# Default variables for s3_policy_attachment_group integration tests
+# Override in tests/integration/integration_config.yml
+#
+# Either set test_attachment_group_gid or test_attachment_groupname for an existing group,
+# or leave both unset and the test will create a local group and use it.
+
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+# S3 policy (created during test or use existing id)
+test_s3policy_name: ansible-test-s3policy-attach-group
+test_s3policy_tenant_id: 1
+test_s3policy_document: >-
+  {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":"*"}]}
+
+# Target group: optional. If none set, the test creates a local group.
+test_attachment_group_gid:
+test_attachment_groupname:
+# Group created by the test when no attachment target is configured
+test_attachment_group_name: ansible-test-s3policy-attach-group
+test_created_group_gid: 19999
+
+# Reusable connection dict — reference as ``vms: "{{ vms_auth }}"`` in tasks
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true

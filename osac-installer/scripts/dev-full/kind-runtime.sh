@@ -252,6 +252,10 @@ else
   vgcreate vg1 "$loopdev"
 fi
 
+# The backing file and VG survive a runtime reboot, but LV device nodes do not.
+# Activate only after verifying that vg1 belongs to this backing device.
+vgchange --activate y vg1
+
 cat > /runtime/lvmd.yaml <<"EOF"
 socket-name: /run/topolvm/lvmd.sock
 # Run LVM in this helper container instead of entering the host namespaces.
@@ -589,7 +593,7 @@ create_cluster() {
       reset_topolvm_kubelet_credentials
     fi
     log "Creating kind cluster '${name}' (${KIND_PROVIDER})..."
-    kind_cmd create cluster --name "${name}" --config "${config}" --wait 60s
+    (source "${SCRIPT_DIR}/../lib.sh"; create_kind_cluster kind_cmd "${name}" "${config}") || return 1
   fi
 
   if [[ "$KIND_PROVIDER" == "podman" ]]; then
@@ -597,9 +601,26 @@ create_cluster() {
     ensure_podman_pid_limits "${name}" kind_cmd container_cmd || return 1
   fi
 
+  # Read relative references from the caller's path and replace the symlink target.
+  local kubeconfig_source="${kubeconfig}" link hops=0
+  while [[ -L "${kubeconfig}" ]]; do
+    if (( hops >= 40 )); then
+      err "Kubeconfig symlink chain is too deep: ${kubeconfig}"
+      return 1
+    fi
+    link="$(readlink "${kubeconfig}")" || return 1
+    if [[ "${link}" == /* ]]; then
+      kubeconfig="${link}"
+    else
+      kubeconfig="$(dirname "${kubeconfig}")/${link}"
+    fi
+    hops=$((hops + 1))
+  done
+
   # Keep the previous kubeconfig intact if Kind finds a node container whose
   # Kubernetes bootstrap never completed. Write the new config as the invoking
-  # user (not root, even when kind ran under sudo), then replace it atomically.
+  # user (not root, even when kind ran under sudo), merge existing entries,
+  # then replace it atomically.
   mkdir -p "$(dirname "${kubeconfig}")"
   local kubeconfig_tmp
   kubeconfig_tmp="$(mktemp "${kubeconfig}.tmp.XXXXXX")"
@@ -612,11 +633,21 @@ create_cluster() {
     err "If this cluster has no data to keep, remove it with: ${delete_command}"
     return 1
   fi
+  if [[ -s "${kubeconfig}" ]]; then
+    local merged
+    merged="$(mktemp "${kubeconfig}.tmp.XXXXXX")"
+    if ! KUBECONFIG="${kubeconfig_tmp}:${kubeconfig_source}" kubectl config view --raw > "${merged}" || [[ ! -s "${merged}" ]]; then
+      rm -f "${kubeconfig_tmp}" "${merged}"
+      err "Could not merge Kind kubeconfig; the previous configuration is unchanged."
+      return 1
+    fi
+    mv -f "${merged}" "${kubeconfig_tmp}"
+  fi
   chmod 600 "${kubeconfig_tmp}"
   mv -f "${kubeconfig_tmp}" "${kubeconfig}"
-  log "Kubeconfig written to ${kubeconfig}"
+  printf 'Use: kubectl cluster-info --context %q --kubeconfig %q\n' "kind-${name}" "${kubeconfig_source}" >&2
   if [[ "${resumed}" == "true" ]]; then
-    wait_for_kind_api "${name}" "${kubeconfig}"
+    wait_for_kind_api "${name}" "${kubeconfig_source}"
   fi
 }
 

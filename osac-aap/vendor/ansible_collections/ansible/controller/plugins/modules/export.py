@@ -86,6 +86,11 @@ options:
         - workflow names, IDs, or named URLs to export
       type: list
       elements: str
+    applications:
+      description:
+        - OAuth2 application names, IDs, or named URLs to export
+      type: list
+      elements: str
     schedules:
       description:
         - schedule names, IDs, or named URLs to export

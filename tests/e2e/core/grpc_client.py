@@ -270,7 +270,7 @@ class GRPCClient:
         # other error still fails fast. Note the two error shapes are matched
         # differently: a completed RPC prints grpcurl's `Code: <Name>` block
         # (AlreadyExists), while a transport failure prints the Go status string
-        # `code = Unavailable desc = ...` -- see tests/e2e/vmaas/regression/external_ip/conftest.py.
+        # `code = Unavailable desc = ...` -- see tests/e2e/vmaas/sanity/external_ip/conftest.py.
         for attempt in range(retries):
             try:
                 self.call(service=f"{PRIVATE_API}.Tenants/Create", data={"object": {"metadata": {"name": name}}})
@@ -329,7 +329,7 @@ class GRPCClient:
     def create_external_ip_pool(self, *, name: str, cidrs: list[str], ip_family: str = "IP_FAMILY_IPV4") -> str:
         response: dict[str, Any] = self.call(
             service=f"{PRIVATE_API}.ExternalIPPools/Create",
-            data={"object": {"metadata": {"name": name}, "spec": {"cidrs": cidrs, "ip_family": ip_family}}},
+            data={"object": {"metadata": _metadata(name=name), "spec": {"cidrs": cidrs, "ip_family": ip_family}}},
         )
         return response["object"]["id"]
 
@@ -956,10 +956,7 @@ class GRPCClient:
             data={
                 "object": {
                     "metadata": _metadata(name=name, tenant=tenant),
-                    "spec": {
-                        "virtual_network": {"id": virtual_network_id},
-                        "external_ip": {"id": external_ip_id},
-                    },
+                    "spec": {"virtual_network": {"id": virtual_network_id}, "external_ip": {"id": external_ip_id}},
                 }
             },
         )
@@ -970,15 +967,12 @@ class GRPCClient:
 
     # RoleBinding operations (public API)
 
-    def create_role_binding(self, *, name: str, role_name: str, user_names: list[str]) -> str:
+    def create_role_binding(self, *, name: str, role_name: str, user_names: list[str] | None = None) -> str:
+        spec: dict[str, Any] = {"role": {"name": role_name}}
+        if user_names:
+            spec["users"] = [{"name": u} for u in user_names]
         response: dict[str, Any] = self.call(
-            service=f"{PUBLIC_API}.RoleBindings/Create",
-            data={
-                "object": {
-                    "metadata": {"name": name},
-                    "spec": {"role": {"name": role_name}, "users": [{"name": u} for u in user_names]},
-                }
-            },
+            service=f"{PUBLIC_API}.RoleBindings/Create", data={"object": {"metadata": {"name": name}, "spec": spec}}
         )
         return response["object"]["id"]
 

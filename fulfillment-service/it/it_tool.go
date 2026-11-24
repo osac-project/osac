@@ -33,11 +33,9 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/onsi/gomega/ghttp"
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
-	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,10 +44,12 @@ import (
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/clientcmd"
+	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/jq"
+	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/network"
 	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
 	"github.com/osac-project/osac/fulfillment-service/internal/tlsconfig"
@@ -96,7 +96,7 @@ type Tool struct {
 	kubeClient      crclient.Client
 	kubeClientSet   *kubernetes.Clientset
 	caPool          *trust.CertPool
-	kcFile          string
+	kubeConfig      clientcmd.ClientConfig
 	internalView    *ToolView
 	externalView    *ToolView
 	secret          string
@@ -117,6 +117,11 @@ type ToolView struct {
 	emergencyClient *http.Client
 	adminClient     *http.Client
 	userClient      *http.Client
+}
+
+// NewLogger creates the redacting setup logger for integration suites outside this component.
+func NewLogger(writer io.Writer, level slog.Level) (*slog.Logger, error) {
+	return logging.NewLogger().SetWriter(writer).SetLevel(level.String()).Build()
 }
 
 // NewTool creates a builder that can then be used to configure and create an instance of the integration test tool.
@@ -245,36 +250,12 @@ func (t *Tool) Setup(ctx context.Context) error {
 		return err
 	}
 
-	// Connect to the pre-existing Kind cluster:
-	t.clusterName = os.Getenv("KIND_CLUSTER")
-	if t.clusterName == "" {
-		t.clusterName = "osac-dev"
-	}
-	t.kcFile = os.Getenv("KUBECONFIG")
-	if t.kcFile == "" {
-		t.kcFile = filepath.Join(os.Getenv("HOME"), ".kube", t.clusterName+"-kind.kubeconfig")
-	}
-
-	// Create the Kubernetes clients from the kubeconfig:
-	restConfig, err := clientcmd.BuildConfigFromFlags("", t.kcFile)
-	if err != nil {
-		return fmt.Errorf("failed to build rest config from kubeconfig: %w", err)
-	}
-	scheme := runtime.NewScheme()
-	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-	utilruntime.Must(osacv1alpha1.AddToScheme(scheme))
-	utilruntime.Must(bmfov1alpha1.AddToScheme(scheme))
-	t.kubeClient, err = crclient.New(restConfig, crclient.Options{Scheme: scheme})
-	if err != nil {
-		return fmt.Errorf("failed to create kubernetes client: %w", err)
-	}
-	t.kubeClientSet, err = kubernetes.NewForConfig(restConfig)
-	if err != nil {
-		return fmt.Errorf("failed to create kubernetes clientset: %w", err)
+	if err = t.openKubernetes(); err != nil {
+		return err
 	}
 
 	// Resolve the secret to use for passwords and credentials:
-	err = t.resolveRandomSecret(ctx)
+	err = t.resolveRandomSecret(ctx, true)
 	if err != nil {
 		return err
 	}
@@ -357,6 +338,69 @@ func (t *Tool) Setup(ctx context.Context) error {
 	// Register the hub:
 	if err = t.registerHub(ctx); err != nil {
 		return err
+	}
+
+	return nil
+}
+
+// Connect opens API clients using identities and credentials prepared by Setup.
+// It leaves shared prerequisites unchanged and omits the CLI build.
+func (t *Tool) Connect(ctx context.Context) error {
+	var err error
+	t.tmpDir, err = os.MkdirTemp("", "*.it")
+	if err != nil {
+		return err
+	}
+	if err = t.openKubernetes(); err != nil {
+		return err
+	}
+	if err = t.resolveRandomSecret(ctx, false); err != nil {
+		return err
+	}
+	if err = t.loadCaBundle(ctx); err != nil {
+		return err
+	}
+	if err = t.createClients(ctx); err != nil {
+		return err
+	}
+	return t.waitForServersReady(ctx)
+}
+
+// openKubernetes opens the existing cluster without changing its resources.
+func (t *Tool) openKubernetes() error {
+	// Connect to the pre-existing Kind cluster:
+	t.clusterName = os.Getenv("KIND_CLUSTER")
+	if t.clusterName == "" {
+		t.clusterName = "osac-dev"
+	}
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if os.Getenv("KUBECONFIG") == "" {
+		rules.ExplicitPath = filepath.Join(os.Getenv("HOME"), ".kube", t.clusterName+"-kind.kubeconfig")
+	}
+	configuration, err := rules.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load kubeconfig: %w", err)
+	}
+	t.kubeConfig = clientcmd.NewNonInteractiveClientConfig(
+		*configuration, configuration.CurrentContext, &clientcmd.ConfigOverrides{}, rules,
+	)
+
+	// Create the Kubernetes clients from the selected, merged context:
+	restConfig, err := t.kubeConfig.ClientConfig()
+	if err != nil {
+		return fmt.Errorf("failed to build rest config from kubeconfig: %w", err)
+	}
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(osacv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(bmfov1alpha1.AddToScheme(scheme))
+	t.kubeClient, err = crclient.New(restConfig, crclient.Options{Scheme: scheme})
+	if err != nil {
+		return fmt.Errorf("failed to create kubernetes client: %w", err)
+	}
+	t.kubeClientSet, err = kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create kubernetes clientset: %w", err)
 	}
 
 	return nil
@@ -473,7 +517,8 @@ func (t *Tool) runCommand(ctx context.Context, name string, args ...string) ([]b
 // provided (via the 'IT_SECRET' environment variable) it is used and persisted to the cluster. Otherwise, the method
 // tries to read an existing secret from the cluster. If none exists, a random one is generated and saved. This ensures
 // that re-runs against an existing cluster reuse the same secret.
-func (t *Tool) resolveRandomSecret(ctx context.Context) error {
+// Connect requires existing credentials; Setup may create them.
+func (t *Tool) resolveRandomSecret(ctx context.Context, create bool) error {
 	t.logger.DebugContext(ctx, "Resolving secret")
 
 	// Try to fetch the current secret from the cluster:
@@ -492,6 +537,9 @@ func (t *Tool) resolveRandomSecret(ctx context.Context) error {
 
 	// If the secret didn't exist then generate a new one if needed, and save it to the cluster:
 	if apierrors.IsNotFound(err) {
+		if !create {
+			return fmt.Errorf("shared integration credentials have not been prepared")
+		}
 		if t.secret == "" {
 			t.secret = uuid.New()
 		}
@@ -526,8 +574,8 @@ func (t *Tool) resolveRandomSecret(ctx context.Context) error {
 	secretText := string(secretBytes)
 	if t.secret != "" && t.secret != secretText {
 		return fmt.Errorf(
-			"secret '%s/%s' has changed from '%s' to '%s'",
-			randomSecretNamespace, randomSecretName, t.secret, secretText,
+			"provided integration credentials differ from secret '%s/%s'",
+			randomSecretNamespace, randomSecretName,
 		)
 	}
 
@@ -1210,31 +1258,6 @@ func (t *Tool) createUserServiceAccounts(ctx context.Context) error {
 	return nil
 }
 
-func (t *Tool) makeKubernetesTokenSource(ctx context.Context, sa, namespace string) (result auth.TokenSource, err error) {
-	response, err := t.kubeClientSet.CoreV1().ServiceAccounts(namespace).CreateToken(
-		ctx,
-		sa,
-		&authenticationv1.TokenRequest{
-			Spec: authenticationv1.TokenRequestSpec{
-				ExpirationSeconds: new(int64(3600)),
-			},
-		},
-		metav1.CreateOptions{},
-	)
-	if err != nil {
-		err = fmt.Errorf("failed to create token for service account '%s': %w", sa, err)
-		return
-	}
-	token := &auth.Token{
-		Access: response.Status.Token,
-	}
-	result, err = auth.NewStaticTokenSource().
-		SetLogger(t.logger).
-		SetToken(token).
-		Build()
-	return
-}
-
 func (t *Tool) makeKeycloakTokenSource(ctx context.Context, username, password string) (result auth.TokenSource, err error) {
 	store, err := auth.NewMemoryTokenStore().
 		SetLogger(t.logger).
@@ -1302,10 +1325,15 @@ func (t *Tool) KeycloakAdminRequest(ctx context.Context, method, path string, in
 	}
 	tlsConfig := tlsconfig.NewClientTLSConfig()
 	tlsConfig.RootCAs = t.caPool.Pool()
+	// This helper runs once per Keycloak admin call, so release the pooled idle connections when it returns.
+	// The suite makes hundreds of these calls, and leaving them open is what exhausts the proxy in front of
+	// Keycloak during a long run.
+	transport := &http.Transport{
+		TLSClientConfig: tlsConfig,
+	}
+	defer transport.CloseIdleConnections()
 	httpClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig,
-		},
+		Transport: transport,
 	}
 	var body io.Reader
 	if input != nil {
@@ -1383,10 +1411,15 @@ func (t *Tool) KeycloakAdminRequestForRealm(ctx context.Context, realm, method, 
 	}
 	tlsConfig := tlsconfig.NewClientTLSConfig()
 	tlsConfig.RootCAs = t.caPool.Pool()
+	// This helper runs once per Keycloak admin call, so release the pooled idle connections when it returns.
+	// The suite makes hundreds of these calls, and leaving them open is what exhausts the proxy in front of
+	// Keycloak during a long run.
+	transport := &http.Transport{
+		TLSClientConfig: tlsConfig,
+	}
+	defer transport.CloseIdleConnections()
 	httpClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig,
-		},
+		Transport: transport,
 	}
 	var body io.Reader
 	if input != nil {
@@ -1450,39 +1483,48 @@ func (t *Tool) makeGrpcConn(addr string, tokenSource auth.TokenSource) (result *
 	return
 }
 
+// viewTransport rewrites the request address and adds a bearer token. It forwards CloseIdleConnections to the
+// transport underneath, because http.Client.CloseIdleConnections only reaches a round tripper that implements
+// it: a plain function round tripper would silently make the call a no-op.
+type viewTransport struct {
+	addr        string
+	tokenSource auth.TokenSource
+	base        *http.Transport
+}
+
+// RoundTrip replaces the scheme and host, so that users of the client only need to provide the path, then adds
+// the token if there is a token source available, and forwards the request.
+func (v *viewTransport) RoundTrip(request *http.Request) (response *http.Response, err error) {
+	request.URL.Scheme = "https"
+	request.URL.Host = v.addr
+	if v.tokenSource != nil {
+		token, tokenErr := v.tokenSource.Token(request.Context())
+		if tokenErr != nil {
+			return nil, tokenErr
+		}
+		request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token.Access))
+	}
+	return v.base.RoundTrip(request)
+}
+
+// CloseIdleConnections releases the idle connections of the wrapped transport.
+func (v *viewTransport) CloseIdleConnections() {
+	v.base.CloseIdleConnections()
+}
+
 // makeHttpClient creates an HTTP client that automatically adds the scheme, host and token to the request. Users of the
 // client only need to provide the URL path, and other headers as needed.
 func (t *Tool) makeHttpClient(addr string, tokenSource auth.TokenSource) *http.Client {
 	tlsConfig := tlsconfig.NewClientTLSConfig()
 	tlsConfig.RootCAs = t.caPool.Pool()
-	transport := &http.Transport{
-		TLSClientConfig: tlsConfig,
-	}
-	tripper := ghttp.RoundTripperFunc(
-		func(request *http.Request) (response *http.Response, err error) {
-			// Replace the scheme and host, so that users of the client only need to provide the path:
-			request.URL.Scheme = "https"
-			request.URL.Host = addr
-
-			// Add the token if there is a token source available:
-			if tokenSource != nil {
-				token, err := tokenSource.Token(request.Context())
-				if err != nil {
-					return nil, err
-				}
-				request.Header.Set(
-					"Authorization",
-					fmt.Sprintf("Bearer %s", token.Access),
-				)
-			}
-
-			// Forward the request:
-			response, err = transport.RoundTrip(request)
-			return
-		},
-	)
 	return &http.Client{
-		Transport: tripper,
+		Transport: &viewTransport{
+			addr:        addr,
+			tokenSource: tokenSource,
+			base: &http.Transport{
+				TLSClientConfig: tlsConfig,
+			},
+		},
 	}
 }
 
@@ -1568,24 +1610,49 @@ func (t *Tool) createHubNamespace(ctx context.Context) error {
 	return nil
 }
 
+// hubKubeconfig publishes only the selected context with embedded credential data
+// and an in-cluster API address. Other contexts and credentials stay on the host.
+func (t *Tool) hubKubeconfig() ([]byte, error) {
+	configuration, err := t.kubeConfig.RawConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load hub kubeconfig: %w", err)
+	}
+	configuration = *configuration.DeepCopy()
+	if err := clientcmdapi.MinifyConfig(&configuration); err != nil {
+		return nil, fmt.Errorf("failed to select hub context: %w", err)
+	}
+	if err := clientcmdapi.FlattenConfig(&configuration); err != nil {
+		return nil, fmt.Errorf("failed to embed hub credentials: %w", err)
+	}
+	for _, user := range configuration.AuthInfos {
+		if user.TokenFile == "" {
+			continue
+		}
+		data, readErr := os.ReadFile(user.TokenFile)
+		token := strings.TrimSpace(string(data))
+		if readErr == nil && token != "" {
+			user.Token = token
+		} else if user.Token == "" {
+			if readErr != nil {
+				return nil, fmt.Errorf("failed to embed hub token file: %w", readErr)
+			}
+			return nil, fmt.Errorf("hub token file is empty")
+		}
+		user.TokenFile = ""
+	}
+	for _, cluster := range configuration.Clusters {
+		cluster.Server = "https://kubernetes.default.svc"
+	}
+	return clientcmd.Write(configuration)
+}
+
+// registerHub reuses the active hub or registers the selected cluster.
 func (t *Tool) registerHub(ctx context.Context) error {
 	t.logger.DebugContext(ctx, "Registering hub")
 
-	// Prepare the kubeconfig for the hub:
-	hubKcBytes, err := os.ReadFile(t.kcFile)
+	hubKcBytes, err := t.hubKubeconfig()
 	if err != nil {
-		return fmt.Errorf("failed to read kubeconfig file: %w", err)
-	}
-	hubKcObject, err := clientcmd.Load(hubKcBytes)
-	if err != nil {
-		return fmt.Errorf("failed to load hub kubeconfig: %w", err)
-	}
-	for clusterKey := range hubKcObject.Clusters {
-		hubKcObject.Clusters[clusterKey].Server = "https://kubernetes.default.svc"
-	}
-	hubKcBytes, err = clientcmd.Write(*hubKcObject)
-	if err != nil {
-		return fmt.Errorf("failed to write hub Kc: %w", err)
+		return err
 	}
 
 	// Create the hubs client:
@@ -1774,7 +1841,18 @@ func (t *Tool) LoginCLI(ctx context.Context, homeDir, user, password string) (st
 	)
 }
 
+// Cleanup closes local clients and exports the shared cluster logs.
 func (t *Tool) Cleanup(ctx context.Context) error {
+	return t.cleanup(ctx, true)
+}
+
+// Close releases this process's clients and temporary files.
+func (t *Tool) Close(ctx context.Context) error {
+	return t.cleanup(ctx, false)
+}
+
+// cleanup closes clients, optionally exports logs, then removes temporary files.
+func (t *Tool) cleanup(ctx context.Context, exportLogs bool) error {
 	var errs []error
 
 	// Close gRPC views:
@@ -1791,11 +1869,13 @@ func (t *Tool) Cleanup(ctx context.Context) error {
 		}
 	}
 
-	// Dump the logs:
-	logsDir := filepath.Join(t.projectDir, "logs")
-	_, dumpErr := t.runCommand(ctx, "kind", "export", "logs", logsDir, "--name", t.clusterName)
-	if dumpErr != nil {
-		errs = append(errs, fmt.Errorf("failed to dump cluster logs: %w", dumpErr))
+	if exportLogs {
+		// Dump the logs:
+		logsDir := filepath.Join(t.projectDir, "logs")
+		_, dumpErr := t.runCommand(ctx, "kind", "export", "logs", logsDir, "--name", t.clusterName)
+		if dumpErr != nil {
+			errs = append(errs, fmt.Errorf("failed to dump cluster logs: %w", dumpErr))
+		}
 	}
 
 	// Remove temporary directory:
@@ -1886,6 +1966,9 @@ func (v *ToolView) Close() error {
 		return nil
 	}
 	closeClient := func(client *http.Client) error {
+		if client != nil {
+			client.CloseIdleConnections()
+		}
 		return nil
 	}
 	return errors.Join(

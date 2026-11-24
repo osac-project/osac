@@ -172,12 +172,14 @@ export default defineConfig(
             {
               name: '@tanstack/react-query',
               importNames: ['useQuery'],
-              message: "Use useApiQuery from '../use-api-query' instead of useQuery directly. ui-components hooks must not supply a queryFn.",
+              message:
+                "Use useListResource, useListAllResources, or useGetResource from '@osac/ui-components/api/use-resource' instead.",
             },
             {
               name: '@tanstack/react-query',
               importNames: ['useQueryClient'],
-              message: "Use useApiQueryClient from '@osac/ui-components/api/use-api-query' instead. It constrains all cache operations to known ApiRoute values.",
+              message:
+                "Use useInvalidateServiceQueries from '@osac/ui-components/api/use-resource' to invalidate resource queries.",
             },
             {
               name: 'react-i18next',

@@ -156,6 +156,61 @@
   ansible.builtin.set_fact:
     _unique_providers: "{{ _storage_provider_tiers | map(attribute='provider') | map('replace', '-', '_') | unique | sort | list }}"
 
+- name: Validate each tier has backend_id defined
+  block:
+    # Undefined, null and empty-string backend_id are all the same failure: the
+    # tier names no backend, so no dispatch can be built for it. An empty string
+    # must NOT be filtered out silently — that produced a tier with no dispatch,
+    # no Secret and no warning, while _unique_providers still enabled that
+    # vendor's CSI controller.
+    - name: Check for tiers with undefined, null, or empty backend_id
+      ansible.builtin.set_fact:
+        _tiers_missing_backend_id: >-
+          {% set _bad = [] -%}
+          {% for _tier in _storage_provider_tiers -%}
+          {% if _tier.backend_id is not defined or _tier.backend_id is none
+                or (_tier.backend_id | string | length) == 0 -%}
+          {% set _ = _bad.append(_tier) -%}
+          {% endif -%}
+          {% endfor -%}
+          {{ _bad }}
+
+    - name: Build structured failure artifact for missing backend_id
+      ansible.builtin.set_fact:
+        osac_storage_provider_failures: >-
+          {{ osac_storage_provider_failures | default([]) + [{
+               'reason': 'missing_backend_id',
+               'tiers': _tiers_missing_backend_id | map(attribute='name') | list,
+               'backend_ids': [],
+               'message': "Tier '" + (_tiers_missing_backend_id[0].name) + "' (provider '"
+                          + (_tiers_missing_backend_id[0].provider) + "') has no backend_id."
+                          + " Every storage tier must specify a backend_id."
+             }] }}
+      when: _tiers_missing_backend_id | length > 0
+
+    - name: Fail if any tier has an undefined, null, or empty backend_id
+      ansible.builtin.fail:
+        msg: >-
+          Tier '{{ _tiers_missing_backend_id[0].name }}' (provider '{{ _tiers_missing_backend_id[0].provider }}') has no backend_id.
+          Every storage tier must specify a backend_id.
+      when: _tiers_missing_backend_id | length > 0
+
+# Every tier is guaranteed to carry a usable backend_id by the validation above,
+# so this derivation does not re-filter: a tier that reached this point always
+# contributes a (provider, backend_id) pair.
+- name: Derive provider backend pairs from tier list
+  ansible.builtin.set_fact:
+    _provider_backend_pairs: >-
+      {% set _pairs = [] -%}
+      {% for _tier in _storage_provider_tiers -%}
+      {% set _normalized_provider = _tier.provider | replace('-', '_') -%}
+      {% set _pair = {'provider': _normalized_provider, 'backend_id': _tier.backend_id | string} -%}
+      {% if _pair not in _pairs -%}
+      {% set _ = _pairs.append(_pair) -%}
+      {% endif -%}
+      {% endfor -%}
+      {{ _pairs | sort(attribute='provider,backend_id') }}
+
 - name: Set dispatch action
   ansible.builtin.set_fact:
     _dispatch_action: "{{ storage_provider_action }}"

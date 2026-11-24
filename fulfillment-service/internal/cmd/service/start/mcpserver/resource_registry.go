@@ -233,6 +233,104 @@ func computeInstanceCatalogItemSummary(item *publicv1.ComputeInstanceCatalogItem
 	}
 }
 
+func clusterCatalogItemResourceOperations(deps ServerDeps) resourceOperations {
+	list := func(
+		ctx context.Context, request *publicv1.ClusterCatalogItemsListRequest,
+	) (*publicv1.ClusterCatalogItemsListResponse, error) {
+		return deps.ClusterCatalogItemsClient.List(ctx, request)
+	}
+	get := func(
+		ctx context.Context, request *publicv1.ClusterCatalogItemsGetRequest,
+	) (*publicv1.ClusterCatalogItemsGetResponse, error) {
+		return deps.ClusterCatalogItemsClient.Get(ctx, request)
+	}
+	return resourceOperations{
+		label: "cluster catalog item",
+		list: typedResourceList(
+			"cluster catalog items", list, clusterCatalogItemListRequest, clusterCatalogItemSummary,
+		),
+		get: typedResourceGet(
+			"cluster catalog item", get, clusterCatalogItemGetRequest, clusterCatalogItemSummary,
+		),
+	}
+}
+
+func clusterCatalogItemListRequest(
+	filter string, page resourcePageRequest,
+) *publicv1.ClusterCatalogItemsListRequest {
+	request := publicv1.ClusterCatalogItemsListRequest_builder{
+		Offset: &page.offset,
+		Limit:  &page.limit,
+	}
+	if filter != "" {
+		request.Filter = &filter
+	}
+	return request.Build()
+}
+
+func clusterCatalogItemGetRequest(id string) *publicv1.ClusterCatalogItemsGetRequest {
+	return publicv1.ClusterCatalogItemsGetRequest_builder{Id: id}.Build()
+}
+
+func clusterCatalogItemSummary(item *publicv1.ClusterCatalogItem) ResourceSummary {
+	return ResourceSummary{
+		ID:      item.GetId(),
+		Name:    item.GetMetadata().GetName(),
+		Version: item.GetMetadata().GetVersion(),
+		State:   catalogItemState(item.GetPublished()),
+	}
+}
+
+func bareMetalInstanceCatalogItemResourceOperations(deps ServerDeps) resourceOperations {
+	list := func(
+		ctx context.Context, request *publicv1.BareMetalInstanceCatalogItemsListRequest,
+	) (*publicv1.BareMetalInstanceCatalogItemsListResponse, error) {
+		return deps.BareMetalInstanceCatalogItemsClient.List(ctx, request)
+	}
+	get := func(
+		ctx context.Context, request *publicv1.BareMetalInstanceCatalogItemsGetRequest,
+	) (*publicv1.BareMetalInstanceCatalogItemsGetResponse, error) {
+		return deps.BareMetalInstanceCatalogItemsClient.Get(ctx, request)
+	}
+	return resourceOperations{
+		label: "bare metal instance catalog item",
+		list: typedResourceList(
+			"bare metal instance catalog items", list,
+			bareMetalInstanceCatalogItemListRequest, bareMetalInstanceCatalogItemSummary,
+		),
+		get: typedResourceGet(
+			"bare metal instance catalog item", get,
+			bareMetalInstanceCatalogItemGetRequest, bareMetalInstanceCatalogItemSummary,
+		),
+	}
+}
+
+func bareMetalInstanceCatalogItemListRequest(
+	filter string, page resourcePageRequest,
+) *publicv1.BareMetalInstanceCatalogItemsListRequest {
+	request := publicv1.BareMetalInstanceCatalogItemsListRequest_builder{
+		Offset: &page.offset,
+		Limit:  &page.limit,
+	}
+	if filter != "" {
+		request.Filter = &filter
+	}
+	return request.Build()
+}
+
+func bareMetalInstanceCatalogItemGetRequest(id string) *publicv1.BareMetalInstanceCatalogItemsGetRequest {
+	return publicv1.BareMetalInstanceCatalogItemsGetRequest_builder{Id: id}.Build()
+}
+
+func bareMetalInstanceCatalogItemSummary(item *publicv1.BareMetalInstanceCatalogItem) ResourceSummary {
+	return ResourceSummary{
+		ID:      item.GetId(),
+		Name:    item.GetMetadata().GetName(),
+		Version: item.GetMetadata().GetVersion(),
+		State:   catalogItemState(item.GetPublished()),
+	}
+}
+
 func computeInstanceTemplateResourceOperations(deps ServerDeps) resourceOperations {
 	list := func(
 		ctx context.Context, request *publicv1.ComputeInstanceTemplatesListRequest,
@@ -274,6 +372,106 @@ func computeInstanceTemplateGetRequest(id string) *publicv1.ComputeInstanceTempl
 }
 
 func computeInstanceTemplateSummary(item *publicv1.ComputeInstanceTemplate) ResourceSummary {
+	return ResourceSummary{
+		ID:      item.GetId(),
+		Name:    item.GetMetadata().GetName(),
+		Version: item.GetMetadata().GetVersion(),
+	}
+}
+
+func clusterTemplateResourceOperations(deps ServerDeps) resourceOperations {
+	list := func(
+		ctx context.Context, request *publicv1.ClusterTemplatesListRequest,
+	) (*publicv1.ClusterTemplatesListResponse, error) {
+		return deps.ClusterTemplatesClient.List(ctx, request)
+	}
+	get := func(
+		ctx context.Context, request *publicv1.ClusterTemplatesGetRequest,
+	) (*publicv1.ClusterTemplatesGetResponse, error) {
+		return deps.ClusterTemplatesClient.Get(ctx, request)
+	}
+	return resourceOperations{
+		label: "cluster template",
+		list: typedResourceList(
+			"cluster templates", list, clusterTemplateListRequest, clusterTemplateSummary,
+		),
+		get: typedResourceGet(
+			"cluster template", get, clusterTemplateGetRequest, clusterTemplateSummary,
+		),
+	}
+}
+
+func clusterTemplateListRequest(
+	filter string, page resourcePageRequest,
+) *publicv1.ClusterTemplatesListRequest {
+	request := publicv1.ClusterTemplatesListRequest_builder{
+		Offset: &page.offset,
+		Limit:  &page.limit,
+	}
+	if filter != "" {
+		request.Filter = &filter
+	}
+	return request.Build()
+}
+
+func clusterTemplateGetRequest(id string) *publicv1.ClusterTemplatesGetRequest {
+	return publicv1.ClusterTemplatesGetRequest_builder{Id: id}.Build()
+}
+
+func clusterTemplateSummary(item *publicv1.ClusterTemplate) ResourceSummary {
+	return ResourceSummary{
+		ID:      item.GetId(),
+		Name:    item.GetMetadata().GetName(),
+		Version: item.GetMetadata().GetVersion(),
+	}
+}
+
+func bareMetalInstanceTemplateResourceOperations(deps ServerDeps) resourceOperations {
+	list := func(
+		ctx context.Context, request *publicv1.BareMetalInstanceTemplatesListRequest,
+	) (*publicv1.BareMetalInstanceTemplatesListResponse, error) {
+		return deps.BareMetalInstanceTemplatesClient.List(ctx, request)
+	}
+	get := func(
+		ctx context.Context, request *publicv1.BareMetalInstanceTemplatesGetRequest,
+	) (*publicv1.BareMetalInstanceTemplatesGetResponse, error) {
+		return deps.BareMetalInstanceTemplatesClient.Get(ctx, request)
+	}
+	return resourceOperations{
+		label: "bare metal instance template",
+		list: typedResourceList(
+			"bare metal instance templates", list,
+			bareMetalInstanceTemplateListRequest, bareMetalInstanceTemplateSummary,
+		),
+		get: typedResourceGet(
+			"bare metal instance template", get,
+			bareMetalInstanceTemplateGetRequest, bareMetalInstanceTemplateSummary,
+		),
+	}
+}
+
+func bareMetalInstanceTemplateListRequest(
+	filter string, page resourcePageRequest,
+) *publicv1.BareMetalInstanceTemplatesListRequest {
+	request := publicv1.BareMetalInstanceTemplatesListRequest_builder{
+		Offset: &page.offset,
+		Limit:  &page.limit,
+	}
+	if filter != "" {
+		request.Filter = &filter
+	}
+	return request.Build()
+}
+
+func bareMetalInstanceTemplateGetRequest(
+	id string,
+) *publicv1.BareMetalInstanceTemplatesGetRequest {
+	return publicv1.BareMetalInstanceTemplatesGetRequest_builder{Id: id}.Build()
+}
+
+func bareMetalInstanceTemplateSummary(
+	item *publicv1.BareMetalInstanceTemplate,
+) ResourceSummary {
 	return ResourceSummary{
 		ID:      item.GetId(),
 		Name:    item.GetMetadata().GetName(),
@@ -584,17 +782,21 @@ func catalogItemState(published bool) string {
 
 func newResourceRegistry(deps ServerDeps) resourceRegistry {
 	return resourceRegistry{
-		ResourceTypeProject:                    projectResourceOperations(deps),
-		ResourceTypeSecretReference:            secretReferenceResourceOperations(deps),
-		ResourceTypeComputeInstanceCatalogItem: computeInstanceCatalogItemResourceOperations(deps),
-		ResourceTypeComputeInstanceTemplate:    computeInstanceTemplateResourceOperations(deps),
-		ResourceTypeInstanceType:               instanceTypeResourceOperations(deps),
-		ResourceTypeDiskImage:                  diskImageResourceOperations(deps),
-		ResourceTypeStorageTier:                storageTierResourceOperations(deps),
-		ResourceTypeVirtualNetwork:             virtualNetworkResourceOperations(deps),
-		ResourceTypeSubnet:                     subnetResourceOperations(deps),
-		ResourceTypeSecurityGroup:              securityGroupResourceOperations(deps),
-		ResourceTypeComputeInstance:            computeInstanceResourceOperations(deps),
+		ResourceTypeProject:                      projectResourceOperations(deps),
+		ResourceTypeSecretReference:              secretReferenceResourceOperations(deps),
+		ResourceTypeComputeInstanceCatalogItem:   computeInstanceCatalogItemResourceOperations(deps),
+		ResourceTypeClusterCatalogItem:           clusterCatalogItemResourceOperations(deps),
+		ResourceTypeBareMetalInstanceCatalogItem: bareMetalInstanceCatalogItemResourceOperations(deps),
+		ResourceTypeComputeInstanceTemplate:      computeInstanceTemplateResourceOperations(deps),
+		ResourceTypeClusterTemplate:              clusterTemplateResourceOperations(deps),
+		ResourceTypeBareMetalInstanceTemplate:    bareMetalInstanceTemplateResourceOperations(deps),
+		ResourceTypeInstanceType:                 instanceTypeResourceOperations(deps),
+		ResourceTypeDiskImage:                    diskImageResourceOperations(deps),
+		ResourceTypeStorageTier:                  storageTierResourceOperations(deps),
+		ResourceTypeVirtualNetwork:               virtualNetworkResourceOperations(deps),
+		ResourceTypeSubnet:                       subnetResourceOperations(deps),
+		ResourceTypeSecurityGroup:                securityGroupResourceOperations(deps),
+		ResourceTypeComputeInstance:              computeInstanceResourceOperations(deps),
 	}
 }
 

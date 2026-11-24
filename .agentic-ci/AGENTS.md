@@ -1,17 +1,29 @@
 # Agentic CI sandbox validation
 
-Follow the repository root instructions. This overlay supplies early Autofix
-feedback; ordinary GitHub CI remains authoritative.
+Never edit this file except for minor corrections. Do not append new content.
 
-## Touched-area map
+Early Autofix sandbox feedback; ordinary GitHub CI remains authoritative.
 
-| Area | Required validation | Command / boundary |
-|---|---|---|
-| Overlay selectors, shared change detection, setup or skip declarations | [DEV] Unit plus production component integration | Run `uv run --no-project --with 'pyyaml>=6.0' python tools/test/agentic-ci-validation-smoke.py` from the repository root, then the [production scenarios](../docs/INTEGRATION-TESTING.md#agentic-ci-sandbox) |
-| Dependency discard paths | [DEV] Production component integration | Follow the [profiling and restoration requirements](../docs/INTEGRATION-TESTING.md#agentic-ci-sandbox) |
-| Regression workflow or path filter | [DEV] Unit and workflow validation | Run the regression suite above, `bash tools/test/component-hooks-smoke.sh`, and actionlint; retain [PR and merge-group reporting](../.github/AGENTS.md#component-hooks-and-sandbox-regression-smoke-tests) |
+## Helper contract
 
-Source `changed.sh` before changing directory. Preserve missing-base fallback,
-pathspecs, and ignored-file behavior; consume the complete tracked/untracked stream.
-See [testing boundaries and production evidence](../docs/INTEGRATION-TESTING.md#agentic-ci-sandbox).
-Declare precise sandbox exceptions in `config.yml`.
+- Source `.agentic-ci/changed.sh` and call `changed` from the repository root.
+  Change directory only after selection or in a subshell.
+- Preserve missing-base fallback, pathspecs and ignored-file behavior; consume
+  the full tracked/untracked stream.
+- Declare precise sandbox exceptions in `config.yml`.
+
+## Local validation
+
+Inspect changed selector and overlay paths and run the relevant existing lint
+checks from the repository root. Workflow changes use actionlint and applicable
+pre-commit hooks. Preserve path selection, failure propagation and required-check
+reporting; do not add meta-tests for routine wiring changes.
+
+<a id="touched-area-map"></a>
+
+## Production boundary
+
+Use the [sandbox guide](../docs/INTEGRATION-TESTING.md#agentic-ci-sandbox) for
+production runner boundaries. Run an authorized production scenario when the
+changed setup or runtime behavior needs it; report unavailable environments
+rather than treating local checks as production evidence.

@@ -89,16 +89,7 @@ func createMetal3BMH(name string, labels map[string]string, opStatus metal3api.O
 
 func newMetal3Reconciler() *BareMetalInstanceReconciler {
 	invClient := inventory.NewMetal3ClientForTest(k8sClient, metal3TestNS, metal3HostClass)
-	mgmtClient := management.NewMetal3ClientForTest(k8sClient, metal3TestNS)
-	return NewBareMetalInstanceReconciler(
-		k8sClient,
-		k8sClient.Scheme(),
-		invClient,
-		mgmtClient,
-		nil,   // provisioning provider
-		false, // networking namespace (networking disabled)
-		0, 0, 0, 0, 0,
-	)
+	return newTestReconciler(invClient, metal3TestNS)
 }
 
 // These are thin, namespace-bound aliases over the shared integration helpers
@@ -640,6 +631,62 @@ var _ = Describe("BareMetalInstance Metal3 Integration", func() {
 			Expect(condition).NotTo(BeNil())
 			Expect(condition.Status).To(Equal(metav1.ConditionTrue))
 			Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerOff))
+		})
+
+		It("powers on a halted host started with a restart trigger in the same update", func() {
+			createMetal3BMH(bmhName, map[string]string{
+				inventory.Metal3HostTypeLabel: "compute",
+			}, metal3api.OperationalStatusOK, metal3api.StateAvailable)
+
+			bmi := &v1alpha1.BareMetalInstance{
+				ObjectMeta: metav1.ObjectMeta{Name: bmiName, Namespace: metal3TestNS},
+				Spec: v1alpha1.BareMetalInstanceSpec{
+					Selector: v1alpha1.HostSelectorSpec{
+						HostSelector: map[string]string{"type": "compute"},
+					},
+					TemplateID:  shared.OsacNoopTemplate,
+					RunStrategy: v1alpha1.RunStrategyHalted,
+				},
+			}
+			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
+
+			reconciler := newMetal3Reconciler()
+			reconcileN(reconciler, bmiName, 5)
+
+			bmi = getBMI(bmiName)
+			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseReady))
+			Expect(getBMH(bmhName).Spec.Online).To(BeFalse(), "precondition: halted host is off")
+
+			// Start the instance and bump the restart trigger in one update. The
+			// restart can't complete before the host is powered on, so the trigger
+			// must be acknowledged and left to power reconciliation instead of
+			// gating it behind IsRestartComplete (which requires PoweredOn and
+			// would deadlock).
+			bmi.Spec.RunStrategy = v1alpha1.RunStrategyAlways
+			bmi.Spec.RestartTrigger = 1
+			Expect(k8sClient.Update(ctx, bmi)).To(Succeed())
+
+			reconcileN(reconciler, bmiName, 1)
+
+			Expect(getBMH(bmhName).Spec.Online).To(BeTrue(),
+				"operator must power the host on instead of waiting for a restart that cannot complete")
+			bmi = getBMI(bmiName)
+			Expect(bmi.Status.RestartTrigger).To(Equal(int64(1)))
+			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseProgressing))
+
+			// Simulate BMO completing the power-on.
+			bmh := getBMH(bmhName)
+			bmh.Status.PoweredOn = true
+			Expect(k8sClient.Status().Update(ctx, bmh)).To(Succeed())
+
+			// First reconcile verifies convergence (stale-read guard), second reaches Ready.
+			reconcileN(reconciler, bmiName, 2)
+			bmi = getBMI(bmiName)
+			Expect(bmi.Status.Phase).To(Equal(v1alpha1.BareMetalInstancePhaseReady))
+			condition := bmi.GetStatusCondition(v1alpha1.HostConditionPowerSynced)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionTrue))
+			Expect(condition.Reason).To(Equal(v1alpha1.HostConditionReasonPowerOn))
 		})
 	})
 

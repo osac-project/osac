@@ -1,0 +1,23 @@
+---
+# Default variables for s3policies integration tests
+# Override these in tests/integration/integration_config.yml
+
+# VAST system connection details
+# Leave empty to skip tests gracefully
+vast_vms: ""
+vast_username: ""
+vast_password: ""
+
+# Test S3 policy configuration
+test_s3policy_name: ansible-test-s3policy
+test_s3policy_tenant_id: 1
+test_s3policy_document: >-
+  {"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["s3:*"],"Resource":"*"}]}
+
+# Reusable connection dict — reference as ``vms: "{{ vms_auth }}"`` in tasks
+vms_auth:
+  host: "{{ vast_vms }}"
+  username: "{{ vast_username }}"
+  password: "{{ vast_password }}"
+  validate_certs: false
+  debug: true

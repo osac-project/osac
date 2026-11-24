@@ -41,6 +41,13 @@ setting `bmf.netbox.enabled: true`; it cannot be enabled alongside the BMF
 Metal3 or BCM inventory backend. Point `bmf.netbox.bmhNamespace` at the
 namespace where BMO watches OSAC-managed BMHs.
 
+The configured token must be a NetBox **v2** API token (`nbt_<key>.<token>`),
+the default token version since NetBox 4.5. BMF sends
+`Authorization: Bearer <token>`. Create the token for the service account in
+NetBox under **Admin > Authentication > API Tokens**, or with
+`POST /api/users/tokens/provision/`; NetBox shows the plaintext only once, at
+creation.
+
 ## Preparing the NetBox device pool
 
 Create these custom fields on NetBox `dcim.device` records. The operator reads these names directly; the `cf_` prefix below is used only in API filters.
@@ -52,6 +59,7 @@ Create these custom fields on NetBox `dcim.device` records. The operator reads t
 | `osac_bmc_address` | Text. Required. Must be a BMC URL with a scheme accepted by Metal3/BMO. Supported schemes include `https`, `ipmi`, `redfish-virtualmedia+https`, `idrac-virtualmedia+https`, `ilo5-virtualmedia+https`, and their `*-virtualmedia+http` variants. Plain `http` is rejected. |
 | `osac_boot_mac` | Text. Required. Must parse as a six-byte MAC address. |
 | `osac_interface_macs` | Optional JSON object mapping logical port names to MAC addresses. Values override native NetBox interface primary MACs with the same name. |
+| `osac_bmc_certificate_verification` | Boolean. Optional. Overrides `bmf.netbox.enableBMCCertificateVerification` for this device. Create the field with no default, and set it `false` only for BMCs with untrusted certificates. |
 
 A free device must have NetBox status `staged`, `osac_managed=true`, and an empty `osac_instance_id`. Each `BareMetalInstance.spec.selector.hostSelector` entry becomes an exact custom-field filter (`cf_<key>=<value>`); all selectors are combined with the pool filters. Use custom-field names without `cf_`, and do not use the reserved pool fields as capability selectors. NetBox tags and device roles are not part of this match.
 
@@ -65,9 +73,24 @@ BMC usernames and passwords come from the OSAC Secret API, not from NetBox and n
 - The label key `osac.openshift.io/netbox-device-<device-id>`; the label value is ignored.
 - Non-empty `data.username` and `data.password` values.
 
-Use the platform-approved process for creating system-scoped OSAC Secrets; the general tenant Secret workflow does not grant system scope. See [Managing Secrets](../secrets-guide.md). A missing or ambiguous Secret, empty credential data, or invalid BMC address/boot MAC causes the device to be quarantined as `failed` before it is claimed. BMF does not authenticate to the BMC before claiming; a wrong but non-empty password can fail later during Metal3/BMO reconciliation.
+Use the platform-approved process for creating system-scoped OSAC Secrets; the general tenant Secret workflow does not grant system scope. See [Managing Secrets](../secrets-guide.md). A missing or ambiguous Secret, empty credential data, an invalid BMC address or boot MAC, or a non-boolean certificate-verification value quarantines the device as `failed` before it is claimed. BMF does not authenticate to the BMC before claiming; a wrong but non-empty password can fail later during Metal3/BMO reconciliation.
 
 After resolving credentials, BMF copies them into the namespaced `netbox-<device-id>-bmc-secret` Kubernetes Secret and labels it `osac.openshift.io/managed-by=baremetal`. BMF refuses to adopt an existing same-name Secret without that ownership label, and only removes Secrets carrying its label during release. Do not put BMC credentials in NetBox custom fields.
+
+## BMC certificate verification
+
+BMO verifies the BMC's TLS certificate during registration, so a self-signed BMC leaves its BMH in `registering` with `online: false`. Two settings control BMC certificate verification for the BMH that BMF creates:
+
+1. `bmf.netbox.enableBMCCertificateVerification` — installer-wide default, `true` (verify).
+2. `osac_bmc_certificate_verification` — per-device NetBox override; wins when set. Create the field with **no default**: NetBox backfills a configured default into every device, so a default of `true` makes the installer-wide setting inert and a default of `false` disables verification fleet-wide.
+
+BFM writes the inverse to `spec.bmc.disableCertificateVerification`, which is the Metal3 field name and state, so it is the one place a negative value appears.
+
+Keep both at their defaults outside lab hardware. Disabling the check lets anyone on the BMC management network impersonate the BMC and control what the host boots; it has no effect on `ipmi` addresses. The claim log records which layer decided each host (`source=netbox-device` or `source=inventory-default`).
+
+BMF applies the setting only at BMH creation, and the operator reads it from the inventory config at startup, so restart the BMF operator after changing `bmf.netbox.enableBMCCertificateVerification`. BMO writes `redfish_verify_ca` into Ironic when it enrolls the node and does not resend driver info when this flag changes, so a host whose BMH predates the setting keeps failing after an upgrade. Delete and re-create its BareMetalInstance, pinning `spec.selector.hostSelector` to that device first so the re-creation cannot claim a different free chassis; the manual BMH and Ironic `driver_info` patches in [OSAC-7116](https://redhat.atlassian.net/browse/OSAC-7116) remain the fallback when the host must not be re-created. The reverse applies too: a host created with verification disabled keeps skipping BMC certificate checks after the device field and `bmf.netbox.enableBMCCertificateVerification` return to verifying, until its BareMetalInstance is re-created.
+
+> **Warning:** re-creating a `BareMetalInstance` deprovisions its host first: any workload on it stops, and Metal3 may wipe disks during automated cleaning. Back up host data and plan for downtime before re-creating.
 
 ## Configuring the installer
 
@@ -82,15 +105,18 @@ bmf:
     tokenSecretKey: "token"
     tokenValue: ""
     caCert: "" # Optional NetBox CA PEM
-    allowInsecureHTTP: false
+    clientAllowInsecureHTTP: false
+    enableBMCCertificateVerification: true
   secrets:
     netboxToken: "osac-netbox-token"
     netboxCA: "osac-netbox-ca"
 ```
 
-`bmf.netbox.url` must be an HTTP(S) origin only: do not append `/api`, a path, credentials, query, or fragment. HTTPS is the default and recommended transport. HTTP requires the explicit `allowInsecureHTTP: true` setting and should be limited to isolated development environments. If `caCert` is set, the chart mounts it through the `bmf.secrets.netboxCA` Secret (default `osac-netbox-ca`, key `ca.crt`); the client adds it to the system trust roots.
+`bmf.netbox.url` must be an HTTP(S) origin only: do not append `/api`, a path, credentials, query, or fragment. HTTPS is the default and recommended transport. HTTP requires the explicit `clientAllowInsecureHTTP: true` setting and should be limited to isolated development environments. If `caCert` is set, the chart mounts it through the `bmf.secrets.netboxCA` Secret (default `osac-netbox-ca`, key `ca.crt`); the client adds it to the system trust roots.
 
-Also configure `bmf.secretAPI.url` and `bmf.secretAPI.issuerUrl`. The Secret API URL must use HTTPS, and its issuer must match the rendered `service.auth.issuerUrl`. `bmf.secretAPI.caBundle` trusts the Secret API and is separate from the NetBox `caCert`. The NetBox API identity needs permission to list/read devices and interfaces and update device status and custom fields.
+Also configure `bmf.secretAPI.url` and `bmf.secretAPI.issuerUrl`. The Secret API URL must use HTTPS, and its issuer must match the rendered `service.auth.issuerUrl`. `bmf.secretAPI.caBundle` trusts the Secret API and is separate from the NetBox `caCert`.
+
+Use a dedicated NetBox service account for BMF rather than a superuser: the token needs `view` and `change` on `dcim.device` (device status and the `osac_*` custom fields), `view` on `dcim.interface`, and `view` on `extras.customfield` to read the custom-field definitions. The `bmaas-netbox-ci` profile provisions its token with the NetBox superuser; that pattern is specific to the disposable test deployment.
 
 The operator reads the token and NetBox CA when it starts. Restart the BMF operator after rotating either mounted Secret.
 

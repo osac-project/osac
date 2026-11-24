@@ -15,8 +15,7 @@ from tests.e2e.core.wait_kinds import WaitResourceKind
 
 _AGENT_PROVIDER_ID = "agent://osac-order-agent/6b0b0c1e-0000-4000-8000-000000000000"
 # A credential an operator could echo back in the message of a failed condition.
-# Built at runtime from non-secret fragments, like FAKE_JWT in
-# tests/unit/test_e2e_failure_plugin.py, so no recognizable bearer token is
+# Built at runtime from non-secret fragments, so no recognizable bearer token is
 # committed for scanners and reviewers to chase: it decodes to nothing, and
 # sanitize_text still has a quoted credential to redact.
 _FAKE_QUOTED_CREDENTIAL = "Bearer " + ".".join(["eyJ" + "a" * 20, "eyJ" + "b" * 20, "c" * 20])

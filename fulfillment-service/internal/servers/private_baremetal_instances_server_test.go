@@ -575,11 +575,12 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(response.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal("default-type"))
 		})
 
-		It("Returns NotFound for a missing instance type", func() {
+		It("Rejects a reference to a missing instance type", func() {
+			name := fmt.Sprintf("test-%s", uuid.NewString()[:8])
 			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						Name: name,
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
@@ -592,9 +593,16 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.NotFound))
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("bare metal instance type"))
 			Expect(status.Message()).To(ContainSubstring("does-not-exist"))
+
+			instancesDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstance]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			stored, err := instancesDao.List().SetFilter(fmt.Sprintf("this.metadata.name == %q", name)).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetItems()).To(BeEmpty())
 		})
 
 		It("Rejects an instance type reference without a shared tenant selector", func() {
@@ -2114,7 +2122,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(getResponse.GetObject().GetSpec().GetAutoExternalIpAttachment()).To(BeTrue())
 		})
 
-		It("skips automatic ExternalIPs and pool reservations when provider networking is disabled", func() {
+		It("skips automatic ExternalIPs when provider networking is disabled", func() {
 			server.settings.ProvisioningEnabled = false
 
 			pools, err := server.externalIPPoolDao.List().Do(ctx)
@@ -2167,6 +2175,14 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(poolResponse.GetObject().GetStatus().GetAvailable()).To(Equal(available))
 			Expect(poolResponse.GetObject().GetStatus().GetAllocated()).To(Equal(allocated))
+
+			// With no pool at all, disabled networking still permits BMI creation.
+			_, err = server.externalIPPoolDao.Delete().SetId(poolID).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			createWithoutExternalIP(fmt.Sprintf("disabled-auto-eip-%s", uuid.NewString()[:8]))
+			pools, err = server.externalIPPoolDao.List().Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(pools.GetItems()).To(BeEmpty())
 		})
 
 		It("auto_external_ip_attachment leaves attachment creation to the ready BareMetalInstance reconciler", func() {
@@ -2195,7 +2211,12 @@ var _ = Describe("Private bare metal instances server", func() {
 				Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(eipList.GetItems()).To(HaveLen(1))
+			Expect(eipList.GetItems()[0].GetMetadata().GetName()).To(Equal(automaticExternalIPPrefix + bmiID))
+			Expect(eipList.GetItems()[0].GetMetadata().GetLabels()[autoCreatedLabel]).To(Equal("true"))
+			Expect(eipList.GetItems()[0].GetMetadata().GetLabels()[autoCreatedForLabel]).To(Equal(bmiID))
 			Expect(eipList.GetItems()[0].GetMetadata().GetLabels()[autoCreatedKindLabel]).To(Equal("bare_metal_instance"))
+			Expect(eipList.GetItems()[0].GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(bmiID))
+			Expect(eipList.GetItems()[0].GetMetadata().GetAnnotations()[tenantAnnotation]).To(Equal(testTenant))
 
 			attDao, err := dao.NewGenericDAO[*privatev1.ExternalIPAttachment]().
 				SetLogger(logger).SetTenancyLogic(tenancy).Build()
@@ -2231,6 +2252,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(eipList.GetItems()).To(HaveLen(1))
 			Expect(eipList.GetItems()[0].GetMetadata().GetLabels()[autoCreatedKindLabel]).To(Equal("bare_metal_instance"))
+			Expect(eipList.GetItems()[0].GetSpec().GetPool().GetTenant()).To(Equal(auth.SharedTenant))
 			Expect(eipList.GetItems()[0].GetMetadata().GetAnnotations()[ownerReferenceAnnotation]).To(Equal(bmiID))
 			Expect(eipList.GetItems()[0].GetMetadata().GetAnnotations()["osac.openshift.io/tenant"]).To(Equal(testTenant))
 
@@ -2381,6 +2403,7 @@ var _ = Describe("Private bare metal instances server", func() {
 				bareMetalNetworkPort("data-0", "fabric"),
 				bareMetalNetworkPort("data-1", "fabric"),
 				bareMetalNetworkPort("mgmt-0", "management"),
+				bareMetalNetworkPort("storage-0", "storage"),
 				bareMetalNetworkPort("bmc-0", "lifecycle"),
 			)).To(Succeed())
 
@@ -2552,6 +2575,7 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			attachments := resp.GetObject().GetSpec().GetNetworkAttachments()
 			Expect(attachments).To(HaveLen(1))
+			Expect(attachments[0].GetInterface()).To(Equal("data-0"))
 			Expect(attachments[0].HasPrimary()).To(BeTrue())
 			Expect(attachments[0].GetPrimary()).To(BeTrue())
 		})
@@ -2666,57 +2690,89 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(status.Message()).To(ContainSubstring("primary"))
 		})
 
-		It("Rejects an interface outside the selected instance type ports", func() {
-			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+		DescribeTable("Rejects tenant interfaces that are not fabric ports", func(iface string) {
+			name := fmt.Sprintf("test-%s", uuid.NewString()[:8])
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
 						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("nonexistent-port"),
+								Interface: strPtr(iface),
 							}.Build(),
 						},
 					}.Build(),
 				}.Build(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("nonexistent-port"))
-			Expect(status.Message()).To(ContainSubstring("not found in instance type"))
-		})
+			Expect(response).To(BeNil())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring(iface))
 
-		It("Rejects interface with lifecycle role", func() {
-			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
+			instancesDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstance]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			stored, err := instancesDao.List().SetFilter(fmt.Sprintf("this.metadata.name == %q", name)).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetItems()).To(BeEmpty())
+		},
+			Entry("management port", "mgmt-0"),
+			Entry("storage port", "storage-0"),
+			Entry("lifecycle port", "bmc-0"),
+			Entry("unknown port", "nonexistent-port"),
+		)
+
+		DescribeTable("Rejects selected fabric interfaces that are not DNS labels", func(iface string, useDefault bool) {
+			instanceTypeID := fmt.Sprintf("invalid-name-type-%s", uuid.NewString()[:8])
+			Expect(createTestBareMetalInstanceType(ctx, instanceTypeID,
+				bareMetalNetworkPort(iface, "fabric"),
+			)).To(Succeed())
+
+			name := fmt.Sprintf("test-%s", uuid.NewString()[:8])
+			interfaceRef := strPtr(iface)
+			if useDefault {
+				interfaceRef = nil
+			}
+			response, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
-					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
-					}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
-						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDWithType}.Build(),
+						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catIDNoType}.Build(),
+						InstanceType:   bareMetalInstanceTypeReference(instanceTypeID),
+						DiskImage:      privatev1.DiskImageReference_builder{Id: "default-bmi-disk-image"}.Build(),
 						UserDataSource: privatev1.UserDataSource_builder{Inline: new("#cloud-config")}.Build(),
 						NetworkAttachments: []*privatev1.BareMetalNetworkAttachment{
 							privatev1.BareMetalNetworkAttachment_builder{
 								Subnet:    privatev1.SubnetLocalReference_builder{Id: subnetID1}.Build(),
-								Interface: strPtr("bmc-0"),
+								Interface: interfaceRef,
 							}.Build(),
 						},
 					}.Build(),
 				}.Build(),
 			}.Build())
+			Expect(response).To(BeNil())
 			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("lifecycle"))
-			Expect(status.Message()).To(ContainSubstring("bmc-0"))
-		})
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring(iface))
+			Expect(err.Error()).To(ContainSubstring("valid DNS label"))
+
+			instancesDao, err := dao.NewGenericDAO[*privatev1.BareMetalInstance]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			stored, err := instancesDao.List().SetFilter(fmt.Sprintf("this.metadata.name == %q", name)).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetItems()).To(BeEmpty())
+		},
+			Entry("uppercase character", "Data-0", false),
+			Entry("underscore", "data_0", false),
+			Entry("leading hyphen", "-data-0", false),
+			Entry("trailing hyphen", "data-0-", false),
+			Entry("more than 63 characters", strings.Repeat("a", 64), false),
+			Entry("invalid default interface", "Data-0", true),
+		)
 
 		It("validates interfaces against a user-selected instance type when the template has no default", func() {
 			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
@@ -4259,10 +4315,11 @@ var _ = Describe("Private bare metal instances server", func() {
 			}.Build())
 			Expect(catErr).ToNot(HaveOccurred())
 
+			name := fmt.Sprintf("test-%s", uuid.NewString()[:8])
 			_, err := server.Create(ctx, privatev1.BareMetalInstancesCreateRequest_builder{
 				Object: privatev1.BareMetalInstance_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name: fmt.Sprintf("test-%s", uuid.NewString()[:8]),
+						Name: name,
 					}.Build(),
 					Spec: privatev1.BareMetalInstanceSpec_builder{
 						CatalogItem:    privatev1.BareMetalInstanceCatalogItemReference_builder{Id: catResp.GetObject().GetId()}.Build(),
@@ -4273,8 +4330,14 @@ var _ = Describe("Private bare metal instances server", func() {
 			Expect(err).To(HaveOccurred())
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.FailedPrecondition))
+			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
 			Expect(status.Message()).To(ContainSubstring("fabric"))
+			instancesDao, daoErr := dao.NewGenericDAO[*privatev1.BareMetalInstance]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(daoErr).ToNot(HaveOccurred())
+			stored, listErr := instancesDao.List().SetFilter(fmt.Sprintf("this.metadata.name == %q", name)).Do(ctx)
+			Expect(listErr).ToNot(HaveOccurred())
+			Expect(stored.GetItems()).To(BeEmpty())
 		})
 	})
 })

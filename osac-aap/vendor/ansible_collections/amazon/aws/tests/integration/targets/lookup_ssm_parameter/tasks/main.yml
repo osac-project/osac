@@ -59,7 +59,6 @@
       register: lookup_missing
     - ansible.builtin.assert:
         that:
-          - lookup_value is defined
           - lookup_value | list | length == 0
 
     - name: Lookup a single missing key (skip)
@@ -68,7 +67,6 @@
       register: lookup_missing
     - ansible.builtin.assert:
         that:
-          - lookup_value is defined
           - lookup_value | list | length == 0
 
     - name: Create key/value pair in aws parameter store
@@ -239,7 +237,7 @@
         that:
           - lookup_value | list | length == 2
           - lookup_value[0] == updated_value
-          - lookup_value[1] is none
+          - lookup_value | bool == False
 
     ###
 
@@ -258,7 +256,7 @@
     - ansible.builtin.assert:
         that:
           - lookup_value | list | length == 2
-          - lookup_value[1] == {}
+          - lookup_value[1] | bool == False
           - path_name_a in lookup_value[0]
           - lookup_value[0][path_name_a] == path_value_a
           - path_name_b in lookup_value[0]
@@ -282,7 +280,7 @@
     - ansible.builtin.assert:
         that:
           - lookup_value | list | length == 2
-          - lookup_value[1] == {}
+          - lookup_value[1] | bool == False
           - path_name_a in lookup_value[0]
           - lookup_value[0][path_name_a] == path_value_a
           - path_name_b in lookup_value[0]

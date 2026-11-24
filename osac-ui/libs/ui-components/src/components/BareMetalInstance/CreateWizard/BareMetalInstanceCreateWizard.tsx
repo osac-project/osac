@@ -3,9 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import { PageSection, PageSectionTypes, Wizard, WizardStep } from '@patternfly/react-core';
 import { Formik } from 'formik';
 
-import { BareMetalInstanceCatalogItem, BareMetalInstanceCatalogItems } from '@osac/types';
-import { useGetResource } from '@osac/ui-components/api/use-resource';
-import { useCreateBareMetalInstance } from '@osac/ui-components/api/v1/baremetal-instance';
+import {
+  BareMetalInstanceCatalogItem,
+  BareMetalInstanceCatalogItems,
+  BareMetalInstances,
+} from '@osac/types';
+import { useCreateResource } from '@osac/ui-components/api/use-resource';
 import { FieldValidationProvider } from '@osac/ui-components/components/Form/FieldValidationContext';
 import LeaveFormConfirmation from '@osac/ui-components/components/Form/LeaveFormConfirmation';
 import { CatalogStep } from '@osac/ui-components/components/ProvisioningWizard/CatalogStep';
@@ -23,22 +26,28 @@ import { buildBareMetalInstanceCreatePayload } from './payload';
 import { type BareMetalWizardStepId, buildBareMetalInstanceStepSchema } from './schemas';
 
 interface Props {
-  initialCatalogItemId?: string;
+  /** Catalog item snapshot for a catalog-origin launch; omit for list-origin creation. */
+  catalogItem?: BareMetalInstanceCatalogItem;
   onClosed: () => void;
 }
 
-const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props) => {
+const BareMetalInstanceCreateWizard = ({ catalogItem, onClosed }: Props) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const provision = useCreateBareMetalInstance();
-  const catalogItemQuery = useGetResource(
-    BareMetalInstanceCatalogItems,
-    { id: initialCatalogItemId ?? '' },
-    { enabled: Boolean(initialCatalogItemId) },
+  const provision = useCreateResource(BareMetalInstances);
+  const [selectedCatalogItem, setSelectedCatalogItem] = useState(catalogItem);
+  const includeCatalogStep = !catalogItem;
+  const [activeStep, setActiveStep] = useState<BareMetalWizardStepId>(
+    includeCatalogStep ? 'catalog' : 'general',
   );
-  const [activeStep, setActiveStep] = useState<BareMetalWizardStepId>('catalog');
-  const [selectedCatalogItem, setSelectedCatalogItem] = useState<BareMetalInstanceCatalogItem>();
-  const steps = ['catalog', 'general', 'configuration', 'networking', 'access', 'review'] as const;
+  const steps: BareMetalWizardStepId[] = [
+    ...(includeCatalogStep ? (['catalog'] as const) : []),
+    'general',
+    'configuration',
+    'networking',
+    'access',
+    'review',
+  ];
   const stepLabels: Record<BareMetalWizardStepId, string> = {
     catalog: t('Catalog item'),
     general: t('General'),
@@ -51,12 +60,10 @@ const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props
   const handleSubmit = useCallback(
     async (values: BareMetalInstanceWizardValues) => {
       try {
-        const created = await provision.mutateAsync(
-          buildBareMetalInstanceCreatePayload(
-            values,
-            selectedCatalogItem ?? catalogItemQuery.data?.object,
-          ),
-        );
+        const response = await provision.mutateAsync({
+          object: buildBareMetalInstanceCreatePayload(values, selectedCatalogItem),
+        });
+        const created = response.object;
         if (created?.id) {
           navigate(`/bare-metal/${created.id}`);
         }
@@ -64,12 +71,12 @@ const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props
         // Surfaced via provision.error in the footer; nothing further to do here.
       }
     },
-    [catalogItemQuery.data?.object, navigate, provision, selectedCatalogItem],
+    [navigate, provision, selectedCatalogItem],
   );
 
   const initialValues = useMemo(
-    () => getBareMetalInstanceInitialValues(catalogItemQuery.data?.object),
-    [catalogItemQuery.data?.object],
+    () => getBareMetalInstanceInitialValues(selectedCatalogItem),
+    [selectedCatalogItem],
   );
   const schema = useMemo(() => buildBareMetalInstanceStepSchema(activeStep, t), [activeStep, t]);
   const stepHasErrors = useCallback(
@@ -107,10 +114,9 @@ const BareMetalInstanceCreateWizard = ({ initialCatalogItemId, onClosed }: Props
                 name={stepLabels[step]}
                 isDisabled={index > steps.indexOf(activeStep)}
               >
-                {activeStep === 'catalog' && (
+                {includeCatalogStep && activeStep === 'catalog' && (
                   <CatalogStep<BareMetalInstanceCatalogItem, BareMetalInstanceWizardValues>
                     catalogService={BareMetalInstanceCatalogItems}
-                    isInitializing={Boolean(initialCatalogItemId) && catalogItemQuery.isPending}
                     getInitialFormValues={getBareMetalInstanceInitialValues}
                     onCatalogItemSelected={setSelectedCatalogItem}
                   />

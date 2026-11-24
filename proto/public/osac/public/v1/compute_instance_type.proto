@@ -294,6 +294,46 @@ message ComputeInstanceStatus {
   // The Volume records associated with this instance's disks. This list is
   // managed by the system and is read-only to API callers.
   repeated ComputeInstanceVolume volumes = 11;
+
+  // Latest provisioning failure retained while a retry is pending or running, or after a terminal failure.
+  // The system removes this field when provisioning succeeds, is cancelled for deletion, or starts for a new configuration.
+  optional ComputeInstanceProvisioningFailure last_provisioning_failure = 13;
+}
+
+// Describes the latest system-observed provisioning failure.
+message ComputeInstanceProvisioningFailure {
+  // Observed failure source; this does not determine whether provisioning is retried.
+  ComputeInstanceProvisioningFailureReason reason = 1;
+
+  // Fixed public explanation. Provider-reported failures use "Provisioning failed.", timeouts use
+  // "The provisioning attempt timed out.", and other failures use "Internal error".
+  string message = 2;
+
+  // One-based number of the attempt that failed, which can differ from the currently running retry.
+  int32 attempt = 3;
+
+  // Time the failure was first observed, retained unchanged while its retry is pending or running.
+  google.protobuf.Timestamp observed_at = 4;
+}
+
+// Classifies the observed source of a provisioning failure.
+enum ComputeInstanceProvisioningFailureReason {
+  // No failure source was specified.
+  COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_UNSPECIFIED = 0;
+  // The provisioning provider reported a failure.
+  COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_REPORTED = 1;
+  // The provisioning result could not be accepted.
+  COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_RESULT_REJECTED = 2;
+  // The provisioning attempt timed out.
+  COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_TIMED_OUT = 3;
+  // The provisioning attempt could no longer be found.
+  COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_JOB_LOST = 4;
+  // The provisioning attempt did not start.
+  COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_JOB_NOT_STARTED = 5;
+  // The provisioning provider returned an invalid result.
+  COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_INVALID_RESULT = 6;
+  // The provisioning provider encountered an infrastructure error.
+  COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_ERROR = 7;
 }
 
 // Associates a ComputeInstance disk with its Volume record.

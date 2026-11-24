@@ -75,7 +75,10 @@ func serviceAccountKeycloakIssuer(ctx context.Context) string {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		"https://"+keycloakAddr+"/realms/osac/.well-known/openid-configuration", nil)
 	Expect(err).ToNot(HaveOccurred())
-	response, err := (&http.Client{Transport: &http.Transport{TLSClientConfig: tls}}).Do(request)
+	transport := &http.Transport{TLSClientConfig: tls}
+	// One discovery request per fixture setup; release the connection when it returns.
+	defer transport.CloseIdleConnections()
+	response, err := (&http.Client{Transport: transport}).Do(request)
 	Expect(err).ToNot(HaveOccurred())
 	defer response.Body.Close()
 	Expect(response.StatusCode).To(Equal(http.StatusOK))

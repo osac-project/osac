@@ -714,6 +714,9 @@ func (t *Tool) simulateOIDCLogin(ctx context.Context, clientID, callbackBase, re
 			return http.ErrUseLastResponse
 		},
 	}
+	// Each login uses its own client, so release the pooled idle connections when it finishes. One login
+	// happens per MCP spec; leaving them open is what exhausts the proxy in front of Keycloak.
+	defer httpClient.CloseIdleConnections()
 
 	type hop struct {
 		method string

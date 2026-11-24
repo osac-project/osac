@@ -92,6 +92,170 @@ func setComputeInstanceTestFinalizer(ctx context.Context, client privatev1.Compu
 }
 
 var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
+	It("keeps provisioning failure feedback readable only to its tenant and output-only", func(ctx context.Context) {
+		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
+		tenant, _ := createCatalogItemTenantAdminFixture(ctx)
+		conn := createCatalogItemMemberFixture(ctx, tenant)
+		network := createCatalogItemNetworkFixture(ctx, tenant, "")
+		instance, err := createComputeInstanceFixture(ctx, conn, publicv1.ComputeInstanceSpec_builder{
+			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		id := instance.GetId()
+		publicClient := publicv1.NewComputeInstancesClient(conn)
+		privateClient := privatev1.NewComputeInstancesClient(tool.InternalView().AdminConn())
+		filter := "this.id == '" + id + "'"
+
+		By("waiting for the controller to initialize the observed state")
+		// Public status preservation checks need a baseline after the controller
+		// has applied its initial state and transition time.
+		Eventually(func(g Gomega) {
+			got, getErr := publicClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			g.Expect(got.GetObject().GetStatus().GetState()).To(Equal(publicv1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
+			g.Expect(got.GetObject().GetStatus().GetStateTransitionTime()).NotTo(BeNil())
+		}, 2*time.Minute, 100*time.Millisecond).Should(Succeed())
+
+		writeFailure := func(failure *privatev1.ComputeInstanceProvisioningFailure) {
+			GinkgoHelper()
+			Expect(retry.OnError(retry.DefaultBackoff, func(err error) bool {
+				return status.Code(err) == codes.Aborted
+			}, func() error {
+				stored, getErr := privateClient.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+				if getErr != nil {
+					return getErr
+				}
+				object := stored.GetObject()
+				if !object.HasStatus() {
+					object.SetStatus(&privatev1.ComputeInstanceStatus{})
+				}
+				if failure == nil {
+					object.GetStatus().ClearLastProvisioningFailure()
+				} else {
+					object.GetStatus().SetLastProvisioningFailure(failure)
+				}
+				_, updateErr := privateClient.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+					Object: object, UpdateMask: catalogItemUpdateMask("status.last_provisioning_failure"), Lock: true,
+				}.Build())
+				return updateErr
+			})).To(Succeed())
+		}
+		forged := publicv1.ComputeInstanceProvisioningFailure_builder{
+			Reason:  publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_REPORTED,
+			Message: "Provisioning failed.", Attempt: 99, ObservedAt: timestamppb.Now(),
+		}.Build()
+		rejectPublicWrite := func(failure *publicv1.ComputeInstanceProvisioningFailure) {
+			GinkgoHelper()
+			before, getErr := privateClient.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			Expect(getErr).NotTo(HaveOccurred())
+			_, updateErr := publicClient.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{
+				Object:     publicv1.ComputeInstance_builder{Id: id, Status: publicv1.ComputeInstanceStatus_builder{LastProvisioningFailure: failure}.Build()}.Build(),
+				UpdateMask: catalogItemUpdateMask("status.last_provisioning_failure"),
+			}.Build())
+			Expect(status.Code(updateErr)).To(Equal(codes.InvalidArgument))
+			after, getErr := privateClient.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			Expect(getErr).NotTo(HaveOccurred())
+			actual, expected := after.GetObject().GetStatus(), before.GetObject().GetStatus()
+			Expect(proto.Equal(actual.GetLastProvisioningFailure(), expected.GetLastProvisioningFailure())).To(BeTrue())
+			Expect(actual.GetState()).To(Equal(expected.GetState()))
+			Expect(proto.Equal(actual.GetStateTransitionTime(), expected.GetStateTransitionTime())).To(BeTrue())
+			Expect(proto.Equal(actual.GetInstanceType(), expected.GetInstanceType())).To(BeTrue())
+			Expect(proto.Equal(actual.GetInstanceTypeTransitionTime(), expected.GetInstanceTypeTransitionTime())).To(BeTrue())
+		}
+
+		By("rejecting a public attempt to set absent observed status")
+		Expect(instance.GetStatus().HasLastProvisioningFailure()).To(BeFalse())
+		rejectPublicWrite(forged)
+		observed := timestamppb.New(time.Now().Truncate(time.Second))
+		for _, attempt := range []int32{1, 2} {
+			By("persisting and projecting the latest private failure")
+			writeFailure(privatev1.ComputeInstanceProvisioningFailure_builder{
+				Reason:  privatev1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_TIMED_OUT,
+				Message: "The provisioning attempt timed out.", Attempt: attempt, ObservedAt: observed,
+			}.Build())
+			got, getErr := publicClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			Expect(getErr).NotTo(HaveOccurred())
+			listed, listErr := publicClient.List(ctx, publicv1.ComputeInstancesListRequest_builder{Filter: &filter}.Build())
+			Expect(listErr).NotTo(HaveOccurred())
+			Expect(listed.GetItems()).To(HaveLen(1))
+			for _, object := range []*publicv1.ComputeInstance{got.GetObject(), listed.GetItems()[0]} {
+				Expect(object.GetStatus().HasLastProvisioningFailure()).To(BeTrue())
+				failure := object.GetStatus().GetLastProvisioningFailure()
+				Expect(failure.GetReason()).To(Equal(publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_TIMED_OUT))
+				Expect(failure.GetMessage()).To(Equal("The provisioning attempt timed out."))
+				Expect(failure.GetAttempt()).To(Equal(attempt))
+				Expect(proto.Equal(failure.GetObservedAt(), observed)).To(BeTrue())
+			}
+			rejectPublicWrite(forged)
+			rejectPublicWrite(nil)
+
+			By("ignoring observed status echoed in a writable maskless update")
+			object := got.GetObject()
+			originalStatus := proto.Clone(object.GetStatus()).(*publicv1.ComputeInstanceStatus)
+			object.GetStatus().SetLastProvisioningFailure(forged)
+			object.GetMetadata().SetLabels(map[string]string{"failure-status-test": "preserved"})
+			updated, updateErr := publicClient.Update(ctx, publicv1.ComputeInstancesUpdateRequest_builder{Object: object}.Build())
+			Expect(updateErr).NotTo(HaveOccurred())
+			// Disk registration may advance other observed status concurrently.
+			actual := updated.GetObject().GetStatus()
+			Expect(proto.Equal(actual.GetLastProvisioningFailure(), originalStatus.GetLastProvisioningFailure())).To(BeTrue())
+			Expect(actual.GetState()).To(Equal(originalStatus.GetState()))
+			Expect(proto.Equal(actual.GetStateTransitionTime(), originalStatus.GetStateTransitionTime())).To(BeTrue())
+			Expect(proto.Equal(actual.GetInstanceType(), originalStatus.GetInstanceType())).To(BeTrue())
+			Expect(proto.Equal(actual.GetInstanceTypeTransitionTime(), originalStatus.GetInstanceTypeTransitionTime())).To(BeTrue())
+			Expect(updated.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("failure-status-test", "preserved"))
+		}
+
+		By("projecting retry progress alongside the latest failure")
+		Eventually(func(g Gomega) {
+			stored, getErr := privateClient.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			object := stored.GetObject()
+			object.GetStatus().SetConditions([]*privatev1.ComputeInstanceCondition{
+				privatev1.ComputeInstanceCondition_builder{
+					Type:   privatev1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED,
+					Status: privatev1.ConditionStatus_CONDITION_STATUS_FALSE,
+					Reason: proto.String("RetryScheduled"), Message: proto.String("A provisioning attempt failed; another attempt is scheduled."),
+				}.Build(),
+			})
+			_, updateErr := privateClient.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object: object, UpdateMask: catalogItemUpdateMask("status.conditions"), Lock: true,
+			}.Build())
+			g.Expect(updateErr).NotTo(HaveOccurred())
+			got, getErr := publicClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			g.Expect(getErr).NotTo(HaveOccurred())
+			listed, listErr := publicClient.List(ctx, publicv1.ComputeInstancesListRequest_builder{Filter: &filter}.Build())
+			g.Expect(listErr).NotTo(HaveOccurred())
+			g.Expect(listed.GetItems()).To(HaveLen(1))
+			for _, current := range []*publicv1.ComputeInstance{got.GetObject(), listed.GetItems()[0]} {
+				g.Expect(current.GetStatus().HasLastProvisioningFailure()).To(BeTrue())
+				g.Expect(current.GetStatus().GetConditions()).To(ContainElement(Satisfy(func(condition *publicv1.ComputeInstanceCondition) bool {
+					return condition.GetType() == publicv1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED &&
+						condition.GetStatus() == publicv1.ConditionStatus_CONDITION_STATUS_FALSE && condition.GetReason() == "RetryScheduled"
+				})))
+			}
+		}, 10*time.Second, 100*time.Millisecond).Should(Succeed())
+
+		By("hiding the instance and its diagnostics from an unrelated tenant")
+		outsider := publicv1.NewComputeInstancesClient(tool.ExternalView().UserConn())
+		_, err = outsider.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+		Expect(status.Code(err)).To(Equal(codes.NotFound))
+		hidden, err := outsider.List(ctx, publicv1.ComputeInstancesListRequest_builder{Filter: &filter}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(hidden.GetItems()).To(BeEmpty())
+
+		By("removing the optional failure through trusted feedback")
+		writeFailure(nil)
+		got, err := publicClient.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got.GetObject().GetStatus().HasLastProvisioningFailure()).To(BeFalse())
+		listed, err := publicClient.List(ctx, publicv1.ComputeInstancesListRequest_builder{Filter: &filter}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(listed.GetItems()).To(HaveLen(1))
+		Expect(listed.GetItems()[0].GetStatus().HasLastProvisioningFailure()).To(BeFalse())
+	})
+
 	It("persists deletion feedback after a referenced Secret disappears", func(ctx context.Context) {
 		templateID := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")

@@ -27,13 +27,18 @@ import (
 // stamped HyperShift resource.
 func recordUpgradeObservations(order *v1alpha1.ClusterOrder,
 	hc *hypershiftv1beta1.HostedCluster, pools []hypershiftv1beta1.NodePool) {
+	specRequests := make(map[string]*v1alpha1.NodeRequest, len(order.Spec.NodeRequests))
+	for i := range order.Spec.NodeRequests {
+		request := &order.Spec.NodeRequests[i]
+		specRequests[request.NodeSet] = request
+	}
 	requestsByNodeSet := make(map[string]*v1alpha1.NodeRequestStatus, len(order.Status.NodeRequests))
-	previous := make(map[string]*v1alpha1.UpgradeObservation, len(order.Status.NodeRequests))
 	for i := range order.Status.NodeRequests {
 		request := &order.Status.NodeRequests[i]
-		previous[request.NodeSet] = request.UpgradeObservation
 		request.UpgradeObservation = nil
-		requestsByNodeSet[request.NodeSet] = request
+		if specRequests[request.NodeSet] != nil {
+			requestsByNodeSet[request.NodeSet] = request
+		}
 	}
 	id := order.Annotations[v1alpha1.UpgradeAttemptIDAnnotation]
 	order.Status.UpgradeObservation = controlPlaneUpgradeObservation(order, hc, id)
@@ -44,64 +49,8 @@ func recordUpgradeObservations(order *v1alpha1.ClusterOrder,
 			continue
 		}
 		if request := requestsByNodeSet[nodeSet]; request != nil {
-			request.UpgradeObservation = nodePoolUpgradeObservationForAttempt(
-				order, pool, nodeSet, id, previous[nodeSet])
+			request.UpgradeObservation = nodePoolUpgradeObservation(pool, specRequests[nodeSet], id)
 		}
-	}
-}
-
-// nodePoolUpgradeObservationForAttempt carries the pre-stamp baseline across
-// polls and attributes progress only after the matching attempt is stamped.
-func nodePoolUpgradeObservationForAttempt(order *v1alpha1.ClusterOrder,
-	pool *hypershiftv1beta1.NodePool, nodeSet, id string,
-	previous *v1alpha1.UpgradeObservation) *v1alpha1.UpgradeObservation {
-	if !nodeSetRequested(order, nodeSet) {
-		// A removed NodeSet reports from the attempt stamped on its NodePool,
-		// even after Fulfillment starts a newer whole-cluster attempt.
-		id = pool.Annotations[v1alpha1.UpgradeAttemptIDAnnotation]
-	}
-	baseline := matchingPreviousBaseline(previous, id)
-	var current *v1alpha1.UpgradeObservation
-	if id != "" && pool.Annotations[v1alpha1.UpgradeAttemptIDAnnotation] != id {
-		current = nodePoolUpgradeBaseline(pool, id)
-		if current == nil && baseline != nil {
-			current = &v1alpha1.UpgradeObservation{AttemptID: id}
-		}
-	} else {
-		current = nodePoolUpgradeObservation(order, pool, nodeSet, id)
-	}
-	if current == nil {
-		return nil
-	}
-	if baseline != nil {
-		current.BaselineTransitionTime = baseline
-	}
-	markLegacyNodePoolProgress(pool, id, current)
-	return current
-}
-
-// matchingPreviousBaseline returns the baseline only when the
-// observation belongs to the attempt.
-func matchingPreviousBaseline(previous *v1alpha1.UpgradeObservation, id string) *metav1.Time {
-	if previous == nil || previous.AttemptID != id {
-		return nil
-	}
-	return previous.BaselineTransitionTime
-}
-
-// markLegacyNodePoolProgress accepts an UpdatingVersion condition without an
-// observed generation only when it changed after the pre-stamp baseline.
-func markLegacyNodePoolProgress(pool *hypershiftv1beta1.NodePool, id string,
-	observation *v1alpha1.UpgradeObservation) {
-	if observation.BaselineTransitionTime == nil || observation.State != "" ||
-		pool.Annotations[v1alpha1.UpgradeAttemptIDAnnotation] != id {
-		return
-	}
-	updating := nodePoolCondition(pool, hypershiftv1beta1.NodePoolUpdatingVersionConditionType)
-	if updating != nil && updating.ObservedGeneration == 0 &&
-		updating.Status == corev1.ConditionTrue &&
-		updating.LastTransitionTime.Time.After(observation.BaselineTransitionTime.Time) {
-		observation.State = v1alpha1.UpgradeObservationProgressing
 	}
 }
 
@@ -172,10 +121,12 @@ func historyVersionAtState(desiredVersion, latestVersion string,
 
 // nodePoolUpgradeObservation classifies only the NodePool stamped for the
 // selected attempt and requested release image.
-func nodePoolUpgradeObservation(order *v1alpha1.ClusterOrder,
-	pool *hypershiftv1beta1.NodePool, nodeSet, id string) *v1alpha1.UpgradeObservation {
-	if id == "" || pool.Annotations[v1alpha1.UpgradeAttemptIDAnnotation] != id ||
-		(nodeSetRequested(order, nodeSet) && !nodePoolReleaseMatchesOrder(order, nodeSet, pool.Spec.Release.Image)) {
+func nodePoolUpgradeObservation(pool *hypershiftv1beta1.NodePool,
+	request *v1alpha1.NodeRequest, id string) *v1alpha1.UpgradeObservation {
+	if id == "" || pool.Annotations[v1alpha1.UpgradeAttemptIDAnnotation] != id {
+		return nil
+	}
+	if request.ReleaseImage == "" || pool.Spec.Release.Image != request.ReleaseImage {
 		return nil
 	}
 	observation := &v1alpha1.UpgradeObservation{AttemptID: id, Version: pool.Status.Version}
@@ -199,17 +150,6 @@ func nodePoolReadyAtVersion(pool *hypershiftv1beta1.NodePool) bool {
 	return currentNodePoolConditionStatus(pool, hypershiftv1beta1.NodePoolUpdatingVersionConditionType, corev1.ConditionFalse) &&
 		currentNodePoolConditionStatus(pool, hypershiftv1beta1.NodePoolAllMachinesReadyConditionType, corev1.ConditionTrue) &&
 		currentNodePoolConditionStatus(pool, hypershiftv1beta1.NodePoolReadyConditionType, corev1.ConditionTrue)
-}
-
-// nodePoolUpgradeBaseline records the UpdatingVersion transition seen before
-// AAP stamps the new attempt, so later polls can reject stale progress.
-func nodePoolUpgradeBaseline(pool *hypershiftv1beta1.NodePool, id string) *v1alpha1.UpgradeObservation {
-	condition := nodePoolCondition(pool, hypershiftv1beta1.NodePoolUpdatingVersionConditionType)
-	if condition == nil || condition.LastTransitionTime.IsZero() {
-		return nil
-	}
-	baseline := condition.LastTransitionTime
-	return &v1alpha1.UpgradeObservation{AttemptID: id, BaselineTransitionTime: &baseline}
 }
 
 // currentHostedClusterCondition returns a HostedCluster
@@ -257,26 +197,4 @@ func nodePoolCondition(pool *hypershiftv1beta1.NodePool, kind string) *hypershif
 		}
 	}
 	return nil
-}
-
-// nodeSetRequested reports whether the order explicitly requests the node set.
-func nodeSetRequested(order *v1alpha1.ClusterOrder, nodeSet string) bool {
-	for _, request := range order.Spec.NodeRequests {
-		if request.NodeSet == nodeSet {
-			return true
-		}
-	}
-	return false
-}
-
-// nodePoolReleaseMatchesOrder reports whether a NodePool uses the explicit
-// release image requested for that node set. A missing node image never matches
-// because the AAP provider also requires an explicit per-node-set image.
-func nodePoolReleaseMatchesOrder(order *v1alpha1.ClusterOrder, nodeSet, image string) bool {
-	for _, request := range order.Spec.NodeRequests {
-		if request.NodeSet == nodeSet {
-			return request.ReleaseImage != "" && image == request.ReleaseImage
-		}
-	}
-	return false
 }

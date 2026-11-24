@@ -17,6 +17,7 @@ package osac.private.v1;
 
 import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
 import "osac/private/v1/billing_account_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
@@ -89,10 +90,13 @@ message BillingAccountsDeleteRequest {
 message BillingAccountsDeleteResponse {}
 
 message BillingAccountsUpdateRequest {
-  string id = 1;
+  BillingAccount object = 1;
+  google.protobuf.FieldMask update_mask = 2;
 }
 
-message BillingAccountsUpdateResponse {}
+message BillingAccountsUpdateResponse {
+  BillingAccount object = 1;
+}
 
 service BillingAccounts {
   // Reads the configured billing provider's account list, refreshing the local record, then returns the discovered
@@ -121,7 +125,11 @@ service BillingAccounts {
 
   // Descriptor-only scaffold: not implemented or authorized.
   rpc Update(BillingAccountsUpdateRequest) returns (BillingAccountsUpdateResponse) {
-    option (google.api.http) = {patch: "/api/private/v1/billing/accounts/{id}"};
+    option (google.api.http) = {
+      patch: "/api/private/v1/billing/accounts/{object.id}"
+      body: "object"
+      response_body: "object"
+    };
   }
 
   // Descriptor-only scaffold: not implemented or authorized. Does not delete a local or provider account.

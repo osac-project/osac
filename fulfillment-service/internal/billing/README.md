@@ -86,16 +86,15 @@ callers must not rely on result order. Old flat account fields, `correlation_id`
 design's example request body predates this amendment; it used the flat scalar fields and does not
 parse against this API. REST and CLI structured output use the nested snake-case field names.
 
-The billing schema ships as one forward-only set: migration 157 creates `billing_accounts` with the
-final normalized envelope, projection trigger and uniqueness indexes; 153 creates
-`tenant_billing_assignments` with interval projection, current-interval uniqueness and no live-tenant
-foreign key; 154 adds the visibility lookup indexes; migrations 155–157 complete the
-tenant-lifecycle migration set. There is no separate SQL-column rename, envelope-normalization or
-lease-table migration to replay, because none of these tables had been applied upstream. These
-migrations are forward-only, with no inverse scripts. Coordinate service/database cutover: old
-binaries require the old schema, and binaries expecting these tables require the new one. Stable
-correlation-related reason codes and provider-native `externalId` remain unchanged. This does not
-add an assignment-to-metering bridge.
+The billing schema is a forward-only set with no down migrations, numbered after main's last migration
+(156). Migration 157 creates `billing_accounts` with the standard envelope, JSON-expression uniqueness
+indexes and validation triggers. Migration 158 creates `tenant_billing_assignments` with JSON
+current-interval uniqueness, validation and reference triggers, and history protection. Neither table
+has a foreign key on the tenant, and the account reference is checked by trigger. Migration 159
+releases finalized tenant domains, 160 creates the deleted tenant identity store, and 161 holds the
+tenant-lifecycle triggers. Coordinate service/database cutover: old binaries require the old schema,
+and binaries expecting these tables require the new one. Stable correlation-related reason codes and
+provider-native `externalId` remain unchanged. This does not add an assignment-to-metering bridge.
 
 Discovery refreshes a supplied, nonempty `base_currency` from a non-older provider observation;
 empty or stale observations do not erase it. Three-letter currency codes are normalized to
@@ -140,9 +139,10 @@ clamped to all-history boundaries, is used for both the old interval's end and i
 start. No durable billing operation lease or separate eligibility transaction is used.
 
 Tenant deletion closes its active assignment at the stored deletion boundary, releasing the account
-for another tenant. Billing history remains queryable as a fallback reservation signal, not the
-source of tenant-name policy. Retaining billing history does not bypass other restrictive tenant
-dependencies and does not define a purge schedule or reserve never-known names.
+for another tenant. The billing history of a deleted tenant also reserves its name; see
+[Deleted tenant identity store](#deleted-tenant-identity-store). Retaining billing history does not
+bypass other restrictive tenant dependencies and does not define a purge schedule or reserve
+never-known names.
 
 ## Authorization and attribution
 
@@ -205,6 +205,41 @@ an empty list, one item is an object, and multiple items are a list. There is no
 `size`/`total`/`items` envelope; the API List envelope remains unchanged. Provider status performs
 exactly one empty Get and rejects keys, `--filter` and `--watch`, including explicit empty/false
 flags. Its capability display describes provider information, not permission for provider writes.
+
+## Deleted tenant identity store
+
+Migration 160 creates `deleted_tenant_identities`, a credential-free store keyed by tenant name. It
+reserves a deleted tenant name and records who deleted it. Its columns are `tenant_name` (primary
+key), `tenant_created_at`, `deletion_timestamp`, `deleted_by` (nullable), `finalized_at` (nullable)
+and `billing_retained`.
+
+Triggers in migration 161 on `tenants` write the store:
+
+- `validate_tenant_insert` (before insert) rejects a new tenant whose name is retained, with SQLSTATE
+  `Z0002` and the message "tenant identity is retained after deletion".
+- `capture_tenant_deletion` (before a soft delete) records the marker, with the deleting actor.
+- `prepare_tenant_finalization` (before a physical delete) records the marker for a direct delete.
+- `finalize_deleted_tenant_identity` (after a physical delete) sets `finalized_at`.
+
+In `private_tenants_server.go`, Create calls `CheckTenantIdentityReusable` and returns FailedPrecondition
+with reason `TENANT_IDENTITY_RETAINED` for a reserved name. Update, Delete and Signal take
+`LockTenantIdentity` on the name, which serializes them with Create.
+
+A name is reserved while either a deletion is pending (`finalized_at` is null), a finalized marker
+exists, or billing history for the name exists in `tenant_billing_assignments`, even when
+`billing_retained` is false. A live tenant with the same name is not reported as reserved; the normal
+duplicate-name rule applies.
+
+Delete sets `osac.tenant_deletion_actor` from the authenticated subject. The stored `deleted_by`
+keeps the first deleter, and a direct database delete records none.
+
+Migration 160 backfills from archived tenants and from tenants already marked deleted. It stops on
+invalid chronology or ambiguous incarnations (SQLSTATE `23514`), and on a lock timeout (`55P03`) it
+asks the operator to drain tenant writers before retrying.
+
+Revocation of a soft-deleted tenant's access is [OSAC-8145](https://redhat.atlassian.net/browse/OSAC-8145).
+Tenant deletion, tombstone and recreation are tracked by
+[OSAC-6886](https://redhat.atlassian.net/browse/OSAC-6886).
 
 ## Follow-up boundaries
 

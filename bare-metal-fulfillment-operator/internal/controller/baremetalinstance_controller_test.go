@@ -2677,23 +2677,27 @@ var _ = Describe("BareMetalInstance network handoff reboot (OSAC-1448)", func() 
 			Expect(result.RequeueAfter).To(Equal(5 * time.Second))
 		})
 
-		It("runs after handoff power cycle completes", func() {
-			// Mark handoff as complete
+		It("marks provisioning disabled from the provision path when networking is off", func() {
+			bareMetalInstance.Spec.TemplateID = "noop"
 			bareMetalInstance.SetStatusCondition(
-				v1alpha1.HostConditionNetworkHandoffComplete,
-				metav1.ConditionTrue,
-				"Succeeded",
-				"Handoff complete",
+				v1alpha1.HostConditionProvisionTemplateComplete,
+				metav1.ConditionTrue, "Succeeded", "Provisioning complete",
 			)
 
-			// IP discovery should run (will fail because no provider, but that's OK for this test)
-			_, err := reconciler.reconcileIPDiscovery(ctx, bareMetalInstance)
+			result, err := reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bareMetalInstance)
 			Expect(err).NotTo(HaveOccurred())
-			// Disabled networking completes lease discovery without a provider call.
-			cond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
-			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProvisioningDisabled))
+			Expect(result).To(Equal(ctrl.Result{}))
+
+			for _, conditionType := range []v1alpha1.BareMetalInstanceConditionType{
+				v1alpha1.HostConditionNetworkAttachmentsReady,
+				v1alpha1.HostConditionNetworkHandoffComplete,
+				v1alpha1.HostConditionIPDiscoveryComplete,
+			} {
+				cond := bareMetalInstance.GetStatusCondition(conditionType)
+				Expect(cond).NotTo(BeNil(), string(conditionType))
+				Expect(cond.Status).To(Equal(metav1.ConditionTrue), string(conditionType))
+				Expect(cond.Reason).To(Equal(v1alpha1.HostConditionReasonProvisioningDisabled), string(conditionType))
+			}
 		})
 	})
 

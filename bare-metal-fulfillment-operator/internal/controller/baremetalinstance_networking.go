@@ -93,8 +93,7 @@ func networkAttachmentKey(
 
 // getNetworkAttachmentForDeletion reads the attachment once per deletion pass.
 // It skips the read when BMF has no network finalizer or no attachment is
-// requested. Cleanup stays independent of NetworkingEnabled so owned
-// attachments are still deleted after the flag is flipped off.
+// requested. Cleanup does not gate on NetworkingEnabled.
 func (r *BareMetalInstanceReconciler) getNetworkAttachmentForDeletion(
 	ctx context.Context, bmi *v1alpha1.BareMetalInstance,
 ) (*opv1alpha1.NetworkAttachment, error) {
@@ -111,28 +110,6 @@ func (r *BareMetalInstanceReconciler) getNetworkAttachmentForDeletion(
 		return nil, nil
 	}
 	return r.getNetworkAttachment(ctx, key)
-}
-
-// networkAttachmentAcquired reports that the instance already selected a port
-// MAC or progressed past create, so disabled-mode must not erase status.
-func networkAttachmentAcquired(bmi *v1alpha1.BareMetalInstance) bool {
-	for _, status := range bmi.Status.NetworkAttachmentStatuses {
-		if status.MACAddress != "" || status.IPAddress != "" {
-			return true
-		}
-	}
-	ready := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-	if ready == nil {
-		return false
-	}
-	switch ready.Reason {
-	case "Succeeded", v1alpha1.HostConditionReasonProgressing,
-		v1alpha1.HostConditionReasonNetworkDetaching,
-		v1alpha1.HostConditionReasonNetworkAttachmentFailed:
-		return true
-	default:
-		return false
-	}
 }
 
 func setNetworkingProvisioningDisabled(bmi *v1alpha1.BareMetalInstance) {
@@ -207,15 +184,8 @@ func (r *BareMetalInstanceReconciler) reconcileNetworking(
 	ctx context.Context,
 	bareMetalInstance *v1alpha1.BareMetalInstance,
 ) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
-	if !r.NetworkingEnabled {
-		log.Info("Networking provisioning disabled, skipping network attachment provisioning")
-		if !networkAttachmentAcquired(bareMetalInstance) {
-			setNetworkingProvisioningDisabled(bareMetalInstance)
-		}
-		return ctrl.Result{}, nil
-	}
+	// NetworkingEnabled is gated by reconcileNetworkProvisionAndDiscovery before
+	// this is called.
 
 	if !r.networkingRequested(bareMetalInstance) {
 		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionTrue, "Skipped", "No network attachments configured")

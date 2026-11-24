@@ -676,9 +676,10 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkProvisionAndDiscovery(ctx 
 	}
 
 	if !r.NetworkingEnabled {
-		if !networkAttachmentAcquired(bareMetalInstance) {
-			setNetworkingProvisioningDisabled(bareMetalInstance)
-		}
+		// Single disabled-mode gate for attach, handoff, and IP discovery.
+		// provisioningEnabled is fixed at install, so acquired-status preservation
+		// for a mid-life flip is out of scope.
+		setNetworkingProvisioningDisabled(bareMetalInstance)
 		return ctrl.Result{}, nil
 	}
 
@@ -933,14 +934,6 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkHandoffPowerCycle(
 	ctx context.Context, bmi *v1alpha1.BareMetalInstance,
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
-
-	if !r.NetworkingEnabled {
-		log.Info("Networking provisioning disabled, skipping network-handoff reboot")
-		if !networkAttachmentAcquired(bmi) {
-			setNetworkingProvisioningDisabled(bmi)
-		}
-		return ctrl.Result{}, nil
-	}
 
 	handoffCond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
 	if handoffCond != nil && handoffCond.Status == metav1.ConditionTrue {

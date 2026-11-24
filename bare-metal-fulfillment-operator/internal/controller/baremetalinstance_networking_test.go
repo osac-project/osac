@@ -217,57 +217,6 @@ var _ = Describe("BareMetalInstance Networking", func() {
 			Expect(cond.Reason).To(Equal("Skipped"))
 		})
 
-		It("marks provisioning disabled when no attachment was acquired", func() {
-			bmi = newBMI(attachments)
-			bmi.SetStatusCondition(v1alpha1.HostConditionProvisionTemplateComplete,
-				metav1.ConditionTrue, "Succeeded", "Provisioning complete")
-			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
-			reconciler.NetworkingEnabled = false
-
-			result, err := reconciler.reconcileNetworking(ctx, bmi)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(BeZero())
-
-			cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-			Expect(cond).NotTo(BeNil())
-			Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(cond.Reason).To(Equal("ProvisioningDisabled"))
-			handoff := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
-			Expect(handoff.Status).To(Equal(metav1.ConditionTrue))
-			Expect(handoff.Reason).To(Equal("ProvisioningDisabled"))
-			Expect(handoff.Message).To(ContainSubstring("handoff"))
-			discovery := bmi.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
-			Expect(discovery.Status).To(Equal(metav1.ConditionTrue))
-			Expect(discovery.Reason).To(Equal("ProvisioningDisabled"))
-			Expect(discovery.Message).To(ContainSubstring("lease"))
-			Expect(bmi.Status.NetworkAttachmentStatuses).To(BeEmpty())
-			Expect(reconciler.InventoryClient.(*mockInventoryClient).getHostLogicalPortMACsCalled).To(BeZero())
-			_, err = getAttachment()
-			Expect(apierrors.IsNotFound(err)).To(BeTrue())
-		})
-
-		It("preserves acquired attachment status when networking is disabled", func() {
-			bmi = newBMI(attachments)
-			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())
-			bmi.Status.NetworkAttachmentStatuses = []v1alpha1.BareMetalNetworkAttachmentStatus{{
-				SubnetRef: "subnet-1", Interface: "data-0", MACAddress: "aa:bb:cc:dd:ee:ff",
-			}}
-			setNetworkAttachmentsReady(bmi, metav1.ConditionTrue, "Succeeded", "Network attachment is ready")
-			reconciler.NetworkingEnabled = false
-
-			result, err := reconciler.reconcileNetworking(ctx, bmi)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(result.RequeueAfter).To(BeZero())
-
-			Expect(bmi.Status.NetworkAttachmentStatuses).To(Equal([]v1alpha1.BareMetalNetworkAttachmentStatus{{
-				SubnetRef: "subnet-1", Interface: "data-0", MACAddress: "aa:bb:cc:dd:ee:ff",
-			}}))
-			cond := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-			Expect(cond.Reason).To(Equal("Succeeded"))
-			Expect(bmi.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)).To(BeNil())
-			Expect(reconciler.InventoryClient.(*mockInventoryClient).getHostLogicalPortMACsCalled).To(BeZero())
-		})
-
 		It("retries a transient create error", func() {
 			bmi = newBMI(attachments)
 			Expect(k8sClient.Create(ctx, bmi)).To(Succeed())

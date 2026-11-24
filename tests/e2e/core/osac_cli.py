@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import json
 import shutil
 import subprocess
 import tempfile
@@ -62,6 +63,9 @@ class OsacCLI:
 
     @staticmethod
     def _parse_uuid(stdout: str) -> str:
+        identifier_match = re.search(r"identifier\s+[`']([^`']+)[`']", stdout, re.IGNORECASE)
+        if identifier_match is not None:
+            return identifier_match.group(1)
         match: re.Match[str] | None = re.search(r"(?:'|`)([^'`]+)(?:'|`)", stdout)
         assert match is not None, f"Failed to parse UUID from CLI output: {stdout}"
         return match.group(1)
@@ -74,26 +78,29 @@ class OsacCLI:
     def create_workload_cluster(
         self, *, name: str, source_hub_id: str, managed_cluster_name: str, supported_workloads: list[str]
     ) -> str:
-        return self._parse_uuid(
-            self._run(
-                "workload-cluster",
-                "create",
-                "--name",
-                name,
-                "--source-hub",
-                source_hub_id,
-                "--managed-cluster-name",
-                managed_cluster_name,
-                "--supported-workloads",
-                ",".join(supported_workloads),
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as input_file:
+            json.dump(
+                {
+                    "@type": "type.googleapis.com/osac.private.v1.WorkloadCluster",
+                    "metadata": {"name": name},
+                    "spec": {
+                        "supportedWorkloads": supported_workloads,
+                        "maas": {
+                            "sourceHubId": source_hub_id,
+                            "managedClusterName": managed_cluster_name,
+                        },
+                    },
+                },
+                input_file,
             )
-        )
+            input_file.flush()
+            return self._parse_uuid(self._run("create", "-f", input_file.name))
 
     def list_workload_clusters(self) -> str:
-        return self._run("workload-cluster", "list")
+        return self._run("get", "workloadclusters")
 
     def describe_workload_cluster(self, reference: str) -> str:
-        return self._run("workload-cluster", "describe", reference)
+        return self._run("get", "workloadclusters", reference)
 
     def create_compute_instance(
         self,

@@ -1152,14 +1152,6 @@ func (s *GenericServer[O]) deleteObject(ctx context.Context, request any) (objec
 }
 
 func (s *GenericServer[O]) Signal(ctx context.Context, request any, response any) error {
-	return s.signal(ctx, request, response, "", "")
-}
-
-func (s *GenericServer[O]) SignalWithEventMetadata(ctx context.Context, request any, response any, reason, severity string) error {
-	return s.signal(ctx, request, response, reason, severity)
-}
-
-func (s *GenericServer[O]) signal(ctx context.Context, request any, response any, reason, severity string) error {
 	// Extract the object identifier from the request:
 	type requestIface interface {
 		GetId() string
@@ -1171,8 +1163,9 @@ func (s *GenericServer[O]) signal(ctx context.Context, request any, response any
 	}
 
 	// Signal the object:
-	signal := s.dao.Signal().SetId(requestId).SetEventMetadata(reason, severity)
-	_, err := signal.Do(ctx)
+	_, err := s.dao.Signal().
+		SetId(requestId).
+		Do(ctx)
 	if err != nil {
 		return ConvertDAOErrorToGRPC(err, "signal", requestId)
 	}

@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -30,11 +29,11 @@ import (
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
-	osacmetrics "github.com/osac-project/osac/fulfillment-service/internal/metrics"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 const (
+	maasWorkload           = "maas"
 	managedClusterGroup    = "cluster.open-cluster-management.io"
 	managedClusterVersion  = "v1"
 	managedClusterResource = "managedclusters"
@@ -54,27 +53,39 @@ var managedClusterGVK = schema.GroupVersionKind{Group: managedClusterGroup, Vers
 
 // FunctionBuilder contains the dependencies needed to observe a registered ManagedCluster.
 type FunctionBuilder struct {
-	logger            *slog.Logger
-	connection        *grpc.ClientConn
-	hubCache          controllers.HubCache
-	metricsRegisterer prometheus.Registerer
+	logger     *slog.Logger
+	connection *grpc.ClientConn
+	hubCache   controllers.HubCache
 }
 
 type function struct {
-	logger             *slog.Logger
-	grpcClient         *grpc.ClientConn
-	hubCache           controllers.HubCache
-	workloadClusters   privatev1.WorkloadClustersClient
-	watchers           map[string]context.CancelFunc
-	watcherCredentials map[string]string
-	watcherGenerations map[string]uint64
-	watchersLock       sync.Mutex
-	readyHubs          map[string]bool
-	managedCaches      map[string]cache.SharedIndexInformer
-	watchEstablished   map[string]bool
-	metrics            *osacmetrics.WorkloadClusterMetrics
-	availabilityLock   sync.Mutex
-	availability       map[string]string
+	logger               *slog.Logger
+	grpcClient           *grpc.ClientConn
+	hubCache             controllers.HubCache
+	workloadClusters     privatev1.WorkloadClustersClient
+	watchers             map[string]context.CancelFunc
+	watcherCredentials   map[string]string
+	watcherGenerations   map[string]uint64
+	watcherUseRevisions  map[string]uint64
+	watchFailures        map[string]uint64
+	watchFailureObserved map[string]bool
+	watchFailureAttempts map[string]uint64
+	watchHealthy         map[string]bool
+	watchAttemptIDs      map[string]uint64
+	watchersLock         sync.Mutex
+	readyHubs            map[string]bool
+	watcherReadyRevision map[string]uint64
+	managedCaches        map[string]cache.SharedIndexInformer
+	watchEstablished     map[string]bool
+	unavailableSignals   map[string]unavailableSignalState
+	unavailableSignalID  uint64
+	pendingReleases      map[string]watcherReleaseState
+	pendingReleaseID     uint64
+}
+
+type watcherReleaseState struct {
+	id     uint64
+	cancel context.CancelFunc
 }
 
 // NewFunction creates a WorkloadCluster observation function.
@@ -95,11 +106,6 @@ func (b *FunctionBuilder) SetHubCache(value controllers.HubCache) *FunctionBuild
 	return b
 }
 
-func (b *FunctionBuilder) SetMetricsRegisterer(value prometheus.Registerer) *FunctionBuilder {
-	b.metricsRegisterer = value
-	return b
-}
-
 // Build creates a reconciler that observes the Hub's ManagedCluster API.
 func (b *FunctionBuilder) Build() (controllers.ReconcilerFunction[*privatev1.WorkloadCluster], error) {
 	if b.logger == nil {
@@ -112,164 +118,230 @@ func (b *FunctionBuilder) Build() (controllers.ReconcilerFunction[*privatev1.Wor
 		return nil, errors.New("hub cache is mandatory")
 	}
 	r := &function{
-		logger:             b.logger,
-		grpcClient:         b.connection,
-		hubCache:           b.hubCache,
-		workloadClusters:   privatev1.NewWorkloadClustersClient(b.connection),
-		watchers:           map[string]context.CancelFunc{},
-		watcherCredentials: map[string]string{},
-		watcherGenerations: map[string]uint64{},
-		readyHubs:          map[string]bool{},
-		managedCaches:      map[string]cache.SharedIndexInformer{},
-		watchEstablished:   map[string]bool{},
-		availability:       map[string]string{},
-	}
-	if b.metricsRegisterer != nil {
-		var metricErr error
-		r.metrics, metricErr = osacmetrics.NewWorkloadClusterMetrics(b.metricsRegisterer)
-		if metricErr != nil {
-			return nil, metricErr
-		}
+		logger:               b.logger,
+		grpcClient:           b.connection,
+		hubCache:             b.hubCache,
+		workloadClusters:     privatev1.NewWorkloadClustersClient(b.connection),
+		watchers:             map[string]context.CancelFunc{},
+		watcherCredentials:   map[string]string{},
+		watcherGenerations:   map[string]uint64{},
+		watcherUseRevisions:  map[string]uint64{},
+		watchFailures:        map[string]uint64{},
+		watchFailureObserved: map[string]bool{},
+		watchFailureAttempts: map[string]uint64{},
+		watchHealthy:         map[string]bool{},
+		watchAttemptIDs:      map[string]uint64{},
+		readyHubs:            map[string]bool{},
+		watcherReadyRevision: map[string]uint64{},
+		managedCaches:        map[string]cache.SharedIndexInformer{},
+		watchEstablished:     map[string]bool{},
+		unavailableSignals:   map[string]unavailableSignalState{},
+		pendingReleases:      map[string]watcherReleaseState{},
 	}
 	return r.run, nil
 }
 
 func (r *function) run(ctx context.Context, object *privatev1.WorkloadCluster) error {
-	if object.GetMetadata().HasDeletionTimestamp() {
-		r.updateAvailabilityMetrics(object.GetId(), "")
-		return r.releaseWatcherIfUnused(ctx, object.GetSpec().GetMaas().GetSourceHubId())
+	// WorkloadCluster can represent multiple workload integrations. MaaS is
+	// the only supported branch today; keep the dispatch explicit so adding a
+	// second integration does not silently reuse MaaS behavior.
+	if !containsWorkload(object.GetSpec().GetSupportedWorkloads(), maasWorkload) {
+		return nil
 	}
+	return r.runMaaS(ctx, object)
+}
+
+func containsWorkload(values []string, expected string) bool {
+	for _, value := range values {
+		if value == expected {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *function) runMaaS(ctx context.Context, object *privatev1.WorkloadCluster) error {
+	if object.GetMetadata().HasDeletionTimestamp() {
+		err := r.releaseWatcherIfUnused(ctx, object.GetSpec().GetMaas().GetSourceHubId())
+		if err != nil {
+			return controllers.RequeueAfter(err, time.Second)
+		}
+		return nil
+	}
+	hubID := object.GetSpec().GetMaas().GetSourceHubId()
+	r.cancelPendingWatcherRelease(hubID)
 	old := proto.Clone(object).(*privatev1.WorkloadCluster)
 	status := object.GetStatus()
 	if status == nil {
 		status = &privatev1.WorkloadClusterStatus{}
 	}
 	entry, err := r.hubCache.Get(ctx, object.GetSpec().GetMaas().GetSourceHubId())
+	watcherFingerprint := ""
+	var watcherErr error
 	if err == nil {
-		r.ensureWatcher(ctx, object.GetSpec().GetMaas().GetSourceHubId(), entry.CredentialFingerprint)
+		watcherFingerprint, watcherErr = r.ensureMaaSWatcher(ctx, object.GetSpec().GetMaas().GetSourceHubId(), entry.CredentialFingerprint)
 	}
-	if err != nil || !r.isHubReady(object.GetSpec().GetMaas().GetSourceHubId()) {
+	informer, generation, readinessRevision, ready, pending := r.readyMaaSInformer(hubID)
+	if err == nil && watcherErr == nil && ready && !r.isMaaSWatcherCredential(hubID, watcherFingerprint) {
+		return controllers.RequeueAfter(errors.New("hub watcher credentials changed during observation"), time.Second)
+	}
+	if err == nil && watcherErr == nil && !ready && pending {
+		return nil
+	}
+	if err != nil || watcherErr != nil || !ready {
 		setUnavailable(status, reasonHubUnreachable, "Cannot reach hub to validate cluster registration", false)
-		if err != nil {
+		if watcherErr != nil {
+			err = controllers.RequeueAfter(errors.New("hub credential resolution failed"), time.Second)
+		} else if err != nil {
 			// Do not return the underlying Hub/Kubernetes error: the generic
 			// reconciler logs returned errors and those errors may contain
 			// endpoints or other credential-adjacent details.
-			err = errors.New("hub credential resolution failed")
+			err = controllers.RequeueAfter(errors.New("hub credential resolution failed"), time.Second)
 		} else {
 			err = errors.New("hub watcher is not ready")
 		}
 	} else {
 		setCondition(status, hubReachable, "True", "HubReachable", "Hub is reachable and ready", true)
-		err = r.observe(ctx, entry.Client, object, status)
+		observationErr := r.observeWithInformer(ctx, entry.Client, object, status, informer)
+		if !r.isReadyMaaSInformer(hubID, generation, readinessRevision, informer, watcherFingerprint) {
+			return controllers.RequeueAfter(errors.New("hub watcher stopped during observation"), time.Second)
+		}
+		err = observationErr
 	}
 	object.SetStatus(status)
 	if !proto.Equal(old.GetStatus(), object.GetStatus()) {
-		_, updateErr := r.workloadClusters.Update(ctx, privatev1.WorkloadClustersUpdateRequest_builder{
+		updateCtx, cancelUpdate := context.WithTimeout(ctx, 15*time.Second)
+		_, updateErr := r.workloadClusters.Update(updateCtx, privatev1.WorkloadClustersUpdateRequest_builder{
 			Object:     object,
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status"}},
 		}.Build())
+		cancelUpdate()
 		if updateErr != nil {
 			return controllers.RequeueAfter(updateErr, time.Second)
 		}
 	}
-	r.recordConditionTransitions(old.GetStatus(), object.GetStatus())
-	r.updateAvailabilityMetrics(object.GetId(), availableStatus(object.GetStatus()))
 	return err
 }
 
 // releaseWatcherIfUnused stops a Hub informer once its last active registration
-// has been deleted. The list is intentionally performed through the public
+// has been deleted. The list is intentionally performed through the private
 // client so soft-deleted records do not keep a Hub watcher alive.
 func (r *function) releaseWatcherIfUnused(ctx context.Context, hubID string) error {
 	if hubID == "" {
 		return nil
 	}
-	filter := "this.spec.maas.source_hub_id == " + strconv.Quote(hubID)
-	response, err := r.workloadClusters.List(ctx, privatev1.WorkloadClustersListRequest_builder{
-		Filter: &filter,
-		Limit:  proto.Int32(1),
-	}.Build())
+	err := r.tryReleaseWatcherIfUnused(ctx, hubID)
 	if err != nil {
-		r.logger.Warn("Failed to check workload cluster registrations before releasing Hub watcher", slog.String("component", "workload-cluster-controller"), slog.String("operation", "cleanup"), slog.String("reason", "ListFailed"))
-		return errors.New("failed to check workload cluster registrations before releasing Hub watcher")
+		r.scheduleWatcherReleaseRetry(ctx, hubID)
 	}
-	if len(response.GetItems()) != 0 {
+	return err
+}
+
+func (r *function) tryReleaseWatcherIfUnused(ctx context.Context, hubID string) error {
+	for {
+		r.watchersLock.Lock()
+		revision := r.watcherUseRevisions[hubID]
+		r.watchersLock.Unlock()
+
+		filter := "this.spec.maas.source_hub_id == " + strconv.Quote(hubID)
+		listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		response, err := r.workloadClusters.List(listCtx, privatev1.WorkloadClustersListRequest_builder{
+			Filter: &filter,
+			Limit:  proto.Int32(1),
+		}.Build())
+		cancel()
+		if err != nil {
+			r.logger.Warn("Failed to check workload cluster registrations before releasing Hub watcher", slog.String("component", "workload-cluster-controller"), slog.String("operation", "cleanup"), slog.String("reason", "ListFailed"))
+			return errors.New("failed to check workload cluster registrations before releasing Hub watcher")
+		}
+		if len(response.GetItems()) != 0 {
+			return nil
+		}
+
+		r.watchersLock.Lock()
+		if err := ctx.Err(); err != nil {
+			r.watchersLock.Unlock()
+			return err
+		}
+		if revision != r.watcherUseRevisions[hubID] {
+			r.watchersLock.Unlock()
+			continue
+		}
+		if cancel, ok := r.watchers[hubID]; ok {
+			cancel()
+			delete(r.watchers, hubID)
+			delete(r.watcherCredentials, hubID)
+			delete(r.watchFailures, hubID)
+			delete(r.readyHubs, hubID)
+			delete(r.managedCaches, hubID)
+			delete(r.watchEstablished, hubID)
+		}
+		r.watchersLock.Unlock()
 		return nil
 	}
+}
 
+func (r *function) scheduleWatcherReleaseRetry(parent context.Context, hubID string) {
+	r.watchersLock.Lock()
+	if r.pendingReleases == nil {
+		r.pendingReleases = make(map[string]watcherReleaseState)
+	}
+	if _, exists := r.pendingReleases[hubID]; exists {
+		r.watchersLock.Unlock()
+		return
+	}
+	r.pendingReleaseID++
+	retryID := r.pendingReleaseID
+	ctx, cancel := context.WithCancel(parent)
+	r.pendingReleases[hubID] = watcherReleaseState{id: retryID, cancel: cancel}
+	r.watchersLock.Unlock()
+
+	go func() {
+		defer cancel()
+		defer func() {
+			r.watchersLock.Lock()
+			if current, exists := r.pendingReleases[hubID]; exists && current.id == retryID {
+				delete(r.pendingReleases, hubID)
+			}
+			r.watchersLock.Unlock()
+		}()
+		for attempt := 0; ; attempt++ {
+			if err := r.tryReleaseWatcherIfUnused(ctx, hubID); err == nil {
+				return
+			}
+			backoff := time.Duration(1<<min(attempt, 5)) * 250 * time.Millisecond
+			timer := time.NewTimer(backoff)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
+	}()
+}
+
+func (r *function) cancelPendingWatcherRelease(hubID string) {
+	if hubID == "" {
+		return
+	}
 	r.watchersLock.Lock()
 	defer r.watchersLock.Unlock()
-	if cancel, ok := r.watchers[hubID]; ok {
-		cancel()
-		delete(r.watchers, hubID)
-		delete(r.watcherCredentials, hubID)
-		delete(r.readyHubs, hubID)
-		delete(r.managedCaches, hubID)
-		delete(r.watchEstablished, hubID)
-	}
-	return nil
-}
-
-func (r *function) recordConditionTransitions(old, current *privatev1.WorkloadClusterStatus) {
-	if r.metrics == nil {
-		return
-	}
-	oldByType := map[string]string{}
-	for _, condition := range old.GetConditions() {
-		oldByType[condition.GetType()] = condition.GetStatus()
-	}
-	for _, condition := range current.GetConditions() {
-		from := oldByType[condition.GetType()]
-		to := condition.GetStatus()
-		if from != to {
-			r.metrics.ConditionTransitions.WithLabelValues(condition.GetType(), from, to).Inc()
-		}
-	}
-}
-
-func availableStatus(status *privatev1.WorkloadClusterStatus) string {
-	for _, condition := range status.GetConditions() {
-		if condition.GetType() == availableCondition {
-			return condition.GetStatus()
-		}
-	}
-	return ""
-}
-
-func (r *function) updateAvailabilityMetrics(id, status string) {
-	if r.metrics == nil || id == "" {
-		return
-	}
-	r.availabilityLock.Lock()
-	defer r.availabilityLock.Unlock()
-	previous := r.availability[id]
-	if previous == status {
-		return
-	}
-	switch previous {
-	case "True":
-		r.metrics.Available.Dec()
-	case "False":
-		r.metrics.Unavailable.Dec()
-	}
-	switch status {
-	case "True":
-		r.metrics.Available.Inc()
-	case "False":
-		r.metrics.Unavailable.Inc()
-	}
-	if status == "" {
-		delete(r.availability, id)
-	} else {
-		r.availability[id] = status
+	if current, exists := r.pendingReleases[hubID]; exists {
+		current.cancel()
+		delete(r.pendingReleases, hubID)
 	}
 }
 
 func (r *function) observe(ctx context.Context, hubClient clnt.Client, object *privatev1.WorkloadCluster, status *privatev1.WorkloadClusterStatus) error {
+	return r.observeWithInformer(ctx, hubClient, object, status, r.managedClusterInformer(object.GetSpec().GetMaas().GetSourceHubId()))
+}
+
+func (r *function) observeWithInformer(ctx context.Context, hubClient clnt.Client, object *privatev1.WorkloadCluster, status *privatev1.WorkloadClusterStatus, informer cache.SharedIndexInformer) error {
 	managed := &unstructured.Unstructured{}
 	managed.SetGroupVersionKind(managedClusterGVK)
 	var err error
-	if informer := r.managedClusterInformer(object.GetSpec().GetMaas().GetSourceHubId()); informer != nil {
+	if informer != nil {
 		cached, exists, cacheErr := informer.GetStore().GetByKey(object.GetSpec().GetMaas().GetManagedClusterName())
 		if cacheErr != nil {
 			err = cacheErr
@@ -330,9 +402,8 @@ func (r *function) observe(ctx context.Context, hubClient clnt.Client, object *p
 }
 
 func (r *function) managedClusterInformer(hubID string) cache.SharedIndexInformer {
-	r.watchersLock.Lock()
-	defer r.watchersLock.Unlock()
-	return r.managedCaches[hubID]
+	informer, _, _, _, _ := r.readyMaaSInformer(hubID)
+	return informer
 }
 
 func clusterIdentity(object *unstructured.Unstructured) (string, error) {

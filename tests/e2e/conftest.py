@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shlex
 import subprocess
 import time
 from collections.abc import Iterator
@@ -460,7 +461,7 @@ def pull_secret_name(cli: OsacCLI, pull_secret_path: str) -> Iterator[str]:
 
 @pytest.fixture(scope="session")
 def private_cli(namespace: str, fulfillment_private_address: str, service_account: str) -> Iterator[OsacCLI]:
-    token_script = " ".join(_service_account_token_args(service_account=service_account, namespace=namespace))
+    token_script = shlex.join(_service_account_token_args(service_account=service_account, namespace=namespace))
     instance = OsacCLI(
         binary=env("OSAC_CLI_PATH", "osac"),
         address=f"https://{fulfillment_private_address}",

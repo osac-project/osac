@@ -133,9 +133,8 @@ reader_roles := {
   "cloud-provider-reader",
 }
 
-# WorkloadCluster is a provider-global resource. Its public API is deliberately
-# restricted to cloud-provider administrators; reader and tenant roles must not
-# gain access through the ordinary client or reader method sets.
+# WorkloadCluster is a provider-global resource exposed only through the
+# private API to cloud-provider administrators.
 cloud_provider_admin_roles := {
   "cloud-provider-admin",
 }
@@ -530,10 +529,10 @@ legacy_allow if {
 legacy_allow if {
   is_cloud_provider_admin
   grpc_method in {
-    "/osac.public.v1.WorkloadClusters/List",
-    "/osac.public.v1.WorkloadClusters/Get",
-    "/osac.public.v1.WorkloadClusters/Create",
-    "/osac.public.v1.WorkloadClusters/Update",
+    "/osac.private.v1.WorkloadClusters/List",
+    "/osac.private.v1.WorkloadClusters/Get",
+    "/osac.private.v1.WorkloadClusters/Create",
+    "/osac.private.v1.WorkloadClusters/Update",
   }
 }
 

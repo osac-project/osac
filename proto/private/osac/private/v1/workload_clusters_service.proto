@@ -20,7 +20,7 @@ import "google/api/annotations.proto";
 import "google/protobuf/field_mask.proto";
 import "osac/private/v1/workload_cluster_type.proto";
 
-option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).private = true;
 option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
 
 message WorkloadClustersListRequest {
@@ -54,8 +54,6 @@ message WorkloadClustersDeleteResponse {}
 message WorkloadClustersSignalRequest {
   option (cleanapi.message).private = true;
   string id = 1;
-  string reason = 2;
-  string severity = 3;
 }
 
 message WorkloadClustersSignalResponse { option (cleanapi.message).private = true; }

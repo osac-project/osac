@@ -23,33 +23,56 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
-	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("WorkloadCluster API contract", func() {
-	It("requires a Hub identity, a DNS name, and at least one supported workload", func() {
-		valid := publicv1.WorkloadCluster_builder{
-			Metadata: publicv1.Metadata_builder{Name: "cluster-a"}.Build(),
-			Spec: publicv1.WorkloadClusterSpec_builder{
-				Maas:               publicv1.MaasConfig_builder{SourceHubId: "hub-a", ManagedClusterName: "cluster-a"}.Build(),
+	It("accepts a valid MaaS registration", func() {
+		valid := privatev1.WorkloadCluster_builder{
+			Metadata: privatev1.Metadata_builder{Name: "cluster-a"}.Build(),
+			Spec: privatev1.WorkloadClusterSpec_builder{
+				Maas:               privatev1.MaasConfig_builder{SourceHubId: "hub-a", ManagedClusterName: "cluster-a"}.Build(),
 				SupportedWorkloads: []string{"maas"},
 			}.Build(),
 		}.Build()
 		Expect(protovalidate.Validate(valid)).To(Succeed())
+	})
 
-		invalid := publicv1.WorkloadCluster_builder{
-			Metadata: publicv1.Metadata_builder{Name: "cluster-a"}.Build(),
-			Spec: publicv1.WorkloadClusterSpec_builder{
-				Maas: publicv1.MaasConfig_builder{SourceHubId: "hub-a", ManagedClusterName: "Cluster-A"}.Build(),
+	It("requires a Hub identity", func() {
+		invalid := privatev1.WorkloadCluster_builder{
+			Metadata: privatev1.Metadata_builder{Name: "cluster-a"}.Build(),
+			Spec: privatev1.WorkloadClusterSpec_builder{
+				Maas:               privatev1.MaasConfig_builder{ManagedClusterName: "cluster-a"}.Build(),
+				SupportedWorkloads: []string{"maas"},
+			}.Build(),
+		}.Build()
+		Expect(protovalidate.Validate(invalid)).To(HaveOccurred())
+	})
+
+	It("requires a valid ManagedCluster name", func() {
+		invalid := privatev1.WorkloadCluster_builder{
+			Metadata: privatev1.Metadata_builder{Name: "cluster-a"}.Build(),
+			Spec: privatev1.WorkloadClusterSpec_builder{
+				Maas:               privatev1.MaasConfig_builder{SourceHubId: "hub-a", ManagedClusterName: "Cluster-A"}.Build(),
+				SupportedWorkloads: []string{"maas"},
+			}.Build(),
+		}.Build()
+		Expect(protovalidate.Validate(invalid)).To(HaveOccurred())
+	})
+
+	It("requires at least one supported workload", func() {
+		invalid := privatev1.WorkloadCluster_builder{
+			Metadata: privatev1.Metadata_builder{Name: "cluster-a"}.Build(),
+			Spec: privatev1.WorkloadClusterSpec_builder{
+				Maas: privatev1.MaasConfig_builder{SourceHubId: "hub-a", ManagedClusterName: "cluster-a"}.Build(),
 			}.Build(),
 		}.Build()
 		Expect(protovalidate.Validate(invalid)).To(HaveOccurred())
 	})
 
 	It("rejects MaaS registrations without a MaaS configuration", func() {
-		invalid := publicv1.WorkloadCluster_builder{
-			Metadata: publicv1.Metadata_builder{Name: "cluster-a"}.Build(),
-			Spec: publicv1.WorkloadClusterSpec_builder{
+		invalid := privatev1.WorkloadCluster_builder{
+			Metadata: privatev1.Metadata_builder{Name: "cluster-a"}.Build(),
+			Spec: privatev1.WorkloadClusterSpec_builder{
 				SupportedWorkloads: []string{"maas"},
 			}.Build(),
 		}.Build()
@@ -57,9 +80,7 @@ var _ = Describe("WorkloadCluster API contract", func() {
 	})
 
 	It("keeps the observed Hub UID and reconciliation signal private", func() {
-		Expect((&publicv1.WorkloadClusterStatus{}).ProtoReflect().Descriptor().Fields().ByName("managed_cluster_uid")).To(BeNil())
 		Expect((&privatev1.WorkloadClusterStatus{}).ProtoReflect().Descriptor().Fields().ByName("managed_cluster_uid").Number()).To(Equal(protoreflect.FieldNumber(2)))
-		Expect(publicv1.File_osac_public_v1_workload_clusters_service_proto.Services().ByName("WorkloadClusters").Methods().ByName("Signal")).To(BeNil())
 		Expect(privatev1.File_osac_private_v1_workload_clusters_service_proto.Services().ByName("WorkloadClusters").Methods().ByName("Signal")).ToNot(BeNil())
 	})
 })

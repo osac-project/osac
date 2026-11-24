@@ -64,7 +64,6 @@ var disabledServicePrefixes = map[string][]string{
 		"/osac.private.v1.BareMetalInstanceTypes/",
 	},
 	"MaaS": {
-		"/osac.public.v1.WorkloadClusters/",
 		"/osac.private.v1.WorkloadClusters/",
 	},
 }

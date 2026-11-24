@@ -16,6 +16,7 @@ the demo commands:
 
 ```bash
 tests/e2e/maas/run-kind.sh --setup-only
+tests/e2e/maas/demo.sh hub-add
 ```
 
 Remove the demo environment with:

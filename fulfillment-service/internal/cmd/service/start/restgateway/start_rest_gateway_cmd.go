@@ -335,7 +335,6 @@ func buildHandlerList() []handlerRegistrar {
 		publicv1.RegisterQuotaLimitRequestsHandler,
 		publicv1.RegisterQuotaUsageHandler,
 		publicv1.RegisterQuotaDefaultLimitsHandler,
-		publicv1.RegisterWorkloadClustersHandler,
 		// Shared private API:
 		privatev1.RegisterCapabilitiesHandler,
 		privatev1.RegisterBillingProviderStatusesHandler,

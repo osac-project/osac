@@ -53,6 +53,27 @@ func TestObserveUsesHubInformerCache(t *testing.T) {
 	require.Equal(t, "True", condition(status, availableCondition).GetStatus())
 }
 
+func TestObserveWithInformerUsesSuppliedInformer(t *testing.T) {
+	informer := cache.NewSharedIndexInformer(
+		&cache.ListWatch{},
+		&unstructured.Unstructured{},
+		0,
+		cache.Indexers{},
+	)
+	require.NoError(t, informer.GetStore().Add(managedCluster("worker-1", "uid-from-supplied-informer", true, true)))
+	object := &privatev1.WorkloadCluster{Spec: &privatev1.WorkloadClusterSpec{Maas: &privatev1.MaasConfig{
+		SourceHubId: "hub-1", ManagedClusterName: "worker-1",
+	}}}
+	status := &privatev1.WorkloadClusterStatus{}
+	hub := fake.NewClientBuilder().WithObjects(managedCluster("worker-1", "uid-from-other-informer", true, true)).Build()
+	reconciler := &function{}
+
+	err := reconciler.observeWithInformer(context.Background(), hub, object, status, informer)
+
+	require.NoError(t, err)
+	require.Equal(t, "uid-from-supplied-informer", status.GetManagedClusterUid())
+}
+
 func TestObserveRetainsIdentityAndReportsMismatch(t *testing.T) {
 	hub := fake.NewClientBuilder().WithObjects(
 		managedCluster("worker-1", "uid-2", true, true),
@@ -156,7 +177,8 @@ func TestSetConditionRefreshesObservationWithoutTransition(t *testing.T) {
 
 	setCondition(status, availableCondition, "True", "ManagedClusterAvailable", "unchanged", true)
 
-	require.NotSame(t, observedAt, condition(status, availableCondition).GetLastObservedTime())
+	lastObserved := condition(status, availableCondition).GetLastObservedTime()
+	require.True(t, lastObserved.AsTime().After(observedAt.AsTime()))
 	require.Equal(t, observedAt, condition(status, availableCondition).GetLastTransitionTime())
 }
 

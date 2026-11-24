@@ -16,10 +16,10 @@ package servers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strconv"
 
-	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -28,17 +28,15 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
-	osacmetrics "github.com/osac-project/osac/fulfillment-service/internal/metrics"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 type PrivateWorkloadClustersServerBuilder struct {
-	logger            *slog.Logger
-	attributionLogic  auth.AttributionLogic
-	tenancyLogic      auth.TenancyLogic
-	hubsServer        privatev1.HubsServer
-	metricsRegisterer prometheus.Registerer
-	filterDesc        protoreflect.MessageDescriptor
+	logger           *slog.Logger
+	attributionLogic auth.AttributionLogic
+	tenancyLogic     auth.TenancyLogic
+	hubsServer       privatev1.HubsServer
+	filterDesc       protoreflect.MessageDescriptor
 }
 
 var _ privatev1.WorkloadClustersServer = (*PrivateWorkloadClustersServer)(nil)
@@ -47,7 +45,6 @@ type PrivateWorkloadClustersServer struct {
 	privatev1.UnimplementedWorkloadClustersServer
 	generic    *GenericServer[*privatev1.WorkloadCluster]
 	hubsServer privatev1.HubsServer
-	metrics    *osacmetrics.WorkloadClusterMetrics
 }
 
 const supportedWorkloadMaaS = "maas"
@@ -76,11 +73,6 @@ func (b *PrivateWorkloadClustersServerBuilder) SetHubsServer(value privatev1.Hub
 	return b
 }
 
-func (b *PrivateWorkloadClustersServerBuilder) SetMetricsRegisterer(value prometheus.Registerer) *PrivateWorkloadClustersServerBuilder {
-	b.metricsRegisterer = value
-	return b
-}
-
 func (b *PrivateWorkloadClustersServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateWorkloadClustersServerBuilder {
 	b.filterDesc = value
 	return b
@@ -98,18 +90,11 @@ func (b *PrivateWorkloadClustersServerBuilder) Build() (result *PrivateWorkloadC
 	}
 
 	s := &PrivateWorkloadClustersServer{hubsServer: b.hubsServer}
-	if b.metricsRegisterer != nil {
-		s.metrics, err = osacmetrics.NewWorkloadClusterMetrics(b.metricsRegisterer)
-		if err != nil {
-			return nil, err
-		}
-	}
 	s.generic, err = NewGenericServer[*privatev1.WorkloadCluster]().
 		SetLogger(b.logger).
 		SetService(privatev1.WorkloadClusters_ServiceDesc.ServiceName).
 		SetAttributionLogic(b.attributionLogic).
 		SetTenancyLogic(b.tenancyLogic).
-		SetMetricsRegisterer(b.metricsRegisterer).
 		SetFilterDesc(b.filterDesc).
 		SetAllowedTenants(auth.SharedTenant).
 		Build()
@@ -135,43 +120,24 @@ func (s *PrivateWorkloadClustersServer) Get(ctx context.Context,
 
 func (s *PrivateWorkloadClustersServer) Create(ctx context.Context,
 	request *privatev1.WorkloadClustersCreateRequest) (*privatev1.WorkloadClustersCreateResponse, error) {
-	registrationResult := "success"
-	defer func() {
-		if s.metrics != nil {
-			s.metrics.Registrations.WithLabelValues(registrationResult).Inc()
-		}
-	}()
-	setRegistrationResult := func(err error) error {
-		if err != nil {
-			switch grpcstatus.Code(err) {
-			case grpccodes.AlreadyExists:
-				registrationResult = "already_exists"
-			case grpccodes.InvalidArgument, grpccodes.FailedPrecondition:
-				registrationResult = "invalid"
-			default:
-				registrationResult = "error"
-			}
-		}
-		return err
-	}
 	if request == nil || request.GetObject() == nil {
-		return nil, setRegistrationResult(grpcstatus.Error(grpccodes.InvalidArgument, "object is required"))
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "object is required")
 	}
 	object := request.GetObject()
 	if err := validateSupportedWorkloads(object); err != nil {
-		return nil, setRegistrationResult(err)
+		return nil, err
 	}
 	if err := validateMaaSConfig(object); err != nil {
-		return nil, setRegistrationResult(err)
+		return nil, err
 	}
 	if err := s.validateSourceHub(ctx, object.GetSpec().GetMaas().GetSourceHubId()); err != nil {
-		return nil, setRegistrationResult(err)
+		return nil, err
 	}
 	if err := s.rejectDuplicate(ctx, object); err != nil {
-		return nil, setRegistrationResult(err)
+		return nil, err
 	}
 	if object.GetMetadata() == nil {
-		return nil, setRegistrationResult(grpcstatus.Error(grpccodes.InvalidArgument, "metadata is required"))
+		return nil, grpcstatus.Error(grpccodes.InvalidArgument, "metadata is required")
 	}
 	object.GetMetadata().SetTenant(auth.SharedTenant)
 
@@ -182,7 +148,7 @@ func (s *PrivateWorkloadClustersServer) Create(ctx context.Context,
 		candidate.SetStatus(initialWorkloadClusterStatus())
 		return nil
 	})
-	return response, setRegistrationResult(err)
+	return response, err
 }
 
 func (s *PrivateWorkloadClustersServer) Update(ctx context.Context,
@@ -223,7 +189,7 @@ func (s *PrivateWorkloadClustersServer) Delete(ctx context.Context,
 func (s *PrivateWorkloadClustersServer) Signal(ctx context.Context,
 	request *privatev1.WorkloadClustersSignalRequest) (*privatev1.WorkloadClustersSignalResponse, error) {
 	var response *privatev1.WorkloadClustersSignalResponse
-	err := s.generic.SignalWithEventMetadata(ctx, request, &response, request.GetReason(), request.GetSeverity())
+	err := s.generic.Signal(ctx, request, &response)
 	return response, err
 }
 
@@ -295,28 +261,35 @@ func (s *PrivateWorkloadClustersServer) validateSourceHub(ctx context.Context, i
 		if txErr != nil {
 			return grpcstatus.Error(grpccodes.Internal, "workload cluster registration requires a database transaction")
 		}
-		if lockErr := database.LockWorkloadClusterHubRegistration(ctx, tx); lockErr != nil {
+		if lockErr := lockWorkloadClusterHubRegistration(ctx, tx); lockErr != nil {
 			return ConvertDAOErrorToGRPC(lockErr, "lock", "workload cluster Hub registration")
 		}
 		activeHubFilter := "this.metadata.deletion_timestamp == null"
-		configured, listErr := listActiveHubs(ctx, hubs, activeHubFilter)
+		activeHubs, listErr := listHubs(ctx, hubs.generic.dao, activeHubFilter)
 		if listErr != nil {
 			return ConvertDAOErrorToGRPC(listErr, "list", "hubs")
 		}
+		activeHubIDsForLock := make([]string, 0, len(activeHubs))
+		for _, hub := range activeHubs {
+			activeHubIDsForLock = append(activeHubIDsForLock, hub.GetId())
+		}
+		lockedHubs, lockErr := hubs.generic.dao.Lock().
+			AddIds(activeHubIDsForLock...).
+			SetReturnObjects(true).
+			Do(ctx)
+		if lockErr != nil {
+			return ConvertDAOErrorToGRPC(lockErr, "lock", "hubs")
+		}
+		configured := lockedHubs.GetObjects()
 		if err := validateExistingWorkloadClusterHub(configured, id); err != nil {
 			return err
 		}
 		activeHubIDs := make(map[string]struct{}, len(configured))
-		activeHubIDList := make([]string, 0, len(configured))
 		for _, hub := range configured {
+			if hub.GetMetadata().HasDeletionTimestamp() {
+				continue
+			}
 			activeHubIDs[hub.GetId()] = struct{}{}
-			activeHubIDList = append(activeHubIDList, hub.GetId())
-		}
-		// Lock every active Hub row in this transaction. Registrations for
-		// different Hubs therefore serialize before checking the single-active-
-		// Hub invariant and inserting the new WorkloadCluster.
-		if _, lockErr := hubs.generic.dao.Lock().AddIds(activeHubIDList...).Do(ctx); lockErr != nil {
-			return ConvertDAOErrorToGRPC(lockErr, "lock", "hubs")
 		}
 		workloadClusters, listErr := listWorkloadClusters(ctx, s.generic.dao, activeHubFilter)
 		if listErr != nil {
@@ -332,7 +305,11 @@ func (s *PrivateWorkloadClustersServer) validateSourceHub(ctx context.Context, i
 			return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.maas.source_hub_id' must reference an existing active Hub")
 		}
 	} else {
-		_, err = s.hubsServer.Get(ctx, privatev1.HubsGetRequest_builder{Id: id}.Build())
+		var response *privatev1.HubsGetResponse
+		response, err = s.hubsServer.Get(ctx, privatev1.HubsGetRequest_builder{Id: id}.Build())
+		if err == nil && response.GetObject().GetMetadata().HasDeletionTimestamp() {
+			err = grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.maas.source_hub_id' must reference an existing active Hub")
+		}
 	}
 	if err != nil {
 		if grpcstatus.Code(err) == grpccodes.NotFound {
@@ -341,21 +318,6 @@ func (s *PrivateWorkloadClustersServer) validateSourceHub(ctx context.Context, i
 		return err
 	}
 	return nil
-}
-
-func listActiveHubs(ctx context.Context, hubs *PrivateHubsServer, filter string) ([]*privatev1.Hub, error) {
-	const pageSize int32 = 100
-	var result []*privatev1.Hub
-	for offset := int32(0); ; offset += pageSize {
-		page, err := hubs.generic.dao.List().SetFilter(filter).SetOffset(offset).SetLimit(pageSize).Do(ctx)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, page.GetItems()...)
-		if int64(offset)+int64(len(page.GetItems())) >= int64(page.GetTotal()) || len(page.GetItems()) == 0 {
-			return result, nil
-		}
-	}
 }
 
 func listWorkloadClusters(ctx context.Context, workloadClusters *dao.GenericDAO[*privatev1.WorkloadCluster], filter string) ([]*privatev1.WorkloadCluster, error) {
@@ -371,6 +333,32 @@ func listWorkloadClusters(ctx context.Context, workloadClusters *dao.GenericDAO[
 			return result, nil
 		}
 	}
+}
+
+func listHubs(ctx context.Context, hubs *dao.GenericDAO[*privatev1.Hub], filter string) ([]*privatev1.Hub, error) {
+	const pageSize int32 = 100
+	var result []*privatev1.Hub
+	for offset := int32(0); ; {
+		page, err := hubs.List().SetFilter(filter).SetOffset(offset).SetLimit(pageSize).Do(ctx)
+		if err != nil {
+			return nil, err
+		}
+		items := page.GetItems()
+		result = append(result, items...)
+		if len(items) == 0 || int64(offset)+int64(len(items)) >= int64(page.GetTotal()) {
+			return result, nil
+		}
+		offset += int32(len(items))
+	}
+}
+
+func lockWorkloadClusterHubRegistration(ctx context.Context, tx database.Tx) error {
+	if _, err := tx.Exec(ctx, `
+		select pg_advisory_xact_lock(hashtextextended($1, 0))`,
+		"osac.workload_cluster_hub_registration"); err != nil {
+		return fmt.Errorf("lock workload cluster Hub registration: %w", err)
+	}
+	return nil
 }
 
 func validateExistingWorkloadClusterHub(hubs []*privatev1.Hub, id string) error {

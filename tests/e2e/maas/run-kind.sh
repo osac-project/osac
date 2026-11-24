@@ -24,6 +24,9 @@ source_cluster="${OSAC_SOURCE_HUB_CLUSTER_NAME:-osac-wc-e2e-hub}"
 management_kubeconfig="${OSAC_KIND_KUBECONFIG:-${TMPDIR:-/tmp}/${management_cluster}.kubeconfig}"
 source_kubeconfig="${OSAC_SOURCE_HUB_KUBECONFIG:-${TMPDIR:-/tmp}/${source_cluster}.kubeconfig}"
 controller_source_kubeconfig="${TMPDIR:-/tmp}/${source_cluster}-controller.kubeconfig"
+ownership_marker="${TMPDIR:-/tmp}/${management_cluster}.osac-wc-e2e-owner"
+source_ownership_marker="${TMPDIR:-/tmp}/${source_cluster}.osac-wc-e2e-owner"
+artifact_marker="${TMPDIR:-/tmp}/osac-wc-e2e-artifacts-owner"
 namespace="${OSAC_NAMESPACE:-osac}"
 private_api_port="${OSAC_E2E_PRIVATE_API_PORT:-18001}"
 keycloak_port="${OSAC_E2E_KEYCLOAK_PORT:-18443}"
@@ -31,8 +34,14 @@ container_provider="${CONTAINER_TOOL:-${KIND_EXPERIMENTAL_PROVIDER:-podman}}"
 fulfillment_image="${OSAC_FULFILLMENT_IMAGE:-localhost/fulfillment-service:e2e}"
 cli_binary="${TMPDIR:-/tmp}/osac-wc-e2e-cli"
 cli_config="${TMPDIR:-/tmp}/osac-wc-e2e-cli-config"
+lifecycle_lock_file="${TMPDIR:-/tmp}/osac-wc-e2e-lifecycle.lock"
 setup_only="false"
 cleanup_only="false"
+preserve_ownership_marker="false"
+created_ownership_marker="false"
+created_source_ownership_marker="false"
+created_artifact_marker="false"
+validated_ownership_marker="false"
 
 for argument in "$@"; do
     case "${argument}" in
@@ -61,47 +70,89 @@ fi
 forward_pids=()
 created_management=false
 created_source=false
+created_cli_binary=false
+created_cli_config=false
 forward_log_dir=""
+lifecycle_lock_acquired=false
+lifecycle_lock_fd=-1
+
+release_lifecycle_lock() {
+    if [[ "${lifecycle_lock_acquired}" == true ]]; then
+        flock -u "${lifecycle_lock_fd}" 2>/dev/null || true
+        exec {lifecycle_lock_fd}>&-
+        lifecycle_lock_acquired=false
+    fi
+}
 
 cleanup() {
     local status=$?
     set +e
+    local cleanup_failed=false
 
     if [[ "${setup_only}" == "true" && "${status}" -eq 0 ]]; then
+        release_lifecycle_lock
         echo "Keeping setup-only demo environment."
         echo "  management kubeconfig: ${management_kubeconfig}"
         echo "  source Hub kubeconfig: ${source_kubeconfig}"
         exit "${status}"
     fi
 
-    for forward_pid in "${forward_pids[@]}"; do
-        kill "${forward_pid}" 2>/dev/null
-        wait "${forward_pid}" 2>/dev/null
-    done
-
-    if [[ "${created_source}" == true ]]; then
-        KIND_EXPERIMENTAL_PROVIDER="${container_provider}" \
-            kind delete cluster --name "${source_cluster}" >/dev/null 2>&1
-    fi
-    if [[ "${created_management}" == true ]]; then
-        KIND_EXPERIMENTAL_PROVIDER="${container_provider}" \
-            kind delete cluster --name "${management_cluster}" >/dev/null 2>&1
+    if [[ ${#forward_pids[@]} -gt 0 ]]; then
+        for forward_pid in "${forward_pids[@]}"; do
+            kill "${forward_pid}" 2>/dev/null
+            wait "${forward_pid}" 2>/dev/null
+        done
     fi
 
-    rm -rf "${cli_config}"
-    rm -f "${cli_binary}"
-    if [[ "${created_management}" == true ]]; then
-        rm -f "${management_kubeconfig}"
-    fi
     if [[ "${created_source}" == true ]]; then
-        rm -f "${source_kubeconfig}" "${controller_source_kubeconfig}"
+        if ! KIND_EXPERIMENTAL_PROVIDER="${container_provider}" \
+            kind delete cluster --name "${source_cluster}" >/dev/null 2>&1; then
+            cleanup_failed=true
+            echo "failed to delete source Hub cluster: ${source_cluster}" >&2
+        else
+            rm -f "${source_kubeconfig}" "${controller_source_kubeconfig}"
+        fi
+    fi
+    if [[ "${created_management}" == true ]]; then
+        if ! KIND_EXPERIMENTAL_PROVIDER="${container_provider}" \
+            kind delete cluster --name "${management_cluster}" >/dev/null 2>&1; then
+            cleanup_failed=true
+            echo "failed to delete management cluster: ${management_cluster}" >&2
+        else
+            rm -f "${management_kubeconfig}"
+        fi
+    fi
+
+    if [[ "${created_cli_config}" == true ]]; then
+        rm -rf "${cli_config}"
+    fi
+    if [[ "${created_cli_binary}" == true ]]; then
+        rm -f "${cli_binary}"
     fi
     if [[ -n "${forward_log_dir}" ]]; then
         rm -rf "${forward_log_dir}"
     fi
+	if [[ "${cleanup_failed}" == false && "${preserve_ownership_marker}" == false ]]; then
+		if [[ "${created_ownership_marker}" == true || "${validated_ownership_marker}" == true ]]; then
+			rm -f "${ownership_marker}"
+		fi
+		if [[ "${created_source_ownership_marker}" == true || "${validated_ownership_marker}" == true ]]; then
+			rm -f "${source_ownership_marker}"
+		fi
+		if [[ "${created_artifact_marker}" == true || "${validated_ownership_marker}" == true ]]; then
+			rm -f "${artifact_marker}"
+		fi
+    fi
+
+    if [[ "${cleanup_failed}" == true && "${status}" -eq 0 ]]; then
+        status=1
+    fi
+    release_lifecycle_lock
     exit "${status}"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 require_command() {
     command -v "$1" >/dev/null 2>&1 || {
@@ -110,26 +161,85 @@ require_command() {
     }
 }
 
-for command in kind kubectl helm go uv; do
-    require_command "${command}"
-done
+require_command kind
+require_command flock
+
+exec {lifecycle_lock_fd}>"${lifecycle_lock_file}"
+if ! flock -n "${lifecycle_lock_fd}"; then
+    exec {lifecycle_lock_fd}>&-
+    echo "another MaaS demo setup or cleanup is already in progress" >&2
+    exit 2
+fi
+lifecycle_lock_acquired=true
 
 if [[ "${cleanup_only}" == "true" ]]; then
-    KIND_EXPERIMENTAL_PROVIDER="${container_provider}" \
-        kind delete cluster --name "${source_cluster}" >/dev/null 2>&1 || true
-    KIND_EXPERIMENTAL_PROVIDER="${container_provider}" \
-        kind delete cluster --name "${management_cluster}" >/dev/null 2>&1 || true
+    expected_ownership="${management_cluster}|${source_cluster}|${container_provider}|${management_kubeconfig}|${source_kubeconfig}|${controller_source_kubeconfig}|${cli_binary}|${cli_config}"
+	if [[ ! -f "${ownership_marker}" ]] || [[ "$(<"${ownership_marker}")" != "${expected_ownership}" ]] ||
+		[[ ! -f "${source_ownership_marker}" ]] || [[ "$(<"${source_ownership_marker}")" != "${expected_ownership}" ]] ||
+		[[ ! -f "${artifact_marker}" ]] || [[ "$(<"${artifact_marker}")" != "${expected_ownership}" ]]; then
+        preserve_ownership_marker=true
+        echo "no matching demo ownership record; refusing cleanup" >&2
+        exit 1
+    fi
+    validated_ownership_marker=true
+    # Keep the ownership records while teardown is in progress. If this
+    # process is interrupted, a later cleanup-only invocation can recover the
+    # remaining clusters and artifacts.
+    preserve_ownership_marker=true
+    cleanup_failed=false
+    if ! KIND_EXPERIMENTAL_PROVIDER="${container_provider}" \
+        kind delete cluster --name "${source_cluster}" >/dev/null 2>&1; then
+        cleanup_failed=true
+        echo "failed to delete source Hub cluster: ${source_cluster}" >&2
+    else
+        rm -f "${source_kubeconfig}" "${controller_source_kubeconfig}"
+    fi
+    if ! KIND_EXPERIMENTAL_PROVIDER="${container_provider}" \
+        kind delete cluster --name "${management_cluster}" >/dev/null 2>&1; then
+        cleanup_failed=true
+        echo "failed to delete management cluster: ${management_cluster}" >&2
+    else
+        rm -f "${management_kubeconfig}"
+    fi
     rm -rf "${cli_config}"
-    rm -f "${cli_binary}" "${management_kubeconfig}" "${source_kubeconfig}" "${controller_source_kubeconfig}"
+    rm -f "${cli_binary}"
+    if [[ "${cleanup_failed}" == true ]]; then
+        echo "Demo environment cleanup failed; retaining recovery files for failed deletions." >&2
+        exit 1
+    fi
+    preserve_ownership_marker=false
     echo "Demo environment cleanup complete."
     exit 0
 fi
 
-if [[ -e "${management_kubeconfig}" || -e "${source_kubeconfig}" || -e "${controller_source_kubeconfig}" ]]; then
+if [[ -e "${cli_binary}" || -e "${cli_config}" ]]; then
+    echo "refusing to reuse existing CLI artifacts; remove the disposable files first:" >&2
+    echo "  ${cli_binary}" >&2
+    echo "  ${cli_config}" >&2
+    exit 2
+fi
+
+ownership_record="${management_cluster}|${source_cluster}|${container_provider}|${management_kubeconfig}|${source_kubeconfig}|${controller_source_kubeconfig}|${cli_binary}|${cli_config}"
+if ! (set -o noclobber; printf '%s\n' "${ownership_record}" >"${artifact_marker}"); then
+    echo "shared demo artifacts are in use; refusing to run concurrently" >&2
+    exit 2
+fi
+created_artifact_marker=true
+
+for command in kubectl helm go uv curl make sed grep; do
+    require_command "${command}"
+done
+require_command "${container_provider}"
+
+if [[ -e "${management_kubeconfig}" || -e "${source_kubeconfig}" || -e "${controller_source_kubeconfig}" || -e "${cli_binary}" || -e "${cli_config}" || -e "${ownership_marker}" || -e "${source_ownership_marker}" ]]; then
     echo "refusing to reuse existing kubeconfig; remove the disposable files first:" >&2
     echo "  ${management_kubeconfig}" >&2
     echo "  ${source_kubeconfig}" >&2
     echo "  ${controller_source_kubeconfig}" >&2
+    echo "  ${cli_binary}" >&2
+    echo "  ${cli_config}" >&2
+    echo "  ${ownership_marker}" >&2
+	echo "  ${source_ownership_marker}" >&2
     exit 2
 fi
 
@@ -143,8 +253,21 @@ if grep -Fxq "${source_cluster}" <<<"${existing_clusters}"; then
     exit 2
 fi
 
+if ! (set -o noclobber; printf '%s\n' "${ownership_record}" >"${source_ownership_marker}"); then
+    echo "source-cluster demo ownership marker was claimed concurrently; refusing to manage the clusters" >&2
+    exit 2
+fi
+created_source_ownership_marker=true
+if ! (set -o noclobber; printf '%s\n' "${ownership_record}" >"${ownership_marker}"); then
+    echo "demo ownership marker was claimed concurrently; refusing to manage the clusters" >&2
+    exit 2
+fi
+created_ownership_marker=true
+
 forward_log_dir=$(mktemp -d "${TMPDIR:-/tmp}/osac-wc-e2e.XXXXXX")
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 created_management=true
 KIND_EXPERIMENTAL_PROVIDER="${container_provider}" \
@@ -192,8 +315,7 @@ if [[ -z "${source_node_ip}" ]]; then
     echo "could not determine source Hub control-plane container IP" >&2
     exit 2
 fi
-cp "${source_kubeconfig}" "${controller_source_kubeconfig}"
-sed -E -i "s#https://127\\.0\\.0\\.1:[0-9]+#https://${source_node_ip}:6443#" "${controller_source_kubeconfig}"
+(umask 077 && sed -E "s#https://127\\.0\\.0\\.1:[0-9]+#https://${source_node_ip}:6443#" "${source_kubeconfig}" >"${controller_source_kubeconfig}")
 
 make -C "${repo_root}/fulfillment-service" image-build \
     IMG="${fulfillment_image}" CONTAINER_TOOL="${container_provider}"
@@ -234,9 +356,11 @@ if [[ "${forward_ready}" != true ]]; then
     exit 1
 fi
 
+created_cli_binary=true
 go build -o "${cli_binary}" "${repo_root}/fulfillment-service/cmd/osac"
 
 token_script="KUBECONFIG=$(printf '%q' "${management_kubeconfig}") kubectl create token admin -n $(printf '%q' "${namespace}") --duration 4h"
+created_cli_config=true
 OSAC_CONFIG="${cli_config}" "${cli_binary}" login "127.0.0.1:${private_api_port}" \
     --insecure --private --token-script "${token_script}"
 

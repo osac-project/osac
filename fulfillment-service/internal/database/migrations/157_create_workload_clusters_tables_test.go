@@ -21,7 +21,7 @@ import (
 
 var _ = DescribeMigration("Create WorkloadCluster tables", func() {
 	BeforeEach(func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 150)).To(Succeed())
+		Expect(tool.Migrate(ctx, 157)).To(Succeed())
 	})
 
 	It("creates the provider-global schema and tenant foreign key", func(ctx context.Context) {
@@ -35,80 +35,6 @@ var _ = DescribeMigration("Create WorkloadCluster tables", func() {
 			select count(*) from pg_constraint
 			where conname = 'workload_clusters_tenant_fk'`).Scan(&count)).To(Succeed())
 		Expect(count).To(Equal(1))
-	})
-
-	It("adds event metadata columns to durable changes", func(ctx context.Context) {
-		var reasonType, severityType string
-		err := conn.QueryRow(ctx, `
-			select
-			(select data_type from information_schema.columns where table_name = 'changes' and column_name = 'reason'),
-			(select data_type from information_schema.columns where table_name = 'changes' and column_name = 'severity')
-		`).Scan(&reasonType, &severityType)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(reasonType).To(Equal("text"))
-		Expect(severityType).To(Equal("text"))
-	})
-
-	It("persists event metadata set by a signal operation", func(ctx context.Context) {
-		_, err := conn.Exec(ctx, `select set_config('osac.event_reason', 'HubReconnected', false), set_config('osac.event_severity', 'Normal', false)`)
-		Expect(err).ToNot(HaveOccurred())
-		_, err = conn.Exec(ctx, `insert into hubs (id, name, tenant, data) values ('event-metadata-hub', 'event-metadata-hub', 'shared', '{}')`)
-		Expect(err).ToNot(HaveOccurred())
-		_, err = conn.Exec(ctx, `
-			insert into workload_clusters (id, name, tenant, data)
-			values ('event-metadata-wc', 'event-metadata-wc', 'shared', '{"spec":{"maas":{"source_hub_id":"event-metadata-hub","managed_cluster_name":"worker-1"}}}')`)
-		Expect(err).ToNot(HaveOccurred())
-
-		var reason, severity string
-		err = conn.QueryRow(ctx, `
-			select reason, severity from changes
-			where "table" = 'workload_clusters' and data->>'id' = 'event-metadata-wc'
-			order by id desc limit 1
-		`).Scan(&reason, &severity)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(reason).To(Equal("HubReconnected"))
-		Expect(severity).To(Equal("Normal"))
-	})
-
-	It("marks only actual WorkloadCluster availability transitions", func(ctx context.Context) {
-		_, err := conn.Exec(ctx, `
-			insert into hubs (id, name, tenant, data) values ('transition-hub', 'transition-hub', 'shared', '{}')
-		`)
-		Expect(err).ToNot(HaveOccurred())
-		_, err = conn.Exec(ctx, `
-			insert into workload_clusters (id, name, tenant, data)
-			values ('transition-wc', 'transition-wc', 'shared',
-			'{"spec":{"maas":{"source_hub_id":"transition-hub","managed_cluster_name":"worker-1"}},"status":{"conditions":[{"type":"Available","status":"False","reason":"ManagedClusterUnavailable"}]}}')
-		`)
-		Expect(err).ToNot(HaveOccurred())
-
-		_, err = conn.Exec(ctx, `
-			update workload_clusters
-			set data = '{"spec":{"maas":{"source_hub_id":"transition-hub","managed_cluster_name":"worker-1"}},"status":{"conditions":[{"type":"Available","status":"True","reason":"ManagedClusterAvailable"}]}}'
-			where id = 'transition-wc'
-		`)
-		Expect(err).ToNot(HaveOccurred())
-		var reason, severity string
-		err = conn.QueryRow(ctx, `
-			select reason, severity from changes
-			where "table" = 'workload_clusters' and data->>'id' = 'transition-wc' and op = 'UPDATE'
-			order by id desc limit 1
-		`).Scan(&reason, &severity)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(reason).To(Equal("Available"))
-		Expect(severity).To(Equal("Normal"))
-
-		_, err = conn.Exec(ctx, `update workload_clusters set finalizers = '{unrelated}' where id = 'transition-wc'`)
-		Expect(err).ToNot(HaveOccurred())
-		var unchangedReason, unchangedSeverity *string
-		err = conn.QueryRow(ctx, `
-			select reason, severity from changes
-			where "table" = 'workload_clusters' and data->>'id' = 'transition-wc' and op = 'UPDATE'
-			order by id desc limit 1
-		`).Scan(&unchangedReason, &unchangedSeverity)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(unchangedReason).To(BeNil())
-		Expect(unchangedSeverity).To(BeNil())
 	})
 
 	It("enforces unique active Hub identity", func(ctx context.Context) {

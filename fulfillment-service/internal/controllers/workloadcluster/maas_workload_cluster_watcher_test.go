@@ -16,6 +16,7 @@ package workloadcluster
 import (
 	"context"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,7 +33,10 @@ type watcherWorkloadClustersServer struct {
 	signals chan *privatev1.WorkloadClustersSignalRequest
 }
 
-func (s *watcherWorkloadClustersServer) List(context.Context, *privatev1.WorkloadClustersListRequest) (*privatev1.WorkloadClustersListResponse, error) {
+func (s *watcherWorkloadClustersServer) List(_ context.Context, request *privatev1.WorkloadClustersListRequest) (*privatev1.WorkloadClustersListResponse, error) {
+	if strings.Contains(request.GetFilter(), "this.id >") {
+		return privatev1.WorkloadClustersListResponse_builder{}.Build(), nil
+	}
 	return privatev1.WorkloadClustersListResponse_builder{
 		Items: []*privatev1.WorkloadCluster{privatev1.WorkloadCluster_builder{
 			Id:   "wc-1",
@@ -46,7 +50,7 @@ func (s *watcherWorkloadClustersServer) Signal(_ context.Context, request *priva
 	return &privatev1.WorkloadClustersSignalResponse{}, nil
 }
 
-func TestSignalForHubRecordsReconnectMetadata(t *testing.T) {
+func TestSignalForHubUsesInternalSignalWithoutEventMetadata(t *testing.T) {
 	listener := bufconn.Listen(1024 * 1024)
 	grpcServer := grpc.NewServer()
 	server := &watcherWorkloadClustersServer{signals: make(chan *privatev1.WorkloadClustersSignalRequest, 1)}
@@ -64,7 +68,7 @@ func TestSignalForHubRecordsReconnectMetadata(t *testing.T) {
 	reconciler := &function{workloadClusters: privatev1.NewWorkloadClustersClient(connection)}
 	signalCtx, cancelSignal := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelSignal()
-	reconciler.signalForHub(signalCtx, "hub-1", "HubReconnected", "Normal")
+	reconciler.signalForHub(signalCtx, "hub-1")
 
 	var request *privatev1.WorkloadClustersSignalRequest
 	select {
@@ -76,6 +80,6 @@ func TestSignalForHubRecordsReconnectMetadata(t *testing.T) {
 		t.Fatal("timed out waiting for Hub signal")
 	}
 	require.Equal(t, "wc-1", request.GetId())
-	require.Equal(t, "HubReconnected", request.GetReason())
-	require.Equal(t, "Normal", request.GetSeverity())
+	require.Equal(t, 1, request.ProtoReflect().Descriptor().Fields().Len())
+	require.Empty(t, request.ProtoReflect().GetUnknown())
 }

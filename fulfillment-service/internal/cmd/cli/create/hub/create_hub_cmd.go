@@ -16,11 +16,11 @@ package hub
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -96,7 +96,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	if c.namespace == "" {
 		return fmt.Errorf("namespace name is required")
 	}
-	labels, err := metautil.ParseLabels(c.labels)
+	labels, err := parseLabels(c.labels)
 	if err != nil {
 		return err
 	}
@@ -142,6 +142,27 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	c.console.Infof(ctx, "Created hub `%s`.\n", hub.GetId())
 
 	return nil
+}
+
+func parseLabels(values []string) (map[string]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	labels := make(map[string]string, len(values))
+	for _, value := range values {
+		key, labelValue, ok := strings.Cut(value, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid label %q: must be in key=value format", value)
+		}
+		if key == "" {
+			return nil, fmt.Errorf("invalid label %q: key must not be empty", value)
+		}
+		if _, exists := labels[key]; exists {
+			return nil, fmt.Errorf("duplicate label key %q", key)
+		}
+		labels[key] = labelValue
+	}
+	return labels, nil
 }
 
 const shortHelp = `Create a hub`

@@ -421,23 +421,6 @@ var _ = Describe("Event publisher", Ordered, func() {
 			return changeID
 		}
 
-		insertWorkloadClusterChange := func(tenant, objectID, operation, reason, severity string) string {
-			var changeID string
-			data := fmt.Sprintf(`{
-				"id": %q,
-				"name": %q,
-				"tenant": %q,
-				"data": {"spec":{"maas":{"source_hub_id":"hub-1","managed_cluster_name":"worker-1"}},"status":{"conditions":[{"type":"Available","status":"False","reason":"ClusterIdentityMismatch"}]}}
-			}`, objectID, objectID, tenant)
-			err := pool.QueryRow(encodeCtx, `
-				insert into changes ("table", op, data, reason, severity)
-				values ('workload_clusters', $1, $2::jsonb, $3, $4)
-				returning id
-			`, operation, data, reason, severity).Scan(&changeID)
-			Expect(err).ToNot(HaveOccurred())
-			return changeID
-		}
-
 		It("Serializes a private Event from the change row", func() {
 			tenant := "acme-" + uuid.New()
 			topic := DefaultEventTopicPrefix + tenant
@@ -459,20 +442,6 @@ var _ = Describe("Event publisher", Ordered, func() {
 			Expect(events[0].event.GetProject().GetId()).To(Equal("p-1"))
 			Expect(events[0].event.GetProject().GetMetadata().GetTenant()).To(Equal(tenant))
 			Expect(events[0].event.GetProject().GetSpec().GetTitle()).To(Equal("Acme"))
-		})
-
-		It("Publishes WorkloadCluster event metadata", func() {
-			tenant := "workload-events-" + uuid.New()
-			changeID := insertWorkloadClusterChange(tenant, "wc-1", "UPDATE", "IdentityMismatch", "Warning")
-
-			cancel, done := startPublisher(pub)
-			defer stopPublisher(cancel, done)
-
-			events := collectKafkaEvents(client, DefaultEventTopicPrefix+tenant, 1)
-			Expect(events[0].event.GetId()).To(Equal(changeID))
-			Expect(events[0].event.GetWorkloadCluster()).ToNot(BeNil())
-			Expect(events[0].event.GetReason()).To(Equal("IdentityMismatch"))
-			Expect(events[0].event.GetSeverity()).To(Equal("Warning"))
 		})
 
 		It("Uses SQL metadata in service account events and ignores unpersisted metadata", func() {
@@ -960,8 +929,6 @@ var _ = Describe("Event publisher", Ordered, func() {
 					"table" text not null,
 					op text not null,
 					data jsonb not null,
-					reason text,
-					severity text,
 					"timestamp" timestamptz not null default now()
 				)
 			`)
@@ -1831,9 +1798,7 @@ var _ = Describe("Event publisher", Ordered, func() {
 					"table" text not null,
 					op text not null,
 					data jsonb not null,
-					"timestamp" timestamptz not null default now(),
-					reason text,
-					severity text
+					"timestamp" timestamptz not null default now()
 				)
 			`)
 			Expect(err).ToNot(HaveOccurred())

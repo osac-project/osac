@@ -209,11 +209,16 @@ var _ = Describe("buildDisabledServiceMap", func() {
 	})
 
 	It("only includes disabled groups for partial disable", func() {
-		m := buildDisabledServiceMap(&services.Flags{CaaS: true, VMaaS: false, BMaaS: true, MaaS: false})
+		m := buildDisabledServiceMap(&services.Flags{CaaS: true, VMaaS: false, BMaaS: true, MaaS: true})
 		for prefix := range m {
-			Expect(m[prefix]).To(BeElementOf("VMaaS", "MaaS"))
+			Expect(m[prefix]).To(Equal("VMaaS"))
 		}
-		Expect(m).To(HaveLen(len(disabledServicePrefixes["VMaaS"]) + len(disabledServicePrefixes["MaaS"])))
+		Expect(m).To(HaveLen(len(disabledServicePrefixes["VMaaS"])))
+	})
+
+	It("includes WorkloadClusters when MaaS is disabled", func() {
+		m := buildDisabledServiceMap(&services.Flags{CaaS: true, VMaaS: true, BMaaS: true, MaaS: false})
+		Expect(m["/osac.private.v1.WorkloadClusters/"]).To(Equal("MaaS"))
 	})
 
 	It("keeps DiskImages enabled when either VMaaS or BMaaS is enabled", func() {

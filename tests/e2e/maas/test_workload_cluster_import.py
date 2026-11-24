@@ -111,47 +111,42 @@ def test_import_available_managed_cluster(
         ),
     )
 
-    try:
-        workload_cluster_id = private_cli.create_workload_cluster(
-            name=workload_cluster_name,
-            source_hub_id=source_hub_id,
-            managed_cluster_name=managed_cluster_name,
-            supported_workloads=["maas"],
-        )
+    workload_cluster_id = private_cli.create_workload_cluster(
+        name=workload_cluster_name,
+        source_hub_id=source_hub_id,
+        managed_cluster_name=managed_cluster_name,
+        supported_workloads=["maas"],
+    )
 
-        def get_workload_cluster() -> dict[str, Any]:
-            return private_grpc.call(service=f"{PRIVATE_API}.WorkloadClusters/Get", data={"id": workload_cluster_id})[
-                "object"
-            ]
+    def get_workload_cluster() -> dict[str, Any]:
+        return private_grpc.call(service=f"{PRIVATE_API}.WorkloadClusters/Get", data={"id": workload_cluster_id})[
+            "object"
+        ]
 
-        registered = poll_until(
-            fn=get_workload_cluster,
-            until=lambda object_: _condition(object_, "Available").get("status") == "True",
-            retries=60,
-            delay=5,
-            description="WorkloadCluster becomes available after Hub import",
-            resource_kind=WaitResourceKind.WORKLOAD_CLUSTER,
-            resource_id=workload_cluster_id,
-        )
-        assert registered["metadata"]["name"] == workload_cluster_name
-        assert registered["spec"] == {
-            "maas": {"sourceHubId": source_hub_id, "managedClusterName": managed_cluster_name},
-            "supportedWorkloads": ["maas"],
-        }
-        assert registered["status"]["managedClusterUid"] == cluster_uid
-        assert _condition(registered, "HubReachable")["status"] == "True"
+    registered = poll_until(
+        fn=get_workload_cluster,
+        until=lambda object_: _condition(object_, "Available").get("status") == "True",
+        retries=60,
+        delay=5,
+        description="WorkloadCluster becomes available after Hub import",
+        resource_kind=WaitResourceKind.WORKLOAD_CLUSTER,
+        resource_id=workload_cluster_id,
+    )
+    assert registered["metadata"]["name"] == workload_cluster_name
+    assert registered["spec"] == {
+        "maas": {"sourceHubId": source_hub_id, "managedClusterName": managed_cluster_name},
+        "supportedWorkloads": ["maas"],
+    }
+    assert registered["status"]["managedClusterUid"] == cluster_uid
+    assert _condition(registered, "HubReachable")["status"] == "True"
 
-        cli_listing = private_cli.list_workload_clusters()
-        assert workload_cluster_id in cli_listing
-        cli_description = private_cli.describe_workload_cluster(workload_cluster_id)
-        assert workload_cluster_name in cli_description
-        assert managed_cluster_name in cli_description
+    cli_listing = private_cli.list_workload_clusters()
+    assert workload_cluster_id in cli_listing
+    cli_description = private_cli.describe_workload_cluster(workload_cluster_id)
+    assert workload_cluster_name in cli_description
 
-        managed_cluster_json = json.loads(
-            run(*source_hub.base_args(), "get", "managedcluster", managed_cluster_name, "-o", "json")
-        )
-        assert managed_cluster_json["metadata"]["name"] == managed_cluster_name
-        assert managed_cluster_json["status"]["clusterClaims"][0]["value"] == cluster_uid
-    finally:
-        source_hub.delete(resource="managedcluster", name=managed_cluster_name, wait=True)
-        source_hub.delete(resource="namespace", name=managed_cluster_name, wait=True)
+    managed_cluster_json = json.loads(
+        run(*source_hub.base_args(), "get", "managedcluster", managed_cluster_name, "-o", "json")
+    )
+    assert managed_cluster_json["metadata"]["name"] == managed_cluster_name
+    assert managed_cluster_json["status"]["clusterClaims"][0]["value"] == cluster_uid

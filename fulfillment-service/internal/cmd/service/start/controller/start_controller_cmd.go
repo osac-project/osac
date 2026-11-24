@@ -511,18 +511,12 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		}
 	}()
 
-	if !r.args.services.MaaS {
-		r.logger.InfoContext(ctx, "Skipping workload cluster reconciler because MaaS is disabled")
-	} else {
-		// Create the WorkloadCluster observer. WorkloadCluster is provider-global
-		// and its API is registered whenever MaaS is enabled; the reconciler uses
-		// the same Hub cache and credentials as the other Hub-backed controllers.
+	if r.args.services.MaaS {
 		r.logger.InfoContext(ctx, "Creating workload cluster reconciler")
 		workloadClusterReconcilerFunction, err := workloadcluster.NewFunction().
 			SetLogger(r.logger).
 			SetConnection(r.client).
 			SetHubCache(hubCache).
-			SetMetricsRegisterer(metricsRegisterer).
 			Build()
 		if err != nil {
 			return fmt.Errorf("failed to create workload cluster reconciler function: %w", err)

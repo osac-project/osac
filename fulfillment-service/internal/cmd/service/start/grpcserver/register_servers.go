@@ -383,25 +383,12 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 	privatev1.RegisterHubsServer(registrar, privateHubsServer)
 
 	if deps.Services.MaaS {
-		deps.Logger.InfoContext(ctx, "Creating workload clusters server")
-		workloadClustersServer, err := servers.NewWorkloadClustersServer().
-			SetLogger(deps.Logger).
-			SetAttributionLogic(deps.PublicAttributionLogic).
-			SetTenancyLogic(deps.TenancyLogic).
-			SetHubsServer(privateHubsServer).
-			SetMetricsRegisterer(deps.MetricsRegisterer).
-			Build()
-		if err != nil {
-			return nil, fmt.Errorf("failed to create workload clusters server: %w", err)
-		}
-		publicv1.RegisterWorkloadClustersServer(registrar, workloadClustersServer)
-
+		deps.Logger.InfoContext(ctx, "Creating private workload clusters server")
 		privateWorkloadClustersServer, err := servers.NewPrivateWorkloadClustersServer().
 			SetLogger(deps.Logger).
 			SetAttributionLogic(deps.PrivateAttributionLogic).
 			SetTenancyLogic(deps.TenancyLogic).
 			SetHubsServer(privateHubsServer).
-			SetMetricsRegisterer(deps.MetricsRegisterer).
 			Build()
 		if err != nil {
 			return nil, fmt.Errorf("failed to create private workload clusters server: %w", err)

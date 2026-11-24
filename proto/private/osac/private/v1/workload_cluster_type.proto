@@ -21,7 +21,7 @@ import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/private/v1/metadata_type.proto";
 
-option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).private = true;
 
 // Represents a provider-managed cluster registered from an ACM Hub.
 message WorkloadCluster {

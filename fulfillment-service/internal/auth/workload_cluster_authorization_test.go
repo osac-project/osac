@@ -21,7 +21,7 @@ import (
 )
 
 var _ = Describe("WorkloadCluster authorization", func() {
-	It("grants only the four public operations to cloud-provider-admin", func(ctx context.Context) {
+	It("grants only the four private operations to cloud-provider-admin", func(ctx context.Context) {
 		evaluator, err := NewEvaluator().AddEmergencyServiceAccounts([]string{}).Build()
 		Expect(err).ToNot(HaveOccurred())
 
@@ -45,10 +45,10 @@ var _ = Describe("WorkloadCluster authorization", func() {
 		}
 
 		methods := []string{
-			"/osac.public.v1.WorkloadClusters/List",
-			"/osac.public.v1.WorkloadClusters/Get",
-			"/osac.public.v1.WorkloadClusters/Create",
-			"/osac.public.v1.WorkloadClusters/Update",
+			"/osac.private.v1.WorkloadClusters/List",
+			"/osac.private.v1.WorkloadClusters/Get",
+			"/osac.private.v1.WorkloadClusters/Create",
+			"/osac.private.v1.WorkloadClusters/Update",
 		}
 		for _, method := range methods {
 			decision, evalErr := evaluator.Evaluate(ctx, admin, method)
@@ -62,7 +62,7 @@ var _ = Describe("WorkloadCluster authorization", func() {
 			}
 		}
 
-		decision, err := evaluator.Evaluate(ctx, admin, "/osac.public.v1.WorkloadClusters/Delete")
+		decision, err := evaluator.Evaluate(ctx, admin, "/osac.private.v1.WorkloadClusters/Delete")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(decision.Allowed).To(BeFalse())
 	})

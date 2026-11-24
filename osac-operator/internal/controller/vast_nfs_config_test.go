@@ -104,6 +104,7 @@ func TestResolveVASTNFSConfig(t *testing.T) {
 	}{
 		{name: "Gold with an NFS address", payload: vastNFSFixtureBundle, address: "acme-nfs.example.com"},
 		{name: "Silver on the same backend", payload: vastNFSFixtureBundle, address: "acme-nfs.example.com"},
+		{name: "absolute DNS name", payload: strings.ReplaceAll(vastNFSFixtureBundle, "acme-nfs.example.com", "Acme-NFS.Example.com."), address: "Acme-NFS.Example.com."},
 		{
 			name: "named VIP pool",
 			payload: strings.ReplaceAll(vastNFSFixtureBundle, "endpoints:\n  data: acme-nfs.example.com\n", "") +
@@ -237,6 +238,8 @@ func TestResolveVASTNFSConfigRejectsInvalidBundles(t *testing.T) {
 		{"duplicate YAML key", vastNFSFixtureBundle + "provider: fixture-only\n"},
 		{"multiple documents", vastNFSFixtureBundle + "---\nprovider: fixture-only\n"},
 		{"unsupported schema", strings.Replace(vastNFSFixtureBundle, "schema_version: 1", "schema_version: 2", 1)},
+		{"fractional schema", strings.Replace(vastNFSFixtureBundle, "schema_version: 1", "schema_version: 1.5", 1)},
+		{"quoted schema", strings.Replace(vastNFSFixtureBundle, "schema_version: 1", "schema_version: '1'", 1)},
 		{"wrong provider", strings.Replace(vastNFSFixtureBundle, "provider: vast", "provider: fixture-only", 1)},
 		{"no VAST tenant", strings.Replace(vastNFSFixtureBundle, "storage_tenant: acme-on-vast\n", "", 1)},
 		{"no username", strings.Replace(vastNFSFixtureBundle, "  username: fixture-admin\n", "", 1)},
@@ -244,6 +247,8 @@ func TestResolveVASTNFSConfigRejectsInvalidBundles(t *testing.T) {
 		{"no export root", strings.Replace(vastNFSFixtureBundle, "  root_export: /acme/claas\n", "", 1)},
 		{"no view policy", strings.Replace(vastNFSFixtureBundle, "  view_policy: fixture-view-policy\n", "", 1)},
 		{"both VIP choices", vastNFSFixtureBundle + "  vip_pool_name: fixture-pool\n"},
+		{"URL instead of VIP pool FQDN", strings.ReplaceAll(vastNFSFixtureBundle, "acme-nfs.example.com", "https://fixture-only.example.com/path")},
+		{"IP instead of VIP pool FQDN", strings.ReplaceAll(vastNFSFixtureBundle, "acme-nfs.example.com", "192.0.2.10")},
 		{"neither VIP choice", strings.Replace(vastNFSFixtureBundle, "endpoints:\n  data: acme-nfs.example.com\n", "", 1)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

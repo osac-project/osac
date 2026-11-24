@@ -79,12 +79,15 @@ New tiers can be configured after a tenant is onboarded:
 
 ## VAST NFS preparation for CLaaS
 
-Create one OPAQUE Secret per OSAC tenant and registered VAST backend. For
-example, the OSAC tenant `acme` shares one bundle across the `gold` and `silver`
-tiers when both use the backend `vast-east`.
+The Cloud Provider Admin can prepare the credentials before CLaaS class setup
+and volume provisioning are connected to the resolver. Create one OPAQUE
+Secret per OSAC tenant and registered VAST backend. For example, tenant
+`acme` shares one bundle across the `gold` and `silver` tiers when both use
+the backend `vast-east`.
 
-Save the example below as `vast-nfs.yaml`. Replace the sample VAST tenant
-name, credentials, and NFS settings with the values prepared for your tenant.
+Save the example below as an owner-only file named `vast-nfs.yaml` (mode
+`0600`). Replace the sample VAST tenant name, credentials, and NFS settings
+with the values prepared for your tenant.
 `storage_tenant` is the tenant name in VAST. Store the VAST management address
 in the registered StorageBackend's endpoint.
 
@@ -102,7 +105,8 @@ options:
   view_policy: acme-nfs
 ```
 
-A named VIP pool uses `options.vip_pool_name` in place of `endpoints.data`.
+Set `endpoints.data` to the VIP pool's fully qualified DNS name. A named VIP
+pool uses `options.vip_pool_name` in place of `endpoints.data`.
 
 Use the private API as a Cloud Provider Admin to create the Secret in the
 default project of the `system` tenant. Name it `<osac-tenant>--<registered-backend>`.
@@ -117,13 +121,12 @@ osac --tenant system --project '' create secret \
   --from-file=config.yaml=./vast-nfs.yaml
 ```
 
-The Secret lookup uses the exact owner, default project and derived name.
+Remove the local credential file after a successful upload. The Secret lookup
+uses the exact owner, default project and derived name.
 Labels can be used for organization.
 
 If the bundle is missing, check all three parts of the address. For an invalid
 bundle, verify the OPAQUE type, the `config.yaml` key and the required settings.
-Correct the preparation and let the affected operation retry. A lookup or
-validation failure stops that operation before it contacts VAST.
 
 ## Offboarding
 
@@ -134,6 +137,11 @@ When a tenant is deleted:
 - **CSP-managed:** OSAC removes its own records only. CSP-owned
   StorageClasses, CSI configuration, and the shared storage system are
   preserved.
+
+For a VAST NFS preparation Secret, the Cloud Provider Admin owns cleanup in the
+default `system` project. Once all volumes using the bundle have been removed,
+delete the Secret and revoke its delegated VAST credentials before reusing the
+OSAC tenant or backend name.
 
 ## Troubleshooting
 

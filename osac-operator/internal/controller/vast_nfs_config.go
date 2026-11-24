@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 
 	"google.golang.org/grpc"
@@ -133,7 +134,7 @@ func vastNFSSecretReadError(operation string, err error) error {
 
 func decodeVASTNFSConfig(payload []byte, endpoint string) (VASTNFSConfig, error) {
 	var bundle struct {
-		SchemaVersion int    `yaml:"schema_version"`
+		SchemaVersion any    `yaml:"schema_version"`
 		Provider      string `yaml:"provider"`
 		StorageTenant string `yaml:"storage_tenant"`
 		Credentials   struct {
@@ -163,7 +164,9 @@ func decodeVASTNFSConfig(payload []byte, endpoint string) (VASTNFSConfig, error)
 		return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS preparation config.yaml must contain one YAML document")
 	}
 
-	if bundle.SchemaVersion != 1 || bundle.Provider != "vast" {
+	// Decoding directly into an int would truncate fractional YAML versions.
+	version, _ := bundle.SchemaVersion.(int)
+	if version != 1 || bundle.Provider != "vast" {
 		return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS preparation requires schema_version 1 and provider vast")
 	}
 	if strings.TrimSpace(bundle.StorageTenant) == "" || strings.TrimSpace(bundle.Credentials.Username) == "" || bundle.Credentials.Password == "" {
@@ -175,6 +178,11 @@ func decodeVASTNFSConfig(payload []byte, endpoint string) (VASTNFSConfig, error)
 	nfsAddress, vipPoolName := strings.TrimSpace(bundle.Endpoints.Data), strings.TrimSpace(bundle.Options.VIPPoolName)
 	if (nfsAddress == "") == (vipPoolName == "") {
 		return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS preparation requires exactly one of endpoints.data or options.vip_pool_name")
+	}
+	if nfsAddress != "" {
+		if len(validation.IsFullyQualifiedDomainName(nil, strings.ToLower(nfsAddress))) != 0 || net.ParseIP(strings.TrimSuffix(nfsAddress, ".")) != nil {
+			return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS endpoints.data must be the fully qualified DNS name of the VIP pool")
+		}
 	}
 	return VASTNFSConfig{
 		ManagementEndpoint: endpoint,

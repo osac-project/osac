@@ -198,7 +198,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 								Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 							}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
-								Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+								Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 								NetworkAttachment: tenantNetworks[tenant].clusterAttachment(),
 								NodeSets:          testClusterNodeSets(clusterBMIT, 3),
 							}.Build(),
@@ -482,7 +482,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 								Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 							}.Build(),
 							Spec: publicv1.ClusterSpec_builder{
-								Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+								Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 								NetworkAttachment: tenantNetworks[OIDCTenants[user][0]].clusterAttachment(),
 								NodeSets:          testClusterNodeSets(clusterBMIT, 3),
 							}.Build(),

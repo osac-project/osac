@@ -482,7 +482,7 @@ var _ = Describe("Catalog publication and references", func() {
 		dependencyDAO, err := dao.NewGenericDAO[*privatev1.ClusterVersion]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
 		Expect(err).ToNot(HaveOccurred())
 		dependencyResponse, err := dependencyDAO.Create().SetObject(privatev1.ClusterVersion_builder{
-			Metadata: privatev1.Metadata_builder{Name: "dependency", Tenant: auth.SharedTenant}.Build(), Spec: privatev1.ClusterVersionSpec_builder{Version: "4.20", Image: "quay.io/test/release", Enabled: new(true), DiskImage: &privatev1.DiskImageReference{Id: "dependency-disk-image"}}.Build(),
+			Metadata: privatev1.Metadata_builder{Name: "dependency", Tenant: auth.SharedTenant}.Build(), Spec: privatev1.ClusterVersionSpec_builder{Version: "4.20", Image: "quay.io/test/release", Enabled: new(true), DiskImage: &privatev1.DiskImageReference{Id: "dependency-disk-image", Tenant: "shared"}}.Build(),
 		}.Build()).Do(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		dependency := dependencyResponse.GetObject()
@@ -490,8 +490,8 @@ var _ = Describe("Catalog publication and references", func() {
 		Expect(err).ToNot(HaveOccurred())
 		request := publicv1.ClusterCatalogItemsCreateRequest_builder{Object: publicv1.ClusterCatalogItem_builder{
 			Metadata: publicv1.Metadata_builder{Name: "offering"}.Build(), Title: "Offering", Published: true,
-			Template: publicv1.ClusterTemplateReference_builder{Name: "my-cluster-template", Shared: true}.Build(),
-			Fields:   publicv1.ClusterCatalogItemFields_builder{Version: publicv1.ClusterVersionReferenceFieldPolicy_builder{Locked: publicv1.ClusterVersionReference_builder{Id: dependency.GetId()}.Build()}.Build()}.Build(),
+			Template: publicv1.ClusterTemplateReference_builder{Name: "my-cluster-template", Tenant: "shared"}.Build(),
+			Fields:   publicv1.ClusterCatalogItemFields_builder{Version: publicv1.ClusterVersionReferenceFieldPolicy_builder{Locked: publicv1.ClusterVersionReference_builder{Id: dependency.GetId(), Tenant: "shared"}.Build()}.Build()}.Build(),
 		}.Build()}.Build()
 		original := proto.Clone(request)
 		result, err := server.Create(ctx, request)

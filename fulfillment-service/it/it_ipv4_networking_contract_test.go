@@ -975,7 +975,7 @@ var _ = Describe("IPv4-only controller endpoint gRPC contract", Label("ipv4-netw
 					Id:       uuid.New(),
 					Metadata: privatev1.Metadata_builder{Name: catalogItemFixtureName(), Tenant: usersGroup}.Build(),
 					Spec: privatev1.ClusterSpec_builder{
-						Template: privatev1.ClusterTemplateReference_builder{Id: "missing-template"}.Build(),
+						Template: privatev1.ClusterTemplateReference_builder{Id: "missing-template", Tenant: "shared"}.Build(),
 					}.Build(),
 					Status: privatev1.ClusterStatus_builder{}.Build(),
 				}.Build()
@@ -999,11 +999,11 @@ var _ = Describe("IPv4-only controller endpoint gRPC contract", Label("ipv4-netw
 		template := createCatalogItemClusterTemplateFixture(ctx, nil, nil)
 		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
 		cluster, err := createClusterFixture(ctx, tool.ExternalView().UserConn(), publicv1.ClusterSpec_builder{
-			Template: publicv1.ClusterTemplateReference_builder{Id: template}.Build(),
+			Template: publicv1.ClusterTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 			NodeSets: map[string]*publicv1.ClusterNodeSet{
 				"workers": publicv1.ClusterNodeSet_builder{
 					Size:                  new(int32(1)),
-					BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Shared: true}.Build(),
+					BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmit, Tenant: "shared"}.Build(),
 				}.Build(),
 			},
 			NetworkAttachment: network.clusterAttachment(),

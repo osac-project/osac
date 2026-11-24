@@ -157,7 +157,7 @@ func handleCreateComputeInstance(
 		if err != nil {
 			return nil, CreateComputeInstanceOutput{}, err
 		}
-		project, err := preflightCreateComputeInstancePrerequisites(ctx, clients, input)
+		project, err := preflightCreateComputeInstancePrerequisites(ctx, clients, input, spec)
 		if err != nil {
 			return nil, CreateComputeInstanceOutput{}, err
 		}
@@ -221,8 +221,13 @@ func isDefiniteComputeInstanceCreateError(err error) bool {
 	}
 }
 
+// preflightCreateComputeInstancePrerequisites verifies the caller-visible resources and copies
+// their stored tenants into full references so ID lookups resolve in the selected scopes.
 func preflightCreateComputeInstancePrerequisites(
-	ctx context.Context, clients computeInstanceClients, input CreateComputeInstanceInput,
+	ctx context.Context,
+	clients computeInstanceClients,
+	input CreateComputeInstanceInput,
+	spec *publicv1.ComputeInstanceSpec,
 ) (*publicv1.Project, error) {
 	catalogResponse, err := clients.catalogItems.Get(ctx, publicv1.ComputeInstanceCatalogItemsGetRequest_builder{
 		Id: input.CatalogItem,
@@ -235,6 +240,7 @@ func preflightCreateComputeInstancePrerequisites(
 			"catalog item %s is not published", input.CatalogItem,
 		))
 	}
+	spec.GetCatalogItem().SetTenant(catalogResponse.GetObject().GetMetadata().GetTenant())
 
 	if input.DiskImageID != "" {
 		imageResponse, imageErr := clients.diskImages.Get(ctx, publicv1.DiskImagesGetRequest_builder{
@@ -248,6 +254,7 @@ func preflightCreateComputeInstancePrerequisites(
 				"disk image %s is obsolete", input.DiskImageID,
 			))
 		}
+		spec.GetDiskImage().SetTenant(imageResponse.GetObject().GetMetadata().GetTenant())
 	}
 
 	var selectedProject *publicv1.Project
@@ -274,12 +281,13 @@ func preflightCreateComputeInstancePrerequisites(
 	}
 
 	if input.InstanceTypeID != "" {
-		_, instanceTypeErr := clients.instanceTypes.Get(ctx, publicv1.InstanceTypesGetRequest_builder{
+		instanceTypeResponse, instanceTypeErr := clients.instanceTypes.Get(ctx, publicv1.InstanceTypesGetRequest_builder{
 			Id: input.InstanceTypeID,
 		}.Build())
 		if instanceTypeErr != nil {
 			return nil, safePrerequisiteError("instance type", input.InstanceTypeID, instanceTypeErr)
 		}
+		spec.GetInstanceType().SetTenant(instanceTypeResponse.GetObject().GetMetadata().GetTenant())
 	}
 	if input.BootDisk != nil && input.BootDisk.StorageTierID != "" {
 		_, storageTierErr := clients.storageTiers.Get(ctx, publicv1.StorageTiersGetRequest_builder{
@@ -491,8 +499,9 @@ func handleUpdateComputeInstance(
 			}
 		}
 
+		var instanceTypeTenant string
 		if input.InstanceTypeID != "" {
-			_, instanceTypeErr := clients.instanceTypes.Get(ctx, publicv1.InstanceTypesGetRequest_builder{
+			instanceTypeResponse, instanceTypeErr := clients.instanceTypes.Get(ctx, publicv1.InstanceTypesGetRequest_builder{
 				Id: input.InstanceTypeID,
 			}.Build())
 			if instanceTypeErr != nil {
@@ -500,13 +509,16 @@ func handleUpdateComputeInstance(
 					"instance type", input.InstanceTypeID, instanceTypeErr,
 				)
 			}
+			instanceTypeTenant = instanceTypeResponse.GetObject().GetMetadata().GetTenant()
 		}
 		paths := make([]string, 0, 2)
 		metadata := publicv1.Metadata_builder{Version: input.Version}
 		spec := publicv1.ComputeInstanceSpec_builder{}
 		if input.InstanceTypeID != "" {
 			paths = append(paths, "spec.instance_type")
-			spec.InstanceType = publicv1.InstanceTypeReference_builder{Id: input.InstanceTypeID}.Build()
+			spec.InstanceType = publicv1.InstanceTypeReference_builder{
+				Id: input.InstanceTypeID, Tenant: instanceTypeTenant,
+			}.Build()
 		}
 		if input.RunStrategy != "" {
 			paths = append(paths, "spec.run_strategy")

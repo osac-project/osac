@@ -30,11 +30,12 @@ var _ = Describe("MCP catalog offering administration", func() {
 		templateID := createCatalogItemComputeInstanceTemplateFixture(ctx, nil, nil)
 		created, err := callMCPTool[mcpserver.CatalogOfferingOutput](
 			ctx, session, "create_catalog_offering", mcpserver.CreateCatalogOfferingInput{
-				Kind:        mcpserver.CatalogOfferingKindComputeInstance,
-				Name:        catalogItemFixtureName(),
-				Title:       "Original offering",
-				Description: "Original description",
-				TemplateID:  templateID,
+				Kind:           mcpserver.CatalogOfferingKindComputeInstance,
+				Name:           catalogItemFixtureName(),
+				Title:          "Original offering",
+				Description:    "Original description",
+				TemplateID:     templateID,
+				TemplateTenant: "shared",
 			},
 		)
 		Expect(err).ToNot(HaveOccurred())
@@ -222,7 +223,7 @@ var _ = Describe("MCP catalog offering administration", func() {
 
 		clusterItem := createClusterCatalogItemFixture(ctx, publicConn, publicv1.ClusterCatalogItem_builder{
 			Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-			Template: publicv1.ClusterTemplateReference_builder{Id: clusterTemplateID}.Build(),
+			Template: publicv1.ClusterTemplateReference_builder{Id: clusterTemplateID, Tenant: "shared"}.Build(),
 			Title:    "Original cluster offering",
 		}.Build())
 
@@ -397,7 +398,7 @@ var _ = Describe("MCP catalog offering administration", func() {
 		bareMetalItem := createBareMetalInstanceCatalogItemFixture(
 			ctx, publicConn, publicv1.BareMetalInstanceCatalogItem_builder{
 				Metadata: publicv1.Metadata_builder{Name: catalogItemFixtureName()}.Build(),
-				Template: publicv1.BareMetalInstanceTemplateReference_builder{Id: bareMetalTemplateID}.Build(),
+				Template: publicv1.BareMetalInstanceTemplateReference_builder{Id: bareMetalTemplateID, Tenant: "shared"}.Build(),
 				Title:    "Original bare metal offering",
 			}.Build(),
 		)
@@ -545,7 +546,7 @@ func assertMcpCatalogOfferingTenantIsolation(
 	createdA, err := callMCPTool[mcpserver.CatalogOfferingOutput](
 		ctx, sessionA, "create_catalog_offering", mcpserver.CreateCatalogOfferingInput{
 			Kind: kind, Name: catalogItemFixtureName(), Title: "Tenant A offering",
-			Description: "Tenant A description", TemplateID: templateID,
+			Description: "Tenant A description", TemplateID: templateID, TemplateTenant: "shared",
 		},
 	)
 	Expect(err).ToNot(HaveOccurred())
@@ -553,7 +554,7 @@ func assertMcpCatalogOfferingTenantIsolation(
 	createdB, err := callMCPTool[mcpserver.CatalogOfferingOutput](
 		ctx, sessionB, "create_catalog_offering", mcpserver.CreateCatalogOfferingInput{
 			Kind: kind, Name: catalogItemFixtureName(), Title: "Tenant B offering",
-			Description: "Tenant B description", TemplateID: templateID,
+			Description: "Tenant B description", TemplateID: templateID, TemplateTenant: "shared",
 		},
 	)
 	Expect(err).ToNot(HaveOccurred())

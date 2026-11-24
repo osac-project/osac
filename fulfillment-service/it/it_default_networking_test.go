@@ -241,11 +241,11 @@ var _ = Describe("Default networking provisioning", func() {
 						Tenant: tenantName,
 					}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						Template: publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
+						Template: publicv1.ClusterTemplateReference_builder{Id: templateID, Tenant: "shared"}.Build(),
 						NodeSets: map[string]*publicv1.ClusterNodeSet{
 							"workers": publicv1.ClusterNodeSet_builder{
 								Size:                  new(int32(1)),
-								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeID}.Build(),
+								BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeID, Tenant: "shared"}.Build(),
 							}.Build(),
 						},
 						NetworkAttachment: attachment,

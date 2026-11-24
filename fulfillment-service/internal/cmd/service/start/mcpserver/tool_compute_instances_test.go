@@ -767,6 +767,7 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 				"spec.instance_type", "spec.run_strategy",
 			))
 			Expect(request.GetObject().GetSpec().GetInstanceType().GetId()).To(Equal("u1-large"))
+			Expect(request.GetObject().GetSpec().GetInstanceType().GetTenant()).To(Equal("shared"))
 			Expect(request.GetObject().GetSpec().GetRunStrategy()).To(Equal(
 				publicv1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_HALTED,
 			))
@@ -784,7 +785,10 @@ var _ = Describe("handleUpdateComputeInstance", func() {
 			_ context.Context, _ *publicv1.InstanceTypesGetRequest, _ ...grpc.CallOption,
 		) (*publicv1.InstanceTypesGetResponse, error) {
 			return publicv1.InstanceTypesGetResponse_builder{
-				Object: publicv1.InstanceType_builder{Id: "u1-large"}.Build(),
+				Object: publicv1.InstanceType_builder{
+					Id:       "u1-large",
+					Metadata: publicv1.Metadata_builder{Tenant: "shared"}.Build(),
+				}.Build(),
 			}.Build(), nil
 		}}
 

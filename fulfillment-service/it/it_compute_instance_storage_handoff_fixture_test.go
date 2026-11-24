@@ -194,15 +194,15 @@ func newComputeStorageFixture(ctx context.Context) *computeStorageFixture {
 	instanceType := createCatalogItemComputeInstanceTypeFixture(ctx)
 	image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
 	template := createCatalogItemComputeInstanceTemplateFixture(ctx, privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-		InstanceType: privatev1.InstanceTypeReference_builder{Id: instanceType}.Build(),
-		DiskImage:    privatev1.DiskImageReference_builder{Id: image.GetId()}.Build(),
+		InstanceType: privatev1.InstanceTypeReference_builder{Id: instanceType, Tenant: "shared"}.Build(),
+		DiskImage:    privatev1.DiskImageReference_builder{Id: image.GetId(), Tenant: "shared"}.Build(),
 		BootDisk: privatev1.ComputeInstanceDisk_builder{
 			SizeGib: new(int32(30)), StorageTier: privatev1.StorageTierReference_builder{Id: f.tierIDs[0]}.Build(),
 		}.Build(),
 		RunStrategy: new(privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS),
 	}.Build(), nil)
 	f.spec = publicv1.ComputeInstanceSpec_builder{
-		Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
+		Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template, Tenant: "shared"}.Build(),
 		NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
 		AdditionalDisks: publicv1.ComputeInstanceDiskList_builder{Items: []*publicv1.ComputeInstanceDisk{
 			publicv1.ComputeInstanceDisk_builder{

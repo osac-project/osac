@@ -137,7 +137,7 @@ var _ = Describe("DiskImage API", Label("disk-images"), func() {
 		client := publicv1.NewDiskImagesClient(tool.ExternalView().AdminConn())
 		image := createPublicDiskImageFixture(ctx, client, "shared")
 		templateID := createCatalogItemComputeInstanceTemplateFixture(ctx, privatev1.ComputeInstanceTemplateSpecDefaults_builder{
-			DiskImage: privatev1.DiskImageReference_builder{Name: image.GetMetadata().GetName(), Shared: true}.Build(),
+			DiskImage: privatev1.DiskImageReference_builder{Name: image.GetMetadata().GetName(), Tenant: "shared"}.Build(),
 		}.Build(), nil)
 		templates := privatev1.NewComputeInstanceTemplatesClient(tool.InternalView().AdminConn())
 		got, err := templates.Get(ctx, privatev1.ComputeInstanceTemplatesGetRequest_builder{Id: templateID}.Build())

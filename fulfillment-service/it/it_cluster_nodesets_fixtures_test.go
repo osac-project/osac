@@ -24,7 +24,7 @@ import (
 func testClusterNodeSets(instanceTypeID string, size int32) map[string]*publicv1.ClusterNodeSet {
 	return map[string]*publicv1.ClusterNodeSet{
 		"my-node-set": publicv1.ClusterNodeSet_builder{
-			Size: new(size), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeID, Shared: true}.Build(),
+			Size: new(size), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: instanceTypeID, Tenant: "shared"}.Build(),
 		}.Build(),
 	}
 }
@@ -36,8 +36,8 @@ func TestClusterNodeSetsSharedHardware(t *testing.T) {
 	}
 	nodeSet := nodeSets["my-node-set"]
 	ref := nodeSet.GetBaremetalInstanceType()
-	if !ref.GetShared() {
-		t.Fatal("bare metal instance type fixture must set shared=true")
+	if ref.GetTenant() != "shared" {
+		t.Fatal("bare metal instance type fixture must select the shared tenant")
 	}
 	if ref.GetId() != "shared-instance-type" || ref.GetProject() != "" || nodeSet.GetSize() != 3 {
 		t.Fatalf("fixture changed hardware identity, project, or size: %v", nodeSet)

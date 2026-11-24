@@ -173,7 +173,7 @@ func (c *runnerContext) run(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	builtSpec, err := c.buildSpec(catalogItem.GetId(), cmd.Flags().Changed("external-ip-attachment"))
+	builtSpec, err := c.buildSpec(catalogItem.GetId(), catalogItem.GetMetadata().GetTenant(), cmd.Flags().Changed("external-ip-attachment"))
 	if err != nil {
 		return err
 	}
@@ -198,9 +198,9 @@ func (c *runnerContext) run(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
-func (c *runnerContext) buildSpec(catalogItemID string, externalIPAttachmentSet bool) (*publicv1.BareMetalInstanceSpec, error) {
+func (c *runnerContext) buildSpec(catalogItemID, catalogItemTenant string, externalIPAttachmentSet bool) (*publicv1.BareMetalInstanceSpec, error) {
 	spec := publicv1.BareMetalInstanceSpec_builder{
-		CatalogItem: &publicv1.BareMetalInstanceCatalogItemReference{Id: catalogItemID},
+		CatalogItem: &publicv1.BareMetalInstanceCatalogItemReference{Id: catalogItemID, Tenant: catalogItemTenant},
 	}
 	if c.args.sshKey != "" {
 		sshKeyRef, err := fieldutil.ParseSSHKeyFlag(c.args.sshKey)
@@ -215,7 +215,7 @@ func (c *runnerContext) buildSpec(catalogItemID string, externalIPAttachmentSet 
 	}
 	if c.args.instanceType != "" {
 		spec.InstanceType = &publicv1.BareMetalInstanceTypeReference{
-			Name: c.args.instanceType, Tenant: auth.SharedTenant, Shared: true,
+			Name: c.args.instanceType, Tenant: auth.SharedTenant,
 		}
 	}
 	if c.args.runStrategy != "" {

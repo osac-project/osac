@@ -129,7 +129,7 @@ var _ = Describe("Cluster upgrade", func() {
 				Spec: privatev1.ClusterVersionSpec_builder{
 					Version:   targetSemver,
 					Image:     targetImage,
-					DiskImage: privatev1.DiskImageReference_builder{Id: diskImage.GetId()}.Build(),
+					DiskImage: privatev1.DiskImageReference_builder{Id: diskImage.GetId(), Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -149,7 +149,7 @@ var _ = Describe("Cluster upgrade", func() {
 					Name: fmt.Sprintf("upgrade-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateID, Tenant: "shared"}.Build(),
 					NodeSets: nodeSets,
 				}.Build(),
 			}.Build(),
@@ -165,13 +165,13 @@ var _ = Describe("Cluster upgrade", func() {
 			"compute": publicv1.ClusterNodeSet_builder{
 				Size: proto.Int32(1),
 				BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{
-					Id: bmitID, Shared: true,
+					Id: bmitID, Tenant: "shared",
 				}.Build(),
 			}.Build(),
 			"gpu": publicv1.ClusterNodeSet_builder{
 				Size: proto.Int32(1),
 				BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{
-					Id: bmitID, Shared: true,
+					Id: bmitID, Tenant: "shared",
 				}.Build(),
 			}.Build(),
 		}
@@ -214,7 +214,7 @@ var _ = Describe("Cluster upgrade", func() {
 			Object: publicv1.Cluster_builder{
 				Id: cluster.GetId(),
 				Spec: publicv1.ClusterSpec_builder{
-					Version: publicv1.ClusterVersionReference_builder{Name: targetVersionName}.Build(),
+					Version: publicv1.ClusterVersionReference_builder{Name: targetVersionName, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.version"}},

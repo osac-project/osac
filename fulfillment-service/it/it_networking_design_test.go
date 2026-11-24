@@ -1258,7 +1258,7 @@ var _ = Describe("Networking design: provider networking disabled", Label("netwo
 			object := publicv1.ExternalIP_builder{
 				Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: publicv1.ExternalIPPoolReference_builder{Id: pool.GetId()}.Build(),
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: pool.GetId(), Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build()
 			publicResponse, err := c.publicExternalIPs.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
@@ -1274,7 +1274,7 @@ var _ = Describe("Networking design: provider networking disabled", Label("netwo
 				Object: privatev1.ExternalIP_builder{
 					Metadata: privatev1.Metadata_builder{Name: name, Tenant: usersGroup}.Build(),
 					Spec: privatev1.ExternalIPSpec_builder{
-						Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetId()}.Build(),
+						Pool: privatev1.ExternalIPPoolReference_builder{Id: pool.GetId(), Tenant: "shared"}.Build(),
 					}.Build(),
 				}.Build(),
 			}.Build())

@@ -137,11 +137,11 @@ var _ = Describe("Node set removal", func() {
 					Name: fmt.Sprintf("nodeset-rm-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NetworkAttachment: network.clusterAttachment(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
-						"workers": publicv1.ClusterNodeSet_builder{Size: new(int32(3)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: workerBmitName, Shared: true}.Build()}.Build(),
-						"storage": publicv1.ClusterNodeSet_builder{Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: storageBmitName, Shared: true}.Build()}.Build(),
+						"workers": publicv1.ClusterNodeSet_builder{Size: new(int32(3)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: workerBmitName, Tenant: "shared"}.Build()}.Build(),
+						"storage": publicv1.ClusterNodeSet_builder{Size: new(int32(2)), BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: storageBmitName, Tenant: "shared"}.Build()}.Build(),
 					},
 				}.Build(),
 			}.Build(),

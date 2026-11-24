@@ -119,7 +119,7 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NodeSets:          testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
@@ -154,7 +154,7 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NodeSets:          testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
@@ -185,7 +185,7 @@ var _ = Describe("Public clusters", func() {
 				Object: publicv1.Cluster_builder{
 					Metadata: publicv1.Metadata_builder{Name: name, Tenant: tenant}.Build(),
 					Spec: publicv1.ClusterSpec_builder{
-						Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Shared: true}.Build(),
+						Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 						NodeSets: testClusterNodeSets(bmitName, 1),
 					}.Build(),
 				}.Build(),
@@ -218,7 +218,7 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NodeSets:          testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
@@ -249,7 +249,7 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NodeSets:          testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
@@ -269,11 +269,11 @@ var _ = Describe("Public clusters", func() {
 					Name: object.GetMetadata().GetName(),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NetworkAttachment: object.GetSpec().GetNetworkAttachment(),
 					NodeSets: map[string]*publicv1.ClusterNodeSet{
 						"my-node-set": {
-							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName, Shared: true}.Build(),
+							BaremetalInstanceType: publicv1.BareMetalInstanceTypeReference_builder{Id: bmitName, Tenant: "shared"}.Build(),
 							Size:                  proto.Int32(4),
 						},
 					},
@@ -304,7 +304,7 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NodeSets:          testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
@@ -368,7 +368,7 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NodeSets:          testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
@@ -456,8 +456,8 @@ var _ = Describe("Public clusters", func() {
 			Object: publicv1.Cluster_builder{
 				Metadata: publicv1.Metadata_builder{Name: name}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Shared: true}.Build(),
-					Version:  publicv1.ClusterVersionReference_builder{Name: versionName, Shared: true}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
+					Version:  publicv1.ClusterVersionReference_builder{Name: versionName, Tenant: "shared"}.Build(),
 					NodeSets: testClusterNodeSets(bmitName, 1),
 				}.Build(),
 			}.Build(),
@@ -489,7 +489,7 @@ var _ = Describe("Public clusters", func() {
 				Spec: privatev1.ClusterVersionSpec_builder{
 					Version:   version,
 					Image:     fmt.Sprintf("quay.io/openshift-release-dev/ocp-release:%s-multi", version),
-					DiskImage: privatev1.DiskImageReference_builder{Id: image.GetId()}.Build(),
+					DiskImage: privatev1.DiskImageReference_builder{Id: image.GetId(), Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -511,8 +511,8 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					Version:           publicv1.ClusterVersionReference_builder{Name: cvName}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
+					Version:           publicv1.ClusterVersionReference_builder{Name: cvName, Tenant: "shared"}.Build(),
 					NodeSets:          testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),
@@ -607,8 +607,8 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-invalid-version-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
-					Version:  publicv1.ClusterVersionReference_builder{Name: versionName}.Build(),
+					Template: publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
+					Version:  publicv1.ClusterVersionReference_builder{Name: versionName, Tenant: "shared"}.Build(),
 					NodeSets: testClusterNodeSets(bmitName, 1),
 				}.Build(),
 			}.Build(),
@@ -651,7 +651,7 @@ var _ = Describe("Public clusters", func() {
 					Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId, Tenant: "shared"}.Build(),
 					NodeSets:          testClusterNodeSets(bmitName, 3),
 					NetworkAttachment: network.clusterAttachment(),
 				}.Build(),

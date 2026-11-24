@@ -184,7 +184,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())
@@ -410,7 +410,7 @@ var _ = Describe("NATGateway lifecycle", func() {
 					Name: fmt.Sprintf("test-ip-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ExternalIPSpec_builder{
-					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId}.Build(),
+					Pool: publicv1.ExternalIPPoolReference_builder{Id: poolId, Tenant: "shared"}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())

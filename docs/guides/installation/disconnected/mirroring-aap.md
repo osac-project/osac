@@ -32,7 +32,7 @@ registry.
 
 | Check | Command / evidence |
 | ----- | ------------------ |
-| Category B execution-environment inventory selected | Shared ISC `mirror.additionalImages` includes `ghcr.io/osac-project/osac-aap:0.0.45` |
+| Category B execution-environment inventory selected | Shared ISC `mirror.additionalImages` includes `ghcr.io/osac-project/osac-aap:0.0.48` |
 | Approved mirror authority, CA and read-access binding selected | Retain the approved inputs before mirroring; node transport is checked only after the full mirror at Category A Step 2c |
 
 ## Resources Required
@@ -40,7 +40,7 @@ registry.
 | Resource | Minimum |
 | -------- | ------- |
 | Additional disk (mirror registry) | ~3 GiB for AAP operand images |
-| Execution environment image(s) | Custom EE images used by OSAC playbooks, default: `ghcr.io/osac-project/osac-aap:0.0.45` |
+| Execution environment image(s) | Custom EE images used by OSAC playbooks, default: `ghcr.io/osac-project/osac-aap:0.0.48` |
 
 ## ImageSetConfiguration Section
 
@@ -63,7 +63,7 @@ configurable through OSAC Helm values:
 | AAP Controller (awx-ee) | Default execution environment | `RELATED_IMAGE_EE` AAP operator env var |
 | AAP Hub (galaxy-ng) | Automation content hub | AAP operator env var `RELATED_IMAGE_HUB` |
 
-Selected OSAC execution-environment image to mirror: `ghcr.io/osac-project/osac-aap:0.0.45`.
+Selected OSAC execution-environment image to mirror: `ghcr.io/osac-project/osac-aap:0.0.48`.
 
 <!-- Moved to installation.md §5. Helm chart configuration parameters. See docs/guides/installation/disconnected/installation.md -->
 
@@ -87,7 +87,7 @@ The `osac-aap` image is included in the core components (Category B):
 
 ```yaml
   additionalImages:
-    - name: ghcr.io/osac-project/osac-aap:0.0.45
+    - name: ghcr.io/osac-project/osac-aap:0.0.48
 ```
 
 ### Execution environment images for playbooks
@@ -102,7 +102,7 @@ OSAC automation must be mirrored separately:
     # Mirror any custom EE images used by OSAC playbooks.
     # The origin-cli image is used for building EE images:
     - name: quay.io/openshift/origin-cli:4.20.0
-    - name: "ghcr.io/osac-project/osac-aap:0.0.45"
+    - name: "ghcr.io/osac-project/osac-aap:0.0.48"
 ```
 
 ## Execution Steps
@@ -125,7 +125,7 @@ After the shared mirror run and Category A apply gate, before handoff:
 
 - Retain Category A Step 2c's node-transport checkpoint result; do not require
   a node pull or applied mirror rules before composing the inventory.
-- Verify the **Category B image** `ghcr.io/osac-project/osac-aap:0.0.45`
+- Verify the **Category B image** `ghcr.io/osac-project/osac-aap:0.0.48`
   is present using its direct mirror reference in the approved administration-host
   mirror-read client context.
 - Verify live IDMS/ITMS coverage for selected AAP images, using IDMS for digests

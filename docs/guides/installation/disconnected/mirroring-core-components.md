@@ -76,7 +76,7 @@ ImageSetConfiguration below:
 | `ghcr.io/osac-project/fulfillment-service` | ghcr.io | Resource lifecycle and Volume API |
 | `ghcr.io/osac-project/envoy` | ghcr.io | OSAC Envoy build |
 | `docker.io/envoyproxy/envoy` | docker.io | Upstream Envoy control-plane dependency |
-| `ghcr.io/osac-project/osac-aap:0.0.45` | ghcr.io | AAP integration workload |
+| `ghcr.io/osac-project/osac-aap:0.0.48` | ghcr.io | AAP integration workload |
 | `ghcr.io/osac-project/osac-ui` | ghcr.io | Web console |
 | `ghcr.io/osac-project/bare-metal-fulfillment-operator` | ghcr.io | BMaaS fulfillment *(BMaaS only)* |
 | `ghcr.io/osac-project/metering-service` | ghcr.io | Usage metering (mandatory) |
@@ -141,7 +141,7 @@ Include only when `global.services.bmaas.enabled: true`:
 
 ```yaml
     # --- BMaaS only (conditional: global.services.bmaas.enabled) ---
-    - name: ghcr.io/osac-project/bare-metal-fulfillment-operator:0.0.38
+    - name: ghcr.io/osac-project/bare-metal-fulfillment-operator:0.0.41
 ```
 
 ### Metering Images
@@ -153,9 +153,9 @@ enabling M360 integration:
 
 ```yaml
     # --- OSAC metering service (mandatory) ---
-    - name: ghcr.io/osac-project/metering-service:0.0.27
+    - name: ghcr.io/osac-project/metering-service:0.0.30
     # --- OSAC metering adapter (M360) — optional; uncomment when enabling M360 ---
-    # - name: ghcr.io/osac-project/metering-m360-adapter:0.0.27
+    # - name: ghcr.io/osac-project/metering-m360-adapter:0.0.30
 ```
 
 ## Execution Steps

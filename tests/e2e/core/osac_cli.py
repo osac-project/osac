@@ -80,6 +80,7 @@ class OsacCLI:
         boot_disk_storage_tier: str | None = None,
         additional_disks: list[dict[str, Any]] | None = None,
         run_strategy: str = "Always",
+        user_data: str | None = None,
         user_data_secret_ref: str | None = None,
         instance_type: str | None = None,
         ssh_key: str | None = None,
@@ -175,8 +176,10 @@ class OsacCLI:
 
                 args.extend(["--network-attachment", ",".join(parts)])
 
+        if user_data is not None:
+            args.extend(["--user-data", user_data])
         if user_data_secret_ref is not None:
-            args.extend(["--user-data", user_data_secret_ref])
+            args.extend(["--user-data-secret", user_data_secret_ref])
         if ssh_key is not None:
             args.extend(["--ssh-key", ssh_key])
         if external_ip_attachment:

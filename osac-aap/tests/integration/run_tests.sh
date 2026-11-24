@@ -209,7 +209,7 @@ echo ""
 
 OCP_VIRT_VM_TEST="${SCRIPT_DIR}/../../collections/ansible_collections/osac/templates/roles/ocp_virt_vm/tests/test.yml"
 
-for scenario in test_windows_userdata_sysprep test_windows_no_userdata test_linux_userdata_cloudinit; do
+for scenario in test_windows_userdata_sysprep test_windows_no_userdata test_linux_userdata_cloudinit test_linux_ssh_key_only_configdrive; do
   echo "Testing ocp_virt_vm: ${scenario}"
   if run_ansible_playbook "${OCP_VIRT_VM_TEST}" -e "${scenario}=true"; then
     PASSED+=("ocp_virt_vm:${scenario}")

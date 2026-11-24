@@ -2246,8 +2246,8 @@ var _ = Describe("ComputeInstance Controller", func() {
 				Expect(reconciler.willTriggerProvisioning(staleCI)).To(BeTrue(), "expected true for stale job state %s", state)
 			}
 
-			Expect(storageGateCondition(nil)).To(Equal(osacv1alpha1.ComputeInstanceConditionProvisioned))
-			Expect(storageGateCondition(&kubevirtv1.VirtualMachine{})).To(Equal(osacv1alpha1.ComputeInstanceConditionConfigurationApplied))
+			Expect(storageGateCondition(nil, false)).To(Equal(osacv1alpha1.ComputeInstanceConditionProvisioned))
+			Expect(storageGateCondition(&kubevirtv1.VirtualMachine{}, false)).To(Equal(osacv1alpha1.ComputeInstanceConditionConfigurationApplied))
 
 			By("Subcase B: envtest Reconcile with ManagementStateManual bypasses CSP gate when CSP storage is unready")
 			const manualName = "test-ci-nontrigger-manual"

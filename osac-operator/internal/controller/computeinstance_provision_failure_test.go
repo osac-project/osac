@@ -10,6 +10,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	events "k8s.io/client-go/tools/events"
 	clocktesting "k8s.io/utils/clock/testing"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -498,6 +499,27 @@ var _ = Describe("ComputeInstance public retry projection", func() {
 		reconcileOK()
 		expectReason(osacv1alpha1.ReasonWaitingForVM)
 		Expect(instance.Status.LastProvisioningFailure).To(BeNil())
+	})
+
+	It("reports retry progress without repeating an unchanged storage-gate event", func() {
+		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
+		result := reconcileOK()
+		clock.Step(result.RequeueAfter)
+		tenant := &osacv1alpha1.Tenant{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instance.Annotations[osacTenantKey], Namespace: "default"}, tenant)).To(Succeed())
+		tenant.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionFalse,
+			osacv1alpha1.TenantReasonNotFound, "Storage is not ready")
+		Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+		recorder := events.NewFakeRecorder(10)
+		reconciler.Recorder = recorder
+		reconcileOK()
+		expectReason("RetryScheduled")
+		Expect(instance.Status.LastProvisioningFailure).NotTo(BeNil())
+		Eventually(recorder.Events, time.Second, 10*time.Millisecond).Should(Receive(ContainSubstring(eventReasonTenantNotReady)))
+		reconcileOK()
+		expectReason("RetryScheduled")
+		Expect(recorder.Events).To(BeEmpty())
+		Expect(fake.tasks()).To(HaveLen(1))
 	})
 
 	It("preserves the storage gate for a new configuration after terminal failure", func() {

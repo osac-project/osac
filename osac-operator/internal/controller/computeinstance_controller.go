@@ -506,7 +506,9 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	// Capture the persisted reason of the condition that records a storage
 	// readiness gate before this reconcile overwrites it, so the TenantNotReady
 	// event fires only when the gate is first hit.
-	priorGateReason := conditionReason(instance, storageGateCondition(kv))
+	entry := networktask.FindJob(instance.Status.Jobs, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
+	gateCondition := storageGateCondition(kv, entry != nil && entry.State == v1alpha1.NetworkJobStateRetrying)
+	priorGateReason := conditionReason(instance, gateCondition)
 
 	// Decided once for the pass: only a pass that may launch resolves the
 	// storage context, and only such a pass launches (see handleProvisioning).
@@ -569,11 +571,10 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 
 	recordRunningConfig(instance)
 
-	// Written last: the status steps above set Provisioned ("VirtualMachine not
-	// yet created") and ConfigurationApplied ("Applying configuration"), and
-	// neither may replace the reason the job is waiting.
+	// Record the gate after ordinary progress writers so the next pass can
+	// distinguish a continuing storage wait from a new transition.
 	if gateMessage != "" {
-		r.deferProvisioningForStorage(ctx, instance, tenant, kv, priorGateReason, gateMessage)
+		r.deferProvisioningForStorage(ctx, instance, tenant, gateCondition, priorGateReason, gateMessage)
 	}
 	if provision.Entry.Task == "" {
 		if entry := networktask.FindJob(instance.Status.Jobs, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone); entry != nil {
@@ -1866,12 +1867,10 @@ func (r *ComputeInstanceReconciler) willTriggerProvisioning(
 		r.Engine.LaunchDue(instance, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
 }
 
-// storageGateCondition returns the ComputeInstance condition that records a
-// storage readiness gate: Provisioned before the KubeVirt VM exists, and
-// ConfigurationApplied for a day-2 job on an existing VM, so the Provisioned
-// and Ready conditions keep reporting the running VM while the job waits.
-func storageGateCondition(kv *kubevirtv1.VirtualMachine) v1alpha1.ComputeInstanceConditionType {
-	if kv == nil {
+// Retry progress owns Provisioned during backoff, so its storage gate uses
+// ConfigurationApplied, as for a day-2 job, to retain the gate transition.
+func storageGateCondition(kv *kubevirtv1.VirtualMachine, retrying bool) v1alpha1.ComputeInstanceConditionType {
+	if kv == nil && !retrying {
 		return v1alpha1.ComputeInstanceConditionProvisioned
 	}
 	return v1alpha1.ComputeInstanceConditionConfigurationApplied
@@ -1884,14 +1883,14 @@ func (r *ComputeInstanceReconciler) deferProvisioningForStorage(
 	ctx context.Context,
 	instance *v1alpha1.ComputeInstance,
 	tenant *v1alpha1.Tenant,
-	kv *kubevirtv1.VirtualMachine,
+	gateCondition v1alpha1.ComputeInstanceConditionType,
 	priorGateReason, msg string,
 ) {
-	instance.SetStatusCondition(storageGateCondition(kv), metav1.ConditionFalse, msg, v1alpha1.ReasonTenantNotReady)
+	instance.SetStatusCondition(gateCondition, metav1.ConditionFalse, msg, v1alpha1.ReasonTenantNotReady)
 	if priorGateReason != v1alpha1.ReasonTenantNotReady {
 		r.Recorder.Eventf(instance, nil, corev1.EventTypeNormal, eventReasonTenantNotReady, eventActionReconcile, "%s", msg)
+		ctrllog.FromContext(ctx).Info("tenant storage is not ready for requested tiers, deferring provisioning", "tenant", tenant.GetName(), "reason", msg)
 	}
-	ctrllog.FromContext(ctx).Info("tenant storage is not ready for requested tiers, deferring provisioning", "tenant", tenant.GetName(), "reason", msg)
 }
 
 // storageClassesCoverRequestedTiers reports whether every requested tier

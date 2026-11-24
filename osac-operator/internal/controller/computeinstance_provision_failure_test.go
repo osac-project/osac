@@ -82,6 +82,66 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 		Expect(out.RequeueAfter).To(Equal(networktask.Backoff("provision", 2, 2)))
 	})
 
+	It("clears a cancelled provision checkpoint only when its configuration changes", func() {
+		instance := &osacv1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("cancel-config-%d", time.Now().UnixNano()), Namespace: "default"},
+			Spec:       newTestComputeInstanceSpec("test_template"),
+		}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+		instance.Status.DesiredConfigVersion = "old"
+		instance.Status.ProvisionConfigVersion = "old"
+		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+		clock := clocktesting.NewFakeClock(time.Now().Truncate(time.Second))
+		aapClient := &checkpointAAP{}
+		engine := networktask.New(k8sClient, k8sClient, aapClient, networktask.Config{Organization: "osac"}).WithClock(clock)
+		r := &ComputeInstanceReconciler{Client: k8sClient, Engine: engine, ProvisionTemplate: "provision"}
+		_, err := r.handleProvisioning(ctx, instance, "default", true)
+		Expect(err).NotTo(HaveOccurred())
+		aapClient.job.Status = "failed"
+		aapClient.job.Artifacts = []byte(`{"osac_error":{"message":"private","retryable":true}}`)
+		failed, err := r.handleProvisioning(ctx, instance, "default", false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(failed.LastFailure).NotTo(BeNil())
+		clock.Step(failed.RequeueAfter)
+		_, err = r.handleProvisioning(ctx, instance, "default", true)
+		Expect(err).NotTo(HaveOccurred())
+		aapClient.job.Status = "canceled"
+		cancelled, err := r.handleProvisioning(ctx, instance, "default", false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cancelled.Entry.State).To(Equal(osacv1alpha1.NetworkJobStateCancelled))
+		Expect(cancelled.LastFailure).NotTo(BeNil())
+		Expect(cancelled.LastFailure.Reason).To(Equal(failed.LastFailure.Reason))
+		Expect(cancelled.LastFailure.Message).To(Equal(failed.LastFailure.Message))
+		Expect(cancelled.LastFailure.Attempt).To(Equal(failed.LastFailure.Attempt))
+		Expect(cancelled.LastFailure.ObservedAt.Time.Equal(failed.LastFailure.ObservedAt.Time)).To(BeTrue())
+		held, err := r.handleProvisioning(ctx, instance, "default", false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(held.LastFailure).NotTo(BeNil())
+		Expect(held.LastFailure.Reason).To(Equal(failed.LastFailure.Reason))
+		Expect(held.LastFailure.Message).To(Equal(failed.LastFailure.Message))
+		Expect(held.LastFailure.Attempt).To(Equal(failed.LastFailure.Attempt))
+		Expect(held.LastFailure.ObservedAt.Time.Equal(failed.LastFailure.ObservedAt.Time)).To(BeTrue())
+		instance.Status.DesiredConfigVersion = "new"
+		held, err = r.handleProvisioning(ctx, instance, "default", false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(held.Entry.State).To(Equal(osacv1alpha1.NetworkJobStateCancelled))
+		Expect(held.LastFailure).To(BeNil())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+		Expect(instance.Status.Jobs[0].LastFailure).To(BeNil())
+		out, err := r.handleProvisioning(ctx, instance, "default", true)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out.Entry.State).To(Equal(osacv1alpha1.NetworkJobStateRunning))
+		Expect(out.Entry.Attempt).To(Equal(int32(3)))
+		Expect(out.LastFailure).To(BeNil())
+		Expect(instance.Status.ProvisionConfigVersion).To(Equal("new"))
+		aapClient.job.Status = "failed"
+		aapClient.job.Artifacts = []byte(`{"osac_error":{"message":"private","retryable":true}}`)
+		out, err = r.handleProvisioning(ctx, instance, "default", false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out.RequeueAfter).To(Equal(networktask.Backoff("provision", 2, 3)))
+	})
+
 	It("persists atomically across resource-version conflicts and validates the CRD shape", func() {
 		name := fmt.Sprintf("provision-failure-%d", time.Now().UnixNano())
 		instance := &osacv1alpha1.ComputeInstance{
@@ -91,9 +151,12 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
 		DeferCleanup(func() {
 			current := &osacv1alpha1.ComputeInstance{}
-			if err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(instance), current); err == nil {
-				Expect(k8sClient.Delete(context.Background(), current)).To(Succeed())
+			err := k8sClient.Get(context.Background(), client.ObjectKeyFromObject(instance), current)
+			if apierrors.IsNotFound(err) {
+				return
 			}
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Delete(context.Background(), current)).To(Succeed())
 		})
 
 		clock := clocktesting.NewFakeClock(time.Date(2026, 10, 1, 12, 0, 0, 123000000, time.UTC))

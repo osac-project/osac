@@ -815,7 +815,7 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 	}
 
 	entry := networktask.FindJob(instance.Status.Jobs, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
-	if entry != nil && entry.State == v1alpha1.NetworkJobStateRetrying &&
+	if entry != nil && (entry.State == v1alpha1.NetworkJobStateRetrying || entry.State == v1alpha1.NetworkJobStateCancelled) &&
 		instance.Status.ProvisionConfigVersion != instance.Status.DesiredConfigVersion && entry.LastFailure != nil {
 		// The checkpoint belongs to the previous input. Preserve the retry
 		// state and engine backoff while clearing its persisted failure.

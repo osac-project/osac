@@ -88,7 +88,25 @@
             mgmt_endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
             nfs_endpoint: "{{ pure_test_nfs_endpoint | default('192.0.2.20') }}"
 
-    - name: Create a second Realm credential Secret (backend B)
+    - name: Create a second Realm credential Secret (also backend A, for backend scoping test)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pure-realm-ps-realm-a2
+            namespace: osac-system
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/pure-realm-credential: ps-realm-a2
+          stringData:
+            realm_name: ps-realm-a2
+            api_token: "{{ pure_test_realm_token | default('PLACEHOLDER_DO_NOT_USE_realm_token_a2') }}"
+            mgmt_endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+            nfs_endpoint: "{{ pure_test_nfs_endpoint | default('192.0.2.20') }}"
+
+    - name: Create a third Realm credential Secret (backend B)
       kubernetes.core.k8s:
         state: present
         definition:
@@ -121,6 +139,7 @@
             PURE_REALM_POOL: |
               [
                 {"realm_name":"ps-realm","secret_name":"pure-realm-ps-realm"},
+                {"realm_name":"ps-realm-a2","secret_name":"pure-realm-ps-realm-a2"},
                 {"realm_name":"ps-realm-b","secret_name":"pure-realm-ps-realm-b"}
               ]
 
@@ -694,6 +713,7 @@
         - pure-tenant-config-ps-existing-be-pure
         - pure-tenant-config-ps-backend-b-be-pure-b
         - pure-realm-ps-realm
+        - pure-realm-ps-realm-a2
         - pure-realm-ps-realm-b
       failed_when: false
 

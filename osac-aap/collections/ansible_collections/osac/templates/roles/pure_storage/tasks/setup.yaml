@@ -130,6 +130,11 @@
     - name: Select an available Realm from the pool
       when: not (_pure_secret_preexisting | bool)
       block:
+        # Get the backend connection endpoint to scope Realm selection
+        - name: Extract backend connection endpoint
+          ansible.builtin.set_fact:
+            _pure_backend_endpoint: "{{ _provider_backend_connections[_pure_backend_id].endpoint }}"
+
         # Find all Realms already claimed by other tenants
         - name: List all hub Secrets with Realm claims
           kubernetes.core.k8s_info:
@@ -138,6 +143,9 @@
             namespace: "{{ pure_storage_config_namespace }}"
             label_selectors:
               - "osac.openshift.io/pure-realm"
+          module_defaults:
+            kubernetes.core.k8s_info:
+              kubeconfig: "{{ none }}"
           register: _pure_claimed_secrets
           no_log: true
 
@@ -152,21 +160,53 @@
               {% endfor -%}
               {{ claimed }}
 
-        - name: Find available (unclaimed) Realms
+        # Read all Realm credential Secrets to filter by backend
+        - name: Read all Realm credential Secrets
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            namespace: "{{ pure_storage_config_namespace }}"
+            label_selectors:
+              - "osac.openshift.io/pure-realm-credential"
+          module_defaults:
+            kubernetes.core.k8s_info:
+              kubeconfig: "{{ none }}"
+          register: _pure_all_realm_secrets
+          no_log: true
+
+        # Filter available Realms: unclaimed AND matching this backend's FlashBlade
+        - name: Find available Realms for this backend
           ansible.builtin.set_fact:
             _pure_available_realms: >-
-              {{ _pure_realm_pool
-                 | rejectattr('realm_name', 'in', _pure_claimed_realms)
-                 | list }}
+              {% set available = [] -%}
+              {% for pool_entry in _pure_realm_pool -%}
+                {% if pool_entry.realm_name not in _pure_claimed_realms -%}
+                  {% set realm_secret = _pure_all_realm_secrets.resources
+                      | selectattr('metadata.name', 'equalto', pool_entry.secret_name)
+                      | list | first | default(none) -%}
+                  {% if realm_secret and
+                        (realm_secret.data.mgmt_endpoint | b64decode) == _pure_backend_endpoint -%}
+                    {% set _ = available.append(pool_entry) -%}
+                  {% endif -%}
+                {% endif -%}
+              {% endfor -%}
+              {{ available }}
 
-        - name: Fail when no Realms are available
+        - name: Fail when no Realms are available for this backend
           ansible.builtin.fail:
             msg: >-
-              No available Realms in the pool. All {{ _pure_realm_pool | length }}
-              Realms are claimed. Claimed: {{ _pure_claimed_realms | join(', ') }}.
-              Provision more Realms or release unused allocations.
+              No available Realms for backend {{ _pure_backend_id }} (endpoint: {{ _pure_backend_endpoint }}).
+              Total pool: {{ _pure_realm_pool | length }} Realms,
+              claimed: {{ _pure_claimed_realms | length }},
+              available for this backend: 0.
+              Provision more Realms on this FlashBlade or release unused allocations.
           when: _pure_available_realms | length == 0
 
+        # TODO: Add atomic Realm claim to prevent race condition where two concurrent
+        # tenant setups can claim the same Realm. The current list-then-write sequence
+        # is not atomic. Consider using Kubernetes Lease resources or a retry loop
+        # with claim verification. See CodeRabbit comment:
+        # https://github.com/osac-project/osac/pull/1531#discussion_r1234567890
         - name: Select the first available Realm
           ansible.builtin.set_fact:
             _pure_selected_realm_name: "{{ _pure_available_realms[0].realm_name }}"

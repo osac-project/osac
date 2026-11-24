@@ -7,9 +7,11 @@ pure_realm_api_version: "2.26"
 
 # TLS certificate validation. Verification is on by default: the login request
 # carries PUREFB_API to the management endpoint, so an unverified TLS session
-# would hand the array-admin token to an impersonated endpoint. Point
-# PURE_VALIDATE_CERTS (or this variable) at a trusted private CA when the array
-# uses a certificate the execution environment does not already trust.
+# would hand the array-admin token to an impersonated endpoint.
+#
+# PURE_VALIDATE_CERTS must be a boolean ('true' or 'false'). For arrays using
+# private CAs, install the CA in the execution environment's trust store rather
+# than passing a CA path here (the bool filter converts paths to false).
 pure_realm_validate_certs: "{{ lookup('env', 'PURE_VALIDATE_CERTS') | default('true', true) | bool }}"
 
 # Hub Kubernetes namespace for Realm credential Secrets

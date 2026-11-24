@@ -51,6 +51,13 @@
       ansible.builtin.set_fact:
         _pure_secret_existed: "{{ _pure_teardown_config.resources | length > 0 }}"
 
+    # TODO: Revoke or rotate the Realm token before releasing the Realm.
+    # Security issue: The token remains valid after teardown, so a leaked
+    # CSI Secret can access the next tenant's Realm. The fix requires calling
+    # the Pure API to revoke the service account's token or rotating it in the
+    # pool Secret before the Realm can be reassigned. See CodeRabbit comment:
+    # https://github.com/osac-project/osac/pull/1531#discussion_r1234567891
+
     - name: Delete tenant config Secret from hub cluster
       when: _pure_secret_existed | bool
       kubernetes.core.k8s:

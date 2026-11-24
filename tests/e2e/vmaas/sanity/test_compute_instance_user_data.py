@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Callable
 from contextlib import closing
 from pathlib import Path
@@ -16,7 +17,9 @@ from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import unique_name, wait_for_cr, wait_for_deletion, wait_for_grpc_removal, wait_for_running
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.vmaas.serial_console import console_output, open_serial_console, wait_for_console_ready, ws_recv
+from tests.e2e.core.runner import poll_until
+from tests.e2e.core.wait_kinds import WaitResourceKind
+from tests.e2e.vmaas.sanity.test_console import _create_ticket, _ws_connect, _ws_recv, _ws_url
 
 pytestmark = pytest.mark.sanity
 
@@ -28,6 +31,45 @@ def cloud_config(banner: str) -> str:
 def ignition_config(banner: str) -> str:
     issue = {"path": "/etc/issue", "overwrite": True, "mode": 0o644, "contents": {"source": f"data:,{banner}%0A"}}
     return json.dumps({"ignition": {"version": "3.4.0"}, "storage": {"files": [issue]}})
+
+
+def _wait_for_first_boot_banner(
+    *,
+    grpc: GRPCClient,
+    fulfillment_address: str,
+    instance: str,
+    expected_banner: str,
+    source_ref: str,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Wait for the guest to print the banner supplied in its first-boot data."""
+    tail = "\n"
+    failure_snapshot.SOURCES.register(
+        instance, lambda directory, _window: failure_snapshot.write_text(directory, "guest-console.txt", tail)
+    )
+    request.addfinalizer(lambda: failure_snapshot.SOURCES.unregister(instance))
+    url = _ws_url(fulfillment_address)
+    with closing(_ws_connect(url, _create_ticket(grpc, instance)["ticket"])) as console:
+        next_enter = time.monotonic()
+        deadline = next_enter + 300
+        while (remaining := deadline - time.monotonic()) > 0:
+            # Redisplay /etc/issue if it was printed before we connected.
+            if time.monotonic() >= next_enter:
+                console.send_binary(b"\r")
+                next_enter = time.monotonic() + 15
+            chunk = _ws_recv(console, min(5, remaining))
+            if chunk == "" or not console.connected:
+                break
+            if chunk is not None:
+                tail += chunk.replace("\r", "")
+                if f"\n{expected_banner}\n" in tail:
+                    return
+                tail = tail[-8192:]
+    raise E2EFailure(
+        Kind.STUCK_STATE,
+        f"{source_ref}: guest did not display the supplied login banner",
+        ids={"compute_instance": instance},
+    )
 
 
 # Pin linux/amd64 manifests: an upstream tag update must not silently change first-boot behavior.
@@ -104,20 +146,20 @@ def test_compute_instance_applies_user_data(
     request.addfinalizer(delete_instance)
     cr = wait_for_cr(k8s=k8s_hub_client, uuid=instance)
     wait_for_running(k8s=k8s_hub_client, name=cr)
-    wait_for_console_ready(grpc, instance)
-
-    # Only this tenant's guest console is captured; no login credentials are sent.
-    tail = ""
-    failure_snapshot.SOURCES.register(
-        instance, lambda directory, _window: failure_snapshot.write_text(directory, "guest-console.txt", tail)
+    # The console resolver reads Fulfillment state, which can lag the hub CR.
+    poll_until(
+        fn=lambda: grpc.get_compute_instance(ci_id=instance)["object"].get("status", {}).get("state"),
+        until=lambda state: state == "COMPUTE_INSTANCE_STATE_RUNNING",
+        description=f"ComputeInstance {instance} Running in Fulfillment for console access",
+        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+        resource_id=instance,
     )
-    request.addfinalizer(lambda: failure_snapshot.SOURCES.unregister(instance))
-    with closing(open_serial_console(grpc, fulfillment_address, instance)) as console:
-        for tail in console_output(console.send_binary, lambda timeout: ws_recv(console, timeout)):
-            if f"\n{banner}\n" in tail:
-                return
-    raise E2EFailure(
-        Kind.STUCK_STATE,
-        f"{source_ref}: guest did not display the supplied login banner",
-        ids={"compute_instance": instance},
+
+    _wait_for_first_boot_banner(
+        grpc=grpc,
+        fulfillment_address=fulfillment_address,
+        instance=instance,
+        expected_banner=banner,
+        source_ref=source_ref,
+        request=request,
     )

@@ -6,10 +6,11 @@ import json
 import logging
 import os
 import queue
+import ssl
 import subprocess
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -27,15 +28,12 @@ from tests.e2e.core.helpers import (
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.vmaas.serial_console import console_output, open_serial_console, wait_for_console_ready
-from tests.e2e.vmaas.serial_console import ws_connect as _ws_connect
-from tests.e2e.vmaas.serial_console import ws_recv as _ws_recv
-from tests.e2e.vmaas.serial_console import ws_url as _ws_url
 
 pytestmark = pytest.mark.sanity
 
 logger = logging.getLogger(__name__)
 
+CONSOLE_WS_PATH = "/api/fulfillment/v1/console_sessions/connect"
 CONSOLE_GRPC_SERVICE = "osac.public.v1.ConsoleProxy/Connect"
 
 
@@ -60,7 +58,6 @@ def console_vm(
         print("Waiting for console test VM to provision and reach Running...")
         wait_for_provision(k8s=k8s_hub_client, name=ci_name)
         wait_for_running(k8s=k8s_hub_client, name=ci_name)
-        wait_for_console_ready(grpc, uuid)
         print("Console test VM is Running")
 
         yield {"uuid": uuid, "name": ci_name}
@@ -77,6 +74,38 @@ def console_vm(
 # ---------------------------------------------------------------------------
 # Transport helpers
 # ---------------------------------------------------------------------------
+
+
+def _ws_url(fulfillment_address: str) -> str:
+    """Build the WebSocket console proxy URL from the fulfillment address."""
+    host: str = fulfillment_address.rsplit(":", 1)[0]
+    return f"wss://{host}{CONSOLE_WS_PATH}"
+
+
+def _ws_connect(url: str, ticket: str, timeout: int = 30) -> websocket.WebSocket:
+    """Open a WebSocket connection to the console proxy with the given ticket."""
+    logger.info("WS connecting to %s (timeout=%ds)", url, timeout)
+    ws = websocket.create_connection(
+        url,
+        header={"Authorization": f"Bearer {ticket}"},
+        sslopt={"cert_reqs": ssl.CERT_NONE},
+        subprotocols=["binary"],
+        timeout=timeout,
+    )
+    logger.info("WS connected")
+    return ws
+
+
+def _ws_recv(ws: websocket.WebSocket, timeout: float) -> str | None:
+    """Read one WebSocket message, returning decoded text or None on timeout."""
+    ws.settimeout(timeout)
+    try:
+        data = ws.recv()
+        if isinstance(data, bytes):
+            return data.decode(errors="replace")
+        return data if data else None
+    except websocket.WebSocketTimeoutException:
+        return None
 
 
 def _ws_try_connect(url: str, ticket: str) -> bool:
@@ -151,7 +180,7 @@ class _GrpcSession:
 
     def __init__(self, address: str, ticket: str, reflect_token: str) -> None:
         self._proc = _grpc_popen(address, ticket, reflect_token)
-        self._output_q: queue.Queue[str] = queue.Queue()
+        self._output_q: queue.Queue[str | None] = queue.Queue()
         self._connected = threading.Event()
         self._reader = threading.Thread(target=self._read_stdout, daemon=True)
         self._reader.start()
@@ -175,7 +204,7 @@ class _GrpcSession:
                             self._connected.set()
                 except json.JSONDecodeError:
                     pass  # incomplete object, keep accumulating lines
-        self._output_q.put("")
+        self._output_q.put(None)
 
     def send(self, data: bytes) -> None:
         assert self._proc.stdin is not None
@@ -185,7 +214,7 @@ class _GrpcSession:
         self._proc.stdin.flush()
 
     def recv(self, timeout: float) -> str | None:
-        """Return decoded output, an empty string on EOF, or None on timeout."""
+        """Read next decoded console output chunk. Returns None on timeout/EOF."""
         try:
             return self._output_q.get(timeout=timeout)
         except queue.Empty:
@@ -254,16 +283,59 @@ def _create_ticket(grpc: GRPCClient, vm_uuid: str, *, client_id: str = "") -> di
 
 
 # ---------------------------------------------------------------------------
+# Shared interactive console helper
+# ---------------------------------------------------------------------------
+
+
+def _wait_for_login_prompt(
+    *,
+    send: Callable[[bytes], None],
+    recv: Callable[[float], str | None],
+    timeout: float = 300.0,
+    enter_interval: float = 15.0,
+) -> str:
+    """Send enter periodically and wait for 'login' prompt in console output.
+
+    Returns accumulated console output. Raises AssertionError on timeout.
+    """
+    accumulated = ""
+    deadline = time.monotonic() + timeout
+    next_enter = time.monotonic()
+
+    while time.monotonic() < deadline:
+        if time.monotonic() >= next_enter:
+            send(b"\n")
+            logger.info("Sent enter to console")
+            next_enter = time.monotonic() + enter_interval
+
+        remaining = deadline - time.monotonic()
+        chunk = recv(min(remaining, 5.0))
+
+        if chunk:
+            accumulated += chunk
+            truncated = chunk[:1024]
+            logger.info("Received %d bytes: %s%s", len(chunk), truncated, "..." if len(chunk) > 1024 else "")
+            if "login" in accumulated.lower():
+                logger.info("Found login prompt (%d bytes total)", len(accumulated))
+                return accumulated
+
+    raise AssertionError(
+        f"Console did not show login prompt within {timeout:.0f}s. Received {len(accumulated)} bytes total."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Positive tests, WebSocket transport
 # ---------------------------------------------------------------------------
 
 
 def test_console_serial_websocket(console_vm: dict[str, str], grpc: GRPCClient, fulfillment_address: str) -> None:
     """Connect to the serial console via WebSocket and verify interactive login prompt."""
-    ws = open_serial_console(grpc, fulfillment_address, console_vm["uuid"])
+    session: dict[str, Any] = _create_ticket(grpc, console_vm["uuid"])
+    url: str = _ws_url(fulfillment_address)
+    ws = _ws_connect(url, session["ticket"])
     try:
-        output = console_output(ws.send_binary, lambda timeout: _ws_recv(ws, timeout))
-        assert any("login" in text.lower() for text in output), "WebSocket console did not show a login prompt"
+        _wait_for_login_prompt(send=ws.send_binary, recv=lambda t, _ws=ws: _ws_recv(_ws, t))
     finally:
         with contextlib.suppress(Exception):
             ws.close()
@@ -279,8 +351,7 @@ def test_console_serial_grpc_stream(console_vm: dict[str, str], grpc: GRPCClient
     session: dict[str, Any] = _create_ticket(grpc, console_vm["uuid"])
     gs = _GrpcSession(fulfillment_address, session["ticket"], reflect_token=grpc.token)
     try:
-        output = console_output(gs.send, gs.recv)
-        assert any("login" in text.lower() for text in output), "gRPC console did not show a login prompt"
+        _wait_for_login_prompt(send=gs.send, recv=gs.recv)
     finally:
         gs.close()
 

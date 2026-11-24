@@ -39,7 +39,7 @@
   ansible.builtin.set_fact:
     create_step_secrets_default:
       name: osac.templates.ocp_virt_vm
-      tasks_from: create_secrets.yaml
+      tasks_from: prepare_first_boot.yaml
     create_step_modify_vm_spec_default:
       name: osac.templates.ocp_virt_vm
       tasks_from: create_modify_vm_spec.yaml
@@ -72,7 +72,7 @@
     tasks_from: configure_permitted_host_devices.yaml
   when: compute_instance.spec.gpu is defined
 
-- name: Step - Create secrets (user-data, SSH) and add to spec
+- name: Step - Prepare guest first boot
   ansible.builtin.include_role:
     name: "{{ (create_step_secrets_override | default(create_step_secrets_default)).name }}"
     tasks_from: "{{ (create_step_secrets_override | default(create_step_secrets_default)).tasks_from }}"

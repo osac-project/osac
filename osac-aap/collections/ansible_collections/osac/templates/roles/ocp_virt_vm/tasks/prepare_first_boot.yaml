@@ -1,0 +1,10 @@
+---
+- name: Prepare Windows sysprep
+  ansible.builtin.include_tasks: prepare_windows_sysprep.yaml
+  when:
+    - guest_os_family == 'windows'
+    - vm_user_data_secret_ref | length > 0
+
+- name: Prepare ConfigDrive for non-Windows guests
+  ansible.builtin.include_tasks: prepare_linux_config_drive.yaml
+  when: guest_os_family != 'windows'

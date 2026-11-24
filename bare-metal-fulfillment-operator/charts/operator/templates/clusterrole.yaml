@@ -7,6 +7,13 @@ metadata:
     {{- include "bare-metal-fulfillment-operator.labels" . | nindent 4 }}
 rules:
 - apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
   - metal3.io
   resources:
   - baremetalhosts

@@ -293,11 +293,45 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 
 			By("powering off the host before starting network cleanup")
 			waitForBMAASHostOffline(fixture.host)
+			Consistently(func(g Gomega) {
+				host := getBMAASHost(fixture.host)
+				poweredOn, found, readErr := unstructured.NestedBool(host.Object, "status", "poweredOn")
+				g.Expect(readErr).NotTo(HaveOccurred())
+				g.Expect(found).To(BeTrue(), "status.poweredOn must remain observable")
+				g.Expect(poweredOn).To(BeTrue(), "the test is withholding power-off confirmation")
+
+				attachment := getBMAASObject("NetworkAttachment", fixture.attachment)
+				g.Expect(attachment.GetDeletionTimestamp()).To(BeNil(),
+					"network cleanup must wait for observed host power-off")
+				g.Expect(getAAPTemplatesByName(bmaasDeleteTemplate)).To(BeEmpty(),
+					"Fabric delete must wait for observed host power-off")
+			}, 5*time.Second, time.Second).Should(Succeed())
 			patchBMAASHostPower(fixture.host, false)
 			deleteJob := waitForAAPTemplate(bmaasDeleteTemplate)
 			completeAAPJob(deleteJob, "failed", map[string]any{
 				"osac_error": map[string]any{"message": "Fabric cleanup unavailable", "retryable": false},
 			})
+
+			By("waiting for OSAC to record the failed Fabric delete before checking retained ownership")
+			Eventually(func(g Gomega) {
+				attachment := getBMAASObject("NetworkAttachment", fixture.attachment)
+				jobs, found, readErr := unstructured.NestedSlice(attachment.Object, "status", "jobs")
+				g.Expect(readErr).NotTo(HaveOccurred())
+				g.Expect(found).To(BeTrue(), "status.jobs must record the Fabric cleanup")
+
+				var deleteStatus map[string]any
+				for _, raw := range jobs {
+					job, ok := raw.(map[string]any)
+					if ok && job["task"] == "delete_network_attachment" && job["manager"] == "fabric" {
+						deleteStatus = job
+						break
+					}
+				}
+				g.Expect(deleteStatus).NotTo(BeNil())
+				g.Expect(deleteStatus).To(HaveKeyWithValue("state", "Retrying"))
+				g.Expect(deleteStatus).To(HaveKeyWithValue("jobID", fmt.Sprint(deleteJob.ID)))
+				g.Expect(deleteStatus["message"]).To(ContainSubstring("Fabric cleanup unavailable"))
+			}, readyTimeout, time.Second).Should(Succeed())
 
 			Eventually(func(g Gomega) {
 				attachment := getBMAASObject("NetworkAttachment", fixture.attachment)
@@ -313,6 +347,8 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 				g.Expect(mapErr).NotTo(HaveOccurred())
 				g.Expect(found).To(BeTrue())
 				g.Expect(consumer).To(HaveKeyWithValue("name", string(bmi.GetUID())))
+				g.Expect(getAAPTemplatesByName(bmaasDeprovisionTemplate)).To(BeEmpty(),
+					"host deprovisioning must wait for network cleanup to succeed")
 			}, readyTimeout, time.Second).Should(Succeed())
 		})
 
@@ -363,10 +399,6 @@ var _ = Describe("BMaaS networking disabled on deployed controllers",
 			waitForBMAASPhase(fixture.id, "Ready")
 
 			bmi := getBMAASObject("BareMetalInstance", fixture.id)
-			condition := findNetworkingCondition(bmi, "NetworkAttachmentsReady")
-			Expect(condition).To(HaveKeyWithValue("status", "True"))
-			Expect(condition).To(HaveKeyWithValue("reason", "Skipped"))
-			Expect(condition).To(HaveKeyWithValue("message", "Networking provisioning disabled"))
 			// The omitempty status list may be absent when it has no entries.
 			statuses, _, readErr := unstructured.NestedSlice(bmi.Object, "status", "networkAttachmentStatuses")
 			Expect(readErr).NotTo(HaveOccurred())

@@ -43,7 +43,7 @@ from tests.e2e.core.helpers import (
     wait_for_host_powered,
 )
 from tests.e2e.core.k8s_client import K8sClient
-from tests.e2e.core.netbox_client import NetBoxClient
+from tests.e2e.core.netbox_client import NetBoxClient, _status_value
 from tests.e2e.core.runner import WaitResourceKind, env, poll_until
 
 VALID_INVENTORY_BACKENDS = ("metal3", "netbox")
@@ -121,6 +121,16 @@ class InventoryBackend(Protocol):
         """
         ...
 
+    def snapshot_inventory(self) -> tuple[set[str], dict[str, Any]]:
+        """Capture a comparable snapshot for no-side-effect assertions.
+
+        Returns the set of BareMetalInstance CR uids plus a per-backend
+        claim map (metal3: BMH name → consumerRef; netbox: device name →
+        ``status/osac_instance_id``). Opaque — compare for equality only,
+        never interpret the contents.
+        """
+        ...
+
     def close(self) -> None:
         """Release client-side resources (temp CA bundles)."""
         ...
@@ -170,6 +180,14 @@ class Metal3Inventory:
         assert available >= 1, (
             f"Need at least 1 available BMH in {self.bmh_namespace}; found {available} "
             "(metal3 hosts are enrolled by the infra backend or an admin, not by the tests)"
+        )
+
+    def snapshot_inventory(self) -> tuple[set[str], dict[str, Any]]:
+        crs = self.k8s.list_json(resource="baremetalinstance", namespace=self.k8s.namespace).get("items", [])
+        hosts = self.k8s.list_json(resource="baremetalhost", namespace=self.bmh_namespace).get("items", [])
+        return (
+            {cr["metadata"]["uid"] for cr in crs},
+            {host["metadata"]["name"]: host.get("spec", {}).get("consumerRef") for host in hosts},
         )
 
     def close(self) -> None:
@@ -264,6 +282,17 @@ class NetBoxInventory:
             f"Need at least 1 staged, unclaimed osac_managed device; found {available} "
             "(netbox devices are staged by the provider reconcile, not by the tests)"
         )
+
+    def snapshot_inventory(self) -> tuple[set[str], dict[str, Any]]:
+        # Stable fields only (name, status, claim id): two reads with nothing
+        # in between must compare equal, so volatile device fields are never
+        # part of the snapshot.
+        crs = self.k8s.list_json(resource="baremetalinstance", namespace=self.k8s.namespace).get("items", [])
+        claims: dict[str, Any] = {}
+        for device in self.netbox.list_devices(custom_fields={"osac_managed": True}):
+            instance_id = device.get("custom_fields", {}).get("osac_instance_id") or ""
+            claims[device["name"]] = f"{_status_value(device.get('status'))}/{instance_id}"
+        return ({cr["metadata"]["uid"] for cr in crs}, claims)
 
     def close(self) -> None:
         self.netbox.close()
@@ -421,11 +450,16 @@ def netbox_settings_from_bmf(*, k8s: K8sClient, namespace: str) -> NetBoxSetting
     )
 
 
-def make_inventory_backend(*, k8s: K8sClient, namespace: str, bmh_namespace: str) -> InventoryBackend:
-    """Build the inventory backend selected by OSAC_INVENTORY_BACKEND."""
+def make_inventory_backend(*, k8s: K8sClient, namespace: str) -> InventoryBackend:
+    """Build the inventory backend selected by OSAC_INVENTORY_BACKEND.
+
+    The BMH namespace is backend-resolved, never passed in: metal3 reads
+    OSAC_BMH_NAMESPACE (host-inventory default), netbox derives it from
+    the deployed management config.
+    """
     backend = env("OSAC_INVENTORY_BACKEND", "metal3")
     if backend == "metal3":
-        return Metal3Inventory(k8s=k8s, bmh_namespace=bmh_namespace)
+        return Metal3Inventory(k8s=k8s, bmh_namespace=env("OSAC_BMH_NAMESPACE", "host-inventory"))
     if backend == "netbox":
         settings = netbox_settings_from_bmf(k8s=k8s, namespace=namespace)
         netbox = NetBoxClient(

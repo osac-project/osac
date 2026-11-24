@@ -36,21 +36,14 @@ def bmi_instance_type(
 
 
 @pytest.fixture(scope="session")
-def bmh_namespace() -> str:
-    return env("OSAC_BMH_NAMESPACE", "host-inventory")
-
-
-@pytest.fixture(scope="session")
-def inventory_backend(
-    k8s_hub_client: K8sClient, namespace: str, bmh_namespace: str
-) -> Generator[InventoryBackend, None, None]:
+def inventory_backend(k8s_hub_client: K8sClient, namespace: str) -> Generator[InventoryBackend, None, None]:
     """Inventory backend selected by OSAC_INVENTORY_BACKEND (default metal3).
 
     On netbox, NetBox connection settings come from the deployed BMF
     configuration (Secrets in the OSAC namespace), with OSAC_NETBOX_* env
     vars as debug overrides only.
     """
-    backend = make_inventory_backend(k8s=k8s_hub_client, namespace=namespace, bmh_namespace=bmh_namespace)
+    backend = make_inventory_backend(k8s=k8s_hub_client, namespace=namespace)
     yield backend
     backend.close()
 

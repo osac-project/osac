@@ -22,15 +22,6 @@ from tests.e2e.core.osac_cli import OsacCLI
 pytestmark = [pytest.mark.regression, pytest.mark.requires_bmaas, pytest.mark.serial]
 
 
-def _inventory(k8s: K8sClient, bmh_namespace: str) -> tuple[set[str], dict[str, Any]]:
-    crs = k8s.list_json(resource="baremetalinstance", namespace=k8s.namespace).get("items", [])
-    hosts = k8s.list_json(resource="baremetalhost", namespace=bmh_namespace).get("items", [])
-    return (
-        {cr["metadata"]["uid"] for cr in crs},
-        {host["metadata"]["name"]: host.get("spec", {}).get("consumerRef") for host in hosts},
-    )
-
-
 def _instances_by_name(grpc: GRPCClient, name: str) -> list[dict[str, Any]]:
     try:
         return grpc.call(
@@ -101,8 +92,7 @@ def test_architecture_mismatch_has_no_side_effects(
     jwt_cli_user: OsacCLI,
     jwt_grpc_tenant1: GRPCClient,
     private_grpc: GRPCClient,
-    k8s_hub_client: K8sClient,
-    bmh_namespace: str,
+    inventory_backend: InventoryBackend,
     ssh_key_secret: str,
 ) -> None:
     image_name = unique_name("e2e-bmi-arm64-image")
@@ -121,7 +111,7 @@ def test_architecture_mismatch_has_no_side_effects(
 
     request.addfinalizer(cleanup_image)
     name = unique_name("e2e-bmi-architecture-rejected")
-    before = _inventory(k8s_hub_client, bmh_namespace)
+    before = inventory_backend.snapshot_inventory()
     try:
         if request_path == "cli":
             with pytest.raises(subprocess.CalledProcessError) as rejected:
@@ -156,7 +146,7 @@ def test_architecture_mismatch_has_no_side_effects(
         assert "INCOMPATIBLE_DISK_IMAGE_ARCHITECTURE" in output
         assert BMI_DISK_IMAGE_SOURCE_REF not in output
         assert not _instances_by_name(private_grpc, name)
-        assert _inventory(k8s_hub_client, bmh_namespace) == before
+        assert inventory_backend.snapshot_inventory() == before
     finally:
         for instance in _instances_by_name(private_grpc, name):
             try:

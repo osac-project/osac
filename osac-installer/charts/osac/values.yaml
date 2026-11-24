@@ -216,7 +216,7 @@ service:
   # bundled fulfillment-ingress-proxy; gatewayapi uses the OpenShift
   # CIO-managed Gateway API and skips the bundled Envoy. gatewayapi requires
   # the cluster-scoped GatewayClass prerequisite (osac-infra gatewayapi.enabled)
-  # and OpenShift 4.19+. In gatewayapi mode every cross-origin browser caller
+  # and OpenShift 4.22+ (BackendTLSPolicy/v1 GA). In gatewayapi mode every cross-origin browser caller
   # (the UI origin) MUST be listed in httpCorsAllowedOrigins below -- the
   # gateway has no CORS filter, so app-side CORS is the only enforcement.
   ingress:

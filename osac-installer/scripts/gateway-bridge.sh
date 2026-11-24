@@ -34,7 +34,7 @@ gateway_ips=""
 while :; do
   gateway_ips=$(oc get endpointslices -n "${GATEWAY_NAMESPACE}" \
     -l "kubernetes.io/service-name=${GATEWAY_SERVICE}" \
-    -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready)]}{.addresses[*]}{" "}{end}' 2>/dev/null || true)
+    -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.addresses[*]}{" "}{end}' 2>/dev/null || true)
   # A terminating endpoint can still report ready=true; snapshotting it
   # would freeze a dead Pod IP into the bridge (nothing reconciles the
   # bridge afterwards). Wait until no endpoint is terminating.

@@ -28,18 +28,19 @@ import (
 var _ = Describe("Public event payloads", func() {
 	publicPayload := (&publicv1.Event{}).ProtoReflect().Descriptor().Oneofs().ByName("payload")
 	privatePayload := (&privatev1.Event{}).ProtoReflect().Descriptor().Oneofs().ByName("payload")
-	privateResources := map[protoreflect.Name]bool{
+	privatePayloads := map[protoreflect.Name]bool{
 		"hub": true, "network_class": true, "storage_backend": true, "volume": true,
+		"quota_limit": true, "quota_default_limit": true, "quota_threshold": true, "quota_limit_request": true,
 	}
-	It("Includes all public resources and excludes the four private resources", func() {
-		Expect(publicPayload.Fields().Len()).To(Equal(privatePayload.Fields().Len() - len(privateResources)))
+	It("Includes public resource payloads and excludes private payloads", func() {
+		Expect(publicPayload.Fields().Len()).To(Equal(privatePayload.Fields().Len() - len(privatePayloads)))
 	})
 
 	for index := range privatePayload.Fields().Len() {
 		privateField := privatePayload.Fields().Get(index)
 		It("Preserves the visibility and identity of "+string(privateField.Name()), func() {
 			publicField := publicPayload.Fields().ByName(privateField.Name())
-			if privateResources[privateField.Name()] {
+			if privatePayloads[privateField.Name()] {
 				Expect(publicField).To(BeNil())
 				return
 			}

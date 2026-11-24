@@ -10,7 +10,6 @@
     tenant_name: test-sametd
     tenant_namespace: osac-system
     tenant_uid: "test-uid-sametd"
-    storage_provider_validate_certs: false
     storage_provider_backend_connections:
       be-a:
         endpoint: "127.0.0.1:18443"
@@ -70,7 +69,6 @@
     tenant_name: test-sametd
     tenant_namespace: osac-system
     tenant_uid: "test-uid-sametd"
-    storage_provider_validate_certs: false
     storage_provider_backend_connections:
       be-b:
         endpoint: "127.0.0.1:18443"
@@ -97,7 +95,6 @@
     tenant_name: test-sametd
     tenant_namespace: osac-system
     tenant_uid: "test-uid-sametd"
-    storage_provider_validate_certs: false
     storage_provider_backend_connections:
       be-b:
         endpoint: "127.0.0.1:18443"
@@ -171,7 +168,6 @@
     tenant_name: test-sametd
     tenant_namespace: osac-system
     tenant_uid: "test-uid-sametd"
-    storage_provider_validate_certs: false
     storage_provider_backend_connections:
       be-a:
         endpoint: "127.0.0.1:18443"

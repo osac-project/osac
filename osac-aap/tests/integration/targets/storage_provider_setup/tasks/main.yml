@@ -33,7 +33,6 @@
         password: "mock-admin-password"
     storage_provider_action: setup
     storage_provider_provisioning_target: vmaas
-    storage_provider_validate_certs: false
 
   tasks:
     - name: Run storage provider setup
@@ -201,7 +200,6 @@
         password: "mock-admin-password"
     storage_provider_action: setup
     storage_provider_provisioning_target: vmaas
-    storage_provider_validate_certs: false
 
   tasks:
     - name: Call storage_provider role with setup action (second run)

@@ -6,7 +6,6 @@
     tenant_name: test-retrystate
     tenant_namespace: osac-system
     tenant_uid: "test-uid-retrystate"
-    storage_provider_validate_certs: false
     storage_provider_backend_connections:
       be-retry:
         endpoint: "127.0.0.1:18443"
@@ -116,7 +115,6 @@
     tenant_name: test-retrystate
     tenant_namespace: osac-system
     tenant_uid: "test-uid-retrystate"
-    storage_provider_validate_certs: false
     storage_provider_backend_connections:
       be-retry:
         endpoint: "127.0.0.1:18443"
@@ -185,7 +183,6 @@
     tenant_name: test-retrystate
     tenant_namespace: osac-system
     tenant_uid: "test-uid-retrystate"
-    storage_provider_validate_certs: false
     storage_provider_backend_connections:
       be-retry:
         endpoint: "127.0.0.1:18443"

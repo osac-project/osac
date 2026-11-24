@@ -3,7 +3,6 @@
   hosts: localhost
   gather_facts: false
   vars:
-    storage_provider_validate_certs: false
     tenant_name: test-nolog
     tenant_namespace: osac-system
     storage_provider_backend_connections:

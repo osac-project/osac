@@ -117,7 +117,6 @@
         password: "mock-admin-password"
     storage_provider_action: ensure_storage_class
     storage_provider_block_encryption_passphrase: "test-encryption-passphrase"
-    storage_provider_validate_certs: false
 
   tasks:
     - name: Call storage_provider role with ensure_storage_class action
@@ -376,7 +375,6 @@
         password: "mock-admin-password"
     storage_provider_action: ensure_storage_class
     storage_provider_block_encryption_passphrase: "test-encryption-passphrase"
-    storage_provider_validate_certs: false
 
   tasks:
     - name: Call ensure_storage_class again (should short-circuit)
@@ -521,7 +519,6 @@
         password: "mock-admin-password"
     storage_provider_action: ensure_storage_class
     storage_provider_snapshots_enabled: false
-    storage_provider_validate_certs: false
 
   tasks:
     - name: Call storage_provider role with snapshots disabled
@@ -805,7 +802,6 @@
         username: "admin"
         password: "mock-admin-password"
     storage_provider_action: ensure_storage_class
-    storage_provider_validate_certs: false
 
   tasks:
     - name: Call storage_provider role with two VAST backends

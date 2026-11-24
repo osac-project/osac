@@ -70,7 +70,6 @@
         endpoint: "127.0.0.1:18443"
         username: "admin"
         password: "{{ _mock_vast_password }}"
-    storage_provider_validate_certs: false
 
   tasks:
     - name: Run storage provider setup
@@ -414,7 +413,6 @@
         endpoint: "127.0.0.1:18445"
         username: "admin"
         password: "{{ _mock_vast_password }}"
-    storage_provider_validate_certs: false
 
   tasks:
     - name: Run setup for both backends

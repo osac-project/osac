@@ -230,7 +230,6 @@
         username: "admin"
         password: "mock-admin-password"
     storage_provider_provisioning_target: vmaas
-    storage_provider_validate_certs: false
 
   tasks:
     - name: Call storage_provider role with teardown_cluster_storage action
@@ -656,7 +655,6 @@
         username: "admin"
         password: "mock-admin-password"
     storage_provider_provisioning_target: vmaas
-    storage_provider_validate_certs: false
 
   tasks:
     - name: Call storage_provider with teardown_cluster_storage for both backends
@@ -838,7 +836,6 @@
             endpoint: "127.0.0.1:18443"
             username: "admin"
             password: "{{ _mock_vast_password }}"
-        storage_provider_validate_certs: false
 
     - name: Setup backend B on endpoint2 (port 18445)
       ansible.builtin.include_role:
@@ -855,7 +852,6 @@
             endpoint: "127.0.0.1:18445"
             username: "admin"
             password: "{{ _mock_vast_password }}"
-        storage_provider_validate_certs: false
 
 - name: "Storage Provider Different-Endpoint Teardown - Teardown backend A"
   hosts: localhost
@@ -907,7 +903,6 @@
             endpoint: "127.0.0.1:18443"
             username: "admin"
             password: "{{ _mock_vast_password }}"
-        storage_provider_validate_certs: false
 
 - name: "Storage Provider Different-Endpoint Teardown - Verify isolation"
   hosts: localhost
@@ -1015,7 +1010,6 @@
                 endpoint: "127.0.0.1:18445"
                 username: "admin"
                 password: "{{ _mock_vast_password }}"
-            storage_provider_validate_certs: false
       rescue:
         - name: Teardown failed but continuing cleanup
           ansible.builtin.debug:

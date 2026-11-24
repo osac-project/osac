@@ -372,7 +372,6 @@ var _ = Describe("BareMetalWorker tenant safety", Label("baremetalworker"), func
 			Expect(workers[0].BareMetalInstance.ID).To(BeEmpty())
 			Expect(fc.CreateCalls()).To(HaveLen(1))
 			Expect(fc.CreateCalls()[0].GetSpec().GetTemplate().GetTenant()).To(Equal("shared"))
-			Expect(fc.CreateCalls()[0].GetSpec().GetTemplate().GetTenant()).To(Equal("shared"))
 			Expect(fc.CreateCatalogItemCalls()).To(BeEmpty())
 		})
 	}

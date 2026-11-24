@@ -180,9 +180,9 @@ begin
            update %I.%I
            set data = osac_5424_rewrite_reference_tenants(data, coalesce(data->>''tenant'', ''''), ''$'', '''')
            where osac_5424_has_shared_reference(data, '''')
-           returning id::text, data
+           returning id::text, osac_5424_has_shared_reference(data, '''') as has_shared
          )
-         select id from updated where osac_5424_has_shared_reference(data, '''') limit 1',
+         select id from updated where has_shared limit 1',
         target.schema_name, target.table_name
       ) into affected_id;
     else
@@ -191,9 +191,9 @@ begin
            update %I.%I
            set data = osac_5424_rewrite_reference_tenants(data, tenant, ''$'', '''')
            where osac_5424_has_shared_reference(data, '''')
-           returning id::text, data
+           returning id::text, osac_5424_has_shared_reference(data, '''') as has_shared
          )
-         select id from updated where osac_5424_has_shared_reference(data, '''') limit 1',
+         select id from updated where has_shared limit 1',
         target.schema_name, target.table_name
       ) into affected_id;
     end if;

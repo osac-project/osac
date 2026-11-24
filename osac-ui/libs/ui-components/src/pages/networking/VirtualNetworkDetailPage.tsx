@@ -31,10 +31,8 @@ import DeleteResourceButton from '@osac/ui-components/components/Resource/Delete
 import DeleteResourceModal from '@osac/ui-components/components/Resource/DeleteResourceModal';
 import ResourceNameField from '@osac/ui-components/components/Resource/ResourceNameField.tsx';
 
-import { useApiQueryClient } from '../../api/use-api-query';
 import { useDeleteResource, useGetResource, useListResource } from '../../api/use-resource';
 import {
-  invalidateVirtualNetworksQueries,
   isDefaultNetworkingResource,
   useNatGateway,
   virtualNetworkScopeFilter,
@@ -62,14 +60,9 @@ export const VirtualNetworkDetailPage = () => {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [detachTarget, setDetachTarget] = useState<NATGateway>();
 
-  const queryClient = useApiQueryClient();
   const { data: vnResponse, isLoading, error } = useGetResource(VirtualNetworks, { id });
   const vn = vnResponse?.object;
-  const deleteVirtualNetwork = useDeleteResource(VirtualNetworks, {
-    onSuccess: () => {
-      void invalidateVirtualNetworksQueries(queryClient);
-    },
-  });
+  const deleteVirtualNetwork = useDeleteResource(VirtualNetworks);
   const {
     data: subnetsResponse,
     isLoading: isLoadingSubnets,

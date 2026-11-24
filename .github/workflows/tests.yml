@@ -20,7 +20,7 @@ on:  # yamllint disable-line rule:truthy
         description: >-
           Which tests: go-unit, caas-unit, ui-unit, metering-contract, it-caas, it-fulfillment-service, it-osac-operator,
           it-bare-metal-fulfillment-operator, it-osac-aap, it-osac-installer, helm-unit or
-          it-osac-installer-preflight-helm3/-helm322/-helm4
+          it-osac-installer-preflight-helm3/-helm322/-helm4 or e2e-workflow-policy
         required: true
         type: string
       dir:
@@ -56,6 +56,35 @@ jobs:
     env:
       KIND_EXPERIMENTAL_PROVIDER: docker
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'e2e-workflow-policy'
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'e2e-workflow-policy'
+        with:
+          repository: osac-project/osac-test-infra
+          # Keep this immutable so flake repetitions use the same runner policy.
+          ref: 622921ac820ff992a88327b925933595c8d552bd
+          path: osac-test-infra
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'e2e-workflow-policy'
+        with:
+          repository: osac-project/osac-ci
+          ref: c5ad0858e6a30ea99c7a2a4b0d4869580b3b655e
+          path: osac-ci
+          persist-credentials: false
+      - uses: ./.github/actions/setup-python
+        if: inputs.kind == 'e2e-workflow-policy'
+      - name: Test E2E workflow selection and coverage contracts
+        if: inputs.kind == 'e2e-workflow-policy'
+        env:
+          OSAC_TEST_INFRA_DIR: ${{ github.workspace }}/osac-test-infra
+          PYTHONPATH: ${{ github.workspace }}/osac-ci/src
+        run: uv run --project osac-test-infra --with pydantic pytest -o addopts= -n 0 tests/workflow_policy/test_caas_full_variant.py tests/workflow_policy/test_caas_ci_suite_policy.py
+
       # --- unit tests of a Go module (fulfillment-service, osac-metering/...)
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: inputs.kind == 'go-unit'
@@ -443,6 +472,21 @@ jobs:
           ref: ${{ inputs.commit }}
           persist-credentials: false
 
+      # The networking provisioning regression runs the prep-osac values tasks
+      # from this checkout instead of a copy; OSAC_TEST_INFRA points at it.
+      - name: Check out osac-test-infra
+        if: inputs.kind == 'it-osac-installer'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          repository: osac-project/osac-test-infra
+          ref: main
+          path: osac-test-infra
+          persist-credentials: false
+
+      - name: Set up Python
+        if: inputs.kind == 'it-osac-installer'
+        uses: ./.github/actions/setup-python
+
       - name: Set up Helm
         if: inputs.kind == 'it-osac-installer'
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
@@ -468,6 +512,8 @@ jobs:
       - name: Validate Helm networking values
         if: inputs.kind == 'it-osac-installer'
         working-directory: osac-installer
+        env:
+          OSAC_TEST_INFRA: ${{ github.workspace }}/osac-test-infra
         run: make helm-networking-test
 
       - name: Template charts (dry-run validation)

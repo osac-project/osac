@@ -380,6 +380,7 @@ export INSTANCE_VALUES_EXTRA
 KIND_RUNTIME := scripts/dev-full/kind-runtime.sh
 KIND_ARM64_CLI_IMAGE := quay.io/openshift/origin-cli:4.20.0
 KIND_AAP_CLI_IMAGE := quay.io/openshift/origin-cli:4.19
+KIND_FEDORA_IMAGE := localhost/osac-dev/fedora-arm64:pci-nomsi-v1
 
 # quay.io/openshift/origin-cli:4.20.0 has no arm64 manifest. On Apple Silicon,
 # build a compatible local image with the same tag so every chart can continue
@@ -390,7 +391,10 @@ DEVSTACK_HELM_ARGS :=
 DEVSTACK_CLUSTER_CHECK :=
 ifeq ($(PLATFORM)/$(PROFILE),kind/dev-full)
 ifeq ($(HOST_IS_MAC_ARM),true)
-DEVSTACK_HELM_ARGS := --set arm64VmCompatibility.enabled=true
+DEVSTACK_HELM_ARGS := --set arm64VmCompatibility.enabled=true \
+	--set-string 'catalog.diskImages[0].name=fedora-mac-arm64' \
+	--set-string 'catalog.diskImages[0].sourceRef=$(KIND_FEDORA_IMAGE)' \
+	--set-json 'catalog.diskImages[0].architecture=["ARCHITECTURE_ARM64"]'
 DEVSTACK_CLUSTER_CHECK := scripts/dev-full/check-cluster-compatibility.sh
 endif
 endif
@@ -407,7 +411,8 @@ endif
 ifeq ($(PLATFORM)/$(PROFILE)/$(KIND_RUNTIME_REQUIRED),kind/dev/false)
 ifeq ($(strip $(KIND_EXPERIMENTAL_PROVIDER)),)
 ifneq ($(shell command -v podman 2>/dev/null),)
-override export KIND_EXPERIMENTAL_PROVIDER := podman
+override KIND_EXPERIMENTAL_PROVIDER := podman
+export KIND_EXPERIMENTAL_PROVIDER
 endif
 endif
 endif
@@ -977,6 +982,14 @@ uninstall-osac: validate-ns ## Uninstall OSAC instance (PLATFORM= PROFILE= NS= r
 
 ##@ Entity: Dev Stack (kind PROFILE=dev-full only)
 
+.PHONY: kind-prepare-fedora-image
+kind-prepare-fedora-image: ## Build/cache the Mac dev-full Fedora disk and load it for CDI
+ifneq ($(PLATFORM)/$(PROFILE)/$(HOST_IS_MAC_ARM),kind/dev-full/true)
+	@echo "ERROR: kind-prepare-fedora-image requires Mac ARM64 PLATFORM=kind PROFILE=dev-full" >&2; exit 1
+else
+	$(KIND_RUNTIME_ENV) bash scripts/dev-full/build-fedora-image.sh $(KIND_CLUSTER_NAME) $(KIND_FEDORA_IMAGE)
+endif
+
 .PHONY: install-devstack
 install-devstack: validate-inputs helm-devstack-deps ## Install dev-full extras: KubeVirt/CDI/Multus + AWX + UI Gateway route + seeded catalog
 ifneq ($(PLATFORM)/$(PROFILE),kind/dev-full)
@@ -984,6 +997,9 @@ ifneq ($(PLATFORM)/$(PROFILE),kind/dev-full)
 endif
 	@case "$(HELM_MAJOR)" in 3|4) ;; *) echo "ERROR: install-devstack requires Helm 3 or 4; could not detect a supported Helm version" >&2; exit 1;; esac
 	$(if $(DEVSTACK_CLUSTER_CHECK),$(DEVSTACK_CLUSTER_CHECK) $(KIND_KUBECTL_TARGET))
+ifeq ($(HOST_IS_MAC_ARM),true)
+	$(MAKE) kind-prepare-fedora-image
+endif
   # Pre-install: node-level CNI setup (requires host container runtime access)
 	$(KIND_RUNTIME_ENV) scripts/dev-full/install-virt-node-setup.sh $(KIND_CLUSTER_NAME)
 ifeq ($(HELM_MAJOR),4)
@@ -1485,7 +1501,10 @@ openbao-security-context-test: helm-infra-deps ## Check OpenBao securityContext 
 	./scripts/test-openbao-security-context.sh
 
 .PHONY: ensure-inotify
-ensure-inotify: override export _INOTIFY_PROVIDER := $(KIND_RUNTIME_PROVIDER)
+# Make 3.81 cannot combine target-specific override and export. Export the
+# variable separately; only this target assigns its resolved provider value.
+export _INOTIFY_PROVIDER
+ensure-inotify: override _INOTIFY_PROVIDER := $(KIND_RUNTIME_PROVIDER)
 ensure-inotify: ## Opt in to native Linux host inotify preparation (floor 512)
 	@source scripts/lib.sh && ensure_inotify_instances
 
@@ -1496,6 +1515,10 @@ infra-ready-wait-test: ## Check install-infra waits for the issuer, PostgreSQL a
 .PHONY: kind-runtime-test
 kind-runtime-test: ## Check Kind runtime, sudo, image loading, and cluster cleanup with command stubs
 	python3 scripts/test-kind-runtime.py
+
+.PHONY: dev-full-fedora-test
+dev-full-fedora-test: ## Check Mac Fedora image build/load and catalog create/upgrade contracts
+	python3 scripts/test-dev-full-fedora.py
 
 .PHONY: bmf-netbox-render-test
 bmf-netbox-render-test: helm-deps ## Check NetBox, Metal3 management, and Secret API Helm wiring
@@ -1532,8 +1555,9 @@ helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-ne
 
 .PHONY: helm-networking-test
 helm-networking-test: helm-deps ## Test global.networking values, validation, and networking manifests
-	python3 scripts/test-networking-values.py
+	uv run --project .. python scripts/test-networking-values.py
 	python3 scripts/test_it_networking_checks.py
+	uv run --with ansible-core --project .. python scripts/test-networking-provisioning-overlay.py
 
 .PHONY: network-class-step-test
 network-class-step-test: ## Test the installer NetworkClass step against a fake fulfillment API

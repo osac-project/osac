@@ -232,7 +232,7 @@ if [[ -n "$FLOW_TAG" ]]; then
   [[ -n "${FLOW_CONFIG[$FLOW_TAG]+set}" ]] ||
     fail "Unknown flow tag '${FLOW_TAG}'. See --help for available tags."
   IFS='|' read -r flow_project flow_mode flow_grep flow_no_deps <<<"${FLOW_CONFIG[$FLOW_TAG]}"
-  [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src/vmaas"
+  [[ -n "$PW_TEST_PATH" ]] || PW_TEST_PATH="e2e-tests/src"
   [[ -n "$PW_PROJECT" ]] || PW_PROJECT="$flow_project"
   [[ -n "$PW_GREP" ]] || PW_GREP="$flow_grep"
   [[ "$MODE_FLAG_SET" == true ]] || OSAC_VM_FLOW_MODE="$flow_mode"
@@ -246,9 +246,13 @@ case "$OSAC_VM_FLOW_MODE" in
   *) fail "OSAC_VM_FLOW_MODE/--mode must be create, delete, or full." ;;
 esac
 
-needs_vmaas=false
-case "${PW_TEST_PATH}:${PW_PROJECT}" in
-  *vmaas*|e2e-tests:*|*:vmaas*) needs_vmaas=true ;;
+needs_flow_setup=false
+case "$PW_TEST_PATH" in
+  *vmaas*|*e2e-tests*|generic|generic/*|*/generic|*/generic/*) needs_flow_setup=true ;;
+esac
+case "$PW_PROJECT" in
+  *vmaas*|vm-flow*|tenant*|disk-image*|instance-type*|storage-tier*|catalog*)
+    needs_flow_setup=true ;;
 esac
 
 need_login=true
@@ -383,7 +387,7 @@ command -v pnpm >/dev/null 2>&1 || fail "pnpm is missing. Run prepare-setup-for-
 pnpm --filter @osac/playwright exec playwright --version >/dev/null 2>&1 ||
   fail "Playwright is not prepared. Run prepare-setup-for-ui-run.sh."
 
-if [[ "$needs_vmaas" == true ]]; then
+if [[ "$needs_flow_setup" == true ]]; then
   extravars_destination="${OSAC_UI_DIR}/apps/e2e-tests/extravars.yaml"
   extravars_backup=""
   extravars_linked=false

@@ -6,8 +6,8 @@ import {
   deleteVmIfPresent,
   waitForVmConditionStatus,
 } from '../../../../../libs/test-utils/src/vms.page';
+import { instanceTypeTestData, resizeVmTestName, tenantName } from '../../shared/test_data';
 import { createVmFromCatalog } from '../create_vm_flow';
-import { instanceTypeTestData, resizeVmTestName, tenantName } from '../test_data';
 
 /** Create the VM used by one resize scenario from the resize catalog blocks. */
 export const createResizeVm = async (page: Page, onCreationStarted?: () => void): Promise<void> => {

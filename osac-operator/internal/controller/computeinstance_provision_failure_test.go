@@ -61,6 +61,16 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(failed.LastFailure).NotTo(BeNil())
 		clock.Step(time.Second)
+		stale := instance.DeepCopy()
+		instance.Annotations = map[string]string{"test": "new-resource-version"}
+		Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+		stale.Status.DesiredConfigVersion = "new"
+		conflicted, err := r.handleProvisioning(ctx, stale, "default", false)
+		Expect(apierrors.IsConflict(err)).To(BeTrue())
+		Expect(conflicted.Entry.Task).To(BeEmpty())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+		Expect(instance.Status.Jobs[0].LastFailure).NotTo(BeNil())
+		Expect(instance.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateRetrying))
 		instance.Status.DesiredConfigVersion = "new"
 		out, err := r.handleProvisioning(ctx, instance, "default", false)
 		Expect(err).NotTo(HaveOccurred())

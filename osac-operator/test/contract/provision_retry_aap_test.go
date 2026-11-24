@@ -312,7 +312,8 @@ func runProvisionScenario(t *testing.T, h provisionAAPHTTP, scenario string) {
 	}
 	failed := run()
 	wantFailure := &v1alpha1.NetworkJobFailure{
-		Reason: wantReason, Message: wantMessage, Attempt: 1, ObservedAt: metav1.NewTime(clock.Now()),
+		Reason: wantReason, Message: wantMessage, Attempt: 1,
+		ObservedAt: metav1.NewTime(clock.Now().UTC().Truncate(time.Second)),
 	}
 	if !sameContractFailure(failed.LastFailure, wantFailure) {
 		t.Fatal("real AAP artifact did not produce the expected safe checkpoint")

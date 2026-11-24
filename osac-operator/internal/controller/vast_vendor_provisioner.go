@@ -19,6 +19,8 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc"
@@ -34,7 +36,7 @@ import (
 // bytesPerGiB converts the Volume spec's GiB size to the CSI capacity in bytes.
 const bytesPerGiB = 1024 * 1024 * 1024
 
-// Hub Secret keys (Secret "vast-tenant-config-<tenant>"), populated during VAST
+// Hub Secret keys (Secret "vast-tenant-config-<tenant>-<backend_id>"), populated during VAST
 // tenant onboarding. Kept in sync with the reader in osac-aap's vast_storage
 // role (read_tenant_credentials.yaml).
 const (
@@ -63,8 +65,8 @@ type vendorDialer func(ctx context.Context, endpoint string) (vendorCSIClient, f
 // volumes by calling a vendor CSI controller (deployed per backend, e.g. the
 // VAST CSI controller) directly over gRPC, passing per-tenant credentials in
 // the CSI secrets field. The per-tenant credentials and VAST-side resource
-// references are read from the hub Secret "vast-tenant-config-<tenant>" created
-// during tenant onboarding.
+// references are read from the tenant's hub Secret
+// ("vast-tenant-config-<tenant>-<backend_id>") created during tenant onboarding.
 //
 // Only block volumes are implemented today. The exact CSI CreateVolume contract
 // is verified against the upstream VAST CSI driver at the tag this deployment
@@ -81,7 +83,7 @@ type VastVendorProvisioner struct {
 	// cluster-wide secret read via its manager ClusterRole, so no extra RBAC is
 	// required.
 	reader client.Reader
-	// configNamespace is where the hub "vast-tenant-config-<tenant>" Secrets
+	// configNamespace is where the hub "vast-tenant-config-<tenant>-<backend_id>" Secrets
 	// live (OSAC_STORAGE_CONFIG_NAMESPACE).
 	configNamespace string
 	// endpoints maps a provider routing key to its vendor CSI controller gRPC
@@ -241,16 +243,37 @@ func (p *VastVendorProvisioner) endpointFor(provider string) (string, error) {
 	return endpoint, nil
 }
 
-// readTenantCreds reads and validates the per-tenant hub Secret.
+// readTenantCreds reads and validates the tenant's VAST hub Secret. osac-aap
+// writes one per backend ("vast-tenant-config-<tenant>-<backend_id>"), and a
+// Volume does not record its backend, so the Secret is found by its tenant and
+// provider labels and a tenant with more than one VAST backend is rejected.
 func (p *VastVendorProvisioner) readTenantCreds(ctx context.Context, tenant string) (tenantCreds, error) {
 	if tenant == "" {
 		return tenantCreds{}, fmt.Errorf("volume has no tenant annotation; cannot select vendor credentials")
 	}
-	name := fmt.Sprintf("vast-tenant-config-%s", tenant)
-	secret := &corev1.Secret{}
-	if err := p.reader.Get(ctx, client.ObjectKey{Namespace: p.configNamespace, Name: name}, secret); err != nil {
-		return tenantCreds{}, fmt.Errorf("read hub secret %s/%s: %w", p.configNamespace, name, err)
+	secrets := &corev1.SecretList{}
+	if err := p.reader.List(ctx, secrets, client.InNamespace(p.configNamespace), client.MatchingLabels{
+		osacTenantKey:            tenant,
+		osacStorageProviderLabel: "vast",
+	}); err != nil {
+		return tenantCreds{}, fmt.Errorf("list VAST hub secrets for tenant %q in %s: %w", tenant, p.configNamespace, err)
 	}
+	switch len(secrets.Items) {
+	case 0:
+		return tenantCreds{}, fmt.Errorf("no VAST hub secret for tenant %q in %s", tenant, p.configNamespace)
+	case 1:
+	default:
+		backendIDs := make([]string, 0, len(secrets.Items))
+		for i := range secrets.Items {
+			backendIDs = append(backendIDs, secrets.Items[i].Labels[osacStorageBackendIDLabel])
+		}
+		sort.Strings(backendIDs)
+		return tenantCreds{}, fmt.Errorf(
+			"tenant %q has VAST hub secrets for several backends (%s); a volume cannot select one",
+			tenant, strings.Join(backendIDs, ", "))
+	}
+	secret := &secrets.Items[0]
+	name := secret.Name
 
 	creds := tenantCreds{
 		username:     string(secret.Data[secretKeyManagerUsername]),

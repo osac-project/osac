@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
@@ -56,12 +57,14 @@ func (f *fakeCSIClient) DeleteVolume(_ context.Context, in *csi.DeleteVolumeRequ
 }
 
 // newProvisioner builds a provisioner wired to the given fake CSI client and a
-// fake secret store containing the provided secret (if non-nil).
-func newProvisioner(t *testing.T, csiCli *fakeCSIClient, secret *corev1.Secret) (*VastVendorProvisioner, *fakeCSIClient) {
+// fake secret store containing the provided secrets (nil entries are skipped).
+func newProvisioner(t *testing.T, csiCli *fakeCSIClient, secrets ...*corev1.Secret) (*VastVendorProvisioner, *fakeCSIClient) {
 	t.Helper()
 	builder := fake.NewClientBuilder()
-	if secret != nil {
-		builder = builder.WithObjects(secret)
+	for _, secret := range secrets {
+		if secret != nil {
+			builder = builder.WithObjects(secret)
+		}
 	}
 	dialed := csiCli
 	return &VastVendorProvisioner{
@@ -74,10 +77,24 @@ func newProvisioner(t *testing.T, csiCli *fakeCSIClient, secret *corev1.Secret) 
 	}, dialed
 }
 
-// fullSecret returns a hub Secret with all required keys populated.
+// fullSecret returns tenant acme's hub Secret for backend be-001, named and
+// labelled the way osac-aap writes it, with all required keys populated.
 func fullSecret() *corev1.Secret {
+	return hubSecret("acme", "be-001")
+}
+
+// hubSecret returns a complete VAST hub Secret for a tenant and backend.
+func hubSecret(tenant, backendID string) *corev1.Secret {
 	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: "vast-tenant-config-acme", Namespace: "osac-system"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vast-tenant-config-" + tenant + "-" + backendID,
+			Namespace: "osac-system",
+			Labels: map[string]string{
+				osacTenantKey:             tenant,
+				osacStorageProviderLabel:  "vast",
+				osacStorageBackendIDLabel: backendID,
+			},
+		},
 		Data: map[string][]byte{
 			secretKeyManagerUsername: []byte("osac-acme"),
 			secretKeyManagerPassword: []byte("s3cret"),
@@ -172,6 +189,31 @@ func TestCreateVolumeMissingSecret(t *testing.T) {
 	p, _ := newProvisioner(t, &fakeCSIClient{}, nil)
 	if _, err := p.CreateVolume(context.Background(), blockCreateReq()); err == nil {
 		t.Fatalf("expected error for missing secret, got nil")
+	}
+}
+
+func TestCreateVolumeIgnoresOtherTenantsSecrets(t *testing.T) {
+	csiResp := &csi.CreateVolumeResponse{Volume: &csi.Volume{VolumeId: "v"}}
+	other := hubSecret("other", "be-001")
+	other.Data[secretKeyManagerUsername] = []byte("osac-other")
+	p, cli := newProvisioner(t, &fakeCSIClient{createResp: csiResp}, other, fullSecret())
+
+	if _, err := p.CreateVolume(context.Background(), blockCreateReq()); err != nil {
+		t.Fatalf("CreateVolume error: %v", err)
+	}
+	if got := cli.createReq.GetSecrets()["username"]; got != "osac-acme" {
+		t.Errorf("secrets.username = %q, want osac-acme", got)
+	}
+}
+
+func TestCreateVolumeAmbiguousHubSecrets(t *testing.T) {
+	p, _ := newProvisioner(t, &fakeCSIClient{}, hubSecret("acme", "be-001"), hubSecret("acme", "be-002"))
+	_, err := p.CreateVolume(context.Background(), blockCreateReq())
+	if err == nil {
+		t.Fatalf("expected error for a tenant with two VAST hub Secrets, got nil")
+	}
+	if !strings.Contains(err.Error(), "be-001") || !strings.Contains(err.Error(), "be-002") {
+		t.Errorf("error %q should name both backend IDs", err)
 	}
 }
 

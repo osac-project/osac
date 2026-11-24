@@ -881,6 +881,9 @@ func (e *Engine) cancelEntryForDelete(ctx context.Context, obj v1alpha1.NetworkT
 		}
 		if found == "" {
 			if entry.State == v1alpha1.NetworkJobStateCancelled {
+				if entry.LastFailure != nil {
+					return cancelled()
+				}
 				return false, true
 			}
 			t := e.state(obj, entry.Task, entry.Manager, entry.Attempt)

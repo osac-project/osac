@@ -815,6 +815,15 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 	}
 
 	entry := networktask.FindJob(instance.Status.Jobs, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
+	if entry != nil && entry.State == v1alpha1.NetworkJobStateRetrying &&
+		instance.Status.ProvisionConfigVersion != instance.Status.DesiredConfigVersion && entry.LastFailure != nil {
+		// The checkpoint belongs to the previous input. Preserve the retry
+		// state and engine backoff while clearing its persisted failure.
+		entry.LastFailure = nil
+		if err := r.Status().Update(ctx, instance); err != nil {
+			return networktask.Outcome{}, fmt.Errorf("clear previous provision configuration failure: %w", err)
+		}
+	}
 	if provisionRerunDue(instance, entry) {
 		log.Info("configuration changed after the provision job ended; running it again",
 			"state", entry.State,

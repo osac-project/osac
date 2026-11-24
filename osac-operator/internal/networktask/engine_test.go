@@ -1501,3 +1501,32 @@ func TestProvisionDeleteThroughRunClearsPersistedCheckpoint(t *testing.T) {
 		})
 	}
 }
+
+func TestProvisionDeleteClearsCancelledReservationFailure(t *testing.T) {
+	h := newHarness(t, computeInstanceObj("ci"))
+	req := computeInstanceReq()
+	h.runComputeInstance("ci", req)
+	h.aap.finish("101", "failed", `{"osac_error":{"message":"private","retryable":true}}`, "")
+	failed := h.runComputeInstance("ci", req)
+	h.clock.Step(failed.RequeueAfter)
+	h.aap.launchErr = errors.New("lost response")
+	h.runComputeInstance("ci", req)
+	h.clock.Step(LostLaunchTimeout)
+	req.HoldLaunch = true
+	held := h.runComputeInstance("ci", req)
+	if held.Entry.State != v1alpha1.NetworkJobStateCancelled || held.Entry.JobID != "" || held.LastFailure == nil {
+		t.Fatalf("expected cancelled reservation with retained failure: %+v", held)
+	}
+	ci := h.getComputeInstance("ci")
+	done, _, err := h.engine.CancelForDelete(h.ctx, ci, req.Kind)
+	if err != nil || !done || h.getComputeInstance("ci").Status.Jobs[0].LastFailure != nil {
+		t.Fatalf("deletion did not persist checkpoint clearing: done=%v err=%v", done, err)
+	}
+	// A second pass needs no status write.
+	ci = h.getComputeInstance("ci")
+	version := ci.ResourceVersion
+	done, _, err = h.engine.CancelForDelete(h.ctx, ci, req.Kind)
+	if err != nil || !done || h.getComputeInstance("ci").ResourceVersion != version {
+		t.Fatalf("unchanged deletion wrote status: done=%v err=%v", done, err)
+	}
+}

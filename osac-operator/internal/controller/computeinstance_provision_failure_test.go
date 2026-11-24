@@ -39,6 +39,49 @@ func (*checkpointAAP) ListJobsByLabel(context.Context, string) ([]aap.Job, error
 func (*checkpointAAP) EnsureLabel(context.Context, string, string) (int, error) { return 1, nil }
 
 var _ = Describe("ComputeInstance provision failure checkpoint", func() {
+	It("clears an old configuration failure during retry without resetting backoff", func() {
+		instance := &osacv1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("retry-config-%d", time.Now().UnixNano()), Namespace: "default"},
+			Spec:       newTestComputeInstanceSpec("test_template"),
+		}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+		instance.Status.DesiredConfigVersion = "old"
+		instance.Status.ProvisionConfigVersion = "old"
+		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+		clock := clocktesting.NewFakeClock(time.Now().Truncate(time.Second))
+		aapClient := &checkpointAAP{}
+		engine := networktask.New(k8sClient, k8sClient, aapClient, networktask.Config{Organization: "osac"}).WithClock(clock)
+		r := &ComputeInstanceReconciler{Client: k8sClient, Engine: engine, ProvisionTemplate: "provision"}
+		_, err := r.handleProvisioning(ctx, instance, "default", true)
+		Expect(err).NotTo(HaveOccurred())
+		aapClient.job.Status = "failed"
+		aapClient.job.Artifacts = []byte(`{"osac_error":{"message":"private","retryable":true}}`)
+		failed, err := r.handleProvisioning(ctx, instance, "default", false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(failed.LastFailure).NotTo(BeNil())
+		clock.Step(time.Second)
+		instance.Status.DesiredConfigVersion = "new"
+		out, err := r.handleProvisioning(ctx, instance, "default", false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out.Retrying()).To(BeTrue())
+		Expect(out.LastFailure).To(BeNil())
+		Expect(out.RequeueAfter).To(Equal(failed.RequeueAfter - time.Second))
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
+		Expect(instance.Status.Jobs[0].LastFailure).To(BeNil())
+		clock.Step(out.RequeueAfter)
+		out, err = r.handleProvisioning(ctx, instance, "default", true)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out.Entry.State).To(Equal(osacv1alpha1.NetworkJobStateRunning))
+		Expect(out.Entry.Attempt).To(Equal(int32(2)))
+		Expect(out.LastFailure).To(BeNil())
+		aapClient.job.Status = "failed"
+		aapClient.job.Artifacts = []byte(`{"osac_error":{"message":"private","retryable":true}}`)
+		out, err = r.handleProvisioning(ctx, instance, "default", false)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out.RequeueAfter).To(Equal(networktask.Backoff("provision", 2, 2)))
+	})
+
 	It("persists atomically across resource-version conflicts and validates the CRD shape", func() {
 		name := fmt.Sprintf("provision-failure-%d", time.Now().UnixNano())
 		instance := &osacv1alpha1.ComputeInstance{

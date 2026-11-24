@@ -7,9 +7,11 @@ endpoints in sync when either suite changes.
 """
 
 import json
+import ssl
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
+from urllib.request import Request, urlopen
 
 TEMPLATES = {
     1: "osac-create-compute-instance",
@@ -61,6 +63,35 @@ class RecorderHandler(BaseHTTPRequestHandler):
             "extra_vars": json.dumps(job["payload"]["extra_vars"]),
             "artifacts": job.get("artifacts", {}),
         }
+
+    @staticmethod
+    def network_handoff_complete_at_launch(payload):
+        """Read the target BMI condition at the instant a DHCP launch arrives."""
+        job_vars = payload.get("extra_vars", {}).get("osac_job_vars", {})
+        resource = job_vars.get("resource", {})
+        target_id = resource.get("spec", {}).get("target", {}).get("id")
+        if not isinstance(target_id, str) or not target_id:
+            raise ValueError("DHCP launch has no BareMetalInstance target")
+
+        service_account = "/var/run/secrets/kubernetes.io/serviceaccount"
+        with open(f"{service_account}/namespace", encoding="utf-8") as stream:
+            namespace = stream.read().strip()
+        with open(f"{service_account}/token", encoding="utf-8") as stream:
+            token = stream.read().strip()
+
+        url = (
+            "https://kubernetes.default.svc/apis/osac.openshift.io/v1alpha1/namespaces/"
+            f"{quote(namespace, safe='')}/baremetalinstances/{quote(target_id, safe='')}"
+        )
+        request = Request(url, headers={"Authorization": f"Bearer {token}"})
+        tls = ssl.create_default_context(cafile=f"{service_account}/ca.crt")
+        with urlopen(request, context=tls, timeout=5) as response:
+            bmi = json.load(response)
+        conditions = bmi.get("status", {}).get("conditions", [])
+        return any(
+            condition.get("type") == "NetworkHandoffComplete" and condition.get("status") == "True"
+            for condition in conditions
+        )
 
     def do_GET(self):
         """Serve health, captures, template lookups, labels, and job status."""
@@ -161,15 +192,28 @@ class RecorderHandler(BaseHTTPRequestHandler):
                 if not isinstance(payload.get("extra_vars"), dict):
                     self.reply(400, {"detail": "extra_vars must be an object"})
                     return
+                template = TEMPLATES[int(parts[3])] if parts[3].isdigit() else parts[3]
+                handoff_complete = None
+                if template == "osac-query-dhcp-lease":
+                    try:
+                        handoff_complete = self.network_handoff_complete_at_launch(payload)
+                    except Exception as error:  # noqa: BLE001 - report only a safe error class
+                        self.server.unexpected.append(
+                            f"DHCP launch condition lookup failed: {type(error).__name__}"
+                        )
+                        self.reply(503, {"detail": "could not inspect handoff condition"})
+                        return
                 self.server.next_id += 1
                 job_id = self.server.next_id
                 self.server.jobs[str(job_id)] = {
                     "id": job_id,
-                    "template": TEMPLATES[int(parts[3])] if parts[3].isdigit() else parts[3],
+                    "template": template,
                     "status": "running",
                     "payload": payload,
                     "artifacts": {},
                 }
+                if handoff_complete is not None:
+                    self.server.jobs[str(job_id)]["network_handoff_complete_at_launch"] = handoff_complete
                 self.reply(201, {"id": job_id})
             elif (
                 len(parts) == 5

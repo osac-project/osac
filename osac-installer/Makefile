@@ -1352,7 +1352,7 @@ endif
 		original_status=$$?; \
 		trap - EXIT; \
 		set +e; \
-		kubectl delete pod,service,configmap osac-aap-recorder -n $(NS) --ignore-not-found --wait=false; \
+		kubectl delete pod,service,configmap,serviceaccount,role,rolebinding osac-aap-recorder -n $(NS) --ignore-not-found --wait=false; \
 		recorder_cleanup_status=$$?; \
 		kubectl delete secret osac-aap-api-token -n $(NS) --ignore-not-found; \
 		token_cleanup_status=$$?; \

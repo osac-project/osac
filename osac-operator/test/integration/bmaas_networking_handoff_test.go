@@ -120,6 +120,10 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 
 			By("querying DHCP only after BMF records NetworkHandoffComplete")
 			query := waitForAAPTemplate(bmaasQueryTemplate)
+			Expect(query.NetworkHandoffCompleteAtLaunch).NotTo(BeNil(),
+				"the AAP recorder must sample BMF's condition when it receives the DHCP launch")
+			Expect(*query.NetworkHandoffCompleteAtLaunch).To(BeTrue(),
+				"DHCP must not launch before BMF persists NetworkHandoffComplete=True")
 			completeAAPJob(query, "successful", map[string]any{
 				"osac_result": map[string]any{"dhcp_lease": map[string]any{
 					"ip_address": "192.0.2.25", "mac_address": bmaasSelectedMAC,

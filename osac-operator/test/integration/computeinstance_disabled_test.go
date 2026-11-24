@@ -29,6 +29,7 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -63,10 +64,11 @@ const (
 var aapRecorderScript string
 
 type aapCapture struct {
-	ID       int    `json:"id"`
-	Template string `json:"template"`
-	Status   string `json:"status"`
-	Payload  struct {
+	ID                             int    `json:"id"`
+	Template                       string `json:"template"`
+	Status                         string `json:"status"`
+	NetworkHandoffCompleteAtLaunch *bool  `json:"network_handoff_complete_at_launch,omitempty"`
+	Payload                        struct {
 		ExtraVars struct {
 			JobVars struct {
 				VMNetwork struct {
@@ -96,12 +98,39 @@ type aapCaptures struct {
 func installAAPRecorder() {
 	// A previous interrupted run may have left the fixed-name objects behind;
 	// recreate the recorder so it always runs the embedded script.
-	for _, resource := range []string{"pod", "service", "configmap"} {
+	for _, resource := range []string{"pod", "service", "configmap", "rolebinding", "role", "serviceaccount"} {
 		_, _ = runRecorderKubectl("", "delete", resource, aapRecorderName,
 			"-n", operatorNamespace, "--ignore-not-found", "--wait=true")
 	}
 
 	objects := []any{
+		&corev1.ServiceAccount{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "ServiceAccount"},
+			ObjectMeta: metav1.ObjectMeta{Name: aapRecorderName, Namespace: operatorNamespace},
+		},
+		&rbacv1.Role{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "Role"},
+			ObjectMeta: metav1.ObjectMeta{Name: aapRecorderName, Namespace: operatorNamespace},
+			Rules: []rbacv1.PolicyRule{{
+				APIGroups: []string{"osac.openshift.io"},
+				Resources: []string{"baremetalinstances"},
+				Verbs:     []string{"get"},
+			}},
+		},
+		&rbacv1.RoleBinding{
+			TypeMeta:   metav1.TypeMeta{APIVersion: "rbac.authorization.k8s.io/v1", Kind: "RoleBinding"},
+			ObjectMeta: metav1.ObjectMeta{Name: aapRecorderName, Namespace: operatorNamespace},
+			RoleRef: rbacv1.RoleRef{
+				APIGroup: "rbac.authorization.k8s.io",
+				Kind:     "Role",
+				Name:     aapRecorderName,
+			},
+			Subjects: []rbacv1.Subject{{
+				Kind:      "ServiceAccount",
+				Name:      aapRecorderName,
+				Namespace: operatorNamespace,
+			}},
+		},
 		&corev1.ConfigMap{
 			TypeMeta:   metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},
 			ObjectMeta: metav1.ObjectMeta{Name: aapRecorderName, Namespace: operatorNamespace},
@@ -127,7 +156,8 @@ func installAAPRecorder() {
 				Labels:    map[string]string{"app": aapRecorderName},
 			},
 			Spec: corev1.PodSpec{
-				AutomountServiceAccountToken: new(false),
+				AutomountServiceAccountToken: new(true),
+				ServiceAccountName:           aapRecorderName,
 				SecurityContext: &corev1.PodSecurityContext{
 					RunAsNonRoot:   new(true),
 					RunAsUser:      new(int64(1000)),
@@ -200,7 +230,7 @@ func installAAPRecorder() {
 	}, 5*time.Minute, 2*time.Second).Should(Succeed())
 
 	DeferCleanup(func() {
-		for _, resource := range []string{"pod", "service", "configmap"} {
+		for _, resource := range []string{"pod", "service", "configmap", "rolebinding", "role", "serviceaccount"} {
 			_, _ = runRecorderKubectl("", "delete", resource, aapRecorderName,
 				"-n", operatorNamespace, "--ignore-not-found", "--wait=false")
 		}

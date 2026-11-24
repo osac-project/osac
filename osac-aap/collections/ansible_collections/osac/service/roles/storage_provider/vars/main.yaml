@@ -1,7 +1,0 @@
----
-# Seconds, for provider management API calls.
-storage_provider_api_timeout: 30
-
-# Mounted by the compute-instance-operations-ig pod spec, which also sets
-# SSL_CERT_FILE to it.
-storage_provider_ca_bundle_path: /etc/ca-bundle/bundle.pem

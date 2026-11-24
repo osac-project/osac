@@ -21,6 +21,13 @@ storage_provider_config_namespace: >-
   {{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
      | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore') | default('', true), true) }}
 
+# Seconds, for provider management API calls.
+storage_provider_api_timeout: 30
+
+# Mounted by the compute-instance-operations-ig pod spec, which also sets
+# SSL_CERT_FILE to it.
+storage_provider_ca_bundle_path: /etc/ca-bundle/bundle.pem
+
 # TLS verification for provider management APIs. Only "false" disables it.
 storage_provider_validate_certs: >-
   {{ (lookup('env', 'OSAC_STORAGE_VALIDATE_CERTS')

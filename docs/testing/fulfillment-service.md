@@ -81,6 +81,38 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   with a missing or not-ready tenant default are rejected in the private
   servers suite and the deployed public Create; provider provisioning remains
   E2E coverage.
+- Quota tables and APIs ([DEV] [OSAC-7613](https://redhat.atlassian.net/browse/OSAC-7613)):
+  the five quota tables are covered by
+  `internal/database/migrations/153_create_quota_tables_test.go` (per-scope
+  dimension uniqueness including pending deletion, identity and ownership
+  immutability, tenant and project foreign keys, the one-pending-request rule,
+  the changes-table audit of limit changes, the outbox's tenant and project
+  references, and the active companions); the concurrent link indexes the
+  usage counter nets against, the volumes name-pattern index and the
+  bare-metal instances cluster-link index (migrations 154 and 155), by their
+  own migration tests; the
+  quota limit, default limit, threshold, limit request and usage services by
+  `internal/servers/quota_servers_test.go` against real PostgreSQL; and the
+  registry-driven usage counter by `internal/quotausage/counter_test.go`
+  against real resource rows, including the larger-of rule for a mid-resize
+  VM, created resources counting in their own kind with the parent adding
+  only the excess, and a stored reference resolving its type by the scope it
+  carries, so a same-name type of another scope can't replace it. The same
+  suite covers the counting rules (the release map
+  of the quota state standard): rows in a mapped state stop counting, an
+  empty default changes nothing, rules load from the file named by
+  `OSAC_QUOTA_COUNTING_RULES`, a missing file means no rules, and rules the
+  counter can't apply fail the build. The tenant and project reconcilers'
+  quota-row cleanup, and the outbox rows the tenants and projects servers
+  remove with an accepted delete, are covered by the controllers suites and
+  `internal/servers`. Tenancy and attribution are suite
+  doubles; the reviewed reader grant of `QuotaUsage/Get` is asserted in
+  `internal/auth`, and the role grants are exercised through the server
+  specs' visibility doubles, which check the servers enforce each role's
+  visibility. Deployed REST or CLI journeys for the quota APIs, the
+  Approve/Deny path under a deployed Cloud Provider Admin identity, and
+  enforcement and warning publishing are not exercised; enforcement is
+  [OSAC-7614](https://redhat.atlassian.net/browse/OSAC-7614).
 
 - **StorageTier/Volume reference guard ([OSAC-7049](https://redhat.atlassian.net/browse/OSAC-7049), DEV):** `internal/cmd/service/start/grpcserver`, `internal/servers` and `internal/database/migrations` exercise production DAOs and in-process handlers against temporary PostgreSQL, including concurrent access. Tenancy and attribution are controlled; deployed service, operator and provider behavior is not covered.
 

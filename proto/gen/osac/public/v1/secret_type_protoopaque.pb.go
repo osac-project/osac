@@ -61,16 +61,8 @@ const (
 	// administrators and controllers may retrieve or mutate its data.
 	SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL SecretType = 7
 	// Windows first-boot answer-file XML. Requires a nonempty `userdata` data
-	// key containing one well-formed XML 1.0 document encoded as UTF-8, at most
-	// 65,536 bytes including any BOM, declaration, and whitespace. The limit
-	// applies to the raw value, before base64 encoding for JSON.
-	// An XML declaration is optional; a declared encoding must be UTF-8
-	// (case-insensitive). A UTF-8 BOM is accepted; all bytes are preserved.
-	// DTDs and other `<!...>` declarations, except comments and CDATA sections,
-	// are prohibited. External resources are never resolved.
-	// Validation does not enforce namespace rules, a particular root name,
-	// Microsoft schemas, or Windows settings. Acceptance does not guarantee a
-	// usable Windows answer file. Data and type are immutable after creation.
+	// key containing well-formed UTF-8 XML, at most 65,536 bytes.
+	// Data and type are immutable after creation.
 	SecretType_SECRET_TYPE_WINDOWS_USER_DATA SecretType = 8
 )
 

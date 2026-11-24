@@ -418,7 +418,7 @@ var _ = Describe("Private secrets server", func() {
 			),
 		)
 
-		It("updates Windows Secret metadata while preserving its XML", func() {
+		DescribeTable("updates Windows Secret metadata while preserving its XML", func(data map[string][]byte) {
 			userData := []byte("\xef\xbb\xbf<?xml version='1.0' ?><unattend><settings/></unattend>")
 			created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
 				Object: privatev1.Secret_builder{
@@ -433,6 +433,7 @@ var _ = Describe("Private secrets server", func() {
 				Object: privatev1.Secret_builder{
 					Id:       created.GetObject().GetId(),
 					Metadata: privatev1.Metadata_builder{Labels: map[string]string{"purpose": "desktop"}}.Build(),
+					Data:     data,
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
 			}.Build())
@@ -443,7 +444,11 @@ var _ = Describe("Private secrets server", func() {
 			Expect(fetched.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("purpose", "desktop"))
 			Expect(fetched.GetObject().GetType()).To(Equal(privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA))
 			Expect(fetched.GetObject().GetData()).To(Equal(map[string][]byte{"userdata": userData}))
-		})
+		},
+			Entry("without data in the request", nil),
+			Entry("with replacement XML outside the update mask",
+				map[string][]byte{"userdata": []byte("<unattend><settings>changed</settings></unattend>")}),
+		)
 
 		It("Delete removes the object", func() {
 			created := createVaultSecret()

@@ -9,25 +9,10 @@ This document explains the implementation and its validation boundaries.
 
 ## Accepted XML profile
 
-[`isPureXMLNoDTD`](../internal/servers/user_data_validation.go) accepts one
-complete UTF-8 XML 1.0 fifth-edition document, with these rules:
-
-- An XML declaration is optional. If present, it must specify version `1.0`;
-  any encoding declaration must identify UTF-8, case-insensitively.
-- A leading UTF-8 BOM is accepted. Validation leaves all input bytes unchanged,
-  including the BOM, whitespace, line endings, and character references.
-- XML names, characters, attributes, references, comments, processing
-  instructions, and CDATA must follow XML 1.0 syntax. Element names are
-  matched as written, and duplicate attribute names are rejected as written.
-- DTDs and other directives are rejected. Comments and CDATA remain allowed
-  in their valid document positions. Only predefined entity references and
-  valid numeric character references are accepted in text and attributes.
-- Namespace rules are not enforced: unbound prefixes and multiple colons in
-  names are accepted. There are no Windows-specific root, schema, or setting
-  checks, and no extra depth or attribute-count limits.
-
-The helper performs no network or file I/O and does not expand entities.
-Acceptance establishes the supported XML format, not Windows usability.
+The [Secrets guide](../../docs/guides/secrets-guide.md#windows-user-data-windows-user-data)
+defines the accepted XML profile, size limit, and Secret restrictions.
+[`isPureXMLNoDTD`](../internal/servers/user_data_validation.go) validates the
+XML syntax without changing the submitted bytes or performing external I/O.
 
 ## Why a dedicated parser
 
@@ -48,21 +33,14 @@ or parser tokens.
 ## Callers and lifecycle
 
 For `WINDOWS_USER_DATA` Secret creation,
-[`validateSecretData`](../internal/servers/private_secrets_server.go) requires
-nonempty `data["userdata"]`. `validateWindowsUserDataSecret` then enforces the
-65,536-byte limit before calling the parser. The count includes any BOM,
-declaration, and whitespace; it is independent of JSON's base64 encoding.
-Parser failures map to fixed `InvalidArgument` messages before storage.
-Generic `USER_DATA` Secret creation does not use the XML parser.
+[`validateSecretData`](../internal/servers/private_secrets_server.go) checks the
+required data key, then `validateWindowsUserDataSecret` checks the size before
+calling the parser. Generic `USER_DATA` Secret creation does not use it.
 
-The existing Windows ComputeInstance admission path uses the same XML helper
-for inline data and for resolved generic `USER_DATA` Secret contents. The XML
-helper itself imposes no byte limit; callers own size validation. Supporting
-`WINDOWS_USER_DATA` Secret references is separate work tracked in
+Windows ComputeInstance admission uses the same parser for inline data and
+resolved `USER_DATA` Secret contents. Callers own size validation; the parser
+itself has no byte limit. Support for `WINDOWS_USER_DATA` references follows in
 [OSAC-7713](https://redhat.atlassian.net/browse/OSAC-7713).
-
-Windows Secret data and type updates are rejected, and the `HUB` backend is
-unsupported. Metadata-only updates are supported.
 
 ## Test boundaries
 

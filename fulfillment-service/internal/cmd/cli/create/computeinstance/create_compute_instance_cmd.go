@@ -1126,7 +1126,8 @@ const userDataSecretFlagHelp = `
 _NAME_ - Name of a Secret resource containing user data for the compute
 instance. For Linux DiskImages, content is cloud-init or ignition configuration.
 For Windows DiskImages, the content is treated as an Unattend.xml answer file
-and must be well-formed XML. The secret must exist in the same tenant. See also
+and must be well-formed XML. The Secret must have type {{ bt }}user-data{{ bt }},
+including for Windows, and must exist in the same tenant. See also
 {{ bt }}osac create secret{{ bt }}. Mutually exclusive with
 {{ bt }}--user-data{{ bt }}.
 `

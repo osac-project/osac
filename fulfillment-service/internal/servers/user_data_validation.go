@@ -15,9 +15,13 @@ package servers
 
 import (
 	"bytes"
+	"errors"
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	grpccodes "google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 )
 
 type xmlValidationReason string
@@ -43,6 +47,24 @@ func (e *xmlValidationError) Error() string {
 
 func newXMLValidationError(reason xmlValidationReason) error {
 	return &xmlValidationError{reason: reason}
+}
+
+// mapWindowsXMLValidationError returns fixed wording without exposing XML content.
+// field must describe the input field, never contain its submitted value.
+func mapWindowsXMLValidationError(err error, field string) error {
+	var xmlErr *xmlValidationError
+	if errors.As(err, &xmlErr) {
+		switch xmlErr.reason {
+		case xmlReasonInvalidUTF8, xmlReasonUnsupportedEncoding:
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"%s has an unsupported encoding; UTF-8 is required", field)
+		case xmlReasonProhibitedDirective:
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"%s contains a prohibited XML directive", field)
+		}
+	}
+	return grpcstatus.Errorf(grpccodes.InvalidArgument,
+		"%s is not well-formed XML", field)
 }
 
 var utf8BOM = []byte{0xef, 0xbb, 0xbf}

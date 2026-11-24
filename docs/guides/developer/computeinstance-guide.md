@@ -497,14 +497,14 @@ For a Linux image, create a `user-data` Secret containing initialization data
 supported by that image, such as cloud-init YAML:
 
 ```bash
-osac create secret --name linux-answer --type=user-data \
+osac create secret --name linux-cloud-init --type=user-data \
   --from-file=userdata=/path/to/cloud-init.yaml
 ```
 
 Then replace the inline `--user-data` option in the CLI example above with:
 
 ```bash
-  --user-data-secret linux-answer
+  --user-data-secret linux-cloud-init
 ```
 
 In gRPC or REST requests, set the following field inside `spec`:
@@ -513,34 +513,22 @@ In gRPC or REST requests, set the following field inside `spec`:
 {
   "user_data_source": {
     "secret": {
-      "name": "linux-answer"
+      "name": "linux-cloud-init"
     }
   }
 }
 ```
 
-For a Windows DiskImage, inline user data is already supported. OSAC checks it
-as UTF-8 XML 1.0 without DTDs; acceptance does not guarantee a usable Windows
-answer file. The catalog item's field policy still determines whether you can
-supply user data.
+For a Windows DiskImage, inline XML user data is already supported. The
+catalog item's field policy determines whether you can supply user data.
 
-You can also create a `windows-user-data` Secret from an `Unattend.xml` file.
-OSAC validates its XML before storing the Secret:
-
-```bash
-osac create secret \
-  --name windows-answer \
-  --type=windows-user-data \
-  --from-file=userdata=/path/to/Unattend.xml
-```
-
-Referencing a `windows-user-data` Secret from a ComputeInstance is not yet
-supported; that work is tracked in
-[OSAC-7713](https://redhat.atlassian.net/browse/OSAC-7713). Current
-`user_data_source.secret` references accept only `user-data` Secrets. For a
-Windows DiskImage, their contents are checked as XML during VM admission.
-For Windows Secret validation and lifecycle rules, see
-[Managing Secrets](../secrets-guide.md#windows-user-data-windows-user-data).
+Current `user_data_source.secret` references require a `user-data` Secret,
+including for Windows DiskImages, where its contents are checked as XML during
+VM admission. The new `windows-user-data` type supports Secret creation and
+retrieval; ComputeInstance references are pending
+[OSAC-7713](https://redhat.atlassian.net/browse/OSAC-7713). See
+[Managing Secrets](../secrets-guide.md#windows-user-data-windows-user-data)
+for its creation example and XML validation rules.
 
 ### Alternative: Create from a YAML file
 

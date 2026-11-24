@@ -640,26 +640,8 @@ func validateWindowsUserDataSecret(value []byte, xmlValidator func([]byte) error
 			windowsUserDataSecretMaxBytes)
 	}
 	if err := xmlValidator(value); err != nil {
-		return mapWindowsXMLValidationError(err)
+		return mapWindowsXMLValidationError(err, fmt.Sprintf("secret type %s data[%q]",
+			privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, userDataSecretDataKey))
 	}
 	return nil
-}
-
-func mapWindowsXMLValidationError(err error) error {
-	var xmlErr *xmlValidationError
-	if errors.As(err, &xmlErr) {
-		switch xmlErr.reason {
-		case xmlReasonInvalidUTF8, xmlReasonUnsupportedEncoding:
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"secret type %s data[%q] has an unsupported encoding; UTF-8 is required",
-				privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, userDataSecretDataKey)
-		case xmlReasonProhibitedDirective:
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"secret type %s data[%q] contains a prohibited XML directive",
-				privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, userDataSecretDataKey)
-		}
-	}
-	return grpcstatus.Errorf(grpccodes.InvalidArgument,
-		"secret type %s data[%q] is not well-formed XML",
-		privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, userDataSecretDataKey)
 }

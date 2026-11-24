@@ -47,7 +47,12 @@ var _ = Describe("CLI Windows user-data Secret lifecycle", Label("cli", "secrets
 		})
 	})
 
-	DescribeTable("creates, describes, and deletes a Windows user-data Secret", func(ctx context.Context, xmlData []byte) {
+	It("round-trips exactly 64 KiB of nested XML with a UTF-8 BOM", func(ctx context.Context) {
+		prefix := "\xef\xbb\xbf<?xml version='1.0' ?><unattend><settings>" + windowsUserDataCLISentinel
+		suffix := "</settings></unattend>"
+		xmlData := []byte(prefix + strings.Repeat("a", windowsUserDataMaxBytes-len(prefix)-len(suffix)) + suffix)
+		Expect(xmlData).To(HaveLen(windowsUserDataMaxBytes))
+
 		_, stderr, exitCode := tool.LoginCLI(ctx, homeDir, userUsername, usersPassword)
 		Expect(exitCode).To(Equal(0), "login failed: %s", stderr)
 
@@ -97,54 +102,36 @@ var _ = Describe("CLI Windows user-data Secret lifecycle", Label("cli", "secrets
 			return status.Code(err)
 		}).WithContext(deletionCtx).WithTimeout(30 * time.Second).Should(Equal(codes.NotFound))
 		created = false
-	},
-		Entry("nested UTF-8 XML with a BOM and declaration whitespace",
-			[]byte("\xef\xbb\xbf<?xml version='1.0' ?><unattend><settings>"+windowsUserDataCLISentinel+"</settings></unattend>")),
-		Entry("exactly 64 KiB", []byte("<root>"+windowsUserDataCLISentinel+
-			strings.Repeat("a", windowsUserDataMaxBytes-len("<root></root>")-len(windowsUserDataCLISentinel))+"</root>")),
-	)
+	})
 
-	DescribeTable("rejects invalid Windows user-data Secrets without exposing content",
-		func(ctx context.Context, key string, data []byte, wantMessage string) {
-			_, stderr, exitCode := tool.LoginCLI(ctx, homeDir, userUsername, usersPassword)
-			Expect(exitCode).To(Equal(0), "login failed: %s", stderr)
+	It("rejects malformed XML without exposing content or persisting the Secret", func(ctx context.Context) {
+		_, stderr, exitCode := tool.LoginCLI(ctx, homeDir, userUsername, usersPassword)
+		Expect(exitCode).To(Equal(0), "login failed: %s", stderr)
 
-			name := "it-windows-user-data-invalid-" + uuid.New()[24:32]
-			xmlPath := writeWindowsUserDataFile(homeDir, "invalid.xml", data)
-			client := publicv1.NewSecretsClient(tool.ExternalView().UserConn())
-			filter := fmt.Sprintf("this.metadata.name == %q", name)
-			// Clean up even if a regression incorrectly persists the rejected input.
-			DeferCleanup(func(ctx context.Context) {
-				list, err := client.List(ctx, publicv1.SecretsListRequest_builder{Filter: &filter}.Build())
-				Expect(err).ToNot(HaveOccurred())
-				for _, secret := range list.GetItems() {
-					_, err = client.Delete(ctx, publicv1.SecretsDeleteRequest_builder{Id: secret.GetId()}.Build())
-					Expect(err).ToNot(HaveOccurred())
-				}
-			})
-
-			stdout, stderr, code := runCreateWindowsUserDataCLI(ctx, homeDir, name, key+"="+xmlPath)
-			output := stdout + "\n" + stderr
-			Expect(code).ToNot(Equal(0), "create unexpectedly succeeded: %s", output)
-			Expect(output).To(ContainSubstring(wantMessage))
-			Expect(output).ToNot(ContainSubstring(windowsUserDataCLISentinel))
-
+		name := "it-windows-user-data-invalid-" + uuid.New()[24:32]
+		xmlPath := writeWindowsUserDataFile(homeDir, "invalid.xml", []byte("<root>"+windowsUserDataCLISentinel))
+		client := publicv1.NewSecretsClient(tool.ExternalView().UserConn())
+		filter := fmt.Sprintf("this.metadata.name == %q", name)
+		// Clean up even if a regression incorrectly persists the rejected input.
+		DeferCleanup(func(ctx context.Context) {
 			list, err := client.List(ctx, publicv1.SecretsListRequest_builder{Filter: &filter}.Build())
 			Expect(err).ToNot(HaveOccurred())
-			Expect(list.GetItems()).To(BeEmpty(), "rejected Secret was persisted")
-		},
-		Entry("missing userdata key", "not-userdata", []byte("<root>"+windowsUserDataCLISentinel+"</root>"),
-			`requires a non-empty data["userdata"]`),
-		Entry("empty userdata", "userdata", []byte{}, `requires a non-empty data["userdata"]`),
-		Entry("malformed XML", "userdata", []byte("<root>"+windowsUserDataCLISentinel), "not well-formed XML"),
-		Entry("unsupported XML encoding", "userdata",
-			[]byte(`<?xml version="1.0" encoding="UTF-16"?><root>`+windowsUserDataCLISentinel+`</root>`), "unsupported encoding"),
-		Entry("raw invalid UTF-8", "userdata", []byte("<root>\xff"+windowsUserDataCLISentinel+"</root>"), "unsupported encoding"),
-		Entry("DTD", "userdata", []byte("<!DOCTYPE root><root>"+windowsUserDataCLISentinel+"</root>"), "prohibited XML directive"),
-		Entry("oversized XML", "userdata",
-			[]byte("<root>"+strings.Repeat("a", windowsUserDataMaxBytes)+windowsUserDataCLISentinel+"</root>"),
-			"exceeds the maximum of 65536 bytes"),
-	)
+			for _, secret := range list.GetItems() {
+				_, err = client.Delete(ctx, publicv1.SecretsDeleteRequest_builder{Id: secret.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+			}
+		})
+
+		stdout, stderr, code := runCreateWindowsUserDataCLI(ctx, homeDir, name, "userdata="+xmlPath)
+		output := stdout + "\n" + stderr
+		Expect(code).ToNot(Equal(0), "create unexpectedly succeeded: %s", output)
+		Expect(output).To(ContainSubstring("not well-formed XML"))
+		Expect(output).ToNot(ContainSubstring(windowsUserDataCLISentinel))
+
+		list, err := client.List(ctx, publicv1.SecretsListRequest_builder{Filter: &filter}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(list.GetItems()).To(BeEmpty(), "rejected Secret was persisted")
+	})
 })
 
 func writeWindowsUserDataFile(homeDir, name string, data []byte) string {

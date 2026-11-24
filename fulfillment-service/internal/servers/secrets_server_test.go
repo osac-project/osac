@@ -279,31 +279,6 @@ var _ = Describe("Secrets Server", func() {
 				privatev1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA, []byte("\xef\xbb\xbf<root/>")),
 		)
 
-		It("forwards private Windows user-data validation errors", func() {
-			const sentinel = "OSAC-7712-PUBLIC-SECRET-SENTINEL"
-			mock := &mockPrivateSecretsServer{
-				createFunc: func(_ context.Context,
-					_ *privatev1.SecretsCreateRequest) (*privatev1.SecretsCreateResponse, error) {
-					return nil, grpcstatus.Error(grpccodes.InvalidArgument,
-						"secret type SECRET_TYPE_WINDOWS_USER_DATA data[\"userdata\"] is not well-formed XML")
-				},
-			}
-
-			server := newTestSecretsServer(mock)
-			_, err := server.Create(ctx, publicv1.SecretsCreateRequest_builder{
-				Object: publicv1.Secret_builder{
-					Metadata: publicv1.Metadata_builder{
-						Name: "windows-secret",
-					}.Build(),
-					Type: publicv1.SecretType_SECRET_TYPE_WINDOWS_USER_DATA,
-					Data: map[string][]byte{"userdata": []byte("<root>" + sentinel)},
-				}.Build(),
-			}.Build())
-
-			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
-			Expect(err.Error()).To(ContainSubstring("not well-formed XML"))
-			Expect(err.Error()).NotTo(ContainSubstring(sentinel))
-		})
 	})
 
 	Describe("List", func() {

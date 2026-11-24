@@ -301,19 +301,11 @@ To create a Windows user-data Secret:
   --from-file=userdata=/path/to/Unattend.xml
 {{ bt 3 }}
 
-Use the explicit {{ bt }}userdata={{ bt }} key and supply the XML file directly,
-without base64 encoding. The server requires a nonempty UTF-8 XML 1.0 document
-of at most 65,536 bytes (64 KiB), including any BOM, declaration, and whitespace.
-An XML declaration is optional; a declared encoding must be UTF-8 (case-insensitive).
-DTDs and other declarations are prohibited, except comments and CDATA sections.
-
-Validation checks XML syntax, without enforcing namespace rules, Microsoft schemas,
-or Windows settings. Acceptance does not guarantee a usable Windows answer file.
-The original bytes, including a UTF-8 BOM, are preserved. Data and type cannot be
-changed after creation; create a new Secret to use different content.
-
-Validation errors omit submitted XML. Create output omits Secret data;
-{{ bt }}get secret NAME -o yaml{{ bt }} or {{ bt }}-o json{{ bt }} returns data as base64 strings.
+Supply the file directly, without base64 encoding. The {{ bt }}windows-user-data{{ bt }}
+type requires nonempty UTF-8 XML of at most 64 KiB (65,536 bytes).
+ComputeInstance references to this type are not yet supported (OSAC-7713);
+use {{ bt }}user-data{{ bt }} for current ComputeInstance references, including Windows.
+See the Secrets guide for detailed XML validation rules.
 `
 
 const nameFlagHelp = `
@@ -333,7 +325,5 @@ _KEY=VALUE_ - Label to set on the secret. Can be specified multiple times.
 const typeFlagHelp = `
 _TYPE_ - Secret type. One of {{ bt }}opaque{{ bt }}, {{ bt }}pull-secret{{ bt }},
 {{ bt }}kubeconfig{{ bt }}, {{ bt }}user-data{{ bt }}, {{ bt }}windows-user-data{{ bt }},
-{{ bt }}value{{ bt }}, or {{ bt }}ssh-public-key{{ bt }}. Use {{ bt }}user-data{{ bt }}
-for Linux/cloud-init or shell-style data, or {{ bt }}windows-user-data{{ bt }} for
-Windows answer-file XML.
+{{ bt }}value{{ bt }}, or {{ bt }}ssh-public-key{{ bt }}.
 `

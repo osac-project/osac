@@ -14,8 +14,8 @@ secret-store deployment, see
 
 ## Create and use a Secret
 
-Create a `pull-secret` Secret from an existing container registry credentials
-file:
+In this example we will create a pull secret typed Secret from an existing
+container registry credentials file.
 
 ```bash
 osac create secret --name cluster-pull-secret --type=pull-secret \
@@ -25,7 +25,7 @@ osac create secret --name cluster-pull-secret --type=pull-secret \
 The `pull-secret` type requires the `.dockerconfigjson` key. The CLI reads the
 file contents as the value; `--from-file=KEY=PATH` lets you choose the key
 independently of the filename. Other consumers require different types and
-keys; see the type descriptions below or `osac create secret --help`.
+keys; See the cli help command for more info.
 
 List Secrets and inspect one without displaying its value:
 
@@ -43,18 +43,15 @@ osac create cluster --catalog-item example-cluster --name my-cluster \
 ```
 
 The Secret must be in the cluster's tenant and have the `pull-secret` type.
-To change its contents, open the Secret in your editor:
+To replace its contents with an updated credentials file, run:
 
 ```bash
-osac edit secret cluster-pull-secret
+osac update secret cluster-pull-secret \
+  --from-file=.dockerconfigjson=./new-pull-secret.json
 ```
 
-The editor displays data values as base64 strings. Replace the value of
-`.dockerconfigjson` with the base64-encoded contents of the new credentials
-file, then save and close the editor. Keep every data key you still need.
-`user-data` and `windows-user-data` Secret data cannot be updated after
-creation; create a new Secret to use different content. Metadata, such as
-labels, can still be updated.
+`update secret` replaces the complete data map. Supply every key you want to
+keep. User-data Secret contents cannot be updated after creation.
 Delete an unused Secret with `osac delete secret cluster-pull-secret`; OSAC
 rejects deletion while a resource still references it.
 
@@ -193,21 +190,29 @@ clusters.
 
 ---
 
-### User Data (`user-data`)
+### User Data
 
-**Purpose:** Store instance initialization data, such as Linux cloud-init
-configuration or shell scripts.
+User-data Secrets store instance initialization content. Both types require a
+nonempty `userdata` key. Use `--from-file=userdata=PATH` to supply the file
+contents directly, without base64 encoding them for the CLI. Without an explicit
+`userdata=` key, the CLI uses the filename as the data key.
 
-**Required key:** `userdata` (nonempty)
+<a id="user-data-user-data"></a>
+
+#### Linux (`user-data`)
+
+**Purpose:** Store Linux initialization data, such as cloud-init configuration
+or shell scripts.
 
 **Used by:** Compute instance and bare metal instance provisioning
 
 **Format:** Typically cloud-init YAML or a shell script supported by the target
 image. Secret creation checks that `userdata` is nonempty, without validating
-its format. The consuming resource applies its own checks. Use
-`windows-user-data` to validate Windows answer-file XML at Secret creation.
+its format. The consuming resource applies its own checks. See the
+[Windows subsection](#windows-user-data-windows-user-data) for Windows answer-file
+XML validation at Secret creation and current availability.
 
-#### Example: Cloud-init script
+##### Example: Cloud-init script
 
 ```bash
 cat > cloud-init.yaml <<'EOF'
@@ -236,7 +241,7 @@ osac create secret --name vm-cloud-init \
 rm cloud-init.yaml
 ```
 
-#### Example: Shell script user data
+##### Example: Shell script user data
 
 ```bash
 cat > init-script.sh <<'EOF'
@@ -262,7 +267,7 @@ osac create secret --name nginx-init \
 rm init-script.sh
 ```
 
-#### Example: YAML format
+##### Example: YAML format
 
 ```yaml
 "@type": type.googleapis.com/osac.public.v1.Secret
@@ -280,18 +285,16 @@ it on first boot. Data is immutable after creation; create a new Secret to
 use different initialization data. See the [ComputeInstance guide](developer/computeinstance-guide.md#user-data-inline-or-secret)
 for the current Windows admission rules.
 
----
+<a id="windows-user-data-windows-user-data"></a>
 
-### Windows User Data (`windows-user-data`)
+#### Windows (`windows-user-data`)
 
 **Purpose:** Store Windows answer-file XML for instance initialization.
 
-**Required key:** `userdata` (nonempty)
-
 **Availability:** Secret creation and retrieval are supported. Referencing this
 type from a ComputeInstance is not yet supported; that work is tracked in
-[OSAC-7713](https://redhat.atlassian.net/browse/OSAC-7713). Inline Windows XML
-remains supported; see the
+[OSAC-7713](https://redhat.atlassian.net/browse/OSAC-7713). For current Windows
+ComputeInstances, use inline XML or a `user-data` Secret; see the
 [ComputeInstance guide](developer/computeinstance-guide.md#user-data-inline-or-secret).
 
 **Format:** One well-formed XML 1.0 document encoded as UTF-8. The `userdata`
@@ -310,7 +313,7 @@ a particular root name or validate namespace conformance, Microsoft schemas,
 or Windows settings.
 Successful validation does not guarantee a working Windows answer file.
 
-#### Example: Create from an answer file
+##### Example: Create from an answer file
 
 ```bash
 osac create secret --name windows-answer \
@@ -320,11 +323,9 @@ osac create secret --name windows-answer \
 osac describe secret windows-answer
 ```
 
-Specify `userdata=` explicitly. Without it, the CLI uses the filename as the
-data key. Supply the XML file directly; do not base64-encode it for the CLI.
 The `describe` command shows metadata and data-key sizes, not the XML content.
 
-#### Restrictions and troubleshooting
+##### Restrictions and troubleshooting
 
 Data and type are immutable after creation. Create a new Secret to use
 different XML; metadata updates remain supported. The private API's `HUB`
@@ -361,29 +362,24 @@ strings. Base64 is an encoding, not redaction; treat that output as sensitive.
 
 #### Example: Database credentials
 
-Prepare one file per value, then use the filenames to supply the data:
-
 ```bash
 osac create secret --name postgres-creds \
   --type=opaque \
-  --from-file=username=./username.txt \
-  --from-file=password=./password.txt \
-  --from-file=host=./host.txt \
-  --from-file=port=./port.txt \
-  --from-file=database=./database.txt
+  --from-literal=username=fake \
+  --from-literal=password='fake!' \
+  --from-literal=host=postgres.example.com \
+  --from-literal=port=5432 \
+  --from-literal=database=production
 ```
-
-The CLI preserves file contents, including trailing newlines. Omit a trailing
-newline when it is not part of the intended value.
 
 #### Example: API keys and tokens
 
 ```bash
 osac create secret --name external-api-creds \
   --type=opaque \
-  --from-file=api-key=./api-key.txt \
-  --from-file=api-secret=./api-secret.txt \
-  --from-file=webhook-url=./webhook-url.txt
+  --from-literal=api-key=fake \
+  --from-literal=api-secret=fake \
+  --from-literal=webhook-url=https://api.example.com/webhook
 ```
 
 #### Example: TLS certificate and key
@@ -404,7 +400,7 @@ osac create secret --name app-config \
   --type=opaque \
   --from-file=config.yaml=./app-config.yaml \
   --from-file=logging.conf=./logging.conf \
-  --from-file=environment=./environment.txt
+  --from-literal=environment=production
 ```
 
 #### Example: YAML format
@@ -441,9 +437,9 @@ for provider-managed secrets, application credentials, and custom integrations.
 #### Example: API token
 
 ```bash
-printf '%s' 'example-token' | osac create secret --name api-token \
+echo -n 'ghp_abc123xyz789token' | osac create secret --name github-token \
   --type=value \
-  --from-file=value=-
+  --from-file=value=/dev/stdin
 ```
 
 #### Example: License key
@@ -451,7 +447,7 @@ printf '%s' 'example-token' | osac create secret --name api-token \
 ```bash
 osac create secret --name app-license \
   --type=value \
-  --from-file=value=./license-key.txt
+  --from-literal=value='XXXX-YYYY-ZZZZ-AAAA-BBBB'
 ```
 
 #### Example: Webhook secret
@@ -459,7 +455,7 @@ osac create secret --name app-license \
 ```bash
 osac create secret --name webhook-secret \
   --type=value \
-  --from-file=value=./webhook-secret.txt
+  --from-literal=value='randomly-generated-webhook-secret-123'
 ```
 
 #### Example: YAML format
@@ -498,12 +494,12 @@ osac create secret --name my-ssh-key \
   --from-file=public_key=$HOME/.ssh/id_rsa.pub
 ```
 
-#### Example: Read from standard input
+#### Example: Create from literal value
 
 ```bash
-cat "$HOME/.ssh/id_ed25519.pub" | osac create secret --name admin-ssh-key \
+osac create secret --name admin-ssh-key \
   --type=ssh-public-key \
-  --from-file=public_key=-
+  --from-literal=public_key='ssh-rsa AAAAB...com'
 ```
 
 #### Example: Generate new SSH key and store

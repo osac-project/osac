@@ -5169,7 +5169,7 @@ var _ = Describe("Catalog materialized defaults", func() {
 		Entry("additional disk", true),
 	)
 
-	Describe("Windows user_data_source.inline validation on update", func() {
+	Describe("Windows user_data_source.inline validation", func() {
 		var (
 			server   *PrivateComputeInstancesServer
 			subnetID string
@@ -5320,6 +5320,31 @@ var _ = Describe("Catalog materialized defaults", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		DescribeTable("rejects invalid XML user_data_source.inline on create for a Windows instance",
+			func(invalidXML, expectedMessage string) {
+				_, err := server.Create(ctx, privatev1.ComputeInstancesCreateRequest_builder{
+					Object: privatev1.ComputeInstance_builder{
+						Metadata: privatev1.Metadata_builder{Name: "win-invalid-xml"}.Build(),
+						Spec: privatev1.ComputeInstanceSpec_builder{
+							Template:       privatev1.ComputeInstanceTemplateReference_builder{Id: "win-template"}.Build(),
+							UserDataSource: privatev1.UserDataSource_builder{Inline: &invalidXML}.Build(),
+							NetworkAttachments: []*privatev1.ComputeNetworkAttachment{
+								privatev1.ComputeNetworkAttachment_builder{
+									Subnet: privatev1.SubnetLocalReference_builder{Id: subnetID}.Build(),
+								}.Build(),
+							},
+						}.Build(),
+					}.Build(),
+				}.Build())
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(grpcstatus.Convert(err).Message()).To(Equal("user_data_source.inline " + expectedMessage))
+				Expect(err.Error()).NotTo(ContainSubstring("xml-content-sentinel"))
+			},
+			Entry("malformed XML", "<root>xml-content-sentinel", "is not well-formed XML"),
+			Entry("prohibited directive", "<!DOCTYPE root><root>xml-content-sentinel</root>", "contains a prohibited XML directive"),
+			Entry("UTF-16 declaration", `<?xml version="1.0" encoding="UTF-16"?><root>xml-content-sentinel</root>`, "has an unsupported encoding; UTF-8 is required"),
+		)
+
 		DescribeTable("rejects invalid XML user_data_source.inline on update for a Windows instance",
 			func(invalidXML, expectedMessage string) {
 				// Create a Windows instance with valid XML user_data_source.inline.
@@ -5359,12 +5384,13 @@ var _ = Describe("Catalog materialized defaults", func() {
 				st, ok := grpcstatus.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(st.Code()).To(Equal(grpccodes.InvalidArgument))
-				Expect(st.Message()).To(ContainSubstring(expectedMessage))
+				Expect(st.Message()).To(Equal("user_data_source.inline " + expectedMessage))
 				Expect(st.Message()).NotTo(ContainSubstring("xml-content-sentinel"))
 			},
-			Entry("plain text", "not xml at all", "not well-formed XML"),
-			Entry("forbidden literal character", "<!--xml-content-sentinel\x00--><root/>", "not well-formed XML"),
-			Entry("UTF-16 declaration", `<?xml version="1.0" encoding="UTF-16"?><root>xml-content-sentinel</root>`, "unsupported_encoding"),
+			Entry("plain text", "not xml at all", "is not well-formed XML"),
+			Entry("forbidden literal character", "<!--xml-content-sentinel\x00--><root/>", "is not well-formed XML"),
+			Entry("prohibited directive", "<!DOCTYPE root><root>xml-content-sentinel</root>", "contains a prohibited XML directive"),
+			Entry("UTF-16 declaration", `<?xml version="1.0" encoding="UTF-16"?><root>xml-content-sentinel</root>`, "has an unsupported encoding; UTF-8 is required"),
 		)
 
 		It("accepts valid XML user_data_source.inline on update for a Windows instance", func() {

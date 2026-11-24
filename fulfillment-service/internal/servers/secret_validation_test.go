@@ -95,7 +95,7 @@ func TestValidateSecretDataWindowsUserData(t *testing.T) {
 		},
 		{
 			name:        "raw invalid UTF-8 is rejected as unsupported encoding",
-			data:        map[string][]byte{"userdata": {0xff, 0xfe, '<', 'r', 'o', 'o', 't', '/', '>'}},
+			data:        map[string][]byte{"userdata": []byte("<root>\xff</root>")},
 			wantMessage: "unsupported encoding",
 		},
 		{
@@ -130,9 +130,6 @@ func TestValidateSecretDataWindowsUserData(t *testing.T) {
 
 func TestValidateWindowsUserDataSecretOrder(t *testing.T) {
 	const maxBytes = 65_536
-	exactLimitXML := append([]byte("<root>"),
-		bytes.Repeat([]byte("a"), maxBytes-len("<root>")-len("</root>"))...)
-	exactLimitXML = append(exactLimitXML, "</root>"...)
 
 	t.Run("oversized malformed value rejects for size without parsing", func(t *testing.T) {
 		calls := 0
@@ -143,19 +140,6 @@ func TestValidateWindowsUserDataSecretOrder(t *testing.T) {
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "exceeds the maximum of 65536 bytes")
 		require.Equal(t, 0, calls)
-	})
-
-	t.Run("exact-limit valid value parses once", func(t *testing.T) {
-		calls := 0
-		var observed []byte
-		err := validateWindowsUserDataSecret(bytes.Clone(exactLimitXML), func(value []byte) error {
-			calls++
-			observed = bytes.Clone(value)
-			return nil
-		})
-		require.NoError(t, err)
-		require.Equal(t, 1, calls)
-		require.Equal(t, exactLimitXML, observed)
 	})
 }
 

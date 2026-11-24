@@ -576,7 +576,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     inventory: "{{ aap_prefix }}-storage-operations"
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
-      - "{{ aap_prefix }}-storage-operations-ig"
+      - "{{ aap_prefix }}-compute-instance-operations-ig"
     allow_simultaneous: false
     ask_variables_on_launch: true
     verbosity: 0
@@ -588,7 +588,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     inventory: "{{ aap_prefix }}-storage-operations"
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
-      - "{{ aap_prefix }}-storage-operations-ig"
+      - "{{ aap_prefix }}-compute-instance-operations-ig"
     allow_simultaneous: false
     ask_variables_on_launch: true
     verbosity: 0
@@ -600,7 +600,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     inventory: "{{ aap_prefix }}-storage-operations"
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
-      - "{{ aap_prefix }}-storage-operations-ig"
+      - "{{ aap_prefix }}-compute-instance-operations-ig"
     allow_simultaneous: false
     ask_variables_on_launch: true
     verbosity: 0
@@ -612,7 +612,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     inventory: "{{ aap_prefix }}-storage-operations"
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
-      - "{{ aap_prefix }}-storage-operations-ig"
+      - "{{ aap_prefix }}-compute-instance-operations-ig"
     allow_simultaneous: false
     ask_variables_on_launch: true
     verbosity: 0
@@ -1119,7 +1119,3 @@ controller_instance_groups: # noqa: var-naming[no-role-prefix]
                   path: clouds.yaml
               defaultMode: 420
               optional: true
-
-  - name: "{{ aap_prefix }}-storage-operations-ig"
-    is_container_group: true
-    pod_spec_override: "{{ lookup('ansible.builtin.template', 'storage-operations-ig.j2') }}"

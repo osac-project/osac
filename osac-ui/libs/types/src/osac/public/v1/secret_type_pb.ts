@@ -18,6 +18,7 @@
 import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
+import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_public_v1_metadata_type } from "./metadata_type_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -26,7 +27,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/secret_type.proto.
  */
 export const file_osac_public_v1_secret_type: GenFile = /*@__PURE__*/
-  fileDesc("CiBvc2FjL3B1YmxpYy92MS9zZWNyZXRfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEi3wEKBlNlY3JldBIKCgJpZBgBIAEoCRIqCghtZXRhZGF0YRgCIAEoCzIYLm9zYWMucHVibGljLnYxLk1ldGFkYXRhEjwKBGRhdGEYAyADKAsyIC5vc2FjLnB1YmxpYy52MS5TZWNyZXQuRGF0YUVudHJ5Qgy6SAmaAQYiBHICEAESMgoEdHlwZRgGIAEoDjIaLm9zYWMucHVibGljLnYxLlNlY3JldFR5cGVCCLpIBYIBAhABGisKCURhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAw6AjgBIloKD1NlY3JldFJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEg8KB3Byb2plY3QYAyABKAkSDgoGdGVuYW50GAUgASgJSgQIBBAFUgZzaGFyZWQiMAoUU2VjcmV0TG9jYWxSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCSr4AQoKU2VjcmV0VHlwZRIbChdTRUNSRVRfVFlQRV9VTlNQRUNJRklFRBAAEhsKF1NFQ1JFVF9UWVBFX1BVTExfU0VDUkVUEAESGgoWU0VDUkVUX1RZUEVfS1VCRUNPTkZJRxACEhkKFVNFQ1JFVF9UWVBFX1VTRVJfREFUQRADEhYKElNFQ1JFVF9UWVBFX09QQVFVRRAEEhUKEVNFQ1JFVF9UWVBFX1ZBTFVFEAUSHgoaU0VDUkVUX1RZUEVfU1NIX1BVQkxJQ19LRVkQBhIqCiZTRUNSRVRfVFlQRV9TRVJWSUNFX0FDQ09VTlRfQ1JFREVOVElBTBAHYgZwcm90bzM", [file_buf_validate_validate, file_osac_public_v1_metadata_type]);
+  fileDesc("CiBvc2FjL3B1YmxpYy92MS9zZWNyZXRfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEi4wEKBlNlY3JldBIKCgJpZBgBIAEoCRIqCghtZXRhZGF0YRgCIAEoCzIYLm9zYWMucHVibGljLnYxLk1ldGFkYXRhEjwKBGRhdGEYAyADKAsyIC5vc2FjLnB1YmxpYy52MS5TZWNyZXQuRGF0YUVudHJ5Qgy6SAmaAQYiBHICEAESNgoEdHlwZRgGIAEoDjIaLm9zYWMucHVibGljLnYxLlNlY3JldFR5cGVCDOJBAQW6SAWCAQIQARorCglEYXRhRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgMOgI4ASJMCg9TZWNyZXRSZWZlcmVuY2USCgoCaWQYASABKAkSDAoEbmFtZRgCIAEoCRIPCgdwcm9qZWN0GAMgASgJEg4KBnRlbmFudBgEIAEoCSIwChRTZWNyZXRMb2NhbFJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJKvgBCgpTZWNyZXRUeXBlEhsKF1NFQ1JFVF9UWVBFX1VOU1BFQ0lGSUVEEAASGwoXU0VDUkVUX1RZUEVfUFVMTF9TRUNSRVQQARIaChZTRUNSRVRfVFlQRV9LVUJFQ09ORklHEAISGQoVU0VDUkVUX1RZUEVfVVNFUl9EQVRBEAMSFgoSU0VDUkVUX1RZUEVfT1BBUVVFEAQSFQoRU0VDUkVUX1RZUEVfVkFMVUUQBRIeChpTRUNSRVRfVFlQRV9TU0hfUFVCTElDX0tFWRAGEioKJlNFQ1JFVF9UWVBFX1NFUlZJQ0VfQUNDT1VOVF9DUkVERU5USUFMEAdiBnByb3RvMw", [file_buf_validate_validate, file_google_api_field_behavior, file_osac_public_v1_metadata_type]);
 
 /**
  * Represents a secret containing typed or opaque key-value data.
@@ -65,7 +66,7 @@ export type Secret = Message<"osac.public.v1.Secret"> & {
   data: { [key: string]: Uint8Array };
 
   /**
-   * Type of data stored in the secret.
+   * Type of data stored in the secret. Immutable after creation.
    *
    * @generated from field: osac.public.v1.SecretType type = 6;
    */
@@ -103,7 +104,7 @@ export type SecretReference = Message<"osac.public.v1.SecretReference"> & {
   /**
    * Tenant where the referenced object lives. If omitted, the owner tenant is used.
    *
-   * @generated from field: string tenant = 5;
+   * @generated from field: string tenant = 4;
    */
   tenant: string;
 };

@@ -19,6 +19,7 @@ import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2"
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_cleanapi_cleanapi } from "../../../cleanapi/cleanapi_pb";
+import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_private_v1_metadata_type } from "./metadata_type_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -27,7 +28,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/secret_type.proto.
  */
 export const file_osac_private_v1_secret_type: GenFile = /*@__PURE__*/
-  fileDesc("CiFvc2FjL3ByaXZhdGUvdjEvc2VjcmV0X3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSKWAwoGU2VjcmV0EgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEj0KBGRhdGEYAyADKAsyIS5vc2FjLnByaXZhdGUudjEuU2VjcmV0LkRhdGFFbnRyeUIMukgJmgEGIgRyAhABEjcKB2JhY2tlbmQYBCABKA4yHi5vc2FjLnByaXZhdGUudjEuU2VjcmV0QmFja2VuZEIGirUYAggBEkUKC2Nvb3JkaW5hdGVzGAUgAygLMigub3NhYy5wcml2YXRlLnYxLlNlY3JldC5Db29yZGluYXRlc0VudHJ5QgaKtRgCCAESMwoEdHlwZRgGIAEoDjIbLm9zYWMucHJpdmF0ZS52MS5TZWNyZXRUeXBlQgi6SAWCAQIQARorCglEYXRhRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgMOgI4ARoyChBDb29yZGluYXRlc0VudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEiWgoPU2VjcmV0UmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDwoHcHJvamVjdBgDIAEoCRIOCgZ0ZW5hbnQYBSABKAlKBAgEEAVSBnNoYXJlZCIwChRTZWNyZXRMb2NhbFJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJKvgBCgpTZWNyZXRUeXBlEhsKF1NFQ1JFVF9UWVBFX1VOU1BFQ0lGSUVEEAASGwoXU0VDUkVUX1RZUEVfUFVMTF9TRUNSRVQQARIaChZTRUNSRVRfVFlQRV9LVUJFQ09ORklHEAISGQoVU0VDUkVUX1RZUEVfVVNFUl9EQVRBEAMSFgoSU0VDUkVUX1RZUEVfT1BBUVVFEAQSFQoRU0VDUkVUX1RZUEVfVkFMVUUQBRIeChpTRUNSRVRfVFlQRV9TU0hfUFVCTElDX0tFWRAGEioKJlNFQ1JFVF9UWVBFX1NFUlZJQ0VfQUNDT1VOVF9DUkVERU5USUFMEAcqaQoNU2VjcmV0QmFja2VuZBIeChpTRUNSRVRfQkFDS0VORF9VTlNQRUNJRklFRBAAEhgKFFNFQ1JFVF9CQUNLRU5EX1ZBVUxUEAESFgoSU0VDUkVUX0JBQ0tFTkRfSFVCEAIaBoq1GAIIAUIUirUYEBIOb3NhYy5wdWJsaWMudjFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_osac_private_v1_metadata_type]);
+  fileDesc("CiFvc2FjL3ByaXZhdGUvdjEvc2VjcmV0X3R5cGUucHJvdG8SD29zYWMucHJpdmF0ZS52MSKaAwoGU2VjcmV0EgoKAmlkGAEgASgJEisKCG1ldGFkYXRhGAIgASgLMhkub3NhYy5wcml2YXRlLnYxLk1ldGFkYXRhEj0KBGRhdGEYAyADKAsyIS5vc2FjLnByaXZhdGUudjEuU2VjcmV0LkRhdGFFbnRyeUIMukgJmgEGIgRyAhABEjcKB2JhY2tlbmQYBCABKA4yHi5vc2FjLnByaXZhdGUudjEuU2VjcmV0QmFja2VuZEIGirUYAggBEkUKC2Nvb3JkaW5hdGVzGAUgAygLMigub3NhYy5wcml2YXRlLnYxLlNlY3JldC5Db29yZGluYXRlc0VudHJ5QgaKtRgCCAESNwoEdHlwZRgGIAEoDjIbLm9zYWMucHJpdmF0ZS52MS5TZWNyZXRUeXBlQgziQQEFukgFggECEAEaKwoJRGF0YUVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoDDoCOAEaMgoQQ29vcmRpbmF0ZXNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBIkwKD1NlY3JldFJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEg8KB3Byb2plY3QYAyABKAkSDgoGdGVuYW50GAQgASgJIjAKFFNlY3JldExvY2FsUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkq+AEKClNlY3JldFR5cGUSGwoXU0VDUkVUX1RZUEVfVU5TUEVDSUZJRUQQABIbChdTRUNSRVRfVFlQRV9QVUxMX1NFQ1JFVBABEhoKFlNFQ1JFVF9UWVBFX0tVQkVDT05GSUcQAhIZChVTRUNSRVRfVFlQRV9VU0VSX0RBVEEQAxIWChJTRUNSRVRfVFlQRV9PUEFRVUUQBBIVChFTRUNSRVRfVFlQRV9WQUxVRRAFEh4KGlNFQ1JFVF9UWVBFX1NTSF9QVUJMSUNfS0VZEAYSKgomU0VDUkVUX1RZUEVfU0VSVklDRV9BQ0NPVU5UX0NSRURFTlRJQUwQByppCg1TZWNyZXRCYWNrZW5kEh4KGlNFQ1JFVF9CQUNLRU5EX1VOU1BFQ0lGSUVEEAASGAoUU0VDUkVUX0JBQ0tFTkRfVkFVTFQQARIWChJTRUNSRVRfQkFDS0VORF9IVUIQAhoGirUYAggBQhSKtRgQEg5vc2FjLnB1YmxpYy52MWIGcHJvdG8z", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_api_field_behavior, file_osac_private_v1_metadata_type]);
 
 /**
  * Represents a secret containing typed or opaque key-value data.
@@ -81,7 +82,7 @@ export type Secret = Message<"osac.private.v1.Secret"> & {
   coordinates: { [key: string]: string };
 
   /**
-   * Type of data stored in the secret.
+   * Type of data stored in the secret. Immutable after creation.
    *
    * @generated from field: osac.private.v1.SecretType type = 6;
    */
@@ -119,7 +120,7 @@ export type SecretReference = Message<"osac.private.v1.SecretReference"> & {
   /**
    * Tenant where the referenced object lives. If omitted, the owner tenant is used.
    *
-   * @generated from field: string tenant = 5;
+   * @generated from field: string tenant = 4;
    */
   tenant: string;
 };

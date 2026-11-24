@@ -29,7 +29,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/external_ip_pool_type.proto.
  */
 export const file_osac_public_v1_external_ip_pool_type: GenFile = /*@__PURE__*/
-  fileDesc("Cipvc2FjL3B1YmxpYy92MS9leHRlcm5hbF9pcF9wb29sX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIrYBCg5FeHRlcm5hbElQUG9vbBIKCgJpZBgBIAEoCRIqCghtZXRhZGF0YRgCIAEoCzIYLm9zYWMucHVibGljLnYxLk1ldGFkYXRhEjAKBHNwZWMYAyABKAsyIi5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQUG9vbFNwZWMSOgoGc3RhdHVzGAQgASgLMiQub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUFBvb2xTdGF0dXNCBOJBAQMicwoSRXh0ZXJuYWxJUFBvb2xTcGVjEj4KCWlwX2ZhbWlseRgDIAEoDjIYLm9zYWMucHVibGljLnYxLklQRmFtaWx5QhHiQQICBbpICYIBBhABIAAgAkoECAQQBVIXaW1wbGVtZW50YXRpb25fc3RyYXRlZ3kiLwoURXh0ZXJuYWxJUFBvb2xTdGF0dXMSFwoJYXZhaWxhYmxlGAYgASgDQgTiQQEDImIKF0V4dGVybmFsSVBQb29sUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDwoHcHJvamVjdBgDIAEoCRIOCgZ0ZW5hbnQYBSABKAlKBAgEEAVSBnNoYXJlZGIGcHJvdG8z", [file_buf_validate_validate, file_google_api_field_behavior, file_osac_public_v1_ip_family_type, file_osac_public_v1_metadata_type]);
+  fileDesc("Cipvc2FjL3B1YmxpYy92MS9leHRlcm5hbF9pcF9wb29sX3R5cGUucHJvdG8SDm9zYWMucHVibGljLnYxIrYBCg5FeHRlcm5hbElQUG9vbBIKCgJpZBgBIAEoCRIqCghtZXRhZGF0YRgCIAEoCzIYLm9zYWMucHVibGljLnYxLk1ldGFkYXRhEjAKBHNwZWMYAyABKAsyIi5vc2FjLnB1YmxpYy52MS5FeHRlcm5hbElQUG9vbFNwZWMSOgoGc3RhdHVzGAQgASgLMiQub3NhYy5wdWJsaWMudjEuRXh0ZXJuYWxJUFBvb2xTdGF0dXNCBOJBAQMicwoSRXh0ZXJuYWxJUFBvb2xTcGVjEj4KCWlwX2ZhbWlseRgDIAEoDjIYLm9zYWMucHVibGljLnYxLklQRmFtaWx5QhHiQQICBbpICYIBBhABIAAgAkoECAQQBVIXaW1wbGVtZW50YXRpb25fc3RyYXRlZ3kiLwoURXh0ZXJuYWxJUFBvb2xTdGF0dXMSFwoJYXZhaWxhYmxlGAYgASgDQgTiQQEDIlQKF0V4dGVybmFsSVBQb29sUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDwoHcHJvamVjdBgDIAEoCRIOCgZ0ZW5hbnQYBCABKAliBnByb3RvMw", [file_buf_validate_validate, file_google_api_field_behavior, file_osac_public_v1_ip_family_type, file_osac_public_v1_metadata_type]);
 
 /**
  * Represents a pool of external IP addresses available for allocation.
@@ -157,9 +157,10 @@ export type ExternalIPPoolReference = Message<"osac.public.v1.ExternalIPPoolRefe
   project: string;
 
   /**
-   * Tenant where the referenced object lives. If omitted, the owner tenant is used.
+   * ExternalIPPools live in the "shared" tenant and are platform-scoped. A name
+   * reference can omit tenant; an ID reference needs no selector.
    *
-   * @generated from field: string tenant = 5;
+   * @generated from field: string tenant = 4;
    */
   tenant: string;
 };

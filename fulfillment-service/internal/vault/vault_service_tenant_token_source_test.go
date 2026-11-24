@@ -287,7 +287,7 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 		})
 
 		It("returns error when keycloak fails", func() {
-			const clientSecret = "test-oauth-credential-marker"
+			const testClientSecret = "test-oauth-credential-marker"
 			const responseMarker = "test-oauth-response-marker"
 			var keycloakServer *httptest.Server
 			mux := http.NewServeMux()
@@ -299,12 +299,13 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 				})
 			})
 			mux.HandleFunc("/protocol/openid-connect/token", func(w http.ResponseWriter, r *http.Request) {
+				defer GinkgoRecover()
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]string{
+				Expect(json.NewEncoder(w).Encode(map[string]string{
 					"error":             "invalid_client",
 					"error_description": responseMarker,
-				})
+				})).To(Succeed())
 			})
 			keycloakServer = httptest.NewServer(mux)
 			DeferCleanup(keycloakServer.Close)
@@ -316,7 +317,7 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 				SetParentNamespace("osac").
 				SetKeycloakIssuerURL(keycloakServer.URL).
 				SetKeycloakClientID("client").
-				SetKeycloakClientSecret(clientSecret).
+				SetKeycloakClientSecret(testClientSecret).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -324,7 +325,7 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("keycloak"))
 			Expect(logs.String()).To(ContainSubstring("msg=\"Failed to obtain Keycloak token for Vault\" tenant=tenant-a\n"))
-			Expect(logs.String()).NotTo(ContainSubstring(clientSecret))
+			Expect(logs.String()).NotTo(ContainSubstring(testClientSecret))
 			Expect(logs.String()).NotTo(ContainSubstring(responseMarker))
 			status := grpcstatus.Convert(ToGrpcError(err))
 			Expect(status.Code()).To(Equal(grpccodes.Internal))
@@ -336,8 +337,10 @@ var _ = Describe("ServiceTenantTokenSource", func() {
 			DeferCleanup(keycloakServer.Close)
 
 			vaultServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer GinkgoRecover()
 				w.WriteHeader(http.StatusForbidden)
-				w.Write([]byte(`{"errors":["vault-login-body-marker"]}`))
+				_, err := w.Write([]byte(`{"errors":["vault-login-body-marker"]}`))
+				Expect(err).To(Succeed())
 			}))
 			DeferCleanup(vaultServer.Close)
 

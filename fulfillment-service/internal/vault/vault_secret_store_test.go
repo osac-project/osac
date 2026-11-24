@@ -298,8 +298,10 @@ var _ = Describe("VaultSecretStore", func() {
 
 			var logs bytes.Buffer
 			store, _ := newTestStore(func(w http.ResponseWriter, r *http.Request) {
+				defer GinkgoRecover()
 				w.WriteHeader(http.StatusForbidden)
-				w.Write([]byte(`{"errors":["vault-write-body-marker"]}`))
+				_, err := w.Write([]byte(`{"errors":["vault-write-body-marker"]}`))
+				Expect(err).To(Succeed())
 			}, func(b *VaultSecretStoreBuilder) {
 				b.SetTokenSource(mockTokenSource).
 					SetLogger(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))

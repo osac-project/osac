@@ -291,7 +291,7 @@ python-openstackclient==9.0.0
     #   osac-aap (pyproject.toml)
     #   python-esiclient
     #   python-esileapclient
-pyyaml==6.0.3
+pyyaml==6.0.4
     # via
     #   ansible-core
     #   ansible-runner

@@ -41,7 +41,7 @@ class RecorderHandler(BaseHTTPRequestHandler):
             "id": job["id"],
             "status": job["status"],
             "extra_vars": json.dumps(job["payload"]["extra_vars"]),
-            "artifacts": {},
+            "artifacts": job.get("artifacts", {}),
         }
 
     def do_GET(self):
@@ -119,10 +119,16 @@ class RecorderHandler(BaseHTTPRequestHandler):
             elif len(parts) == 2 and parts[0] == "complete":
                 job = self.server.jobs.get(parts[1])
                 state = payload.get("status")
-                if job is None or state not in ("successful", "failed", "canceled"):
+                artifacts = payload.get("artifacts", {})
+                if (
+                    job is None
+                    or state not in ("successful", "failed", "canceled")
+                    or not isinstance(artifacts, dict)
+                ):
                     self.reply(400, {"detail": "invalid completion"})
                     return
                 job["status"] = state
+                job["artifacts"] = artifacts
                 self.reply(200, {})
             elif (
                 len(parts) == 5

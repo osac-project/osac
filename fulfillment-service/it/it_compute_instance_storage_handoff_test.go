@@ -235,20 +235,7 @@ func expectComputeStorageRecordAttributes(ctx context.Context, parent *privatev1
 
 func waitComputeStorageLaunch(ctx context.Context, id, template string) computeStorageCapture {
 	GinkgoHelper()
-	var found computeStorageCapture
-	Eventually(func(g Gomega) {
-		captures := readComputeStorageCaptures(ctx)
-		g.Expect(captures.Unexpected).To(BeEmpty())
-		matches := make([]computeStorageCapture, 0)
-		for _, job := range captures.Jobs {
-			if job.Template == template && job.Payload.ExtraVars.JobVars.Resource.Labels[labels.ComputeInstanceUuid] == id {
-				matches = append(matches, job)
-			}
-		}
-		g.Expect(matches).To(HaveLen(1))
-		found = matches[0]
-	}, opTimeout, time.Second).Should(Succeed())
-	return found
+	return waitComputeStorageLaunchAfter(ctx, id, template, 0, opTimeout)
 }
 
 func expectComputeStorageLaunch(job computeStorageCapture, parent *privatev1.ComputeInstance, ids map[string]string, fixture *computeStorageFixture) {

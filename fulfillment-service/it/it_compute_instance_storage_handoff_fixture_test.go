@@ -35,6 +35,7 @@ import (
 	"k8s.io/client-go/util/retry"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/kubernetes/labels"
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -295,4 +296,22 @@ func (f *computeStorageFixture) createInstanceInTenant(ctx context.Context, tena
 		Expect(readComputeStorageCaptures(cleanupCtx).Unexpected).To(BeEmpty())
 	})
 	return response.GetObject()
+}
+
+func waitComputeStorageLaunchAfter(ctx context.Context, id, template string, afterID int, timeout time.Duration) computeStorageCapture {
+	GinkgoHelper()
+	var found computeStorageCapture
+	Eventually(func(g Gomega) {
+		captures := readComputeStorageCaptures(ctx)
+		g.Expect(captures.Unexpected).To(BeEmpty())
+		matches := make([]computeStorageCapture, 0)
+		for _, job := range captures.Jobs {
+			if job.ID > afterID && job.Template == template && job.Payload.ExtraVars.JobVars.Resource.Labels[labels.ComputeInstanceUuid] == id {
+				matches = append(matches, job)
+			}
+		}
+		g.Expect(matches).To(HaveLen(1), "expected one matching launch after job %d", afterID)
+		found = matches[0]
+	}, timeout, time.Second).Should(Succeed())
+	return found
 }

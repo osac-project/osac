@@ -261,6 +261,39 @@ func TestDeleteVolumeSuccess(t *testing.T) {
 	}
 }
 
+func TestCreateVolumeRecordsBackendID(t *testing.T) {
+	csiResp := &csi.CreateVolumeResponse{Volume: &csi.Volume{VolumeId: "v"}}
+	p, cli := newProvisioner(t, &fakeCSIClient{createResp: csiResp}, fullSecret())
+
+	resp, err := p.CreateVolume(context.Background(), blockCreateReq())
+	if err != nil {
+		t.Fatalf("CreateVolume error: %v", err)
+	}
+	if got := resp.VendorContext[vendorContextBackendIDKey]; got != "be-001" {
+		t.Errorf("VendorContext[%s] = %q, want be-001", vendorContextBackendIDKey, got)
+	}
+	if _, ok := cli.createReq.GetParameters()[vendorContextBackendIDKey]; ok {
+		t.Errorf("CSI CreateVolume parameters must not carry %s", vendorContextBackendIDKey)
+	}
+}
+
+func TestDeleteVolumeUsesRecordedBackend(t *testing.T) {
+	second := hubSecret("acme", "be-002")
+	second.Data[secretKeyManagerUsername] = []byte("osac-acme-2")
+	p, cli := newProvisioner(t, &fakeCSIClient{}, fullSecret(), second)
+
+	err := p.DeleteVolume(context.Background(), VendorDeleteVolumeRequest{
+		VendorVolumeID: "vendor-vol-2", Provider: "vast", Tenant: "acme",
+		VendorContext: map[string]string{vendorContextBackendIDKey: "be-002"},
+	})
+	if err != nil {
+		t.Fatalf("DeleteVolume error: %v", err)
+	}
+	if got := cli.deleteReq.GetSecrets()["username"]; got != "osac-acme-2" {
+		t.Errorf("delete secrets.username = %q, want osac-acme-2", got)
+	}
+}
+
 func TestDeleteVolumeNotFoundIsSuccess(t *testing.T) {
 	p, _ := newProvisioner(t, &fakeCSIClient{deleteErr: grpcstatus.Error(codes.NotFound, "gone")}, fullSecret())
 	if err := p.DeleteVolume(context.Background(), VendorDeleteVolumeRequest{

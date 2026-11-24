@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"maps"
 	"sort"
 	"strings"
 
@@ -47,6 +48,13 @@ const (
 	secretKeyVipPoolFQDN     = "vip_pool_fqdn"
 	secretKeyTenantUIDHash   = "tenant_uid_hash"
 )
+
+// vendorContextBackendIDKey records, in a volume's VendorContext, the backend
+// whose hub Secret created it, so later calls use the same credentials even
+// after the tenant gains another VAST backend. osac-csi-driver forwards
+// VendorContext to the vendor's ControllerPublishVolume alongside its own
+// "osac.*" keys, which the vendor driver ignores.
+const vendorContextBackendIDKey = "osac.backend-id"
 
 // vendorCSIClient is the subset of the CSI controller service the provisioner
 // uses. csi.ControllerClient (over a real gRPC connection) satisfies it, and
@@ -122,6 +130,8 @@ type tenantCreds struct {
 	vipPoolName  string
 	vipPoolFQDN  string
 	uidHash      string
+	// backendID is the hub Secret's storage-backend-id label.
+	backendID string
 }
 
 // CreateVolume provisions a block volume on the vendor array. It reads the
@@ -139,7 +149,7 @@ func (p *VastVendorProvisioner) CreateVolume(ctx context.Context, req VendorCrea
 	if err != nil {
 		return VendorCreateVolumeResponse{}, err
 	}
-	creds, err := p.readTenantCreds(ctx, req.Tenant)
+	creds, err := p.readTenantCreds(ctx, req.Tenant, req.VendorContext[vendorContextBackendIDKey])
 	if err != nil {
 		return VendorCreateVolumeResponse{}, err
 	}
@@ -184,13 +194,15 @@ func (p *VastVendorProvisioner) CreateVolume(ctx context.Context, req VendorCrea
 		return VendorCreateVolumeResponse{}, fmt.Errorf("vendor CreateVolume for %q returned no volume id", req.Name)
 	}
 
+	// ControllerPublishVolume needs the same subsystem/tenant_name/vip_pool_* parameters
+	// CreateVolume used -- csiReq.Parameters already has exactly those, so copy it rather than
+	// re-deriving a second set that could drift out of sync, and add the backend ID.
+	vendorContext := maps.Clone(csiReq.Parameters)
+	vendorContext[vendorContextBackendIDKey] = creds.backendID
 	return VendorCreateVolumeResponse{
 		VendorVolumeID: vol.GetVolumeId(),
 		Protocol:       string(v1alpha1.VolumeProtocolBlock),
-		// ControllerPublishVolume needs the same subsystem/tenant_name/vip_pool_* parameters
-		// CreateVolume used -- csiReq.Parameters already has exactly those, so reuse it rather than
-		// re-deriving a second copy that could drift out of sync.
-		VendorContext: csiReq.Parameters,
+		VendorContext:  vendorContext,
 	}, nil
 }
 
@@ -202,7 +214,7 @@ func (p *VastVendorProvisioner) DeleteVolume(ctx context.Context, req VendorDele
 	if err != nil {
 		return err
 	}
-	creds, err := p.readTenantCreds(ctx, req.Tenant)
+	creds, err := p.readTenantCreds(ctx, req.Tenant, req.VendorContext[vendorContextBackendIDKey])
 	if err != nil {
 		return err
 	}
@@ -244,22 +256,30 @@ func (p *VastVendorProvisioner) endpointFor(provider string) (string, error) {
 }
 
 // readTenantCreds reads and validates the tenant's VAST hub Secret. osac-aap
-// writes one per backend ("vast-tenant-config-<tenant>-<backend_id>"), and a
-// Volume does not record its backend, so the Secret is found by its tenant and
-// provider labels and a tenant with more than one VAST backend is rejected.
-func (p *VastVendorProvisioner) readTenantCreds(ctx context.Context, tenant string) (tenantCreds, error) {
+// writes one per backend ("vast-tenant-config-<tenant>-<backend_id>"), found
+// here by its labels. A volume that recorded its backend selects that Secret;
+// otherwise a tenant with more than one VAST backend is rejected.
+func (p *VastVendorProvisioner) readTenantCreds(ctx context.Context, tenant, backendID string) (tenantCreds, error) {
 	if tenant == "" {
 		return tenantCreds{}, fmt.Errorf("volume has no tenant annotation; cannot select vendor credentials")
 	}
-	secrets := &corev1.SecretList{}
-	if err := p.reader.List(ctx, secrets, client.InNamespace(p.configNamespace), client.MatchingLabels{
+	selector := client.MatchingLabels{
 		osacTenantKey:            tenant,
 		osacStorageProviderLabel: "vast",
-	}); err != nil {
+	}
+	if backendID != "" {
+		selector[osacStorageBackendIDLabel] = backendID
+	}
+	secrets := &corev1.SecretList{}
+	if err := p.reader.List(ctx, secrets, client.InNamespace(p.configNamespace), selector); err != nil {
 		return tenantCreds{}, fmt.Errorf("list VAST hub secrets for tenant %q in %s: %w", tenant, p.configNamespace, err)
 	}
 	switch len(secrets.Items) {
 	case 0:
+		if backendID != "" {
+			return tenantCreds{}, fmt.Errorf("no VAST hub secret for tenant %q and backend %q in %s",
+				tenant, backendID, p.configNamespace)
+		}
 		return tenantCreds{}, fmt.Errorf("no VAST hub secret for tenant %q in %s", tenant, p.configNamespace)
 	case 1:
 	default:
@@ -282,6 +302,7 @@ func (p *VastVendorProvisioner) readTenantCreds(ctx context.Context, tenant stri
 		vipPoolName:  string(secret.Data[secretKeyVipPoolName]),
 		vipPoolFQDN:  string(secret.Data[secretKeyVipPoolFQDN]),
 		uidHash:      string(secret.Data[secretKeyTenantUIDHash]),
+		backendID:    secret.Labels[osacStorageBackendIDLabel],
 	}
 	if creds.username == "" || creds.password == "" {
 		return tenantCreds{}, fmt.Errorf("hub secret %s/%s missing manager credentials", p.configNamespace, name)

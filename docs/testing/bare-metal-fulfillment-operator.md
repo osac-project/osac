@@ -29,8 +29,17 @@ After a local run, the BMF release stays configured against the fixture
 Deployment, Service, and synthetic token Secrets in the test namespace.
 CI runs both BMF scenarios with shared images and CRDs. The existing NetBox
 envtest specs cover selection, allocation, release, and claim recovery with
-an in-process reconciler. The Kind case uses the same HTTP fixture and checks
-deployed credential lookup and token reload after a rollout.
+an in-process reconciler. The Kind case uses the same NetBox WireMock
+mappings and checks deployed credential lookup and token reload after a rollout.
+
+The BMF `make test` target builds the WireMock image and runs one isolated
+instance per NetBox envtest spec. Docker or Podman must be available. To run
+just these specs directly, build the image with `make wiremock-image` first.
+The installer builds and loads the same image for Kind. The image in
+`bare-metal-fulfillment-operator/test/wiremock` can serve other provider
+fixtures with their own mappings. The NetBox mappings exercise conditional
+updates and sequential claim/release flows. Parallel envtest specs use separate
+WireMock instances.
 
 ## Coverage notes
 

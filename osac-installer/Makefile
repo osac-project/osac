@@ -1332,8 +1332,8 @@ endif
 ifneq ($(or $(filter bmf-netbox,$(SUITE)),$(and $(filter bmf,$(SUITE)),$(filter true,$(BMF_NETBOX_TEST)))),)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
 	$(call kind-load-image,localhost/fulfillment-service:it)
-	$(call kind-container-build,-t localhost/bmf-netbox-fixture:it -f ../bare-metal-fulfillment-operator/test/netboxmock/cmd/netbox-fixture/Containerfile ../bare-metal-fulfillment-operator)
-	$(call kind-load-image,localhost/bmf-netbox-fixture:it)
+	$(call kind-container-build,-t localhost/osac-wiremock:it -f ../bare-metal-fulfillment-operator/test/wiremock/Containerfile ../bare-metal-fulfillment-operator/test/wiremock)
+	$(call kind-load-image,localhost/osac-wiremock:it)
 	# Recreate the mock so a failed run cannot carry a claimed device into the next run.
 	kubectl delete -n $(NS) deployment/bmf-netbox-fixture --ignore-not-found
 	@initial_token=$$(openssl rand -hex 24); \

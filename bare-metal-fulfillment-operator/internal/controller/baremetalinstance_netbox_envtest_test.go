@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strconv"
 
 	metal3api "github.com/metal3-io/baremetal-operator/apis/metal3.io/v1alpha1"
@@ -44,6 +46,7 @@ import (
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/secretapi"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/internal/shared"
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/test/netboxmock"
+	"github.com/osac-project/osac/bare-metal-fulfillment-operator/test/wiremock"
 )
 
 const (
@@ -144,15 +147,43 @@ func netboxDeviceFields(cpuCores int) map[string]any {
 }
 
 var _ = Describe("BareMetalInstance NetBox Integration", func() {
-	var mock *netboxmock.Server
+	var mock *netboxmock.Fixture
+	var admin wiremock.Admin
 	var server *httptest.Server
 
-	BeforeEach(func() {
+	selector := map[string]string{"cpu_cores": "16"}
+
+	BeforeEach(func(specCtx SpecContext) {
 		ensureTestNamespace(netboxTestNS)
-		mock = netboxmock.New(testNetBoxToken)
-		server = httptest.NewTLSServer(mock)
+		baseURL, stop, err := wiremock.Start(specCtx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(stop)
+		admin = wiremock.HTTPAdmin(baseURL)
+		target, err := url.Parse(baseURL)
+		Expect(err).NotTo(HaveOccurred())
+		// Keep the NetBox client's TLS and CA trust path in the controller test.
+		server = httptest.NewTLSServer(httputil.NewSingleHostReverseProxy(target))
 		DeferCleanup(server.Close)
 	})
+
+	configure := func(devices ...netboxmock.Device) {
+		GinkgoHelper()
+		var err error
+		mock, err = netboxmock.Configure(ctx, admin, []string{testNetBoxToken}, selector, devices...)
+		Expect(err).NotTo(HaveOccurred())
+	}
+	device := func(id int) netboxmock.Device {
+		GinkgoHelper()
+		snapshot, err := mock.Device(ctx, id)
+		Expect(err).NotTo(HaveOccurred())
+		return snapshot
+	}
+	requestsFor := func(method, path string) []netboxmock.Request {
+		GinkgoHelper()
+		requests, err := mock.RequestsFor(ctx, method, path)
+		Expect(err).NotTo(HaveOccurred())
+		return requests
+	}
 
 	Describe("allocation", func() {
 		const bmiName = "netbox-alloc-bmi"
@@ -163,11 +194,13 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 		})
 
 		It("allocates a host through a BareMetalInstance (TC-INT-001)", func() {
-			mock.AddDevice(42, "staged", netboxDeviceFields(16))
-			mock.AddDevice(43, "staged", netboxDeviceFields(8))
+			configure(
+				netboxmock.Device{ID: 42, Status: "staged", CustomFields: netboxDeviceFields(16)},
+				netboxmock.Device{ID: 43, Status: "staged", CustomFields: netboxDeviceFields(8)},
+			)
 			reconciler := newNetBoxReconciler(server, newNetBoxCredentialsReader(42))
 
-			createNetBoxBMI(bmiName, map[string]string{"cpu_cores": "16"})
+			createNetBoxBMI(bmiName, selector)
 
 			// Finalizer, then selection: the host binding is persisted before any claim.
 			reconcileInNS(reconciler, netboxTestNS, bmiName, 2)
@@ -175,7 +208,7 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			Expect(bmi.Spec.ExternalHostID).To(Equal(netboxTestNS + "/" + hostname))
 			Expect(bmi.Spec.ExternalHostName).To(Equal(hostname))
 
-			listRequests := mock.RequestsFor(http.MethodGet, "/api/dcim/devices/")
+			listRequests := requestsFor(http.MethodGet, "/api/dcim/devices/")
 			listCount := len(listRequests)
 			Expect(listCount).To(BeNumerically(">", 0))
 			query := listRequests[0].Query
@@ -184,17 +217,17 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			Expect(query["cf_osac_instance_id__empty"]).To(ConsistOf("true"))
 			Expect(query["cf_cpu_cores"]).To(ConsistOf("16"))
 			Expect(listRequests[0].TokenIndex).To(BeZero())
-			claimPatches := len(mock.RequestsFor(http.MethodPatch, "/api/dcim/devices/42/"))
+			claimPatches := len(requestsFor(http.MethodPatch, "/api/dcim/devices/42/"))
 			Expect(claimPatches).To(Equal(0))
 
 			// Claim: the device becomes active and owned by the BareMetalInstance UID.
 			reconcileInNS(reconciler, netboxTestNS, bmiName, 1)
 			bmi = getBMIInNS(netboxTestNS, bmiName)
-			device := mock.Device(42)
-			Expect(device.Status).To(Equal("active"))
-			Expect(device.CustomFields["osac_instance_id"]).To(Equal(string(bmi.UID)))
-			Expect(mock.Device(43).Status).To(Equal("staged"))
-			patches := mock.RequestsFor(http.MethodPatch, "/api/dcim/devices/42/")
+			snapshot := device(42)
+			Expect(snapshot.Status).To(Equal("active"))
+			Expect(snapshot.CustomFields["osac_instance_id"]).To(Equal(string(bmi.UID)))
+			Expect(device(43).Status).To(Equal("staged"))
+			patches := requestsFor(http.MethodPatch, "/api/dcim/devices/42/")
 			patchCount := len(patches)
 			Expect(patchCount).To(Equal(1))
 			Expect(patches[0].IfMatch).NotTo(BeEmpty())
@@ -229,10 +262,10 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 		})
 
 		It("releases the NetBox claim when the BareMetalInstance is deleted (TC-INT-002)", func() {
-			mock.AddDevice(42, "staged", netboxDeviceFields(16))
+			configure(netboxmock.Device{ID: 42, Status: "staged", CustomFields: netboxDeviceFields(16)})
 			reconciler := newNetBoxReconciler(server, newNetBoxCredentialsReader(42))
 
-			createNetBoxBMI(bmiName, map[string]string{"cpu_cores": "16"})
+			createNetBoxBMI(bmiName, selector)
 			driveToAllocatedIn(reconciler, netboxTestNS, bmiName, hostname)
 
 			bmi := getBMIInNS(netboxTestNS, bmiName)
@@ -244,17 +277,17 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			err := k8sClient.Get(ctx, types.NamespacedName{Name: bmiName, Namespace: netboxTestNS}, &v1alpha1.BareMetalInstance{})
 			Expect(apierrors.IsNotFound(err)).To(BeTrue(), "the inventory finalizer should be released")
 
-			device := mock.Device(42)
-			Expect(device.Status).To(Equal("staged"))
-			Expect(device.CustomFields["osac_instance_id"]).To(BeNil())
-			Expect(device.CustomFields["cpu_cores"]).To(Equal(16))
+			snapshot := device(42)
+			Expect(snapshot.Status).To(Equal("staged"))
+			Expect(snapshot.CustomFields["osac_instance_id"]).To(BeNil())
+			Expect(snapshot.CustomFields["cpu_cores"]).To(BeNumerically("==", 16))
 			Expect(bmhExistsInNS(netboxTestNS, hostname)).To(BeFalse())
 
 			secret := &corev1.Secret{}
 			err = k8sClient.Get(ctx, types.NamespacedName{Name: baremetalhost.CredentialsSecretName(hostname), Namespace: netboxTestNS}, secret)
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
 
-			patches := mock.RequestsFor(http.MethodPatch, "/api/dcim/devices/42/")
+			patches := requestsFor(http.MethodPatch, "/api/dcim/devices/42/")
 			patchCount := len(patches)
 			Expect(patchCount).To(Equal(2))
 			Expect(patches[1].IfMatch).NotTo(BeEmpty())
@@ -270,7 +303,7 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 		})
 
 		It("retries host preparation without losing the NetBox claim (TC-INT-003)", func() {
-			mock.AddDevice(42, "staged", netboxDeviceFields(16))
+			configure(netboxmock.Device{ID: 42, Status: "staged", CustomFields: netboxDeviceFields(16)})
 
 			// A foreign BMH with the generated name makes CreateBMH fail after the
 			// claim PATCH has already succeeded.
@@ -287,7 +320,7 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			Expect(k8sClient.Create(ctx, foreign)).To(Succeed())
 
 			reconciler := newNetBoxReconciler(server, newNetBoxCredentialsReader(42))
-			createNetBoxBMI(bmiName, map[string]string{"cpu_cores": "16"})
+			createNetBoxBMI(bmiName, selector)
 
 			// Finalizer and selection.
 			reconcileInNS(reconciler, netboxTestNS, bmiName, 2)
@@ -302,9 +335,9 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			Expect(bmi.Spec.ExternalHostID).To(Equal(netboxTestNS + "/" + hostname))
 			Expect(bmi.Spec.HostClass).To(BeEmpty())
 
-			device := mock.Device(42)
-			Expect(device.Status).To(Equal("active"))
-			Expect(device.CustomFields["osac_instance_id"]).To(Equal(string(bmi.UID)))
+			snapshot := device(42)
+			Expect(snapshot.Status).To(Equal("active"))
+			Expect(snapshot.CustomFields["osac_instance_id"]).To(Equal(string(bmi.UID)))
 
 			foreignBMH := netboxBMH(hostname)
 			Expect(foreignBMH.Spec.ConsumerRef).NotTo(BeNil())
@@ -314,14 +347,14 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			// reselecting or releasing the claim.
 			Expect(k8sClient.Delete(ctx, foreign)).To(Succeed())
 			reconcileInNS(reconciler, netboxTestNS, bmiName, 1)
-			searchCount := len(mock.RequestsFor(http.MethodGet, "/api/dcim/devices/"))
+			searchCount := len(requestsFor(http.MethodGet, "/api/dcim/devices/"))
 			Expect(searchCount).To(Equal(1))
-			retryPatchCount := len(mock.RequestsFor(http.MethodPatch, "/api/dcim/devices/42/"))
+			retryPatchCount := len(requestsFor(http.MethodPatch, "/api/dcim/devices/42/"))
 			Expect(retryPatchCount).To(Equal(1))
 			claimedBMH := netboxBMH(hostname)
 			Expect(claimedBMH.Spec.ConsumerRef).NotTo(BeNil())
 			Expect(claimedBMH.Spec.ConsumerRef.Name).To(Equal(string(bmi.UID)))
-			Expect(mock.Device(42).CustomFields["osac_instance_id"]).To(Equal(string(bmi.UID)))
+			Expect(device(42).CustomFields["osac_instance_id"]).To(Equal(string(bmi.UID)))
 
 			markBMHReadyInNS(netboxTestNS, hostname)
 			reconcileInNS(reconciler, netboxTestNS, bmiName, 1)
@@ -332,8 +365,8 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 			reconcileInNS(reconciler, netboxTestNS, bmiName, 2)
 			err = k8sClient.Get(ctx, types.NamespacedName{Name: bmiName, Namespace: netboxTestNS}, &v1alpha1.BareMetalInstance{})
 			Expect(apierrors.IsNotFound(err)).To(BeTrue())
-			Expect(mock.Device(42).Status).To(Equal("staged"))
-			Expect(mock.Device(42).CustomFields["osac_instance_id"]).To(BeNil())
+			Expect(device(42).Status).To(Equal("staged"))
+			Expect(device(42).CustomFields["osac_instance_id"]).To(BeNil())
 			Expect(bmhExistsInNS(netboxTestNS, hostname)).To(BeFalse())
 		})
 	})

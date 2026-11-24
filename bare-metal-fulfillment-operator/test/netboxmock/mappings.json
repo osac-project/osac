@@ -1,0 +1,192 @@
+{
+  "mappings": [
+    {
+      "name": "seed",
+      "request": {
+        "method": "POST",
+        "urlPathPattern": "/__fixture/devices/[0-9]+"
+      },
+      "response": {
+        "status": 204
+      },
+      "serveEventListeners": [
+        {
+          "name": "recordState",
+          "parameters": {
+            "context": "netbox-device-{{request.pathSegments.[2]}}",
+            "state": {
+              "document": "{{{request.body}}}",
+              "version": "0"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "list",
+      "request": {
+        "method": "GET",
+        "urlPath": "/api/dcim/devices/"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "transformers": [
+          "response-template"
+        ]
+      }
+    },
+    {
+      "name": "interfaces",
+      "request": {
+        "method": "GET",
+        "urlPath": "/api/dcim/interfaces/"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "jsonBody": {
+          "count": 0,
+          "next": null,
+          "previous": null,
+          "results": []
+        }
+      }
+    },
+    {
+      "name": "get",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/api/dcim/devices/[0-9]+/",
+        "customMatcher": {
+          "name": "state-matcher",
+          "parameters": {
+            "hasContext": "netbox-device-{{request.pathSegments.[3]}}"
+          }
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json",
+          "ETag": "\"v{{state context=(arrayJoin '' 'netbox-device-' request.pathSegments.[3]) property='version'}}\""
+        },
+        "transformers": [
+          "response-template"
+        ],
+        "body": "{{{state context=(arrayJoin '' 'netbox-device-' request.pathSegments.[3]) property='document'}}}"
+      }
+    },
+    {
+      "name": "patch",
+      "priority": 1,
+      "request": {
+        "method": "PATCH",
+        "urlPathPattern": "/api/dcim/devices/[0-9]+/",
+        "headers": {
+          "If-Match": {
+            "matches": "\"v[0-9]+\""
+          }
+        },
+        "customMatcher": {
+          "name": "state-matcher",
+          "parameters": {
+            "hasContext": "netbox-device-{{request.pathSegments.[3]}}",
+            "property": {
+              "version": {
+                "equalTo": "{{regexExtract request.headers.[If-Match] '[0-9]+' default='-1'}}"
+              }
+            }
+          }
+        },
+        "bodyPatterns": [
+          {
+            "matchesJsonSchema": {
+              "type": "object",
+              "required": [
+                "status",
+                "custom_fields"
+              ],
+              "properties": {
+                "status": {
+                  "enum": [
+                    "active",
+                    "staged"
+                  ]
+                },
+                "custom_fields": {
+                  "type": "object",
+                  "required": [
+                    "osac_instance_id"
+                  ],
+                  "properties": {
+                    "osac_instance_id": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json",
+          "ETag": "\"v{{math (state context=(arrayJoin '' 'netbox-device-' request.pathSegments.[3]) property='version') '+' 1}}\""
+        },
+        "transformers": [
+          "response-template"
+        ]
+      },
+      "serveEventListeners": [
+        {
+          "name": "recordState",
+          "parameters": {
+            "context": "netbox-device-{{request.pathSegments.[3]}}",
+            "state": {
+              "document": "{{{response.body}}}",
+              "version": "{{math (state context=(arrayJoin '' 'netbox-device-' request.pathSegments.[3]) property='version') '+' 1}}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "stale",
+      "priority": 10,
+      "request": {
+        "method": "PATCH",
+        "urlPathPattern": "/api/dcim/devices/[0-9]+/",
+        "customMatcher": {
+          "name": "state-matcher",
+          "parameters": {
+            "hasContext": "netbox-device-{{request.pathSegments.[3]}}"
+          }
+        }
+      },
+      "response": {
+        "status": 412
+      }
+    },
+    {
+      "name": "unauthorized",
+      "priority": 10,
+      "request": {
+        "method": "ANY",
+        "urlPathPattern": "/api/.*"
+      },
+      "response": {
+        "status": 401
+      }
+    }
+  ]
+}

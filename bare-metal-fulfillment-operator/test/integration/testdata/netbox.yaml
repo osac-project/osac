@@ -41,12 +41,17 @@ spec:
         osac.openshift.io/owner-reference: bmf-netbox-integration
     spec:
       automountServiceAccountToken: false
+      volumes:
+        - name: tmp
+          emptyDir: {}
       containers:
-        - name: netbox
-          image: localhost/bmf-netbox-fixture:it
+        - name: wiremock
+          image: localhost/osac-wiremock:it
           imagePullPolicy: Never
           securityContext:
             runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
             capabilities:
@@ -57,29 +62,21 @@ spec:
               containerPort: 8080
           resources:
             requests:
-              cpu: 10m
-              memory: 16Mi
+              cpu: 50m
+              memory: 128Mi
             limits:
-              cpu: 100m
-              memory: 64Mi
+              cpu: 500m
+              memory: 256Mi
           livenessProbe:
             tcpSocket:
               port: http
           readinessProbe:
             httpGet:
-              path: /fixture-state
+              path: /__admin/health
               port: http
-          env:
-            - name: NETBOX_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: bmf-netbox-fixture-token
-                  key: token
-            - name: NETBOX_ROTATED_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: bmf-netbox-fixture-rotated-token
-                  key: token
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
 ---
 apiVersion: v1
 kind: Service

@@ -1,0 +1,13 @@
+{{~val (array) assign='results'~}}
+{{~#each parameters.contexts~}}
+  {{~val (parseJson (state context=this property='document')) assign='device'~}}
+  {{~#if (and (eq device.status.value 'staged') (not device.custom_fields.osac_instance_id))~}}
+    {{~val (arrayAdd results device) assign='results'~}}
+  {{~/if~}}
+{{~/each~}}
+{
+  "count": {{size results}},
+  "next": null,
+  "previous": null,
+  "results": {{{toJson results}}}
+}

@@ -70,6 +70,7 @@ var _ = Describe("Disk images server", func() {
 	Describe("OBSOLETE filtering", func() {
 		var server *DiskImagesServer
 		var privateServer *PrivateDiskImagesServer
+		var createWithLifecycle func(string, privatev1.DiskImageLifecycle, privatev1.Architecture)
 
 		BeforeEach(func() {
 			var err error
@@ -87,18 +88,16 @@ var _ = Describe("Disk images server", func() {
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
-			createWithLifecycle := func(name string, lifecycle privatev1.DiskImageLifecycle) {
+			createWithLifecycle = func(name string, lifecycle privatev1.DiskImageLifecycle, architecture privatev1.Architecture) {
 				createResponse, createErr := privateServer.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
 					Object: privatev1.DiskImage_builder{
 						Metadata: privatev1.Metadata_builder{
 							Name: name,
 						}.Build(),
 						Spec: privatev1.DiskImageSpec_builder{
-							SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
-							SourceRef:  "quay.io/test:" + name,
-							Architecture: []privatev1.Architecture{
-								privatev1.Architecture_ARCHITECTURE_AMD64,
-							},
+							SourceType:   privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+							SourceRef:    "quay.io/test:" + name,
+							Architecture: []privatev1.Architecture{architecture},
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -135,9 +134,9 @@ var _ = Describe("Disk images server", func() {
 				Expect(updateErr).ToNot(HaveOccurred())
 			}
 
-			createWithLifecycle("image-available", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE)
-			createWithLifecycle("image-deprecated", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED)
-			createWithLifecycle("image-obsolete", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE)
+			createWithLifecycle("image-available", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, privatev1.Architecture_ARCHITECTURE_AMD64)
+			createWithLifecycle("image-deprecated", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_DEPRECATED, privatev1.Architecture_ARCHITECTURE_AMD64)
+			createWithLifecycle("image-obsolete", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_OBSOLETE, privatev1.Architecture_ARCHITECTURE_AMD64)
 		})
 
 		It("Filters by architecture", func() {
@@ -161,6 +160,18 @@ var _ = Describe("Disk images server", func() {
 				names[i] = item.GetMetadata().GetName()
 			}
 			Expect(names).To(ConsistOf("image-available", "image-deprecated"))
+
+			createWithLifecycle("image-arm64", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, privatev1.Architecture_ARCHITECTURE_ARM64)
+			createWithLifecycle("image-s390x", privatev1.DiskImageLifecycle_DISK_IMAGE_LIFECYCLE_AVAILABLE, privatev1.Architecture_ARCHITECTURE_S390X)
+			request := publicv1.DiskImagesListRequest_builder{}.Build()
+			request.SetFilter("2 in this.spec.architecture || 3 in this.spec.architecture")
+			response, err := server.List(ctx, request)
+			Expect(err).ToNot(HaveOccurred())
+			names = make([]string, len(response.GetItems()))
+			for i, item := range response.GetItems() {
+				names[i] = item.GetMetadata().GetName()
+			}
+			Expect(names).To(ConsistOf("image-arm64", "image-s390x"))
 		})
 
 		DescribeTable("Rejects invalid architecture filters", func(filter, message string) {

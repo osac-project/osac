@@ -213,9 +213,27 @@ is_csi if {
 }
 
 # Reader restrictions apply only when no other role grants access.
+default is_cloud_provider_admin = false
+is_cloud_provider_admin if {
+  input.auth.identity.authnMethod == "jwt"
+  some role in subject_realm_roles
+  role == "cloud-provider-admin"
+}
+
+# Cloud Provider Admins can use the provider-wide model-management API.
+models_admin_methods := {
+  "/osac.public.v1.Models/Create",
+  "/osac.public.v1.Models/Delete",
+  "/osac.public.v1.Models/Get",
+  "/osac.public.v1.Models/List",
+  "/osac.public.v1.Models/ListPlacementClusters",
+  "/osac.public.v1.Models/Update",
+}
+
 default is_reader_only = false
 is_reader_only if {
   is_reader
+  not is_cloud_provider_admin
   not is_admin
   not is_tenant_admin
   not is_tenant_idp_manager
@@ -225,6 +243,7 @@ is_reader_only if {
 # Check if an account is a regular client (no admin, tenant management, or CSI roles):
 default is_client = false
 is_client if {
+  not is_cloud_provider_admin
   not is_admin
   not is_tenant_admin
   not is_tenant_idp_manager
@@ -470,6 +489,11 @@ managed_service_account_grant if {
 legacy_allow if {
   has_client_permissions
   grpc_method in client_permission_methods
+}
+
+legacy_allow if {
+  is_cloud_provider_admin
+  grpc_method in models_admin_methods
 }
 
 # Reader access is the reviewed read-only subset of existing client grants.

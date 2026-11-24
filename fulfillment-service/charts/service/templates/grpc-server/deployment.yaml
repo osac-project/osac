@@ -67,6 +67,14 @@ spec:
           items:
           - key: tls.crt
             path: tls.crt
+      {{- if .Values.aiGrid.git.token.secretName }}
+      - name: ai-grid-git-token
+        secret:
+          secretName: {{ .Values.aiGrid.git.token.secretName }}
+          items:
+          - key: {{ .Values.aiGrid.git.token.secretKey }}
+            path: token
+      {{- end }}
       - name: vault-credentials
         projected:
           sources:
@@ -171,6 +179,19 @@ spec:
       - name: grpc-server
         image: {{ .Values.images.service.repository }}:{{ .Values.images.service.tag }}
         imagePullPolicy: {{ .Values.images.service.pullPolicy }}
+        env:
+        {{- if .Values.aiGrid.git.url }}
+        - name: AI_GRID_GIT_URL
+          value: {{ .Values.aiGrid.git.url | quote }}
+        {{- end }}
+        - name: AI_GRID_GIT_BRANCH
+          value: {{ .Values.aiGrid.git.branch | quote }}
+        - name: AI_GRID_GIT_READ_MAX_AGE
+          value: {{ .Values.aiGrid.git.readMaxAge | quote }}
+        {{- if .Values.aiGrid.git.token.secretName }}
+        - name: AI_GRID_GIT_TOKEN_FILE
+          value: /etc/fulfillment-grpc-server/ai-grid-git/token
+        {{- end }}
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
@@ -212,6 +233,11 @@ spec:
         - name: token-encryption-cert
           mountPath: /etc/fulfillment-token-encryption
           readOnly: true
+        {{- if .Values.aiGrid.git.token.secretName }}
+        - name: ai-grid-git-token
+          mountPath: /etc/fulfillment-grpc-server/ai-grid-git
+          readOnly: true
+        {{- end }}
         command:
         {{ if .Values.debug }}
         - dlv

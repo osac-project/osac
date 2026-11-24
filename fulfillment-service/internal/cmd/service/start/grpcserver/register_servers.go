@@ -402,6 +402,19 @@ func RegisterResourceServers(ctx context.Context, registrar grpc.ServiceRegistra
 		return nil, fmt.Errorf("failed to create hub client provider: %w", err)
 	}
 
+	if deps.Services.MaaS {
+		deps.Logger.InfoContext(ctx, "Creating models server")
+		modelsServer, err := servers.NewModelsServer().
+			SetLogger(deps.Logger).
+			SetHubsServer(privateHubsServer).
+			SetHubClientProvider(hubClientProvider).
+			Build()
+		if err != nil {
+			return nil, fmt.Errorf("failed to create models server: %w", err)
+		}
+		publicv1.RegisterModelsServer(registrar, modelsServer)
+	}
+
 	hubSecretFetcher, err := servers.NewHubSecretFetcher().
 		SetHubClientProvider(hubClientProvider).
 		Build()

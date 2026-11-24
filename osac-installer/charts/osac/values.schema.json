@@ -883,6 +883,71 @@
           ],
           "default": "openshift"
         },
+        "aiGrid": {
+          "type": "object",
+          "description": "AI Grid model catalog integration",
+          "properties": {
+            "git": {
+              "type": "object",
+              "description": "Git repository used to store model desired state",
+              "properties": {
+                "url": {
+                  "type": "string",
+                  "default": "",
+                  "description": "HTTPS or file URL of the AI Grid model catalog repository"
+                },
+                "branch": {
+                  "type": "string",
+                  "minLength": 1,
+                  "default": "main",
+                  "description": "Catalog branch to read and update"
+                },
+                "readMaxAge": {
+                  "type": "string",
+                  "pattern": "^(0|([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h)))+$",
+                  "default": "10s",
+                  "description": "Maximum age of the last Git fetch before a read fetches again"
+                },
+                "token": {
+                  "type": "object",
+                  "description": "Optional Git HTTPS token from an existing Secret in the release namespace",
+                  "properties": {
+                    "secretName": {
+                      "type": "string",
+                      "default": "",
+                      "description": "Secret mounted for Git authentication; the token value is never stored in Helm values"
+                    },
+                    "secretKey": {
+                      "type": "string",
+                      "minLength": 1,
+                      "default": "token",
+                      "description": "Secret key containing the Git token"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "allOf": [{
+                "if": {
+                  "properties": {
+                    "token": {
+                      "properties": {"secretName": {"minLength": 1}},
+                      "required": ["secretName"]
+                    }
+                  },
+                  "required": ["token"]
+                },
+                "then": {
+                  "properties": {
+                    "url": {"minLength": 1, "pattern": "^https://"}
+                  }
+                }
+              }],
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
         "images": {
           "type": "object",
           "properties": {

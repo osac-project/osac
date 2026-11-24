@@ -931,4 +931,47 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				[]any{"cloud-provider-reader"}, []any{}, false),
 		)
 	})
+
+	Describe("Cloud Provider Admin model authorization", func() {
+		It("allows model management only to the Cloud Provider Admin role", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().AddEmergencyServiceAccounts([]string{}).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			makeUser := func(roles []any) *AuthContext {
+				return &AuthContext{
+					Username:     "model-admin-test",
+					AuthMethod:   "jwt",
+					Organization: []any{"acme-corp"},
+					RealmAccess:  map[string]any{"roles": roles},
+					Tenant:       "acme-corp",
+				}
+			}
+			admin := makeUser([]any{"cloud-provider-admin"})
+			ordinaryUser := makeUser([]any{"user"})
+			tenantAdmin := makeUser([]any{"tenant-admin"})
+			methods := []string{
+				"/osac.public.v1.Models/Create",
+				"/osac.public.v1.Models/Delete",
+				"/osac.public.v1.Models/Get",
+				"/osac.public.v1.Models/List",
+				"/osac.public.v1.Models/ListPlacementClusters",
+				"/osac.public.v1.Models/Update",
+			}
+
+			for _, method := range methods {
+				decision, err := evaluator.Evaluate(ctx, admin, method)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(BeTrue(), "CPA on %q", method)
+
+				for role, authContext := range map[string]*AuthContext{
+					"ordinary user": ordinaryUser,
+					"tenant admin":  tenantAdmin,
+				} {
+					decision, err := evaluator.Evaluate(ctx, authContext, method)
+					Expect(err).ToNot(HaveOccurred())
+					Expect(decision.Allowed).To(BeFalse(), "%s on %q", role, method)
+				}
+			}
+		})
+	})
 })

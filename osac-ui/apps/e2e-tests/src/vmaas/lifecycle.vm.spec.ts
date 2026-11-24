@@ -1,7 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { access } from 'node:fs/promises';
 
-import { tenantNameOrSkip, vmTestName } from './test_data';
 import { getComputeInstanceLastRestartedAt } from '../../../../libs/osac-cli/src/compute_instance';
 import { openAndLogin } from '../../../../libs/test-utils/src/general/open_and_login';
 import { logProgress, testStep } from '../../../../libs/test-utils/src/general/test_progress';
@@ -17,6 +16,7 @@ import {
   waitForVmDetailsStatus,
   waitForVmToBeRunning,
 } from '../../../../libs/test-utils/src/vms.page';
+import { tenantNameOrSkip, vmTestName } from '../shared/test_data';
 
 const runningButtons = { start: false, stop: true, restart: true };
 const stoppedButtons = { start: true, stop: false, restart: false };

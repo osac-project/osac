@@ -24,7 +24,7 @@ import {
   instanceTypeTestData,
   resizeCpuUpMemoryDownInstanceTypeTestData,
   resizeInstanceTypeTestData,
-} from '../test_data';
+} from '../../shared/test_data';
 
 export const restartRequiredCondition = 'RESTART REQUIRED';
 export const restartInProgressCondition = 'RESTART IN PROGRESS';

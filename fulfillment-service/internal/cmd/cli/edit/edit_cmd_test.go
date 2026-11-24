@@ -102,7 +102,6 @@ var _ = Describe("Edit command", func() {
 			SetLogger(logger).
 			SetConnection(conn).
 			AddPackage("osac.public.v1", 0).
-			AddPackage("osac.private.v1", 0).
 			Build()
 		Expect(err).ToNot(HaveOccurred())
 
@@ -120,7 +119,13 @@ var _ = Describe("Edit command", func() {
 		BeforeEach(func() {
 			requests = make(chan *privatev1.TenantBillingAssignmentsUpdateRequest, 1)
 			privatev1.RegisterTenantBillingAssignmentsServer(server.Registrar(), &captureAssignmentUpdate{requests: requests})
-			helper = reflectionHelper.Lookup("tenantbillingassignment")
+			billingHelper, err := reflection.NewHelper().
+				SetLogger(logger).
+				SetConnection(conn).
+				AddPackage("osac.private.v1", 0).
+				Build()
+			Expect(err).NotTo(HaveOccurred())
+			helper = billingHelper.Lookup("tenantbillingassignment")
 			Expect(helper).NotTo(BeNil())
 		})
 

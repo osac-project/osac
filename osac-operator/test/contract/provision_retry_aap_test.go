@@ -297,7 +297,7 @@ func runProvisionScenario(t *testing.T, h provisionAAPHTTP, scenario string) {
 		}
 		return out
 	}
-	first := launchProvisionAttempt(t, ctx, run, 1)
+	first := launchProvisionAttempt(t, ctx, clock, run, 1)
 	job := waitProvisionAttempt(t, ctx, h, api, first, runID, scenario, 1)
 	wantStatus := "failed"
 	wantReason, wantMessage := "InvalidResult", "Internal error"
@@ -329,7 +329,7 @@ func runProvisionScenario(t *testing.T, h provisionAAPHTTP, scenario string) {
 	checkpoint := failed.LastFailure.DeepCopy()
 	clock.Step(failed.RequeueAfter)
 	req.Vars["fixture_attempt"] = 2
-	second := launchProvisionAttempt(t, ctx, run, 2)
+	second := launchProvisionAttempt(t, ctx, clock, run, 2)
 	stored := &v1alpha1.ComputeInstance{}
 	if err := kube.Get(ctx, client.ObjectKeyFromObject(instance), stored); err != nil {
 		t.Fatal("read retry reservation")
@@ -445,11 +445,12 @@ func (h provisionAAPHTTP) cleanup(
 }
 
 func launchProvisionAttempt(
-	t *testing.T, ctx context.Context, run func() networktask.Outcome, attempt int,
+	t *testing.T, ctx context.Context, clock *clocktesting.FakeClock, run func() networktask.Outcome, attempt int,
 ) networktask.Outcome {
 	t.Helper()
 	deadline, stop := context.WithTimeout(ctx, 5*time.Minute)
 	defer stop()
+	lastPoll := time.Now()
 	out := run()
 	for out.Entry.JobID == "" {
 		select {
@@ -457,6 +458,9 @@ func launchProvisionAttempt(
 			t.Fatal("AAP launch/label recovery exceeded deadline")
 		case <-time.After(time.Second):
 		}
+		now := time.Now()
+		clock.Step(now.Sub(lastPoll))
+		lastPoll = now
 		out = run()
 	}
 	if out.Entry.State != v1alpha1.NetworkJobStateRunning || out.Entry.Attempt != int32(attempt) {
@@ -480,4 +484,36 @@ func waitProvisionAttempt(
 		t.Fatal(err)
 	}
 	return job
+}
+
+func TestLaunchProvisionAttemptAdvancesRecoveryClock(t *testing.T) {
+	for _, recoverLaunch := range []bool{false, true} {
+		t.Run(fmt.Sprintf("recovery=%t", recoverLaunch), func(t *testing.T) {
+			// Preserve an explicit retry-backoff advance before launch polling.
+			start := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC).Add(2 * time.Minute)
+			clock := clocktesting.NewFakeClock(start)
+			calls := 0
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			run := func() networktask.Outcome {
+				calls++
+				entry := v1alpha1.NetworkJobStatus{State: v1alpha1.NetworkJobStateRunning, Attempt: 2}
+				if recoverLaunch && calls == 1 {
+					return networktask.Outcome{Entry: entry}
+				}
+				if recoverLaunch && clock.Since(start) < time.Second {
+					t.Fatal("launch recovery did not advance the engine clock by elapsed real time")
+				}
+				entry.JobID = "101"
+				return networktask.Outcome{Entry: entry}
+			}
+			out := launchProvisionAttempt(t, ctx, clock, run, 2)
+			if out.Entry.JobID != "101" {
+				t.Fatal("launch recovery lost the job")
+			}
+			if !recoverLaunch && (!clock.Now().Equal(start) || calls != 1) {
+				t.Fatal("immediate launch changed the controlled clock or polled again")
+			}
+		})
+	}
 }

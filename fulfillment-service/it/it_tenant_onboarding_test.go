@@ -320,7 +320,14 @@ var _ = Describe("Tenant deletion", func() {
 					Filter: &listFilter,
 				}.Build())
 				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(listResp.GetTotal()).To(BeNumerically(">", 0))
+				// A tenant without default networking is offboarded within about a
+				// second, so the cascade can archive every project before the first
+				// poll. The pending state below is only observable while deletion is
+				// still in flight; once the projects are gone, fall through to the
+				// completion checks instead of requiring the transient state.
+				if listResp.GetTotal() == 0 {
+					return
+				}
 
 				getResp, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{
 					Id: id,

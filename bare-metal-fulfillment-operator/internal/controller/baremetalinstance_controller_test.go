@@ -3107,7 +3107,7 @@ var _ = Describe("BareMetalInstance network offboard shutdown (OSAC-1448)", func
 		Expect(controllerutil.ContainsFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer)).To(BeTrue())
 	})
 
-	It("skips offboarding when no attachment create was attempted", func() {
+	It("powers off before releasing networking ownership when the attachment is absent", func() {
 		reconciler.NetworkingEnabled = true
 		bareMetalInstance.Name = "offboard-no-attachment-test-bmi"
 		controllerutil.AddFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer)
@@ -3116,37 +3116,40 @@ var _ = Describe("BareMetalInstance network offboard shutdown (OSAC-1448)", func
 			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, bareMetalInstance))).To(Succeed())
 		}()
 
+		mockMgmtClient.getPowerStateFunc = func(_ context.Context, _ string) (*management.PowerStatus, error) {
+			return &management.PowerStatus{State: management.PowerOn, IsTransitioning: false}, nil
+		}
+
 		result, err := reconciler.handleDeletion(ctx, bareMetalInstance)
 
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result).To(Equal(ctrl.Result{}))
-		Expect(setPowerCallCount).To(BeZero())
-		Expect(bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkOffboardComplete)).To(BeNil())
-		Expect(controllerutil.ContainsFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer)).To(BeFalse())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(setPowerCallCount).To(Equal(1))
+		Expect(setPowerTarget).To(Equal(management.PowerOff))
+		Expect(bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkOffboardComplete)).NotTo(BeNil())
+		Expect(controllerutil.ContainsFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer)).
+			To(BeTrue(), "networking finalizer remains until offboard completes")
 	})
 
-	It("does not enter offboard shutdown when networking provisioning is disabled", func() {
+	It("still offboards when networking provisioning is disabled but cleanup is owned", func() {
 		Expect(reconciler.NetworkingEnabled).To(BeFalse(), "precondition: networking must be disabled")
+		bareMetalInstance.Name = "offboard-disabled-networking-bmi"
+		controllerutil.AddFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer)
+		Expect(k8sClient.Create(ctx, bareMetalInstance)).To(Succeed())
+		defer func() {
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, bareMetalInstance))).To(Succeed())
+		}()
 
 		mockMgmtClient.getPowerStateFunc = func(_ context.Context, _ string) (*management.PowerStatus, error) {
 			return &management.PowerStatus{State: management.PowerOn, IsTransitioning: false}, nil
 		}
 
-		// The handleDeletion guard: NetworkAttachments > 0 && ManagementClient != nil && networking enabled.
-		// With networking disabled, the offboard shutdown block is skipped entirely.
-		// Verify by checking that even with a powered-on host, no power-off is triggered.
-		Expect(bareMetalInstance.Spec.NetworkAttachments).ToNot(BeEmpty(),
-			"precondition: BMI must have network attachments")
-		Expect(reconciler.ManagementClient).NotTo(BeNil(),
-			"precondition: management client must be set")
+		result, err := reconciler.handleDeletion(ctx, bareMetalInstance)
 
-		// Directly verify the guard condition that was changed
-		shouldRunOffboard := len(bareMetalInstance.Spec.NetworkAttachments) > 0 &&
-			reconciler.ManagementClient != nil &&
-			reconciler.NetworkingEnabled
-		Expect(shouldRunOffboard).To(BeFalse(),
-			"offboard shutdown guard must be false when networking is disabled")
-		Expect(setPowerCallCount).To(Equal(0), "must not power off when networking is disabled")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		Expect(setPowerCallCount).To(Equal(1), "owned networking cleanup still powers off when the flag is off")
+		Expect(setPowerTarget).To(Equal(management.PowerOff))
 	})
 })
 

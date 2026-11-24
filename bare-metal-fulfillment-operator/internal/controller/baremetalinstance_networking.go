@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"net"
 	"strings"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -48,12 +47,6 @@ const (
 
 	networkAttachmentCreateRejectedMessage = "Network attachment create was rejected"
 	networkAttachmentCleanupMessage        = "Waiting for network attachment cleanup"
-	networkAttachmentCreatingMessage       = "Creating the network attachment"
-
-	// networkAttachmentCreateVisibilityTimeout bounds how long deletion waits for
-	// a Create that was requested but not yet observed. After this window the
-	// create is treated as never committed so the host can be released.
-	networkAttachmentCreateVisibilityTimeout = 2 * time.Minute
 )
 
 // errSelectedPortMACUnavailable marks a selected port whose MAC address the
@@ -140,20 +133,6 @@ func networkAttachmentAcquired(bmi *v1alpha1.BareMetalInstance) bool {
 	default:
 		return false
 	}
-}
-
-// networkAttachmentMayExist reports that deletion must keep ownership because
-// a Create was requested and may still produce an attachment. A recorded MAC
-// alone is not enough: MAC is persisted before any Create is sent.
-func networkAttachmentMayExist(bmi *v1alpha1.BareMetalInstance) bool {
-	ready := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-	if ready == nil || ready.Reason != v1alpha1.HostConditionReasonProgressing {
-		return false
-	}
-	if ready.LastTransitionTime.IsZero() {
-		return true
-	}
-	return time.Now().Before(ready.LastTransitionTime.Add(networkAttachmentCreateVisibilityTimeout))
 }
 
 func setNetworkingProvisioningDisabled(bmi *v1alpha1.BareMetalInstance) {
@@ -341,28 +320,18 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkAttachmentCreation(
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		// Persist the MAC before Create so a retry does not re-query inventory.
+		// Record the MAC on the in-memory status, then Create in this same pass.
 		status.MACAddress = mac
-		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
 	}
 	ready := bmi.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
 	if ready != nil && ready.Reason == v1alpha1.HostConditionReasonNetworkAttachmentFailed &&
 		ready.ObservedGeneration == bmi.Generation {
 		return ctrl.Result{}, nil
 	}
-	// Persist create intent before Create so deletion can tell "never sent"
-	// (MAC only) from "create outcome unknown" (Progressing), even when Create
-	// returns a transient error after the request may have been accepted.
-	if ready == nil || ready.Reason != v1alpha1.HostConditionReasonProgressing {
-		setNetworkAttachmentsReady(bmi, metav1.ConditionFalse, v1alpha1.HostConditionReasonProgressing,
-			networkAttachmentCreatingMessage)
-		return ctrl.Result{RequeueAfter: r.ProvisionPollIntervalDuration}, nil
-	}
 	na := &opv1alpha1.NetworkAttachment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        key.Name,
 			Namespace:   key.Namespace,
-			Finalizers:  []string{BareMetalInstanceNetworkingFinalizer},
 			Annotations: map[string]string{tenantAnnotation: tenant},
 		},
 		Spec: opv1alpha1.NetworkAttachmentSpec{
@@ -378,6 +347,12 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkAttachmentCreation(
 			},
 			SecurityGroups: attachment.SecurityGroupRefs,
 		},
+	}
+	// OwnerReference lets Kubernetes GC remove a late-created orphan after the
+	// BMI is gone. Do not put BMF's finalizer on the NA: that finalizer is what
+	// stuck orphans when BMI networking ownership had already been released.
+	if err := controllerutil.SetControllerReference(bmi, na, r.Scheme); err != nil {
+		return ctrl.Result{}, fmt.Errorf("set NetworkAttachment owner reference: %w", err)
 	}
 	if err := r.Create(ctx, na); err != nil && !apierrors.IsAlreadyExists(err) {
 		if apierrors.IsBadRequest(err) || apierrors.IsInvalid(err) {
@@ -423,8 +398,10 @@ func (r *BareMetalInstanceReconciler) failSelectedPortMAC(
 }
 
 // reconcileNetworkingDeletion deletes the attachment observed this pass and
-// waits for cleanup. NotFound releases ownership only when create cannot still
-// produce an attachment; otherwise ownership is retained for a later pass.
+// waits until it is gone. NotFound finishes BMI network ownership. Late
+// orphans are GC'd via the BMI ownerReference once the BMI is removed; the
+// NetworkAttachment controller must not fabric-apply against a deleting or
+// missing BMI.
 func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 	ctx context.Context,
 	bareMetalInstance *v1alpha1.BareMetalInstance,
@@ -436,42 +413,30 @@ func (r *BareMetalInstanceReconciler) reconcileNetworkingDeletion(
 		return ctrl.Result{}, true, nil
 	}
 
-	if observedAttachment != nil {
-		key := client.ObjectKeyFromObject(observedAttachment)
-		na := observedAttachment
-		if na.DeletionTimestamp.IsZero() {
-			log.Info("Deleting NetworkAttachment", "networkAttachment", key.Name)
-			if err := r.Delete(ctx, na); err != nil && !apierrors.IsNotFound(err) {
-				return ctrl.Result{}, false, fmt.Errorf("delete NetworkAttachment %s: %w", key.Name, err)
-			}
-		} else if len(na.Finalizers) == 1 && na.Finalizers[0] == BareMetalInstanceNetworkingFinalizer {
-			ready := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-			if ready == nil || ready.Reason != v1alpha1.HostConditionReasonNetworkDetaching {
-				setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse,
-					v1alpha1.HostConditionReasonNetworkDetaching, networkAttachmentCleanupMessage)
-				return ctrl.Result{RequeueAfter: networkRetryInterval}, false, nil
-			}
-			// The networking controller has finished the Fabric cleanup.
-			base := na.DeepCopy()
-			controllerutil.RemoveFinalizer(na, BareMetalInstanceNetworkingFinalizer)
-			if err := r.Patch(ctx, na, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil &&
-				!apierrors.IsNotFound(err) {
-				return ctrl.Result{}, false, fmt.Errorf("remove finalizer from NetworkAttachment %s: %w", key.Name, err)
-			}
+	if observedAttachment == nil {
+		return r.removeNetworkingFinalizer(ctx, bareMetalInstance)
+	}
+
+	key := client.ObjectKeyFromObject(observedAttachment)
+	na := observedAttachment
+	if na.DeletionTimestamp.IsZero() {
+		log.Info("Deleting NetworkAttachment", "networkAttachment", key.Name)
+		if err := r.Delete(ctx, na); err != nil && !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, false, fmt.Errorf("delete NetworkAttachment %s: %w", key.Name, err)
 		}
-		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse,
-			v1alpha1.HostConditionReasonNetworkDetaching, networkAttachmentCleanupMessage)
-		return ctrl.Result{RequeueAfter: networkRetryInterval}, false, nil
+	} else if controllerutil.ContainsFinalizer(na, BareMetalInstanceNetworkingFinalizer) {
+		// Legacy NAs created with a BMF finalizer: release it so the object can
+		// disappear after (or without) the networking controller's finalizer.
+		base := na.DeepCopy()
+		controllerutil.RemoveFinalizer(na, BareMetalInstanceNetworkingFinalizer)
+		if err := r.Patch(ctx, na, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})); err != nil &&
+			!apierrors.IsNotFound(err) {
+			return ctrl.Result{}, false, fmt.Errorf("remove finalizer from NetworkAttachment %s: %w", key.Name, err)
+		}
 	}
-
-	if networkAttachmentMayExist(bareMetalInstance) {
-		// Keep Progressing so LastTransitionTime (visibility deadline) is stable.
-		setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse,
-			v1alpha1.HostConditionReasonProgressing, networkAttachmentCleanupMessage)
-		return ctrl.Result{RequeueAfter: networkRetryInterval}, false, nil
-	}
-
-	return r.removeNetworkingFinalizer(ctx, bareMetalInstance)
+	setNetworkAttachmentsReady(bareMetalInstance, metav1.ConditionFalse,
+		v1alpha1.HostConditionReasonNetworkDetaching, networkAttachmentCleanupMessage)
+	return ctrl.Result{RequeueAfter: networkRetryInterval}, false, nil
 }
 
 // removeNetworkingFinalizer completes network cleanup of a BareMetalInstance.

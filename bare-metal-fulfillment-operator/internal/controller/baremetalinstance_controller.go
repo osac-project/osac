@@ -1329,12 +1329,18 @@ func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMe
 	var err error
 
 	// Read the attachment once and share it with shutdown and cleanup. NotFound
-	// finishes ownership only when create cannot still produce an attachment.
+	// finishes network ownership so deletion can proceed. Late orphans are
+	// removed by ownerReference GC after the BMI is gone; the NetworkAttachment
+	// controller must not fabric-apply against a deleting or missing BMI.
 	observedAttachment, err := r.getNetworkAttachmentForDeletion(ctx, bareMetalInstance)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if observedAttachment != nil && bareMetalInstance.Spec.ExternalHostID != "" {
+	// Power off whenever networking cleanup is still owned and a host is
+	// assigned, even if the attachment Get returned NotFound (e.g. Create
+	// timed out). That avoids releasing the host while it is still on.
+	if controllerutil.ContainsFinalizer(bareMetalInstance, BareMetalInstanceNetworkingFinalizer) &&
+		bareMetalInstance.Spec.ExternalHostID != "" {
 		result, err = r.reconcileNetworkOffboardShutdown(ctx, bareMetalInstance)
 		if err != nil {
 			return result, err
@@ -1345,7 +1351,7 @@ func (r *BareMetalInstanceReconciler) handleDeletion(ctx context.Context, bareMe
 		}
 	}
 
-	// Delete the attachment only after an assigned host is confirmed off.
+	// Delete the attachment (if observed) only after an assigned host is off.
 	result, done, err = r.reconcileNetworkingDeletion(ctx, bareMetalInstance, observedAttachment)
 	if err != nil {
 		return result, err

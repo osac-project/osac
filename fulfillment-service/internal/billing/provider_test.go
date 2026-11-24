@@ -27,6 +27,9 @@ var _ = Describe("Provider", func() {
 		p := billing.NewProvider("", nil, nil)
 		Expect(p.IsConfigured()).To(BeFalse())
 		Expect(p.Key()).To(BeEmpty())
+		adapter, err := p.Adapter()
+		Expect(adapter).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
 	})
 
 	It("is configured when it has a key and an adapter", func() {
@@ -43,7 +46,11 @@ var _ = Describe("Provider", func() {
 		cause := &billing.Error{Reason: billing.ReasonUnavailable, Op: "load config"}
 		p := billing.NewProvider("m360", nil, cause)
 		Expect(p.IsConfigured()).To(BeTrue())
-		_, err := p.Adapter()
-		Expect(errors.Is(err, cause)).To(BeTrue())
+		adapter, err := p.Adapter()
+		Expect(adapter).To(BeNil())
+		var e *billing.Error
+		Expect(errors.As(err, &e)).To(BeTrue())
+		Expect(e).To(BeIdenticalTo(cause))
+		Expect(e.Reason).To(Equal(billing.ReasonUnavailable))
 	})
 })

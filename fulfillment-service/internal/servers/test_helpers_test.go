@@ -23,9 +23,35 @@ import (
 	clnt "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
+
+// commitSuiteTxFixtures commits the suite transaction — including the testTenant row it created — and
+// replaces ctx with a transaction-less context that still carries the transaction manager. The suite
+// installs a fresh database per spec, so committing cannot leak rows across specs. Catalog inventory
+// fills sweep in their own committed transaction, so fixture rows must be committed before a List
+// through the cache can see them.
+func commitSuiteTxFixtures() {
+	if suiteTx != nil {
+		ExpectWithOffset(1, suiteTx.End(ctx)).To(Succeed())
+		suiteTx = nil
+	}
+	ctx = database.TxManagerIntoContext(context.Background(), tm)
+}
+
+// seedCommittedCatalogFixtures commits the suite transaction and then seeds catalog rows inside an
+// independent committed transaction, so the inventory cache's sweep transaction — which never borrows
+// the suite transaction — can see them.
+func seedCommittedCatalogFixtures(seed func(context.Context)) {
+	commitSuiteTxFixtures()
+	_, err := database.WithNewTx(ctx, func(txCtx context.Context) (struct{}, error) {
+		seed(txCtx)
+		return struct{}{}, nil
+	})
+	ExpectWithOffset(1, err).ToNot(HaveOccurred())
+}
 
 // stubHubClientProvider is a test double for HubClientProvider that returns a fixed client.
 type stubHubClientProvider struct {

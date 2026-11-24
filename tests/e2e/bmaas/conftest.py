@@ -39,9 +39,10 @@ def bmi_instance_type(
 def inventory_backend(k8s_hub_client: K8sClient, namespace: str) -> Generator[InventoryBackend, None, None]:
     """Inventory backend selected by OSAC_INVENTORY_BACKEND (default metal3).
 
-    On netbox, NetBox connection settings come from the deployed BMF
-    configuration (Secrets in the OSAC namespace), with OSAC_NETBOX_* env
-    vars as debug overrides only.
+    On netbox:
+    - connection settings come from the deployed BMF configuration (Secrets
+      in the OSAC namespace),
+    - ``OSAC_NETBOX_*`` env vars are debug overrides only.
     """
     backend = make_inventory_backend(k8s=k8s_hub_client, namespace=namespace)
     yield backend
@@ -52,11 +53,12 @@ def inventory_backend(k8s_hub_client: K8sClient, namespace: str) -> Generator[In
 def inventory_hosts(inventory_backend: InventoryBackend) -> Iterator[None]:
     """Assert the pre-staged inventory has an available host.
 
-    Both backends stage their inventory before the suite starts — metal3
-    BMHs are enrolled by the lab/CI infrastructure (the netris Ansible
-    backend) or the platform admin; netbox devices are staged by the
-    provider reconcile (setup-virtual-netbox-devices.sh) — never by the
-    tests or the OSAC operators.
+    Both backends stage their inventory before the suite starts — never
+    the tests or the OSAC operators:
+    - metal3: BMHs enrolled by the lab/CI infrastructure (the netris
+      Ansible backend) or the platform admin.
+    - netbox: devices staged by the provider reconcile
+      (setup-virtual-netbox-devices.sh).
     """
     inventory_backend.ensure_available_hosts()
     yield

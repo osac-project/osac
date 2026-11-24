@@ -1942,11 +1942,11 @@ def wait_for_bmi_running(*, grpc: GRPCClient, bmi_id: str, retries: int = _BMI_R
 class HostRef:
     """A provisioning host: the BMH the inventory handed over to metal3.
 
-    On every inventory backend the BMI's externalHostID names the BMH once a
-    host is allocated (metal3: the pre-existing BMH; netbox: the
-    bare-metal-fulfillment operator derives ``netbox-<device-id>`` and
-    creates it on the fly), so provisioning assertions below run
-    identically on both.
+    On every inventory backend the BMI's externalHostID names the BMH once
+    a host is allocated, so the assertions below run identically on both:
+    - metal3: the pre-existing BMH.
+    - netbox: the bare-metal-fulfillment operator derives
+      ``netbox-<device-id>`` and creates it on the fly.
     """
 
     namespace: str
@@ -1956,9 +1956,12 @@ class HostRef:
 def wait_for_host_allocated(*, k8s: K8sClient, host: HostRef, expected_image_url: str | None = None) -> None:
     """Wait until the BMH is provisioned to a BMI and assert the allocation.
 
-    Bundles the BMH provisioning-state wait with the image, consumerRef, and
-    online assertions. ``expected_image_url`` compares the BMH's provisioned
-    image URL exactly; ``None`` only requires one to be set.
+    Bundles into one wait+assert pass:
+    - the BMH provisioning-state wait,
+    - the image URL (``expected_image_url`` compares exactly; ``None`` only
+      requires one to be set),
+    - consumerRef non-empty,
+    - online.
     """
     wait_for_bmh_provisioned(k8s=k8s, name=host.name, bmh_namespace=host.namespace)
 

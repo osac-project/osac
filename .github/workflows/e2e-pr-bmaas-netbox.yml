@@ -2,11 +2,13 @@
 # The BMaaS NetBox suite of a pull request, as a run of its own.
 #
 # What runs here: what e2e-pr-bmaas.yml does with the same arguments, plus
-# `inventory-backend: netbox` — nothing else. The decision of e2e-pr.yml
-# (osac-ci) starts it with workflow_dispatch for the approved commit; the
-# policy names this file for the suite (`workflow: e2e-pr-bmaas-netbox.yml`
-# in .github/e2e-policy.yml). The suite is manual_only in the policy until
-# the flavor is validated end to end.
+# `inventory-backend: netbox` — nothing else. `tier: full` selects the
+# sanity + regression variant (policy entry e2e-bmaas-netbox-full).
+#
+# Who starts it: the decision of e2e-pr.yml (osac-ci), by hand through the
+# E2E comment or /test. The policy names this file for the suite
+# (`workflow: e2e-pr-bmaas-netbox.yml` in .github/e2e-policy.yml); the
+# suite is manual_only until the flavor is validated end to end.
 #
 # Input trust: anyone with write access can dispatch this workflow with any
 # inputs. `verify` (osac-ci) checks them against the pull request — the

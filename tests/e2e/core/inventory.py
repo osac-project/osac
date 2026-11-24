@@ -1,24 +1,24 @@
 """Inventory backend routing for the BMaaS E2E suites.
 
-Two layers are kept apart:
+Two layers, kept apart:
 
-- **Inventory** (this module's backend abstraction, selected by
-  ``OSAC_INVENTORY_BACKEND`` — ``metal3`` default, ``netbox``): finding,
-  counting, claiming, and releasing hosts. metal3's inventory *is* the set of
-  BareMetalHosts; netbox's is the pool of ``osac_managed`` dcim.device
-  records.
-- **Provisioning** (shared, backend-agnostic): once the inventory allocates a
-  host, the bare-metal-fulfillment operator hands over to BMH/metal3 in every
-  mode — the BMI's
-  ``spec.externalHostID`` is the namespace-qualified BMH name (on netbox the
-  operator derives it from the device id as ``netbox-<id>`` and creates that
-  BMH). All provisioning assertions (provisioned state, image URL,
-  consumerRef, online, power, inspected NICs) therefore run against the BMH
-  identically on both backends, through the ``wait_for_host_*`` /
-  ``host_*`` helpers below.
+- **Inventory** (this module, selected by ``OSAC_INVENTORY_BACKEND`` —
+  ``metal3`` default, ``netbox``): finding, counting, claiming, and
+  releasing hosts.
+  - metal3: the BareMetalHosts are the inventory.
+  - netbox: the pool of ``osac_managed`` dcim.device records.
+- **Provisioning** (shared, backend-agnostic): once the inventory allocates
+  a host, the bare-metal-fulfillment operator hands over to BMH/metal3 in
+  every mode.
+  - The BMI's ``spec.externalHostID`` names the BMH (namespace-qualified).
+  - On netbox the operator derives ``netbox-<device-id>`` and creates that
+    BMH.
+  - All provisioning assertions (provisioned state, image URL, consumerRef,
+    online, power, inspected NICs) run against that BMH identically on both
+    backends, through the ``wait_for_host_*`` / ``host_*`` helpers below.
 
-Connection settings on netbox:
-- URL/token/CA: the BMF chart's Secrets, read from the deployed
+NetBox connection settings:
+- Primary source: the BMF chart's Secrets, read from the deployed
   bare-metal-fulfillment configuration.
 - ``OSAC_NETBOX_*`` env vars: debug overrides only — they win when set.
 - Backend selection is env-var-only; the cluster's inventory ``type`` is
@@ -102,9 +102,9 @@ class InventoryBackend(Protocol):
     def default_host_selector(self) -> dict[str, str]:
         """Return the host selector for the suite's auto-created instance type.
 
-        metal3: keys match BMH labels (osac.openshift.io/host-type). netbox:
-        keys must be valid device custom-field names, since the
-        bare-metal-fulfillment operator queries them as cf_<key>.
+        - metal3: keys match BMH labels (``osac.openshift.io/host-type``).
+        - netbox: keys must be valid device custom-field names — the
+          bare-metal-fulfillment operator queries them as ``cf_<key>``.
         """
         ...
 
@@ -115,19 +115,22 @@ class InventoryBackend(Protocol):
     def ensure_available_hosts(self) -> None:
         """Assert the inventory has at least one allocatable host.
 
-        Hosts are pre-staged before the suite starts — BMHs by the infra
-        backend on metal3, devices by the provider reconcile on netbox —
-        never created by the tests.
+        Hosts are pre-staged before the suite starts, never created by the
+        tests:
+        - metal3: BMHs, by the infra backend.
+        - netbox: devices, by the provider reconcile.
         """
         ...
 
     def snapshot_inventory(self) -> tuple[set[str], dict[str, Any]]:
         """Capture a comparable snapshot for no-side-effect assertions.
 
-        Returns the set of BareMetalInstance CR uids plus a per-backend
-        claim map (metal3: BMH name → consumerRef; netbox: device name →
-        ``status/osac_instance_id``). Opaque — compare for equality only,
-        never interpret the contents.
+        Returns:
+        - the set of BareMetalInstance CR uids, plus
+        - a per-backend claim map (metal3: BMH name → consumerRef; netbox:
+          device name → ``status/osac_instance_id``).
+
+        Opaque — compare for equality only, never interpret the contents.
         """
         ...
 
@@ -197,12 +200,13 @@ class Metal3Inventory:
 class NetBoxInventory:
     """netbox backend: OSAC-managed dcim.device records are the inventory.
 
-    Claim: status ``active`` + ``osac_instance_id`` set (netbox-specific).
-    Handover: the bare-metal-fulfillment operator derives
-    ``netbox-<device-id>`` from the device id, records it in the BMI's
-    externalHostID and creates that BMH on the fly — so all provisioning
-    assertions use the shared BMH helpers.
-    Release: it deletes that BMH and restores the device to ``staged``.
+    - Claim: device status ``active`` + ``osac_instance_id`` set.
+    - Handover: the bare-metal-fulfillment operator derives
+      ``netbox-<device-id>``, records it in the BMI's externalHostID and
+      creates that BMH on the fly — provisioning assertions use the shared
+      BMH helpers.
+    - Release: the operator deletes that BMH and restores the device to
+      ``staged``.
     """
 
     def __init__(self, *, k8s: K8sClient, netbox: NetBoxClient, bmh_namespace: str = "") -> None:
@@ -250,11 +254,11 @@ class NetBoxInventory:
         )
 
     def default_host_selector(self) -> dict[str, str]:
-        # The netbox equivalent of the BMH host-type label: a capability
-        # custom field the bare-metal-fulfillment operator queries as
-        # cf_host_type. The provider
-        # reconcile stamps it on every staged device, the same way the infra
-        # backend labels BMHs for metal3.
+        # The netbox equivalent of the BMH host-type label: the host_type
+        # capability custom field, queried as cf_host_type by the
+        # bare-metal-fulfillment operator. The provider reconcile stamps it
+        # on every staged device, the same way the infra backend labels
+        # BMHs for metal3.
         return {"host_type": "default"}
 
     def wait_for_released(self, *, host: HostRef) -> None:
@@ -309,11 +313,12 @@ def assert_bmi_lifecycle_on_running(
 ) -> tuple[str, HostRef]:
     """Assert host allocation and power cycling on an already-RUNNING BMI.
 
-    Does not create or delete the instance. Inventory exhaust calls this after all
-    claim BMIs reach RUNNING so provisioning is not blocked by interleaved checks.
-
-    Returns (bmi_cr_name, host): the inventory hands over to a BMH in every
-    mode, so the provisioning assertions run against it identically.
+    - Does not create or delete the instance.
+    - Inventory exhaust calls this after all claim BMIs reach RUNNING, so
+      provisioning is not blocked by interleaved checks.
+    - Returns ``(bmi_cr_name, host)``: the inventory hands over to a BMH in
+      every mode, so the provisioning assertions run against it
+      identically.
     """
     assert bmi_id in grpc.list_baremetal_instance_ids()
     bmi_cr_name: str = wait_for_bmi_cr(k8s=k8s, uuid=bmi_id)
@@ -453,9 +458,9 @@ def netbox_settings_from_bmf(*, k8s: K8sClient, namespace: str) -> NetBoxSetting
 def make_inventory_backend(*, k8s: K8sClient, namespace: str) -> InventoryBackend:
     """Build the inventory backend selected by OSAC_INVENTORY_BACKEND.
 
-    The BMH namespace is backend-resolved, never passed in: metal3 reads
-    OSAC_BMH_NAMESPACE (host-inventory default), netbox derives it from
-    the deployed management config.
+    The BMH namespace is backend-resolved, never passed in:
+    - metal3: ``OSAC_BMH_NAMESPACE`` (host-inventory default).
+    - netbox: the deployed management config.
     """
     backend = env("OSAC_INVENTORY_BACKEND", "metal3")
     if backend == "metal3":

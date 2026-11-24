@@ -36,11 +36,13 @@ def _status_value(status: object) -> str:
 class NetBoxClient:
     """NetBox device reads on top of pynetbox.
 
-    Construction performs no network calls. TLS is configured through a
-    dedicated ``requests.Session``: a temporary CA bundle file when
-    ``ca_pem`` is given, disabled verification when ``insecure`` is set,
-    and default system verification otherwise. The API token is applied
-    per request by pynetbox and must never appear in logs or exceptions.
+    - Construction performs no network calls.
+    - TLS goes through a dedicated ``requests.Session``:
+      - temp CA bundle file when ``ca_pem`` is given,
+      - disabled verification when ``insecure`` is set,
+      - default system verification otherwise.
+    - The API token is applied per request by pynetbox and must never
+      appear in logs or exceptions.
     """
 
     def __init__(

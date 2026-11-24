@@ -383,6 +383,11 @@ Each dispatched `backend_id` uses exactly one of two modes, selected by its
   customer TBCs or Secrets. Bandwidth QoS belongs to the customer's virtual pools, so
   tiers with non-zero `qos_limits.static_limits` are rejected.
 
+In both modes, `ensure_storage_class` checks the immutable parameters of all
+requested StorageClasses for a backend before creating any missing class. It
+leaves existing classes untouched. If the parameters conflict, the job names
+the affected classes and stops StorageClass creation for that backend.
+
 `teardown_cluster_storage` removes only OSAC-managed resources
 (`app.kubernetes.io/managed-by=osac-aap`) and refuses to remove anything while a
 PersistentVolume or PersistentVolumeClaim still uses one of the tenant's

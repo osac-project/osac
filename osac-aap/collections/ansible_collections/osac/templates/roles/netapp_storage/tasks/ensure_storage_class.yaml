@@ -79,15 +79,19 @@
 
 # Check if all tiers' StorageClasses, TridentBackendConfigs, and CSI Secrets
 # already exist on the target cluster before provisioning.
-- name: Check existing tenant StorageClasses
+- name: Look up the requested StorageClasses by name
   kubernetes.core.k8s_info:
     api_version: storage.k8s.io/v1
     kind: StorageClass
-    label_selectors:
-      - "osac.openshift.io/tenant={{ tenant_name }}"
-      - "osac.openshift.io/storage-provider=netapp"
-      - "app.kubernetes.io/managed-by=osac-aap"
-  register: _netapp_sc_checks
+    name: "{{ item }}"
+  loop: "{{ _netapp_expected_sc_names }}"
+  register: _netapp_sc_lookups
+  no_log: true
+
+- name: Collect existing requested StorageClasses
+  ansible.builtin.set_fact:
+    _netapp_sc_checks:
+      resources: "{{ _netapp_sc_lookups.results | map(attribute='resources') | flatten }}"
   no_log: true
 
 - name: Verify TridentBackendConfig CRD is installed on the target cluster
@@ -282,6 +286,7 @@
     - name: Clear credential-bearing facts
       ansible.builtin.set_fact:
         _netapp_sc_checks: {}
+        _netapp_sc_lookups: {}
         _netapp_tbc_checks: {}
         _netapp_csi_checks: {}
         _trident_crd_check: {}

@@ -20,6 +20,8 @@
 #      is true) + per-tier StorageClasses bound via parameters.selector,
 #      short-circuits on the second run when all resources exist, and omits
 #      trustedCACertificate when netapp_storage_validate_certs is false.
+#      Matching classes stay untouched, missing classes are created, and
+#      immutable parameter drift blocks all class creation for that backend.
 #      Successive calls that each name some of the tenant's tiers build the TBC
 #      up pool by pool: a call keeps the pools of the tiers it does not name
 #      and their positions, rebuilds a changed tier in place, and short-circuits
@@ -38,8 +40,8 @@
 #      names.
 #   8. Shared-TBC ensure_storage_class (Bound TBC): creates per-tier
 #      StorageClasses with selector and storagePools without creating OSAC
-#      TBCs/Secrets, and recreates StorageClasses on selector/backendName
-#      updates (including dotted spec.backendName fallback).
+#      TBCs/Secrets, applies the same drift handling as Dedicated-SVM mode,
+#      and uses the dotted spec.backendName fallback for a new class.
 #   9. Shared-TBC ensure_storage_class (NotFound TBC): fails and creates no
 #      StorageClass when the customer TBC cannot be read, and creates the
 #      StorageClass with storagePools once the TBC is Bound.
@@ -611,6 +613,20 @@
         fail_msg: "Short-circuit run lost or changed the output fact"
         success_msg: "Short-circuit run preserved the output fact"
       no_log: true
+
+    - name: Verify Dedicated-SVM StorageClass ensure cases
+      ansible.builtin.include_tasks: storageclass_ensure_case.yaml
+      vars:
+        _fixture_sibling_sc: "{{ _scs.results[0].resources[0] }}"
+        _fixture_retained_sc: "{{ _scs.results[1].resources[0] }}"
+      loop:
+        - {name: matching, drift: false, sibling_missing: false}
+        - {name: drift, drift: true, sibling_missing: false}
+        - {name: drift with missing sibling, drift: true, sibling_missing: true}
+        - {name: matching with missing sibling, drift: false, sibling_missing: true}
+      loop_control:
+        loop_var: _sc_case
+        label: "{{ _sc_case.name }}"
 
     # ── Cert validation override on an existing TBC: the CA set above is removed in place ──
     - name: Read the TBC UID before disabling certificate validation
@@ -1619,7 +1635,7 @@
         fail_msg: "Shared-TBC setup must reject duplicate profile names in provider_config.profiles"
         success_msg: "Shared-TBC setup rejected duplicate profile names"
 
-# ── Test 8: Shared-TBC ensure_storage_class (Bound TBC + selector update) ──
+# ── Test 8: Shared-TBC ensure_storage_class (Bound TBC + drift cases) ──
 - name: "ONTAP Storage Provider - Shared-TBC ensure_storage_class with Bound customer TBC"
   hosts: localhost
   gather_facts: false
@@ -1630,6 +1646,7 @@
     _t_assignment_key: "{{ (('netapp-shared-1' ~ '|' ~ tenant_name) | hash('sha256'))[:16] | lower }}"
     _sc_extreme: "netapp-{{ _t_assignment_key }}-{{ ('extreme' | hash('sha256'))[:16] | lower }}"
     _sc_value: "netapp-{{ _t_assignment_key }}-{{ ('value' | hash('sha256'))[:16] | lower }}"
+    _sc_highwrite: "netapp-{{ _t_assignment_key }}-{{ ('highwrite' | hash('sha256'))[:16] | lower }}"
     storage_provider_tiers:
       - name: extreme
         protocol: block
@@ -1747,10 +1764,19 @@
         success_msg: "No per-tenant TBC or CSI Secret created in Shared-TBC mode"
       no_log: true
 
-    - name: Re-run ensure_storage_class for Shared-TBC backend (idempotent short-circuit)
-      ansible.builtin.include_tasks: dispatch.yaml
+    - name: Verify Shared-TBC StorageClass ensure cases
+      ansible.builtin.include_tasks: storageclass_ensure_case.yaml
       vars:
-        storage_provider_action: ensure_storage_class
+        _fixture_sibling_sc: "{{ _shared_scs.results[0].resources[0] }}"
+        _fixture_retained_sc: "{{ _shared_scs.results[1].resources[0] }}"
+      loop:
+        - {name: matching, drift: false, sibling_missing: false}
+        - {name: drift, drift: true, sibling_missing: false}
+        - {name: drift with missing sibling, drift: true, sibling_missing: true}
+        - {name: matching with missing sibling, drift: false, sibling_missing: true}
+      loop_control:
+        loop_var: _sc_case
+        label: "{{ _sc_case.name }}"
 
     - name: Update customer-fc TBC to dotted spec.backendName and clear status.backendInfo.backendName
       kubernetes.core.k8s:
@@ -1783,12 +1809,12 @@
       changed_when: true
       no_log: true
 
-    - name: Update extreme tier to multi-key pool_selector and re-run ensure_storage_class
+    - name: Run ensure_storage_class for a new tier with a multi-key pool_selector
       ansible.builtin.include_tasks: dispatch.yaml
       vars:
         storage_provider_action: ensure_storage_class
         storage_provider_tiers:
-          - name: extreme
+          - name: highwrite
             protocol: block
             provider: netapp
             backend_id: netapp-shared-1
@@ -1797,31 +1823,22 @@
               pool_selector:
                 zone: az1
                 performance: highwrite
-          - name: value
-            protocol: block
-            provider: netapp
-            backend_id: netapp-shared-1
-            provider_config:
-              profile: shared-fc
-              pool_selector:
-                performance: value
 
-    - name: Read back updated extreme StorageClass
+    - name: Read back the highwrite StorageClass
       kubernetes.core.k8s_info:
         api_version: storage.k8s.io/v1
         kind: StorageClass
-        name: "{{ _sc_extreme }}"
-      register: _updated_extreme_sc
+        name: "{{ _sc_highwrite }}"
+      register: _highwrite_sc
       no_log: true
 
-    - name: Assert extreme StorageClass was recreated with sorted multi-key selector and escaped dotted spec.backendName
+    - name: Assert the new StorageClass uses the sorted selector and escaped dotted backendName
       ansible.builtin.assert:
         that:
-          - _updated_extreme_sc.resources | length == 1
-          - _updated_extreme_sc.resources[0].parameters['selector'] == 'performance=highwrite;zone=az1'
-          - _updated_extreme_sc.resources[0].parameters['storagePools'] == 'osiscsi\\.backend\\.v1:.*'
-        fail_msg: "StorageClass was not recreated with sorted multi-key selector and escaped dotted spec.backendName"
-        success_msg: "StorageClass recreated with sorted multi-key selector and escaped dotted spec.backendName"
+          - _highwrite_sc.resources | length == 1
+          - _highwrite_sc.resources[0].parameters['selector'] == 'performance=highwrite;zone=az1'
+          - _highwrite_sc.resources[0].parameters['storagePools'] == 'osiscsi\\.backend\\.v1:.*'
+        fail_msg: "The new StorageClass has an unexpected selector or storagePools pin"
       no_log: true
 
     - name: Restore customer-fc TBC to osiscsibackend with Bound backendInfo

@@ -193,78 +193,23 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
         "cluster-mgmt"
     )
 
-    # 2. Render Dedicated-SVM StorageClass parameters and stale Dedicated-SVM SC detection.
-    sc_task = _find_task(block_tasks, "Create the per-tier StorageClasses")
-    dedicated_sc_params = _render(
-        sc_task["kubernetes.core.k8s"]["definition"]["parameters"],
-        {"_tbc_name": "netapp-0000000000000001", "item": {"name": "gold"}},
+    # 2. Render the StorageClass parameters for both tenancy modes.
+    desired_params_task = _find_task(block_tasks, "Build desired NetApp StorageClass parameters per tier")
+    desired_params_expr = desired_params_task["ansible.builtin.set_fact"]["_netapp_sc_desired_params"]
+    dedicated_params = _render(
+        desired_params_expr,
+        {
+            "_netapp_is_shared_tbc": False,
+            "_backend_tiers": [{"name": "gold"}],
+            "_tbc_name": "netapp-0000000000000001",
+        },
     )
-    assert dedicated_sc_params == {
+    assert dedicated_params["gold"] == {
         "backendType": "ontap-san",
         "selector": "osac_backend=netapp-0000000000000001;tier=gold",
     }
-    assert "storagePools" not in dedicated_sc_params
 
-    stale_ded_task = _find_task(
-        block_tasks,
-        "Identify existing Dedicated-SVM StorageClasses with changed immutable parameters",
-    )
-    stale_ded_expr = stale_ded_task["ansible.builtin.set_fact"]["_netapp_stale_dedicated_sc_names"]
-    ded_sc_name = _render(
-        sc_task["kubernetes.core.k8s"]["definition"]["metadata"]["name"],
-        {"_assignment_key": "0000000000000001", "item": {"name": "gold"}},
-    )
-    assert (
-        _render(
-            stale_ded_expr,
-            {
-                "_assignment_key": "0000000000000001",
-                "_tbc_name": "netapp-0000000000000001",
-                "_backend_tiers": [{"name": "gold"}],
-                "_netapp_sc_checks": {
-                    "resources": [
-                        {"metadata": {"name": ded_sc_name}, "parameters": dedicated_sc_params}
-                    ]
-                },
-            },
-        )
-        == []
-    )
-    assert _render(
-        stale_ded_expr,
-        {
-            "_assignment_key": "0000000000000001",
-            "_tbc_name": "netapp-0000000000000001",
-            "_backend_tiers": [{"name": "gold"}],
-            "_netapp_sc_checks": {
-                "resources": [
-                    {
-                        "metadata": {"name": ded_sc_name},
-                        "parameters": {
-                            "backendType": "ontap-san",
-                            "selector": "osac_backend=netapp-old;tier=gold",
-                        },
-                    }
-                ]
-            },
-        },
-    ) == [ded_sc_name]
-
-    # 3. Render Shared-TBC StorageClass parameters: multi-key pool_selector sorted by key,
-    #    always pinned to the resolved backend with a dot-escaped storagePools value.
-    desired_params_task = _find_task(
-        block_tasks, "Build desired Shared-TBC StorageClass parameters per tier"
-    )
-    desired_params_expr = desired_params_task["ansible.builtin.set_fact"][
-        "_netapp_shared_sc_desired_params"
-    ]
-    shared_sc_task = _find_task(
-        block_tasks, "Create the per-tier StorageClasses for shared Trident backend"
-    )
-    assert shared_sc_task["kubernetes.core.k8s"]["definition"]["parameters"] == (
-        "{{ _netapp_shared_sc_desired_params[item.name] }}"
-    )
-
+    # Shared-TBC selectors sort keys, and storagePools pins to the escaped backend name.
     shared_tier = {
         "name": "gold",
         "provider_config": {
@@ -272,19 +217,13 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
             "pool_selector": {"z_tier": "fast", "a_env": "prod"},
         },
     }
-    rendered_desired_with_bname = _render(
-        desired_params_expr,
-        {
-            "_assignment_key": "0000000000000001",
-            "_backend_tiers": [shared_tier],
-            "_netapp_profile_backend_names": {"gold-prof": "trident.shared-san.01"},
-        },
-    )
-    rendered_shared_with_bname = _render(
-        shared_sc_task["kubernetes.core.k8s"]["definition"]["parameters"],
-        {"item": shared_tier, "_netapp_shared_sc_desired_params": rendered_desired_with_bname},
-    )
-    assert rendered_shared_with_bname == {
+    shared_vars = {
+        "_netapp_is_shared_tbc": True,
+        "_backend_tiers": [shared_tier],
+        "_netapp_profile_backend_names": {"gold-prof": "trident.shared-san.01"},
+    }
+    shared_params = _render(desired_params_expr, shared_vars)
+    assert shared_params["gold"] == {
         "backendType": "ontap-san",
         "selector": "a_env=prod;z_tier=fast",
         "storagePools": r"trident\.shared-san\.01:.*",
@@ -295,8 +234,7 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
     assert "storagePools" in _render(
         desired_params_expr,
         {
-            "_assignment_key": "0000000000000001",
-            "_backend_tiers": [shared_tier],
+            **shared_vars,
             "_netapp_profile_backend_names": {"gold-prof": ""},
         },
     )["gold"]
@@ -309,46 +247,37 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
         )
         is True
     )
-    selector_only_params = {"backendType": "ontap-san", "selector": "a_env=prod;z_tier=fast"}
-
-    # Verify stale Shared-TBC StorageClass detection agrees with rendered parameters.
-    stale_task = _find_task(
-        block_tasks, "Identify existing Shared-TBC StorageClasses with changed immutable parameters"
-    )
-    stale_expr = stale_task["ansible.builtin.set_fact"]["_netapp_stale_shared_sc_names"]
-    sc_name = _render(
-        shared_sc_task["kubernetes.core.k8s"]["definition"]["metadata"]["name"],
-        {"_assignment_key": "0000000000000001", "item": shared_tier},
-    )
-    assert (
-        _render(
-            stale_expr,
-            {
-                "_assignment_key": "0000000000000001",
-                "_backend_tiers": [shared_tier],
-                "_netapp_shared_sc_desired_params": rendered_desired_with_bname,
-                "_netapp_sc_checks": {
-                    "resources": [
-                        {"metadata": {"name": sc_name}, "parameters": rendered_shared_with_bname}
-                    ]
-                },
-            },
-        )
-        == []
-    )
-    assert _render(
-        stale_expr,
-        {
+    # 3. Classify every tier before creation, including an earlier missing sibling.
+    plan_task = _find_task(block_tasks, "Classify missing and conflicting NetApp StorageClasses")
+    plan_expr = plan_task["ansible.builtin.set_fact"]["_netapp_sc_plan"]
+    gold_name = "netapp-0000000000000001-24d7f03d8dc3c366"
+    silver_name = "netapp-0000000000000001-78cde64c3e47f2cb"
+    for desired, conflicting in (
+        (dedicated_params, {"backendType": "ontap-san", "selector": "osac_backend=old;tier=gold"}),
+        (shared_params, {"backendType": "ontap-san", "selector": "a_env=prod;z_tier=fast"}),
+    ):
+        variables = {
             "_assignment_key": "0000000000000001",
-            "_backend_tiers": [shared_tier],
-            "_netapp_shared_sc_desired_params": rendered_desired_with_bname,
-            "_netapp_sc_checks": {
-                "resources": [
-                    {"metadata": {"name": sc_name}, "parameters": selector_only_params}
-                ]
-            },
-        },
-    ) == [sc_name]
+            "_backend_tiers": [{"name": "silver"}, {"name": "gold"}],
+            "_netapp_sc_desired_params": desired,
+        }
+        for live_params, conflicting_names in (
+            (desired["gold"], []),
+            (conflicting, [gold_name]),
+        ):
+            plan = _render(
+                plan_expr,
+                {
+                    **variables,
+                    "_netapp_sc_checks": {
+                        "resources": [{"metadata": {"name": gold_name}, "parameters": live_params}],
+                    },
+                },
+            )
+            assert plan == {
+                "missing": [{"name": silver_name, "tier": "silver"}],
+                "conflicting": conflicting_names,
+            }
 
     # 4. Evaluate netapp_storage_validate_certs default and CA bundle fail-fast conditions.
     defaults = _load_yaml(NETAPP_ROLE_DIR / "defaults" / "main.yaml")
@@ -1895,8 +1824,8 @@ def test_netapp_dual_mode_validation_and_shared_tbc_contracts():
         "_tbc_update",
         "_tbc_written",
         "_shared_tbc_lookups",
-        "_netapp_shared_sc_desired_params",
-        "_netapp_stale_dedicated_sc_names",
+        "_netapp_sc_desired_params",
+        "_netapp_sc_plan",
     ):
         assert fact_name in cleared_facts
     # The runtime password fact is dropped (null), not overwritten with a literal.

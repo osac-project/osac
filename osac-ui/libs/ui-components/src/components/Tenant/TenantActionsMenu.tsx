@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Dropdown, DropdownList, MenuToggle } from '@patternfly/react-core';
+import { Link } from 'react-router-dom';
+import { Dropdown, DropdownItem, DropdownList, MenuToggle } from '@patternfly/react-core';
 import { EllipsisVIcon } from '@patternfly/react-icons/dist/esm/icons/ellipsis-v-icon';
 
 import { type Tenant, Tenants } from '@osac/types/private';
@@ -7,6 +8,7 @@ import { useDeleteResource } from '@osac/ui-components/api/use-resource';
 import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 import DeleteResourceModal from '@osac/ui-components/components/Resource/DeleteResourceModal';
 
+import { tenantEditPath } from './routes';
 import { useTranslation } from '../../hooks/useTranslation';
 
 interface TenantActionsMenuProps {
@@ -51,6 +53,12 @@ const TenantActionsMenu = ({ tenant }: TenantActionsMenuProps) => {
         popperProps={{ position: 'right' }}
       >
         <DropdownList>
+          <DropdownItem
+            component={(props) => <Link {...props} to={tenantEditPath(tenant.id)} />}
+            onClick={() => setOpen(false)}
+          >
+            {t('Edit')}
+          </DropdownItem>
           <DeleteResourceButton
             isDropdown
             onClick={() => {

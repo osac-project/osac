@@ -198,6 +198,8 @@ import type {
   StorageTiersUpdateResponse,
   TenantsCreateRequest,
   TenantsCreateResponse,
+  TenantsUpdateRequest,
+  TenantsUpdateResponse,
 } from '@osac/types/private';
 import {
   BareMetalInstanceTypesCreateResponseSchema,
@@ -574,6 +576,7 @@ export type MockTransportOverrides = {
     req: IdentityProvidersUpdateRequest,
   ) => IdentityProvidersUpdateResponse;
   onTenantCreate?: (req: TenantsCreateRequest) => TenantsCreateResponse;
+  onTenantUpdate?: (req: TenantsUpdateRequest) => TenantsUpdateResponse;
   onTenantList?: () => never;
   onStorageBackendList?: (
     req: StorageBackendsListRequest,
@@ -1412,6 +1415,8 @@ export const createMockConnectTransport = (
             },
           };
         },
+        update: (req) =>
+          overrides.onTenantUpdate?.(req) ?? ({ object: req.object } as TenantsUpdateResponse),
         delete: () => ({}),
       });
 

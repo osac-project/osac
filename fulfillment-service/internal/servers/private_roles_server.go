@@ -25,6 +25,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -155,8 +156,48 @@ func (s *PrivateRolesServer) Update(ctx context.Context,
 
 func (s *PrivateRolesServer) Delete(ctx context.Context,
 	request *privatev1.RolesDeleteRequest) (response *privatev1.RolesDeleteResponse, err error) {
+	if id := request.GetId(); id != "" {
+		if err = s.checkRoleUnused(ctx, id); err != nil {
+			return
+		}
+	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
+}
+
+func (s *PrivateRolesServer) checkRoleUnused(ctx context.Context, id string) error {
+	if _, err := getLockedReferenceResource(ctx, s.generic.dao, id); err != nil {
+		return ConvertDAOErrorToGRPC(err, "delete", id)
+	}
+
+	referenced, err := s.hasRoleReferences(ctx, id)
+	if err != nil {
+		return err
+	}
+	if referenced {
+		return grpcstatus.Error(grpccodes.FailedPrecondition, "Role is still referenced by a Tenant default role or RoleBinding")
+	}
+	return nil
+}
+
+func (s *PrivateRolesServer) hasRoleReferences(ctx context.Context, id string) (bool, error) {
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return false, grpcstatus.Error(grpccodes.Internal, "failed to check Role references")
+	}
+
+	// Search all tenants by Role ID
+	var referenced bool
+	err = tx.QueryRow(ctx, `
+		select
+			exists (select 1 from tenants where data #>> '{spec,default_role,id}' = $1)
+			or exists (select 1 from role_bindings where data #>> '{spec,role,id}' = $1)`, id,
+	).Scan(&referenced)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to check Role references", slog.Any("error", err))
+		return false, grpcstatus.Error(grpccodes.Internal, "failed to check Role references")
+	}
+	return referenced, nil
 }
 
 func (s *PrivateRolesServer) Signal(ctx context.Context,

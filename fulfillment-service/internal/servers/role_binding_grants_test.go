@@ -596,7 +596,8 @@ var _ = Describe("RoleBinding grant resolution with PostgreSQL", func() {
 			bindRoleByName("alice-grant", "stable-reader", user.GetId())
 			createBinding(bindingSeed{name: "service-grant", roleID: role.GetId(), serviceAccountID: "service-1"})
 
-			_, err := rolesServer.Delete(ctx, privatev1.RolesDeleteRequest_builder{Id: role.GetId()}.Build())
+			// Reproduce a dangling binding that predates the Role deletion guard.
+			_, err := rolesDAO.Delete().SetId(role.GetId()).Do(ctx)
 			Expect(err).ToNot(HaveOccurred())
 			createRole(roleSeed{name: "stable-reader", tenant: auth.SharedTenant, methods: []string{"*"}})
 

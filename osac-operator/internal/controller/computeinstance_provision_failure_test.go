@@ -11,7 +11,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	clocktesting "k8s.io/utils/clock/testing"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	"github.com/osac-project/osac/osac-operator/internal/networktask"
@@ -342,4 +345,261 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 		zeroAttempt.Status.Jobs[0].LastFailure.Attempt = 0
 		Expect(apierrors.IsInvalid(k8sClient.Status().Update(ctx, zeroAttempt))).To(BeTrue())
 	})
+})
+
+type projectionConflictClient struct {
+	client.Client
+	when func(*osacv1alpha1.ComputeInstance) bool
+}
+
+type projectionConflictWriter struct {
+	client.SubResourceWriter
+	owner *projectionConflictClient
+}
+
+func (c *projectionConflictClient) Status() client.SubResourceWriter {
+	return projectionConflictWriter{SubResourceWriter: c.Client.Status(), owner: c}
+}
+
+func (w projectionConflictWriter) Update(ctx context.Context, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+	ci, ok := obj.(*osacv1alpha1.ComputeInstance)
+	if ok && w.owner.when != nil && w.owner.when(ci) {
+		w.owner.when = nil
+		fresh := &osacv1alpha1.ComputeInstance{}
+		Expect(w.owner.Client.Get(ctx, client.ObjectKeyFromObject(ci), fresh)).To(Succeed())
+		if fresh.Annotations == nil {
+			fresh.Annotations = map[string]string{}
+		}
+		fresh.Annotations["test-conflict"] = fresh.ResourceVersion
+		Expect(w.owner.Client.Update(ctx, fresh)).To(Succeed())
+	}
+	return w.SubResourceWriter.Update(ctx, obj, opts...)
+}
+
+var _ = Describe("ComputeInstance public retry projection", func() {
+	var instance *osacv1alpha1.ComputeInstance
+	var fake *wlFakeAAP
+	var clock *clocktesting.FakeClock
+	var reconciler *ComputeInstanceReconciler
+	var writes *projectionConflictClient
+	var key types.NamespacedName
+
+	reload := func() {
+		Expect(k8sClient.Get(ctx, key, instance)).To(Succeed())
+	}
+	recreate := func() {
+		reconciler = newTestCIReconcilerWithFake(fake, "", "default", "", time.Second)
+		reconciler.Client = writes
+		reconciler.Engine = networktask.New(writes, k8sClient, fake, networktask.Config{
+			Organization: "osac", PollInterval: time.Second,
+		}).WithClock(clock)
+	}
+	run := func() (ctrl.Result, error) {
+		return reconciler.Reconcile(ctx, mcreconcile.Request{Request: reconcile.Request{NamespacedName: key}})
+	}
+	reconcileOK := func() ctrl.Result {
+		result, err := run()
+		Expect(err).NotTo(HaveOccurred())
+		reload()
+		return result
+	}
+	expectReason := func(reason string) {
+		condition := instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+		Expect(condition).NotTo(BeNil())
+		Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+		Expect(condition.Reason).To(Equal(reason))
+		Expect(condition.Message).NotTo(ContainSubstring("private-provider-text"))
+	}
+	BeforeEach(func() {
+		name := fmt.Sprintf("retry-projection-%d", time.Now().UnixNano())
+		createReadyTenant(ctx, "default", name)
+		DeferCleanup(func() { deleteTenantInNamespace(ctx, "default", name) })
+		instance = &osacv1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", Annotations: map[string]string{osacTenantKey: name}},
+			Spec:       newTestComputeInstanceSpec("test_template"),
+		}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		key = client.ObjectKeyFromObject(instance)
+		DeferCleanup(func() {
+			fresh := &osacv1alpha1.ComputeInstance{}
+			if err := k8sClient.Get(ctx, key, fresh); err == nil {
+				fresh.Finalizers = nil
+				Expect(k8sClient.Update(ctx, fresh)).To(Succeed())
+				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, fresh))).To(Succeed())
+			}
+		})
+		fake = newWLFakeAAP()
+		clock = clocktesting.NewFakeClock(time.Now().Truncate(time.Second))
+		writes = &projectionConflictClient{Client: k8sClient}
+		recreate()
+		reconcileOK()
+	})
+
+	It("replays the latest failure and successful clearing across real projection conflicts and restart", func() {
+		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
+		result := reconcileOK()
+		expectReason("RetryScheduled")
+		Expect(result.RequeueAfter).To(BeNumerically(">", 0))
+		first := instance.Status.LastProvisioningFailure.DeepCopy()
+		Expect(first.Attempt).To(Equal(int32(1)))
+		Expect(first.Message).To(Equal("Provisioning failed."))
+		Expect(instance.Status.Jobs[0].Message).To(ContainSubstring("private-provider-text"))
+		clock.Step(result.RequeueAfter)
+		reconcileOK()
+		expectReason("RetryRunning")
+		Expect(instance.Status.LastProvisioningFailure.Attempt).To(Equal(int32(1)))
+		clock.Step(time.Second)
+		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text-second","retryable":true}}`)
+		writes.when = func(ci *osacv1alpha1.ComputeInstance) bool {
+			return ci.Status.LastProvisioningFailure != nil && ci.Status.LastProvisioningFailure.Attempt == 2
+		}
+		_, err := run()
+		Expect(apierrors.IsConflict(err)).To(BeTrue())
+		reload()
+		checkpoint := instance.Status.Jobs[0].LastFailure.DeepCopy()
+		Expect(checkpoint.Attempt).To(Equal(int32(2)))
+		Expect(instance.Status.LastProvisioningFailure.Attempt).To(Equal(int32(1)))
+		recreate()
+		result = reconcileOK()
+		expectReason("RetryScheduled")
+		Expect(instance.Status.LastProvisioningFailure.Attempt).To(Equal(checkpoint.Attempt))
+		Expect(instance.Status.LastProvisioningFailure.ObservedAt.Time.Equal(checkpoint.ObservedAt.Time)).To(BeTrue())
+		Expect(checkpoint.ObservedAt.After(first.ObservedAt.Time)).To(BeTrue())
+		clock.Step(result.RequeueAfter)
+		writes.when = func(ci *osacv1alpha1.ComputeInstance) bool {
+			c := ci.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned)
+			return c != nil && c.Reason == "RetryRunning"
+		}
+		_, err = run()
+		Expect(apierrors.IsConflict(err)).To(BeTrue())
+		reload()
+		Expect(instance.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateRunning))
+		recreate()
+		reconcileOK()
+		expectReason("RetryRunning")
+		Expect(instance.Status.Jobs[0].Attempt).To(Equal(int32(3)))
+		Expect(instance.Status.LastProvisioningFailure.ObservedAt.Time.Equal(checkpoint.ObservedAt.Time)).To(BeTrue())
+		fake.finish(computeInstanceProvisionTask, "successful", `{}`)
+		writes.when = func(ci *osacv1alpha1.ComputeInstance) bool { return ci.Status.LastProvisioningFailure == nil }
+		_, err = run()
+		Expect(apierrors.IsConflict(err)).To(BeTrue())
+		reload()
+		Expect(instance.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateSucceeded))
+		Expect(instance.Status.Jobs[0].LastFailure).To(BeNil())
+		Expect(instance.Status.LastProvisioningFailure).NotTo(BeNil())
+		recreate()
+		reconcileOK()
+		expectReason(osacv1alpha1.ReasonWaitingForVM)
+		Expect(instance.Status.LastProvisioningFailure).To(BeNil())
+	})
+
+	It("preserves the storage gate for a new configuration after terminal failure", func() {
+		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":false}}`)
+		reconcileOK()
+		expectReason(osacv1alpha1.ReasonProvisioningFailed)
+		restart := metav1.NewTime(clock.Now().Add(time.Second))
+		instance.Spec.RestartRequestedAt = &restart
+		Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+		tenant := &osacv1alpha1.Tenant{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instance.Annotations[osacTenantKey], Namespace: "default"}, tenant)).To(Succeed())
+		tenant.SetStatusCondition(osacv1alpha1.TenantConditionStorageReady, metav1.ConditionFalse,
+			osacv1alpha1.TenantReasonNotFound, "Storage is not ready")
+		Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+		reconcileOK()
+		expectReason(osacv1alpha1.ReasonTenantNotReady)
+		Expect(instance.Status.LastProvisioningFailure).To(BeNil())
+		Expect(fake.tasks()).To(HaveLen(1))
+	})
+
+	It("clears previous-input diagnostics without resetting retry policy when configuration changes", func() {
+		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
+		result := reconcileOK()
+		Expect(instance.Status.LastProvisioningFailure).NotTo(BeNil())
+		restart := metav1.NewTime(clock.Now().Add(time.Second))
+		instance.Spec.RestartRequestedAt = &restart
+		Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+		updated := reconcileOK()
+		expectReason("RetryScheduled")
+		Expect(instance.Status.LastProvisioningFailure).To(BeNil())
+		Expect(instance.Status.Jobs[0].LastFailure).To(BeNil())
+		Expect(updated.RequeueAfter).To(Equal(result.RequeueAfter))
+		clock.Step(updated.RequeueAfter)
+		reconcileOK()
+		expectReason(osacv1alpha1.ReasonWaitingForVM)
+		Expect(instance.Status.LastProvisioningFailure).To(BeNil())
+	})
+
+	It("clears retry and failure while deletion waits for normal cleanup", func() {
+		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
+		reconcileOK()
+		Expect(instance.Status.LastProvisioningFailure).NotTo(BeNil())
+		Expect(k8sClient.Delete(ctx, instance)).To(Succeed())
+		reconcileOK()
+		expectReason(osacv1alpha1.ReasonDeleting)
+		Expect(instance.Status.LastProvisioningFailure).To(BeNil())
+		Expect(instance.Status.Phase).To(Equal(osacv1alpha1.ComputeInstancePhaseDeleting))
+	})
+
+	It("does not publish a failure when the engine's checkpoint write conflicts", func() {
+		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
+		writes.when = func(ci *osacv1alpha1.ComputeInstance) bool {
+			return ci.Status.Jobs[0].State == osacv1alpha1.NetworkJobStateRetrying
+		}
+		_, err := run()
+		Expect(apierrors.IsConflict(err)).To(BeTrue())
+		reload()
+		Expect(instance.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateRunning))
+		Expect(instance.Status.Jobs[0].LastFailure).To(BeNil())
+		Expect(instance.Status.LastProvisioningFailure).To(BeNil())
+		expectReason(osacv1alpha1.ReasonWaitingForVM)
+	})
+
+	DescribeTable("keeps snapshot-free legacy progress conservative", func(state osacv1alpha1.NetworkJobState, attempt int32, want string) {
+		reload()
+		instance.Status.Jobs[0].State = state
+		instance.Status.Jobs[0].Attempt = attempt
+		instance.Status.Jobs[0].LastFailure = nil
+		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+		recreate()
+		result := reconcileOK()
+		expectReason(want)
+		Expect(instance.Status.LastProvisioningFailure).To(BeNil())
+		if state == osacv1alpha1.NetworkJobStateRetrying {
+			clock.Step(result.RequeueAfter)
+			reconcileOK()
+			expectReason(osacv1alpha1.ReasonWaitingForVM)
+			Expect(instance.Status.LastProvisioningFailure).To(BeNil())
+		}
+		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
+		result = reconcileOK()
+		expectReason("RetryScheduled")
+		Expect(instance.Status.LastProvisioningFailure).NotTo(BeNil())
+		observed := instance.Status.LastProvisioningFailure.ObservedAt.DeepCopy()
+		clock.Step(result.RequeueAfter)
+		reconcileOK()
+		recreate()
+		reconcileOK()
+		expectReason("RetryRunning")
+		Expect(instance.Status.LastProvisioningFailure.ObservedAt.Time.Equal(observed.Time)).To(BeTrue())
+	},
+		Entry("initial running", osacv1alpha1.NetworkJobStateRunning, int32(1), osacv1alpha1.ReasonWaitingForVM),
+		Entry("configuration rerun", osacv1alpha1.NetworkJobStateRunning, int32(3), osacv1alpha1.ReasonWaitingForVM),
+		Entry("cancelled relaunch", osacv1alpha1.NetworkJobStateCancelled, int32(2), osacv1alpha1.ReasonWaitingForVM),
+		Entry("backoff", osacv1alpha1.NetworkJobStateRetrying, int32(2), "RetryScheduled"),
+	)
+
+	DescribeTable("reports final job failure safely without scheduling a retry", func(jobStatus, artifacts, reason string) {
+		fake.finish(computeInstanceProvisionTask, jobStatus, artifacts)
+		reconcileOK()
+		expectReason(osacv1alpha1.ReasonProvisioningFailed)
+		Expect(instance.Status.LastProvisioningFailure).NotTo(BeNil())
+		Expect(instance.Status.LastProvisioningFailure.Reason).To(Equal(reason))
+		Expect(instance.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateFailed))
+		Expect(instance.GetStatusCondition(osacv1alpha1.ComputeInstanceConditionProvisioned).Message).To(Equal("Provisioning failed; no retry is scheduled."))
+	},
+		Entry("nonretryable provider", "failed", `{"osac_error":{"message":"private-provider-text","retryable":false}}`, "ProviderReported"),
+		Entry("missing error", "failed", `{}`, "InvalidResult"),
+		Entry("malformed error", "failed", `{"osac_error":true}`, "InvalidResult"),
+		Entry("unexpected output", "successful", `{"osac_result":{"unexpected":true}}`, "ResultRejected"),
+	)
 })

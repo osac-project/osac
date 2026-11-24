@@ -548,7 +548,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		// as the next attempt (see handleProvisioning); the same spec stays failed (VMaaS design,
 		// Create step 5).
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse,
-			provision.Entry.Message, v1alpha1.ReasonProvisioningFailed)
+			"Provisioning failed; no retry is scheduled.", v1alpha1.ReasonProvisioningFailed)
 		if kv == nil {
 			setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseFailed)
 		}
@@ -575,6 +575,13 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 	if gateMessage != "" {
 		r.deferProvisioningForStorage(ctx, instance, tenant, kv, priorGateReason, gateMessage)
 	}
+	if provision.Entry.Task == "" {
+		if entry := networktask.FindJob(instance.Status.Jobs, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone); entry != nil {
+			provision.Entry = *entry
+			provision.LastFailure = entry.LastFailure
+		}
+	}
+	projectComputeInstanceProvisioningStatus(instance, provision)
 	return result, nil
 }
 
@@ -1112,6 +1119,9 @@ func (r *ComputeInstanceReconciler) handleDelete(ctx context.Context, _ reconcil
 	log.Info("deleting compute instance")
 
 	setComputeInstancePhase(&instance.Status, v1alpha1.ComputeInstancePhaseDeleting)
+	instance.Status.LastProvisioningFailure = nil
+	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse,
+		"ComputeInstance is being deleted", v1alpha1.ReasonDeleting)
 	instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionReady, metav1.ConditionFalse,
 		"ComputeInstance is being deleted", v1alpha1.ReasonDeleting)
 
@@ -2042,4 +2052,30 @@ func filterStorageClassesToRequestedTiers(
 		}
 	}
 	return filtered
+}
+
+func projectComputeInstanceProvisioningStatus(instance *v1alpha1.ComputeInstance, provision networktask.Outcome) {
+	instance.Status.LastProvisioningFailure = nil
+	if failure := provision.LastFailure; failure != nil && instance.Status.ProvisionConfigVersion == instance.Status.DesiredConfigVersion {
+		instance.Status.LastProvisioningFailure = &v1alpha1.ComputeInstanceProvisioningFailure{
+			Reason: failure.Reason, Message: failure.Message, Attempt: failure.Attempt,
+			ObservedAt: failure.ObservedAt.DeepCopy(),
+		}
+	}
+	reason, message := "", ""
+	switch {
+	case provision.Retrying():
+		reason, message = "RetryScheduled", "A provisioning attempt failed; another attempt is scheduled."
+	case provision.Entry.State == v1alpha1.NetworkJobStateRunning && instance.Status.LastProvisioningFailure != nil:
+		reason, message = "RetryRunning", "A provisioning retry is running."
+	case provision.Failed() && instance.Status.ProvisionConfigVersion == instance.Status.DesiredConfigVersion:
+		reason, message = v1alpha1.ReasonProvisioningFailed, "Provisioning failed; no retry is scheduled."
+	}
+	if reason != "" {
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse, message, reason)
+	} else if current := instance.GetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned); current != nil &&
+		(current.Reason == "RetryScheduled" || current.Reason == "RetryRunning") {
+		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionProvisioned, metav1.ConditionFalse,
+			"VirtualMachine not yet created, waiting for provisioning", v1alpha1.ReasonWaitingForVM)
+	}
 }

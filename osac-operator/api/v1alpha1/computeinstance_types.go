@@ -286,8 +286,27 @@ type TenantReferenceType struct {
 	Namespace string `json:"namespace"`
 }
 
+// ComputeInstanceProvisioningFailure is the latest tenant-safe provisioning failure.
+type ComputeInstanceProvisioningFailure struct {
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=ProviderReported;ResultRejected;TimedOut;JobLost;JobNotStarted;InvalidResult;ProviderError
+	Reason string `json:"reason,omitempty"`
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Message string `json:"message,omitempty"`
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=1
+	Attempt int32 `json:"attempt,omitempty"`
+	// +kubebuilder:validation:Required
+	ObservedAt *metav1.Time `json:"observedAt,omitempty"`
+}
+
 // ComputeInstanceStatus defines the observed state of ComputeInstance.
 type ComputeInstanceStatus struct {
+	// LastProvisioningFailure retains the latest failure until success, deletion or a new configuration.
+	// +kubebuilder:validation:Optional
+	LastProvisioningFailure *ComputeInstanceProvisioningFailure `json:"lastProvisioningFailure,omitempty"`
+
 	// Phase provides a single-value overview of the state of the ComputeInstance
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string

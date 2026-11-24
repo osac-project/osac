@@ -475,6 +475,36 @@ spec:
                 - task
                 - manager
                 x-kubernetes-list-type: map
+              lastProvisioningFailure:
+                description: LastProvisioningFailure retains the latest failure until
+                  success, deletion or a new configuration.
+                properties:
+                  attempt:
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  message:
+                    minLength: 1
+                    type: string
+                  observedAt:
+                    format: date-time
+                    type: string
+                  reason:
+                    enum:
+                    - ProviderReported
+                    - ResultRejected
+                    - TimedOut
+                    - JobLost
+                    - JobNotStarted
+                    - InvalidResult
+                    - ProviderError
+                    type: string
+                required:
+                - attempt
+                - message
+                - observedAt
+                - reason
+                type: object
               lastRestartedAt:
                 description: |-
                   LastRestartedAt records when the last restart was initiated by the controller.

@@ -39,6 +39,46 @@ func (*checkpointAAP) ListJobsByLabel(context.Context, string) ([]aap.Job, error
 func (*checkpointAAP) EnsureLabel(context.Context, string, string) (int, error) { return 1, nil }
 
 var _ = Describe("ComputeInstance provision failure checkpoint", func() {
+
+	It("round trips and clears a complete public failure while rejecting incomplete status", func() {
+		instance := &osacv1alpha1.ComputeInstance{
+			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("public-failure-%d", time.Now().UnixNano()), Namespace: "default"},
+			Spec:       newTestComputeInstanceSpec("test_template"),
+		}
+		Expect(k8sClient.Create(ctx, instance)).To(Succeed())
+		DeferCleanup(func() { Expect(k8sClient.Delete(ctx, instance)).To(Succeed()) })
+		observed := metav1.NewTime(time.Date(2026, 11, 24, 8, 0, 0, 0, time.UTC))
+		failure := &osacv1alpha1.ComputeInstanceProvisioningFailure{
+			Reason: "ProviderReported", Message: "Provisioning failed.", Attempt: 2, ObservedAt: &observed,
+		}
+		instance.Status.LastProvisioningFailure = failure
+		Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+		stored := &osacv1alpha1.ComputeInstance{}
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), stored)).To(Succeed())
+		Expect(stored.Status.LastProvisioningFailure).NotTo(BeNil())
+		Expect(stored.Status.LastProvisioningFailure.Reason).To(Equal(failure.Reason))
+		Expect(stored.Status.LastProvisioningFailure.Message).To(Equal(failure.Message))
+		Expect(stored.Status.LastProvisioningFailure.Attempt).To(Equal(failure.Attempt))
+		Expect(stored.Status.LastProvisioningFailure.ObservedAt.Time.Equal(observed.Time)).To(BeTrue())
+		copied := stored.DeepCopy()
+		copied.Status.LastProvisioningFailure.ObservedAt.Time = observed.Add(time.Hour)
+		Expect(stored.Status.LastProvisioningFailure.ObservedAt.Time.Equal(observed.Time)).To(BeTrue())
+		for _, mutate := range []func(*osacv1alpha1.ComputeInstanceProvisioningFailure){
+			func(f *osacv1alpha1.ComputeInstanceProvisioningFailure) { f.Reason = "" },
+			func(f *osacv1alpha1.ComputeInstanceProvisioningFailure) { f.Reason = "Unknown" },
+			func(f *osacv1alpha1.ComputeInstanceProvisioningFailure) { f.Message = "" },
+			func(f *osacv1alpha1.ComputeInstanceProvisioningFailure) { f.Attempt = 0 },
+			func(f *osacv1alpha1.ComputeInstanceProvisioningFailure) { f.ObservedAt = nil },
+		} {
+			invalid := stored.DeepCopy()
+			mutate(invalid.Status.LastProvisioningFailure)
+			Expect(apierrors.IsInvalid(k8sClient.Status().Update(ctx, invalid))).To(BeTrue())
+		}
+		stored.Status.LastProvisioningFailure = nil
+		Expect(k8sClient.Status().Update(ctx, stored)).To(Succeed())
+		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), stored)).To(Succeed())
+		Expect(stored.Status.LastProvisioningFailure).To(BeNil())
+	})
 	It("clears an old configuration failure during retry without resetting backoff", func() {
 		By("creating the instance and arranging the provision engine")
 		instance := &osacv1alpha1.ComputeInstance{

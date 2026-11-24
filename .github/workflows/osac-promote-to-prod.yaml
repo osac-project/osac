@@ -915,13 +915,32 @@ jobs:
                 ])
                 print(f"[{COMPONENT}] Cancelled unfinished PaC PipelineRun {meta['name']}", flush=True)
 
+        def fallback_runs():
+            out = run_oc([
+                "get", "pipelinerun", "-n", NAMESPACE, "-l",
+                f"{FALLBACK_LABEL}={COMMIT_SHA},appstudio.openshift.io/component={COMPONENT}",
+                "-o", "json",
+            ])
+            return sorted(json.loads(out.stdout)["items"], key=lambda i: i["metadata"].get("creationTimestamp", ""))
+
+        def run_succeeded_status(item):
+            return next(
+                (c for c in item.get("status", {}).get("conditions", []) if c.get("type") == "Succeeded"), {},
+            ).get("status")
+
         def start_fallback_build():
             # Konflux sometimes fails to start a chart PipelineRun ("pipelinerun
             # start failure") and leaves it hung at clone-repository. The same
             # PipelineRun created without the PaC git-auth workspace builds
             # normally, so create one from this commit's own .tekton template.
+            # If this job is re-run, reuse a fallback build that is still
+            # running or already succeeded; only a failed one is started again.
             # Returns False, with a warning, if anything about that fails.
             try:
+                for existing in fallback_runs():
+                    if not existing.get("status", {}).get("completionTime") or run_succeeded_status(existing) == "True":
+                        print(f"[{COMPONENT}] Reusing fallback build {existing['metadata']['name']}", flush=True)
+                        return True
                 url = (
                     f"https://api.github.com/repos/{GITHUB_REPOSITORY}/contents/"
                     f".tekton/{COMPONENT}/release.yaml?ref={COMMIT_SHA}"
@@ -970,20 +989,10 @@ jobs:
 
         def fallback_build_failed():
             try:
-                out = run_oc([
-                    "get", "pipelinerun", "-n", NAMESPACE, "-l",
-                    f"{FALLBACK_LABEL}={COMMIT_SHA},appstudio.openshift.io/component={COMPONENT}",
-                    "-o", "json",
-                ])
+                runs = fallback_runs()
             except subprocess.CalledProcessError:
                 return False
-            runs = sorted(json.loads(out.stdout)["items"], key=lambda i: i["metadata"].get("creationTimestamp", ""))
-            if not runs:
-                return False
-            succeeded = next(
-                (c for c in runs[-1].get("status", {}).get("conditions", []) if c.get("type") == "Succeeded"), {},
-            )
-            return succeeded.get("status") == "False"
+            return bool(runs) and run_succeeded_status(runs[-1]) == "False"
 
         deadline = time.time() + TIMEOUT_SECONDS
         found = None

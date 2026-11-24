@@ -52,7 +52,8 @@ while IFS= read -r tag; do
     version="${tag#fulfillment-service/v}"
     break
   fi
-done < <(git -C "${repo_root}" tag --list 'fulfillment-service/v*')
+done < <(git -C "${repo_root}" -c versionsort.suffix=-rc \
+  tag --list 'fulfillment-service/v*' --sort=-version:refname)
 
 # Git's version sort treats "-rc.N" as later than the final release unless told
 # otherwise, which would pick an RC over the final tag. Mark it as a pre-release

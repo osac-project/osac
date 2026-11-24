@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -193,6 +194,97 @@ var _ = Describe("Identity provider login flow", func() {
 	It("Allows an IdP-linked user to authenticate and obtain a token", func() {
 		token := provisionAndLogin(ctx, tenantName, idpAlias)
 		Expect(token).ToNot(BeEmpty(), "expected a non-empty KC access token from the full OIDC flow")
+	})
+
+	It("Keeps two brokers independent when one provider is updated", func() {
+		// Both brokers point at the same external realm, but use distinct OSAC
+		// Secret resources. This verifies reference isolation without making the
+		// second broker unusable for the authentication assertion below.
+		secondSecret := createIdPClientSecret(ctx, secretsClient, tenantName, extRealm.ClientSecret())
+		replacementSecret := createIdPClientSecret(ctx, secretsClient, tenantName, extRealm.ClientSecret())
+		secondName := fmt.Sprintf("second-%s", uuid.New())
+		secondAlias := fmt.Sprintf("%s-%s", tenantName, secondName)
+
+		secondResponse, err := client.Create(ctx, privatev1.IdentityProvidersCreateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Metadata: privatev1.Metadata_builder{Name: secondName, Tenant: tenantName}.Build(),
+				Spec: privatev1.IdentityProviderSpec_builder{
+					Title: "Second Broker", Enabled: true,
+					Oidc: privatev1.OidcConfig_builder{
+						AuthorizationUrl:   extRealm.AuthorizationURL(),
+						TokenUrl:           extRealm.TokenURL(),
+						ClientId:           extRealm.ClientID(),
+						ClientSecretSecret: secondSecret,
+						Issuer:             extRealm.IssuerURL(),
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		secondID := secondResponse.GetObject().GetId()
+		DeferCleanup(func() {
+			_, _ = client.Delete(ctx, privatev1.IdentityProvidersDeleteRequest_builder{Id: secondID}.Build())
+		})
+
+		waitReady := func(id string) {
+			Eventually(func(g Gomega) {
+				response, getErr := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{Id: id}.Build())
+				g.Expect(getErr).ToNot(HaveOccurred())
+				g.Expect(response.GetObject().GetStatus().GetPhase()).To(Equal(
+					privatev1.IdentityProviderPhase_IDENTITY_PROVIDER_PHASE_READY))
+			}, 2*time.Minute, time.Second).Should(Succeed())
+		}
+		waitReady(secondID)
+		Expect(tool.PatchKCIdPDisableTrustManager(ctx, secondAlias)).To(Succeed())
+
+		firstBefore, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{Id: osacIdpID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		firstRef := firstBefore.GetObject().GetSpec().GetOidc().GetClientSecretSecret()
+
+		_, err = client.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+			Object:     privatev1.IdentityProvider_builder{Id: osacIdpID, Spec: privatev1.IdentityProviderSpec_builder{Title: "Updated First Broker"}.Build()}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.title"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		waitReady(osacIdpID)
+
+		// Replace only the first broker's secret reference. Keeping the external
+		// credential the same lets the subsequent login prove that reconciliation
+		// completed successfully, while the reference identity still changes.
+		_, err = client.Update(ctx, privatev1.IdentityProvidersUpdateRequest_builder{
+			Object: privatev1.IdentityProvider_builder{
+				Id: osacIdpID,
+				Spec: privatev1.IdentityProviderSpec_builder{
+					Oidc: privatev1.OidcConfig_builder{
+						ClientSecretSecret: replacementSecret,
+					}.Build(),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.oidc.client_secret_secret"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		waitReady(osacIdpID)
+
+		firstAfter, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{Id: osacIdpID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		secondAfter, err := client.Get(ctx, privatev1.IdentityProvidersGetRequest_builder{Id: secondID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(firstAfter.GetObject().GetSpec().GetTitle()).To(Equal("Updated First Broker"))
+		Expect(firstAfter.GetObject().GetSpec().GetOidc().GetClientSecretSecret().GetId()).ToNot(Equal(firstRef.GetId()))
+		Expect(firstAfter.GetObject().GetSpec().GetOidc().GetClientSecretSecret().GetId()).To(Equal(replacementSecret.GetId()))
+		Expect(secondAfter.GetObject().GetSpec().GetTitle()).To(Equal("Second Broker"))
+		Expect(secondAfter.GetObject().GetSpec().GetOidc().GetClientSecretSecret().GetId()).To(Equal(secondSecret.GetId()))
+
+		firstToken := provisionAndLogin(ctx, tenantName, idpAlias)
+		Expect(firstToken).ToNot(BeEmpty())
+		secondToken := provisionAndLogin(ctx, tenantName, secondAlias)
+		Expect(secondToken).ToNot(BeEmpty())
+
+		for _, alias := range []string{idpAlias, secondAlias} {
+			code, _, requestErr := tool.KeycloakAdminRequest(ctx, "GET", "/identity-provider/instances/"+alias, nil)
+			Expect(requestErr).ToNot(HaveOccurred())
+			Expect(code).To(Equal(200), "broker %q should remain independently registered", alias)
+		}
 	})
 
 	It("Scopes IdP user access to their tenant", func() {

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import base64
+import importlib
 import io
 import json
-from urllib.error import HTTPError
+from pathlib import Path
+from urllib.error import HTTPError, URLError
 
 import pytest
 from ansible.errors import AnsibleError
@@ -13,6 +15,7 @@ import fulfillment_token as plugin
 ISSUER = "https://keycloak.example/realms/osac"
 CLIENT_ID = "test-client"
 TEST_CLIENT_SECRET = "test-secret"
+INTERNAL_API_URL = "https://fulfillment.example:8001"
 
 
 class FakeResponse:
@@ -67,6 +70,8 @@ def set_credentials(monkeypatch):
     monkeypatch.setenv("OSAC_FULFILLMENT_ISSUER_URL", ISSUER)
     monkeypatch.setenv("OSAC_FULFILLMENT_CLIENT_ID", CLIENT_ID)
     monkeypatch.setenv("OSAC_FULFILLMENT_CLIENT_SECRET", TEST_CLIENT_SECRET)
+    monkeypatch.delenv("OSAC_FULFILLMENT_CLIENT_SECRET_FILE", raising=False)
+    monkeypatch.delenv("OSAC_FULFILLMENT_CA_FILE", raising=False)
     monkeypatch.delenv("SSL_CERT_FILE", raising=False)
 
 
@@ -213,3 +218,137 @@ def test_rejects_token_response_without_a_valid_expiry(monkeypatch):
 
     with pytest.raises(AnsibleError, match="valid expiry"):
         _lookup()
+
+
+def test_loads_the_client_secret_from_the_runtime_file(monkeypatch, tmp_path):
+    opener = FakeOpener()
+    _install_opener(monkeypatch, opener)
+    credential = tmp_path / "credential"
+    credential.write_text("file-secret\n")
+    monkeypatch.setenv("OSAC_FULFILLMENT_CLIENT_SECRET_FILE", str(credential))
+
+    assert _lookup() == "access-token-1"
+
+    token_request = next(call for call in opener.calls if call.get_method() == "POST")
+    expected = base64.b64encode(f"{CLIENT_ID}:file-secret".encode()).decode()
+    assert token_request.get_header("Authorization") == f"Basic {expected}"
+
+
+def test_a_missing_runtime_file_fails_without_falling_back_or_revealing_its_path(monkeypatch, tmp_path):
+    opener = FakeOpener()
+    _install_opener(monkeypatch, opener)
+    path = tmp_path / "unavailable-credential"
+    monkeypatch.setenv("OSAC_FULFILLMENT_CLIENT_SECRET_FILE", str(path))
+
+    with pytest.raises(AnsibleError, match="client secret file could not be read") as exc_info:
+        _lookup()
+    assert str(path) not in str(exc_info.value)
+    assert opener.calls == []
+
+
+@pytest.fixture
+def secret_lookup(monkeypatch):
+    collections = Path(__file__).resolve().parents[4] / "collections"
+    monkeypatch.syspath_prepend(str(collections))
+    namespace = "ansible_collections.osac.service.plugins.lookup."
+    token = importlib.import_module(namespace + "fulfillment_token")
+    secret_data = importlib.import_module(namespace + "fulfillment_secret_data")
+    token._TOKEN_CACHE.clear()
+    monkeypatch.setenv("OSAC_FULFILLMENT_INTERNAL_API_URL", INTERNAL_API_URL)
+    return token, secret_data.LookupModule()
+
+
+@pytest.mark.parametrize("secret_id", ["", ".", "..", "tenant/source-id", 123])
+def test_rejects_invalid_secret_ids_before_network_requests(monkeypatch, secret_lookup, secret_id):
+    token, lookup = secret_lookup
+    opener = FakeOpener()
+    monkeypatch.setattr(token, "build_opener", lambda *handlers: opener)
+
+    assert lookup.run([secret_id], data_key="fixture-key") == [{"error": "The Fulfillment Secret ID is invalid."}]
+    assert opener.calls == []
+
+
+@pytest.mark.parametrize(
+    ("url", "error"),
+    [
+        (f"{INTERNAL_API_URL}/api", "The Fulfillment internal API URL must identify the listener root."),
+        ("https://fulfillment.example:invalid", "Fulfillment internal API URL is not a valid HTTPS URL."),
+        ("https://fulfillment.example:65536", "Fulfillment internal API URL is not a valid HTTPS URL."),
+    ],
+)
+def test_rejects_invalid_secret_api_urls_before_network_requests(monkeypatch, secret_lookup, url, error):
+    token, lookup = secret_lookup
+    opener = FakeOpener()
+    monkeypatch.setattr(token, "build_opener", lambda *handlers: opener)
+    monkeypatch.setenv("OSAC_FULFILLMENT_INTERNAL_API_URL", url)
+
+    assert lookup.run(["source-id"], data_key="fixture-key") == [{"error": error}]
+    assert opener.calls == []
+
+
+@pytest.mark.parametrize(
+    ("responses", "expected", "tokens"),
+    [
+        (
+            [401, {"fixture-key": "Zml4dHVyZQ==", "other-key": "YXV4"}],
+            {"value": "Zml4dHVyZQ=="},
+            ["access-token-1", "access-token-2"],
+        ),
+        (
+            [401, 401],
+            {"error": "Fulfillment rejected the refreshed AAP credentials."},
+            ["access-token-1", "access-token-2"],
+        ),
+        (
+            [403],
+            {"error": "The AAP credential does not have permission to read the Fulfillment Secret."},
+            ["access-token-1"],
+        ),
+        ([404], {"error": "The Fulfillment Secret is unavailable."}, ["access-token-1"]),
+        ([502], {"error": "Fulfillment Secret read request failed with HTTP 502."}, ["access-token-1"]),
+        (
+            [{}],
+            {"error": "The Fulfillment Secret does not contain a non-empty value for the requested data key."},
+            ["access-token-1"],
+        ),
+        (
+            [{"fixture-key": "opaque response!"}],
+            {"error": "Fulfillment returned invalid base64 Secret data."},
+            ["access-token-1"],
+        ),
+        (
+            [URLError("opaque connection detail")],
+            {"error": "Fulfillment Secret read request could not be completed."},
+            ["access-token-1"],
+        ),
+        (
+            [TimeoutError("opaque timeout detail")],
+            {"error": "Fulfillment Secret read request could not be completed."},
+            ["access-token-1"],
+        ),
+    ],
+)
+def test_secret_read_retries_only_a_rejected_token(monkeypatch, secret_lookup, responses, expected, tokens):
+    token, lookup = secret_lookup
+    auth = FakeOpener()
+    bearer_tokens = []
+
+    class SecretAPI:
+        def open(self, request, timeout):
+            if request.host != "fulfillment.example:8001":
+                return auth.open(request, timeout)
+            assert request.get_method() == "GET"
+            assert request.selector == "/api/private/v1/secrets/source-id"
+            bearer_tokens.append(request.get_header("Authorization").removeprefix("Bearer "))
+            response = responses[len(bearer_tokens) - 1]
+            if isinstance(response, Exception):
+                raise response
+            if isinstance(response, int):
+                raise HTTPError(request.full_url, response, "", {}, io.BytesIO(b"sensitive response"))
+            return FakeResponse({"data": response})
+
+    monkeypatch.setattr(token, "build_opener", lambda *handlers: SecretAPI())
+    assert token.get_access_token_from_environment() == "access-token-1"
+    assert lookup.run(["source-id"], data_key="fixture-key") == [expected]
+    assert bearer_tokens == tokens
+    assert auth.token_requests == len(tokens)

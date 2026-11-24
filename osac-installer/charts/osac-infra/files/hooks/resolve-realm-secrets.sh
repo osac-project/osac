@@ -12,6 +12,7 @@ if ! oc get secret "${SECRET_NAME}" -n "${NAMESPACE}"; then
     echo "Generating Keycloak client secrets..."
     oc create secret generic "${SECRET_NAME}" -n "${NAMESPACE}" \
         --from-literal=osac-controller="$(openssl rand -base64 18)" \
+        --from-literal=osac-aap-secret-reader="$(openssl rand -base64 18)" \
         --from-literal=osac-admin="$(openssl rand -base64 18)" \
         --from-literal=osac-csi-driver="$(openssl rand -base64 18)" \
         --from-literal=osac-ui-backend="$(openssl rand -base64 18)" \
@@ -38,8 +39,14 @@ else
         oc patch secret "${SECRET_NAME}" -n "${NAMESPACE}" \
             -p "{\"data\":{\"osac-mcp-exchange\":\"$(printf '%s' "${MCP_EXCHANGE_NEW}" | base64 -w0)\"}}"
     fi
+    if ! oc get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.osac-aap-secret-reader}' | grep -q .; then
+        printf '{"data":{"osac-aap-secret-reader":"%s"}}' "$(openssl rand -base64 18 | base64 -w0)" \
+            | oc patch secret "${SECRET_NAME}" -n "${NAMESPACE}" --patch-file /dev/stdin >/dev/null
+    fi
 fi
 
+AAP_READER_SECRET=$(oc get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.osac-aap-secret-reader}' | base64 -d)
+[[ -n "${AAP_READER_SECRET}" ]] || { echo "ERROR: ${SECRET_NAME} missing osac-aap-secret-reader key" >&2; exit 1; }
 CONTROLLER_SECRET=$(oc get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.osac-controller}' | base64 -d)
 ADMIN_SECRET=$(oc get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.osac-admin}' | base64 -d)
 CSI_DRIVER_SECRET=$(oc get secret "${SECRET_NAME}" -n "${NAMESPACE}" -o jsonpath='{.data.osac-csi-driver}' | base64 -d)
@@ -102,6 +109,7 @@ escape_sed_replacement() {
 
 sed \
     -e "s#__OSAC_CONTROLLER_CLIENT_SECRET__#${CONTROLLER_SECRET}#" \
+    -e "s#__OSAC_AAP_SECRET_READER_CLIENT_SECRET__#$(escape_sed_replacement "$(json_escape_string "${AAP_READER_SECRET}")")#" \
     -e "s#__OSAC_ADMIN_CLIENT_SECRET__#${ADMIN_SECRET}#" \
     -e "s#__OSAC_CSI_DRIVER_CLIENT_SECRET__#${CSI_DRIVER_SECRET}#" \
     -e "s#__OSAC_UI_BACKEND_CLIENT_SECRET__#${UI_BACKEND_SECRET}#" \

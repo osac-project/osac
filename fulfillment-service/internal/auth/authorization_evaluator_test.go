@@ -89,6 +89,76 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 		})
 	})
 
+	Describe("AAP Secret reader", func() {
+		const clientID = "osac-aap-secret-reader"
+		const getSecret = "/osac.private.v1.Secrets/Get"
+
+		var evaluator *OPAAuthorizationEvaluator
+		var identity *AuthContext
+
+		BeforeEach(func() {
+			var err error
+			evaluator, err = NewEvaluator().Build()
+			Expect(err).NotTo(HaveOccurred())
+			identity = &AuthContext{
+				AuthMethod: "jwt", AuthorizedParty: clientID, ClientID: clientID,
+				Username: "service-account-" + clientID,
+			}
+		})
+
+		It("allows private Get with visibility across the deployment", func(ctx context.Context) {
+			identity.Groups = []any{"admins"}
+			identity.Organization = []any{"tenant-a"}
+			identity.RealmAccess = map[string]any{"roles": []any{"osac-csi-driver"}}
+			decision, err := evaluator.Evaluate(ctx, identity, getSecret)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(decision).To(Equal(&AuthzDecision{
+				Allowed:        true,
+				SubjectUser:    identity.Username,
+				SubjectTenant:  SystemTenant,
+				SubjectTenants: []string{"*"},
+			}))
+		})
+
+		DescribeTable("denies other methods even when the token contains an admin group",
+			func(ctx context.Context, method string) {
+				identity.Groups = []any{"admins"}
+				decision, err := evaluator.Evaluate(ctx, identity, method)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(decision.Allowed).To(BeFalse())
+			},
+			Entry("public Get", "/osac.public.v1.Secrets/Get"),
+			Entry("private List", "/osac.private.v1.Secrets/List"),
+			Entry("private Create", "/osac.private.v1.Secrets/Create"),
+			Entry("private Update", "/osac.private.v1.Secrets/Update"),
+			Entry("private Delete", "/osac.private.v1.Secrets/Delete"),
+			Entry("unrelated read", "/osac.private.v1.ComputeInstances/Get"),
+		)
+
+		DescribeTable("requires the dedicated client credentials claims on a JWT identity",
+			func(ctx context.Context, mutate func(*AuthContext)) {
+				mutate(identity)
+				decision, err := evaluator.Evaluate(ctx, identity, getSecret)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(decision.Allowed).To(BeFalse())
+			},
+			Entry("Kubernetes service account", func(i *AuthContext) { i.AuthMethod = "serviceaccount" }),
+			Entry("wrong authorized party", func(i *AuthContext) { i.AuthorizedParty = "another-client" }),
+			Entry("different service-account client", func(i *AuthContext) {
+				i.AuthorizedParty = "another-client"
+				i.ClientID = "another-client"
+				i.Username = "service-account-another-client"
+			}),
+			Entry("missing client credentials claim", func(i *AuthContext) { i.ClientID = "" }),
+			Entry("wrong username", func(i *AuthContext) { i.Username = "ordinary-user" }),
+			Entry("managed service account", func(i *AuthContext) { i.ManagedServiceAccountCandidate = true }),
+			Entry("admin group without client credentials claim", func(i *AuthContext) {
+				i.ClientID = ""
+				i.Groups = []any{"admins"}
+			}),
+		)
+	})
+
 	Describe("Evaluate", func() {
 		var evaluator *OPAAuthorizationEvaluator
 

@@ -54,6 +54,9 @@ type AuthzDecision struct {
 // This structure preserves all claims needed for OPA policy evaluation, ensuring
 // identical authorization decisions for both actual operations and permission checks.
 type AuthContext struct {
+	AuthorizedParty string
+	ClientID        string
+
 	// AuthMethod indicates the authentication method: "jwt" or "serviceaccount"
 	AuthMethod string
 
@@ -358,6 +361,8 @@ func constructOPAInput(authContext *AuthContext, method string) map[string]any {
 		identity["user"] = user
 	} else {
 		// For JWT tokens, include username at top level and conditionally include claims
+		identity["azp"] = authContext.AuthorizedParty
+		identity["client_id"] = authContext.ClientID
 		if authContext.Username != "" {
 			identity["username"] = authContext.Username
 		}

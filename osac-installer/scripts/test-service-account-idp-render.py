@@ -103,6 +103,43 @@ def check():
     assert len(setup_jobs) == 1
     assert "mountPath: /etc/keycloak/ca" in setup_jobs[0]
     assert "secretName: keycloak-tls-cert" in setup_jobs[0]
+    reader_id = "osac-aap-secret-reader"
+    reader = next(client for client in realm["clients"] if client["clientId"] == reader_id)
+    assert reader["serviceAccountsEnabled"] is True
+    assert reader["publicClient"] is False
+    assert reader["fullScopeAllowed"] is False
+    assert reader["standardFlowEnabled"] is False
+    assert reader["directAccessGrantsEnabled"] is False
+    assert reader["secret"] == "__OSAC_AAP_SECRET_READER_CLIENT_SECRET__"
+    assert {"osac-api", "service_account"}.issubset(reader["defaultClientScopes"])
+    reader_user = next(u for u in realm["users"] if u["username"] == "service-account-" + reader_id)
+    assert reader_user["serviceAccountClientId"] == reader_id
+    assert not any(reader_user.get(field) for field in ("groups", "clientRoles", "realmRoles"))
+
+    platform = INSTALLER / "charts/osac"
+    values = str(platform / "ci/default-values.yaml")
+    reader_docs = render(
+        platform,
+        "-f", values,
+        "--set", "service.auth.issuerUrl=https://issuer.example/realms/osac",
+        "--set", "aap.configAsCode.fulfillmentInternalApiUrl=https://fulfillment.example",
+    )
+    config = next(d for d in reader_docs if "kind: ConfigMap\n" in d and "  name: aap-fulfillment-secret-reader\n" in d)
+    assert "OSAC_AAP_SECRET_READER_CLIENT_ID" not in config
+    assert 'OSAC_AAP_SECRET_READER_ISSUER_URL: "https://issuer.example/realms/osac"' in config
+    assert 'OSAC_AAP_SECRET_READER_API_URL: "https://fulfillment.example"' in config
+    assert "CLIENT_SECRET" not in config
+    deployment = next(d for d in reader_docs if "kind: Deployment\n" in d and "  name: fulfillment-grpc-server\n" in d)
+    assert "--aap-secret-reader-client-id" not in deployment
+    assert "--grpc-authn-trusted-token-issuers=https://issuer.example/realms/osac" in deployment
+    assert "--aap-secret-reader-issuer" not in deployment
+    bootstrap = next(d for d in reader_docs if "kind: Job\n" in d and "name: OSAC_AAP_SECRET_READER_CLIENT_SECRET" in d)
+    assert bootstrap.count("name: aap-fulfillment-secret-reader") == 2
+    assert "key: client-secret" in bootstrap
+    without_vmaas = render(platform, "-f", values, "--set", "global.services.vmaas.enabled=false")
+    assert any("--enable-vmaas=false" in d and "  name: fulfillment-grpc-server\n" in d for d in without_vmaas)
+    assert any("OSAC_AAP_SECRET_READER_ISSUER_URL" in d for d in without_vmaas)
+    assert any("kind: Job\n" in d and "name: OSAC_AAP_SECRET_READER_CLIENT_SECRET" in d for d in without_vmaas)
     print("Service-account IDP rendering passed.")
 
 

@@ -12,6 +12,7 @@ import json
 import os
 import ssl
 import threading
+from pathlib import Path
 from time import monotonic
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus, urlencode, urlsplit, urlunsplit
@@ -25,6 +26,12 @@ _TOKEN_CACHE_LOCK = threading.Lock()
 _TOKEN_REFRESH_SKEW_SECONDS = 60
 _REQUEST_TIMEOUT_SECONDS = 10
 _MAX_RESPONSE_BYTES = 1024 * 1024
+
+
+class HTTPRequestError(AnsibleError):
+    def __init__(self, operation: str, status: int):
+        super().__init__(f"{operation} request failed with HTTP {status}.")
+        self.status = status
 
 
 class _NoRedirectHandler(HTTPRedirectHandler):
@@ -66,6 +73,7 @@ def _request_json(
     headers: dict[str, str],
     ca_file: str,
     operation: str,
+    max_response_bytes: int = _MAX_RESPONSE_BYTES,
 ) -> dict:
     try:
         context = ssl.create_default_context(cafile=ca_file or None)
@@ -79,36 +87,40 @@ def _request_json(
     except HTTPError as err:
         status = err.code
         err.close()
-        raise AnsibleError(f"Keycloak {operation} request failed with HTTP {status}.") from None
+        raise HTTPRequestError(operation, status) from None
     except (URLError, OSError, TimeoutError, ssl.SSLError):
-        raise AnsibleError(f"Keycloak {operation} request could not be completed.") from None
+        raise AnsibleError(f"{operation} request could not be completed.") from None
 
     try:
-        payload = response.read(_MAX_RESPONSE_BYTES + 1)
+        payload = response.read(max_response_bytes + 1)
     except (OSError, TimeoutError):
-        raise AnsibleError(f"Keycloak {operation} response could not be read.") from None
+        raise AnsibleError(f"{operation} response could not be read.") from None
     finally:
         response.close()
 
-    if len(payload) > _MAX_RESPONSE_BYTES:
-        raise AnsibleError(f"Keycloak {operation} response was too large.")
+    if len(payload) > max_response_bytes:
+        raise AnsibleError(f"{operation} response was too large.")
 
     try:
         decoded = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError):
-        raise AnsibleError(f"Keycloak {operation} response was not valid JSON.") from None
+        raise AnsibleError(f"{operation} response was not valid JSON.") from None
     if not isinstance(decoded, dict):
-        raise AnsibleError(f"Keycloak {operation} response was not a JSON object.")
+        raise AnsibleError(f"{operation} response was not a JSON object.")
     return decoded
 
 
-def _get_access_token(issuer_url: str, client_id: str, client_secret: str, ca_file: str) -> str:
+def _get_access_token(
+    issuer_url: str, client_id: str, client_secret: str, ca_file: str, *, force_refresh: bool = False
+) -> str:
     issuer, issuer_origin = _parse_https_url(issuer_url, "Fulfillment issuer URL")
-    cache_material = "\0".join((issuer_url.strip(), client_id, client_secret)).encode()
+    cache_material = "\0".join((issuer_url.strip(), client_id, client_secret, ca_file)).encode()
     cache_key = hashlib.sha256(cache_material).hexdigest()
 
     with _TOKEN_CACHE_LOCK:
         now = monotonic()
+        if force_refresh:
+            _TOKEN_CACHE.pop(cache_key, None)
         cached = _TOKEN_CACHE.get(cache_key)
         if cached and now < cached[1]:
             return cached[0]
@@ -123,7 +135,7 @@ def _get_access_token(issuer_url: str, client_id: str, client_secret: str, ca_fi
             body=None,
             headers={"Accept": "application/json"},
             ca_file=ca_file,
-            operation="issuer discovery",
+            operation="Keycloak issuer discovery",
         )
 
         discovered_issuer = metadata.get("issuer")
@@ -157,7 +169,7 @@ def _get_access_token(issuer_url: str, client_id: str, client_secret: str, ca_fi
                 "Content-Type": "application/x-www-form-urlencoded",
             },
             ca_file=ca_file,
-            operation="client-credentials token",
+            operation="Keycloak client-credentials token",
         )
 
         access_token = token_response.get("access_token")
@@ -172,23 +184,38 @@ def _get_access_token(issuer_url: str, client_id: str, client_secret: str, ca_fi
         return access_token
 
 
+def fulfillment_ca_file() -> str:
+    return (os.environ.get("OSAC_FULFILLMENT_CA_FILE") or os.environ.get("SSL_CERT_FILE", "")).strip()
+
+
+def get_access_token_from_environment(*, force_refresh: bool = False) -> str:
+    issuer_url = os.environ.get("OSAC_FULFILLMENT_ISSUER_URL", "").strip()
+    client_id = os.environ.get("OSAC_FULFILLMENT_CLIENT_ID", "").strip()
+    secret_file = os.environ.get("OSAC_FULFILLMENT_CLIENT_SECRET_FILE", "").strip()
+    if secret_file:
+        try:
+            client_secret = Path(secret_file).read_text(encoding="utf-8").rstrip("\r\n")
+        except (OSError, UnicodeError, ValueError):
+            raise AnsibleError("The Fulfillment client secret file could not be read.") from None
+    else:
+        client_secret = os.environ.get("OSAC_FULFILLMENT_CLIENT_SECRET", "")
+    if not issuer_url or not client_id or not client_secret:
+        raise AnsibleError(
+            "Fulfillment authentication requires OSAC_FULFILLMENT_ISSUER_URL, OSAC_FULFILLMENT_CLIENT_ID, "
+            "and OSAC_FULFILLMENT_CLIENT_SECRET_FILE or OSAC_FULFILLMENT_CLIENT_SECRET."
+        )
+
+    return _get_access_token(
+        issuer_url,
+        client_id,
+        client_secret,
+        fulfillment_ca_file(),
+        force_refresh=force_refresh,
+    )
+
+
 class LookupModule(LookupBase):
     """Return a cached token, refreshing it before it is close to expiry."""
 
     def run(self, terms, variables=None, **kwargs):
-        issuer_url = os.environ.get("OSAC_FULFILLMENT_ISSUER_URL", "").strip()
-        client_id = os.environ.get("OSAC_FULFILLMENT_CLIENT_ID", "").strip()
-        client_secret = os.environ.get("OSAC_FULFILLMENT_CLIENT_SECRET", "")
-        if not issuer_url or not client_id or not client_secret:
-            raise AnsibleError(
-                "OSAC_FULFILLMENT_ISSUER_URL, OSAC_FULFILLMENT_CLIENT_ID, and "
-                "OSAC_FULFILLMENT_CLIENT_SECRET are required for Fulfillment authentication."
-            )
-
-        token = _get_access_token(
-            issuer_url,
-            client_id,
-            client_secret,
-            os.environ.get("SSL_CERT_FILE", "").strip(),
-        )
-        return [token]
+        return [get_access_token_from_environment()]

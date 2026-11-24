@@ -295,6 +295,57 @@ API identity. Its projected Kubernetes token is separate from the Keycloak
 client-credentials token used for Fulfillment requests; it no longer needs
 permission to create service-account tokens.
 
+#### Fulfillment Secret reader
+
+The platform configures the bundled Keycloak client `osac-aap-secret-reader`.
+When Fulfillment is enabled, AAP bootstrap registers the custom credential
+`<prefix>-fulfillment-secret-reader`. Fulfillment limits this identity to
+private `Secrets/Get`. The grant covers every Secret type in all customer
+tenants and in the `shared` and `system` scopes, including protected
+credentials. Restrict access to the credential and any associated job
+template, project, and runner to trusted automation.
+
+The ComputeInstance create template uses this credential by default. Other
+trusted job templates can attach it to read private Fulfillment Secrets.
+
+Fulfillment accepts tokens for this client from any configured trusted
+issuer when the token carries the required client and service-account claims.
+
+The bootstrap Job reads `client-secret` from the
+`aap-fulfillment-secret-reader` Secret in the OSAC namespace. For an external
+Keycloak deployment, create a confidential service-account-only client with
+the ID `osac-aap-secret-reader`, the `osac-api` audience, a `client_id` claim,
+the service-account username `service-account-osac-aap-secret-reader`, and
+no administrative roles. Provision the Kubernetes Secret through your
+secret-management system before running bootstrap.
+
+The credential injects a client secret file, client ID, issuer URL, private
+API URL, and CA bundle path into the runner. Configure the job's instance
+group to mount the `ca-bundle` ConfigMap at `/etc/ca-bundle`. The default
+private API URL is `https://fulfillment-internal-api:8001`. If the runner
+cannot reach the Service, point `aap.configAsCode.fulfillmentInternalApiUrl`
+at the internal API Route and ensure the bundle trusts both that Route and
+the issuer.
+
+Use `query('osac.service.fulfillment_secret_data', secret_id, data_key='key') | first`
+to read a data key by canonical Secret ID. The lookup returns the
+base64-encoded `value` or a sanitized `error`. It uses Fulfillment's
+private API and retries once on HTTP 401 with a fresh Keycloak token.
+Keep the result under `no_log` and out of persistent facts, job extra vars,
+and job artifacts. Jobs that call other Fulfillment methods can reuse
+`osac.service.fulfillment_token` with their own identity and grant. The
+template publisher can supply its secret through
+`OSAC_FULFILLMENT_CLIENT_SECRET`.
+
+To rotate the credential, rotate the secret in Keycloak and update the
+protected bootstrap Secret. On a bundled installation, update the
+`osac-aap-secret-reader` key in Keycloak's `keycloak-client-secrets` Secret
+so the next infrastructure run copies the current value. Rerun platform
+bootstrap to update the existing AAP credential. Launch a fresh job with
+the attached credential to confirm delivery of the updated file. A job
+running with the previous file needs a fresh launch to use the new
+credential.
+
 #### Bootstrap AAP configuration
 
 Use the execution environment built in the scope of `osac-aap` to run the

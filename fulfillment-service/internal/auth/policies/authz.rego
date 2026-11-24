@@ -17,6 +17,22 @@ import rego.v1
 
 default allow := false
 
+# Tokens issued to the dedicated AAP client use only the Secret read grant.
+aap_secret_reader_client_id := "osac-aap-secret-reader"
+
+is_aap_secret_reader_client if {
+  input.auth.identity.authnMethod == "jwt"
+  input.auth.identity.azp == aap_secret_reader_client_id
+}
+
+aap_secret_read_allowed if {
+  is_aap_secret_reader_client
+  not is_managed_service_account_candidate
+  input.auth.identity.client_id == aap_secret_reader_client_id
+  subject_name == concat("", ["service-account-", aap_secret_reader_client_id])
+  grpc_method == "/osac.private.v1.Secrets/Get"
+}
+
 # A managed-client marker suppresses all legacy JWT role and group grants. The
 # marker is based on signed claims; policy grants require a current database
 # resolution by the authorization evaluator.
@@ -28,13 +44,19 @@ is_managed_service_account_candidate if {
 default is_managed_service_account_valid := false
 is_managed_service_account_valid if {
   is_managed_service_account_candidate
+  not is_aap_secret_reader_client
   input.auth.identity.authnMethod == "jwt"
   input.auth.identity.managed_service_account_claims_valid == true
   input.auth.identity.managed_service_account_valid == true
 }
 
-allow if {
+is_legacy_principal if {
   not is_managed_service_account_candidate
+  not is_aap_secret_reader_client
+}
+
+allow if {
+  is_legacy_principal
   legacy_allow
 }
 
@@ -42,6 +64,8 @@ allow if {
   is_managed_service_account_valid
   managed_service_account_grant
 }
+
+allow if aap_secret_read_allowed
 
 # Emergency service accounts are Kubernetes service accounts that are allowed to act as administrators in case of
 # emergency situations where it isn't possible to get a valid JWT token from the identity provider. The full service
@@ -98,14 +122,14 @@ default subject_tenants = []
 # Extract tenant names from organization array (simple format: ["org-name"])
 subject_tenants = input.auth.identity.organization if {
   input.auth.identity.authnMethod == "jwt"
-  not is_managed_service_account_candidate
+  is_legacy_principal
   is_array(input.auth.identity.organization)
 }
 
 # Extract tenant names from organization object (Keycloak format: {"org-name": {"groups": [...]}})
 subject_tenants = [org_name | input.auth.identity.organization[org_name]] if {
   input.auth.identity.authnMethod == "jwt"
-  not is_managed_service_account_candidate
+  is_legacy_principal
   is_object(input.auth.identity.organization)
 }
 
@@ -122,7 +146,7 @@ subject_tenants = [input.auth.identity.managed_service_account_tenant] if {
 default subject_realm_roles = []
 subject_realm_roles = input.auth.identity.realm_access.roles if {
   input.auth.identity.authnMethod == "jwt"
-  not is_managed_service_account_candidate
+  is_legacy_principal
   input.auth.identity.realm_access
   input.auth.identity.realm_access.roles
 }
@@ -144,7 +168,7 @@ default subject_org_groups = {}
 # If organization is an object with groups, use it directly
 subject_org_groups := input.auth.identity.organization if {
   input.auth.identity.authnMethod == "jwt"
-  not is_managed_service_account_candidate
+  is_legacy_principal
   is_object(input.auth.identity.organization)
 }
 
@@ -154,7 +178,7 @@ subject_org_groups := {tenant: {"groups": input.auth.identity.groups} |
   some tenant in input.auth.identity.organization
 } if {
   input.auth.identity.authnMethod == "jwt"
-  not is_managed_service_account_candidate
+  is_legacy_principal
   is_array(input.auth.identity.organization)
   input.auth.identity.groups
 }
@@ -162,15 +186,15 @@ subject_org_groups := {tenant: {"groups": input.auth.identity.groups} |
 # Check if an account is an admin account:
 default is_admin = false
 is_admin if {
-  not is_managed_service_account_candidate
+  is_legacy_principal
   subject_name in emergency_service_accounts
 }
 is_admin if {
-  not is_managed_service_account_candidate
+  is_legacy_principal
   subject_name in admin_service_accounts
 }
 is_admin if {
-  not is_managed_service_account_candidate
+  is_legacy_principal
   some group in subject_groups
   group in admin_groups
 }
@@ -701,7 +725,10 @@ subject_user = input.auth.identity.managed_service_account_client_id if {
 }
 subject_user = input.auth.identity.username if {
   input.auth.identity.authnMethod == "jwt"
-  not is_managed_service_account_candidate
+  is_legacy_principal
+}
+subject_user = subject_name if {
+  aap_secret_read_allowed
 }
 subject_user = split(input.auth.identity.user.username, ":")[3] if {
   input.auth.identity.authnMethod == "serviceaccount"
@@ -719,6 +746,9 @@ subject_tenant := "system" if {
 subject_tenant := "system" if {
   is_csi
 }
+subject_tenant := "system" if {
+  aap_secret_read_allowed
+}
 subject_tenant := input.auth.identity.managed_service_account_tenant if {
   is_managed_service_account_valid
 }
@@ -728,7 +758,7 @@ subject_tenant := service_account_namespace if {
 subject_tenant := tenant if {
   not is_admin
   not is_csi
-  not is_managed_service_account_candidate
+  is_legacy_principal
   input.auth.identity.authnMethod == "jwt"
   organizations := {org | some org in subject_tenants}
   count(organizations) == 1
@@ -739,6 +769,9 @@ subject_tenant := tenant if {
 
 subject_tenant_result = ["*"] if {
   is_admin
+}
+subject_tenant_result = ["*"] if {
+  aap_secret_read_allowed
 }
 
 default subject_managed_service_account := false
@@ -770,7 +803,7 @@ subject_tenant_result = subject_tenants if {
   not is_admin
   not is_csi
   input.auth.identity.authnMethod == "jwt"
-  not is_managed_service_account_candidate
+  is_legacy_principal
 }
 subject_tenant_result = [service_account_namespace] if {
   not is_admin

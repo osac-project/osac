@@ -38,11 +38,12 @@ func newCatalogOfferingClients(deps ServerDeps) catalogOfferingClients {
 }
 
 type CreateCatalogOfferingInput struct {
-	Kind        CatalogOfferingKind `json:"kind" jsonschema:"offering family"`
-	Name        string              `json:"name" jsonschema:"DNS-safe catalog offering name"`
-	Title       string              `json:"title,omitempty" jsonschema:"optional catalog offering title"`
-	Description string              `json:"description,omitempty" jsonschema:"optional catalog offering description"`
-	TemplateID  string              `json:"template_id" jsonschema:"ID of the offering's immutable template"`
+	Kind           CatalogOfferingKind `json:"kind" jsonschema:"offering family"`
+	Name           string              `json:"name" jsonschema:"DNS-safe catalog offering name"`
+	Title          string              `json:"title,omitempty" jsonschema:"optional catalog offering title"`
+	Description    string              `json:"description,omitempty" jsonschema:"optional catalog offering description"`
+	TemplateID     string              `json:"template_id" jsonschema:"ID of the offering's immutable template"`
+	TemplateTenant string              `json:"template_tenant,omitempty" jsonschema:"tenant containing the template; omit for a template in the caller's tenant, or set shared for a shared template"`
 }
 
 type UpdateCatalogOfferingInput struct {
@@ -88,6 +89,7 @@ func handleCreateCatalogOffering(
 		input.Kind = CatalogOfferingKind(strings.TrimSpace(string(input.Kind)))
 		input.Name = strings.TrimSpace(input.Name)
 		input.TemplateID = strings.TrimSpace(input.TemplateID)
+		input.TemplateTenant = strings.TrimSpace(input.TemplateTenant)
 		if err := validateCatalogOfferingKind(input.Kind); err != nil {
 			return nil, CatalogOfferingOutput{}, safeInvalidRequestError(err)
 		}
@@ -121,7 +123,7 @@ func handleCreateCatalogOffering(
 						Title:       input.Title,
 						Description: input.Description,
 						Template: publicv1.ComputeInstanceTemplateReference_builder{
-							Id: input.TemplateID,
+							Id: input.TemplateID, Tenant: input.TemplateTenant,
 						}.Build(),
 					}.Build(),
 				}.Build())
@@ -138,7 +140,7 @@ func handleCreateCatalogOffering(
 					Title:       input.Title,
 					Description: input.Description,
 					Template: publicv1.ClusterTemplateReference_builder{
-						Id: input.TemplateID,
+						Id: input.TemplateID, Tenant: input.TemplateTenant,
 					}.Build(),
 				}.Build(),
 			}.Build())
@@ -156,7 +158,7 @@ func handleCreateCatalogOffering(
 						Title:       input.Title,
 						Description: input.Description,
 						Template: publicv1.BareMetalInstanceTemplateReference_builder{
-							Id: input.TemplateID,
+							Id: input.TemplateID, Tenant: input.TemplateTenant,
 						}.Build(),
 					}.Build(),
 				}.Build())

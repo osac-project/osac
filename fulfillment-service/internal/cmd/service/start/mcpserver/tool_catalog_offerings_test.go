@@ -345,11 +345,12 @@ var _ = Describe("handleCreateCatalogOffering", func() {
 		handler := handleCreateCatalogOffering(catalogOfferingClients{computeInstances: computeItems})
 		_, output, err := handler(
 			context.Background(), requestWithToken(catalogOfferingTokenFixture), CreateCatalogOfferingInput{
-				Kind:        CatalogOfferingKindComputeInstance,
-				Name:        " offering ",
-				Title:       "Compute offering",
-				Description: "A governed offering",
-				TemplateID:  " template-1 ",
+				Kind:           CatalogOfferingKindComputeInstance,
+				Name:           " offering ",
+				Title:          "Compute offering",
+				Description:    "A governed offering",
+				TemplateID:     " template-1 ",
+				TemplateTenant: " shared ",
 			},
 		)
 		Expect(err).ToNot(HaveOccurred())
@@ -358,6 +359,7 @@ var _ = Describe("handleCreateCatalogOffering", func() {
 		Expect(capturedObject.GetTitle()).To(Equal("Compute offering"))
 		Expect(capturedObject.GetDescription()).To(Equal("A governed offering"))
 		Expect(capturedObject.GetTemplate().GetId()).To(Equal("template-1"))
+		Expect(capturedObject.GetTemplate().GetTenant()).To(Equal("shared"))
 		Expect(capturedObject.GetPublished()).To(BeFalse())
 		Expect(output).To(Equal(CatalogOfferingOutput{
 			Kind:     "compute_instance",

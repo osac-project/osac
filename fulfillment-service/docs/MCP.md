@@ -130,8 +130,10 @@ safe authorization error.
 `create_catalog_offering` supports only the `compute_instance`, `cluster`, and
 `bare_metal_instance` offering families through their public Create APIs. It
 accepts the offering `kind`, DNS-safe `name`, optional `title`, optional
-`description`, and immutable `template_id`; Fulfillment assigns tenant and
-Project scope from the signed-in caller. New offerings are always unpublished
+`description`, immutable `template_id`, and optional `template_tenant`;
+Fulfillment assigns offering tenant and Project scope from the signed-in
+caller. Omit `template_tenant` for a template in the caller's tenant, or set it
+to `shared` when using a shared template. New offerings are always unpublished
 so publication cannot be hidden inside Create.
 
 `update_catalog_offering` accepts only `title` and `description`. It sends an

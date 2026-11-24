@@ -546,7 +546,9 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 		Name: "create_catalog_offering",
 		Description: "Use this tool only after the user confirms the requested unpublished catalog offering. " +
 			"Supported kinds are compute_instance, cluster, and bare_metal_instance; the template ID must be " +
-			"caller-visible. Publication is a separate tool.",
+			"caller-visible. Set template_tenant to shared for a shared template; omit it for a template " +
+			"in the caller's tenant. " +
+			"Publication is a separate tool.",
 		Annotations: &mcp.ToolAnnotations{
 			Title:           "Create OSAC catalog offering",
 			ReadOnlyHint:    false,

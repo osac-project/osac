@@ -137,6 +137,19 @@ describe('AdminInstanceTypeListPage', () => {
     expect(screen.getByText('Obsolete')).toBeInTheDocument();
   });
 
+  it('shows the full long instance type name instead of character-truncating it', () => {
+    const longName = 'instance-type-e2e-resize-cpu-up-memory-down';
+    setupDefaultListMocks([
+      makeInstanceType('e2e-resize-cpu-up-memory-down', InstanceTypeState.ACTIVE),
+    ]);
+
+    renderPage();
+
+    expect(screen.getByRole('link', { name: longName })).toBeInTheDocument();
+    expect(screen.getByText(longName)).toHaveClass('resource-name-field__clamped');
+    expect(document.querySelector('.pf-v6-c-truncate')).toBeNull();
+  });
+
   it('shows a loading spinner while the query is in flight', () => {
     vi.mocked(useListResource).mockReturnValue(
       mockQueryResult<InstanceTypesListResponse>({

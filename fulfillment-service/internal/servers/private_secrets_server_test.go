@@ -26,6 +26,7 @@ import (
 	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
@@ -37,8 +38,9 @@ import (
 )
 
 type memorySecretStore struct {
-	mu   sync.Mutex
-	data map[string]map[string][]byte
+	mu     sync.Mutex
+	data   map[string]map[string][]byte
+	stores int
 }
 
 func newMemorySecretStore() *memorySecretStore {
@@ -52,8 +54,15 @@ func (s *memorySecretStore) key(tenant, project, name string) string {
 func (s *memorySecretStore) Store(_ context.Context, tenant, project, name string, data map[string][]byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.stores++
 	s.data[s.key(tenant, project, name)] = data
 	return nil
+}
+
+func (s *memorySecretStore) storeCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stores
 }
 
 func (s *memorySecretStore) Fetch(_ context.Context, tenant, project, name string) (map[string][]byte, error) {
@@ -112,15 +121,19 @@ var _ = Describe("Private secrets server", func() {
 	})
 
 	Describe("Behaviour", func() {
-		var server *PrivateSecretsServer
+		var (
+			secretStore *memorySecretStore
+			server      *PrivateSecretsServer
+		)
 
 		BeforeEach(func() {
 			var err error
+			secretStore = newMemorySecretStore()
 			server, err = NewPrivateSecretsServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
 				SetTenancyLogic(tenancy).
-				SetSecretStore(newMemorySecretStore()).
+				SetSecretStore(secretStore).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 		})
@@ -322,6 +335,87 @@ var _ = Describe("Private secrets server", func() {
 			Expect(getResponse.GetObject().GetData()).To(
 				HaveKeyWithValue("new-key", []byte("new-value")))
 		})
+
+		DescribeTable("Persists Vault data only when the update mask selects data",
+			func(
+				secretType privatev1.SecretType,
+				initialData map[string][]byte,
+				updateData map[string][]byte,
+				labels map[string]string,
+				updateMask *fieldmaskpb.FieldMask,
+				expectedData map[string][]byte,
+				expectedLabels map[string]string,
+				expectedStores int,
+			) {
+				created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "masked-secret-" + uuid.NewString(),
+						}.Build(),
+						Type: secretType,
+						Data: initialData,
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				updated := proto.Clone(created.GetObject()).(*privatev1.Secret)
+				updated.SetData(updateData)
+				updated.GetMetadata().SetLabels(labels)
+				storesBefore := secretStore.storeCount()
+				_, err = server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+					Object:     updated,
+					UpdateMask: updateMask,
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(secretStore.storeCount()).To(Equal(storesBefore + expectedStores))
+
+				getResponse, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{
+					Id: created.GetObject().GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				stored := getResponse.GetObject()
+				Expect(stored.GetMetadata().GetLabels()).To(Equal(expectedLabels))
+				Expect(stored.GetData()).To(Equal(expectedData))
+				Expect(secretStore.data).To(HaveKeyWithValue(
+					secretStore.key(
+						stored.GetMetadata().GetTenant(),
+						stored.GetMetadata().GetProject(),
+						stored.GetMetadata().GetName(),
+					),
+					expectedData,
+				))
+			},
+			Entry("metadata-only user-data update preserves stored data",
+				privatev1.SecretType_SECRET_TYPE_USER_DATA,
+				map[string][]byte{"userdata": []byte("original")},
+				map[string][]byte{"userdata": []byte("changed")},
+				map[string]string{"updated": "true"},
+				&fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+				map[string][]byte{"userdata": []byte("original")},
+				map[string]string{"updated": "true"},
+				0,
+			),
+			Entry("data mask updates opaque data",
+				privatev1.SecretType_SECRET_TYPE_OPAQUE,
+				map[string][]byte{"key": []byte("original")},
+				map[string][]byte{"key": []byte("changed")},
+				nil,
+				&fieldmaskpb.FieldMask{Paths: []string{"data"}},
+				map[string][]byte{"key": []byte("changed")},
+				map[string]string{},
+				1,
+			),
+			Entry("nil mask replaces opaque data",
+				privatev1.SecretType_SECRET_TYPE_OPAQUE,
+				map[string][]byte{"key": []byte("original")},
+				map[string][]byte{"key": []byte("changed")},
+				nil,
+				nil,
+				map[string][]byte{"key": []byte("changed")},
+				map[string]string{},
+				1,
+			),
+		)
 
 		It("Delete removes the object", func() {
 			created := createVaultSecret()

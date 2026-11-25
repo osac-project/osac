@@ -14,6 +14,7 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -260,5 +261,89 @@ func (s *PrivateFabricDomainsServer) validateFabricDomain(ctx context.Context, o
 			"the NetworkClass does not set east_west_capabilities.supports_east_west_ethernet")
 	}
 
+	servers := slices.Clone(spec.GetServers())
+	slices.Sort(servers)
+	servers = slices.Compact(servers)
+	if err := s.lockFabricDomainServerHosts(ctx, object, servers); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+func (s *PrivateFabricDomainsServer) lockFabricDomainServerHosts(
+	ctx context.Context, domain *privatev1.FabricDomain, hosts []string,
+) error {
+	for _, host := range hosts {
+		if strings.TrimSpace(host) == "" {
+			return grpcstatus.Error(grpccodes.InvalidArgument, "FabricDomain server name must not be empty")
+		}
+	}
+
+	matchedIDs := make(map[string]string, len(hosts))
+	ambiguousHosts := make(map[string]bool)
+	quotedHosts := make([]string, len(hosts))
+	for i, host := range hosts {
+		quotedHosts[i] = strconv.Quote(host)
+	}
+	domainMeta := domain.GetMetadata()
+	filter := "this.metadata.tenant == " + strconv.Quote(domainMeta.GetTenant()) +
+		" && this.metadata.project == " + strconv.Quote(domainMeta.GetProject()) +
+		" && this.status.external_host_name in [" +
+		strings.Join(quotedHosts, ", ") + "]"
+	// Resolve requested hosts in one project-filtered inventory pass, then lock and revalidate the matches.
+	err := forEachMatchingRecord(ctx, s.guards.bareMetalInstances, filter, func(instance *privatev1.BareMetalInstance) {
+		host := instance.GetStatus().GetExternalHostName()
+		if matchedIDs[host] != "" && matchedIDs[host] != instance.GetId() {
+			ambiguousHosts[host] = true
+			return
+		}
+		matchedIDs[host] = instance.GetId()
+	})
+	if err != nil {
+		s.guards.logger.ErrorContext(ctx, "Failed to resolve FabricDomain server host", slog.Any("error", err))
+		return grpcstatus.Error(grpccodes.Internal, "failed to resolve FabricDomain server host")
+	}
+
+	ids := make([]string, 0, len(hosts))
+	hostByID := make(map[string]string, len(hosts))
+	for _, host := range hosts {
+		matchedID := matchedIDs[host]
+		if ambiguousHosts[host] || matchedID == "" {
+			return invalidFabricDomainServer(host)
+		}
+		ids = append(ids, matchedID)
+		hostByID[matchedID] = host
+	}
+	locked, err := s.guards.bareMetalInstances.Lock().AddIds(ids...).SetReturnObjects(true).Do(ctx)
+	if err != nil {
+		var notFound *dao.ErrNotFound
+		if errors.As(err, &notFound) && len(notFound.IDs) > 0 {
+			return invalidFabricDomainServer(hostByID[notFound.IDs[0]])
+		}
+		return ConvertDAOErrorToGRPC(err, "lock", "")
+	}
+	instancesByID := make(map[string]*privatev1.BareMetalInstance, len(ids))
+	for _, instance := range locked.GetObjects() {
+		instancesByID[instance.GetId()] = instance
+	}
+	for _, host := range hosts {
+		instance := instancesByID[matchedIDs[host]]
+		instanceMeta := instance.GetMetadata()
+		if instanceMeta.GetTenant() != domainMeta.GetTenant() ||
+			instanceMeta.GetProject() != domainMeta.GetProject() ||
+			instance.GetStatus().GetExternalHostName() != host || instanceMeta.HasDeletionTimestamp() {
+			return invalidFabricDomainServer(host)
+		}
+		if refKey(instance.GetStatus().GetCluster()) != "" || instance.GetStatus().GetNodeSet() != "" {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"FabricDomain server %s is a Cluster worker", host)
+		}
+	}
+	return nil
+}
+
+func invalidFabricDomainServer(host string) error {
+	return grpcstatus.Errorf(grpccodes.InvalidArgument,
+		"FabricDomain server %s is not a bare-metal host of this project", host)
 }

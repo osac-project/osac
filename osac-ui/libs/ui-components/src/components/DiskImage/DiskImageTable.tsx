@@ -6,7 +6,7 @@ import ResourceNameField from '@osac/ui-components/components/Resource/ResourceN
 
 import DiskImageActionsMenu from './DiskImageActionsMenu';
 import DiskImageLifecycleLabel from './DiskImageLifecycleLabel';
-import { DISK_IMAGE_NAME_PREVIEW_LENGTH, architectureLabels, guestOsFamilyLabels } from './utils';
+import { architectureLabels, guestOsFamilyLabels } from './utils';
 import { useTranslation } from '../../hooks/useTranslation';
 import { Timestamp } from '../Primitives/Timestamp';
 
@@ -49,11 +49,10 @@ const DiskImageTable = ({ diskImages, tenants }: DiskImageTableProps) => {
 
           return (
             <Tr key={diskImage.id}>
-              <Td dataLabel={t('Name')} modifier="truncate" width={NAME_COLUMN_WIDTH}>
+              <Td dataLabel={t('Name')} width={NAME_COLUMN_WIDTH}>
                 <ResourceNameField
                   resource={diskImage}
                   detailsUrl={`/admin/infrastructure/disk-images/${diskImage.id}`}
-                  maxCharsDisplayed={DISK_IMAGE_NAME_PREVIEW_LENGTH}
                 />
               </Td>
               <Td dataLabel={t('Lifecycle')} width={LIFECYCLE_COLUMN_WIDTH}>

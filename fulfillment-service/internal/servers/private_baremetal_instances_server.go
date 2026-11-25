@@ -79,6 +79,7 @@ type PrivateBareMetalInstancesServer struct {
 	externalIPDao           *dao.GenericDAO[*privatev1.ExternalIP]
 	externalIPAttachmentDao *dao.GenericDAO[*privatev1.ExternalIPAttachment]
 	secretsDao              *dao.GenericDAO[*privatev1.Secret]
+	fabricDomainsDao        *dao.GenericDAO[*privatev1.FabricDomain]
 	secretStore             vault.SecretStore
 	settings                NetworkingSettings
 	lifecycle               *externalIPLifecycle
@@ -256,6 +257,10 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 	if err != nil {
 		return
 	}
+	fabricDomainsDao, err := newGuardDAO[*privatev1.FabricDomain](b.logger)
+	if err != nil {
+		return
+	}
 
 	result = &PrivateBareMetalInstancesServer{
 		logger:                  b.logger,
@@ -273,6 +278,7 @@ func (b *PrivateBareMetalInstancesServerBuilder) Build() (result *PrivateBareMet
 		externalIPDao:           externalIPDao,
 		externalIPAttachmentDao: externalIPAttachmentDao,
 		secretsDao:              secretsDao,
+		fabricDomainsDao:        fabricDomainsDao,
 		secretStore:             b.secretStore,
 		settings:                resolveNetworkingSettings(b.networkingSettings),
 	}
@@ -521,7 +527,15 @@ func (s *PrivateBareMetalInstancesServer) Delete(ctx context.Context,
 	if err != nil {
 		return
 	}
+	if deleteAlreadyAccepted(instance.GetMetadata()) {
+		return &privatev1.BareMetalInstancesDeleteResponse{}, nil
+	}
 	if err = s.lifecycle.rejectManualAttachmentDelete(ctx, "BareMetalInstance", id, instance.GetMetadata()); err != nil {
+		return
+	}
+	// Reject before generic.Delete so a referenced host does not enter DELETING
+	// while the tenant removes the FabricDomain and retries.
+	if err = s.rejectDeleteIfFabricDomainReferencesHost(ctx, instance); err != nil {
 		return
 	}
 	if instance.GetSpec().GetAutoExternalIpAttachment() {
@@ -536,6 +550,39 @@ func (s *PrivateBareMetalInstancesServer) Delete(ctx context.Context,
 	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
+}
+
+// rejectDeleteIfFabricDomainReferencesHost prevents deletion while the projected
+// assigned host is referenced by a same-project FabricDomain. When no host has
+// been projected yet, delete is accepted and the reconciler checks the live CR.
+func (s *PrivateBareMetalInstancesServer) rejectDeleteIfFabricDomainReferencesHost(
+	ctx context.Context, instance *privatev1.BareMetalInstance,
+) error {
+	status := instance.GetStatus()
+	host := status.GetExternalHostName()
+	if host == "" {
+		return nil
+	}
+	metadata := instance.GetMetadata()
+	filter := fmt.Sprintf(
+		"this.metadata.tenant == %q && this.metadata.project == %q && %q in this.spec.servers",
+		metadata.GetTenant(), metadata.GetProject(), host)
+	count, firstID, err := countRecords(ctx, s.fabricDomainsDao, filter)
+	if err != nil {
+		s.logger.ErrorContext(ctx, "Failed to check FabricDomain host references",
+			slog.String("bmi_id", instance.GetId()), slog.Any("error", err))
+		return grpcstatus.Error(grpccodes.Internal, "failed to check FabricDomain references")
+	}
+	if count == 0 {
+		return nil
+	}
+	parentName := fmt.Sprintf("'%s'", instance.GetId())
+	if metadata != nil && metadata.GetName() != "" && metadata.GetName() != instance.GetId() {
+		parentName = fmt.Sprintf("'%s' (id '%s')", metadata.GetName(), instance.GetId())
+	}
+	return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		"cannot delete BareMetalInstance %s: %d FabricDomain record(s) still reference it (including '%s')",
+		parentName, count, firstID)
 }
 
 func (s *PrivateBareMetalInstancesServer) autoCleanupExternalIP(ctx context.Context, bmiID string) error {

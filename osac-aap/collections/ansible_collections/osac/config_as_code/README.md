@@ -306,8 +306,10 @@ private `Secrets/Get` in all customer tenants and in the `shared` and
 Restrict access to the credential and any associated job
 template, project, and runner to trusted automation.
 
-The ComputeInstance create template uses this credential by default. Other
-trusted job templates can attach it to read private Fulfillment Secrets.
+To enable a playbook to read private Fulfillment Secrets, explicitly attach
+`<prefix>-fulfillment-secret-reader` to the trusted AAP job template that runs it.
+For a job template managed by config as code, add the credential name to that
+template's `credentials` list.
 
 Fulfillment binds the reader grant to the sole trusted OIDC issuer, which
 Helm configures from `service.auth.issuerUrl`. For a server configured with
@@ -332,14 +334,15 @@ at the HTTPS listener root of the internal API Route. Use the host with an
 optional port and trailing slash. Omit path prefixes, credentials, query
 strings, and fragments. Ensure the bundle trusts both the Route and the issuer.
 
-Use `query('osac.service.fulfillment_secret_data', secret_id, data_key='key') | first`
-to read a data key by canonical Secret ID. The lookup returns the
-base64-encoded `value` or a sanitized `error`. It uses Fulfillment's
-private API and retries once on HTTP 401 with a fresh Keycloak token.
-Keep the result under `no_log` and out of persistent facts, job extra vars,
-and job artifacts. Jobs that call other Fulfillment methods can reuse
-`osac.service.fulfillment_token` with their own identity and grant. The
-template publisher can supply its secret through
+Pass the canonical Secret ID to the playbook. Use
+`query('osac.service.fulfillment_secret_data', secret_id, data_key='key') | first`
+with the desired data key in a task with `no_log: true`. Check for the sanitized
+`error` before consuming the base64-encoded `value`. The lookup uses Fulfillment's
+private API and retries once on HTTP 401 with a fresh Keycloak token. Use
+`no_log: true` on tasks that consume the value and keep it out of persistent
+facts, job extra vars, and job artifacts. Jobs that call other Fulfillment
+methods can reuse `osac.service.fulfillment_token` with their own identity and
+grant. The template publisher can supply its secret through
 `OSAC_FULFILLMENT_CLIENT_SECRET`.
 
 For bundled Keycloak, rotate the credential by updating the

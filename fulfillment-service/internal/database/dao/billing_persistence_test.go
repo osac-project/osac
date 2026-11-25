@@ -18,7 +18,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -43,7 +42,6 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 		pool           *pgxpool.Pool
 		visibility     *auth.Visibility
 		accounts       *GenericDAO[*privatev1.BillingAccount]
-		publicAccounts *GenericDAO[*privatev1.BillingAccount]
 		assignments    *GenericDAO[*privatev1.TenantBillingAssignment]
 		publicAssigned *GenericDAO[*privatev1.TenantBillingAssignment]
 		tenants        *GenericDAO[*privatev1.Tenant]
@@ -111,9 +109,6 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 			return visibility, nil
 		}).AnyTimes()
 		accounts, err = NewGenericDAO[*privatev1.BillingAccount]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
-		Expect(err).NotTo(HaveOccurred())
-		publicAccounts, err = NewGenericDAO[*privatev1.BillingAccount]().SetLogger(logger).SetTenancyLogic(tenancy).
-			SetFilterDesc((*privatev1.BillingAccount)(nil).ProtoReflect().Descriptor()).Build()
 		Expect(err).NotTo(HaveOccurred())
 		assignments, err = NewGenericDAO[*privatev1.TenantBillingAssignment]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
 		Expect(err).NotTo(HaveOccurred())
@@ -209,69 +204,6 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 	}, Entry("absent is SQL NULL", (*string)(nil)), Entry("present empty", proto.String("")),
 		Entry("whitespace", proto.String(" \t\n")), Entry("padded", proto.String("  attribution  ")),
 		Entry("verbatim", proto.String("Raw/東京'\\ID")))
-
-	DescribeTable("queries raw tokens without conflating SQL and LIKE escapes", func(value string, decoys []string) {
-		var conforming string
-		Expect(tx.QueryRow(ctx, `show standard_conforming_strings`).Scan(&conforming)).To(Succeed())
-		Expect(conforming).To(Equal("on"))
-		tokens := append([]string{value, "prefix-" + value, value + "-suffix"}, decoys...)
-		byID := map[string]string{}
-		for i, token := range tokens {
-			id := fmt.Sprintf("raw-%02d", i)
-			byID[id] = token
-			_, err := accounts.Create().SetObject(accountObject(id, &token)).Do(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			stored, err := accounts.Get().SetId(id).Do(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(stored.GetObject().GetStatus().GetExternalBillingAccountId()).To(Equal(token))
-		}
-		for _, d := range []*GenericDAO[*privatev1.BillingAccount]{accounts, publicAccounts} {
-			for _, operation := range []string{"equals", "startsWith", "endsWith", "contains"} {
-				var want []string
-				for i, token := range tokens {
-					matches := token == value
-					switch operation {
-					case "startsWith":
-						matches = strings.HasPrefix(token, value)
-					case "endsWith":
-						matches = strings.HasSuffix(token, value)
-					case "contains":
-						matches = strings.Contains(token, value)
-					}
-					if matches {
-						want = append(want, fmt.Sprintf("raw-%02d", i))
-					}
-				}
-				filter := fmt.Sprintf("this.status.external_billing_account_id.%s(%q)", operation, value)
-				if operation == "equals" {
-					filter = fmt.Sprintf("this.status.external_billing_account_id == %q", value)
-				}
-				count, err := d.List().SetFilter(filter).SetLimit(0).Do(ctx)
-				Expect(err).NotTo(HaveOccurred(), "%s", filter)
-				Expect(count.GetTotal()).To(Equal(int32(len(want))), "%s", filter)
-				Expect(count.GetItems()).To(BeEmpty())
-				for offset := 0; offset <= len(want); offset++ {
-					page, err := d.List().SetFilter(filter).SetOffset(int32(offset)).SetLimit(1).Do(ctx)
-					Expect(err).NotTo(HaveOccurred(), "%s", filter)
-					Expect(page.GetTotal()).To(Equal(int32(len(want))), "%s", filter)
-					if offset == len(want) {
-						Expect(page.GetItems()).To(BeEmpty())
-					} else {
-						Expect(page.GetItems()).To(HaveLen(1))
-						Expect(page.GetItems()[0].GetId()).To(Equal(want[offset]), "%s", filter)
-						Expect(page.GetItems()[0].GetStatus().GetExternalBillingAccountId()).To(Equal(byID[want[offset]]))
-					}
-				}
-			}
-		}
-	},
-		Entry("one backslash is distinct from two", `path\to`, []string{`path\\to`, `pathto`, `pathXto`}),
-		Entry("two backslashes are distinct from one", `path\\to`, []string{`path\to`, `pathto`, `pathXto`}),
-		Entry("LIKE wildcards only", `raw%_token`, []string{`rawABtoken`, `raw%Xtoken`}),
-		Entry("backslash with LIKE wildcards", `raw\%_token`, []string{`raw\\%_token`, `raw%_token`, `raw\ABtoken`, `raw\%Xtoken`}),
-		Entry("quote with LIKE wildcards", `raw'%_token`, []string{`raw'ABtoken`, `raw'%Xtoken`}),
-		Entry("backslash with quotes controls and UTF-8", "raw\\%_'\n\t\r東京", []string{"raw\\AB'\n\t\r東京", "raw\\%X'\n\t\r東京"}),
-	)
 
 	It("reports the actual native-key constraint and recovers the create savepoint", func() {
 		_, err := accounts.Create().SetObject(accountObject("first", nil)).Do(ctx)

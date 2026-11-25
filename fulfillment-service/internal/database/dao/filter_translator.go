@@ -22,15 +22,12 @@ import (
 	"log/slog"
 	"maps"
 	"math"
-	"regexp"
 	"strings"
-	"time"
 	"unicode"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/ast"
 	"github.com/google/cel-go/common/operators"
-	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
@@ -190,9 +187,6 @@ var binaryOps = map[string]binaryOpInfo{
 	operators.LogicalAnd:    {"and", filterTranslatorAndPrecedence, false},
 	operators.LogicalOr:     {"or", filterTranslatorOrPrecedence, false},
 }
-
-// time.Parse accepts extra forms, including a one-digit hour, comma fractions and out-of-range offsets.
-var filterTimestampSyntax = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$`)
 
 // NewFilterTranslator creates a object that knows how to translate filter expressions into SQL where statements.
 func NewFilterTranslator() *FilterTranslatorBuilder {
@@ -404,28 +398,6 @@ func (t *FilterTranslator) translateCall(expr ast.CallExpr) (result filterTransl
 		result, err = t.translateIn(funcArgs)
 	case operators.Index:
 		result, err = t.translateIndex(funcArgs)
-	case "timestamp":
-		// Only the literal RFC3339 constructor is supported, not CEL's integer/identity overloads or evaluation.
-		if len(funcArgs) != 1 || funcArgs[0].Kind() != ast.LiteralKind {
-			return result, &ErrValidation{Reason: "timestamp requires exactly one literal RFC3339 string"}
-		}
-		text, ok := funcArgs[0].AsLiteral().Value().(string)
-		if !ok {
-			return result, &ErrValidation{Reason: "timestamp requires exactly one literal RFC3339 string"}
-		}
-		instant, parseErr := time.Parse(time.RFC3339Nano, text)
-		if parseErr != nil || !filterTimestampSyntax.MatchString(text) || timestamppb.New(instant).CheckValid() != nil {
-			return result, &ErrValidation{Reason: "timestamp requires a valid RFC3339 instant in the protobuf Timestamp range"}
-		}
-		// Normalize before lowering so PostgreSQL need not interpret the caller's date syntax. Reuse literal
-		// escaping; no caller text is interpolated into SQL, and descriptor/type checking remains in CEL.
-		result, err = t.translateLiteral(types.String(instant.UTC().Format(time.RFC3339Nano)))
-		if err != nil {
-			return
-		}
-		result.sql = "cast(" + result.sql + " as timestamp with time zone)"
-		result.kind = filterTranslatorTimeKind
-		result.hasStringValue = false
 	case "contains":
 		if len(funcArgs) != 1 {
 			err = fmt.Errorf(
@@ -1133,7 +1105,22 @@ func (t *FilterTranslator) translateSelectThisMdField(fieldName string,
 			result.precedence = filterTranslatorMaxPrecedence
 		}
 	case "deletion_timestamp":
-		// In the database, a deletion timestamp is set to the Unix epoch when the object hasn't been deleted.
+		// The deletion timestamp doesn't accept null values in the database, instead it is set to the Unix
+		// epoch when there object hasn't been deleted, so we need to translate that into a null in order to be
+		// able to compare to other things that may be null. For example the following filter expression:
+		//
+		//	this.metadata.deletion_timestamp != null
+		//
+		// Can't be translated into this, because the result will always be `true``:
+		//
+		//	deletion_timestamp is not null
+		//
+		// Instead we will translate into this:
+		//
+		//	nullif(deletion_timestamp, '1970-01-01 00:00:00Z') is not null
+		//
+		// That will return `false` if the date is set to the Unix epoch, and `true` if the date has any other
+		// value.
 		if testOnly {
 			result.sql = fmt.Sprintf("%s != '1970-01-01 00:00:00Z'", fieldName)
 			result.kind = filterTranslatorBooleanKind

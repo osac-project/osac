@@ -299,6 +299,18 @@ OSAC_CHART_OCI_VERSION ?=
 override OSAC_CHART_OCI_REF := $(value OSAC_CHART_OCI_REF)
 override OSAC_CHART_OCI_VERSION := $(value OSAC_CHART_OCI_VERSION)
 export OSAC_CHART_OCI_REF OSAC_CHART_OCI_VERSION
+# Pass Kind cert-manager overrides literally, before the parse-time shell
+# calls below can expand any auto-exported command-line assignments.
+KIND_CERT_MANAGER_CHART ?= oci://quay.io/jetstack/charts/cert-manager
+KIND_CERT_MANAGER_VERSION ?= v1.20.0
+KIND_CERT_MANAGER_PULL_TIMEOUT ?= 90
+KIND_CERT_MANAGER_PULL_BACKOFF ?= 2 5
+override KIND_CERT_MANAGER_CHART := $(value KIND_CERT_MANAGER_CHART)
+override KIND_CERT_MANAGER_VERSION := $(value KIND_CERT_MANAGER_VERSION)
+override KIND_CERT_MANAGER_PULL_TIMEOUT := $(value KIND_CERT_MANAGER_PULL_TIMEOUT)
+override KIND_CERT_MANAGER_PULL_BACKOFF := $(value KIND_CERT_MANAGER_PULL_BACKOFF)
+export KIND_CERT_MANAGER_CHART KIND_CERT_MANAGER_VERSION
+export KIND_CERT_MANAGER_PULL_TIMEOUT KIND_CERT_MANAGER_PULL_BACKOFF
 # Runtime supplies hostnames and credentials; use the minimal CI fixture for
 # local chart checks without loosening the required-values schema.
 HELM_VALIDATION_VALUES := $(OSAC_CHART)/ci/default-values.yaml
@@ -569,6 +581,7 @@ install-infra: validate-inputs helm-infra-deps ## Install infrastructure (PLATFO
 ifeq ($(PLATFORM),kind)
 	@python3 -c 'import sys; sys.exit(sys.version_info < (3, 8))' 2>/dev/null \
 		|| { echo "ERROR: Python 3.8 or later is required to install cert-manager on Kind" >&2; exit 1; }
+	@python3 scripts/install-kind-cert-manager.py --check-config
 ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME_CMD) check
 	@$(KIND_RUNTIME_CMD) create-cluster "$(KIND_CLUSTER_NAME)" "$(KIND_CONFIG)" "$$KIND_KUBECONFIG"
@@ -1102,8 +1115,8 @@ endif
 .PHONY: install-dry-run
 install-dry-run: validate-ns validate-remote-cluster-identifiers helm-deps validate-osac-chart-oci-ref ## Render every release in make install without connecting to a cluster
 ifeq ($(PLATFORM),kind)
-	helm template cert-manager oci://quay.io/jetstack/charts/cert-manager \
-		--version v1.20.0 --namespace cert-manager \
+	python3 scripts/install-kind-cert-manager.py --template \
+		--namespace cert-manager \
 		--set crds.enabled=true
 	helm template trust-manager oci://quay.io/jetstack/charts/trust-manager \
 		--version v0.22.0 --namespace cert-manager \

@@ -1969,6 +1969,16 @@
                   "type": "string",
                   "description": "Cost Management ingestion API base URL"
                 },
+                "eventsPath": {
+                  "type": "string",
+                  "description": "Events ingestion path appended to apiUrl",
+                  "default": "/api/v1/events"
+                },
+                "readyPath": {
+                  "type": "string",
+                  "description": "Readiness check path appended to apiUrl (empty string uses HEAD reachability probe)",
+                  "default": "/readyz"
+                },
                 "apiTokenSecret": {
                   "type": "string",
                   "description": "Optional K8s Secret containing the Bearer token"
@@ -1977,6 +1987,15 @@
                   "type": "string",
                   "description": "Key inside apiTokenSecret holding the Bearer token",
                   "default": "token"
+                },
+                "caCertConfigMap": {
+                  "type": "string",
+                  "description": "Optional ConfigMap containing a PEM CA bundle for remote/two-cluster HTTPS endpoints"
+                },
+                "caCertKey": {
+                  "type": "string",
+                  "description": "Key inside caCertConfigMap holding the PEM CA bundle",
+                  "default": "ca.crt"
                 }
               },
               "additionalProperties": false

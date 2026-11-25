@@ -12,6 +12,7 @@ package costmanagement
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net/http"
@@ -206,6 +207,78 @@ var _ = Describe("client", func() {
 			cl = newClient(server.URL, "", "", logr.Discard())
 
 			Expect(cl.healthCheck(context.Background())).To(HaveOccurred())
+		})
+
+		It("uses HEAD reachability when ReadyPath is explicitly empty (gateway mode)", func() {
+			var capturedMethod string
+			server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				capturedMethod = r.Method
+				// Authenticating gateways return 401 to unauthenticated HEAD probes.
+				w.WriteHeader(http.StatusUnauthorized)
+			}))
+			var err error
+			cl, err = newClientFromConfig(ClientConfig{
+				BaseURL:      server.URL + "/api/cost-events",
+				EventsPath:   "/v1/events",
+				ReadyPath:    "",
+				ReadyPathSet: true,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cl.healthCheck(context.Background())).To(Succeed())
+			Expect(capturedMethod).To(Equal(http.MethodHead))
+		})
+	})
+
+	Describe("two-cluster HTTPS and custom path support", func() {
+		It("posts to a custom EventsPath over HTTPS verified by CACertFile", func() {
+			var capturedPath string
+			server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				capturedPath = r.URL.Path
+				w.WriteHeader(http.StatusNoContent)
+			}))
+
+			certPEM := pem.EncodeToMemory(&pem.Block{
+				Type:  "CERTIFICATE",
+				Bytes: server.Certificate().Raw,
+			})
+			caPath := filepath.Join(GinkgoT().TempDir(), "ca.crt")
+			Expect(os.WriteFile(caPath, certPEM, 0o600)).To(Succeed())
+
+			a, err := NewAdapterWithConfig(ClientConfig{
+				BaseURL:      server.URL + "/api/cost-events",
+				EventsPath:   "/v1/events",
+				ReadyPath:    "",
+				ReadyPathSet: true,
+				CACertFile:   caPath,
+				Logger:       logr.Discard(),
+			})
+			Expect(err).NotTo(HaveOccurred())
+
+			cl, err := newClientFromConfig(ClientConfig{
+				BaseURL:    server.URL + "/api/cost-events",
+				EventsPath: "/v1/events",
+				CACertFile: caPath,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cl.post(context.Background(), sampleEvent())).To(Succeed())
+			Expect(capturedPath).To(Equal("/api/cost-events/v1/events"))
+			Expect(a.HealthCheck(context.Background())).To(Succeed())
+		})
+
+		It("rejects unreadable or invalid CACertFile at startup", func() {
+			_, err := NewAdapterWithConfig(ClientConfig{
+				BaseURL:    "https://cost.example.com",
+				CACertFile: filepath.Join(GinkgoT().TempDir(), "missing.crt"),
+			})
+			Expect(err).To(HaveOccurred())
+
+			badCA := filepath.Join(GinkgoT().TempDir(), "bad.crt")
+			Expect(os.WriteFile(badCA, []byte("not-a-cert"), 0o600)).To(Succeed())
+			_, err = NewAdapterWithConfig(ClientConfig{
+				BaseURL:    "https://cost.example.com",
+				CACertFile: badCA,
+			})
+			Expect(err).To(HaveOccurred())
 		})
 	})
 })

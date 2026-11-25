@@ -21,6 +21,17 @@ type adapter struct {
 	client *client
 }
 
+// NewAdapterWithConfig creates a Cost Management provider adapter from an
+// explicit ClientConfig, supporting custom paths, token files, and private CA
+// bundles for both single-cluster and two-cluster deployments.
+func NewAdapterWithConfig(cfg ClientConfig) (adapters.ProviderAdapter, error) {
+	cl, err := newClientFromConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &adapter{client: cl}, nil
+}
+
 // NewAdapter creates a Cost Management provider adapter using a static Bearer
 // token (which may be empty when authentication is handled by the network path).
 func NewAdapter(baseURL, token string, logger logr.Logger) adapters.ProviderAdapter {

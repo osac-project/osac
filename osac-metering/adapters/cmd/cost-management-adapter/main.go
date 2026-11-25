@@ -31,7 +31,6 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/go-logr/stdr"
 
-	"github.com/osac-project/osac-metering/adapters"
 	"github.com/osac-project/osac-metering/adapters/costmanagement"
 	"github.com/osac-project/osac-metering/adapters/internal/envutil"
 	"github.com/osac-project/osac-metering/adapters/internal/kafka"
@@ -62,14 +61,26 @@ func main() {
 	metricsAddr := envutil.EnvOrDefault("METRICS_ADDR", ":2112")
 	logger := stdr.New(log.New(os.Stderr, "", log.LstdFlags))
 
-	var adapter adapters.ProviderAdapter
+	clientCfg := costmanagement.ClientConfig{
+		BaseURL:    apiURL,
+		EventsPath: os.Getenv("COST_MANAGEMENT_API_EVENTS_PATH"),
+		CACertFile: os.Getenv("COST_MANAGEMENT_API_CA_CERT"),
+		Logger:     logger,
+	}
+	if readyPath, ok := os.LookupEnv("COST_MANAGEMENT_API_READY_PATH"); ok {
+		clientCfg.ReadyPath = readyPath
+		clientCfg.ReadyPathSet = true
+	}
 	if tokenFile := os.Getenv("COST_MANAGEMENT_API_TOKEN_FILE"); tokenFile != "" {
 		// Validate the mounted Secret at startup, then keep the file path so
 		// every request observes Kubernetes Secret rotation.
 		envutil.ReadFileOrFatal(tokenFile)
-		adapter = costmanagement.NewAdapterFromTokenFile(apiURL, tokenFile, logger)
-	} else {
-		adapter = costmanagement.NewAdapter(apiURL, "", logger)
+		clientCfg.TokenFile = tokenFile
+	}
+
+	adapter, err := costmanagement.NewAdapterWithConfig(clientCfg)
+	if err != nil {
+		log.Fatalf("creating cost-management adapter: %v", err)
 	}
 
 	kafkaCfg := kafka.KafkaConfigFromEnv()

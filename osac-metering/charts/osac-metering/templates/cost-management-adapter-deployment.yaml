@@ -40,6 +40,14 @@ spec:
               - key: {{ .Values.costManagementAdapter.costManagement.apiTokenSecretKey | default "token" }}
                 path: token
         {{- end }}
+        {{- if .Values.costManagementAdapter.costManagement.caCertConfigMap }}
+        - name: cost-management-ca
+          configMap:
+            name: {{ .Values.costManagementAdapter.costManagement.caCertConfigMap }}
+            items:
+              - key: {{ .Values.costManagementAdapter.costManagement.caCertKey | default "ca.crt" }}
+                path: ca.crt
+        {{- end }}
         - name: tmp
           emptyDir:
             sizeLimit: 10Mi
@@ -62,9 +70,21 @@ spec:
               value: /etc/kafka-secrets/password
             - name: COST_MANAGEMENT_API_URL
               value: {{ required "costManagementAdapter.costManagement.apiUrl is required when costManagementAdapter is enabled" .Values.costManagementAdapter.costManagement.apiUrl | quote }}
+            {{- if .Values.costManagementAdapter.costManagement.eventsPath }}
+            - name: COST_MANAGEMENT_API_EVENTS_PATH
+              value: {{ .Values.costManagementAdapter.costManagement.eventsPath | quote }}
+            {{- end }}
+            {{- if not (kindIs "invalid" .Values.costManagementAdapter.costManagement.readyPath) }}
+            - name: COST_MANAGEMENT_API_READY_PATH
+              value: {{ .Values.costManagementAdapter.costManagement.readyPath | quote }}
+            {{- end }}
             {{- if .Values.costManagementAdapter.costManagement.apiTokenSecret }}
             - name: COST_MANAGEMENT_API_TOKEN_FILE
               value: /etc/cost-management/token
+            {{- end }}
+            {{- if .Values.costManagementAdapter.costManagement.caCertConfigMap }}
+            - name: COST_MANAGEMENT_API_CA_CERT
+              value: /etc/cost-management-ca/ca.crt
             {{- end }}
             - name: METRICS_ADDR
               value: ":8080"
@@ -78,6 +98,11 @@ spec:
             {{- if .Values.costManagementAdapter.costManagement.apiTokenSecret }}
             - name: cost-management-api-token
               mountPath: /etc/cost-management
+              readOnly: true
+            {{- end }}
+            {{- if .Values.costManagementAdapter.costManagement.caCertConfigMap }}
+            - name: cost-management-ca
+              mountPath: /etc/cost-management-ca
               readOnly: true
             {{- end }}
           ports:

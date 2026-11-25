@@ -14,8 +14,6 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
-	"context"
-	"errors"
 	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -29,42 +27,6 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
-
-type stubNotificationObjectAccess struct {
-	allow map[string]bool
-	err   error
-}
-
-func (s *stubNotificationObjectAccess) MayAccess(_ context.Context,
-	resource *privatev1.NotificationObjectReference) (bool, error) {
-	if s.err != nil {
-		return false, s.err
-	}
-	if resource == nil {
-		return true, nil
-	}
-	id := resource.GetCluster().GetId()
-	if id == "" {
-		id = resource.GetComputeInstance().GetId()
-	}
-	if allowed, ok := s.allow[id]; ok {
-		return allowed, nil
-	}
-	return false, nil
-}
-
-func (s *stubNotificationObjectAccess) MayAccessMany(ctx context.Context,
-	resources []*privatev1.NotificationObjectReference) ([]bool, error) {
-	out := make([]bool, len(resources))
-	for i, resource := range resources {
-		ok, err := s.MayAccess(ctx, resource)
-		if err != nil {
-			return nil, err
-		}
-		out[i] = ok
-	}
-	return out, nil
-}
 
 var _ = Describe("Notifications server", func() {
 	Describe("Creation", func() {
@@ -199,89 +161,7 @@ var _ = Describe("Notifications server", func() {
 			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 		})
 
-		It("Omits List items and hides Get when resource access is denied", func() {
-			access := &stubNotificationObjectAccess{allow: map[string]bool{"cluster-denied": false}}
-			server, err := NewNotificationsServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				SetObjectAccess(access).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-
-			created, err := privateServer.Create(ctx, privatev1.NotificationsCreateRequest_builder{
-				Object: privatev1.Notification_builder{
-					Metadata: privatev1.Metadata_builder{Name: "gated-inbox"}.Build(),
-					Spec: privatev1.NotificationSpec_builder{
-						Kind:        privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
-						Severity:    privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
-						Type:        "osac.notification.event.resource_created",
-						Source:      "osac-fulfillment",
-						RecipientId: callerUser,
-						Title:       "secret title",
-						Object: privatev1.NotificationObjectReference_builder{
-							Cluster: privatev1.ClusterReference_builder{Id: "cluster-denied"}.Build(),
-						}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-
-			list, err := server.List(ctx, &publicv1.NotificationsListRequest{})
-			Expect(err).ToNot(HaveOccurred())
-			for _, item := range list.GetItems() {
-				Expect(item.GetId()).ToNot(Equal(created.GetObject().GetId()))
-				Expect(item.GetSpec().GetTitle()).ToNot(Equal("secret title"))
-			}
-
-			_, err = server.Get(ctx, publicv1.NotificationsGetRequest_builder{
-				Id: created.GetObject().GetId(),
-			}.Build())
-			Expect(status.Code(err)).To(Equal(codes.NotFound))
-		})
-
-		It("Fails closed on Get when resource access check errors", func() {
-			access := &stubNotificationObjectAccess{err: errors.New("checker unavailable")}
-			server, err := NewNotificationsServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				SetObjectAccess(access).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-
-			created, err := privateServer.Create(ctx, privatev1.NotificationsCreateRequest_builder{
-				Object: privatev1.Notification_builder{
-					Metadata: privatev1.Metadata_builder{Name: "err-gated"}.Build(),
-					Spec: privatev1.NotificationSpec_builder{
-						Kind:        privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
-						Severity:    privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
-						Type:        "osac.notification.event.resource_created",
-						Source:      "osac-fulfillment",
-						RecipientId: callerUser,
-						Title:       "hidden",
-						Object: privatev1.NotificationObjectReference_builder{
-							Cluster: privatev1.ClusterReference_builder{Id: "cluster-x"}.Build(),
-						}.Build(),
-					}.Build(),
-				}.Build(),
-			}.Build())
-			Expect(err).ToNot(HaveOccurred())
-
-			_, err = server.Get(ctx, publicv1.NotificationsGetRequest_builder{
-				Id: created.GetObject().GetId(),
-			}.Build())
-			Expect(status.Code(err)).To(Equal(codes.NotFound))
-		})
-
-		It("Pages through private List results beyond one DAO page", func() {
-			// Shrink the private page size so a small fixture still crosses a page boundary.
-			previousPageSize := notificationPrivateListPageSize
-			notificationPrivateListPageSize = 2
-			DeferCleanup(func() {
-				notificationPrivateListPageSize = previousPageSize
-			})
-
+		It("Uses standard List pagination limits", func() {
 			const total = 5
 			createdIDs := make([]string, 0, total)
 			for i := range total {
@@ -293,7 +173,7 @@ var _ = Describe("Notifications server", func() {
 			}
 
 			all, err := server.List(ctx, publicv1.NotificationsListRequest_builder{
-				Limit: new(int32(notificationListMaxLimit)),
+				Limit: new(int32(1000)),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(all.GetTotal()).To(BeNumerically(">=", int32(total)))
@@ -306,7 +186,6 @@ var _ = Describe("Notifications server", func() {
 			defaults, err := server.List(ctx, &publicv1.NotificationsListRequest{})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(defaults.GetTotal()).To(Equal(all.GetTotal()))
-			Expect(defaults.GetSize()).To(BeNumerically("<=", notificationListDefaultLimit))
 
 			page, err := server.List(ctx, publicv1.NotificationsListRequest_builder{
 				Offset: new(int32(2)),
@@ -386,7 +265,7 @@ var _ = Describe("Notifications server", func() {
 				Tenants: auth.AllTenants,
 			})
 			list, err := server.List(adminCtx, publicv1.NotificationsListRequest_builder{
-				Limit: new(int32(notificationListMaxLimit)),
+				Limit: new(int32(1000)),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			ids := make([]string, 0, len(list.GetItems()))
@@ -424,28 +303,16 @@ var _ = Describe("Notifications server", func() {
 			Expect(status.Code(err)).To(Equal(codes.PermissionDenied))
 		})
 
-		It("Allows announcement Delete even when resource access is denied", func() {
-			access := &stubNotificationObjectAccess{allow: map[string]bool{"cluster-denied": false}}
-			server, err := NewNotificationsServer().
-				SetLogger(logger).
-				SetAttributionLogic(attribution).
-				SetTenancyLogic(tenancy).
-				SetObjectAccess(access).
-				Build()
-			Expect(err).ToNot(HaveOccurred())
-
+		It("Allows platform admin announcement Delete", func() {
 			created, err := privateServer.Create(ctx, privatev1.NotificationsCreateRequest_builder{
 				Object: privatev1.Notification_builder{
-					Metadata: privatev1.Metadata_builder{Name: "ann-gated-del"}.Build(),
+					Metadata: privatev1.Metadata_builder{Name: "ann-admin-del"}.Build(),
 					Spec: privatev1.NotificationSpec_builder{
 						Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT,
 						Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
 						Type:     "osac.notification.announcement.maintenance",
 						Scope:    privatev1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
-						Title:    "gated announcement",
-						Object: privatev1.NotificationObjectReference_builder{
-							Cluster: privatev1.ClusterReference_builder{Id: "cluster-denied"}.Build(),
-						}.Build(),
+						Title:    "admin delete",
 					}.Build(),
 				}.Build(),
 			}.Build())

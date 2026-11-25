@@ -166,6 +166,12 @@ class MockFlashBladeHandler(BaseHTTPRequestHandler):
         content_length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(content_length)) if content_length > 0 else {}
 
+        # Batch endpoints such as /resource-accesses/batch take an array body
+        # and answer with one {"items": [...]} document.
+        if isinstance(body, list):
+            self._create_batch(resource, body)
+            return
+
         # Extract name from query params or body
         query_params = self._parse_query_params()
         name = query_params.get("names", [None])[0] or body.get("name", f"test-{resource}-1")
@@ -191,6 +197,46 @@ class MockFlashBladeHandler(BaseHTTPRequestHandler):
             _STORE[resource][name] = item
 
         self._send_json({"items": [item]}, status=200)
+
+    def _create_batch(self, resource, entries):
+        """Create every entry of a batch request or fail the whole batch."""
+        items = []
+        with _LOCK:
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    self._send_json(
+                        {"errors": [{"message": "batch entries must be objects"}]},
+                        status=400
+                    )
+                    return
+                name = self._batch_item_name(resource, entry)
+                if name in _STORE[resource]:
+                    self._send_json(
+                        {"errors": [{"message": f"{resource} {name} already exists"}]},
+                        status=400
+                    )
+                    return
+                item_id = str(_NEXT_ID[resource])
+                _NEXT_ID[resource] += 1
+                item = copy.deepcopy(CANNED_DEFAULTS.get(resource, {}))
+                item.update(entry)
+                item["id"] = item_id
+                item["name"] = name
+                items.append(item)
+            for item in items:
+                _STORE[resource][item["name"]] = item
+        self._send_json({"items": items}, status=200)
+
+    @staticmethod
+    def _batch_item_name(resource, entry):
+        """Name a batch entry by the access it grants, or by its name field."""
+        scope = entry.get("scope") or {}
+        target = entry.get("resource") or {}
+        if scope.get("name") and target.get("name"):
+            scope_type = scope.get("resource_type", "scope")
+            target_type = target.get("resource_type", resource)
+            return f"{target_type} '{target['name']}' for {scope_type} '{scope['name']}'"
+        return entry.get("name", f"test-{resource}-{_NEXT_ID[resource]}")
 
     def do_GET(self):
         """Handle GET requests."""

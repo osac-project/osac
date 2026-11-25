@@ -65,31 +65,6 @@ var _ = DescribeMigration("Create Notification tables", func() {
 		Expect(count).To(Equal(2))
 	})
 
-	It("enforces unique inbox identity per tenant event recipient", func(ctx context.Context) {
-		payload := `{"spec":{"kind":"NOTIFICATION_KIND_EVENT","event":{"id":"e1","source":"svc"},"recipient_id":"u1"}}`
-		_, err := conn.Exec(ctx, `insert into notifications (id, name, tenant, data)
-            values ('n1', 'a', 'notif-tenant-a', $1)`, payload)
-		Expect(err).ToNot(HaveOccurred())
-		_, err = conn.Exec(ctx, `insert into notifications (id, name, tenant, data)
-            values ('n2', 'b', 'notif-tenant-a', $1)`, payload)
-		Expect(err).To(HaveOccurred())
-
-		_, err = conn.Exec(ctx, `insert into notifications (id, name, tenant, data)
-            values ('n3', 'c', 'notif-tenant-b', $1)`, payload)
-		Expect(err).ToNot(HaveOccurred())
-
-		otherRecipient := `{"spec":{"kind":"NOTIFICATION_KIND_EVENT","event":{"id":"e1","source":"svc"},"recipient_id":"u2"}}`
-		_, err = conn.Exec(ctx, `insert into notifications (id, name, tenant, data)
-            values ('n4', 'd', 'notif-tenant-a', $1)`, otherRecipient)
-		Expect(err).ToNot(HaveOccurred())
-
-		ann := `{"spec":{"kind":"NOTIFICATION_KIND_ANNOUNCEMENT","scope":"NOTIFICATION_SCOPE_TENANT","title":"maint"}}`
-		_, err = conn.Exec(ctx, `insert into notifications (id, name, tenant, data)
-            values ('a1', 'ann-1', 'notif-tenant-a', $1),
-                   ('a2', 'ann-2', 'notif-tenant-a', $1)`, ann)
-		Expect(err).ToNot(HaveOccurred())
-	})
-
 	It("allows updating spec.state but rejects other immutable spec fields", func(ctx context.Context) {
 		_, err := conn.Exec(ctx, `insert into notifications (id, name, tenant, data) values (
 			'n1', 'inbox-u1', 'notif-tenant-a',
@@ -103,6 +78,10 @@ var _ = DescribeMigration("Create Notification tables", func() {
 
 		_, err = conn.Exec(ctx,
 			`update notifications set data = jsonb_set(data, '{spec,title}', '"nope"') where id = 'n1'`)
+		Expect(err).To(HaveOccurred())
+
+		_, err = conn.Exec(ctx,
+			`update notifications set data = jsonb_set(data, '{spec,source}', '"other"') where id = 'n1'`)
 		Expect(err).To(HaveOccurred())
 	})
 

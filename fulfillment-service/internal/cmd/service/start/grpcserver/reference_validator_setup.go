@@ -45,8 +45,8 @@ import (
 // tenant-only SSH-key contract, validate key material, and store canonical
 // Secret references. Update exclusions also leave immutable-field handling to
 // the merged candidate rather than resolving a replacement in the interceptor.
-// Notification event/resource fields are producer-set opaque or typed wrappers
-// (not DAO id/name references); servers validate shape and resource visibility.
+// Notification event/object fields are producer-set opaque or typed wrappers
+// (not DAO id/name references); servers validate shape and object visibility.
 // Other references continue through the interceptor's registered lookups.
 func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, registerer prometheus.Registerer) (*references.ReferenceValidator, error) {
 	validator, err := references.NewReferenceValidator().SetLogger(logger).SetMetricsRegisterer(registerer).
@@ -64,7 +64,7 @@ func newReferenceValidator(logger *slog.Logger, tenancy auth.TenancyLogic, regis
 		SetExcludedReferencePaths(bareMetalInstanceSSHKeyMethods(), "object.spec.ssh_key").
 		SetExcludedReferencePaths(clusterSshKeyMethods(), "object.spec.ssh_key").
 		SetExcludedReferencePaths(clusterTemplateSshKeyMethods(), "object.spec_defaults.ssh_key").
-		SetExcludedReferencePaths(notificationReferenceMethods(), "object.spec.event", "object.spec.resource").
+		SetExcludedReferencePaths(notificationReferenceMethods(), "object.spec.object").
 		Build()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create reference validator: %w", err)

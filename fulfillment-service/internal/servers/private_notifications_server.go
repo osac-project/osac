@@ -177,8 +177,8 @@ func (s *PrivateNotificationsServer) validateCreate(object *privatev1.Notificati
 		if spec.GetRecipientId() != "" {
 			return grpcstatus.Error(grpccodes.InvalidArgument, "announcements must not set spec.recipient_id")
 		}
-		if spec.GetEvent() != nil && (spec.GetEvent().GetId() != "" || spec.GetEvent().GetSource() != "") {
-			return grpcstatus.Error(grpccodes.InvalidArgument, "announcements must not set spec.event")
+		if spec.GetSource() != "" {
+			return grpcstatus.Error(grpccodes.InvalidArgument, "announcements must not set spec.source")
 		}
 		if spec.GetState() != privatev1.NotificationState_NOTIFICATION_STATE_UNSPECIFIED {
 			return grpcstatus.Error(grpccodes.InvalidArgument, "announcements must not set spec.state")
@@ -189,8 +189,8 @@ func (s *PrivateNotificationsServer) validateCreate(object *privatev1.Notificati
 	if spec.GetRecipientId() == "" {
 		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.recipient_id' is required for inbox notifications")
 	}
-	if spec.GetEvent() == nil || spec.GetEvent().GetId() == "" || spec.GetEvent().GetSource() == "" {
-		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.event' with id and source is required for inbox notifications")
+	if spec.GetSource() == "" {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "field 'spec.source' is required for inbox notifications")
 	}
 	return nil
 }

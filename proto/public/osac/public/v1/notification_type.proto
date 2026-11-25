@@ -76,19 +76,10 @@ enum NotificationState {
   NOTIFICATION_STATE_READ = 2;
 }
 
-// Identity of the producer event for an inbox notification.
-message NotificationEventReference {
-  // Identifier of the producer event.
-  string id = 1;
-
-  // Name of the producing source.
-  string source = 2;
-}
-
-// Optional reference to a related API object.
+// Optional reference to a related API object (for deep links and visibility).
 // Uses full (non-local) references because Notifications are tenant-scoped, not
 // project-scoped, and may point at objects in any project within the tenant.
-message NotificationResourceReference {
+message NotificationObjectReference {
   oneof object {
     // Related cluster.
     ClusterReference cluster = 1;
@@ -138,10 +129,12 @@ message NotificationSpec {
     }
   ];
 
-  // Producer event for an inbox notification.
-  NotificationEventReference event = 4 [(google.api.field_behavior) = IMMUTABLE];
+  // Producer of an EVENT notification. Example: `osac-fulfillment`,
+  // `osac-metering`. Empty for ANNOUNCEMENT.
+  string source = 4 [(google.api.field_behavior) = IMMUTABLE];
 
-  // Recipient of an inbox notification. Empty for announcements.
+  // OSAC user id of the inbox recipient. Empty for ANNOUNCEMENT.
+  // Example: recipient_id = "user-123".
   string recipient_id = 5 [(google.api.field_behavior) = IMMUTABLE];
 
   // Scope of an announcement.
@@ -159,10 +152,20 @@ message NotificationSpec {
   // Description of the notification.
   string description = 8 [(google.api.field_behavior) = IMMUTABLE];
 
-  // Related API object.
-  NotificationResourceReference resource = 9 [(google.api.field_behavior) = IMMUTABLE];
+  // Related API object for deep links and visibility checks. Optional.
+  NotificationObjectReference object = 9 [(google.api.field_behavior) = IMMUTABLE];
 
-  // Additional key-value details.
+  // Optional producer-defined key/value metadata for UIs and clients.
+  //
+  // Keys are not a closed schema: producers may add kind-specific entries.
+  // Common examples from fulfillment and metering publishers:
+  //   lifecycle = "created" | "failed" | ...
+  //   project_id = "proj-9"
+  //   name = "vm-42"
+  //   used = "180"
+  //   limit = "200"
+  //   threshold_percent = "90"
+  // Announcements often leave this map empty.
   map<string, string> details = 10 [(google.api.field_behavior) = IMMUTABLE];
 
   // Read state of an inbox notification.

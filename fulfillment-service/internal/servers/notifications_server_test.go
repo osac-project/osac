@@ -30,13 +30,13 @@ import (
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
-type stubNotificationResourceAccess struct {
+type stubNotificationObjectAccess struct {
 	allow map[string]bool
 	err   error
 }
 
-func (s *stubNotificationResourceAccess) MayAccess(_ context.Context,
-	resource *privatev1.NotificationResourceReference) (bool, error) {
+func (s *stubNotificationObjectAccess) MayAccess(_ context.Context,
+	resource *privatev1.NotificationObjectReference) (bool, error) {
 	if s.err != nil {
 		return false, s.err
 	}
@@ -53,8 +53,8 @@ func (s *stubNotificationResourceAccess) MayAccess(_ context.Context,
 	return false, nil
 }
 
-func (s *stubNotificationResourceAccess) MayAccessMany(ctx context.Context,
-	resources []*privatev1.NotificationResourceReference) ([]bool, error) {
+func (s *stubNotificationObjectAccess) MayAccessMany(ctx context.Context,
+	resources []*privatev1.NotificationObjectReference) ([]bool, error) {
 	out := make([]bool, len(resources))
 	for i, resource := range resources {
 		ok, err := s.MayAccess(ctx, resource)
@@ -138,13 +138,10 @@ var _ = Describe("Notifications server", func() {
 			return privatev1.Notification_builder{
 				Metadata: privatev1.Metadata_builder{Name: "inbox-" + recipient + "-" + eventID}.Build(),
 				Spec: privatev1.NotificationSpec_builder{
-					Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
-					Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
-					Type:     "osac.notification.event.resource_created",
-					Event: privatev1.NotificationEventReference_builder{
-						Id:     eventID,
-						Source: "osac/fulfillment-service",
-					}.Build(),
+					Kind:        privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
+					Severity:    privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+					Type:        "osac.notification.event.resource_created",
+					Source:      "osac-fulfillment",
 					RecipientId: recipient,
 					Title:       "Resource ready",
 				}.Build(),
@@ -203,12 +200,12 @@ var _ = Describe("Notifications server", func() {
 		})
 
 		It("Omits List items and hides Get when resource access is denied", func() {
-			access := &stubNotificationResourceAccess{allow: map[string]bool{"cluster-denied": false}}
+			access := &stubNotificationObjectAccess{allow: map[string]bool{"cluster-denied": false}}
 			server, err := NewNotificationsServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
 				SetTenancyLogic(tenancy).
-				SetResourceAccess(access).
+				SetObjectAccess(access).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -216,16 +213,13 @@ var _ = Describe("Notifications server", func() {
 				Object: privatev1.Notification_builder{
 					Metadata: privatev1.Metadata_builder{Name: "gated-inbox"}.Build(),
 					Spec: privatev1.NotificationSpec_builder{
-						Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
-						Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
-						Type:     "osac.notification.event.resource_created",
-						Event: privatev1.NotificationEventReference_builder{
-							Id:     "evt-gated",
-							Source: "osac/fulfillment-service",
-						}.Build(),
+						Kind:        privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
+						Severity:    privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+						Type:        "osac.notification.event.resource_created",
+						Source:      "osac-fulfillment",
 						RecipientId: callerUser,
 						Title:       "secret title",
-						Resource: privatev1.NotificationResourceReference_builder{
+						Object: privatev1.NotificationObjectReference_builder{
 							Cluster: privatev1.ClusterReference_builder{Id: "cluster-denied"}.Build(),
 						}.Build(),
 					}.Build(),
@@ -247,12 +241,12 @@ var _ = Describe("Notifications server", func() {
 		})
 
 		It("Fails closed on Get when resource access check errors", func() {
-			access := &stubNotificationResourceAccess{err: errors.New("checker unavailable")}
+			access := &stubNotificationObjectAccess{err: errors.New("checker unavailable")}
 			server, err := NewNotificationsServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
 				SetTenancyLogic(tenancy).
-				SetResourceAccess(access).
+				SetObjectAccess(access).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -260,16 +254,13 @@ var _ = Describe("Notifications server", func() {
 				Object: privatev1.Notification_builder{
 					Metadata: privatev1.Metadata_builder{Name: "err-gated"}.Build(),
 					Spec: privatev1.NotificationSpec_builder{
-						Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
-						Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
-						Type:     "osac.notification.event.resource_created",
-						Event: privatev1.NotificationEventReference_builder{
-							Id:     "evt-err",
-							Source: "osac/fulfillment-service",
-						}.Build(),
+						Kind:        privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
+						Severity:    privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+						Type:        "osac.notification.event.resource_created",
+						Source:      "osac-fulfillment",
 						RecipientId: callerUser,
 						Title:       "hidden",
-						Resource: privatev1.NotificationResourceReference_builder{
+						Object: privatev1.NotificationObjectReference_builder{
 							Cluster: privatev1.ClusterReference_builder{Id: "cluster-x"}.Build(),
 						}.Build(),
 					}.Build(),
@@ -434,12 +425,12 @@ var _ = Describe("Notifications server", func() {
 		})
 
 		It("Allows announcement Delete even when resource access is denied", func() {
-			access := &stubNotificationResourceAccess{allow: map[string]bool{"cluster-denied": false}}
+			access := &stubNotificationObjectAccess{allow: map[string]bool{"cluster-denied": false}}
 			server, err := NewNotificationsServer().
 				SetLogger(logger).
 				SetAttributionLogic(attribution).
 				SetTenancyLogic(tenancy).
-				SetResourceAccess(access).
+				SetObjectAccess(access).
 				Build()
 			Expect(err).ToNot(HaveOccurred())
 
@@ -452,7 +443,7 @@ var _ = Describe("Notifications server", func() {
 						Type:     "osac.notification.announcement.maintenance",
 						Scope:    privatev1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
 						Title:    "gated announcement",
-						Resource: privatev1.NotificationResourceReference_builder{
+						Object: privatev1.NotificationObjectReference_builder{
 							Cluster: privatev1.ClusterReference_builder{Id: "cluster-denied"}.Build(),
 						}.Build(),
 					}.Build(),

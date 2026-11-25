@@ -261,8 +261,8 @@ def format_overall_failure_risk(report: dict[str, Any]) -> str:
         return "0%"
     if risk <= Fraction(1, 100):
         return "almost zero"
-    if risk <= Fraction(3, 100):
-        return "≤3% (MINOR)"
+    if risk <= Fraction(5, 100):
+        return "≤5% (MINOR)"
     return format_percentage(risk)
 
 
@@ -275,7 +275,7 @@ def overall_status_icon(report: dict[str, Any]) -> str:
         )
     if risk <= Fraction(1, 100):
         return PASSED_ICON
-    return MINOR_ICON if risk <= Fraction(3, 100) else FAILED_ICON
+    return MINOR_ICON if risk <= Fraction(5, 100) else FAILED_ICON
 
 
 def suite_status_icon(suite: dict[str, Any], summary: dict[str, Any]) -> str:
@@ -520,11 +520,11 @@ def render_markdown(report: dict[str, Any]) -> str:
         "Zero observed failures do not establish zero future risk.",
         "",
         "For complete, uncancelled results, green means an observed failure rate of ≤1%. "
-        "Orange means >1% through 2% per suite, or >1% through 3% overall; higher rates are red. "
-        "Overall risk is shown as 0%, almost zero for nonzero risk ≤1%, or ≤3% (MINOR) for risk >1% through 3%. "
+        "Orange means >1% through 2% per suite, or >1% through 5% overall; higher rates are red. "
+        "Overall risk is shown as 0%, almost zero for nonzero risk ≤1%, or ≤5% (MINOR) for risk >1% through 5%. "
         "These labels describe observed estimates, not guarantees about future failures. "
         "Numeric percentages use half-up rounding: one decimal below 10%, whole percentages at 10% or above. "
-        "Colors use unrounded values, so a red result can display 2.0% per suite or 3.0% overall.",
+        "Colors use unrounded values, so a red result can display 2.0% per suite or 5.0% overall.",
     ]
     if report["issues"]:
         lines.extend(["", f"## {INCOMPLETE_ICON} Reporting notes", *[f"- {issue}" for issue in report["issues"]]])

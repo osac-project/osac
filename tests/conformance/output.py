@@ -93,17 +93,22 @@ def _test_markers(test: TestIdentity) -> list[str]:
 
 def plan_document(plan: Plan, redactor: Redactor) -> dict[str, object]:
     return {
-        "profiles": list(plan.profiles),
+        "profiles": [redactor.text(profile) for profile in plan.profiles],
         "selectors": [
-            {"id": selector.id, "type": selector.type, "markers": list(selector.markers)} for selector in plan.selectors
+            {
+                "id": redactor.text(selector.id),
+                "type": selector.type,
+                "markers": [redactor.text(marker) for marker in selector.markers],
+            }
+            for selector in plan.selectors
         ],
         "tests": [
             {
                 "id": redactor.text(test.id),
                 "key": plan_key(test.id),
                 "name": redactor.text(test.name),
-                "profiles": list(test.profiles),
-                "markers": _test_markers(test),
+                "profiles": [redactor.text(profile) for profile in test.profiles],
+                "markers": [redactor.text(marker) for marker in _test_markers(test)],
             }
             for test in plan.tests
         ],

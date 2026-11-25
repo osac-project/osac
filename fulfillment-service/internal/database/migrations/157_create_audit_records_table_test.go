@@ -18,7 +18,7 @@ import (
 
 var _ = DescribeMigration("Create audit records table", func() {
 	BeforeEach(func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 154)).To(Succeed())
+		Expect(tool.Migrate(ctx, 157)).To(Succeed())
 	})
 
 	It("stores audit records with their event ID and tenant metadata", func(ctx context.Context) {

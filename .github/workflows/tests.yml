@@ -18,7 +18,8 @@ on:  # yamllint disable-line rule:truthy
         default: ""
       kind:
         description: >-
-          Which tests: go-unit, caas-unit, ui-unit, metering-contract, it-caas, it-fulfillment-service, it-osac-operator,
+          Which tests: go-unit, observability-unit, caas-unit, ui-unit, metering-contract, it-caas,
+          it-fulfillment-service, it-osac-operator,
           it-bare-metal-fulfillment-operator, it-osac-aap, it-osac-installer, helm-unit or
           it-osac-installer-preflight-helm3/-helm322/-helm4 or e2e-workflow-policy
         required: true
@@ -129,6 +130,41 @@ jobs:
         if: inputs.kind == 'metering-contract'
         working-directory: osac-metering
         run: make contract-check schemas-unchanged-test rules-render-test rules-unchanged-test
+      # --- Go tests and chart unit tests of osac-observability
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: inputs.kind == 'observability-unit'
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+      - uses: ./.github/actions/setup-go
+        if: inputs.kind == 'observability-unit'
+        with:
+          working-directory: osac-observability
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
+        if: inputs.kind == 'observability-unit'
+        with:
+          version: v3.22.0
+      - name: Install helm-unittest
+        if: inputs.kind == 'observability-unit'
+        run: |
+          # Helm 4 refuses to install a remote plugin it cannot verify unless
+          # --verify=false is given; Helm 3 has no such flag at all. Probe for
+          # the flag instead of pinning the invocation to one major version.
+          verify=""
+          if helm plugin install --help 2>&1 | grep -q -- '--verify'; then
+            verify="--verify=false"
+          fi
+          helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.8.2 $verify
+      # go test is the only accepted command for the ginkgo go-unit kind, and
+      # osac-observability uses the standard library's testing package.
+      - name: Run Go tests
+        if: inputs.kind == 'observability-unit'
+        working-directory: osac-observability
+        run: go test ./...
+      - name: Run chart unit tests
+        if: inputs.kind == 'observability-unit'
+        working-directory: osac-observability
+        run: helm unittest charts/osac-observability
       # --- unit tests of osac-ui
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         if: inputs.kind == 'ui-unit'

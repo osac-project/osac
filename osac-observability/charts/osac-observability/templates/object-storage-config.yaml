@@ -1,6 +1,20 @@
 {{- if dig "observability" "enabled" false (.Values.global | default dict) }}
 {{- $obs := .Values.global.observability -}}
 {{- $storage := $obs.objectStorage | default dict -}}
+{{- $endpoint := required "global.observability.objectStorage.endpoint is required when observability is enabled" $storage.endpoint -}}
+{{- /*
+Thanos's S3 provider rejects an endpoint that carries a scheme or a path
+("Endpoint url cannot have fully qualified paths"); TLS is selected by
+`insecure` instead. The value keeps its scheme so the chart schema and the
+preflight can validate it, and only the rendered file is reduced to host:port.
+An http:// endpoint is plaintext by definition, so it forces insecure: true
+rather than letting a TLS handshake fail against the listener.
+*/ -}}
+{{- $insecure := $storage.insecure | default false -}}
+{{- if hasPrefix "http://" $endpoint -}}
+{{- $insecure = true -}}
+{{- end -}}
+{{- $endpoint = regexReplaceAll "^[a-zA-Z][a-zA-Z0-9+.-]*://" $endpoint "" -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -15,8 +29,11 @@ data:
     type: S3
     config:
       bucket: {{ required "global.observability.objectStorage.bucket is required when observability is enabled" $storage.bucket | quote }}
-      endpoint: {{ required "global.observability.objectStorage.endpoint is required when observability is enabled" $storage.endpoint | quote }}
-      insecure: {{ $storage.insecure | default false }}
+      endpoint: {{ $endpoint | quote }}
+      insecure: {{ $insecure }}
+      # Use the pod's credential chain (the mounted Secret) instead of the
+      # anonymous default, which would make every bucket read fail.
+      aws_sdk_auth: true
       {{- with $storage.region }}
       region: {{ . | quote }}
       {{- end }}

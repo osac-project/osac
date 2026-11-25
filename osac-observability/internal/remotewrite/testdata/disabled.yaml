@@ -1,0 +1,14 @@
+prometheusK8s:
+  retention: 15d
+  scrapeInterval: 1m
+  enableUserWorkload: true
+  externalLabels:
+    osac_cluster: management
+    managed_by: osac
+    region: us-east-1
+  remoteWrite:
+    - name: osac
+      url: https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive
+    - name: guest
+      url: https://guest.example.com/api/v1/receive
+alertmanagerMain: {}

@@ -1,0 +1,147 @@
+// Command remote-write-config upserts OSAC's remote-write settings into the
+// management cluster's cluster-monitoring-config ConfigMap and removes only
+// those settings when observability is disabled.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"strconv"
+
+	"github.com/osac-project/osac/osac-observability/internal/remotewrite"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+)
+
+const (
+	defaultNamespace          = "openshift-monitoring"
+	defaultName               = "cluster-monitoring-config"
+	defaultReceiveURL         = "https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive"
+	defaultPlatformNamespaces = `["osac","osac-csi","osac-observability"]`
+	dataKey                   = "config.yaml"
+)
+
+type config struct {
+	Enabled            bool
+	ReceiveURL         string
+	PlatformNamespaces []string
+	Namespace          string
+	Name               string
+}
+
+func main() {
+	cfg, err := loadConfig(os.Getenv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	restConfig, err := rest.InClusterConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "in-cluster configuration: %v\n", err)
+		os.Exit(1)
+	}
+	client, err := kubernetes.NewForConfig(restConfig)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "kubernetes client: %v\n", err)
+		os.Exit(1)
+	}
+	if err := run(context.Background(), client, cfg); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func loadConfig(getenv func(string) string) (config, error) {
+	cfg := config{
+		ReceiveURL: defaultReceiveURL,
+		Namespace:  valueOr(getenv, "OBS_CONFIGMAP_NAMESPACE", defaultNamespace),
+		Name:       valueOr(getenv, "OBS_CONFIGMAP_NAME", defaultName),
+	}
+	enabled, err := strconv.ParseBool(valueOr(getenv, "OBSERVABILITY_ENABLED", "false"))
+	if err != nil {
+		return config{}, fmt.Errorf("OBSERVABILITY_ENABLED: %w", err)
+	}
+	cfg.Enabled = enabled
+	if value := getenv("OBS_RECEIVE_URL"); value != "" {
+		cfg.ReceiveURL = value
+	}
+	namespaces := valueOr(getenv, "OBS_PLATFORM_NAMESPACES", defaultPlatformNamespaces)
+	if err := json.Unmarshal([]byte(namespaces), &cfg.PlatformNamespaces); err != nil {
+		return config{}, fmt.Errorf("OBS_PLATFORM_NAMESPACES: %w", err)
+	}
+	if len(cfg.PlatformNamespaces) == 0 {
+		return config{}, fmt.Errorf("OBS_PLATFORM_NAMESPACES must list at least one namespace")
+	}
+	return cfg, nil
+}
+
+func valueOr(getenv func(string) string, name, fallback string) string {
+	if value := getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func (cfg config) options() remotewrite.Options {
+	return remotewrite.Options{
+		Enabled:            cfg.Enabled,
+		ReceiveURL:         cfg.ReceiveURL,
+		PlatformNamespaces: cfg.PlatformNamespaces,
+	}
+}
+
+// updateAttempts bounds the read-merge-update loop. Another writer (the
+// cluster monitoring operator or an administrator) can change the ConfigMap
+// between the read and the update; a conflict is retried, but the Job's
+// backoffLimit stays 0 so a persistent conflict still fails the release.
+const updateAttempts = 3
+
+func run(ctx context.Context, client kubernetes.Interface, cfg config) error {
+	configMaps := client.CoreV1().ConfigMaps(cfg.Namespace)
+	cm, err := configMaps.Get(ctx, cfg.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		if !cfg.Enabled {
+			return nil
+		}
+		// Cluster monitoring owns this ConfigMap. Creating it here would
+		// bypass its own defaults and hide a cluster that never enabled
+		// monitoring, so report the missing prerequisite instead.
+		return fmt.Errorf("ConfigMap %s/%s not found: enable cluster monitoring before enabling OSAC observability", cfg.Namespace, cfg.Name)
+	}
+	if err != nil {
+		return fmt.Errorf("read ConfigMap %s/%s: %w", cfg.Namespace, cfg.Name, err)
+	}
+
+	opts := cfg.options()
+
+	for attempt := 1; ; attempt++ {
+		data := cm.Data[dataKey]
+		merged, err := remotewrite.Merge([]byte(data), opts)
+		if err != nil {
+			return err
+		}
+		if string(merged) == data {
+			return nil
+		}
+		if cm.Data == nil {
+			cm.Data = map[string]string{}
+		}
+		cm.Data[dataKey] = string(merged)
+		if _, err := configMaps.Update(ctx, cm, metav1.UpdateOptions{}); err != nil {
+			if !apierrors.IsConflict(err) || attempt == updateAttempts {
+				return fmt.Errorf("update ConfigMap %s/%s: %w", cfg.Namespace, cfg.Name, err)
+			}
+			// Re-read the object the other writer changed and merge again.
+			cm, err = configMaps.Get(ctx, cfg.Name, metav1.GetOptions{})
+			if err != nil {
+				return fmt.Errorf("read ConfigMap %s/%s after a conflict: %w", cfg.Namespace, cfg.Name, err)
+			}
+			continue
+		}
+		return nil
+	}
+}

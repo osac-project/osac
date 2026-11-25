@@ -1,0 +1,134 @@
+{{- $fullname := include "osac.fullname" . -}}
+{{- $observability := .Values.global.observability | default dict -}}
+{{- $collection := $observability.collection | default dict -}}
+{{- $image := ($observability.services | default dict).metricsAuth | default dict -}}
+{{- $name := printf "%s-observability-remote-write" $fullname -}}
+{{- $enabled := $observability.enabled | default false -}}
+{{- /* The Job runs when observability is enabled, and also when a cluster that
+       was previously enabled still carries the osac remote-write entry: that
+       entry has to be removed on the disable path. A fresh install of a
+       disabled cluster must not render anything in openshift-monitoring, so
+       fall back to an in-cluster lookup. lookup returns nothing during
+       `helm template`, which is exactly the fresh-render semantics we want. */ -}}
+{{- $job := $enabled -}}
+{{- if not $enabled -}}
+  {{- $cm := lookup "v1" "ConfigMap" "openshift-monitoring" "cluster-monitoring-config" -}}
+  {{- if $cm -}}
+    {{- $raw := index ($cm.data | default dict) "config.yaml" | default "" -}}
+    {{- if $raw -}}
+      {{- $parsed := fromYaml $raw -}}
+      {{- if and (kindIs "map" $parsed) (hasKey $parsed "prometheusK8s") -}}
+        {{- $prom := index $parsed "prometheusK8s" -}}
+        {{- if kindIs "map" $prom -}}
+          {{- $entries := index $prom "remoteWrite" | default list -}}
+          {{- if kindIs "slice" $entries -}}
+            {{- range $entry := $entries -}}
+              {{- if and (kindIs "map" $entry) (eq (index $entry "name" | default "") "osac") -}}
+                {{- $job = true -}}
+              {{- end -}}
+            {{- end -}}
+          {{- end -}}
+        {{- end -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- if $job -}}
+{{- if not ($image.tag | default "") -}}
+{{- fail "global.observability.services.metricsAuth.tag must be set when the remote-write Job renders" -}}
+{{- end -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: openshift-monitoring
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: openshift-monitoring
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    resourceNames:
+      - cluster-monitoring-config
+    verbs:
+      - get
+      - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: openshift-monitoring
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: openshift-monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: openshift-monitoring
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    # After the observability workloads and the namespace exists.
+    "helm.sh/hook-weight": "20"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        {{- include "osac.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ $name }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: remote-write-config
+          image: "{{ $image.repository }}:{{ $image.tag }}"
+          imagePullPolicy: IfNotPresent
+          command:
+            - /remote-write-config
+          env:
+            - name: OBSERVABILITY_ENABLED
+              value: {{ $observability.enabled | default false | quote }}
+            - name: OBS_PLATFORM_NAMESPACES
+              value: {{ $collection.platformNamespaces | default (list "osac" "osac-csi" "osac-observability") | toJson | quote }}
+            - name: OBS_RECEIVE_URL
+              value: https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+{{- end }}

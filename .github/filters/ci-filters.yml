@@ -277,6 +277,8 @@ helm-osac-csi-driver:
   - '{osac-csi-driver/charts/**,.github/workflows/helm-lint.yaml}'
 helm-osac-metering:
   - '{osac-metering/charts/**,.github/workflows/helm-lint.yaml}'
+helm-osac-observability:
+  - '{osac-observability/charts/**,.github/workflows/helm-lint.yaml}'
 helm-osac-installer:
   - '{osac-installer/charts/**,osac-installer/values/**,osac-installer/ct.yaml,osac-installer/Makefile,osac-installer/scripts/test-mce-render.py,osac-installer/scripts/test-lvms-optional-path-render.py,osac-installer/scripts/test-billing-render.py,osac-installer/scripts/test-chart-name-independence-render.py,osac-installer/scripts/test-networking-values.py,osac-installer/scripts/test-networking-provisioning-overlay.py,osac-installer/scripts/testdata/**,osac-installer/scripts/test-network-class-step.py,osac-installer/scripts/test-netris-ca-lifecycle.py,osac-installer/scripts/test-bmf-netbox-render.py,osac-installer/scripts/lib.sh,osac-installer/scripts/test-infra-ready-wait.sh,osac-installer/scripts/test-input-validation.sh,osac-installer/scripts/test-validation-diagnostics.py,.github/workflows/helm-lint.yaml}'
 
@@ -347,6 +349,8 @@ metering-contract:
   - '{osac-metering/docs/contract/**,osac-metering/schema/**,osac-metering/metering-service/**,osac-metering/charts/osac-metering/rules/**,osac-metering/charts/osac-metering/values.yaml,osac-metering/charts/osac-metering/templates/rules.yaml,osac-metering/charts/osac-metering/templates/kafka-topics.yaml,osac-metering/scripts/test-contract-schemas.sh,osac-metering/scripts/test-rules-unchanged.sh,osac-metering/Makefile,proto/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 unit-tests-osac-metering-adapters:
   - '{osac-metering/adapters/**,osac-metering/schema/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
+unit-tests-osac-observability:
+  - '{osac-observability/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 unit-tests-osac-metering-schema:
   - '{osac-metering/schema/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 # The selector policy tests read this repository's workflow callers and the

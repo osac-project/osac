@@ -25,7 +25,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
      never carries the floating tag the repository's tag check rejects. */}}
 {{- define "osac-observability.image" -}}
 {{- $image := . -}}
-{{- printf "%s/%s:%s" $image.registry $image.repository ($image.tag | default "latest") -}}
+{{- printf "%s/%s:%s" $image.registry $image.repository $image.tag -}}
 {{- end -}}
 
 {{- define "osac-observability.serviceAccountName" -}}

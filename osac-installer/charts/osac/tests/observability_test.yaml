@@ -1,6 +1,7 @@
 suite: observability namespaces and scrape access
 templates:
   - templates/observability/*.yaml
+  - templates/hooks/observability-remote-write.yaml
 release:
   name: osac
   namespace: osac
@@ -66,6 +67,44 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].command[3]
           value: osac
+
+  # A pinned runAsUser is rejected by OpenShift's restricted-v2 SCC, which
+  # requires a UID from the namespace's allocated range. Both hook Jobs must
+  # leave the UID to the SCC there.
+  - it: lets the OpenShift SCC allocate the UID for the label job
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+      apiVersions:
+        - security.openshift.io/v1
+    template: templates/observability/label-namespaces.yaml
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["openshift.io/required-scc"]
+          value: restricted-v2
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - notExists:
+          path: spec.template.spec.securityContext.runAsUser
+      - notExists:
+          path: spec.template.spec.securityContext.fsGroup
+
+  - it: lets the OpenShift SCC allocate the UID for the unlabel job
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+      apiVersions:
+        - security.openshift.io/v1
+    template: templates/observability/label-namespaces.yaml
+    documentIndex: 4
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["openshift.io/required-scc"]
+          value: restricted-v2
+      - notExists:
+          path: spec.template.spec.securityContext.runAsUser
 
   - it: removes the label before the release is deleted
     template: templates/observability/label-namespaces.yaml
@@ -226,3 +265,121 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  - it: scopes the remote-write service account to one ConfigMap
+    template: templates/hooks/observability-remote-write.yaml
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: ServiceAccount
+      - equal:
+          path: metadata.namespace
+          value: openshift-monitoring
+
+  - it: limits the remote-write role to get, create, update and patch
+    template: templates/hooks/observability-remote-write.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: metadata.namespace
+          value: openshift-monitoring
+      - equal:
+          path: rules[0].resourceNames
+          value:
+            - cluster-monitoring-config
+      - equal:
+          path: rules[0].verbs
+          value:
+            - get
+            - create
+            - update
+            - patch
+
+  - it: binds the remote-write role to its service account
+    template: templates/hooks/observability-remote-write.yaml
+    documentIndex: 2
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: roleRef.kind
+          value: Role
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+
+  - it: runs the remote-write Job after install and upgrade
+    template: templates/hooks/observability-remote-write.yaml
+    documentIndex: 3
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: metadata.name
+          value: osac-observability-remote-write
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "20"
+      - equal:
+          path: spec.backoffLimit
+          value: 0
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 120
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/osac-project/osac-observability:latest
+      - equal:
+          path: spec.template.spec.containers[0].command[0]
+          value: /remote-write-config
+
+  - it: passes the enabled payload to the remote-write Job
+    template: templates/hooks/observability-remote-write.yaml
+    documentIndex: 3
+    set:
+      global.observability.collection.platformNamespaces:
+        - osac
+        - osac-csi
+        - osac-observability
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OBSERVABILITY_ENABLED
+            value: "true"
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OBS_SCRAPE_INTERVAL
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OBS_PLATFORM_NAMESPACES
+            value: '["osac","osac-csi","osac-observability"]'
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OBS_RECEIVE_URL
+            value: https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive
+
+  - it: keeps the remote-write Job on the disable path
+    template: templates/hooks/observability-remote-write.yaml
+    documentIndex: 3
+    set:
+      global.observability.enabled: false
+    asserts:
+      - isKind:
+          of: Job
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OBSERVABILITY_ENABLED
+            value: "false"

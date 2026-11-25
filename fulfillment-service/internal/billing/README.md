@@ -79,12 +79,13 @@ nor an empty `update_mask` query value requests an empty mask.
 Billing filters use nested descriptor paths, such as `this.status.state == 1` (ACTIVE),
 `this.status.connection_state == 2` (CONNECTED), `!has(this.status.effective_to_timestamp)`, and
 `status.external_billing_account_id`. Enum comparisons are numeric, not the type-prefixed names used
-by JSON responses. Timestamp predicates use `timestamp("2026-01-01T00:00:00Z")`. List ordering
-remains unimplemented, as for other Fulfillment object types; the request field is ignored and
-callers must not rely on result order. Old flat account fields, `correlation_id`, scalar
-`tenant_id`/`billing_account_id`, and `effective_from`/`effective_to` are not aliases. The merged
-design's example request body predates this amendment; it used the flat scalar fields and does not
-parse against this API. REST and CLI structured output use the nested snake-case field names.
+by JSON responses. Timestamp comparisons use `now` or `null`, as documented in
+[FILTER.md](../../docs/FILTER.md). List ordering remains unimplemented, as for other Fulfillment
+object types; the request field is ignored and callers must not rely on result order. Old flat
+account fields, `correlation_id`, scalar `tenant_id`/`billing_account_id`, and
+`effective_from`/`effective_to` are not aliases. The merged design's example request body predates
+this amendment; it used the flat scalar fields and does not parse against this API. REST and CLI
+structured output use the nested snake-case field names.
 
 The billing schema is a forward-only set with no down migrations, numbered after main's last migration
 (156). Migration 157 creates `billing_accounts` with the standard envelope, JSON-expression uniqueness

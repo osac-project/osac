@@ -228,7 +228,7 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 			// Keys are immutable OSAC id/name, not a display label, native id or attribution token.
 			for _, key := range []string{first.GetId(), first.GetMetadata().GetName()} {
 				items := billingCLIItems(ctx, home, "billingaccount", format, pkg+"BillingAccount", key,
-					"--filter", `this.status.state == 1 && has(this.status.state_observation_timestamp) && this.status.state_observation_timestamp >= timestamp("2026-01-01T00:00:00Z")`)
+					"--filter", `this.status.state == 1 && has(this.status.state_observation_timestamp) && this.status.state_observation_timestamp <= now`)
 				Expect(items).To(HaveLen(1))
 				Expect(items[0]).To(HaveKeyWithValue("id", first.GetId()))
 				Expect(items[0]).To(HaveKey("spec"))
@@ -482,7 +482,7 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		expectBillingAssignmentCLI(ctx, home, []*privatev1.TenantBillingAssignment{old.GetObject()},
 			assignment.GetMetadata().GetName(), "--filter", "has(this.status.effective_to_timestamp)")
 		expectBillingAssignmentCLI(ctx, home, []*privatev1.TenantBillingAssignment{updated.GetObject()},
-			"--filter", `this.status.connection_state == 2 && !has(this.status.effective_to_timestamp) && this.status.effective_from_timestamp >= timestamp("2026-01-01T00:00:00Z")`)
+			"--filter", `this.status.connection_state == 2 && !has(this.status.effective_to_timestamp) && this.status.effective_from_timestamp <= now`)
 		privateHome := newBillingCLI(ctx, tenant, true)
 		expectBillingAssignmentCLI(ctx, privateHome, history.GetItems(), assignment.GetId(), updated.GetObject().GetMetadata().GetName())
 		expectBillingAssignmentCLI(ctx, privateHome, []*privatev1.TenantBillingAssignment{updated.GetObject()}, updated.GetObject().GetId())

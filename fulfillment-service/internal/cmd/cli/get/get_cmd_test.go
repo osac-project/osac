@@ -228,9 +228,9 @@ var _ = Describe("Get command", func() {
 
 			DescribeTable(pkg+" "+kind+" carries keys and domain CEL unchanged on the first page",
 				func(history bool) {
-					filter := `this.status.state == 1 && this.status.state_observation_timestamp >= timestamp("2026-01-01T00:00:00Z") && this.metadata.labels["env"] == "test"`
+					filter := `this.status.state == 1 && this.status.state_observation_timestamp <= now && this.metadata.labels["env"] == "test"`
 					if kind == "tenantbillingassignment" {
-						filter = `this.status.connection_state == 1 && this.status.effective_from_timestamp >= timestamp("2026-01-01T00:00:00Z") && this.metadata.labels["env"] == "test" && `
+						filter = `this.status.connection_state == 1 && this.status.effective_from_timestamp <= now && this.metadata.labels["env"] == "test" && `
 						if history {
 							filter += `has(this.status.effective_to_timestamp)`
 						} else {

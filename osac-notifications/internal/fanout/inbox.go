@@ -74,7 +74,7 @@ func (i *Inbox) FanOut(ctx context.Context, accepted *cevent.Accepted) error {
 		return fmt.Errorf("%w: no USER recipients", ErrNonRetryable)
 	}
 
-	resource := mapResource(accepted.Data.Resource)
+	resource := mapResource(accepted.Tenant, accepted.Data.Resource)
 	for _, userID := range userIDs {
 		name, nameErr := inboxName(accepted.ID, userID)
 		if nameErr != nil {
@@ -86,14 +86,11 @@ func (i *Inbox) FanOut(ctx context.Context, accepted *cevent.Accepted) error {
 				Tenant: accepted.Tenant,
 			}.Build(),
 			Spec: privatev1.NotificationSpec_builder{
-				Kind:     kind,
-				Severity: severity,
-				Type:     accepted.Type,
-				Title:    accepted.Data.Title,
-				Event: privatev1.NotificationEventReference_builder{
-					Id:     accepted.ID,
-					Source: accepted.Source,
-				}.Build(),
+				Kind:        kind,
+				Severity:    severity,
+				Type:        accepted.Type,
+				Title:       accepted.Data.Title,
+				Source:      accepted.Source,
 				RecipientId: userID,
 			}.Build(),
 		}.Build()
@@ -101,7 +98,7 @@ func (i *Inbox) FanOut(ctx context.Context, accepted *cevent.Accepted) error {
 			object.GetSpec().SetDescription(accepted.Data.Description)
 		}
 		if resource != nil {
-			object.GetSpec().SetResource(resource)
+			object.GetSpec().SetObject(resource)
 		}
 		if len(accepted.Data.Details) > 0 {
 			details := make(map[string]string, len(accepted.Data.Details))
@@ -177,29 +174,37 @@ func severityFromSegment(segment string) (privatev1.NotificationSeverity, error)
 	}
 }
 
-func mapResource(resource *cevent.Resource) *privatev1.NotificationResourceReference {
+// mapResource maps CE data.resource into a non-local NotificationObjectReference.
+// CE wire only carries object ids; tenant comes from the accepted event.
+func mapResource(tenant string, resource *cevent.Resource) *privatev1.NotificationObjectReference {
 	if resource == nil {
 		return nil
 	}
-	out := &privatev1.NotificationResourceReference{}
+	out := &privatev1.NotificationObjectReference{}
 	switch {
 	case resource.Cluster != nil && resource.Cluster.ID != "":
-		out.SetCluster(privatev1.ClusterLocalReference_builder{Id: resource.Cluster.ID}.Build())
+		out.SetCluster(privatev1.ClusterReference_builder{
+			Id: resource.Cluster.ID, Tenant: tenant,
+		}.Build())
 	case resource.ComputeInstance != nil && resource.ComputeInstance.ID != "":
-		out.SetComputeInstance(privatev1.ComputeInstanceLocalReference_builder{
-			Id: resource.ComputeInstance.ID,
+		out.SetComputeInstance(privatev1.ComputeInstanceReference_builder{
+			Id: resource.ComputeInstance.ID, Tenant: tenant,
 		}.Build())
 	case resource.VirtualNetwork != nil && resource.VirtualNetwork.ID != "":
-		out.SetVirtualNetwork(privatev1.VirtualNetworkLocalReference_builder{
-			Id: resource.VirtualNetwork.ID,
+		out.SetVirtualNetwork(privatev1.VirtualNetworkReference_builder{
+			Id: resource.VirtualNetwork.ID, Tenant: tenant,
 		}.Build())
 	case resource.Subnet != nil && resource.Subnet.ID != "":
-		out.SetSubnet(privatev1.SubnetLocalReference_builder{Id: resource.Subnet.ID}.Build())
+		out.SetSubnet(privatev1.SubnetReference_builder{
+			Id: resource.Subnet.ID, Tenant: tenant,
+		}.Build())
 	case resource.ExternalIP != nil && resource.ExternalIP.ID != "":
-		out.SetExternalIp(privatev1.ExternalIPLocalReference_builder{Id: resource.ExternalIP.ID}.Build())
+		out.SetExternalIp(privatev1.ExternalIPReference_builder{
+			Id: resource.ExternalIP.ID, Tenant: tenant,
+		}.Build())
 	case resource.BareMetal != nil && resource.BareMetal.ID != "":
-		out.SetBareMetalInstance(privatev1.BareMetalInstanceLocalReference_builder{
-			Id: resource.BareMetal.ID,
+		out.SetBareMetalInstance(privatev1.BareMetalInstanceReference_builder{
+			Id: resource.BareMetal.ID, Tenant: tenant,
 		}.Build())
 	default:
 		return nil

@@ -172,16 +172,13 @@ func (s *NotificationsServer) List(ctx context.Context,
 	return
 }
 
-// listFilterForCaller adds a recipient clause for normal users.
-// Platform and tenant admins omit that clause.
+// listFilterForCaller scopes List to announcements and the caller's own inbox
+// rows. Admins do not see other users' inbox items.
 func (s *NotificationsServer) listFilterForCaller(ctx context.Context, userFilter string) (string, error) {
 	if userFilter != "" {
 		if err := validateCELSyntax(userFilter); err != nil {
 			return "", grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid filter: %s", err)
 		}
-	}
-	if s.callerSeesAllInbox(ctx) {
-		return userFilter, nil
 	}
 	subject, ok := auth.SubjectPresent(ctx)
 	if !ok {
@@ -431,13 +428,11 @@ func (s *NotificationsServer) canManageAnnouncement(ctx context.Context,
 }
 
 // isRecipientVisible reports whether the caller may see this inbox row or announcement.
+// Inbox rows are visible only to their recipient; announcements are visible to the tenant.
 func (s *NotificationsServer) isRecipientVisible(ctx context.Context,
 	notification *privatev1.Notification) bool {
 	spec := notification.GetSpec()
 	if spec.GetKind() == privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT {
-		return true
-	}
-	if s.callerSeesAllInbox(ctx) {
 		return true
 	}
 	subject, ok := auth.SubjectPresent(ctx)
@@ -445,16 +440,4 @@ func (s *NotificationsServer) isRecipientVisible(ctx context.Context,
 		return false
 	}
 	return spec.GetRecipientId() == subject.User
-}
-
-// callerSeesAllInbox reports whether the caller may see every inbox row in their tenancy.
-func (s *NotificationsServer) callerSeesAllInbox(ctx context.Context) bool {
-	subject, ok := auth.SubjectPresent(ctx)
-	if !ok {
-		return false
-	}
-	if !subject.Tenants.Finite() {
-		return true
-	}
-	return auth.IsTenantAdmin(ctx)
 }

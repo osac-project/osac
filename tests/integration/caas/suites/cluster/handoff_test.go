@@ -189,7 +189,7 @@ func (s *clusterFixture) checkConsumerHandoff(ctx context.Context, g Gomega) {
 	}
 }
 
-// checkAgentHandoff checks OSAC approval and binding, then returns the validated consumer claim.
+// checkAgentHandoff verifies OSAC approval and CAP-Agent's binding and Ignition settings.
 func (s *clusterFixture) checkAgentHandoff(
 	ctx context.Context,
 	g Gomega,
@@ -232,8 +232,13 @@ func (s *clusterFixture) checkAgentHandoff(
 
 	deployment := current.Spec.ClusterDeploymentName
 	g.Expect(deployment).NotTo(BeNil(), "consumer deployment binding must remain present")
-	g.Expect(deployment.Name).NotTo(BeEmpty())
-	g.Expect(deployment.Namespace).NotTo(BeEmpty())
+	g.Expect(deployment.Name).To(Equal(s.hostedCluster.Name))
+	g.Expect(deployment.Namespace).To(Equal(claim.Namespace))
+	g.Expect(current.Spec.MachineConfigPool).To(Equal("ignition"), "CAP-Agent must set the worker Ignition path")
+	token := current.Spec.IgnitionEndpointTokenReference
+	g.Expect(token).NotTo(BeNil(), "CAP-Agent must set the worker Ignition token reference")
+	g.Expect(token.Name).NotTo(BeEmpty())
+	g.Expect(token.Namespace).To(Equal(claim.Namespace))
 
 	return claim
 }

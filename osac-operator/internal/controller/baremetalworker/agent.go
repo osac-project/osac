@@ -42,9 +42,9 @@ var agentGVK = schema.GroupVersionKind{
 }
 
 // reconcileObservedAgents performs Agent actions against the invocation snapshot:
-// it matches and binds unbound Agents, then enforces the registration timeout.
+// it matches and prepares unbound Agents, then enforces the registration timeout.
 // Phase projection already happened once in observeExistingWorkers; this stage
-// never re-derives phases from the Agent list, and after a bind or delete it
+// never re-derives phases from the Agent list, and after a patch or delete it
 // leaves further observation to the next explicit invocation. Status persistence
 // remains in the caller.
 func (r *Reconciler) reconcileObservedAgents(
@@ -85,11 +85,11 @@ func (r *Reconciler) observeAgentReadiness(
 	}
 }
 
-// matchAndBindAgents correlates unbound Agents to BMIs by MAC and performs late binding.
+// matchAndBindAgents correlates unbound Agents to BMIs by MAC and prepares them for CAP-Agent.
 // It requires a unique unbound compatible candidate in both directions before patching: an
 // Agent matching several workers and several Agents matching one worker are both ambiguous and
-// bind nothing. Incompatible candidates are returned as an error so the blocker is observable.
-// Returns the number of newly bound workers.
+// are left untouched. Incompatible candidates return an error so the blocker is observable.
+// Returns the number of workers moved to Binding.
 func (r *Reconciler) matchAndBindAgents(
 	ctx context.Context, co *v1alpha1.ClusterOrder,
 	agents *unstructured.UnstructuredList, workers []v1alpha1.WorkerStatus, macs MACResolver,
@@ -123,8 +123,9 @@ func (r *Reconciler) matchAndBindAgents(
 	return bound, nil
 }
 
-// bindAgent sets the Agent's clusterDeploymentName (late binding), marks it approved,
-// and applies labels for NodePool selection and role identification.
+// bindAgent approves and labels an Agent for CAP-Agent to claim. CAP-Agent
+// selects unbound Agents and sets the ClusterDeployment reference together with
+// the Ignition settings.
 func (r *Reconciler) bindAgent(
 	ctx context.Context, co *v1alpha1.ClusterOrder,
 	agent *unstructured.Unstructured, worker *v1alpha1.WorkerStatus,
@@ -150,13 +151,6 @@ func (r *Reconciler) bindAgent(
 		return nil
 	}
 	base := latest.DeepCopy()
-
-	if err := unstructured.SetNestedMap(latest.Object, map[string]interface{}{
-		"name":      co.Name,
-		"namespace": co.Namespace,
-	}, "spec", "clusterDeploymentName"); err != nil {
-		return fmt.Errorf("setting agent clusterDeploymentName: %w", err)
-	}
 
 	if err := unstructured.SetNestedField(latest.Object, true, "spec", "approved"); err != nil {
 		return fmt.Errorf("setting agent approved: %w", err)

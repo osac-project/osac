@@ -1347,17 +1347,18 @@ var _ = Describe("Unified worker reconciliation", Label("baremetalworker"), func
 		Expect(getAgent(agentName).GetLabels()).NotTo(HaveKey("osac.openshift.io/worker-name"))
 		Expect(fc.CreateCalls()).To(HaveLen(createsBefore))
 
-		// Once the test owner releases the competing binding, an explicit invocation
-		// may bind safely to this cluster deployment.
+		// Once the test owner releases the competing binding, OSAC may prepare
+		// the Agent for CAP-Agent to claim.
 		released := getAgent(agentName)
 		unstructured.RemoveNestedField(released.Object, "spec", "clusterDeploymentName")
 		Expect(k8sClient.Update(ctx, released)).To(Succeed())
 		_, err = run()
 		Expect(err).NotTo(HaveOccurred())
-		bound := getAgent(agentName)
-		Expect(bound.GetLabels()).To(HaveKeyWithValue("osac.openshift.io/worker-name", old.Name))
-		boundName, _, _ := unstructured.NestedString(bound.Object, "spec", "clusterDeploymentName", "name")
-		Expect(boundName).To(Equal(co.Name))
+		prepared := getAgent(agentName)
+		Expect(prepared.GetLabels()).To(HaveKeyWithValue("osac.openshift.io/worker-name", old.Name))
+		_, hasDeployment, err := unstructured.NestedFieldNoCopy(prepared.Object, "spec", "clusterDeploymentName")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(hasDeployment).To(BeFalse())
 	})
 
 	It("recovers a Failed ID-less reference during deletion without history reset or allocation", func() {

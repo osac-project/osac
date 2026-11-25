@@ -44,7 +44,7 @@
         - resource: servers
           name: "realm-a::nfs-server"
         - resource: nfs-export-policies
-          name: "realm-a::export-policy"
+          name: "realm-a::nfs-export"
       loop_control:
         label: "{{ item.name }}"
 
@@ -64,7 +64,7 @@
         - resource: servers
           name: "realm-b::nfs-server"
         - resource: nfs-export-policies
-          name: "realm-b::export-policy"
+          name: "realm-b::nfs-export"
       loop_control:
         label: "{{ item.name }}"
 
@@ -87,7 +87,7 @@
             mgmt_endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
             nfs_endpoint: "{{ pure_test_nfs_endpoint | default('192.0.2.20') }}"
             nfs_server: "realm-a::nfs-server"
-            nfs_policy: "realm-a::export-policy"
+            nfs_policy: "realm-a::nfs-export"
             storage_provider_type: pure
             tenant_uid_hash: test-uid-hash-a
 
@@ -110,7 +110,7 @@
             mgmt_endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
             nfs_endpoint: "{{ pure_test_nfs_endpoint | default('192.0.2.20') }}"
             nfs_server: "realm-b::nfs-server"
-            nfs_policy: "realm-b::export-policy"
+            nfs_policy: "realm-b::nfs-export"
             storage_provider_type: pure
             tenant_uid_hash: test-uid-hash-b
 
@@ -174,7 +174,7 @@
       ansible.builtin.assert:
         that:
           - _params.pure_nfs_server == 'realm-a::nfs-server'
-          - _params.pure_nfs_policy == 'realm-a::export-policy'
+          - _params.pure_nfs_policy == 'realm-a::nfs-export'
         fail_msg: "Tenant-a StorageClass doesn't use realm-a resources"
         success_msg: "Tenant-a StorageClass uses realm-a resources"
 
@@ -242,7 +242,7 @@
       ansible.builtin.assert:
         that:
           - _params.pure_nfs_server == 'realm-b::nfs-server'
-          - _params.pure_nfs_policy == 'realm-b::export-policy'
+          - _params.pure_nfs_policy == 'realm-b::nfs-export'
         fail_msg: "Tenant-b StorageClass doesn't use realm-b resources"
         success_msg: "Tenant-b StorageClass uses realm-b resources"
 

@@ -659,6 +659,8 @@
         api_token: "{{ _pure_realm_token }}"
         mgmt_endpoint: "{{ pure_realm_fb_url }}"
         nfs_endpoint: "{{ realm.interface_address }}"
+        nfs_server: "{{ realm.name }}::{{ pure_realm_server_name }}"
+        nfs_policy: "{{ realm.name }}::{{ pure_realm_export_policy_name }}"
   no_log: true
   when: _pure_realm_token | length > 0
 
@@ -699,10 +701,10 @@
     - _pure_realm_token | length == 0
     - >-
       (_pure_realm_credential_secret.resources | length == 0) or
-      (['realm_name', 'api_token', 'mgmt_endpoint', 'nfs_endpoint']
+      (['realm_name', 'api_token', 'mgmt_endpoint', 'nfs_endpoint', 'nfs_server', 'nfs_policy']
        | difference(_pure_realm_credential_secret.resources[0].data
                     | default({}) | list) | length > 0) or
-      (['realm_name', 'api_token', 'mgmt_endpoint', 'nfs_endpoint']
+      (['realm_name', 'api_token', 'mgmt_endpoint', 'nfs_endpoint', 'nfs_server', 'nfs_policy']
        | select('in', _pure_realm_credential_secret.resources[0].data
                 | default({}) | list)
        | map('extract', _pure_realm_credential_secret.resources[0].data

@@ -616,6 +616,23 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     allow_simultaneous: false
     ask_variables_on_launch: true
     verbosity: 0
+  # Admin-only Pure Storage Realm provisioning. Requires array-wide admin
+  # credentials (PUREFB_API, PUREFB_URL) and runs before tenants are onboarded.
+  # Populates PURE_REALM_POOL ConfigMap with provisioned Realms that tenant setup
+  # can then allocate. Keep separate from tenant operations - this uses the
+  # array-admin credential, never the per-Realm token.
+  - name: "{{ aap_prefix }}-provision-pure-realms"
+    project: "{{ aap_prefix }}"
+    organization: "{{ aap_organization_name }}"
+    job_type: run
+    playbook: "osac-aap/playbook_osac_provision_pure_realms.yml"
+    inventory: "{{ aap_prefix }}-storage-operations"
+    execution_environment: "{{ aap_prefix }}-ee"
+    instance_groups:
+      - "{{ aap_prefix }}-storage-operations-ig"
+    allow_simultaneous: true
+    ask_variables_on_launch: true
+    verbosity: 0
 controller_job_template_surveys: # noqa: var-naming[no-role-prefix]
   - name: "{{ aap_prefix }}-create-hosted-cluster-post-install"
     survey_enabled: true

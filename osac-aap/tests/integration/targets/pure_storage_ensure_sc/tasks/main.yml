@@ -40,7 +40,7 @@
         - resource: servers
           name: "ps-realm-esc::nfs-server"
         - resource: nfs-export-policies
-          name: "ps-realm-esc::export-policy"
+          name: "ps-realm-esc::nfs-export"
       loop_control:
         label: "{{ item.name }}"
 
@@ -63,7 +63,7 @@
             mgmt_endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
             nfs_endpoint: "{{ pure_test_nfs_endpoint | default('192.0.2.20') }}"
             nfs_server: "ps-realm-esc::nfs-server"
-            nfs_policy: "ps-realm-esc::export-policy"
+            nfs_policy: "ps-realm-esc::nfs-export"
             storage_provider_type: pure
             tenant_uid_hash: test-uid-hash-esc
 
@@ -200,7 +200,7 @@
         that:
           - _params.backend == 'pure_file'
           - _params.pure_nfs_server == 'ps-realm-esc::nfs-server'
-          - _params.pure_nfs_policy == 'ps-realm-esc::export-policy'
+          - _params.pure_nfs_policy == 'ps-realm-esc::nfs-export'
           - _params.pure_fb_hard_limit_enabled == 'true'
           - _params['csi.storage.k8s.io/provisioner-secret-name'] == 'pure-csi-secret-be-pure'
           - _params['csi.storage.k8s.io/provisioner-secret-namespace'] == 'osac-system'
@@ -245,7 +245,7 @@
       ansible.builtin.assert:
         that:
           - _params.pure_nfs_server == 'ps-realm-esc::nfs-server'
-          - _params.pure_nfs_policy == 'ps-realm-esc::export-policy'
+          - _params.pure_nfs_policy == 'ps-realm-esc::nfs-export'
         fail_msg: "Fast StorageClass parameters incorrect"
         success_msg: "Fast StorageClass uses same Realm-scoped resources"
 

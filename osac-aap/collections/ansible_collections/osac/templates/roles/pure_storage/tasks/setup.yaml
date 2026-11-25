@@ -249,6 +249,8 @@
             _pure_api_token: "{{ _pure_realm_secret.resources[0].data.api_token | b64decode }}"
             _pure_mgmt_endpoint: "{{ _pure_realm_secret.resources[0].data.mgmt_endpoint | b64decode }}"
             _pure_nfs_endpoint: "{{ _pure_realm_secret.resources[0].data.nfs_endpoint | b64decode }}"
+            _pure_nfs_server: "{{ _pure_realm_secret.resources[0].data.nfs_server | b64decode }}"
+            _pure_nfs_policy: "{{ _pure_realm_secret.resources[0].data.nfs_policy | b64decode }}"
           no_log: true
 
     # ── Reuse Realm credentials from existing hub Secret (re-onboarding) ──
@@ -259,12 +261,9 @@
         _pure_api_token: "{{ _pure_existing_config.api_token }}"
         _pure_mgmt_endpoint: "{{ _pure_existing_config.mgmt_endpoint }}"
         _pure_nfs_endpoint: "{{ _pure_existing_config.nfs_endpoint }}"
+        _pure_nfs_server: "{{ _pure_existing_config.nfs_server }}"
+        _pure_nfs_policy: "{{ _pure_existing_config.nfs_policy }}"
       no_log: true
-
-    - name: Derive Realm-scoped resource names by convention
-      ansible.builtin.set_fact:
-        _pure_nfs_server: "{{ _pure_realm_name }}::{{ pure_storage_nfs_server_suffix }}"
-        _pure_nfs_policy: "{{ _pure_realm_name }}::{{ pure_storage_export_policy_suffix }}"
 
     # ── Create or update hub Secret with tenant allocation ──
     - name: Create hub Secret recording tenant-to-Realm allocation

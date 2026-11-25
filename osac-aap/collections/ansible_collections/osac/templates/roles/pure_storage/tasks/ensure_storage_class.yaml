@@ -70,6 +70,27 @@
     _pure_all_sc_exist: >-
       {{ (_pure_sc_checks.resources | map(attribute='metadata.name') | list | sort) == (_pure_expected_sc_names | sort) }}
 
+# Verify Pure CSI driver is installed before creating StorageClasses.
+# Unlike VAST (which installs its own operator), Pure CSI is operator-managed
+# and must be installed separately. Creating StorageClasses without the driver
+# leaves PVCs pending indefinitely.
+- name: Check if Pure CSI driver is installed on target cluster
+  kubernetes.core.k8s_info:
+    api_version: storage.k8s.io/v1
+    kind: CSIDriver
+    name: "{{ pure_storage_csi_provisioner }}"
+  register: _pure_csi_driver_check
+
+- name: Fail when Pure CSI driver is not installed
+  ansible.builtin.fail:
+    msg: >-
+      Pure CSI driver ({{ pure_storage_csi_provisioner }}) is not installed on
+      the target cluster. StorageClasses cannot be created without the driver.
+      Install the Pure CSI driver via your cluster's operator catalog before
+      onboarding Pure Storage tenants. This check runs on every invocation to
+      catch driver removal on clusters with existing StorageClasses.
+  when: _pure_csi_driver_check.resources | length == 0
+
 # Only StorageClass creation is skipped when the classes already exist. The CSI
 # Secret is reconciled on every run: a tenant whose classes survive but whose
 # Secret was deleted would otherwise report success and fail at first PVC.

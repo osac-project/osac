@@ -15,6 +15,8 @@ that reach the cluster:
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -22,6 +24,7 @@ from typing import Any
 
 import pytest
 
+from tests.e2e.core import metering as metering_core
 from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector, billing_account_id
 from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.vmaas.sanity import test_compute_instance_creation as creation
@@ -216,7 +219,17 @@ def test_stop_journey_accepts_corrected_net_usage(monkeypatch: pytest.MonkeyPatc
     assert sum(Decimal(event["data"]["usage"]["quantity"]) for event in events) == Decimal("45")
     collector = _serve(monkeypatch, events)
     _patch_billing_waits(monkeypatch)
-    monkeypatch.setattr(billing.time, "sleep", lambda *_args: None)
+    # The journey waits for the net billed end to go quiet; clamp the quiet
+    # window to zero so the check needs no wall time but still runs the real
+    # helper against the synthetic trace.
+    original_wait_for_billing_end = MeteringCollector.wait_for_billing_end
+
+    def immediate_wait_for_billing_end(
+        self: MeteringCollector, resource_id: str, *, deletion: datetime, timeout: int = 600
+    ) -> datetime:
+        return original_wait_for_billing_end(self, resource_id, deletion=deletion, quiet=0, timeout=timeout)
+
+    monkeypatch.setattr(MeteringCollector, "wait_for_billing_end", immediate_wait_for_billing_end)
     # The silence window is polled for its whole duration; clamp it to zero so
     # the harness check needs no wall time (it still runs its polling loop once).
     original_assert_no_events = MeteringCollector.assert_no_events
@@ -236,11 +249,23 @@ def test_stop_journey_accepts_corrected_net_usage(monkeypatch: pytest.MonkeyPatc
             "object": {
                 "status": {
                     "state": "COMPUTE_INSTANCE_STATE_STOPPED",
-                    "stateTransitionTime": (START + timedelta(seconds=45)).isoformat(),
+                    # Fulfillment observed STOPPED 10s after the CR's Stopping
+                    # phase; the journey must anchor on Stopping, not this.
+                    "stateTransitionTime": (START + timedelta(seconds=55)).isoformat(),
                 }
             }
         },
     )
+
+    @contextlib.contextmanager
+    def watch_phase_transition(**_kwargs: object) -> Iterator[Callable[[str], str]]:
+        yield lambda phase: {
+            "Stopping": (START + timedelta(seconds=45)).isoformat(),
+            "Stopped": (START + timedelta(seconds=55)).isoformat(),
+        }.get(phase, "")
+
+    def get_jsonpath(**_kwargs: object) -> str:
+        return "2026-10-05T10:03:00Z"
 
     billing.test_metering_stop_ends_billing(
         cli=SimpleNamespace(
@@ -249,11 +274,12 @@ def test_stop_journey_accepts_corrected_net_usage(monkeypatch: pytest.MonkeyPatc
             delete_compute_instance=lambda **_kwargs: None,
         ),
         grpc=grpc,
-        # The journey's cleanup reads the CR's deletion timestamp before the
-        # patched waits remove it.
+        # The cleanup reads the CR's deletion timestamp before the patched
+        # waits remove it.
         k8s_hub_client=SimpleNamespace(
             get_compute_instance_vm_namespace=lambda **_kwargs: "vm-ns",
-            get_jsonpath=lambda **_kwargs: "2026-10-05T10:03:00Z",
+            get_jsonpath=get_jsonpath,
+            watch_phase_transition=watch_phase_transition,
         ),
         k8s_virt_client=SimpleNamespace(get_vm_printable_status=lambda **_kwargs: "Stopped"),
         vm_template="vm-template",
@@ -261,6 +287,78 @@ def test_stop_journey_accepts_corrected_net_usage(monkeypatch: pytest.MonkeyPatc
         metering=collector,
         metering_project="billing",
     )
+
+
+def test_billing_end_wait_requires_the_late_correction(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An overshoot that stays visible is not the billed end: the helper must
+    wait for the correction even after the quiet window has elapsed."""
+    overshoot = _corrected_stop_events()[:2]
+    correction = _corrected_stop_events()[2]
+    stop = START + timedelta(seconds=45)
+    calls = 0
+
+    def fetch(*_args: object) -> list[dict[str, Any]]:
+        nonlocal calls
+        calls += 1
+        return overshoot if calls == 1 else [*overshoot, correction]
+
+    collector = MeteringCollector(base_url="http://echo-adapter.example.test")
+    monkeypatch.setattr(collector, "_fetch_events", fetch)
+    monkeypatch.setattr(metering_core.time, "sleep", lambda *_args: None)
+
+    end = collector.wait_for_billing_end("vm-7", deletion=stop, quiet=0, timeout=5)
+
+    assert calls == 2, f"the helper returned before the correction landed on call {calls}"
+    assert end == stop
+
+
+def test_billing_end_wait_retries_transient_fetch_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A dropped echo-adapter connection is retried by the polling wait, not
+    raised as a test failure."""
+    events = _corrected_stop_events()
+    calls = 0
+
+    def fetch(*_args: object) -> list[dict[str, Any]]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("Remote end closed connection without response")
+        return events
+
+    collector = MeteringCollector(base_url="http://echo-adapter.example.test")
+    monkeypatch.setattr(collector, "_fetch_events", fetch)
+    monkeypatch.setattr(metering_core.time, "sleep", lambda *_args: None)
+
+    end = collector.wait_for_billing_end("vm-7", deletion=START + timedelta(seconds=45), quiet=0, timeout=5)
+
+    assert calls == 2, f"the helper gave up after {calls} fetch attempt(s)"
+    assert end == START + timedelta(seconds=45)
+
+
+def test_billing_end_wait_accepts_one_second_of_clock_slop(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A final interval one second past the recorded boundary is the clock
+    truncation the callers already tolerate, not an uncorrected overshoot."""
+    collector = _serve(monkeypatch, _corrected_stop_events())
+    monkeypatch.setattr(metering_core.time, "sleep", lambda *_args: None)
+
+    end = collector.wait_for_billing_end("vm-7", deletion=START + timedelta(seconds=44), quiet=0, timeout=5)
+
+    assert end == START + timedelta(seconds=45)
+
+
+def test_billing_end_wait_honors_the_quiet_window(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The helper must keep watching for a correction for the quiet window,
+    not return on the first stable sample."""
+    collector = _serve(monkeypatch, _corrected_stop_events())
+    monkeypatch.setattr(metering_core.time, "sleep", lambda *_args: None)
+    stop = START + timedelta(seconds=45)
+    started = metering_core.time.monotonic()
+
+    end = collector.wait_for_billing_end("vm-7", deletion=stop, quiet=1, timeout=5)
+
+    elapsed = metering_core.time.monotonic() - started
+    assert end == stop
+    assert elapsed >= 1, f"the helper returned after {elapsed:.3f}s, before the quiet window"
 
 
 def test_assert_no_events_accepts_canceled_net_usage(monkeypatch: pytest.MonkeyPatch) -> None:

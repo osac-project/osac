@@ -544,23 +544,40 @@ class MeteringCollector:
         correction lands reads as billing past the anchor. The whole net
         interval state, not just the latest end, must be unchanged for the
         quiet window, because a correction can change billed usage inside
-        the life without moving the end. Each meter is tracked separately,
-        so one meter's final piece landing does not end the wait for another
-        meter's.
+        the life without moving the end. Each meter's last end must sit
+        within the clock tolerance of the deletion: a final interval that
+        ends a little early is still the recorded boundary, while a larger
+        overrun is an uncorrected overshoot and keeps the wait open. Each
+        meter is tracked separately, so one meter's final piece landing does
+        not end the wait for another meter's.
         """
         deadline = time.monotonic() + timeout
         latest: dict[str, list[tuple[datetime, datetime, Decimal]]] = {}
         unchanged_since: float | None = None
         while True:
-            intervals = self._latest_net_intervals(resource_id)
+            try:
+                intervals = self._latest_net_intervals(resource_id)
+            except (OSError, json.JSONDecodeError) as exc:
+                now = time.monotonic()
+                if now >= deadline:
+                    raise TimeoutError(
+                        f"billing of {resource_id}: metering events stayed unreachable "
+                        f"until the {timeout}s deadline: {exc}"
+                    ) from exc
+                # A missed observation cannot count toward the quiet window: restart it
+                # when the next fetch succeeds.
+                unchanged_since = None
+                logger.warning("Transient error fetching events during billing-end wait: %s", exc)
+                time.sleep(10)
+                continue
             now = time.monotonic()
-            if intervals != latest:
+            if intervals != latest or unchanged_since is None:
                 latest, unchanged_since = intervals, now
             if (
                 latest
                 and unchanged_since is not None
                 and now - unchanged_since >= quiet
-                and all(net[-1][1] >= deletion - CR_STAMP_TOLERANCE for net in latest.values())
+                and all(abs(net[-1][1] - deletion) <= CR_STAMP_TOLERANCE for net in latest.values())
             ):
                 return max(net[-1][1] for net in latest.values())
             if now >= deadline:

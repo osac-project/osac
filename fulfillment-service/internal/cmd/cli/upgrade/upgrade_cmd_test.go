@@ -21,10 +21,8 @@ import (
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
@@ -136,30 +134,19 @@ var _ = Describe("Upgrade command", func() {
 		server.Start()
 		DeferCleanup(server.Stop)
 		settings.SetAddress(server.Address())
-
-		conn, err := grpc.NewClient(
-			server.Address(),
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		)
-		Expect(err).NotTo(HaveOccurred())
+		settings.SetPlaintext(true)
 
 		ctx := context.Background()
 		ctx = logging.LoggerIntoContext(ctx, logger)
 		ctx = terminal.ConsoleIntoContext(ctx, console)
 		ctx = config.SettingsIntoContext(ctx, settings)
 
-		runner := &runnerContext{
-			console: console,
-			logger:  logger,
-			connect: func(context.Context, *pflag.FlagSet, *config.Settings) (*grpc.ClientConn, error) {
-				return conn, nil
-			},
-		}
-		runner.args.version = "missing"
-		cmd := &cobra.Command{}
-		cmd.SetContext(ctx)
+		cmd := Cmd()
+		cmd.SetArgs([]string{"cluster", "cluster-id", "--version", "missing"})
+		cmd.SetOut(GinkgoWriter)
+		cmd.SetErr(GinkgoWriter)
 
-		err = runner.run(cmd, []string{"cluster-id"})
+		err = cmd.ExecuteContext(ctx)
 		Expect(err).To(HaveOccurred())
 		Expect(output.String()).To(ContainSubstring("Version 'missing' doesn't exist."))
 		Expect(output.String()).To(ContainSubstring("The following are some of the valid versions:"))
@@ -245,7 +232,7 @@ var _ = Describe("upgradeCluster", func() {
 		}
 
 		Expect(upgradeCluster(ctx, clusters, versions, console, "my-cluster", "4-17-0")).To(Succeed())
-		Expect(output.String()).To(ContainSubstring("Upgraded cluster 'cluster-id' to version '4.17.0'"))
+		Expect(output.String()).To(ContainSubstring("Requested upgrade of cluster 'cluster-id' to version '4.17.0'"))
 	})
 
 	It("resolves a semver input to the catalog version name", func() {

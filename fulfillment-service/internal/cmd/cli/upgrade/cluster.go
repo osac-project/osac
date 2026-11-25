@@ -20,8 +20,6 @@ import (
 	"log/slog"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
-	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
@@ -35,11 +33,7 @@ import (
 )
 
 func clusterCmd() *cobra.Command {
-	runner := &runnerContext{
-		connect: func(ctx context.Context, flags *pflag.FlagSet, cfg *config.Settings) (*grpc.ClientConn, error) {
-			return cfg.Connect(ctx, flags)
-		},
-	}
+	runner := &runnerContext{}
 	result := &cobra.Command{
 		Use:                   "cluster ID|NAME",
 		Aliases:               []string{"clusters"},
@@ -67,7 +61,6 @@ type runnerContext struct {
 	}
 	console *terminal.Console
 	logger  *slog.Logger
-	connect func(ctx context.Context, flags *pflag.FlagSet, cfg *config.Settings) (*grpc.ClientConn, error)
 }
 
 func (c *runnerContext) run(cmd *cobra.Command, args []string) (err error) {
@@ -81,7 +74,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) (err error) {
 		return fmt.Errorf("there is no configuration, run the 'login' command")
 	}
 
-	conn, err := c.connect(ctx, cmd.Flags(), cfg)
+	conn, err := cfg.Connect(ctx, cmd.Flags())
 	if err != nil {
 		return fmt.Errorf("failed to create gRPC connection: %w", err)
 	}
@@ -158,7 +151,7 @@ func upgradeCluster(
 		return fmt.Errorf("failed to upgrade cluster: %w", err)
 	}
 
-	console.Infof(ctx, "Upgraded cluster '%s' to version '%s'.\n",
+	console.Infof(ctx, "Requested upgrade of cluster '%s' to version '%s'.\n",
 		cluster.GetId(), version.GetSpec().GetVersion())
 	return nil
 }
@@ -173,10 +166,6 @@ To upgrade a cluster to version 4.17.0:
 {{ bt 3 }}shell
 {{ binary }} upgrade cluster my-cluster --version 4.17.0
 {{ bt 3 }}
-
-The cluster ID or name can be used interchangeably. The version can be either a
-catalog version name or an OpenShift semantic version; OSAC resolves it to the
-catalog version reference before sending the update.
 `
 
 const versionFlagHelp = `

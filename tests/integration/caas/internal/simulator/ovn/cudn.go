@@ -7,14 +7,20 @@ package ovn
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/osac-project/osac/tests/integration/caas/internal/simulator/kube"
 )
@@ -25,6 +31,8 @@ const (
 	cudnKind     = "ClusterUserDefinedNetwork"
 	vtepKind     = "VTEP"
 	managerLabel = "osac.openshift.io/k8s-manager"
+	fixtureName  = "caas-it-networking-fixture"
+	heldCUDNsKey = "notReadyCudns"
 )
 
 var (
@@ -140,8 +148,9 @@ func AddToScheme(scheme *runtime.Scheme) error {
 
 // CUDNReconciler reports the accepted and ready status normally written by OVN-Kubernetes.
 type CUDNReconciler struct {
-	Client    client.Client
-	APIReader client.Reader
+	Client            client.Client
+	APIReader         client.Reader
+	SettingsNamespace string
 }
 
 // Reconcile updates only CUDNs created for OSAC's production Kubernetes Manager.
@@ -158,10 +167,19 @@ func (r *CUDNReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		return ctrl.Result{}, nil
 	}
 
+	held, err := r.isHeld(ctx, object.GetName())
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	status, reason, message := metav1.ConditionTrue, "FixtureReady", "Accepted by the Kind OVN fixture."
+	if held {
+		status, reason, message = metav1.ConditionFalse, "FixtureNotReady", "Held by the Kind OVN fixture."
+	}
+
 	wanted := make([]metav1.Condition, 0, 3)
 	for _, kind := range []string{"TransportAccepted", "NetworkCreated", "NetworkAllocationSucceeded"} {
-		wanted = append(wanted, condition(kind, metav1.ConditionTrue, "FixtureReady",
-			"Accepted by the Kind OVN fixture.", object.GetGeneration(), object.Status.Conditions))
+		wanted = append(wanted, condition(kind, status, reason, message, object.GetGeneration(), object.Status.Conditions))
 	}
 
 	if equality.Semantic.DeepEqual(object.Status.Conditions, wanted) {
@@ -176,6 +194,51 @@ func (r *CUDNReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// isHeld reports whether the fixture settings hold this CUDN in a not-ready state.
+func (r *CUDNReconciler) isHeld(ctx context.Context, name string) (bool, error) {
+	settings := &corev1.ConfigMap{}
+
+	err := r.APIReader.Get(ctx, client.ObjectKey{Namespace: r.SettingsNamespace, Name: fixtureName}, settings)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+
+	if err != nil {
+		return false, fmt.Errorf("get OVN fixture settings: %w", err)
+	}
+
+	for heldName := range strings.SplitSeq(settings.Data[heldCUDNsKey], ",") {
+		if strings.TrimSpace(heldName) == name {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+// cudnsForFixtureConfig requeues managed CUDNs when their fixture settings change.
+func (r *CUDNReconciler) cudnsForFixtureConfig(ctx context.Context, object client.Object) []reconcile.Request {
+	if object.GetNamespace() != r.SettingsNamespace || object.GetName() != fixtureName {
+		return nil
+	}
+
+	cudns := &CUDNList{}
+	if err := r.APIReader.List(ctx, cudns); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "list CUDNs after OVN fixture settings changed")
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0, len(cudns.Items))
+	for index := range cudns.Items {
+		cudn := &cudns.Items[index]
+		if cudn.GetLabels()[managerLabel] == "cudn_evpn" {
+			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cudn)})
+		}
+	}
+
+	return requests
 }
 
 // VTEPReconciler marks the configured tenant VTEP accepted by the simulated hub.
@@ -212,12 +275,16 @@ func (r *VTEPReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 }
 
 // SetupWithManager installs the two external API status simulators.
-func SetupWithManager(mgr ctrl.Manager, apiReader client.Reader) error {
+func SetupWithManager(mgr ctrl.Manager, apiReader client.Reader, settingsNamespace string) error {
+	cudn := &CUDNReconciler{
+		Client: mgr.GetClient(), APIReader: apiReader, SettingsNamespace: settingsNamespace,
+	}
 	if err := ctrl.NewControllerManagedBy(mgr).
 		Named("kind-ovn-cudn-status").
 		For(CUDNObject()).
+		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(cudn.cudnsForFixtureConfig)).
 		WithOptions(kube.ControllerOptions()).
-		Complete(&CUDNReconciler{Client: mgr.GetClient(), APIReader: apiReader}); err != nil {
+		Complete(cudn); err != nil {
 		return err
 	}
 

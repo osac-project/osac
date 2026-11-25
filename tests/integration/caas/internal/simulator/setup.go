@@ -107,7 +107,7 @@ func setupControllers(mgr ctrl.Manager, reader client.Reader, cfg Config) error 
 		return err
 	}
 
-	if err := ovn.SetupWithManager(mgr, reader); err != nil {
+	if err := ovn.SetupWithManager(mgr, reader, cfg.SettingsNamespace); err != nil {
 		return err
 	}
 

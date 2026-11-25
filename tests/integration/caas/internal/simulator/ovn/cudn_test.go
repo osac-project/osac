@@ -8,6 +8,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -18,6 +19,7 @@ import (
 var _ = Describe("Kind OVN status fixture", func() {
 	It("reports accepted CUDN status", func(ctx SpecContext) {
 		scheme := runtime.NewScheme()
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 		Expect(AddToScheme(scheme)).To(Succeed())
 
 		object := CUDNObject()
@@ -26,7 +28,7 @@ var _ = Describe("Kind OVN status fixture", func() {
 
 		store := fake.NewClientBuilder().WithScheme(scheme).WithObjects(object).
 			WithStatusSubresource(CUDNObject(), VTEPObject()).Build()
-		reconciler := &CUDNReconciler{Client: store, APIReader: store}
+		reconciler := &CUDNReconciler{Client: store, APIReader: store, SettingsNamespace: "settings"}
 		request := ctrlRequest(object)
 
 		result, err := reconciler.Reconcile(ctx, request)
@@ -38,8 +40,45 @@ var _ = Describe("Kind OVN status fixture", func() {
 		}
 	})
 
+	It("holds a listed CUDN until the fixture setting is cleared", func(ctx SpecContext) {
+		scheme := runtime.NewScheme()
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
+		Expect(AddToScheme(scheme)).To(Succeed())
+
+		object := CUDNObject()
+		object.SetName("network-a")
+		object.Labels = map[string]string{managerLabel: "cudn_evpn"}
+		settings := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "settings", Name: fixtureName},
+			Data:       map[string]string{heldCUDNsKey: "network-a"},
+		}
+		store := fake.NewClientBuilder().WithScheme(scheme).WithObjects(object, settings).
+			WithStatusSubresource(CUDNObject(), VTEPObject()).Build()
+		reconciler := &CUDNReconciler{Client: store, APIReader: store, SettingsNamespace: "settings"}
+		request := ctrlRequest(object)
+
+		_, err := reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		for _, kind := range []string{"TransportAccepted", "NetworkCreated", "NetworkAllocationSucceeded"} {
+			Expect(cudnCondition(ctx, store, object, kind)).To(Equal("False"))
+		}
+
+		settings.Data[heldCUDNsKey] = ""
+		Expect(store.Update(ctx, settings)).To(Succeed())
+		Expect(reconciler.cudnsForFixtureConfig(ctx, settings)).To(ConsistOf(request))
+
+		_, err = reconciler.Reconcile(ctx, request)
+		Expect(err).NotTo(HaveOccurred())
+
+		for _, kind := range []string{"TransportAccepted", "NetworkCreated", "NetworkAllocationSucceeded"} {
+			Expect(cudnCondition(ctx, store, object, kind)).To(Equal("True"))
+		}
+	})
+
 	It("accepts the configured tenant VTEP", func(ctx SpecContext) {
 		scheme := runtime.NewScheme()
+		Expect(corev1.AddToScheme(scheme)).To(Succeed())
 		Expect(AddToScheme(scheme)).To(Succeed())
 
 		object := VTEPObject()

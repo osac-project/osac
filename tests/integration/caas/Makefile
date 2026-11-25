@@ -49,6 +49,8 @@ include $(INSTALLER_DIR)/scripts/kind-images.mk
 
 SIMULATOR_IMAGE := localhost/osac-caas-simulator:it
 EE_IMAGE := localhost/osac-aap:it
+networkProfileComma := ,
+NETWORK_PROFILE_SERVICES_HELM = $(subst $(networkProfileComma),\\$(networkProfileComma),$(NETWORK_PROFILE_SERVICES))
 INSTALLER_ARGS = PLATFORM=kind PROFILE=dev NS=osac KIND_CLUSTER_NAME="$(KIND_CLUSTER_NAME)" KUBECONFIG="$$KUBECONFIG"
 BOOTSTRAP_IMAGE_ARGS := --set-string images.ee=$(EE_IMAGE) --set images.eePullPolicy=Never
 NETWORK_PROFILE_VALUES ?=
@@ -64,7 +66,7 @@ NETRIS_PASSWORD_FILE ?=
 BOOTSTRAP_ARGS = $(BOOTSTRAP_IMAGE_ARGS) \
   --set networking.enabled=$(NETWORKING_ENABLED) \
   --set-string "networking.profileName=$(NETWORK_PROFILE_NAME)" \
-  --set-string "networking.services=$(NETWORK_PROFILE_SERVICES)" \
+  --set-string "networking.services=$(NETWORK_PROFILE_SERVICES_HELM)" \
   --set-string "networking.expectedFabricManager=$(EXPECTED_FABRIC_MANAGER)" \
   --set-string "networking.expectedK8sManager=$(EXPECTED_K8S_MANAGER)" \
   --set-string "project.url=$$PROJECT_URL" --set-string "project.commit=$$PROJECT_COMMIT"
@@ -306,7 +308,7 @@ _mod-check:
 _chart-check: BOOTSTRAP_CHECK_ARGS := $(BOOTSTRAP_IMAGE_ARGS) \
   --set networking.enabled=$(NETWORKING_ENABLED) \
   --set-string networking.profileName=$(NETWORK_PROFILE_NAME) \
-  --set-string networking.services=$(NETWORK_PROFILE_SERVICES) \
+  --set-string networking.services=$(NETWORK_PROFILE_SERVICES_HELM) \
   --set-string networking.expectedFabricManager=$(EXPECTED_FABRIC_MANAGER) \
   --set-string networking.expectedK8sManager=$(EXPECTED_K8S_MANAGER) \
   --set-string project.commit=0000000000000000000000000000000000000000 --set bootstrap.enabled=true

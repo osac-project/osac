@@ -5,4 +5,4 @@ global:
 
 operator:
   controllers:
-    computeInstance: true
+    computeInstance: false

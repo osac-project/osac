@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	github.com/IBM/sarama v1.60.2
 	github.com/cloudevents/sdk-go/v2 v2.16.2
-	github.com/jackc/pgx/v5 v5.7.6
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.42.1
 	github.com/osac-project/osac/proto v0.0.0-00010101000000-000000000000

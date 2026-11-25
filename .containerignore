@@ -11,6 +11,7 @@
 !osac-operator/
 !osac-csi-driver/
 !osac-metering/
+!osac-notifications/
 !osac-ui/
 
 # osac-aap: ansible-builder execution-environment component, built from a

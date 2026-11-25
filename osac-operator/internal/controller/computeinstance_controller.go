@@ -519,7 +519,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		}
 	}
 
-	// A gated pass starts no job and leaves status.jobs as it is; the status
+	// A gated pass starts no job and preserves job state and retry timing; the status
 	// steps below still run, with the zero Outcome: the job they would report
 	// on is the one that waits, not a failed one.
 	var provision networktask.Outcome
@@ -815,15 +815,7 @@ func (r *ComputeInstanceReconciler) handleProvisioning(ctx context.Context, inst
 	}
 
 	entry := networktask.FindJob(instance.Status.Jobs, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
-	if entry != nil && (entry.State == v1alpha1.NetworkJobStateRetrying || entry.State == v1alpha1.NetworkJobStateCancelled) &&
-		instance.Status.ProvisionConfigVersion != instance.Status.DesiredConfigVersion && entry.LastFailure != nil {
-		// The checkpoint belongs to the previous input. Preserve the retry
-		// state and engine backoff while clearing its persisted failure.
-		entry.LastFailure = nil
-		if err := r.Status().Update(ctx, instance); err != nil {
-			return networktask.Outcome{}, fmt.Errorf("clear previous provision configuration failure: %w", err)
-		}
-	}
+
 	if provisionRerunDue(instance, entry) {
 		log.Info("configuration changed after the provision job ended; running it again",
 			"state", entry.State,
@@ -1431,13 +1423,27 @@ func (r *ComputeInstanceReconciler) handleKubeVirtVM(ctx context.Context, instan
 	}
 }
 
-// handleDesiredConfigVersion sets status.desiredConfigVersion to the hash of spec.
-func (r *ComputeInstanceReconciler) handleDesiredConfigVersion(_ context.Context, instance *v1alpha1.ComputeInstance) error {
+// handleDesiredConfigVersion records the spec hash and invalidates failure data
+// from an earlier configuration before readiness gates can defer provisioning.
+func (r *ComputeInstanceReconciler) handleDesiredConfigVersion(ctx context.Context, instance *v1alpha1.ComputeInstance) error {
 	version, err := provisioning.ComputeDesiredConfigVersion(instance.Spec)
 	if err != nil {
 		return err
 	}
 	instance.Status.DesiredConfigVersion = version
+	if instance.Annotations[osacComputeInstanceManagementStateAnnotation] == ManagementStateManual {
+		return nil
+	}
+	entry := networktask.FindJob(instance.Status.Jobs, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
+	if entry != nil && (entry.State == v1alpha1.NetworkJobStateRetrying ||
+		entry.State == v1alpha1.NetworkJobStateCancelled || entry.State == v1alpha1.NetworkJobStateFailed) &&
+		instance.Status.ProvisionConfigVersion != version && entry.LastFailure != nil {
+		// Keep the job state and retry tracking; only the old failure is stale.
+		entry.LastFailure = nil
+		if err := r.Status().Update(ctx, instance); err != nil {
+			return fmt.Errorf("clear previous provision configuration failure: %w", err)
+		}
+	}
 	return nil
 }
 

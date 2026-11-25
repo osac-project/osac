@@ -40,6 +40,7 @@ func (*checkpointAAP) EnsureLabel(context.Context, string, string) (int, error) 
 
 var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 	It("clears an old configuration failure during retry without resetting backoff", func() {
+		By("creating the instance and arranging the provision engine")
 		instance := &osacv1alpha1.ComputeInstance{
 			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("retry-config-%d", time.Now().UnixNano()), Namespace: "default"},
 			Spec:       newTestComputeInstanceSpec("test_template"),
@@ -59,23 +60,25 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 		r := &ComputeInstanceReconciler{Client: k8sClient, Engine: engine, ProvisionTemplate: "provision"}
 		_, err := r.handleProvisioning(ctx, instance, "default", true)
 		Expect(err).NotTo(HaveOccurred())
+		By("recording a retryable provisioning failure")
 		aapClient.job.Status = "failed"
 		aapClient.job.Artifacts = []byte(`{"osac_error":{"message":"private","retryable":true}}`)
 		failed, err := r.handleProvisioning(ctx, instance, "default", false)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(failed.LastFailure).NotTo(BeNil())
+		By("rejecting a stale checkpoint-clearing write without changing stored state")
 		clock.Step(time.Second)
 		stale := instance.DeepCopy()
 		instance.Annotations = map[string]string{"test": "new-resource-version"}
 		Expect(k8sClient.Update(ctx, instance)).To(Succeed())
 		stale.Status.DesiredConfigVersion = "new"
-		conflicted, err := r.handleProvisioning(ctx, stale, "default", false)
+		err = r.handleDesiredConfigVersion(ctx, stale)
 		Expect(apierrors.IsConflict(err)).To(BeTrue())
-		Expect(conflicted.Entry.Task).To(BeEmpty())
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
 		Expect(instance.Status.Jobs[0].LastFailure).NotTo(BeNil())
 		Expect(instance.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateRetrying))
-		instance.Status.DesiredConfigVersion = "new"
+		By("invalidating the previous configuration failure from fresh state")
+		Expect(r.handleDesiredConfigVersion(ctx, instance)).To(Succeed())
 		out, err := r.handleProvisioning(ctx, instance, "default", false)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(out.Retrying()).To(BeTrue())
@@ -83,12 +86,14 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 		Expect(out.RequeueAfter).To(Equal(failed.RequeueAfter - time.Second))
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
 		Expect(instance.Status.Jobs[0].LastFailure).To(BeNil())
+		By("launching the next attempt with the original retry schedule")
 		clock.Step(out.RequeueAfter)
 		out, err = r.handleProvisioning(ctx, instance, "default", true)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(out.Entry.State).To(Equal(osacv1alpha1.NetworkJobStateRunning))
 		Expect(out.Entry.Attempt).To(Equal(int32(2)))
 		Expect(out.LastFailure).To(BeNil())
+		By("recording a retryable provisioning failure")
 		aapClient.job.Status = "failed"
 		aapClient.job.Artifacts = []byte(`{"osac_error":{"message":"private","retryable":true}}`)
 		out, err = r.handleProvisioning(ctx, instance, "default", false)
@@ -97,6 +102,7 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 	})
 
 	It("clears a cancelled provision checkpoint only when its configuration changes", func() {
+		By("creating the instance and arranging the provision engine")
 		instance := &osacv1alpha1.ComputeInstance{
 			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("cancel-config-%d", time.Now().UnixNano()), Namespace: "default"},
 			Spec:       newTestComputeInstanceSpec("test_template"),
@@ -116,6 +122,7 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 		r := &ComputeInstanceReconciler{Client: k8sClient, Engine: engine, ProvisionTemplate: "provision"}
 		_, err := r.handleProvisioning(ctx, instance, "default", true)
 		Expect(err).NotTo(HaveOccurred())
+		By("recording a retryable provisioning failure")
 		aapClient.job.Status = "failed"
 		aapClient.job.Artifacts = []byte(`{"osac_error":{"message":"private","retryable":true}}`)
 		failed, err := r.handleProvisioning(ctx, instance, "default", false)
@@ -124,6 +131,7 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 		clock.Step(failed.RequeueAfter)
 		_, err = r.handleProvisioning(ctx, instance, "default", true)
 		Expect(err).NotTo(HaveOccurred())
+		By("holding a cancelled retry with its same-configuration checkpoint")
 		aapClient.job.Status = "canceled"
 		cancelled, err := r.handleProvisioning(ctx, instance, "default", false)
 		Expect(err).NotTo(HaveOccurred())
@@ -140,19 +148,22 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 		Expect(held.LastFailure.Message).To(Equal(failed.LastFailure.Message))
 		Expect(held.LastFailure.Attempt).To(Equal(failed.LastFailure.Attempt))
 		Expect(held.LastFailure.ObservedAt.Time.Equal(failed.LastFailure.ObservedAt.Time)).To(BeTrue())
-		instance.Status.DesiredConfigVersion = "new"
+		By("invalidating the previous configuration failure from fresh state")
+		Expect(r.handleDesiredConfigVersion(ctx, instance)).To(Succeed())
 		held, err = r.handleProvisioning(ctx, instance, "default", false)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(held.Entry.State).To(Equal(osacv1alpha1.NetworkJobStateCancelled))
 		Expect(held.LastFailure).To(BeNil())
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), instance)).To(Succeed())
 		Expect(instance.Status.Jobs[0].LastFailure).To(BeNil())
+		By("launching the changed configuration without the previous failure")
 		out, err := r.handleProvisioning(ctx, instance, "default", true)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(out.Entry.State).To(Equal(osacv1alpha1.NetworkJobStateRunning))
 		Expect(out.Entry.Attempt).To(Equal(int32(3)))
 		Expect(out.LastFailure).To(BeNil())
-		Expect(instance.Status.ProvisionConfigVersion).To(Equal("new"))
+		Expect(instance.Status.ProvisionConfigVersion).To(Equal(instance.Status.DesiredConfigVersion))
+		By("recording a retryable provisioning failure")
 		aapClient.job.Status = "failed"
 		aapClient.job.Artifacts = []byte(`{"osac_error":{"message":"private","retryable":true}}`)
 		out, err = r.handleProvisioning(ctx, instance, "default", false)
@@ -162,6 +173,7 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 
 	It("persists atomically across resource-version conflicts and validates the CRD shape", func() {
 		name := fmt.Sprintf("provision-failure-%d", time.Now().UnixNano())
+		By("creating the instance and arranging the provision engine")
 		instance := &osacv1alpha1.ComputeInstance{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default", UID: types.UID("uid-" + name)},
 			Spec:       newTestComputeInstanceSpec("test_template"),
@@ -192,11 +204,13 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(out.Entry.State).To(Equal(osacv1alpha1.NetworkJobStateRunning))
 
+		By("conflicting the failure write and verifying atomic persistence")
 		stale := &osacv1alpha1.ComputeInstance{}
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), stale)).To(Succeed())
 		newer := stale.DeepCopy()
 		newer.Annotations = map[string]string{"test": "new-resource-version"}
 		Expect(k8sClient.Update(ctx, newer)).To(Succeed())
+		By("recording a retryable provisioning failure")
 		aapClient.job.Status = "failed"
 		aapClient.job.Artifacts = []byte(`{"osac_error":{"message":"private provider detail","retryable":true}}`)
 
@@ -228,6 +242,7 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 		Expect(storedFailure.Attempt).To(Equal(out.LastFailure.Attempt))
 		Expect(storedFailure.ObservedAt.Time.Equal(out.LastFailure.ObservedAt.Time)).To(BeTrue())
 
+		By("replaying the stored checkpoint across restart and retry launch")
 		// Recreate the engine from stored state, then advance through a retry.
 		engine = networktask.New(k8sClient, k8sClient, aapClient, networktask.Config{Organization: "osac"}).WithClock(clock)
 		replay, err := engine.Run(ctx, stored, req)
@@ -242,6 +257,7 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 		Expect(running.Entry.Attempt).To(Equal(int32(2)))
 		Expect(running.LastFailure.Attempt).To(Equal(int32(1)))
 		Expect(running.LastFailure.ObservedAt.Time.Equal(storedFailure.ObservedAt.Time)).To(BeTrue())
+		By("preserving the committed checkpoint when a later status update conflicts")
 		// A caller's later projection may conflict; the checkpoint stays stored.
 		staleProjection := stored.DeepCopy()
 		Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(instance), stored)).To(Succeed())
@@ -257,6 +273,7 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 		Expect(replay.LastFailure.Reason).To(Equal(storedFailure.Reason))
 		Expect(replay.LastFailure.Message).To(Equal(storedFailure.Message))
 		Expect(replay.LastFailure.ObservedAt.Time.Equal(storedFailure.ObservedAt.Time)).To(BeTrue())
+		By("clearing the failure on success and replaying successful state")
 		aapClient.job.Status = "successful"
 		aapClient.job.Artifacts = []byte(`{}`)
 		out, err = engine.Run(ctx, stored, req)
@@ -276,6 +293,7 @@ var _ = Describe("ComputeInstance provision failure checkpoint", func() {
 		Expect(out.Succeeded()).To(BeTrue())
 		Expect(out.LastFailure).To(BeNil())
 
+		By("rejecting invalid checkpoint shapes at the Kubernetes API")
 		partial := stored.DeepCopy()
 		partial.Status.Jobs[0].LastFailure = &osacv1alpha1.NetworkJobFailure{Reason: "ProviderReported"}
 		Expect(apierrors.IsInvalid(k8sClient.Status().Update(ctx, partial))).To(BeTrue())

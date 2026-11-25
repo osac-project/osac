@@ -14,14 +14,19 @@ language governing permissions and limitations under the License.
 package cluster
 
 import (
+	"cmp"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
@@ -109,12 +114,10 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	renderCluster(c.console, matched, version)
-
-	return nil
+	return renderCluster(c.console, matched, version)
 }
 
-func renderCluster(w io.Writer, cluster *publicv1.Cluster, version *publicv1.ClusterVersion) {
+func renderCluster(w io.Writer, cluster *publicv1.Cluster, version *publicv1.ClusterVersion) error {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	catalogItem := "-"
 	if cluster.Spec != nil {
@@ -131,15 +134,33 @@ func renderCluster(w io.Writer, cluster *publicv1.Cluster, version *publicv1.Clu
 		state = cluster.Status.State.String()
 		state = strings.TrimPrefix(state, "CLUSTER_STATE_")
 	}
-	fmt.Fprintf(writer, "ID:\t%s\n", cluster.Id)
-	fmt.Fprintf(writer, "Catalog Item:\t%s\n", catalogItem)
-	fmt.Fprintf(writer, "State:\t%s\n", state)
+	observedVersion := cmp.Or(cluster.GetStatus().GetObservedVersion(), "-")
+	if _, err := fmt.Fprintf(writer, "ID:\t%s\n", cluster.Id); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(writer, "Catalog Item:\t%s\n", catalogItem); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(writer, "State:\t%s\n", state); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(writer, "Control Plane Current Version:\t%s\n", observedVersion); err != nil {
+		return err
+	}
 
-	writer.Flush()
+	if err := writer.Flush(); err != nil {
+		return err
+	}
 
-	// Version section — rendered as indented fields under a "Version:" header.
+	if err := renderNodeSets(w, cluster.GetStatus().GetNodeSets()); err != nil {
+		return err
+	}
+	if err := renderUpgradeHistory(w, cluster.GetStatus().GetUpgradeHistory()); err != nil {
+		return err
+	}
+
 	if cluster.GetSpec().HasVersion() {
-		fmt.Fprintln(w, "Version:")
+		fmt.Fprintln(w, "Desired Version:")
 		versionWriter := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 
 		fmt.Fprintf(versionWriter, "\tName:\t%s\n", cluster.GetSpec().GetVersion().GetName())
@@ -167,6 +188,82 @@ func renderCluster(w io.Writer, cluster *publicv1.Cluster, version *publicv1.Clu
 
 		versionWriter.Flush()
 	}
+
+	return nil
+}
+
+func renderNodeSets(w io.Writer, nodeSets map[string]*publicv1.ClusterNodeSetStatus) error {
+	if len(nodeSets) == 0 {
+		return nil
+	}
+
+	if _, err := fmt.Fprintln(w, "Node Sets:"); err != nil {
+		return err
+	}
+	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintf(writer, "\tName\tSize\tCurrent Version\n"); err != nil {
+		return err
+	}
+
+	names := slices.Sorted(maps.Keys(nodeSets))
+
+	for _, name := range names {
+		status := nodeSets[name]
+		size := "-"
+		if status.HasSize() {
+			size = strconv.Itoa(int(status.GetSize()))
+		}
+		observedVersion := cmp.Or(status.GetObservedVersion(), "-")
+		if _, err := fmt.Fprintf(writer, "\t%s\t%s\t%s\n", name, size, observedVersion); err != nil {
+			return err
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func renderUpgradeHistory(w io.Writer, history []*publicv1.ClusterUpgradeHistoryEntry) error {
+	if len(history) == 0 {
+		return nil
+	}
+
+	if _, err := fmt.Fprintln(w, "Upgrade History:"); err != nil {
+		return err
+	}
+	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintf(writer, "\tSource\tTarget\tState\tAccepted At\tLast Transition\tMessage\n"); err != nil {
+		return err
+	}
+
+	for _, entry := range history {
+		sourceVersion := cmp.Or(entry.GetSourceVersion(), "-")
+		targetVersion := cmp.Or(entry.GetTargetVersion(), "-")
+		state := strings.TrimPrefix(entry.GetState().String(), "CLUSTER_UPGRADE_STATE_")
+		message := cmp.Or(entry.GetMessage(), "-")
+		if _, err := fmt.Fprintf(writer, "\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			sourceVersion,
+			targetVersion,
+			state,
+			formatTimestamp(entry.GetAcceptedTime()),
+			formatTimestamp(entry.GetStateTransitionTime()),
+			message,
+		); err != nil {
+			return err
+		}
+	}
+	if err := writer.Flush(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func formatTimestamp(timestamp *timestamppb.Timestamp) string {
+	if timestamp == nil {
+		return "-"
+	}
+	return timestamp.AsTime().Format(time.RFC3339)
 }
 
 const shortHelp = `Describe a cluster`

@@ -47,7 +47,7 @@ require (
 	go.yaml.in/yaml/v2 v2.4.4
 	golang.org/x/crypto v0.58.0
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba
-	golang.org/x/sync v0.24.0
+	golang.org/x/sync v0.25.0
 	golang.org/x/term v0.47.0
 	google.golang.org/genproto/googleapis/api v0.0.0-20260825221802-da73d73af1c5
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260911204522-f61a6ca850bd

@@ -7,6 +7,7 @@ import {
   type DiskImage,
   DiskImageLifecycle,
   DiskImageSchema,
+  DiskImagesDeleteResponseSchema,
   DiskImagesUpdateResponseSchema,
 } from '@osac/types';
 
@@ -49,14 +50,49 @@ describe('DiskImageActionsMenu', () => {
     expect(screen.queryByRole('menuitem', { name: 'Delete' })).not.toBeInTheDocument();
   });
 
-  it('exposes only Reactivate for an OBSOLETE disk image (Delete not wired this story)', async () => {
+  it('exposes Deprecate, Reactivate, and Delete, but not Obsolete, for an OBSOLETE disk image', async () => {
     const { user } = renderMenu(makeDiskImage(DiskImageLifecycle.OBSOLETE));
     await openMenu(user);
 
+    expect(screen.getByRole('menuitem', { name: 'Deprecate' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Reactivate' })).toBeInTheDocument();
-    expect(screen.queryByRole('menuitem', { name: 'Deprecate' })).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: 'Obsolete' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('menuitem', { name: 'Delete' })).not.toBeInTheDocument();
+  });
+
+  it('opens the delete confirmation modal without issuing a request when Delete is selected', async () => {
+    let deleteCalled = false;
+    const { user } = renderMenu(makeDiskImage(DiskImageLifecycle.OBSOLETE), {
+      transportOverrides: {
+        onDiskImageDelete: () => {
+          deleteCalled = true;
+          return create(DiskImagesDeleteResponseSchema);
+        },
+      },
+    });
+    await openMenu(user);
+    await user.click(screen.getByRole('menuitem', { name: 'Delete' }));
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(deleteCalled).toBe(false);
+  });
+
+  it('deletes the disk image after the confirmation is accepted', async () => {
+    let deletedId: string | undefined;
+    const { user } = renderMenu(makeDiskImage(DiskImageLifecycle.OBSOLETE), {
+      transportOverrides: {
+        onDiskImageDelete: (req) => {
+          deletedId = req.id;
+          return create(DiskImagesDeleteResponseSchema);
+        },
+      },
+    });
+    await openMenu(user);
+    await user.click(screen.getByRole('menuitem', { name: 'Delete' }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(deletedId).toBe('di-1');
   });
 
   it('renders nothing for an unspecified lifecycle (no actions available)', () => {

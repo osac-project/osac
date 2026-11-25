@@ -36,6 +36,9 @@ def _status_value(status: object) -> str:
 
 # A stalled NetBox must fail the request, not hang the suite: requests has
 # no default timeout and pynetbox 7.8 passes none. (connect, read) seconds.
+# Timeouts surface as raw requests exceptions on purpose: the message is
+# connection-level (host, port, timeout) — no token, no body — and a raw
+# traceback is the more diagnostic failure.
 _REQUEST_TIMEOUT = (10, 30)
 
 
@@ -92,7 +95,8 @@ class NetBoxClient:
         response bodies and request payloads are dropped to guarantee no
         credential or tenant data leaks through exception messages. The
         ``from None`` at the raise sites keeps the RequestError (response
-        body included) out of the exception chain for the same reason.
+        body included) out of the printed traceback; ``__context__`` still
+        holds it in-process, where nothing prints it.
         """
         req = getattr(exc, "req", None)
         status = getattr(req, "status_code", "?")

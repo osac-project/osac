@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
 	grpccodes "google.golang.org/grpc/codes"
@@ -436,9 +435,9 @@ func (s *PrivateSecretsServer) filterProtectedSecrets(ctx context.Context,
 	}
 
 	request = proto.Clone(request).(*privatev1.SecretsListRequest)
-	protectedFilter := fmt.Sprintf("this.type != %d && !this.metadata.name.contains(%q)",
-		privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL,
-		breakGlassCredentialsSecretName)
+	protectedFilter := fmt.Sprintf("this.type != %d && this.type != %d",
+		privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL, privatev1.SecretType_SECRET_TYPE_BREAKGLASS_CREDENTIAL,
+	)
 	if filter := request.GetFilter(); filter != "" {
 		protectedFilter = fmt.Sprintf("(%s) && (%s)", filter, protectedFilter)
 	}
@@ -482,8 +481,7 @@ func isProtectedSecret(secret *privatev1.Secret) bool {
 	if secret == nil {
 		return false
 	}
-	return secret.GetType() == privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL ||
-		strings.Contains(secret.GetMetadata().GetName(), breakGlassCredentialsSecretName)
+	return secret.GetType() == privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL || secret.GetType() == privatev1.SecretType_SECRET_TYPE_BREAKGLASS_CREDENTIAL
 }
 
 func (s *PrivateSecretsServer) withSavepoint(ctx context.Context, operation func(context.Context) error) error {
@@ -591,7 +589,7 @@ func (s *PrivateSecretsServer) validateSecretUpdate(_ context.Context,
 func validateSecretData(secretType privatev1.SecretType, data map[string][]byte) error {
 	key := ""
 	switch secretType {
-	case privatev1.SecretType_SECRET_TYPE_OPAQUE, privatev1.SecretType_SECRET_TYPE_UNSPECIFIED:
+	case privatev1.SecretType_SECRET_TYPE_OPAQUE, privatev1.SecretType_SECRET_TYPE_UNSPECIFIED, privatev1.SecretType_SECRET_TYPE_BREAKGLASS_CREDENTIAL:
 		return nil
 	case privatev1.SecretType_SECRET_TYPE_PULL_SECRET:
 		key = ".dockerconfigjson"

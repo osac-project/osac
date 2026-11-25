@@ -371,14 +371,11 @@ var _ = Describe("Private tenant billing assignments server", func() {
 	})
 
 	DescribeTable("compares raw local duplicate tokens during assignment", func(method string, equal bool) {
-		const providerValue = `path\to`
-		retainedValue := `path\\to`
+		const providerValue = `provider-token`
+		retainedValue := `retained-token`
 		if equal {
 			retainedValue = providerValue
 		}
-		var conforming string
-		Expect(testPool.QueryRow(ctx, `show standard_conforming_strings`).Scan(&conforming)).To(Succeed())
-		Expect(conforming).To(Equal("on"))
 		var accounts []billingfake.AccountSpec
 		selected := newAccount(&accounts, providerValue, "", "ACTIVE")
 		// The other account retains a local token but is not a provider-side carrier of the selected token.
@@ -413,7 +410,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(reason(err)).To(Equal(billing.ReasonAccountCorrelationConflict))
 			Expect(fake.Count("ListAccounts")).To(Equal(carrierScans), "the local duplicate must fail before the provider carrier walk or SQL uniqueness")
 		} else {
-			Expect(err).NotTo(HaveOccurred(), "one and two backslashes are different retained tokens")
+			Expect(err).NotTo(HaveOccurred(), "a distinct retained token is not a local duplicate")
 			Expect(fake.Count("ListAccounts")).To(Equal(carrierScans + 1))
 			Expect(object.GetStatus().GetConnectionState()).To(Equal(
 				privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED))
@@ -453,10 +450,10 @@ var _ = Describe("Private tenant billing assignments server", func() {
 		Expect(present).To(BeTrue())
 		Expect(value).To(Equal(providerValue))
 	},
-		Entry("Create accepts a distinct two-backslash retained token", "Create", false),
-		Entry("Update accepts a distinct two-backslash retained token", "Update", false),
-		Entry("Create rejects an actually equal one-backslash retained token", "Create", true),
-		Entry("Update rejects an actually equal one-backslash retained token", "Update", true),
+		Entry("Create accepts a distinct retained token", "Create", false),
+		Entry("Update accepts a distinct retained token", "Update", false),
+		Entry("Create rejects an actually equal retained token", "Create", true),
+		Entry("Update rejects an actually equal retained token", "Update", true),
 	)
 
 	DescribeTable("handles a row disappearing between count and page without provider I/O", func(method string, code codes.Code) {

@@ -25,6 +25,10 @@ on:  # yamllint disable-line rule:truthy
         description: Suffix for diagnostic artifacts when repeating tests
         type: string
         default: ""
+      suite_parallelism:
+        description: Maximum concurrent suite jobs per call. Use 0 for full fan-out.
+        type: number
+        default: 0
 
 permissions:
   contents: read
@@ -55,6 +59,8 @@ jobs:
     needs: plan
     strategy:
       fail-fast: false
+      # Standalone runs and callers that omit the input use GitHub's matrix limit.
+      max-parallel: ${{ inputs.suite_parallelism || 256 }}
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.tests) }}
     permissions:

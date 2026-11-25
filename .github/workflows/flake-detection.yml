@@ -6,14 +6,18 @@ name: Flake detection
 #
 # Controls:
 #   runs               = total repetitions per group
-#   parallel_workflows = maximum concurrent workflow calls, split by group
+#   parallel_workflows = requested concurrent calls, split by group
+#
+# Unit calls keep the floor of half the request and run all their suite jobs
+# in parallel. Integration calls get the ceiling of half the request, capped
+# at 10, and run at most 3 suite jobs per call (up to 30 across the campaign).
 #
 # Example: runs=20, parallel_workflows=20
 # Campaign
 # +-- Unit: 20 repetitions, up to 10 calls active
-# |   `-- Each call runs every unit suite as a separate job
+# |   `-- Each call can run every unit suite at once
 # `-- Integration: 20 repetitions, up to 10 calls active
-#     `-- Each call runs every integration suite as a separate job
+#     `-- Each call runs every integration suite, up to 3 at a time
 #
 # Each group starts its next repetition when one of its own calls finishes.
 # A call finishes after all its suite jobs finish. Slots stay within each group.
@@ -33,7 +37,7 @@ on:
         type: number
         default: 100
       parallel_workflows:
-        description: Concurrent workflow calls, split between unit and integration (at least 2)
+        description: Requested concurrent calls (at least 2), split by group with integration capped at 10
         type: number
         default: 20
 
@@ -82,14 +86,14 @@ jobs:
 
           # Create repetition numbers [1, 2, ..., runs] for both test groups.
           # Split parallel_workflows into fixed limits: unit gets half rounded down,
-          # and integration gets half rounded up. Each group keeps its own limit
-          # for the entire campaign, including after the other group finishes.
+          # and integration gets half rounded up, capped at 10. Each group keeps
+          # its own limit for the entire campaign.
           # Write JSON values to $GITHUB_OUTPUT for those jobs to read with fromJSON().
           jq -cn --argjson runs "$RUNS" --argjson parallel "$PARALLEL" '
             {
               iterations: [range(1; $runs + 1)],
               unit_parallelism: ($parallel / 2 | floor),
-              integration_parallelism: ($parallel / 2 | ceil)
+              integration_parallelism: ([($parallel / 2 | ceil), 10] | min)
             } | to_entries[] | "\(.key)=\(.value | tojson)"
           ' -r >> "$GITHUB_OUTPUT"
 
@@ -137,5 +141,6 @@ jobs:
     uses: ./.github/workflows/integration-tests.yml
     with:
       commit: ${{ needs.plan.outputs.test_sha }}
+      suite_parallelism: 3
       # Identify the group, repetition and rerun attempt in saved log names.
       artifact_suffix: -integration-${{ matrix.iteration }}-attempt-${{ github.run_attempt }}

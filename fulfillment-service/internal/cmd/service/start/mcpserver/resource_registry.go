@@ -29,9 +29,10 @@ import (
 // accept an arbitrary public method or serialize a resource directly when a
 // narrower projection is required. A nil get marks a list-only resource.
 type resourceOperations struct {
-	label string
-	list  func(context.Context, string, resourcePageRequest) (ListResourcesOutput, error)
-	get   func(context.Context, string) (ResourceSummary, error)
+	label   string
+	list    func(context.Context, string, resourcePageRequest) (ListResourcesOutput, error)
+	get     func(context.Context, string) (ResourceSummary, error)
+	outcome func(context.Context, string) (GetResourceOutcomeOutput, error)
 }
 
 type resourceRegistry map[ResourceType]resourceOperations
@@ -782,9 +783,10 @@ func virtualNetworkResourceOperations(deps ServerDeps) resourceOperations {
 		return deps.VirtualNetworksClient.Get(ctx, request)
 	}
 	return resourceOperations{
-		label: "virtual network",
-		list:  typedResourceList("virtual networks", list, virtualNetworkListRequest, virtualNetworkSummary),
-		get:   typedResourceGet("virtual network", get, virtualNetworkGetRequest, virtualNetworkSummary),
+		label:   "virtual network",
+		list:    typedResourceList("virtual networks", list, virtualNetworkListRequest, virtualNetworkSummary),
+		get:     typedResourceGet("virtual network", get, virtualNetworkGetRequest, virtualNetworkSummary),
+		outcome: typedResourceOutcome("virtual network", get, virtualNetworkGetRequest, virtualNetworkOutcome),
 	}
 }
 
@@ -824,9 +826,10 @@ func subnetResourceOperations(deps ServerDeps) resourceOperations {
 		return deps.SubnetsClient.Get(ctx, request)
 	}
 	return resourceOperations{
-		label: "subnet",
-		list:  typedResourceList("subnets", list, subnetListRequest, subnetSummary),
-		get:   typedResourceGet("subnet", get, subnetGetRequest, subnetSummary),
+		label:   "subnet",
+		list:    typedResourceList("subnets", list, subnetListRequest, subnetSummary),
+		get:     typedResourceGet("subnet", get, subnetGetRequest, subnetSummary),
+		outcome: typedResourceOutcome("subnet", get, subnetGetRequest, subnetOutcome),
 	}
 }
 
@@ -866,9 +869,10 @@ func securityGroupResourceOperations(deps ServerDeps) resourceOperations {
 		return deps.SecurityGroupsClient.Get(ctx, request)
 	}
 	return resourceOperations{
-		label: "security group",
-		list:  typedResourceList("security groups", list, securityGroupListRequest, securityGroupSummary),
-		get:   typedResourceGet("security group", get, securityGroupGetRequest, securityGroupSummary),
+		label:   "security group",
+		list:    typedResourceList("security groups", list, securityGroupListRequest, securityGroupSummary),
+		get:     typedResourceGet("security group", get, securityGroupGetRequest, securityGroupSummary),
+		outcome: typedResourceOutcome("security group", get, securityGroupGetRequest, securityGroupOutcome),
 	}
 }
 
@@ -908,9 +912,10 @@ func computeInstanceResourceOperations(deps ServerDeps) resourceOperations {
 		return deps.ComputeInstancesClient.Get(ctx, request)
 	}
 	return resourceOperations{
-		label: "compute instance",
-		list:  typedResourceList("compute instances", list, computeInstanceListRequest, computeInstanceSummary),
-		get:   typedResourceGet("compute instance", get, computeInstanceGetRequest, computeInstanceSummary),
+		label:   "compute instance",
+		list:    typedResourceList("compute instances", list, computeInstanceListRequest, computeInstanceSummary),
+		get:     typedResourceGet("compute instance", get, computeInstanceGetRequest, computeInstanceSummary),
+		outcome: typedResourceOutcome("compute instance", get, computeInstanceGetRequest, computeInstanceOutcome),
 	}
 }
 
@@ -946,7 +951,7 @@ func catalogItemState(published bool) string {
 }
 
 func newResourceRegistry(deps ServerDeps) resourceRegistry {
-	return resourceRegistry{
+	registry := resourceRegistry{
 		ResourceTypeProject:                      projectResourceOperations(deps),
 		ResourceTypeSecretReference:              secretReferenceResourceOperations(deps),
 		ResourceTypeComputeInstanceCatalogItem:   computeInstanceCatalogItemResourceOperations(deps),
@@ -967,6 +972,14 @@ func newResourceRegistry(deps ServerDeps) resourceRegistry {
 		ResourceTypeNATGateway:                   natGatewayResourceOperations(deps),
 		ResourceTypeComputeInstance:              computeInstanceResourceOperations(deps),
 	}
+	for resourceType, operations := range registry {
+		if operations.get == nil || operations.outcome != nil {
+			continue
+		}
+		operations.outcome = outcomeFromGet(resourceType, operations.get)
+		registry[resourceType] = operations
+	}
+	return registry
 }
 
 func secretReferenceType(secretType publicv1.SecretType) string {

@@ -57,6 +57,10 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   Fulfillment and PostgreSQL; the network provider is omitted, so that
   coverage does not imply a provisioned VM or provider execution. Read the
   fixtures before extending those cases.
+- MCP normalized outcomes ([OSAC-5844](https://redhat.atlassian.net/browse/OSAC-5844))
+  are covered by unit table tests for every registered family and by a
+  deployed integration test that reads the same Project outcome from two
+  independently started MCP servers with fresh client sessions.
 - MCP write safety ([OSAC-5851](https://redhat.atlassian.net/browse/OSAC-5851))
   uses typed client failure injection, a pass-through token exchanger, deployed
   Fulfillment, and PostgreSQL. Its unit suite also uses the generated public

@@ -39,6 +39,32 @@ Secret references are list-only: MCP returns the reference's ID, name, and
 type, and never Secret bytes, credentials, tokens, provider data, or the
 underlying Secret object.
 
+`get_resource_outcome` accepts every resource type advertised by
+`list_resources`, including list-only Secret references. It returns a stable
+normalized envelope with:
+
+- `resource` (`type`, `id`, `version`)
+- `lifecycle_state`
+- `conditions`
+- `timing` (`observed_at`, plus public transition times where available)
+- `facts`
+- `unknowns`
+- `next_actions`
+
+The tool performs the allowlisted public Get as the signed-in caller for every
+resource type with a safe Get projection. A list-only type returns an explicit
+unknown outcome and never invents readiness. Missing, private-only,
+provider-pending, or stale evidence is named in `unknowns`; API acceptance is
+never mapped to infrastructure readiness. The projection includes only public
+API fields and omits sensitive hardware details, tokens, Secret bytes, raw
+provider payloads, and private conditions.
+
+A fresh transport session or replacement MCP pod reconstructs the same outcome
+from current public Fulfillment state. The tool does not use a pod-local plan,
+task, grant, operation, or write-record cache. `timing.observed_at` is the MCP
+call time and can change between otherwise identical outcomes; compare it
+separately or ignore it when checking outcome stability.
+
 When Fulfillment returns the missing-Secret validation error recognized by the
 MCP mapper, typed write tools return the shared `not_found` safe-error
 envelope. The result names the missing Secret reference and directs the caller

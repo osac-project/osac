@@ -382,6 +382,7 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 	resources := newResourceRegistry(deps)
 	listResourceTypes := resources.listResourceTypes()
 	getResourceTypes := resources.getResourceTypes()
+	outcomeResourceTypes := resources.resourceTypes()
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "osac-deployment-mcp",
 		Version: version.Get(),
@@ -435,6 +436,21 @@ func newServer(deps ServerDeps, endpoint string) *mcp.Server {
 		OutputSchema: compatibleToolSchema[GetResourceOutput](),
 	}
 	registerGetResourceTool(registry, getResourceTool, resources)
+	registerReadTool(registry, &mcp.Tool{
+		Name: "get_resource_outcome",
+		Description: "Use this tool to inspect the current public outcome of one selected resource after a session ends. " +
+			"It reports normalized lifecycle state, public conditions, timing, safe facts, explicit unknowns, and next actions. " +
+			"Acceptance of an earlier request is never reported as readiness.",
+		Annotations: &mcp.ToolAnnotations{
+			Title:           "Get OSAC resource outcome",
+			ReadOnlyHint:    true,
+			DestructiveHint: toolAnnotationBool(false),
+			IdempotentHint:  true,
+			OpenWorldHint:   toolAnnotationBool(true),
+		},
+		InputSchema:  resourceToolSchema[GetResourceOutcomeInput](outcomeResourceTypes),
+		OutputSchema: compatibleToolSchema[GetResourceOutcomeOutput](),
+	}, handleGetResourceOutcome(resources))
 	registerWriteTool(registry, &mcp.Tool{
 		Name: "create_network_resource",
 		Description: "Use this tool only after the user confirms the requested resource. Create a virtual_network with ipv4_cidr, " +

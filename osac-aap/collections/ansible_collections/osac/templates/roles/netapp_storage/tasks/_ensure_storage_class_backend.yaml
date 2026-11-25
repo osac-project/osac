@@ -389,9 +389,9 @@
         )
       no_log: true
 
-    - name: Reconcile the per-tier StorageClasses
+    - name: Ensure StorageClasses
       block:
-        - name: Ensure the StorageClass for each requested tier
+        - name: Create or update the StorageClass per tier
           kubernetes.core.k8s:
             state: present
             definition:
@@ -417,14 +417,13 @@
               {{ _netapp_shared_sc_desired_params[item] if (_netapp_is_shared_tbc | bool) else _dedicated_parameters }}
           loop: "{{ _backend_tiers | map(attribute='name') | list }}"
           register: _netapp_sc_write
-          # A merge patch can retain extra routing parameters, and kubernetes.core
-          # 5.5.0 returns an empty result if a concurrent create wins.
+          # Merge patch keeps unrequested parameters; require an exact match.
           failed_when: >-
             _netapp_sc_write is failed or
             (_netapp_sc_write.result.parameters | default(none)) != _sc_parameters
           no_log: true
       rescue:
-        - name: Report the failed StorageClass writes without logging resource contents
+        - name: Fail on StorageClasses that could not be updated
           ansible.builtin.fail:
             msg: >-
               Kubernetes could not reconcile NetApp StorageClasses:

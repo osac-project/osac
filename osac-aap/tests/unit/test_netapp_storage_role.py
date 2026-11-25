@@ -194,7 +194,7 @@ def test_netapp_virtual_pools_use_labels_and_selector_not_storage_pools(
     )
 
     # Render the parameters used by the native StorageClass task in both modes.
-    reconcile = _find_task(block_tasks, "Reconcile the per-tier StorageClasses")["block"][0]
+    reconcile = _find_task(block_tasks, "Ensure StorageClasses")["block"][0]
     manifest_params = reconcile["kubernetes.core.k8s"]["definition"]["parameters"]
     dedicated = {
         **reconcile["vars"],

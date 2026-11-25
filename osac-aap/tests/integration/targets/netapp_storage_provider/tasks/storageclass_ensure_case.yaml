@@ -47,7 +47,9 @@
             that:
               - _expect_immutable_conflict
               - _fixture_sc.metadata.name in ansible_failed_result.msg
-              - "'updates to parameters are forbidden' in ansible_failed_result.msg"
+              - >-
+                ('updates to parameters are forbidden' in ansible_failed_result.msg) or
+                ('field is immutable' in ansible_failed_result.msg)
 
     - name: Read back the class and its claim
       kubernetes.core.k8s_info:

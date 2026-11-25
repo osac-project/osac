@@ -1,0 +1,6 @@
+# UBI repositories mirrored into ghcr.io/osac-project, relative to the source
+# registry (registry.access.redhat.com). Only the bases the high-volume CI
+# builds pull are listed; add a repository here to widen the mirror. Blank
+# lines and lines starting with '#' are ignored.
+ubi10-minimal
+ubi10/go-toolset

@@ -1,9 +1,10 @@
 name: Mirror UBI Base Images
 
-# Keep ghcr.io/osac-project stocked with the Red Hat UBI base images the
-# Containerfiles build on. The integration CI legs pull these copies and retag
-# them locally, so their builds never request an anonymous Red Hat token.
-# The mirror is keyed by the exact tag each Containerfile uses.
+# Keep ghcr.io/osac-project stocked with the Red Hat UBI bases listed in
+# .github/ubi-mirror-repos.txt. The integration CI legs pull these copies and
+# retag them locally, so their builds never request an anonymous Red Hat
+# token. The mirror is keyed by the exact tags the Containerfiles use; add a
+# repository to the list to widen the scope.
 
 on:
   workflow_dispatch:
@@ -15,6 +16,7 @@ on:
     paths:
       - '**/Containerfile*'
       - '.github/scripts/ubi-mirror.sh'
+      - '.github/ubi-mirror-repos.txt'
       - '.github/workflows/mirror-ubi-bases.yaml'
 
 permissions:

@@ -5,6 +5,8 @@ set -euo pipefail
 
 registry=${UBI_SOURCE_REGISTRY:-registry.access.redhat.com}
 mirror=${UBI_MIRROR:-ghcr.io/osac-project}
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repos_file=${script_dir}/../ubi-mirror-repos.txt
 
 # Print every registry.access.redhat.com image the given files build on: FROM
 # lines and ARG defaults (osac-aap's EE_BASE_IMAGE is only an ARG default).
@@ -35,6 +37,26 @@ list_refs() {
     }' "$@" | sort -u
 }
 
+# Keep only refs whose source repository appears in the include list, one
+# repository per line relative to the registry (e.g. ubi10/go-toolset).
+filter_repos() {
+  if [ ! -f "${repos_file}" ]; then
+    echo "ubi-mirror: missing include list: ${repos_file}" >&2
+    return 1
+  fi
+  awk -v registry="${registry}/" '
+    NR == FNR {
+      if ($0 !~ /^[[:space:]]*(#|$)/) { include[$0] = 1 }
+      next
+    }
+    {
+      if (index($0, registry) != 1) { next }
+      repo = substr($0, length(registry) + 1)
+      sub(/:[^:/]*$/, "", repo)
+      if (repo in include) { print }
+    }' "${repos_file}" -
+}
+
 # registry.access.redhat.com/<repo>:<tag> -> ghcr.io/osac-project/<repo->:tag
 mirror_ref() {
   local ref=$1 path repo tag
@@ -61,7 +83,7 @@ mirror_ref() {
 case ${1:-} in
   list)
     shift
-    list_refs "$@"
+    list_refs "$@" | filter_repos
     ;;
   mirror)
     mirror_ref "${2:?usage: $0 mirror <ref>}"

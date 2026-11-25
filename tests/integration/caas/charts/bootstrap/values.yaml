@@ -8,3 +8,11 @@ project:
   commit: ""
 bootstrap:
   enabled: false
+networking:
+  # Include the production network task templates and execution group in AWX.
+  enabled: false
+  # Profile expectations are written to caas-it-configuration for suite checks.
+  profileName: custom
+  services: ""
+  expectedFabricManager: ""
+  expectedK8sManager: ""

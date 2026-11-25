@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: caas-it-networking-fixture
+data:
+  # Comma-separated CUDN names held in not-ready state for retry scenarios.
+  notReadyCudns: ""

@@ -1,0 +1,8 @@
+# Keep the current service set while checking the provider-networking-off path.
+global:
+  networking:
+    provisioningEnabled: false
+
+operator:
+  controllers:
+    computeInstance: true

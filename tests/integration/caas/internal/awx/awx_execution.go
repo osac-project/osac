@@ -5,6 +5,7 @@ package awx
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -41,11 +42,16 @@ type AWXExecutionEvidence struct {
 // The saved AWX project, execution environment and instance group IDs let each
 // job check confirm that it used the verified configuration.
 type Installation struct {
-	Client        *aap.Client       `json:"-"`
-	ProjectURL    string            `json:"projectURL"`
-	ProjectCommit string            `json:"projectCommit"`
-	EEImage       string            `json:"eeImage"`
-	EEPullPolicy  corev1.PullPolicy `json:"eePullPolicy"`
+	Client            *aap.Client       `json:"-"`
+	ProjectURL        string            `json:"projectURL"`
+	ProjectCommit     string            `json:"projectCommit"`
+	EEImage           string            `json:"eeImage"`
+	EEPullPolicy      corev1.PullPolicy `json:"eePullPolicy"`
+	NetworkingEnabled bool              `json:"networkingEnabled"`
+	ProfileName       string            `json:"profileName"`
+	Services          string            `json:"services"`
+	ExpectedFabric    string            `json:"expectedFabricManager"`
+	ExpectedK8s       string            `json:"expectedK8sManager"`
 
 	projectID              int
 	executionEnvironmentID int
@@ -82,10 +88,23 @@ func checkConfiguration(
 		ProjectCommit:    configuration.Data["projectCommit"],
 		EEImage:          configuration.Data["eeImage"],
 		EEPullPolicy:     corev1.PullPolicy(configuration.Data["eePullPolicy"]),
+		ProfileName:      configuration.Data["profileName"],
+		Services:         configuration.Data["services"],
+		ExpectedFabric:   configuration.Data["expectedFabricManager"],
+		ExpectedK8s:      configuration.Data["expectedK8sManager"],
 		instanceGroupIDs: map[string]int{},
 	}
+	if selected.ProfileName == "" {
+		selected.ProfileName = "custom"
+	}
+
 	if selected.ProjectURL == "" || len(selected.ProjectCommit) != 40 || selected.EEImage == "" {
 		return nil, fmt.Errorf("AWX Git URL, commit and EE image must be configured")
+	}
+
+	selected.NetworkingEnabled, err = parseNetworkingEnabled(configuration.Data["networkingEnabled"])
+	if err != nil {
+		return nil, err
 	}
 
 	pull, ok := map[corev1.PullPolicy]string{
@@ -139,9 +158,28 @@ func checkConfiguration(
 	return selected, nil
 }
 
+// parseNetworkingEnabled reads the optional networking toggle from AWX configuration.
+func parseNetworkingEnabled(value string) (bool, error) {
+	if value == "" {
+		return false, nil
+	}
+
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("invalid AWX networking-enabled setting")
+	}
+
+	return enabled, nil
+}
+
 // checkInstanceGroups observes the production groups required by this suite.
 func (selected *Installation) checkInstanceGroups(ctx context.Context) error {
-	for _, name := range []string{"osac-bare-metal-fulfillment-ig", "osac-cluster-fulfillment-ig"} {
+	requiredGroups := []string{"osac-bare-metal-fulfillment-ig", "osac-cluster-fulfillment-ig"}
+	if selected.NetworkingEnabled {
+		requiredGroups = append(requiredGroups, "osac-networking-operations-ig")
+	}
+
+	for _, name := range requiredGroups {
 		groups, err := selected.Client.ListInstanceGroups(ctx, name)
 		if err != nil {
 			return err
@@ -169,11 +207,36 @@ func (selected *Installation) checkInstanceGroups(ctx context.Context) error {
 			return fmt.Errorf("%s differs from the required worker layout or service account", name)
 		}
 
+		if name == "osac-networking-operations-ig" && !networkingSettingsMounted(pod) {
+			return fmt.Errorf("%s does not load the production network settings and credentials", name)
+		}
+
 		selected.instanceGroupIDs[name] = groups[0].ID
 		slog.DebugContext(ctx, "verified AWX production container group", "group", name, "id", groups[0].ID)
 	}
 
 	return nil
+}
+
+// networkingSettingsMounted confirms networking jobs receive the production manager settings.
+func networkingSettingsMounted(pod corev1.Pod) bool {
+	for _, container := range pod.Spec.Containers {
+		if container.Name != "worker" {
+			continue
+		}
+
+		configMapMounted, secretMounted := false, false
+		for _, source := range container.EnvFrom {
+			configMapMounted = configMapMounted ||
+				(source.ConfigMapRef != nil && source.ConfigMapRef.Name == "network-fulfillment-ig")
+			secretMounted = secretMounted ||
+				(source.SecretRef != nil && source.SecretRef.Name == "network-fulfillment-ig")
+		}
+
+		return configMapMounted && secretMounted
+	}
+
+	return false
 }
 
 // CheckExecution checks a job's submitted resource, playbook, Git
@@ -195,23 +258,51 @@ func (selected *Installation) CheckExecution(
 		return nil, err
 	}
 
-	id := strconv.Itoa(job.ID)
+	if err := selected.checkExecutionJob(job, resource, playbook, groupID); err != nil {
+		return nil, err
+	}
 
+	if playbook == "osac-aap/playbook_osac_network_task.yml" {
+		if err := selected.checkNetworkManager(job); err != nil {
+			return nil, err
+		}
+	}
+
+	return selected.executionEvidence(job, resource, jobPods)
+}
+
+// checkExecutionJob confirms the observed job belongs to the selected resource and inputs.
+func (selected *Installation) checkExecutionJob(
+	job aap.Job,
+	resource metav1.Object,
+	playbook string,
+	groupID int,
+) error {
 	metadata, err := jobResourceMetadata(job)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if metadata.UID != resource.GetUID() || metadata.Namespace != resource.GetNamespace() ||
 		metadata.Annotations[harness.TenantAnnotation] != resource.GetAnnotations()[harness.TenantAnnotation] {
-		return nil, fmt.Errorf("job submitted another resource incarnation or scope")
+		return fmt.Errorf("job submitted another resource incarnation or scope")
 	}
 
 	if job.Playbook != playbook || job.ProjectID != selected.projectID || job.SCMRevision != selected.ProjectCommit ||
-		job.ExecutionEnvironmentID != selected.executionEnvironmentID ||
-		job.InstanceGroupID != groupID {
-		return nil, fmt.Errorf("job differs from the selected playbook, Git revision, EE or execution group")
+		job.ExecutionEnvironmentID != selected.executionEnvironmentID || job.InstanceGroupID != groupID {
+		return fmt.Errorf("job differs from the selected playbook, Git revision, EE or execution group")
 	}
+
+	return nil
+}
+
+// executionEvidence checks the worker Pod and returns its observed runtime image identity.
+func (selected *Installation) executionEvidence(
+	job aap.Job,
+	resource metav1.Object,
+	jobPods *JobPodObserver,
+) (*AWXExecutionEvidence, error) {
+	id := strconv.Itoa(job.ID)
 
 	pod, err := jobPods.podForJob(id)
 	if err != nil {
@@ -259,6 +350,46 @@ func (selected *Installation) CheckExecution(
 	return nil, fmt.Errorf("execution runtime image identity is unavailable")
 }
 
+// checkNetworkManager verifies the production task received the profile's selected manager.
+func (selected *Installation) checkNetworkManager(job aap.Job) error {
+	var inputs struct {
+		Vars struct {
+			Task    string `json:"task"`
+			Manager struct {
+				Name string `json:"name"`
+				Type string `json:"type"`
+			} `json:"manager"`
+		} `json:"osac_job_vars"`
+	}
+
+	if err := json.Unmarshal([]byte(job.ExtraVars), &inputs); err != nil {
+		return fmt.Errorf("network job %d has unreadable task and manager inputs", job.ID)
+	}
+
+	if inputs.Vars.Task == "" {
+		return fmt.Errorf("network job %d has no production task name", job.ID)
+	}
+
+	expected, supported := map[string]string{
+		"fabric":     selected.ExpectedFabric,
+		"kubernetes": selected.ExpectedK8s,
+	}[inputs.Vars.Manager.Type]
+	if !supported {
+		return fmt.Errorf("network job %d has unsupported manager type %q", job.ID, inputs.Vars.Manager.Type)
+	}
+
+	if inputs.Vars.Manager.Name == "" {
+		return fmt.Errorf("network job %d has no selected %s manager name", job.ID, inputs.Vars.Manager.Type)
+	}
+
+	if expected != "" && inputs.Vars.Manager.Name != expected {
+		return fmt.Errorf("network job %d selected %s manager %q; profile requires %q",
+			job.ID, inputs.Vars.Manager.Type, inputs.Vars.Manager.Name, expected)
+	}
+
+	return nil
+}
+
 // executionGroupID selects the verified production group independently of observed jobs.
 func (selected *Installation) executionGroupID(playbook string) (int, error) {
 	var name string
@@ -270,6 +401,12 @@ func (selected *Installation) executionGroupID(playbook string) (int, error) {
 	case "osac-aap/playbook_osac_create_hosted_cluster.yml",
 		"osac-aap/playbook_osac_delete_hosted_cluster.yml":
 		name = "osac-cluster-fulfillment-ig"
+	case "osac-aap/playbook_osac_network_task.yml":
+		if !selected.NetworkingEnabled {
+			return 0, fmt.Errorf("networking execution is disabled")
+		}
+
+		name = "osac-networking-operations-ig"
 	default:
 		return 0, fmt.Errorf("unsupported execution playbook %q", playbook)
 	}

@@ -6,14 +6,17 @@
   vars:
     project_directory: /tmp/osac-project
     production_role: "{{ project_directory }}/osac-aap/collections/ansible_collections/osac/config_as_code/roles/aap"
-    selected_playbooks:
-      - osac-aap/playbook_osac_create_bare_metal_instance.yml
-      - osac-aap/playbook_osac_delete_bare_metal_instance.yml
-      - osac-aap/playbook_osac_create_hosted_cluster.yml
-      - osac-aap/playbook_osac_delete_hosted_cluster.yml
-    selected_groups:
-      - bare-metal-fulfillment
-      - cluster-fulfillment
+    networking_enabled: "{{ lookup('env', 'NETWORKING_ENABLED') | bool }}"
+    selected_playbooks: >-
+      {{ [
+           'osac-aap/playbook_osac_create_bare_metal_instance.yml',
+           'osac-aap/playbook_osac_delete_bare_metal_instance.yml',
+           'osac-aap/playbook_osac_create_hosted_cluster.yml',
+           'osac-aap/playbook_osac_delete_hosted_cluster.yml'
+         ] + (['osac-aap/playbook_osac_network_task.yml'] if networking_enabled | bool else []) }}
+    selected_groups: >-
+      {{ ['bare-metal-fulfillment', 'cluster-fulfillment']
+         + (['networking-operations'] if networking_enabled | bool else []) }}
     selected_inventory_names: "{{ selected_groups | map('regex_replace', '^', aap_prefix + '-') | list }}"
     selected_group_names: "{{ selected_inventory_names | map('regex_replace', '$', '-ig') | list }}"
     project_sync_timeout: 300
@@ -165,6 +168,8 @@
             max_concurrent_jobs: 4
           - name: "{{ aap_prefix }}-cluster-fulfillment-ig"
             max_concurrent_jobs: 2
+          - name: "{{ aap_prefix }}-networking-operations-ig"
+            max_concurrent_jobs: 4
 
     - name: Select production controller objects
       ansible.builtin.set_fact:
@@ -177,6 +182,16 @@
         controller_inventory_sources: >-
           {{ controller_inventory_sources | selectattr('inventory', 'in', selected_inventory_names)
              | map('combine', {'wait': true, 'timeout': inventory_sync_timeout}) | list }}
+
+    - name: Verify production network task templates are selected
+      ansible.builtin.assert:
+        that:
+          - >-
+            not (networking_enabled | bool) or
+            controller_templates | selectattr('playbook', 'equalto', 'osac-aap/playbook_osac_network_task.yml')
+            | list | length > 0
+        fail_msg: The selected revision has no production network task templates.
+        quiet: true
 
     - name: Configure cluster templates for the guestless Kind environment
       ansible.builtin.set_fact:

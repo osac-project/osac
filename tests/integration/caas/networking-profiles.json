@@ -1,0 +1,202 @@
+{
+  "version": 1,
+  "profiles": [
+    {
+      "name": "networking-disabled",
+      "status": "runnable",
+      "overlay": "values/networking/networking-disabled.yaml",
+      "networkingEnabled": false,
+      "services": ["caas", "bmaas", "vmaas"],
+      "fabricManager": "netris",
+      "k8sManager": "cudn_evpn",
+      "registrationEvidence": {
+        "fabric": "osac-installer/charts/osac/templates/networking/netris-registration.yaml",
+        "kubernetes": "osac-installer/charts/osac/templates/networking/cudn-evpn-registration.yaml"
+      },
+      "capabilities": {
+        "fabric": {"networkTypes": ["evpn"], "features": ["eastWestEthernet", "security_group_icmp"]},
+        "kubernetes": {"networkTypes": ["evpn"], "features": []}
+      },
+      "fixture": "none",
+      "expectedOutcome": "success",
+      "requiredScenarios": [
+        "tenant default network objects become ready",
+        "no production network-manager AWX jobs are launched"
+      ]
+    },
+    {
+      "name": "caas-bmaas-netris-no-vmaas",
+      "status": "runnable-after-6194",
+      "overlay": "values/networking/caas-bmaas-netris-no-vmaas.yaml",
+      "networkingEnabled": true,
+      "services": ["caas", "bmaas"],
+      "fabricManager": "netris",
+      "k8sManager": "",
+      "registrationEvidence": {
+        "fabric": "osac-installer/charts/osac/templates/networking/netris-registration.yaml",
+        "kubernetes": null
+      },
+      "capabilities": {
+        "fabric": {"networkTypes": ["evpn"], "features": ["eastWestEthernet", "security_group_icmp"]},
+        "kubernetes": null
+      },
+      "fixture": "netris",
+      "expectedOutcome": "success",
+      "requiredScenarios": [
+        "tenant defaults execute the production Fabric Manager tasks",
+        "CaaS workers can select the physical Fabric attachment path"
+      ]
+    },
+    {
+      "name": "bmaas-netris",
+      "status": "runnable-after-6194",
+      "overlay": "values/networking/bmaas-netris.yaml",
+      "networkingEnabled": true,
+      "services": ["bmaas"],
+      "fabricManager": "netris",
+      "k8sManager": "",
+      "registrationEvidence": {
+        "fabric": "osac-installer/charts/osac/templates/networking/netris-registration.yaml",
+        "kubernetes": null
+      },
+      "capabilities": {
+        "fabric": {"networkTypes": ["evpn"], "features": ["eastWestEthernet", "security_group_icmp"]},
+        "kubernetes": null
+      },
+      "fixture": "netris",
+      "expectedOutcome": "success",
+      "requiredScenarios": [
+        "tenant defaults execute the production Fabric Manager tasks",
+        "BMaaS can use the physical attachment and DHCP discovery path"
+      ]
+    },
+    {
+      "name": "vmaas-netris-cudn-evpn",
+      "status": "runnable-after-6194",
+      "overlay": "values/networking/vmaas-netris-cudn-evpn.yaml",
+      "networkingEnabled": true,
+      "services": ["vmaas"],
+      "fabricManager": "netris",
+      "k8sManager": "cudn_evpn",
+      "registrationEvidence": {
+        "fabric": "osac-installer/charts/osac/templates/networking/netris-registration.yaml",
+        "kubernetes": "osac-installer/charts/osac/templates/networking/cudn-evpn-registration.yaml"
+      },
+      "capabilities": {
+        "fabric": {"networkTypes": ["evpn"], "features": ["eastWestEthernet", "security_group_icmp"]},
+        "kubernetes": {"networkTypes": ["evpn"], "features": []}
+      },
+      "fixture": "netris-and-ovn",
+      "expectedOutcome": "success",
+      "requiredScenarios": [
+        "tenant defaults execute the production Fabric Manager tasks",
+        "the Kubernetes Manager production role creates and observes CUDN resources",
+        "the ComputeInstance controller is enabled"
+      ]
+    },
+    {
+      "name": "all-services-netris-cudn-evpn",
+      "status": "runnable-after-6194",
+      "overlay": "values/networking/all-services-netris-cudn-evpn.yaml",
+      "networkingEnabled": true,
+      "services": ["caas", "bmaas", "vmaas"],
+      "fabricManager": "netris",
+      "k8sManager": "cudn_evpn",
+      "registrationEvidence": {
+        "fabric": "osac-installer/charts/osac/templates/networking/netris-registration.yaml",
+        "kubernetes": "osac-installer/charts/osac/templates/networking/cudn-evpn-registration.yaml"
+      },
+      "capabilities": {
+        "fabric": {"networkTypes": ["evpn"], "features": ["eastWestEthernet", "security_group_icmp"]},
+        "kubernetes": {"networkTypes": ["evpn"], "features": []}
+      },
+      "fixture": "netris-and-ovn",
+      "expectedOutcome": "success",
+      "requiredScenarios": [
+        "CaaS, BMaaS and VMaaS controllers and prerequisites are enabled",
+        "production Fabric and Kubernetes Manager tasks run through AWX"
+      ]
+    },
+    {
+      "name": "bmaas-agentless-net",
+      "status": "blocked-by-6195",
+      "services": ["bmaas"],
+      "fabricManager": "agentless_net",
+      "k8sManager": "",
+      "registrationEvidence": {
+        "fabric": "osac-installer/charts/osac/templates/networking/agentless-net-registration.yaml",
+        "kubernetes": null
+      },
+      "capabilities": {
+        "fabric": {"networkTypes": [], "features": ["security_group_icmp"]},
+        "kubernetes": null
+      },
+      "fixture": "agentless-net",
+      "expectedOutcome": "success",
+      "requiredScenarios": [
+        "BMaaS physical attachment uses the production AgentlessNet role",
+        "fixture state records switch operations and cleanup"
+      ]
+    },
+    {
+      "name": "caas-agentless-net",
+      "status": "unqualified",
+      "services": ["caas", "bmaas"],
+      "fabricManager": "agentless_net",
+      "k8sManager": "",
+      "registrationEvidence": {
+        "fabric": "osac-installer/charts/osac/templates/networking/agentless-net-registration.yaml",
+        "kubernetes": null
+      },
+      "capabilities": {
+        "fabric": {"networkTypes": [], "features": ["security_group_icmp"]},
+        "kubernetes": null
+      },
+      "fixture": "agentless-net",
+      "expectedOutcome": "requires-contract-evidence",
+      "requiredScenarios": [
+        "verify the Fabric Manager supports CaaS worker attachment requirements"
+      ]
+    },
+    {
+      "name": "vmaas-agentless-cudn-evpn",
+      "status": "contract-rejected",
+      "services": ["vmaas"],
+      "fabricManager": "agentless_net",
+      "k8sManager": "cudn_evpn",
+      "registrationEvidence": {
+        "fabric": "osac-installer/charts/osac/templates/networking/agentless-net-registration.yaml",
+        "kubernetes": "osac-installer/charts/osac/templates/networking/cudn-evpn-registration.yaml"
+      },
+      "capabilities": {
+        "fabric": {"networkTypes": [], "features": ["security_group_icmp"]},
+        "kubernetes": {"networkTypes": ["evpn"], "features": []}
+      },
+      "fixture": "none",
+      "expectedOutcome": "reject-network-type-mismatch",
+      "requiredScenarios": [
+        "NetworkClass resolution rejects a Fabric Manager without the selected EVPN network type"
+      ]
+    },
+    {
+      "name": "vmaas-no-kubernetes-manager",
+      "status": "contract-rejected",
+      "services": ["vmaas"],
+      "fabricManager": "netris",
+      "k8sManager": "",
+      "registrationEvidence": {
+        "fabric": "osac-installer/charts/osac/templates/networking/netris-registration.yaml",
+        "kubernetes": null
+      },
+      "capabilities": {
+        "fabric": {"networkTypes": ["evpn"], "features": ["eastWestEthernet", "security_group_icmp"]},
+        "kubernetes": null
+      },
+      "fixture": "none",
+      "expectedOutcome": "reject-installer-validation",
+      "requiredScenarios": [
+        "installer validation rejects VMaaS without a Kubernetes Manager"
+      ]
+    }
+  ]
+}

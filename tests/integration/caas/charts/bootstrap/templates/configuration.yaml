@@ -7,3 +7,8 @@ data:
   projectCommit: {{ .Values.project.commit | quote }}
   eeImage: {{ .Values.images.ee | quote }}
   eePullPolicy: {{ .Values.images.eePullPolicy | quote }}
+  networkingEnabled: {{ .Values.networking.enabled | quote }}
+  profileName: {{ .Values.networking.profileName | quote }}
+  services: {{ .Values.networking.services | quote }}
+  expectedFabricManager: {{ .Values.networking.expectedFabricManager | quote }}
+  expectedK8sManager: {{ .Values.networking.expectedK8sManager | quote }}

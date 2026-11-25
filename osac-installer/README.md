@@ -245,9 +245,11 @@ make install-infra PLATFORM=kind PROFILE=dev NS=osac \
   KIND_CERT_MANAGER_PULL_BACKOFF='1 3'
 ```
 
-Each delay allows one retry after a connection reset. Use
-`KIND_CERT_MANAGER_PULL_BACKOFF=` for a single pull. `DRY_RUN=1` uses the same
-chart reference and version in one `helm template` invocation.
+`install-infra` checks these settings before setting up the Kind cluster, then
+pulls the chart and installs from the local archive. Each delay allows one pull
+retry after a connection reset. Use `KIND_CERT_MANAGER_PULL_BACKOFF=` for a
+single pull. `DRY_RUN=1` uses the same pull settings and renders the local
+archive once without connecting to the cluster.
 
 #### Two-cluster VMaaS installation (OpenShift)
 

@@ -313,16 +313,25 @@ export KIND_CERT_MANAGER_CHART KIND_CERT_MANAGER_VERSION
 export KIND_CERT_MANAGER_PULL_TIMEOUT KIND_CERT_MANAGER_PULL_BACKOFF
 # Build argv in the recipe shell so spaces and empty values stay intact.
 # The helper and its children receive the settings only through arguments.
-define run-kind-cert-manager
-( set -- --chart="$${KIND_CERT_MANAGER_CHART}" \
+define run-kind-cert-manager-pull
+( command -v python3 >/dev/null \
+		|| { echo "ERROR: Install Python 3.8 or later and make python3 available on PATH for cert-manager on Kind" >&2; exit 1; }; \
+	set -- --chart="$${KIND_CERT_MANAGER_CHART}" \
 	--version="$${KIND_CERT_MANAGER_VERSION}" \
 	--pull-timeout="$${KIND_CERT_MANAGER_PULL_TIMEOUT}" \
 	--pull-backoff="$${KIND_CERT_MANAGER_PULL_BACKOFF}" $(1); \
 	unset KIND_CERT_MANAGER_CHART KIND_CERT_MANAGER_VERSION \
 		KIND_CERT_MANAGER_PULL_TIMEOUT KIND_CERT_MANAGER_PULL_BACKOFF; \
-	python3 -c 'import sys; sys.exit(sys.version_info < (3, 8))' 2>/dev/null \
-		|| { echo "ERROR: Python 3.8 or later is required for cert-manager on Kind" >&2; exit 1; }; \
-	exec python3 scripts/install-kind-cert-manager.py "$$@" )
+	exec python3 scripts/pull-helm-oci-chart.py "$$@" )
+endef
+
+check-kind-cert-manager-config = $(call run-kind-cert-manager-pull,--check-config)
+
+# The caller's recipe shell owns the local archive through install or render.
+define prepare-kind-cert-manager-chart
+chart_dir=$$(mktemp -d "$${TMPDIR:-/tmp}/osac-cert-manager-XXXXXX"); \
+	trap 'rm -rf -- "$$chart_dir"' EXIT; \
+	$(call run-kind-cert-manager-pull,--output "$$chart_dir/chart.tgz")
 endef
 # Runtime supplies hostnames and credentials; use the minimal CI fixture for
 # local chart checks without loosening the required-values schema.
@@ -592,7 +601,7 @@ endif
 .PHONY: install-infra
 install-infra: validate-inputs helm-infra-deps ## Install infrastructure (PLATFORM= PROFILE= NS= required)
 ifeq ($(PLATFORM),kind)
-	@$(call run-kind-cert-manager,--check-config)
+	@$(check-kind-cert-manager-config)
 ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME_CMD) check
 	@$(KIND_RUNTIME_CMD) create-cluster "$(KIND_CLUSTER_NAME)" "$(KIND_CONFIG)" "$$KIND_KUBECONFIG"
@@ -616,9 +625,11 @@ endif
 ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME_ENV) $(KIND_ARM64_CLI_IMAGE_SCRIPT) $(KIND_CLUSTER_NAME) $(KIND_ARM64_CLI_IMAGE)
 endif
-	$(call run-kind-cert-manager,-- \
+	@$(prepare-kind-cert-manager-chart); \
+	helm upgrade --install cert-manager "$$chart_dir/chart.tgz" \
+		--version "$${KIND_CERT_MANAGER_VERSION}" \
 		--namespace cert-manager --create-namespace \
-		--set crds.enabled=true $(INSTALL_HELM_TARGET) --wait --timeout 5m)
+		--set crds.enabled=true $(INSTALL_HELM_TARGET) --wait --timeout 5m
 	helm upgrade --install trust-manager oci://quay.io/jetstack/charts/trust-manager \
 		--version v0.22.0 --namespace cert-manager \
 		--set defaultPackage.enabled=false $(INSTALL_HELM_TARGET) --wait --timeout 5m
@@ -1126,9 +1137,16 @@ endif
 .PHONY: install-dry-run
 install-dry-run: validate-ns validate-remote-cluster-identifiers helm-deps validate-osac-chart-oci-ref ## Render every release in make install without connecting to a cluster
 ifeq ($(PLATFORM),kind)
-	$(call run-kind-cert-manager,--template -- \
-		--namespace cert-manager \
-		--set crds.enabled=true)
+	@$(prepare-kind-cert-manager-chart); \
+	if helm template cert-manager "$$chart_dir/chart.tgz" \
+		--version "$${KIND_CERT_MANAGER_VERSION}" --namespace cert-manager \
+		--set crds.enabled=true >"$$chart_dir/rendered.yaml" 2>/dev/null; then \
+		cat "$$chart_dir/rendered.yaml"; \
+	else \
+		status=$$?; \
+		echo "ERROR: cert-manager chart render failed (Helm exit $$status)" >&2; \
+		exit "$$status"; \
+	fi
 	helm template trust-manager oci://quay.io/jetstack/charts/trust-manager \
 		--version v0.22.0 --namespace cert-manager \
 		--set defaultPackage.enabled=false

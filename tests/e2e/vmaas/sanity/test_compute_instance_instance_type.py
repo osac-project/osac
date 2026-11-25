@@ -165,7 +165,9 @@ def _vmi_has_resources(vmi: dict[str, Any], *, vcpus: int, memory_gib: int) -> b
     memory = domain.get("memory", {}).get("guest", "")
     status = vmi.get("status", {})
     topology = status.get("currentCPUTopology") or {}
-    live_memory = (status.get("memory") or {}).get("guestCurrent") or memory
+    live_memory = (status.get("memory") or {}).get("guestCurrent")
+    if not live_memory:
+        return False
     factors = {"Gi": 1024**3, "Mi": 1024**2, "Ki": 1024, "G": 1000**3, "M": 1000**2}
     quantity = str(live_memory)
     multiplier = next((factor for suffix, factor in factors.items() if quantity.endswith(suffix)), 1)

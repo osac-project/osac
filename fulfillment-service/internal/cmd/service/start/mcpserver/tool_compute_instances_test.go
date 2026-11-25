@@ -562,7 +562,7 @@ var _ = Describe("handleCreateComputeInstance", func() {
 		Expect(err.Error()).ToNot(ContainSubstring("tenant is not allowed"))
 	})
 
-	It("Preserves a selected Project from another tenant in the public create object", func() {
+	It("Preserves the selected Project and reference tenants in the public create object", func() {
 		var capturedObject *publicv1.ComputeInstance
 		instances := &mockComputeInstancesClient{
 			createFunc: func(
@@ -573,11 +573,35 @@ var _ = Describe("handleCreateComputeInstance", func() {
 			},
 		}
 		clients := createPrerequisiteClients(instances)
+		clients.catalogItems = &mockComputeInstanceCatalogItemsClient{getFunc: func(
+			_ context.Context, _ *publicv1.ComputeInstanceCatalogItemsGetRequest, _ ...grpc.CallOption,
+		) (*publicv1.ComputeInstanceCatalogItemsGetResponse, error) {
+			return publicv1.ComputeInstanceCatalogItemsGetResponse_builder{
+				Object: publicv1.ComputeInstanceCatalogItem_builder{
+					Id:        "catalog-item-1",
+					Metadata:  publicv1.Metadata_builder{Tenant: "tenant-b"}.Build(),
+					Published: true,
+				}.Build(),
+			}.Build(), nil
+		}}
 		clients.diskImages = &mockDiskImagesClient{getFunc: func(
 			_ context.Context, _ *publicv1.DiskImagesGetRequest, _ ...grpc.CallOption,
 		) (*publicv1.DiskImagesGetResponse, error) {
 			return publicv1.DiskImagesGetResponse_builder{
-				Object: publicv1.DiskImage_builder{Id: "image-1"}.Build(),
+				Object: publicv1.DiskImage_builder{
+					Id:       "image-1",
+					Metadata: publicv1.Metadata_builder{Tenant: "shared"}.Build(),
+				}.Build(),
+			}.Build(), nil
+		}}
+		clients.instanceTypes = &mockInstanceTypesClient{getFunc: func(
+			_ context.Context, _ *publicv1.InstanceTypesGetRequest, _ ...grpc.CallOption,
+		) (*publicv1.InstanceTypesGetResponse, error) {
+			return publicv1.InstanceTypesGetResponse_builder{
+				Object: publicv1.InstanceType_builder{
+					Id:       "u1-medium",
+					Metadata: publicv1.Metadata_builder{Tenant: "shared"}.Build(),
+				}.Build(),
 			}.Build(), nil
 		}}
 		clients.projects = &mockProjectsClient{listFunc: func(
@@ -596,12 +620,20 @@ var _ = Describe("handleCreateComputeInstance", func() {
 
 		handler := handleCreateComputeInstance(clients)
 		_, _, err := handler(context.Background(), requestWithToken(testRawBearerValue), CreateComputeInstanceInput{
-			Name: "demo-vm", CatalogItem: "catalog-item-1", DiskImageID: "image-1", ProjectID: "project-1",
+			Name:           "demo-vm",
+			CatalogItem:    "catalog-item-1",
+			DiskImageID:    "image-1",
+			ProjectID:      "project-1",
+			InstanceTypeID: "u1-medium",
 		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(capturedObject.GetMetadata().GetProject()).To(Equal("team-b.project-1"))
 		Expect(capturedObject.GetMetadata().GetTenant()).To(Equal("tenant-b"))
-		Expect(capturedObject.GetSpec().GetDiskImage().GetId()).To(Equal("image-1"))
+		spec := capturedObject.GetSpec()
+		Expect(spec.GetCatalogItem().GetTenant()).To(Equal("tenant-b"))
+		Expect(spec.GetDiskImage().GetId()).To(Equal("image-1"))
+		Expect(spec.GetDiskImage().GetTenant()).To(Equal("shared"))
+		Expect(spec.GetInstanceType().GetTenant()).To(Equal("shared"))
 	})
 
 	It("Names a missing prerequisite and stops before the dependent create", func() {

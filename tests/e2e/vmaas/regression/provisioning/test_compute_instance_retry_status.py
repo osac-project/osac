@@ -170,8 +170,8 @@ def retry_instance(
         yield instance
     finally:
         with case_steps.step(f"Clean up ComputeInstance {name}"):
-            grpc.delete_compute_instance(ci_id=instance_id)
             try:
+                grpc.delete_compute_instance(ci_id=instance_id)
                 if instance is not None:
                     wait_for_deletion(k8s=k8s_hub_client, name=instance.cr)
                     assert (
@@ -203,13 +203,19 @@ def _require_retry_surface(instance: Instance, *, surface: str, expected: str, o
         )
 
 
-def _observe_api_retry(grpc: GRPCClient, instance: Instance, reason: str) -> dict[str, Any]:
+def _observe_api_retry(grpc: GRPCClient, instance: Instance, reason: str) -> tuple[dict[str, Any], str]:
     condition: dict[str, Any] = {}
     failure: dict[str, Any] | None = None
+    state: str | None = None
 
     def read_reason() -> str:
-        nonlocal condition, failure
-        condition, failure = _public_status(grpc, instance)
+        nonlocal condition, failure, state
+        status = grpc.get_compute_instance(ci_id=instance.id)["object"].get("status", {})
+        condition = next(
+            (c for c in status.get("conditions", []) if c["type"] == "COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED"), {}
+        )
+        failure = status.get("lastProvisioningFailure")
+        state = status.get("state", "COMPUTE_INSTANCE_STATE_UNSPECIFIED")
         observed = condition.get("reason")
         if observed == reason:
             return "expected retry reason"
@@ -240,8 +246,9 @@ def _observe_api_retry(grpc: GRPCClient, instance: Instance, reason: str) -> dic
     except ValueError:
         pytest.fail("Expected an ISO 8601 failure observation timestamp", pytrace=False)
     assert observed_at.tzinfo is not None, "Expected a timezone in the failure timestamp"
+    assert isinstance(state, str) and state, "Expected an observable ComputeInstance state"
     LOG.info("%s API %s with ProviderReported failure for attempt 1", instance.id, reason)
-    return failure
+    return failure, state
 
 
 def _cli_list_status(cli: OsacCLI, instance: Instance, *, retrying: bool) -> None:
@@ -266,38 +273,46 @@ def _cli_list_status(cli: OsacCLI, instance: Instance, *, retrying: bool) -> Non
             cells = [line[start:end].strip() for start, end in zip(offsets, [*offsets[1:], None], strict=True)]
             if cells[headers.index("ID")] == instance.id:
                 columns.update(zip(headers, cells, strict=True))
-                return columns["PROVISIONING"]
+                provisioning = columns["PROVISIONING"]
+                failure = columns["LAST FAILURE"]
+                if provisioning != expected:
+                    return "waiting for provisioning status"
+                if retrying and re.sub(r"[^a-z]", "", failure.lower()) != "providerreported":
+                    return "waiting for failure reason"
+                if not retrying and failure != "-":
+                    return "waiting for failure to clear"
+                return "expected status"
         return "instance missing"
 
     columns: dict[str, str] = {}
     expected = "Retrying" if retrying else "-"
-    instance.wait(read_provisioning, lambda value: value == expected, f"CLI list PROVISIONING={expected}", retries=10)
-    reason = columns["LAST FAILURE"]
-    if retrying:
-        assert re.sub(r"[^a-z]", "", reason.lower()) == "providerreported", (
-            "CLI list did not show the ProviderReported failure reason"
-        )
-    else:
-        assert reason == "-", "CLI list retained a failure after success"
+    instance.wait(
+        read_provisioning, lambda value: value == "expected status", f"CLI list PROVISIONING={expected}", retries=10
+    )
 
 
 def _cli_describe_status(cli: OsacCLI, instance: Instance, *, retrying: bool) -> None:
-    details = run(cli.binary, "--config", cli.config_dir, "describe", "computeinstance", instance.id, timeout=30)
-    if retrying:
+    def read_details() -> str:
+        details = run(cli.binary, "--config", cli.config_dir, "describe", "computeinstance", instance.id, timeout=30)
         assert "OSAC-7812 controlled provider diagnostic" not in details, "CLI leaked the raw AAP diagnostic"
-        for pattern in (
+        if not retrying:
+            if re.search(r"Provisioning:\s+Retrying|Last Provisioning Failure", details):
+                return "waiting for retry and failure to clear"
+            return "expected status"
+        patterns = (
             r"Provisioning:\s+Retrying",
+            r"Last Provisioning Failure Reason:\s+PROVIDER_REPORTED\b",
             r"Last Provisioning Failure Attempt:\s+1\b",
             re.escape(SAFE_MESSAGE),
-        ):
-            assert re.search(pattern, details), f"CLI describe omitted expected detail ({pattern})"
-        assert re.search(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b", details), (
-            "CLI describe omitted the failure observation time"
+            r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b",
         )
-    else:
-        assert not re.search(r"Provisioning:\s+Retrying|Last Provisioning Failure", details), (
-            "CLI describe retained retry or failure details after success"
+        return (
+            "expected status"
+            if all(re.search(pattern, details) for pattern in patterns)
+            else "waiting for retry details"
         )
+
+    instance.wait(read_details, lambda value: value == "expected status", "CLI describe retry status", retries=10)
 
 
 def _wait_for_success_feedback(grpc: GRPCClient, instance: Instance) -> None:
@@ -373,12 +388,13 @@ def test_compute_instance_retry_public_api(grpc: GRPCClient, retry_instance: Ins
     with case_steps.step("Confirm OSAC scheduled a retry after AAP attempt 1 failed"):
         retry_instance.observe_job("attempt=1 state=Retrying")
     with case_steps.step("Verify public API reports RetryScheduled and the original failure"):
-        scheduled = _observe_api_retry(grpc, retry_instance, "RetryScheduled")
+        scheduled, scheduled_state = _observe_api_retry(grpc, retry_instance, "RetryScheduled")
     with case_steps.step("Confirm AAP attempt 2 is running"):
         retry_instance.observe_job("attempt=2 state=Running")
     with case_steps.step("Verify public API reports RetryRunning and keeps the original failure"):
-        running = _observe_api_retry(grpc, retry_instance, "RetryRunning")
+        running, running_state = _observe_api_retry(grpc, retry_instance, "RetryRunning")
         assert scheduled == running, "Retry changed the original failed attempt or its observation timestamp"
+        assert scheduled_state == running_state, "Retry changed the ComputeInstance power state"
     with case_steps.step("Release attempt 2 and wait for AAP success"):
         retry_instance.release_retry()
         retry_instance.observe_job("attempt=2 state=Succeeded")

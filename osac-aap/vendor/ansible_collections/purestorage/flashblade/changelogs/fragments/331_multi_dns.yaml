@@ -1,3 +1,0 @@
-minor_changes:
- - purefb_dns - Added support for multiple DNS configurations.
- - purefb_info - Added support for multiple DNS configurations.

@@ -10,7 +10,6 @@ import (
 	. "github.com/onsi/gomega"
 
 	v1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
-	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"sigs.k8s.io/yaml"
 )
 
@@ -18,13 +17,41 @@ var _ = Describe("ClusterOrder upgrade contract", func() {
 	It("validates control-plane and node-set release images identically", func() {
 		data, err := os.ReadFile("../../config/crd/bases/osac.openshift.io_clusterorders.yaml")
 		Expect(err).NotTo(HaveOccurred())
-		var crd apiextensionsv1.CustomResourceDefinition
+		var crd struct {
+			Spec struct {
+				Versions []struct {
+					Schema struct {
+						OpenAPIV3Schema struct {
+							Properties map[string]json.RawMessage `json:"properties"`
+						} `json:"openAPIV3Schema"`
+					} `json:"schema"`
+				} `json:"versions"`
+			} `json:"spec"`
+		}
 		Expect(yaml.Unmarshal(data, &crd)).To(Succeed())
 		Expect(crd.Spec.Versions).NotTo(BeEmpty())
 
-		spec := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"]
-		controlPlane := spec.Properties["releaseImage"]
-		nodeSet := spec.Properties["nodeRequests"].Items.Schema.Properties["releaseImage"]
+		var spec struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		Expect(yaml.Unmarshal(crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["spec"], &spec)).To(Succeed())
+
+		var controlPlane struct {
+			Pattern   string `json:"pattern"`
+			MaxLength *int64 `json:"maxLength"`
+		}
+		Expect(yaml.Unmarshal(spec.Properties["releaseImage"], &controlPlane)).To(Succeed())
+		var nodeRequests struct {
+			Items struct {
+				Properties map[string]json.RawMessage `json:"properties"`
+			} `json:"items"`
+		}
+		Expect(yaml.Unmarshal(spec.Properties["nodeRequests"], &nodeRequests)).To(Succeed())
+		var nodeSet struct {
+			Pattern   string `json:"pattern"`
+			MaxLength *int64 `json:"maxLength"`
+		}
+		Expect(yaml.Unmarshal(nodeRequests.Items.Properties["releaseImage"], &nodeSet)).To(Succeed())
 		Expect(nodeSet.Pattern).To(Equal(controlPlane.Pattern))
 		Expect(nodeSet.MaxLength).To(Equal(controlPlane.MaxLength))
 		Expect(controlPlane.MaxLength).NotTo(BeNil())
@@ -59,17 +86,43 @@ var _ = Describe("ClusterOrder upgrade contract", func() {
 	It("keeps provider baseline timestamps out of upgrade observations", func() {
 		data, err := os.ReadFile("../../config/crd/bases/osac.openshift.io_clusterorders.yaml")
 		Expect(err).NotTo(HaveOccurred())
-		var crd apiextensionsv1.CustomResourceDefinition
+		var crd struct {
+			Spec struct {
+				Versions []struct {
+					Schema struct {
+						OpenAPIV3Schema struct {
+							Properties map[string]json.RawMessage `json:"properties"`
+						} `json:"openAPIV3Schema"`
+					} `json:"schema"`
+				} `json:"versions"`
+			} `json:"spec"`
+		}
 		Expect(yaml.Unmarshal(data, &crd)).To(Succeed())
 		Expect(crd.Spec.Versions).NotTo(BeEmpty())
 
-		status := crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["status"]
-		controlPlane := status.Properties["upgradeObservation"].Properties
-		nodeSet := status.Properties["nodeRequests"].Items.Schema.Properties["upgradeObservation"].Properties
-		Expect(controlPlane).To(HaveKey("attemptID"))
-		Expect(nodeSet).To(HaveKey("attemptID"))
-		Expect(controlPlane).NotTo(HaveKey("baselineTransitionTime"))
-		Expect(nodeSet).NotTo(HaveKey("baselineTransitionTime"))
+		var status struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		Expect(yaml.Unmarshal(crd.Spec.Versions[0].Schema.OpenAPIV3Schema.Properties["status"], &status)).To(Succeed())
+
+		var controlPlane struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		Expect(yaml.Unmarshal(status.Properties["upgradeObservation"], &controlPlane)).To(Succeed())
+		var nodeRequests struct {
+			Items struct {
+				Properties map[string]json.RawMessage `json:"properties"`
+			} `json:"items"`
+		}
+		Expect(yaml.Unmarshal(status.Properties["nodeRequests"], &nodeRequests)).To(Succeed())
+		var nodeSet struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		Expect(yaml.Unmarshal(nodeRequests.Items.Properties["upgradeObservation"], &nodeSet)).To(Succeed())
+		Expect(controlPlane.Properties).To(HaveKey("attemptID"))
+		Expect(nodeSet.Properties).To(HaveKey("attemptID"))
+		Expect(controlPlane.Properties).NotTo(HaveKey("baselineTransitionTime"))
+		Expect(nodeSet.Properties).NotTo(HaveKey("baselineTransitionTime"))
 	})
 
 	It("serializes the SSH key reference as an ID-only secret", func() {

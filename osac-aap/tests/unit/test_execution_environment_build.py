@@ -37,11 +37,11 @@ if [ "$1" = sync ]; then exit 0; fi
 [ "$1 $2 $3 $4" = 'tool run ansible-builder build' ]
 shift 4
 runtime=
-platform=
+build_args=
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --container-runtime) runtime="$2"; shift ;;
-        --extra-build-cli-args=*) platform="${1#*=}" ;;
+        --extra-build-cli-args=*) build_args="${1#*=}" ;;
     esac
     shift
 done
@@ -49,7 +49,7 @@ case "$runtime" in
     podman|docker) ;;
     *) echo "invalid container runtime: $runtime" >&2; exit 2 ;;
 esac
-"$runtime" build $platform
+"$runtime" build $build_args
 """,
     )
     result = subprocess.run(
@@ -70,7 +70,11 @@ esac
         timeout=15,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    expected_build = f"build --platform={platform}" if platform else "build"
+    expected_build_args = []
+    if platform:
+        expected_build_args.append(f"--platform={platform}")
+    expected_build_args.append("--build-arg=ANSIBLE_GALAXY_CLI_COLLECTION_OPTS=--no-deps")
+    expected_build = " ".join(["build", *expected_build_args])
     assert log.read_text().splitlines() == [
         expected_build, "tag test-ee test/ee:latest",
     ]

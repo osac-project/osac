@@ -20,7 +20,7 @@ author:
   - Yuriy Novostavskiy (@yurnov)
 
 requirements:
-  - "helm (https://github.com/helm/helm/releases) >= 3.8.0, <4.0.0"
+  - "helm (https://github.com/helm/helm/releases) >= 3.8.0"
 
 description:
   -  Helm registry authentication module allows you to login C(helm registry login) and logout C(helm registry logout) from a Helm registry.
@@ -75,6 +75,14 @@ options:
       - Path to the CA certificate SSL file for verify registry server certificate.
     required: false
     type: path
+  plain_http:
+    description:
+      - Use insecure HTTP connections for C(helm registry login).
+      - Requires Helm >= 3.18.0
+    required: false
+    type: bool
+    default: False
+    version_added: 6.4.0
   binary_path:
     description:
       - The path of a helm binary to use.
@@ -98,17 +106,23 @@ EXAMPLES = r"""
 RETURN = r"""
 stdout:
   type: str
-  description: Full C(helm) command stdout, in case you want to display it or examine the event log
+  description:
+    - Full C(helm) command stdout, in case you want to display it or examine the event log.
+    - As of Helm 4.2.1 success messages such as C(Login Succeeded) are printed to stdout
+      (see U(https://github.com/helm/helm/pull/32056)). On earlier versions they are printed to stderr.
   returned: always
-stout_lines:
+  sample: 'Login Succeeded\n'
+stdout_lines:
   type: list
   description: Full C(helm) command stdout, in case you want to display it or examine the event log
   returned: always
 stderr:
   type: str
-  description: >-
-    Full C(helm) command stderr, in case you want to display it or examine the event log.
-    Please be note that helm binnary may print messages to stderr even if the command is successful.
+  description:
+    - Full C(helm) command stderr, in case you want to display it or examine the event log.
+    - Please note that the helm binary may print messages to stderr even if the command is successful.
+    - On Helm versions earlier than 4.2.1, success messages such as C(Login Succeeded) are printed
+      here; as of Helm 4.2.1 they are printed to stdout (see U(https://github.com/helm/helm/pull/32056)).
   returned: always
   sample: 'Login Succeeded\n'
 stderr_lines:
@@ -148,6 +162,7 @@ def arg_spec():
         key_file=dict(type="path", required=False),
         cert_file=dict(type="path", required=False),
         ca_file=dict(type="path", required=False),
+        plain_http=dict(type="bool", default=False),
     )
 
 
@@ -160,6 +175,7 @@ def login(
     key_file,
     cert_file,
     ca_file,
+    plain_http,
 ):
     login_command = command + " registry login " + host
 
@@ -177,6 +193,8 @@ def login(
 
     if ca_file is not None:
         login_command += " --ca-file=" + ca_file
+    if plain_http:
+        login_command += " --plain-http"
 
     return login_command
 
@@ -194,8 +212,8 @@ def main():
         supports_check_mode=True,
     )
 
-    # Validate Helm version >=3.0.0,<4.0.0
-    module.validate_helm_version()
+    # Validate Helm version >=3.8.0
+    module.validate_helm_version(version="3.8.0")
 
     changed = False
 
@@ -207,6 +225,19 @@ def main():
     key_file = module.params.get("key_file")
     cert_file = module.params.get("cert_file")
     ca_file = module.params.get("ca_file")
+    plain_http = module.params.get("plain_http")
+
+    helm_version = module.get_helm_version()
+
+    if plain_http:
+        if LooseVersion(helm_version) < LooseVersion("3.18.0"):
+            module.warn(
+                "plain_http option requires helm >= 3.18.0, current version is {0}".format(
+                    helm_version
+                )
+            )
+            # reset option
+            plain_http = False
 
     helm_cmd = module.get_helm_binary()
 
@@ -215,7 +246,15 @@ def main():
         changed = True
     elif state == "present":
         helm_cmd = login(
-            helm_cmd, host, insecure, username, password, key_file, cert_file, ca_file
+            helm_cmd,
+            host,
+            insecure,
+            username,
+            password,
+            key_file,
+            cert_file,
+            ca_file,
+            plain_http,
         )
         changed = True
 
@@ -238,7 +277,6 @@ def main():
                 command=helm_cmd,
             )
 
-    helm_version = module.get_helm_version()
     if LooseVersion(helm_version) >= LooseVersion("3.18.0") and state == "absent":
         # https://github.com/ansible-collections/kubernetes.core/issues/944
         module.warn(

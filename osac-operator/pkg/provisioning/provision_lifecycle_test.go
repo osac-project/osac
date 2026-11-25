@@ -584,7 +584,6 @@ var _ = ginkgo.Describe("ComputeDesiredConfigVersion", func() {
 		encoded, err := json.Marshal(spec)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(encoded)).To(Equal(`{"nodeRequests":[{"nodeSet":"workers","numberOfNodes":3}]}`))
-
 		hash, err := ComputeDesiredConfigVersion(spec)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(hash).To(Equal("398d688e45d7741c"))

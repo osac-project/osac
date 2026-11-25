@@ -1,2 +1,0 @@
-bugfixes:
- - purefb_bucket - Fix versioning control and access rules for public buckets

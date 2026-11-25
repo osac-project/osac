@@ -1,2 +1,0 @@
-bugfixes:
-  - purefb_bucket - Fixed module.warn() calls to be compatible with Ansible 2.15+ by removing msg= parameter

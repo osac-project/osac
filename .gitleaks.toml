@@ -28,11 +28,11 @@
 
 [[allowlists]]
   description = """
-Placeholder FlashBlade API tokens in the vendored purestorage.flashblade
-collection (OSAC-5016). Upstream ships these fake values in the EXAMPLES block
-of its modules, alongside an equally fake fb_url of 10.10.10.2; they are
-documentation samples in third-party code pinned at v1.26.0, not credentials
-for any OSAC system.
+  Placeholder FlashBlade API tokens in the vendored purestorage.flashblade
+  collection (OSAC-5016). Upstream ships these fake values in the EXAMPLES block
+  of its modules, alongside an equally fake fb_url of 10.10.10.2; they are
+  documentation samples in third-party code pinned at v1.26.0, not credentials
+  for any OSAC system.
 
 Scoped by both path and exact value, with condition = "AND" so a finding is
 only suppressed when it is one of these values AND it sits under the vendored
@@ -48,6 +48,7 @@ and the image digest in .github/workflows/pre-commit.yaml).
   paths = [
     '''^osac-aap/vendor/ansible_collections/purestorage/flashblade/''',
   ]
+
   regexes = [
     '''^T-55a68eb5-c785-4720-a2ca-8b03903bf641$''',  # x85
     '''^T-9f276a18-50ab-446e-8a0c-666a3529a1b6$''',  # x67

@@ -25,7 +25,7 @@ Requirements
 ------------
 The below requirements are needed on the host that executes this module.
 
-- helm (https://github.com/helm/helm/releases)
+- helm >= 3.0.0 (https://github.com/helm/helm/releases)
 - yaml (https://pypi.org/project/PyYAML/)
 
 
@@ -73,6 +73,7 @@ Parameters
                 </td>
                 <td>
                         <div>If set, the installation process deletes the installation on failure.</div>
+                        <div>With Helm v4 this is translated to the <code>--rollback-on-failure</code> flag, since <code>--atomic</code> was renamed; with Helm v3 the <code>--atomic</code> flag is used. The O(atomic) option works the same way regardless of the installed Helm version.</div>
                 </td>
             </tr>
             <tr>
@@ -154,6 +155,29 @@ Parameters
                 </td>
                 <td>
                         <div>Chart version to install. If this is not specified, the latest version is installed.</div>
+                </td>
+            </tr>
+            <tr>
+                <td colspan="2">
+                    <div class="ansibleOptionAnchor" id="parameter-"></div>
+                    <b>cleanup_on_fail</b>
+                    <a class="ansibleOptionLink" href="#parameter-" title="Permalink to this option"></a>
+                    <div style="font-size: small">
+                        <span style="color: purple">boolean</span>
+                    </div>
+                    <div style="font-style: italic; font-size: small; color: darkgreen">added in 6.6.0</div>
+                </td>
+                <td>
+                        <ul style="margin: 0; padding: 0"><b>Choices:</b>
+                                    <li><div style="color: blue"><b>no</b>&nbsp;&larr;</div></li>
+                                    <li>yes</li>
+                        </ul>
+                </td>
+                <td>
+                        <div>Allow deletion of new resources created during a failed upgrade.</div>
+                        <div>Maps to the <code>--cleanup-on-fail</code> flag, which is available since helm 3.0.0 and was not renamed in Helm v4.</div>
+                        <div>Complements O(atomic) rather than replacing it, and the two can be combined so that a rollback also drops resources orphaned by the failed upgrade.</div>
+                        <div>Helm only accepts this flag on <code>helm upgrade</code>, so it cannot be used together with O(replace), which deploys through <code>helm install</code>.</div>
                 </td>
             </tr>
             <tr>
@@ -254,6 +278,30 @@ Parameters
                 </td>
                 <td>
                         <div>Helm option to force reinstall, ignore on new install.</div>
+                        <div>With Helm v4 this performs a client-side replacement. Helm v4 deprecated <code>--force</code> (split into <code>--force-replace</code> and <code>--force-conflicts</code>) and enables server-side apply by default, so for Helm v4 the module emits <code>--server-side=false --force-replace</code> to preserve the Helm v3 behaviour. With Helm v3 the <code>--force</code> flag is used. The O(force) option works the same way regardless of the installed Helm version.</div>
+                        <div>Mutually exclusive with O(server_side) and O(force_conflicts).</div>
+                </td>
+            </tr>
+            <tr>
+                <td colspan="2">
+                    <div class="ansibleOptionAnchor" id="parameter-"></div>
+                    <b>force_conflicts</b>
+                    <a class="ansibleOptionLink" href="#parameter-" title="Permalink to this option"></a>
+                    <div style="font-size: small">
+                        <span style="color: purple">boolean</span>
+                    </div>
+                    <div style="font-style: italic; font-size: small; color: darkgreen">added in 6.5.0</div>
+                </td>
+                <td>
+                        <ul style="margin: 0; padding: 0"><b>Choices:</b>
+                                    <li><div style="color: blue"><b>no</b>&nbsp;&larr;</div></li>
+                                    <li>yes</li>
+                        </ul>
+                </td>
+                <td>
+                        <div>When server-side apply is enabled (the Helm v4 default), force changes against conflicts instead of failing.</div>
+                        <div>Maps to the <code>--force-conflicts</code> flag.</div>
+                        <div>This option requires Helm v4, cannot be combined with O(server_side=false), and is mutually exclusive with O(force).</div>
                 </td>
             </tr>
             <tr>
@@ -328,6 +376,27 @@ Parameters
                         <div>If the value is not specified in the task, the value of environment variable <code>K8S_AUTH_KUBECONFIG</code> will be used instead.</div>
                         <div>The configuration can be provided as dictionary. Added in version 2.4.0.</div>
                         <div style="font-size: small; color: darkgreen"><br/>aliases: kubeconfig_path</div>
+                </td>
+            </tr>
+            <tr>
+                <td colspan="2">
+                    <div class="ansibleOptionAnchor" id="parameter-"></div>
+                    <b>plain_http</b>
+                    <a class="ansibleOptionLink" href="#parameter-" title="Permalink to this option"></a>
+                    <div style="font-size: small">
+                        <span style="color: purple">boolean</span>
+                    </div>
+                    <div style="font-style: italic; font-size: small; color: darkgreen">added in 6.1.0</div>
+                </td>
+                <td>
+                        <ul style="margin: 0; padding: 0"><b>Choices:</b>
+                                    <li><div style="color: blue"><b>no</b>&nbsp;&larr;</div></li>
+                                    <li>yes</li>
+                        </ul>
+                </td>
+                <td>
+                        <div>Use HTTP instead of HTTPS when working with OCI registries</div>
+                        <div>Requires Helm &gt;= 3.13.0</div>
                 </td>
             </tr>
             <tr>
@@ -476,7 +545,9 @@ Parameters
                 </td>
                 <td>
                         <div>When upgrading package, reset the values to the ones built into the chart, apply the last release&#x27;s values and merge in any overrides from parameters O(release_values), O(values_files) or O(set_values).</div>
-                        <div>If O(reset_values) or O(reuse_values) is set to V(True), this is ignored.</div>
+                        <div>Helm ignores this when <code>--reset-values</code> or <code>--reuse-values</code> is passed. Since O(reset_values) defaults to V(true), it has to be set to V(false), and O(reuse_values) left unset or V(false), for this option to take any effect.</div>
+                        <div><code>helm install</code> does not accept <code>--reset-then-reuse-values</code>, so this option is ignored when O(replace) is set.</div>
+                        <div>The module warns whenever one of those combinations makes this option a no-op.</div>
                         <div>This feature requires helm diff &gt;= 3.9.12.</div>
                 </td>
             </tr>
@@ -498,6 +569,7 @@ Parameters
                 </td>
                 <td>
                         <div>When upgrading package, reset the values to the ones built into the chart.</div>
+                        <div>Defaults to V(true), which makes helm ignore O(reuse_values) and O(reset_then_reuse_values). Set it to V(false) to use either of them.</div>
                 </td>
             </tr>
             <tr>
@@ -517,8 +589,33 @@ Parameters
                         </ul>
                 </td>
                 <td>
-                        <div>When upgrading package, specifies wether to reuse the last release&#x27;s values and merge in any overrides from parameters <em>release_values</em>, <em>values_files</em> or <em>set_values</em>.</div>
-                        <div>If <em>reset_values</em> is set to <code>True</code>, this is ignored.</div>
+                        <div>When upgrading package, specifies whether to reuse the last release&#x27;s values and merge in any overrides from parameters O(release_values), O(values_files) or O(set_values).</div>
+                        <div>Helm ignores this when <code>--reset-values</code> is passed. Since O(reset_values) defaults to V(true), it has to be set to V(false) for this option to take any effect.</div>
+                        <div><code>helm install</code> does not accept <code>--reuse-values</code>, so this option is ignored when O(replace) is set.</div>
+                        <div>The module warns whenever one of those combinations makes this option a no-op.</div>
+                </td>
+            </tr>
+            <tr>
+                <td colspan="2">
+                    <div class="ansibleOptionAnchor" id="parameter-"></div>
+                    <b>server_side</b>
+                    <a class="ansibleOptionLink" href="#parameter-" title="Permalink to this option"></a>
+                    <div style="font-size: small">
+                        <span style="color: purple">string</span>
+                    </div>
+                    <div style="font-style: italic; font-size: small; color: darkgreen">added in 6.5.0</div>
+                </td>
+                <td>
+                        <ul style="margin: 0; padding: 0"><b>Choices:</b>
+                                    <li>auto</li>
+                                    <li>true</li>
+                                    <li>false</li>
+                        </ul>
+                </td>
+                <td>
+                        <div>Control Helm v4 server-side apply when installing or upgrading a release.</div>
+                        <div>Maps to the <code>--server-side</code> flag, which accepts <code>true</code>, <code>false</code> or <code>auto</code>.</div>
+                        <div>This option requires Helm v4 and is mutually exclusive with O(force).</div>
                 </td>
             </tr>
             <tr>
@@ -599,6 +696,48 @@ Parameters
                 </td>
                 <td>
                         <div>Skip custom resource definitions when installing or upgrading.</div>
+                </td>
+            </tr>
+            <tr>
+                <td colspan="2">
+                    <div class="ansibleOptionAnchor" id="parameter-"></div>
+                    <b>skip_schema_validation</b>
+                    <a class="ansibleOptionLink" href="#parameter-" title="Permalink to this option"></a>
+                    <div style="font-size: small">
+                        <span style="color: purple">boolean</span>
+                    </div>
+                    <div style="font-style: italic; font-size: small; color: darkgreen">added in 6.2.0</div>
+                </td>
+                <td>
+                        <ul style="margin: 0; padding: 0"><b>Choices:</b>
+                                    <li><div style="color: blue"><b>no</b>&nbsp;&larr;</div></li>
+                                    <li>yes</li>
+                        </ul>
+                </td>
+                <td>
+                        <div>Disables JSON schema validation for Chart and values.</div>
+                        <div>This feature requires helm &gt;= 3.16.0</div>
+                </td>
+            </tr>
+            <tr>
+                <td colspan="2">
+                    <div class="ansibleOptionAnchor" id="parameter-"></div>
+                    <b>take_ownership</b>
+                    <a class="ansibleOptionLink" href="#parameter-" title="Permalink to this option"></a>
+                    <div style="font-size: small">
+                        <span style="color: purple">boolean</span>
+                    </div>
+                    <div style="font-style: italic; font-size: small; color: darkgreen">added in 6.1.0</div>
+                </td>
+                <td>
+                        <ul style="margin: 0; padding: 0"><b>Choices:</b>
+                                    <li><div style="color: blue"><b>no</b>&nbsp;&larr;</div></li>
+                                    <li>yes</li>
+                        </ul>
+                </td>
+                <td>
+                        <div>Helm will ignore the check for helm annotations and take ownership of the existing resources</div>
+                        <div>This feature requires helm &gt;= 3.17.0</div>
                 </td>
             </tr>
             <tr>
@@ -698,6 +837,28 @@ Parameters
                 <td>
                         <div>When <em>release_state</em> is set to <code>present</code>, wait until all Pods, PVCs, Services, and minimum number of Pods of a Deployment are in a ready state before marking the release as successful.</div>
                         <div>When <em>release_state</em> is set to <code>absent</code>, will wait until all the resources are deleted before returning. It will wait for as long as <em>wait_timeout</em>. This feature requires helm&gt;=3.7.0. Added in version 2.3.0.</div>
+                </td>
+            </tr>
+            <tr>
+                <td colspan="2">
+                    <div class="ansibleOptionAnchor" id="parameter-"></div>
+                    <b>wait_for_jobs</b>
+                    <a class="ansibleOptionLink" href="#parameter-" title="Permalink to this option"></a>
+                    <div style="font-size: small">
+                        <span style="color: purple">boolean</span>
+                    </div>
+                    <div style="font-style: italic; font-size: small; color: darkgreen">added in 6.6.0</div>
+                </td>
+                <td>
+                        <ul style="margin: 0; padding: 0"><b>Choices:</b>
+                                    <li><div style="color: blue"><b>no</b>&nbsp;&larr;</div></li>
+                                    <li>yes</li>
+                        </ul>
+                </td>
+                <td>
+                        <div>When <em>release_state</em> is set to <code>present</code>, and <em>wait</em> is set to <code>True</code>, wait until all jobs are in a completed state before marking the release as successful.</div>
+                        <div>Ignored when used without O(wait).</div>
+                        <div>Requires Helm &gt;= 3.5.0</div>
                 </td>
             </tr>
             <tr>
@@ -810,6 +971,12 @@ Examples
         chart_ref: "https://github.com/grafana/helm-charts/releases/download/grafana-5.6.0/grafana-5.6.0.tgz"
         release_namespace: monitoring
 
+    - name: Deploy Bitnami's MongoDB latest chart from OCI registry
+      kubernetes.core.helm:
+        name: test
+        chart_ref: "oci://registry-1.docker.io/bitnamicharts/mongodb"
+        release_namespace: database
+
     # Using complex Values
     - name: Deploy new-relic client chart
       kubernetes.core.helm:
@@ -818,6 +985,7 @@ Examples
         release_namespace: default
         force: True
         wait: True
+        wait_for_jobs: True
         replace: True
         update_repo_cache: True
         disable_hook: True
@@ -837,15 +1005,30 @@ Examples
             enabled: True
 
     # Deploy latest version
+    # 'reset_values' defaults to true and helm ignores '--reuse-values' when it is set,
+    # so it has to be turned off explicitly.
     - name: Deploy latest version of Grafana chart using reuse_values
       kubernetes.core.helm:
         name: test
         chart_ref: stable/grafana
         release_namespace: monitoring
         reuse_values: true
+        reset_values: false
         values:
           replicas: 2
           version: 3e8ec0b2dffa40fb97d5342e4af887de95faa8c61a62480dd7f8aa03dffcf533
+
+    # Same for 'reset_then_reuse_values', which helm ignores when either
+    # '--reset-values' or '--reuse-values' is set.
+    - name: Deploy latest version of Grafana chart using reset_then_reuse_values
+      kubernetes.core.helm:
+        name: test
+        chart_ref: stable/grafana
+        release_namespace: monitoring
+        reset_then_reuse_values: true
+        reset_values: false
+        values:
+          replicas: 2
 
 
 

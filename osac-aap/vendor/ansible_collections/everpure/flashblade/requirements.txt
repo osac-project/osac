@@ -1,0 +1,6 @@
+netaddr
+distro
+pycountry
+pytz
+urllib3
+py-pure-client >= 1.88.0

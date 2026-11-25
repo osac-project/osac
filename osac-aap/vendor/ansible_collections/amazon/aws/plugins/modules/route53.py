@@ -96,9 +96,9 @@ options:
         have the same combination of DNS name and type, a value that
         determines what portion of traffic for the current resource record set
         is routed to the associated location.
-      - Mutually exclusive with O(region) and O(failover).
+      - Mutually exclusive with O(routing_region), O(region), and O(failover).
     type: int
-  region:
+  routing_region:
     description:
       - Latency-based resource record sets only Among resource record sets
         that have the same combination of DNS name and type, a value that
@@ -106,6 +106,25 @@ options:
         latency-based routing
       - Mutually exclusive with O(weight) and O(failover).
     type: str
+    version_added: 11.2.0
+  region:
+    description:
+      - Latency-based resource record sets only Among resource record sets
+        that have the same combination of DNS name and type, a value that
+        determines which region this should be associated with for the
+        latency-based routing
+      - Mutually exclusive with O(weight) and O(failover).
+      - This parameter has been deprecated and will be removed in a release after 2027-06-01.
+      - Please use O(routing_region) instead.
+    type: str
+  aws_region:
+    description:
+      - The AWS region to use for API requests.
+      - If not specified, the value of the E(AWS_REGION) or E(AWS_DEFAULT_REGION) environment variable is used.
+      - See the AWS documentation U(https://docs.aws.amazon.com/general/latest/gr/rande.html#ec2_region) for more information.
+      - When O(aws_region) is not specified, the module may also use a profile from your AWS configuration.
+    type: str
+    version_added: 11.2.0
   geo_location:
     description:
       - Allows to control how Amazon Route 53 responds to DNS queries based on the geographic origin of the query.
@@ -140,7 +159,7 @@ options:
     description:
       - Failover resource record sets only. Whether this is the primary or
         secondary resource record set. Allowed values are V(PRIMARY) and V(SECONDARY).
-      - Mutually exclusive with O(weight) and O(region).
+      - Mutually exclusive with O(weight), O(routing_region), and O(region).
     type: str
     choices: ['SECONDARY', 'PRIMARY']
   vpc_id:
@@ -216,8 +235,16 @@ resource_record_sets:
       returned: always
       type: str
       sample: "new.foo.com"
-    region:
+    routing_region:
       description: Which region this should be associated with for latency-based routing.
+      returned: always
+      type: str
+      sample: "us-west-2"
+      version_added: 11.2.0
+    region:
+      description:
+        - Which region this should be associated with for latency-based routing.
+        - This return value has been deprecated and will be removed in a release after 2027-06-01. Use RV(resource_record_sets.routing_region) instead.
       returned: always
       type: str
       sample: "us-west-2"
@@ -225,7 +252,7 @@ resource_record_sets:
       description: Information about the resource records to act upon.
       type: list
       returned: always
-      sample: [{"value": "1.1.1.1"}]
+      sample: [{"value": "198.51.100.1"}]
     ttl:
       description: Resource record cache TTL.
       returned: always
@@ -240,13 +267,23 @@ resource_record_sets:
       description: Record value.
       returned: always
       type: str
-      sample: "52.43.18.27"
+      sample: "203.0.113.3"
+    record_values:
+      description: Record values as a list.
+      returned: always
+      type: list
+      version_added: 11.0.0
+      sample:
+      - 203.0.113.3
     values:
-      description: Record Values.
+      description:
+        - Record values as a list.
+        - This return value has been deprecated and will be removed in a release after
+          2026-12-01. Use RV(resource_record_sets.record_values) instead.
       returned: always
       type: list
       sample:
-      - 52.43.18.27
+      - 203.0.113.3
     weight:
       description: Weight of the record.
       returned: always
@@ -273,7 +310,7 @@ EXAMPLES = r"""
     record: new.foo.com
     type: A
     ttl: 7200
-    value: 1.1.1.1,2.2.2.2,3.3.3.3
+    value: 198.51.100.1,198.51.100.2,198.51.100.3
     wait: true
 
 - name: Update new.foo.com as an A record with a list of 3 IPs and wait until the changes have been replicated
@@ -284,9 +321,9 @@ EXAMPLES = r"""
     type: A
     ttl: 7200
     value:
-      - 1.1.1.1
-      - 2.2.2.2
-      - 3.3.3.3
+      - 198.51.100.1
+      - 198.51.100.2
+      - 198.51.100.3
     wait: true
 
 - name: Retrieve the details for new.foo.com
@@ -419,7 +456,7 @@ EXAMPLES = r"""
     record: 'geo-test.{{ zone_one }}'
     identifier: "geohost@www"
     type: A
-    value: 1.1.1.1
+    value: 198.51.100.1
     ttl: 30
     geo_location:
       country_code: US
@@ -431,7 +468,7 @@ EXAMPLES = r"""
     record: 'geo-test.{{ zone_one }}'
     identifier: "geohost@www"
     type: A
-    value: 1.1.1.1
+    value: 198.51.100.1
     ttl: 30
     geo_location:
       country_code: US
@@ -461,8 +498,9 @@ try:
 except ImportError:
     pass  # Handled by AnsibleAWSModule
 
-from ansible.module_utils._text import to_native
+from ansible.module_utils.basic import env_fallback
 from ansible.module_utils.common.dict_transformations import camel_dict_to_snake_dict
+from ansible.module_utils.common.text.converters import to_native
 
 from ansible_collections.amazon.aws.plugins.module_utils.botocore import is_boto3_error_message
 from ansible_collections.amazon.aws.plugins.module_utils.modules import AnsibleAWSModule
@@ -542,7 +580,8 @@ def format_record(record_in, zone_in, zone_id):
     record["ttl"] = record_in.get("TTL", None)
     record["identifier"] = record_in.get("SetIdentifier", None)
     record["weight"] = record_in.get("Weight", None)
-    record["region"] = record_in.get("Region", None)
+    record["routing_region"] = record_in.get("Region", None)
+    record["region"] = record_in.get("Region", None)  # Deprecated, kept for backward compatibility
     record["failover"] = record_in.get("Failover", None)
     record["health_check"] = record_in.get("HealthCheckId", None)
 
@@ -550,20 +589,26 @@ def format_record(record_in, zone_in, zone_id):
         record["ttl"] = str(record["ttl"])
     if record["weight"]:
         record["weight"] = str(record["weight"])
+    if record["routing_region"]:
+        record["routing_region"] = str(record["routing_region"])
     if record["region"]:
         record["region"] = str(record["region"])
 
     if record_in.get("AliasTarget"):
         record["alias"] = True
         record["value"] = record_in["AliasTarget"].get("DNSName")
-        record["values"] = [record_in["AliasTarget"].get("DNSName")]
+        # record_values is the new key, values is deprecated but kept for backward compatibility
+        record["record_values"] = [record_in["AliasTarget"].get("DNSName")]
+        record["values"] = record["record_values"]
         record["alias_hosted_zone_id"] = record_in["AliasTarget"].get("HostedZoneId")
         record["alias_evaluate_target_health"] = record_in["AliasTarget"].get("EvaluateTargetHealth")
     else:
         record["alias"] = False
         records = [r.get("Value") for r in record_in.get("ResourceRecords")]
         record["value"] = ",".join(sorted(records))
-        record["values"] = sorted(records)
+        # record_values is the new key, values is deprecated but kept for backward compatibility
+        record["record_values"] = sorted(records)
+        record["values"] = record["record_values"]
 
     return record
 
@@ -602,7 +647,12 @@ def main():
         private_zone=dict(type="bool", default=False),
         identifier=dict(type="str"),
         weight=dict(type="int"),
+        routing_region=dict(type="str"),
         region=dict(type="str"),
+        aws_region=dict(
+            type="str",
+            fallback=(env_fallback, ["AWS_REGION", "AWS_DEFAULT_REGION"]),
+        ),
         geo_location=dict(
             type="dict",
             options=dict(
@@ -628,18 +678,25 @@ def main():
             ("state", "present", ["value"]),
             ("state", "create", ["value"]),
         ),
-        # failover, region and weight are mutually exclusive
+        # failover, routing_region, region and weight are mutually exclusive
         mutually_exclusive=[
-            ("failover", "region", "weight"),
+            ("failover", "routing_region", "region", "weight"),
             ("alias", "ttl"),
         ],
-        # failover, region, weight and geo_location require identifier
+        # failover, routing_region, region, weight and geo_location require identifier
         required_by=dict(
             failover=("identifier",),
+            routing_region=("identifier",),
             region=("identifier",),
             weight=("identifier",),
             geo_location=("identifier",),
         ),
+    )
+
+    module.deprecate(
+        "The 'values' key in resource_record_sets return value is deprecated. Use 'record_values' instead.",
+        date="2026-12-01",
+        collection_name="amazon.aws",
     )
 
     if module.params["state"] in ("present", "create"):
@@ -667,13 +724,24 @@ def main():
 
     identifier_in = module.params.get("identifier")
     weight_in = module.params.get("weight")
-    region_in = module.params.get("region")
+    routing_region_in = module.params.get("routing_region")
+    region_in = module.params.get("region")  # Deprecated, for backward compatibility
     health_check_in = module.params.get("health_check")
     failover_in = module.params.get("failover")
     vpc_id_in = module.params.get("vpc_id")
     wait_in = module.params.get("wait")
     wait_timeout_in = module.params.get("wait_timeout")
     geo_location = module.params.get("geo_location")
+    aws_region_in = module.params.get("aws_region")
+
+    # Handle backward compatibility for deprecated 'region' parameter
+    if region_in:
+        module.deprecate(
+            "The 'region' parameter for latency-based routing is deprecated. Please use 'routing_region' instead.",
+            date="2027-06-01",
+            collection_name="amazon.aws",
+        )
+        routing_region_in = region_in
 
     if zone_in[-1:] != ".":
         zone_in += "."
@@ -685,11 +753,11 @@ def main():
         if alias_in and len(value_in) != 1:
             module.fail_json(msg="parameter 'value' must contain a single dns name for alias records")
         if (
-            weight_in is None and region_in is None and failover_in is None and geo_location is None
+            weight_in is None and routing_region_in is None and failover_in is None and geo_location is None
         ) and identifier_in is not None:
             module.fail_json(
                 msg=(
-                    "You have specified identifier which makes sense only if you specify one of: weight, region,"
+                    "You have specified identifier which makes sense only if you specify one of: weight, routing_region,"
                     " geo_location or failover."
                 )
             )
@@ -702,8 +770,12 @@ def main():
     )
 
     # connect to the route53 endpoint
+    # Use aws_region for API connection, not the deprecated latency-routing region parameter
     try:
-        route53 = module.client("route53", retry_decorator=retry_decorator)
+        client_params = {"retry_decorator": retry_decorator}
+        if aws_region_in:
+            client_params["region"] = aws_region_in
+        route53 = module.client("route53", **client_params)
     except botocore.exceptions.HTTPClientError as e:
         module.fail_json_aws(e, msg="Failed to connect to AWS")
 
@@ -722,7 +794,7 @@ def main():
             "Name": record_in,
             "Type": type_in,
             "Weight": weight_in,
-            "Region": region_in,
+            "Region": routing_region_in,
             "Failover": failover_in,
             "TTL": ttl_in,
             "ResourceRecords": [dict(Value=value) for value in value_in],
@@ -791,7 +863,7 @@ def main():
 
     if command_in == "get":
         if type_in == "NS":
-            ns = aws_record.get("values", [])
+            ns = aws_record.get("record_values", [])
         else:
             # Retrieve name servers associated to the zone.
             ns = get_hosted_zone_nameservers(route53, zone_id)

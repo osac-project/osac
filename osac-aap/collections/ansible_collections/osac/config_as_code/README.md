@@ -318,12 +318,26 @@ client's issuer from `--grpc-authn-trusted-token-issuers`. The reader grant
 is disabled when no issuer is selected.
 
 The bootstrap Job reads `client-secret` from the
-`aap-fulfillment-secret-reader` Secret in the OSAC namespace. For an external
+`aap-fulfillment-secret-reader` Secret in its namespace. For an external
 Keycloak deployment, create a confidential service-account-only client with
 the ID `osac-aap-secret-reader`, the `osac-api` audience, a `client_id` claim,
 the service-account username `service-account-osac-aap-secret-reader`, and
 no administrative roles. Provision the Kubernetes Secret through your
 secret-management system before running bootstrap.
+
+For standalone bootstrap with the reader enabled, provision the Secret and
+create this ConfigMap in `fulfillment-aap`, the Job's namespace. Replace the
+example URLs with your reader client's issuer and a private API HTTPS listener
+the runner can reach. If you do not use the reader, omit both resources.
+
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: aap-fulfillment-secret-reader
+      namespace: fulfillment-aap
+    data:
+      OSAC_AAP_SECRET_READER_ISSUER_URL: https://keycloak.example.com/realms/osac
+      OSAC_AAP_SECRET_READER_API_URL: https://fulfillment-api.example.com
 
 The credential injects a client secret file, client ID, issuer URL, private
 API URL, and CA bundle path into the runner. Configure the job's instance
@@ -376,7 +390,16 @@ playbook that will perform the initial configuration of AAP:
               envFrom:
                 - secretRef:
                     name: config-as-code-ig
+                - configMapRef:
+                    name: aap-fulfillment-secret-reader
+                    optional: true
               env:
+                - name: OSAC_AAP_SECRET_READER_CLIENT_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: aap-fulfillment-secret-reader
+                      key: client-secret
+                      optional: true
                 - name: AAP_USERNAME
                   value: admin
                 - name: AAP_PASSWORD
@@ -384,16 +407,16 @@ playbook that will perform the initial configuration of AAP:
                     secretKeyRef:
                       name: fulfillment-admin-password
                       key: password
-                  - name: LICENSE_MANIFEST_PATH
-                    value: /var/secrets/config-as-code-manifest/license.zip
+                - name: LICENSE_MANIFEST_PATH
+                  value: /var/secrets/config-as-code-manifest/license.zip
               volumeMounts:
                 - name: config-as-code-manifest-volume
                   mountPath: /var/secrets/config-as-code-manifest
                   readOnly: true
-            volumes:
-              - name: config-as-code-manifest-volume
-                secret:
-                  secretName: config-as-code-manifest-ig
+          volumes:
+            - name: config-as-code-manifest-volume
+              secret:
+                secretName: config-as-code-manifest-ig
           restartPolicy: Never
       backoffLimit: 4
     EOF

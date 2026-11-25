@@ -186,6 +186,17 @@ spec:
   attachRequired: true
 CSIEOF
 
+  echo "Creating fake Pure CSIDriver (short-circuits operator installation in tests)..."
+  kubectl apply -f - <<PURECSIEOF
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: pxd.portworx.com
+spec:
+  attachRequired: true
+  podInfoOnMount: false
+PURECSIEOF
+
   # Generate self-signed TLS cert for mock VMS server
   echo "Generating TLS certificate for mock VMS server..."
   mkdir -p "${SCRIPT_DIR}/certs"

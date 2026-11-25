@@ -39,16 +39,26 @@ failure occurs. The fixture returns:
 
 - `job_environment`: values for `AGENTLESS_NET_VN_INVENTORY`,
   `AGENTLESS_NET_STATE_FILE`, `AGENTLESS_NET_SSH_PRIVATE_KEY`,
-  `ANSIBLE_SSH_EXECUTABLE`, `OSAC_AGENTLESS_SWITCH_STATE_FILE`, and
-  `OSAC_AGENTLESS_SWITCH_FAIL_MARKER`.
-- `inventory`: the corresponding Ansible inventory mapping for the network
-  node and fake Cumulus switch.
+  `ANSIBLE_SSH_EXECUTABLE`, `OSAC_AGENTLESS_SWITCH_STATE_FILE`,
+  `OSAC_AGENTLESS_SWITCH_FAIL_MARKER`, `PYTHONPATH`,
+  `OSAC_AGENTLESS_NET_CONTRACT_TEST_MODE`, and
+  `OSAC_AGENTLESS_DHCP_LEASE_FILE`.
+- `inventory`: the provider inventory mapping for the network node and fake
+  Cumulus switch. The fixture exports this through
+  `AGENTLESS_NET_VN_INVENTORY`.
+- `job_inventory`: the Ansible job inventory for the generic network playbook.
+  It targets `localhost`, uses the local connection, disables privilege
+  escalation, and selects the playbook's Python interpreter.
 
 Merge `fixture.job_environment` into the job's existing environment and use
-`fixture.inventory` for the job inventory. The returned executable path points
-into the synced project. The fixture does not replace the AWX execution
+`fixture.job_inventory` for the job inventory. The fixture prepends the stub
+directory to the current `PYTHONPATH`, preserving its existing entries. The
+returned executable path points into the synced project. The fixture does not replace the AWX execution
 environment's `PATH`; if the selected Ansible connection plugin needs to find
 `ssh` by name, prepend the executable's directory to `PATH` inside that job.
+The Python path loads the contract test's `sitecustomize.py`, which stubs host
+DHCP and systemd operations for this fixture. The lease-file path is scoped to
+the fixture workspace.
 
 The fixture uses the physical `apply_network_attachment` case from the local
 AgentlessNet contract target as its representative operation. The job should
@@ -64,7 +74,7 @@ import os
 try:
     run_awx_job(
         environment={**os.environ, **fixture.job_environment},
-        inventory=fixture.inventory,
+        inventory=fixture.job_inventory,
     )
 finally:
     cleanup_agentless_net_awx_fixture(fixture)

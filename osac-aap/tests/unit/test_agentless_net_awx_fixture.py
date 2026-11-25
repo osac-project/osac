@@ -37,6 +37,16 @@ def test_prepare_returns_job_paths_inventory_and_seeded_network_state(
     assert fixture.job_environment["ANSIBLE_SSH_EXECUTABLE"] == (
         "/runner/project/tests/integration/fixtures/agentless_switch/ssh"
     )
+    expected_pythonpath = (
+        "/runner/project/tests/integration/targets/agentless_net_contract/files/python"
+    )
+    if "PYTHONPATH" in os.environ:
+        expected_pythonpath += os.pathsep + os.environ["PYTHONPATH"]
+    assert fixture.job_environment["PYTHONPATH"] == expected_pythonpath
+    assert fixture.job_environment["OSAC_AGENTLESS_NET_CONTRACT_TEST_MODE"] == "true"
+    assert fixture.job_environment["OSAC_AGENTLESS_DHCP_LEASE_FILE"] == (
+        "/runner/work/job-one/dhcp/dnsmasq.leases"
+    )
     assert "PATH" not in fixture.job_environment
 
     store = fixture_module.StateStore(fixture.workspace / "network.sqlite3")
@@ -50,6 +60,17 @@ def test_prepare_returns_job_paths_inventory_and_seeded_network_state(
     assert fixture.inventory["all"]["children"]["switches"]["hosts"]["leaf-1"][
         "ansible_network_os"
     ] == "cumulus"
+    assert fixture.job_inventory == {
+        "all": {
+            "hosts": {"localhost": {}},
+            "vars": {
+                "ansible_connection": "local",
+                "ansible_become": False,
+                "ansible_python_interpreter": "{{ ansible_playbook_python }}",
+            },
+        }
+    }
+    assert fixture.job_inventory != fixture.inventory
 
     state = json.loads((fixture.workspace / "switch.json").read_text())
     assert state == {
@@ -90,6 +111,18 @@ def test_fake_ssh_mutates_only_the_selected_fixture_state(tmp_path):
     assert second_state["ports"] == {"swp1": [30], "swp2": [30], "swp3": [200]}
 
 
+def test_prepare_prepends_stub_path_to_existing_pythonpath(tmp_path, monkeypatch):
+    monkeypatch.setenv("PYTHONPATH", "/existing/one:/existing/two")
+
+    fixture = prepare_fixture(tmp_path)
+
+    assert fixture.job_environment["PYTHONPATH"] == (
+        "/runner/project/tests/integration/targets/agentless_net_contract/files/python"
+        + os.pathsep
+        + "/existing/one:/existing/two"
+    )
+
+
 def test_cleanup_removes_fixture_files_but_preserves_unowned_files(
     tmp_path
 ):
@@ -98,6 +131,20 @@ def test_cleanup_removes_fixture_files_but_preserves_unowned_files(
     (fixture.workspace / "switch-failed-once").write_text("failed once\n")
     unowned_file = fixture.workspace / "profile.log"
     unowned_file.write_text("keep\n")
+    store = fixture_module.StateStore(fixture.workspace / "network.sqlite3")
+    existing_resource_locks = set(
+        fixture.workspace.glob("network.sqlite3.uid-lock-*.lock")
+    )
+    with store._resource_locked("runtime-resource"):
+        resource_lock_files = set(
+            fixture.workspace.glob("network.sqlite3.uid-lock-*.lock")
+        )
+    assert len(resource_lock_files - existing_resource_locks) == 1
+    (fixture.workspace / "network.sqlite3.firewall.lock").write_text("lock\n")
+    dhcp_directory = fixture.workspace / "dhcp"
+    dhcp_directory.mkdir()
+    (dhcp_directory / ".initialized").write_text("initialized\n")
+    (dhcp_directory / "dnsmasq.leases").write_text("lease\n")
     workspace_sentinel = tmp_path / "caller-owned.txt"
     workspace_sentinel.write_text("keep\n")
 
@@ -108,9 +155,16 @@ def test_cleanup_removes_fixture_files_but_preserves_unowned_files(
     assert not (fixture.workspace / "network.sqlite3").exists()
     assert not (fixture.workspace / "switch.json").exists()
     assert not (fixture.workspace / "switch-failed-once").exists()
-    assert not (fixture.workspace / fixture_module.FIXTURE_MARKER).exists()
+    assert not dhcp_directory.exists()
+    assert not (fixture.workspace / "network.sqlite3.firewall.lock").exists()
+    assert all(not path.exists() for path in resource_lock_files)
     assert (sibling.workspace / "network.sqlite3").exists()
     assert (sibling.workspace / "switch.json").exists()
+    assert (fixture.workspace / fixture_module.FIXTURE_MARKER).exists()
+
+    unowned_file.unlink()
+    fixture_module.cleanup_agentless_net_awx_fixture(fixture)
+    assert not fixture.workspace.exists()
 
 
 def test_cleanup_removes_empty_fixture_directory_and_is_idempotent(
@@ -134,6 +188,7 @@ def test_cleanup_refuses_to_remove_a_workspace_without_its_marker(tmp_path):
         workspace=unowned_workspace,
         job_environment={},
         inventory={},
+        job_inventory={},
     )
 
     with pytest.raises(ValueError, match="ownership marker"):

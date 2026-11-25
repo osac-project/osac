@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import posixpath
 import re
 import sqlite3
@@ -16,6 +17,7 @@ COLLECTIONS = Path(__file__).resolve().parents[3] / "collections"
 sys.path.insert(0, str(COLLECTIONS))
 
 from ansible_collections.osac.templates.plugins.module_utils.agentless_net_state import (  # noqa: E402
+    RESOURCE_LOCK_SHARDS,
     StateStore,
 )
 
@@ -30,6 +32,7 @@ class AgentlessNetAWXFixture:
     workspace: Path
     job_environment: Mapping[str, str]
     inventory: Mapping[str, object]
+    job_inventory: Mapping[str, object]
 
 
 def _mapped_path(value: str, name: str) -> PurePosixPath:
@@ -85,6 +88,20 @@ def _inventory() -> dict[str, object]:
     }
 
 
+def _job_inventory() -> dict[str, object]:
+    """Return the localhost inventory used by the generic network playbook."""
+    return {
+        "all": {
+            "hosts": {"localhost": {}},
+            "vars": {
+                "ansible_connection": "local",
+                "ansible_become": False,
+                "ansible_python_interpreter": "{{ ansible_playbook_python }}",
+            },
+        }
+    }
+
+
 def prepare_agentless_net_contract_state(
     state_path: Path,
     tenant: str,
@@ -135,6 +152,18 @@ def _record_owned_files(workspace: Path) -> None:
             "switch-failed-once",
         }
     )
+    files.update(
+        f"network.sqlite3.uid-lock-{shard:03d}.lock"
+        for shard in range(RESOURCE_LOCK_SHARDS)
+    )
+    files.update(
+        {
+            "dhcp",
+            "dhcp/.initialized",
+            "dhcp/dnsmasq.leases",
+            "network.sqlite3.firewall.lock",
+        }
+    )
     (workspace / FIXTURE_MARKER).write_text(
         json.dumps(
             {"version": FIXTURE_MARKER_VERSION, "files": sorted(files)}
@@ -164,8 +193,17 @@ def prepare_agentless_net_awx_fixture(
     job_state_file = job_fixture_workspace / "network.sqlite3"
     job_switch_state = job_fixture_workspace / "switch.json"
     job_fail_marker = job_fixture_workspace / "switch-failed-once"
+    job_lease_file = job_fixture_workspace / "dhcp" / "dnsmasq.leases"
     fake_ssh_directory = project_root / "tests/integration/fixtures/agentless_switch"
+    contract_python_directory = (
+        project_root / "tests/integration/targets/agentless_net_contract/files/python"
+    )
     inventory = _inventory()
+    job_inventory = _job_inventory()
+    pythonpath = str(contract_python_directory)
+    existing_pythonpath = os.environ.get("PYTHONPATH")
+    if existing_pythonpath is not None:
+        pythonpath = f"{pythonpath}{os.pathsep}{existing_pythonpath}"
     job_environment = {
         "AGENTLESS_NET_VN_INVENTORY": json.dumps(
             inventory, sort_keys=True, separators=(",", ":")
@@ -175,11 +213,15 @@ def prepare_agentless_net_awx_fixture(
         "ANSIBLE_SSH_EXECUTABLE": str(fake_ssh_directory / "ssh"),
         "OSAC_AGENTLESS_SWITCH_STATE_FILE": str(job_switch_state),
         "OSAC_AGENTLESS_SWITCH_FAIL_MARKER": str(job_fail_marker),
+        "OSAC_AGENTLESS_NET_CONTRACT_TEST_MODE": "true",
+        "OSAC_AGENTLESS_DHCP_LEASE_FILE": str(job_lease_file),
+        "PYTHONPATH": pythonpath,
     }
     fixture = AgentlessNetAWXFixture(
         workspace=fixture_workspace,
         job_environment=job_environment,
         inventory=inventory,
+        job_inventory=job_inventory,
     )
 
     try:
@@ -235,25 +277,42 @@ def cleanup_agentless_net_awx_fixture(
     if not isinstance(owned_files, list) or any(
         not isinstance(name, str)
         or not name
-        or Path(name).name != name
+        or Path(name).is_absolute()
+        or any(part in {"", ".", ".."} for part in PurePosixPath(name).parts)
+        or str(PurePosixPath(name)) != name
         or name == FIXTURE_MARKER
         for name in owned_files
     ):
         raise ValueError("fixture ownership marker is invalid")
 
-    for name in [*owned_files, FIXTURE_MARKER]:
-        path = workspace / name
-        if path.is_file() or path.is_symlink():
-            path.unlink()
-        elif path.is_dir():
-            try:
-                path.rmdir()
-            except OSError:
-                pass
-    try:
-        workspace.rmdir()
-    except OSError:
-        pass
+    for name in sorted(
+        owned_files,
+        key=lambda value: (len(PurePosixPath(value).parts), value),
+        reverse=True,
+    ):
+        parts = PurePosixPath(name).parts
+        parent = workspace
+        for part in parts[:-1]:
+            parent = parent / part
+            if parent.is_symlink() or not parent.is_dir():
+                break
+        else:
+            path = parent / parts[-1]
+            if path.is_file() or path.is_symlink():
+                path.unlink()
+            elif path.is_dir():
+                try:
+                    path.rmdir()
+                except OSError:
+                    pass
+
+    # Keep the marker while caller-owned files remain so cleanup can be retried.
+    if not any(path.name != FIXTURE_MARKER for path in workspace.iterdir()):
+        marker.unlink()
+        try:
+            workspace.rmdir()
+        except OSError:
+            pass
 
 
 def _main() -> None:
@@ -283,6 +342,7 @@ def _main() -> None:
                 workspace=args.cleanup_workspace,
                 job_environment={},
                 inventory={},
+                job_inventory={},
             )
         )
         return
@@ -312,6 +372,7 @@ def _main() -> None:
                 "workspace": str(fixture.workspace),
                 "job_environment": dict(fixture.job_environment),
                 "inventory": fixture.inventory,
+                "job_inventory": fixture.job_inventory,
             },
             sort_keys=True,
         )

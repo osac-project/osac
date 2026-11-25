@@ -26,11 +26,8 @@
           'ANSIBLE_STDOUT_CALLBACK': 'ansible.posix.json',
           'ANSIBLE_SHOW_CUSTOM_STATS': 'true',
           'ANSIBLE_LOCALHOST_WARNING': 'False',
-          'PYTHONPATH': playbook_dir ~ '/../files/python',
           'PATH': playbook_dir ~ '/../../../fixtures/agentless_switch:' ~ lookup('ansible.builtin.env', 'PATH'),
-          'OSAC_AGENTLESS_NET_CONTRACT_TEST_MODE': 'true',
-          'OSAC_AGENTLESS_SWITCH_FAIL_ONCE': agentless_net_contract_fail_once | default(''),
-          'OSAC_AGENTLESS_DHCP_LEASE_FILE': agentless_net_contract_lease_file
+          'OSAC_AGENTLESS_SWITCH_FAIL_ONCE': agentless_net_contract_fail_once | default('')
         })
     }}
   register: _agentless_net_contract_raw

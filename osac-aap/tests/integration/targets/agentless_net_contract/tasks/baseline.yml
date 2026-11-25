@@ -104,16 +104,13 @@
             agentless_net_contract_fail_marker: >-
               {{ agentless_net_contract_fixture.job_environment['OSAC_AGENTLESS_SWITCH_FAIL_MARKER'] }}
             agentless_net_contract_lease_file: >-
-              {{ agentless_net_contract_fixture.workspace }}/dhcp/dnsmasq.leases
+              {{ agentless_net_contract_fixture.job_environment['OSAC_AGENTLESS_DHCP_LEASE_FILE'] }}
 
         - name: Write the child playbook inventory
           ansible.builtin.copy:
             dest: "{{ agentless_net_contract_tempdir.path }}/inventory.yaml"
             mode: "0600"
-            content: >-
-              {{ {'all': {'hosts': {'localhost': {}}, 'vars': {
-                  'ansible_connection': 'local', 'ansible_become': false,
-                  'ansible_python_interpreter': ansible_playbook_python}}} | to_nice_yaml }}
+            content: "{{ agentless_net_contract_fixture.job_inventory | to_nice_yaml }}"
 
         - name: Create a private SSH control directory for the fake transport
           ansible.builtin.file:

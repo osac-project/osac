@@ -359,10 +359,11 @@ cleanup before using this example: the directory can remain on a self-hosted
 runner after the job. The workflow's other console output must also be kept
 free of sensitive data.
 
-The example builds the image in every job. A runner may reuse local cached
-layers, but different runners do not share a build automatically. The tagged
-image and build cache remain in the runner's Podman storage after the job, so
-manage their retention to prevent disk exhaustion. For a CI integration, build
+The example builds the image in every job, tags it uniquely, and passes the
+built image ID to the test step. A runner may reuse local cached layers, but
+different runners do not share a build automatically. The tagged image and
+build cache remain in the runner's Podman storage after the job, so manage
+their retention to prevent disk exhaustion. For a CI integration, build
 the E2E image once for the commit under test, publish it to a registry, and
 have authorized test jobs pull it by digest. Define registry permissions and
 retention, and manage runner storage even when pulling images. This image
@@ -384,6 +385,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build the UI E2E image
+        id: build
         run: |
           set -o pipefail
           build_context=$(mktemp -d /tmp/osac-ui-e2e-build.XXXXXXXX)
@@ -391,10 +393,13 @@ jobs:
           git archive HEAD osac-ui | tar -x --same-permissions -C "$build_context"
           podman build \
             -f "$build_context/osac-ui/apps/e2e-tests/container/Containerfile" \
-            -t osac-ui-e2e:${{ github.sha }} \
+            --iidfile "$build_context/image.iid" \
+            -t "osac-ui-e2e:${build_context##*/}" \
             "$build_context"
+          printf 'image_id=%s\n' "$(cat "$build_context/image.iid")" >> "$GITHUB_OUTPUT"
       - name: Run the happy flow
         env:
+          OSAC_UI_E2E_IMAGE: ${{ steps.build.outputs.image_id }}
           OSAC_ADMIN_PASSWORD: ${{ secrets.OSAC_ADMIN_PASSWORD }}
           FULFILLMENT_SERVICE_IMAGE: ${{ vars.FULFILLMENT_SERVICE_IMAGE }}
         run: |
@@ -419,7 +424,7 @@ jobs:
             -v "$result_dir":/tmp/test-output:Z \
             -e OSAC_UI_BASE_URL="${{ vars.OSAC_UI_BASE_URL }}" \
             -e OSAC_API_BASE_URL="${{ vars.OSAC_API_BASE_URL }}" \
-            osac-ui-e2e:${{ github.sha }} \
+            "$OSAC_UI_E2E_IMAGE" \
             --tag=vmaas_full_happy_basic \
             --ignore-tls \
             --admin-password-file=/work/admin-password \

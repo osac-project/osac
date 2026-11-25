@@ -19,6 +19,7 @@ COPY --chown=1001:1001 osac-metering/schema/go.mod osac-metering/schema/go.sum o
 COPY --chown=1001:1001 osac-metering/metering-service/go.mod osac-metering/metering-service/go.sum osac-metering/metering-service/
 COPY --chown=1001:1001 osac-metering/adapters/go.mod osac-metering/adapters/go.sum osac-metering/adapters/
 COPY --chown=1001:1001 osac-ui/proxy/go.mod osac-ui/proxy/go.sum osac-ui/proxy/
+COPY --chown=1001:1001 osac-observability/go.mod osac-observability/go.sum osac-observability/
 # Source Hermeto/Cachi2's generated env (GOPROXY/GOFLAGS pointed at the
 # prefetched module cache) when present -- i.e. a hermetic Konflux build.
 # Absent entirely for local/non-hermetic builds (plain `podman build`, the

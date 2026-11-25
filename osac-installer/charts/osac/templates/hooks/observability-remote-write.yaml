@@ -91,6 +91,7 @@ metadata:
     # After the observability workloads and the namespace exists.
     "helm.sh/hook-weight": "20"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-output-log-policy": hook-failed
 spec:
   backoffLimit: 0
   activeDeadlineSeconds: 120

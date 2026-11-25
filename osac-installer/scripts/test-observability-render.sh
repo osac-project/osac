@@ -35,6 +35,12 @@ CRD_ARGS=(
 # subcharts. Enabling it must not require a second --set.
 OBS_ARGS=(
   --set global.observability.enabled=true
+  # Object storage is referenced by Secret name; the render only needs the
+  # names, never key material.
+  --set global.observability.objectStorage.secretName=thanos-object-storage
+  --set global.observability.objectStorage.endpoint=https://s3.example.com
+  --set global.observability.objectStorage.bucket=thanos
+  --set global.observability.objectStorage.region=us-east-1
 )
 # Metering is always deployed (billing is not optional), so the scrape checks
 # only switch its billing adapters on.
@@ -155,8 +161,6 @@ for forbidden in insecureSkipVerify bearerTokenSecret basicAuth oauth2; do
 done
 
 echo "checking platform monitoring discovery"
-require "${enabled}" 'name: osac-observability'
-require "${enabled}" 'openshift.io/cluster-monitoring: "true"'
 require "${enabled}" 'name: osac-prometheus-scrape'
 require "${enabled}" 'name: prometheus-k8s'
 require "${enabled}" 'namespace: openshift-monitoring'
@@ -199,13 +203,130 @@ extract_kind "${interval}" ServiceMonitor >"${interval_sms}"
 expect_count "${interval_sms}" 'interval: "45s"' 9
 expect_count "${interval_sms}" 'interval: "30s"' 0
 
+# Extract one kind that also carries a namespace, so the checks cannot match a
+# same-kind object owned by another component.
+extract_kind_ns() {
+  local file=$1
+  local kind=$2
+  local namespace=$3
+  awk -v kind="${kind}" -v ns="${namespace}" '
+    /^---[[:space:]]*$/ {
+      if (isKind && isNs) printf "%s", doc
+      doc = ""
+      isKind = 0
+      isNs = 0
+      next
+    }
+    { doc = doc $0 "\n" }
+    /^kind: / { if ($0 == "kind: " kind) isKind = 1 }
+    /^  namespace: / { if ($0 == "  namespace: " ns) isNs = 1 }
+    END { if (isKind && isNs) printf "%s", doc }
+  ' "${file}"
+}
+
+echo "checking the four Thanos workloads render with their replica counts"
+for kind_name in \
+  'StatefulSet:thanos-receive' \
+  'Deployment:thanos-store' \
+  'Deployment:thanos-query' \
+  'StatefulSet:thanos-compactor'; do
+  kind=${kind_name%%:*}
+  name=${kind_name##*:}
+  workload="${TMP_DIR}/${name}.yaml"
+  extract_kind_ns "${enabled}" "${kind}" osac-observability >"${workload}"
+  require "${workload}" "kind: ${kind}"
+  require "${workload}" "name: ${name}"
+done
+require "${TMP_DIR}/thanos-receive.yaml" 'replicas: 2'
+require "${TMP_DIR}/thanos-store.yaml" 'replicas: 2'
+require "${TMP_DIR}/thanos-query.yaml" 'replicas: 2'
+require "${TMP_DIR}/thanos-compactor.yaml" 'replicas: 1'
+
+echo "checking remote write is served over TLS on the service-CA certificate"
+thanos_services="${TMP_DIR}/thanos-services.yaml"
+extract_kind_ns "${enabled}" Service osac-observability >"${thanos_services}"
+require "${thanos_services}" 'name: thanos-receive'
+require "${thanos_services}" 'service.beta.openshift.io/serving-cert-secret-name: thanos-receive-tls'
+require "${thanos_services}" 'name: remote-write'
+require "${thanos_services}" 'port: 19291'
+require "${TMP_DIR}/thanos-receive.yaml" '--remote-write.server-tls-cert=/etc/thanos/tls/tls.crt'
+require "${TMP_DIR}/thanos-receive.yaml" '--remote-write.server-tls-key=/etc/thanos/tls/tls.key'
+
+echo "checking object storage is referenced by Secret name only"
+require "${TMP_DIR}/thanos-receive.yaml" 'name: thanos-object-storage'
+require "${TMP_DIR}/thanos-store.yaml" 'name: thanos-object-storage'
+require "${TMP_DIR}/thanos-compactor.yaml" 'name: thanos-object-storage'
+require "${enabled}" 'bucket: "thanos"'
+require "${enabled}" 'endpoint: "https://s3.example.com"'
+for forbidden in AWS_SECRET_ACCESS_KEY MINIO_ROOT_PASSWORD secret_key: access_key:; do
+  reject "${enabled}" "${forbidden}"
+done
+enabled_secrets="${TMP_DIR}/thanos-secrets.yaml"
+extract_kind_ns "${enabled}" Secret osac-observability >"${enabled_secrets}"
+if [ -s "${enabled_secrets}" ]; then
+  fail "the observability render must not create a Secret"
+fi
+
+echo "checking replication, retention and downsampling flags"
+require "${TMP_DIR}/thanos-receive.yaml" '--receive.replication-factor=2'
+require "${TMP_DIR}/thanos-receive.yaml" '--label=replica=$(POD_NAME)'
+require "${TMP_DIR}/thanos-query.yaml" '--query.replica-label=replica'
+require "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-raw=365d'
+require "${TMP_DIR}/thanos-compactor.yaml" '--downsampling.disable'
+reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-5m'
+reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-1h'
+
+echo "checking four network policies gate the store pods"
+enabled_policies="${TMP_DIR}/thanos-networkpolicies.yaml"
+extract_kind_ns "${enabled}" NetworkPolicy osac-observability >"${enabled_policies}"
+expect_count "${enabled_policies}" '^kind: NetworkPolicy' 4
+for policy in thanos-query thanos-authorizer thanos-store thanos-receive; do
+  require "${enabled_policies}" "name: ${policy}"
+done
+require "${enabled_policies}" 'app.kubernetes.io/component: receive'
+require "${enabled_policies}" 'app.kubernetes.io/component: store'
+require "${enabled_policies}" 'app.kubernetes.io/component: query'
+reject "${enabled_policies}" 'podSelector: {}'
+reject "${enabled_policies}" 'osac.openshift.io/tenant'
+reject "${enabled_policies}" 'egress:'
+
+echo "checking the observability gate renders before install"
+require "${enabled}" 'name: osac-observability-preflight'
+enabled_jobs="${TMP_DIR}/enabled-jobs.yaml"
+extract_kind "${enabled}" Job >"${enabled_jobs}"
+require "${enabled_jobs}" 'name: osac-observability-preflight'
+require "${enabled_jobs}" 'pre-install,pre-upgrade'
+# Helm must not own the component namespace: a rendered Namespace object makes
+# the upgrade that disables observability delete the namespace, the admin's
+# Secret and the Receive and Compactor PVCs. The gate creates and labels it
+# instead, then requires the object-storage Secret on every install, including
+# the first one.
+enabled_namespaces="${TMP_DIR}/enabled-namespaces.yaml"
+extract_kind "${enabled}" Namespace >"${enabled_namespaces}"
+reject "${enabled_namespaces}" 'name: osac-observability'
+require "${enabled_jobs}" 'oc create namespace "${namespace}"'
+require "${enabled_jobs}" \
+  'oc label namespace "${namespace}" openshift.io/cluster-monitoring=true --overwrite'
+require "${enabled_jobs}" 'oc get secret "${secret_name}" -n "${namespace}"'
+preflight_role="${TMP_DIR}/preflight-clusterrole.yaml"
+extract_kind_name "${enabled}" ClusterRole osac-observability-preflight >"${preflight_role}"
+require "${preflight_role}" 'resourceNames: ["osac-observability"]'
+require "${preflight_role}" 'verbs: ["get", "patch", "update"]'
+# create cannot be restricted by resourceNames, so the grant is a hook-only
+# ClusterRole that Helm deletes when the gate succeeds.
+require "${preflight_role}" 'verbs: ["create"]'
+
 echo "checking disabled render"
 disabled="${TMP_DIR}/disabled.yaml"
 "${HELM_BIN}" "${COMMON_ARGS[@]}" >"${disabled}"
 disabled_sms="${TMP_DIR}/disabled-servicemonitors.yaml"
 extract_kind "${disabled}" ServiceMonitor >"${disabled_sms}"
 expect_count "${disabled_sms}" '^kind: ServiceMonitor' 0
-reject "${disabled}" 'name: osac-observability'
+# The remote-write Job keeps its name on the disabled path, so the namespace
+# check must look only at Namespace documents.
+disabled_ns="${TMP_DIR}/disabled-namespace.yaml"
+extract_kind "${disabled}" Namespace >"${disabled_ns}"
+reject "${disabled_ns}" 'name: osac-observability'
 reject "${disabled}" 'name: osac-prometheus-scrape'
 reject "${disabled}" 'openshift.io/cluster-monitoring=true'
 # The disabled revision still carries the upgrade hook that removes a label an
@@ -215,6 +336,17 @@ disabled_jobs="${TMP_DIR}/disabled-jobs.yaml"
 extract_kind "${disabled}" Job >"${disabled_jobs}"
 require "${disabled_jobs}" 'name: osac-unlabel-namespaces'
 require "${disabled_jobs}" 'pre-upgrade'
+# Disabling removes the osac-observability cluster-monitoring label but never
+# the namespace: the admin's Secret and the Receive and Compactor PVCs live
+# there and must survive a disable/re-enable cycle.
+unlabel_obs="${TMP_DIR}/unlabel-observability-namespace.yaml"
+extract_kind_name "${disabled}" Job osac-unlabel-observability-namespace \
+  >"${unlabel_obs}"
+require "${unlabel_obs}" 'name: osac-unlabel-observability-namespace'
+require "${unlabel_obs}" 'pre-upgrade'
+require "${unlabel_obs}" 'openshift.io/cluster-monitoring-'
+reject "${unlabel_obs}" 'create namespace'
+reject "${unlabel_obs}" 'delete namespace'
 # Disabling observability removes the scrapes and their Prometheus RBAC, but the
 # operators keep serving HTTPS metrics on 8443 with the service-CA certificate.
 require "${disabled}" '--metrics-bind-address=:8443'
@@ -222,6 +354,17 @@ require "${disabled}" 'serving-cert-secret-name: osac-operator-metrics-tls'
 require "${disabled}" 'serving-cert-secret-name: bmf-operator-metrics-tls'
 reject "${disabled}" 'name: osac-operator-metrics-reader-prometheus'
 reject "${disabled}" 'name: bmf-operator-metrics-reader-prometheus'
+
+echo "checking the disabled render keeps no Thanos resource"
+for name in thanos-receive thanos-store thanos-query thanos-compactor \
+  thanos-authorizer osac-observability-preflight; do
+  reject "${disabled}" "name: ${name}"
+done
+reject "${disabled}" 'namespace: osac-observability'
+# Removing the owned keys is the same upsert with the switch off, so the
+# remote-write Job stays and runs against the disabled payload.
+require "${disabled_jobs}" 'name: osac-observability-remote-write'
+require "${disabled_jobs}" 'value: "false"'
 
 echo "checking monitoring CRD guard"
 no_crd="${TMP_DIR}/no-crd.yaml"
@@ -270,25 +413,25 @@ echo "checking invalid scrape interval rejection"
 expect_render_failure empty-interval \
   'global.observability.collection.osacControlPlane must be a positive Prometheus duration' \
   --skip-schema-validation \
-  --set global.observability.enabled=true \
+  "${OBS_ARGS[@]}" \
   --set global.observability.collection.osacControlPlane=
 expect_render_failure zero-interval \
   'must be a positive Prometheus duration' \
-  --set global.observability.enabled=true \
+  "${OBS_ARGS[@]}" \
   --set global.observability.collection.osacControlPlane=0s
 expect_render_failure malformed-interval \
   'does not match pattern' \
-  --set global.observability.enabled=true \
+  "${OBS_ARGS[@]}" \
   --set global.observability.collection.osacControlPlane=30x
 
 echo "checking thanos retention and resolution validation"
 expect_render_failure zero-retention \
   'global.observability.thanos.retention must be a positive Prometheus duration' \
-  --set global.observability.enabled=true \
+  "${OBS_ARGS[@]}" \
   --set global.observability.thanos.retention=0d
 expect_render_failure retention-resolution-mismatch \
   'global.observability.thanos.resolution.5m must equal global.observability.thanos.retention' \
-  --set global.observability.enabled=true \
+  "${OBS_ARGS[@]}" \
   --set global.observability.thanos.retention=30d \
   --set global.observability.thanos.resolution.raw=30d \
   --set global.observability.thanos.resolution.5m=365d \
@@ -304,7 +447,7 @@ expect_render_failure replication-factor-exceeds-replicas \
 
 retention_ok="${TMP_DIR}/retention-ok.yaml"
 "${HELM_BIN}" "${COMMON_ARGS[@]}" \
-  --set global.observability.enabled=true \
+  "${OBS_ARGS[@]}" \
   --set global.observability.thanos.retention=30d \
   --set global.observability.thanos.resolution.raw=30d \
   --set global.observability.thanos.resolution.5m=30d \
@@ -317,7 +460,7 @@ echo "checking infrastructure collection interval validation"
 expect_render_failure empty-infrastructure \
   'global.observability.collection.infrastructure must be a positive Prometheus duration' \
   --skip-schema-validation \
-  --set global.observability.enabled=true \
+  "${OBS_ARGS[@]}" \
   --set global.observability.collection.infrastructure=
 
 echo "checking the values nothing enforces yet do not look active"

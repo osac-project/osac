@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+
+# Exercises the observability pre-install prerequisite gate without a cluster.
+# The gate script is run from the chart's files/ directory; oc and getent are
+# stubbed in a temporary PATH so every abort path and the success path are
+# covered locally.
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd -- "${SCRIPT_DIR}/../.." && pwd)
+GATE="${REPO_ROOT}/osac-installer/charts/osac/files/validate-observability.sh"
+TMP_DIR=$(mktemp -d)
+trap 'rm -rf "${TMP_DIR}"' EXIT
+STUB_DIR="${TMP_DIR}/bin"
+mkdir -p "${STUB_DIR}"
+
+fail() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+# The stubs answer from environment variables so each case states only what it
+# changes. Every invocation is appended to STUB_CALLS so a case can prove that
+# the gate created and labeled the namespace before it checked the Secret.
+cat >"${STUB_DIR}/oc" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"${STUB_CALLS:-/dev/null}"
+case "$*" in
+  "get namespace osac-observability -o name")
+    case "${STUB_NAMESPACE:-absent}" in
+      present)
+        echo "namespace/osac-observability"
+        ;;
+      forbidden)
+        echo 'Error from server (Forbidden): namespaces "osac-observability" is forbidden' >&2
+        exit 1
+        ;;
+      *)
+        echo 'Error from server (NotFound): namespaces "osac-observability" not found' >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  "create namespace osac-observability")
+    echo "namespace/osac-observability created"
+    ;;
+  "label namespace osac-observability openshift.io/cluster-monitoring=true --overwrite")
+    echo "namespace/osac-observability labeled"
+    ;;
+  "get secret "*" -n osac-observability -o jsonpath="*)
+    if [ "${STUB_SECRET:-missing}" != "present" ]; then
+      name=$(printf '%s' "$*" | cut -d' ' -f3)
+      echo "Error from server (NotFound): secrets \"${name}\" not found" >&2
+      exit 1
+    fi
+    # STUB_SECRET_KEYS lists the keys the Secret carries. An omitted key makes
+    # jsonpath print nothing, like a real Secret without that key.
+    key=$(printf '%s' "$*" | sed -n 's/.*jsonpath={\.data\.\([A-Za-z0-9_]*\)}.*/\1/p')
+    case ",${STUB_SECRET_KEYS:-AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY}," in
+      *",${key},"*) echo "c2VjcmV0" ;;
+    esac
+    ;;
+  "get secret "*" -n osac-observability")
+    if [ "${STUB_SECRET:-missing}" != "present" ]; then
+      name=$(printf '%s' "$*" | cut -d' ' -f3)
+      echo "Error from server (NotFound): secrets \"${name}\" not found" >&2
+      exit 1
+    fi
+    ;;
+  "get --raw /apis/cert-manager.io/v1")
+    if [ "${STUB_CERTMANAGER:-missing}" != "served" ]; then
+      echo 'Error from server (NotFound): the server could not find the requested resource' >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "unexpected oc invocation: $*" >&2
+    exit 2
+    ;;
+esac
+STUB
+chmod +x "${STUB_DIR}/oc"
+
+cat >"${STUB_DIR}/getent" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "$2" = "no-such-host" ]; then
+  exit 2
+fi
+echo "$2"
+STUB
+chmod +x "${STUB_DIR}/getent"
+
+export PATH="${STUB_DIR}:${PATH}"
+export OBS_SECRET_NAME=thanos-object-storage
+export OBS_SECRET_NAMESPACE=osac-observability
+export OBS_ENDPOINT=https://s3.example.com
+export OBSERVABILITY_ENABLED=true
+
+# expect_exit <name> <expected-status> <expected-message> <env assignments...>
+expect_exit() {
+  local name=$1
+  local expected_status=$2
+  local expected_message=$3
+  shift 3
+
+  local output="${TMP_DIR}/${name}.log"
+  local status=0
+  # shellcheck disable=SC2086 # the extra arguments are KEY=VALUE assignments
+  env "$@" bash "${GATE}" >"${output}" 2>&1 || status=$?
+  if [ "${status}" != "${expected_status}" ]; then
+    echo "ERROR: ${name} exited ${status}, expected ${expected_status}" >&2
+    cat "${output}" >&2
+    exit 1
+  fi
+  if ! grep -Fq -- "${expected_message}" "${output}"; then
+    echo "ERROR: ${name} did not report ${expected_message@Q}" >&2
+    cat "${output}" >&2
+    exit 1
+  fi
+  echo "ok: ${name}"
+}
+
+# expect_calls <calls-file> <exact oc invocation...>: asserts that every listed
+# invocation was made, in no particular order.
+expect_calls() {
+  local calls=$1
+  local call
+  shift
+  for call in "$@"; do
+    if ! grep -Fxq -- "${call}" "${calls}"; then
+      echo "ERROR: expected oc invocation ${call@Q} was not made" >&2
+      cat "${calls}" >&2 || true
+      exit 1
+    fi
+  done
+}
+
+echo "checking the observability prerequisite gate"
+
+expect_exit empty-secret 1 \
+  'global.observability.objectStorage.secretName must name an existing Secret when observability is enabled' \
+  OBS_SECRET_NAME=
+
+expect_exit empty-endpoint 1 \
+  'global.observability.objectStorage.endpoint must be set when observability is enabled' \
+  OBS_ENDPOINT=
+
+expect_exit missing-secret 1 \
+  'observability object-storage Secret "thanos-object-storage" was not found in namespace "osac-observability"' \
+  STUB_NAMESPACE=present STUB_SECRET=missing
+
+# aws_sdk_auth needs both keys. A Secret that only carries one used to pass the
+# gate and then fail every Receive, Store and Compactor bucket call.
+expect_exit missing-secret-key 1 \
+  'observability object-storage Secret "thanos-object-storage" has no AWS_SECRET_ACCESS_KEY key in namespace "osac-observability"' \
+  STUB_NAMESPACE=present STUB_SECRET=present STUB_SECRET_KEYS=AWS_ACCESS_KEY_ID \
+  STUB_CERTMANAGER=served
+
+expect_exit forbidden-namespace 1 \
+  'could not read namespace "osac-observability"' \
+  STUB_NAMESPACE=forbidden
+
+# On a first install no chart resource exists yet, so the gate itself creates
+# and labels osac-observability. The Secret must then exist: skipping the check
+# because the namespace was new let an enabled install come up without object
+# storage.
+first_install_calls="${TMP_DIR}/first-install.calls"
+expect_exit first-install-missing-secret 1 \
+  'observability object-storage Secret "thanos-object-storage" was not found in namespace "osac-observability"' \
+  STUB_NAMESPACE=absent STUB_SECRET=missing STUB_CERTMANAGER=served \
+  STUB_CALLS="${first_install_calls}"
+expect_calls "${first_install_calls}" \
+  'get namespace osac-observability -o name' \
+  'create namespace osac-observability' \
+  'label namespace osac-observability openshift.io/cluster-monitoring=true --overwrite'
+
+first_install_ok_calls="${TMP_DIR}/first-install-ok.calls"
+expect_exit first-install-creates-namespace 0 \
+  'observability prerequisites validated' \
+  STUB_NAMESPACE=absent STUB_SECRET=present STUB_CERTMANAGER=served \
+  STUB_SECRET_KEYS=AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY \
+  STUB_CALLS="${first_install_ok_calls}"
+expect_calls "${first_install_ok_calls}" \
+  'create namespace osac-observability' \
+  'label namespace osac-observability openshift.io/cluster-monitoring=true --overwrite'
+
+# An upgrade relabels the existing namespace but must not try to create it.
+upgrade_calls="${TMP_DIR}/upgrade.calls"
+expect_exit upgrade-relabels 0 'observability prerequisites validated' \
+  STUB_NAMESPACE=present STUB_SECRET=present STUB_CERTMANAGER=served \
+  STUB_CALLS="${upgrade_calls}"
+expect_calls "${upgrade_calls}" \
+  'label namespace osac-observability openshift.io/cluster-monitoring=true --overwrite'
+if grep -Fxq -- 'create namespace osac-observability' "${upgrade_calls}"; then
+  fail "an existing namespace must not be created again"
+fi
+
+expect_exit unresolvable-endpoint 1 \
+  'observability object-storage endpoint host "no-such-host" does not resolve' \
+  STUB_NAMESPACE=present STUB_SECRET=present OBS_ENDPOINT=https://no-such-host/
+
+expect_exit missing-cert-manager 1 \
+  'the cert-manager.io/v1 API is not served; install cert-manager before enabling observability' \
+  STUB_NAMESPACE=present STUB_SECRET=present STUB_CERTMANAGER=missing
+
+expect_exit validated 0 'observability prerequisites validated' \
+  STUB_NAMESPACE=present STUB_SECRET=present STUB_CERTMANAGER=served \
+  STUB_SECRET_KEYS=AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY
+
+expect_exit disabled 0 'observability is disabled; skipping prerequisites' \
+  OBSERVABILITY_ENABLED=false
+
+echo 'Observability prerequisite gate checks passed.'

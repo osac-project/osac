@@ -13,6 +13,13 @@
 !osac-metering/
 !osac-ui/
 
+# osac-observability: the helper binaries (remote-write-config, query-allowlist,
+# admin-credentials, query-auth-gate) are built from this module by its own
+# Containerfile, which the installer Makefile and the publish workflow build
+# with the repository root as the context. Without this entry the allowlist
+# above filters the module out and the build fails at COPY go.mod.
+!osac-observability/
+
 # osac-aap: ansible-builder execution-environment component, built from a
 # hand-maintained Containerfile (see osac-aap/Containerfile's own header
 # comment) rather than one generated live by a custom Tekton task.

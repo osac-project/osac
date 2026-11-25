@@ -1567,7 +1567,7 @@ chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/
 	uv run --project .. python scripts/test-chart-name-independence-render.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint helm-unit service-account-idp-render-test csi-render-test helm-networking-test observability-render-test netris-ca-lifecycle-test network-class-step-test input-validation-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test lvms-optional-path-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint helm-unit service-account-idp-render-test csi-render-test helm-networking-test observability-render-test observability-hook-test observability-unit-test netris-ca-lifecycle-test network-class-step-test input-validation-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test lvms-optional-path-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \
@@ -1596,6 +1596,15 @@ helm-networking-test: helm-deps ## Test global.networking values, validation, an
 .PHONY: observability-render-test
 observability-render-test: helm-deps ## Check the metrics scrape wiring renders as designed
 	./scripts/test-observability-render.sh
+
+.PHONY: observability-hook-test
+observability-hook-test: ## Check the observability prerequisite gate aborts on each missing prerequisite
+	./scripts/test-observability-hook.sh
+
+.PHONY: observability-unit-test
+observability-unit-test: helm-osac-deps ## Run the observability render, chart and helper tests
+	helm unittest $(OSAC_CHART) -f tests/observability_test.yaml
+	$(MAKE) -C $(abspath $(CURDIR)/../osac-observability) test
 
 .PHONY: network-class-step-test
 network-class-step-test: ## Test the installer NetworkClass step against a fake fulfillment API

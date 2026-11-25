@@ -128,13 +128,24 @@ disabled="${TMP_DIR}/disabled.yaml"
 "${HELM_BIN}" "${COMMON_ARGS[@]}" "${OBS_ARGS[@]}" >"${enabled}"
 "${HELM_BIN}" "${COMMON_ARGS[@]}" >"${disabled}"
 
-echo "checking the observability subchart renders only when enabled"
+echo "checking the observability namespace is not owned by Helm"
+# A rendered Namespace object is deleted by the upgrade that disables
+# observability, which would also delete the admin's Secret and the Receive and
+# Compactor PVCs. The pre-install gate creates and labels the namespace instead
+# and only removes the label when observability is disabled.
 extract_kind "${enabled}" Namespace >"${TMP_DIR}/enabled-namespace.yaml"
 extract_kind "${disabled}" Namespace >"${TMP_DIR}/disabled-namespace.yaml"
-require "${TMP_DIR}/enabled-namespace.yaml" 'name: osac-observability'
+reject "${TMP_DIR}/enabled-namespace.yaml" 'name: osac-observability'
 if [ -s "${TMP_DIR}/disabled-namespace.yaml" ]; then
   fail "the observability namespace rendered while disabled"
 fi
+extract_kind "${enabled}" Job >"${TMP_DIR}/enabled-hook-jobs.yaml"
+require "${TMP_DIR}/enabled-hook-jobs.yaml" 'oc create namespace "${namespace}"'
+require "${TMP_DIR}/enabled-hook-jobs.yaml" \
+  'oc label namespace "${namespace}" openshift.io/cluster-monitoring=true --overwrite'
+extract_kind "${disabled}" Job >"${TMP_DIR}/disabled-hook-jobs.yaml"
+require "${TMP_DIR}/disabled-hook-jobs.yaml" \
+  'kubectl label namespace osac-observability openshift.io/cluster-monitoring-'
 
 echo "checking the four Thanos workloads render in the component namespace"
 for kind_name in \
@@ -162,14 +173,22 @@ require "${TMP_DIR}/thanos-compactor.yaml" '--downsampling.disable'
 reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-5m'
 reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-1h'
 
-echo "checking five network policies gate the store pods"
+echo "checking six network policies gate the store pods"
 policies="${TMP_DIR}/networkpolicies.yaml"
 extract_kind "${enabled}" NetworkPolicy >"${policies}"
-expect_count "${policies}" '^kind: NetworkPolicy' 5
+expect_count "${policies}" '^kind: NetworkPolicy' 6
 for policy in thanos-query thanos-authorizer thanos-store thanos-receive \
-  thanos-compactor; do
+  thanos-compactor thanos-query-auth-proxy; do
   require "${policies}" "name: ${policy}"
 done
+# Only the gate port is admitted from the router. The allowlist (9091) and the
+# OAuth proxies (4180, 4181) must stay unreachable from other pods, or the
+# token check can be skipped by connecting to the proxy pod IP.
+require "${policies}" 'network.openshift.io/policy-group: ingress'
+require "${policies}" 'port: 9092'
+reject "${policies}" 'port: 9091'
+reject "${policies}" 'port: 4180'
+reject "${policies}" 'port: 4181'
 require "${policies}" 'app.kubernetes.io/component: compactor'
 # The Compactor is not a serving endpoint; an explicit empty ingress list keeps
 # every source out of it.
@@ -296,9 +315,16 @@ require "${TMP_DIR}/thanos-receive.yaml" 'secretRef:'
 require "${objstore}" 'aws_sdk_auth: true'
 reject "${objstore}" 'access_key'
 reject "${objstore}" 'secret_key'
-reject "${enabled}" 'AWS_SECRET_ACCESS_KEY'
 reject "${enabled}" 'MINIO_ROOT_PASSWORD'
 reject "${enabled}" 'secretKey:'
+# The prerequisite gate's embedded script names the two AWS variables it
+# requires in the Secret; that is a check, not credential material. The
+# workloads that consume the Secret must still not carry the values.
+for forbidden in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+  for workload in thanos-receive thanos-store thanos-compactor; do
+    reject "${TMP_DIR}/${workload}.yaml" "${forbidden}"
+  done
+done
 extract_kind "${enabled}" Secret >"${TMP_DIR}/secrets.yaml"
 reject "${TMP_DIR}/secrets.yaml" 'namespace: osac-observability'
 

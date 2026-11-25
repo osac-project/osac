@@ -171,7 +171,6 @@ jobs:
         helm dependency build charts/osac/
 
     - name: Install helm-unittest
-      if: steps.should-run.outputs.run
       run: |
         # Helm 4 refuses to install a remote plugin it cannot verify unless
         # --verify=false is given; Helm 3 has no such flag at all. Probe for
@@ -183,7 +182,6 @@ jobs:
         helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.8.2 $verify
 
     - name: Run Helm unit tests
-      if: steps.should-run.outputs.run
       working-directory: osac-installer
       run: |
         helm unittest charts/osac -s=false
@@ -191,9 +189,9 @@ jobs:
         helm unittest ../fulfillment-service/charts/service
         helm unittest ../osac-operator/charts/operator
         helm unittest ../bare-metal-fulfillment-operator/charts/operator
+        helm unittest ../osac-observability/charts/osac-observability
 
     - name: Test observability rendering
-      if: steps.should-run.outputs.run
       working-directory: osac-installer
       run: ./scripts/test-observability-render.sh
 

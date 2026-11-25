@@ -1,0 +1,114 @@
+{{- if .Values.costManagementAdapter.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "osac-metering.fullname" . }}-cost-management-adapter
+  labels:
+    {{- include "osac-metering.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cost-management-adapter
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "osac-metering.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: cost-management-adapter
+  template:
+    metadata:
+      labels:
+        {{- include "osac-metering.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: cost-management-adapter
+    spec:
+      serviceAccountName: {{ include "osac-metering.fullname" . }}
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: kafka-secrets
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: ca-bundle
+          configMap:
+            name: {{ .Values.certs.caBundle.configMap }}
+        {{- if .Values.costManagementAdapter.costManagement.apiTokenSecret }}
+        - name: cost-management-api-token
+          secret:
+            secretName: {{ .Values.costManagementAdapter.costManagement.apiTokenSecret }}
+            items:
+              - key: {{ .Values.costManagementAdapter.costManagement.apiTokenSecretKey | default "token" }}
+                path: token
+        {{- end }}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 10Mi
+      initContainers:
+        {{- include "osac-metering.kafkaSecretsInitContainer" (list . "osac-metering-cost-management-adapter") | nindent 8 }}
+      containers:
+        - name: cost-management-adapter
+          image: "{{ required "costManagementAdapter.image.repository is required when costManagementAdapter is enabled" .Values.costManagementAdapter.image.repository }}:{{ required "costManagementAdapter.image.tag is required when costManagementAdapter is enabled" .Values.costManagementAdapter.image.tag }}"
+          imagePullPolicy: {{ .Values.costManagementAdapter.image.pullPolicy | default "Always" }}
+          env:
+            - name: KAFKA_BROKERS
+              value: {{ include "osac-metering.kafkaBrokers" . | quote }}
+            - name: KAFKA_TLS_CA_CERT
+              value: /etc/ca-bundle/bundle.pem
+            - name: KAFKA_SASL_USERNAME
+              value: osac-metering-cost-management-adapter
+            - name: KAFKA_CONSUMER_GROUP
+              value: osac-metering-cost-management-adapter
+            - name: KAFKA_SASL_PASSWORD_FILE
+              value: /etc/kafka-secrets/password
+            - name: COST_MANAGEMENT_API_URL
+              value: {{ required "costManagementAdapter.costManagement.apiUrl is required when costManagementAdapter is enabled" .Values.costManagementAdapter.costManagement.apiUrl | quote }}
+            {{- if .Values.costManagementAdapter.costManagement.apiTokenSecret }}
+            - name: COST_MANAGEMENT_API_TOKEN_FILE
+              value: /etc/cost-management/token
+            {{- end }}
+            - name: METRICS_ADDR
+              value: ":8080"
+          volumeMounts:
+            - name: kafka-secrets
+              mountPath: /etc/kafka-secrets
+              readOnly: true
+            - name: ca-bundle
+              mountPath: /etc/ca-bundle
+              readOnly: true
+            {{- if .Values.costManagementAdapter.costManagement.apiTokenSecret }}
+            - name: cost-management-api-token
+              mountPath: /etc/cost-management
+              readOnly: true
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+            timeoutSeconds: 5
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+{{- end }}

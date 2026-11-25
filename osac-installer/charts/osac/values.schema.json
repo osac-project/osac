@@ -1936,6 +1936,54 @@
           },
           "additionalProperties": false
         },
+        "costManagementAdapter": {
+          "type": "object",
+          "description": "Red Hat Cost Management metering adapter",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable the Cost Management metering adapter",
+              "default": false
+            },
+            "image": {
+              "type": "object",
+              "description": "Cost Management adapter container image",
+              "properties": {
+                "repository": {
+                  "type": "string"
+                },
+                "tag": {
+                  "type": "string"
+                },
+                "pullPolicy": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            },
+            "costManagement": {
+              "type": "object",
+              "description": "Cost Management API connection settings",
+              "properties": {
+                "apiUrl": {
+                  "type": "string",
+                  "description": "Cost Management ingestion API base URL"
+                },
+                "apiTokenSecret": {
+                  "type": "string",
+                  "description": "Optional K8s Secret containing the Bearer token"
+                },
+                "apiTokenSecretKey": {
+                  "type": "string",
+                  "description": "Key inside apiTokenSecret holding the Bearer token",
+                  "default": "token"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
         "heartbeat": {
           "type": "object",
           "description": "Metering heartbeat configuration (subchart default)"

@@ -29,8 +29,12 @@ import (
 	"strconv"
 	"strings"
 
+	gowiremock "github.com/wiremock/go-wiremock"
+
 	"github.com/osac-project/osac/bare-metal-fulfillment-operator/test/wiremock"
 )
+
+const authorizationHeader = "Authorization"
 
 //go:embed mappings.json
 var mappings []byte
@@ -72,66 +76,11 @@ func Configure(
 	if len(expressions) == 0 {
 		return nil, errors.New("NetBox fixture requires at least one token")
 	}
-	authorization := "(?:" + strings.Join(expressions, "|") + ")"
-
-	// WireMock selects this list mapping only for the expected query. The
-	// response template reads each selected device's current state on demand.
-	const equalTo = "equalTo"
-	query := map[string]any{
-		"status":                     map[string]string{equalTo: "staged"},
-		"cf_osac_managed":            map[string]string{equalTo: "true"},
-		"cf_osac_instance_id__empty": map[string]string{equalTo: "true"},
+	bundle, err := fixtureMappings("(?:"+strings.Join(expressions, "|")+")", selector, devices)
+	if err != nil {
+		return nil, err
 	}
-	for name, value := range selector {
-		query["cf_"+name] = map[string]string{equalTo: value}
-	}
-	contexts := make([]string, 0, len(devices))
-	for _, device := range devices {
-		if deviceMatchesSelector(device, selector) {
-			contexts = append(contexts, deviceContext(device.ID))
-		}
-	}
-
-	var stubs struct {
-		Mappings []struct {
-			Name           string            `json:"name"`
-			Priority       int               `json:"priority,omitempty"`
-			Request        map[string]any    `json:"request"`
-			Response       map[string]any    `json:"response"`
-			EventListeners []json.RawMessage `json:"serveEventListeners,omitempty"`
-		} `json:"mappings"`
-	}
-	if err := json.Unmarshal(mappings, &stubs); err != nil {
-		return nil, fmt.Errorf("decode NetBox WireMock mappings: %w", err)
-	}
-
-	for _, stub := range stubs.Mappings {
-		switch stub.Name {
-		case "seed":
-			continue
-		case "list":
-			stub.Request["queryParameters"] = query
-			stub.Response["body"] = listTemplate
-			stub.Response["transformerParameters"] = map[string]any{"contexts": contexts}
-		case "patch":
-			stub.Response["body"] = patchTemplate
-		}
-		headers, ok := stub.Request["headers"].(map[string]any)
-		if !ok {
-			headers = make(map[string]any)
-			stub.Request["headers"] = headers
-		}
-		if stub.Name == "unauthorized" {
-			headers["Authorization"] = map[string]any{"or": []any{
-				map[string]bool{"absent": true},
-				map[string]string{"doesNotMatch": authorization},
-			}}
-		} else {
-			headers["Authorization"] = map[string]string{"matches": authorization}
-		}
-	}
-
-	if err := fixture.post(ctx, "/__admin/mappings/import", stubs); err != nil {
+	if err := fixture.post(ctx, "/__admin/mappings/import", map[string]any{"mappings": bundle}); err != nil {
 		return nil, err
 	}
 	for _, device := range devices {
@@ -142,6 +91,71 @@ func Configure(
 		}
 	}
 	return fixture, nil
+}
+
+func fixtureMappings(authorization string, selector map[string]string, devices []Device) ([]any, error) {
+	query := map[string]gowiremock.BasicParamMatcher{
+		"status":                     gowiremock.EqualTo("staged"),
+		"cf_osac_managed":            gowiremock.EqualTo("true"),
+		"cf_osac_instance_id__empty": gowiremock.EqualTo("true"),
+	}
+	for name, value := range selector {
+		query["cf_"+name] = gowiremock.EqualTo(value)
+	}
+	// The list template reads the current state of these devices.
+	contexts := make([]string, 0, len(devices))
+	for _, device := range devices {
+		if deviceMatchesSelector(device, selector) {
+			contexts = append(contexts, deviceContext(device.ID))
+		}
+	}
+
+	var stateful struct {
+		Mappings []struct {
+			Name           string            `json:"name"`
+			Priority       int               `json:"priority,omitempty"`
+			Request        map[string]any    `json:"request"`
+			Response       map[string]any    `json:"response"`
+			EventListeners []json.RawMessage `json:"serveEventListeners,omitempty"`
+		} `json:"mappings"`
+	}
+	if err := json.Unmarshal(mappings, &stateful); err != nil {
+		return nil, fmt.Errorf("decode NetBox WireMock mappings: %w", err)
+	}
+
+	validBearer := gowiremock.Matching(authorization)
+	bundle := []any{
+		gowiremock.Get(gowiremock.URLPathEqualTo("/api/dcim/interfaces/")).
+			WithHeader(authorizationHeader, validBearer).
+			WillReturnResponse(gowiremock.OK().
+				WithHeader("Content-Type", "application/json").
+				WithJSONBody(map[string]any{"count": 0, "next": nil, "previous": nil, "results": []any{}})),
+		gowiremock.NewStubRule("ANY", gowiremock.URLPathMatching("/api/.*")).
+			AtPriority(10).
+			WithHeader(authorizationHeader, gowiremock.Or(gowiremock.Absent(), gowiremock.NotMatching(authorization))).
+			WillReturnResponse(gowiremock.NewResponse().WithStatus(http.StatusUnauthorized)),
+	}
+	for _, stub := range stateful.Mappings {
+		switch stub.Name {
+		case "list":
+			stub.Request["queryParameters"] = query
+			stub.Response["body"] = listTemplate
+			stub.Response["transformerParameters"] = map[string]any{"contexts": contexts}
+		case "patch":
+			stub.Response["body"] = patchTemplate
+		}
+		if stub.Name != "seed" {
+			headers, _ := stub.Request["headers"].(map[string]any)
+			if headers == nil {
+				headers = make(map[string]any)
+				stub.Request["headers"] = headers
+			}
+			headers[authorizationHeader] = validBearer
+		}
+		bundle = append(bundle, stub)
+	}
+
+	return bundle, nil
 }
 
 func deviceMatchesSelector(device Device, selector map[string]string) bool {
@@ -241,7 +255,7 @@ func (f *Fixture) RequestsFor(ctx context.Context, method, path string) ([]Reque
 		if err != nil {
 			return nil, err
 		}
-		tokenIndex := slices.Index(f.bearers, event.Request.Headers.Get("Authorization"))
+		tokenIndex := slices.Index(f.bearers, event.Request.Headers.Get(authorizationHeader))
 		if target.Path != path || tokenIndex < 0 {
 			continue
 		}

@@ -20,6 +20,7 @@ require (
 	github.com/stmcginnis/gofish v0.27.0
 	github.com/testcontainers/testcontainers-go v0.45.0
 	github.com/testcontainers/testcontainers-go/modules/podman v0.45.0
+	github.com/wiremock/go-wiremock v1.16.0
 	go.uber.org/mock v0.6.0
 	golang.org/x/oauth2 v0.37.0
 	google.golang.org/grpc v1.85.0

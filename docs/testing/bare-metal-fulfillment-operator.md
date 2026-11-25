@@ -45,6 +45,10 @@ and set `TESTCONTAINERS_PROVIDER=podman` when invoking `go test`.
 If Ryuk cannot access the container engine socket locally, run
 `TESTCONTAINERS_RYUK_DISABLED=true make test`. Each spec cleans up its own container.
 
+Both suites use Go-built stubs for ordinary requests and the fixture's JSON
+mappings for State Extension behavior. The fixture uses the WireMock HTTP API
+to load both kinds of mappings, seed devices, and read device state.
+
 The installer builds and loads the same image for Kind. The image in
 `bare-metal-fulfillment-operator/test/wiremock` can serve other provider
 fixtures with their own mappings. The NetBox mappings exercise conditional

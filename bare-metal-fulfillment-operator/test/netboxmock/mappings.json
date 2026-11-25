@@ -39,25 +39,6 @@
       }
     },
     {
-      "name": "interfaces",
-      "request": {
-        "method": "GET",
-        "urlPath": "/api/dcim/interfaces/"
-      },
-      "response": {
-        "status": 200,
-        "headers": {
-          "Content-Type": "application/json"
-        },
-        "jsonBody": {
-          "count": 0,
-          "next": null,
-          "previous": null,
-          "results": []
-        }
-      }
-    },
-    {
       "name": "get",
       "request": {
         "method": "GET",
@@ -175,17 +156,6 @@
       },
       "response": {
         "status": 412
-      }
-    },
-    {
-      "name": "unauthorized",
-      "priority": 10,
-      "request": {
-        "method": "ANY",
-        "urlPathPattern": "/api/.*"
-      },
-      "response": {
-        "status": 401
       }
     }
   ]

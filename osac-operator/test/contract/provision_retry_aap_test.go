@@ -261,6 +261,7 @@ func runProvisionScenario(t *testing.T, h provisionAAPHTTP, scenario string) {
 		t.Fatal("generate fixture run ID")
 	}
 	runID := "contract-" + hex.EncodeToString(random[:])
+	t.Logf("AAP contract run ID: %s", runID)
 	api := aap.NewClient(h.cfg.base, h.cfg.token, false)
 	knownJobs := map[int]bool{}
 	labels := []string{

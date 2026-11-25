@@ -991,17 +991,14 @@ var _ = Describe("Private billing accounts server", func() {
 		} else {
 			Eventually(commitHookEntered, 5*time.Second).Should(BeClosed())
 			Expect(server.lastDiscovery).To(BeZero(), "freshness is not published before all commit hooks complete")
-			Expect(server.discoverInFlight).To(BeTrue(), "local admission bridges commit and freshness publication")
-			_, err := list(server, nil)
-			Expect(status.Code(err)).To(Equal(codes.Unavailable))
-			Expect(fake.Count("ListAccounts")).To(Equal(1), "the commit-to-publication gap cannot start another walk")
+			Expect(server.discoverInFlight).To(BeFalse(), "local admission is released when the handler returns")
 			close(releaseCommitHook)
 			var firstErr error
 			Eventually(first, 5*time.Second).Should(Receive(&firstErr))
 			Expect(firstErr).NotTo(HaveOccurred())
 			Expect(server.lastDiscovery).NotTo(BeZero())
 			Expect(server.discoverInFlight).To(BeFalse())
-			_, err = list(server, nil)
+			_, err := list(server, nil)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(fake.Count("ListAccounts")).To(Equal(1))
 		}
@@ -1030,7 +1027,7 @@ var _ = Describe("Private billing accounts server", func() {
 		_, err = server.List(direct, &privatev1.BillingAccountsListRequest{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(server.lastDiscovery).To(BeZero())
-		Expect(server.discoverInFlight).To(BeTrue())
+		Expect(server.discoverInFlight).To(BeFalse(), "local admission is released when the handler returns")
 		err = errors.New("caller chose rollback")
 		tx.ReportError(&err)
 		err = tx.End(ctx)

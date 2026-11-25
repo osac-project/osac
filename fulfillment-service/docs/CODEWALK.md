@@ -104,9 +104,10 @@ never runs after a rollback or a failed commit.
 **Provider-backed billing RPCs use that same ordinary transaction.** Account discovery
 (`BillingAccounts.List`) includes its full inventory, unseen sweep, requested page and private mapping
 before the outer commit. `Tx.OnCommit` opens freshness only after that commit; a page, mapping or
-commit failure leaves both rows and freshness unchanged. A transaction-finish callback keeps the local
-discovery admission held across the commit-to-publication gap and releases it on either outcome; this
-is the only production consumer of `OnTxFinish`. Assignment Create, Update and private Signal
+commit failure leaves both rows and freshness unchanged. Local discovery admission is released when the
+handler returns, while the commit hook publishes freshness after the commit; a List in that short
+window may start a redundant walk, which the transaction-scoped advisory lock still serialises.
+Assignment Create, Update and private Signal
 read an unlocked snapshot, then gather bounded read-only provider evidence before any business locks.
 Finalization locks tenant → the complete original selected/previous account set in SQL id order →
 current interval, rereads material inputs and merges observations before token/interval writes. One

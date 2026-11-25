@@ -93,8 +93,7 @@ type PrivateBillingAccountsServer struct {
 	lastDiscovery time.Time
 	// lastDiscoveryFailure is when the last failed walk ended; the failure backoff window runs from it.
 	lastDiscoveryFailure time.Time
-	// discoverInFlight bridges the database commit and freshness publication; the Tx finish callback releases it on
-	// both commit and rollback.
+	// discoverInFlight is released when the handler returns; freshness publication is left to Tx.OnCommit.
 	discoverInFlight bool
 	// discoverDeadline bounds one walk; discoverFailureBackoff is how long a failed walk suppresses the next
 	// attempt. Both are fields so the suite can shorten them.
@@ -194,19 +193,20 @@ func (s *PrivateBillingAccountsServer) List(ctx context.Context,
 	admitted, err := s.admitDiscovery()
 	refreshReady := false
 	if admitted {
-		finish := func(committed bool) {
+		// Release local admission however the RPC ends. This runs before the transaction ends, so it can't
+		// observe the outcome; freshness is left to OnCommit, which only runs after a commit.
+		defer func() {
 			s.discoverMu.Lock()
-			if committed && refreshReady {
-				s.lastDiscovery = time.Now()
-			}
 			s.discoverInFlight = false
 			s.discoverMu.Unlock()
-		}
-		if !database.OnTxFinish(tx, finish) {
-			// A custom transaction may not support finish callbacks. Do not strand admission or publish
-			// freshness without a known commit; the database advisory lock still protects the store.
-			defer finish(false)
-		}
+		}()
+		tx.OnCommit(func() {
+			if refreshReady {
+				s.discoverMu.Lock()
+				s.lastDiscovery = time.Now()
+				s.discoverMu.Unlock()
+			}
+		})
 		err = s.discoverFresh(ctx, adapter)
 	}
 	if err != nil {

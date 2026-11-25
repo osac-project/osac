@@ -128,12 +128,9 @@ func (m *txManager) Run(ctx context.Context, task any, args ...any) error {
 }
 
 func (t *managedTx) End(ctx context.Context) error {
-	committed := false
-	defer func() { t.runFinishHooks(ctx, committed) }()
 	if t.real == nil {
 		// Nothing was sent to the database, which counts as a commit when there are no errors.
 		if len(t.errs) == 0 {
-			committed = true
 			t.runCommitHooks(ctx)
 		}
 		return nil
@@ -144,7 +141,6 @@ func (t *managedTx) End(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		committed = true
 		t.runCommitHooks(ctx)
 		return nil
 	}
@@ -164,9 +160,8 @@ type managedTx struct {
 	real    pgx.Tx
 	errs    []error
 	hooks   []func()
-	finish  []func(bool)
 
-	// parent is set when a savepoint is released; later hook registration goes to it.
+	// parent is set when a savepoint is released; later OnCommit calls go to it.
 	parent *managedTx
 }
 
@@ -182,30 +177,6 @@ func (t *managedTx) OnCommit(fn func()) {
 	t.hooks = append(t.hooks, fn)
 }
 
-// OnFinish implements the optional finish-callback interface used by account discovery admission.
-func (t *managedTx) OnFinish(fn func(bool)) {
-	if fn == nil {
-		return
-	}
-	if t.parent != nil {
-		t.parent.OnFinish(fn)
-		return
-	}
-	t.finish = append(t.finish, fn)
-}
-
-func (t *managedTx) runFinishHooks(ctx context.Context, committed bool) {
-	for len(t.finish) > 0 {
-		hooks := t.finish
-		t.finish = nil
-		for _, hook := range hooks {
-			t.runHook(ctx, "Function registered to run after transaction end panicked", func() {
-				hook(committed)
-			})
-		}
-	}
-}
-
 // runCommitHooks runs the OnCommit functions once, including ones they register. The transaction is already
 // committed, so a panic is logged instead of failing the request.
 func (t *managedTx) runCommitHooks(ctx context.Context) {
@@ -213,18 +184,18 @@ func (t *managedTx) runCommitHooks(ctx context.Context) {
 		hooks := t.hooks
 		t.hooks = nil
 		for _, hook := range hooks {
-			t.runHook(ctx, "Function registered to run after commit panicked", hook)
+			t.runCommitHook(ctx, hook)
 		}
 	}
 }
 
-// runHook runs one transaction callback, logging a panic.
-func (t *managedTx) runHook(ctx context.Context, panicMessage string, hook func()) {
+// runCommitHook runs one OnCommit function, logging a panic.
+func (t *managedTx) runCommitHook(ctx context.Context, hook func()) {
 	defer func() {
 		if fault := recover(); fault != nil {
 			t.manager.logger.ErrorContext(
 				ctx,
-				panicMessage,
+				"Function registered to run after commit panicked",
 				slog.Any("panic", fault),
 			)
 		}
@@ -284,16 +255,10 @@ func (t *managedTx) Savepoint(ctx context.Context, fn func(ctx context.Context) 
 		return fmt.Errorf("failed to create savepoint: %w", err)
 	}
 	spManaged := &managedTx{manager: t.manager, real: spTx}
-	released := false
-	defer func() {
-		if !released {
-			_ = spTx.Rollback(ctx)
-			spManaged.runFinishHooks(ctx, false)
-		}
-	}()
 	spCtx := TxIntoContext(ctx, spManaged)
 	err = fn(spCtx)
 	if err != nil {
+		_ = spTx.Rollback(ctx)
 		return err
 	}
 	err = spTx.Commit(ctx)
@@ -303,11 +268,8 @@ func (t *managedTx) Savepoint(ctx context.Context, fn func(ctx context.Context) 
 
 	// A released savepoint isn't stored yet, so its functions wait for the enclosing transaction:
 	t.hooks = append(t.hooks, spManaged.hooks...)
-	t.finish = append(t.finish, spManaged.finish...)
 	spManaged.hooks = nil
-	spManaged.finish = nil
 	spManaged.parent = t
-	released = true
 	return nil
 }
 

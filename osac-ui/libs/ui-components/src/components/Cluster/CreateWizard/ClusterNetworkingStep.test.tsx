@@ -232,11 +232,12 @@ describe('ClusterNetworkingStep', () => {
     const subnet = screen.getByLabelText(/^Subnet/);
     await waitFor(() => expect(subnet).not.toBeDisabled());
     await user.click(subnet);
-    expect(
-      await screen.findByRole('option', { name: 'team-subnet · 10.43.0.0/24' }),
-    ).toBeInTheDocument();
+    const teamSubnet = await screen.findByRole('option', { name: /team-subnet/ });
+    expect(teamSubnet.querySelector('.pf-v6-c-menu__item-description')).toHaveTextContent(
+      '10.43.0.0/24',
+    );
     expect(screen.queryByRole('option', { name: /default-ipv4/ })).not.toBeInTheDocument();
-    await user.click(screen.getByRole('option', { name: 'team-subnet · 10.43.0.0/24' }));
+    await user.click(teamSubnet);
     await user.click(screen.getByLabelText(/^Security groups/));
     expect(await screen.findByRole('option', { name: 'isolated-group' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'isolated-strict' })).toBeInTheDocument();
@@ -256,7 +257,7 @@ describe('ClusterNetworkingStep', () => {
     await user.click(await screen.findByRole('option', { name: 'isolated' }));
     await waitFor(() => expect(screen.getByLabelText(/^Subnet/)).not.toBeDisabled());
     await user.click(screen.getByLabelText(/^Subnet/));
-    await user.click(await screen.findByRole('option', { name: 'team-subnet · 10.43.0.0/24' }));
+    await user.click(await screen.findByRole('option', { name: /team-subnet/ }));
     await user.click(screen.getByLabelText(/^Security groups/));
     await user.click(await screen.findByRole('option', { name: 'isolated-group' }));
 

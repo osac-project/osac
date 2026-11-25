@@ -25,6 +25,8 @@ interface OSACWizardFooterProps {
   error: unknown;
   onErrorReset?: () => void;
   isNextDisabled?: boolean;
+  /** Disables the submit button on the last step while the form has no changes. */
+  disableSubmitWhenPristine?: boolean;
   submitLabel?: string;
   errorTitle?: string;
 }
@@ -36,12 +38,13 @@ export const OSACWizardFooter = ({
   error,
   onErrorReset,
   isNextDisabled = false,
+  disableSubmitWhenPristine = false,
   submitLabel,
   errorTitle,
 }: OSACWizardFooterProps) => {
   const { t } = useTranslation();
   const { activeStep, goToStepByIndex, steps } = useWizardContext();
-  const { submitForm, validateForm, isSubmitting } = useFormikContext();
+  const { submitForm, validateForm, isSubmitting, dirty } = useFormikContext();
   const { setShowErrors } = useFieldValidation();
   const [validationAlert, setValidationAlert] = useState(false);
 
@@ -144,7 +147,11 @@ export const OSACWizardFooter = ({
                   type="button"
                   variant="primary"
                   onClick={() => void handleNextOrCreate()}
-                  isDisabled={isSubmitting || isNextDisabled}
+                  isDisabled={
+                    isSubmitting ||
+                    isNextDisabled ||
+                    (isLast && disableSubmitWhenPristine && !dirty)
+                  }
                   isLoading={isSubmitting}
                 >
                   {isLast ? submitButtonLabel : t('Next')}

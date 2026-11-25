@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Install or render the pinned cert-manager chart on Kind."""
 
-import os
+import argparse
 from pathlib import Path
 import re
 import stat
@@ -23,11 +23,43 @@ SEMVER = re.compile(
 )
 
 
-def read_config():
-    chart = os.environ.get("KIND_CERT_MANAGER_CHART", "")
-    version = os.environ.get("KIND_CERT_MANAGER_VERSION", "")
-    timeout = os.environ.get("KIND_CERT_MANAGER_PULL_TIMEOUT", "")
-    backoff = os.environ.get("KIND_CERT_MANAGER_PULL_BACKOFF", "").split()
+class HelperArgumentParser(argparse.ArgumentParser):
+    def error(self, _message):
+        # argparse's normal diagnostics can quote untrusted arguments.
+        self.exit(2, "ERROR: invalid or missing cert-manager helper arguments. See --help.\n")
+
+
+def parse_args(argv):
+    parser = HelperArgumentParser(
+        prog="install-kind-cert-manager.py",
+        description=__doc__,
+        usage=("%(prog)s [--check-config | --template] --chart REF --version VERSION "
+               "--pull-timeout SECONDS --pull-backoff DELAYS [-- HELM_ARGS ...]"),
+        epilog="Pass Helm options after --.",
+        allow_abbrev=False,
+    )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--check-config", action="store_true", help="Validate settings without running Helm")
+    mode.add_argument("--template", action="store_true", help="Render instead of installing")
+    parser.add_argument("--chart", required=True, metavar="REF", help="Untagged OCI chart reference")
+    parser.add_argument("--version", required=True, help="Exact semantic version")
+    parser.add_argument("--pull-timeout", required=True, metavar="SECONDS", help="Per-pull timeout (1 to 600 seconds)")
+    parser.add_argument("--pull-backoff", required=True, metavar="DELAYS",
+                        help="Up to five space-separated delays of 0 to 60 seconds each. Empty for one pull")
+
+    boundary = argv.index("--") if "--" in argv else len(argv)
+    config = parser.parse_args(argv[:boundary])
+    helm_args = argv[boundary + 1:]
+    if config.check_config and helm_args:
+        parser.error("--check-config takes no Helm options")
+    return config, helm_args
+
+
+def validate_config(config):
+    chart = config.chart
+    version = config.version
+    timeout = config.pull_timeout
+    backoff = config.pull_backoff.split()
 
     if not OCI_CHART.fullmatch(chart):
         raise ValueError("KIND_CERT_MANAGER_CHART must be an untagged oci:// chart reference")
@@ -116,18 +148,18 @@ def install_chart(chart, version, timeout, backoff, args):
 
 
 def main():
+    config, helm_args = parse_args(sys.argv[1:])
     try:
-        chart, version, timeout, backoff = read_config()
+        chart, version, timeout, backoff = validate_config(config)
     except ValueError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
 
-    args = sys.argv[1:]
-    if args == ["--check-config"]:
+    if config.check_config:
         return 0
-    if args[:1] == ["--template"]:
-        return render_chart(chart, version, args[1:])
-    return install_chart(chart, version, timeout, backoff, args)
+    if config.template:
+        return render_chart(chart, version, helm_args)
+    return install_chart(chart, version, timeout, backoff, helm_args)
 
 
 if __name__ == "__main__":

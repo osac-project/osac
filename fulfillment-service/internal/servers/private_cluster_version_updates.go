@@ -16,7 +16,6 @@ package servers
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"slices"
 	"sort"
 	"strings"
@@ -51,30 +50,39 @@ func (s *PrivateClustersServer) prepareClusterVersionChange(ctx context.Context,
 		return grpcstatus.Error(grpccodes.Internal, "resolved target ClusterVersion is missing")
 	}
 	targetVersion := resolvedTarget.GetSpec().GetVersion()
-	// A semantic-version match is a reference replacement, not an upgrade.
-	// Comparing versions rather than image strings also handles tag and digest
-	// forms of the same release.
-	if source.GetSpec().GetVersion() == targetVersion {
-		retireClusterUpgradeAttemptForReferenceReplacement(candidate, targetVersion)
-		s.logger.InfoContext(ctx,
-			"Replaced ClusterVersion reference with the same semantic version; no upgrade attempt created",
-			slog.String("cluster_id", current.GetId()),
-			slog.String("component", "control_plane"),
-			slog.String("previous_cluster_version_id", source.GetId()),
-			slog.String("new_cluster_version_id", resolvedTarget.GetId()),
-		)
-		return nil
+	if err := validateClusterVersionAdvance(source, resolvedTarget); err != nil {
+		return err
 	}
 
 	attemptID := uuid.New()
 	now := controllers.NowTruncated()
 	candidate.GetStatus().SetVersionTransitionTime(now)
-	sourceVersion := current.GetStatus().GetObservedVersion()
-	if sourceVersion == "" {
-		return grpcstatus.Error(grpccodes.FailedPrecondition,
-			"cluster status observed_version is required before an upgrade")
+	createClusterUpgradeAttempt(current, candidate,
+		current.GetStatus().GetObservedVersion(), targetVersion, attemptID, now)
+	return nil
+}
+
+// validateClusterVersionAdvance enforces upgrade direction and minor-version skew.
+func validateClusterVersionAdvance(source, target *privatev1.ClusterVersion) error {
+	sourceVersion, err := parseSemVer(source.GetSpec().GetVersion())
+	if err != nil {
+		return err
 	}
-	createClusterUpgradeAttempt(current, candidate, sourceVersion, targetVersion, attemptID, now)
+	targetVersion, err := parseSemVer(target.GetSpec().GetVersion())
+	if err != nil {
+		return err
+	}
+	if targetVersion.Compare(sourceVersion) <= 0 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"target cluster version %q must be newer than the current cluster version %q",
+			target.GetSpec().GetVersion(), source.GetSpec().GetVersion())
+	}
+	if targetVersion.Minor() > sourceVersion.Minor() &&
+		targetVersion.Minor()-sourceVersion.Minor() > 3 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"target cluster version %q is more than 3 minor versions newer than the current cluster version %q",
+			target.GetSpec().GetVersion(), source.GetSpec().GetVersion())
+	}
 	return nil
 }
 
@@ -204,8 +212,7 @@ func mergeClusterUpgradeHistory(current, candidate *privatev1.Cluster,
 		candidate.SetStatus(&privatev1.ClusterStatus{})
 	}
 	candidate.GetStatus().SetUpgradeAttemptId(attemptID)
-	// A new target retires this attempt at its last observed outcome. A
-	// same-version reference replacement can still update its membership.
+	// A new target supersedes the current attempt at its last observed outcome.
 	if selectsDifferentClusterUpgradeTarget(current, candidate, mask, resolvedTarget) {
 		candidate.GetStatus().SetActiveUpgradeAttempt(current.GetStatus().GetActiveUpgradeAttempt())
 		candidate.GetStatus().SetUpgradeHistory(stored)
@@ -257,24 +264,6 @@ func clusterUpgradeHistoryEntryByID(entries []*privatev1.ClusterUpgradeHistoryEn
 		}
 	}
 	return nil
-}
-
-// retireClusterUpgradeAttemptForReferenceReplacement stops feedback for an
-// attempt whose target no longer matches the selected semantic version. The
-// history remains, but Fulfillment no longer owns an active attempt.
-func retireClusterUpgradeAttemptForReferenceReplacement(candidate *privatev1.Cluster,
-	targetVersion string) {
-	attemptID := candidate.GetStatus().GetUpgradeAttemptId()
-	if attemptID == "" || candidate.GetStatus().GetActiveUpgradeAttempt() == nil {
-		return
-	}
-	entry := clusterUpgradeHistoryEntryByID(
-		candidate.GetStatus().GetUpgradeHistory(), attemptID)
-	if entry.GetTargetVersion() == targetVersion {
-		return
-	}
-	candidate.GetStatus().SetUpgradeAttemptId("")
-	candidate.GetStatus().ClearActiveUpgradeAttempt()
 }
 
 // mergeClusterUpgradeAttemptState validates component feedback against the
@@ -593,6 +582,13 @@ func (s *PrivateClustersServer) validateVersionUpdate(ctx context.Context,
 	if err != nil || !found {
 		return nil, err
 	}
+	// A full-object edit carries the stored target rather than selecting it.
+	if request.GetUpdateMask() == nil && newSpec.GetVersion() != nil &&
+		existing.GetSpec().GetVersion() != nil &&
+		newSpec.GetVersion().GetId() == existing.GetSpec().GetVersion().GetId() {
+		newSpec.SetVersion(cloneMessage(existing.GetSpec().GetVersion()))
+		return nil, nil
+	}
 	version, resolved, err := s.validateVersionReferenceUpdate(ctx, existing.GetMetadata(),
 		existing.GetSpec().GetVersion(), newSpec.GetVersion())
 	if err != nil {
@@ -602,8 +598,7 @@ func (s *PrivateClustersServer) validateVersionUpdate(ctx context.Context,
 	return resolved, nil
 }
 
-// validateVersionReferenceUpdate preserves an omitted or unchanged cluster target;
-// changed selections use the shared ClusterVersion catalog lookup.
+// validateVersionReferenceUpdate resolves a selected ClusterVersion and rejects an unchanged target.
 func (s *PrivateClustersServer) validateVersionReferenceUpdate(ctx context.Context,
 	owner *privatev1.Metadata, stored, selected *privatev1.ClusterVersionReference,
 ) (*privatev1.ClusterVersionReference, *privatev1.ClusterVersion, error) {
@@ -611,7 +606,7 @@ func (s *PrivateClustersServer) validateVersionReferenceUpdate(ctx context.Conte
 		return nil, nil, grpcstatus.Error(grpccodes.InvalidArgument,
 			"spec.version must specify id or name")
 	}
-	if selected == nil || stored.GetId() == selected.GetId() {
+	if selected == nil {
 		if stored == nil {
 			return nil, nil, nil
 		}
@@ -625,8 +620,9 @@ func (s *PrivateClustersServer) validateVersionReferenceUpdate(ctx context.Conte
 	if err := validateResolvedClusterVersion(version, version.GetMetadata().GetName(), ""); err != nil {
 		return nil, nil, err
 	}
-	if stored.GetId() == selected.GetId() {
-		return cloneMessage(stored), nil, nil
+	if stored != nil && version.GetId() == stored.GetId() {
+		return nil, nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"spec.version %q is already selected", version.GetMetadata().GetName())
 	}
 	return selected, version, nil
 }

@@ -20,6 +20,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	"golang.org/x/sync/errgroup"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
@@ -584,6 +585,107 @@ var _ = Describe("Volume lifecycle", func() {
 				}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(afterResp.GetObject().GetSpec().GetStorageTier()).To(Equal(tierName))
+		})
+	})
+
+	Describe("Idempotent volume create", func() {
+		volumeOwner := func(reference string) *privatev1.VolumeOwner {
+			return privatev1.VolumeOwner_builder{
+				Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+				Reference: reference,
+			}.Build()
+		}
+
+		createRequest := func(name string, sizeGib int64, owner *privatev1.VolumeOwner) *privatev1.VolumesCreateRequest {
+			return privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   name,
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: tierName,
+						SizeGib:     sizeGib,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Owner:       owner,
+					}.Build(),
+				}.Build(),
+			}.Build()
+		}
+
+		listByName := func(name string) []*privatev1.Volume {
+			filter := fmt.Sprintf("this.metadata.name == %q && this.metadata.tenant == %q", name, testTenant)
+			response, err := volumesClient.List(ctx,
+				privatev1.VolumesListRequest_builder{Filter: &filter}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			return response.GetItems()
+		}
+
+		cleanupVolume := func(id string) {
+			if id == "" {
+				return
+			}
+			DeferCleanup(func() {
+				_, _ = volumesClient.Delete(ctx,
+					privatev1.VolumesDeleteRequest_builder{Id: id}.Build())
+			})
+		}
+
+		It("returns the existing volume for a repeated identical Create", func() {
+			name := fmt.Sprintf("ci-idem-seq-%s", uuid.New()[24:32])
+			owner := volumeOwner("ci-idem-seq-owner")
+
+			first, err := volumesClient.Create(ctx, createRequest(name, 10, owner))
+			Expect(err).ToNot(HaveOccurred())
+			cleanupVolume(first.GetObject().GetId())
+
+			second, err := volumesClient.Create(ctx, createRequest(name, 10, owner))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(second.GetObject().GetId()).To(Equal(first.GetObject().GetId()))
+
+			Expect(listByName(name)).To(HaveLen(1))
+		})
+
+		It("rejects a name match with a different sizeGiB naming the field", func() {
+			name := fmt.Sprintf("ci-idem-mismatch-%s", uuid.New()[24:32])
+			owner := volumeOwner("ci-idem-mismatch-owner")
+
+			created, err := volumesClient.Create(ctx, createRequest(name, 10, owner))
+			Expect(err).ToNot(HaveOccurred())
+			cleanupVolume(created.GetObject().GetId())
+
+			_, err = volumesClient.Create(ctx, createRequest(name, 20, owner))
+			Expect(err).To(HaveOccurred())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.AlreadyExists))
+			Expect(grpcstatus.Convert(err).Message()).To(ContainSubstring("spec.size_gib"))
+		})
+
+		It("returns the same volume ID for synchronized concurrent identical Creates", func() {
+			name := fmt.Sprintf("ci-idem-conc-%s", uuid.New()[24:32])
+			owner := volumeOwner("ci-idem-conc-owner")
+
+			start := make(chan struct{})
+			ids := make([]string, 2)
+			group, groupCtx := errgroup.WithContext(ctx)
+			for i := range ids {
+				group.Go(func() error {
+					<-start
+					response, err := volumesClient.Create(groupCtx, createRequest(name, 10, owner))
+					if err != nil {
+						return err
+					}
+					ids[i] = response.GetObject().GetId()
+					return nil
+				})
+			}
+			close(start)
+			Expect(group.Wait()).To(Succeed())
+
+			Expect(ids[0]).ToNot(BeEmpty())
+			Expect(ids[1]).To(Equal(ids[0]))
+			cleanupVolume(ids[0])
+
+			Expect(listByName(name)).To(HaveLen(1))
 		})
 	})
 })

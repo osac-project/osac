@@ -380,5 +380,22 @@ export default defineConfig({
       testMatch: /delete\.external_ip\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
     },
+    {
+      // Subnet flows. One worker keeps files in order: create (which records the
+      // subnet and the network it used), then the list checks, then the teardown.
+      name: 'subnet',
+      testDir: networkingDir,
+      testMatch: /(?:create|list)\.subnet\.spec\.ts/,
+      fullyParallel: false,
+      workers: 1,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+      teardown: 'subnet-delete',
+    },
+    {
+      name: 'subnet-delete',
+      testDir: networkingDir,
+      testMatch: /delete\.subnet\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'], trace: 'off', video: 'off' },
+    },
   ],
 });

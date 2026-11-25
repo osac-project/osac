@@ -20,6 +20,7 @@ export const MainPage = {
   diskImages: ['link', { name: 'Disk images', exact: true }],
   networking: ['button', { name: 'Networking', exact: true }],
   virtualNetworks: ['link', { name: 'Virtual networks', exact: true }],
+  subnets: ['link', { name: 'Subnets', exact: true }],
   securityGroups: ['link', { name: 'Security groups', exact: true }],
   externalIps: ['link', { name: 'External IPs', exact: true }],
   secrets: ['link', { name: 'Secrets', exact: true }],

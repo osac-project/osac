@@ -11,7 +11,7 @@ Touched-area requirements: [component guide](../../osac-ui/AGENTS.md#test).
 | Tier | Suite (by directory/role) | Exercises for real | Faked or omitted |
 |---|---|---|---|
 | Unit | Vitest suites in `apps/app-frontend/src` and `libs/ui-components/src` (`pnpm test`) | Components, hooks, and API wiring with an in-memory Connect transport | No browser, no deployed proxy, no fulfillment service |
-| UI E2E (manual) | Playwright flows in `apps/e2e-tests` (`src/vmaas/`, `src/networking/`) driven by the harness in `apps/playwright` | Real browser through the deployed SPA, Go proxy, Keycloak OIDC login, and fulfillment-service: VMaaS resource and VM journeys, External IP pool and tenant allocation | Only the failure-path tests fake a response: they intercept the list request and return HTTP 500. Everything else runs against the deployment; the suite needs admin and tenant credentials, so it never runs in CI |
+| UI E2E (manual) | Playwright flows in `apps/e2e-tests` (`src/vmaas/`, `src/networking/`) driven by the harness in `apps/playwright` | Real browser through the deployed SPA, Go proxy, Keycloak OIDC login, and fulfillment-service: VMaaS resource and VM journeys, External IP pool and tenant allocation, Subnet list/create/delete | Only the failure-path tests fake a response: they intercept the list or create request and return HTTP 500/400. Everything else runs against the deployment; the suite needs admin and tenant credentials, so it never runs in CI |
 
 `pnpm run typecheck`, `pnpm lint` and `pnpm test` are separate CI jobs and the
 unit tier gate for this component. The Playwright flows are manual: see
@@ -54,6 +54,21 @@ unit tier gate for this component. The Playwright flows are manual: see
   when `global.networking.provisioningEnabled` is `false`, and the stock
   `osac-installer/values/dev/kind-instance.yaml` profile sets it to `false`.
   On such a deployment only the list and error-state checks can pass.
+- **Subnet flows use an existing READY network.** User-created virtual networks
+  only become READY through operator feedback, so `create.subnet.spec.ts` never
+  provisions one: `OSAC_SUBNET_VIRTUAL_NETWORK` names it, otherwise the first
+  READY network whose create page offers a free block is used (a network fully
+  occupied by its subnets is skipped) and the network named `default` is used
+  for the gate check. The CIDR comes from the create page's example, which is
+  shown only once the network's subnets are known, unless `OSAC_SUBNET_CIDR`
+  pins it. The default-network gate test asserts the
+  pair — the inline reason appears exactly when Create is disabled — so it is
+  valid whether the default subnet is Ready or not, and skips only when the
+  tenant has no matching network.
+- **Subnet cleanup is ownership-scoped.** The create spec records the subnet id
+  and the network it used in `/tmp/osac-subnet-state-<OSAC_E2E_INSTANCE>.json`,
+  and `subnet-delete` deletes only a row whose id still matches. Without a
+  record it leaves a same-named subnet in place.
 - **VMaaS flows:** the full suite creates tenants, roles, storage, catalog and
   VM resources; run its prerequisites before the tenant-scoped flows.
 

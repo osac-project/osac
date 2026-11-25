@@ -17,7 +17,7 @@ isolated browser with simulated responses.
 apps/e2e-tests/
 ├── src/
 │   ├── generic/                tenant, infrastructure, and catalog administration tests
-│   ├── networking/             External IP flows and networking test data
+│   ├── networking/             External IP and Subnet flows and networking test data
 │   ├── shared/                 resource configuration and run state used by both suites
 │   └── vmaas/                  VM creation, deletion, resize, and power actions
 ├── helper-tests/               isolated helper regression tests
@@ -38,7 +38,7 @@ libs/
 └── osac-cli/                   OSAC CLI helpers used by UI flows
 ```
 
-Add platform-wide UI tests under `src/generic/`, External IP flows under
+Add platform-wide UI tests under `src/generic/`, networking flows under
 `src/networking/` with their own test data, and VM-specific journeys under
 `src/vmaas/`. The VMaaS full flow runs the generic setup and cleanup specs
 through Playwright project dependencies and teardowns. Committed tests belong
@@ -273,6 +273,60 @@ pnpm --filter @osac/playwright exec playwright test --project=external-ip
 ```
 
 Both pool projects then skip, and the teardown leaves the pool in place.
+
+## Subnet (networking) suite
+
+`src/networking/` also covers the tenant Subnets UI: list columns and filters,
+the create page, the READY-network picker, the CIDR example, the tenant default
+network gate, and the row delete guard. It never provisions a virtual network:
+a user-created network only reaches READY through operator feedback, so the
+suite uses a READY network the deployment already has.
+
+It picks the first READY network whose create page offers a free block. A
+network can be fully occupied — a tenant default network whose default subnet
+fills the whole range is — so the picker's options are tried in order and the
+suite fails with that reason when none has room. Set
+`OSAC_SUBNET_VIRTUAL_NETWORK` to pin a network, and `OSAC_SUBNET_CIDR` to submit
+a specific free block instead of the create page's example.
+
+| Variable | Required | Meaning |
+| --- | --- | --- |
+| `OSAC_UI_BASE_URL` | yes | URL of the deployed console |
+| `OSAC_E2E_TENANT_NAME` | yes | Tenant onboarded with at least one READY virtual network |
+| `OSAC_TENANT_ADMIN_USERNAME` / `OSAC_TENANT_ADMIN_PASSWORD` | no | Explicit tenant admin; otherwise the break-glass credentials of `OSAC_E2E_TENANT_NAME` |
+| `IGNORE_HTTPS_ERRORS` | no | `true` when the Keycloak login uses a self-signed or cluster-internal certificate |
+| `OSAC_SUBNET_VIRTUAL_NETWORK` | no | Name of the READY network to use; unset tries the options in order, and `default` is used for the gate check |
+| `OSAC_SUBNET_CIDR` | no | CIDR to submit; unset uses the create page's own first-free-block example |
+| `OSAC_SUBNET_PROJECT` | no | Project to expect on the created row; empty uses the tenant default project |
+| `OSAC_E2E_INSTANCE` | no | Run index that makes resource names unique (default `1`) |
+
+```bash
+cd osac-ui
+export OSAC_UI_BASE_URL=https://osac-ui-<namespace>.<cluster-domain>
+export OSAC_E2E_TENANT_NAME=<tenant-name>
+# When the login redirects to a Keycloak with a self-signed certificate:
+export IGNORE_HTTPS_ERRORS=true
+# Optional: pin the network and block when the deployment has several.
+export OSAC_SUBNET_VIRTUAL_NETWORK=<ready-network-name>
+export OSAC_SUBNET_CIDR=<free-block>
+
+pnpm --filter @osac/playwright exec playwright test --project=subnet --reporter=line
+```
+
+Playwright runs `subnet` (`create.subnet.spec.ts`, then `list.subnet.spec.ts`,
+in that order), then the `subnet-delete` teardown. The create spec records the
+subnet id and the network it used in
+`/tmp/osac-subnet-state-<OSAC_E2E_INSTANCE>.json`; the teardown deletes only a
+row whose id matches the record and reports a retained subnet instead of
+deleting by name. Provider networking may be disabled: subnets do not allocate
+addresses, so the suite only needs the network to be READY.
+
+The default-network gate check runs against `OSAC_SUBNET_VIRTUAL_NETWORK` or the
+network named `default`, and skips with a logged reason when the tenant has
+neither. It asserts the pair — the inline reason appears exactly when Create is
+disabled — so it is valid whether the default subnet is Ready or not.
+
+UI E2E is not executed in CI (OSAC-4847); attach the run log to the pull request.
 
 ## Prepare and run
 

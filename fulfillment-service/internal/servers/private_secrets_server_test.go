@@ -983,10 +983,12 @@ var _ = Describe("Private secrets server", func() {
 				return created.GetObject()
 			}
 
+			testPasswordData := "testpassword"
+
 			createBreakGlassSecret := func(name string) *privatev1.Secret {
 				mockStore.EXPECT().
 					Store(gomock.Any(), testTenant, "", name,
-						map[string][]byte{"username": []byte("break-glass-user")}).
+						map[string][]byte{"username": []byte("break-glass-user"), "password": []byte(testPasswordData)}).
 					Return(nil)
 				created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
 					Object: privatev1.Secret_builder{
@@ -994,8 +996,8 @@ var _ = Describe("Private secrets server", func() {
 							Name:   name,
 							Tenant: testTenant,
 						}.Build(),
-						Type: privatev1.SecretType_SECRET_TYPE_OPAQUE,
-						Data: map[string][]byte{"username": []byte("break-glass-user")},
+						Type: privatev1.SecretType_SECRET_TYPE_BREAKGLASS_CREDENTIAL,
+						Data: map[string][]byte{"username": []byte("break-glass-user"), "password": []byte(testPasswordData)},
 					}.Build(),
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())

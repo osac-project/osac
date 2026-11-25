@@ -734,7 +734,11 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 				Expect(req.GetId()).To(Equal("secret-id"))
 				return privatev1.SecretsGetResponse_builder{
 					Object: privatev1.Secret_builder{
-						Id: "secret-id",
+						Id:   "secret-id",
+						Type: privatev1.SecretType_SECRET_TYPE_BREAKGLASS_CREDENTIAL,
+						Metadata: privatev1.Metadata_builder{
+							Tenant: "test-org",
+						}.Build(),
 						Data: map[string][]byte{
 							"username": []byte("test-org-osac-break-glass"),
 							"password": []byte(testSecretPassword),
@@ -792,7 +796,11 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 				getFunc: func(context.Context, *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
 					return privatev1.SecretsGetResponse_builder{
 						Object: privatev1.Secret_builder{
-							Id: "secret-id",
+							Id:   "secret-id",
+							Type: privatev1.SecretType_SECRET_TYPE_BREAKGLASS_CREDENTIAL,
+							Metadata: privatev1.Metadata_builder{
+								Tenant: "test-org",
+							}.Build(),
 							Data: map[string][]byte{
 								"username": []byte("test-org-osac-break-glass"),
 								"password": []byte(testInlinePassword),
@@ -850,6 +858,10 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 					return privatev1.SecretsGetResponse_builder{
 						Object: privatev1.Secret_builder{
 							Id:   "secret-id",
+							Type: privatev1.SecretType_SECRET_TYPE_BREAKGLASS_CREDENTIAL,
+							Metadata: privatev1.Metadata_builder{
+								Tenant: "test-org",
+							}.Build(),
 							Data: map[string][]byte{"username": []byte("only-user")},
 						}.Build(),
 					}.Build(), nil
@@ -908,6 +920,10 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 				getFunc: func(context.Context, *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
 					return privatev1.SecretsGetResponse_builder{
 						Object: privatev1.Secret_builder{
+							Type: privatev1.SecretType_SECRET_TYPE_BREAKGLASS_CREDENTIAL,
+							Metadata: privatev1.Metadata_builder{
+								Tenant: "test-org",
+							}.Build(),
 							Data: map[string][]byte{
 								"username": []byte("another-org-osac-break-glass"),
 								"password": []byte(testSecretPassword),
@@ -936,7 +952,7 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 				Expect(generatedPassword).To(HaveLen(password.Length))
 				Expect(secret.GetMetadata().GetName()).To(Equal("break-glass-credentials"))
 				Expect(secret.GetMetadata().GetTenant()).To(Equal("test-org"))
-				Expect(secret.GetType()).To(Equal(privatev1.SecretType_SECRET_TYPE_OPAQUE))
+				Expect(secret.GetType()).To(Equal(privatev1.SecretType_SECRET_TYPE_BREAKGLASS_CREDENTIAL))
 				Expect(secret.GetData()).To(HaveKeyWithValue("username", []byte("test-org-osac-break-glass")))
 				Expect(secret.GetData()).To(HaveKeyWithValue("password", []byte(generatedPassword)))
 				secret.SetId("created-secret-id")
@@ -994,7 +1010,8 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 				return privatev1.SecretsListResponse_builder{
 					Items: []*privatev1.Secret{
 						privatev1.Secret_builder{
-							Id: "existing-secret-id",
+							Id:   "existing-secret-id",
+							Type: privatev1.SecretType_SECRET_TYPE_BREAKGLASS_CREDENTIAL,
 							Metadata: privatev1.Metadata_builder{
 								Name:   "break-glass-credentials",
 								Tenant: "test-org",
@@ -1007,7 +1024,11 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 				Expect(req.GetId()).To(Equal("existing-secret-id"))
 				return privatev1.SecretsGetResponse_builder{
 					Object: privatev1.Secret_builder{
-						Id: "existing-secret-id",
+						Id:   "existing-secret-id",
+						Type: privatev1.SecretType_SECRET_TYPE_BREAKGLASS_CREDENTIAL,
+						Metadata: privatev1.Metadata_builder{
+							Tenant: "test-org",
+						}.Build(),
 						Data: map[string][]byte{
 							"username": []byte("test-org-osac-break-glass"),
 							"password": []byte(testPreGeneratedPassword),
@@ -1112,7 +1133,11 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 				Expect(req.GetId()).To(Equal("break-glass-secret"))
 				return privatev1.SecretsGetResponse_builder{
 					Object: privatev1.Secret_builder{
-						Id: req.GetId(),
+						Id:   req.GetId(),
+						Type: privatev1.SecretType_SECRET_TYPE_BREAKGLASS_CREDENTIAL,
+						Metadata: privatev1.Metadata_builder{
+							Tenant: "test-org",
+						}.Build(),
 						Data: map[string][]byte{
 							"username": []byte("test-org-osac-break-glass"),
 							"password": []byte(persistedPassword),

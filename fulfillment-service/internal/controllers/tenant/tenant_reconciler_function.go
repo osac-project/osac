@@ -435,6 +435,15 @@ func (t *task) getBreakGlassSecretPassword(ctx context.Context) (string, error) 
 	if err != nil {
 		return "", err
 	}
+	if response.GetObject() == nil {
+		return "", errors.New("break-glass credentials secret not found")
+	}
+	if response.GetObject().GetMetadata().GetTenant() != t.tenant.GetMetadata().GetName() {
+		return "", errors.New("break-glass credentials secret is not owned by the tenant")
+	}
+	if response.GetObject().GetType() != privatev1.SecretType_SECRET_TYPE_BREAKGLASS_CREDENTIAL {
+		return "", errors.New("break-glass credentials secret is not a break-glass credentials secret")
+	}
 	data := response.GetObject().GetData()
 	if len(data["username"]) == 0 || len(data["password"]) == 0 {
 		return "", errors.New("break-glass credentials secret is missing username or password")
@@ -469,7 +478,7 @@ func (t *task) createBreakGlassSecret(ctx context.Context, password string) erro
 				Name:   breakGlassSecretName,
 				Tenant: tenantName,
 			}.Build(),
-			Type: privatev1.SecretType_SECRET_TYPE_OPAQUE,
+			Type: privatev1.SecretType_SECRET_TYPE_BREAKGLASS_CREDENTIAL,
 			Data: map[string][]byte{
 				"username": []byte(fmt.Sprintf("%s-osac-break-glass", tenantName)),
 				"password": []byte(password),

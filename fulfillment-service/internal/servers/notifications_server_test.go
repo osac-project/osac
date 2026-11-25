@@ -226,7 +226,7 @@ var _ = Describe("Notifications server", func() {
 						RecipientId: callerUser,
 						Title:       "secret title",
 						Resource: privatev1.NotificationResourceReference_builder{
-							Cluster: privatev1.ClusterLocalReference_builder{Id: "cluster-denied"}.Build(),
+							Cluster: privatev1.ClusterReference_builder{Id: "cluster-denied"}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build(),
@@ -270,7 +270,7 @@ var _ = Describe("Notifications server", func() {
 						RecipientId: callerUser,
 						Title:       "hidden",
 						Resource: privatev1.NotificationResourceReference_builder{
-							Cluster: privatev1.ClusterLocalReference_builder{Id: "cluster-x"}.Build(),
+							Cluster: privatev1.ClusterReference_builder{Id: "cluster-x"}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build(),
@@ -453,7 +453,7 @@ var _ = Describe("Notifications server", func() {
 						Scope:    privatev1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
 						Title:    "gated announcement",
 						Resource: privatev1.NotificationResourceReference_builder{
-							Cluster: privatev1.ClusterLocalReference_builder{Id: "cluster-denied"}.Build(),
+							Cluster: privatev1.ClusterReference_builder{Id: "cluster-denied"}.Build(),
 						}.Build(),
 					}.Build(),
 				}.Build(),

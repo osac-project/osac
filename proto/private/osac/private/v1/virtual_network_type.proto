@@ -145,6 +145,17 @@ enum VirtualNetworkState {
   reserved 5;
 }
 
+// Reference to a VirtualNetwork resource.
+message VirtualNetworkReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
+  // Tenant where the referenced object lives. If omitted, the owner tenant is used;
+  // the legacy shared selector can select the shared tenant.
+  string tenant = 5;
+}
+
 // Local reference to a VirtualNetwork resource.
 message VirtualNetworkLocalReference {
   string id = 1;

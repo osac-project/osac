@@ -226,7 +226,7 @@ var _ = Describe("Notifications API", Label("notifications"), func() {
 					Scope:    publicv1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
 					Title:    "With resource",
 					Resource: publicv1.NotificationResourceReference_builder{
-						Cluster: publicv1.ClusterLocalReference_builder{
+						Cluster: publicv1.ClusterReference_builder{
 							Id: "nonexistent-cluster",
 						}.Build(),
 					}.Build(),

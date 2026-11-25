@@ -58,6 +58,7 @@ type AuthContext struct {
 	Issuer          string
 	AuthorizedParty string
 	ClientID        string
+	Audiences       []string
 
 	// AuthMethod indicates the authentication method: "jwt" or "serviceaccount"
 	AuthMethod string
@@ -217,6 +218,7 @@ func (b *EvaluatorBuilder) Build() (*OPAAuthorizationEvaluator, error) {
 
 	policyData := inmem.NewFromObject(map[string]any{
 		"emergency_service_accounts":  emergencyServiceAccounts,
+		"aap_secret_reader_audience":  Audience,
 		"aap_secret_reader_client_id": aapSecretReaderClientID,
 		"aap_secret_reader_issuer":    b.aapSecretReaderIssuer,
 	})
@@ -403,6 +405,9 @@ func constructOPAInput(authContext *AuthContext, method string) map[string]any {
 		identity["iss"] = authContext.Issuer
 		identity["azp"] = authContext.AuthorizedParty
 		identity["client_id"] = authContext.ClientID
+		if len(authContext.Audiences) > 0 {
+			identity["aud"] = authContext.Audiences
+		}
 		if authContext.Username != "" {
 			identity["username"] = authContext.Username
 		}

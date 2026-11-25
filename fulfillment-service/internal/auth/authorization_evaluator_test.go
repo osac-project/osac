@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
@@ -96,6 +97,7 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 		const otherIssuer = "https://another-keycloak.example/realms/osac"
 
 		var evaluator *OPAAuthorizationEvaluator
+		var claims jwt.MapClaims
 		var identity *AuthContext
 
 		BeforeEach(func() {
@@ -103,10 +105,15 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 			Expect(err).NotTo(HaveOccurred())
 			evaluator, err = NewEvaluator().SetAAPSecretReaderIssuer(readerIssuer).Build()
 			Expect(err).NotTo(HaveOccurred())
-			identity = &AuthContext{
-				AuthMethod: "jwt", Issuer: issuer, AuthorizedParty: clientID, ClientID: clientID,
-				Username: "service-account-" + clientID,
+			claims = jwt.MapClaims{
+				"iss":                issuer,
+				"azp":                clientID,
+				"client_id":          clientID,
+				"preferred_username": "service-account-" + clientID,
+				"aud":                Audience,
 			}
+			identity, err = ExtractAuthContext(&jwt.Token{Claims: claims})
+			Expect(err).NotTo(HaveOccurred())
 		})
 
 		DescribeTable("selects the grant issuer from configured OIDC issuers",
@@ -149,6 +156,27 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				SubjectTenants: []string{"*"},
 			}))
 		})
+
+		DescribeTable("requires the Fulfillment audience for private Get and wildcard tenant access",
+			func(ctx context.Context, audience any, allowed bool, tenants []string) {
+				delete(claims, "aud")
+				if audience != nil {
+					claims["aud"] = audience
+				}
+				claims["groups"] = []any{"admins"}
+				identity, err := ExtractAuthContext(&jwt.Token{Claims: claims})
+				Expect(err).NotTo(HaveOccurred())
+				decision, err := evaluator.Evaluate(ctx, identity, getSecret)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(decision.Allowed).To(Equal(allowed))
+				Expect(decision.SubjectTenants).To(Equal(tenants))
+			},
+			Entry("single audience", Audience, true, []string{"*"}),
+			Entry("matching audience in an array", []any{"other-service", Audience}, true, []string{"*"}),
+			Entry("missing audience", nil, false, []string(nil)),
+			Entry("different audience", "other-service", false, []string(nil)),
+			Entry("malformed audience array", []any{Audience, 42}, false, []string(nil)),
+		)
 
 		DescribeTable("denies other methods even when the token contains an admin group",
 			func(ctx context.Context, method string) {

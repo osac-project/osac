@@ -36,9 +36,27 @@ it belongs in the PRD. If no, it belongs in the design.
   lets a user declare a property is not prior art for changing it.
 
 ### Design EP Expectations
-- All template sections must be present, even if marked "TBD" or "N/A"
-- Implementation details should cover the affected contracts and lifecycle; scale depth to the change
-- Test plans should describe strategy, not just "tests will be added"
+- Two accepted layouts: this repository's template and the simplified layout
+  the design workflow ships. New designs may use either
+- Template headers and feature dimensions follow different rules. A template
+  header that does not apply gets one line, "N/A: {reason}". A feature
+  dimension that does not apply is skipped silently, as `osac-dimensions.md`
+  says, and adds no line. A header is a section of the document; a dimension
+  is a question the author considered
+- The simplified layout's sections: Today and with this design, How it works,
+  Definitions, one section per step, Guard Rails, Security, Where the code
+  goes, API, Alternatives, Not in this design
+- Guard Rails is required in the simplified layout. It holds the invariants
+  that keep results correct: atomic writes, duplicate prevention, ordering,
+  isolation, and behavior on crash, restart, restore and failure. Missing
+  Guard Rails on a stateful or billing-like design is a gap
+- The API section gives one numbered entry per affected interface, so test
+  plans can map cases to them. Do not pad the list
+- The detailed test plan lives in `testplan.md`, not in the design. A design
+  without a Test Plan section is complete
+- Implementation details cover only the decisions reviewers must agree on: schemas, APIs and the guarantees the design depends on. Step-by-step code flow belongs in implementation PRs and in the Jira stories
+- Length: at most 200 lines and 2,000 words, target 150 lines. Tables count. Only YAML frontmatter, Mermaid diagrams and code blocks do not. A longer design carries code-level detail or should be split
+- Plain language, following [ASD-STE100](https://www.asd-ste100.org/): at most 25 words per sentence, one claim per sentence, no semicolon chains, conditions in a table, terms defined by what they are
 
 ### Clarity
 - Technical terms should be defined upfront (see Networking EP's Terminology section)
@@ -81,7 +99,8 @@ current implementation or networking support. Verify the latest accepted design
 and source code before adopting an example. In particular, historical IPv6 and
 dual-stack examples do not override [networking decisions](networking-decisions.md).
 
-Existing EPs as quality benchmarks:
+Existing EPs as structure examples. Length is not a quality signal. Shorter is
+better when the decisions are covered:
 
 | Slug | Description | Lines | Notable Patterns |
 |------|-------------|-------|------------------|
@@ -93,7 +112,7 @@ Existing EPs as quality benchmarks:
 | `computeinstance-phase-condition-expansion` | ComputeInstance status and lifecycle updates | ~200 | API evolution pattern for existing resources |
 
 Key takeaways:
-- All EPs follow the template structure exactly (no skipped sections)
+- EPs keep the template headers. Sections that do not apply are one line
 - Successful EPs define terminology upfront and use it consistently
 
 ## Review Process

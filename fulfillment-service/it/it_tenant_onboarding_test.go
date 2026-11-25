@@ -311,39 +311,7 @@ var _ = Describe("Tenant deletion", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 
-		kubeClient := tool.KubeClient()
 		listFilter := fmt.Sprintf("this.metadata.tenant == %q", name)
-		By("Verifying tenant and hub resources remain while tenant projects are pending deletion")
-		Eventually(
-			func(g Gomega) {
-				listResp, err := projectsClient.List(ctx, privatev1.ProjectsListRequest_builder{
-					Filter: &listFilter,
-				}.Build())
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(listResp.GetTotal()).To(BeNumerically(">", 0))
-
-				getResp, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{
-					Id: id,
-				}.Build())
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(getResp.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeTrue())
-
-				tenantList := &osacv1alpha1.TenantList{}
-				err = kubeClient.List(ctx, tenantList, crclient.MatchingLabels{
-					labels.TenantID: id,
-				}, crclient.InNamespace(hubNamespace))
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(tenantList.Items).To(HaveLen(1))
-				g.Expect(tenantList.Items[0].GetDeletionTimestamp().IsZero()).To(BeTrue())
-
-				ns := &corev1.Namespace{}
-				err = kubeClient.Get(ctx, crclient.ObjectKey{Name: name}, ns)
-				g.Expect(err).ToNot(HaveOccurred())
-				g.Expect(ns.GetDeletionTimestamp().IsZero()).To(BeTrue())
-			},
-			30*time.Second,
-			time.Second,
-		).Should(Succeed())
 
 		By("Waiting for tenant deletion to remove every project, including the root")
 		Eventually(

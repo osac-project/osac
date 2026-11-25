@@ -4,6 +4,7 @@ import { Table, Tbody, Td, Th, Thead, Tr } from '@patternfly/react-table';
 import type { Tenant } from '@osac/types/private';
 
 import TenantActionsMenu from './TenantActionsMenu';
+import TenantExternalBillingId from './TenantExternalBillingId';
 import TenantStatusLabel from './TenantStatusLabel';
 import { useTranslation } from '../../hooks/useTranslation';
 import { Timestamp } from '../Primitives/Timestamp';
@@ -20,7 +21,8 @@ const TenantTable = ({ tenants }: TenantTableProps) => {
     () => ({
       tenant: t('Tenant'),
       status: t('Status'),
-      primaryDomain: t('Domain'),
+      primaryDomain: t('Primary domain'),
+      externalBillingId: t('External billing ID'),
       registered: t('Registered'),
       actions: t('Actions'),
     }),
@@ -34,6 +36,7 @@ const TenantTable = ({ tenants }: TenantTableProps) => {
           <Th>{columnLabels.tenant}</Th>
           <Th>{columnLabels.status}</Th>
           <Th>{columnLabels.primaryDomain}</Th>
+          <Th>{columnLabels.externalBillingId}</Th>
           <Th>{columnLabels.registered}</Th>
           <Th aria-label={columnLabels.actions} />
         </Tr>
@@ -48,6 +51,9 @@ const TenantTable = ({ tenants }: TenantTableProps) => {
               <TenantStatusLabel state={tenant.status?.state} />
             </Td>
             <Td dataLabel={columnLabels.primaryDomain}>{tenant.spec?.domains?.[0] ?? '—'}</Td>
+            <Td dataLabel={columnLabels.externalBillingId}>
+              <TenantExternalBillingId tenant={tenant} />
+            </Td>
             <Td dataLabel={columnLabels.registered}>
               <Timestamp value={tenant.metadata?.creationTimestamp} />
             </Td>

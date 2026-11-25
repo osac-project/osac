@@ -10,8 +10,6 @@ import RoleBindingActionsMenu from '../RoleBindingActionsMenu';
 import RoleBindingStatusLabel from '../RoleBindingStatusLabel';
 import { resolveRoleTitle } from '../utils';
 
-const ROLE_BINDING_NAME_PREVIEW_LENGTH = 32;
-
 interface RoleBindingsTableProps {
   roleBindings: RoleBinding[];
   rolesById: Map<string, string>;
@@ -46,11 +44,8 @@ const RoleBindingsTable = ({ roleBindings, rolesById }: RoleBindingsTableProps) 
       <Tbody>
         {roleBindings.map((roleBinding) => (
           <Tr key={roleBinding.id}>
-            <Td dataLabel={columnLabels.name} modifier="truncate">
-              <ResourceNameField
-                resource={roleBinding}
-                maxCharsDisplayed={ROLE_BINDING_NAME_PREVIEW_LENGTH}
-              />
+            <Td dataLabel={columnLabels.name}>
+              <ResourceNameField resource={roleBinding} />
             </Td>
             <Td dataLabel={columnLabels.status}>
               <RoleBindingStatusLabel rb={roleBinding} />

@@ -425,11 +425,14 @@ var _ = Describe("ComputeInstance public retry projection", func() {
 		key = client.ObjectKeyFromObject(instance)
 		DeferCleanup(func() {
 			fresh := &osacv1alpha1.ComputeInstance{}
-			if err := k8sClient.Get(ctx, key, fresh); err == nil {
-				fresh.Finalizers = nil
-				Expect(k8sClient.Update(ctx, fresh)).To(Succeed())
-				Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, fresh))).To(Succeed())
+			err := k8sClient.Get(ctx, key, fresh)
+			if apierrors.IsNotFound(err) {
+				return
 			}
+			Expect(err).NotTo(HaveOccurred())
+			fresh.Finalizers = nil
+			Expect(k8sClient.Update(ctx, fresh)).To(Succeed())
+			Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, fresh))).To(Succeed())
 		})
 		fake = newWLFakeAAP()
 		clock = clocktesting.NewFakeClock(time.Now().Truncate(time.Second))
@@ -499,6 +502,71 @@ var _ = Describe("ComputeInstance public retry projection", func() {
 		reconcileOK()
 		expectReason(osacv1alpha1.ReasonWaitingForVM)
 		Expect(instance.Status.LastProvisioningFailure).To(BeNil())
+	})
+
+	DescribeTable("invalidates only obsolete managed diagnostics before the tenant-readiness gate", func(changeSpec, manual, checkpointCleared, wantFailure bool) {
+		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
+		reconcileOK()
+		entry := instance.Status.Jobs[0].DeepCopy()
+		if checkpointCleared {
+			instance.Status.Jobs[0].LastFailure = nil
+			Expect(k8sClient.Status().Update(ctx, instance)).To(Succeed())
+		}
+		if changeSpec {
+			restart := metav1.NewTime(clock.Now().Add(time.Second))
+			instance.Spec.RestartRequestedAt = &restart
+		}
+		if manual {
+			instance.Annotations[osacComputeInstanceManagementStateAnnotation] = ManagementStateManual
+		}
+		Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+		tenant := &osacv1alpha1.Tenant{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instance.Annotations[osacTenantKey], Namespace: "default"}, tenant)).To(Succeed())
+		tenant.Status.Phase = osacv1alpha1.TenantPhaseProgressing
+		Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+		result := reconcileOK()
+		expectReason(osacv1alpha1.ReasonTenantNotReady)
+		Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+		Expect(instance.Status.Jobs[0].State).To(Equal(entry.State))
+		Expect(instance.Status.Jobs[0].Attempt).To(Equal(entry.Attempt))
+		Expect(instance.Status.Jobs[0].JobID).To(Equal(entry.JobID))
+		Expect(instance.Status.Jobs[0].Message).To(Equal(entry.Message))
+		Expect(fake.tasks()).To(HaveLen(1))
+		if wantFailure {
+			Expect(instance.Status.LastProvisioningFailure).NotTo(BeNil())
+			Expect(instance.Status.Jobs[0].LastFailure).NotTo(BeNil())
+		} else {
+			Expect(instance.Status.LastProvisioningFailure).To(BeNil())
+			Expect(instance.Status.Jobs[0].LastFailure).To(BeNil())
+		}
+	},
+		Entry("changed configuration", true, false, false, false),
+		Entry("public clearing replay", true, false, true, false),
+		Entry("same configuration", false, false, false, true),
+		Entry("manual management", true, true, false, true),
+	)
+
+	It("retries obsolete diagnostic clearing after a real conflict while the tenant is unready", func() {
+		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
+		reconcileOK()
+		restart := metav1.NewTime(clock.Now().Add(time.Second))
+		instance.Spec.RestartRequestedAt = &restart
+		Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+		tenant := &osacv1alpha1.Tenant{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instance.Annotations[osacTenantKey], Namespace: "default"}, tenant)).To(Succeed())
+		tenant.Status.Phase = osacv1alpha1.TenantPhaseProgressing
+		Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+		writes.when = func(ci *osacv1alpha1.ComputeInstance) bool { return ci.Status.Jobs[0].LastFailure == nil }
+		_, err := run()
+		Expect(apierrors.IsConflict(err)).To(BeTrue())
+		reload()
+		Expect(instance.Status.Jobs[0].LastFailure).NotTo(BeNil())
+		Expect(instance.Status.LastProvisioningFailure).NotTo(BeNil())
+		recreate()
+		reconcileOK()
+		Expect(instance.Status.Jobs[0].LastFailure).To(BeNil())
+		Expect(instance.Status.LastProvisioningFailure).To(BeNil())
+		Expect(fake.tasks()).To(HaveLen(1))
 	})
 
 	It("reports retry progress without repeating an unchanged storage-gate event", func() {

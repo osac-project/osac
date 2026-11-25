@@ -452,6 +452,10 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		return ctrl.Result{}, err
 	}
 
+	if err := r.handleDesiredConfigVersion(ctx, instance); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// If the tenant is not ready, requeue
 	if tenant.Status.Phase != v1alpha1.TenantPhaseReady {
 		msg := formatTenantNotReadyMessage(tenant)
@@ -487,10 +491,6 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 		}
 		instance.SetStatusCondition(v1alpha1.ComputeInstanceConditionNetworkReady, metav1.ConditionTrue,
 			networktask.MessageNetworkingDisabled, v1alpha1.ReasonProvisioningDisabled)
-	}
-
-	if err := r.handleDesiredConfigVersion(ctx, instance); err != nil {
-		return ctrl.Result{}, err
 	}
 
 	// The VM recorded in status. A job launched below cannot have created it
@@ -1444,6 +1444,9 @@ func (r *ComputeInstanceReconciler) handleDesiredConfigVersion(ctx context.Conte
 	instance.Status.DesiredConfigVersion = version
 	if instance.Annotations[osacComputeInstanceManagementStateAnnotation] == ManagementStateManual {
 		return nil
+	}
+	if instance.Status.ProvisionConfigVersion != version {
+		instance.Status.LastProvisioningFailure = nil
 	}
 	entry := networktask.FindJob(instance.Status.Jobs, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
 	if entry != nil && (entry.State == v1alpha1.NetworkJobStateRetrying ||

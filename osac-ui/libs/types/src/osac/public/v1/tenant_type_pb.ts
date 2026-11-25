@@ -20,6 +20,8 @@ import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import type { Metadata } from "./metadata_type_pb";
 import { file_osac_public_v1_metadata_type } from "./metadata_type_pb";
+import type { RoleReference } from "./role_type_pb";
+import { file_osac_public_v1_role_type } from "./role_type_pb";
 import type { SecretLocalReference } from "./secret_type_pb";
 import { file_osac_public_v1_secret_type } from "./secret_type_pb";
 import type { Message } from "@bufbuild/protobuf";
@@ -28,7 +30,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/public/v1/tenant_type.proto.
  */
 export const file_osac_public_v1_tenant_type: GenFile = /*@__PURE__*/
-  fileDesc("CiBvc2FjL3B1YmxpYy92MS90ZW5hbnRfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEiagoGVGVuYW50EgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESKAoEc3BlYxgDIAEoCzIaLm9zYWMucHVibGljLnYxLlRlbmFudFNwZWMi0wQKClRlbmFudFNwZWMS9gMKB2RvbWFpbnMYASADKAlC5AO6SOADkgHcAxgBItcDugF4Cg5ub3RfaXBfYWRkcmVzcxIpbXVzdCBiZSBhIEROUyBob3N0bmFtZSwgbm90IGFuIElQIGFkZHJlc3MaOyF0aGlzLm1hdGNoZXMoJ15bMC05Ll0rJCcpICYmICF0aGlzLm1hdGNoZXMoJ15bMC05YS1mOl0rJCcpugFZCg5taW5fdHdvX2xhYmVscxIzbXVzdCBoYXZlIGF0IGxlYXN0IHR3byBsYWJlbHMgKGUuZy4sICdleGFtcGxlLmNvbScpGhJ0aGlzLmNvbnRhaW5zKCcuJym6AfUBChB2YWxpZF9kbnNfbGFiZWxzEmRhbGwgbGFiZWxzIG11c3QgYmUgdmFsaWQgRE5TIGxhYmVscyAobG93ZXJjYXNlIGEtei8wLTkvaHlwaGVuLCBtYXggNjMgY2hhcnMsIGFscGhhbnVtZXJpYyBzdGFydC9lbmQpGnt0aGlzLnNwbGl0KCcuJykuYWxsKGxhYmVsLCBsYWJlbC5zaXplKCkgPiAwICYmIGxhYmVsLnNpemUoKSA8PSA2MyAmJiBsYWJlbC5tYXRjaGVzKCdeW2EtejAtOV0oW2EtejAtOS1dezAsNjF9W2EtejAtOV0pPyQnKSlyBRABGP0BEkwKHmJyZWFrX2dsYXNzX2NyZWRlbnRpYWxzX3NlY3JldBgCIAEoCzIkLm9zYWMucHVibGljLnYxLlNlY3JldExvY2FsUmVmZXJlbmNlYgZwcm90bzM", [file_buf_validate_validate, file_osac_public_v1_metadata_type, file_osac_public_v1_secret_type]);
+  fileDesc("CiBvc2FjL3B1YmxpYy92MS90ZW5hbnRfdHlwZS5wcm90bxIOb3NhYy5wdWJsaWMudjEiagoGVGVuYW50EgoKAmlkGAEgASgJEioKCG1ldGFkYXRhGAIgASgLMhgub3NhYy5wdWJsaWMudjEuTWV0YWRhdGESKAoEc3BlYxgDIAEoCzIaLm9zYWMucHVibGljLnYxLlRlbmFudFNwZWMiiAUKClRlbmFudFNwZWMS9gMKB2RvbWFpbnMYASADKAlC5AO6SOADkgHcAxgBItcDugF4Cg5ub3RfaXBfYWRkcmVzcxIpbXVzdCBiZSBhIEROUyBob3N0bmFtZSwgbm90IGFuIElQIGFkZHJlc3MaOyF0aGlzLm1hdGNoZXMoJ15bMC05Ll0rJCcpICYmICF0aGlzLm1hdGNoZXMoJ15bMC05YS1mOl0rJCcpugFZCg5taW5fdHdvX2xhYmVscxIzbXVzdCBoYXZlIGF0IGxlYXN0IHR3byBsYWJlbHMgKGUuZy4sICdleGFtcGxlLmNvbScpGhJ0aGlzLmNvbnRhaW5zKCcuJym6AfUBChB2YWxpZF9kbnNfbGFiZWxzEmRhbGwgbGFiZWxzIG11c3QgYmUgdmFsaWQgRE5TIGxhYmVscyAobG93ZXJjYXNlIGEtei8wLTkvaHlwaGVuLCBtYXggNjMgY2hhcnMsIGFscGhhbnVtZXJpYyBzdGFydC9lbmQpGnt0aGlzLnNwbGl0KCcuJykuYWxsKGxhYmVsLCBsYWJlbC5zaXplKCkgPiAwICYmIGxhYmVsLnNpemUoKSA8PSA2MyAmJiBsYWJlbC5tYXRjaGVzKCdeW2EtejAtOV0oW2EtejAtOS1dezAsNjF9W2EtejAtOV0pPyQnKSlyBRABGP0BEkwKHmJyZWFrX2dsYXNzX2NyZWRlbnRpYWxzX3NlY3JldBgCIAEoCzIkLm9zYWMucHVibGljLnYxLlNlY3JldExvY2FsUmVmZXJlbmNlEjMKDGRlZmF1bHRfcm9sZRgEIAEoCzIdLm9zYWMucHVibGljLnYxLlJvbGVSZWZlcmVuY2ViBnByb3RvMw", [file_buf_validate_validate, file_osac_public_v1_metadata_type, file_osac_public_v1_role_type, file_osac_public_v1_secret_type]);
 
 /**
  * A tenant groups resources and users for a customer or business unit.
@@ -99,6 +101,15 @@ export type TenantSpec = Message<"osac.public.v1.TenantSpec"> & {
    * @generated from field: osac.public.v1.SecretLocalReference break_glass_credentials_secret = 2;
    */
   breakGlassCredentialsSecret?: SecretLocalReference | undefined;
+
+  /**
+   * Role selected for onboarding. It must belong to this tenant or to shared.
+   * An unset value on an ordinary tenant inherits the shared tenant's selection.
+   * An unset value on shared means there is no platform default.
+   *
+   * @generated from field: osac.public.v1.RoleReference default_role = 4;
+   */
+  defaultRole?: RoleReference | undefined;
 };
 
 /**

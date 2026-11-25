@@ -26,19 +26,28 @@ func NewConsoleWebSocketProxy(upstreamBaseURL string, tlsConfig *tls.Config) (ht
 		return nil, fmt.Errorf("upstream URL must include a host")
 	}
 
-	proxy := httputil.NewSingleHostReverseProxy(target)
+	// Rewrite, not Director: Director is deprecated as of Go 1.26. The reverse
+	// proxy sanitizes the outbound request before calling Rewrite -- hop-by-hop
+	// headers are removed and the upgrade headers restored for WebSocket
+	// handshakes, and inbound Forwarded and X-Forwarded-* headers are deleted
+	// -- whereas a Director runs before that cleanup, so a client-supplied
+	// Connection header can strip headers the Director sets, and inbound
+	// forwarding headers reach the upstream verbatim. Rewrite receives the
+	// sanitized request, which keeps the console upgrade path intact and sends
+	// no client-controlled forwarding headers upstream. SetURL clears Out.Host
+	// so the transport uses the target URL's host, matching the previous
+	// explicit req.Host assignment.
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.SetURL(target)
+			r.Out.URL.Path = consoleConnectPath
+			r.Out.URL.RawPath = ""
+		},
+	}
 	if target.Scheme == "https" {
 		proxy.Transport = &http.Transport{
 			TLSClientConfig: tlsConfig,
 		}
-	}
-
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		req.URL.Path = consoleConnectPath
-		req.URL.RawPath = ""
-		req.Host = target.Host
 	}
 
 	return proxy, nil

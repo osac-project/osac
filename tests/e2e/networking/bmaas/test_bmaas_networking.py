@@ -7,7 +7,7 @@ from typing import Any, ClassVar
 
 import pytest
 
-from tests.e2e.core.grpc_client import GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
 from tests.e2e.core.helpers import (
     wait_for_bmh_available,
     wait_for_bmi_cr,
@@ -295,6 +295,27 @@ class TestBmaasNetworking:
     ) -> None:
         _require(self.state, "bmi3")
         bmi3 = self.state["bmi3"]
+
+        def host_projection() -> str:
+            status = (
+                private_grpc.call(service=f"{PRIVATE_API}.BareMetalInstances/Get", data={"id": bmi3["id"]})
+                .get("object", {})
+                .get("status", {})
+            )
+            return str(status.get("external_host_name", status.get("externalHostName", "")))
+
+        projected_host = poll_until(
+            fn=host_projection,
+            until=lambda value: value == bmi3["bmh"],
+            retries=30,
+            delay=5,
+            description=f"Fulfillment host-name projection for BMI3 {bmi3['id']}",
+            resource_kind=WaitResourceKind.BARE_METAL_INSTANCE,
+            resource_id=bmi3["id"],
+        )
+        assert projected_host == bmi3["bmh"], (
+            f"Fulfillment projected host name {projected_host!r}, expected {bmi3['bmh']!r}"
+        )
 
         def find_auto_attachment() -> dict[str, Any] | None:
             attachments = grpc.call(service="osac.public.v1.ExternalIPAttachments/List")

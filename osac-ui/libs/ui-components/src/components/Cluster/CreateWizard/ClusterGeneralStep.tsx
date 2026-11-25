@@ -10,7 +10,7 @@ import {
 import PullSecretField from './fields/PullSecretField';
 import NameField from '../../Form/NameField';
 import OsacForm from '../../Form/OsacForm';
-import SshKeyField from '../../Form/SshKeyField';
+import SshPublicKeySecretField from '../../Form/SshPublicKeySecretField';
 import ProvisioningField from '../../ProvisioningWizard/fields/ProvisioningField';
 
 const ClusterGeneralStep = () => {
@@ -23,11 +23,20 @@ const ClusterGeneralStep = () => {
           if (!values.spec.pullSecretSecret.locked) {
             void setFieldValue(`${CLUSTER_PULL_SECRET_FORM_PATH}.value`, '');
           }
+          if (!values.spec.sshKey.locked) {
+            void setFieldValue(`${CLUSTER_SSH_KEY_FORM_PATH}.value`, '');
+          }
         }}
       />
       <NameField />
       <ProvisioningField name={CLUSTER_SSH_KEY_FORM_PATH}>
-        {({ valueName, isDisabled }) => <SshKeyField name={valueName} isDisabled={isDisabled} />}
+        {({ valueName, isDisabled }) => (
+          <SshPublicKeySecretField
+            name={valueName}
+            project={values.metadata.project}
+            isDisabled={isDisabled}
+          />
+        )}
       </ProvisioningField>
       <ProvisioningField name={CLUSTER_PULL_SECRET_FORM_PATH}>
         {({ valueName, isDisabled }) => (

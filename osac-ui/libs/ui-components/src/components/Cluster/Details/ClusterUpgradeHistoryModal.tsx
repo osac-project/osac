@@ -44,7 +44,7 @@ const ClusterUpgradeHistoryModal = ({ attempts, onClose }: ClusterUpgradeHistory
       <ModalHeader title={t('Upgrade history')} labelId="cluster-upgrade-history-title" />
       <ModalBody>
         {attempts.length === 0 ? (
-          <Content component="p">{t('No control plane upgrades have been recorded.')}</Content>
+          <Content component="p">{t('No cluster upgrades have been recorded.')}</Content>
         ) : (
           <Table aria-label={t('Upgrade history')} variant="compact">
             <Thead>

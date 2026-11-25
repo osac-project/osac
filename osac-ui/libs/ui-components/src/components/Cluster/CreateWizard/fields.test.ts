@@ -37,7 +37,7 @@ describe('getInitialFormValues — node sets', () => {
                 items: {
                   workers: {
                     size: 2,
-                    baremetalInstanceType: { id: 'bmit-worker', name: 'worker', shared: true },
+                    baremetalInstanceType: { id: 'bmit-worker', name: 'worker', tenant: 'shared' },
                   },
                 },
               },

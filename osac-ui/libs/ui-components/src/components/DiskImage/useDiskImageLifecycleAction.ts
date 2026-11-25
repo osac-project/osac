@@ -11,7 +11,8 @@ import { useToast } from '../Toast/useToast';
 export type DiskImageLifecycleAction = Exclude<DiskImageLifecycle, DiskImageLifecycle.UNSPECIFIED>;
 
 const DISK_IMAGE_LIFECYCLE_ACTION_RULES = {
-  canDeprecate: [DiskImageLifecycle.AVAILABLE],
+  // OSAC-6385: match InstanceType, which also allows deprecating an obsolete image.
+  canDeprecate: [DiskImageLifecycle.AVAILABLE, DiskImageLifecycle.OBSOLETE],
   canObsolete: [DiskImageLifecycle.AVAILABLE, DiskImageLifecycle.DEPRECATED],
   canReactivate: [DiskImageLifecycle.DEPRECATED, DiskImageLifecycle.OBSOLETE],
   canDelete: [DiskImageLifecycle.OBSOLETE],

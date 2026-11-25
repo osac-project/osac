@@ -240,7 +240,7 @@ describe('ClusterCatalogItemWizard', () => {
           items: {
             workers: {
               size: 3,
-              baremetalInstanceType: { id: HOST_TYPE.id, name: 'worker', shared: true },
+              baremetalInstanceType: { id: HOST_TYPE.id, name: 'worker', tenant: 'shared' },
             },
           },
         },
@@ -316,7 +316,7 @@ describe('ClusterCatalogItemWizard', () => {
         version: {
           behavior: {
             case: 'locked',
-            value: { id: 'version-1', name: '4-17-0', shared: true },
+            value: { id: 'version-1', name: '4-17-0', tenant: 'shared' },
           },
         },
         network: {
@@ -356,7 +356,7 @@ describe('ClusterCatalogItemWizard', () => {
         version: {
           behavior: {
             case: 'locked',
-            value: { id: 'version-1', name: '4-17-0', shared: true },
+            value: { id: 'version-1', name: '4-17-0', tenant: 'shared' },
           },
         },
       },

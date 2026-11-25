@@ -49,13 +49,11 @@ export const clusterStatusFilterLabel = (filter: ClusterStatusFilter, t: TFuncti
 
 export const isClusterSpecFilterValue = (value: string): value is string => value.trim().length > 0;
 
-export const getControlPlaneUpgradeHistory = (cluster: Cluster): ClusterUpgradeHistoryEntry[] =>
-  cluster.status?.upgradeHistory.filter(
-    (entry) => entry.component?.target.case === 'controlPlane',
-  ) ?? [];
+export const getClusterUpgradeHistory = (cluster: Cluster): ClusterUpgradeHistoryEntry[] =>
+  cluster.status?.upgradeHistory ?? [];
 
-export const getActiveControlPlaneUpgradeTarget = (cluster: Cluster): string | undefined => {
-  const latestAttempt = getControlPlaneUpgradeHistory(cluster)[0];
+export const getActiveClusterUpgradeTarget = (cluster: Cluster): string | undefined => {
+  const latestAttempt = getClusterUpgradeHistory(cluster)[0];
   const active =
     latestAttempt?.state === ClusterUpgradeState.PENDING ||
     latestAttempt?.state === ClusterUpgradeState.PROGRESSING;

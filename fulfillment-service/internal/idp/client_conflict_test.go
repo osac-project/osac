@@ -22,6 +22,8 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 )
@@ -218,6 +220,44 @@ var _ = Describe("Client conflict handling", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("failed to add user to organization group"))
 		})
+	})
+
+	Describe("RemoveUserFromGroup", func() {
+		DescribeTable("classifies only Keycloak's exact missing-user response as NotFound",
+			func(responseStatus int, responseBody string, expectedCode codes.Code) {
+				mux.HandleFunc("GET /admin/realms/osac/organizations", func(w http.ResponseWriter, r *http.Request) {
+					defer GinkgoRecover()
+					w.Header().Set("Content-Type", "application/json")
+					Expect(json.NewEncoder(w).Encode([]keycloakOrganization{
+						{ID: "org-123", Name: "shared"},
+					})).To(Succeed())
+				})
+				mux.HandleFunc("DELETE /admin/realms/osac/organizations/org-123/groups/group-456/members/user-789", func(w http.ResponseWriter, r *http.Request) {
+					defer GinkgoRecover()
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(responseStatus)
+					if responseBody != "" {
+						_, err := w.Write([]byte(responseBody))
+						Expect(err).To(Succeed())
+					}
+				})
+
+				err := client.RemoveUserFromGroup(ctx, "shared", "user-789", "group-456")
+				if expectedCode == codes.OK {
+					Expect(err).ToNot(HaveOccurred())
+				} else {
+					Expect(err).To(HaveOccurred())
+				}
+				Expect(status.Code(err)).To(Equal(expectedCode))
+			},
+			Entry("successful removal", http.StatusNoContent, "", codes.OK),
+			Entry("missing user", http.StatusNotFound, `{"errorMessage":"User does not exist"}`, codes.NotFound),
+			Entry("generic route 404", http.StatusNotFound, `{"error":"HTTP 404 Not Found"}`, codes.Unknown),
+			Entry("empty 404", http.StatusNotFound, "", codes.Unknown),
+			Entry("malformed JSON 404", http.StatusNotFound, `{"errorMessage":"User does not exist"`, codes.Unknown),
+			Entry("missing group", http.StatusNotFound, `{"errorMessage":"Group does not exist"}`, codes.Unknown),
+			Entry("server failure", http.StatusInternalServerError, `{"errorMessage":"User does not exist"}`, codes.Unknown),
+		)
 	})
 
 	Describe("CreateTenant end-to-end race simulation", func() {

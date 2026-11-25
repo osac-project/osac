@@ -8,7 +8,8 @@ route:
 
 api:
   fulfillment:
-    url: https://fulfillment-api:8000
+    # The UI proxy requires access to both public and private RPCs.
+    url: https://fulfillment-internal-api:8001
     # Certificate configuration for Fulfillment API
     certs:
       # This defines the trusted CA certificates bundle. It must be the name of a configmap in the release namespace

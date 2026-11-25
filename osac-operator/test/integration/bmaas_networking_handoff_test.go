@@ -340,9 +340,10 @@ var _ = Describe("BMaaS NetworkAttachment handoff on deployed controllers",
 			Eventually(func(g Gomega) {
 				attachment := getBMAASObjectWith(g, "NetworkAttachment", fixture.attachment)
 				g.Expect(attachment.GetDeletionTimestamp()).NotTo(BeNil())
-				g.Expect(attachment.GetFinalizers()).To(ContainElements(
-					"osac.openshift.io/networkattachment", bmaasNetworkingFinalizer,
-				))
+				// OSAC holds Fabric cleanup on the NA. BMF keeps ownership on the
+				// BMI (and ownerReference), not via a BMF finalizer on the NA.
+				g.Expect(attachment.GetFinalizers()).To(ContainElement("osac.openshift.io/networkattachment"))
+				g.Expect(attachment.GetFinalizers()).NotTo(ContainElement(bmaasNetworkingFinalizer))
 				bmi := getBMAASObjectWith(g, "BareMetalInstance", fixture.id)
 				g.Expect(bmi.GetFinalizers()).To(ContainElement(bmaasNetworkingFinalizer))
 				g.Expect(bmi.GetFinalizers()[len(bmi.GetFinalizers())-1]).To(Equal(bmaasFeedbackFinalizer))

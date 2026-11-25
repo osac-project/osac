@@ -3165,6 +3165,7 @@ var _ = Describe("BareMetalInstance networking feature gate (OSAC_ENABLE_NETWORK
 		bareMetalInstance *v1alpha1.BareMetalInstance
 
 		triggerRestartCallCount int
+		powerStateRequests      []management.PowerState
 	)
 
 	BeforeEach(func() {
@@ -3172,8 +3173,13 @@ var _ = Describe("BareMetalInstance networking feature gate (OSAC_ENABLE_NETWORK
 		mockMgmtClient = &mockManagementClient{}
 
 		triggerRestartCallCount = 0
+		powerStateRequests = nil
 		mockMgmtClient.triggerRestartFunc = func(_ context.Context, _ string) error {
 			triggerRestartCallCount++
+			return nil
+		}
+		mockMgmtClient.setPowerStateFunc = func(_ context.Context, _ string, target management.PowerState) error {
+			powerStateRequests = append(powerStateRequests, target)
 			return nil
 		}
 		mockMgmtClient.isRestartCompleteFunc = func(_ context.Context, _ string) (bool, error) {
@@ -3213,26 +3219,31 @@ var _ = Describe("BareMetalInstance networking feature gate (OSAC_ENABLE_NETWORK
 			)
 		})
 
-		It("skips move, reboot, and IP discovery in reconcileNetworkProvisionAndDiscovery", func() {
+		It("reports disabled network phases without requesting a handoff power-off", func() {
 			result, err := reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bareMetalInstance)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(result).To(Equal(ctrl.Result{}))
-			Expect(triggerRestartCallCount).To(Equal(0), "must not reboot when networking is disabled")
+			Expect(powerStateRequests).NotTo(ContainElement(management.PowerOff),
+				"disabled networking must not request a handoff power-off")
 
-			netCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkAttachmentsReady)
-			Expect(netCond).NotTo(BeNil())
-			Expect(netCond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(netCond.Reason).To(Equal(v1alpha1.HostConditionReasonProvisioningDisabled))
+			expectNetworkingProvisioningDisabledConditions(bareMetalInstance)
+		})
 
-			handoffCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionNetworkHandoffComplete)
-			Expect(handoffCond).NotTo(BeNil())
-			Expect(handoffCond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(handoffCond.Reason).To(Equal(v1alpha1.HostConditionReasonProvisioningDisabled))
+		It("normalizes legacy True/Skipped network conditions", func() {
+			for _, conditionType := range []v1alpha1.BareMetalInstanceConditionType{
+				v1alpha1.HostConditionNetworkAttachmentsReady,
+				v1alpha1.HostConditionNetworkHandoffComplete,
+				v1alpha1.HostConditionIPDiscoveryComplete,
+			} {
+				bareMetalInstance.SetStatusCondition(conditionType,
+					metav1.ConditionTrue, "Skipped", "Networking provisioning disabled")
+			}
 
-			ipCond := bareMetalInstance.GetStatusCondition(v1alpha1.HostConditionIPDiscoveryComplete)
-			Expect(ipCond).NotTo(BeNil())
-			Expect(ipCond.Status).To(Equal(metav1.ConditionTrue))
-			Expect(ipCond.Reason).To(Equal(v1alpha1.HostConditionReasonProvisioningDisabled))
+			result, err := reconciler.reconcileNetworkProvisionAndDiscovery(ctx, bareMetalInstance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result).To(Equal(ctrl.Result{}))
+
+			expectNetworkingProvisioningDisabledConditions(bareMetalInstance)
 		})
 	})
 
@@ -3258,3 +3269,30 @@ var _ = Describe("BareMetalInstance networking feature gate (OSAC_ENABLE_NETWORK
 		})
 	})
 })
+
+func expectNetworkingProvisioningDisabledConditions(bareMetalInstance *v1alpha1.BareMetalInstance) {
+	for _, expected := range []struct {
+		conditionType v1alpha1.BareMetalInstanceConditionType
+		message       string
+	}{
+		{
+			conditionType: v1alpha1.HostConditionNetworkAttachmentsReady,
+			message:       "Network attachment provisioning is disabled; no attachment was created",
+		},
+		{
+			conditionType: v1alpha1.HostConditionNetworkHandoffComplete,
+			message:       "Network handoff is disabled; no host power cycle was requested",
+		},
+		{
+			conditionType: v1alpha1.HostConditionIPDiscoveryComplete,
+			message:       "IP lease discovery is disabled; no lease was queried",
+		},
+	} {
+		condition := bareMetalInstance.GetStatusCondition(expected.conditionType)
+		Expect(condition).NotTo(BeNil(), string(expected.conditionType))
+		Expect(condition.Status).To(Equal(metav1.ConditionTrue), string(expected.conditionType))
+		Expect(condition.Reason).To(
+			Equal(v1alpha1.HostConditionReasonProvisioningDisabled), string(expected.conditionType))
+		Expect(condition.Message).To(Equal(expected.message), string(expected.conditionType))
+	}
+}

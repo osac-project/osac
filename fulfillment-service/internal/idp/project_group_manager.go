@@ -151,6 +151,12 @@ func (m *ProjectGroupManager) getGroupIDByPath(ctx context.Context, tenantName, 
 // These groups are used by Authorino OPA policies for authorization.
 // Returns the managers group ID for immediate use (avoids timing issues with group lookup).
 func (m *ProjectGroupManager) CreateProjectGroups(ctx context.Context, tenant, projectPath string) (string, error) {
+	managersGroupID, err := m.EnsureProjectGroups(ctx, tenant, projectPath)
+	return managersGroupID, err
+}
+
+// EnsureProjectGroups creates the project authorization groups and returns the managers group ID.
+func (m *ProjectGroupManager) EnsureProjectGroups(ctx context.Context, tenant, projectPath string) (string, error) {
 	if tenant == "" {
 		return "", fmt.Errorf("tenant is required")
 	}
@@ -171,7 +177,7 @@ func (m *ProjectGroupManager) CreateProjectGroups(ctx context.Context, tenant, p
 
 	// Create the viewers group:
 	viewersGroupPath := path.Join(projectPath, GroupNameViewers)
-	viewersGroupID, err := m.client.CreateGroup(ctx, tenant, viewersGroupPath)
+	viewersGroupID, viewersCreated, err := m.createGroup(ctx, tenant, viewersGroupPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to create viewers group: %w", err)
 	}
@@ -186,17 +192,19 @@ func (m *ProjectGroupManager) CreateProjectGroups(ctx context.Context, tenant, p
 
 	// Create the managers group:
 	managersGroupPath := path.Join(projectPath, GroupNameManagers)
-	managersGroupID, err := m.client.CreateGroup(ctx, tenant, managersGroupPath)
+	managersGroupID, _, err := m.createGroup(ctx, tenant, managersGroupPath)
 	if err != nil {
-		// Clean up viewers group on failure
-		if cleanupErr := m.client.DeleteGroup(ctx, tenant, viewersGroupID); cleanupErr != nil {
-			m.logger.ErrorContext(
-				ctx,
-				"Failed to cleanup viewers group during rollback",
-				slog.String("group_id", viewersGroupID),
-				slog.Any("cleanup_error", cleanupErr),
-			)
-			return "", fmt.Errorf("failed to create managers group: %w (rollback also failed: %w)", err, cleanupErr)
+		if viewersCreated {
+			// Clean up only the viewers group created by this call.
+			if cleanupErr := m.client.DeleteGroup(ctx, tenant, viewersGroupID); cleanupErr != nil {
+				m.logger.ErrorContext(
+					ctx,
+					"Failed to cleanup viewers group during rollback",
+					slog.String("group_id", viewersGroupID),
+					slog.Any("cleanup_error", cleanupErr),
+				)
+				return "", fmt.Errorf("failed to create managers group: %w (rollback also failed: %w)", err, cleanupErr)
+			}
 		}
 		return "", fmt.Errorf("failed to create managers group: %w", err)
 	}
@@ -210,6 +218,10 @@ func (m *ProjectGroupManager) CreateProjectGroups(ctx context.Context, tenant, p
 	)
 
 	return managersGroupID, nil
+}
+
+func (m *ProjectGroupManager) createGroup(ctx context.Context, tenant, groupPath string) (string, bool, error) {
+	return m.client.CreateGroup(ctx, tenant, groupPath)
 }
 
 // AddUserToProjectGroup adds a user to a project group (system:viewers or system:managers).

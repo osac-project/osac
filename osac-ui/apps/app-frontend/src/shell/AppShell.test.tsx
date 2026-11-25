@@ -37,6 +37,18 @@ describe('AppShell', () => {
     expect(await screen.findByRole('heading', { name: 'Storage routes' })).toBeInTheDocument();
   });
 
+  it('renders the subnets list route through the tenant shell', async () => {
+    renderAppShell('/networking/subnets', 'tenant-admin');
+
+    expect(await screen.findByRole('heading', { name: 'Subnets' })).toBeInTheDocument();
+  });
+
+  it('renders the subnet create route through the tenant shell', async () => {
+    renderAppShell('/networking/subnets/create', 'tenant-admin');
+
+    expect(await screen.findByRole('heading', { name: 'Create subnet' })).toBeInTheDocument();
+  });
+
   it('renders the instance type list route through the admin shell', async () => {
     renderAppShell('/admin/infrastructure/instance-types');
 

@@ -63,6 +63,18 @@ export const defaultSubnetListFilter = () =>
     ),
   );
 
+// The tenant default subnet of one network in any state: the create readiness
+// gate must tell "not created yet or not ready" from "ready", so unlike
+// `defaultSubnetListFilter` it does not filter on the state.
+export const tenantDefaultSubnetFilter = (virtualNetworkId: string) =>
+  cel<Subnet>((filter) =>
+    filter.and(
+      DEFAULT_NETWORK_LABEL_FILTER as CelFilter<Subnet>,
+      filter.field('metadata.project').equals(''),
+      filter.field('spec.virtualNetwork.id').equals(virtualNetworkId),
+    ),
+  );
+
 export const defaultSecurityGroupListFilter = (virtualNetworkId: string) =>
   cel<SecurityGroup>((filter) =>
     filter.and(

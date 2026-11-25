@@ -196,6 +196,12 @@ const getNetworkNav = (t: TFunction): NavRow => ({
     },
     {
       kind: 'link',
+      id: 'subnets',
+      label: t('Subnets'),
+      path: '/networking/subnets',
+    },
+    {
+      kind: 'link',
       id: 'security-groups',
       label: t('Security groups'),
       path: '/networking/security-groups',

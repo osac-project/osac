@@ -110,7 +110,7 @@ const renderPage = (
         element={<AttachNatGatewayWizardPage />}
       />
       <Route path="/networking/virtual-networks" element={<div>virtual networks list</div>} />
-      <Route path="/networking/subnets/:id" element={<div>subnet details</div>} />
+      <Route path="/networking/subnets/create" element={<div>subnet create</div>} />
       <Route path="/networking/virtual-networks/:id" element={<VirtualNetworkDetailPage />} />
     </Routes>,
     {
@@ -144,7 +144,7 @@ describe('VirtualNetworkDetailPage', () => {
 
     expect(await screen.findByText('subnet-a')).toBeInTheDocument();
     expect(await screen.findByRole('link', { name: 'sg-web' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Create subnet' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Create subnet' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Create security group' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^(Edit|Update)/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: /^(Edit|Update)/ })).not.toBeInTheDocument();
@@ -237,13 +237,20 @@ describe('VirtualNetworkDetailPage', () => {
     expect(screen.queryByRole('heading', { name: /Delete nat-egress\?/ })).not.toBeInTheDocument();
   });
 
-  it('links each subnet to its detail page', async () => {
+  it('links the subnet create action to the create page with this network', async () => {
     renderPage();
 
-    expect(await screen.findByRole('link', { name: 'subnet-a' })).toHaveAttribute(
+    expect(await screen.findByRole('link', { name: 'Create subnet' })).toHaveAttribute(
       'href',
-      '/networking/subnets/subnet-1',
+      '/networking/subnets/create?virtualNetwork=vn-1',
     );
+  });
+
+  it('does not link a subnet name because a subnet has no page', async () => {
+    renderPage();
+
+    expect(await screen.findByText('subnet-a')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'subnet-a' })).not.toBeInTheDocument();
   });
 
   describe('delete', () => {

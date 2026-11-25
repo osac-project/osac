@@ -23,6 +23,7 @@ import {
   type NATGateway,
   SecurityGroups,
   Subnets,
+  type VirtualNetwork,
   VirtualNetworkState,
   VirtualNetworks,
 } from '@osac/types';
@@ -41,8 +42,8 @@ import { DetachNatGatewayModal } from '../../components/networking/DetachNatGate
 import NatGatewayCard from '../../components/networking/NatGatewayCard';
 import { SecurityGroupCreateModal } from '../../components/networking/SecurityGroupCreateModal';
 import { SecurityGroupStatusLabel } from '../../components/networking/SecurityGroupStatusLabel';
-import { SubnetCreateModal } from '../../components/networking/SubnetCreateModal';
-import { SubnetStatusLabel } from '../../components/networking/SubnetStatusLabel';
+import { subnetsCreatePath } from '../../components/networking/subnet-list-utils';
+import { SubnetsTable } from '../../components/networking/SubnetsTable';
 import { VirtualNetworkStatusLabel } from '../../components/networking/VirtualNetworkStatusLabel';
 import ListPage from '../../components/Page/ListPage';
 import ListPageBody from '../../components/Page/ListPageBody';
@@ -51,11 +52,12 @@ import { useTranslation } from '../../hooks/useTranslation';
 import { getErrorMessage } from '../../utils/error';
 import { defaultResourceDeleteReason } from '../../utils/networking';
 
+const EMPTY_VIRTUAL_NETWORKS = new Map<string, VirtualNetwork>();
+
 export const VirtualNetworkDetailPage = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { id = '' } = useParams<{ id: string }>();
-  const [isSubnetModalOpen, setIsSubnetModalOpen] = useState(false);
   const [isSecurityGroupModalOpen, setIsSecurityGroupModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [detachTarget, setDetachTarget] = useState<NATGateway>();
@@ -167,7 +169,7 @@ export const VirtualNetworkDetailPage = () => {
                         <CreateButton
                           service={Subnets}
                           variant="secondary"
-                          onClick={() => setIsSubnetModalOpen(true)}
+                          to={subnetsCreatePath(id)}
                         >
                           {t('Create subnet')}
                         </CreateButton>
@@ -188,31 +190,11 @@ export const VirtualNetworkDetailPage = () => {
                         {t('No subnets yet. Create one to get started.')}
                       </SubtleContent>
                     ) : (
-                      <Table aria-label={t('Subnets')} variant="compact" borders>
-                        <Thead>
-                          <Tr>
-                            <Th>{t('Name')}</Th>
-                            <Th>{t('Status')}</Th>
-                            <Th>{t('CIDR')}</Th>
-                          </Tr>
-                        </Thead>
-                        <Tbody>
-                          {subnets.map((subnet) => (
-                            <Tr key={subnet.id}>
-                              <Td dataLabel="Name">
-                                <ResourceNameField
-                                  resource={subnet}
-                                  detailsUrl={`/networking/subnets/${subnet.id}`}
-                                />
-                              </Td>
-                              <Td dataLabel="Status">
-                                <SubnetStatusLabel state={subnet.status?.state} />
-                              </Td>
-                              <Td dataLabel="CIDR">{subnet.spec?.ipv4Cidr ?? '—'}</Td>
-                            </Tr>
-                          ))}
-                        </Tbody>
-                      </Table>
+                      <SubnetsTable
+                        subnets={subnets}
+                        virtualNetworksById={EMPTY_VIRTUAL_NETWORKS}
+                        showVirtualNetwork={false}
+                      />
                     )}
                   </CardBody>
                 </Card>
@@ -304,13 +286,6 @@ export const VirtualNetworkDetailPage = () => {
         />
       )}
 
-      {isSubnetModalOpen && vn && (
-        <SubnetCreateModal
-          onClose={() => setIsSubnetModalOpen(false)}
-          parentVN={vn}
-          existingSubnets={subnets}
-        />
-      )}
       {detachTarget && (
         <DetachNatGatewayModal
           natGateway={detachTarget}

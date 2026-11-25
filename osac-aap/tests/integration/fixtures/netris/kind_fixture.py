@@ -28,6 +28,7 @@ PORT = 8080
 FIXTURE_DIR = Path(__file__).resolve().parent
 FAKE_NETRIS = FIXTURE_DIR / "fake_netris.py"
 RESOURCE_TYPES = ("configmap", "service", "deployment")
+RUN_ID_LABEL = "osac.openshift.io/test-run-id"
 
 
 def _validate_dns_label(value: str, field: str) -> None:
@@ -44,17 +45,21 @@ def build_resources(
     namespace: str,
     image: str,
     pull_policy: str = "IfNotPresent",
+    run_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build the namespaced resources for one isolated fake Netris server."""
     _validate_dns_label(name, "name")
     _validate_dns_label(namespace, "namespace")
     if not image.strip():
         raise ValueError("image must not be empty")
+    if run_id is None:
+        run_id = uuid.uuid4().hex
 
     labels = {
         "app.kubernetes.io/name": "netris-fake",
         "app.kubernetes.io/instance": name,
         "app.kubernetes.io/managed-by": "osac-aap-test-fixture",
+        RUN_ID_LABEL: run_id,
     }
     metadata = _metadata(name, namespace, labels)
     fake_source = FAKE_NETRIS.read_text(encoding="utf-8")
@@ -176,6 +181,7 @@ class NetrisKindFixture:
         self.kubeconfig = kubeconfig
         self.readiness_timeout = readiness_timeout
         self.pull_policy = pull_policy
+        self._run_id = uuid.uuid4().hex
         self._created_resources: list[str] | None = None
         self._port_forward: subprocess.Popen[str] | None = None
         self._port_forward_log: IO[str] | None = None
@@ -211,7 +217,7 @@ class NetrisKindFixture:
             raise RuntimeError(f"kubectl {' '.join(args[:2])} failed: {message}")
         return result
 
-    def _delete(self, resources: list[str]) -> None:
+    def _delete(self, resources: list[str], *, run_id: str | None = None) -> None:
         if not resources:
             return
         resource_types = ",".join(
@@ -221,6 +227,8 @@ class NetrisKindFixture:
             "app.kubernetes.io/managed-by=osac-aap-test-fixture,"
             f"app.kubernetes.io/instance={self.name}"
         )
+        if run_id is not None:
+            selector += f",{RUN_ID_LABEL}={run_id}"
         result = subprocess.run(
             self._kubectl_command(
                 "delete",
@@ -253,9 +261,16 @@ class NetrisKindFixture:
                 self.namespace,
                 self.image,
                 self.pull_policy,
+                self._run_id,
             ):
                 kind = resource["kind"].lower()
-                self._run_kubectl("create", "-f", "-", input_text=json.dumps(resource))
+                self._run_kubectl(
+                    "create",
+                    "-f",
+                    "-",
+                    input_text=json.dumps(resource),
+                    timeout=self.readiness_timeout,
+                )
                 self._created_resources.append(f"{kind}/{self.name}")
             self._run_kubectl(
                 "rollout",
@@ -266,8 +281,11 @@ class NetrisKindFixture:
             )
             return self.service_url
         except Exception as error:
+            self._created_resources = [
+                f"{kind}/{self.name}" for kind in RESOURCE_TYPES
+            ]
             try:
-                self._delete(self._created_resources)
+                self._delete(self._created_resources, run_id=self._run_id)
                 self._created_resources.clear()
             except Exception as cleanup_error:
                 raise RuntimeError(
@@ -346,9 +364,11 @@ class NetrisKindFixture:
     def stop(self) -> None:
         if self._created_resources is None:
             resources = [f"{kind}/{self.name}" for kind in RESOURCE_TYPES]
+            run_id = None
         else:
             resources = list(self._created_resources)
-        self._delete(resources)
+            run_id = self._run_id
+        self._delete(resources, run_id=run_id)
         if self._created_resources is not None:
             self._created_resources.clear()
 

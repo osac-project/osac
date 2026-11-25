@@ -29,7 +29,7 @@ def test_start_creates_a_private_service_with_the_existing_fake(monkeypatch):
     calls = []
 
     def run(command, *, input=None, text, capture_output, check, timeout=None):
-        calls.append((command, input))
+        calls.append((command, input, timeout))
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(kind_fixture.subprocess, "run", run)
@@ -43,8 +43,22 @@ def test_start_creates_a_private_service_with_the_existing_fake(monkeypatch):
 
     assert fixture.start() == "http://netris-fake-test.osac-tests.svc.cluster.local:8080"
 
-    created = [json.loads(payload) for command, payload in calls if "create" in command]
+    created = [
+        json.loads(payload)
+        for command, payload, _ in calls
+        if "create" in command
+    ]
     assert [resource["kind"] for resource in created] == ["ConfigMap", "Service", "Deployment"]
+    run_ids = {
+        resource["metadata"]["labels"]["osac.openshift.io/test-run-id"]
+        for resource in created
+    }
+    assert len(run_ids) == 1
+    assert all(
+        timeout == fixture.readiness_timeout
+        for command, _, timeout in calls
+        if "create" in command
+    )
     config_map, service, deployment = created
     assert config_map["data"]["fake_netris.py"] == (
         FIXTURE_DIR / "fake_netris.py"
@@ -64,16 +78,35 @@ def test_start_creates_a_private_service_with_the_existing_fake(monkeypatch):
         "--state-file",
         "/state/state.json",
     ]
-    assert any("rollout" in command and "status" in command for command, _ in calls)
+    assert any(
+        "rollout" in command and "status" in command
+        for command, _, _ in calls
+    )
 
 
-def test_start_removes_only_resources_created_before_a_failure(monkeypatch):
+def test_start_cleans_up_a_resource_persisted_before_create_times_out(monkeypatch):
     calls = []
+    server_resources = {}
 
     def run(command, *, input=None, text, capture_output, check, timeout=None):
-        calls.append((command, input))
-        if "create" in command and json.loads(input)["kind"] == "Service":
-            return subprocess.CompletedProcess(command, 1, stdout="", stderr="service rejected")
+        calls.append((command, input, timeout))
+        if "create" in command:
+            resource = json.loads(input)
+            resource_type = resource["kind"].lower()
+            server_resources[(resource_type, resource["metadata"]["name"])] = resource
+            if resource["kind"] == "Service":
+                raise subprocess.TimeoutExpired(command, timeout)
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if "delete" in command:
+            resource_types = set(command[command.index("delete") + 1].split(","))
+            selector = command[command.index("--selector") + 1]
+            selected_labels = dict(item.split("=", 1) for item in selector.split(","))
+            for key, resource in list(server_resources.items()):
+                labels = resource["metadata"]["labels"]
+                if key[0] in resource_types and all(
+                    labels.get(label) == value for label, value in selected_labels.items()
+                ):
+                    del server_resources[key]
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     monkeypatch.setattr(kind_fixture.subprocess, "run", run)
@@ -85,13 +118,81 @@ def test_start_removes_only_resources_created_before_a_failure(monkeypatch):
         readiness_timeout=15,
     )
 
-    with pytest.raises(RuntimeError, match="service rejected"):
+    with pytest.raises(subprocess.TimeoutExpired):
         fixture.start()
 
-    delete = next(command for command, _ in calls if "delete" in command)
+    create_calls = [call for call in calls if "create" in call[0]]
+    assert [timeout for _, _, timeout in create_calls] == [15, 15]
+    service = json.loads(create_calls[-1][1])
+    run_id = service["metadata"]["labels"]["osac.openshift.io/test-run-id"]
+
+    delete = next(command for command, _, _ in calls if "delete" in command)
     selector_index = delete.index("--selector")
-    assert delete[delete.index("delete") + 1 : selector_index] == ["configmap"]
-    assert "configmap/netris-fake-test" not in delete
+    assert delete[delete.index("delete") + 1 : selector_index] == [
+        "configmap,service,deployment"
+    ]
+    assert f"osac.openshift.io/test-run-id={run_id}" in delete[selector_index + 1]
+    assert server_resources == {}
+
+
+def test_start_cleanup_preserves_prior_run_resources_with_the_same_name(monkeypatch):
+    fixture = kind_fixture.NetrisKindFixture(
+        name="netris-fake-test",
+        namespace="osac-tests",
+        image="registry.example/osac-aap:test",
+        kubectl="kubectl",
+    )
+    prior_resources = kind_fixture.build_resources(
+        fixture.name,
+        fixture.namespace,
+        fixture.image,
+        run_id="prior-run",
+    )
+    server_resources = {
+        (resource["kind"].lower(), fixture.name): resource
+        for resource in prior_resources
+    }
+    calls = []
+
+    def run(command, *, input=None, text, capture_output, check, timeout=None):
+        calls.append(command)
+        if "create" in command:
+            resource = json.loads(input)
+            key = (resource["kind"].lower(), resource["metadata"]["name"])
+            if key in server_resources:
+                return subprocess.CompletedProcess(
+                    command,
+                    1,
+                    stdout="",
+                    stderr=f'Error from server (AlreadyExists): {key[0]} "{key[1]}" already exists',
+                )
+            server_resources[key] = resource
+        elif "delete" in command:
+            resource_types = set(command[command.index("delete") + 1].split(","))
+            selector = command[command.index("--selector") + 1]
+            selected_labels = dict(item.split("=", 1) for item in selector.split(","))
+            for key, resource in list(server_resources.items()):
+                labels = resource["metadata"]["labels"]
+                if key[0] in resource_types and all(
+                    labels.get(label) == value for label, value in selected_labels.items()
+                ):
+                    del server_resources[key]
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(kind_fixture.subprocess, "run", run)
+
+    with pytest.raises(RuntimeError, match="AlreadyExists"):
+        fixture.start()
+
+    assert len(server_resources) == len(prior_resources)
+    assert all(
+        resource["metadata"]["labels"]["osac.openshift.io/test-run-id"] == "prior-run"
+        for resource in server_resources.values()
+    )
+    delete = next(command for command in calls if "delete" in command)
+    assert f"osac.openshift.io/test-run-id={fixture._run_id}" in delete[
+        delete.index("--selector") + 1
+    ]
 
 
 def test_admin_port_forward_listens_on_loopback(monkeypatch):

@@ -1394,6 +1394,18 @@ helm-template: helm-infra-deps ## Dry-run render all templates
 	helm template osac $(OSAC_CHART) --values $(HELM_VALIDATION_VALUES)
 
 # Schema-error patterns accept Helm 3 dotted paths and Helm 4 JSON pointers.
+
+.PHONY: helm-unit
+helm-unit: helm-deps ## Run Helm unit tests
+	@helm plugin list | grep -q '^unittest' || { \
+		echo "ERROR: the helm-unittest plugin is required. Install it with:" >&2; \
+		echo "  helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.8.2" >&2; \
+		exit 1; \
+	}
+	helm unittest $(OSAC_CHART) -s=false
+	helm unittest ../osac-metering/charts/osac-metering
+	helm unittest ../fulfillment-service/charts/service
+
 .PHONY: csi-render-test
 csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider chart rendering
 	@set -euo pipefail; \
@@ -1551,7 +1563,7 @@ chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/
 	uv run --project .. python scripts/test-chart-name-independence-render.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test network-class-step-test input-validation-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test lvms-optional-path-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint helm-unit service-account-idp-render-test csi-render-test helm-networking-test observability-render-test netris-ca-lifecycle-test network-class-step-test input-validation-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test lvms-optional-path-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \
@@ -1576,6 +1588,10 @@ helm-networking-test: helm-deps ## Test global.networking values, validation, an
 	uv run --project .. python scripts/test-networking-values.py
 	python3 scripts/test_it_networking_checks.py
 	uv run --with ansible-core --project .. python scripts/test-networking-provisioning-overlay.py
+
+.PHONY: observability-render-test
+observability-render-test: helm-deps ## Check the metrics scrape wiring renders as designed
+	./scripts/test-observability-render.sh
 
 .PHONY: network-class-step-test
 network-class-step-test: ## Test the installer NetworkClass step against a fake fulfillment API

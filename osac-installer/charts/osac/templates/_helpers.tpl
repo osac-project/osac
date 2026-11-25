@@ -270,6 +270,18 @@ cannot express.
 */}}
 {{- define "osac.validateValues" -}}
 {{- include "osac.networking.validate" . -}}
+{{- /* global.observability is the single enablement switch: it reaches both the
+     umbrella templates and the subcharts, so there is no second copy to compare
+     against. The interval is validated here, on every render, because the
+     component charts cannot see the umbrella's defaults. Never default the
+     value here: an empty interval must fail, not silently become 30s. */ -}}
+{{- $globalObservability := (.Values.global | default dict).observability | default dict -}}
+{{- $collection := $globalObservability.collection | default dict -}}
+{{- $observabilityInterval := $collection.osacControlPlane | default "" | toString -}}
+{{- $observabilityPattern := "^([0-9]+(ms|s|m|h|d|w|y))+$" -}}
+{{- if or (not (regexMatch $observabilityPattern $observabilityInterval)) (not (regexMatch "[1-9]" $observabilityInterval)) -}}
+  {{- fail (printf "global.observability.collection.osacControlPlane must be a positive Prometheus duration (got %q)" $observabilityInterval) }}
+{{- end -}}
 {{- end -}}
 
 {{/*

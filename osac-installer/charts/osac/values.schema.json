@@ -147,6 +147,31 @@
           },
           "additionalProperties": false
         },
+        "observability": {
+          "type": "object",
+          "description": "OSAC control-plane metrics collection. This is the single observability switch: it reaches both the umbrella templates and the subcharts. It does not deploy storage or querying.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable the platform-monitoring namespace labels, the namespace-scoped scrape RBAC, and the plain-HTTP ServiceMonitors. Does not enable storage or querying.",
+              "default": false
+            },
+            "collection": {
+              "type": "object",
+              "description": "Metrics collection settings",
+              "properties": {
+                "osacControlPlane": {
+                  "type": "string",
+                  "description": "Scrape interval for every OSAC control-plane target (Prometheus duration, e.g. 30s)",
+                  "default": "30s",
+                  "pattern": "^([0-9]+(ms|s|m|h|d|w|y))+$"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
         "services": {
           "type": "object",
           "description": "Service tier enablement flags. Controls which tiers are active across all OSAC components. At least one tier must be enabled.",
@@ -1156,6 +1181,25 @@
           },
           "additionalProperties": false
         },
+        "serviceMonitor": {
+          "type": "object",
+          "description": "Standalone ServiceMonitor override for the fulfillment chart. The umbrella chart enables scrapes through global.observability.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "interval": {
+              "type": "string",
+              "description": "When empty, global.observability.collection.osacControlPlane is used."
+            },
+            "labels": {
+              "type": "object",
+              "description": "Extra labels for Prometheus instances that select monitors by label"
+            }
+          },
+          "additionalProperties": false
+        },
         "httpCorsAllowedOrigins": {
           "type": "array",
           "description": "Allowed CORS origins for the fulfillment service HTTP API (subchart default)",
@@ -1970,6 +2014,10 @@
               "type": "boolean",
               "description": "Create ServiceMonitors scraping the /metrics endpoints",
               "default": false
+            },
+            "interval": {
+              "type": "string",
+              "description": "Scrape interval for the metering targets (Prometheus duration; defaults to global.observability.collection.osacControlPlane)"
             },
             "labels": {
               "type": "object",

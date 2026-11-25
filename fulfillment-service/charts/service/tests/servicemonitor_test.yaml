@@ -1,0 +1,151 @@
+suite: fulfillment plain-HTTP ServiceMonitors
+templates:
+  - templates/grpc-server/servicemonitor.yaml
+  - templates/rest-gateway/servicemonitor.yaml
+  - templates/controller/servicemonitor.yaml
+  - templates/event-publisher/servicemonitor.yaml
+  - templates/console-proxy/servicemonitor.yaml
+release:
+  name: osac
+  namespace: osac
+capabilities:
+  apiVersions:
+    - monitoring.coreos.com/v1
+    - monitoring.coreos.com/v1/ServiceMonitor
+
+tests:
+  - it: renders nothing with the chart defaults
+    template: templates/grpc-server/servicemonitor.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the grpc server monitor from global.observability
+    template: templates/grpc-server/servicemonitor.yaml
+    set:
+      global.observability.enabled: true
+      global.observability.collection.osacControlPlane: 30s
+    asserts:
+      - isKind:
+          of: ServiceMonitor
+      - equal:
+          path: metadata.name
+          value: fulfillment-grpc-server
+      - equal:
+          path: metadata.namespace
+          value: osac
+      - equal:
+          path: spec.namespaceSelector.matchNames[0]
+          value: osac
+      - equal:
+          path: spec.selector.matchLabels.app
+          value: fulfillment-grpc-server
+      - equal:
+          path: spec.endpoints[0].port
+          value: metrics
+      - equal:
+          path: spec.endpoints[0].scheme
+          value: http
+      - equal:
+          path: spec.endpoints[0].path
+          value: /metrics
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 30s
+      - equal:
+          path: spec.endpoints[0].relabelings[0].targetLabel
+          value: job
+      - equal:
+          path: spec.endpoints[0].relabelings[0].replacement
+          value: fulfillment-grpc-server
+      - notExists:
+          path: spec.jobLabel
+      - notExists:
+          path: spec.endpoints[0].tlsConfig
+      - notExists:
+          path: spec.endpoints[0].bearerTokenSecret
+
+  - it: renders the rest gateway monitor
+    template: templates/rest-gateway/servicemonitor.yaml
+    set:
+      global.observability.enabled: true
+      global.observability.collection.osacControlPlane: 30s
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels.app
+          value: fulfillment-rest-gateway
+      - equal:
+          path: spec.endpoints[0].relabelings[0].replacement
+          value: fulfillment-rest-gateway
+
+  - it: renders the controller monitor
+    template: templates/controller/servicemonitor.yaml
+    set:
+      global.observability.enabled: true
+      global.observability.collection.osacControlPlane: 30s
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels.app
+          value: fulfillment-controller
+      - equal:
+          path: spec.endpoints[0].relabelings[0].replacement
+          value: fulfillment-controller
+
+  - it: renders the event publisher monitor
+    template: templates/event-publisher/servicemonitor.yaml
+    set:
+      global.observability.enabled: true
+      global.observability.collection.osacControlPlane: 30s
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels.app
+          value: fulfillment-event-publisher
+      - equal:
+          path: spec.endpoints[0].relabelings[0].replacement
+          value: fulfillment-event-publisher
+
+  - it: renders the console proxy monitor
+    template: templates/console-proxy/servicemonitor.yaml
+    set:
+      global.observability.enabled: true
+      global.observability.collection.osacControlPlane: 30s
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels.app
+          value: fulfillment-console-proxy
+      - equal:
+          path: spec.endpoints[0].relabelings[0].replacement
+          value: fulfillment-console-proxy
+
+  - it: omits the console proxy monitor when the console proxy is disabled
+    template: templates/console-proxy/servicemonitor.yaml
+    set:
+      consoleProxy.disabled: true
+      global.observability.enabled: true
+      global.observability.collection.osacControlPlane: 30s
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: supports the standalone serviceMonitor override
+    template: templates/grpc-server/servicemonitor.yaml
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.interval: 15s
+    asserts:
+      - isKind:
+          of: ServiceMonitor
+      - equal:
+          path: spec.endpoints[0].interval
+          value: 15s
+
+  - it: renders nothing when the ServiceMonitor CRD is absent
+    template: templates/grpc-server/servicemonitor.yaml
+    capabilities:
+      apiVersions:
+    set:
+      global.observability.enabled: true
+      global.observability.collection.osacControlPlane: 30s
+    asserts:
+      - hasDocuments:
+          count: 0

@@ -1,0 +1,14 @@
+{{- if .Values.global.observability.enabled }}
+# Platform Prometheus discovers ServiceMonitors in namespaces labeled with
+# openshift.io/cluster-monitoring. This is a labeled component namespace that
+# carries the namespace-scoped scrape Role; it does not host a store or query
+# tier in this ticket. Later stories add their objects to this namespace and
+# must not create a second Namespace named osac-observability.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: osac-observability
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+    openshift.io/cluster-monitoring: "true"
+{{- end }}

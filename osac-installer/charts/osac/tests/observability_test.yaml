@@ -1,0 +1,227 @@
+suite: observability namespaces and scrape access
+templates:
+  - templates/observability/*.yaml
+release:
+  name: osac
+  namespace: osac
+set:
+  # Required by the chart schema; unrelated to this suite.
+  service.internalHostname: fulfillment.osac.svc
+  service.externalHostname: fulfillment.example.com
+  global.observability.enabled: true
+  global.observability.collection.osacControlPlane: "30s"
+
+tests:
+  - it: labels the observability namespace for platform monitoring
+    template: templates/observability/namespace.yaml
+    asserts:
+      - isKind:
+          of: Namespace
+      - equal:
+          path: metadata.name
+          value: osac-observability
+      - equal:
+          path: metadata.labels["openshift.io/cluster-monitoring"]
+          value: "true"
+
+  - it: renders no observability namespace when disabled
+    template: templates/observability/namespace.yaml
+    set:
+      global.observability.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: labels the release namespace from a pre-install and pre-upgrade hook
+    template: templates/observability/label-namespaces.yaml
+    documentIndex: 3
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: metadata.name
+          value: osac-label-namespaces
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: osac-label-namespaces
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 1000
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - contains:
+          path: spec.template.spec.containers[0].command
+          content: openshift.io/cluster-monitoring=true
+      - equal:
+          path: spec.template.spec.containers[0].command[3]
+          value: osac
+
+  - it: removes the label before the release is deleted
+    template: templates/observability/label-namespaces.yaml
+    documentIndex: 4
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: metadata.name
+          value: osac-unlabel-namespaces
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-delete
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: osac-label-namespaces
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].command[0]
+          value: /bin/bash
+      # The script must fail closed: `set -e` must abort on a failed kubectl
+      # get, and the get must be its own command (not a $(...) assignment, which
+      # a missing set -e would ignore).
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: set -euo pipefail
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: kubectl get namespace "\$ns" .* > /tmp/monitoring-label
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: kubectl label namespace "\$ns" openshift\.io/cluster-monitoring-
+
+  - it: removes a leftover label on upgrade when disabled
+    template: templates/observability/label-namespaces.yaml
+    set:
+      global.observability.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 4
+      - isKind:
+          of: Job
+        documentIndex: 3
+      - equal:
+          path: metadata.name
+          value: osac-unlabel-namespaces
+        documentIndex: 3
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-upgrade
+        documentIndex: 3
+
+  - it: restricts the namespace label permission to the release namespace
+    template: templates/observability/label-namespaces.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-install,pre-upgrade,pre-delete
+      - equal:
+          path: rules[0].resources[0]
+          value: namespaces
+      - equal:
+          path: rules[0].resourceNames[0]
+          value: osac
+      - equal:
+          path: rules[0].verbs
+          value: [get, patch, update]
+
+  - it: binds the label hook to its own service account
+    template: templates/observability/label-namespaces.yaml
+    documentIndex: 2
+    asserts:
+      - isKind:
+          of: ClusterRoleBinding
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+      - equal:
+          path: subjects[0].name
+          value: osac-label-namespaces
+      - equal:
+          path: subjects[0].namespace
+          value: osac
+
+  - it: grants scrape access in the release namespace only
+    template: templates/observability/scrape-rbac.yaml
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: metadata.namespace
+          value: osac
+      - equal:
+          path: rules[0].resources
+          value: [services, endpoints, pods]
+      - equal:
+          path: rules[0].verbs
+          value: [get, list, watch]
+
+  - it: binds scrape access to prometheus-k8s in the release namespace
+    template: templates/observability/scrape-rbac.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: metadata.namespace
+          value: osac
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+      - equal:
+          path: subjects[0].name
+          value: prometheus-k8s
+      - equal:
+          path: subjects[0].namespace
+          value: openshift-monitoring
+      - equal:
+          path: roleRef.kind
+          value: Role
+
+  - it: grants scrape access in the observability namespace
+    template: templates/observability/scrape-rbac.yaml
+    documentIndex: 2
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+
+  - it: binds scrape access to prometheus-k8s in the observability namespace
+    template: templates/observability/scrape-rbac.yaml
+    documentIndex: 3
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: metadata.namespace
+          value: osac-observability
+      - equal:
+          path: subjects[0].name
+          value: prometheus-k8s
+
+  - it: renders no scrape resources when disabled
+    template: templates/observability/scrape-rbac.yaml
+    set:
+      global.observability.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

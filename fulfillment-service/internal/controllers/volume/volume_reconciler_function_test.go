@@ -250,7 +250,6 @@ var _ = Describe("buildSpec", func() {
 						DiskKey:        "boot",
 						Namespace:      "vm-ns",
 						DataVolumeName: "ci-01a1-root-disk",
-						TargetCluster:  "cluster-1",
 					}.Build(),
 				}.Build(),
 			}.Build(),
@@ -272,7 +271,6 @@ var _ = Describe("buildSpec", func() {
 			DiskKey:        "boot",
 			Namespace:      "vm-ns",
 			DataVolumeName: "ci-01a1-root-disk",
-			TargetCluster:  "cluster-1",
 		}))
 	})
 
@@ -292,7 +290,6 @@ var _ = Describe("buildSpec", func() {
 						DiskKey:        "disk-1",
 						Namespace:      "vm-ns",
 						DataVolumeName: "ci-01a1-disk-1",
-						TargetCluster:  "cluster-1",
 					}.Build(),
 				}.Build(),
 			}.Build(),

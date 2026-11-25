@@ -90,12 +90,6 @@ type VolumeTarget struct {
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1
 	DataVolumeName string `json:"dataVolumeName"`
-
-	// TargetCluster is the identifier of the cluster where the storage is
-	// provisioned.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MinLength=1
-	TargetCluster string `json:"targetCluster"`
 }
 
 // VolumeSpec defines the desired state of Volume.

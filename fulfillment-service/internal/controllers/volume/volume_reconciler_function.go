@@ -540,7 +540,6 @@ func protoTargetToCRD(source *privatev1.VolumeTarget) *osacv1alpha1.VolumeTarget
 		DiskKey:        source.GetDiskKey(),
 		Namespace:      source.GetNamespace(),
 		DataVolumeName: source.GetDataVolumeName(),
-		TargetCluster:  source.GetTargetCluster(),
 	}
 }
 

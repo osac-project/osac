@@ -133,9 +133,6 @@ message VolumeTarget {
   // Deterministic name of the provisioned storage object that the owner's
   // workload references.
   string data_volume_name = 3 [(buf.validate.field).string.min_len = 1];
-
-  // Identifier of the cluster where the storage is provisioned.
-  string target_cluster = 4 [(buf.validate.field).string.min_len = 1];
 }
 
 // Defines the desired configuration for a Volume. All fields are immutable after creation.

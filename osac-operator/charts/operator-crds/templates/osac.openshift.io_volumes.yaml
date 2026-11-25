@@ -176,17 +176,10 @@ spec:
                       storage is created.
                     minLength: 1
                     type: string
-                  targetCluster:
-                    description: |-
-                      TargetCluster is the identifier of the cluster where the storage is
-                      provisioned.
-                    minLength: 1
-                    type: string
                 required:
                 - dataVolumeName
                 - diskKey
                 - namespace
-                - targetCluster
                 type: object
                 x-kubernetes-validations:
                 - message: target is immutable

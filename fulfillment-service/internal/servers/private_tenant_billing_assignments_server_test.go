@@ -1310,7 +1310,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 		}, Entry("tenant", "metadata.tenant"),
 			Entry("metadata", "metadata"), Entry("status", "status"), Entry("status leaf", "status.message"))
 
-		It("accepts a reference leaf mask as one atomic reference replacement", func() {
+		DescribeTable("accepts reference leaf masks as one atomic reference replacement", func(paths []string) {
 			var accounts []billingfake.AccountSpec
 			first := newAccount(&accounts, "first", "first", "ACTIVE")
 			second := newAccount(&accounts, "second", "second", "ACTIVE")
@@ -1324,11 +1324,17 @@ var _ = Describe("Private tenant billing assignments server", func() {
 						BillingAccount: privatev1.BillingAccountReference_builder{Id: second}.Build(),
 					}.Build(),
 				}.Build(),
-				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.billing_account.id"}},
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: paths},
 			}.Build())
 			Expect(err).NotTo(HaveOccurred())
 			Expect(updated.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(second))
-		})
+			Expect(updated.GetObject().GetSpec().GetBillingAccount().GetName()).NotTo(BeEmpty(),
+				"the replaced selector is canonicalized, not merged with the stored one")
+		},
+			Entry("reference field", []string{"spec.billing_account"}),
+			Entry("id selector", []string{"spec.billing_account.id"}),
+			Entry("changed and cleared selectors", []string{"spec.billing_account.name", "spec.billing_account.id"}),
+		)
 
 		It("revalidates an unchanged interval without rewriting its metadata or version", func() {
 			var accounts []billingfake.AccountSpec

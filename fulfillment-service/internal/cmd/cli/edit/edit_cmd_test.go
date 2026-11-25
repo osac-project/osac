@@ -147,13 +147,15 @@ var _ = Describe("Edit command", func() {
 				var request *privatev1.TenantBillingAssignmentsUpdateRequest
 				Expect(requests).To(Receive(&request))
 				Expect(request.GetUpdateMask()).NotTo(BeNil())
-				Expect(request.GetUpdateMask().GetPaths()).To(Equal(paths))
+				Expect(request.GetUpdateMask().GetPaths()).To(ConsistOf(paths))
 				account := request.GetObject().GetSpec().GetBillingAccount()
 				Expect(account.GetId()).To(Equal(id))
 				Expect(account.GetName()).To(Equal(name))
 			},
-			Entry("by ID with the old name removed", `{"id":"new-id"}`, "new-id", "", []string{"spec.billing_account"}),
-			Entry("by name with the old ID removed", `{"name":"new-name"}`, "", "new-name", []string{"spec.billing_account"}),
+			Entry("by ID with the old name removed", `{"id":"new-id"}`, "new-id", "",
+				[]string{"spec.billing_account.name", "spec.billing_account.id"}),
+			Entry("by name with the old ID removed", `{"name":"new-name"}`, "", "new-name",
+				[]string{"spec.billing_account.name", "spec.billing_account.id"}),
 			Entry("unchanged", originalReference, "old-id", "old-name", []string(nil)),
 		)
 	})

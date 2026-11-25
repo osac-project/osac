@@ -477,9 +477,15 @@ func (s *PrivateTenantBillingAssignmentsServer) Update(ctx context.Context,
 	}
 	paths := request.GetUpdateMask().GetPaths()
 	if len(paths) > 0 {
-		if len(paths) != 1 || (paths[0] != "spec.billing_account" &&
-			paths[0] != "spec.billing_account.id" && paths[0] != "spec.billing_account.name") {
-			return nil, status.Error(codes.InvalidArgument, "only atomic spec.billing_account is writable")
+		// Every selected path must stay inside the atomic reference: the whole field, or one of its
+		// selectors. Selectors are not merged individually, so several of them arriving in one mask
+		// (the CLI sends the changed selector and the cleared one) still mean one replacement.
+		for _, path := range paths {
+			switch path {
+			case "spec.billing_account", "spec.billing_account.id", "spec.billing_account.name":
+			default:
+				return nil, status.Error(codes.InvalidArgument, "only atomic spec.billing_account is writable")
+			}
 		}
 	}
 	merged := proto.Clone(existing).(*privatev1.TenantBillingAssignment)

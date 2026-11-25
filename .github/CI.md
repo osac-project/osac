@@ -16,11 +16,13 @@ auto-merge (`e2e-pr.yml`, job `Auto-merge`). To keep one pull request from mergi
 convert it to a draft. The queue runs `CI` and
 `E2E` again on the result of merging, so what lands is what was tested.
 
-## Optional: BMaaS Netris
+## BMaaS Netris
 
-The BMaaS Netris end-to-end test (a real Netris lab on an AWS box) is not part of `E2E` and is not
-required: the policy marks it `manual_only`, so the decision never chooses it and the `E2E` check does not wait for it.
-Start it on a pull request with the comment `/test bmaas-netris` (any member of the organization, any approval state), or by
+The BMaaS Netris end-to-end test (a real Netris lab on an AWS box) runs for networking changes only: the policy gives it
+the `connectivity` filter of `filters/ci-filters.yml` (the networking paths, kept by hand). For such a change the
+decision chooses it like any suite, the `E2E` check waits for it and counts it, and the merge queue runs it
+(`e2e-queue.yml`); any other change does not run it.
+Start it by hand on any pull request with the comment `/test bmaas-netris` (any member of the organization, any approval state), or by
 checking its box in the E2E comment of the pull request; the suite has its own line, `E2E / BMaaS Netris Full Install`, and
 the decision runs it through `workflows/e2e-pr-bmaas-netris.yml`, which calls `workflows/e2e-bmaas-netris-full-install.yml`. It can also be started from the Actions page
 ("E2E BMaaS Netris Full Install", Run workflow, with the pull request's number, repository, branch and commit). A label no longer
@@ -61,11 +63,12 @@ scheduled suites.
 - Each policy variant uses `variant_of: <service>` and `tier: full`; the service's PR workflow passes the tier to its
   full-install wrapper.
 
-## Optional: VMaaS Netris
+## VMaaS Netris
 
 The VMaaS Netris suite uses the `vmaas-ci` profile with `values/vmaas-ci/netris.yaml`
 (which sets the operator's AAP status poll interval to 5s) and the Netris backend of
-osac-test-infra. It is manual-only: start it with `/test vmaas-netris` or its checkbox in
+osac-test-infra. Like the BMaaS Netris suite it runs for networking changes (the `connectivity`
+filter), counts in `E2E` and runs in the merge queue; start it by hand with `/test vmaas-netris` or its checkbox in
 the pull request comment. The job runs `test_vmaas_networking.py` with `-x`, so it stops at
 the first failed test: `test_00`..`test_13`, and
 the single teardown test `test_14`. Its NAT and ExternalIP tests always run and fail with a
@@ -118,6 +121,14 @@ change also runs `pre-commit` and `dependency-review`. `ci-tests.yml` and `filte
 | `tests/e2e/` and the E2E workflows | the `E2E` suites the change affects (`e2e-policy.yml`) |
 
 The CaaS Kind integration test is separate from full-install `E2E`.
+
+## A leg that repeats on a pull request
+
+A leg in `ci-tests.yml` that sets `pr_repetitions` runs that many times, in parallel, on a pull request. Today that is
+only the fulfillment-service integration test: five jobs over the same commit, so a test that fails once in a while is
+caught before the change merges. Every repetition must pass: one failure fails `CI` like any other leg, and the run
+shows the five as separate rows. The merge queue, the scheduled and manual runs of `integration-tests.yml` and the
+flake-detection campaigns keep one execution per leg.
 
 A rule that a change must also add or change tests is not enforced: `CI` checks that the tests which exist pass.
 

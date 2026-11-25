@@ -39,11 +39,26 @@ git -C "${repo_root}" fetch --quiet --tags origin
 # Release tags are created on a temporary branch after release metadata is stamped. If the
 # tag commit is not in this checkout's history but its parent is, use that parent as the
 # release baseline. This keeps main snapshots newer than the latest released RPM instead
-# of falling back to an older reachable tag. On the tagged release commit itself, use the
-# tag as the baseline so the build keeps the exact release version.
+# of falling back to an older reachable tag.
 repo_head=$(git -C "${repo_root}" rev-parse HEAD)
 version=""
+
+# A build of a release tag's own commit keeps that exact version, even when a
+# newer tag exists elsewhere: an RC rebuilt after the final release must not
+# borrow the final tag's parent as its baseline.
 while IFS= read -r tag; do
+  tag_commit=$(git -C "${repo_root}" rev-parse "${tag}^{commit}")
+  if [[ "${tag_commit}" == "${repo_head}" ]]; then
+    version="${tag#fulfillment-service/v}"
+    break
+  fi
+done < <(git -C "${repo_root}" -c versionsort.suffix=-rc \
+  tag --list 'fulfillment-service/v*' --sort=-version:refname)
+
+# Git's version sort treats "-rc.N" as later than the final release unless told
+# otherwise, which would pick an RC over the final tag. Mark it as a pre-release
+# suffix so the order matches RPM: 0.4.0~rc.5 before 0.4.0.
+while [[ -z "${version}" ]] && IFS= read -r tag; do
   release_version="${tag#fulfillment-service/v}"
   tag_commit=$(git -C "${repo_root}" rev-parse "${tag}^{commit}")
   baseline="${tag_commit}"
@@ -63,7 +78,8 @@ while IFS= read -r tag; do
     fi
     break
   fi
-done < <(git -C "${repo_root}" tag --list 'fulfillment-service/v*' --sort=-version:refname)
+done < <(git -C "${repo_root}" -c versionsort.suffix=-rc \
+  tag --list 'fulfillment-service/v*' --sort=-version:refname)
 
 # Retain git-describe fallback for checkouts without an applicable release tag.
 if [[ -z "${version}" ]]; then
@@ -74,6 +90,11 @@ if [[ -z "${version}" ]]; then
       -e 's/-\([0-9]*\)-g/^\1.g/'
   )
 fi
+
+# RPM does not allow '-' in Version, so the pre-release suffix of a tag such as
+# fulfillment-service/v0.4.0-rc.5 becomes the RPM pre-release separator '~'.
+# Ordering stays correct: 0.4.0~rc.5 < 0.4.0 < 0.4.0^1.gabc1234.
+version="${version//-/\~}"
 
 # Calculate the date for the changelog entry in the format required by RPM:
 date=$(date +'%a %b %d %Y')

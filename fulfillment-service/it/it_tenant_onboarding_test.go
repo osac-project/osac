@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,6 +33,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
 
 var _ = Describe("Tenant onboarding to hub", func() {
@@ -340,6 +342,176 @@ var _ = Describe("Tenant deletion", func() {
 			2*time.Minute,
 			time.Second,
 		).Should(Succeed())
+	})
+
+	It("Completes ProjectMembership cleanup when its user has a stale Keycloak ID", func(ctx context.Context) {
+		name := fmt.Sprintf("test-%s", uuid.New())
+
+		By(fmt.Sprintf("Creating tenant %q", name))
+		id := createTenant(ctx, tenantsClient, name)
+
+		By("Waiting for tenant to reach SYNCED state")
+		waitForTenantSynced(ctx, tenantsClient, id)
+
+		By("Creating a user in the tenant root project with a stale Keycloak ID")
+		userName := fmt.Sprintf("user-%s", uuid.New())
+		staleKeycloakID := "00000000-0000-0000-0000-000000000001"
+		createdUser, err := usersClient.Create(ctx, privatev1.UsersCreateRequest_builder{
+			Object: privatev1.User_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:   userName,
+					Tenant: name,
+				}.Build(),
+				Spec: privatev1.UserSpec_builder{
+					Username: userName,
+					Email:    userName + "@example.com",
+					Enabled:  true,
+				}.Build(),
+				Status: privatev1.UserStatus_builder{
+					KeycloakUserId: staleKeycloakID,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		userID := createdUser.GetObject().GetId()
+
+		DeferCleanup(func(cleanupCtx context.Context) {
+			_, err := usersClient.Get(cleanupCtx, privatev1.UsersGetRequest_builder{
+				Id: userID,
+			}.Build())
+			if isGRPCCode(err, grpccodes.NotFound) {
+				return
+			}
+			Expect(err).ToNot(HaveOccurred())
+
+			// Reset the fixture's stale ID before cleanup so this membership
+			// regression does not depend on realm-user deletion behavior.
+			_, err = usersClient.Update(cleanupCtx, privatev1.UsersUpdateRequest_builder{
+				Object: privatev1.User_builder{
+					Id:     userID,
+					Status: privatev1.UserStatus_builder{}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{
+					Paths: []string{"status.keycloak_user_id"},
+				},
+			}.Build())
+			if !isGRPCCode(err, grpccodes.NotFound) {
+				Expect(err).ToNot(HaveOccurred())
+			}
+			_, err = usersClient.Delete(cleanupCtx, privatev1.UsersDeleteRequest_builder{
+				Id: userID,
+			}.Build())
+			if !isGRPCCode(err, grpccodes.NotFound) {
+				Expect(err).ToNot(HaveOccurred())
+			}
+			Eventually(func(g Gomega) {
+				_, err := usersClient.Get(cleanupCtx, privatev1.UsersGetRequest_builder{
+					Id: userID,
+				}.Build())
+				g.Expect(isGRPCCode(err, grpccodes.NotFound)).To(BeTrue())
+			}, time.Minute, time.Second).Should(Succeed())
+		})
+
+		By("Creating a tenant-admin connection for project creation")
+		tenant, err := tenantsClient.Get(ctx, privatev1.TenantsGetRequest_builder{
+			Id: id,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		tenantAdminRole := getOrCreateKeycloakTenantAdminRole(ctx)
+		assignKeycloakRealmRole(
+			ctx,
+			tenant.GetObject().GetStatus().GetBreakGlassUserId(),
+			tenantAdminRole,
+		)
+		_, tokenSource := loginAsBreakGlass(ctx, tenantsClient, name, id)
+		publicConn, err := tool.makeGrpcConn(externalServiceAddr, tokenSource)
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(publicConn.Close)
+
+		By("Creating a project under the tenant")
+		projectName := fmt.Sprintf("proj-%s", uuid.New())
+		publicProjectsClient := publicv1.NewProjectsClient(publicConn)
+		projectResponse, err := publicProjectsClient.Create(ctx, publicv1.ProjectsCreateRequest_builder{
+			Object: publicv1.Project_builder{
+				Metadata: publicv1.Metadata_builder{
+					Name:   projectName,
+					Tenant: name,
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		projectID := projectResponse.GetObject().GetId()
+
+		Eventually(func(g Gomega) {
+			getProject, err := projectsClient.Get(ctx, privatev1.ProjectsGetRequest_builder{
+				Id: projectID,
+			}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(getProject.GetObject().GetStatus().GetState()).To(Equal(
+				privatev1.ProjectState_PROJECT_STATE_ACTIVE,
+			))
+		}, 2*time.Minute, time.Second).Should(Succeed())
+
+		By("Creating a ProjectMembership for the stale user")
+		membershipsClient := privatev1.NewProjectMembershipsClient(tool.InternalView().AdminConn())
+		membershipResponse, err := membershipsClient.Create(ctx, privatev1.ProjectMembershipsCreateRequest_builder{
+			Object: privatev1.ProjectMembership_builder{
+				Metadata: privatev1.Metadata_builder{
+					Name:    fmt.Sprintf("%s-membership", projectName),
+					Tenant:  name,
+					Project: projectName,
+				}.Build(),
+				Spec: privatev1.ProjectMembershipSpec_builder{
+					Role: privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
+					Users: []*privatev1.UserReference{
+						{Id: userID},
+					},
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		membershipID := membershipResponse.GetObject().GetId()
+
+		By("Waiting for the membership to fail because the stale Keycloak user does not exist")
+		Eventually(func(g Gomega) {
+			membership, err := membershipsClient.Get(ctx, privatev1.ProjectMembershipsGetRequest_builder{
+				Id: membershipID,
+			}.Build())
+			g.Expect(err).ToNot(HaveOccurred())
+			g.Expect(membership.GetObject().GetStatus().GetState()).To(Equal(
+				privatev1.ProjectMembershipState_PROJECT_MEMBERSHIP_STATE_FAILED,
+			))
+			g.Expect(membership.GetObject().GetStatus().GetMessage()).To(ContainSubstring("User does not exist"))
+		}, 2*time.Minute, time.Second).Should(Succeed())
+
+		By("Deleting the membership once")
+		_, err = membershipsClient.Delete(ctx, privatev1.ProjectMembershipsDeleteRequest_builder{
+			Id: membershipID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		By("Verifying the membership is archived without a second delete")
+		Eventually(func(g Gomega) {
+			_, err := membershipsClient.Get(ctx, privatev1.ProjectMembershipsGetRequest_builder{
+				Id: membershipID,
+			}.Build())
+			g.Expect(isGRPCCode(err, grpccodes.NotFound)).To(BeTrue())
+		}, 2*time.Minute, time.Second).Should(Succeed())
+
+		By("Deleting the project after the membership is gone")
+		_, err = projectsClient.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{
+			Id: projectID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+
+		By("Verifying the project is archived without a second membership delete")
+		Eventually(func(g Gomega) {
+			_, err := projectsClient.Get(ctx, privatev1.ProjectsGetRequest_builder{
+				Id: projectID,
+			}.Build())
+			g.Expect(isGRPCCode(err, grpccodes.NotFound)).To(BeTrue())
+		}, 2*time.Minute, time.Second).Should(Succeed())
+
 	})
 })
 

@@ -19,9 +19,9 @@ export const buildClusterCreatePayload = (
     };
   }
 
-  const sshPublicKey = values.spec.sshPublicKey.value.trim();
-  if (!values.spec.sshPublicKey.locked && sshPublicKey) {
-    spec.sshPublicKey = sshPublicKey;
+  const sshKey = values.spec.sshKey.value.trim();
+  if (!values.spec.sshKey.locked && sshKey) {
+    spec.sshKey = { name: sshKey };
   }
 
   if (!values.spec.versionName.locked && values.spec.versionName.value) {

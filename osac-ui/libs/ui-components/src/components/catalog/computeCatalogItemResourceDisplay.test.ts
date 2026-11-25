@@ -24,7 +24,7 @@ describe('computeCatalogItemResourceDisplay', () => {
   });
 
   it('reads instance type and disk image references from field policies', () => {
-    const lockedRef = { id: 'it-1', name: 'standard-4-8', project: 'default', shared: false };
+    const lockedRef = { id: 'it-1', name: 'standard-4-8', tenant: 'tenant-a', project: 'default' };
     expect(
       computeInstanceTypeReferenceFromPolicy({
         behavior: { case: 'locked', value: lockedRef },
@@ -36,7 +36,7 @@ describe('computeCatalogItemResourceDisplay', () => {
       } as InstanceTypePolicy),
     ).toEqual(lockedRef);
 
-    const diskRef = { id: 'di-1', name: 'RHEL 10', project: 'default', shared: false };
+    const diskRef = { id: 'di-1', name: 'RHEL 10', tenant: 'tenant-a', project: 'default' };
     expect(
       computeDiskImageReferenceFromPolicy({
         behavior: { case: 'locked', value: diskRef },

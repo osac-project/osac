@@ -13,7 +13,7 @@ import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 
 import { GuestOsIcon } from '../../shared/GuestOsIcon';
 import ClusterVersionLifecycleLabel from '../ClusterVersionLifecycleLabel';
-import { getActiveControlPlaneUpgradeTarget } from './clusterDisplay';
+import { getActiveClusterUpgradeTarget } from './clusterDisplay';
 
 interface ClusterResourcesProps {
   cluster: Cluster;
@@ -24,7 +24,7 @@ const ClusterResources = ({ cluster, clusterVersion }: ClusterResourcesProps) =>
   const { t } = useTranslation();
   const observedVersion = cluster.status?.observedVersion;
   const versionLabel = observedVersion ? `OpenShift ${observedVersion}` : '—';
-  const activeTarget = getActiveControlPlaneUpgradeTarget(cluster);
+  const activeTarget = getActiveClusterUpgradeTarget(cluster);
 
   const specNodeSets = cluster.spec?.nodeSets;
   const statusNodeSets = cluster.status?.nodeSets ?? {};

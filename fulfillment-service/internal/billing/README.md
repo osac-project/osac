@@ -22,10 +22,10 @@ self-service assignment read. The assignment's `metadata.tenant` is data, not an
 credential. The private metering read and identity are owned by
 [OSAC-6888](https://redhat.atlassian.net/browse/OSAC-6888), not this administrative API.
 
-Descriptor presence does not mean available CRUD: account `Get`, `Create` and `Delete`, and
-assignment `Delete`, are descriptor-only scaffolds. They retain `Unimplemented` handlers and are
-denied by authorization even for administrators. Accounts have no Update or Signal RPC. Provider
-status is a get-only singleton, not a lifecycle object.
+Descriptor presence does not mean available CRUD: account `Get`, `Create`, `Update` and `Delete`,
+and assignment `Delete`, are descriptor-only scaffolds. Their handlers remain `Unimplemented` and
+authorization denies them even for administrators. Accounts have no `Signal` RPC. Provider status
+is a get-only singleton, not a lifecycle object.
 
 Accounts and assignments use the standard `id`, `metadata`, `spec`, `status` envelope:
 
@@ -53,7 +53,7 @@ Accounts and assignments use the standard `id`, `metadata`, `spec`, `status` env
   reference, accepting `id`, `name` or both; both billing-account selectors must agree. Responses
   retain canonical identities even after tenant deletion. The owner is also recorded in the
   `osac.openshift.io/tenant` annotation; assignments are not project-scoped. Only the atomic
-  `spec.billing_account` reference is writable on Update.
+  `spec.billing_account` reference is writable on Update; its selectors are not merged independently.
   Replacement closes the old interval and creates a new ID with the same metadata name;
   same-account revalidation preserves both ID and `status.effective_from_timestamp`.
   `status.effective_to_timestamp` is absent for the current interval; closed intervals are
@@ -63,18 +63,19 @@ Accounts and assignments use the standard `id`, `metadata`, `spec`, `status` env
 Billing assignments use standard OSAC object envelopes and typed references rather than the scalar
 IDs shown in the design.
 
-For direct gRPC `TenantBillingAssignments.Update`, omit `update_mask` or specify the single path
-`spec.billing_account` to replace the entire reference. A present empty mask leaves the assignment
-unchanged without provider revalidation. Explicit child paths such as
-`spec.billing_account.id` and `spec.billing_account.name` are not writable.
+For direct gRPC `TenantBillingAssignments.Update`, omit `update_mask` or select
+`spec.billing_account`, `spec.billing_account.id`, or `spec.billing_account.name`. These paths all
+replace the entire reference atomically; selector fields are not merged independently. A present
+empty mask leaves the assignment unchanged without provider revalidation.
 
 The private REST `PATCH /api/private/v1/billing/tenant_billing_assignments/{id}` takes the object
 fields directly, for example `{"spec":{"billing_account":{"name":"new-account"}}}`. Use `id`
-instead of `name` to select by ID. The gateway turns inferred reference selector paths into one
-`spec.billing_account` path; other inferred paths still reach the server for validation. An explicit
-`?update_mask=spec.billing_account` uses exactly that path; explicit child paths are not normalized.
-With no body or mask query, the gateway infers an empty mask. Neither an empty JSON object (`{}`)
-nor an empty `update_mask` query value requests an empty mask.
+instead of `name` to select by ID. The generated gateway infers update masks from body fields
+(`proto/gen/osac/private/v1/tenant_billing_assignments_service.pb.gw.go`) and does not normalize
+selector paths. `PrivateTenantBillingAssignmentsServer.Update` in
+`internal/servers/private_tenant_billing_assignments_server.go` accepts the whole-reference and
+selector paths, applying them as one atomic replacement; other paths are rejected. No body or `{}`
+yields an empty mask and a no-op; an empty `update_mask` query value is not an empty path list.
 
 Billing filters use nested descriptor paths, such as `this.status.state == 1` (ACTIVE),
 `this.status.connection_state == 2` (CONNECTED), `!has(this.status.effective_to_timestamp)`, and
@@ -157,12 +158,13 @@ subject, and no tenant role or other realm role grants billing access. No `cloud
 realm role is provisioned; a token that claims it grants nothing. Cloud Provider Admin names a
 workflow/persona using an existing `is_admin` identity, not a new realm-role grant.
 
-Account `Get`, `Create` and `Delete`, and assignment `Delete`, are descriptor-only scaffolds: direct
-handlers remain `Unimplemented`, while normal requests are denied by this allow-list even for
-administrators. Accounts are system-global objects, with empty Spec and read-only nested Status;
-only private descriptors expose `status.provider_account_reference`. Assignment access checks the
-stored canonical tenant against trusted scope, not a replacement request reference or selected CLI
-project. Generic CLI discovery/completion does not grant these methods or expose private fields.
+Account `Get`, `Create`, `Update` and `Delete`, and assignment `Delete`, are descriptor-only
+scaffolds: generated handlers remain `Unimplemented`, while normal requests are denied by this
+allow-list even for administrators. Accounts are system-global objects, with empty Spec and
+read-only nested Status; only private descriptors expose `status.provider_account_reference`.
+Assignment access checks the stored canonical tenant against trusted scope, not a replacement
+request reference or selected CLI project. Generic CLI discovery/completion does not grant these
+methods or expose private fields.
 
 The OAuth `aud` claim identifies the Fulfillment API audience, not a billing account or metering
 consumer. `status.external_billing_account_id` is an attribution token, not an authentication

@@ -233,7 +233,18 @@ var _ = Describe("Private volumes server", func() {
 				failedTx.EXPECT().Query(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(suiteTx.Query).AnyTimes()
 				failedTx.EXPECT().QueryRow(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(suiteTx.QueryRow).AnyTimes()
 				failedTx.EXPECT().ReportError(gomock.Any()).DoAndReturn(suiteTx.ReportError).AnyTimes()
-				failedTx.EXPECT().Savepoint(gomock.Any(), gomock.Any()).Return(lookupErr)
+				// The first savepoint wraps the whole create; its body runs
+				// against the mock so the nested parent-lookup savepoint
+				// fails with lookupErr.
+				savepointCalls := 0
+				failedTx.EXPECT().Savepoint(gomock.Any(), gomock.Any()).DoAndReturn(
+					func(savepointCtx context.Context, fn func(context.Context) error) error {
+						savepointCalls++
+						if savepointCalls == 1 {
+							return fn(savepointCtx)
+						}
+						return lookupErr
+					}).AnyTimes()
 				_, err = server.Create(database.TxIntoContext(ctx, failedTx), privatev1.VolumesCreateRequest_builder{Object: volume}.Build())
 				Expect(status.Code(err)).To(Equal(expectedCode))
 				encoded, encodeErr := proto.Marshal(status.Convert(err).Proto())
@@ -898,6 +909,7 @@ var _ = Describe("Private volumes server", func() {
 				st, ok := status.FromError(err)
 				Expect(ok).To(BeTrue())
 				Expect(st.Code()).To(Equal(codes.AlreadyExists))
+				Expect(st.Message()).To(ContainSubstring("spec.size_gib"))
 			})
 
 			It("Create after delete of same name succeeds", func() {
@@ -911,6 +923,79 @@ var _ = Describe("Private volumes server", func() {
 				second := createVolumeWithName("reusable-name")
 				Expect(second.GetId()).ToNot(Equal(created.GetId()))
 				Expect(second.GetMetadata().GetName()).To(Equal("reusable-name"))
+			})
+		})
+
+		Describe("Idempotent create", func() {
+			volumeOwner := func(reference string) *privatev1.VolumeOwner {
+				return privatev1.VolumeOwner_builder{
+					Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+					Reference: reference,
+				}.Build()
+			}
+
+			createOwnedVolume := func(name string, sizeGib int64, owner *privatev1.VolumeOwner) (*privatev1.Volume, error) {
+				response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+					Object: privatev1.Volume_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: name,
+						}.Build(),
+						Spec: privatev1.VolumeSpec_builder{
+							StorageTier: "gold",
+							SizeGib:     sizeGib,
+							AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+							Owner:       owner,
+						}.Build(),
+					}.Build(),
+				}.Build())
+				return response.GetObject(), err
+			}
+
+			listVolumesByName := func(name string) []*privatev1.Volume {
+				response, err := server.List(ctx, privatev1.VolumesListRequest_builder{
+					Filter: new(fmt.Sprintf("this.metadata.name == %q", name)),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				return response.GetItems()
+			}
+
+			It("Repeated identical Create returns the existing volume", func() {
+				first, err := createOwnedVolume("ci-idempotent-boot", 100, volumeOwner("ci-record"))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(first.GetId()).ToNot(BeEmpty())
+
+				second, err := createOwnedVolume("ci-idempotent-boot", 100, volumeOwner("ci-record"))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(second.GetId()).To(Equal(first.GetId()))
+				Expect(second.GetSpec().GetOwner().GetReference()).To(Equal("ci-record"))
+				Expect(second.GetStatus().GetState()).To(Equal(first.GetStatus().GetState()))
+
+				Expect(listVolumesByName("ci-idempotent-boot")).To(HaveLen(1))
+			})
+
+			It("Create with same name but different owner fails naming the owner", func() {
+				_, err := createOwnedVolume("ci-owner-conflict", 100, volumeOwner("ci-one"))
+				Expect(err).ToNot(HaveOccurred())
+
+				_, err = createOwnedVolume("ci-owner-conflict", 100, volumeOwner("ci-two"))
+				Expect(err).To(HaveOccurred())
+				st, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(codes.AlreadyExists))
+				Expect(st.Message()).To(ContainSubstring("spec.owner"))
+			})
+
+			It("Create stores the owner without validating the owner's state", func() {
+				created, err := createOwnedVolume("ci-unchecked-owner", 100, volumeOwner("ci-missing-record"))
+				Expect(err).ToNot(HaveOccurred())
+
+				getResponse, err := server.Get(ctx, privatev1.VolumesGetRequest_builder{
+					Id: created.GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				owner := getResponse.GetObject().GetSpec().GetOwner()
+				Expect(owner.GetReference()).To(Equal("ci-missing-record"))
+				Expect(owner.GetType()).To(Equal(privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE))
 			})
 		})
 

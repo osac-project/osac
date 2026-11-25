@@ -16,7 +16,9 @@ package servers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -203,48 +205,185 @@ func (s *PrivateVolumesServer) Create(ctx context.Context,
 
 	vol.SetId("")
 
-	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response,
-		func(ctx context.Context, _ *privatev1.Volume, candidate *privatev1.Volume) error {
-			inventory, err := computeinstance.IsComputeInstanceVolumeInventory(ctx,
-				func(ctx context.Context, id string) (*privatev1.ComputeInstance, error) {
-					var parent *privatev1.ComputeInstancesGetResponse
-					tx, err := database.TxFromContext(ctx)
-					if err != nil {
-						return nil, err
-					}
-					err = tx.Savepoint(ctx, func(ctx context.Context) error {
-						return s.computeInstances.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build(), &parent)
-					})
-					if err != nil {
-						failureStatus, ok := grpcstatus.FromError(err)
-						if !ok {
-							failureStatus = grpcstatus.FromContextError(err)
+	// The mutating create runs inside a savepoint: a concurrent identical
+	// Create that loses the unique name-per-tenant race receives
+	// AlreadyExists after the winner commits, and the savepoint rollback
+	// keeps the request transaction usable for the adopting re-read below.
+	var candidate *privatev1.Volume
+	create := func(ctx context.Context) error {
+		return s.generic.CreateWithCandidatePreparation(ctx, request, &response,
+			func(ctx context.Context, _ *privatev1.Volume, prepared *privatev1.Volume) error {
+				candidate = prepared
+				err := s.checkVolumeAdoption(ctx, prepared)
+				if err != nil {
+					return err
+				}
+				inventory, err := computeinstance.IsComputeInstanceVolumeInventory(ctx,
+					func(ctx context.Context, id string) (*privatev1.ComputeInstance, error) {
+						var parent *privatev1.ComputeInstancesGetResponse
+						tx, err := database.TxFromContext(ctx)
+						if err != nil {
+							return nil, err
 						}
-						failure, detailErr := failureStatus.WithDetails(&errdetails.ErrorInfo{
-							Reason: computeinstance.VolumeCreateNotPersistedReason,
-							Domain: computeinstance.VolumeCreateErrorDomain,
+						err = tx.Savepoint(ctx, func(ctx context.Context) error {
+							return s.computeInstances.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build(), &parent)
 						})
-						if detailErr == nil {
-							err = failure.Err()
+						if err != nil {
+							failureStatus, ok := grpcstatus.FromError(err)
+							if !ok {
+								failureStatus = grpcstatus.FromContextError(err)
+							}
+							failure, detailErr := failureStatus.WithDetails(&errdetails.ErrorInfo{
+								Reason: computeinstance.VolumeCreateNotPersistedReason,
+								Domain: computeinstance.VolumeCreateErrorDomain,
+							})
+							if detailErr == nil {
+								err = failure.Err()
+							}
 						}
-					}
-					return parent.GetObject(), err
-				}, candidate)
-			if err != nil {
-				return err
+						return parent.GetObject(), err
+					}, prepared)
+				if err != nil {
+					return err
+				}
+				if inventory {
+					// For 0.4 only: ticket - OSAC-7670
+					// AVAILABLE means inventory registration, not disk readiness or vendor provisioning.
+					prepared.SetStatus(privatev1.VolumeStatus_builder{
+						State:               privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
+						StateTransitionTime: timestamppb.New(time.Now().Truncate(time.Second)),
+						Provider:            resolved.Provider, Protocol: resolved.Protocol,
+					}.Build())
+				}
+				return nil
+			})
+	}
+
+	if tx, txErr := database.TxFromContext(ctx); txErr == nil {
+		err = tx.Savepoint(ctx, create)
+	} else {
+		err = create(ctx)
+	}
+	if err == nil {
+		return
+	}
+
+	var adopted *errAdoptedVolume
+	if errors.As(err, &adopted) {
+		response = privatev1.VolumesCreateResponse_builder{Object: adopted.volume}.Build()
+		err = nil
+		return
+	}
+	if grpcstatus.Code(err) == grpccodes.AlreadyExists && candidate != nil {
+		// The loser of a concurrent identical Create re-reads the stored
+		// record and adopts it when the requests match.
+		existing, found, readErr := s.findActiveVolume(ctx, candidate)
+		if readErr == nil && found {
+			if conflicts := conflictingVolumeFields(existing, candidate); len(conflicts) > 0 {
+				err = volumeAlreadyExistsError(candidate.GetMetadata().GetName(), conflicts)
+				return
 			}
-			if inventory {
-				// For 0.4 only: ticket - OSAC-7670
-				// AVAILABLE means inventory registration, not disk readiness or vendor provisioning.
-				candidate.SetStatus(privatev1.VolumeStatus_builder{
-					State:               privatev1.VolumeState_VOLUME_STATE_AVAILABLE,
-					StateTransitionTime: timestamppb.New(time.Now().Truncate(time.Second)),
-					Provider:            resolved.Provider, Protocol: resolved.Protocol,
-				}.Build())
-			}
-			return nil
-		})
+			response = privatev1.VolumesCreateResponse_builder{Object: existing}.Build()
+			err = nil
+		}
+	}
 	return
+}
+
+// errAdoptedVolume is an internal signal that Create resolved to an existing,
+// matching record instead of inserting a new one. It is intercepted by Create
+// and never reaches a caller.
+type errAdoptedVolume struct {
+	volume *privatev1.Volume
+}
+
+func (e *errAdoptedVolume) Error() string {
+	return "volume create adopted an existing record"
+}
+
+// checkVolumeAdoption implements the get-or-adopt behavior of the private
+// Volumes.Create: a request whose name matches an active volume in the same
+// tenant returns the stored record when the owner and spec are identical, and
+// an AlreadyExists error naming the conflicting fields when they are not.
+// This behavior is new relative to the public API surface — it applies to
+// owned and ownerless volumes alike, so retries from every caller of the
+// private Create (the CSI driver's deterministic PVC-ref names, the CI
+// controller's deterministic disk names) resolve to the stored record instead
+// of failing. Create never mutates the stored record and never validates the
+// owner's state — the owner reference is stored as data.
+func (s *PrivateVolumesServer) checkVolumeAdoption(ctx context.Context, prepared *privatev1.Volume) error {
+	if isDryRun(ctx) {
+		return nil
+	}
+	existing, found, err := s.findActiveVolume(ctx, prepared)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	if conflicts := conflictingVolumeFields(existing, prepared); len(conflicts) > 0 {
+		return volumeAlreadyExistsError(prepared.GetMetadata().GetName(), conflicts)
+	}
+	return &errAdoptedVolume{volume: existing}
+}
+
+// findActiveVolume returns the active volume stored under the prepared
+// record's name and tenant, or found=false when no such record exists.
+func (s *PrivateVolumesServer) findActiveVolume(ctx context.Context,
+	prepared *privatev1.Volume) (*privatev1.Volume, bool, error) {
+	metadata := prepared.GetMetadata()
+	filter := fmt.Sprintf(
+		"this.metadata.name == %q && this.metadata.tenant == %q && !has(this.metadata.deletion_timestamp)",
+		metadata.GetName(), metadata.GetTenant())
+	var existing *privatev1.Volume
+	err := forEachMatchingRecord(ctx, s.generic.dao, filter, func(volume *privatev1.Volume) {
+		if existing == nil {
+			existing = volume
+		}
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return existing, existing != nil, nil
+}
+
+// conflictingVolumeFields returns the field paths that differ between a
+// stored volume and an incoming Create candidate.
+func conflictingVolumeFields(existing, candidate *privatev1.Volume) []string {
+	var conflicts []string
+	if existing.GetMetadata().GetProject() != candidate.GetMetadata().GetProject() {
+		conflicts = append(conflicts, "metadata.project")
+	}
+	existingSpec := existing.GetSpec()
+	candidateSpec := candidate.GetSpec()
+	if !proto.Equal(existingSpec.GetOwner(), candidateSpec.GetOwner()) {
+		conflicts = append(conflicts, "spec.owner")
+	}
+	if existingSpec.GetStorageTier() != candidateSpec.GetStorageTier() {
+		conflicts = append(conflicts, "spec.storage_tier")
+	}
+	if existingSpec.GetSizeGib() != candidateSpec.GetSizeGib() {
+		conflicts = append(conflicts, "spec.size_gib")
+	}
+	if existingSpec.GetAccessMode() != candidateSpec.GetAccessMode() {
+		conflicts = append(conflicts, "spec.access_mode")
+	}
+	if !proto.Equal(existingSpec.GetTopology(), candidateSpec.GetTopology()) {
+		conflicts = append(conflicts, "spec.topology")
+	}
+	if !proto.Equal(existingSpec.GetDiskImage(), candidateSpec.GetDiskImage()) {
+		conflicts = append(conflicts, "spec.disk_image")
+	}
+	if !proto.Equal(existingSpec.GetTarget(), candidateSpec.GetTarget()) {
+		conflicts = append(conflicts, "spec.target")
+	}
+	return conflicts
+}
+
+func volumeAlreadyExistsError(name string, conflicts []string) error {
+	return grpcstatus.Errorf(grpccodes.AlreadyExists,
+		"volume '%s' already exists with a different %s", name, strings.Join(conflicts, ", "))
 }
 
 func (s *PrivateVolumesServer) validateVolumeCreate(vol *privatev1.Volume) error {

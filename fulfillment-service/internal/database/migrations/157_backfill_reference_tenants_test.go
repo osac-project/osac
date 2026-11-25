@@ -126,10 +126,6 @@ var _ = DescribeMigration("Backfill full-reference tenant selectors", func() {
 				"default":{"baremetal_instance_type":{"name":"default-type","shared":true}}
 			}}}}}')`)
 		Expect(err).ToNot(HaveOccurred())
-		_, err = conn.Exec(ctx, `update tenants
-			set data = jsonb_set(data, '{spec}', '{"default_role":{"name":"tenant-user","tenant":"shared","shared":true}}')
-			where id = 'shared'`)
-		Expect(err).ToNot(HaveOccurred())
 
 		Expect(tool.Migrate(ctx, 157)).To(Succeed())
 
@@ -143,7 +139,11 @@ var _ = DescribeMigration("Backfill full-reference tenant selectors", func() {
 		var roleData string
 		Expect(conn.QueryRow(ctx, `select (data #> '{spec,default_role}')::text
 			from tenants where id = 'shared'`).Scan(&roleData)).To(Succeed())
-		Expect(roleData).To(MatchJSON(`{"name":"tenant-user","tenant":"shared"}`))
+		Expect(roleData).To(MatchJSON(`{
+			"id":"019dd9f6-36cf-77bc-8041-c6a6a415c185",
+			"name":"tenant-user",
+			"tenant":"shared"
+		}`))
 	})
 
 	It("includes every resource and archive table in the backfill schema", func(ctx context.Context) {

@@ -17,6 +17,7 @@ package osac.private.v1;
 
 import "cleanapi/cleanapi.proto";
 import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
 import "osac/private/v1/billing_account_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
@@ -82,6 +83,17 @@ message BillingAccountsCreateResponse {
   BillingAccount object = 1;
 }
 
+message BillingAccountsUpdateRequest {
+  string id = 1;
+  BillingAccount object = 2;
+  google.protobuf.FieldMask update_mask = 3;
+  bool lock = 4;
+}
+
+message BillingAccountsUpdateResponse {
+  BillingAccount object = 1;
+}
+
 message BillingAccountsDeleteRequest {
   string id = 1;
 }
@@ -108,6 +120,15 @@ service BillingAccounts {
   rpc Create(BillingAccountsCreateRequest) returns (BillingAccountsCreateResponse) {
     option (google.api.http) = {
       post: "/api/private/v1/billing/accounts"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Descriptor-only scaffold: not implemented or authorized.
+  rpc Update(BillingAccountsUpdateRequest) returns (BillingAccountsUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/private/v1/billing/accounts/{id}"
       body: "object"
       response_body: "object"
     };

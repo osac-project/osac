@@ -761,23 +761,14 @@ var _ = Describe("registered SSH key resolution", func() {
 		Entry("with another error", status.Error(codes.Unavailable, "database unavailable"), false),
 	)
 
-	It("marks initial reconciliation failed when the registered Secret is gone", func() {
-		const (
-			instanceID   = "new-vm-with-deleted-key"
-			hubID        = "initial-ssh-key-hub"
-			hubNamespace = "initial-ssh-key-hub-ns"
-		)
-		ctx := context.Background()
-		ctrl := gomock.NewController(GinkgoT())
-		DeferCleanup(ctrl.Finish)
-
+	newRunner := func(ctrl *gomock.Controller, secretsErr error) (*function, *privatev1.ComputeInstance, *MockComputeInstancesClient) {
 		scheme := runtime.NewScheme()
 		Expect(osacv1alpha1.AddToScheme(scheme)).To(Succeed())
 		hubClient := fake.NewClientBuilder().WithScheme(scheme).Build()
 		hubCache := controllers.NewMockHubCache(ctrl)
 		hubCache.EXPECT().
-			Get(gomock.Any(), hubID).
-			Return(&controllers.HubEntry{Namespace: hubNamespace, Client: hubClient}, nil)
+			Get(gomock.Any(), "ssh-key-hub").
+			Return(&controllers.HubEntry{Namespace: "ssh-key-hub-ns", Client: hubClient}, nil)
 		instanceTypesClient := NewMockInstanceTypesClient(ctrl)
 		instanceTypesClient.EXPECT().
 			Get(gomock.Any(), gomock.Any()).
@@ -789,16 +780,10 @@ var _ = Describe("registered SSH key resolution", func() {
 		secretsClient := NewMockSecretsClient(ctrl)
 		secretsClient.EXPECT().
 			Get(gomock.Any(), gomock.Any()).
-			Return(nil, status.Error(codes.NotFound, "Secret is gone"))
+			Return(nil, secretsErr)
 		computeInstancesClient := NewMockComputeInstancesClient(ctrl)
-		computeInstancesClient.EXPECT().
-			Update(gomock.Any(), gomock.Any(), gomock.Any()).
-			DoAndReturn(func(_ context.Context, request *privatev1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption) (*privatev1.ComputeInstancesUpdateResponse, error) {
-				return privatev1.ComputeInstancesUpdateResponse_builder{Object: request.GetObject()}.Build(), nil
-			})
-
 		computeInstance := privatev1.ComputeInstance_builder{
-			Id: instanceID,
+			Id: "ci-ssh-key-run-test",
 			Metadata: privatev1.Metadata_builder{
 				Finalizers: []string{finalizers.Controller},
 				Tenant:     "tenant-a",
@@ -807,11 +792,11 @@ var _ = Describe("registered SSH key resolution", func() {
 				Template:     privatev1.ComputeInstanceTemplateReference_builder{Id: "osac.templates.ocp_virt_vm"}.Build(),
 				InstanceType: privatev1.InstanceTypeReference_builder{Id: "small"}.Build(),
 				RunStrategy:  privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS.Enum(),
-				SshKey:       privatev1.SecretReference_builder{Id: "deleted-secret", Name: "login"}.Build(),
+				SshKey:       privatev1.SecretReference_builder{Id: "secret-id", Name: "login"}.Build(),
 			}.Build(),
 			Status: privatev1.ComputeInstanceStatus_builder{
 				State: privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING,
-				Hub:   hubID,
+				Hub:   "ssh-key-hub",
 			}.Build(),
 		}.Build()
 		reconciler := &function{
@@ -822,8 +807,20 @@ var _ = Describe("registered SSH key resolution", func() {
 			secretsClient:          secretsClient,
 			maskCalculator:         masks.NewCalculator().Build(),
 		}
+		return reconciler, computeInstance, computeInstancesClient
+	}
 
-		err := reconciler.run(ctx, computeInstance)
+	It("marks initial reconciliation failed when the registered Secret is gone", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		reconciler, computeInstance, instances := newRunner(ctrl, status.Error(codes.NotFound, "Secret is gone"))
+		instances.EXPECT().
+			Update(gomock.Any(), gomock.Any(), gomock.Any()).
+			DoAndReturn(func(_ context.Context, request *privatev1.ComputeInstancesUpdateRequest, _ ...grpc.CallOption) (*privatev1.ComputeInstancesUpdateResponse, error) {
+				return privatev1.ComputeInstancesUpdateResponse_builder{Object: request.GetObject()}.Build(), nil
+			})
+
+		err := reconciler.run(context.Background(), computeInstance)
 		Expect(err).To(MatchError(ContainSubstring("Secret is gone")))
 		Expect(controllers.IsConflict(err)).To(BeFalse())
 		Expect(computeInstance.GetStatus().GetState()).To(
@@ -840,7 +837,31 @@ var _ = Describe("registered SSH key resolution", func() {
 		Expect(provisioned.GetReason()).To(Equal("SecretNotFound"))
 	})
 
-	DescribeTable("classifies SSH key lookup failures", func(code codes.Code, permanent bool, reason string) {
+	It("requeues retryable SSH-key resolution failures without persisting status", func() {
+		ctrl := gomock.NewController(GinkgoT())
+		DeferCleanup(ctrl.Finish)
+		reconciler, computeInstance, instances := newRunner(ctrl, status.Error(codes.Unavailable, "api unavailable"))
+		instances.EXPECT().Update(gomock.Any(), gomock.Any(), gomock.Any()).Times(0)
+
+		err := reconciler.run(context.Background(), computeInstance)
+		Expect(err).To(MatchError(ContainSubstring("api unavailable")))
+		// The wrapped error still carries the resolution failure and its reason.
+		var secretErr *controllers.SSHKeyResolutionError
+		Expect(errors.As(err, &secretErr)).To(BeTrue())
+		Expect(secretErr.Reason).To(Equal(controllers.SSHKeyResolutionReasonSecretUnavailable))
+		// OSAC-7245: run() wraps the retryable failure so the shared
+		// reconciler schedules a bounded retry instead of waiting for an
+		// unrelated event or the periodic sync.
+		Expect(controllers.IsRequeueable(err)).To(BeTrue())
+		var retryable interface{ RequeueAfter() time.Duration }
+		Expect(errors.As(err, &retryable)).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(controllers.SSHKeyResolutionRetryDelay))
+		// The prior status is preserved while the retryable failure is retried.
+		Expect(computeInstance.GetStatus().GetState()).To(
+			Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_STARTING))
+	})
+
+	DescribeTable("forwards SSH-key lookup failure reasons", func(code codes.Code, reason string) {
 		ctrl := gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
 		t := newTask(ctrl, privatev1.Secret_builder{
@@ -851,14 +872,13 @@ var _ = Describe("registered SSH key resolution", func() {
 		err := t.addExplicitFields(context.Background(), &osacv1alpha1.ComputeInstanceSpec{})
 		var resolutionErr *controllers.SSHKeyResolutionError
 		Expect(errors.As(err, &resolutionErr)).To(BeTrue())
-		Expect(resolutionErr.Permanent).To(Equal(permanent))
 		Expect(resolutionErr.Reason).To(Equal(reason))
+		// The resolver classifies only; run() decides the retry policy. The
+		// full code-to-reason matrix lives in the controllers suite.
+		Expect(controllers.IsRequeueable(err)).To(BeFalse())
 	},
-		Entry("not found", codes.NotFound, true, "SecretNotFound"),
-		Entry("invalid", codes.InvalidArgument, true, "SecretInvalid"),
-		Entry("unavailable", codes.Unavailable, false, ""),
-		Entry("deadline", codes.DeadlineExceeded, false, ""),
-		Entry("canceled", codes.Canceled, false, ""),
+		Entry("not found", codes.NotFound, controllers.SSHKeyResolutionReasonSecretNotFound),
+		Entry("unavailable", codes.Unavailable, controllers.SSHKeyResolutionReasonSecretUnavailable),
 	)
 
 	DescribeTable("classifies invalid SSH key Secrets as permanent", func(secret *privatev1.Secret) {
@@ -869,8 +889,8 @@ var _ = Describe("registered SSH key resolution", func() {
 		err := t.addExplicitFields(context.Background(), &osacv1alpha1.ComputeInstanceSpec{})
 		var resolutionErr *controllers.SSHKeyResolutionError
 		Expect(errors.As(err, &resolutionErr)).To(BeTrue())
-		Expect(resolutionErr.Permanent).To(BeTrue())
 		Expect(resolutionErr.Reason).To(Equal("SecretInvalid"))
+		Expect(controllers.IsRequeueable(err)).To(BeFalse())
 	},
 		Entry("wrong Secret type", privatev1.Secret_builder{
 			Type: privatev1.SecretType_SECRET_TYPE_VALUE,
@@ -911,8 +931,8 @@ var _ = Describe("registered SSH key resolution", func() {
 		err := t.addExplicitFields(context.Background(), &osacv1alpha1.ComputeInstanceSpec{})
 		var resolutionErr *controllers.SSHKeyResolutionError
 		Expect(errors.As(err, &resolutionErr)).To(BeTrue())
-		Expect(resolutionErr.Permanent).To(BeTrue())
 		Expect(resolutionErr.Reason).To(Equal("SecretInvalid"))
+		Expect(controllers.IsRequeueable(err)).To(BeFalse())
 	})
 })
 

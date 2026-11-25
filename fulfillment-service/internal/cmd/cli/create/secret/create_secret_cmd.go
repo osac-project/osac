@@ -294,6 +294,13 @@ To create a pull secret:
   --from-file=.dockerconfigjson=/path/to/pull-secret.json
 {{ bt 3 }}
 
+To create a Linux user-data Secret:
+
+{{ bt 3 }}shell
+{{ binary }} create secret --name linux-cloud-init --type=user-data \
+  --from-file=userdata=/path/to/cloud-init.yaml
+{{ bt 3 }}
+
 To create a Windows user-data Secret:
 
 {{ bt 3 }}shell

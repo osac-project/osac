@@ -43,15 +43,14 @@ osac create cluster --catalog-item example-cluster --name my-cluster \
 ```
 
 The Secret must be in the cluster's tenant and have the `pull-secret` type.
-To replace its contents with an updated credentials file, run:
+To change its contents, open the Secret in your editor:
 
 ```bash
-osac update secret cluster-pull-secret \
-  --from-file=.dockerconfigjson=./new-pull-secret.json
+osac edit secret cluster-pull-secret
 ```
 
-`update secret` replaces the complete data map. Supply every key you want to
-keep. User-data Secret contents cannot be updated after creation.
+Save and close the editor to apply your changes. User-data Secret contents
+cannot be updated after creation.
 Delete an unused Secret with `osac delete secret cluster-pull-secret`; OSAC
 rejects deletion while a resource still references it.
 
@@ -192,8 +191,9 @@ clusters.
 
 ### User Data
 
-User-data Secrets store instance initialization content. Both types require a
-nonempty `userdata` key. Use `--from-file=userdata=PATH` to supply the file
+User-data Secrets store instance initialization content. Both `user-data` and
+`windows-user-data` require a nonempty `userdata` key. Use
+`--from-file=userdata=PATH` to supply the file
 contents directly, without base64 encoding them for the CLI. Without an explicit
 `userdata=` key, the CLI uses the filename as the data key.
 
@@ -362,24 +362,28 @@ strings. Base64 is an encoding, not redaction; treat that output as sensitive.
 
 #### Example: Database credentials
 
+Prepare one file per value, then supply the filenames:
+
 ```bash
 osac create secret --name postgres-creds \
   --type=opaque \
-  --from-literal=username=fake \
-  --from-literal=password='fake!' \
-  --from-literal=host=postgres.example.com \
-  --from-literal=port=5432 \
-  --from-literal=database=production
+  --from-file=username=./username.txt \
+  --from-file=password=./password.txt \
+  --from-file=host=./host.txt \
+  --from-file=port=./port.txt \
+  --from-file=database=./database.txt
 ```
 
 #### Example: API keys and tokens
 
+Prepare files containing the API key, API secret, and webhook URL:
+
 ```bash
 osac create secret --name external-api-creds \
   --type=opaque \
-  --from-literal=api-key=fake \
-  --from-literal=api-secret=fake \
-  --from-literal=webhook-url=https://api.example.com/webhook
+  --from-file=api-key=./api-key.txt \
+  --from-file=api-secret=./api-secret.txt \
+  --from-file=webhook-url=./webhook-url.txt
 ```
 
 #### Example: TLS certificate and key
@@ -395,12 +399,12 @@ osac create secret --name app-tls \
 #### Example: Configuration files
 
 ```bash
-# Create a secret from multiple config files
+# Include the environment name in environment.txt alongside the config files
 osac create secret --name app-config \
   --type=opaque \
   --from-file=config.yaml=./app-config.yaml \
   --from-file=logging.conf=./logging.conf \
-  --from-literal=environment=production
+  --from-file=environment=./environment.txt
 ```
 
 #### Example: YAML format
@@ -444,18 +448,22 @@ echo -n 'ghp_abc123xyz789token' | osac create secret --name github-token \
 
 #### Example: License key
 
+Store the license key in `license-key.txt`:
+
 ```bash
 osac create secret --name app-license \
   --type=value \
-  --from-literal=value='XXXX-YYYY-ZZZZ-AAAA-BBBB'
+  --from-file=value=./license-key.txt
 ```
 
 #### Example: Webhook secret
 
+Store the webhook secret in `webhook-secret.txt`:
+
 ```bash
 osac create secret --name webhook-secret \
   --type=value \
-  --from-literal=value='randomly-generated-webhook-secret-123'
+  --from-file=value=./webhook-secret.txt
 ```
 
 #### Example: YAML format
@@ -494,12 +502,12 @@ osac create secret --name my-ssh-key \
   --from-file=public_key=$HOME/.ssh/id_rsa.pub
 ```
 
-#### Example: Create from literal value
+#### Example: Read from standard input
 
 ```bash
-osac create secret --name admin-ssh-key \
+cat "$HOME/.ssh/id_rsa.pub" | osac create secret --name admin-ssh-key \
   --type=ssh-public-key \
-  --from-literal=public_key='ssh-rsa AAAAB...com'
+  --from-file=public_key=-
 ```
 
 #### Example: Generate new SSH key and store

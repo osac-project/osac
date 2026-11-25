@@ -91,7 +91,7 @@ message TenantSpec {
 // based on the reconciliation with the identity provider.
 message TenantStatus {
   // True once all four minimal onboarding requirements have succeeded.
-  bool onboarded = 7 [
+  bool onboarded = 1 [
     (google.api.field_behavior) = OUTPUT_ONLY
   ];
 

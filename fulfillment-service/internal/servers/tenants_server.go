@@ -19,9 +19,6 @@ import (
 	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -163,23 +160,12 @@ func (s *TenantsServer) List(ctx context.Context,
 	return
 }
 
-func rejectPublicTenantStatus(object *publicv1.Tenant, mask *fieldmaskpb.FieldMask) error {
-	if object.HasStatus() {
-		return status.Error(codes.InvalidArgument, "status is output-only and cannot be set by users")
-	}
-	return validateNoStatusInMask(mask)
-}
-
 func (s *TenantsServer) Create(ctx context.Context,
 	request *publicv1.TenantsCreateRequest) (response *publicv1.TenantsCreateResponse, err error) {
 	ctx = withPublicAPIView(ctx)
 	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
 		return nil, err
 	}
-	if err := rejectPublicTenantStatus(request.GetObject(), nil); err != nil {
-		return nil, err
-	}
-
 	privateObject := &privatev1.Tenant{}
 	err = s.inMapper.Copy(ctx, request.GetObject(), privateObject)
 	if err != nil {
@@ -213,10 +199,6 @@ func (s *TenantsServer) Update(ctx context.Context,
 	if err := validatePublicObjectMetadata(request.GetObject()); err != nil {
 		return nil, err
 	}
-	if err := rejectPublicTenantStatus(request.GetObject(), request.GetUpdateMask()); err != nil {
-		return nil, err
-	}
-
 	privateObject := &privatev1.Tenant{}
 	err = s.inMapper.Copy(ctx, request.GetObject(), privateObject)
 	if err != nil {

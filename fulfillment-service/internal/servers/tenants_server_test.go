@@ -19,6 +19,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -130,6 +131,7 @@ var _ = Describe("Public tenants server", func() {
 			fields := (&publicv1.TenantStatus{}).ProtoReflect().Descriptor().Fields()
 			Expect(fields.Len()).To(Equal(1))
 			Expect(string(fields.Get(0).Name())).To(Equal("onboarded"))
+			Expect(fields.Get(0).Number()).To(Equal(protoreflect.FieldNumber(1)))
 		})
 
 		It("Maps only the public onboarding status field", func() {
@@ -192,6 +194,35 @@ var _ = Describe("Public tenants server", func() {
 			Expect(response.GetObject().GetMetadata().GetName()).To(Equal("public-tenant"))
 		})
 
+		It("Restores public tenant status when status is not selected", func() {
+			createResponse, err := privateServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
+				Object: privatev1.Tenant_builder{
+					Metadata: &privatev1.Metadata{
+						Name: "status-restore-tenant",
+					},
+					Status: privatev1.TenantStatus_builder{Onboarded: true}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			id := createResponse.GetObject().GetId()
+
+			updateResponse, err := publicServer.Update(ctx, publicv1.TenantsUpdateRequest_builder{
+				Object: publicv1.Tenant_builder{
+					Id: id,
+					Metadata: publicv1.Metadata_builder{
+						Name:   "status-restore-tenant",
+						Labels: map[string]string{"public": "true"},
+					}.Build(),
+					Status: publicv1.TenantStatus_builder{Onboarded: false}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetMetadata().GetLabels()).
+				To(HaveKeyWithValue("public", "true"))
+			Expect(updateResponse.GetObject().GetStatus().GetOnboarded()).To(BeTrue())
+		})
+
 		It("Updates a tenant without status", func() {
 			createResponse, err := privateServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
 				Object: privatev1.Tenant_builder{
@@ -217,23 +248,21 @@ var _ = Describe("Public tenants server", func() {
 			Expect(updateResponse.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("public", "true"))
 		})
 
-		It("Rejects public tenant creation with status", func() {
-			_, err := publicServer.Create(ctx, publicv1.TenantsCreateRequest_builder{
+		It("Clears public tenant creation status", func() {
+			response, err := publicServer.Create(ctx, publicv1.TenantsCreateRequest_builder{
 				Object: publicv1.Tenant_builder{
 					Metadata: publicv1.Metadata_builder{
-						Name: "my-tenant",
+						Name: "status-clear-tenant",
 					}.Build(),
-					Status: publicv1.TenantStatus_builder{}.Build(),
+					Status: publicv1.TenantStatus_builder{Onboarded: true}.Build(),
 				}.Build(),
 			}.Build())
-			Expect(err).To(HaveOccurred())
-			status, ok := grpcstatus.FromError(err)
-			Expect(ok).To(BeTrue())
-			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("status is output-only"))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().HasStatus()).To(BeFalse())
+			Expect(response.GetObject().GetStatus().GetOnboarded()).To(BeFalse())
 		})
 
-		It("Rejects public tenant update with status", func() {
+		It("Rejects public tenant update with a status mask", func() {
 			createResponse, err := privateServer.Create(ctx, privatev1.TenantsCreateRequest_builder{
 				Object: privatev1.Tenant_builder{
 					Metadata: &privatev1.Metadata{
@@ -258,7 +287,7 @@ var _ = Describe("Public tenants server", func() {
 			status, ok := grpcstatus.FromError(err)
 			Expect(ok).To(BeTrue())
 			Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-			Expect(status.Message()).To(ContainSubstring("status is output-only"))
+			Expect(status.Message()).To(ContainSubstring("OUTPUT_ONLY"))
 		})
 
 		It("Can't delete a tenant, not implemented", func() {

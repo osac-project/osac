@@ -30,15 +30,17 @@ import (
 
 var _ = Describe("Tenant onboarding status", func() {
 	var (
-		ctx           context.Context
-		publicClient  publicv1.TenantsClient
-		privateClient privatev1.TenantsClient
+		ctx            context.Context
+		publicClient   publicv1.TenantsClient
+		privateClient  privatev1.TenantsClient
+		projectsClient privatev1.ProjectsClient
 	)
 
 	BeforeEach(func() {
 		ctx = context.Background()
 		publicClient = publicv1.NewTenantsClient(tool.ExternalView().AdminConn())
 		privateClient = privatev1.NewTenantsClient(tool.InternalView().AdminConn())
+		projectsClient = privatev1.NewProjectsClient(tool.InternalView().AdminConn())
 	})
 
 	It("Exposes only the public onboarding status field", func() {
@@ -64,11 +66,7 @@ var _ = Describe("Tenant onboarding status", func() {
 		id := privateCreate.GetObject().GetId()
 
 		DeferCleanup(func(cleanupCtx context.Context) {
-			_, err := privateClient.Delete(cleanupCtx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
-			if grpcstatus.Code(err) == grpccodes.NotFound {
-				return
-			}
-			Expect(err).ToNot(HaveOccurred())
+			deleteTenant(cleanupCtx, privateClient, projectsClient, id, name)
 		})
 
 		publicGet, err := publicClient.Get(ctx, publicv1.TenantsGetRequest_builder{Id: id}.Build())
@@ -87,34 +85,49 @@ var _ = Describe("Tenant onboarding status", func() {
 		Expect(defaultNetworking.GetStatus()).To(Equal(privatev1.ConditionStatus_CONDITION_STATUS_TRUE))
 	})
 
-	It("Rejects public status writes", func() {
+	It("Prevents public status writes", func() {
 		name := fmt.Sprintf("onboarding-write-%s", uuid.New())
 
-		_, err := publicClient.Create(ctx, publicv1.TenantsCreateRequest_builder{
+		publicCreate, err := publicClient.Create(ctx, publicv1.TenantsCreateRequest_builder{
 			Object: publicv1.Tenant_builder{
 				Metadata: &publicv1.Metadata{Name: name},
-				Status:   publicv1.TenantStatus_builder{}.Build(),
+				Status:   publicv1.TenantStatus_builder{Onboarded: true}.Build(),
 			}.Build(),
 		}.Build())
-		Expect(err).To(HaveOccurred())
-		status, ok := grpcstatus.FromError(err)
-		Expect(ok).To(BeTrue())
-		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-		Expect(status.Message()).To(ContainSubstring("status is output-only"))
-
-		privateCreate, err := privateClient.Create(ctx, privatev1.TenantsCreateRequest_builder{
-			Object: privatev1.Tenant_builder{Metadata: &privatev1.Metadata{Name: name}}.Build(),
-		}.Build())
 		Expect(err).ToNot(HaveOccurred())
-		id := privateCreate.GetObject().GetId()
+		Expect(publicCreate.GetObject().HasStatus()).To(BeFalse())
+		Expect(publicCreate.GetObject().GetStatus().GetOnboarded()).To(BeFalse())
+		id := publicCreate.GetObject().GetId()
 
 		DeferCleanup(func(cleanupCtx context.Context) {
-			_, err := privateClient.Delete(cleanupCtx, privatev1.TenantsDeleteRequest_builder{Id: id}.Build())
-			if grpcstatus.Code(err) == grpccodes.NotFound {
-				return
-			}
-			Expect(err).ToNot(HaveOccurred())
+			deleteTenant(cleanupCtx, privateClient, projectsClient, id, name)
 		})
+
+		privateUpdate, err := privateClient.Update(ctx, privatev1.TenantsUpdateRequest_builder{
+			Object: privatev1.Tenant_builder{
+				Id:     id,
+				Status: privatev1.TenantStatus_builder{Onboarded: true}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.onboarded"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(privateUpdate.GetObject().GetStatus().GetOnboarded()).To(BeTrue())
+
+		publicRestore, err := publicClient.Update(ctx, publicv1.TenantsUpdateRequest_builder{
+			Object: publicv1.Tenant_builder{
+				Id: id,
+				Metadata: &publicv1.Metadata{
+					Name:   name,
+					Labels: map[string]string{"public": "true"},
+				},
+				Status: publicv1.TenantStatus_builder{Onboarded: false}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(publicRestore.GetObject().GetMetadata().GetLabels()).
+			To(HaveKeyWithValue("public", "true"))
+		Expect(publicRestore.GetObject().GetStatus().GetOnboarded()).To(BeTrue())
 
 		_, err = publicClient.Update(ctx, publicv1.TenantsUpdateRequest_builder{
 			Object: publicv1.Tenant_builder{
@@ -125,9 +138,9 @@ var _ = Describe("Tenant onboarding status", func() {
 			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.onboarded"}},
 		}.Build())
 		Expect(err).To(HaveOccurred())
-		status, ok = grpcstatus.FromError(err)
+		status, ok := grpcstatus.FromError(err)
 		Expect(ok).To(BeTrue())
 		Expect(status.Code()).To(Equal(grpccodes.InvalidArgument))
-		Expect(status.Message()).To(ContainSubstring("status is output-only"))
+		Expect(status.Message()).To(ContainSubstring("OUTPUT_ONLY"))
 	})
 })

@@ -103,7 +103,7 @@ message TenantSpec {
 // based on the reconciliation with the identity provider.
 message TenantStatus {
   // True once all four minimal onboarding requirements have succeeded.
-  bool onboarded = 7 [
+  bool onboarded = 1 [
     (google.api.field_behavior) = OUTPUT_ONLY
   ];
 
@@ -111,12 +111,12 @@ message TenantStatus {
   // Only populated on successful creation. These credentials must be stored securely.
   // This field is not persisted; Get and List responses omit it. The durable copy is the
   // Secret referenced by spec.break_glass_credentials_secret.
-  BreakGlassCredentials break_glass_credentials = 1 [
+  BreakGlassCredentials break_glass_credentials = 2 [
     (cleanapi.field).private = true
   ];
 
   // Current lifecycle state of the tenant's IDP synchronization.
-  TenantState state = 2 [
+  TenantState state = 3 [
     (cleanapi.field).private = true
   ];
 
@@ -129,7 +129,7 @@ message TenantStatus {
   // "Tenant name already exists in IDP", or "Invalid tenant name format".
   //
   // For SYNCED state, this is typically empty or contains confirmation like "Tenant synced to IDP".
-  optional string message = 3 [
+  optional string message = 4 [
     (cleanapi.field).private = true
   ];
 
@@ -137,7 +137,7 @@ message TenantStatus {
   // Typically matches the tenant name but stored here for reference.
   // This is set by the controller after successful IDP sync.
   // Empty string when state is PENDING or FAILED.
-  string idp_tenant_name = 4 [
+  string idp_tenant_name = 5 [
     (cleanapi.field).private = true
   ];
 
@@ -146,12 +146,12 @@ message TenantStatus {
   // The break-glass password is NOT stored here for security reasons - it is only returned once
   // during tenant creation.
   // Empty string when state is PENDING or FAILED.
-  string break_glass_user_id = 5 [
+  string break_glass_user_id = 6 [
     (cleanapi.field).private = true
   ];
 
   // Conditions provide detailed status information about various subsystems of the tenant.
-  repeated TenantCondition conditions = 6 [
+  repeated TenantCondition conditions = 7 [
     (cleanapi.field).private = true
   ];
 }

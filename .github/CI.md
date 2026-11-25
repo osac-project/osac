@@ -122,6 +122,14 @@ change also runs `pre-commit` and `dependency-review`. `ci-tests.yml` and `filte
 
 The CaaS Kind integration test is separate from full-install `E2E`.
 
+## A leg that repeats on a pull request
+
+A leg in `ci-tests.yml` that sets `pr_repetitions` runs that many times, in parallel, on a pull request. Today that is
+only the fulfillment-service integration test: five jobs over the same commit, so a test that fails once in a while is
+caught before the change merges. Every repetition must pass: one failure fails `CI` like any other leg, and the run
+shows the five as separate rows. The merge queue, the scheduled and manual runs of `integration-tests.yml` and the
+flake-detection campaigns keep one execution per leg.
+
 A rule that a change must also add or change tests is not enforced: `CI` checks that the tests which exist pass.
 
 ## What you see on a pull request

@@ -377,8 +377,8 @@ func (s *PrivateSecretsServer) Delete(ctx context.Context,
 	return
 }
 
-// authorizePlatformSecretManagement restricts reads and mutations of shared and system Secrets to
-// platform administrators and controllers. Shared metadata remains listable for template references;
+// authorizePlatformSecretManagement requires universal tenant scope to read or mutate shared and
+// system Secrets. Shared metadata remains listable for template references;
 // system metadata is hidden by tenant visibility filtering.
 func (s *PrivateSecretsServer) authorizePlatformSecretManagement(ctx context.Context, secret *privatev1.Secret) error {
 	if secret == nil {
@@ -410,6 +410,9 @@ func (s *PrivateSecretsServer) canManagePlatformSecrets(ctx context.Context) (bo
 }
 
 func (s *PrivateSecretsServer) canReadProtectedSecrets(ctx context.Context) (bool, error) {
+	if auth.IsAAPSecretReader(ctx) {
+		return false, nil
+	}
 	if auth.IsTenantAdmin(ctx) || auth.IsControllerServiceAccount(ctx) {
 		return true, nil
 	}

@@ -24,6 +24,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -1378,6 +1379,80 @@ var _ = Describe("Private secrets server", func() {
 		})
 
 		Describe("Get", func() {
+			It("limits the authorized AAP reader to ordinary Secrets across tenant scopes", func() {
+				const issuer = "https://keycloak.example/realms/osac"
+				const clientID = "osac-aap-secret-reader"
+				const username = "service-account-" + clientID
+				evaluator, err := auth.NewEvaluator().SetAAPSecretReaderIssuer(issuer).Build()
+				Expect(err).NotTo(HaveOccurred())
+				interceptor, err := auth.NewGrpcAuthzInterceptor().SetLogger(logger).SetEvaluator(evaluator).Build()
+				Expect(err).NotTo(HaveOccurred())
+				readTenancy, err := auth.NewDefaultTenancyLogic().SetLogger(logger).Build()
+				Expect(err).NotTo(HaveOccurred())
+				reader, err := NewPrivateSecretsServer().
+					SetLogger(logger).
+					SetAttributionLogic(attribution).
+					SetTenancyLogic(readTenancy).
+					SetSecretStore(mockStore).
+					Build()
+				Expect(err).NotTo(HaveOccurred())
+				readerCtx := auth.ContextWithToken(ctx, &jwt.Token{Claims: jwt.MapClaims{
+					"iss": issuer, "azp": clientID, "client_id": clientID,
+					"preferred_username": username,
+					"realm_access":       map[string]any{"roles": []any{"tenant-admin"}},
+				}})
+
+				create := func(tenant, name string, secretType privatev1.SecretType, data map[string][]byte) *privatev1.Secret {
+					mockStore.EXPECT().Store(gomock.Any(), tenant, "", name, data).Return(nil)
+					created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+						Object: privatev1.Secret_builder{
+							Metadata: privatev1.Metadata_builder{Tenant: tenant, Name: name}.Build(),
+							Type:     secretType,
+							Data:     data,
+						}.Build(),
+					}.Build())
+					Expect(err).NotTo(HaveOccurred())
+					return created.GetObject()
+				}
+				get := func(callerCtx context.Context, secret *privatev1.Secret) (any, error) {
+					request := privatev1.SecretsGetRequest_builder{Id: secret.GetId()}.Build()
+					return interceptor.UnaryServer(callerCtx, request,
+						&grpc.UnaryServerInfo{FullMethod: privatev1.Secrets_Get_FullMethodName},
+						func(ctx context.Context, _ any) (any, error) { return reader.Get(ctx, request) })
+				}
+
+				opaque := privatev1.SecretType_SECRET_TYPE_OPAQUE
+				ordinaryData := map[string][]byte{"value": []byte("fixture")}
+				for _, tenant := range []string{testTenant, auth.SharedTenant, auth.SystemTenant} {
+					secret := create(tenant, "aap-readable", opaque, ordinaryData)
+					mockStore.EXPECT().Fetch(gomock.Any(), tenant, "", "aap-readable").Return(ordinaryData, nil)
+					response, err := get(readerCtx, secret)
+					Expect(err).NotTo(HaveOccurred(), "tenant %s", tenant)
+					Expect(response.(*privatev1.SecretsGetResponse).GetObject().GetData()).To(Equal(ordinaryData))
+				}
+
+				credentialData := map[string][]byte{"client_secret": []byte("fixture")}
+				credential := create(auth.SharedTenant, "service-account-credential",
+					privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL, credentialData)
+				for _, protected := range []*privatev1.Secret{
+					create(testTenant, breakGlassCredentialsSecretName, opaque, map[string][]byte{"password": []byte("fixture")}),
+					credential,
+				} {
+					// No Vault fetch is expected for any denied read.
+					_, err := get(readerCtx, protected)
+					Expect(status.Code(err)).To(Equal(codes.PermissionDenied), "secret %s", protected.GetMetadata().GetName())
+				}
+
+				adminCtx := auth.ContextWithToken(ctx, &jwt.Token{Claims: jwt.MapClaims{
+					"iss": issuer, "azp": "another-client", "preferred_username": username,
+					"groups": []any{"admins"},
+				}})
+				mockStore.EXPECT().Fetch(gomock.Any(), auth.SharedTenant, "", "service-account-credential").Return(credentialData, nil)
+				response, err := get(adminCtx, credential)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(response.(*privatev1.SecretsGetResponse).GetObject().GetData()).To(Equal(credentialData))
+			})
+
 			It("Fetches data from vault", func() {
 				mockStore.EXPECT().
 					Store(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).

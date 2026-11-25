@@ -158,21 +158,29 @@ var _ = Describe("Ingress separation", func() {
 			return object
 		}
 
-		for _, tenant := range []string{"tenant1", "tenant2", auth.SharedTenant, auth.SystemTenant} {
-			secretType := privatev1.SecretType_SECRET_TYPE_USER_DATA
-			data := map[string][]byte{"userdata": []byte("synthetic user data")}
-			key := "userdata"
-			if tenant == auth.SystemTenant {
-				secretType = privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL
-				key = "client_secret"
-				data = map[string][]byte{"client_id": []byte("synthetic"), key: []byte("synthetic credential")}
-			}
+		ordinaryName := "aap-reader-" + uuid.New()
+		opaque := privatev1.SecretType_SECRET_TYPE_OPAQUE
+		for _, fixture := range []struct {
+			tenant     string
+			name       string
+			secretType privatev1.SecretType
+			key        string
+			status     int
+		}{
+			{"tenant1", ordinaryName, privatev1.SecretType_SECRET_TYPE_USER_DATA, "userdata", http.StatusOK},
+			{"tenant2", ordinaryName, privatev1.SecretType_SECRET_TYPE_USER_DATA, "userdata", http.StatusOK},
+			{auth.SharedTenant, ordinaryName, opaque, "value", http.StatusOK},
+			{auth.SystemTenant, ordinaryName, opaque, "value", http.StatusOK},
+			{"tenant1", "break-glass-credentials-" + uuid.New(), opaque, "password", http.StatusForbidden},
+			{auth.SystemTenant, ordinaryName + "-sa", privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL, "client_secret", http.StatusForbidden},
+		} {
+			data := map[string][]byte{fixture.key: []byte("synthetic fixture")}
 			created, createErr := admin.Create(ctx, privatev1.SecretsCreateRequest_builder{
 				Object: privatev1.Secret_builder{
 					Metadata: privatev1.Metadata_builder{
-						Name: "aap-reader-" + uuid.New(), Tenant: tenant,
+						Name: fixture.name, Tenant: fixture.tenant,
 					}.Build(),
-					Type: secretType,
+					Type: fixture.secretType,
 					Data: data,
 				}.Build(),
 			}.Build())
@@ -183,9 +191,11 @@ var _ = Describe("Ingress separation", func() {
 				Expect(deleteErr).NotTo(HaveOccurred())
 			})
 			privatePath := "/api/private/v1/secrets/" + id
-			object := get(internal, privatePath, http.StatusOK)
-			Expect(object["id"]).To(Equal(id))
-			Expect(object["data"]).To(HaveKeyWithValue(key, base64.StdEncoding.EncodeToString(data[key])))
+			object := get(internal, privatePath, fixture.status)
+			if fixture.status == http.StatusOK {
+				Expect(object["id"]).To(Equal(id))
+				Expect(object["data"]).To(HaveKeyWithValue(fixture.key, base64.StdEncoding.EncodeToString(data[fixture.key])))
+			}
 			get(internal, "/api/fulfillment/v1/secrets/"+id, http.StatusForbidden)
 			get(external, privatePath, http.StatusNotFound)
 		}

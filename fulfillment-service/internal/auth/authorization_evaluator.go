@@ -216,8 +216,9 @@ func (b *EvaluatorBuilder) Build() (*OPAAuthorizationEvaluator, error) {
 	}
 
 	policyData := inmem.NewFromObject(map[string]any{
-		"emergency_service_accounts": emergencyServiceAccounts,
-		"aap_secret_reader_issuer":   b.aapSecretReaderIssuer,
+		"emergency_service_accounts":  emergencyServiceAccounts,
+		"aap_secret_reader_client_id": aapSecretReaderClientID,
+		"aap_secret_reader_issuer":    b.aapSecretReaderIssuer,
 	})
 
 	query, err := rego.New(

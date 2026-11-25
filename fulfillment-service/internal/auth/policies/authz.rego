@@ -18,11 +18,9 @@ import rego.v1
 default allow := false
 
 # Tokens issued to the dedicated AAP client use only the Secret read grant.
-aap_secret_reader_client_id := "osac-aap-secret-reader"
-
 is_aap_secret_reader_client if {
   input.auth.identity.authnMethod == "jwt"
-  input.auth.identity.azp == aap_secret_reader_client_id
+  input.auth.identity.azp == data.aap_secret_reader_client_id
 }
 
 aap_secret_read_allowed if {
@@ -30,8 +28,8 @@ aap_secret_read_allowed if {
   not is_managed_service_account_candidate
   data.aap_secret_reader_issuer != ""
   input.auth.identity.iss == data.aap_secret_reader_issuer
-  input.auth.identity.client_id == aap_secret_reader_client_id
-  subject_name == concat("", ["service-account-", aap_secret_reader_client_id])
+  input.auth.identity.client_id == data.aap_secret_reader_client_id
+  subject_name == concat("", ["service-account-", data.aap_secret_reader_client_id])
   grpc_method == "/osac.private.v1.Secrets/Get"
 }
 

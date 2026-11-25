@@ -300,9 +300,10 @@ permission to create service-account tokens.
 The platform configures the bundled Keycloak client `osac-aap-secret-reader`.
 When Fulfillment is enabled, AAP bootstrap registers the custom credential
 `<prefix>-fulfillment-secret-reader`. Fulfillment limits this identity to
-private `Secrets/Get`. The grant covers every Secret type in all customer
-tenants and in the `shared` and `system` scopes, including protected
-credentials. Restrict access to the credential and any associated job
+private `Secrets/Get` in all customer tenants and in the `shared` and
+`system` scopes. Fulfillment denies reads of Secrets with names containing
+`break-glass-credentials` and Secrets of type `SERVICE_ACCOUNT_CREDENTIAL`.
+Restrict access to the credential and any associated job
 template, project, and runner to trusted automation.
 
 The ComputeInstance create template uses this credential by default. Other

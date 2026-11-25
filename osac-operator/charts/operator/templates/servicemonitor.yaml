@@ -1,0 +1,37 @@
+{{- if include "osac-operator.serviceMonitorEnabled" . }}
+{{- if .Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor" }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "osac-operator.fullname" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac-operator.labels" . | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      control-plane: controller-manager
+      app.kubernetes.io/name: {{ include "osac-operator.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  endpoints:
+  - port: https
+    scheme: https
+    path: /metrics
+    interval: {{ include "osac-operator.serviceMonitorInterval" . | quote }}
+    bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    tlsConfig:
+      # serving-certs-ca-bundle is the service-CA bundle the platform Prometheus
+      # actually mounts. With a path it cannot read, Prometheus fails to build
+      # the whole scrape pool and the operator produces no series at all.
+      caFile: /etc/prometheus/configmaps/serving-certs-ca-bundle/service-ca.crt
+      # ServiceMonitor targets are pod IPs; the service-ca certificate carries
+      # Service DNS names, so verify against the Service name explicitly.
+      serverName: {{ include "osac-operator.fullname" . }}-metrics.{{ .Release.Namespace }}.svc
+    relabelings:
+    - targetLabel: job
+      replacement: osac-operator
+{{- end }}
+{{- end }}

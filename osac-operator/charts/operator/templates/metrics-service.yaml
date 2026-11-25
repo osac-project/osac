@@ -3,6 +3,8 @@ kind: Service
 metadata:
   name: {{ include "osac-operator.fullname" . }}-metrics
   namespace: {{ .Release.Namespace }}
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: {{ include "osac-operator.fullname" . }}-metrics-tls
   labels:
     {{- include "osac-operator.labels" . | nindent 4 }}
 spec:

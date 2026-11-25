@@ -1398,6 +1398,7 @@ var _ = Describe("Private secrets server", func() {
 				Expect(err).NotTo(HaveOccurred())
 				readerCtx := auth.ContextWithToken(ctx, &jwt.Token{Claims: jwt.MapClaims{
 					"iss": issuer, "azp": clientID, "client_id": clientID,
+					"aud":                auth.Audience,
 					"preferred_username": username,
 					"realm_access":       map[string]any{"roles": []any{"tenant-admin"}},
 				}})

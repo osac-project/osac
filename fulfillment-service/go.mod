@@ -44,7 +44,7 @@ require (
 	github.com/xdg-go/scram v1.2.0
 	github.com/zalando/go-keyring v0.2.8
 	go.uber.org/mock v0.6.0
-	go.yaml.in/yaml/v2 v2.4.4
+	go.yaml.in/yaml/v2 v2.4.5
 	golang.org/x/crypto v0.58.0
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba
 	golang.org/x/sync v0.24.0

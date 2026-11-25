@@ -25,6 +25,8 @@ jobs:
   mirror:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      images: ${{ steps.mirror.outputs.images }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -51,8 +53,10 @@ jobs:
           sudo apt-get install -y -qq skopeo
 
       - name: Mirror every image and compare digests
+        id: mirror
         run: |
           set -euo pipefail
+          : > signed-images.txt
           while read -r ref; do
             target=$(.github/scripts/ubi-mirror.sh mirror "${ref}")
             skopeo copy --all --preserve-digests "docker://${ref}" "docker://${target}"
@@ -62,8 +66,10 @@ jobs:
               echo "::error title=ubi-mirror::digest mismatch for ${ref}"
               exit 1
             fi
+            echo "${target}@${source_digest}" >> signed-images.txt
             echo "Mirrored ${ref} -> ${target} (${source_digest})"
           done < ubi-bases.txt
+          echo "images=$(jq -R -s -c 'split("\n") | map(select(length > 0))' signed-images.txt)" >> "$GITHUB_OUTPUT"
 
       # A new package starts private. The token used above would mask that, so
       # log out first: this step fails until the package is made public.
@@ -73,6 +79,35 @@ jobs:
           docker logout ghcr.io || true
           while read -r ref; do
             target=$(.github/scripts/ubi-mirror.sh mirror "${ref}")
-            skopeo inspect --no-tags "docker://${target}" >/dev/null
+            skopeo inspect --no-creds --no-tags "docker://${target}" >/dev/null
             echo "Anonymous pull OK: ${target}"
           done < ubi-bases.txt
+
+  sign:
+    needs: mirror
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJSON(needs.mirror.outputs.images) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sign the mirrored digest
+        uses: ./.github/actions/cosign-sign-image
+        with:
+          image: ${{ matrix.image }}

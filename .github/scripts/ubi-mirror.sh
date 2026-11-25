@@ -10,7 +10,14 @@ mirror=${UBI_MIRROR:-ghcr.io/osac-project}
 # lines and ARG defaults (osac-aap's EE_BASE_IMAGE is only an ARG default).
 list_refs() {
   awk -v prefix="${registry}/" '
-    toupper($1) == "FROM" || toupper($1) == "ARG" {
+    {
+      # Dockerfiles may continue an instruction with a trailing backslash.
+      while ($0 ~ /\\[[:space:]]*$/) {
+        sub(/\\[[:space:]]*$/, " ")
+        if ((getline more) <= 0) { break }
+        $0 = $0 more
+      }
+      if (toupper($1) != "FROM" && toupper($1) != "ARG") { next }
       for (i = 2; i <= NF; i++) {
         ref = $i
         sub(/^[^=]*=/, "", ref)
@@ -22,9 +29,24 @@ list_refs() {
 
 # registry.access.redhat.com/<repo>:<tag> -> ghcr.io/osac-project/<repo->:tag
 mirror_ref() {
-  local path=${1#"${registry}/"} repo tag
-  tag=${path##*:}
+  local ref=$1 path repo tag
+  case ${ref} in
+    *@*)
+      echo "ubi-mirror: digest references are not supported: ${ref}" >&2
+      return 1
+      ;;
+  esac
+  if [ "${ref#"${registry}/"}" = "${ref}" ]; then
+    echo "ubi-mirror: not a ${registry} reference: ${ref}" >&2
+    return 1
+  fi
+  path=${ref#"${registry}/"}
   repo=${path%:*}
+  tag=${path##*:}
+  if [ "${repo}" = "${path}" ] || [ -z "${tag}" ]; then
+    echo "ubi-mirror: reference has no tag: ${ref}" >&2
+    return 1
+  fi
   printf '%s/%s:%s\n' "$mirror" "${repo//\//-}" "${tag}"
 }
 

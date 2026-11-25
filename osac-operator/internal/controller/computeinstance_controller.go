@@ -1445,10 +1445,11 @@ func (r *ComputeInstanceReconciler) handleDesiredConfigVersion(ctx context.Conte
 	if instance.Annotations[osacComputeInstanceManagementStateAnnotation] == ManagementStateManual {
 		return nil
 	}
-	if instance.Status.ProvisionConfigVersion != version {
+	entry := networktask.FindJob(instance.Status.Jobs, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
+	if instance.Status.ProvisionConfigVersion != version ||
+		(entry != nil && entry.State == v1alpha1.NetworkJobStateSucceeded) {
 		instance.Status.LastProvisioningFailure = nil
 	}
-	entry := networktask.FindJob(instance.Status.Jobs, computeInstanceProvisionTask, v1alpha1.NetworkJobManagerNone)
 	if entry != nil && (entry.State == v1alpha1.NetworkJobStateRetrying ||
 		entry.State == v1alpha1.NetworkJobStateCancelled || entry.State == v1alpha1.NetworkJobStateFailed) &&
 		instance.Status.ProvisionConfigVersion != version && entry.LastFailure != nil {

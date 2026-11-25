@@ -504,6 +504,66 @@ var _ = Describe("ComputeInstance public retry projection", func() {
 		Expect(instance.Status.LastProvisioningFailure).To(BeNil())
 	})
 
+	DescribeTable("replays persisted success clearing before tenant readiness", func(manual bool) {
+		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
+		result := reconcileOK()
+		clock.Step(result.RequeueAfter)
+		reconcileOK()
+		fake.finish(computeInstanceProvisionTask, "successful", `{}`)
+		writes.when = func(ci *osacv1alpha1.ComputeInstance) bool { return ci.Status.LastProvisioningFailure == nil }
+		_, err := run()
+		Expect(apierrors.IsConflict(err)).To(BeTrue())
+		reload()
+		Expect(instance.Status.Jobs[0].State).To(Equal(osacv1alpha1.NetworkJobStateSucceeded))
+		Expect(instance.Status.Jobs[0].LastFailure).To(BeNil())
+		Expect(instance.Status.LastProvisioningFailure).NotTo(BeNil())
+		entry := instance.Status.Jobs[0].DeepCopy()
+		if manual {
+			instance.Annotations[osacComputeInstanceManagementStateAnnotation] = ManagementStateManual
+			Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+		}
+		tenant := &osacv1alpha1.Tenant{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instance.Annotations[osacTenantKey], Namespace: "default"}, tenant)).To(Succeed())
+		tenant.Status.Phase = osacv1alpha1.TenantPhaseProgressing
+		Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+		recreate()
+		result = reconcileOK()
+		expectReason(osacv1alpha1.ReasonTenantNotReady)
+		Expect(result.RequeueAfter).To(Equal(defaultPreconditionRequeueInterval))
+		Expect(instance.Status.Jobs[0]).To(Equal(*entry))
+		Expect(fake.tasks()).To(HaveLen(2))
+		if manual {
+			Expect(instance.Status.LastProvisioningFailure).NotTo(BeNil())
+		} else {
+			Expect(instance.Status.LastProvisioningFailure).To(BeNil())
+		}
+	},
+		Entry("managed replay after conflict", false),
+		Entry("manual exclusion after conflict", true),
+	)
+
+	DescribeTable("retains current failure history before tenant readiness", func(running bool) {
+		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
+		result := reconcileOK()
+		if running {
+			clock.Step(result.RequeueAfter)
+			reconcileOK()
+		}
+		observed := instance.Status.LastProvisioningFailure.ObservedAt.DeepCopy()
+		entry := instance.Status.Jobs[0].DeepCopy()
+		tenant := &osacv1alpha1.Tenant{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: instance.Annotations[osacTenantKey], Namespace: "default"}, tenant)).To(Succeed())
+		tenant.Status.Phase = osacv1alpha1.TenantPhaseProgressing
+		Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+		reconcileOK()
+		Expect(instance.Status.LastProvisioningFailure).NotTo(BeNil())
+		Expect(instance.Status.LastProvisioningFailure.ObservedAt.Time.Equal(observed.Time)).To(BeTrue())
+		Expect(instance.Status.Jobs[0]).To(Equal(*entry))
+	},
+		Entry("retry backoff", false),
+		Entry("running retry", true),
+	)
+
 	DescribeTable("invalidates only obsolete managed diagnostics before the tenant-readiness gate", func(changeSpec, manual, checkpointCleared, wantFailure bool) {
 		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
 		reconcileOK()

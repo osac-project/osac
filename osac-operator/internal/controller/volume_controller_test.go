@@ -18,19 +18,24 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 
 	osacv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
 var _ = Describe("VolumeReconciler", func() {
@@ -591,6 +596,234 @@ var _ = Describe("VolumeReconciler", func() {
 		Expect(req.AccessMode).To(Equal(osacv1alpha1.VolumeAccessModeReadWriteOnce))
 		Expect(req.Protocol).To(Equal(osacv1alpha1.VolumeProtocolBlock))
 		Expect(req.Topology.Segments).To(Equal(map[string]string{"osac.io/node": "worker-1"}))
+	})
+
+	It("uses SecretsService preparation for endpoint-only VAST NFS create and delete", func() {
+		vol.Annotations = map[string]string{osacTenantKey: "acme"}
+		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
+		stamped := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, stamped)).To(Succeed())
+		stamped.Status.Provider = "vast"
+		stamped.Status.Protocol = osacv1alpha1.VolumeProtocolNFS
+		Expect(k8sClient.Status().Update(testCtx, stamped)).To(Succeed())
+
+		tier := privatev1.StorageTier_builder{
+			Metadata: privatev1.Metadata_builder{Name: "gold", Tenant: "shared"}.Build(),
+			Spec: privatev1.StorageTierSpec_builder{
+				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
+				Backends: []*privatev1.BackendAssociation{
+					privatev1.BackendAssociation_builder{BackendId: "backend-a"}.Build(),
+				},
+			}.Build(),
+		}.Build()
+		secrets := &preparationTestSecrets{items: []*privatev1.Secret{{
+			Id:       "secret-a",
+			Metadata: privatev1.Metadata_builder{Tenant: "system", Name: "acme--vast-east"}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_OPAQUE,
+		}}}
+		reconciler.TiersClient = &preparationTestTiers{items: []*privatev1.StorageTier{tier}}
+		reconciler.BackendsClient = &preparationTestBackends{
+			items: map[string]*privatev1.StorageBackend{
+				"backend-a": endpointOnlyVASTBackend("backend-a", "vast-east"),
+			},
+			calls: make(map[string]int),
+		}
+		reconciler.SecretsClient = secrets
+		reconciler.VendorProvisioners = VendorProvisionerRegistry{"vast": mockProv}
+		mockProv.UseCreateResponse = true
+		mockProv.CreateResponse = VendorCreateVolumeResponse{VendorVolumeID: "vast-nfs-volume-1", Protocol: "NFS"}
+
+		reconcileCurrent := func() ctrl.Result {
+			result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
+			}})
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+			return result
+		}
+
+		Expect(reconcileCurrent().RequeueAfter).To(Equal(statusStampPollInterval))
+		updated := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
+		condition := apimeta.FindStatusCondition(updated.Status.Conditions, string(osacv1alpha1.VolumeConditionVendorProvisioned))
+		Expect(condition).NotTo(BeNil())
+		Expect(condition.Reason).To(Equal("CreateStarted"))
+		Expect(mockProv.CreateCallCount()).To(BeZero())
+
+		Expect(reconcileCurrent().RequeueAfter).To(BeZero())
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
+		Expect(updated.Status.Phase).To(Equal(osacv1alpha1.VolumePhaseReady))
+		Expect(updated.Status.VendorVolumeID).To(Equal("vast-nfs-volume-1"))
+		Expect(mockProv.CreateCallCount()).To(Equal(int64(1)))
+		Expect(mockProv.LastCreateReq.VASTNFSConfig).NotTo(BeNil())
+		Expect(mockProv.LastCreateReq.VASTNFSConfig.NFSAddress).To(Equal("acme-nfs.example.com"))
+		Expect(mockProv.LastCreateReq.VASTNFSConfig.StorageTenant).To(Equal("acme-on-vast"))
+		serializedStatus, err := json.Marshal(updated.Status)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(serializedStatus)).NotTo(ContainSubstring("prepared-password"))
+
+		Expect(k8sClient.Delete(testCtx, updated)).To(Succeed())
+		// First delete pass records Deleting; the next pass calls the vendor.
+		reconcileCurrent()
+		reconcileCurrent()
+		Expect(mockProv.DeleteCallCount()).To(Equal(int64(1)))
+		Expect(mockProv.LastDeleteReq.VendorVolumeID).To(Equal("vast-nfs-volume-1"))
+		Expect(mockProv.LastDeleteReq.VASTNFSConfig).NotTo(BeNil())
+		Expect(mockProv.LastDeleteReq.VASTNFSConfig.StorageTenant).To(Equal("acme-on-vast"))
+	})
+
+	It("keeps VAST NFS progressing until a missing preparation is corrected", func() {
+		vol.Annotations = map[string]string{osacTenantKey: "acme"}
+		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
+		stamped := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, stamped)).To(Succeed())
+		stamped.Status.Provider = "vast"
+		stamped.Status.Protocol = osacv1alpha1.VolumeProtocolNFS
+		Expect(k8sClient.Status().Update(testCtx, stamped)).To(Succeed())
+
+		tier := privatev1.StorageTier_builder{
+			Metadata: privatev1.Metadata_builder{Name: "gold", Tenant: "shared"}.Build(),
+			Spec: privatev1.StorageTierSpec_builder{
+				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
+				Backends: []*privatev1.BackendAssociation{
+					privatev1.BackendAssociation_builder{BackendId: "backend-a"}.Build(),
+				},
+			}.Build(),
+		}.Build()
+		tiers := &preparationTestTiers{items: []*privatev1.StorageTier{tier}}
+		backends := &preparationTestBackends{
+			items: map[string]*privatev1.StorageBackend{"backend-a": endpointOnlyVASTBackend("backend-a", "vast-east")},
+			calls: make(map[string]int),
+		}
+		secrets := &preparationTestSecrets{}
+		reconciler.TiersClient = tiers
+		reconciler.BackendsClient = backends
+		reconciler.SecretsClient = secrets
+		reconciler.VendorProvisioners = VendorProvisionerRegistry{"vast": mockProv}
+
+		reconcileCurrent := func() ctrl.Result {
+			result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
+			}})
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+			return result
+		}
+
+		Expect(reconcileCurrent().RequeueAfter).To(Equal(vastNFSRetryInterval))
+		updated := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
+		Expect(updated.Status.Phase).To(Equal(osacv1alpha1.VolumePhaseProgressing))
+		condition := apimeta.FindStatusCondition(updated.Status.Conditions, string(osacv1alpha1.VolumeConditionVASTNFSPreparationReady))
+		Expect(condition).NotTo(BeNil())
+		Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+		Expect(condition.Message).NotTo(ContainSubstring("password"))
+		Expect(mockProv.CreateCallCount()).To(BeZero())
+
+		secrets.items = []*privatev1.Secret{{
+			Id:       "secret-a",
+			Metadata: privatev1.Metadata_builder{Tenant: "system", Name: "acme--vast-east"}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_OPAQUE,
+		}}
+		Expect(reconcileCurrent().RequeueAfter).To(Equal(statusStampPollInterval))
+		Expect(reconcileCurrent().RequeueAfter).To(BeZero())
+		Expect(mockProv.CreateCallCount()).To(Equal(int64(1)))
+	})
+
+	It("retries an uncertain VAST NFS create using the current tier backend", func() {
+		vol.Annotations = map[string]string{osacTenantKey: "acme"}
+		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
+		stamped := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, stamped)).To(Succeed())
+		stamped.Status.Provider = "vast"
+		stamped.Status.Protocol = osacv1alpha1.VolumeProtocolNFS
+		Expect(k8sClient.Status().Update(testCtx, stamped)).To(Succeed())
+
+		tier := privatev1.StorageTier_builder{
+			Metadata: privatev1.Metadata_builder{Name: "gold", Tenant: "shared"}.Build(),
+			Spec: privatev1.StorageTierSpec_builder{
+				Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS,
+				Backends: []*privatev1.BackendAssociation{
+					privatev1.BackendAssociation_builder{BackendId: "backend-a"}.Build(),
+				},
+			}.Build(),
+		}.Build()
+		secrets := &preparationTestSecrets{items: []*privatev1.Secret{{
+			Id:       "secret-a",
+			Metadata: privatev1.Metadata_builder{Tenant: "system", Name: "acme--vast-east"}.Build(),
+			Type:     privatev1.SecretType_SECRET_TYPE_OPAQUE,
+		}}}
+		reconciler.TiersClient = &preparationTestTiers{items: []*privatev1.StorageTier{tier}}
+		reconciler.BackendsClient = &preparationTestBackends{
+			items: map[string]*privatev1.StorageBackend{
+				"backend-a": endpointOnlyVASTBackend("backend-a", "vast-east"),
+			},
+			calls: make(map[string]int),
+		}
+		reconciler.SecretsClient = secrets
+		reconciler.VendorProvisioners = VendorProvisionerRegistry{"vast": mockProv}
+		mockProv.CreateErr = grpcstatus.Error(codes.Unavailable, "temporary vendor error")
+
+		reconcileCurrent := func() ctrl.Result {
+			result, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
+			}})
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+			return result
+		}
+
+		Expect(reconcileCurrent().RequeueAfter).To(Equal(statusStampPollInterval))
+		Expect(reconcileCurrent().RequeueAfter).To(Equal(vastNFSRetryInterval))
+		updated := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
+		Expect(updated.Status.Phase).To(Equal(osacv1alpha1.VolumePhaseProgressing))
+		Expect(updated.Status.VendorVolumeID).To(BeEmpty())
+		condition := apimeta.FindStatusCondition(updated.Status.Conditions, string(osacv1alpha1.VolumeConditionVendorProvisioned))
+		Expect(condition).NotTo(BeNil())
+		Expect(condition.Reason).To(Equal("CreateOutcomeUnknown"))
+		Expect(condition.Message).NotTo(ContainSubstring("temporary vendor error"))
+
+		mockProv.CreateErr = nil
+		mockProv.UseCreateResponse = true
+		mockProv.CreateResponse = VendorCreateVolumeResponse{VendorVolumeID: "vast-nfs-volume-1", Protocol: "NFS"}
+		Expect(reconcileCurrent().RequeueAfter).To(BeZero())
+		Expect(mockProv.CreateCallCount()).To(Equal(int64(2)))
+		Expect(mockProv.LastCreateReq.VASTNFSConfig).NotTo(BeNil())
+		Expect(mockProv.LastCreateReq.VASTNFSConfig.ManagementEndpoint).To(Equal("https://vast-manager.example.com"))
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
+		Expect(updated.Status.Phase).To(Equal(osacv1alpha1.VolumePhaseReady))
+		Expect(updated.Status.VendorVolumeID).To(Equal("vast-nfs-volume-1"))
+	})
+
+	It("retains the finalizer when a VAST NFS create may have succeeded without an ID", func() {
+		vol.Finalizers = []string{osacVolumeFinalizer}
+		vol.Annotations = map[string]string{osacTenantKey: "acme"}
+		vol.Status.Provider = "vast"
+		vol.Status.Protocol = osacv1alpha1.VolumeProtocolNFS
+		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
+		current := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, current)).To(Succeed())
+		current.Status.Provider = "vast"
+		current.Status.Protocol = osacv1alpha1.VolumeProtocolNFS
+		setVendorProvisionedCondition(&current.Status.Conditions, metav1.ConditionFalse, "CreateStarted",
+			"VAST NFS create may have started; the operator will retry with the same volume name.")
+		Expect(k8sClient.Status().Update(testCtx, current)).To(Succeed())
+		Expect(k8sClient.Delete(testCtx, current)).To(Succeed())
+
+		reconcileCurrent := func() {
+			_, err := reconciler.Reconcile(testCtx, mcreconcile.Request{Request: reconcile.Request{
+				NamespacedName: types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace},
+			}})
+			ExpectWithOffset(1, err).NotTo(HaveOccurred())
+		}
+		reconcileCurrent() // phase transition to Deleting
+		reconcileCurrent() // uncertain vendor identity blocks finalizer removal
+
+		updated := &osacv1alpha1.Volume{}
+		Expect(k8sClient.Get(testCtx, types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}, updated)).To(Succeed())
+		Expect(updated.Finalizers).To(ContainElement(osacVolumeFinalizer))
+		condition := apimeta.FindStatusCondition(updated.Status.Conditions, string(osacv1alpha1.VolumeConditionVendorProvisioned))
+		Expect(condition).NotTo(BeNil())
+		Expect(condition.Reason).To(Equal("CleanupBlocked"))
+		Expect(mockProv.DeleteCallCount()).To(BeZero())
 	})
 
 	It("should pass tenant, provider, and vendor volume ID through to the vendor delete request", func() {

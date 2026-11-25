@@ -759,7 +759,9 @@ func setupStorageController(mgr mcmanager.Manager, grpcConn grpc.ClientConnInter
 	if grpcConn != nil {
 		reconciler.BackendsClient = privatev1.NewStorageBackendsClient(grpcConn)
 		reconciler.TiersClient = privatev1.NewStorageTiersClient(grpcConn)
-		reconciler.SecretsClient = privatev1.NewSecretsClient(grpcConn)
+		secretsClient := privatev1.NewSecretsClient(grpcConn)
+		reconciler.SecretsClient = secretsClient
+		reconciler.VASTNFSSecretsClient = secretsClient
 	}
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("storage controller: %w", err)
@@ -891,11 +893,17 @@ func setupVolumeControllers(mgr mcmanager.Manager, grpcConn grpc.ClientConnInter
 		}
 	}
 
-	if err := controller.NewVolumeReconciler(
+	reconciler := controller.NewVolumeReconciler(
 		mgr,
 		volumeNamespace,
 		provisioners,
-	).SetupWithManager(mgr); err != nil {
+	)
+	if grpcConn != nil {
+		reconciler.TiersClient = privatev1.NewStorageTiersClient(grpcConn)
+		reconciler.BackendsClient = privatev1.NewStorageBackendsClient(grpcConn)
+		reconciler.SecretsClient = privatev1.NewSecretsClient(grpcConn)
+	}
+	if err := reconciler.SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("volume controller: %w", err)
 	}
 	return nil

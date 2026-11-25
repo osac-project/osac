@@ -74,6 +74,27 @@ When a ComputeInstance is created, each disk's selected tier is resolved
 against the current StorageClass mapping and the resulting class is used for
 the disk's volume. See [guides/volume-lifecycle.md](../guides/volume-lifecycle.md).
 
+### Follow-up: backend and configuration changes during a Volume lifecycle
+
+The initial VAST NFS wiring resolves the tier's current backend and its
+tenant/backend preparation on each create or delete operation. It does not
+persist a selected backend or a configuration version on the Volume. Changing
+a tier's backend association while its Volumes exist can therefore change where
+a later retry or cleanup is sent. Updates to the preparation bundle or backend
+endpoint also need an explicit lifecycle rule; credentials may need a safe
+rotation path even if routing and storage identity must remain stable.
+
+Follow-up design options:
+
+1. Store the selected backend ID on each Volume as a generic field, and prevent
+   deleting that backend until its Volumes are cleaned up.
+2. Reject tier/backend association changes while active Volumes use the tier.
+3. Store an immutable, versioned configuration reference per Volume, with a
+   separate policy for rotating credentials.
+
+No option is selected here. The follow-up should compare enforcement cost,
+cleanup behavior, and credential rotation before choosing a contract.
+
 ## See also
 
 - [Responsibility matrix](responsibility-matrix.md)

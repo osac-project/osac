@@ -253,6 +253,98 @@ func TestNewVastVendorProvisionerFailFast(t *testing.T) {
 	}
 }
 
+func TestVastVendorProvisionerNFSUsesResolvedPreparation(t *testing.T) {
+	csiClient := &fakeCSIClient{createResp: nfsVendorResponse()}
+	provisioner, _ := newProvisionerWithEndpoints(t, csiClient, nil, perProtocolEndpoints())
+	config := &VASTNFSConfig{
+		ManagementEndpoint: "https://vast-manager.example.com",
+		StorageTenant:      "acme-on-vast",
+		Username:           "prepared-user",
+		Password:           "prepared-password",
+		RootExport:         "/acme/claas",
+		ViewPolicy:         "acme-claas",
+		NFSAddress:         "acme-nfs.example.com",
+	}
+	req := nfsCreateReq()
+	req.NFS = nil
+	req.VASTNFSConfig = config
+
+	response, err := provisioner.CreateVolume(t.Context(), req)
+	if err != nil {
+		t.Fatalf("CreateVolume with resolved preparation: %v", err)
+	}
+	if response.VendorVolumeID != "pvc-n" || csiClient.createReq == nil {
+		t.Fatal("expected the CSI driver response to be returned")
+	}
+	if csiClient.createReq.Parameters["root_export"] != config.RootExport ||
+		csiClient.createReq.Parameters["view_policy"] != config.ViewPolicy ||
+		csiClient.createReq.Parameters["vip_pool_fqdn"] != config.NFSAddress {
+		t.Fatalf("CSI parameters = %#v", csiClient.createReq.Parameters)
+	}
+	if _, exists := csiClient.createReq.Parameters["vip_pool_name"]; exists {
+		t.Fatal("MVP NFS request must use the configured FQDN, not a VIP pool name")
+	}
+	wantSecrets := map[string]string{
+		"username": "prepared-user",
+		"password": "prepared-password",
+		"endpoint": "https://vast-manager.example.com",
+		"tenant":   "acme-on-vast",
+	}
+	if !maps.Equal(csiClient.createReq.Secrets, wantSecrets) {
+		t.Fatalf("CSI secrets = %#v, want the resolved tenant credentials", csiClient.createReq.Secrets)
+	}
+}
+
+func TestVastVendorProvisionerNFSDeleteUsesResolvedPreparation(t *testing.T) {
+	csiClient := &fakeCSIClient{}
+	provisioner, _ := newProvisionerWithEndpoints(t, csiClient, nil, perProtocolEndpoints())
+	config := &VASTNFSConfig{
+		ManagementEndpoint: "https://vast-manager.example.com",
+		StorageTenant:      "acme-on-vast",
+		Username:           "prepared-user",
+		Password:           "prepared-password",
+	}
+
+	err := provisioner.DeleteVolume(t.Context(), VendorDeleteVolumeRequest{
+		Name:           "volume-1",
+		VendorVolumeID: "vast-volume-1",
+		Provider:       "vast",
+		Protocol:       v1alpha1.VolumeProtocolNFS,
+		Tenant:         "acme",
+		VASTNFSConfig:  config,
+	})
+	if err != nil {
+		t.Fatalf("DeleteVolume with resolved preparation: %v", err)
+	}
+	if csiClient.deleteReq == nil || csiClient.deleteReq.GetVolumeId() != "vast-volume-1" {
+		t.Fatal("expected DeleteVolume to use the persisted vendor volume ID")
+	}
+	wantSecrets := map[string]string{
+		"username": "prepared-user",
+		"password": "prepared-password",
+		"endpoint": "https://vast-manager.example.com",
+		"tenant":   "acme-on-vast",
+	}
+	if !maps.Equal(csiClient.deleteReq.Secrets, wantSecrets) {
+		t.Fatalf("CSI secrets = %#v, want the freshly resolved tenant credentials", csiClient.deleteReq.Secrets)
+	}
+}
+
+func TestValidateVASTNFSConfigForCreateRequiresDataFQDN(t *testing.T) {
+	config := &VASTNFSConfig{
+		ManagementEndpoint: "https://vast-manager.example.com",
+		StorageTenant:      "acme-on-vast",
+		Username:           "prepared-user",
+		Password:           "prepared-password",
+		RootExport:         "/acme/claas",
+		ViewPolicy:         "acme-claas",
+		VIPPoolName:        "pool-east",
+	}
+	if err := validateVASTNFSConfigForCreate(config); err == nil {
+		t.Fatal("expected pool-name-only configuration to be rejected")
+	}
+}
+
 func TestToCSIAccessMode(t *testing.T) {
 	cases := map[v1alpha1.VolumeAccessMode]csi.VolumeCapability_AccessMode_Mode{
 		v1alpha1.VolumeAccessModeReadWriteOnce:    csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,

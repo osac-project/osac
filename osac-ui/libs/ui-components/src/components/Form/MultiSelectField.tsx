@@ -80,7 +80,11 @@ export const MultiSelectField = ({
         noOptionsFoundMessage={noOptionsFoundMessage}
         onSelectionChange={(_event, selections) => {
           void helpers.setValue(selections, true);
-          void helpers.setTouched(true);
+          // Do not validate here: setValue already validated the new selection.
+          // Validating again in the same tick would run against the stale render-time
+          // values and re-apply the required-field error until the next re-render
+          // (OSAC-7737). The onToggle handler below validates with current values on close.
+          void helpers.setTouched(true, false);
         }}
         onToggle={(open) => {
           if (!open) {

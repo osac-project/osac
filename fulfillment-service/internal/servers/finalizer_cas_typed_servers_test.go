@@ -20,6 +20,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
@@ -28,10 +29,13 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	osactesting "github.com/osac-project/osac/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -367,6 +371,52 @@ func verifyAssignmentDeleteUnsupported() {
 	}
 	f.expectUnchanged()
 	Expect(f.fake.Calls()).To(BeEmpty())
+}
+
+func verifyBillingAccountUpdateUnsupported() {
+	GinkgoHelper()
+	id, token := uuid.NewString(), uuid.NewString()
+	name, err := billingAccountName(id)
+	Expect(err).ToNot(HaveOccurred())
+	_, err = fixtureDAO[*privatev1.BillingAccount]().Create().SetObject(privatev1.BillingAccount_builder{
+		Id: id, Metadata: privatev1.Metadata_builder{
+			Name: name, Tenant: auth.SystemTenant, Creator: "system", Finalizers: []string{finalizerController},
+		}.Build(),
+		Spec: &privatev1.BillingAccountSpec{},
+		Status: privatev1.BillingAccountStatus_builder{
+			ProviderKey: billingfake.Key, ProviderAccountReference: id, ExternalBillingAccountId: &token,
+			State:                     privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE,
+			StateObservationTimestamp: timestamppb.Now(),
+		}.Build(),
+	}.Build()).Do(ctx)
+	Expect(err).ToNot(HaveOccurred())
+	fake := billingfake.New(billingfake.Scenario{})
+	server, err := NewPrivateBillingAccountsServer().SetLogger(logger).SetProvider(fake.Provider()).Build()
+	Expect(err).ToNot(HaveOccurred())
+
+	var before string
+	Expect(suiteTx.QueryRow(ctx, `select to_jsonb(b)::text from billing_accounts b where id = $1`, id).
+		Scan(&before)).To(Succeed())
+	var changesBefore int
+	Expect(suiteTx.QueryRow(ctx, `select count(*) from changes where "table" = 'billing_accounts' and data->>'id' = $1`, id).
+		Scan(&changesBefore)).To(Succeed())
+	object := privatev1.BillingAccount_builder{
+		Id:       id,
+		Metadata: privatev1.Metadata_builder{Finalizers: []string{finalizerController, finalizerHold}}.Build(),
+	}.Build()
+	_, err = server.Update(ctx, privatev1.BillingAccountsUpdateRequest_builder{Object: object}.Build())
+	Expect(status.Code(err)).To(Equal(codes.Unimplemented),
+		"private billing account Update is now supported: replace the descriptor-only case with full CAS coverage")
+
+	var after string
+	Expect(suiteTx.QueryRow(ctx, `select to_jsonb(b)::text from billing_accounts b where id = $1`, id).
+		Scan(&after)).To(Succeed())
+	Expect(after).To(Equal(before), "an unsupported update must not change the billing account row")
+	Expect(fake.Calls()).To(BeEmpty())
+	var changesAfter int
+	Expect(suiteTx.QueryRow(ctx, `select count(*) from changes where "table" = 'billing_accounts' and data->>'id' = $1`, id).
+		Scan(&changesAfter)).To(Succeed())
+	Expect(changesAfter).To(Equal(changesBefore), "an unsupported update must not emit a billing account change")
 }
 
 var _ = Describe("typed finalizer updates", func() {

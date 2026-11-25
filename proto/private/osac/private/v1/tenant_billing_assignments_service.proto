@@ -153,7 +153,7 @@ service TenantBillingAssignments {
     };
   }
 
-  // Descriptor-only scaffold: not implemented or authorized, including for administrators. This is not unlinking
+  // Descriptor-only scaffold: not implemented. This is not unlinking
   // or deletion of assignment history; closing an interval remains part of reassignment or tenant deletion.
   rpc Delete(TenantBillingAssignmentsDeleteRequest) returns (TenantBillingAssignmentsDeleteResponse) {
     option (google.api.http) = {delete: "/api/private/v1/billing/tenant_billing_assignments/{id}"};

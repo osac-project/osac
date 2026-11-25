@@ -47,13 +47,13 @@ type BillingAccountsClient interface {
 	// accounts. Fails with `BILLING_NOT_CONFIGURED` when billing is disabled and `UNAVAILABLE` when the provider
 	// cannot be reached; it never serves a stale list unmarked as current. Deployment-wide administrator access only.
 	List(ctx context.Context, in *BillingAccountsListRequest, opts ...grpc.CallOption) (*BillingAccountsListResponse, error)
-	// Descriptor-only scaffold: not implemented or authorized, including for administrators.
+	// Descriptor-only scaffold: not implemented.
 	Get(ctx context.Context, in *BillingAccountsGetRequest, opts ...grpc.CallOption) (*BillingAccountsGetResponse, error)
-	// Descriptor-only scaffold: not implemented or authorized. Does not create a local or provider account.
+	// Descriptor-only scaffold: not implemented. Does not create a local or provider account.
 	Create(ctx context.Context, in *BillingAccountsCreateRequest, opts ...grpc.CallOption) (*BillingAccountsCreateResponse, error)
-	// Descriptor-only scaffold: not implemented or authorized.
+	// Descriptor-only scaffold: not implemented.
 	Update(ctx context.Context, in *BillingAccountsUpdateRequest, opts ...grpc.CallOption) (*BillingAccountsUpdateResponse, error)
-	// Descriptor-only scaffold: not implemented or authorized. Does not delete a local or provider account.
+	// Descriptor-only scaffold: not implemented. Does not delete a local or provider account.
 	Delete(ctx context.Context, in *BillingAccountsDeleteRequest, opts ...grpc.CallOption) (*BillingAccountsDeleteResponse, error)
 }
 
@@ -123,13 +123,13 @@ type BillingAccountsServer interface {
 	// accounts. Fails with `BILLING_NOT_CONFIGURED` when billing is disabled and `UNAVAILABLE` when the provider
 	// cannot be reached; it never serves a stale list unmarked as current. Deployment-wide administrator access only.
 	List(context.Context, *BillingAccountsListRequest) (*BillingAccountsListResponse, error)
-	// Descriptor-only scaffold: not implemented or authorized, including for administrators.
+	// Descriptor-only scaffold: not implemented.
 	Get(context.Context, *BillingAccountsGetRequest) (*BillingAccountsGetResponse, error)
-	// Descriptor-only scaffold: not implemented or authorized. Does not create a local or provider account.
+	// Descriptor-only scaffold: not implemented. Does not create a local or provider account.
 	Create(context.Context, *BillingAccountsCreateRequest) (*BillingAccountsCreateResponse, error)
-	// Descriptor-only scaffold: not implemented or authorized.
+	// Descriptor-only scaffold: not implemented.
 	Update(context.Context, *BillingAccountsUpdateRequest) (*BillingAccountsUpdateResponse, error)
-	// Descriptor-only scaffold: not implemented or authorized. Does not delete a local or provider account.
+	// Descriptor-only scaffold: not implemented. Does not delete a local or provider account.
 	Delete(context.Context, *BillingAccountsDeleteRequest) (*BillingAccountsDeleteResponse, error)
 	mustEmbedUnimplementedBillingAccountsServer()
 }

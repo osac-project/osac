@@ -22,10 +22,10 @@ self-service assignment read. The assignment's `metadata.tenant` is data, not an
 credential. The private metering read and identity are owned by
 [OSAC-6888](https://redhat.atlassian.net/browse/OSAC-6888), not this administrative API.
 
-Descriptor presence does not mean available CRUD: account `Get`, `Create`, `Update` and `Delete`,
-and assignment `Delete`, are descriptor-only scaffolds. Their handlers remain `Unimplemented` and
-authorization denies them even for administrators. Accounts have no `Signal` RPC. Provider status
-is a get-only singleton, not a lifecycle object.
+Account `Get`, `Create`, `Update` and `Delete`, and assignment `Delete`, are descriptor-only
+scaffolds. They are defined on the private API, so administrators can reach them; each returns
+`Unimplemented`. Accounts have no `Signal` RPC. Provider status is a get-only singleton, not a
+lifecycle object.
 
 Accounts and assignments use the standard `id`, `metadata`, `spec`, `status` envelope:
 
@@ -148,23 +148,20 @@ never-known names.
 
 ## Authorization and attribution
 
-Billing method grants are restricted to Cloud Provider Admins (`is_admin`), with assignment access
+Billing is private API functionality for Cloud Provider Admins (`is_admin`), with assignment access
 additionally limited to the subject's trusted tenant scope. Current platform administrators have
-universal tenant scope. The billing service namespaces are excluded from the admin catch-all and
-served by a closed, reviewed private allow-list: `BillingAccounts.List`,
-`BillingProviderStatuses.Get`, and `TenantBillingAssignments.List`, `Get`, `Create`, and `Update`.
-`TenantBillingAssignments.Signal` is admin-only. Any other billing method is denied for every
-subject, and no tenant role or other realm role grants billing access. No `cloud-provider-admin`
-realm role is provisioned; a token that claims it grants nothing. Cloud Provider Admin names a
-workflow/persona using an existing `is_admin` identity, not a new realm-role grant.
+universal tenant scope. `TenantBillingAssignments.Signal` is admin-only. No tenant role or other
+realm role grants billing access. No `cloud-provider-admin` realm role is provisioned; a token that
+claims it grants nothing. Cloud Provider Admin names a workflow/persona using an existing `is_admin`
+identity, not a new realm-role grant.
 
 Account `Get`, `Create`, `Update` and `Delete`, and assignment `Delete`, are descriptor-only
-scaffolds: generated handlers remain `Unimplemented`, while normal requests are denied by this
-allow-list even for administrators. Accounts are system-global objects, with empty Spec and
-read-only nested Status; only private descriptors expose `status.provider_account_reference`.
-Assignment access checks the stored canonical tenant against trusted scope, not a replacement
-request reference or selected CLI project. Generic CLI discovery/completion does not grant these
-methods or expose private fields.
+scaffolds: administrators can reach them through the private API, where their generated handlers
+return `Unimplemented`. Accounts are system-global objects, with empty Spec and read-only nested
+Status; only private descriptors expose `status.provider_account_reference`. Assignment access
+checks the stored canonical tenant against trusted scope, not a replacement request reference or
+selected CLI project. Generic CLI discovery/completion does not implement these methods or expose
+private fields.
 
 The OAuth `aud` claim identifies the Fulfillment API audience, not a billing account or metering
 consumer. `status.external_billing_account_id` is an attribution token, not an authentication
@@ -175,9 +172,9 @@ performed externally.
 ## Billing CLI
 
 Billing uses generic descriptor-driven `get`, `create`, `edit`, `label` and `delete` dispatch, not
-billing-specific command adapters. Dispatch/completion support does not make a scaffold RPC
-available: the service/authorization restrictions above still apply. Use private mode for the
-Cloud Provider Admin workflow; private Signal is an internal revalidation operation.
+billing-specific command adapters. Descriptor-defined scaffold calls through the private API return
+`Unimplemented`. Use private mode for the Cloud Provider Admin workflow; private Signal is an
+internal revalidation operation.
 
 Canonical short types are `billingaccount`/`billingaccounts`,
 `tenantbillingassignment`/`tenantbillingassignments`, and

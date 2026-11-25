@@ -65,7 +65,7 @@ type TenantBillingAssignmentsClient interface {
 	// transaction. Resubmitting the same tenant and account revalidates the current interval in place instead of
 	// opening a new one, re-running correlation resolution against the provider.
 	Update(ctx context.Context, in *TenantBillingAssignmentsUpdateRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsUpdateResponse, error)
-	// Descriptor-only scaffold: not implemented or authorized, including for administrators. This is not unlinking
+	// Descriptor-only scaffold: not implemented. This is not unlinking
 	// or deletion of assignment history; closing an interval remains part of reassignment or tenant deletion.
 	Delete(ctx context.Context, in *TenantBillingAssignmentsDeleteRequest, opts ...grpc.CallOption) (*TenantBillingAssignmentsDeleteResponse, error)
 	// Synchronously revalidates the current assignment interval with the same correlation and account-match
@@ -168,7 +168,7 @@ type TenantBillingAssignmentsServer interface {
 	// transaction. Resubmitting the same tenant and account revalidates the current interval in place instead of
 	// opening a new one, re-running correlation resolution against the provider.
 	Update(context.Context, *TenantBillingAssignmentsUpdateRequest) (*TenantBillingAssignmentsUpdateResponse, error)
-	// Descriptor-only scaffold: not implemented or authorized, including for administrators. This is not unlinking
+	// Descriptor-only scaffold: not implemented. This is not unlinking
 	// or deletion of assignment history; closing an interval remains part of reassignment or tenant deletion.
 	Delete(context.Context, *TenantBillingAssignmentsDeleteRequest) (*TenantBillingAssignmentsDeleteResponse, error)
 	// Synchronously revalidates the current assignment interval with the same correlation and account-match

@@ -37,6 +37,7 @@ func descriptorOnlyFinalizerCases() []struct {
 		service string
 		verify  func()
 	}{
+		{privatev1.BillingAccounts_ServiceDesc.ServiceName, verifyBillingAccountUpdateUnsupported},
 		{privatev1.TenantBillingAssignments_ServiceDesc.ServiceName, verifyAssignmentDeleteUnsupported},
 	}
 }

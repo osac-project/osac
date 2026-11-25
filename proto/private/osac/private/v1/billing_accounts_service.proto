@@ -108,7 +108,7 @@ service BillingAccounts {
     option (google.api.http) = {get: "/api/private/v1/billing/accounts"};
   }
 
-  // Descriptor-only scaffold: not implemented or authorized, including for administrators.
+  // Descriptor-only scaffold: not implemented.
   rpc Get(BillingAccountsGetRequest) returns (BillingAccountsGetResponse) {
     option (google.api.http) = {
       get: "/api/private/v1/billing/accounts/{id}"
@@ -116,7 +116,7 @@ service BillingAccounts {
     };
   }
 
-  // Descriptor-only scaffold: not implemented or authorized. Does not create a local or provider account.
+  // Descriptor-only scaffold: not implemented. Does not create a local or provider account.
   rpc Create(BillingAccountsCreateRequest) returns (BillingAccountsCreateResponse) {
     option (google.api.http) = {
       post: "/api/private/v1/billing/accounts"
@@ -125,7 +125,7 @@ service BillingAccounts {
     };
   }
 
-  // Descriptor-only scaffold: not implemented or authorized.
+  // Descriptor-only scaffold: not implemented.
   rpc Update(BillingAccountsUpdateRequest) returns (BillingAccountsUpdateResponse) {
     option (google.api.http) = {
       patch: "/api/private/v1/billing/accounts/{id}"
@@ -134,7 +134,7 @@ service BillingAccounts {
     };
   }
 
-  // Descriptor-only scaffold: not implemented or authorized. Does not delete a local or provider account.
+  // Descriptor-only scaffold: not implemented. Does not delete a local or provider account.
   rpc Delete(BillingAccountsDeleteRequest) returns (BillingAccountsDeleteResponse) {
     option (google.api.http) = {delete: "/api/private/v1/billing/accounts/{id}"};
   }

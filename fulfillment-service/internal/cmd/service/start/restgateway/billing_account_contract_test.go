@@ -346,8 +346,8 @@ var _ = Describe("Billing account final API contract", func() {
 
 			It("exposes only the approved methods and keeps Signal private", func() {
 				accounts := layer.accounts.Services().ByName("BillingAccounts")
-				Expect(accounts.Methods().Len()).To(Equal(4))
-				for _, name := range []protoreflect.Name{"List", "Get", "Create", "Delete"} {
+				Expect(accounts.Methods().Len()).To(Equal(5))
+				for _, name := range []protoreflect.Name{"List", "Get", "Create", "Update", "Delete"} {
 					Expect(accounts.Methods().ByName(name)).ToNot(BeNil())
 				}
 				assignments := layer.services.Services().ByName("TenantBillingAssignments")

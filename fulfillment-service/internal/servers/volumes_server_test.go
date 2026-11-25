@@ -153,9 +153,9 @@ var _ = Describe("Public volumes server", func() {
 			Expect(object.GetSpec().GetAccessMode()).
 				To(Equal(publicv1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE))
 
-			// Status state is visible; the private server stamped CREATING.
+			// Status state is visible; the private server stamped PENDING.
 			Expect(object.GetStatus().GetState()).
-				To(Equal(publicv1.VolumeState_VOLUME_STATE_CREATING))
+				To(Equal(publicv1.VolumeState_VOLUME_STATE_PENDING))
 
 			// The internal routing fields (provider, protocol, hub, vendor_volume_id) are not part of
 			// the public Volume type at all, so they cannot leak. This is enforced at compile time by
@@ -167,6 +167,54 @@ var _ = Describe("Public volumes server", func() {
 				Id: uuid.NewString(),
 			}.Build())
 			Expect(err).To(HaveOccurred())
+		})
+
+		It("Exposes the owner of an owned volume and omits it for ownerless volumes", func() {
+			ownerless := createVolumeViaPrivate("ownerless-vol")
+			response, err := privateServer.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "owned-vol",
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Owner: privatev1.VolumeOwner_builder{
+							Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+							Reference: "ci-01a1",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			owned := response.GetObject()
+
+			getOwned, err := publicServer.Get(ctx, publicv1.VolumesGetRequest_builder{
+				Id: owned.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getOwned.GetObject().GetSpec().GetOwner().GetType()).
+				To(Equal(publicv1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE))
+			Expect(getOwned.GetObject().GetSpec().GetOwner().GetReference()).To(Equal("ci-01a1"))
+
+			getOwnerless, err := publicServer.Get(ctx, publicv1.VolumesGetRequest_builder{
+				Id: ownerless.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getOwnerless.GetObject().GetSpec().GetOwner()).To(BeNil())
+
+			listResponse, err := publicServer.List(ctx, publicv1.VolumesListRequest_builder{}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			owners := map[string]*publicv1.VolumeOwner{}
+			for _, item := range listResponse.GetItems() {
+				owners[item.GetMetadata().GetName()] = item.GetSpec().GetOwner()
+			}
+			Expect(owners["owned-vol"]).NotTo(BeNil())
+			Expect(owners["owned-vol"].GetReference()).To(Equal("ci-01a1"))
+			Expect(owners).To(HaveKey("ownerless-vol"))
+			Expect(owners["ownerless-vol"]).To(BeNil())
 		})
 
 		It("Lists volumes visible to the caller", func() {
@@ -187,7 +235,7 @@ var _ = Describe("Public volumes server", func() {
 			createVolumeViaPrivate("filter-vol")
 
 			listRequest := &publicv1.VolumesListRequest{}
-			listRequest.SetFilter("this.status.state == 1") // VOLUME_STATE_CREATING
+			listRequest.SetFilter("this.status.state == 6") // VOLUME_STATE_PENDING
 			response, err := publicServer.List(ctx, listRequest)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetItems()).ToNot(BeEmpty())
@@ -253,7 +301,7 @@ var _ = Describe("Public volumes server", func() {
 			return response.GetObject()
 		}
 
-		// TC-C1: Create with valid input returns a public Volume in CREATING state.
+		// TC-C1: Create with valid input returns a public Volume in PENDING state.
 		It("Creates a volume with valid input", func() {
 			vol := createVolumeViaPublic("analytics-data")
 			Expect(vol.GetId()).ToNot(BeEmpty())
@@ -263,14 +311,14 @@ var _ = Describe("Public volumes server", func() {
 			Expect(vol.GetSpec().GetAccessMode()).To(Equal(
 				publicv1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE))
 			Expect(vol.GetStatus().GetState()).To(Equal(
-				publicv1.VolumeState_VOLUME_STATE_CREATING))
+				publicv1.VolumeState_VOLUME_STATE_PENDING))
 		})
 
 		// TC-C1a: Create carrying a spoofed status stores no fabricated fact.
 		It("Drops a caller-supplied status on create", func() {
 			// The insert is not checked by the metering source contract, so a caller-supplied
 			// status must never reach the stored object: the stored state is the
-			// system-written CREATING one, and the spoofed message is dropped.
+			// system-written PENDING one, and the spoofed message is dropped.
 			response, err := server.Create(ctx, publicv1.VolumesCreateRequest_builder{
 				Object: publicv1.Volume_builder{
 					Metadata: publicv1.Metadata_builder{
@@ -290,7 +338,7 @@ var _ = Describe("Public volumes server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			object := response.GetObject()
 			Expect(object.GetStatus().GetState()).To(Equal(
-				publicv1.VolumeState_VOLUME_STATE_CREATING))
+				publicv1.VolumeState_VOLUME_STATE_PENDING))
 			Expect(object.GetStatus().GetMessage()).To(BeEmpty())
 		})
 

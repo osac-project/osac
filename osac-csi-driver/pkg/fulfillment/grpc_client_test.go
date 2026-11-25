@@ -318,6 +318,7 @@ func TestToProtoAccessMode(t *testing.T) {
 func TestFromProtoStateAndProtocol(t *testing.T) {
 	states := map[privatev1.VolumeState]VolumeState{
 		privatev1.VolumeState_VOLUME_STATE_CREATING:    VolumeStateCreating,
+		privatev1.VolumeState_VOLUME_STATE_PENDING:     VolumeStateCreating,
 		privatev1.VolumeState_VOLUME_STATE_AVAILABLE:   VolumeStateAvailable,
 		privatev1.VolumeState_VOLUME_STATE_DELETING:    VolumeStateDeleting,
 		privatev1.VolumeState_VOLUME_STATE_DELETED:     VolumeStateDeleting,

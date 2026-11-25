@@ -188,7 +188,7 @@ var _ = Describe("Private volumes server", func() {
 			Expect(created.GetSpec().GetAccessMode()).To(Equal(
 				privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE))
 			Expect(created.GetStatus().GetState()).To(Equal(
-				privatev1.VolumeState_VOLUME_STATE_CREATING))
+				privatev1.VolumeState_VOLUME_STATE_PENDING))
 			Expect(created.GetStatus().GetProvider()).To(Equal("test-provider"))
 
 			getResponse, err := server.Get(ctx, privatev1.VolumesGetRequest_builder{
@@ -316,7 +316,7 @@ var _ = Describe("Private volumes server", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(proto.Equal(created.GetObject(), stored.GetObject())).To(BeTrue())
 				actual := stored.GetObject()
-				state := privatev1.VolumeState_VOLUME_STATE_CREATING
+				state := privatev1.VolumeState_VOLUME_STATE_PENDING
 				if inventory {
 					state = privatev1.VolumeState_VOLUME_STATE_AVAILABLE
 					Expect(actual.GetStatus().GetStateTransitionTime()).NotTo(BeNil())
@@ -417,7 +417,7 @@ var _ = Describe("Private volumes server", func() {
 				stored, err := server.Get(ctx, privatev1.VolumesGetRequest_builder{Id: response.GetObject().GetId()}.Build())
 				Expect(err).NotTo(HaveOccurred())
 				Expect(proto.Equal(stored.GetObject(), response.GetObject())).To(BeTrue())
-				state := privatev1.VolumeState_VOLUME_STATE_CREATING
+				state := privatev1.VolumeState_VOLUME_STATE_PENDING
 				if scenario == "non-system" {
 					Expect(stored.GetObject().GetMetadata().GetCreator()).To(Equal("ordinary-caller"))
 				}
@@ -470,7 +470,7 @@ var _ = Describe("Private volumes server", func() {
 			Expect(created.GetSpec().GetStorageTier()).To(Equal("gold"))
 			Expect(created.GetSpec().GetSizeGib()).To(Equal(int64(50)))
 			Expect(created.GetStatus().GetState()).To(Equal(
-				privatev1.VolumeState_VOLUME_STATE_CREATING))
+				privatev1.VolumeState_VOLUME_STATE_PENDING))
 		})
 
 		It("preserves requested topology segments", func() {
@@ -784,7 +784,7 @@ var _ = Describe("Private volumes server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(response.GetObject().GetStatus().GetState()).To(Equal(
-				privatev1.VolumeState_VOLUME_STATE_CREATING))
+				privatev1.VolumeState_VOLUME_STATE_PENDING))
 		})
 
 		Describe("Validation", func() {

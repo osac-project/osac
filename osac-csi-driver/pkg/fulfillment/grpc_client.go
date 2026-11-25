@@ -214,11 +214,12 @@ func volumeToInfo(v *privatev1.Volume) *VolumeInfo {
 }
 
 // fromProtoState maps the proto VolumeState to the driver-internal VolumeState.
-// DELETED collapses onto DELETING (both mean "gone or going"); UNSPECIFIED maps
-// to the empty state, which the controller's poll loop treats as unexpected.
+// DELETED collapses onto DELETING (both mean "gone or going"); PENDING collapses
+// onto CREATING (both mean "provisioning not finished, keep polling"); UNSPECIFIED
+// maps to the empty state, which the controller's poll loop treats as unexpected.
 func fromProtoState(s privatev1.VolumeState) VolumeState {
 	switch s {
-	case privatev1.VolumeState_VOLUME_STATE_CREATING:
+	case privatev1.VolumeState_VOLUME_STATE_PENDING, privatev1.VolumeState_VOLUME_STATE_CREATING:
 		return VolumeStateCreating
 	case privatev1.VolumeState_VOLUME_STATE_AVAILABLE:
 		return VolumeStateAvailable

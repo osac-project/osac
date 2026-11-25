@@ -227,10 +227,103 @@ var _ = Describe("buildSpec", func() {
 		spec := t.buildSpec()
 		Expect(spec.AccessMode).To(Equal(osacv1alpha1.VolumeAccessModeReadWriteOnce))
 	})
+
+	It("maps owner, disk image and target for an owned volume", func() {
+		t := &task{
+			volume: privatev1.Volume_builder{
+				Id: "vol-buildspec-owned",
+				Spec: privatev1.VolumeSpec_builder{
+					StorageTier: "gold",
+					SizeGib:     100,
+					AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+					Owner: privatev1.VolumeOwner_builder{
+						Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+						Reference: "ci-01a1",
+					}.Build(),
+					DiskImage: privatev1.DiskImageReference_builder{
+						Id:      "img-1",
+						Name:    "fedora",
+						Project: "project-1",
+						Shared:  true,
+					}.Build(),
+					Target: privatev1.VolumeTarget_builder{
+						DiskKey:        "boot",
+						Namespace:      "vm-ns",
+						DataVolumeName: "ci-01a1-root-disk",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		spec := t.buildSpec()
+
+		Expect(spec.Owner).To(Equal(&osacv1alpha1.VolumeOwner{
+			Type:      osacv1alpha1.VolumeOwnerTypeComputeInstance,
+			Reference: "ci-01a1",
+		}))
+		Expect(spec.DiskImage).To(Equal(&osacv1alpha1.DiskImageReference{
+			ID:      "img-1",
+			Name:    "fedora",
+			Project: "project-1",
+			Shared:  true,
+		}))
+		Expect(spec.Target).To(Equal(&osacv1alpha1.VolumeTarget{
+			DiskKey:        "boot",
+			Namespace:      "vm-ns",
+			DataVolumeName: "ci-01a1-root-disk",
+		}))
+	})
+
+	It("leaves the disk image nil for blank additional disks", func() {
+		t := &task{
+			volume: privatev1.Volume_builder{
+				Id: "vol-buildspec-blank",
+				Spec: privatev1.VolumeSpec_builder{
+					StorageTier: "gold",
+					SizeGib:     100,
+					AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+					Owner: privatev1.VolumeOwner_builder{
+						Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+						Reference: "ci-01a1",
+					}.Build(),
+					Target: privatev1.VolumeTarget_builder{
+						DiskKey:        "disk-1",
+						Namespace:      "vm-ns",
+						DataVolumeName: "ci-01a1-disk-1",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		spec := t.buildSpec()
+
+		Expect(spec.DiskImage).To(BeNil())
+		Expect(spec.Owner).NotTo(BeNil())
+		Expect(spec.Target).NotTo(BeNil())
+	})
+
+	It("leaves owner, disk image and target nil for ownerless volumes", func() {
+		t := &task{
+			volume: privatev1.Volume_builder{
+				Id: "vol-buildspec-ownerless",
+				Spec: privatev1.VolumeSpec_builder{
+					StorageTier: "gold",
+					SizeGib:     100,
+					AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+				}.Build(),
+			}.Build(),
+		}
+
+		spec := t.buildSpec()
+
+		Expect(spec.Owner).To(BeNil())
+		Expect(spec.DiskImage).To(BeNil())
+		Expect(spec.Target).To(BeNil())
+	})
 })
 
 var _ = Describe("setDefaults", func() {
-	It("sets CREATING state when status is unspecified", func() {
+	It("sets PENDING state when status is unspecified", func() {
 		t := &task{
 			volume: privatev1.Volume_builder{
 				Id: "vol-defaults-1",
@@ -240,7 +333,7 @@ var _ = Describe("setDefaults", func() {
 		t.setDefaults()
 
 		Expect(t.volume.GetStatus().GetState()).To(
-			Equal(privatev1.VolumeState_VOLUME_STATE_CREATING),
+			Equal(privatev1.VolumeState_VOLUME_STATE_PENDING),
 		)
 	})
 
@@ -274,7 +367,7 @@ var _ = Describe("setDefaults", func() {
 
 		Expect(t.volume.HasStatus()).To(BeTrue())
 		Expect(t.volume.GetStatus().GetState()).To(
-			Equal(privatev1.VolumeState_VOLUME_STATE_CREATING),
+			Equal(privatev1.VolumeState_VOLUME_STATE_PENDING),
 		)
 	})
 })
@@ -428,7 +521,7 @@ var _ = Describe("update", func() {
 			task := &task{r: &function{logger: logger, hubCache: hubs}, volume: volume}
 			err := task.update(context.Background())
 			Expect(err).To(MatchError("standalone hub lookup"))
-			Expect(volume.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_CREATING))
+			Expect(volume.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_PENDING))
 			Expect(volume.GetStatus().GetStateTransitionTime()).NotTo(BeNil())
 		},
 		Entry("legitimate placeholder node", map[string]string{"osac.io/node": "osac-volume-registration-pending"}),
@@ -985,6 +1078,126 @@ var _ = Describe("selectHub", func() {
 		err := t.selectHub(ctx)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("no hubs available"))
+	})
+
+	It("inherits the hub from the owning ComputeInstance", func() {
+		hubCache := controllers.NewMockHubCache(ctrl)
+		hubCache.EXPECT().
+			Get(gomock.Any(), "hub-ci").
+			Return(&controllers.HubEntry{
+				Namespace: "ci-hub-ns",
+				Client:    fake.NewClientBuilder().Build(),
+			}, nil)
+
+		parent := privatev1.ComputeInstance_builder{
+			Id:     "ci-01a1",
+			Status: privatev1.ComputeInstanceStatus_builder{Hub: "hub-ci"}.Build(),
+		}.Build()
+		client := &inventoryParentClient{parent: parent}
+
+		t := &task{
+			r: &function{
+				logger:                 logger,
+				hubCache:               hubCache,
+				computeInstancesClient: client,
+			},
+			volume: privatev1.Volume_builder{
+				Id: "vol-owned-hub",
+				Spec: privatev1.VolumeSpec_builder{
+					Owner: privatev1.VolumeOwner_builder{
+						Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+						Reference: "ci-01a1",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		err := t.selectHub(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(client.calls).To(Equal(1))
+		Expect(t.hubId).To(Equal("hub-ci"))
+		Expect(t.hubNamespace).To(Equal("ci-hub-ns"))
+	})
+
+	It("fails when the owning ComputeInstance is not found", func() {
+		parent := privatev1.ComputeInstance_builder{
+			Id:     "ci-other",
+			Status: privatev1.ComputeInstanceStatus_builder{Hub: "hub-ci"}.Build(),
+		}.Build()
+		client := &inventoryParentClient{parent: parent}
+
+		t := &task{
+			r: &function{
+				logger:                 logger,
+				computeInstancesClient: client,
+			},
+			volume: privatev1.Volume_builder{
+				Id: "vol-missing-owner",
+				Spec: privatev1.VolumeSpec_builder{
+					Owner: privatev1.VolumeOwner_builder{
+						Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+						Reference: "ci-gone",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		err := t.selectHub(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("ci-gone"))
+		Expect(err.Error()).To(ContainSubstring("not found"))
+	})
+
+	It("fails when the owning ComputeInstance has no hub assigned", func() {
+		parent := privatev1.ComputeInstance_builder{
+			Id: "ci-01a1",
+		}.Build()
+		client := &inventoryParentClient{parent: parent}
+
+		t := &task{
+			r: &function{
+				logger:                 logger,
+				computeInstancesClient: client,
+			},
+			volume: privatev1.Volume_builder{
+				Id: "vol-owner-no-hub",
+				Spec: privatev1.VolumeSpec_builder{
+					Owner: privatev1.VolumeOwner_builder{
+						Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+						Reference: "ci-01a1",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		err := t.selectHub(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("no hub assigned"))
+	})
+
+	It("fails when the owning ComputeInstance lookup fails", func() {
+		client := &inventoryParentClient{err: status.Error(codes.Unavailable, "parent unavailable")}
+
+		t := &task{
+			r: &function{
+				logger:                 logger,
+				computeInstancesClient: client,
+			},
+			volume: privatev1.Volume_builder{
+				Id: "vol-owner-lookup",
+				Spec: privatev1.VolumeSpec_builder{
+					Owner: privatev1.VolumeOwner_builder{
+						Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+						Reference: "ci-01a1",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		err := t.selectHub(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("ci-01a1"))
+		Expect(err.Error()).To(ContainSubstring("parent unavailable"))
 	})
 })
 

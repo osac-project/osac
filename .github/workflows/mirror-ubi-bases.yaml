@@ -1,0 +1,78 @@
+name: Mirror UBI Base Images
+
+# Keep ghcr.io/osac-project stocked with the Red Hat UBI base images the
+# Containerfiles build on. The integration CI legs pull these copies and retag
+# them locally, so their builds never request an anonymous Red Hat token.
+# The mirror is keyed by the exact tag each Containerfile uses.
+
+on:
+  workflow_dispatch:
+  # Weekly refresh, for tags republished under a moving name.
+  schedule:
+    - cron: '17 5 * * 1'  # Monday 5:17am UTC
+  push:
+    branches: [main]
+    paths:
+      - '**/Containerfile*'
+      - '.github/scripts/ubi-mirror.sh'
+      - '.github/workflows/mirror-ubi-bases.yaml'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Collect the UBI base images the Containerfiles use
+        run: |
+          set -euo pipefail
+          mapfile -t containerfiles < <(git ls-files -- '*Containerfile*')
+          ((${#containerfiles[@]}))
+          .github/scripts/ubi-mirror.sh list "${containerfiles[@]}" | tee ubi-bases.txt
+          test -s ubi-bases.txt
+
+      - name: Log in to GHCR
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0  # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install skopeo
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
+
+      - name: Mirror every image and compare digests
+        run: |
+          set -euo pipefail
+          while read -r ref; do
+            target=$(.github/scripts/ubi-mirror.sh mirror "${ref}")
+            skopeo copy --all --preserve-digests "docker://${ref}" "docker://${target}"
+            source_digest=$(skopeo inspect --no-tags --format '{{.Digest}}' "docker://${ref}")
+            target_digest=$(skopeo inspect --no-tags --format '{{.Digest}}' "docker://${target}")
+            if [ "${source_digest}" != "${target_digest}" ]; then
+              echo "::error title=ubi-mirror::digest mismatch for ${ref}"
+              exit 1
+            fi
+            echo "Mirrored ${ref} -> ${target} (${source_digest})"
+          done < ubi-bases.txt
+
+      # A new package starts private. The token used above would mask that, so
+      # log out first: this step fails until the package is made public.
+      - name: Verify every mirror pulls anonymously
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io || true
+          while read -r ref; do
+            target=$(.github/scripts/ubi-mirror.sh mirror "${ref}")
+            skopeo inspect --no-tags "docker://${target}" >/dev/null
+            echo "Anonymous pull OK: ${target}"
+          done < ubi-bases.txt

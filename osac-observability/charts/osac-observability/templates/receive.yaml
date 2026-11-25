@@ -1,0 +1,123 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $obs := .Values.global.observability -}}
+{{- $thanos := $obs.thanos | default dict -}}
+{{- $receive := $thanos.receive | default dict -}}
+{{- $storage := $obs.objectStorage | default dict -}}
+{{- $replicas := $receive.replicas | default 2 | int -}}
+{{- $replicaLabel := (($thanos.deduplication | default dict).replicaLabel) | default "replica" -}}
+{{- $ns := include "osac-observability.namespace" . -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: thanos-receive
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.componentLabels" (dict "root" . "component" "receive") | nindent 4 }}
+spec:
+  serviceName: thanos-receive-headless
+  replicas: {{ $replicas }}
+  # Start every replica together so the hashring is complete before any pod
+  # accepts a write.
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "osac-observability.componentSelectorLabels" (dict "root" . "component" "receive") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "osac-observability.componentLabels" (dict "root" . "component" "receive") | nindent 8 }}
+    spec:
+      securityContext:
+        {{- include "osac-observability.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: thanos-receive
+          image: "{{ include "osac-observability.image" $thanos.image }}"
+          imagePullPolicy: IfNotPresent
+          args:
+            - receive
+            - --remote-write.address=0.0.0.0:19291
+            - --remote-write.server-tls-cert=/etc/thanos/tls/tls.crt
+            - --remote-write.server-tls-key=/etc/thanos/tls/tls.key
+            - --grpc-address=0.0.0.0:10901
+            - --http-address=0.0.0.0:10902
+            {{- /*
+            Receive parses --label as key="value" and unquotes the value, so an
+            unquoted value fails with "unquote label value: invalid syntax" and
+            the pod crash-loops. The quotes are literals in the argument; only
+            $(POD_NAME) is expanded by the kubelet.
+            */}}
+            - '--label={{ $replicaLabel }}="$(POD_NAME)"'
+            - --receive.replication-factor={{ $receive.replicationFactor | default 2 }}
+            - --receive.local-endpoint=$(POD_NAME).thanos-receive-headless.{{ $ns }}.svc.cluster.local:10901
+            - --receive.hashrings-file=/etc/thanos/hashring/hashring.json
+            - --objstore.config-file=/etc/thanos/objstore/objstore.yml
+            - --tsdb.path=/var/thanos/receive
+          ports:
+            - name: remote-write
+              containerPort: 19291
+              protocol: TCP
+            - name: grpc
+              containerPort: 10901
+              protocol: TCP
+            - name: http
+              containerPort: 10902
+              protocol: TCP
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: HOME
+              value: /tmp
+          envFrom:
+            - secretRef:
+                name: {{ required "global.observability.objectStorage.secretName is required when observability is enabled" $storage.secretName }}
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml $receive.resources | nindent 12 }}
+          securityContext:
+            {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/thanos/tls
+              readOnly: true
+            - name: hashring
+              mountPath: /etc/thanos/hashring
+              readOnly: true
+            - name: objstore
+              mountPath: /etc/thanos/objstore
+              readOnly: true
+            - name: data
+              mountPath: /var/thanos/receive
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tls
+          secret:
+            secretName: thanos-receive-tls
+        - name: hashring
+          configMap:
+            name: thanos-receive-hashring
+        - name: objstore
+          configMap:
+            name: thanos-object-storage
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        {{- with $thanos.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $receive.pvcSize | default "20Gi" }}
+{{- end }}

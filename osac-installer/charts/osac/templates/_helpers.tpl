@@ -282,6 +282,30 @@ cannot express.
 {{- if or (not (regexMatch $observabilityPattern $observabilityInterval)) (not (regexMatch "[1-9]" $observabilityInterval)) -}}
   {{- fail (printf "global.observability.collection.osacControlPlane must be a positive Prometheus duration (got %q)" $observabilityInterval) }}
 {{- end -}}
+{{- /* Thanos keeps one retention value for every resolution. Each level must be a
+     positive duration and equal thanos.retention, otherwise the Compactor drops
+     data one level still serves or the Store keeps data no level may return. */ -}}
+{{- $thanos := $globalObservability.thanos | default dict -}}
+{{- $retention := $thanos.retention | default "" | toString -}}
+{{- if or (not (regexMatch $observabilityPattern $retention)) (not (regexMatch "[1-9]" $retention)) -}}
+  {{- fail (printf "global.observability.thanos.retention must be a positive Prometheus duration (got %q)" $retention) }}
+{{- end -}}
+{{- $resolution := $thanos.resolution | default dict -}}
+{{- range $level := list "raw" "5m" "1h" -}}
+  {{- $value := index $resolution $level | default "" | toString -}}
+  {{- if ne $value $retention -}}
+    {{- fail (printf "global.observability.thanos.resolution.%s must equal global.observability.thanos.retention (got %q and %q)" $level $value $retention) }}
+  {{- end -}}
+{{- end -}}
+{{- /* Receive rejects a write it cannot replicate to as many pods as the
+     replication factor asks for, so a factor above the replica count drops
+     every sample. */ -}}
+{{- $receive := $thanos.receive | default dict -}}
+{{- $receiveReplicas := $receive.replicas | default 2 | int -}}
+{{- $replicationFactor := $receive.replicationFactor | default 2 | int -}}
+{{- if gt $replicationFactor $receiveReplicas -}}
+  {{- fail (printf "global.observability.thanos.receive.replicationFactor (%d) must not exceed global.observability.thanos.receive.replicas (%d)" $replicationFactor $receiveReplicas) }}
+{{- end -}}
 {{- end -}}
 
 {{/*

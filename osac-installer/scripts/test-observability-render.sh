@@ -234,14 +234,15 @@ require "${no_crd}" 'name: osac-prometheus-scrape'
 
 echo "checking the top-level observability key is rejected"
 # global.observability is the only switch; a second top-level object would give
-# the wizard a control that does nothing. Helm 4 says "additional properties
-# 'observability' not allowed"; Helm 3 says "Additional property observability
-# is not allowed", so match either phrasing.
+# the wizard a control that does nothing. The schema accepts the key only as the
+# internal dependency alias, so Helm 4 reports "at '/observability': additional
+# properties 'enabled' not allowed" while Helm 3 says "Additional property
+# observability is not allowed"; match either phrasing.
 top_level="${TMP_DIR}/top-level.stderr"
 if "${HELM_BIN}" "${COMMON_ARGS[@]}" --set observability.enabled=true >/dev/null 2>"${top_level}"; then
   fail "a top-level observability key unexpectedly rendered"
 fi
-if ! grep -Eq "[Aa]dditional propert(y|ies).*observability.*not allowed" "${top_level}"; then
+if ! grep -Eq "([Aa]dditional propert(y|ies).*['\"]?observability['\"]?.*not allowed|at '/observability'.*[Aa]dditional propert)" "${top_level}"; then
   echo "ERROR: top-level observability was not rejected by the schema" >&2
   cat "${top_level}" >&2
   exit 1
@@ -279,5 +280,83 @@ expect_render_failure malformed-interval \
   'does not match pattern' \
   --set global.observability.enabled=true \
   --set global.observability.collection.osacControlPlane=30x
+
+echo "checking thanos retention and resolution validation"
+expect_render_failure zero-retention \
+  'global.observability.thanos.retention must be a positive Prometheus duration' \
+  --set global.observability.enabled=true \
+  --set global.observability.thanos.retention=0d
+expect_render_failure retention-resolution-mismatch \
+  'global.observability.thanos.resolution.5m must equal global.observability.thanos.retention' \
+  --set global.observability.enabled=true \
+  --set global.observability.thanos.retention=30d \
+  --set global.observability.thanos.resolution.raw=30d \
+  --set global.observability.thanos.resolution.5m=365d \
+  --set global.observability.thanos.resolution.1h=30d
+
+echo "checking the receive replication factor fits the replica count"
+# Receive rejects every write it cannot replicate, so one replica with the
+# default factor of two would silently drop all remote write.
+expect_render_failure replication-factor-exceeds-replicas \
+  'global.observability.thanos.receive.replicationFactor (2) must not exceed global.observability.thanos.receive.replicas (1)' \
+  "${OBS_ARGS[@]}" \
+  --set global.observability.thanos.receive.replicas=1
+
+retention_ok="${TMP_DIR}/retention-ok.yaml"
+"${HELM_BIN}" "${COMMON_ARGS[@]}" \
+  --set global.observability.enabled=true \
+  --set global.observability.thanos.retention=30d \
+  --set global.observability.thanos.resolution.raw=30d \
+  --set global.observability.thanos.resolution.5m=30d \
+  --set global.observability.thanos.resolution.1h=30d >"${retention_ok}"
+require "${retention_ok}" 'name: osac-observability'
+
+echo "checking infrastructure collection interval validation"
+# The schema pattern already rejects an empty string; skip it so this proves
+# osac.validateValues never rewrites a missing interval to the default.
+expect_render_failure empty-infrastructure \
+  'global.observability.collection.infrastructure must be a positive Prometheus duration' \
+  --skip-schema-validation \
+  --set global.observability.enabled=true \
+  --set global.observability.collection.infrastructure=
+
+echo "checking the values nothing enforces yet do not look active"
+# clusterRemoteWrite and tenant.limits have no consumer in this release, so
+# their defaults must not claim tenant clusters already write or that limits
+# are applied. The downsampling description must match the Compactor template,
+# which passes explicit resolution flags rather than Thanos's defaults.
+if grep -Fq -- 'does not deploy storage or querying' "${CHART_DIR}/values.yaml"; then
+  fail "values.yaml still says the observability switch does not deploy the store"
+fi
+if grep -A2 '^    clusterRemoteWrite:$' "${CHART_DIR}/values.yaml" | grep -Fq -- '      enabled: true'; then
+  fail "clusterRemoteWrite.enabled defaults to true although nothing writes from tenant clusters"
+fi
+python3 - "${CHART_DIR}/values.schema.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    schema = json.load(handle)
+props = schema["properties"]["global"]["properties"]["observability"]["properties"]
+
+
+def fail(message):
+    print(f"ERROR: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+remote = props["clusterRemoteWrite"]
+if remote["properties"]["enabled"]["default"] is not False:
+    fail("clusterRemoteWrite.enabled schema default is not false")
+for name in ("clusterRemoteWrite", "tenant"):
+    description = props[name]["description"]
+    if "no controller enforces" not in description.lower():
+        fail(f"{name} description does not say no controller enforces it: {description!r}")
+    if "epic" in description.lower():
+        fail(f"{name} description still points at a later epic: {description!r}")
+down = props["thanos"]["properties"]["downsampling"]["properties"]["enabled"]["description"]
+if "--retention.resolution-5m" not in down or "thanos.retention" not in down:
+    fail(f"downsampling description does not match the Compactor flags: {down!r}")
+PY
 
 echo 'Observability render checks passed.'

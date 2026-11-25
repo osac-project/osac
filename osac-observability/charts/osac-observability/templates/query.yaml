@@ -1,0 +1,67 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $thanos := .Values.global.observability.thanos | default dict -}}
+{{- $query := $thanos.query | default dict -}}
+{{- $replicaLabel := (($thanos.deduplication | default dict).replicaLabel) | default "replica" -}}
+{{- $ns := include "osac-observability.namespace" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thanos-query
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.componentLabels" (dict "root" . "component" "query") | nindent 4 }}
+spec:
+  replicas: {{ $query.replicas | default 2 }}
+  selector:
+    matchLabels:
+      {{- include "osac-observability.componentSelectorLabels" (dict "root" . "component" "query") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "osac-observability.componentLabels" (dict "root" . "component" "query") | nindent 8 }}
+    spec:
+      securityContext:
+        {{- include "osac-observability.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: thanos-query
+          image: "{{ include "osac-observability.image" $thanos.image }}"
+          imagePullPolicy: IfNotPresent
+          args:
+            - query
+            - --http-address=0.0.0.0:9090
+            - --grpc-address=0.0.0.0:10901
+            {{- /*
+            The supported Thanos image has no --store flag. Upstream renamed it
+            to --endpoint and the rename is complete in this build, which exits
+            with "unknown long flag '--store'".
+            */}}
+            - --endpoint=dnssrv+_grpc._tcp.thanos-store-headless.{{ $ns }}.svc.cluster.local
+            - --endpoint=dnssrv+_grpc._tcp.thanos-receive-headless.{{ $ns }}.svc.cluster.local
+            - --query.replica-label={{ $replicaLabel }}
+          ports:
+            - name: http
+              containerPort: 9090
+              protocol: TCP
+            - name: grpc
+              containerPort: 10901
+              protocol: TCP
+          env:
+            - name: HOME
+              value: /tmp
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml $query.resources | nindent 12 }}
+          securityContext:
+            {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

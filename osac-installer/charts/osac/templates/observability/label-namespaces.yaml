@@ -89,10 +89,21 @@ spec:
     metadata:
       labels:
         {{- include "osac.labels" . | nindent 8 }}
+      annotations:
+        openshift.io/required-scc: restricted-v2
     spec:
       securityContext:
         runAsNonRoot: true
+        {{- /*
+        On OpenShift the restricted-v2 SCC rejects a pinned runAsUser: the UID
+        must come from the namespace's allocated range. Omit it there and let
+        the SCC assign one; other clusters still need a non-root UID and an
+        fsGroup that can write the emptyDir at /tmp.
+        */}}
+        {{- if not (.Capabilities.APIVersions.Has "security.openshift.io/v1") }}
         runAsUser: 1000
+        fsGroup: 1000
+        {{- end }}
         seccompProfile:
           type: RuntimeDefault
       serviceAccountName: {{ $fullname }}-label-namespaces
@@ -149,10 +160,19 @@ spec:
     metadata:
       labels:
         {{- include "osac.labels" . | nindent 8 }}
+      annotations:
+        openshift.io/required-scc: restricted-v2
     spec:
       securityContext:
         runAsNonRoot: true
+        {{- /*
+        Same as the label Job: the restricted-v2 SCC on OpenShift allocates the
+        UID, so never pin one there.
+        */}}
+        {{- if not (.Capabilities.APIVersions.Has "security.openshift.io/v1") }}
         runAsUser: 1000
+        fsGroup: 1000
+        {{- end }}
         seccompProfile:
           type: RuntimeDefault
       serviceAccountName: {{ $fullname }}-label-namespaces

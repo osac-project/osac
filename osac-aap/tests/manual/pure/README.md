@@ -6,8 +6,11 @@ This directory contains manual test playbooks for Pure Storage FlashBlade integr
 
 The Pure Storage integration follows a **Realm pool** model where:
 - Realms are pre-provisioned on FlashBlade and registered in a pool
-- Tenants check out available Realms on setup
-- Realms are released back to the pool on teardown
+- Tenants check out available Realms on setup, claiming the Realm with a
+  `coordination.k8s.io/v1` Lease named `pure-realm-claim-<realm>` so two
+  concurrent setups cannot take the same Realm
+- Realms are released back to the pool on teardown, which deletes the claim
+  Lease as well as the tenant's hub Secret
 - The CSI driver dynamically creates filesystems on-demand when PVCs are provisioned
 
 ## Prerequisites
@@ -95,9 +98,10 @@ ansible-playbook tests/manual/test_pure_setup.yml
 
 **Tests:**
 - Realm pool validation
-- Available Realm selection (first unclaimed Realm)
+- Available Realm selection: each candidate is claimed with a server-side
+  applied Lease, and a candidate already claimed by another run is skipped
 - Hub Secret creation with tenant-to-Realm allocation
-- Idempotency (reuses same Realm on re-run)
+- Idempotency (reuses same Realm on re-run, re-claiming it is a no-op)
 
 **Prerequisites:**
 - Realm pool ConfigMap exists: `pure-realm-pool`
@@ -105,7 +109,13 @@ ansible-playbook tests/manual/test_pure_setup.yml
 
 **Output:**
 - Hub Secret: `pure-tenant-config-test-pure-tenant-be-pure-test`
+- Lease: `pure-realm-claim-<realm>` holding the tenant-to-Realm claim
 - Labels: `osac.openshift.io/pure-realm`, `osac.openshift.io/tenant`
+
+If every candidate is claimed, setup fails with the conflicting Realm names.
+`kubectl get leases -l osac.openshift.io/pure-realm-claim=true` shows who holds
+each Realm; a Lease left behind by a run that never wrote its hub Secret has to
+be deleted by hand before that Realm is claimable again.
 
 ---
 
@@ -172,6 +182,7 @@ ansible-playbook tests/manual/test_pure_teardown_backend.yml
 
 **What it deletes:**
 - Hub Secret (`pure-tenant-config-<tenant>-<backend-id>`)
+- Claim Lease (`pure-realm-claim-<realm>`), which returns the Realm to the pool
 
 **What it does NOT delete:**
 - Realm itself (stays in pool for reuse)

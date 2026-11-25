@@ -1,7 +1,8 @@
 ---
 # Pure Storage teardown_backend: release Realm allocation only.
 # Deletes the hub Secret for the backend this dispatch is scoped to
-# (<prefix><tenant>-<backend-id>), releasing the Realm back to the pool.
+# (<prefix><tenant>-<backend-id>) and the Lease that claims its Realm, releasing
+# the Realm back to the pool.
 #
 # Receives from the dispatcher:
 #   _provider_tiers                — tiers with provider: pure
@@ -71,12 +72,35 @@
           kubeconfig: "{{ none }}"
       no_log: true
 
+    # The Lease goes after the Secret, so the Realm never looks free while a
+    # Secret still records it. Without the Secret there is no way to learn which
+    # Realm to release; a stale Lease from such a run has to be removed by hand.
+    - name: Derive the claim Lease name for the released Realm
+      when: _pure_teardown_realm_name | default('') | length > 0
+      ansible.builtin.include_tasks: _realm_claim_lease_name.yaml
+      vars:
+        _pure_realm_lease_realm: "{{ _pure_teardown_realm_name }}"
+
+    - name: Release the Realm claim Lease
+      when: _pure_teardown_realm_name | default('') | length > 0
+      kubernetes.core.k8s:
+        state: absent
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: "{{ _pure_realm_lease_name }}"
+        namespace: "{{ pure_storage_config_namespace }}"
+      module_defaults:
+        kubernetes.core.k8s:
+          kubeconfig: "{{ none }}"
+      ignore_errors: true  # noqa: ignore-errors
+
     - name: Report backend teardown summary
       ansible.builtin.debug:
         msg: >-
           Backend teardown for tenant '{{ tenant_name }}' complete.
           Hub Secret: {{ 'deleted' if (_pure_secret_existed | bool) else 'not found (already deleted)' }}.
-          Realm '{{ _pure_teardown_realm_name | default("N/A") }}' released back to pool.
+          Realm '{{ _pure_teardown_realm_name | default("N/A") }}' released back to pool
+          (claim Lease: {{ _pure_realm_lease_name | default("not derived") }}).
           Note: Filesystems created by CSI driver are NOT deleted (managed by PVC lifecycle).
 
   always:
@@ -84,5 +108,6 @@
       ansible.builtin.set_fact:
         _pure_teardown_config: {}
         _pure_teardown_realm_name: ""
+        _pure_realm_lease_name: ""
         _pure_secret_existed: false
       no_log: true

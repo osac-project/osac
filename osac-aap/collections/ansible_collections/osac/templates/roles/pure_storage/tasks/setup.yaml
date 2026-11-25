@@ -36,6 +36,19 @@
     fail_msg: "Tier names must be unique."
     quiet: true
 
+# set_fact is host-scoped, so a dispatch for another backend in the same play
+# would otherwise inherit a Realm selection and a claim flag it does not own.
+# Reset before anything in the block below can fail, so the rescue only ever
+# releases a claim this dispatch made.
+- name: Reset Realm claim state left by an earlier dispatch
+  ansible.builtin.set_fact:
+    _pure_selected_realm_name: ""
+    _pure_selected_realm_secret: ""
+    _pure_realm_lease_name: ""
+    _pure_claimed_realm_lease_name: ""
+    _pure_realm_claim_created: false
+    _pure_realm_claim_conflicts: []
+
 - name: Provision Pure Storage Realm for tenant
   block:
     # ── Check for existing allocation (re-onboarding) ──
@@ -127,6 +140,27 @@
           ansible.builtin.set_fact:
             _pure_selected_realm_name: "{{ _pure_existing_config.realm_name }}"
 
+        # Allocations made before claims were atomic left no Lease behind.
+        # Re-claim the Realm so a concurrent setup for another tenant still
+        # collides on it. Re-claiming with the same field manager is idempotent;
+        # a conflict here means two hub Secrets already record this Realm.
+        - name: Re-claim the Realm this tenant already owns
+          ansible.builtin.include_tasks: _claim_realm.yaml
+          vars:
+            _pure_candidate:
+              realm_name: "{{ _pure_existing_config.realm_name }}"
+
+        - name: Fail when another tenant holds the claim for the reused Realm
+          ansible.builtin.fail:
+            msg: >-
+              Tenant '{{ tenant_name }}' records Realm
+              '{{ _pure_existing_config.realm_name }}' in its hub Secret, but
+              the Realm claim Lease is held by another run
+              ({{ _pure_claim_attempt.msg | default('unknown error') }}).
+              Two tenants may already be recording this Realm. Resolve the
+              duplicate allocation before re-onboarding this tenant.
+          when: not (_pure_realm_claim_created | default(false) | bool)
+
     - name: Select an available Realm from the pool
       when: not (_pure_secret_preexisting | bool)
       block:
@@ -202,27 +236,39 @@
               Provision more Realms on this FlashBlade or release unused allocations.
           when: _pure_available_realms | length == 0
 
-        # TODO: Add atomic Realm claim to prevent race condition where two concurrent
-        # tenant setups can claim the same Realm. The current list-then-write sequence
-        # is not atomic. Consider using Kubernetes Lease resources or a retry loop
-        # with claim verification. See CodeRabbit comment:
-        # https://github.com/osac-project/osac/pull/1531#discussion_r1234567890
-        - name: Select the first available Realm
-          ansible.builtin.set_fact:
-            _pure_selected_realm_name: "{{ _pure_available_realms[0].realm_name }}"
-            _pure_selected_realm_secret: "{{ _pure_available_realms[0].secret_name }}"
+        # Listing the pool and then writing a claim Secret is not atomic: two
+        # setups can read the same free Realm before either writes. Each
+        # candidate is therefore claimed through a server-side-applied Lease
+        # whose name depends only on the Realm; the loser gets a conflict and
+        # moves on to the next candidate.
+        # _claim_realm.yaml stops claiming once this dispatch holds a Realm, so
+        # every candidate is offered but at most one Lease is taken.
+        - name: Claim the first Realm another run has not taken
+          ansible.builtin.include_tasks: _claim_realm.yaml
+          loop: "{{ _pure_available_realms }}"
+          loop_control:
+            loop_var: _pure_candidate
+            label: "{{ _pure_candidate.realm_name }}"
+
+        - name: Fail when every available Realm was claimed concurrently
+          ansible.builtin.fail:
+            msg: >-
+              Could not claim a Realm for backend {{ _pure_backend_id }}
+              (endpoint: {{ _pure_backend_endpoint }}) from
+              {{ _pure_available_realms | length }} candidate(s):
+              {{ (_pure_realm_claim_conflicts | join(', ')) or 'none' }}
+              were claimed by another run first.
+              If none of those holders is a live tenant, a previous setup may
+              have left a stale claim Lease behind: inspect
+              'kubectl -n {{ pure_storage_config_namespace }} get leases
+              -l osac.openshift.io/pure-realm-claim=true' and delete the stale
+              claim, or provision more Realms on this FlashBlade.
+          when: _pure_selected_realm_name | length == 0
 
     # ── Read Realm credentials from pool Secret (new allocation) ──
     - name: Read Realm credentials from pool for new allocation
       when: not (_pure_secret_preexisting | bool)
       block:
-        - name: Find the pool Secret for selected Realm
-          ansible.builtin.set_fact:
-            _pure_selected_realm_secret: >-
-              {{ (_pure_realm_pool
-                  | selectattr('realm_name', 'equalto', _pure_selected_realm_name)
-                  | list | first).secret_name }}
-
         - name: Read Realm credential Secret from pool
           kubernetes.core.k8s_info:
             api_version: v1
@@ -316,13 +362,32 @@
       ignore_errors: true  # noqa: ignore-errors
       no_log: true
 
+    # Release the claim after the hub Secret is gone, so the Realm never looks
+    # free while a Secret still records it. A pre-existing allocation keeps its
+    # claim: that tenant still owns the Realm.
+    - name: Rollback - release the Realm claim Lease this run created
+      when:
+        - not (_pure_secret_preexisting | default(false) | bool)
+        - _pure_realm_claim_created | default(false) | bool
+        - _pure_claimed_realm_lease_name | default('') | length > 0
+      kubernetes.core.k8s:
+        state: absent
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: "{{ _pure_claimed_realm_lease_name }}"
+        namespace: "{{ pure_storage_config_namespace }}"
+      module_defaults:
+        kubernetes.core.k8s:
+          kubeconfig: "{{ none }}"
+      ignore_errors: true  # noqa: ignore-errors
+
     - name: Report Pure Storage setup failure
       ansible.builtin.fail:
         msg: >-
           Pure FlashBlade setup failed for tenant '{{ tenant_name }}'.
           Failed task: {{ ansible_failed_task.name | default('unknown') }}.
           Error: {{ ansible_failed_result.msg | default('see logs for details') }}.
-          Rollback attempted for hub Secret.
+          Rollback attempted for hub Secret and Realm claim.
 
   always:
     # ── Clear all credential facts from play scope ──
@@ -334,6 +399,11 @@
         _pure_existing_config: {}
         _pure_realm_secret: {}
         _pure_existing_secret: {}
+        _pure_claim_attempt: {}
+        _pure_realm_lease_name: ""
+        _pure_claimed_realm_lease_name: ""
+        _pure_realm_claim_conflicts: []
+        _pure_realm_claim_created: false
       no_log: true
 
 # ── Return output to dispatcher ──

@@ -1,0 +1,22 @@
+---
+# Derives the name of the Lease that claims a Realm.
+#
+# The name depends only on the Realm, never on the tenant: that is what makes
+# the Lease a per-Realm key that every tenant setup contends for. The result is
+# lowercased, stripped of characters that are invalid in a DNS subdomain and
+# trimmed of leading/trailing separators, because Realm names may contain
+# delimiters such as '::'.
+#
+# Requires:
+#   _pure_realm_lease_realm     — Realm name
+#   pure_storage_realm_claim_prefix
+#
+# Sets:
+#   _pure_realm_lease_name
+
+- name: Derive the Realm claim Lease name for {{ _pure_realm_lease_realm }}
+  ansible.builtin.set_fact:
+    _pure_realm_lease_name: >-
+      {{ (pure_storage_realm_claim_prefix ~ _pure_realm_lease_realm)
+         | lower | regex_replace('[^a-z0-9.-]', '-')
+         | regex_replace('^[.-]+', '') | regex_replace('[.-]+$', '') }}

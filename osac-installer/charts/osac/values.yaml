@@ -57,6 +57,39 @@ global:
     # Enable only when tenant CSI trust support is deployed.
     enabled: false
     tenantNamespace: osac-csi
+  # Supported MCP endpoint contract. The previous service.mcp block is no
+  # longer accepted; set global.mcp explicitly when enabling the endpoint.
+  # Secret contents never belong in these values.
+  mcp:
+    enabled: false
+    # Canonical externally reachable HTTPS root URL. Keep the trailing slash.
+    publicURL: ""
+    # OAuth issuer that signs MCP caller tokens.
+    issuerURL: ""
+    # Audience required in tokens exchanged for Fulfillment API calls.
+    audience: "osac-api"
+    # OAuth token exchange endpoint used by the confidential client below.
+    exchangeTokenEndpoint: ""
+    exchangeClientID: ""
+    exchangeClientSecret:
+      name: ""
+      key: "client-secret"
+    trust:
+      # configMap mounts the named PEM CA bundle; system uses the image roots.
+      mode: "configMap"
+      configMap: ""
+    replicas: 2
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    limits:
+      requestSize: "1Mi"
+      concurrency: 100
+      timeout: "30s"
   # --- Service Enablement ---
   # Controls which service tiers are active across all OSAC components.
   # When all are true (the default), OSAC operates as a full-stack cloud.
@@ -212,21 +245,6 @@ service:
   externalHostname: ""
   # [REQUIRED] Hostname for the internal API Route (e.g. fulfillment-internal-api-osac.apps.mycluster.example.com)
   internalHostname: ""
-  mcp:
-    enabled: false
-    externalHostname: ""
-    # OpenShift Routes use HTTPS port 443; custom external ports are supported on Kind.
-    externalPort: 443
-    # The OAuth resource URL is the MCP HTTPS root URL ending in /.
-    exchangeClientId: ""
-    exchangeCredentialsSecret: ""
-    resources:
-      requests:
-        cpu: 50m
-        memory: 128Mi
-      limits:
-        cpu: 500m
-        memory: 512Mi
   images:
     service:
       repository: ghcr.io/osac-project/fulfillment-service

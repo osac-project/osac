@@ -82,7 +82,8 @@ class RefusalPodTests(unittest.TestCase):
 
     def test_inverts_the_flag_in_the_rendered_chart_deployment(self) -> None:
         # Fixture: helm template of fulfillment-service/charts/service (ci-values.yaml,
-        # mcp.externalHostname=mcp.osac.localhost, excludedIpv4Cidrs=[192.0.2.0/24]),
+        # global.mcp.publicURL=https://mcp.osac.localhost:8443/,
+        # excludedIpv4Cidrs=[192.0.2.0/24]),
         # templates/grpc-server/deployment.yaml. The chart puts the flags in `command`.
         dep = json.loads(Path(__file__).with_name("testdata").joinpath("grpc-server-deployment.json").read_text())
         pod = CHECKS["refusal_pod_manifest"](dep, "p4")

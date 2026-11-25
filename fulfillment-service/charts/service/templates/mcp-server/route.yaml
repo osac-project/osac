@@ -11,7 +11,7 @@ Unless required by applicable law or agreed to in writing, software distributed 
 specific language governing permissions and limitations under the License.
 */}}
 
-{{- if .Values.mcp.enabled }}
+{{- if .Values.global.mcp.enabled }}
 {{- $hostname := include "fulfillment-mcp-server.hostname" . }}
 {{- if eq .Values.variant "openshift" }}
 apiVersion: route.openshift.io/v1

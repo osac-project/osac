@@ -11,12 +11,20 @@ Unless required by applicable law or agreed to in writing, software distributed 
 specific language governing permissions and limitations under the License.
 */}}
 
-{{- if .Values.mcp.enabled }}
-{{- $caBundleConfigMap := required "certs.caBundle.configMap is required" .Values.certs.caBundle.configMap }}
-{{- $hostname := include "fulfillment-mcp-server.hostname" . }}
-{{- $externalPort := include "fulfillment-mcp-server.externalPort" . | int }}
-{{- $exchangeClientId := required "mcp.exchangeClientId is required when mcp.enabled=true" .Values.mcp.exchangeClientId }}
-{{- $exchangeSecret := required "mcp.exchangeCredentialsSecret is required when mcp.enabled=true" .Values.mcp.exchangeCredentialsSecret }}
+{{- if .Values.global.mcp.enabled }}
+{{- $mcp := .Values.global.mcp }}
+{{- $publicURL := tpl (include "fulfillment-mcp-server.publicURL" .) . }}
+{{- $issuerURL := tpl (required "global.mcp.issuerURL is required when global.mcp.enabled=true" $mcp.issuerURL) . }}
+{{- $audience := required "global.mcp.audience is required when global.mcp.enabled=true" $mcp.audience }}
+{{- $exchangeTokenEndpoint := tpl (required "global.mcp.exchangeTokenEndpoint is required when global.mcp.enabled=true" $mcp.exchangeTokenEndpoint) . }}
+{{- $exchangeClientID := required "global.mcp.exchangeClientID is required when global.mcp.enabled=true" $mcp.exchangeClientID }}
+{{- $exchangeSecretName := required "global.mcp.exchangeClientSecret.name is required when global.mcp.enabled=true" $mcp.exchangeClientSecret.name }}
+{{- $exchangeSecretKey := required "global.mcp.exchangeClientSecret.key is required when global.mcp.enabled=true" $mcp.exchangeClientSecret.key }}
+{{- $trustMode := $mcp.trust.mode }}
+{{- $caConfigMap := "" }}
+{{- if eq $trustMode "configMap" }}
+{{- $caConfigMap = required "global.mcp.trust.configMap is required when global.mcp.enabled=true and trust.mode=configMap" $mcp.trust.configMap }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -26,9 +34,14 @@ spec:
   selector:
     matchLabels:
       app: fulfillment-mcp-server
-  replicas: 1
+  replicas: {{ $mcp.replicas }}
   strategy:
     type: {{ if .Values.debug }}Recreate{{ else }}RollingUpdate{{ end }}
+    {{- if not .Values.debug }}
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+    {{- end }}
   template:
     metadata:
       labels:
@@ -40,15 +53,20 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       volumes:
+      {{- if $caConfigMap }}
       - name: cas
         configMap:
-          name: {{ $caBundleConfigMap }}
+          name: {{ $caConfigMap }}
+      {{- end }}
       - name: tls
         secret:
           secretName: fulfillment-mcp-server-tls
       - name: exchange-credentials
         secret:
-          secretName: {{ $exchangeSecret }}
+          secretName: {{ $exchangeSecretName }}
+          items:
+          - key: {{ $exchangeSecretKey }}
+            path: client-secret
       containers:
       - name: mcp-server
         image: {{ .Values.images.service.repository }}:{{ .Values.images.service.tag }}
@@ -60,10 +78,12 @@ spec:
             drop:
             - ALL
         resources:
-          {{- toYaml .Values.mcp.resources | nindent 10 }}
+          {{- toYaml $mcp.resources | nindent 10 }}
         volumeMounts:
+        {{- if $caConfigMap }}
         - name: cas
           mountPath: /etc/fulfillment-mcp-server/tls/cas
+        {{- end }}
         - name: tls
           mountPath: /etc/fulfillment-mcp-server/tls
         - name: exchange-credentials
@@ -77,17 +97,20 @@ spec:
         # OAuth bearer tokens and tenant resource data must not be logged.
         - --log-headers=false
         - --log-bodies=false
+        {{- if $caConfigMap }}
         - --ca-file=/etc/fulfillment-mcp-server/tls/cas
+        {{- end }}
         - --http-listener-address=0.0.0.0:8000
         - --http-listener-tls-crt=/etc/fulfillment-mcp-server/tls/tls.crt
         - --http-listener-tls-key=/etc/fulfillment-mcp-server/tls/tls.key
-        - --http-cors-allowed-origins=https://{{ $hostname }}{{ if ne $externalPort 443 }}:{{ $externalPort }}{{ end }}
+        - --http-cors-allowed-origins={{ trimSuffix "/" $publicURL }}
         - --grpc-server-address=fulfillment-api:8000
-        - --grpc-authn-trusted-token-issuers={{ tpl (required "auth.issuerUrl is required" .Values.auth.issuerUrl) . }}
-        - --oauth-authorization-server={{ tpl (required "auth.issuerUrl is required" .Values.auth.issuerUrl) . }}
-        - --oauth-resource-url=https://{{ $hostname }}{{ if ne $externalPort 443 }}:{{ $externalPort }}{{ end }}/
-        - --oauth-token-endpoint={{ trimSuffix "/" (tpl (required "auth.issuerUrl is required" .Values.auth.issuerUrl) .) }}/protocol/openid-connect/token
-        - --oauth-exchange-client-id={{ $exchangeClientId }}
+        - --grpc-authn-trusted-token-issuers={{ $issuerURL }}
+        - --oauth-authorization-server={{ $issuerURL }}
+        - --oauth-resource-url={{ $publicURL }}
+        - --oauth-token-endpoint={{ $exchangeTokenEndpoint }}
+        - --oauth-exchange-client-id={{ $exchangeClientID }}
+        - --oauth-api-audience={{ $audience }}
         - --oauth-exchange-client-secret-file=/etc/fulfillment-mcp-server/oauth/client-secret
         ports:
         - name: mcp

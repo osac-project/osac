@@ -77,6 +77,13 @@ var _ = Describe("Cmd", func() {
 		Expect(cmd.Flags().Lookup("oauth-resource-url")).ToNot(BeNil())
 	})
 
+	It("Has an --oauth-api-audience flag with the canonical default", func() {
+		cmd := Cmd()
+		flag := cmd.Flags().Lookup("oauth-api-audience")
+		Expect(flag).ToNot(BeNil())
+		Expect(flag.DefValue).To(Equal(auth.Audience))
+	})
+
 	It("Accepts no arguments", func() {
 		cmd := Cmd()
 		Expect(cmd.Args).ToNot(BeNil())

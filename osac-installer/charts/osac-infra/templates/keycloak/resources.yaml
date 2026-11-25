@@ -420,6 +420,8 @@ spec:
           value: /realm/realm.json
         - name: OSAC_UI_URL
           value: {{ .Values.keycloak.uiUrl | quote }}
+        - name: MCP_ENABLED
+          value: {{ .Values.global.mcp.enabled | quote }}
         - name: REALM_ADMIN_USERNAME
           valueFrom:
             secretKeyRef:
@@ -557,6 +559,7 @@ spec:
     termination: {{ if .Values.keycloak.route.publicIngress }}reencrypt{{ else }}passthrough{{ end }}
 {{- end }}
 {{- if .Values.keycloak.devFixtures.enabled }}
+{{- if .Values.global.mcp.enabled }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -568,6 +571,7 @@ metadata:
 data:
   client.json: |
 {{ .Files.Get "files/mcp-client.json" | indent 4 }}
+{{- end }}
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -824,8 +828,10 @@ data:
     set_password "your_user" "${DEFAULT_USER_PASSWORD}"
 
     echo "All demo-user passwords set"
-    ensure_mcp_exchange_client
-    ensure_mcp_client
+    if [[ "${MCP_ENABLED:-false}" == "true" ]]; then
+        ensure_mcp_exchange_client
+        ensure_mcp_client
+    fi
     ensure_controller_idp_roles
     ensure_service_account_registration_policies
     ensure_service_account_registration_token_policy
@@ -872,6 +878,9 @@ spec:
             secretKeyRef:
               name: keycloak-admin-credentials
               key: default-user-password
+        {{- if .Values.global.mcp.enabled }}
+        - name: MCP_ENABLED
+          value: "true"
         - name: MCP_RESOURCE_URL
           value: {{ .Values.keycloak.devFixtures.mcpResourceURL | quote }}
         - name: MCP_EXCHANGE_SECRET
@@ -879,6 +888,7 @@ spec:
             secretKeyRef:
               name: keycloak-client-secrets
               key: osac-mcp-exchange
+        {{- end }}
         resources:
           requests:
             cpu: 50m
@@ -895,9 +905,11 @@ spec:
         volumeMounts:
         - name: scripts
           mountPath: /scripts
+        {{- if .Values.global.mcp.enabled }}
         - name: mcp-client
           mountPath: /mcp-client
           readOnly: true
+        {{- end }}
         - name: keycloak-ca
           mountPath: /etc/keycloak/ca
           readOnly: true
@@ -908,9 +920,11 @@ spec:
         configMap:
           name: keycloak-password-setup
           defaultMode: 0755
+      {{- if .Values.global.mcp.enabled }}
       - name: mcp-client
         configMap:
           name: keycloak-mcp-client
+      {{- end }}
       - name: keycloak-ca
         secret:
           secretName: keycloak-tls-cert

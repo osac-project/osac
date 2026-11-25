@@ -26,7 +26,8 @@ export PROFILE=dev-full
 export KUBECONFIG="$HOME/.kube/osac-dev-kind-root.kubeconfig"
 make -C osac-installer install \
   PLATFORM=kind PROFILE="$PROFILE" NS=osac \
-  EXTRA_HELM_ARGS='--set service.mcp.enabled=true --set-string service.mcp.externalHostname=mcp.osac.localhost --set service.mcp.externalPort=8443'
+  INFRA_VALUES_EXTRA='--values values/dev/mcp.yaml' \
+  EXTRA_HELM_ARGS='--values values/dev/mcp.yaml'
 ```
 
 This profile also installs the local VM stack, seeds a sample catalog, and
@@ -49,7 +50,7 @@ The MCP client's access token is scoped to the MCP URL; the server exchanges
 it for a separate API token for the same user when a tool runs.
 If you change the MCP host or port, set
 `keycloak.devFixtures.mcpResourceURL` on `install-infra` and
-`service.mcp.exchangeClientId` on `install-osac` to the same external HTTPS
+`global.mcp.exchangeClientID` on `install-osac` to the same external HTTPS
 URL, including its nonstandard port and a trailing `/`. The connection URL
 used by Codex or Inspector may omit that slash; the OAuth resource identifier
 must be identical in Keycloak, the MCP metadata, and the exchange client ID.
@@ -69,7 +70,7 @@ make -C fulfillment-service kind-load-image \
   IMG="localhost/fulfillment-service:$FULFILLMENT_IMAGE_TAG" NS=osac
 make -C osac-installer install-osac \
   PLATFORM=kind PROFILE="$PROFILE" NS=osac \
-  EXTRA_HELM_ARGS="--set service.mcp.enabled=true --set-string service.mcp.externalHostname=mcp.osac.localhost --set service.mcp.externalPort=8443 --set-string service.images.service.repository=localhost/fulfillment-service --set-string service.images.service.tag=$FULFILLMENT_IMAGE_TAG --set service.images.service.pullPolicy=Never"
+  EXTRA_HELM_ARGS="--values values/dev/mcp.yaml --set-string service.images.service.repository=localhost/fulfillment-service --set-string service.images.service.tag=$FULFILLMENT_IMAGE_TAG --set service.images.service.pullPolicy=Never"
 ```
 
 On a fresh cluster, run
@@ -97,9 +98,9 @@ invocation so it does not affect unrelated Helm installs.
 Ask the deployment operator for:
 
 - The **externally reachable HTTPS MCP URL** configured with
-  `service.mcp.enabled`, `service.mcp.externalHostname`, and, if needed,
-  `service.mcp.externalPort`. The URL must be reachable from the machine
-  running Codex. An in-cluster service name is not a workstation URL.
+  `global.mcp.enabled` and `global.mcp.publicURL`. The URL must be reachable
+  from the machine running Codex. An in-cluster service name is not a
+  workstation URL.
 - The HTTPS OAuth issuer URL reachable from both Codex and the browser.
 - A public OAuth client ID. The development Keycloak fixture provides
   `osac-mcp-client` when `devFixtures.enabled` is set. That shared fixture is
@@ -198,8 +199,7 @@ Rebuild it after the Kind CA changes. Launch Codex from the shell with the
 verified setting, or follow the desktop guidance below.
 
 For either Kind profile, set
-`service.mcp.externalHostname=mcp.osac.localhost` and
-`service.mcp.externalPort=8443`. Its MCP URL is
+`global.mcp.publicURL=https://mcp.osac.localhost:8443/`. Its MCP URL is
 `https://mcp.osac.localhost:8443`. The `dev-full` issuer is
 `https://keycloak.osac.localhost:8443/realms/osac`; the plain `dev` issuer and
 its host mapping are noted above. The browser must also trust the development
@@ -343,7 +343,7 @@ issuer, while `PROFILE=dev` uses `keycloak.keycloak.svc.cluster.local`.
 - If Inspector reports `The requested resource is invalid, missing, unknown,
   or malformed`, compare its OAuth request's `resource` parameter with the
   protected-resource metadata `resource`,
-  `keycloak.devFixtures.mcpResourceURL`, and `service.mcp.exchangeClientId`.
+  `keycloak.devFixtures.mcpResourceURL`, and `global.mcp.exchangeClientID`.
   For the Kind example all three must be
   `https://mcp.osac.localhost:8443/`, including the trailing slash. Inspector
   sends the slash for a root URL. From this worktree, rerun `install-infra`,

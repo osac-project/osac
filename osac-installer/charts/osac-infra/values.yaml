@@ -1,3 +1,7 @@
+global:
+  mcp:
+    enabled: false
+
 cliImage: quay.io/openshift/origin-cli:4.20.0
 # Pod securityContext for cliImage hook Jobs. Leave unset so OpenShift
 # restricted-v2 SCC allocates the UID. Kind has no SCC and origin-cli

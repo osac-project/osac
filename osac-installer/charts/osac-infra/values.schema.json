@@ -4,6 +4,27 @@
   "description": "Configuration values for OSAC shared infrastructure (Phase 2)",
   "type": "object",
   "properties": {
+    "global": {
+      "type": "object",
+      "description": "Values shared between OSAC installer phases",
+      "properties": {
+        "mcp": {
+          "type": "object",
+          "description": "MCP enablement shared with the OSAC instance chart",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Register MCP development fixtures and client credentials",
+              "default": false
+            }
+          },
+          "required": ["enabled"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["mcp"],
+      "additionalProperties": false
+    },
     "hookResources": {
       "type": "object",
       "description": "Resource requests and limits applied to every cliImage hook Job. These hooks invoke `oc`, whose peak memory scales with the cluster's CRD count because of API discovery caching, so the limit is shared rather than set per hook. Raise the memory limit on clusters with unusually large CRD counts.",

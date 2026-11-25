@@ -3,6 +3,31 @@
 
 global:
   osacDeploymentId: "ci/osac"
+  mcp:
+    enabled: true
+    publicURL: "https://mcp.example.com/"
+    issuerURL: "https://keycloak.example.com/realms/osac"
+    audience: "osac-api"
+    exchangeTokenEndpoint: "https://keycloak.example.com/realms/osac/protocol/openid-connect/token"
+    exchangeClientID: "https://mcp.example.com/"
+    exchangeClientSecret:
+      name: "ci-mcp-exchange-credentials"
+      key: "client-secret"
+    trust:
+      mode: "configMap"
+      configMap: "ca-bundle"
+    replicas: 2
+    resources:
+      requests:
+        cpu: "50m"
+        memory: "128Mi"
+      limits:
+        cpu: "500m"
+        memory: "512Mi"
+    limits:
+      requestSize: "1Mi"
+      concurrency: 100
+      timeout: "30s"
   networking:
     # The Fabric Manager registration is applied by the admin; rendering only
     # needs its name.
@@ -25,12 +50,6 @@ ui:
 service:
   externalHostname: fulfillment-api.example.com
   internalHostname: fulfillment-internal-api.example.com
-  mcp:
-    enabled: true
-    externalHostname: mcp.example.com
-    externalPort: 443
-    exchangeClientId: https://mcp.example.com/
-    exchangeCredentialsSecret: ci-mcp-exchange-credentials
   auth:
     controllerCredentials:
     - secret:

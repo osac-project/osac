@@ -274,6 +274,7 @@ jobs:
         if: inputs.kind == 'it-fulfillment-service'
         env:
           CONTAINER_TOOL: docker
+          MCP_TEST_ENABLED: "true"
         run: make -C osac-installer install-infra PLATFORM=kind PROFILE=dev NS=osac
       - name: Run integration tests
         if: inputs.kind == 'it-fulfillment-service'

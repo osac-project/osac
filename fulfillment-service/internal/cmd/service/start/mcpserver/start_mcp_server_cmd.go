@@ -88,6 +88,7 @@ func Cmd() *cobra.Command {
 	flags.StringVar(&runner.args.oauthTokenEndpoint, "oauth-token-endpoint", "", "HTTPS OAuth token exchange endpoint")
 	flags.StringVar(&runner.args.oauthExchangeClientID, "oauth-exchange-client-id", "", "Confidential token exchange client ID")
 	flags.StringVar(&runner.args.oauthExchangeClientSecretFile, "oauth-exchange-client-secret-file", "", "Path to token exchange client secret")
+	flags.StringVar(&runner.args.oauthAPIAudience, "oauth-api-audience", auth.Audience, "Audience required in tokens exchanged for Fulfillment API calls")
 	return command
 }
 
@@ -103,6 +104,7 @@ type runnerContext struct {
 		oauthTokenEndpoint            string
 		oauthExchangeClientID         string
 		oauthExchangeClientSecretFile string
+		oauthAPIAudience              string
 	}
 }
 
@@ -244,7 +246,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 		SetLogger(c.logger).
 		SetJwksCache(jwksCache).
 		SetExpirationLeeway(tokenExpirationLeeway).
-		AddAudience(auth.Audience).
+		AddAudience(c.args.oauthAPIAudience).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create API JWT validator: %w", err)

@@ -1,0 +1,7 @@
+# Kind dev overlay -- layer on both Kind phase values files.
+#
+# The instance base carries the complete global.mcp contract. This overlay
+# turns the endpoint on for both the infrastructure and instance releases.
+global:
+  mcp:
+    enabled: true

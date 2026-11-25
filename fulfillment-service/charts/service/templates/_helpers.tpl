@@ -39,23 +39,27 @@ Return the hostname for the fulfillment internal API. Fails if 'internalHostname
 {{- required "internalHostname is required" .Values.internalHostname -}}
 {{- end -}}
 
+{{- define "fulfillment-mcp-server.publicURL" -}}
+{{- required "global.mcp.publicURL is required when global.mcp.enabled=true" .Values.global.mcp.publicURL -}}
+{{- end -}}
+
 {{- define "fulfillment-mcp-server.hostname" -}}
-{{- $hostname := required "mcp.externalHostname is required when mcp.enabled=true" .Values.mcp.externalHostname -}}
+{{- $publicURL := tpl (include "fulfillment-mcp-server.publicURL" .) . -}}
+{{- $hostname := (urlParse $publicURL).hostname -}}
 {{- if eq .Values.variant "kind" -}}
 {{- $expected := printf "mcp.%s.localhost" .Release.Namespace -}}
 {{- if ne $hostname $expected -}}
-{{- fail (printf "mcp.externalHostname must be %s for the kind variant" $expected) -}}
+{{- fail (printf "global.mcp.publicURL must use hostname %s for the kind variant" $expected) -}}
 {{- end -}}
 {{- end -}}
 {{- $hostname -}}
 {{- end -}}
 
 {{- define "fulfillment-mcp-server.externalPort" -}}
-{{- $port := int .Values.mcp.externalPort -}}
-{{- if and (eq .Values.variant "openshift") (ne $port 443) -}}
-{{- fail "mcp.externalPort must be 443 for the openshift variant" -}}
-{{- end -}}
-{{- $port -}}
+{{- $publicURL := tpl (include "fulfillment-mcp-server.publicURL" .) . -}}
+{{- $host := (urlParse $publicURL).host -}}
+{{- $port := regexFind ":[0-9]+$" $host -}}
+{{- if $port -}}{{ trimPrefix ":" $port }}{{- else -}}443{{- end -}}
 {{- end -}}
 
 {{/*

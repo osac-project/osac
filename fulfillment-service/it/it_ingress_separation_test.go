@@ -167,11 +167,11 @@ var _ = Describe("Ingress separation", func() {
 			key        string
 			status     int
 		}{
-			{"tenant1", ordinaryName, privatev1.SecretType_SECRET_TYPE_USER_DATA, "userdata", http.StatusOK},
-			{"tenant2", ordinaryName, privatev1.SecretType_SECRET_TYPE_USER_DATA, "userdata", http.StatusOK},
+			{"engineering", ordinaryName, privatev1.SecretType_SECRET_TYPE_USER_DATA, "userdata", http.StatusOK},
+			{"development", ordinaryName, privatev1.SecretType_SECRET_TYPE_USER_DATA, "userdata", http.StatusOK},
 			{auth.SharedTenant, ordinaryName, opaque, "value", http.StatusOK},
 			{auth.SystemTenant, ordinaryName, opaque, "value", http.StatusOK},
-			{"tenant1", "break-glass-credentials-" + uuid.New(), opaque, "password", http.StatusForbidden},
+			{"engineering", "break-glass-credentials-" + uuid.New(), opaque, "password", http.StatusForbidden},
 			{auth.SystemTenant, ordinaryName + "-sa", privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL, "client_secret", http.StatusForbidden},
 		} {
 			data := map[string][]byte{fixture.key: []byte("synthetic fixture")}

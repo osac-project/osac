@@ -934,20 +934,29 @@ var _ = Describe("Private volumes server", func() {
 				}.Build()
 			}
 
-			createOwnedVolume := func(name string, sizeGib int64, owner *privatev1.VolumeOwner) (*privatev1.Volume, error) {
-				response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+			ownedVolumeRequest := func(name string, sizeGib int64, owner *privatev1.VolumeOwner,
+				mutate func(spec *privatev1.VolumeSpec_builder, metadata *privatev1.Metadata_builder),
+			) *privatev1.VolumesCreateRequest {
+				spec := privatev1.VolumeSpec_builder{
+					StorageTier: "gold",
+					SizeGib:     sizeGib,
+					AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+					Owner:       owner,
+				}
+				metadata := privatev1.Metadata_builder{Name: name}
+				if mutate != nil {
+					mutate(&spec, &metadata)
+				}
+				return privatev1.VolumesCreateRequest_builder{
 					Object: privatev1.Volume_builder{
-						Metadata: privatev1.Metadata_builder{
-							Name: name,
-						}.Build(),
-						Spec: privatev1.VolumeSpec_builder{
-							StorageTier: "gold",
-							SizeGib:     sizeGib,
-							AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
-							Owner:       owner,
-						}.Build(),
+						Metadata: metadata.Build(),
+						Spec:     spec.Build(),
 					}.Build(),
-				}.Build())
+				}.Build()
+			}
+
+			createOwnedVolume := func(name string, sizeGib int64, owner *privatev1.VolumeOwner) (*privatev1.Volume, error) {
+				response, err := server.Create(ctx, ownedVolumeRequest(name, sizeGib, owner, nil))
 				return response.GetObject(), err
 			}
 
@@ -996,6 +1005,57 @@ var _ = Describe("Private volumes server", func() {
 				owner := getResponse.GetObject().GetSpec().GetOwner()
 				Expect(owner.GetReference()).To(Equal("ci-missing-record"))
 				Expect(owner.GetType()).To(Equal(privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE))
+			})
+
+			DescribeTable("rejects a name match with a differing field naming it",
+				func(mutate func(spec *privatev1.VolumeSpec_builder, metadata *privatev1.Metadata_builder), expectedField string) {
+					_, err := createOwnedVolume("ci-field-conflict", 100, volumeOwner("ci-one"))
+					Expect(err).ToNot(HaveOccurred())
+
+					_, err = server.Create(ctx, ownedVolumeRequest("ci-field-conflict", 100, volumeOwner("ci-one"), mutate))
+					Expect(err).To(HaveOccurred())
+					st, ok := status.FromError(err)
+					Expect(ok).To(BeTrue())
+					Expect(st.Code()).To(Equal(codes.AlreadyExists))
+					Expect(st.Message()).To(ContainSubstring(expectedField))
+				},
+				Entry("storage tier", func(spec *privatev1.VolumeSpec_builder, _ *privatev1.Metadata_builder) {
+					spec.StorageTier = "silver"
+				}, "spec.storage_tier"),
+				Entry("access mode", func(spec *privatev1.VolumeSpec_builder, _ *privatev1.Metadata_builder) {
+					spec.AccessMode = privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_MANY
+				}, "spec.access_mode"),
+				Entry("topology", func(spec *privatev1.VolumeSpec_builder, _ *privatev1.Metadata_builder) {
+					spec.Topology = privatev1.VolumeTopology_builder{
+						Segments: map[string]string{"osac.io/node": "worker-1"},
+					}.Build()
+				}, "spec.topology"),
+				Entry("disk image", func(spec *privatev1.VolumeSpec_builder, _ *privatev1.Metadata_builder) {
+					spec.DiskImage = privatev1.DiskImageReference_builder{Name: "gold-image"}.Build()
+				}, "spec.disk_image"),
+				Entry("target", func(spec *privatev1.VolumeSpec_builder, _ *privatev1.Metadata_builder) {
+					spec.Target = privatev1.VolumeTarget_builder{
+						DiskKey:        "boot",
+						Namespace:      "vm-ns",
+						DataVolumeName: "dv-boot",
+					}.Build()
+				}, "spec.target"),
+				Entry("project", func(_ *privatev1.VolumeSpec_builder, metadata *privatev1.Metadata_builder) {
+					metadata.Project = "other-project"
+				}, "metadata.project"))
+
+			It("Dry-run Create does not adopt an existing volume", func() {
+				first, err := createOwnedVolume("ci-dry-run-adopt", 100, volumeOwner("ci-record"))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(first.GetId()).ToNot(BeEmpty())
+
+				dryRun, err := server.Create(dryRunCtx(), ownedVolumeRequest("ci-dry-run-adopt", 100, volumeOwner("ci-record"), nil))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(dryRun.GetObject().GetId()).To(BeEmpty())
+
+				adopted, err := createOwnedVolume("ci-dry-run-adopt", 100, volumeOwner("ci-record"))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(adopted.GetId()).To(Equal(first.GetId()))
 			})
 		})
 

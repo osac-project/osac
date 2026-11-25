@@ -10,11 +10,19 @@ mirror=${UBI_MIRROR:-ghcr.io/osac-project}
 # lines and ARG defaults (osac-aap's EE_BASE_IMAGE is only an ARG default).
 list_refs() {
   awk -v prefix="${registry}/" '
+    function comment(line) { return line ~ /^[[:space:]]*#/ }
+    function blank(line) { return line ~ /^[[:space:]]*$/ }
     {
+      if (comment($0)) { next }
       # Dockerfiles may continue an instruction with a trailing backslash.
       while ($0 ~ /\\[[:space:]]*$/) {
-        sub(/\\[[:space:]]*$/, " ")
-        if ((getline more) <= 0) { break }
+        sub(/\\[[:space:]]*$/, "")
+        skip = 1
+        while (skip) {
+          if ((getline more) <= 0) { break }
+          skip = comment(more) || blank(more)
+        }
+        if (skip) { break }
         $0 = $0 more
       }
       if (toupper($1) != "FROM" && toupper($1) != "ARG") { next }

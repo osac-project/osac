@@ -1283,7 +1283,9 @@ func (r *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		SetName("project-membership").
 		SetClient(r.client).
 		SetFunction(projectMembershipReconcilerFunction.Run).
-		SetEventFilter("has(event.project_membership)").
+		// User status updates populate keycloak_user_id, which can unblock a
+		// membership that previously failed during creator setup.
+		SetEventFilter("has(event.project_membership) || has(event.user)").
 		SetHealthReporter(healthAggregator).
 		Build()
 	if err != nil {

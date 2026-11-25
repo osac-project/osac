@@ -20,6 +20,7 @@ OSAC_NAMESPACE="${OSAC_NAMESPACE:-osac}"
 KEYCLOAK_NAMESPACE="${KEYCLOAK_NAMESPACE:-}"
 BUNDLE_SYNC_TOKEN="${BUNDLE_SYNC_TOKEN:-}"
 USE_DEFAULT_CAS="${USE_DEFAULT_CAS:-false}"
+INCLUDE_INGRESS_CA="${INCLUDE_INGRESS_CA:-${USE_DEFAULT_CAS}}"
 CA_BUNDLE_SYNC_TIMEOUT_SECONDS="${CA_BUNDLE_SYNC_TIMEOUT_SECONDS:-300}"
 KEYCLOAK_ROLLOUT_TIMEOUT_SECONDS="${KEYCLOAK_ROLLOUT_TIMEOUT_SECONDS:-300}"
 BUNDLE_SYNC_ANNOTATION="osac.openshift.io/ca-bundle-sync-token"
@@ -187,7 +188,7 @@ fi
 # Extract the ingress CA from the router-ca secret and add it as a Bundle
 # source so trust-manager includes it alongside the system CAs.
 INGRESS_CA_SOURCE=""
-if [[ "${USE_DEFAULT_CAS}" == "true" ]]; then
+if [[ "${INCLUDE_INGRESS_CA}" == "true" ]]; then
   echo "Extracting OpenShift ingress CA from openshift-ingress-operator/router-ca..."
   if ! INGRESS_CA_DATA=$(oc_run get secret router-ca \
     -n openshift-ingress-operator \

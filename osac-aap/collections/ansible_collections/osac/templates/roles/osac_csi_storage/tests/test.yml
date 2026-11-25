@@ -5,9 +5,6 @@
 #   Test 1 (hub-cluster path rejected when _remote_kubeconfig is absent):
 #     ansible-playbook ... -e test_hub_path_rejected=true
 #
-#   Test 1b (input validation for tenant_name and _provider_tiers):
-#     ansible-playbook ... -e test_input_validation=true
-#
 #   Test 3 (setup action sets required storage_provider_tenant_config):
 #     ansible-playbook ... -e test_setup_contract=true
 #
@@ -67,50 +64,6 @@
             fail_msg: "Expected teardown failure about admin_kubeconfig, got: {{ teardown_result.msg | default('') }}"
             success_msg: "Teardown hub-path correctly rejected with actionable error"
 
-
-# ──────────────────────────────────────────────────────────────
-# Test 1b: Input Validation
-# ──────────────────────────────────────────────────────────────
-- name: Test osac_csi_driver -- input validation
-  hosts: localhost
-  gather_facts: false
-
-  vars:
-    _remote_kubeconfig: hack/tmp/fake.kubeconfig
-
-  tasks:
-    - name: Run input validation tests
-      when: test_input_validation | default(false) | bool
-      block:
-        - name: Call ensure_storage_class with invalid tenant_name
-          ansible.builtin.include_role:
-            name: osac.templates.osac_csi_driver
-            tasks_from: ensure_storage_class
-          vars:
-            tenant_name: "Invalid_Name!"
-            _provider_tiers:
-              - name: default
-                protocol: nfs
-                provider: osac_csi_driver
-          ignore_errors: true
-          register: name_result
-
-        - name: Call ensure_storage_class with empty _provider_tiers
-          ansible.builtin.include_role:
-            name: osac.templates.osac_csi_driver
-            tasks_from: ensure_storage_class
-          vars:
-            tenant_name: valid-name
-            _provider_tiers: []
-          ignore_errors: true
-          register: tiers_result
-
-        - name: Verify input validation failures
-          ansible.builtin.assert:
-            that:
-              - name_result.msg is search('not a valid DNS label')
-              - tiers_result.msg is search('_provider_tiers must be provided')
-            success_msg: "Input validation successfully guarded invalid inputs"
 
 # ──────────────────────────────────────────────────────────────
 # Test 3: Setup contract (sets storage_provider_tenant_config)
@@ -176,9 +129,8 @@
           vars:
             storage_provider_action: setup
             storage_provider_tiers:
-              # Hyphenated: the dispatcher validates provider as a DNS label and
-              # normalizes hyphens to underscores when resolving the role name
-              # (osac-csi-driver -> osac.templates.osac_csi_driver_storage).
+              # Hyphenated: the dispatcher normalizes hyphens to underscores when
+              # resolving the role name (osac-csi-driver -> osac.templates.osac_csi_driver_storage).
               - name: silver
                 protocol: block
                 provider: osac-csi-driver

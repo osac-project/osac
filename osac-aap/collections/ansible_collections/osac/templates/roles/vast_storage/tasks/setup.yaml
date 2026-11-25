@@ -23,35 +23,8 @@
 # Fix by recording a vip_pool_self_created flag in the hub Secret and deleting
 # the pool by name on teardown only when self-created (never a pre-created pool).
 
-- name: Assert _provider_tiers is defined and non-empty
-  ansible.builtin.assert:
-    that:
-      - _provider_tiers is defined
-      - _provider_tiers | length > 0
-    fail_msg: >-
-      _provider_tiers must be provided by the service role dispatcher.
-      This role should not be called directly — use osac.service.storage_provider.
-
 - name: Resolve the backend_id this dispatch is scoped to
   ansible.builtin.include_tasks: _resolve_backend_id.yaml
-
-- name: Validate tenant_name is a valid DNS label
-  ansible.builtin.fail:
-    msg: >-
-      tenant_name '{{ tenant_name }}' is not a valid DNS label.
-      Must be 1-63 lowercase alphanumeric characters or hyphens,
-      cannot start or end with a hyphen.
-  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
-
-- name: Validate tier names are unique
-  ansible.builtin.assert:
-    that:
-      - (_provider_tiers | map(attribute='name') | list | unique | length) == (_provider_tiers | length)
-    fail_msg: "Tier names must be unique."
-    quiet: true
-
-- name: Include shared tier protocol validation
-  ansible.builtin.include_tasks: _validate_tier_protocols.yaml
 
 - name: Compute unique protocols from tiers
   ansible.builtin.set_fact:
@@ -68,8 +41,8 @@
           host: "{{ vast_endpoint }}"
           username: "{{ vast_username }}"
           password: "{{ vast_password }}"
-          validate_certs: "{{ vast_storage_validate_certs }}"
-          timeout: "{{ vast_storage_api_timeout }}"
+          validate_certs: "{{ storage_provider_validate_certs }}"
+          timeout: "{{ storage_provider_api_timeout }}"
       no_log: true
 
     # ── VIP pool existence check (fail fast, before creating the tenant) ──
@@ -89,8 +62,8 @@
         url_username: "{{ vast_username }}"
         url_password: "{{ vast_password }}"
         force_basic_auth: true
-        validate_certs: "{{ vast_storage_validate_certs }}"
-        timeout: "{{ vast_storage_api_timeout | int }}"
+        validate_certs: "{{ storage_provider_validate_certs }}"
+        timeout: "{{ storage_provider_api_timeout | int }}"
         status_code: [200]
       register: _vast_vip_pool_check
       no_log: true
@@ -142,8 +115,8 @@
             body:
               username: "{{ vast_username }}"
               password: "{{ vast_password }}"
-            validate_certs: "{{ vast_storage_validate_certs }}"
-            timeout: "{{ vast_storage_api_timeout | int }}"
+            validate_certs: "{{ storage_provider_validate_certs }}"
+            timeout: "{{ storage_provider_api_timeout | int }}"
             status_code: [200, 201]
           register: _vast_setup_auth
           no_log: true
@@ -158,8 +131,8 @@
             method: GET
             headers:
               Authorization: "Bearer {{ _vast_setup_auth.json.access }}"
-            validate_certs: "{{ vast_storage_validate_certs }}"
-            timeout: "{{ vast_storage_api_timeout | int }}"
+            validate_certs: "{{ storage_provider_validate_certs }}"
+            timeout: "{{ storage_provider_api_timeout | int }}"
             status_code: [200]
           register: _vast_lp_check
           no_log: true
@@ -174,8 +147,8 @@
               name: "{{ _vast_local_provider_name }}"
             headers:
               Authorization: "Bearer {{ _vast_setup_auth.json.access }}"
-            validate_certs: "{{ vast_storage_validate_certs }}"
-            timeout: "{{ vast_storage_api_timeout | int }}"
+            validate_certs: "{{ storage_provider_validate_certs }}"
+            timeout: "{{ storage_provider_api_timeout | int }}"
             status_code: [200, 201]
           register: _vast_lp_create_result
           no_log: true
@@ -203,8 +176,8 @@
             method: GET
             headers:
               Authorization: "Bearer {{ _vast_setup_auth.json.access }}"
-            validate_certs: "{{ vast_storage_validate_certs }}"
-            timeout: "{{ vast_storage_api_timeout | int }}"
+            validate_certs: "{{ storage_provider_validate_certs }}"
+            timeout: "{{ storage_provider_api_timeout | int }}"
             status_code: [200]
           register: _vast_tenant_check
           no_log: true
@@ -330,8 +303,8 @@
               apiVersion: v1
               kind: Secret
               metadata:
-                name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}"
-                namespace: "{{ vast_storage_config_namespace }}"
+                name: "{{ _hub_secret_name }}"
+                namespace: "{{ storage_provider_config_namespace }}"
                 labels:
                   app.kubernetes.io/managed-by: osac-aap
                   osac.openshift.io/storage-provider: vast
@@ -360,7 +333,7 @@
           ansible.builtin.debug:
             msg: >-
               ROLLBACK: tenant={{ tenant_name }}, backend_id={{ _vast_backend_id | default('UNDEFINED') }},
-              Secret name will be: {{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id | default('UNDEFINED') }}
+              Secret name will be: {{ _hub_secret_name }}
 
         - name: Rollback - delete per-tenant VMS manager
           ansible.builtin.include_tasks: delete_tenant_manager.yaml
@@ -371,8 +344,8 @@
           kubernetes.core.k8s_info:
             api_version: v1
             kind: Secret
-            name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}"
-            namespace: "{{ vast_storage_config_namespace }}"
+            name: "{{ _hub_secret_name }}"
+            namespace: "{{ storage_provider_config_namespace }}"
           register: _vast_rollback_secret_check
           ignore_errors: true
           no_log: true
@@ -380,7 +353,7 @@
         - name: Log Secret existence before rollback deletion
           ansible.builtin.debug:
             msg: >-
-              Rollback: Checking for Secret {{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}:
+              Rollback: Checking for Secret {{ _hub_secret_name }}:
               {{ 'EXISTS (' ~ _vast_rollback_secret_check.resources | length ~ ' found)' if (_vast_rollback_secret_check.resources | default([]) | length > 0) else 'NOT FOUND' }}
 
         - name: Rollback - delete hub Secret
@@ -388,8 +361,8 @@
             state: absent
             api_version: v1
             kind: Secret
-            name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}"
-            namespace: "{{ vast_storage_config_namespace }}"
+            name: "{{ _hub_secret_name }}"
+            namespace: "{{ storage_provider_config_namespace }}"
           register: _vast_rollback_secret_delete
           ignore_errors: true  # noqa: ignore-errors
           no_log: true
@@ -397,7 +370,7 @@
         - name: Log Secret deletion result
           ansible.builtin.debug:
             msg: >-
-              Rollback Secret deletion for {{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}:
+              Rollback Secret deletion for {{ _hub_secret_name }}:
               {{ 'deleted' if (_vast_rollback_secret_delete is defined and not _vast_rollback_secret_delete.failed) else 'failed or skipped' }}
 
         - name: Rollback - check if tenant is shared before cleanup
@@ -419,8 +392,8 @@
             body:
               username: "{{ vast_username }}"
               password: "{{ vast_password }}"
-            validate_certs: "{{ vast_storage_validate_certs }}"
-            timeout: "{{ vast_storage_api_timeout | int }}"
+            validate_certs: "{{ storage_provider_validate_certs }}"
+            timeout: "{{ storage_provider_api_timeout | int }}"
             status_code: [200, 201]
           register: _vast_rollback_auth
           ignore_errors: true
@@ -476,8 +449,8 @@
             method: DELETE
             headers:
               Authorization: "Bearer {{ _vast_rollback_auth.json.access }}"
-            validate_certs: "{{ vast_storage_validate_certs }}"
-            timeout: "{{ vast_storage_api_timeout | int }}"
+            validate_certs: "{{ storage_provider_validate_certs }}"
+            timeout: "{{ storage_provider_api_timeout | int }}"
             status_code: [200, 204, 404]
           ignore_errors: true  # noqa: ignore-errors
           no_log: true

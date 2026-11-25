@@ -102,34 +102,30 @@ section and
 [`config/base/configmap-network-fulfillment-ig-example.yaml`](../../../../config/base/configmap-network-fulfillment-ig-example.yaml)
 and [`config/base/secret-network-fulfillment-ig-example.yaml`](../../../../config/base/secret-network-fulfillment-ig-example.yaml).
 
-### Compute instance operations environment variables
+### Compute instance and storage operations environment variables
 
-Compute instance (VMaaS) job templates run in the
-`compute-instance-operations-ig` instance group. The default KubeVirt path
-(`ocp_virt_vm`) uses the configured AAP service account
-(`AAP_OSAC_SERVICE_ACCOUNT`, default `osac-sa`) and does not require credentials
-in a dedicated secret.
+Compute instance (VMaaS) and tenant storage job templates run in the
+`compute-instance-operations-ig` instance group, because VM provisioning runs
+the same storage dispatch as the storage jobs. Jobs use the configured AAP
+service account (`AAP_OSAC_SERVICE_ACCOUNT`, default `osac-sa`).
 
-The pod spec optionally mounts a secret named
-`compute-instance-operations-ig`. Create it only when a deployment-specific
-compute template needs extra environment variables. OpenStack credentials are
-not required for VMaaS; Neutron networking uses `network-fulfillment-ig`, and
-cluster/ESI floating-IP workflows use `cluster-fulfillment-ig`. Jobs use the
-configured AAP service account (`AAP_OSAC_SERVICE_ACCOUNT`, default `osac-sa`).
+The pod spec mounts these, all optional:
 
-The compute instance instance group also optionally mounts `storage-operations-ig`
-for JIT tenant storage during VM provisioning, and may mount a remote cluster
-kubeconfig when `REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME` is configured.
+- The `storage-operations-ig` secret and config map, for storage provider
+  settings.
+- A `compute-instance-operations-ig` secret. Create it only when a
+  deployment-specific compute template needs extra environment variables. The
+  default KubeVirt path (`ocp_virt_vm`) needs none, and VMaaS needs no OpenStack
+  credentials: Neutron networking uses `network-fulfillment-ig`, and
+  cluster/ESI floating-IP workflows use `cluster-fulfillment-ig`.
+- The remote-cluster kubeconfig secret named by
+  `REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME`, exported as
+  `OSAC_REMOTE_CLUSTER_KUBECONFIG`. Tenant StorageClass provisioning and
+  teardown use it when configured, and the worker's default cluster context
+  otherwise. ClusterOrder storage uses the per-job `admin_kubeconfig`.
 
-### Storage operations environment variables
-
-Storage jobs use the isolated `storage-operations-ig` secret and config map. The
-worker optionally mounts the same remote-cluster kubeconfig secret configured by
-`REMOTE_CLUSTER_KUBECONFIG_SECRET_NAME` and exports its path as
-`OSAC_REMOTE_CLUSTER_KUBECONFIG`. Tenant StorageClass provisioning and teardown
-use this kubeconfig when it is configured; without it, they use the worker's
-default cluster context. ClusterOrder storage continues to use the per-job
-`admin_kubeconfig`.
+The pod also requires the trust-manager `ca-bundle` config map, mounted at
+`/etc/ca-bundle` and exported as `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE`.
 
 ## Deploy a local AAP installation using CRC
 

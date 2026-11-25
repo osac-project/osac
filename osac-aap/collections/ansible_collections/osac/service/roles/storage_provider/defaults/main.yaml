@@ -14,3 +14,21 @@ storage_provider_csi_backends_chart_ref: >-
 storage_provider_csi_backends_chart_version: ""
 storage_provider_csi_backends_release_name: "osac-csi-backends"
 storage_provider_csi_backends_namespace: "osac-csi-backends"
+
+# Hub namespace for provider Secrets: OSAC_STORAGE_CONFIG_NAMESPACE, else the
+# job pod's own namespace. Empty fails in tasks/main.yaml.
+storage_provider_config_namespace: >-
+  {{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE')
+     | default(lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/namespace', errors='ignore') | default('', true), true) }}
+
+# Seconds, for provider management API calls.
+storage_provider_api_timeout: 30
+
+# Mounted by the compute-instance-operations-ig pod spec, which also sets
+# SSL_CERT_FILE to it.
+storage_provider_ca_bundle_path: /etc/ca-bundle/bundle.pem
+
+# TLS verification for provider management APIs. Only "false" disables it.
+storage_provider_validate_certs: >-
+  {{ (lookup('env', 'OSAC_STORAGE_VALIDATE_CERTS')
+      | default('true', true) | lower | trim) != 'false' }}

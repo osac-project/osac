@@ -1,14 +1,12 @@
 ---
-# ONTAP setup: validate operator-resolved ONTAP backend parameters per
-# dispatched backend in Shared-TBC mode (provider_config.profiles) or
-# Dedicated-SVM mode (endpoint + tenant_preparation.provider_config).
-# Networking to the ONTAP management LIF is only assumed on the target VMaaS
-# cluster where NetApp Trident runs (not on the hub cluster). This action
-# validates the dispatched tiers and per-backend inputs without cluster or
-# ONTAP network calls and outputs storage_provider_tenant_config.
+# ONTAP setup: validate each dispatched backend's inputs, in Shared-TBC mode
+# (provider_config.profiles) or Dedicated-SVM mode (endpoint +
+# tenant_preparation.provider_config), and output
+# storage_provider_tenant_config. Makes no cluster or ONTAP calls: only the
+# target cluster, where Trident runs, reaches the ONTAP management LIF.
 
-- name: Include shared tier validation
-  ansible.builtin.include_tasks: _validate_tiers.yaml
+- name: Validate ONTAP settings
+  ansible.builtin.include_tasks: _validate_settings.yaml
 
 - name: Compute the dispatched backend ids
   ansible.builtin.set_fact:

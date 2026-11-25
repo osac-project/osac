@@ -52,10 +52,8 @@
 
   environment:
     VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
-    vast_storage_config_namespace: osac-system
     tenant_name: "test-rollback"
     tenant_namespace: "osac-system"
     tenant_uid: "test-uid-rollback"
@@ -76,7 +74,6 @@
         password: "mock-admin-password"
     storage_provider_action: setup
     storage_provider_provisioning_target: vmaas
-    vast_storage_validate_certs: false
 
   tasks:
     - name: Run setup and capture failure
@@ -311,10 +308,8 @@
 
   environment:
     VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
-    vast_storage_config_namespace: osac-system
     tenant_name: "test-rbmulti"
     tenant_namespace: "osac-system"
     tenant_uid: "test-uid-rbmulti"
@@ -340,7 +335,6 @@
         password: "mock-admin-password"
     storage_provider_action: setup
     storage_provider_provisioning_target: vmaas
-    vast_storage_validate_certs: false
 
   tasks:
     - name: Run two-backend setup and capture the expected failure
@@ -488,11 +482,9 @@
 
   environment:
     VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
     _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
-    vast_storage_config_namespace: osac-system
     tenant_name: "test-rbsame"
     tenant_namespace: "osac-system"
     tenant_uid: "test-uid-rbsame"
@@ -507,7 +499,6 @@
         endpoint: "127.0.0.1:18443"
         username: "admin"
         password: "{{ _mock_vast_password }}"
-    vast_storage_validate_certs: false
 
   tasks:
     - name: Setup backend A successfully
@@ -590,11 +581,9 @@
 
   environment:
     VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
 
   vars:
     _mock_vast_password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
-    vast_storage_config_namespace: osac-system
     tenant_name: "test-rbsame"
     tenant_namespace: "osac-system"
     tenant_uid: "test-uid-rbsame"
@@ -609,7 +598,6 @@
         endpoint: "127.0.0.1:18443"
         username: "admin"
         password: "{{ _mock_vast_password }}"
-    vast_storage_validate_certs: false
 
   tasks:
     - name: Record call log mark before failing setup
@@ -745,7 +733,6 @@
                 endpoint: "127.0.0.1:18443"
                 username: "admin"
                 password: "{{ lookup('env', 'MOCK_VAST_PASSWORD') | default('mock-admin-password', true) }}"
-            vast_storage_validate_certs: false
       rescue:
         - name: Cleanup teardown failures are ignored
           ansible.builtin.debug:

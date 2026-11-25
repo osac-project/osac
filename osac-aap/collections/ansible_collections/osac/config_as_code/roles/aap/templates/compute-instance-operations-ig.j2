@@ -28,11 +28,7 @@ spec:
         - name: kube-api-access
           mountPath: /var/run/secrets/kubernetes.io/serviceaccount
           readOnly: true
-        # Cluster trust bundle (trust-manager `ca-bundle`, including roots added
-        # with the osac.openshift.io/ca-bundle=additional Secret label). VM
-        # creation dispatches storage provider roles just in time, and those
-        # roles read /etc/ca-bundle/bundle.pem to verify storage management
-        # endpoints, e.g. TridentBackendConfig.trustedCACertificate.
+        # trust-manager `ca-bundle`; SSL_CERT_FILE and REQUESTS_CA_BUNDLE point here.
         - name: ca-bundle
           mountPath: /etc/ca-bundle
           readOnly: true
@@ -42,9 +38,11 @@ spec:
           readOnly: true
 {% endif %}
       envFrom:
+        # Optional keys for deployment-specific compute templates.
         - secretRef:
             name: compute-instance-operations-ig
             optional: true
+        # Storage credentials. Never fall back to a broader-scope credential.
         - secretRef:
             name: storage-operations-ig
             optional: true
@@ -52,10 +50,10 @@ spec:
             name: storage-operations-ig
             optional: true
       env:
-        - name: OSAC_COMPUTE_INSTANCE_OPERATIONS_NAMESPACE_DEFAULT
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.namespace
+        - name: SSL_CERT_FILE
+          value: /etc/ca-bundle/bundle.pem
+        - name: REQUESTS_CA_BUNDLE
+          value: /etc/ca-bundle/bundle.pem
 {% if remote_cluster_kubeconfig_secret_name %}
         - name: OSAC_REMOTE_CLUSTER_KUBECONFIG
           value: /etc/osac/remote-cluster-kubeconfig
@@ -90,7 +88,8 @@ spec:
         items:
           - key: bundle.pem
             path: bundle.pem
-        optional: true
+        # Required: the env vars above replace the system trust store.
+        optional: false
 {% if remote_cluster_kubeconfig_secret_name %}
     - name: remote-cluster-kubeconfig
       secret:

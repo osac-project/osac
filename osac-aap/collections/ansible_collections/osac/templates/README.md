@@ -285,7 +285,9 @@ least one limit — always include `qos_limits.static_limits` for a tier that sh
 enforcement.
 
 **Dispatcher pattern:** `osac.service.storage_provider` validates inputs (tier list,
-provider allowlist, protocol allowlist, provisioning target enum, max tier count) then
+tier-name DNS labels, unique tier names, QoS name length and derived
+`qos_policy`, `tenant_namespace`, and `storage_provider_action`; the fulfillment
+API already restricts tier protocols to `nfs` and `block`), then
 dispatches to `osac.templates.{provider}_storage` via a `_dispatch_provider.yaml`
 wrapper (Ansible does not support `loop:` on `include_role`).
 
@@ -360,8 +362,8 @@ Each dispatched `backend_id` uses exactly one of two modes, selected by its
   additional` in the cert-manager namespace. Verification is standard TLS, so the
   certificate must carry a SAN matching `management_lif` (an IP SAN when the LIF is
   an address); a Common-Name-only certificate is rejected even when trusted.
-  `NETAPP_VALIDATE_CERTS=false` omits `trustedCACertificate`, and Trident then skips
-  certificate verification; it is an explicit opt-out for lab endpoints only.
+  `OSAC_STORAGE_VALIDATE_CERTS=false` omits `trustedCACertificate`, and Trident then
+  skips certificate verification; it is an explicit opt-out for lab endpoints only.
   ONTAP QoS policy groups are created by a cluster administrator, belong to one SVM,
   and are only referenced by name from Trident virtual pools; Trident does not check
   they exist until it provisions a volume. A tier that requests bandwidth QoS

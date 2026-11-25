@@ -4,19 +4,8 @@
 # Admin credentials are loaded (via read_credentials.yaml) for VMS API calls
 # but are NEVER written into the CSI Secret or any tenant-namespace resource.
 
-- name: Assert _provider_tiers is defined and non-empty
-  ansible.builtin.assert:
-    that:
-      - _provider_tiers is defined
-      - _provider_tiers | length > 0
-    fail_msg: >-
-      _provider_tiers must be provided by the service role dispatcher.
-
 - name: Resolve the backend_id this dispatch is scoped to
   ansible.builtin.include_tasks: _resolve_backend_id.yaml
-
-- name: Include shared tier protocol validation
-  ansible.builtin.include_tasks: _validate_tier_protocols.yaml
 
 - name: Compute unique protocols from tiers
   ansible.builtin.set_fact:
@@ -118,8 +107,8 @@
           host: "{{ vast_endpoint }}"
           username: "{{ vast_username }}"
           password: "{{ vast_password }}"
-          validate_certs: "{{ vast_storage_validate_certs }}"
-          timeout: "{{ vast_storage_api_timeout }}"
+          validate_certs: "{{ storage_provider_validate_certs }}"
+          timeout: "{{ storage_provider_api_timeout }}"
       no_log: true
 
     - name: Initialize view policy accumulators

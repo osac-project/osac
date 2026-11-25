@@ -10,8 +10,6 @@
     tenant_name: test-sametd
     tenant_namespace: osac-system
     tenant_uid: "test-uid-sametd"
-    vast_storage_validate_certs: false
-    vast_storage_config_namespace: osac-system
     storage_provider_backend_connections:
       be-a:
         endpoint: "127.0.0.1:18443"
@@ -24,7 +22,6 @@
         provider: vast
   environment:
     VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
   tasks:
     - name: Reset mock VMS state
       ansible.builtin.uri:
@@ -72,8 +69,6 @@
     tenant_name: test-sametd
     tenant_namespace: osac-system
     tenant_uid: "test-uid-sametd"
-    vast_storage_validate_certs: false
-    vast_storage_config_namespace: osac-system
     storage_provider_backend_connections:
       be-b:
         endpoint: "127.0.0.1:18443"
@@ -86,7 +81,6 @@
         provider: vast
   environment:
     VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
   tasks:
     - name: Setup backend B
       ansible.builtin.include_role:
@@ -101,8 +95,6 @@
     tenant_name: test-sametd
     tenant_namespace: osac-system
     tenant_uid: "test-uid-sametd"
-    vast_storage_validate_certs: false
-    vast_storage_config_namespace: osac-system
     storage_provider_backend_connections:
       be-b:
         endpoint: "127.0.0.1:18443"
@@ -115,7 +107,6 @@
         provider: vast
   environment:
     VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
   tasks:
     - name: Teardown backend B
       ansible.builtin.include_role:
@@ -177,8 +168,6 @@
     tenant_name: test-sametd
     tenant_namespace: osac-system
     tenant_uid: "test-uid-sametd"
-    vast_storage_validate_certs: false
-    vast_storage_config_namespace: osac-system
     storage_provider_backend_connections:
       be-a:
         endpoint: "127.0.0.1:18443"
@@ -191,7 +180,6 @@
         provider: vast
   environment:
     VAST_VIP_POOL_SUPERNET: "10.0.0.0/24"
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
   tasks:
     - name: Teardown backend A to clean up
       block:

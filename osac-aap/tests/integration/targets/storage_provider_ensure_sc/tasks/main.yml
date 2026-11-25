@@ -96,11 +96,7 @@
   hosts: localhost
   gather_facts: false
 
-  environment:
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
-
   vars:
-    vast_storage_config_namespace: osac-system
     tenant_name: "test-ensuresc"
     tenant_namespace: "osac-system"
     _cluster_name: "test-cluster"
@@ -121,7 +117,6 @@
         password: "mock-admin-password"
     storage_provider_action: ensure_storage_class
     storage_provider_block_encryption_passphrase: "test-encryption-passphrase"
-    vast_storage_validate_certs: false
 
   tasks:
     - name: Call storage_provider role with ensure_storage_class action
@@ -360,11 +355,7 @@
   hosts: localhost
   gather_facts: false
 
-  environment:
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
-
   vars:
-    vast_storage_config_namespace: osac-system
     tenant_name: "test-ensuresc"
     tenant_namespace: "osac-system"
     _cluster_name: "test-cluster"
@@ -384,7 +375,6 @@
         password: "mock-admin-password"
     storage_provider_action: ensure_storage_class
     storage_provider_block_encryption_passphrase: "test-encryption-passphrase"
-    vast_storage_validate_certs: false
 
   tasks:
     - name: Call ensure_storage_class again (should short-circuit)
@@ -513,11 +503,7 @@
   hosts: localhost
   gather_facts: false
 
-  environment:
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
-
   vars:
-    vast_storage_config_namespace: osac-system
     tenant_name: "test-ensuresc-nosnap"
     tenant_namespace: "osac-system"
     _cluster_name: "test-cluster"
@@ -533,7 +519,6 @@
         password: "mock-admin-password"
     storage_provider_action: ensure_storage_class
     storage_provider_snapshots_enabled: false
-    vast_storage_validate_certs: false
 
   tasks:
     - name: Call storage_provider role with snapshots disabled
@@ -794,11 +779,7 @@
   hosts: localhost
   gather_facts: false
 
-  environment:
-    OSAC_STORAGE_CONFIG_NAMESPACE: "osac-system"
-
   vars:
-    vast_storage_config_namespace: osac-system
     tenant_name: "test-escmulti"
     tenant_namespace: "osac-system"
     _cluster_name: "test-cluster"
@@ -821,7 +802,6 @@
         username: "admin"
         password: "mock-admin-password"
     storage_provider_action: ensure_storage_class
-    vast_storage_validate_certs: false
 
   tasks:
     - name: Call storage_provider role with two VAST backends

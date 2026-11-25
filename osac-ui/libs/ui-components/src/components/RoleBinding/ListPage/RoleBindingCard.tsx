@@ -20,8 +20,6 @@ import { useTranslation } from '@osac/ui-components/hooks/useTranslation';
 import RoleBindingActionsMenu from '../RoleBindingActionsMenu';
 import RoleBindingStatusLabel from '../RoleBindingStatusLabel';
 
-const ROLE_BINDING_NAME_PREVIEW_LENGTH = 32;
-
 interface RoleBindingCardProps {
   roleBinding: RoleBinding;
   roleTitle: string;
@@ -33,12 +31,7 @@ const RoleBindingCard = ({ roleBinding, roleTitle }: RoleBindingCardProps) => {
 
   return (
     <ListPageCard
-      title={
-        <ResourceNameField
-          resource={roleBinding}
-          maxCharsDisplayed={ROLE_BINDING_NAME_PREVIEW_LENGTH}
-        />
-      }
+      title={<ResourceNameField resource={roleBinding} />}
       icon={<RhUiUsersIcon />}
       statusLabel={<RoleBindingStatusLabel rb={roleBinding} />}
       actionMenu={<RoleBindingActionsMenu roleBinding={roleBinding} />}

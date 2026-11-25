@@ -125,7 +125,7 @@ const TenantListPage = () => {
       error={error}
       actions={
         <CreateButton service={Tenants} to="/admin/tenants/create">
-          {t('Create tenant')}
+          {t('Register tenant')}
         </CreateButton>
       }
     >

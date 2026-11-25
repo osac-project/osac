@@ -8,7 +8,7 @@ type TenantsLocator =
 
 export const TenantsMainPage = {
   pageTitle: ['heading', { name: 'Tenants', exact: true }],
-  createTenant: ['link', { name: 'Create tenant', exact: true }],
+  createTenant: ['link', { name: 'Register tenant', exact: true }],
   searchTenants: ['textbox', { name: 'Search tenants', exact: true }],
   listView: ['#list-view'],
   tenantsTable: ['grid', { name: 'Tenants', exact: true }],
@@ -20,13 +20,14 @@ export const TenantsMainPage = {
 } as const satisfies Record<string, TenantsLocator>;
 
 export const TenantsCreatePage = {
-  createPageTitle: ['heading', { name: 'Create tenant', exact: true }],
+  createPageTitle: ['heading', { name: 'Register tenant', exact: true }],
   tenantsBreadcrumb: ['button', { name: 'Tenants', exact: true }],
-  name: ['Name'],
-  domain: ['Domain 1'],
-  domains: ['group', { name: 'Domains', exact: true }],
+  name: ['Tenant name'],
+  primaryDomain: ['Primary email domain'],
+  externalBillingId: ['External billing ID'],
   addDomain: ['button', { name: 'Add domain', exact: true }],
-  create: ['button', { name: 'Create', exact: true }],
+  next: ['button', { name: 'Next', exact: true }],
+  register: ['button', { name: 'Register tenant', exact: true }],
   cancel: ['button', { name: 'Cancel', exact: true }],
 } as const satisfies Record<string, TenantsLocator>;
 

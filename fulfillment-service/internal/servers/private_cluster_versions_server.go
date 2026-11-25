@@ -17,10 +17,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"log/slog"
 	"strconv"
-	"strings"
 
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/prometheus/client_golang/prometheus"
@@ -32,6 +30,7 @@ import (
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/utils"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -570,25 +569,9 @@ func validateSemVer(version string) error {
 // and appends a 4-character FNV-32a hex suffix derived from the original version string.
 // If the sanitized base exceeds 58 characters, it is truncated to keep the total within 63.
 func generateNameFromVersion(version string) string {
-	result := strings.ToLower(version)
-
-	var sanitized strings.Builder
-	for _, r := range result {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			sanitized.WriteRune(r)
-		} else {
-			sanitized.WriteRune('-')
-		}
-	}
-	result = strings.Trim(sanitized.String(), "-")
-
-	if len(result) > 58 {
-		result = strings.TrimRight(result[:58], "-")
-	}
-
-	h := fnv.New32a()
-	h.Write([]byte(version))
-	return fmt.Sprintf("%s-%04x", result, h.Sum32()%0x10000)
+	return utils.SanitizeDNS1123Name(version, 58, func(v string) string {
+		return fmt.Sprintf("-%04x", fnv32a(v)%0x10000)
+	})
 }
 
 // listAllMatching returns all ClusterVersions matching the given CEL filter,

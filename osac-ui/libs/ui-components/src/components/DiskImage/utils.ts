@@ -2,8 +2,6 @@ import type { TFunction } from 'i18next';
 
 import { Architecture, GuestOSFamily } from '@osac/types';
 
-export const DISK_IMAGE_NAME_PREVIEW_LENGTH = 32;
-
 export const architectureLabels = (t: TFunction): Record<Architecture, string> => ({
   [Architecture.UNSPECIFIED]: t('Unspecified'),
   [Architecture.AMD64]: 'amd64',

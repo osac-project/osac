@@ -308,10 +308,28 @@ var _ = Describe("Config Building", func() {
 
 		config := task.buildConfigFromIdp(identityProvider, "secret-456")
 		Expect(config).To(HaveKeyWithValue("authorizationUrl", "https://example.com/auth"))
+		Expect(config).To(HaveKeyWithValue("forwardParameters", ","))
 		Expect(config).To(HaveKeyWithValue("tokenUrl", "https://example.com/token"))
 		Expect(config).To(HaveKeyWithValue("clientId", "client-123"))
 		Expect(config).To(HaveKeyWithValue("clientSecret", "secret-456"))
 		Expect(config).To(HaveKeyWithValue("issuer", "https://example.com"))
+	})
+
+	It("disables request parameter forwarding when building OIDC config", func() {
+		identityProvider := privatev1.IdentityProvider_builder{
+			Spec: privatev1.IdentityProviderSpec_builder{
+				Oidc: privatev1.OidcConfig_builder{
+					AuthorizationUrl: "https://example.com/auth?acr_values=urn%3Aexample%3Amfa",
+					TokenUrl:         "https://example.com/token",
+					ClientId:         "client-123",
+					Issuer:           "https://example.com",
+				}.Build(),
+			}.Build(),
+		}.Build()
+
+		config := (&task{identityProvider: identityProvider}).buildConfigFromIdp(identityProvider, "secret-456")
+		Expect(config).To(HaveKeyWithValue("authorizationUrl", "https://example.com/auth?acr_values=urn%3Aexample%3Amfa"))
+		Expect(config).To(HaveKeyWithValue("forwardParameters", ","))
 	})
 
 	It("should return empty config when no provider is configured", func() {

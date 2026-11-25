@@ -7,6 +7,7 @@ import math
 import re
 from collections import Counter
 from datetime import UTC, datetime
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -14,11 +15,18 @@ JOB_NAME = re.compile(r"^(Unit|Integration) repetition ([1-9][0-9]*) / (.+) / .+
 GROUPS = (("integration", "Integration tests"), ("unit", "Unit tests"))
 SLACK_SECTION_LIMIT = 2800
 FAILED_ICON = "\U0001f534"  # Red circle.
+MINOR_ICON = "\U0001f7e0"  # Orange circle.
 INCOMPLETE_ICON = "\U0001f7e1"  # Yellow circle.
 PASSED_ICON = "\U0001f7e2"  # Green circle.
-# Diagnostic artifact prefixes are produced by workflows/tests.yml.
+# Diagnostic artifact prefixes are produced by workflows/tests.yml. The
+# integration-test bundles carry the caller run's id (flake detection
+# repeats every suite inside one campaign run), the installer's log
+# artifact does not.
 DIAGNOSTIC_PREFIXES = {
-    ("integration", "Integration test (fulfillment-service)"): "logs",
+    ("integration", "Integration test (fulfillment-service)"): "osac-logs-it-fulfillment-{run_id}",
+    ("integration", "Integration test (osac-operator)"): "osac-logs-it-operator-{run_id}",
+    ("integration", "Integration test (bare-metal-fulfillment-operator)"): "osac-logs-it-bmf-{run_id}",
+    ("integration", "Integration test (CaaS)"): "osac-logs-it-caas-{run_id}",
     ("integration", "Integration test (osac-installer)"): "osac-installer-logs",
 }
 
@@ -225,23 +233,61 @@ def result_summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def format_overall_failure_risk(report: dict[str, Any]) -> str:
+def overall_failure_risk(report: dict[str, Any]) -> Fraction | None:
     """Combine complete suite failure rates, assuming independent outcomes."""
     if (
         report["status"] == "incomplete"
         or not result_summary(report["suites"])["complete"]
         or any(not (suite["passed"] + suite["failed"]) for suite in report["suites"])
     ):
+        return None
+    return 1 - math.prod(1 - Fraction(suite["failed"], suite["passed"] + suite["failed"]) for suite in report["suites"])
+
+
+def format_percentage(rate: Fraction) -> str:
+    """Round half up, using one decimal below 10% and whole percentages at 10% or above."""
+    if not rate:
+        return "0%"
+    scale = 10 if rate < Fraction(1, 10) else 1
+    rounded = math.floor(rate * 100 * scale + Fraction(1, 2))
+    return f"{rounded // 10}.{rounded % 10}%" if scale == 10 else f"{rounded}%"
+
+
+def format_overall_failure_risk(report: dict[str, Any]) -> str:
+    risk = overall_failure_risk(report)
+    if risk is None:
         return "Unavailable"
-    risk = 1 - math.prod(1 - suite["failed"] / (suite["passed"] + suite["failed"]) for suite in report["suites"])
-    return f"{risk:.1%}"
+    if risk == 0:
+        return "0%"
+    if risk <= Fraction(1, 100):
+        return "almost zero"
+    if risk <= Fraction(5, 100):
+        return "≤5% (MINOR)"
+    return format_percentage(risk)
+
+
+def overall_status_icon(report: dict[str, Any]) -> str:
+    summary = result_summary(report["suites"])
+    risk = overall_failure_risk(report)
+    if risk is None or summary["cancelled"]:
+        return status_icon(
+            bool(summary["failed"] or summary["cancelled"]), report["status"] == "incomplete" or risk is None
+        )
+    if risk <= Fraction(1, 100):
+        return PASSED_ICON
+    return MINOR_ICON if risk <= Fraction(5, 100) else FAILED_ICON
 
 
 def suite_status_icon(suite: dict[str, Any], summary: dict[str, Any]) -> str:
     all_cancelled = summary["complete"] and summary["cancelled"] == summary["executions"] == suite["expected"]
     if all_cancelled:
         return INCOMPLETE_ICON
-    return status_icon(bool(summary["failed"] or summary["cancelled"]), not summary["complete"])
+    if not summary["complete"] or summary["cancelled"]:
+        return status_icon(bool(summary["failed"] or summary["cancelled"]), not summary["complete"])
+    rate = Fraction(summary["failed"], summary["completed"])
+    if rate <= Fraction(1, 100):
+        return PASSED_ICON
+    return MINOR_ICON if rate <= Fraction(2, 100) else FAILED_ICON
 
 
 def format_timeout_note(summary: dict[str, Any]) -> str:
@@ -252,13 +298,10 @@ def format_timeout_note(summary: dict[str, Any]) -> str:
     return "all timeouts" if count == summary["failed"] else f"including {count:,} {noun}"
 
 
-def format_failure_rate(summary: dict[str, Any], *, compact: bool = False) -> str:
+def format_failure_rate(summary: dict[str, Any]) -> str:
     if not summary["completed"]:
         return "unknown"
-    if not summary["failed"]:
-        return "0%"
-    percentage = summary["failed"] / summary["completed"] * 100
-    return f"{round(percentage, 1):g}%" if compact else f"{percentage:.1f}%"
+    return format_percentage(Fraction(summary["failed"], summary["completed"]))
 
 
 def format_result_notes(summary: dict[str, Any]) -> str:
@@ -305,8 +348,7 @@ def report_status(report: dict[str, Any]) -> str:
 
 
 def report_header(report: dict[str, Any]) -> str:
-    failed = any(suite["failed"] or suite["outcomes"].get("cancelled") for suite in report["suites"])
-    icon = status_icon(failed, report["status"] == "incomplete")
+    icon = overall_status_icon(report)
     return f"{icon} *OSAC Weekly Test Stability* | {campaign_date(report['run'])}"
 
 
@@ -329,6 +371,7 @@ def suite_logs(suite: dict[str, Any], report: dict[str, Any]) -> dict[int, list[
     prefix = DIAGNOSTIC_PREFIXES.get((suite["group"], suite["suite"]))
     if not prefix:
         return {}
+    prefix = prefix.format(run_id=report["run"]["run_id"])
     logs = {}
     for artifact in report["artifacts"]:
         match = re.fullmatch(
@@ -450,7 +493,7 @@ def render_execution_tables(report: dict[str, Any]) -> list[str]:
 def render_markdown(report: dict[str, Any]) -> str:
     run = report["run"]
     overall = result_summary(report["suites"])
-    icon = status_icon(bool(overall["failed"] or overall["cancelled"]), report["status"] == "incomplete")
+    icon = overall_status_icon(report)
     lines = [
         "# Weekly Test Stability Report",
         "",
@@ -475,6 +518,13 @@ def render_markdown(report: dict[str, Any]) -> str:
         "Other cancellations are excluded. Unverified cancellations make the report incomplete. "
         "Risk is unavailable if any suite has no completed executions. "
         "Zero observed failures do not establish zero future risk.",
+        "",
+        "For complete, uncancelled results, green means an observed failure rate of ≤1%. "
+        "Orange means >1% through 2% per suite, or >1% through 5% overall; higher rates are red. "
+        "Overall risk is shown as 0%, almost zero for nonzero risk ≤1%, or ≤5% (MINOR) for risk >1% through 5%. "
+        "These labels describe observed estimates, not guarantees about future failures. "
+        "Numeric percentages use half-up rounding: one decimal below 10%, whole percentages at 10% or above. "
+        "Colors use unrounded values, so a red result can display 2.0% per suite or 5.0% overall.",
     ]
     if report["issues"]:
         lines.extend(["", f"## {INCOMPLETE_ICON} Reporting notes", *[f"- {issue}" for issue in report["issues"]]])
@@ -500,7 +550,7 @@ def slack_group_summary(title: str, suites: list[dict[str, Any]]) -> str:
             clean_count += 1
             continue
         icon = suite_status_icon(suite, result)
-        rate = format_failure_rate(result, compact=True)
+        rate = format_failure_rate(result)
         notes = format_result_notes(result | {"cancelled": 0})
         extra = f" · {notes}" if notes else ""
         if result["cancelled"] and not result["failed"]:

@@ -276,16 +276,19 @@ require "${TMP_DIR}/thanos-compactor.yaml" '--downsampling.disable'
 reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-5m'
 reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-1h'
 
-echo "checking four network policies gate the store pods"
+echo "checking five network policies gate the store pods"
 enabled_policies="${TMP_DIR}/thanos-networkpolicies.yaml"
 extract_kind_ns "${enabled}" NetworkPolicy osac-observability >"${enabled_policies}"
-expect_count "${enabled_policies}" '^kind: NetworkPolicy' 4
-for policy in thanos-query thanos-authorizer thanos-store thanos-receive; do
+expect_count "${enabled_policies}" '^kind: NetworkPolicy' 5
+for policy in thanos-query thanos-authorizer thanos-store thanos-receive \
+  thanos-compactor; do
   require "${enabled_policies}" "name: ${policy}"
 done
 require "${enabled_policies}" 'app.kubernetes.io/component: receive'
 require "${enabled_policies}" 'app.kubernetes.io/component: store'
 require "${enabled_policies}" 'app.kubernetes.io/component: query'
+require "${enabled_policies}" 'app.kubernetes.io/component: compactor'
+require "${enabled_policies}" 'ingress: []'
 reject "${enabled_policies}" 'podSelector: {}'
 reject "${enabled_policies}" 'osac.openshift.io/tenant'
 reject "${enabled_policies}" 'egress:'

@@ -6,6 +6,7 @@ release:
   namespace: osac
 set:
   global.observability.enabled: true
+  global.observability.keycloak.issuerUrl: https://keycloak.example.com/realms/osac
   global.observability.objectStorage.secretName: thanos-object-storage
   global.observability.objectStorage.endpoint: https://s3.example.com
   global.observability.objectStorage.bucket: thanos

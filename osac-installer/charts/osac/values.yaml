@@ -183,7 +183,14 @@ global:
       keycloakAdminRole: cloud-provider-admin
       adminClientId: thanos-admin
       tenantClientId: thanos-tenant
-      issuerUrl: ""
+      # Accepted bearer audiences: the clients OSAC users log in with
+      # (ui.auth.oidcClientId and the CLI client). thanos-admin is only the
+      # browser OAuth client and is deliberately not an accepted audience.
+      adminAudience: "osac-ui,osac-cli"
+      # tpl is applied at render time -- {{ .Values.global.clusterDomain }}
+      # expands via global.clusterDomain. The admin gates verify tokens against
+      # this realm and the render fails when it is empty.
+      issuerUrl: "https://keycloak-keycloak.{{ .Values.global.clusterDomain }}/realms/osac"
   # --- Service Enablement ---
   # Controls which service tiers are active across all OSAC components.
   # When all are true (the default), OSAC operates as a full-stack cloud.

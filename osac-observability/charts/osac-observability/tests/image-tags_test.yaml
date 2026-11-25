@@ -16,6 +16,7 @@ set:
   global.observability.services.metricsAuth.tag: test-metrics-auth
   global.observability.services.oauth2Proxy.tag: test-oauth2-proxy
   global.observability.services.openshiftOauthProxy.tag: test-ose-oauth-proxy
+  global.observability.keycloak.issuerUrl: https://keycloak.example.com/realms/osac
 
 tests:
   # An empty tag used to fall back to "latest", which pulls whatever the
@@ -51,6 +52,25 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "observability image tags must be set when observability is enabled: global.observability.services.openshiftOauthProxy.tag"
+
+  # An empty issuer renders an empty --oidc-issuer-url, which would accept a
+  # token from any realm, so the render fails and names the key.
+  - it: fails the render when the Keycloak issuer is empty
+    template: templates/validate.yaml
+    set:
+      global.observability.keycloak.issuerUrl: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: 'global.observability.keycloak.issuerUrl must be set (with global.clusterDomain resolvable) when observability is enabled (got "")'
+
+  - it: fails the render when the issuer tpl default has no cluster domain
+    template: templates/validate.yaml
+    set:
+      global.observability.keycloak.issuerUrl: "https://keycloak-keycloak.{{ .Values.global.clusterDomain }}/realms/osac"
+      global.clusterDomain: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: 'global.observability.keycloak.issuerUrl must be set (with global.clusterDomain resolvable) when observability is enabled (got "https://keycloak-keycloak./realms/osac")'
 
   - it: renders no document when every image tag is set
     template: templates/validate.yaml

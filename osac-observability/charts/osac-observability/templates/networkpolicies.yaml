@@ -166,4 +166,34 @@ spec:
   policyTypes:
     - Ingress
   ingress: []
+---
+# The admin Route reaches the gate on the container port 9092. The same pod
+# also runs the two OAuth proxies on 4180 and 4181 and the allowlist on 9091;
+# those stay closed to every other pod, so nothing can skip the gate by
+# connecting to the pod IP. Traffic between the containers inside the pod uses
+# loopback and is not filtered by NetworkPolicy. The Route enters through the
+# OpenShift router namespace, which carries this policy-group label. Kubelet
+# probes come from the node and are not filtered, so the containers keep their
+# httpGet and tcpSocket probes.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: thanos-query-auth-proxy
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      osac.openshift.io/observability-role: query-auth-proxy
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              network.openshift.io/policy-group: ingress
+      ports:
+        - protocol: TCP
+          port: 9092
 {{- end }}

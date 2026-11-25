@@ -45,6 +45,16 @@ app.kubernetes.io/component: {{ .component }}
 app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
+{{/* The two admin proxies must not select each other's pods, so they carry a
+     per-workload instance label instead of the release-wide one. */}}
+{{- define "osac-observability.adminProxyLabels" -}}
+helm.sh/chart: {{ printf "%s-%s" .root.Chart.Name .root.Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
+app.kubernetes.io/name: thanos
+app.kubernetes.io/instance: {{ .instance }}
+app.kubernetes.io/component: query-auth-proxy
+app.kubernetes.io/managed-by: {{ .root.Release.Service }}
+{{- end -}}
+
 {{- define "osac-observability.podSecurityContext" -}}
 runAsNonRoot: true
 seccompProfile:

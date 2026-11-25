@@ -23,21 +23,19 @@ from tests.e2e.core.helpers import (
     wait_for_cr,
     wait_for_deletion,
     wait_for_grpc_removal,
-    wait_for_new_vmi,
     wait_for_provision,
-    wait_for_restart,
     wait_for_running,
 )
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
-from tests.e2e.core.runner import poll_until
-from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.vmaas.sanity.test_compute_instance_instance_type import (
     _condition_status,
     _configuration_snapshot,
     _instance_type_name,
     _next_restart_timestamp,
     _wait_for_configuration_applied,
+    _wait_for_resize_staged,
+    _wait_for_resized_restart,
     _wait_for_vmi_resources,
 )
 from tests.e2e.vmaas.sanity.test_compute_instance_instance_type import active_instance_type as active_instance_type
@@ -182,21 +180,17 @@ def test_mixed_direction_resize_and_restart_via_cli(
     monkeypatch.setenv("OSAC_E2E_TARGET_INSTANCE_TYPE", mixed_instance_types[1])
     cli.edit_compute_instance(uuid=ci_id)
     assert _instance_type_name(grpc.get_compute_instance(ci_id=ci_id)) == mixed_instance_types[1]
-    _wait_for_configuration_applied(
-        k8s_hub_client, name=cr_name, vcpus=4, memory_gib=4, previous_config_version=previous_version
+    _wait_for_resize_staged(
+        k8s_hub_client,
+        k8s_virt_client,
+        ci_name=cr_name,
+        vmi_namespace=vm_namespace,
+        current_vcpus=2,
+        current_memory_gib=8,
+        target_vcpus=4,
+        target_memory_gib=4,
+        previous_config_version=previous_version,
     )
-    poll_until(
-        fn=lambda: k8s_hub_client.get_compute_instance_condition_status(
-            name=cr_name, condition_type="RestartRequired", checked=False
-        ),
-        until=lambda status: status == "True",
-        retries=60,
-        delay=5,
-        description=f"{cr_name} RestartRequired after mixed resize",
-        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
-        resource_id=cr_name,
-    )
-    _wait_for_vmi_resources(k8s_virt_client, vmi_namespace=vm_namespace, ci_name=cr_name, vcpus=2, memory_gib=8)
 
     restart_timestamp = _next_restart_timestamp(previous_restart)
     editor = tmp_path / "restart-editor.py"
@@ -214,20 +208,14 @@ def test_mixed_direction_resize_and_restart_via_cli(
     monkeypatch.setenv("EDITOR", str(editor))
     monkeypatch.setenv("OSAC_E2E_RESTART_AT", restart_timestamp)
     cli.edit_compute_instance(uuid=ci_id)
-    wait_for_restart(k8s=k8s_hub_client, name=cr_name, initial=previous_restart, restart_ts=restart_timestamp)
-    wait_for_running(k8s=k8s_hub_client, name=cr_name)
-    wait_for_new_vmi(
-        k8s=k8s_virt_client, vmi_namespace=vm_namespace, compute_instance_name=cr_name, initial_timestamp=previous_vmi
+    _wait_for_resized_restart(
+        k8s_hub_client,
+        k8s_virt_client,
+        ci_name=cr_name,
+        vmi_namespace=vm_namespace,
+        previous_restart=previous_restart,
+        restart_timestamp=restart_timestamp,
+        initial_vmi_timestamp=previous_vmi,
+        target_vcpus=4,
+        target_memory_gib=4,
     )
-    poll_until(
-        fn=lambda: k8s_hub_client.get_compute_instance_condition_status(
-            name=cr_name, condition_type="RestartRequired", checked=False
-        ),
-        until=lambda status: status == "False",
-        retries=60,
-        delay=5,
-        description=f"{cr_name} RestartRequired cleared after mixed resize restart",
-        resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
-        resource_id=cr_name,
-    )
-    _wait_for_vmi_resources(k8s_virt_client, vmi_namespace=vm_namespace, ci_name=cr_name, vcpus=4, memory_gib=4)

@@ -85,7 +85,7 @@ type Resolution struct {
 }
 
 // ResolveAccountCorrelationID applies the correlation-id precedence for one account: generate, adopt, or report a
-// conflict. It performs only provider reads; the caller commits Resolution.Value itself under database uniqueness.
+// conflict. It performs only provider reads; the caller commits Resolution.Value itself after the read-only checks.
 //
 // Every successful outcome makes one selected-account read and one complete exact-value carrier walk, bounded by
 // MaxListPages and the caller's context deadline. A provider-present value must have the selected native identity as

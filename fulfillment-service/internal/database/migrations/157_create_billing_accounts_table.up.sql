@@ -46,12 +46,6 @@ create table billing_accounts (
 create unique index billing_accounts_unique_provider_account
   on billing_accounts ((data -> 'status' ->> 'provider_key'), (data -> 'status' ->> 'provider_account_reference'));
 
--- At most one account may hold a given attribution id, backing the ACCOUNT_AMBIGUOUS check. Accounts without an id are
--- allowed.
-create unique index billing_accounts_unique_external_billing_account_id
-  on billing_accounts ((data -> 'status' ->> 'external_billing_account_id'))
-  where data -> 'status' ->> 'external_billing_account_id' is not null;
-
 create unique index billing_accounts_unique_name on billing_accounts (name);
 
 -- Validate protobuf timestamp spellings before PostgreSQL can normalize alternate forms (including 24:00 and leap

@@ -113,15 +113,15 @@ var _ = DescribeMigration("Create billing accounts table", func() {
 		}
 	})
 
-	It("enforces attribution uniqueness on status JSON and permits absent ids", func(ctx context.Context) {
+	It("allows repeated external billing account ids and permits absent ids", func(ctx context.Context) {
 		Expect(tool.Migrate(ctx, 157)).To(Succeed())
 		for i, token := range []string{"ext-1", " ext-1 ", "", " \t "} {
 			id := []string{"plain", "padded", "empty", "whitespace"}[i]
 			_, err := conn.Exec(ctx, insertBillingAccount, id, billingAccountName(id), billingAccountData(id, &token))
 			Expect(err).ToNot(HaveOccurred())
 			duplicate := "duplicate-" + id
-			rejectStatement(ctx, "23505", "billing_accounts_unique_external_billing_account_id",
-				insertBillingAccount, duplicate, billingAccountName(duplicate), billingAccountData(duplicate, &token))
+			_, err = conn.Exec(ctx, insertBillingAccount, duplicate, billingAccountName(duplicate), billingAccountData(duplicate, &token))
+			Expect(err).ToNot(HaveOccurred(), "billing account rows may retain the same attribution id")
 		}
 		for _, id := range []string{"absent-a", "absent-b"} {
 			_, err := conn.Exec(ctx, insertBillingAccount, id, billingAccountName(id), billingAccountData(id, nil))

@@ -173,7 +173,7 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 		Expect(proto.Equal(stored.GetObject(), updated.GetObject())).To(BeTrue())
 	})
 
-	DescribeTable("preserves optional token presence and raw uniqueness", func(token *string) {
+	DescribeTable("preserves optional token presence and raw values", func(token *string) {
 		created, err := accounts.Create().SetObject(accountObject("first", token)).Do(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		stored, err := accounts.Get().SetId("first").Do(ctx)
@@ -187,19 +187,13 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 			from billing_accounts where id='first'`).Scan(&projection, &present)).To(Succeed())
 		Expect(projection).To(Equal(token))
 		Expect(present).To(Equal(token != nil))
-		err = tx.Savepoint(ctx, func(spCtx context.Context) error {
-			_, err := accounts.Create().SetObject(accountObject("second", token)).Do(spCtx)
-			return err
-		})
-		if token == nil {
-			Expect(err).NotTo(HaveOccurred(), "multiple SQL NULL tokens are allowed")
-		} else {
-			var duplicate *ErrAlreadyExists
-			Expect(errors.As(err, &duplicate)).To(BeTrue())
-			Expect(duplicate.ConstraintName).To(Equal("billing_accounts_unique_external_billing_account_id"))
-			other := *token + " "
-			_, err = accounts.Create().SetObject(accountObject("raw-distinct", &other)).Do(ctx)
-			Expect(err).NotTo(HaveOccurred(), "uniqueness uses bytes, not trimmed equality")
+		_, err = accounts.Create().SetObject(accountObject("second", token)).Do(ctx)
+		Expect(err).NotTo(HaveOccurred(), "billing account rows may retain the same attribution token")
+		second, err := accounts.Get().SetId("second").Do(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(second.GetObject().GetStatus().HasExternalBillingAccountId()).To(Equal(token != nil))
+		if token != nil {
+			Expect(second.GetObject().GetStatus().GetExternalBillingAccountId()).To(Equal(*token))
 		}
 	}, Entry("absent is SQL NULL", (*string)(nil)), Entry("present empty", proto.String("")),
 		Entry("whitespace", proto.String(" \t\n")), Entry("padded", proto.String("  attribution  ")),
@@ -224,44 +218,15 @@ var _ = Describe("Billing GenericDAO persistence", func() {
 		Expect(err).NotTo(HaveOccurred())
 	})
 
-	It("retains Update's real raw-token ConstraintName, recovers, and commits unrelated work", func() {
+	It("allows an account update to duplicate an existing attribution token", func() {
 		_, err := accounts.Create().SetObject(accountObject("carrier", proto.String("shared-raw"))).Do(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		candidate, err := accounts.Create().SetObject(accountObject("candidate", nil)).Do(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		candidate.GetObject().GetStatus().SetExternalBillingAccountId("shared-raw")
-		err = tx.Savepoint(ctx, func(spCtx context.Context) error {
-			_, err := accounts.Update().SetObject(candidate.GetObject()).Do(spCtx)
-			return err
-		})
-		var conflict *ErrAlreadyExists
-		Expect(errors.As(err, &conflict)).To(BeTrue())
-		stored, err := accounts.Get().SetId("candidate").Do(ctx)
+		updated, err := accounts.Update().SetObject(candidate.GetObject()).Do(ctx)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(stored.GetObject().GetStatus().HasExternalBillingAccountId()).To(BeFalse())
-		Expect(stored.GetObject().GetMetadata().GetVersion()).To(BeZero())
-		stored.GetObject().GetStatus().SetDisplayName("valid observation retained without token")
-		_, err = accounts.Update().SetObject(stored.GetObject()).Do(ctx)
-		Expect(err).NotTo(HaveOccurred())
-		_, err = tenants.Create().SetObject(privatev1.Tenant_builder{Id: "after-token-conflict",
-			Metadata: privatev1.Metadata_builder{Name: "after-token-conflict", Tenant: "after-token-conflict"}.Build(),
-		}.Build()).Do(ctx)
-		Expect(err).NotTo(HaveOccurred())
-		var one int
-		Expect(tx.QueryRow(ctx, `select 1`).Scan(&one)).To(Succeed())
-		Expect(one).To(Equal(1))
-		Expect(tx.End(ctx)).To(Succeed())
-		tx = nil
-		Expect(tm.Run(context.Background(), func(readCtx context.Context) error {
-			read, err := accounts.Get().SetId("candidate").Do(readCtx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(read.GetObject().GetMetadata().GetVersion()).To(Equal(int32(1)))
-			Expect(read.GetObject().GetStatus().HasExternalBillingAccountId()).To(BeFalse())
-			control, err := tenants.List().SetFilter(`this.id == 'after-token-conflict'`).Do(readCtx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(control.GetTotal()).To(Equal(int32(1)))
-			return nil
-		})).To(Succeed())
+		Expect(updated.GetObject().GetStatus().GetExternalBillingAccountId()).To(Equal("shared-raw"))
 	})
 
 	It("rejects native identity changes and established token rotation without poisoning the transaction", func() {

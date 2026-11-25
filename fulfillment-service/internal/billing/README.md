@@ -89,8 +89,8 @@ this amendment; it used the flat scalar fields and does not parse against this A
 structured output use the nested snake-case field names.
 
 The billing schema is a forward-only set with no down migrations, numbered after main's last migration
-(156). Migration 157 creates `billing_accounts` with the standard envelope, JSON-expression uniqueness
-indexes and validation triggers. Migration 158 creates `tenant_billing_assignments` with JSON
+(156). Migration 157 creates `billing_accounts` with the standard envelope, provider-identity and name
+uniqueness indexes, and validation triggers. Migration 158 creates `tenant_billing_assignments` with JSON
 current-interval uniqueness, validation and reference triggers, and history protection. Neither table
 has a foreign key on the tenant, and the account reference is checked by trigger. Migration 159
 releases finalized tenant domains, 160 creates the deleted tenant identity store, and 161 holds the

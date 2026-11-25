@@ -129,10 +129,10 @@ var _ = DescribeMigration("Retain deleted tenant identities", func() {
 		var indexes int
 		Expect(conn.QueryRow(ctx, `select count(*) from pg_index i join pg_class c on c.oid = i.indexrelid
 		 where i.indisvalid and c.relname in ('billing_accounts_unique_provider_account',
-		 'billing_accounts_unique_external_billing_account_id', 'tenant_billing_assignments_unique_active_tenant',
+		 'tenant_billing_assignments_unique_active_tenant',
 		 'tenant_billing_assignments_unique_active_account', 'tenant_billing_assignments_by_tenant',
 		 'tenant_billing_assignments_by_account', 'tenant_billing_assignments_by_effective_from')`).Scan(&indexes)).To(Succeed())
-		Expect(indexes).To(Equal(7))
+		Expect(indexes).To(Equal(6))
 		var accountForeignKeys int
 		Expect(conn.QueryRow(ctx, `select count(*) from pg_constraint where contype = 'f'
 			 and conrelid = 'tenant_billing_assignments'::regclass and confrelid = 'billing_accounts'::regclass

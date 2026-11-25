@@ -408,7 +408,7 @@ var _ = Describe("Private tenant billing assignments server", func() {
 		if equal {
 			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 			Expect(reason(err)).To(Equal(billing.ReasonAccountCorrelationConflict))
-			Expect(fake.Count("ListAccounts")).To(Equal(carrierScans), "the local duplicate must fail before the provider carrier walk or SQL uniqueness")
+			Expect(fake.Count("ListAccounts")).To(Equal(carrierScans), "the local duplicate must fail before the provider carrier walk")
 		} else {
 			Expect(err).NotTo(HaveOccurred(), "a distinct retained token is not a local duplicate")
 			Expect(fake.Count("ListAccounts")).To(Equal(carrierScans + 1))
@@ -1971,43 +1971,28 @@ var _ = Describe("Private tenant billing assignments server", func() {
 			Expect(server.assignSem).To(BeEmpty())
 		}, Entry("deadlock SQLSTATE", "40P01"), Entry("serialization SQLSTATE", "40001"))
 
-		It("settles cross-account correlation races through final SQL uniqueness across server instances", func() {
+		It("rejects a second account's correlation through the local duplicate check", func() {
 			createOtherTenant()
-			var accounts []billingfake.AccountSpec
-			first := newAccount(&accounts, "shared-candidate", "", "ACTIVE")
-			second := newAccount(&accounts, "shared-candidate", "", "ACTIVE")
-			// Each provider view is individually consistent but stale relative to the other. Both must finish their
-			// read-only evidence; the final unique index, not a pre-I/O reservation, decides adoption.
-			firstFake := billingfake.New(billingfake.Scenario{Accounts: accounts[:1]})
-			secondFake := billingfake.New(billingfake.Scenario{Accounts: accounts[1:]})
-			adapter := &gatedAccountScanAdapter{Fake: firstFake, entered: make(chan struct{}), release: make(chan struct{})}
-			server1 := build(billing.NewProvider(billingfake.Key, adapter, nil))
+			var firstAccounts, secondAccounts []billingfake.AccountSpec
+			first := newAccount(&firstAccounts, "shared-candidate", "", "ACTIVE")
+			second := newAccount(&secondAccounts, "shared-candidate", "", "ACTIVE")
+			firstFake := billingfake.New(billingfake.Scenario{Accounts: firstAccounts})
+			secondFake := billingfake.New(billingfake.Scenario{Accounts: secondAccounts})
+			server1 := build(firstFake.Provider())
 			server2 := build(secondFake.Provider())
-			result := make(chan error, 1)
-			go func() {
-				_, err := billingRPC(adminCtx(), server1.Create, createRequest(testTenant, first, "asg-1"))
-				result <- err
-			}()
-			DeferCleanup(func() {
-				select {
-				case <-adapter.release:
-				default:
-					close(adapter.release)
-				}
-			})
-			Eventually(adapter.entered, 5*time.Second).Should(BeClosed())
-			_, err := billingRPC(adminCtx(), server2.Create, createRequest(otherTenant, second, "asg-2"))
+			_, err := billingRPC(adminCtx(), server1.Create, createRequest(testTenant, first, "asg-1"))
 			Expect(err).NotTo(HaveOccurred())
-			Expect(secondFake.Count("ListAccounts")).To(Equal(1))
+			_, err = billingRPC(adminCtx(), server2.Create, createRequest(otherTenant, second, "asg-2"))
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+			Expect(reason(err)).To(Equal(billing.ReasonAccountCorrelationConflict))
+			Expect(secondFake.Count("ListAccounts")).To(BeZero(), "the local duplicate check runs before the provider carrier walk")
 			Expect(secondFake.Count("SetCorrelationValue")).To(BeZero())
-			close(adapter.release)
-			var firstErr error
-			Eventually(result, 5*time.Second).Should(Receive(&firstErr))
-			Expect(status.Code(firstErr)).To(Equal(codes.FailedPrecondition))
-			Expect(reason(firstErr)).To(Equal("ACCOUNT_CORRELATION_CONFLICT"))
-			var token *string
-			Expect(testPool.QueryRow(ctx, `select data->'status'->>'external_billing_account_id' from billing_accounts where id = $1`, first).Scan(&token)).To(Succeed())
-			Expect(token).To(BeNil())
+			var firstToken, secondToken *string
+			Expect(testPool.QueryRow(ctx, `select data->'status'->>'external_billing_account_id' from billing_accounts where id = $1`, first).Scan(&firstToken)).To(Succeed())
+			Expect(testPool.QueryRow(ctx, `select data->'status'->>'external_billing_account_id' from billing_accounts where id = $1`, second).Scan(&secondToken)).To(Succeed())
+			Expect(firstToken).NotTo(BeNil())
+			Expect(*firstToken).To(Equal("shared-candidate"))
+			Expect(secondToken).To(BeNil())
 		})
 
 		DescribeTable("releases the ordinary connection and admission after bounded provider cancellation", func(gate, cutoff string) {

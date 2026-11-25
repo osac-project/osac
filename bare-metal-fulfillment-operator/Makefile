@@ -69,7 +69,7 @@ test: manifests generate fmt vet setup-envtest wiremock-image ## Run tests.
 
 .PHONY: wiremock-image
 wiremock-image: ## Build the WireMock fixture image for Envtest.
-	$(WIREMOCK_CONTAINER_TOOL) build -t localhost/osac-wiremock:it -f test/wiremock/Containerfile test/wiremock
+	$(WIREMOCK_CONTAINER_TOOL) build -t localhost/osac-wiremock:it -f Containerfile.wiremock .
 
 # Run integration tests against a pre-existing Kind cluster deployed via
 # the root Makefile's `make dev-env` + `make integration-test-bmf`.

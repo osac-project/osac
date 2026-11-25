@@ -32,28 +32,13 @@ envtest specs cover selection, allocation, release, and claim recovery with
 an in-process reconciler. The Kind case uses the same NetBox WireMock
 mappings and checks deployed credential lookup and token reload after a rollout.
 
-The BMF `make test` target builds the WireMock image. Testcontainers starts and
-cleans up an isolated instance for each NetBox envtest spec. To run the specs
-directly with `go test`, build the image with `make wiremock-image` first.
+The BMF `make test` target builds the WireMock image and starts an isolated
+container for each NetBox envtest spec. For direct `go test` runs, build the
+image first with `make wiremock-image`. For Podman, configure the API socket
+and run `make test CONTAINER_TOOL=podman`. See the
+[Testcontainers Podman setup](https://golang.testcontainers.org/system_requirements/using_podman/).
 
-For Podman, enable its API socket and configure `DOCKER_HOST` as described in
-the [Testcontainers Podman setup](https://golang.testcontainers.org/system_requirements/using_podman/).
-Use `make test CONTAINER_TOOL=podman` so the image build and tests use the same
-engine. For direct test runs, build with `make wiremock-image CONTAINER_TOOL=podman`
-and set `TESTCONTAINERS_PROVIDER=podman` when invoking `go test`.
-
-If Ryuk cannot access the container engine socket locally, run
-`TESTCONTAINERS_RYUK_DISABLED=true make test`. Each spec cleans up its own container.
-
-Both suites use Go-built stubs for ordinary requests and the fixture's JSON
-mappings for State Extension behavior. The fixture uses the WireMock HTTP API
-to load both kinds of mappings, seed devices, and read device state.
-
-The installer builds and loads the same image for Kind. The image in
-`bare-metal-fulfillment-operator/test/wiremock` can serve other provider
-fixtures with their own mappings. The NetBox mappings exercise conditional
-updates and sequential claim/release flows. Parallel envtest specs use separate
-WireMock instances.
+The installer builds and loads the same image for Kind.
 
 ## Coverage notes
 

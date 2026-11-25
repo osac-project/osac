@@ -1355,7 +1355,7 @@ endif
 ifneq ($(filter bmf-netbox,$(BMF_TEST_PHASES)),)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
 	$(call kind-load-image,localhost/fulfillment-service:it)
-	$(call kind-container-build,-t localhost/osac-wiremock:it -f ../bare-metal-fulfillment-operator/test/wiremock/Containerfile ../bare-metal-fulfillment-operator/test/wiremock)
+	$(call kind-container-build,-t localhost/osac-wiremock:it -f ../bare-metal-fulfillment-operator/Containerfile.wiremock ../bare-metal-fulfillment-operator)
 	$(call kind-load-image,localhost/osac-wiremock:it)
 	# Recreate the mock so a failed run cannot carry a claimed device into the next run.
 	kubectl delete -n $(NS) deployment/bmf-netbox-fixture --ignore-not-found

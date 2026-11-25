@@ -1022,8 +1022,13 @@
       vars:
         realm:
           name: ps-realm-custom
-          subnet: "192.0.2.64/26"
-          vlan: 100
+          subnet_prefix: "192.0.2.64/26"
+          subnet_vlan: 100
+          subnet_gateway: "192.0.2.65"
+          interface_address: "192.0.2.70"
+          dns_domain: "custom.example.com"
+          dns_nameservers:
+            - "192.0.2.65"
           admin_password: "{{ lookup('env', 'PURE_REALM_ADMIN_PASSWORD') | default('PlaceholderPass123!', true) }}"
         pure_realm_fb_url: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
         pure_realm_api_token: "{{ lookup('env', 'PUREFB_API') | default('PLACEHOLDER_DO_NOT_USE_array_admin_token', true) }}"

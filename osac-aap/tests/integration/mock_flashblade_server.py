@@ -21,7 +21,9 @@ _INJECTED_FAILURES = []
 
 _NEXT_ID = {r: 1 for r in (
     "realms", "file-systems", "servers", "nfs-export-policies",
-    "network-interfaces", "dns", "resource-accesses"
+    "network-interfaces", "dns", "resource-accesses", "subnets",
+    "certificates", "management-access-policies", "admins", "tls-policies",
+    "hardware", "link-aggregation-groups"
 )}
 _STORE = {r: {} for r in _NEXT_ID}
 _LOCK = threading.Lock()
@@ -34,6 +36,19 @@ CANNED_DEFAULTS = {
     "network-interfaces": {"name": "", "address": ""},
     "dns": {"name": "", "domain": ""},
     "resource-accesses": {"resource": {}, "scope": {}},
+    "subnets": {"name": "", "prefix": "", "vlan": 0, "gateway": "", "mtu": 1500, "lag": ""},
+    "certificates": {"name": "", "certificate": "", "status": "valid"},
+    "management-access-policies": {"name": "", "rules": []},
+    "admins": {"name": "", "admin_type": "service-account"},
+    "tls-policies": {"name": "", "enabled": True},
+    "hardware": {"name": "", "model": "FA-m", "status": "healthy"},
+    "link-aggregation-groups": {"name": "", "ports": []},
+}
+
+# Objects the array always has. The purefb_* modules read the LAG named by
+# pure_realm_subnet_lag before creating a subnet and fail when it is absent.
+_DEFAULT_OBJECTS = {
+    "link-aggregation-groups": ["lag-01"],
 }
 
 _LIST_FILTER_FIELDS = {
@@ -42,6 +57,22 @@ _LIST_FILTER_FIELDS = {
     "servers": ["name", "names"],
     "nfs-export-policies": ["name", "names"],
 }
+
+
+def _seed_defaults():
+    """Install the objects a bare array always has on top of _STORE."""
+    for resource, names in _DEFAULT_OBJECTS.items():
+        for name in names:
+            if name in _STORE[resource]:
+                continue
+            item = copy.deepcopy(CANNED_DEFAULTS[resource])
+            item["id"] = str(_NEXT_ID[resource])
+            _NEXT_ID[resource] += 1
+            item["name"] = name
+            _STORE[resource][name] = item
+
+
+_seed_defaults()
 
 
 class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
@@ -108,6 +139,7 @@ class MockFlashBladeHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         """Handle POST requests."""
         self._log_call()
+        path_only = self.path.split("?", 1)[0]
 
         if self.path == "/_inject_failure":
             # Test control endpoint
@@ -137,8 +169,9 @@ class MockFlashBladeHandler(BaseHTTPRequestHandler):
             self._send_json({"status": "seeded", "resource": resource, "name": name})
             return
 
-        # Login endpoint
-        if self.path == "/api/login":
+        # Login endpoint. pypureclient logs in under the negotiated version
+        # prefix (/api/2.26/login), while the role's raw calls use /api/login.
+        if path_only == "/api/login" or path_only.endswith("/login"):
             # Mock authentication - return session token in header
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -165,6 +198,36 @@ class MockFlashBladeHandler(BaseHTTPRequestHandler):
         # Parse request body
         content_length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(content_length)) if content_length > 0 else {}
+
+        # API tokens are issued once per admin; the role reads
+        # items[0].api_token.token and tolerates a 400 on a re-run.
+        if path_only.endswith("/admins/api-tokens"):
+            admin_name = (self._parse_query_params().get("admin_names") or [""])[0]
+            with _LOCK:
+                admin = _STORE["admins"].get(admin_name)
+                if admin is None:
+                    self._send_json(
+                        {"errors": [{"message": f"admins '{admin_name}' not found"}]},
+                        status=400
+                    )
+                    return
+                if admin.get("api_token_issued"):
+                    self._send_json(
+                        {"errors": [{"message": "API token already exists"}]},
+                        status=400
+                    )
+                    return
+                admin["api_token_issued"] = True
+            self._send_json(
+                {"items": [{"api_token": {"token": "mock-realm-api-token"}}]},
+                status=200
+            )
+            return
+
+        # Binding members to a TLS policy carries both names in the query.
+        if path_only.endswith("/tls-policies/network-interfaces"):
+            self._send_json({"items": []}, status=200)
+            return
 
         # Batch endpoints such as /resource-accesses/batch take an array body
         # and answer with one {"items": [...]} document.
@@ -251,6 +314,7 @@ class MockFlashBladeHandler(BaseHTTPRequestHandler):
                     _STORE[resource].clear()
                 for resource in _NEXT_ID:
                     _NEXT_ID[resource] = 1
+                _seed_defaults()
             self._send_json({"status": "reset"})
             return
 
@@ -258,6 +322,11 @@ class MockFlashBladeHandler(BaseHTTPRequestHandler):
             with _LOCK:
                 calls = copy.deepcopy(CALL_LOG)
             self._send_json(calls)
+            return
+
+        # pypureclient negotiates the REST version before any versioned call.
+        if self.path.split("?", 1)[0].rstrip("/").endswith("/api_version"):
+            self._send_json({"versions": ["2.26"]})
             return
 
         # API resource listing
@@ -271,9 +340,21 @@ class MockFlashBladeHandler(BaseHTTPRequestHandler):
         with _LOCK:
             items = list(_STORE[resource].values())
 
-        # Filter by names query param
+        # Filter by names query param. The real API answers a filtered GET for
+        # a name it does not hold with 400, not an empty 200 -- the purefb_*
+        # modules check the status code to decide whether a resource exists.
         if "names" in query_params:
             filter_names = [unquote(n) for n in query_params["names"][0].split(",")]
+            unexpected = [
+                name for name in filter_names
+                if name not in {item["name"] for item in items}
+            ]
+            if unexpected:
+                self._send_json(
+                    {"errors": [{"message": f"{resource} {unexpected[0]!r} does not exist."}]},
+                    status=400
+                )
+                return
             items = [item for item in items if item["name"] in filter_names]
 
         self._send_json({

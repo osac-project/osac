@@ -24,71 +24,53 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"os/exec"
+	"net/netip"
 	"strings"
 	"time"
 
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/testcontainers/testcontainers-go"
+	_ "github.com/testcontainers/testcontainers-go/modules/podman" // Register the Podman provider.
+	"github.com/testcontainers/testcontainers-go/wait"
 	"k8s.io/client-go/kubernetes"
 )
 
-const image = "localhost/osac-wiremock:it"
+const (
+	image    = "localhost/osac-wiremock:it"
+	httpPort = "8080/tcp"
+)
 
 // Start runs an isolated WireMock instance on a dynamically assigned loopback
 // port. Call stop to remove it when the spec finishes.
-func Start(ctx context.Context) (baseURL string, stop func() error, err error) {
-	tool := os.Getenv("CONTAINER_TOOL")
-	if tool == "" {
-		tool = "docker"
-		if _, err := exec.LookPath(tool); err != nil {
-			tool = "podman"
-		}
-	}
-
+func Start(ctx context.Context) (string, func() error, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	output, err := exec.CommandContext(ctx, tool,
-		"run", "--detach", "--rm", "--pull=never", "--publish", "127.0.0.1::8080", image,
-	).Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return "", nil, fmt.Errorf("start WireMock (build with make wiremock-image): %w: %s", err, exitErr.Stderr)
-		}
-		return "", nil, fmt.Errorf("start WireMock: %w", err)
-	}
 
-	id := strings.TrimSpace(string(output))
-	stop = func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	instance, err := testcontainers.Run(ctx, image,
+		testcontainers.WithExposedPorts(httpPort),
+		testcontainers.WithHostConfigModifier(func(config *container.HostConfig) {
+			config.PortBindings = network.PortMap{
+				network.MustParsePort(httpPort): {{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: "0"}},
+			}
+		}),
+		testcontainers.WithWaitStrategy(wait.ForHTTP("/__admin/health").WithPort(httpPort)),
+	)
+	// Startup can fail after the container has been created.
+	stop := func() error {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		output, err := exec.CommandContext(ctx, tool, "stop", "--time", "1", id).CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("stop WireMock: %w: %s", err, output)
-		}
-		return nil
+		return instance.Terminate(cleanupCtx, testcontainers.StopTimeout(time.Second))
+	}
+	if err != nil {
+		return "", nil, errors.Join(fmt.Errorf("start WireMock (build with make wiremock-image): %w", err), stop())
 	}
 
-	output, err = exec.CommandContext(ctx, tool, "port", id, "8080/tcp").CombinedOutput()
+	baseURL, err := instance.PortEndpoint(ctx, httpPort, "http")
 	if err != nil {
-		_ = stop()
-		return "", nil, fmt.Errorf("discover WireMock port: %w: %s", err, output)
+		return "", nil, errors.Join(fmt.Errorf("discover WireMock endpoint: %w", err), stop())
 	}
-	baseURL = "http://" + strings.TrimSpace(string(output))
-	admin := HTTPAdmin(baseURL)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if _, err := admin(ctx, http.MethodGet, "/__admin/health", nil); err == nil {
-			return baseURL, stop, nil
-		}
-		select {
-		case <-ctx.Done():
-			_ = stop()
-			return "", nil, fmt.Errorf("wait for WireMock readiness: %w", ctx.Err())
-		case <-ticker.C:
-		}
-	}
+	return baseURL, stop, nil
 }
 
 // Admin sends fixture setup and inspection requests to WireMock. Kind supplies

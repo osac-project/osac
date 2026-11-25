@@ -32,9 +32,19 @@ envtest specs cover selection, allocation, release, and claim recovery with
 an in-process reconciler. The Kind case uses the same NetBox WireMock
 mappings and checks deployed credential lookup and token reload after a rollout.
 
-The BMF `make test` target builds the WireMock image and runs one isolated
-instance per NetBox envtest spec. Docker or Podman must be available. To run
-just these specs directly, build the image with `make wiremock-image` first.
+The BMF `make test` target builds the WireMock image. Testcontainers starts and
+cleans up an isolated instance for each NetBox envtest spec. To run the specs
+directly with `go test`, build the image with `make wiremock-image` first.
+
+For Podman, enable its API socket and configure `DOCKER_HOST` as described in
+the [Testcontainers Podman setup](https://golang.testcontainers.org/system_requirements/using_podman/).
+Use `make test CONTAINER_TOOL=podman` so the image build and tests use the same
+engine. For direct test runs, build with `make wiremock-image CONTAINER_TOOL=podman`
+and set `TESTCONTAINERS_PROVIDER=podman` when invoking `go test`.
+
+If Ryuk cannot access the container engine socket locally, run
+`TESTCONTAINERS_RYUK_DISABLED=true make test`. Each spec cleans up its own container.
+
 The installer builds and loads the same image for Kind. The image in
 `bare-metal-fulfillment-operator/test/wiremock` can serve other provider
 fixtures with their own mappings. The NetBox mappings exercise conditional

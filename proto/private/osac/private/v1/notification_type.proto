@@ -89,25 +89,27 @@ message NotificationEventReference {
 }
 
 // Optional reference to a related API object.
+// Uses full (non-local) references because Notifications are tenant-scoped, not
+// project-scoped, and may point at objects in any project within the tenant.
 message NotificationResourceReference {
   oneof object {
     // Related cluster.
-    ClusterLocalReference cluster = 1;
+    ClusterReference cluster = 1;
 
     // Related compute instance.
-    ComputeInstanceLocalReference compute_instance = 2;
+    ComputeInstanceReference compute_instance = 2;
 
     // Related bare metal instance.
-    BareMetalInstanceLocalReference bare_metal_instance = 3;
+    BareMetalInstanceReference bare_metal_instance = 3;
 
     // Related subnet.
-    SubnetLocalReference subnet = 4;
+    SubnetReference subnet = 4;
 
     // Related virtual network.
-    VirtualNetworkLocalReference virtual_network = 5;
+    VirtualNetworkReference virtual_network = 5;
 
     // Related external IP.
-    ExternalIPLocalReference external_ip = 6;
+    ExternalIPReference external_ip = 6;
   }
 }
 

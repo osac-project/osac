@@ -81,7 +81,7 @@ func newDAONotificationResourceAccess(
 	}
 
 	if err := registerNotificationResourceDAO(add, "cluster",
-		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.ClusterLocalReference {
+		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.ClusterReference {
 			return r.GetCluster()
 		}),
 		func() (*dao.GenericDAO[*privatev1.Cluster], error) {
@@ -91,7 +91,7 @@ func newDAONotificationResourceAccess(
 		return nil, err
 	}
 	if err := registerNotificationResourceDAO(add, "compute_instance",
-		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.ComputeInstanceLocalReference {
+		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.ComputeInstanceReference {
 			return r.GetComputeInstance()
 		}),
 		func() (*dao.GenericDAO[*privatev1.ComputeInstance], error) {
@@ -101,7 +101,7 @@ func newDAONotificationResourceAccess(
 		return nil, err
 	}
 	if err := registerNotificationResourceDAO(add, "bare_metal_instance",
-		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.BareMetalInstanceLocalReference {
+		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.BareMetalInstanceReference {
 			return r.GetBareMetalInstance()
 		}),
 		func() (*dao.GenericDAO[*privatev1.BareMetalInstance], error) {
@@ -111,7 +111,7 @@ func newDAONotificationResourceAccess(
 		return nil, err
 	}
 	if err := registerNotificationResourceDAO(add, "subnet",
-		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.SubnetLocalReference {
+		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.SubnetReference {
 			return r.GetSubnet()
 		}),
 		func() (*dao.GenericDAO[*privatev1.Subnet], error) {
@@ -121,7 +121,7 @@ func newDAONotificationResourceAccess(
 		return nil, err
 	}
 	if err := registerNotificationResourceDAO(add, "virtual_network",
-		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.VirtualNetworkLocalReference {
+		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.VirtualNetworkReference {
 			return r.GetVirtualNetwork()
 		}),
 		func() (*dao.GenericDAO[*privatev1.VirtualNetwork], error) {
@@ -131,7 +131,7 @@ func newDAONotificationResourceAccess(
 		return nil, err
 	}
 	if err := registerNotificationResourceDAO(add, "external_ip",
-		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.ExternalIPLocalReference {
+		notificationResourceID(func(r *privatev1.NotificationResourceReference) *privatev1.ExternalIPReference {
 			return r.GetExternalIp()
 		}),
 		func() (*dao.GenericDAO[*privatev1.ExternalIP], error) {

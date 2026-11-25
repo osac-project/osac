@@ -79,11 +79,14 @@ export const MultiSelectField = ({
         isDisabled={controlDisabled}
         noOptionsFoundMessage={noOptionsFoundMessage}
         onSelectionChange={(_event, selections) => {
+          // setValue validates the new selection but leaves the field untouched,
+          // and errors render only when the field is touched or the form is
+          // submitted. Mark it touched so the required error becomes visible once
+          // the selection is emptied. Pass false so setTouched does not validate:
+          // it would validate this render's values, which do not include the new
+          // selection yet, re-applying the required error until the next render
+          // (OSAC-7737).
           void helpers.setValue(selections, true);
-          // Do not validate here: setValue already validated the new selection.
-          // Validating again in the same tick would run against the stale render-time
-          // values and re-apply the required-field error until the next re-render
-          // (OSAC-7737). The onToggle handler below validates with current values on close.
           void helpers.setTouched(true, false);
         }}
         onToggle={(open) => {

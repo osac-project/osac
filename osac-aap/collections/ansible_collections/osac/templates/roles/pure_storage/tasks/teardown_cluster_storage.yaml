@@ -1,0 +1,85 @@
+---
+# Pure Storage teardown_cluster_storage: remove cluster-side K8s resources only.
+# Deletes StorageClasses and CSI Secret by label selector.
+# Does NOT delete FlashBlade resources, hub Secret, or CSI driver.
+# Used when a cluster is deleted but the tenant stays (resources may be
+# needed on other clusters).
+#
+# Receives from the dispatcher:
+#   _provider_tiers                — tiers with provider: pure
+#   _provider_backend_connections  — connection details for backend_id
+#   tenant_name                    — tenant identifier
+#   tenant_namespace               — namespace on tenant cluster
+#
+# Target cluster routing:
+#   - Cluster-as-a-Service: dispatcher sets storage_provider_target_kubeconfig
+#     to route deletion to the specific tenant cluster being removed
+#   - POC/single-cluster: storage_provider_target_kubeconfig unset, uses default
+#     kubeconfig context (deletes from local cluster)
+
+- name: Validate tenant_name is a valid DNS label
+  ansible.builtin.fail:
+    msg: >-
+      tenant_name '{{ tenant_name }}' is not a valid DNS label.
+      Must be 1-63 lowercase alphanumeric characters or hyphens,
+      cannot start or end with a hyphen.
+  when: tenant_name is not regex('^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+
+# Outside the rescue-guarded block below: resolving the backend_id is a contract
+# check against the dispatched tiers, not a target-cluster operation, so a
+# failure here must surface rather than be reported as "target cluster
+# unreachable".
+- name: Resolve the backend_id this dispatch is scoped to
+  ansible.builtin.include_tasks: _resolve_backend_id.yaml
+
+- name: Clean up cluster-side K8s resources
+  block:
+    - name: Find all tenant StorageClasses by label
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        label_selectors:
+          - "osac.openshift.io/tenant={{ tenant_name }}"
+          - "app.kubernetes.io/managed-by=osac-aap"
+          # Scope to this dispatch: a tenant can hold several Pure backends and
+          # classes from other providers share the tenant label.
+          - "osac.openshift.io/storage-provider=pure"
+          - "osac.openshift.io/storage-backend-id={{ _pure_backend_id }}"
+      register: _pure_cleanup_sc_list
+
+    - name: Delete tenant StorageClasses
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ item.metadata.name }}"
+      loop: "{{ _pure_cleanup_sc_list.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      ignore_errors: true  # noqa: ignore-errors
+
+    - name: Delete CSI Secret in tenant namespace
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "pure-csi-secret-{{ _pure_backend_id }}"
+        namespace: "{{ tenant_namespace }}"
+      ignore_errors: true  # noqa: ignore-errors
+      no_log: true
+
+    - name: Report teardown_cluster_storage summary
+      ansible.builtin.debug:
+        msg: >-
+          Teardown of cluster-side resources for tenant '{{ tenant_name }}' complete.
+          {{ (_pure_cleanup_sc_list.resources | default([]) | length) }} StorageClasses,
+          1 CSI Secret removed from target cluster.
+          Backend resources and hub Secret untouched.
+
+  rescue:
+    - name: Warn about teardown_cluster_storage failure (target cluster may be unreachable)
+      ansible.builtin.debug:
+        msg: >-
+          Teardown of cluster-side resources failed for tenant '{{ tenant_name }}'.
+          This may be expected if the target cluster is being destroyed.
+          Error: {{ ansible_failed_result.msg | default('unknown') }}

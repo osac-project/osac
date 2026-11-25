@@ -1,0 +1,184 @@
+---
+# Test Pure Storage setup.yaml - Realm checkout and hub Secret creation
+#
+# Tests:
+#   - Realm pool validation
+#   - Available Realm selection
+#   - Hub Secret creation with Realm claim
+#   - Idempotency (re-onboarding)
+
+- name: Test Pure Storage Setup - Realm Checkout
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    test_namespace: osac-system
+    test_tenant: test-pure-tenant
+    test_tenant_uid: test-uid-12345
+    test_backend_id: be-pure-test
+
+  tasks:
+    - name: Verify Realm pool exists
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: ConfigMap
+        name: pure-realm-pool
+        namespace: "{{ test_namespace }}"
+      register: _pool_check
+
+    - name: Show available Realms
+      ansible.builtin.debug:
+        msg: "Realm pool: {{ (_pool_check.resources[0].data.PURE_REALM_POOL | from_json) if _pool_check.resources | length > 0 else 'NOT FOUND' }}"
+
+    - name: Clean up from previous test run
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "pure-tenant-config-{{ test_tenant }}-{{ test_backend_id }}"
+        namespace: "{{ test_namespace }}"
+
+    - name: Run Pure Storage setup through storage_provider dispatcher
+      block:
+        - name: Call storage_provider dispatcher
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            storage_provider_action: setup
+            storage_provider_provisioning_target: vmaas
+            tenant_name: "{{ test_tenant }}"
+            tenant_uid: "{{ test_tenant_uid }}"
+            tenant_namespace: "{{ test_namespace }}"
+            storage_provider_tiers:
+              - name: default
+                protocol: nfs
+                provider: pure
+                backend_id: "{{ test_backend_id }}"
+              - name: fast
+                protocol: nfs
+                provider: pure
+                backend_id: "{{ test_backend_id }}"
+            storage_provider_backend_connections:
+              "{{ test_backend_id }}":
+                endpoint: "10.3.11.50"
+      rescue:
+        - name: Show setup failure details
+          ansible.builtin.debug:
+            msg:
+              - "Setup failed!"
+              - "Task: {{ ansible_failed_task.name | default('unknown') }}"
+              - "Error: {{ ansible_failed_result.msg | default('no message') }}"
+
+        - name: Fail with error details
+          ansible.builtin.fail:
+            msg: "Setup failed - see above for details"
+
+    - name: Read the hub Secret created by setup
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "pure-tenant-config-{{ test_tenant }}-{{ test_backend_id }}"
+        namespace: "{{ test_namespace }}"
+      register: _hub_secret
+
+    - name: Assert hub Secret was created
+      ansible.builtin.assert:
+        that:
+          - _hub_secret.resources | length == 1
+        fail_msg: "Hub Secret was not created"
+        success_msg: "Hub Secret created"
+
+    - name: Assert hub Secret has Realm claim labels
+      vars:
+        _labels: "{{ _hub_secret.resources[0].metadata.labels }}"
+      ansible.builtin.assert:
+        that:
+          - _labels['osac.openshift.io/tenant'] == test_tenant
+          - _labels['osac.openshift.io/pure-realm'] is defined
+          - _labels['osac.openshift.io/storage-backend-id'] == test_backend_id
+        fail_msg: "Hub Secret labels incorrect: {{ _labels }}"
+        success_msg: "Hub Secret has correct Realm claim labels"
+
+    - name: Assert hub Secret has all required fields
+      vars:
+        _data: "{{ _hub_secret.resources[0].data }}"
+      ansible.builtin.assert:
+        that:
+          - _data.realm_name is defined
+          - _data.nfs_server is defined
+          - _data.nfs_policy is defined
+          - _data.api_token is defined
+          - _data.mgmt_endpoint is defined
+          - _data.nfs_endpoint is defined
+          - _data.storage_provider_type is defined
+        fail_msg: "Hub Secret missing required fields"
+        success_msg: "Hub Secret has all required fields"
+
+    - name: Extract hub Secret data
+      ansible.builtin.set_fact:
+        _realm_name: "{{ _hub_secret.resources[0].data.realm_name | b64decode }}"
+        _nfs_server: "{{ _hub_secret.resources[0].data.nfs_server | b64decode }}"
+        _claimed_realm: "{{ _hub_secret.resources[0].metadata.labels['osac.openshift.io/pure-realm'] }}"
+
+    - name: Assert Realm-qualified resource names are correct
+      ansible.builtin.assert:
+        that:
+          - _nfs_server == (_realm_name + '::nfs-server')
+          - _realm_name == _claimed_realm
+        fail_msg: "Resource naming incorrect"
+        success_msg: "Realm-qualified resource names are correct"
+
+    - name: Display selected Realm
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════"
+          - "PURE STORAGE SETUP TEST PASSED"
+          - "   Tenant: {{ test_tenant }}"
+          - "   Realm allocated: {{ _realm_name }}"
+          - "   NFS server: {{ _nfs_server }}"
+          - "════════════════════════════════════════"
+
+    - name: Test idempotency - run setup again
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        storage_provider_action: setup
+        storage_provider_provisioning_target: vmaas
+        tenant_name: "{{ test_tenant }}"
+        tenant_uid: "{{ test_tenant_uid }}"
+        tenant_namespace: "{{ test_namespace }}"
+        storage_provider_tiers:
+          - name: default
+            protocol: nfs
+            provider: pure
+            backend_id: "{{ test_backend_id }}"
+        storage_provider_backend_connections:
+          "{{ test_backend_id }}":
+            endpoint: "10.3.11.50"
+
+    - name: Verify same Realm was reused
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "pure-tenant-config-{{ test_tenant }}-{{ test_backend_id }}"
+        namespace: "{{ test_namespace }}"
+      register: _hub_secret_rerun
+
+    - name: Assert reused same Realm
+      vars:
+        _realm_rerun: "{{ _hub_secret_rerun.resources[0].metadata.labels['osac.openshift.io/pure-realm'] }}"
+      ansible.builtin.assert:
+        that:
+          - _realm_rerun == _realm_name
+        fail_msg: "Re-onboarding selected different Realm"
+        success_msg: "Idempotency: reused same Realm {{ _realm_name }}"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════"
+          - "ALL TESTS PASSED"
+          - "   - Realm checkout works"
+          - "   - Hub Secret created correctly"
+          - "   - Idempotency works (reuses Realm)"
+          - "════════════════════════════════════════"

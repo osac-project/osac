@@ -1,0 +1,49 @@
+---
+# Pure-specific defaults — all use pure_storage_ prefix.
+
+# CSI provisioner name — native Portworx Pure CSI driver
+# Uses pxd.portworx.com (Portworx driver name)
+pure_storage_csi_provisioner: "pxd.portworx.com"
+
+# Hub Secret prefix for per-tenant Pure config
+pure_storage_tenant_config_secret_prefix: "pure-tenant-config-"
+
+# FlashBlade Realm claim Lease prefix. One Lease per Realm serializes
+# allocation: the first setup to server-side-apply spec.holderIdentity owns
+# that field, and a concurrent setup for another tenant gets a conflict and
+# moves on to the next candidate Realm.
+pure_storage_realm_claim_prefix: "pure-realm-claim-"
+
+# Field manager used to claim a Realm. Server-side apply gives the owning field
+# manager exclusive hold on spec.holderIdentity, so this value is the identity
+# of the claim: it must be unique per tenant and backend but stable across
+# re-runs, or re-onboarding collides with its own claim. It is hashed because
+# tenant names and backend IDs have no length limit that fits a field manager,
+# and only stable inputs are used so a new tenant_uid does not add an owner to
+# a claim the same tenant already holds. Never change this expression without
+# also migrating the existing claim Leases.
+pure_storage_realm_claim_field_manager: >-
+  osac-pure-realm-claim-{{ ((tenant_name ~ '/' ~ _pure_backend_id)
+  | hash('sha256'))[:16] }}
+
+# Holder identity recorded on the claim Lease. Read by operators when a Realm
+# cannot be allocated; must not contain credentials.
+pure_storage_realm_claim_holder: "{{ tenant_name }}/{{ _pure_backend_id }}"
+
+# Namespace for hub-cluster config Secrets
+pure_storage_config_namespace: "{{ lookup('env', 'OSAC_STORAGE_CONFIG_NAMESPACE') | default('osac-system', true) }}"
+
+# osac-csi-driver Pure controller credential Secret (shared, multi-Realm)
+pure_storage_csi_backends_namespace: "osac-csi-backends"
+pure_storage_csi_credential_secret_name: "pure-csi-credentials"
+
+# Realm-scoped resource naming conventions
+# Format: {{ realm_name }}::{{ suffix }}
+pure_storage_nfs_server_suffix: "nfs-server"
+pure_storage_export_policy_suffix: "export-policy"
+
+# Default NFS version for mount options
+pure_storage_nfs_version: "nfsvers=4.1"
+
+# TLS certificate validation for FlashBlade API
+pure_storage_validate_certs: "{{ lookup('env', 'PURE_VALIDATE_CERTS') | default('true', true) | bool }}"

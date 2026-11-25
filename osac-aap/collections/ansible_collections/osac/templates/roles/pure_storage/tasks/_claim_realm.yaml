@@ -1,0 +1,88 @@
+---
+# Atomically claim one candidate Realm with a server-side-applied Lease.
+#
+# The Lease is the per-Realm key: its name is derived from the Realm alone, so
+# every tenant setup contends for the same object. Server-side apply makes the
+# write atomic — the first holder's field manager owns spec.holderIdentity, and
+# a second setup applying any other holder identity gets HTTP 409 instead of
+# overwriting it. The caller runs this once per candidate Realm and treats a
+# conflict as "another run took this Realm".
+#
+# Requires:
+#   _pure_candidate                        — pool entry with realm_name;
+#                                            secret_name is only read for a
+#                                            fresh allocation
+#   pure_storage_realm_claim_field_manager — stable per (tenant, backend_id)
+#   pure_storage_realm_claim_holder        — holder identity written to the Lease
+#   pure_storage_realm_claim_prefix, pure_storage_config_namespace
+#
+# Sets on success:
+#   _pure_selected_realm_name, _pure_selected_realm_secret
+#   _pure_claimed_realm_lease_name, _pure_realm_claim_created
+# On conflict:
+#   appends the Realm to _pure_realm_claim_conflicts and claims nothing
+#
+# The block below is a no-op once this dispatch has claimed a Realm. That guard
+# has to sit on the tasks, not on the caller's loop: a conditional on a looped
+# include is not re-evaluated between iterations, so it would let a second
+# candidate be claimed as well.
+
+- name: Claim a Realm unless this dispatch already holds one
+  when: not (_pure_realm_claim_created | default(false) | bool)
+  block:
+    - name: Derive the claim Lease name for candidate Realm
+      ansible.builtin.include_tasks: _realm_claim_lease_name.yaml
+      vars:
+        _pure_realm_lease_realm: "{{ _pure_candidate.realm_name }}"
+
+    - name: Attempt atomic claim of Realm {{ _pure_candidate.realm_name }}
+      kubernetes.core.k8s:
+        state: present
+        apply: true
+        server_side_apply:
+          field_manager: "{{ pure_storage_realm_claim_field_manager }}"
+          force_conflicts: false
+        definition:
+          apiVersion: coordination.k8s.io/v1
+          kind: Lease
+          metadata:
+            name: "{{ _pure_realm_lease_name }}"
+            namespace: "{{ pure_storage_config_namespace }}"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/pure-realm-claim: "true"
+              osac.openshift.io/pure-realm: "{{ _pure_candidate.realm_name }}"
+              osac.openshift.io/storage-backend-id: "{{ _pure_backend_id }}"
+          spec:
+            holderIdentity: "{{ pure_storage_realm_claim_holder }}"
+      register: _pure_claim_attempt
+      ignore_errors: true  # noqa: ignore-errors
+
+    - name: Fail when the Realm claim failed for a reason other than a conflict
+      when:
+        - _pure_claim_attempt is failed
+        - _pure_claim_attempt.reason | default('') != 'Conflict'
+        - (_pure_claim_attempt.msg | default('') | string) is not search('(?i)conflict')
+      ansible.builtin.fail:
+        msg: >-
+          Failed to claim Realm '{{ _pure_candidate.realm_name }}':
+          {{ _pure_claim_attempt.msg | default('unknown error') }}
+
+    - name: Record the Realm as claimed by another run
+      when:
+        - _pure_claim_attempt is failed
+        - >-
+          (_pure_claim_attempt.reason | default('') == 'Conflict')
+          or (_pure_claim_attempt.msg | default('') | string) is search('(?i)conflict')
+      ansible.builtin.set_fact:
+        _pure_realm_claim_conflicts: >-
+          {{ (_pure_realm_claim_conflicts | default([]))
+             + [_pure_candidate.realm_name] }}
+
+    - name: Record the claimed Realm
+      when: not (_pure_claim_attempt is failed)
+      ansible.builtin.set_fact:
+        _pure_selected_realm_name: "{{ _pure_candidate.realm_name }}"
+        _pure_selected_realm_secret: "{{ _pure_candidate.secret_name | default('') }}"
+        _pure_claimed_realm_lease_name: "{{ _pure_realm_lease_name }}"
+        _pure_realm_claim_created: true

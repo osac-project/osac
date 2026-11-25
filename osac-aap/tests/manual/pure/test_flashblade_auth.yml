@@ -1,0 +1,103 @@
+---
+# Simple test to verify FlashBlade authentication and list filesystems
+# Usage:
+#   cd osac-aap
+#   ansible-playbook tests/manual/test_flashblade_auth.yml
+
+- name: Test FlashBlade Authentication
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    test_namespace: osac-system
+    test_realm_secret: pure-realm-danni-test-1
+
+  tasks:
+    - name: Read Realm credentials from Secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "{{ test_realm_secret }}"
+        namespace: "{{ test_namespace }}"
+      register: _realm_secret
+      no_log: true
+
+    - name: Extract credentials
+      ansible.builtin.set_fact:
+        fb_mgmt_endpoint: "{{ _realm_secret.resources[0].data.mgmt_endpoint | b64decode }}"
+        fb_api_token: "{{ _realm_secret.resources[0].data.api_token | b64decode }}"
+        fb_realm_name: "{{ _realm_secret.resources[0].data.realm_name | b64decode }}"
+      no_log: true
+
+    - name: Display connection info (no credentials)
+      ansible.builtin.debug:
+        msg: "Testing FlashBlade at {{ fb_mgmt_endpoint }}, Realm: {{ fb_realm_name }}"
+
+    - name: Authenticate to FlashBlade API
+      ansible.builtin.uri:
+        url: "https://{{ fb_mgmt_endpoint }}/api/login"
+        method: POST
+        headers:
+          api-token: "{{ fb_api_token }}"
+        validate_certs: false
+        status_code: 200
+      register: _fb_login
+      no_log: true
+
+    - name: List all file systems
+      ansible.builtin.uri:
+        url: "https://{{ fb_mgmt_endpoint }}/api/2.26/file-systems"
+        method: GET
+        headers:
+          x-auth-token: "{{ _fb_login.x_auth_token }}"
+        validate_certs: false
+        status_code: 200
+      register: _fb_filesystems
+      no_log: true
+
+    - name: Display filesystem count
+      ansible.builtin.debug:
+        msg: "Authentication successful! Found {{ _fb_filesystems.json.total_item_count }} filesystems"
+
+    - name: List filesystems in the test Realm
+      ansible.builtin.uri:
+        url: "https://{{ fb_mgmt_endpoint }}/api/2.26/file-systems?filter=realm.name='{{ fb_realm_name }}'"
+        method: GET
+        headers:
+          x-auth-token: "{{ _fb_login.x_auth_token }}"
+        validate_certs: false
+        status_code: 200
+      register: _realm_filesystems
+      no_log: true
+
+    - name: Display Realm filesystems
+      ansible.builtin.debug:
+        msg:
+          - "Filesystems in Realm '{{ fb_realm_name }}': {{ _realm_filesystems.json.total_item_count }}"
+          - "Names: {{ _realm_filesystems.json.items | default([]) }}"
+
+    - name: Verify Realm exists
+      ansible.builtin.uri:
+        url: "https://{{ fb_mgmt_endpoint }}/api/2.26/realms?names={{ fb_realm_name }}"
+        method: GET
+        headers:
+          x-auth-token: "{{ _fb_login.x_auth_token }}"
+        validate_certs: false
+        status_code: 200
+      register: _realm_info
+      no_log: true
+
+    - name: Display Realm info
+      ansible.builtin.debug:
+        msg: "Realm '{{ fb_realm_name }}' verified - response received"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "════════════════════════════════════════"
+          - "FlashBlade Authentication: SUCCESS"
+          - "   Endpoint: {{ fb_mgmt_endpoint }}"
+          - "   Realm: {{ fb_realm_name }}"
+          - "   Total filesystems: {{ _fb_filesystems.json.total_item_count }}"
+          - "   Filesystems in Realm: {{ _realm_filesystems.json.total_item_count }}"
+          - "════════════════════════════════════════"

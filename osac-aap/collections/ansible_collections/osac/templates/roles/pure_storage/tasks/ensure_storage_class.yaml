@@ -1,0 +1,232 @@
+---
+# Pure Storage ensure_storage_class: creates the CSI Secret + StorageClasses.
+# The Pure CSI driver creates filesystems on-demand when PVCs are provisioned.
+# Creates: backend-scoped CSI Secret, StorageClasses
+#
+# Receives from dispatcher:
+#   _provider_tiers                — tiers with provider: pure
+#   _provider_backend_connections  — connection details for backend_id
+#   tenant_name                    — tenant identifier
+#   tenant_namespace               — namespace on tenant cluster
+#
+# Hub-side reads must not inherit the dispatcher's target kubeconfig
+# (storage_provider_target_kubeconfig). The dispatcher sets that kubeconfig as
+# a module_default inside the block that includes this role, so each hub-side
+# task overrides it with `kubeconfig: "{{ none }}"` to fall back to the hub's
+# ambient credentials.
+#
+# Target cluster routing:
+#   - Cluster-as-a-Service: dispatcher sets storage_provider_target_kubeconfig
+#     to route StorageClass/Secret creation to the tenant cluster
+#   - POC/single-cluster: storage_provider_target_kubeconfig unset, uses default
+#     kubeconfig context (StorageClasses created on local cluster)
+
+- name: Assert _provider_tiers is defined and non-empty
+  ansible.builtin.assert:
+    that:
+      - _provider_tiers is defined
+      - _provider_tiers | length > 0
+    fail_msg: >-
+      _provider_tiers must be provided by the service role dispatcher.
+
+- name: Resolve the backend_id this dispatch is scoped to
+  ansible.builtin.include_tasks: _resolve_backend_id.yaml
+
+- name: Build expected StorageClass entries per tier
+  ansible.builtin.set_fact:
+    _pure_expected_sc_entries: >-
+      {% set entries = [] -%}
+      {% for tier in _provider_tiers -%}
+      {% set _ = entries.append({'name': 'pure-' ~ tier.protocol ~ '-' ~ tenant_name ~ '-' ~ tier.name, 'tier': tier.name}) -%}
+      {% endfor -%}
+      {{ entries }}
+    _pure_expected_sc_names: >-
+      {% set names = [] -%}
+      {% for tier in _provider_tiers -%}
+      {% set _ = names.append('pure-' ~ tier.protocol ~ '-' ~ tenant_name ~ '-' ~ tier.name) -%}
+      {% endfor -%}
+      {{ names }}
+
+# One Secret per backend: a tenant with two Pure backends must keep each
+# backend's credentials separate, because a StorageClass resolves its Secret
+# by name from its own parameters.
+- name: Set the backend-scoped CSI Secret name
+  ansible.builtin.set_fact:
+    _pure_csi_secret_name: "pure-csi-secret-{{ _pure_backend_id }}"
+
+- name: Check existing tenant StorageClasses
+  kubernetes.core.k8s_info:
+    api_version: storage.k8s.io/v1
+    kind: StorageClass
+    label_selectors:
+      - "osac.openshift.io/tenant={{ tenant_name }}"
+      - "app.kubernetes.io/managed-by=osac-aap"
+      - "osac.openshift.io/storage-provider=pure"
+      - "osac.openshift.io/storage-backend-id={{ _pure_backend_id }}"
+  register: _pure_sc_checks
+
+- name: Determine if all StorageClasses already exist
+  ansible.builtin.set_fact:
+    _pure_all_sc_exist: >-
+      {{ (_pure_sc_checks.resources | map(attribute='metadata.name') | list | sort) == (_pure_expected_sc_names | sort) }}
+
+# Verify Pure CSI driver is installed before creating StorageClasses.
+# Unlike VAST (which installs its own operator), Pure CSI is operator-managed
+# and must be installed separately. Creating StorageClasses without the driver
+# leaves PVCs pending indefinitely.
+- name: Check if Pure CSI driver is installed on target cluster
+  kubernetes.core.k8s_info:
+    api_version: storage.k8s.io/v1
+    kind: CSIDriver
+    name: "{{ pure_storage_csi_provisioner }}"
+  register: _pure_csi_driver_check
+
+- name: Fail when Pure CSI driver is not installed
+  ansible.builtin.fail:
+    msg: >-
+      Pure CSI driver ({{ pure_storage_csi_provisioner }}) is not installed on
+      the target cluster. StorageClasses cannot be created without the driver.
+      Install the Pure CSI driver via osac-installer with PURE_ENABLED=true
+      (see docs/storage/providers/pure.md) before onboarding Pure Storage tenants.
+      This check runs on every invocation to catch driver removal on clusters
+      with existing StorageClasses.
+  when: _pure_csi_driver_check.resources | length == 0
+
+# Only StorageClass creation is skipped when the classes already exist. The CSI
+# Secret is reconciled on every run: a tenant whose classes survive but whose
+# Secret was deleted would otherwise report success and fail at first PVC.
+- name: Provision CSI Secret and StorageClasses
+  block:
+    # ── Read Realm credentials from hub Secret ──
+    - name: Read hub Secret for Realm allocation
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "{{ pure_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _pure_backend_id }}"
+        namespace: "{{ pure_storage_config_namespace }}"
+      module_defaults:
+        kubernetes.core.k8s_info:
+          kubeconfig: "{{ none }}"
+      register: _pure_hub_secret
+      no_log: true
+
+    - name: Fail when hub Secret is missing
+      ansible.builtin.fail:
+        msg: >-
+          Hub Secret '{{ pure_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _pure_backend_id }}'
+          not found in {{ pure_storage_config_namespace }}. Run setup first.
+      when: _pure_hub_secret.resources | length == 0
+
+    - name: Extract Realm credentials and metadata from hub Secret
+      ansible.builtin.set_fact:
+        _pure_api_token: "{{ _pure_hub_secret.resources[0].data.api_token | b64decode }}"
+        _pure_mgmt_endpoint: "{{ _pure_hub_secret.resources[0].data.mgmt_endpoint | b64decode }}"
+        _pure_nfs_endpoint: "{{ _pure_hub_secret.resources[0].data.nfs_endpoint | b64decode }}"
+        _pure_nfs_server: "{{ _pure_hub_secret.resources[0].data.nfs_server | b64decode }}"
+        _pure_nfs_policy: "{{ _pure_hub_secret.resources[0].data.nfs_policy | b64decode }}"
+      no_log: true
+
+    # ── Create CSI Secret on tenant cluster ──
+    # The Pure CSI driver will create filesystems on-demand when PVCs are provisioned
+    - name: Ensure tenant namespace exists on target cluster
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ tenant_namespace }}"
+            labels:
+              osac.openshift.io/tenant: "{{ tenant_name }}"
+
+    - name: Create pure.json Secret for CSI driver
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: "{{ _pure_csi_secret_name }}"
+            namespace: "{{ tenant_namespace }}"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "{{ tenant_name }}"
+              osac.openshift.io/storage-provider: pure
+              osac.openshift.io/storage-backend-id: "{{ _pure_backend_id }}"
+          type: Opaque
+          stringData:
+            pure.json: >-
+              {{
+                {
+                  "FlashBlades": [
+                    {
+                      "MgmtEndPoint": _pure_mgmt_endpoint,
+                      "NFSEndPoint": _pure_nfs_endpoint,
+                      "APIToken": _pure_api_token
+                    }
+                  ]
+                } | to_json
+              }}
+      no_log: true
+
+    # ── Create StorageClasses per tier ──
+    - name: Create StorageClass per tier
+      when: not (_pure_all_sc_exist | bool)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: "pure-{{ item.protocol }}-{{ tenant_name }}-{{ item.name }}"
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/tenant: "{{ tenant_name }}"
+              osac.openshift.io/storage-provider: pure
+              osac.openshift.io/storage-backend-id: "{{ _pure_backend_id }}"
+              osac.openshift.io/tier: "{{ item.name }}"
+          provisioner: "{{ pure_storage_csi_provisioner }}"
+          parameters:
+            backend: pure_file
+            pure_nfs_server: "{{ _pure_nfs_server }}"
+            pure_nfs_policy: "{{ _pure_nfs_policy }}"
+            pure_fb_hard_limit_enabled: "true"
+            csi.storage.k8s.io/provisioner-secret-name: "{{ _pure_csi_secret_name }}"
+            csi.storage.k8s.io/provisioner-secret-namespace: "{{ tenant_namespace }}"
+            csi.storage.k8s.io/controller-expand-secret-name: "{{ _pure_csi_secret_name }}"
+            csi.storage.k8s.io/controller-expand-secret-namespace: "{{ tenant_namespace }}"
+            csi.storage.k8s.io/node-publish-secret-name: "{{ _pure_csi_secret_name }}"
+            csi.storage.k8s.io/node-publish-secret-namespace: "{{ tenant_namespace }}"
+          mountOptions:
+            - "{{ pure_storage_nfs_version }}"
+            - tcp
+          reclaimPolicy: Delete
+          allowVolumeExpansion: true
+          volumeBindingMode: Immediate
+      loop: "{{ _provider_tiers }}"
+      loop_control:
+        label: "pure-{{ item.protocol }}-{{ tenant_name }}-{{ item.name }}"
+
+    - name: Set StorageClass names output
+      ansible.builtin.set_fact:
+        storage_provider_storage_class_names: "{{ _pure_expected_sc_names }}"
+
+  rescue:
+    - name: Report Pure Storage ensure_storage_class failure
+      ansible.builtin.fail:
+        msg: >-
+          Pure FlashBlade ensure_storage_class failed for tenant '{{ tenant_name }}'.
+          Failed task: {{ ansible_failed_task.name | default('unknown') }}.
+          Error: {{ ansible_failed_result.msg | default('see logs for details') }}.
+
+  always:
+    # ── Clear all credential facts ──
+    - name: Clear all credential facts from play scope
+      ansible.builtin.set_fact:
+        _pure_api_token: ""
+        _pure_mgmt_endpoint: ""
+        _pure_nfs_endpoint: ""
+        _pure_nfs_server: ""
+        _pure_nfs_policy: ""
+        _pure_hub_secret: {}
+      no_log: true

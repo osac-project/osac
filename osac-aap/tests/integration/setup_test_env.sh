@@ -186,6 +186,17 @@ spec:
   attachRequired: true
 CSIEOF
 
+  echo "Creating fake Pure CSIDriver (short-circuits operator installation in tests)..."
+  kubectl apply -f - <<PURECSIEOF
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: pxd.portworx.com
+spec:
+  attachRequired: true
+  podInfoOnMount: false
+PURECSIEOF
+
   # Generate self-signed TLS cert for mock VMS server
   echo "Generating TLS certificate for mock VMS server..."
   mkdir -p "${SCRIPT_DIR}/certs"
@@ -242,6 +253,30 @@ CSIEOF
   done
   if [ "${SERVER_READY_B}" -eq 0 ]; then
     echo "ERROR: Second mock VMS server failed to become ready on port 18445"
+    exit 1
+  fi
+
+  # Start the mock FlashBlade server used by the pure_storage_setup target.
+  echo "Starting mock FlashBlade server (TLS)..."
+  python3 "${SCRIPT_DIR}/mock_flashblade_server.py" --port 18444 \
+    --tls --cert "${SCRIPT_DIR}/certs/mock.pem" --key "${SCRIPT_DIR}/certs/mock.key" &
+  MOCK_FLASHBLADE_PID=$!
+  echo "${MOCK_FLASHBLADE_PID}" > "${SCRIPT_DIR}/.mock_flashblade_pid"
+
+  SERVER_READY_FB=0
+  for i in $(seq 1 10); do
+    # Check that port 18444 is owned by our mock process and responds successfully
+    PORT_OWNER=$(lsof -ti:18444 2>/dev/null || true)
+    if [ "${PORT_OWNER}" = "${MOCK_FLASHBLADE_PID}" ] && \
+       curl -sk -o /dev/null -w '%{http_code}' https://127.0.0.1:18444/_calls 2>/dev/null | grep -q '^2'; then
+      echo "Mock FlashBlade server ready on port 18444 (PID: ${MOCK_FLASHBLADE_PID})"
+      SERVER_READY_FB=1
+      break
+    fi
+    sleep 1
+  done
+  if [ "${SERVER_READY_FB}" -eq 0 ]; then
+    echo "ERROR: Mock FlashBlade server failed to become ready on port 18444"
     exit 1
   fi
 

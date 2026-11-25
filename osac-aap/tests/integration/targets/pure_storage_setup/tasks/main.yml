@@ -1,0 +1,1243 @@
+---
+# Integration test for the Pure FlashBlade setup action, end to end through
+# osac.service.storage_provider.
+#
+# Covers Realm checkout, hub Secret creation, rollback in both Secret variants,
+# and credential hygiene. Does NOT test filesystem creation (filesystems are
+# created on-demand by the Pure CSI driver when PVCs are provisioned, not by
+# setup.yaml).
+#
+# Requires: kind cluster with osac-system, and the mock FlashBlade server on
+# 127.0.0.1:18444 (started by setup_test_env.sh).
+#
+# WARNING: every credential value below is a PLACEHOLDER. Never insert real
+# credentials into this file.
+#
+# For POC runs against the real MOC array, override these variables:
+#   pure_test_mgmt_endpoint: <real-array-ip>
+#   pure_test_nfs_endpoint: <real-data-vip>
+#   pure_test_realm_token: <real-realm-token>
+#   pure_test_skip_mock_calls: true
+
+# ── Prepare ──
+- name: "Pure Storage Setup - Prepare"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Reset the mock FlashBlade
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
+      ansible.builtin.uri:
+        url: "https://{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}/_reset"
+        validate_certs: false
+        method: GET
+
+    # The Realm, its NFS server and its export policy are pre-provisioned.
+    # The setup action only checks out a Realm and creates the hub Secret;
+    # it does NOT create filesystems (filesystems are created on-demand by
+    # the CSI driver when PVCs are provisioned).
+    - name: Seed the Realm-owned FlashBlade resources
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
+      ansible.builtin.uri:
+        url: "https://{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}/_seed"
+        validate_certs: false
+        method: POST
+        body_format: json
+        body:
+          resource: "{{ item.resource }}"
+          name: "{{ item.name }}"
+      loop:
+        - resource: realms
+          name: ps-realm
+        - resource: servers
+          name: "ps-realm::nfs-server"
+        - resource: nfs-export-policies
+          name: "ps-realm::nfs-export"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Delete Secrets left behind by an earlier run
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item }}"
+        namespace: osac-system
+      loop:
+        - pure-tenant-config-ps-new-be-pure
+        - pure-tenant-config-ps-roll-be-pure
+        - pure-tenant-config-ps-existing-be-pure
+        - pure-tenant-config-ps-race-be-pure
+        - pure-tenant-config-ps-blocked-be-pure
+        - pure-realm-ps-realm
+        - pure-realm-ps-roll-broken
+      failed_when: false
+
+    # A claim Lease left behind by an earlier run would make its Realm
+    # permanently unclaimable, so this target owns releasing them.
+    - name: Delete claim Leases left behind by an earlier run
+      kubernetes.core.k8s:
+        state: absent
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: "{{ item }}"
+        namespace: osac-system
+      loop:
+        - pure-realm-claim-ps-realm
+        - pure-realm-claim-ps-realm-a2
+        - pure-realm-claim-ps-realm-b
+        - pure-realm-claim-ps-roll-broken
+      failed_when: false
+
+    - name: Create the Realm credential Secret (backend A)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pure-realm-ps-realm
+            namespace: osac-system
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/pure-realm-credential: ps-realm
+          stringData:
+            realm_name: ps-realm
+            api_token: "{{ pure_test_realm_token | default('PLACEHOLDER_DO_NOT_USE_realm_token') }}"
+            mgmt_endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+            nfs_endpoint: "{{ pure_test_nfs_endpoint | default('192.0.2.20') }}"
+            nfs_server: "ps-realm::nfs-server"
+            nfs_policy: "ps-realm::nfs-export"
+
+    - name: Create a second Realm credential Secret (also backend A, for backend scoping test)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pure-realm-ps-realm-a2
+            namespace: osac-system
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/pure-realm-credential: ps-realm-a2
+          stringData:
+            realm_name: ps-realm-a2
+            api_token: "{{ pure_test_realm_token | default('PLACEHOLDER_DO_NOT_USE_realm_token_a2') }}"
+            mgmt_endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+            nfs_endpoint: "{{ pure_test_nfs_endpoint | default('192.0.2.20') }}"
+            nfs_server: "ps-realm-a2::nfs-server"
+            nfs_policy: "ps-realm-a2::nfs-export"
+
+    - name: Create a third Realm credential Secret (backend B)
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pure-realm-ps-realm-b
+            namespace: osac-system
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/pure-realm-credential: ps-realm-b
+          stringData:
+            realm_name: ps-realm-b
+            api_token: "{{ pure_test_realm_token | default('PLACEHOLDER_DO_NOT_USE_realm_token_b') }}"
+            mgmt_endpoint: "192.0.2.100"
+            nfs_endpoint: "192.0.2.101"
+            nfs_server: "ps-realm-b::nfs-server"
+            nfs_policy: "ps-realm-b::nfs-export"
+
+    # setup.yaml reads the pool from this ConfigMap, so the target seeds it
+    # rather than relying on a manually provisioned cluster.
+    - name: Seed the Realm pool ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: pure-realm-pool
+            namespace: osac-system
+          data:
+            PURE_REALM_POOL: |
+              [
+                {"realm_name":"ps-realm","secret_name":"pure-realm-ps-realm"},
+                {"realm_name":"ps-realm-a2","secret_name":"pure-realm-ps-realm-a2"},
+                {"realm_name":"ps-realm-b","secret_name":"pure-realm-ps-realm-b"}
+              ]
+
+# ── Atomic Realm claim ──
+# Listing the pool and then writing the hub Secret is not atomic: two setups
+# can read the same free Realm before either writes. The claim Lease, named
+# after the Realm alone, is what serializes them — a second run's server-side
+# apply of spec.holderIdentity fails with a conflict and it tries the next
+# candidate.
+- name: "Pure Storage Setup - Realm claim race"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    pure_storage_config_namespace: osac-system
+    tenant_namespace: osac-system
+    storage_provider_action: setup
+    storage_provider_provisioning_target: vmaas
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: pure
+        backend_id: be-pure
+    storage_provider_backend_connections:
+      be-pure:
+        endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+
+  pre_tasks:
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Exercise the winning and the exhausted race outcomes
+      block:
+        # Another run claimed ps-realm before this setup started, but wrote no
+        # hub Secret yet: the Realm still looks free in the Secret list.
+        - name: Seed a claim Lease another run already holds for ps-realm
+          kubernetes.core.k8s:
+            state: present
+            apply: true
+            server_side_apply:
+              field_manager: osac-aap-test-other-run
+              force_conflicts: false
+            definition:
+              apiVersion: coordination.k8s.io/v1
+              kind: Lease
+              metadata:
+                name: pure-realm-claim-ps-realm
+                namespace: "{{ pure_storage_config_namespace }}"
+                labels:
+                  app.kubernetes.io/managed-by: osac-aap
+                  osac.openshift.io/pure-realm-claim: "true"
+                  osac.openshift.io/pure-realm: ps-realm
+              spec:
+                holderIdentity: ps-other/be-pure
+
+        - name: Run setup for a tenant that loses the ps-realm race
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            tenant_name: ps-race
+            tenant_uid: test-uid-ps-race
+
+        - name: Read the hub Secret written for the racing tenant
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: pure-tenant-config-ps-race-be-pure
+            namespace: osac-system
+          register: _ps_race_secret
+
+        - name: Read the claim Leases
+          kubernetes.core.k8s_info:
+            api_version: coordination.k8s.io/v1
+            kind: Lease
+            namespace: osac-system
+            label_selectors:
+              - "osac.openshift.io/pure-realm-claim"
+          register: _ps_race_leases
+
+        - name: Assert the lost race moved on to the next Realm
+          vars:
+            _race_realm: "{{ _ps_race_secret.resources[0].data.realm_name | b64decode }}"
+            _own_lease: >-
+              {{ _ps_race_leases.resources
+                 | selectattr('metadata.name', 'equalto', 'pure-realm-claim-ps-realm-a2')
+                 | list }}
+            _other_lease: >-
+              {{ _ps_race_leases.resources
+                 | selectattr('metadata.name', 'equalto', 'pure-realm-claim-ps-realm')
+                 | list }}
+          ansible.builtin.assert:
+            that:
+              - _ps_race_secret.resources | length == 1
+              - _race_realm == 'ps-realm-a2'
+              - _own_lease | length == 1
+              - _own_lease[0].spec.holderIdentity == 'ps-race/be-pure'
+              - _other_lease | length == 1
+              - _other_lease[0].spec.holderIdentity == 'ps-other/be-pure'
+            fail_msg: >-
+              Realm {{ _race_realm }}, own claim {{ _own_lease }},
+              other claim {{ _other_lease }}
+            success_msg: "The lost race skipped the claimed Realm and took the next one"
+
+        # Release the racing tenant so both backend-A Realms look free again,
+        # then claim them from outside: the next setup must fail closed. The
+        # Lease goes too, otherwise the competing claim below conflicts with
+        # the tenant this case just onboarded.
+        - name: Release the racing tenant's allocation
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api_version }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: osac-system
+          loop:
+            - api_version: v1
+              kind: Secret
+              name: pure-tenant-config-ps-race-be-pure
+            - api_version: coordination.k8s.io/v1
+              kind: Lease
+              name: pure-realm-claim-ps-realm-a2
+          loop_control:
+            label: "{{ item.kind }}/{{ item.name }}"
+
+        - name: Seed claim Leases other runs hold for both backend-A Realms
+          kubernetes.core.k8s:
+            state: present
+            apply: true
+            server_side_apply:
+              field_manager: "osac-aap-test-other-run-{{ item.realm }}"
+              force_conflicts: false
+            definition:
+              apiVersion: coordination.k8s.io/v1
+              kind: Lease
+              metadata:
+                name: "pure-realm-claim-{{ item.realm }}"
+                namespace: "{{ pure_storage_config_namespace }}"
+                labels:
+                  app.kubernetes.io/managed-by: osac-aap
+                  osac.openshift.io/pure-realm-claim: "true"
+                  osac.openshift.io/pure-realm: "{{ item.realm }}"
+              spec:
+                holderIdentity: "{{ item.holder }}"
+          loop:
+            - realm: ps-realm
+              holder: ps-other/be-pure
+            - realm: ps-realm-a2
+              holder: ps-other-2/be-pure
+          loop_control:
+            label: "{{ item.realm }}"
+
+        - name: Run setup for a tenant with no claimable Realm
+          block:
+            - name: Dispatch setup when every candidate Realm is claimed
+              ansible.builtin.include_role:
+                name: osac.service.storage_provider
+              vars:
+                tenant_name: ps-blocked
+                tenant_uid: test-uid-ps-blocked
+
+            - name: Fail the test if setup succeeded with no claimable Realm
+              ansible.builtin.fail:
+                msg: "Setup succeeded although every candidate Realm was claimed"
+
+          rescue:
+            - name: Assert the run failed closed and named the lost candidates
+              ansible.builtin.assert:
+                that:
+                  - ansible_failed_result.msg is search('Could not claim a Realm')
+                  - ansible_failed_result.msg is search('ps-realm-a2')
+                fail_msg: >-
+                  Unexpected failure: {{ ansible_failed_result.msg | default('') }}
+                success_msg: "Setup failed closed when every candidate was claimed"
+
+        - name: Look for a hub Secret for the tenant that could not claim
+          kubernetes.core.k8s_info:
+            api_version: v1
+            kind: Secret
+            name: pure-tenant-config-ps-blocked-be-pure
+            namespace: osac-system
+          register: _ps_blocked_secret
+
+        - name: Assert the failed claim left no hub Secret
+          ansible.builtin.assert:
+            that:
+              - _ps_blocked_secret.resources | length == 0
+            fail_msg: "Setup recorded an allocation although it claimed no Realm"
+            success_msg: "A failed claim recorded nothing"
+
+      always:
+        - name: Release every allocation and claim this case created
+          kubernetes.core.k8s:
+            state: absent
+            api_version: "{{ item.api_version }}"
+            kind: "{{ item.kind }}"
+            name: "{{ item.name }}"
+            namespace: osac-system
+          loop:
+            - api_version: v1
+              kind: Secret
+              name: pure-tenant-config-ps-race-be-pure
+            - api_version: coordination.k8s.io/v1
+              kind: Lease
+              name: pure-realm-claim-ps-realm
+            - api_version: coordination.k8s.io/v1
+              kind: Lease
+              name: pure-realm-claim-ps-realm-a2
+          loop_control:
+            label: "{{ item.kind }}/{{ item.name }}"
+          failed_when: false
+
+# ── Happy path: provision a new tenant ──
+- name: "Pure Storage Setup - Provision a new tenant"
+  hosts: localhost
+  gather_facts: false
+
+  vars: &pure_setup_vars
+    pure_storage_config_namespace: osac-system
+    tenant_namespace: osac-system
+    storage_provider_action: setup
+    storage_provider_provisioning_target: vmaas
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: pure
+        backend_id: be-pure
+      - name: fast
+        protocol: nfs
+        provider: pure
+        backend_id: be-pure
+    storage_provider_backend_connections:
+      be-pure:
+        endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+
+  pre_tasks:
+    # Facts persist across plays for the same host; without this a rescue in a
+    # later play would act on the filesystem list a previous play left behind.
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Run the setup dispatch for a new tenant
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        tenant_name: ps-new
+        tenant_uid: test-uid-ps-new
+
+    - name: Read the hub Secret the run wrote
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pure-tenant-config-ps-new-be-pure
+        namespace: osac-system
+      register: _ps_secret
+
+    - name: Assert the hub Secret carries the Realm claim labels
+      vars:
+        _labels: "{{ _ps_secret.resources[0].metadata.labels }}"
+      ansible.builtin.assert:
+        that:
+          - _ps_secret.resources | length == 1
+          - _labels['osac.openshift.io/tenant'] == 'ps-new'
+          - _labels['osac.openshift.io/pure-realm'] == 'ps-realm'
+          - _labels['app.kubernetes.io/managed-by'] == 'osac-aap'
+        fail_msg: "Hub Secret labels do not record the Realm claim"
+        success_msg: "Hub Secret labels record the Realm claim"
+
+    - name: Assert the hub Secret carries every documented field
+      ansible.builtin.assert:
+        that:
+          - (_ps_secret.resources[0].data | list | sort) ==
+            ['api_token', 'mgmt_endpoint', 'nfs_endpoint', 'nfs_policy',
+             'nfs_server', 'realm_name', 'storage_provider_type', 'tenant_uid_hash']
+        fail_msg: >-
+          Hub Secret fields are {{ _ps_secret.resources[0].data | list | sort }}
+        success_msg: "Hub Secret carries all eight fields"
+
+    - name: Assert the Realm-qualified resource names were recorded
+      ansible.builtin.assert:
+        that:
+          - (_ps_secret.resources[0].data.realm_name | b64decode) == 'ps-realm'
+          - (_ps_secret.resources[0].data.nfs_server | b64decode) == 'ps-realm::nfs-server'
+          - (_ps_secret.resources[0].data.nfs_policy | b64decode) == 'ps-realm::nfs-export'
+        fail_msg: "Hub Secret does not record the Realm-qualified resource names"
+        success_msg: "Hub Secret records the Realm-qualified resource names"
+
+    - name: Assert the dispatcher received a populated tenant config
+      ansible.builtin.assert:
+        that:
+          - storage_provider_tenant_configs['be-pure'].realm_name == 'ps-realm'
+          - storage_provider_tenant_configs['be-pure'].nfs_server == 'ps-realm::nfs-server'
+          - storage_provider_tenant_configs['be-pure'].nfs_policy == 'ps-realm::nfs-export'
+        fail_msg: >-
+          Dispatcher tenant config:
+          {{ storage_provider_tenant_configs['be-pure'] | default('absent') }}
+        success_msg: "Dispatcher received the pure tenant config"
+
+    # AC-13: the always block clears the credentials it read, so nothing
+    # downstream in the same play can leak them.
+    - name: Assert the credential facts were cleared after the block
+      ansible.builtin.assert:
+        that:
+          - _pure_api_token == ""
+          - _pure_mgmt_endpoint == ""
+          - _pure_nfs_endpoint == ""
+          # Not endpoints but credentials all the same: _pure_existing_config
+          # is a previous onboard's hub Secret with every field decoded, its
+          # api_token included, and _pure_existing_secret is the k8s_info result
+          # it was read from.
+          - _pure_existing_config == {}
+          - _pure_existing_secret.resources | default([]) | length == 0
+        fail_msg: "Credential facts survived the setup block"
+        success_msg: "Credential facts cleared after setup"
+
+- name: "Pure Storage Setup - Verify no filesystem creation"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Get the mock FlashBlade call log
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18444/_calls"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _ps_calls
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
+
+    - name: Assert setup did NOT create filesystems
+      vars:
+        _creates: >-
+          {{ _ps_calls.json | selectattr('method', 'equalto', 'POST')
+             | map(attribute='path') | select('search', 'file-systems') | list }}
+      ansible.builtin.assert:
+        that:
+          - _creates | length == 0
+        fail_msg: "Setup created filesystems (should not): {{ _creates }}"
+        success_msg: "Setup correctly did NOT create filesystems (CSI driver creates on-demand)"
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
+
+
+    # AC-12: the mock redacts token-shaped headers, so a token reaching the
+    # call log at all would mean it travelled somewhere it was not redacted.
+    - name: Assert the Realm token never appears in the call log
+      ansible.builtin.assert:
+        that:
+          - "'PLACEHOLDER_DO_NOT_USE_realm_token' not in _ps_calls.content"
+        fail_msg: "The Realm API token leaked into the mock call log"
+        success_msg: "No token material in the call log"
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
+
+
+# ── Re-onboarding an already-provisioned tenant (AC-2) ──
+#
+# Re-running setup is the design's sanctioned token-rotation path, so the
+# idempotency short-circuit must reuse the existing Realm without skipping the
+# hub Secret write -- a rotated Realm token has to reach the Secret.
+- name: "Pure Storage Setup - Re-onboarding rewrites the Secret"
+  hosts: localhost
+  gather_facts: false
+
+  vars: *pure_setup_vars
+
+  pre_tasks:
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    # A different tenant_uid than the first run: tenant_uid_hash stores its
+    # first eight characters, so a run that skips the Secret write keeps the
+    # old hash and the assertion below fails.
+    - name: Run the setup dispatch for the already-onboarded tenant
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        tenant_name: ps-new
+        tenant_uid: rerun-uid-ps-new
+
+    - name: Read the hub Secret after the re-run
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pure-tenant-config-ps-new-be-pure
+        namespace: osac-system
+      register: _ps_secret_rerun
+
+    # The Secret write is what rotates the token, so it must still happen on a
+    # run that provisions nothing. Asserting the full field set catches a
+    # short-circuit that skips the write and leaves the first run's Secret.
+    - name: Assert the re-run rewrote a complete hub Secret
+      ansible.builtin.assert:
+        that:
+          - (_ps_secret_rerun.resources[0].data | list | sort) ==
+            ['api_token', 'mgmt_endpoint', 'nfs_endpoint', 'nfs_policy',
+             'nfs_server', 'realm_name', 'storage_provider_type', 'tenant_uid_hash']
+          - (_ps_secret_rerun.resources[0].data.realm_name | b64decode) == 'ps-realm'
+          - (_ps_secret_rerun.resources[0].data.nfs_server | b64decode) == 'ps-realm::nfs-server'
+          - (_ps_secret_rerun.resources[0].data.nfs_policy | b64decode) == 'ps-realm::nfs-export'
+          - (_ps_secret_rerun.resources[0].data.tenant_uid_hash | b64decode) == 'rerun-ui'
+        fail_msg: >-
+          Hub Secret after re-onboarding:
+          {{ _ps_secret_rerun.resources[0].data | list | sort }}
+        success_msg: "Re-onboarding rewrote the full hub Secret"
+
+    - name: Assert the dispatcher still received the tenant config
+      ansible.builtin.assert:
+        that:
+          - storage_provider_tenant_configs['be-pure'].realm_name == 'ps-realm'
+          - storage_provider_tenant_configs['be-pure'].nfs_server == 'ps-realm::nfs-server'
+          - storage_provider_tenant_configs['be-pure'].nfs_policy == 'ps-realm::nfs-export'
+        fail_msg: >-
+          Dispatcher tenant config after re-onboarding:
+          {{ storage_provider_tenant_configs['be-pure'] | default('absent') }}
+        success_msg: "Re-onboarding returned the tenant config to the dispatcher"
+
+# ── Rollback before the Realm is selected must not touch the Secret (AC-11) ──
+#
+# The dangerous case is a failure before select_realm has read the tenant's
+# Secret -- a lease that times out, a mistyped PURE_REALM_POOL -- because the
+# rescue then runs with nothing recording that the tenant was already
+# onboarded. Deleting the Secret there would release the Realm to the next
+# tenant while this tenant's filesystems still exist on it. A pool entry
+# missing secret_name is used as the trigger: pool validation is the last step
+# before the Secret is read, so it fails on the far side of that boundary.
+#
+# An empty pool would not do: for an already-onboarded tenant the reuse branch
+# reads the Secret first and fails later, with _pure_secret_preexisting already
+# true -- the safe side of the same boundary.
+- name: "Pure Storage Setup - A failure before Realm selection keeps the Secret"
+  hosts: localhost
+  gather_facts: false
+
+  vars: *pure_setup_vars
+
+  pre_tasks:
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    # ps-new is onboarded and holds a complete hub Secret from the plays above.
+    - name: Corrupt the Realm pool with an incomplete entry
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: pure-realm-pool
+            namespace: "{{ pure_storage_config_namespace }}"
+          data:
+            PURE_REALM_POOL: >-
+              [{"realm_name": "ps-realm", "secret_name": "pure-realm-ps-realm"},
+               {"realm_name": "ps-realm-typo"}]
+
+    - name: Run the setup dispatch against a malformed pool
+      block:
+        - name: Dispatch setup for an onboarded tenant with a malformed pool
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            tenant_name: ps-new
+            tenant_uid: test-uid-ps-new
+
+        - name: Fail the test if setup succeeded on a malformed pool
+          ansible.builtin.fail:
+            msg: "Setup succeeded with an incomplete Realm pool entry"
+
+      rescue:
+        - name: Assert the run failed on the pool, before the tenant Secret was read
+          ansible.builtin.assert:
+            that:
+              # The role's rescue reports a failed loop as "One or more items
+              # failed" and drops the per-item message, so assert on the task
+              # that failed instead.
+              - ansible_failed_result.msg is search(
+                  'Check each Realm pool entry has required fields')
+            fail_msg: "Unexpected failure: {{ ansible_failed_result.msg | default('') }}"
+            success_msg: "Failed on pool validation, before the Secret was read"
+
+      always:
+        - name: Restore the valid Realm pool
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: pure-realm-pool
+                namespace: "{{ pure_storage_config_namespace }}"
+              data:
+                PURE_REALM_POOL: >-
+                  [{"realm_name": "ps-realm",
+                    "secret_name": "pure-realm-ps-realm"}]
+
+    - name: Read the onboarded tenant's hub Secret after the failed run
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pure-tenant-config-ps-new-be-pure
+        namespace: osac-system
+      register: _ps_untouched
+
+    - name: Assert the onboarded tenant's Secret and Realm claim survived
+      ansible.builtin.assert:
+        that:
+          - _ps_untouched.resources | length == 1
+          - (_ps_untouched.resources[0].data.realm_name | b64decode) == 'ps-realm'
+          - _ps_untouched.resources[0].metadata.labels['osac.openshift.io/pure-realm'] == 'ps-realm'
+        fail_msg: >-
+          Rollback deleted the hub Secret of an already-onboarded tenant after a
+          failure that never reached Realm selection, releasing its Realm
+        success_msg: "An early failure left the onboarded tenant's Secret intact"
+
+# ── Rollback with no pre-existing Secret: no Realm claim may survive ──
+# The failure is injected after the Realm is claimed (an unusable pool
+# credential Secret) so the rollback of the claim itself is exercised, not
+# just the early validation path.
+- name: "Pure Storage Setup - A failed onboard leaves no Realm claim"
+  hosts: localhost
+  gather_facts: false
+
+  vars: *pure_setup_vars
+
+  pre_tasks:
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    # Remove ps-new's Secret so the pool has an available Realm for ps-roll
+    - name: Remove the hub Secret so this tenant onboards fresh
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item }}"
+        namespace: osac-system
+      loop:
+        - pure-tenant-config-ps-roll-be-pure
+        - pure-tenant-config-ps-new-be-pure
+
+    # The Realm is claimable, so setup takes its claim Lease, and only then
+    # discovers the pool entry is unusable (no api_token to extract).
+    - name: Create an unusable Realm credential Secret
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pure-realm-ps-roll-broken
+            namespace: osac-system
+            labels:
+              app.kubernetes.io/managed-by: osac-aap
+              osac.openshift.io/pure-realm-credential: ps-roll-broken
+          stringData:
+            realm_name: ps-roll-broken
+            mgmt_endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+            nfs_endpoint: "192.0.2.20"
+            nfs_server: "ps-roll-broken::nfs-server"
+            nfs_policy: "ps-roll-broken::nfs-export"
+
+    - name: Point the Realm pool at the unusable Realm
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: pure-realm-pool
+            namespace: "{{ pure_storage_config_namespace }}"
+          data:
+            PURE_REALM_POOL: >-
+              [{"realm_name": "ps-roll-broken",
+                "secret_name": "pure-realm-ps-roll-broken"}]
+
+    - name: Run the setup dispatch and expect it to fail after claiming the Realm
+      block:
+        - name: Dispatch setup with an unusable Realm credential Secret
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            tenant_name: ps-roll
+            tenant_uid: test-uid-ps-roll
+
+        - name: Fail the test if setup succeeded with an unusable Realm
+          ansible.builtin.fail:
+            msg: "Setup succeeded despite an unusable Realm credential Secret"
+
+      rescue:
+        - name: Assert the failure came from reading the claimed Realm's credentials
+          # The extraction task is no_log, so assert on the task name the
+          # role's rescue reports rather than on its censored result.
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search(
+                  'Extract Realm credentials and metadata from pool Secret')
+            fail_msg: "Unexpected failure: {{ ansible_failed_result.msg | default('') }}"
+            success_msg: "Setup failed after claiming the Realm"
+
+      always:
+        - name: Restore the valid Realm pool
+          kubernetes.core.k8s:
+            state: present
+            definition:
+              apiVersion: v1
+              kind: ConfigMap
+              metadata:
+                name: pure-realm-pool
+                namespace: "{{ pure_storage_config_namespace }}"
+              data:
+                PURE_REALM_POOL: >-
+                  [{"realm_name": "ps-realm",
+                    "secret_name": "pure-realm-ps-realm"}]
+
+        - name: Delete the unusable Realm credential Secret
+          kubernetes.core.k8s:
+            state: absent
+            api_version: v1
+            kind: Secret
+            name: pure-realm-ps-roll-broken
+            namespace: osac-system
+          failed_when: false
+
+    - name: Look for a hub Secret after rollback
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pure-tenant-config-ps-roll-be-pure
+        namespace: osac-system
+      register: _ps_rolled_back
+
+    - name: Look for the claim Lease after rollback
+      kubernetes.core.k8s_info:
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: pure-realm-claim-ps-roll-broken
+        namespace: osac-system
+      register: _ps_rolled_back_lease
+
+    - name: Assert the failed onboard left no hub Secret and no Realm claim
+      ansible.builtin.assert:
+        that:
+          - _ps_rolled_back.resources | length == 0
+          - _ps_rolled_back_lease.resources | length == 0
+        fail_msg: >-
+          Rollback left a hub Secret ({{ _ps_rolled_back.resources | length }})
+          or a claim Lease ({{ _ps_rolled_back_lease.resources | length }})
+          behind, claiming the Realm for a tenant with no storage
+        success_msg: "The failed onboard left no Realm claim behind"
+
+# ── Rollback with a pre-existing Secret: it must survive (AC-11) ──
+- name: "Pure Storage Setup - Rollback preserves a pre-existing Secret"
+  hosts: localhost
+  gather_facts: false
+
+  vars: *pure_setup_vars
+
+  pre_tasks:
+    # Facts persist across plays for the same host; without this a rescue in a
+    # later play would act on the filesystem list a previous play left behind.
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    # A re-onboard skips provisioning entirely, so the array cannot be the
+    # source of the failure. Recording the Realm without the resource names it
+    # was supposed to carry -- a Secret edited or truncated out of band -- fails
+    # the reuse step instead, which is after _pure_secret_preexisting is true.
+    - name: Record a damaged earlier onboard
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: pure-tenant-config-ps-existing-be-pure
+            namespace: osac-system
+            labels:
+              osac.openshift.io/tenant: ps-existing
+              osac.openshift.io/pure-realm: ps-realm
+              app.kubernetes.io/managed-by: osac-aap
+          stringData:
+            storage_provider_type: pure
+            realm_name: ps-realm
+
+    - name: Run the setup dispatch for the re-onboarding tenant
+      block:
+        - name: Dispatch setup for a tenant that already holds the Realm
+          ansible.builtin.include_role:
+            name: osac.service.storage_provider
+          vars:
+            tenant_name: ps-existing
+            tenant_uid: test-uid-ps-existing
+
+        - name: Fail the test if setup accepted the damaged allocation
+          ansible.builtin.fail:
+            msg: "Setup succeeded despite a damaged pre-existing allocation"
+
+      rescue:
+        - name: Assert the failure came from the reuse validation
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_result.msg is search(
+                  'Verify existing allocation has required fields')
+              - ansible_failed_result.msg is search('missing required fields')
+            fail_msg: "Unexpected failure: {{ ansible_failed_result.msg | default('') }}"
+            success_msg: "Failed on the existing allocation's required fields"
+
+    - name: Read the pre-existing hub Secret
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pure-tenant-config-ps-existing-be-pure
+        namespace: osac-system
+      register: _ps_preexisting
+
+    - name: Assert the pre-existing Secret survived
+      ansible.builtin.assert:
+        that:
+          - _ps_preexisting.resources | length == 1
+          - (_ps_preexisting.resources[0].data.realm_name | b64decode) == 'ps-realm'
+        fail_msg: >-
+          Rollback deleted a hub Secret it did not create, releasing the Realm
+          while the tenant's filesystems still exist
+        success_msg: "Pre-existing hub Secret survived rollback"
+
+    # Realm-owned resources (server, export policy) are pre-provisioned and
+    # shared by all tenants. Setup does not create or delete them.
+    - name: Read the Realm's NFS server and export policy from the mock
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18444/api/2.26/{{ item }}"
+        validate_certs: false
+        method: GET
+        return_content: true
+      register: _ps_realm_resources
+      loop:
+        - servers
+        - nfs-export-policies
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
+
+    # Subscript, not dot: Jinja resolves .items to the dict method rather than
+    # to the response's items key, and a method is not iterable.
+    - name: Assert the Realm's shared resources were not touched
+      ansible.builtin.assert:
+        that:
+          - _ps_realm_resources.results[0].json['items']
+            | selectattr('name', 'equalto', 'ps-realm::nfs-server') | list | length == 1
+          - _ps_realm_resources.results[1].json['items']
+            | selectattr('name', 'equalto', 'ps-realm::nfs-export') | list | length == 1
+        fail_msg: "Setup incorrectly modified Realm-owned resources"
+        success_msg: "Realm server and export policy remain untouched (pre-provisioned)"
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
+
+
+# ── Re-seed pool for backend scoping test ──
+# Earlier tests reset the pool to 1-2 Realms for their scenarios.
+# Backend scoping needs all 3 Realms (2 for backend A, 1 for backend B).
+- name: "Pure Storage Setup - Re-seed pool for backend scoping"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Re-seed the Realm pool ConfigMap with all 3 Realms
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: pure-realm-pool
+            namespace: osac-system
+          data:
+            PURE_REALM_POOL: |
+              [
+                {"realm_name":"ps-realm","secret_name":"pure-realm-ps-realm"},
+                {"realm_name":"ps-realm-a2","secret_name":"pure-realm-ps-realm-a2"},
+                {"realm_name":"ps-realm-b","secret_name":"pure-realm-ps-realm-b"}
+              ]
+
+
+# ── Test: Backend scoping ──
+- name: "Pure Storage Setup - Backend scoping"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    pure_storage_config_namespace: osac-system
+    tenant_namespace: osac-system
+    storage_provider_action: setup
+    storage_provider_provisioning_target: vmaas
+    storage_provider_tiers:
+      - name: default
+        protocol: nfs
+        provider: pure
+        backend_id: be-pure-b
+    storage_provider_backend_connections:
+      be-pure-b:
+        endpoint: "192.0.2.100"
+
+  pre_tasks:
+    - name: Isolate this case from facts set by earlier cases
+      ansible.builtin.meta: clear_facts
+
+  tasks:
+    - name: Run setup for tenant on backend B
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        tenant_name: ps-backend-b
+        tenant_uid: test-uid-backend-b
+
+    - name: Read the hub Secret for backend B tenant
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pure-tenant-config-ps-backend-b-be-pure-b
+        namespace: osac-system
+      register: _ps_backend_b_secret
+
+    - name: Assert backend B tenant got ps-realm-b (not ps-realm)
+      vars:
+        _realm: "{{ _ps_backend_b_secret.resources[0].data.realm_name | b64decode }}"
+        _endpoint: "{{ _ps_backend_b_secret.resources[0].data.mgmt_endpoint | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - _realm == 'ps-realm-b'
+          - _endpoint == '192.0.2.100'
+        fail_msg: >-
+          Backend scoping failed: tenant on backend B (192.0.2.100) got realm {{ _realm }}
+          with endpoint {{ _endpoint }}, expected ps-realm-b with 192.0.2.100
+        success_msg: "Backend scoping works: tenant on backend B got ps-realm-b"
+
+
+# ── Test: Custom resource names (regression for PR review comment) ──
+# This test validates that custom resource names set during Realm provisioning
+# flow through to StorageClass creation without hardcoded derivation.
+# Addresses: https://github.com/osac-project/osac/pull/1531#discussion_r4689944922
+- name: "Pure Storage Setup - Custom resource names"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    pure_storage_config_namespace: osac-system
+    tenant_namespace: osac-system
+    # Custom names to test the flow
+    custom_server_name: "custom-nfs"
+    custom_policy_name: "custom-export"
+
+  tasks:
+    - name: Provision Realm with custom resource names using pure_realm role
+      ansible.builtin.include_role:
+        name: osac.service.pure_realm
+      vars:
+        realm:
+          name: ps-realm-custom
+          subnet_prefix: "192.0.2.64/26"
+          subnet_vlan: 100
+          subnet_gateway: "192.0.2.65"
+          interface_address: "192.0.2.70"
+          dns_domain: "custom.example.com"
+          dns_nameservers:
+            - "192.0.2.65"
+          admin_password: "{{ lookup('env', 'PURE_REALM_ADMIN_PASSWORD') | default('PlaceholderPass123!', true) }}"
+        pure_realm_fb_url: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+        pure_realm_api_token: "{{ lookup('env', 'PUREFB_API') | default('PLACEHOLDER_DO_NOT_USE_array_admin_token', true) }}"
+        pure_realm_validate_certs: false
+        pure_realm_config_namespace: osac-system
+        pure_realm_secret_prefix: "pure-realm-"
+        pure_realm_server_name: "{{ custom_server_name }}"
+        pure_realm_export_policy_name: "{{ custom_policy_name }}"
+
+    - name: Verify Realm credential Secret contains custom names
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pure-realm-ps-realm-custom
+        namespace: osac-system
+      register: _ps_custom_realm_secret
+
+    - name: Assert custom names are recorded in Realm Secret
+      vars:
+        _nfs_server: "{{ _ps_custom_realm_secret.resources[0].data.nfs_server | b64decode }}"
+        _nfs_policy: "{{ _ps_custom_realm_secret.resources[0].data.nfs_policy | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - _nfs_server == 'ps-realm-custom::custom-nfs'
+          - _nfs_policy == 'ps-realm-custom::custom-export'
+        fail_msg: >-
+          Realm Secret does not contain expected custom names.
+          Got nfs_server={{ _nfs_server }}, nfs_policy={{ _nfs_policy }}.
+          Expected ps-realm-custom::custom-nfs and ps-realm-custom::custom-export.
+
+    - name: Add custom Realm to pool ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: pure-realm-pool
+            namespace: osac-system
+          data:
+            PURE_REALM_POOL: >-
+              {{
+                ([
+                  {'realm_name': 'ps-realm-custom', 'secret_name': 'pure-realm-ps-realm-custom'}
+                ] | to_json)
+              }}
+
+    - name: Run tenant setup to allocate the custom-named Realm
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        tenant_name: ps-custom
+        tenant_uid: test-uid-custom
+        storage_provider_action: setup
+        storage_provider_provisioning_target: vmaas
+        storage_provider_tiers:
+          - name: default
+            protocol: nfs
+            provider: pure
+            backend_id: be-pure
+        storage_provider_backend_connections:
+          be-pure:
+            endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+
+    - name: Verify tenant allocation Secret contains custom names
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pure-tenant-config-ps-custom-be-pure
+        namespace: osac-system
+      register: _ps_custom_tenant_secret
+
+    - name: Assert custom names flowed through to tenant Secret
+      vars:
+        _nfs_server: "{{ _ps_custom_tenant_secret.resources[0].data.nfs_server | b64decode }}"
+        _nfs_policy: "{{ _ps_custom_tenant_secret.resources[0].data.nfs_policy | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - _nfs_server == 'ps-realm-custom::custom-nfs'
+          - _nfs_policy == 'ps-realm-custom::custom-export'
+        fail_msg: >-
+          Tenant Secret does not preserve custom names from Realm Secret.
+          Got nfs_server={{ _nfs_server }}, nfs_policy={{ _nfs_policy }}.
+
+    - name: Create StorageClass using ensure_storage_class
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        tenant_name: ps-custom
+        tenant_uid: test-uid-custom
+        tenant_namespace: osac-system
+        storage_provider_action: ensure_storage_class
+        storage_provider_provisioning_target: vmaas
+        storage_provider_tiers:
+          - name: default
+            protocol: nfs
+            provider: pure
+            backend_id: be-pure
+        storage_provider_backend_connections:
+          be-pure:
+            endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+
+    - name: Read created StorageClass
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: pure-nfs-ps-custom-default
+      register: _ps_custom_sc
+
+    - name: Assert StorageClass uses custom names
+      vars:
+        _sc_nfs_server: "{{ _ps_custom_sc.resources[0].parameters.pure_nfs_server }}"
+        _sc_nfs_policy: "{{ _ps_custom_sc.resources[0].parameters.pure_nfs_policy }}"
+      ansible.builtin.assert:
+        that:
+          - _sc_nfs_server == 'ps-realm-custom::custom-nfs'
+          - _sc_nfs_policy == 'ps-realm-custom::custom-export'
+        fail_msg: >-
+          StorageClass does not use custom resource names from Realm provisioning.
+          Got pure_nfs_server={{ _sc_nfs_server }}, pure_nfs_policy={{ _sc_nfs_policy }}.
+          Expected ps-realm-custom::custom-nfs and ps-realm-custom::custom-export.
+          This means the name-passing contract is broken.
+        success_msg: >-
+          Custom resource names flow correctly from Realm provisioning through
+          tenant setup to StorageClass creation.
+
+
+# ── Cleanup ──
+- name: "Pure Storage Setup - Cleanup"
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Delete the Secrets this target created
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item }}"
+        namespace: osac-system
+      loop:
+        - pure-tenant-config-ps-new-be-pure
+        - pure-tenant-config-ps-roll-be-pure
+        - pure-tenant-config-ps-existing-be-pure
+        - pure-tenant-config-ps-backend-b-be-pure-b
+        - pure-tenant-config-ps-race-be-pure
+        - pure-tenant-config-ps-blocked-be-pure
+        - pure-tenant-config-ps-custom-be-pure
+        - pure-realm-ps-realm
+        - pure-realm-ps-realm-a2
+        - pure-realm-ps-realm-b
+        - pure-realm-ps-roll-broken
+        - pure-realm-ps-realm-custom
+      failed_when: false
+
+    - name: Delete the claim Leases this target created
+      kubernetes.core.k8s:
+        state: absent
+        api_version: coordination.k8s.io/v1
+        kind: Lease
+        name: "{{ item }}"
+        namespace: osac-system
+      loop:
+        - pure-realm-claim-ps-realm
+        - pure-realm-claim-ps-realm-a2
+        - pure-realm-claim-ps-realm-b
+        - pure-realm-claim-ps-roll-broken
+        - pure-realm-claim-ps-realm-custom
+      failed_when: false
+
+    - name: Delete StorageClasses created by custom names test
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ item }}"
+      loop:
+        - pure-nfs-ps-custom-default
+      failed_when: false
+
+    - name: Delete CSI Secrets created by custom names test
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item }}"
+        namespace: osac-system
+      loop:
+        - pure-csi-secret-be-pure
+      failed_when: false
+
+    - name: Reset the mock FlashBlade for the next target
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:18444/_reset"
+        validate_certs: false
+        method: GET
+      failed_when: false
+      when: not (pure_test_skip_mock_calls | default(false) | bool)
+
+
+    - name: Leave a valid Realm pool for the next run
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: pure-realm-pool
+            namespace: osac-system
+          data:
+            PURE_REALM_POOL: '[{"realm_name":"ps-realm","secret_name":"pure-realm-ps-realm"}]'
+      failed_when: false

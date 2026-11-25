@@ -254,7 +254,7 @@ var _ = Describe("Notifications server", func() {
 			Expect(status.Code(err)).To(Equal(codes.NotFound))
 		})
 
-		It("Lets platform admins List their users' inbox rows", func() {
+		It("Hides other users' inbox rows from platform admins", func() {
 			other, err := privateServer.Create(ctx, privatev1.NotificationsCreateRequest_builder{
 				Object: inboxObject("other-user", "evt-admin-list"),
 			}.Build())
@@ -272,7 +272,12 @@ var _ = Describe("Notifications server", func() {
 			for _, item := range list.GetItems() {
 				ids = append(ids, item.GetId())
 			}
-			Expect(ids).To(ContainElement(other.GetObject().GetId()))
+			Expect(ids).ToNot(ContainElement(other.GetObject().GetId()))
+
+			_, err = server.Get(adminCtx, publicv1.NotificationsGetRequest_builder{
+				Id: other.GetObject().GetId(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.NotFound))
 		})
 
 		It("Rejects an invalid List filter", func() {

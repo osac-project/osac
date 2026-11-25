@@ -213,11 +213,6 @@ func (s *PrivateProjectsServer) Delete(ctx context.Context,
 		return
 	}
 	response = &privatev1.ProjectsDeleteResponse{Object: object}
-	object, err := s.generic.deleteObject(ctx, request)
-	if err != nil {
-		return
-	}
-	response = &privatev1.ProjectsDeleteResponse{Object: object}
 	return
 }
 

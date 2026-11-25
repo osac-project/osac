@@ -311,18 +311,21 @@ override KIND_CERT_MANAGER_PULL_TIMEOUT := $(value KIND_CERT_MANAGER_PULL_TIMEOU
 override KIND_CERT_MANAGER_PULL_BACKOFF := $(value KIND_CERT_MANAGER_PULL_BACKOFF)
 export KIND_CERT_MANAGER_CHART KIND_CERT_MANAGER_VERSION
 export KIND_CERT_MANAGER_PULL_TIMEOUT KIND_CERT_MANAGER_PULL_BACKOFF
-# Build argv in the recipe shell so spaces and empty values stay intact.
-# The helper and its children receive the settings only through arguments.
+# Pass quoted shell expressions for the four values and a fixed CLI mode.
+define run-helm-oci-pull
+command -v python3 >/dev/null \
+	|| { echo "ERROR: Install Python 3.8 or later and make python3 available on PATH to pull Helm OCI charts" >&2; exit 1; }; \
+python3 scripts/pull-helm-oci-chart.py --chart=$(1) --version=$(2) \
+	--pull-timeout=$(3) --pull-backoff=$(4) $(5)
+endef
+
+# Save the values in positional arguments before clearing their exports.
 define run-kind-cert-manager-pull
-( command -v python3 >/dev/null \
-		|| { echo "ERROR: Install Python 3.8 or later and make python3 available on PATH for cert-manager on Kind" >&2; exit 1; }; \
-	set -- --chart="$${KIND_CERT_MANAGER_CHART}" \
-	--version="$${KIND_CERT_MANAGER_VERSION}" \
-	--pull-timeout="$${KIND_CERT_MANAGER_PULL_TIMEOUT}" \
-	--pull-backoff="$${KIND_CERT_MANAGER_PULL_BACKOFF}" $(1); \
+( set -- "$${KIND_CERT_MANAGER_CHART}" "$${KIND_CERT_MANAGER_VERSION}" \
+	"$${KIND_CERT_MANAGER_PULL_TIMEOUT}" "$${KIND_CERT_MANAGER_PULL_BACKOFF}"; \
 	unset KIND_CERT_MANAGER_CHART KIND_CERT_MANAGER_VERSION \
 		KIND_CERT_MANAGER_PULL_TIMEOUT KIND_CERT_MANAGER_PULL_BACKOFF; \
-	exec python3 scripts/pull-helm-oci-chart.py "$$@" )
+	$(call run-helm-oci-pull,"$$1","$$2","$$3","$$4",$(1)) )
 endef
 
 check-kind-cert-manager-config = $(call run-kind-cert-manager-pull,--check-config)

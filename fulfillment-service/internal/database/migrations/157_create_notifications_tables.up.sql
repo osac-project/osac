@@ -55,19 +55,6 @@ create unique index notifications_unique_name_per_tenant
   where deletion_timestamp = 'epoch'
     and name <> '';
 
--- Event-driven inbox rows are unique on tenant + producer event + recipient.
-create unique index notifications_unique_inbox_event
-  on notifications (
-    tenant,
-    (data #>> '{spec,event,source}'),
-    (data #>> '{spec,event,id}'),
-    (data #>> '{spec,recipient_id}')
-  )
-  where deletion_timestamp = 'epoch'
-    and coalesce(data #>> '{spec,event,id}', '') <> ''
-    and coalesce(data #>> '{spec,event,source}', '') <> ''
-    and coalesce(data #>> '{spec,recipient_id}', '') <> '';
-
 alter table notifications
   add constraint notifications_tenant_fk
   foreign key (tenant) references tenants (name);
@@ -90,12 +77,12 @@ create trigger check_immutable_data_fields
     'spec.kind',
     'spec.severity',
     'spec.type',
-    'spec.event',
+    'spec.source',
     'spec.recipient_id',
     'spec.scope',
     'spec.title',
     'spec.description',
-    'spec.resource',
+    'spec.object',
     'spec.details'
   );
 

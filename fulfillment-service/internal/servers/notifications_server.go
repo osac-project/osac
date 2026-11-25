@@ -36,7 +36,7 @@ type NotificationsServerBuilder struct {
 	attributionLogic  auth.AttributionLogic
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
-	resourceAccess    NotificationResourceAccess
+	objectAccess    NotificationObjectAccess
 }
 
 var _ publicv1.NotificationsServer = (*NotificationsServer)(nil)
@@ -49,7 +49,7 @@ type NotificationsServer struct {
 	delegate       privatev1.NotificationsServer
 	inMapper       *GenericMapper[*publicv1.Notification, *privatev1.Notification]
 	outMapper      *GenericMapper[*privatev1.Notification, *publicv1.Notification]
-	resourceAccess NotificationResourceAccess
+	objectAccess NotificationObjectAccess
 }
 
 // NewNotificationsServer creates a builder for the public notifications server.
@@ -81,11 +81,11 @@ func (b *NotificationsServerBuilder) SetMetricsRegisterer(value prometheus.Regis
 	return b
 }
 
-// SetResourceAccess sets the resource visibility checker. This is optional. When
-// omitted, Build installs the default DAO checker: Get for a single resource and
-// List with this.id in [...] for a batch.
-func (b *NotificationsServerBuilder) SetResourceAccess(value NotificationResourceAccess) *NotificationsServerBuilder {
-	b.resourceAccess = value
+// SetObjectAccess sets the related-object visibility checker. This is optional.
+// When omitted, Build installs the default DAO checker: Get for a single object
+// and List with this.id in [...] for a batch.
+func (b *NotificationsServerBuilder) SetObjectAccess(value NotificationObjectAccess) *NotificationsServerBuilder {
+	b.objectAccess = value
 	return b
 }
 
@@ -130,9 +130,9 @@ func (b *NotificationsServerBuilder) Build() (result *NotificationsServer, err e
 		return
 	}
 
-	resourceAccess := b.resourceAccess
-	if resourceAccess == nil {
-		resourceAccess, err = newDAONotificationResourceAccess(b.logger, b.tenancyLogic, b.metricsRegisterer)
+	objectAccess := b.objectAccess
+	if objectAccess == nil {
+		objectAccess, err = newDAONotificationObjectAccess(b.logger, b.tenancyLogic, b.metricsRegisterer)
 		if err != nil {
 			return
 		}
@@ -143,7 +143,7 @@ func (b *NotificationsServerBuilder) Build() (result *NotificationsServer, err e
 		delegate:       delegate,
 		inMapper:       inMapper,
 		outMapper:      outMapper,
-		resourceAccess: resourceAccess,
+		objectAccess: objectAccess,
 	}
 	return
 }
@@ -291,27 +291,27 @@ func (s *NotificationsServer) visibleForCaller(ctx context.Context,
 		candidates = append(candidates, privateItem)
 	}
 
-	resources := make([]*privatev1.NotificationResourceReference, len(candidates))
+	resources := make([]*privatev1.NotificationObjectReference, len(candidates))
 	for i, candidate := range candidates {
 		// Ignore Announcement notifications
 		if candidate.GetSpec().GetKind() == privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT {
 			continue
 		}
-		resources[i] = candidate.GetSpec().GetResource()
+		resources[i] = candidate.GetSpec().GetObject()
 	}
-	visibleFlags, visErr := s.resourceAccess.MayAccessMany(ctx, resources)
+	visibleFlags, visErr := s.objectAccess.MayAccessMany(ctx, resources)
 	if visErr != nil {
 		s.logger.ErrorContext(ctx, "Notification resource visibility batch check failed",
 			slog.Any("error", visErr),
 		)
-		visibleFlags = failClosedResourceFlags(resources)
+		visibleFlags = failClosedObjectFlags(resources)
 	}
 	if len(visibleFlags) != len(candidates) {
 		s.logger.ErrorContext(ctx, "Notification resource visibility batch size mismatch",
 			slog.Int("candidates", len(candidates)),
 			slog.Int("flags", len(visibleFlags)),
 		)
-		visibleFlags = failClosedResourceFlags(resources)
+		visibleFlags = failClosedObjectFlags(resources)
 	}
 
 	filtered := make([]*privatev1.Notification, 0, len(candidates))
@@ -524,8 +524,8 @@ func (s *NotificationsServer) Delete(ctx context.Context,
 	return
 }
 
-// failClosedResourceFlags allows nil resources and denies everything else.
-func failClosedResourceFlags(resources []*privatev1.NotificationResourceReference) []bool {
+// failClosedObjectFlags allows nil resources and denies everything else.
+func failClosedObjectFlags(resources []*privatev1.NotificationObjectReference) []bool {
 	flags := make([]bool, len(resources))
 	for i, resource := range resources {
 		flags[i] = resource == nil
@@ -539,7 +539,7 @@ func (s *NotificationsServer) authorizePublicRead(ctx context.Context,
 	if !s.isRecipientVisible(ctx, notification) {
 		return grpcstatus.Error(grpccodes.NotFound, "object not found")
 	}
-	visible, visErr := s.isResourceVisible(ctx, notification)
+	visible, visErr := s.isObjectVisible(ctx, notification)
 	if visErr != nil {
 		s.logger.ErrorContext(ctx, "Notification resource visibility check failed",
 			slog.Any("error", visErr),
@@ -605,16 +605,16 @@ func (s *NotificationsServer) callerSeesAllInbox(ctx context.Context) bool {
 	return auth.IsTenantAdmin(ctx)
 }
 
-// isResourceVisible reports whether the caller may access the notification's linked resource.
-func (s *NotificationsServer) isResourceVisible(ctx context.Context,
+// isObjectVisible reports whether the caller may access the notification's linked resource.
+func (s *NotificationsServer) isObjectVisible(ctx context.Context,
 	notification *privatev1.Notification) (bool, error) {
 	// Ignore Announcement notifications
 	if notification.GetSpec().GetKind() == privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT {
 		return true, nil
 	}
-	resource := notification.GetSpec().GetResource()
+	resource := notification.GetSpec().GetObject()
 	if resource == nil {
 		return true, nil
 	}
-	return s.resourceAccess.MayAccess(ctx, resource)
+	return s.objectAccess.MayAccess(ctx, resource)
 }

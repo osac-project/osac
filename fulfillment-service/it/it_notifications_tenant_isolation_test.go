@@ -80,13 +80,10 @@ var _ = Describe("Notifications tenant isolation", Label("notifications"), func(
 					Tenant: nameA,
 				}.Build(),
 				Spec: privatev1.NotificationSpec_builder{
-					Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
-					Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
-					Type:     "osac.notification.event.resource_created",
-					Event: privatev1.NotificationEventReference_builder{
-						Id:     fmt.Sprintf("evt-%s", uuid.New()[:8]),
-						Source: "osac/fulfillment-service",
-					}.Build(),
+					Kind:        privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
+					Severity:    privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+					Type:        "osac.notification.event.resource_created",
+					Source:      "osac-fulfillment",
 					RecipientId: fmt.Sprintf("%s-osac-break-glass", nameA),
 					Title:       "Tenant A inbox",
 				}.Build(),

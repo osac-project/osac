@@ -102,21 +102,18 @@ var _ = Describe("Notifications API", Label("notifications"), func() {
 		privateClient := privatev1.NewNotificationsClient(tool.InternalView().AdminConn())
 
 		recipient := userUsername
-		eventID := fmt.Sprintf("evt-%s", uuid.New()[:8])
+		inboxName := fmt.Sprintf("inbox-%s", uuid.New()[:8])
 		created, err := privateClient.Create(ctx, privatev1.NotificationsCreateRequest_builder{
 			Object: privatev1.Notification_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name:   fmt.Sprintf("inbox-%s", uuid.New()[:8]),
+					Name:   inboxName,
 					Tenant: usersGroup,
 				}.Build(),
 				Spec: privatev1.NotificationSpec_builder{
-					Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
-					Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
-					Type:     "osac.notification.event.resource_created",
-					Event: privatev1.NotificationEventReference_builder{
-						Id:     eventID,
-						Source: "osac/fulfillment-service",
-					}.Build(),
+					Kind:        privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
+					Severity:    privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+					Type:        "osac.notification.event.resource_created",
+					Source:      "osac-fulfillment",
 					RecipientId: recipient,
 					Title:       "Resource ready",
 				}.Build(),
@@ -129,9 +126,10 @@ var _ = Describe("Notifications API", Label("notifications"), func() {
 		})
 		Expect(created.GetObject().GetSpec().GetState()).To(Equal(
 			privatev1.NotificationState_NOTIFICATION_STATE_UNREAD))
+		Expect(created.GetObject().GetSpec().GetSource()).To(Equal("osac-fulfillment"))
 
 		listed, err := publicClient.List(ctx, publicv1.NotificationsListRequest_builder{
-			Filter: new(fmt.Sprintf(`this.spec.event.id == %q`, eventID)),
+			Filter: new(fmt.Sprintf(`this.metadata.name == %q`, inboxName)),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(containsId(listed.GetItems(), id)).To(BeTrue())
@@ -225,7 +223,7 @@ var _ = Describe("Notifications API", Label("notifications"), func() {
 					Type:     "osac.notification.announcement.maintenance",
 					Scope:    publicv1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
 					Title:    "With resource",
-					Resource: publicv1.NotificationResourceReference_builder{
+					Object: publicv1.NotificationObjectReference_builder{
 						Cluster: publicv1.ClusterReference_builder{
 							Id: "nonexistent-cluster",
 						}.Build(),
@@ -258,21 +256,18 @@ var _ = Describe("Notifications API", Label("notifications"), func() {
 		publicClient := publicv1.NewNotificationsClient(tool.ExternalView().UserConn())
 		privateClient := privatev1.NewNotificationsClient(tool.InternalView().AdminConn())
 
-		otherEvent := fmt.Sprintf("evt-other-%s", uuid.New()[:8])
+		otherName := fmt.Sprintf("inbox-other-%s", uuid.New()[:8])
 		other, err := privateClient.Create(ctx, privatev1.NotificationsCreateRequest_builder{
 			Object: privatev1.Notification_builder{
 				Metadata: privatev1.Metadata_builder{
-					Name:   fmt.Sprintf("inbox-other-%s", uuid.New()[:8]),
+					Name:   otherName,
 					Tenant: usersGroup,
 				}.Build(),
 				Spec: privatev1.NotificationSpec_builder{
-					Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
-					Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
-					Type:     "osac.notification.event.resource_created",
-					Event: privatev1.NotificationEventReference_builder{
-						Id:     otherEvent,
-						Source: "osac/fulfillment-service",
-					}.Build(),
+					Kind:        privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
+					Severity:    privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+					Type:        "osac.notification.event.resource_created",
+					Source:      "osac-fulfillment",
 					RecipientId: "other-user",
 					Title:       "Other user only",
 				}.Build(),
@@ -285,7 +280,7 @@ var _ = Describe("Notifications API", Label("notifications"), func() {
 		})
 
 		listed, err := publicClient.List(ctx, publicv1.NotificationsListRequest_builder{
-			Filter: new(fmt.Sprintf(`this.spec.event.id == %q`, otherEvent)),
+			Filter: new(fmt.Sprintf(`this.metadata.name == %q`, otherName)),
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(containsId(listed.GetItems(), otherID)).To(BeFalse())

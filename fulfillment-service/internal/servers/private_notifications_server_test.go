@@ -74,13 +74,10 @@ var _ = Describe("Private notifications server", func() {
 					Name: "inbox-" + recipient + "-" + eventID,
 				}.Build(),
 				Spec: privatev1.NotificationSpec_builder{
-					Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
-					Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
-					Type:     "osac.notification.event.resource_created",
-					Event: privatev1.NotificationEventReference_builder{
-						Id:     eventID,
-						Source: "osac/fulfillment-service",
-					}.Build(),
+					Kind:        privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
+					Severity:    privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+					Type:        "osac.notification.event.resource_created",
+					Source:      "osac-fulfillment",
 					RecipientId: recipient,
 					Title:       "Resource ready",
 				}.Build(),
@@ -204,11 +201,9 @@ var _ = Describe("Private notifications server", func() {
 			Entry("missing type", privatev1.Notification_builder{
 				Metadata: privatev1.Metadata_builder{Name: "bad-type-missing"}.Build(),
 				Spec: privatev1.NotificationSpec_builder{
-					Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
-					Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
-					Event: privatev1.NotificationEventReference_builder{
-						Id: "e1", Source: "svc",
-					}.Build(),
+					Kind:        privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
+					Severity:    privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+					Source:      "osac-fulfillment",
 					RecipientId: "user-1",
 					Title:       "x",
 				}.Build(),
@@ -226,12 +221,10 @@ var _ = Describe("Private notifications server", func() {
 			Entry("type kind mismatch", privatev1.Notification_builder{
 				Metadata: privatev1.Metadata_builder{Name: "bad-type-kind"}.Build(),
 				Spec: privatev1.NotificationSpec_builder{
-					Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
-					Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
-					Type:     "osac.notification.announcement.maintenance",
-					Event: privatev1.NotificationEventReference_builder{
-						Id: "e1", Source: "svc",
-					}.Build(),
+					Kind:        privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
+					Severity:    privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+					Type:        "osac.notification.announcement.maintenance",
+					Source:      "osac-fulfillment",
 					RecipientId: "user-1",
 					Title:       "x",
 				}.Build(),
@@ -242,10 +235,18 @@ var _ = Describe("Private notifications server", func() {
 					Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
 					Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
 					Type:     "osac.notification.event.resource_created",
-					Event: privatev1.NotificationEventReference_builder{
-						Id: "e1", Source: "svc",
-					}.Build(),
-					Title: "x",
+					Source:   "osac-fulfillment",
+					Title:    "x",
+				}.Build(),
+			}.Build()),
+			Entry("inbox missing source", privatev1.Notification_builder{
+				Metadata: privatev1.Metadata_builder{Name: "bad-inbox-source"}.Build(),
+				Spec: privatev1.NotificationSpec_builder{
+					Kind:        privatev1.NotificationKind_NOTIFICATION_KIND_EVENT,
+					Severity:    privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+					Type:        "osac.notification.event.resource_created",
+					RecipientId: "user-1",
+					Title:       "x",
 				}.Build(),
 			}.Build()),
 			Entry("announcement missing scope", privatev1.Notification_builder{
@@ -266,6 +267,17 @@ var _ = Describe("Private notifications server", func() {
 					Scope:       privatev1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
 					RecipientId: "user-1",
 					Title:       "x",
+				}.Build(),
+			}.Build()),
+			Entry("announcement with source", privatev1.Notification_builder{
+				Metadata: privatev1.Metadata_builder{Name: "bad-ann-source"}.Build(),
+				Spec: privatev1.NotificationSpec_builder{
+					Kind:     privatev1.NotificationKind_NOTIFICATION_KIND_ANNOUNCEMENT,
+					Severity: privatev1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
+					Type:     "osac.notification.announcement.maintenance",
+					Scope:    privatev1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
+					Source:   "osac-fulfillment",
+					Title:    "x",
 				}.Build(),
 			}.Build()),
 			Entry("announcement with state", privatev1.Notification_builder{

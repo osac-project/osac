@@ -17,12 +17,16 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from http.client import RemoteDisconnected
+from io import BytesIO
+from json import dumps
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from tests.e2e.core.metering import HEARTBEAT_TYPE, MeteringCollector, billing_account_id
+from tests.e2e.core.runner import StuckState
 from tests.e2e.core.wait_kinds import WaitResourceKind
 from tests.e2e.vmaas.sanity import test_compute_instance_creation as creation
 from tests.e2e.vmaas.sanity import test_metering_billing as billing
@@ -382,3 +386,101 @@ def test_published_heartbeats_keep_their_billing_account_when_later_ones_change(
     assert still[later["id"]] == "acct-2"
     for event_id, account in published.items():
         assert still[event_id] == account
+
+
+def _script_event_reads(
+    monkeypatch: pytest.MonkeyPatch, *responses: list[dict[str, Any]] | None
+) -> tuple[MeteringCollector, list[float]]:
+    """Script GET responses and disconnects below the collector's inner retry loop."""
+    remaining = iter(responses)
+    now = 0.0
+    read_times: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        nonlocal now
+        now += seconds
+
+    def urlopen(_request: object, *, timeout: int) -> BytesIO:
+        read_times.append(now)
+        response = next(remaining)
+        if response is None:
+            raise RemoteDisconnected("Remote end closed connection without response")
+        return BytesIO(dumps(response).encode())
+
+    clock = SimpleNamespace(monotonic=lambda: now, sleep=sleep)
+    monkeypatch.setattr("tests.e2e.core.metering.time", clock)
+    monkeypatch.setattr("tests.e2e.core.runner.time", clock)
+    monkeypatch.setattr("tests.e2e.core.metering.urlopen", urlopen)
+    return MeteringCollector(base_url="http://echo-adapter.example.test"), read_times
+
+
+def test_heartbeat_with_dimensions_recovers_after_disconnected_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    after = START + timedelta(minutes=1)
+    early = _heartbeat("early", START, after, "60.000000")
+    untyped = _heartbeat("untyped", after, after + timedelta(minutes=1), "60.000000", instance_type=None)
+    matching = _heartbeat("matching", after, after + timedelta(minutes=1), "60.000000")
+    nonmatching = [early, untyped]
+    collector, read_times = _script_event_reads(monkeypatch, None, None, None, nonmatching, [*nonmatching, matching])
+
+    event = collector.heartbeat_with_dimensions(
+        "vm-7", {"instance_type": "m-small"}, resource_kind=WaitResourceKind.COMPUTE_INSTANCE, after=after, timeout=30
+    )
+
+    assert event == matching
+    assert read_times == [0, 2, 4, 16, 26]
+
+
+@pytest.mark.parametrize("disconnected", [True, False], ids=["unavailable", "missing"])
+def test_heartbeat_with_dimensions_timeout_distinguishes_disconnected_reads(
+    monkeypatch: pytest.MonkeyPatch, disconnected: bool
+) -> None:
+    responses: list[list[dict[str, Any]] | None] = [None] * 6 if disconnected else [[], []]
+    collector, read_times = _script_event_reads(monkeypatch, *responses)
+
+    with pytest.raises(StuckState, match="heartbeat of vm-7 with dimensions") as error:
+        collector.heartbeat_with_dimensions(
+            "vm-7", {"instance_type": "m-small"}, resource_kind=WaitResourceKind.COMPUTE_INSTANCE, timeout=20
+        )
+
+    if disconnected:
+        assert "RemoteDisconnected" in str(error.value)
+        assert isinstance(error.value.__cause__, RemoteDisconnected)
+        assert read_times == [0, 2, 4, 16, 18, 20]
+    else:
+        assert error.value.__cause__ is None
+        assert read_times == [0, 10]
+
+
+def test_assert_no_events_recovers_after_disconnected_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    collector, read_times = _script_event_reads(monkeypatch, None, None, None, [], [], [])
+
+    collector.assert_no_events(HEARTBEAT_TYPE, "vm-7", since=START.isoformat(), within=18)
+
+    assert read_times == [0, 2, 4, 11, 16, 18]
+
+
+@pytest.mark.parametrize("initial_read_succeeds", [True, False], ids=["earlier-sample", "persistent"])
+def test_assert_no_events_fails_if_deadline_read_disconnects(
+    monkeypatch: pytest.MonkeyPatch, initial_read_succeeds: bool
+) -> None:
+    initial: list[list[dict[str, Any]] | None] = [[]] if initial_read_succeeds else [None] * 3
+    collector, read_times = _script_event_reads(monkeypatch, *initial, None, None, None)
+
+    with pytest.raises(TimeoutError, match="metering event read failed at the 10s deadline") as error:
+        collector.assert_no_events(HEARTBEAT_TYPE, "vm-7", since=START.isoformat(), within=10)
+
+    assert isinstance(error.value.__cause__, RemoteDisconnected)
+    assert read_times == ([0, 5, 7, 9] if initial_read_succeeds else [0, 2, 4, 10, 12, 14])
+
+
+@pytest.mark.parametrize("within, recovered_at", [(30, 11), (10, 10)], ids=["before-deadline", "at-deadline"])
+def test_assert_no_events_checks_for_overbilling_after_disconnected_read(
+    monkeypatch: pytest.MonkeyPatch, within: int, recovered_at: int
+) -> None:
+    overbilled = _heartbeat("overbilled", START, START + timedelta(minutes=1), "60.000000")
+    collector, read_times = _script_event_reads(monkeypatch, None, None, None, [overbilled])
+
+    with pytest.raises(AssertionError, match="but net usage past it is"):
+        collector.assert_no_events(HEARTBEAT_TYPE, "vm-7", since=START.isoformat(), within=within)
+
+    assert read_times == [0, 2, 4, recovered_at]

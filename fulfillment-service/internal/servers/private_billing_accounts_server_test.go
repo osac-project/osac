@@ -1079,7 +1079,7 @@ var _ = Describe("Private billing accounts server", func() {
 	},
 		Entry("unknown field with a healthy provider", "", `this.state == 1`),
 		Entry("unknown field with a failing provider", "walk", `this.no_such_field == "unused"`),
-		Entry("non-Boolean filter when the adapter failed to initialize", "adapter", `this.status.display_name`),
+		Entry("unknown field when the adapter failed to initialize", "adapter", `this.no_such_field == "unused"`),
 	)
 
 	It("stores canonical JSON and preserves identity, metadata and version for stale or identical observations", func() {

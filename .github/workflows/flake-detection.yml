@@ -8,11 +8,17 @@ name: Flake detection
 #   runs               = total repetitions per group
 #   parallel_workflows = requested concurrent calls, split by group
 #
-# Unit calls keep the floor of half the request and run all their suite jobs
-# in parallel. Integration calls get the ceiling of half the request, capped
-# at 10, and run at most 3 suite jobs per call (up to 30 across the campaign).
+# Manual runs use integration_repetition_limit and integration_suite_parallelism.
+# Scheduled runs use OSAC_FLAKE_INTEGRATION_REPETITION_LIMIT and
+# OSAC_FLAKE_INTEGRATION_SUITE_PARALLELISM. Unset or empty variables use 10 and 3.
+# The limits are whole numbers in 1-30 and 1-9, respectively. The configured
+# limits must multiply to at most 30 integration suite jobs.
 #
-# Example: runs=20, parallel_workflows=20
+# Unit calls get half of parallel_workflows rounded down, with full suite
+# fan-out. Integration calls get half rounded up, capped by the configured
+# repetition limit. Each call uses the configured suite parallelism.
+#
+# Example with default limits: runs=20, parallel_workflows=20
 # Campaign
 # +-- Unit: 20 repetitions, up to 10 calls active
 # |   `-- Each call can run every unit suite at once
@@ -37,9 +43,17 @@ on:
         type: number
         default: 100
       parallel_workflows:
-        description: Requested concurrent calls (at least 2), split by group with integration capped at 10
+        description: Requested concurrent calls (at least 2), split by group and subject to the integration repetition limit
         type: number
         default: 20
+      integration_repetition_limit:
+        description: Maximum concurrent integration repetitions (1-30). Product with integration_suite_parallelism must be at most 30.
+        type: number
+        default: 10
+      integration_suite_parallelism:
+        description: Maximum concurrent suite jobs per integration repetition (1-9). Product with integration_repetition_limit must be at most 30.
+        type: number
+        default: 3
 
 permissions:
   contents: read
@@ -59,6 +73,7 @@ jobs:
       iterations: ${{ steps.plan.outputs.iterations }}
       unit_parallelism: ${{ steps.plan.outputs.unit_parallelism }}
       integration_parallelism: ${{ steps.plan.outputs.integration_parallelism }}
+      integration_suite_parallelism: ${{ steps.plan.outputs.integration_suite_parallelism }}
     steps:
       # Resolve the requested branch or tag to a commit once, so all repetitions
       # use the same code even if that branch moves while the tests run.
@@ -75,6 +90,13 @@ jobs:
           # Scheduled events have no inputs, so apply the same defaults here.
           RUNS: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.runs) || '100' }}
           PARALLEL: ${{ github.event_name == 'workflow_dispatch' && format('{0}', inputs.parallel_workflows) || '20' }}
+          # Format manual numbers as strings so explicit zero reaches validation.
+          INTEGRATION_REPETITION_LIMIT: >-
+            ${{ (github.event_name == 'workflow_dispatch' && format('{0}', inputs.integration_repetition_limit))
+                || (github.event_name == 'schedule' && vars.OSAC_FLAKE_INTEGRATION_REPETITION_LIMIT) || '10' }}
+          INTEGRATION_SUITE_PARALLELISM: >-
+            ${{ (github.event_name == 'workflow_dispatch' && format('{0}', inputs.integration_suite_parallelism))
+                || (github.event_name == 'schedule' && vars.OSAC_FLAKE_INTEGRATION_SUITE_PARALLELISM) || '3' }}
         run: |
           set -euo pipefail
           # Require whole numbers: 1-256 repetitions and at least two concurrent calls.
@@ -84,18 +106,33 @@ jobs:
             $parallel >= 2 and $parallel == ($parallel | floor)
           ' >/dev/null || { echo '::error::runs must be an integer in 1-256; parallel_workflows must be an integer >= 2'; exit 1; }
 
+          # Validate bounded decimal strings before arithmetic or JSON parsing.
+          if [[ ! "$INTEGRATION_REPETITION_LIMIT" =~ ^([1-9]|[12][0-9]|30)$ ]]; then
+            echo '::error::Set integration_repetition_limit (manual) or OSAC_FLAKE_INTEGRATION_REPETITION_LIMIT (scheduled) to a whole number from 1 to 30.'
+            exit 1
+          fi
+          if [[ ! "$INTEGRATION_SUITE_PARALLELISM" =~ ^[1-9]$ ]]; then
+            echo '::error::Set integration_suite_parallelism (manual) or OSAC_FLAKE_INTEGRATION_SUITE_PARALLELISM (scheduled) to a whole number from 1 to 9.'
+            exit 1
+          fi
+          if (( INTEGRATION_REPETITION_LIMIT * INTEGRATION_SUITE_PARALLELISM > 30 )); then
+            echo '::error::Lower the configured integration repetition limit or suite parallelism so their product is at most 30.'
+            exit 1
+          fi
+
           # Create repetition numbers [1, 2, ..., runs] for both test groups.
-          # Split parallel_workflows into fixed limits: unit gets half rounded down,
-          # and integration gets half rounded up, capped at 10. Each group keeps
-          # its own limit for the entire campaign.
-          # Write JSON values to $GITHUB_OUTPUT for those jobs to read with fromJSON().
-          jq -cn --argjson runs "$RUNS" --argjson parallel "$PARALLEL" '
+          # Each group keeps its own call limit for the entire campaign.
+          plan=$(jq -cn --argjson runs "$RUNS" --argjson parallel "$PARALLEL" \
+            --argjson repetition_limit "$INTEGRATION_REPETITION_LIMIT" \
+            --argjson suite_parallelism "$INTEGRATION_SUITE_PARALLELISM" '
             {
               iterations: [range(1; $runs + 1)],
               unit_parallelism: ($parallel / 2 | floor),
-              integration_parallelism: ([($parallel / 2 | ceil), 10] | min)
-            } | to_entries[] | "\(.key)=\(.value | tojson)"
-          ' -r >> "$GITHUB_OUTPUT"
+              integration_parallelism: ([($parallel / 2 | ceil), $repetition_limit] | min),
+              integration_suite_parallelism: $suite_parallelism
+            }
+          ')
+          jq -r 'to_entries[] | "\(.key)=\(.value | tojson)"' <<< "$plan" >> "$GITHUB_OUTPUT"
 
           # Save the suite list and expected repetitions for flake-report.yml.
           # sha identifies the workflow commit; test_sha identifies the tested commit.
@@ -106,6 +143,15 @@ jobs:
             --arg test_sha "$TEST_SHA" \
             '{runs: $runs, run_id: $run_id, run_attempt: $run_attempt, sha: $sha, test_sha: $test_sha,
               suites: map({id, group})}' > flake-plan.json
+
+          jq -r --argjson repetition_limit "$INTEGRATION_REPETITION_LIMIT" --slurpfile campaign flake-plan.json '
+            ($campaign[0].suites | map(select(.group == "integration")) | length) as $suite_count |
+            ([.integration_parallelism, (.iterations | length)] | min) as $active_calls |
+            ([.integration_suite_parallelism, $suite_count] | min) as $active_suites |
+            "Configured integration limits: \($repetition_limit) repetitions, \(.integration_suite_parallelism) suite jobs per call.",
+            "Effective scheduling limits: \(.unit_parallelism) unit calls, \(.integration_parallelism) integration calls, \(.integration_suite_parallelism) suite jobs per integration call.",
+            "Integration suite jobs may run up to \($active_calls * $active_suites) at once in this campaign (ceiling 30, subject to runner availability)."
+          ' <<< "$plan"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7
         with:
           name: flake-plan-${{ github.run_attempt }}
@@ -141,6 +187,6 @@ jobs:
     uses: ./.github/workflows/integration-tests.yml
     with:
       commit: ${{ needs.plan.outputs.test_sha }}
-      suite_parallelism: 3
+      suite_parallelism: ${{ fromJSON(needs.plan.outputs.integration_suite_parallelism) }}
       # Identify the group, repetition and rerun attempt in saved log names.
       artifact_suffix: -integration-${{ matrix.iteration }}-attempt-${{ github.run_attempt }}

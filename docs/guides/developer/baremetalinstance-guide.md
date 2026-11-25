@@ -196,3 +196,82 @@ CatalogItem Create and Update validate the selected image. `OBSOLETE` and
 out-of-scope images are rejected. A `DEPRECATED` image is accepted with a
 warning. See [Catalog items](../../../fulfillment-service/docs/CATALOG_ITEMS.md)
 for the complete field-policy rules.
+
+## Networking
+
+The API field `spec.network_attachments` is plural, but a BareMetalInstance
+supports one attachment and cannot change it after creation. Without
+`--network-attachment`, OSAC uses the tenant's default Subnet and SecurityGroup
+and the first `fabric` port on the BareMetalInstanceType. Set `interface` to
+choose a port.
+
+The Subnet must be `READY`. See the [networking guide](networking-guide.md)
+for tenant Subnet and SecurityGroup setup. When provider networking is enabled,
+host and Fabric Manager prerequisites are in the
+[installation guide](../installation/customer-install-guide.md#44-installing-with-provider-networking);
+that guide also states current BMaaS provider-networking support.
+
+```bash
+osac create baremetalinstance \
+  --name worker-0 \
+  --catalog-item standard-bare-metal \
+  --disk-image rhel-9-4-amd64 \
+  --ssh-key worker-login-key \
+  --network-attachment subnet=tenant-subnet,interface=data-0,security-groups=web \
+  --external-ip-attachment
+
+osac get baremetalinstances worker-0 -o yaml
+osac delete baremetalinstance worker-0
+```
+
+> **Note:** The `--network-attachment` flag uses the format
+> `subnet=<name-or-id>[,interface=<port>][,security-groups=<sg1>,<sg2>]`.
+> `interface` and security groups are optional. At most one
+> `--network-attachment` is supported. In the API, send a single
+> `network_attachments` entry with `subnet` and optional `interface` and
+> `security_groups`.
+
+`--external-ip-attachment` asks OSAC to select an available ExternalIPPool and
+create an ExternalIP with an ExternalIPAttachment.
+
+When provider networking is enabled, OSAC provisions the host on the
+provisioning network, connects the selected port to the tenant Subnet, and
+power-cycles for tenant DHCP. After lease discovery, OSAC enables requested
+external access to the primary tenant address. On deletion, it removes external
+access and the network attachment before deprovisioning and releasing the host.
+
+If a same-project FabricDomain lists the assigned host in `spec.servers`,
+deleting the BareMetalInstance returns `FailedPrecondition` without starting
+deletion. Delete the FabricDomain first, then retry.
+
+### Network status
+
+Network setup progress and many network failures appear in `NETWORK_READY`.
+Some network failures also stamp the tenant's `PROVISIONED` condition with the
+same reason (for example `NetworkAttachmentFailed`, `NetworkHandoffFailed`, or
+`IPDiscoveryFailed`). Host allocation failures appear only on `PROVISIONED`
+with reason `HostAllocationFailed`. If allocation failed because the selected
+port's MAC mapping is missing or invalid, the operator-managed BMI's
+`.status.conditions` records `SelectedPortMACUnavailable`; ask a Cloud Provider
+Admin to correct the mapping (see the
+[installation guide](../installation/customer-install-guide.md#24-credentials-and-external-services)),
+then delete the failed BMI and create a new one.
+
+| Reason | Meaning and action |
+|---|---|
+| `Progressing`, `PoweringOff`, `PoweringOn` | Setup is in progress. Wait. |
+| `NetworkAttachmentFailed` | Attachment failed. Check the Subnet and port. |
+| `NetworkHandoffFailed` | Host handoff failed. |
+| `LeasePending` | OSAC is waiting for a tenant DHCP lease. Wait. |
+| `IPDiscoveryFailed` | OSAC could not discover the tenant address. |
+| `Offboarding`, `NetworkDetaching`, `Deleting` | Cleanup is in progress. Wait; do not force deletion. |
+| `PowerOffFailed` | Cleanup could not power off the host. Do not force deletion. |
+| `ProvisioningDisabled` | Provider networking was skipped. Host lifecycle remains available, but tenant interface moves, IP discovery, routing, and ExternalIP access are skipped. |
+| `IPDiscovered` | Network setup is complete. No action is needed. |
+| `NetworkSetupFailed` | Network setup failed. |
+
+## References
+
+- [BMaaS networking design](https://github.com/osac-project/enhancement-proposals/blob/main/enhancements/OSAC-1437-bmaas-networking/design.md) — Full technical design and implementation details
+- [Installing with provider networking](../installation/customer-install-guide.md#44-installing-with-provider-networking) — Support status and administrator prerequisites
+- [Networking guide](networking-guide.md) — Tenant Subnets and SecurityGroups

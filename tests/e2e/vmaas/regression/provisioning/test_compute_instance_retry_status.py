@@ -332,10 +332,8 @@ def _wait_for_success_feedback(grpc: GRPCClient, instance: Instance) -> None:
             return "cleared at InfrastructureReady (intermediate progress not observed)"
         return "unexpected provisioning state"
 
-    phase = instance.wait(
-        feedback, lambda value: value.startswith("cleared "), "public API cleared retry after AAP success"
-    )
-    LOG.info("%s public API %s", instance.id, phase)
+    instance.wait(feedback, lambda value: value.startswith("cleared "), "public API cleared retry after AAP success")
+    LOG.info("Public API cleared retry and failure after AAP success")
 
 
 def _wait_for_ready(grpc: GRPCClient, instance: Instance) -> None:

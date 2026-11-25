@@ -1605,6 +1605,7 @@ observability-hook-test: ## Check the observability prerequisite gate aborts on 
 observability-unit-test: helm-osac-deps ## Run the observability render, chart and helper tests
 	helm unittest $(OSAC_CHART) -f tests/observability_test.yaml
 	$(MAKE) -C $(abspath $(CURDIR)/../osac-observability) test
+	./scripts/test-observability-realm.sh
 
 .PHONY: network-class-step-test
 network-class-step-test: ## Test the installer NetworkClass step against a fake fulfillment API

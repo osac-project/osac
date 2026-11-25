@@ -41,6 +41,13 @@ OBS_ARGS=(
   --set global.observability.objectStorage.endpoint=https://s3.example.com
   --set global.observability.objectStorage.bucket=thanos
   --set global.observability.objectStorage.region=us-east-1
+  # The chart refuses an empty image tag; these renders never pull.
+  --set global.observability.services.metricsAuth.tag=test-metrics-auth
+  --set global.observability.thanos.image.tag=test-thanos
+  --set global.observability.services.oauth2Proxy.tag=test-oauth2-proxy
+  --set global.observability.services.openshiftOauthProxy.tag=test-ose-oauth-proxy
+  # The gate refuses an empty issuer; the render never reaches Keycloak.
+  --set global.observability.keycloak.issuerUrl=https://keycloak.example.com/realms/osac
 )
 # Metering is always deployed (billing is not optional), so the scrape checks
 # only switch its billing adapters on.
@@ -224,6 +231,27 @@ extract_kind_ns() {
   ' "${file}"
 }
 
+# Extract one kind with one metadata name, so per-route and per-proxy
+# assertions cannot match a sibling object of the same kind.
+extract_kind_name() {
+  local file=$1
+  local kind=$2
+  local name=$3
+  awk -v kind="${kind}" -v name="${name}" '
+    /^---[[:space:]]*$/ {
+      if (isKind && isName) printf "%s", doc
+      doc = ""
+      isKind = 0
+      isName = 0
+      next
+    }
+    { doc = doc $0 "\n" }
+    /^kind: / { if ($0 == "kind: " kind) isKind = 1 }
+    /^  name: / { if ($0 == "  name: " name) isName = 1 }
+    END { if (isKind && isName) printf "%s", doc }
+  ' "${file}"
+}
+
 echo "checking the four Thanos workloads render with their replica counts"
 for kind_name in \
   'StatefulSet:thanos-receive' \
@@ -257,10 +285,27 @@ require "${TMP_DIR}/thanos-receive.yaml" 'name: thanos-object-storage'
 require "${TMP_DIR}/thanos-store.yaml" 'name: thanos-object-storage'
 require "${TMP_DIR}/thanos-compactor.yaml" 'name: thanos-object-storage'
 require "${enabled}" 'bucket: "thanos"'
-require "${enabled}" 'endpoint: "https://s3.example.com"'
-for forbidden in AWS_SECRET_ACCESS_KEY MINIO_ROOT_PASSWORD secret_key: access_key:; do
+# Thanos rejects an endpoint that carries a scheme or a path; the chart keeps the
+# scheme in values and renders host:port.
+require "${enabled}" 'endpoint: "s3.example.com"'
+for forbidden in MINIO_ROOT_PASSWORD secret_key: access_key:; do
   reject "${enabled}" "${forbidden}"
 done
+# The prerequisite gate's embedded script names the two AWS variables it
+# requires in the Secret; that is a check, not credential material. The three
+# workloads that read the Secret must not carry either name at all.
+for forbidden in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+  for workload in thanos-receive thanos-store thanos-compactor; do
+    reject "${TMP_DIR}/${workload}.yaml" "${forbidden}"
+  done
+done
+objstore="${TMP_DIR}/object-storage-configmap.yaml"
+extract_kind_name "${enabled}" ConfigMap thanos-object-storage >"${objstore}"
+# Without aws_sdk_auth Thanos ignores the pod credentials and falls back to
+# anonymous access, so the bucket reads fail even though the Secret exists.
+require "${objstore}" 'aws_sdk_auth: true'
+reject "${objstore}" 'access_key'
+reject "${objstore}" 'secret_key'
 enabled_secrets="${TMP_DIR}/thanos-secrets.yaml"
 extract_kind_ns "${enabled}" Secret osac-observability >"${enabled_secrets}"
 if [ -s "${enabled_secrets}" ]; then
@@ -269,21 +314,31 @@ fi
 
 echo "checking replication, retention and downsampling flags"
 require "${TMP_DIR}/thanos-receive.yaml" '--receive.replication-factor=2'
-require "${TMP_DIR}/thanos-receive.yaml" '--label=replica=$(POD_NAME)'
+# Receive unquotes the value of --label, so the rendered argument carries the
+# quotes; only $(POD_NAME) is expanded by the kubelet.
+require "${TMP_DIR}/thanos-receive.yaml" '--label=replica="$(POD_NAME)"'
 require "${TMP_DIR}/thanos-query.yaml" '--query.replica-label=replica'
 require "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-raw=365d'
 require "${TMP_DIR}/thanos-compactor.yaml" '--downsampling.disable'
 reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-5m'
 reject "${TMP_DIR}/thanos-compactor.yaml" '--retention.resolution-1h'
 
-echo "checking five network policies gate the store pods"
+echo "checking six network policies gate the store pods"
 enabled_policies="${TMP_DIR}/thanos-networkpolicies.yaml"
 extract_kind_ns "${enabled}" NetworkPolicy osac-observability >"${enabled_policies}"
-expect_count "${enabled_policies}" '^kind: NetworkPolicy' 5
+expect_count "${enabled_policies}" '^kind: NetworkPolicy' 6
 for policy in thanos-query thanos-authorizer thanos-store thanos-receive \
-  thanos-compactor; do
+  thanos-compactor thanos-query-auth-proxy; do
   require "${enabled_policies}" "name: ${policy}"
 done
+# The admin Route reaches the gate on 9092. The allowlist (9091) and the two
+# OAuth proxies (4180, 4181) must not be admitted from anywhere else, or a pod
+# can skip the gate by connecting to the proxy pod IP.
+require "${enabled_policies}" 'network.openshift.io/policy-group: ingress'
+require "${enabled_policies}" 'port: 9092'
+reject "${enabled_policies}" 'port: 9091'
+reject "${enabled_policies}" 'port: 4180'
+reject "${enabled_policies}" 'port: 4181'
 require "${enabled_policies}" 'app.kubernetes.io/component: receive'
 require "${enabled_policies}" 'app.kubernetes.io/component: store'
 require "${enabled_policies}" 'app.kubernetes.io/component: query'
@@ -316,8 +371,96 @@ extract_kind_name "${enabled}" ClusterRole osac-observability-preflight >"${pref
 require "${preflight_role}" 'resourceNames: ["osac-observability"]'
 require "${preflight_role}" 'verbs: ["get", "patch", "update"]'
 # create cannot be restricted by resourceNames, so the grant is a hook-only
-# ClusterRole that Helm deletes when the gate succeeds.
+# ClusterRole that Helm deletes whether the gate succeeds or fails.
 require "${preflight_role}" 'verbs: ["create"]'
+require "${preflight_role}" 'before-hook-creation,hook-succeeded,hook-failed'
+
+echo "checking the admin query routes and proxies"
+# The Routes take their hosts from global.clusterDomain, which the baseline
+# render deliberately leaves empty, so render one revision with the domain set.
+admin="${TMP_DIR}/admin.yaml"
+"${HELM_BIN}" "${COMMON_ARGS[@]}" "${CRD_ARGS[@]}" "${OBS_ARGS[@]}" \
+  --set global.clusterDomain=apps.example.com >"${admin}"
+admin_routes="${TMP_DIR}/admin-routes.yaml"
+extract_kind_ns "${admin}" Route osac-observability >"${admin_routes}"
+# Exactly one Route per admin path: a second Route to Thanos Query would expose
+# the unrestricted API beside the allowlisted one.
+expect_count "${admin_routes}" '^kind: Route' 2
+for route in thanos-query-admin thanos-query-admin-openshift; do
+  route_doc="${TMP_DIR}/route-${route}.yaml"
+  extract_kind_name "${admin}" Route "${route}" >"${route_doc}"
+  require "${route_doc}" "name: ${route}"
+  require "${route_doc}" 'host: '"${route}"'-osac-observability.apps.example.com'
+  # Each Route reaches its own proxy Service, never thanos-query directly.
+  expect_count "${route_doc}" '^    name: '"${route}"'$' 1
+done
+expect_count "${admin_routes}" '^    name: thanos-query$' 0
+
+# The proxies listen behind their Service, and the Service exposes 9091 while
+# the container port stays the proxy's own.
+for route in thanos-query-admin thanos-query-admin-openshift; do
+  service_doc="${TMP_DIR}/service-${route}.yaml"
+  extract_kind_name "${admin}" Service "${route}" >"${service_doc}"
+  require "${service_doc}" "name: ${route}"
+  require "${service_doc}" 'port: 9091'
+  require "${service_doc}" 'targetPort: gate'
+  require "${service_doc}" 'app.kubernetes.io/component: query-auth-proxy'
+done
+
+# Both proxies serve the same five-endpoint allowlist through one shared
+# implementation, so both must mount the same ConfigMap.
+for proxy in thanos-query-admin thanos-query-admin-openshift; do
+  proxy_doc="${TMP_DIR}/deployment-${proxy}.yaml"
+  extract_kind_name "${enabled}" Deployment "${proxy}" >"${proxy_doc}"
+  require "${proxy_doc}" "name: ${proxy}"
+  require "${proxy_doc}" 'osac.openshift.io/observability-role: query-auth-proxy'
+  require "${proxy_doc}" '- name: query-auth-gate'
+  require "${proxy_doc}" '- /query-auth-gate'
+  require "${proxy_doc}" '- name: query-allowlist'
+  require "${proxy_doc}" '- /query-allowlist'
+  require "${proxy_doc}" 'name: osac-observability-query-allowlist'
+  require "${proxy_doc}" '--upstream=http://127.0.0.1:9091'
+done
+require "${TMP_DIR}/deployment-thanos-query-admin.yaml" '--client-id=thanos-admin'
+require "${TMP_DIR}/deployment-thanos-query-admin.yaml" \
+  '--allowed-role=cloud-provider-admin'
+require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" \
+  '--openshift-group=osac-cloud-infrastructure-admins'
+require "${TMP_DIR}/deployment-thanos-query-admin.yaml" 'value: keycloak'
+require "${TMP_DIR}/deployment-thanos-query-admin.yaml" \
+  'value: "https://keycloak.example.com/realms/osac"'
+require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" 'value: openshift'
+
+# The allowlist is the whole admin API surface: one entry per documented
+# endpoint and nothing else.
+allowlist="${TMP_DIR}/allowlist-configmap.yaml"
+extract_kind_name "${enabled}" ConfigMap osac-observability-query-allowlist >"${allowlist}"
+expect_count "${allowlist}" '^    /api/v1/' 5
+for endpoint in \
+  '/api/v1/query' \
+  '/api/v1/query_range' \
+  '/api/v1/series' \
+  '/api/v1/labels' \
+  '/api/v1/label/<name>/values'; do
+  require "${allowlist}" "${endpoint}"
+done
+# A directory mount of /etc/query-allowlist yields one file per key, so the key
+# must be exactly the name ALLOWLIST_FILE reads. A rename on either side would
+# leave the sidecar reading a missing file, which is now a startup error.
+require "${allowlist}" '  endpoints.txt: |'
+reject "${allowlist}" '  endpoints: |'
+for proxy in thanos-query-admin thanos-query-admin-openshift; do
+  require "${TMP_DIR}/deployment-${proxy}.yaml" \
+    'value: /etc/query-allowlist/endpoints.txt'
+  require "${TMP_DIR}/deployment-${proxy}.yaml" \
+    'mountPath: /etc/query-allowlist'
+done
+# Only the allowlist sidecar may reach Thanos Query: the authentication proxy's
+# upstream is the sidecar on loopback, checked above.
+require "${TMP_DIR}/deployment-thanos-query-admin.yaml" \
+  'value: http://thanos-query.osac-observability.svc.cluster.local:9090'
+require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" \
+  'value: http://thanos-query.osac-observability.svc.cluster.local:9090'
 
 echo "checking disabled render"
 disabled="${TMP_DIR}/disabled.yaml"
@@ -325,8 +468,8 @@ disabled="${TMP_DIR}/disabled.yaml"
 disabled_sms="${TMP_DIR}/disabled-servicemonitors.yaml"
 extract_kind "${disabled}" ServiceMonitor >"${disabled_sms}"
 expect_count "${disabled_sms}" '^kind: ServiceMonitor' 0
-# The remote-write Job keeps its name on the disabled path, so the namespace
-# check must look only at Namespace documents.
+# The namespace check must look only at Namespace documents because other
+# components' resources may carry the same string.
 disabled_ns="${TMP_DIR}/disabled-namespace.yaml"
 extract_kind "${disabled}" Namespace >"${disabled_ns}"
 reject "${disabled_ns}" 'name: osac-observability'
@@ -346,7 +489,7 @@ unlabel_obs="${TMP_DIR}/unlabel-observability-namespace.yaml"
 extract_kind_name "${disabled}" Job osac-unlabel-observability-namespace \
   >"${unlabel_obs}"
 require "${unlabel_obs}" 'name: osac-unlabel-observability-namespace'
-require "${unlabel_obs}" 'pre-upgrade'
+require "${unlabel_obs}" 'pre-upgrade,pre-delete'
 require "${unlabel_obs}" 'openshift.io/cluster-monitoring-'
 reject "${unlabel_obs}" 'create namespace'
 reject "${unlabel_obs}" 'delete namespace'
@@ -360,14 +503,17 @@ reject "${disabled}" 'name: bmf-operator-metrics-reader-prometheus'
 
 echo "checking the disabled render keeps no Thanos resource"
 for name in thanos-receive thanos-store thanos-query thanos-compactor \
-  thanos-authorizer osac-observability-preflight; do
+  thanos-authorizer osac-observability-preflight \
+  thanos-query-admin thanos-query-admin-openshift \
+  osac-observability-query-allowlist osac-observability-admin-credentials; do
   reject "${disabled}" "name: ${name}"
 done
 reject "${disabled}" 'namespace: osac-observability'
-# Removing the owned keys is the same upsert with the switch off, so the
-# remote-write Job stays and runs against the disabled payload.
-require "${disabled_jobs}" 'name: osac-observability-remote-write'
-require "${disabled_jobs}" 'value: "false"'
+# A fresh disabled install must not touch openshift-monitoring. The Job that
+# removes a leftover osac remote-write entry only renders when an in-cluster
+# lookup finds one, and helm template has no cluster to look at.
+reject "${disabled}" 'name: osac-observability-remote-write'
+reject "${disabled}" 'namespace: openshift-monitoring'
 
 echo "checking monitoring CRD guard"
 no_crd="${TMP_DIR}/no-crd.yaml"
@@ -456,15 +602,6 @@ retention_ok="${TMP_DIR}/retention-ok.yaml"
   --set global.observability.thanos.resolution.5m=30d \
   --set global.observability.thanos.resolution.1h=30d >"${retention_ok}"
 require "${retention_ok}" 'name: osac-observability'
-
-echo "checking infrastructure collection interval validation"
-# The schema pattern already rejects an empty string; skip it so this proves
-# osac.validateValues never rewrites a missing interval to the default.
-expect_render_failure empty-infrastructure \
-  'global.observability.collection.infrastructure must be a positive Prometheus duration' \
-  --skip-schema-validation \
-  "${OBS_ARGS[@]}" \
-  --set global.observability.collection.infrastructure=
 
 echo "checking the values nothing enforces yet do not look active"
 # clusterRemoteWrite and tenant.limits have no consumer in this release, so

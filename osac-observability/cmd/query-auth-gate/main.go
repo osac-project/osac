@@ -112,10 +112,15 @@ func loadConfig(getenv func(string) string) (config, error) {
 		if cfg.cookieName == "" {
 			cfg.cookieName = "_oauth2_proxy"
 		}
+		client, err := authgate.NewHTTPClient(getenv("OIDC_CA_FILE"))
+		if err != nil {
+			return config{}, err
+		}
 		authenticator, err := authgate.NewKeycloakAuthenticator(authgate.KeycloakConfig{
 			Issuer:    getenv("OIDC_ISSUER_URL"),
 			Audiences: splitList(getenv("OIDC_AUDIENCE")),
 			AdminRole: getenv("ADMIN_ROLE"),
+			Client:    client,
 		})
 		if err != nil {
 			return config{}, err

@@ -26,11 +26,16 @@
 {{- $openshiftGroup := $admin.openshiftGroup | default "osac-cloud-infrastructure-admins" -}}
 {{- $keycloakHost := printf "thanos-query-admin-%s" $ns -}}
 {{- $openshiftHost := printf "thanos-query-admin-openshift-%s" $ns -}}
+{{- /* The Keycloak Route certificate is signed by a cluster CA, which the image
+       does not trust. --provider-ca-file reads the copy the credentials job
+       places beside the proxies, and --use-system-trust-store keeps the public
+       roots so an externally signed identity provider still verifies. */ -}}
 {{- $keycloakArgs := list "--provider=keycloak-oidc"
       (printf "--oidc-issuer-url=%s" $issuer)
       (printf "--client-id=%s" ($keycloak.adminClientId | default "thanos-admin"))
-      "--client-secret-file=/etc/thanos-oauth2/client-secret"
-      "--cookie-secret-file=/etc/thanos-oauth2/cookie-secret"
+      "--client-secret-file=/etc/thanos-oauth2/client-secret/client-secret"
+      "--provider-ca-file=/etc/keycloak-ca/bundle.pem"
+      "--use-system-trust-store=true"
       "--email-domain=*"
       "--http-address=0.0.0.0:4180"
       (printf "--upstream=%s" $allowlistURL)
@@ -93,6 +98,10 @@ spec:
               value: {{ $audiences | quote }}
             - name: ADMIN_ROLE
               value: {{ $adminRole | quote }}
+            # The gate fetches discovery and the JWK set from the same issuer,
+            # so it trusts the same copy of the cluster bundle.
+            - name: OIDC_CA_FILE
+              value: /etc/keycloak-ca/bundle.pem
           ports:
             - name: gate
               containerPort: 9092
@@ -112,11 +121,24 @@ spec:
               memory: 64Mi
           securityContext:
             {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: keycloak-ca
+              mountPath: /etc/keycloak-ca
+              readOnly: true
         - name: oauth2-proxy
-          image: "{{ $oauth2Proxy.repository }}:{{ $oauth2Proxy.tag | default "latest" }}"
+          image: "{{ $oauth2Proxy.repository }}:{{ $oauth2Proxy.tag }}"
           imagePullPolicy: IfNotPresent
           args:
             {{- toYaml $keycloakArgs | nindent 12 }}
+          env:
+            # oauth2-proxy v7 rejects --cookie-secret-file as an unknown flag.
+            # The environment variable is the supported way to feed the value
+            # from a Secret without putting it in the pod spec.
+            - name: OAUTH2_PROXY_COOKIE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: thanos-admin-oauth2-proxy
+                  key: cookie-secret
           ports:
             - name: oauth2-proxy
               containerPort: 4180
@@ -136,17 +158,18 @@ spec:
               memory: 128Mi
           securityContext:
             {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
+          # Directory mount, not subPath: a subPath mount keeps the old value
+          # after Keycloak rotates the client Secret. The Secret keys are the
+          # file names inside the directory.
           volumeMounts:
             - name: oauth2-client-secret
               mountPath: /etc/thanos-oauth2/client-secret
-              subPath: client-secret
               readOnly: true
-            - name: oauth2-cookie-secret
-              mountPath: /etc/thanos-oauth2/cookie-secret
-              subPath: cookie-secret
+            - name: keycloak-ca
+              mountPath: /etc/keycloak-ca
               readOnly: true
         - name: query-allowlist
-          image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag | default "latest" }}"
+          image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag }}"
           imagePullPolicy: IfNotPresent
           command:
             - /query-allowlist
@@ -186,9 +209,11 @@ spec:
         - name: oauth2-client-secret
           secret:
             secretName: thanos-admin-client-secret
-        - name: oauth2-cookie-secret
-          secret:
-            secretName: thanos-admin-oauth2-proxy
+        # Written by the admin-credentials job: a volume cannot cross
+        # namespaces, so the bundle the Keycloak chart publishes is copied here.
+        - name: keycloak-ca
+          configMap:
+            name: keycloak-ca-bundle
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -253,7 +278,7 @@ spec:
           securityContext:
             {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
         - name: ose-oauth-proxy
-          image: "{{ $openshiftOAuthProxy.repository }}:{{ $openshiftOAuthProxy.tag | default "latest" }}"
+          image: "{{ $openshiftOAuthProxy.repository }}:{{ $openshiftOAuthProxy.tag }}"
           imagePullPolicy: IfNotPresent
           args:
             - --provider=openshift
@@ -263,7 +288,7 @@ spec:
             - --upstream={{ $allowlistURL }}
             - --openshift-service-account=thanos-query-admin-openshift
             - --openshift-group={{ $openshiftGroup }}
-            - --cookie-secret-file=/etc/thanos-oauth/cookie-secret
+            - --cookie-secret-file=/etc/thanos-oauth/cookie-secret/cookie-secret
             - --email-domain=*
             - --skip-provider-button
           ports:
@@ -285,13 +310,13 @@ spec:
               memory: 128Mi
           securityContext:
             {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
+          # Directory mount for the same reason as the Keycloak proxy.
           volumeMounts:
             - name: oauth-cookie-secret
               mountPath: /etc/thanos-oauth/cookie-secret
-              subPath: cookie-secret
               readOnly: true
         - name: query-allowlist
-          image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag | default "latest" }}"
+          image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag }}"
           imagePullPolicy: IfNotPresent
           command:
             - /query-allowlist

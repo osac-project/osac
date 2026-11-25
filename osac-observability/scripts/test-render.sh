@@ -300,17 +300,6 @@ for name in thanos-query-admin thanos-query-admin-openshift \
   reject "${disabled}" "name: ${name}"
 done
 
-echo "checking the remote-write Job follows the switch"
-extract_kind "${enabled}" Job >"${TMP_DIR}/enabled-jobs.yaml"
-extract_kind "${disabled}" Job >"${TMP_DIR}/disabled-jobs.yaml"
-require "${TMP_DIR}/enabled-jobs.yaml" 'name: osac-observability-remote-write'
-require "${TMP_DIR}/disabled-jobs.yaml" 'name: osac-observability-remote-write'
-require "${TMP_DIR}/enabled-jobs.yaml" 'value: "true"'
-require "${TMP_DIR}/disabled-jobs.yaml" 'value: "false"'
-require "${TMP_DIR}/enabled-jobs.yaml" 'value: "30s"'
-require "${TMP_DIR}/enabled-jobs.yaml" \
-  'value: https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive'
-
 echo "checking object storage is referenced by Secret name only"
 objstore="${TMP_DIR}/object-storage-configmap.yaml"
 extract_kind_name "${enabled}" ConfigMap thanos-object-storage >"${objstore}"

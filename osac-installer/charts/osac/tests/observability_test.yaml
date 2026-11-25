@@ -14,6 +14,8 @@ set:
   global.networking.fabricManager: test_fabric
   global.observability.enabled: true
   global.observability.collection.osacControlPlane: "30s"
+  # The chart refuses empty image tags; this suite never pulls an image.
+  global.observability.services.metricsAuth.tag: test-metrics-auth
 
 tests:
   # Helm must not own osac-observability: a rendered Namespace is deleted by the
@@ -288,7 +290,7 @@ tests:
           path: metadata.namespace
           value: openshift-monitoring
 
-  - it: limits the remote-write role to get, create, update and patch
+  - it: limits the remote-write role to reading and updating one ConfigMap
     template: templates/hooks/observability-remote-write.yaml
     documentIndex: 1
     asserts:
@@ -305,9 +307,7 @@ tests:
           path: rules[0].verbs
           value:
             - get
-            - create
             - update
-            - patch
 
   - it: binds the remote-write role to its service account
     template: templates/hooks/observability-remote-write.yaml
@@ -348,7 +348,7 @@ tests:
           value: true
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/osac-project/osac-observability:latest
+          value: ghcr.io/osac-project/osac-observability:test-metrics-auth
       - equal:
           path: spec.template.spec.containers[0].command[0]
           value: /remote-write-config
@@ -382,19 +382,25 @@ tests:
             name: OBS_RECEIVE_URL
             value: https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive
 
-  - it: keeps the remote-write Job on the disable path
+  # A normal install of a cluster that never had observability enabled must not
+  # touch openshift-monitoring at all. The lookup that detects a leftover osac
+  # entry returns nothing under `helm template`, so a fresh disabled render is
+  # the right proof that nothing ships.
+  - it: renders nothing on a fresh disabled install
     template: templates/hooks/observability-remote-write.yaml
-    documentIndex: 3
     set:
       global.observability.enabled: false
     asserts:
-      - isKind:
-          of: Job
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: OBSERVABILITY_ENABLED
-            value: "false"
+      - hasDocuments:
+          count: 0
+
+  - it: fails the render when the remote-write Job has no image tag
+    template: templates/hooks/observability-remote-write.yaml
+    set:
+      global.observability.services.metricsAuth.tag: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: global.observability.services.metricsAuth.tag must be set when the remote-write Job renders
 
   - it: skips the prerequisite gate when observability is disabled
     template: templates/hooks/observability-pre-install-validate.yaml

@@ -28,8 +28,11 @@ rules:
   - secrets
   resourceNames:
   - keycloak-client-secrets
+  # The resolve-realm-secrets init container patches this Secret on upgrade
+  # when it predates a client; `patch` is required for that upgrade path.
   verbs:
   - get
+  - patch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

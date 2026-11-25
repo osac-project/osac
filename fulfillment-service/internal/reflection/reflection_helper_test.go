@@ -33,7 +33,6 @@ import (
 
 type testTenantKey struct{}
 
-// This distinct package deliberately remains unregistered.
 func testTenantFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(testTenantKey{}).(string)
 	return v

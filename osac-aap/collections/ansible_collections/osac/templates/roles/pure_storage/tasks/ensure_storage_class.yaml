@@ -86,9 +86,10 @@
     msg: >-
       Pure CSI driver ({{ pure_storage_csi_provisioner }}) is not installed on
       the target cluster. StorageClasses cannot be created without the driver.
-      Install the Pure CSI driver via your cluster's operator catalog before
-      onboarding Pure Storage tenants. This check runs on every invocation to
-      catch driver removal on clusters with existing StorageClasses.
+      Install the Pure CSI driver via osac-installer with PURE_ENABLED=true
+      (see docs/storage/providers/pure.md) before onboarding Pure Storage tenants.
+      This check runs on every invocation to catch driver removal on clusters
+      with existing StorageClasses.
   when: _pure_csi_driver_check.resources | length == 0
 
 # Only StorageClass creation is skipped when the classes already exist. The CSI

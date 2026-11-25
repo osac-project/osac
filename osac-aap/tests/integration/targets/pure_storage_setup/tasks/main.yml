@@ -1000,6 +1000,157 @@
         success_msg: "Backend scoping works: tenant on backend B got ps-realm-b"
 
 
+# ── Test: Custom resource names (regression for PR review comment) ──
+# This test validates that custom resource names set during Realm provisioning
+# flow through to StorageClass creation without hardcoded derivation.
+# Addresses: https://github.com/osac-project/osac/pull/1531#discussion_r4689944922
+- name: "Pure Storage Setup - Custom resource names"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    pure_storage_config_namespace: osac-system
+    tenant_namespace: osac-system
+    # Custom names to test the flow
+    custom_server_name: "custom-nfs"
+    custom_policy_name: "custom-export"
+
+  tasks:
+    - name: Provision Realm with custom resource names using pure_realm role
+      ansible.builtin.include_role:
+        name: osac.service.pure_realm
+      vars:
+        realm:
+          name: ps-realm-custom
+          subnet: "192.0.2.64/26"
+          vlan: 100
+          admin_password: "{{ lookup('env', 'PURE_REALM_ADMIN_PASSWORD') | default('PlaceholderPass123!', true) }}"
+        pure_realm_fb_url: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+        pure_realm_api_token: "{{ lookup('env', 'PUREFB_API') | default('PLACEHOLDER_DO_NOT_USE_array_admin_token', true) }}"
+        pure_realm_validate_certs: false
+        pure_realm_config_namespace: osac-system
+        pure_realm_secret_prefix: "pure-realm-"
+        pure_realm_server_name: "{{ custom_server_name }}"
+        pure_realm_export_policy_name: "{{ custom_policy_name }}"
+
+    - name: Verify Realm credential Secret contains custom names
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pure-realm-ps-realm-custom
+        namespace: osac-system
+      register: _ps_custom_realm_secret
+
+    - name: Assert custom names are recorded in Realm Secret
+      vars:
+        _nfs_server: "{{ _ps_custom_realm_secret.resources[0].data.nfs_server | b64decode }}"
+        _nfs_policy: "{{ _ps_custom_realm_secret.resources[0].data.nfs_policy | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - _nfs_server == 'ps-realm-custom::custom-nfs'
+          - _nfs_policy == 'ps-realm-custom::custom-export'
+        fail_msg: >-
+          Realm Secret does not contain expected custom names.
+          Got nfs_server={{ _nfs_server }}, nfs_policy={{ _nfs_policy }}.
+          Expected ps-realm-custom::custom-nfs and ps-realm-custom::custom-export.
+
+    - name: Add custom Realm to pool ConfigMap
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: pure-realm-pool
+            namespace: osac-system
+          data:
+            PURE_REALM_POOL: >-
+              {{
+                ([
+                  {'realm_name': 'ps-realm-custom', 'secret_name': 'pure-realm-ps-realm-custom'}
+                ] | to_json)
+              }}
+
+    - name: Run tenant setup to allocate the custom-named Realm
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        tenant_name: ps-custom
+        tenant_uid: test-uid-custom
+        storage_provider_action: setup
+        storage_provider_provisioning_target: vmaas
+        storage_provider_tiers:
+          - name: default
+            protocol: nfs
+            provider: pure
+            backend_id: be-pure
+        storage_provider_backend_connections:
+          be-pure:
+            endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+
+    - name: Verify tenant allocation Secret contains custom names
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: pure-tenant-config-ps-custom-be-pure
+        namespace: osac-system
+      register: _ps_custom_tenant_secret
+
+    - name: Assert custom names flowed through to tenant Secret
+      vars:
+        _nfs_server: "{{ _ps_custom_tenant_secret.resources[0].data.nfs_server | b64decode }}"
+        _nfs_policy: "{{ _ps_custom_tenant_secret.resources[0].data.nfs_policy | b64decode }}"
+      ansible.builtin.assert:
+        that:
+          - _nfs_server == 'ps-realm-custom::custom-nfs'
+          - _nfs_policy == 'ps-realm-custom::custom-export'
+        fail_msg: >-
+          Tenant Secret does not preserve custom names from Realm Secret.
+          Got nfs_server={{ _nfs_server }}, nfs_policy={{ _nfs_policy }}.
+
+    - name: Create StorageClass using ensure_storage_class
+      ansible.builtin.include_role:
+        name: osac.service.storage_provider
+      vars:
+        tenant_name: ps-custom
+        tenant_uid: test-uid-custom
+        tenant_namespace: osac-system
+        storage_provider_action: ensure_storage_class
+        storage_provider_provisioning_target: vmaas
+        storage_provider_tiers:
+          - name: default
+            protocol: nfs
+            provider: pure
+            backend_id: be-pure
+        storage_provider_backend_connections:
+          be-pure:
+            endpoint: "{{ pure_test_mgmt_endpoint | default('127.0.0.1:18444') }}"
+
+    - name: Read created StorageClass
+      kubernetes.core.k8s_info:
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: pure-nfs-ps-custom-default
+      register: _ps_custom_sc
+
+    - name: Assert StorageClass uses custom names
+      vars:
+        _sc_nfs_server: "{{ _ps_custom_sc.resources[0].parameters.pure_nfs_server }}"
+        _sc_nfs_policy: "{{ _ps_custom_sc.resources[0].parameters.pure_nfs_policy }}"
+      ansible.builtin.assert:
+        that:
+          - _sc_nfs_server == 'ps-realm-custom::custom-nfs'
+          - _sc_nfs_policy == 'ps-realm-custom::custom-export'
+        fail_msg: >-
+          StorageClass does not use custom resource names from Realm provisioning.
+          Got pure_nfs_server={{ _sc_nfs_server }}, pure_nfs_policy={{ _sc_nfs_policy }}.
+          Expected ps-realm-custom::custom-nfs and ps-realm-custom::custom-export.
+          This means the name-passing contract is broken.
+        success_msg: >-
+          Custom resource names flow correctly from Realm provisioning through
+          tenant setup to StorageClass creation.
+
+
 # ── Cleanup ──
 - name: "Pure Storage Setup - Cleanup"
   hosts: localhost
@@ -1020,10 +1171,12 @@
         - pure-tenant-config-ps-backend-b-be-pure-b
         - pure-tenant-config-ps-race-be-pure
         - pure-tenant-config-ps-blocked-be-pure
+        - pure-tenant-config-ps-custom-be-pure
         - pure-realm-ps-realm
         - pure-realm-ps-realm-a2
         - pure-realm-ps-realm-b
         - pure-realm-ps-roll-broken
+        - pure-realm-ps-realm-custom
       failed_when: false
 
     - name: Delete the claim Leases this target created
@@ -1038,6 +1191,28 @@
         - pure-realm-claim-ps-realm-a2
         - pure-realm-claim-ps-realm-b
         - pure-realm-claim-ps-roll-broken
+        - pure-realm-claim-ps-realm-custom
+      failed_when: false
+
+    - name: Delete StorageClasses created by custom names test
+      kubernetes.core.k8s:
+        state: absent
+        api_version: storage.k8s.io/v1
+        kind: StorageClass
+        name: "{{ item }}"
+      loop:
+        - pure-nfs-ps-custom-default
+      failed_when: false
+
+    - name: Delete CSI Secrets created by custom names test
+      kubernetes.core.k8s:
+        state: absent
+        api_version: v1
+        kind: Secret
+        name: "{{ item }}"
+        namespace: osac-system
+      loop:
+        - pure-csi-secret-be-pure
       failed_when: false
 
     - name: Reset the mock FlashBlade for the next target

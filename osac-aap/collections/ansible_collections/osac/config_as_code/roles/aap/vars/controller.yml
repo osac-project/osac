@@ -621,6 +621,14 @@ controller_templates: # noqa: var-naming[no-role-prefix]
   # Populates PURE_REALM_POOL ConfigMap with provisioned Realms that tenant setup
   # can then allocate. Keep separate from tenant operations - this uses the
   # array-admin credential, never the per-Realm token.
+  #
+  # Credentials: Bind PUREFB_API and PUREFB_URL to this template as extra_vars,
+  # a custom credential, or mount /var/config/pure-realms/realms.yml into the
+  # execution environment. See playbook header for invocation options.
+  #
+  # Concurrency: allow_simultaneous is false because the playbook updates
+  # pure-realm-pool ConfigMap with a read-modify-write sequence. Concurrent runs
+  # would race and lose each other's additions.
   - name: "{{ aap_prefix }}-provision-pure-realms"
     project: "{{ aap_prefix }}"
     organization: "{{ aap_organization_name }}"
@@ -630,7 +638,7 @@ controller_templates: # noqa: var-naming[no-role-prefix]
     execution_environment: "{{ aap_prefix }}-ee"
     instance_groups:
       - "{{ aap_prefix }}-storage-operations-ig"
-    allow_simultaneous: true
+    allow_simultaneous: false
     ask_variables_on_launch: true
     verbosity: 0
 controller_job_template_surveys: # noqa: var-naming[no-role-prefix]

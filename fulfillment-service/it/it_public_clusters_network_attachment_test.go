@@ -16,6 +16,7 @@ package it
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
@@ -744,7 +745,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 				var err error
 				createResponse, err = clustersClient.Create(ctx, newProjectClusterRequest(project, clusterId))
 				if err != nil && (grpcstatus.Code(err) != grpccodes.FailedPrecondition ||
-					grpcstatus.Convert(err).Message() != "tenant default networking is not ready") {
+					!strings.HasPrefix(grpcstatus.Convert(err).Message(), "tenant default networking is not ready")) {
 					return StopTrying("Cluster Create failed for a reason other than Tenant readiness").Wrap(err)
 				}
 				return err

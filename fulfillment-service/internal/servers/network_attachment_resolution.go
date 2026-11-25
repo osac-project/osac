@@ -408,21 +408,93 @@ func checkAttachmentResolution(request networkAttachmentRequest, result *network
 	return nil
 }
 
+const (
+	// tenantDefaultNetworkingNotReadyPrefix is the stable prefix of the errors returned when a workload create is gated
+	// on the tenant's default networking readiness. Keep it stable: clients and tests match it.
+	tenantDefaultNetworkingNotReadyPrefix = "tenant default networking is not ready"
+
+	// tenantDefaultNetworkingDeleting is the message while the tenant, and with it its default networking, is
+	// being deleted.
+	tenantDefaultNetworkingDeleting = "the tenant is being deleted; retry after the tenant is recreated"
+
+	// tenantConditionReasonDeleting and tenantConditionReasonResourceFailed are the DefaultNetworkingReady reasons
+	// this gate acts on. They mirror the values the tenant controller writes.
+	tenantConditionReasonDeleting       = "Deleting"
+	tenantConditionReasonResourceFailed = "ResourceFailed"
+
+	// tenantDefaultNetworkingRetryGuidance is the next step when the readiness reason doesn't need an administrator.
+	tenantDefaultNetworkingRetryGuidance = "Retry shortly; if the problem persists, contact your cloud provider " +
+		"administrator."
+)
+
 // requireDefaultNetworkingReady checks that the tenant's DefaultNetworkingReady condition is True.
 func requireDefaultNetworkingReady(ctx context.Context, tenants *dao.GenericDAO[*privatev1.Tenant], tenant string) error {
 	response, err := tenants.List().SetFilter(fmt.Sprintf("this.id == %q", tenant)).SetLimit(1).Do(ctx)
 	if err != nil {
 		return grpcstatus.Error(grpccodes.Internal, "failed to check the tenant default networking")
 	}
-	for _, item := range response.GetItems() {
-		for _, condition := range item.GetStatus().GetConditions() {
-			if condition.GetType() == privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY &&
-				condition.GetStatus() == privatev1.ConditionStatus_CONDITION_STATUS_TRUE {
-				return nil
-			}
+	items := response.GetItems()
+	if len(items) == 0 {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument, "tenant '%s' doesn't exist", tenant)
+	}
+	if condition := tenantCondition(items[0],
+		privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY); condition != nil &&
+		condition.GetStatus() == privatev1.ConditionStatus_CONDITION_STATUS_TRUE {
+		return nil
+	}
+	return tenantDefaultNetworkingError(items[0])
+}
+
+// tenantDefaultNetworkingError explains why a tenant's default networking isn't ready, using the readiness
+// condition the tenant controller already maintains. The message names the unmet prerequisite and the tenant
+// resource that is missing, and tells the user whether to wait or contact an administrator. It contains only the
+// tenant's own resources and platform-level readiness state, so it is safe to return to the tenant.
+func tenantDefaultNetworkingError(tenant *privatev1.Tenant) error {
+	condition := tenantCondition(tenant, privatev1.TenantConditionType_TENANT_CONDITION_TYPE_DEFAULT_NETWORKING_READY)
+	reason := ""
+	if condition != nil {
+		reason = strings.TrimSpace(condition.GetReason())
+	}
+	if tenant.GetMetadata().HasDeletionTimestamp() || reason == tenantConditionReasonDeleting {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"%s: %s", tenantDefaultNetworkingNotReadyPrefix, tenantDefaultNetworkingDeleting)
+	}
+	if condition == nil {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"%s: the tenant has not reported default networking readiness yet. %s",
+			tenantDefaultNetworkingNotReadyPrefix, tenantDefaultNetworkingRetryGuidance)
+	}
+	detail := strings.TrimSuffix(strings.TrimSpace(condition.GetMessage()), ".")
+	if detail == "" {
+		detail = reason
+	}
+	guidance := tenantDefaultNetworkingGuidance(reason)
+	if detail == "" {
+		return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+			"%s: %s", tenantDefaultNetworkingNotReadyPrefix, guidance)
+	}
+	return grpcstatus.Errorf(grpccodes.FailedPrecondition,
+		"%s: %s. %s", tenantDefaultNetworkingNotReadyPrefix, detail, guidance)
+}
+
+// tenantDefaultNetworkingGuidance returns the next step for a default networking readiness condition reason.
+func tenantDefaultNetworkingGuidance(reason string) string {
+	if reason == tenantConditionReasonResourceFailed {
+		return "Contact your cloud provider administrator to repair the default networking resources or add " +
+			"external IP capacity."
+	}
+	return tenantDefaultNetworkingRetryGuidance
+}
+
+// tenantCondition returns the tenant's condition of the given type, or nil.
+func tenantCondition(tenant *privatev1.Tenant,
+	conditionType privatev1.TenantConditionType) *privatev1.TenantCondition {
+	for _, condition := range tenant.GetStatus().GetConditions() {
+		if condition.GetType() == conditionType {
+			return condition
 		}
 	}
-	return grpcstatus.Error(grpccodes.FailedPrecondition, "tenant default networking is not ready")
+	return nil
 }
 
 // tenantDefaultFilter selects the system-managed defaults of a tenant's default project.

@@ -567,6 +567,8 @@ endif
 .PHONY: install-infra
 install-infra: validate-inputs helm-infra-deps ## Install infrastructure (PLATFORM= PROFILE= NS= required)
 ifeq ($(PLATFORM),kind)
+	@python3 -c 'import sys; sys.exit(sys.version_info < (3, 8))' 2>/dev/null \
+		|| { echo "ERROR: Python 3.8 or later is required to install cert-manager on Kind" >&2; exit 1; }
 ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME_CMD) check
 	@$(KIND_RUNTIME_CMD) create-cluster "$(KIND_CLUSTER_NAME)" "$(KIND_CONFIG)" "$$KIND_KUBECONFIG"
@@ -590,8 +592,8 @@ endif
 ifeq ($(HOST_IS_MAC_ARM),true)
 	@$(KIND_RUNTIME_ENV) $(KIND_ARM64_CLI_IMAGE_SCRIPT) $(KIND_CLUSTER_NAME) $(KIND_ARM64_CLI_IMAGE)
 endif
-	helm upgrade --install cert-manager oci://quay.io/jetstack/charts/cert-manager \
-		--version v1.20.0 --namespace cert-manager --create-namespace \
+	python3 scripts/install-kind-cert-manager.py \
+		--namespace cert-manager --create-namespace \
 		--set crds.enabled=true $(INSTALL_HELM_TARGET) --wait --timeout 5m
 	helm upgrade --install trust-manager oci://quay.io/jetstack/charts/trust-manager \
 		--version v0.22.0 --namespace cert-manager \

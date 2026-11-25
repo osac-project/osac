@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Exercise Kind host commands with fake runtimes and sudo credentials."""
 
+from contextlib import redirect_stderr
+import io
 import json
 import os
 from pathlib import Path
+import runpy
 import shlex
 import shutil
 import socket
@@ -609,10 +612,15 @@ create_cluster osac-dev config.yaml {shlex.quote(str(kubeconfig))}
             "helm-infra-deps must keep the vendored osac-infra archives")
         self.assertIn("dependency build", self.log.read_text())
 
-    def run_direct_infra(self, cluster_name=None, skip_deps=True):
+    def run_direct_infra(self, cluster_name=None, skip_deps=True, helm_stub=None):
         """Run install-infra with mocked helm, skipping the dependency targets."""
-        self.write_command("helm", '''
-if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >> "$MOCK_LOG"; fi
+        self.write_command("helm", helm_stub or '''
+if [[ "$1" == version ]]; then
+    echo v3.0.0
+else
+    printf 'helm %s\\n' "$*" >> "$MOCK_LOG"
+    if [[ "$1" == pull ]]; then : >"${@: -1}/cert-manager-v1.20.0.tgz"; fi
+fi
 ''')
         self.write_command("kubectl", 'printf "kubectl %s\\n" "$*" >> "$MOCK_LOG"')
         args = ["/usr/bin/make", "--no-print-directory", "-C", str(INSTALLER)]
@@ -625,6 +633,136 @@ if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >>
                 f"KIND_KUBECONFIG={self.directory / 'cluster.kubeconfig'}"],
             env=self.env, text=True, capture_output=True, timeout=15,
         )
+
+    def test_cert_manager_download_and_install(self):
+        # A synthetic query string stands in for sensitive registry diagnostics.
+        url = "https://example.invalid/blob?fixture=download-output-sentinel"
+        reset = f'Get "{url}": read tcp: read: connection reset by peer'
+        helm_stub = '''
+exec python3 - "$@" <<'PY'
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+args = sys.argv[1:]
+if args[0] == "version":
+    print("v3.22.0")
+    sys.exit(0)
+if args[0] not in ("pull", "upgrade"):
+    sys.exit(0)
+
+trace = Path(os.environ["MOCK_CERT_TRACE"])
+with trace.open("a+") as log:
+    log.seek(0)
+    prior_pulls = sum(json.loads(line)[0] == "pull" for line in log)
+    log.write(json.dumps(args) + "\\n")
+
+if args[0] == "pull":
+    destination = Path(args[args.index("--destination") + 1])
+    assert stat.S_IMODE(destination.stat().st_mode) == 0o700
+    package = destination / "cert-manager-v1.20.0.tgz"
+    assert not package.exists(), "stale chart left by an earlier attempt"
+    if os.environ["MOCK_CERT_WRITE_PACKAGE"] == "1":
+        package.write_text("chart package fixture")
+    print(os.environ["MOCK_CERT_URL"])
+    failures = json.loads(os.environ["MOCK_CERT_PULL_FAILURES"])
+    if prior_pulls < len(failures):
+        print(f"Error: {failures[prior_pulls]}", file=sys.stderr)
+        sys.exit(17)
+    print(os.environ["MOCK_CERT_URL"], file=sys.stderr)
+elif args[2] == "cert-manager":
+    assert Path(args[3]).read_text() == "chart package fixture"
+    if os.environ["MOCK_CERT_INSTALL_FAILURE"] == "1":
+        print("install failure fixture: connection reset by peer", file=sys.stderr)
+        sys.exit(23)
+PY
+'''
+        self.cluster_name = "cert-manager-test"
+        self.env.update(KIND_EXPERIMENTAL_PROVIDER="docker",
+                        MOCK_KIND_NODES=f"{self.cluster_name}-control-plane",
+                        KUBECONFIG=str(self.directory / "unrelated kubeconfig"))
+        cases = (
+            ("success", [], True, 0, 1, ""),
+            ("reset then success", [reset], True, 0, 2, "retrying in 2s"),
+            ("exhausted", [reset] * 3, True, 17, 3, "download failed on attempt 3/3"),
+            ("unauthorized", [f'Get "{url}": 401 Unauthorized'], True, 17, 1,
+             "registry authentication or authorization failed"),
+            ("missing version", [f'Get "{url}": 404 Not Found'], True, 17, 1,
+             "chart or version not found"),
+            ("unknown error", [f'Get "{url}": unexpected EOF'], True, 17, 1, "unexpected Helm error"),
+            ("missing package", [], False, 1, 1, "Helm did not create cert-manager-v1.20.0.tgz"),
+            ("install failure", [], True, 23, 1, "install failure fixture"),
+        )
+        for index, (case, failures, write_package, status, attempts, diagnostic) in enumerate(cases):
+            with self.subTest(case=case):
+                trace = self.directory / f"helm-{index}.jsonl"
+                temporary = self.directory / f"chart temp {index}"
+                temporary.mkdir()
+                self.env.update(
+                    TMPDIR=str(temporary),
+                    MOCK_CERT_TRACE=str(trace),
+                    MOCK_CERT_URL=url,
+                    MOCK_CERT_PULL_FAILURES=json.dumps(failures),
+                    MOCK_CERT_WRITE_PACKAGE=str(int(write_package)),
+                    MOCK_CERT_INSTALL_FAILURE=str(int(status == 23)),
+                )
+                result = self.run_direct_infra(helm_stub=helm_stub)
+                if status == 0:
+                    self.assert_success(result)
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(f"Error {status}", result.stderr)
+                if diagnostic:
+                    self.assertIn(diagnostic, result.stderr)
+                self.assertEqual(result.stderr.count("retrying in "), attempts - 1)
+                if attempts == 3:
+                    self.assertIn("retrying in 5s", result.stderr)
+                self.assertNotIn("example.invalid", result.stdout + result.stderr)
+                self.assertNotIn("download-output-sentinel", result.stdout + result.stderr)
+
+                calls = [json.loads(line) for line in trace.read_text().splitlines()]
+                destination = Path(calls[0][-1])
+                self.assertEqual(destination.parent.resolve(), temporary.resolve())
+                self.assertEqual(calls[:attempts], [[
+                    "pull", "oci://quay.io/jetstack/charts/cert-manager", "--version", "v1.20.0",
+                    "--destination", str(destination),
+                ]] * attempts)
+                remaining = calls[attempts:]
+                if status in (0, 23):
+                    self.assertEqual(remaining[0], [
+                        "upgrade", "--install", "cert-manager", str(destination / "cert-manager-v1.20.0.tgz"),
+                        "--version", "v1.20.0", "--namespace", "cert-manager", "--create-namespace",
+                        "--set", "crds.enabled=true", "--kubeconfig", str(self.directory / "cluster.kubeconfig"),
+                        "--kube-context", f"kind-{self.cluster_name}", "--wait", "--timeout", "5m",
+                    ])
+                    self.assertEqual([call[2] for call in remaining[1:]],
+                                     ["trust-manager", "envoy-gateway", "strimzi-cluster-operator", "osac-infra"]
+                                     if status == 0 else [])
+                else:
+                    self.assertEqual(remaining, [])
+                self.assertEqual(list(temporary.iterdir()), [])
+
+    def test_cert_manager_download_deadline(self):
+        script = runpy.run_path(str(INSTALLER / "scripts/install-kind-cert-manager.py"))
+        stderr = io.StringIO()
+        timeout = subprocess.TimeoutExpired(["helm", "pull"], 90, stderr=b"download-output-sentinel")
+        with patch("subprocess.run", side_effect=timeout) as helm, redirect_stderr(stderr):
+            self.assertEqual(script["main"](), 124)
+
+        helm.assert_called_once()
+        self.assertEqual(helm.call_args.kwargs["timeout"], 90)
+        self.assertFalse(Path(helm.call_args.args[0][-1]).exists())
+        self.assertEqual(stderr.getvalue(), "ERROR: cert-manager v1.20.0 download exceeded 90s\n")
+
+    def test_infra_requires_supported_python_before_kind_commands(self):
+        self.write_command("python3", "exit 1")
+        result = self.run_direct_infra()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Python 3.8 or later is required to install cert-manager on Kind", result.stderr)
+        self.assertFalse(any(command.startswith("kind ") for command in self.commands()))
 
     def test_direct_podman_create_and_reuse_raise_and_verify_pid_limits(self):
         self.assert_direct_podman_create_and_reuse()
@@ -749,7 +887,8 @@ if [[ "${1:-}" == version ]]; then echo v3.0.0; else printf 'helm %s\\n' "$*" >>
                 if provider == "unset":
                     self.env.pop("KIND_EXPERIMENTAL_PROVIDER")
                     (self.bin / "podman").unlink()
-                    for command in ("bash", "env", "awk", "sed", "basename", "dirname", "grep", "mktemp", "rm"):
+                    for command in ("bash", "env", "awk", "sed", "basename", "dirname",
+                                    "grep", "mktemp", "rm", "python3"):
                         (self.bin / command).symlink_to(shutil.which(command))
                     self.env["PATH"] = str(self.bin)
                 else:

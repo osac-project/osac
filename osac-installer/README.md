@@ -176,6 +176,9 @@ before applying any, and later phases depend on CRDs and secrets that earlier
 phases create. See [docs/helm-deployment-guide.md](docs/helm-deployment-guide.md)
 for a detailed explanation.
 
+Kind infrastructure installation on Linux and macOS requires Python 3.8 or
+later on `PATH` for the cert-manager chart download.
+
 ```bash
 # Full install (infra + osac)
 make install PLATFORM=openshift PROFILE=<profile> NS=<namespace>

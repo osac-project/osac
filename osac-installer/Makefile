@@ -216,9 +216,11 @@ GATEWAY_NAMESPACE ?= openshift-ingress
 GATEWAY_NAME ?= osac-gateway
 GATEWAY_CLASS_NAME ?= openshift-default
 # One source of truth shared by install-osac, install-dry-run and the
-# input-validation gate: the driver flag and the Gateway identity are always
-# set together, from these variables only.
-INGRESS_DRIVER_HELM_ARGS := $(if $(filter gatewayapi,$(INGRESS_DRIVER)),--set service.ingress.driver=gatewayapi --set service.ingress.gatewayapi.gatewayName=$(GATEWAY_NAME) --set service.ingress.gatewayapi.gatewayNamespace=$(GATEWAY_NAMESPACE) --set service.ingress.gatewayapi.gatewayClassName=$(GATEWAY_CLASS_NAME))
+# input-validation gate: the driver is ALWAYS passed so an instance-values
+# overlay cannot silently select a different one than the installer acts on
+# (the bridge only runs for INGRESS_DRIVER=gatewayapi). The Gateway identity
+# is set together with a gatewayapi selection, from these variables only.
+INGRESS_DRIVER_HELM_ARGS := --set service.ingress.driver=$(INGRESS_DRIVER) $(if $(filter gatewayapi,$(INGRESS_DRIVER)),--set service.ingress.gatewayapi.gatewayName=$(GATEWAY_NAME) --set service.ingress.gatewayapi.gatewayNamespace=$(GATEWAY_NAMESPACE) --set service.ingress.gatewayapi.gatewayClassName=$(GATEWAY_CLASS_NAME))
 ifneq ($(filter $(INGRESS_DRIVER),envoy gatewayapi),$(INGRESS_DRIVER))
 $(error INGRESS_DRIVER must be envoy or gatewayapi)
 endif

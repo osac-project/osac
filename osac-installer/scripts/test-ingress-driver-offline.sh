@@ -108,6 +108,8 @@ NO_OC_PATH="$WORK/bin-nooc:$WORK/essentials"
 REF="stub-chart@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 COMMON=(PLATFORM=openshift PROFILE=vmaas-ci NS=gwtest OSAC_CHART_OCI_REF="$REF")
 LICENSE="$WORK/license.zip"; echo stub-license > "$LICENSE"
+# A values overlay that tries to select gatewayapi behind the installer's back
+printf 'service:\n  ingress:\n    driver: gatewayapi\n' > "$WORK/gatewayapi-overlay.yaml"
 
 # ------------------------------------------------------------- runner
 # run <scenario-dir> [env VAR=...] [VAR=value...] -- make <args...>
@@ -231,6 +233,17 @@ if ok "$rc" && ! grep -q "get endpointslices" "$WORK/s10/logs/oc.log" \
    && ! grep -q "Bridge EndpointSlices" "$WORK/s10/out.log"; then
   pass "10 default envoy install runs no bridge or preflight"
 else fail "10 default envoy install runs no bridge or preflight (rc=$rc)"; fi
+
+# ---------------------------------------------------------------- 10b
+# An instance-values overlay selecting gatewayapi must not beat the
+# installer: INGRESS_DRIVER=envoy (the default) still forces envoy in the
+# helm arguments, so the chart and the installer cannot disagree.
+rc=$(run_make "$WORK/s10b" INSTANCE_VALUES_EXTRA="-f $WORK/gatewayapi-overlay.yaml" -- install-osac)
+if ok "$rc" && helm_has "$WORK/s10b" "service.ingress.driver=envoy" \
+   && helm_not "$WORK/s10b" "service.ingress.driver=gatewayapi" \
+   && ! grep -q "get endpointslices" "$WORK/s10b/logs/oc.log"; then
+  pass "10b values-overlay driver cannot override INGRESS_DRIVER"
+else fail "10b values-overlay driver cannot override INGRESS_DRIVER (rc=$rc)"; fi
 
 echo
 if [ "$failures" -eq 0 ]; then

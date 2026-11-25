@@ -46,7 +46,7 @@ import (
 
 func TestRealmAuthorization(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "Shipped CSI realm authorization")
+	RunSpecs(t, "Shipped machine-client realm authorization")
 }
 
 var _ = Describe("Client credentials from a shipped realm", func() {

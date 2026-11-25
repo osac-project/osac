@@ -76,14 +76,14 @@
   # caller of tests.yml keep one execution.
   pr_repetitions: 5
   filters: [code, integration-tests-fulfillment-service]
-- id: Contract test (CSI realm authorization)
+- id: Contract tests (machine-client realm authorization)
   group: integration
   # Reuse the Ginkgo runner; this suite starts real Keycloak containers.
   kind: go-unit
   dir: fulfillment-service
   cmd: ginkgo run --timeout 30m -v it/realmauth
   timeout: 40  # Two cold realm imports, authorization checks and compilation
-  filters: [integration-tests-csi-realm-auth]
+  filters: [integration-tests-machine-client-realm-auth]
 - id: Integration test (osac-operator)
   group: integration
   kind: it-osac-operator

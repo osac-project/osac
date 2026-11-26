@@ -17,6 +17,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -279,6 +280,20 @@ var _ = Describe("Quota enforcement", func() {
 			Expect(failure.GetUsage()).To(Equal(int64(7)))
 			Expect(failure.GetAdded()).To(Equal(int64(5)))
 			Expect(countRows("volumes")).To(Equal(1))
+		})
+
+		It("refuses a request whose size no int64 sum holds", func() {
+			// A size near MaxInt64 wrapped the usage-plus-added sum negative and
+			// slipped under the limit. The comparison subtracts now, so the ask is
+			// refused on its own size:
+			err := createVolume("vol-huge", "", "fast", math.MaxInt64)
+			reason, failure := quotaFailure(err)
+			Expect(reason).To(Equal("QUOTA_EXCEEDED"))
+			Expect(failure.GetDimension()).To(Equal("storage.fast.gib"))
+			Expect(failure.GetLimit()).To(Equal(int64(10)))
+			Expect(failure.GetUsage()).To(Equal(int64(0)))
+			Expect(failure.GetAdded()).To(Equal(int64(math.MaxInt64)))
+			Expect(countRows("volumes")).To(Equal(0))
 		})
 
 		It("reports the conflict of a retried create instead of the quota refusal", func() {

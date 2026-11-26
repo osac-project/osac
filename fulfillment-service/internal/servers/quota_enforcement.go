@@ -676,7 +676,9 @@ type quotaRefusal struct {
 // of its own, then the tenant. A project without a limit of its own is bound by the tenant's, so
 // the tenant step reports it, and a refusal always names the scope whose limit it shows. It
 // returns the first crossing, or nil when every dimension fits. The dimensions are compared
-// sorted, so the first refusal a caller sees is stable.
+// sorted, so the first refusal a caller sees is stable. The comparison subtracts rather than
+// adds: a request can name a size no int64 sum holds, and the wrapped sum would slip under the
+// limit.
 func firstQuotaRefusal(
 	added map[string]int64,
 	usage map[string]map[string]int64,
@@ -691,7 +693,7 @@ func firstQuotaRefusal(
 			if !found {
 				continue
 			}
-			if scopeUsage[dimension]+added[dimension] > limit {
+			if added[dimension] > limit-scopeUsage[dimension] {
 				scopeKind := publicv1.QuotaScope_QUOTA_SCOPE_ANCESTOR_PROJECT
 				if i == 0 {
 					scopeKind = publicv1.QuotaScope_QUOTA_SCOPE_PROJECT
@@ -710,7 +712,7 @@ func firstQuotaRefusal(
 	tenantUsage := quotaSubtreeUsage(usage, "")
 	for _, dimension := range quota.SortedKeys(added) {
 		limit := limits.limitOf("", dimension)
-		if tenantUsage[dimension]+added[dimension] > limit {
+		if added[dimension] > limit-tenantUsage[dimension] {
 			return &quotaRefusal{
 				scope:     publicv1.QuotaScope_QUOTA_SCOPE_TENANT,
 				dimension: dimension,

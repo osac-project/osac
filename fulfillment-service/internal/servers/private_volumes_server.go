@@ -352,6 +352,24 @@ func applyVolumeUpdate(base, update *privatev1.Volume, mask *fieldmaskpb.FieldMa
 				dst[k] = v
 			}
 			base.GetSpec().GetTopology().SetSegments(dst)
+		case "spec.owner":
+			if owner := update.GetSpec().GetOwner(); owner != nil {
+				base.GetSpec().SetOwner(proto.Clone(owner).(*privatev1.VolumeOwner))
+			} else {
+				base.GetSpec().SetOwner(nil)
+			}
+		case "spec.disk_image":
+			if diskImage := update.GetSpec().GetDiskImage(); diskImage != nil {
+				base.GetSpec().SetDiskImage(proto.Clone(diskImage).(*privatev1.DiskImageReference))
+			} else {
+				base.GetSpec().SetDiskImage(nil)
+			}
+		case "spec.target":
+			if target := update.GetSpec().GetTarget(); target != nil {
+				base.GetSpec().SetTarget(proto.Clone(target).(*privatev1.VolumeTarget))
+			} else {
+				base.GetSpec().SetTarget(nil)
+			}
 		case "status.provider":
 			base.GetStatus().SetProvider(update.GetStatus().GetProvider())
 		case "status.protocol":

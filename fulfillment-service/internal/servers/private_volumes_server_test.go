@@ -836,6 +836,67 @@ var _ = Describe("Private volumes server", func() {
 			Expect(st.Message()).To(ContainSubstring("immutable"))
 		})
 
+		DescribeTable("Rejects masked updates that change an immutable field",
+			func(maskPath string, create func() *privatev1.Volume, changed *privatev1.VolumeSpec) {
+				created := create()
+
+				_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+					Object: privatev1.Volume_builder{
+						Id:   created.GetId(),
+						Spec: changed,
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{maskPath}},
+				}.Build())
+				Expect(err).To(HaveOccurred())
+				st, ok := status.FromError(err)
+				Expect(ok).To(BeTrue())
+				Expect(st.Code()).To(Equal(codes.InvalidArgument))
+				Expect(st.Message()).To(ContainSubstring(maskPath))
+				Expect(st.Message()).To(ContainSubstring("immutable"))
+			},
+			Entry("owner", "spec.owner",
+				func() *privatev1.Volume { return createVolumeWithOwner("ci-original") },
+				privatev1.VolumeSpec_builder{
+					Owner: privatev1.VolumeOwner_builder{
+						Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+						Reference: "ci-other",
+					}.Build(),
+				}.Build()),
+			Entry("disk_image", "spec.disk_image",
+				func() *privatev1.Volume { return createVolumeWithDiskImage("img-original") },
+				privatev1.VolumeSpec_builder{
+					DiskImage: privatev1.DiskImageReference_builder{Id: "img-other"}.Build(),
+				}.Build()),
+			Entry("target", "spec.target",
+				func() *privatev1.Volume { return createVolumeWithTarget("boot", "vm-ns", "vm-root-disk") },
+				privatev1.VolumeSpec_builder{
+					Target: privatev1.VolumeTarget_builder{
+						DiskKey:        "disk-1",
+						Namespace:      "vm-ns",
+						DataVolumeName: "vm-root-disk",
+					}.Build(),
+				}.Build()),
+		)
+
+		It("Allows a masked update that repeats the stored owner", func() {
+			created := createVolumeWithOwner("ci-original")
+
+			updateResponse, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Id: created.GetId(),
+					Spec: privatev1.VolumeSpec_builder{
+						Owner: privatev1.VolumeOwner_builder{
+							Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+							Reference: "ci-original",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.owner"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updateResponse.GetObject().GetSpec().GetOwner().GetReference()).To(Equal("ci-original"))
+		})
+
 		It("Rejects updates that add an owner to an ownerless volume", func() {
 			created := createVolume()
 

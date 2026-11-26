@@ -30,8 +30,10 @@ enum VolumeOwnerType {
 // behalf of a workload carry this reference so that the volume's lifecycle
 // is bound to its owner.
 message VolumeOwner {
-  // Type of the owning workload.
-  VolumeOwnerType type = 1 [(buf.validate.field).enum.defined_only = true];
+  // Type of the owning workload. Required when the owner is present: the
+  // unspecified value is rejected so a stored owner always projects onto a
+  // valid CRD owner type.
+  VolumeOwnerType type = 1 [(buf.validate.field).enum = {defined_only: true, not_in: [0]}];
 
   // Identifier of the owning workload record (for a ComputeInstance, its
   // identifier, for example "ci-...").

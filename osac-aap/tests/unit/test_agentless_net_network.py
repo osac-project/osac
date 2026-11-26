@@ -224,6 +224,141 @@ def test_ensure_veth_pair_rejects_foreign_host_interface(monkeypatch):
         )
 
 
+def test_ensure_veth_pair_recreates_a_peer_that_vanishes_after_a_failed_delete(monkeypatch):
+    commands = []
+    stale_peer_present = True
+
+    def run(command, check=True):
+        nonlocal stale_peer_present
+        commands.append(command)
+        if command == ["ip", "netns", "exec", "vn-test", "true"]:
+            return completed(command)
+        if command == ["ip", "-o", "link", "show", "dev", "vn-host"]:
+            return completed(command, returncode=0 if stale_peer_present else 1)
+        if command == [
+            "ip", "netns", "exec", "vn-test", "ip", "-o", "link", "show", "dev", "vn-ns",
+        ]:
+            return completed(command, returncode=1)
+        if command == ["ip", "-j", "-d", "link", "show", "dev", "vn-host"]:
+            return completed(
+                command,
+                json.dumps(
+                    [
+                        {
+                            "ifname": "vn-host",
+                            "flags": ["UP"],
+                            "ifalias": "osac-vn:11111111-1111-4111-8111-111111111111",
+                            "linkinfo": {"info_kind": "veth"},
+                        }
+                    ]
+                ),
+            )
+        if command == ["ip", "link", "delete", "dev", "vn-host"]:
+            # The delete reports a failure although the peer is already gone.
+            stale_peer_present = False
+            return completed(command, returncode=1)
+        if command in (["ip", "-j", "link", "show"], [
+            "ip", "netns", "exec", "vn-test", "ip", "-j", "link", "show",
+        ]):
+            assert not stale_peer_present
+            return completed(command, "[]")
+        return completed(command)
+
+    monkeypatch.setattr(agentless_net_network, "run_command", run)
+    assert agentless_net_network.ensure_veth_pair(
+        "vn-test", "vn-ns", "vn-host", owner_alias="osac-vn:11111111-1111-4111-8111-111111111111"
+    ) is True
+    assert ["ip", "link", "add", "vn-host", "type", "veth", "peer", "name", "vn-ns"] in commands
+
+
+def test_ensure_veth_pair_does_not_create_a_pair_when_absence_is_unconfirmed(monkeypatch):
+    commands = []
+
+    def run(command, check=True):
+        commands.append(command)
+        if command == ["ip", "netns", "exec", "vn-test", "true"]:
+            return completed(command)
+        if command == ["ip", "-o", "link", "show", "dev", "vn-host"]:
+            return completed(command)
+        if command == [
+            "ip", "netns", "exec", "vn-test", "ip", "-o", "link", "show", "dev", "vn-ns",
+        ]:
+            return completed(command, returncode=1)
+        if command == ["ip", "-j", "-d", "link", "show", "dev", "vn-host"]:
+            return completed(
+                command,
+                json.dumps(
+                    [
+                        {
+                            "ifname": "vn-host",
+                            "flags": ["UP"],
+                            "ifalias": "osac-vn:expected-uid",
+                            "linkinfo": {"info_kind": "veth"},
+                        }
+                    ]
+                ),
+            )
+        if command == ["ip", "link", "delete", "dev", "vn-host"]:
+            return completed(command, returncode=1)
+        if command == ["ip", "-j", "link", "show"]:
+            return completed(command, '[{"ifname":"vn-host"}]')
+        if command == [
+            "ip", "netns", "exec", "vn-test", "ip", "-j", "link", "show",
+        ]:
+            return completed(command, "[]")
+        return completed(command)
+
+    monkeypatch.setattr(agentless_net_network, "run_command", run)
+    with pytest.raises(agentless_net_network.NetworkCommandError, match="stale host uplink remains"):
+        agentless_net_network.ensure_veth_pair(
+            "vn-test", "vn-ns", "vn-host", owner_alias="osac-vn:expected-uid"
+        )
+    assert not any(command[:3] == ["ip", "link", "add"] for command in commands)
+
+
+def test_ensure_veth_pair_does_not_create_a_pair_when_verification_fails(monkeypatch):
+    commands = []
+
+    def run(command, check=True):
+        commands.append(command)
+        if command == ["ip", "netns", "exec", "vn-test", "true"]:
+            return completed(command)
+        if command == ["ip", "-o", "link", "show", "dev", "vn-host"]:
+            return completed(command)
+        if command == [
+            "ip", "netns", "exec", "vn-test", "ip", "-o", "link", "show", "dev", "vn-ns",
+        ]:
+            return completed(command, returncode=1)
+        if command == ["ip", "-j", "-d", "link", "show", "dev", "vn-host"]:
+            return completed(
+                command,
+                json.dumps(
+                    [
+                        {
+                            "ifname": "vn-host",
+                            "flags": ["UP"],
+                            "ifalias": "osac-vn:expected-uid",
+                            "linkinfo": {"info_kind": "veth"},
+                        }
+                    ]
+                ),
+            )
+        if command == ["ip", "link", "delete", "dev", "vn-host"]:
+            return completed(command, returncode=1)
+        if command == ["ip", "-j", "link", "show"]:
+            if check:
+                raise agentless_net_network.NetworkCommandError("ip failed (exit status 1)")
+            return completed(command, returncode=1)
+        return completed(command)
+
+    monkeypatch.setattr(agentless_net_network, "run_command", run)
+    with pytest.raises(agentless_net_network.NetworkCommandError, match="ip failed"):
+        agentless_net_network.ensure_veth_pair(
+            "vn-test", "vn-ns", "vn-host", owner_alias="osac-vn:expected-uid"
+        )
+    assert not any(command[:3] == ["ip", "link", "add"] for command in commands)
+
+
 def test_run_command_bounds_subprocess_and_reports_timeout(monkeypatch):
     def timeout(command, **kwargs):
         assert kwargs["timeout"] == agentless_net_network.COMMAND_TIMEOUT_SECONDS
@@ -245,6 +380,8 @@ def test_run_command_bounds_subprocess_and_reports_timeout(monkeypatch):
         (True, True, 1, "", "not JSON", None),
         (True, True, 1, "", "", None),
         (True, True, 1, "", '[{"index":1}]', None),
+        (False, True, 1, "", "[]", False),
+        (True, True, 1, "vn-test (id: 1)\n", '[{"ifname":"vn-host"}]', None),
     ],
 )
 def test_delete_uplink_verifies_cleanup(

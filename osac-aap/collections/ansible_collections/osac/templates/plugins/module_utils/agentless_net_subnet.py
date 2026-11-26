@@ -363,8 +363,13 @@ def remove_subnet_interface(namespace: str, entry: dict[str, Any]) -> bool:
             trunk=trunk,
             allow_unclaimed=True,
         )
-        _run(["ip", "netns", "exec", namespace, "ip", "link", "delete", "dev", interface])
-        changed = True
+        # The interface can disappear after the probe above. Delete best-effort
+        # and decide by the verified listings instead of the command's status.
+        deleted = _run(
+            ["ip", "netns", "exec", namespace, "ip", "link", "delete", "dev", interface],
+            check=False,
+        )
+        changed = deleted.returncode == 0
     elif host_link is not None:
         _verify_vlan_link(
             host_link,
@@ -374,10 +379,18 @@ def remove_subnet_interface(namespace: str, entry: dict[str, Any]) -> bool:
             trunk=trunk,
             allow_unclaimed=True,
         )
-        _run(["ip", "link", "delete", "dev", interface])
-        changed = True
-    host_after, namespace_after = _interface_locations(namespace, interface)
-    if host_after is not None or namespace_after is not None:
+        deleted = _run(["ip", "link", "delete", "dev", interface], check=False)
+        changed = deleted.returncode == 0
+    # Both listings must succeed and must not contain the exact name: a failed
+    # or malformed probe is not evidence that the interface is gone, so the
+    # caller retries. Skip the namespaced listing only when a successful
+    # listing confirms the namespace itself is gone.
+    if interface in network._listed_interface_names():
+        raise SubnetProviderError(f"Subnet VLAN interface {interface} remains after deletion")
+    if (
+        namespace in network._listed_namespace_names()
+        and interface in network._listed_interface_names(namespace)
+    ):
         raise SubnetProviderError(f"Subnet VLAN interface {interface} remains after deletion")
     return changed
 

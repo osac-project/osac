@@ -272,6 +272,8 @@ def provider_testbed(monkeypatch, tmp_path, *, reject_dnsmasq=False):
         "supervisor_starting_statuses": 0,
         "supervisor_stuck_starting": False,
         "on_stop": None,
+        "link_delete_returncode": 0,
+        "link_delete_removes": True,
     }
 
     def completed(command, *, stdout="", returncode=0, stderr=""):
@@ -419,9 +421,17 @@ def provider_testbed(monkeypatch, tmp_path, *, reject_dnsmasq=False):
             return completed(command)
         if local[:2] == ["ip", "link"] and local[2] == "delete":
             interface = local[-1]
-            (namespace_links.get(namespace, {}) if namespace else host_links).pop(interface, None)
-            addresses.get(namespace, {}).pop(interface, None)
-            return completed(command)
+            if service["link_delete_removes"]:
+                (namespace_links.get(namespace, {}) if namespace else host_links).pop(interface, None)
+                addresses.get(namespace, {}).pop(interface, None)
+            return completed(command, returncode=service["link_delete_returncode"])
+        if local == ["ip", "-j", "link", "show"]:
+            state = namespace_links.get(namespace, {}) if namespace else host_links
+            return completed(command, stdout=json.dumps([{"ifname": name} for name in state]))
+        if local == ["ip", "netns", "list"]:
+            return completed(
+                command, stdout="".join(f"{name} (id: 1)\n" for name in namespace_links)
+            )
         return completed(command)
 
     monkeypatch.setattr(agentless_net_subnet.network, "run_command", fake_run)
@@ -449,6 +459,74 @@ def test_vlan_interface_is_created_verified_and_removed(monkeypatch, tmp_path):
     agentless_net_subnet.verify_subnet_interface(NAMESPACE, entry)
     assert agentless_net_subnet.remove_subnet_interface(NAMESPACE, entry) is True
     assert entry["vlan_interface"] not in namespace_links[NAMESPACE]
+
+
+def test_remove_subnet_interface_finishes_when_the_interface_vanishes_after_a_failed_delete(
+    monkeypatch, tmp_path
+):
+    _, _, _, namespace_links, _, service = provider_testbed(monkeypatch, tmp_path)
+    entry = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
+    agentless_net_subnet._ensure_subnet_interfaces(parent_entry(), [entry])
+
+    service["link_delete_returncode"] = 1
+    service["link_delete_removes"] = True
+
+    assert agentless_net_subnet.remove_subnet_interface(NAMESPACE, entry) is False
+    assert entry["vlan_interface"] not in namespace_links[NAMESPACE]
+
+
+def test_remove_subnet_interface_finishes_when_an_host_left_interface_vanishes(
+    monkeypatch, tmp_path
+):
+    _, _, host_links, namespace_links, addresses, service = provider_testbed(monkeypatch, tmp_path)
+    entry = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
+    interface = entry["vlan_interface"]
+    host_links[interface] = {
+        "ifname": interface,
+        "flags": ["BROADCAST", "MULTICAST", "UP"],
+        "ifalias": f"osac-subnet:{SUBNET_A_UID}",
+        "link": "eth1",
+        "linkinfo": {"info_kind": "vlan", "info_data": {"id": 100}},
+    }
+
+    service["link_delete_returncode"] = 1
+    service["link_delete_removes"] = True
+
+    assert agentless_net_subnet.remove_subnet_interface(NAMESPACE, entry) is False
+    assert interface not in host_links
+    assert interface not in namespace_links[NAMESPACE]
+    assert interface not in addresses.get(NAMESPACE, {})
+
+
+def test_remove_subnet_interface_keeps_retrying_when_the_interface_survives_a_failed_delete(
+    monkeypatch, tmp_path
+):
+    _, _, _, namespace_links, _, service = provider_testbed(monkeypatch, tmp_path)
+    entry = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
+    agentless_net_subnet._ensure_subnet_interfaces(parent_entry(), [entry])
+
+    service["link_delete_returncode"] = 1
+    service["link_delete_removes"] = False
+
+    with pytest.raises(agentless_net_subnet.SubnetProviderError, match="remains after deletion"):
+        agentless_net_subnet.remove_subnet_interface(NAMESPACE, entry)
+    assert entry["vlan_interface"] in namespace_links[NAMESPACE]
+
+
+def test_remove_subnet_interface_keeps_retrying_when_the_listing_fails(monkeypatch, tmp_path):
+    provider_testbed(monkeypatch, tmp_path)
+    entry = subnet_entry(SUBNET_A_UID, "10.20.1.0/24", 100)
+    agentless_net_subnet._ensure_subnet_interfaces(parent_entry(), [entry])
+
+    def failing_listing(namespace=None):
+        raise agentless_net_subnet.network.NetworkCommandError("link listing returned no output")
+
+    monkeypatch.setattr(agentless_net_subnet.network, "_listed_interface_names", failing_listing)
+
+    # An untrustworthy listing is not evidence of success, so the delete stays
+    # retryable instead of reporting that the interface is gone.
+    with pytest.raises(agentless_net_subnet.network.NetworkCommandError):
+        agentless_net_subnet.remove_subnet_interface(NAMESPACE, entry)
 
 
 def test_retry_moves_an_owned_vlan_left_on_the_host_into_the_parent_namespace(monkeypatch, tmp_path):

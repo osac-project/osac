@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import base64
+import hmac
 import json
 import os
 from pathlib import Path
+import secrets
 import ssl
 import subprocess
 import sys
@@ -13,8 +15,8 @@ import tempfile
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-CLIENT_SECRET = "synthetic-test-client-secret"
-ACCESS_TOKEN = "synthetic-test-access-token"
+CLIENT_SECRET = secrets.token_urlsafe(32)
+ACCESS_TOKEN = secrets.token_urlsafe(32)
 USERDATA = "synthetic-test-userdata"
 CLOUD_CONFIG = f"#cloud-config\nhostname: {USERDATA}"
 SYSPREP = f"<unattend><!-- {USERDATA} --></unattend>"
@@ -41,15 +43,20 @@ class AuthAndSecretAPI(BaseHTTPRequestHandler):
         self.server.calls.append(self.path)
         if self.path == DISCOVERY:
             self.reply(200, {"issuer": self.server.origin + "/realm", "token_endpoint": self.server.origin + TOKEN})
-        elif self.path == SECRET and self.headers.get("Authorization") == f"Bearer {ACCESS_TOKEN}":
+        elif self.path == SECRET and hmac.compare_digest(
+            self.headers.get("Authorization", "").encode("latin-1"),
+            f"Bearer {ACCESS_TOKEN}".encode("ascii"),
+        ):
             self.reply(200, {"data": {"userdata": self.server.payload}})
         else:
             self.reply(404, {"error": "unknown test request"})
 
     def do_POST(self):
         self.server.calls.append(self.path)
-        expected = base64.b64encode(f"fixture:{CLIENT_SECRET}".encode()).decode()
-        if self.path == TOKEN and self.headers.get("Authorization") == f"Basic {expected}":
+        expected = b"Basic " + base64.b64encode(f"fixture:{CLIENT_SECRET}".encode("ascii"))
+        if self.path == TOKEN and hmac.compare_digest(
+            self.headers.get("Authorization", "").encode("latin-1"), expected
+        ):
             self.reply(200, {"access_token": ACCESS_TOKEN, "expires_in": 300})
         else:
             self.reply(401, {"error": "unexpected test credentials"})

@@ -375,6 +375,105 @@ var _ = Describe("Private storage tiers server", func() {
 				privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS))
 		})
 
+		It("rejects a supplied nonexistent backend even outside the update mask", func() {
+			created := createStorageTier()
+			_, err := server.Update(ctx, privatev1.StorageTiersUpdateRequest_builder{
+				Object: privatev1.StorageTier_builder{
+					Id: created.GetId(), Spec: privatev1.StorageTierSpec_builder{
+						Description: "updated",
+						Backends:    []*privatev1.BackendAssociation{privatev1.BackendAssociation_builder{BackendId: "missing"}.Build()},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.description"}},
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.NotFound))
+		})
+
+		It("rejects extra backend associations in an indexed update", func() {
+			created := createStorageTier()
+			_, err := server.Update(ctx, privatev1.StorageTiersUpdateRequest_builder{
+				Object: privatev1.StorageTier_builder{
+					Id: created.GetId(),
+					Spec: privatev1.StorageTierSpec_builder{Backends: []*privatev1.BackendAssociation{
+						privatev1.BackendAssociation_builder{BackendId: backendID, MaxReadBandwidthMbs: 2000}.Build(),
+						privatev1.BackendAssociation_builder{BackendId: backendID}.Build(),
+					}}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.backends.0"}},
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(status.Convert(err).Message()).To(ContainSubstring("only one backend association"))
+			got, err := server.Get(ctx, privatev1.StorageTiersGetRequest_builder{Id: created.GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.GetObject().GetSpec().GetBackends()[0].GetMaxReadBandwidthMbs()).
+				To(Equal(created.GetSpec().GetBackends()[0].GetMaxReadBandwidthMbs()))
+		})
+
+		It("allows a description edit on a historical tier with no backend associations", func() {
+			_, err := server.generic.dao.Create().SetObject(privatev1.StorageTier_builder{
+				Id:       "legacy-tier",
+				Metadata: privatev1.Metadata_builder{Name: "legacy-tier", Tenant: auth.SharedTenant}.Build(),
+				Spec:     privatev1.StorageTierSpec_builder{Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			response, err := server.Update(ctx, privatev1.StorageTiersUpdateRequest_builder{
+				Object: privatev1.StorageTier_builder{
+					Id: "legacy-tier", Spec: privatev1.StorageTierSpec_builder{Description: "Updated"}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.description"}},
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(response.GetObject().GetSpec().GetDescription()).To(Equal("Updated"))
+			Expect(response.GetObject().GetSpec().GetBackends()).To(BeEmpty())
+		})
+
+		It("checks the effective protocol and backend for delegated VAST tiers", func() {
+			const delegatedID = "delegated-vast"
+			_, err := server.storageBackendsDAO.Create().SetObject(privatev1.StorageBackend_builder{
+				Id:       delegatedID,
+				Metadata: privatev1.Metadata_builder{Name: delegatedID, Tenant: auth.SharedTenant}.Build(),
+				Spec:     privatev1.StorageBackendSpec_builder{Provider: "vast", Endpoint: "https://vast.example.com"}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).NotTo(HaveOccurred())
+
+			object := privatev1.StorageTier_builder{
+				Metadata: privatev1.Metadata_builder{Name: "delegated-tier"}.Build(),
+				Spec: privatev1.StorageTierSpec_builder{
+					Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK,
+					Backends: []*privatev1.BackendAssociation{privatev1.BackendAssociation_builder{BackendId: delegatedID}.Build()},
+				}.Build(),
+			}.Build()
+			create := privatev1.StorageTiersCreateRequest_builder{Object: object}.Build()
+			_, err = server.Create(ctx, create)
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(status.Convert(err).Message()).To(ContainSubstring("credentials"))
+
+			object.GetSpec().SetProtocol(privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS)
+			created, err := server.Create(ctx, create)
+			Expect(err).NotTo(HaveOccurred())
+			id := created.GetObject().GetId()
+			update := func(spec *privatev1.StorageTierSpec, paths ...string) error {
+				_, err := server.Update(ctx, privatev1.StorageTiersUpdateRequest_builder{
+					Object:     privatev1.StorageTier_builder{Id: id, Spec: spec}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: paths},
+				}.Build())
+				return err
+			}
+
+			block := privatev1.StorageTierSpec_builder{Protocol: privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK}.Build()
+			Expect(status.Code(update(block, "spec.protocol"))).To(Equal(codes.InvalidArgument))
+			Expect(status.Code(update(block, "spec. protocol"))).To(Equal(codes.InvalidArgument))
+			block.SetBackends([]*privatev1.BackendAssociation{privatev1.BackendAssociation_builder{BackendId: backendID}.Build()})
+			Expect(update(block, "spec.protocol", "spec.backends")).To(Succeed())
+			Expect(status.Code(update(object.GetSpec(), "spec.backends"))).To(Equal(codes.InvalidArgument))
+			Expect(status.Code(update(object.GetSpec(), "spec.backends.0"))).To(Equal(codes.InvalidArgument))
+
+			got, err := server.Get(ctx, privatev1.StorageTiersGetRequest_builder{Id: id}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got.GetObject().GetSpec().GetProtocol()).To(Equal(privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK))
+			Expect(got.GetObject().GetSpec().GetBackends()[0].GetBackendId()).To(Equal(backendID))
+		})
+
 		It("Delete removes the object", func() {
 			created := createStorageTier()
 

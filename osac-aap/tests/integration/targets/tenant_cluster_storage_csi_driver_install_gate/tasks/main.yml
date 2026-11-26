@@ -5,8 +5,8 @@
 # sends a Tenant) and CaaS/guest-cluster storage (handleCaaSUpdate, sends a ClusterOrder).
 # csi_driver_install must fire for the Tenant (hub) case and NEVER for the ClusterOrder
 # (guest-cluster) case, since it always targets the hub's default kubeconfig context.
-# Legacy ClusterOrder VAST tiers still use the VAST provider's installer on the guest
-# cluster until OSAC CSI support for CaaS is complete.
+# A ClusterOrder VAST tier is served by the OSAC CSI role, so the ClusterOrder case also
+# asserts that no VAST CSI operator is installed on the guest cluster.
 #
 # Verifies the playbook's when: osac_job_vars.resource.kind == 'Tenant' gate by stubbing
 # the real Helm install via csi_driver_install_override (same override mechanism

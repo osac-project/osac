@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
+	posixpath "path"
 	"strings"
 
 	"google.golang.org/grpc"
@@ -49,7 +51,6 @@ type VASTNFSConfig struct {
 	RootExport         string
 	ViewPolicy         string
 	NFSAddress         string
-	VIPPoolName        string
 }
 
 // ResolveVASTNFSConfig reads preparation for an authorized tenant and an already selected OSAC-managed VAST backend.
@@ -61,11 +62,15 @@ func ResolveVASTNFSConfig(
 ) (VASTNFSConfig, error) {
 	backendName := backend.GetMetadata().GetName()
 	spec := backend.GetSpec()
-	if len(validation.IsDNS1123Label(tenantName)) != 0 || len(validation.IsDNS1123Label(backendName)) != 0 || strings.TrimSpace(spec.GetEndpoint()) == "" {
-		return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS requires valid tenant and backend names and a management endpoint")
+	if len(validation.IsDNS1123Label(tenantName)) != 0 || len(validation.IsDNS1123Label(backendName)) != 0 {
+		return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS requires valid tenant and backend names")
 	}
 	if spec.GetProvider() != "vast" || spec.GetCspManaged() {
 		return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS preparation requires an OSAC-managed VAST backend")
+	}
+	managementEndpoint, err := normalizeVASTManagementEndpoint(spec.GetEndpoint())
+	if err != nil {
+		return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS backend requires a valid management hostname or IP, optionally prefixed with https://")
 	}
 	if secrets == nil {
 		return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS preparation requires a SecretsService client")
@@ -112,7 +117,28 @@ func ResolveVASTNFSConfig(
 	if secret.GetType() != privatev1.SecretType_SECRET_TYPE_OPAQUE {
 		return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS preparation Secret must be OPAQUE")
 	}
-	return decodeVASTNFSConfig(secret.GetData()["config.yaml"], spec.GetEndpoint())
+	return decodeVASTNFSConfig(secret.GetData()["config.yaml"], managementEndpoint)
+}
+
+// normalizeVASTManagementEndpoint removes the optional HTTPS scheme because
+// the VAST CSI controller adds https:// when it builds its management URL.
+func normalizeVASTManagementEndpoint(endpoint string) (string, error) {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return "", fmt.Errorf("management endpoint is empty")
+	}
+	if strings.Contains(endpoint, "://") {
+		parsed, err := url.Parse(endpoint)
+		if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" || parsed.User != nil ||
+			(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return "", fmt.Errorf("management endpoint must be an HTTPS origin without credentials, path, query or fragment")
+		}
+		endpoint = parsed.Host
+	}
+	if strings.ContainsAny(endpoint, "/?#@ \t\r\n") {
+		return "", fmt.Errorf("management endpoint must be a hostname or IP address")
+	}
+	return endpoint, nil
 }
 
 func matchesVASTNFSSecret(secret *privatev1.Secret, name string) bool {
@@ -145,9 +171,8 @@ func decodeVASTNFSConfig(payload []byte, endpoint string) (VASTNFSConfig, error)
 			Data string `yaml:"data"`
 		} `yaml:"endpoints"`
 		Options struct {
-			RootExport  string `yaml:"root_export"`
-			ViewPolicy  string `yaml:"view_policy"`
-			VIPPoolName string `yaml:"vip_pool_name"`
+			RootExport string `yaml:"root_export"`
+			ViewPolicy string `yaml:"view_policy"`
 		} `yaml:"options"`
 	}
 
@@ -175,23 +200,49 @@ func decodeVASTNFSConfig(payload []byte, endpoint string) (VASTNFSConfig, error)
 	if strings.TrimSpace(bundle.Options.RootExport) == "" || strings.TrimSpace(bundle.Options.ViewPolicy) == "" {
 		return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS preparation requires options.root_export and options.view_policy")
 	}
-	nfsAddress, vipPoolName := strings.TrimSpace(bundle.Endpoints.Data), strings.TrimSpace(bundle.Options.VIPPoolName)
-	if (nfsAddress == "") == (vipPoolName == "") {
-		return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS preparation requires exactly one of endpoints.data or options.vip_pool_name")
+	rootExport, err := normalizeVASTNFSRootExport(bundle.Options.RootExport)
+	if err != nil {
+		return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS options.root_export must be an absolute path without parent-directory components")
 	}
-	if nfsAddress != "" {
-		if len(validation.IsFullyQualifiedDomainName(nil, strings.ToLower(nfsAddress))) != 0 || net.ParseIP(strings.TrimSuffix(nfsAddress, ".")) != nil {
-			return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS endpoints.data must be the fully qualified DNS name of the VIP pool")
-		}
+	nfsAddress := strings.TrimSpace(bundle.Endpoints.Data)
+	if nfsAddress == "" {
+		return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS preparation requires endpoints.data as a direct mount hostname or IP address")
+	}
+	if !validVASTNFSDataAddress(nfsAddress) {
+		return VASTNFSConfig{}, status.Error(codes.FailedPrecondition, "VAST NFS endpoints.data must be a fully qualified DNS name or IP address without a URL scheme")
 	}
 	return VASTNFSConfig{
 		ManagementEndpoint: endpoint,
 		StorageTenant:      bundle.StorageTenant,
 		Username:           bundle.Credentials.Username,
 		Password:           bundle.Credentials.Password,
-		RootExport:         bundle.Options.RootExport,
+		RootExport:         rootExport,
 		ViewPolicy:         bundle.Options.ViewPolicy,
 		NFSAddress:         nfsAddress,
-		VIPPoolName:        vipPoolName,
 	}, nil
+}
+
+func normalizeVASTNFSRootExport(rootExport string) (string, error) {
+	rootExport = strings.TrimSpace(rootExport)
+	if !strings.HasPrefix(rootExport, "/") {
+		return "", fmt.Errorf("root export must be absolute")
+	}
+	for _, component := range strings.Split(rootExport, "/") {
+		if component == ".." {
+			return "", fmt.Errorf("root export cannot contain parent-directory components")
+		}
+	}
+	return posixpath.Clean(rootExport), nil
+}
+
+func validVASTNFSDataAddress(address string) bool {
+	ipAddress := address
+	if strings.HasPrefix(ipAddress, "[") && strings.HasSuffix(ipAddress, "]") {
+		ipAddress = ipAddress[1 : len(ipAddress)-1]
+	}
+	if net.ParseIP(ipAddress) != nil {
+		return true
+	}
+	dnsName := strings.TrimSuffix(address, ".")
+	return len(validation.IsFullyQualifiedDomainName(nil, strings.ToLower(dnsName))) == 0
 }

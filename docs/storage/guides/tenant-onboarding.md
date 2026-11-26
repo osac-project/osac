@@ -105,8 +105,15 @@ options:
   view_policy: acme-nfs
 ```
 
-Set `endpoints.data` to the VIP pool's fully qualified DNS name. A named VIP
-pool uses `options.vip_pool_name` in place of `endpoints.data`.
+Set `endpoints.data` to the direct NFS mount address: a fully qualified DNS
+name or IP address, without a URL scheme. For now, provide the pool address
+itself; OSAC does not look up a VIP pool by name. This is the mount address
+used by workloads, separate from the VAST management address in the registered
+StorageBackend.
+
+The resolver passes the management host to VAST CSI without its optional
+`https://` prefix. VAST CSI adds that scheme when connecting to the management
+API, so a configured URL does not become `https://https://...`.
 
 Use the private API as a Cloud Provider Admin to create the Secret in the
 default project of the `system` tenant. Name it `<osac-tenant>--<registered-backend>`.

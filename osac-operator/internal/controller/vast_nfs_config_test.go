@@ -100,17 +100,12 @@ func TestResolveVASTNFSConfig(t *testing.T) {
 		name    string
 		payload string
 		address string
-		vipPool string
 	}{
 		{name: "Gold with an NFS address", payload: vastNFSFixtureBundle, address: "acme-nfs.example.com"},
 		{name: "Silver on the same backend", payload: vastNFSFixtureBundle, address: "acme-nfs.example.com"},
 		{name: "absolute DNS name", payload: strings.ReplaceAll(vastNFSFixtureBundle, "acme-nfs.example.com", "Acme-NFS.Example.com."), address: "Acme-NFS.Example.com."},
-		{
-			name: "named VIP pool",
-			payload: strings.ReplaceAll(vastNFSFixtureBundle, "endpoints:\n  data: acme-nfs.example.com\n", "") +
-				"  vip_pool_name: fixture-vip-pool\n",
-			vipPool: "fixture-vip-pool",
-		},
+		{name: "IPv4 mount address", payload: strings.ReplaceAll(vastNFSFixtureBundle, "acme-nfs.example.com", "192.0.2.10"), address: "192.0.2.10"},
+		{name: "IPv6 mount address", payload: strings.ReplaceAll(vastNFSFixtureBundle, "acme-nfs.example.com", "2001:db8::10"), address: "2001:db8::10"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client := vastNFSFixtureClient(tc.payload)
@@ -124,12 +119,63 @@ func TestResolveVASTNFSConfig(t *testing.T) {
 			if len(client.gotIDs) != 1 || client.gotIDs[0] != "prepared-secret-id" {
 				t.Fatal("expected Get by the matching Secret's ID")
 			}
-			if config.ManagementEndpoint != "https://vast-manager.example.com" ||
+			if config.ManagementEndpoint != "vast-manager.example.com" ||
 				config.StorageTenant != "acme-on-vast" || config.Username != "fixture-admin" ||
 				config.Password != " fixture-only " || config.RootExport != "/acme/claas" ||
 				config.ViewPolicy != "fixture-view-policy" ||
-				config.NFSAddress != tc.address || config.VIPPoolName != tc.vipPool {
+				config.NFSAddress != tc.address {
 				t.Fatal("resolved configuration differs from the selected backend and fixture bundle")
+			}
+		})
+	}
+}
+
+func TestNormalizeVASTManagementEndpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "HTTPS URL strips scheme", input: "https://vast-manager.example.com", want: "vast-manager.example.com"},
+		{name: "HTTPS URL with root slash strips scheme", input: "https://vast-manager.example.com/", want: "vast-manager.example.com"},
+		{name: "bare hostname is retained", input: "vast-manager.example.com", want: "vast-manager.example.com"},
+		{name: "bare IP with port is retained", input: "192.0.2.10:443", want: "192.0.2.10:443"},
+		{name: "HTTP URL rejected", input: "http://vast-manager.example.com", wantErr: true},
+		{name: "path rejected", input: "https://vast-manager.example.com/api", wantErr: true},
+		{name: "query rejected", input: "https://vast-manager.example.com?tenant=acme", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeVASTManagementEndpoint(tc.input)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("normalizeVASTManagementEndpoint(%q) error = %v, wantErr %t", tc.input, err, tc.wantErr)
+			}
+			if err == nil && got != tc.want {
+				t.Fatalf("normalized endpoint = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeVASTNFSRootExport(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "canonical path", input: "/acme/claas", want: "/acme/claas"},
+		{name: "normalizes path", input: " /acme//claas/./ ", want: "/acme/claas"},
+		{name: "rejects parent traversal", input: "/acme/../other", wantErr: true},
+		{name: "rejects relative path", input: "acme/claas", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := normalizeVASTNFSRootExport(tc.input)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("normalizeVASTNFSRootExport(%q) error = %v, wantErr %t", tc.input, err, tc.wantErr)
+			}
+			if err == nil && got != tc.want {
+				t.Fatalf("normalized root export = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -246,10 +292,10 @@ func TestResolveVASTNFSConfigRejectsInvalidBundles(t *testing.T) {
 		{"no password", strings.Replace(vastNFSFixtureBundle, "  password: ' fixture-only '\n", "", 1)},
 		{"no export root", strings.Replace(vastNFSFixtureBundle, "  root_export: /acme/claas\n", "", 1)},
 		{"no view policy", strings.Replace(vastNFSFixtureBundle, "  view_policy: fixture-view-policy\n", "", 1)},
-		{"both VIP choices", vastNFSFixtureBundle + "  vip_pool_name: fixture-pool\n"},
-		{"URL instead of VIP pool FQDN", strings.ReplaceAll(vastNFSFixtureBundle, "acme-nfs.example.com", "https://fixture-only.example.com/path")},
-		{"IP instead of VIP pool FQDN", strings.ReplaceAll(vastNFSFixtureBundle, "acme-nfs.example.com", "192.0.2.10")},
-		{"neither VIP choice", strings.Replace(vastNFSFixtureBundle, "endpoints:\n  data: acme-nfs.example.com\n", "", 1)},
+		{"parent traversal in root export", strings.Replace(vastNFSFixtureBundle, "/acme/claas", "/acme/../other", 1)},
+		{"named VIP pool is unsupported", strings.Replace(vastNFSFixtureBundle, "endpoints:\n  data: acme-nfs.example.com\n", "", 1) + "  vip_pool_name: fixture-pool\n"},
+		{"URL instead of direct mount address", strings.ReplaceAll(vastNFSFixtureBundle, "acme-nfs.example.com", "https://fixture-only.example.com/path")},
+		{"missing direct mount address", strings.Replace(vastNFSFixtureBundle, "endpoints:\n  data: acme-nfs.example.com\n", "", 1)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := vastNFSFixtureClient(tc.payload)

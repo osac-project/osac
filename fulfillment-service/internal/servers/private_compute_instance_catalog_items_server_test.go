@@ -469,10 +469,15 @@ var _ = Describe("Private compute instance catalog items server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			object := createResponse.GetObject()
 
-			_, err = server.Delete(ctx, privatev1.ComputeInstanceCatalogItemsDeleteRequest_builder{
+			deleteResponse, err := server.Delete(ctx, privatev1.ComputeInstanceCatalogItemsDeleteRequest_builder{
 				Id: object.GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+			deleted := deleteResponse.GetObject()
+			Expect(deleted).ToNot(BeNil())
+			Expect(deleted.GetId()).To(Equal(object.GetId()))
+			Expect(deleted.GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
+			Expect(deleted.GetMetadata().GetFinalizers()).To(Equal([]string{"a"}))
 
 			getResponse, err := server.Get(ctx, privatev1.ComputeInstanceCatalogItemsGetRequest_builder{
 				Id: object.GetId(),

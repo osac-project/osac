@@ -371,6 +371,10 @@ var _ = Describe("Compute instance templates server", func() {
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(deleteResponse).ToNot(BeNil())
+			deleted := deleteResponse.GetObject()
+			Expect(deleted).ToNot(BeNil())
+			Expect(deleted.GetId()).To(Equal(id))
+			Expect(deleted.GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
 
 			// Verify the object is deleted:
 			getResponse, err := server.Get(ctx, publicv1.ComputeInstanceTemplatesGetRequest_builder{

@@ -522,10 +522,14 @@ var _ = Describe("Compute instance catalog items server", func() {
 			)
 			Expect(err).ToNot(HaveOccurred())
 
-			_, err = server.Delete(ctx, publicv1.ComputeInstanceCatalogItemsDeleteRequest_builder{
+			deleteResponse, err := server.Delete(ctx, publicv1.ComputeInstanceCatalogItemsDeleteRequest_builder{
 				Id: object.GetId(),
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
+			deleted := deleteResponse.GetObject()
+			Expect(deleted).ToNot(BeNil())
+			Expect(deleted.GetId()).To(Equal(object.GetId()))
+			Expect(deleted.GetMetadata().GetDeletionTimestamp()).ToNot(BeNil())
 
 			getResponse, err := server.Get(ctx, publicv1.ComputeInstanceCatalogItemsGetRequest_builder{
 				Id: object.GetId(),

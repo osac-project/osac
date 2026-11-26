@@ -48,6 +48,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/storagebackend"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/storagetier"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/subnet"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/tenant"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/virtualnetwork"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/help"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
@@ -84,6 +85,7 @@ func Cmd() *cobra.Command {
 	result.AddCommand(subnet.Cmd())
 	result.AddCommand(secret.Cmd())
 	result.AddCommand(securitygroup.Cmd())
+	result.AddCommand(help.MarkPrivateAPI(tenant.Cmd()))
 	result.AddCommand(help.MarkPrivateAPI(storagebackend.Cmd()))
 	result.AddCommand(help.MarkPrivateAPI(storagetier.Cmd()))
 	flags := result.Flags()

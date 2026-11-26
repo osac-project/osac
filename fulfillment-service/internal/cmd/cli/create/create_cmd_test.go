@@ -35,6 +35,7 @@ import (
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/secret"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/securitygroup"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/subnet"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/tenant"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/virtualnetwork"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -63,6 +64,7 @@ var _ = Describe("Create command", func() {
 		Entry("subnet", subnet.Cmd, (*publicv1.Subnet)(nil)),
 		Entry("secret", secret.Cmd, (*publicv1.Secret)(nil)),
 		Entry("securitygroup", securitygroup.Cmd, (*publicv1.SecurityGroup)(nil)),
+		Entry("tenant", tenant.Cmd, (*privatev1.Tenant)(nil)),
 	)
 
 	Describe("Subcommands", func() {
@@ -92,6 +94,7 @@ var _ = Describe("Create command", func() {
 				"subnet",
 				"secret",
 				"securitygroup",
+				"tenant",
 			))
 		})
 	})
@@ -101,7 +104,7 @@ var _ = Describe("Create command", func() {
 			cmd := Cmd()
 			privateNames := map[string]bool{
 				"baremetalinstancetype": true, "hub": true, "instancetype": true, "clusterversion": true,
-				"storagebackend": true, "storagetier": true,
+				"storagebackend": true, "storagetier": true, "tenant": true,
 			}
 			for _, sub := range cmd.Commands() {
 				if privateNames[sub.Name()] {

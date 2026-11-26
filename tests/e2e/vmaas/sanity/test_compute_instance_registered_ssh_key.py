@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 from collections.abc import Callable
@@ -8,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import unique_name, wait_for_cr, wait_for_deletion, wait_for_provision, wait_for_running
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
@@ -66,8 +68,13 @@ def test_registered_ssh_key_cleanup_deletes_key_when_instance_cleanup_fails() ->
 
 
 def test_compute_instance_resolves_registered_ssh_key(
-    cli: OsacCLI, k8s_hub_client: K8sClient, default_network_attachment: dict[str, object], vm_template: str
+    cli: OsacCLI,
+    grpc: GRPCClient,
+    k8s_hub_client: K8sClient,
+    default_network_attachment: dict[str, object],
+    vm_template: str,
 ) -> None:
+    """TC-02 / TC-11 (partial): verify the selected key reference and VM CR projection."""
     with tempfile.TemporaryDirectory() as tmpdir:
         private_key = Path(tmpdir) / "compute-instance-key"
         subprocess.run(
@@ -84,12 +91,22 @@ def test_compute_instance_resolves_registered_ssh_key(
         instance_id: str | None = None
         instance_name: str | None = None
         try:
+            secret_payload = json.loads(cli._run("get", "secrets", key_name, "-o", "json"))
+            secrets = secret_payload if isinstance(secret_payload, list) else [secret_payload]
+            assert len(secrets) == 1
+            secret_id = secrets[0]["id"]
             instance_id = cli.create_compute_instance(
                 template=vm_template,
                 name=unique_name("e2e-ssh-ci"),
                 network_attachments=[default_network_attachment],
                 ssh_key=key_name,
             )
+            instance = grpc.get_compute_instance(ci_id=instance_id)["object"]
+            assert not instance["metadata"].get("project")
+            reference = instance["spec"]["sshKey"]
+            assert reference["id"] == secret_id
+            assert reference["name"] == key_name
+            assert not reference.get("project")
             instance_name = wait_for_cr(k8s=k8s_hub_client, uuid=instance_id)
             wait_for_provision(k8s=k8s_hub_client, name=instance_name)
             wait_for_running(k8s=k8s_hub_client, name=instance_name)

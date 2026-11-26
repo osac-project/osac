@@ -1,4 +1,4 @@
-FROM docker.io/wiremock/wiremock:3.13.2-2@sha256:27c4b74404f58ceedc6899f73abdfe228d8f80d5efa4d8bd42d6c155558b677c
+FROM ghcr.io/wiremock/wiremock:3.13.2-2@sha256:27c4b74404f58ceedc6899f73abdfe228d8f80d5efa4d8bd42d6c155558b677c
 
 # Use the standalone extension, which includes its runtime dependencies.
 ADD --chmod=0444 --checksum=sha256:8898a2700ca16f2d235fa42253e3f400cc08117f9190fdfe1686014c31619ae7 https://repo.maven.apache.org/maven2/org/wiremock/extensions/wiremock-state-extension-standalone/0.10.1/wiremock-state-extension-standalone-0.10.1.jar /var/wiremock/extensions/

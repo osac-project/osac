@@ -303,6 +303,14 @@ func (t *Tool) Setup(ctx context.Context) error {
 		return err
 	}
 
+	// Seed the quota defaults before the first tenant is created: the tenant reconciler gives
+	// each new tenant default networking, and the quota check refuses that VirtualNetwork
+	// create when the dimension has no default:
+	err = t.seedQuotaDefaults(ctx)
+	if err != nil {
+		return err
+	}
+
 	// Create the hub namespace:
 	err = t.createHubNamespace(ctx)
 	if err != nil {
@@ -1470,7 +1478,10 @@ func (t *Tool) MakeUserConnection(ctx context.Context, username, password string
 	return t.makeGrpcConn(externalServiceAddr, tokenSource)
 }
 
-// makeGrpcConn creates a gRPC connection that automatically adds the token to the request.
+// makeGrpcConn creates a gRPC connection that automatically adds the token to the request. The
+// connection also seeds the quota defaults of the templated dimensions when the suite creates
+// a storage tier, a bare metal instance type or a GPU instance type through it (see
+// seedQuotaDefaultsForType).
 func (t *Tool) makeGrpcConn(addr string, tokenSource auth.TokenSource) (result *grpc.ClientConn, err error) {
 	userAgent := fmt.Sprintf("%s/%s", userAgent, version.Get())
 	result, err = network.NewGrpcClient().
@@ -1479,6 +1490,7 @@ func (t *Tool) makeGrpcConn(addr string, tokenSource auth.TokenSource) (result *
 		SetAddress(addr).
 		SetTokenSource(tokenSource).
 		SetUserAgent(userAgent).
+		AddUnaryInterceptor(t.seedQuotaDefaultsForType).
 		Build()
 	return
 }

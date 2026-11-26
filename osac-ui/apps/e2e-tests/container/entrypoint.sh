@@ -9,16 +9,6 @@ ui_dir="${OSAC_UI_DIR:-/work/osac-ui}"
 output_dir="${OSAC_UI_E2E_OUTPUT:-/tmp/test-output}"
 export OSAC_E2E_CREDENTIALS_DIR="${OSAC_E2E_CREDENTIALS_DIR:-/work/tenant-credentials}"
 
-export_rc=0
-if [[ -d "${output_dir}" ]]; then
-  for result in playwright-report test-results; do
-    if ! rm -rf -- "${output_dir:?}/${result}"; then
-      echo "Failed to clear ${result} artifacts." >&2
-      export_rc=1
-    fi
-  done
-fi
-
 # Tenant recovery credentials must outlive a removed container. Listing and
 # help do not authenticate or create tenants, so they need no mount.
 needs_credentials_mount=true
@@ -44,11 +34,20 @@ rc=0
 bash "${ui_dir}/apps/e2e-tests/run_scripts/run-ui-e2e.sh" \
   --osac-ui-dir="${ui_dir}" "$@" || rc=$?
 
-if [[ -d "${output_dir}" ]]; then
+export_rc=0
+run_output=""
+if [[ "$needs_credentials_mount" == true && -d "${output_dir}" ]]; then
   for result in playwright-report test-results; do
     if [[ -d "${ui_dir}/apps/playwright/${result}" ]]; then
-      if [[ -e "${output_dir}/${result}" || -L "${output_dir}/${result}" ]] ||
-        ! cp -r -- "${ui_dir}/apps/playwright/${result}" "${output_dir}/${result}"; then
+      if [[ -z "$run_output" ]]; then
+        if ! run_output=$(mktemp -d -- "${output_dir}/run-XXXXXXXX"); then
+          echo 'Failed to create an artifact directory.' >&2
+          export_rc=1
+          break
+        fi
+        echo "Test artifacts: ${run_output}"
+      fi
+      if ! cp -r -- "${ui_dir}/apps/playwright/${result}" "${run_output}/${result}"; then
         echo "Failed to copy ${result} artifacts." >&2
         export_rc=1
       fi

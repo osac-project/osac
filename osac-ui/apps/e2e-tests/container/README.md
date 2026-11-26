@@ -143,10 +143,9 @@ fi
   runner also logs the mounted `osac` CLI in with these credentials, so no CLI
   configuration needs to be mounted.
 - The Playwright HTML report and test results, when generated, are copied to
-  `test-output/playwright-report/` and `test-output/test-results/` when the
-  run ends. These two directories are cleared before each run, so use a
-  separate output directory to keep earlier reports. They are owned by your
-  user; with rootless podman their group
+  a fresh `test-output/run-XXXXXXXX/` directory when the run ends. The
+  entrypoint prints its path; earlier reports remain in their own directories.
+  The files are owned by your user; with rootless podman their group
   shows as a subordinate group ID (for example `165536`), which is the
   container's group 0. You can still read and delete them.
 
@@ -178,13 +177,12 @@ podman run --rm \
 
 The flow is selected only by `--tag`; the image and the other options stay the
 same. For example, to run the VM Start, Stop and Restart test with the full
-flow, change the tag and use a separate output directory so the reports do not
-overwrite each other:
+flow, change the tag. Each run keeps its own reports:
 
 ```bash
-mkdir -p test-output-vm-power
+mkdir -p test-output
 podman run ... \
-  -v ./test-output-vm-power:/tmp/test-output:Z \
+  -v ./test-output:/tmp/test-output:Z \
   osac-ui-e2e --tag=full_vm_power --ignore-tls --admin-password-file=/work/admin-password
 ```
 
@@ -307,8 +305,9 @@ the first attempt left behind.
   tests. Check the passed and skipped counts before claiming full coverage.
   The first test failure stops the run.
 - **Artifacts:** `playwright-report/` (open `index.html`) and `test-results/`
-  are copied to the results directory if generated, including after a failed
-  run. An early failure can leave no report, so retain the container log too.
+  are copied to a new `run-XXXXXXXX/` directory within the results directory
+  if generated, including after a failed run. The entrypoint prints that
+  directory. An early failure can leave no report, so retain the container log too.
   There is no JUnit output. Tracing and video are off for the credentialed
   flows, and Playwright failure snapshots are disabled because they can expose
   passwords. Treat reports and logs as sensitive: they can still contain other

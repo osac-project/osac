@@ -109,8 +109,7 @@ type Metadata struct {
 	// `team-a.frontend`.
 	//
 	// For organization objects this field is always empty, as organizations don't belong to a project.
-	Project string `protobuf:"bytes,9,opt,name=project,proto3" json:"project,omitempty"`
-	// Reference to the Document describing this object, by document id.
+	Project       string  `protobuf:"bytes,9,opt,name=project,proto3" json:"project,omitempty"`
 	Description   *string `protobuf:"bytes,10,opt,name=description,proto3,oneof" json:"description,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -353,8 +352,7 @@ type Metadata_builder struct {
 	// `team-a.frontend`.
 	//
 	// For organization objects this field is always empty, as organizations don't belong to a project.
-	Project string
-	// Reference to the Document describing this object, by document id.
+	Project     string
 	Description *string
 }
 

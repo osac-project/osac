@@ -106,7 +106,6 @@ message Metadata {
   // For organization objects this field is always empty, as organizations don't belong to a project.
   string project = 9;
 
-  // Reference to the Document describing this object, by document id.
   optional string description = 10;
 
   // Finalizers indicate tasks that need to be completed before the object can be completely deleted. When the object

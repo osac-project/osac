@@ -27,9 +27,10 @@ after provisioning the Kind infrastructure. It uses the OSAC Helm chart and
 asserts allocation, release, and use of a rotated token in `test/integration`.
 After a local run, the BMF release stays configured against the fixture
 Deployment, Service, and synthetic token Secrets in the test namespace.
-CI runs both BMF scenarios with shared images and CRDs. The existing NetBox
-envtest specs cover selection, allocation, release, and claim recovery with
-an in-process reconciler. The Kind case uses the same NetBox WireMock
+Pull request and merge-queue CI build the test images once and run Metal3 and
+NetBox in parallel on separate Kind clusters. The NetBox envtest specs cover
+selection, allocation, release, and claim recovery with an in-process
+reconciler. The Kind case uses the same NetBox WireMock
 mappings and checks deployed credential lookup and token reload after a rollout.
 
 Envtest and Kind pull the same digest-pinned Linux AMD64 WireMock image

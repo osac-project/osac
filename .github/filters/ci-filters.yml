@@ -386,7 +386,7 @@ integration-tests-fulfillment-service:
 integration-tests-osac-operator:
   - '{osac-operator/**,bare-metal-fulfillment-operator/**,proto/**,osac-installer/**,tests/contract/network-task/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 integration-tests-bare-metal-fulfillment-operator:
-  - '{bare-metal-fulfillment-operator/**,osac-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
+  - '{bare-metal-fulfillment-operator/**,osac-operator/**,proto/**,osac-installer/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/workflows/bmf-integration-tests.yml,.github/ci-tests.yml}'
 integration-tests-osac-aap:
   - '{osac-aap/**,tests/contract/network-task/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
 # The install preflight Kind test (a preflight-only copy of the osac chart, not the full stack).

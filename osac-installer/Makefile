@@ -1258,9 +1258,21 @@ test-platform-images: validate-ns ## Build and load the API, metering and operat
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
 	$(call kind-load-image,localhost/osac-operator:it)
 
+BMF_IT_IMAGE := localhost/bmf-operator:it
 BMF_TEST_PHASES := $(filter bmf bmf-netbox,$(SUITE))
 ifeq ($(SUITE)/$(BMF_NETBOX_TEST),bmf/true)
 BMF_TEST_PHASES += bmf-netbox
+endif
+
+.PHONY: bmf-test-images
+bmf-test-images: ## Build images for the BMF Kind suites (SUITE=bmf|bmf-netbox)
+ifeq ($(BMF_TEST_PHASES),)
+	$(error bmf-test-images requires SUITE=bmf or SUITE=bmf-netbox)
+endif
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(BMF_IT_IMAGE) -f ../bare-metal-fulfillment-operator/Containerfile ..)
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
+ifneq ($(filter bmf-netbox,$(BMF_TEST_PHASES)),)
+	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
 endif
 
 .PHONY: test
@@ -1340,10 +1352,12 @@ ifneq ($(BMF_TEST_PHASES),)
 ifneq ($(strip $(JUNIT_REPORT_DIR)),)
 	rm -f $(foreach phase,$(BMF_TEST_PHASES),"$(abspath $(JUNIT_REPORT_DIR)/$(phase).xml)")
 endif
-	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/bmf-operator:it -f ../bare-metal-fulfillment-operator/Containerfile ..)
-	$(call kind-load-image,localhost/bmf-operator:it)
-	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
+# Parallel CI jobs have already loaded the build job's images into Kind.
+ifneq ($(BMF_TEST_IMAGES_PRELOADED),true)
+	$(MAKE) bmf-test-images
+	$(call kind-load-image,$(BMF_IT_IMAGE))
 	$(call kind-load-image,$(METERING_IT_IMAGE))
+endif
 	kubectl apply --server-side --force-conflicts -f ../bare-metal-fulfillment-operator/test/crds/
 endif
 ifeq ($(SUITE),bmf)
@@ -1351,10 +1365,10 @@ ifeq ($(SUITE),bmf)
 		EXTRA_HELM_ARGS="--set global.services.bmaas.enabled=true --set bmf.replicaCount=1 --set bmf.image.repository=localhost/bmf-operator --set bmf.image.tag=it --set bmf.image.pullPolicy=Never --set bmf.secretAPI.url= --set operator.enabled=false --set operator.networkManagers.enabled=true --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.networking.provisioningEnabled=true $(METERING_IT_IMAGE_ARGS)"
 	cd ../bare-metal-fulfillment-operator && ginkgo run $(call junit-report,bmf) --timeout 30m -v --label-filter '!bmf-netbox' test/integration
 endif
-# CI runs both BMF scenarios without rebuilding their shared images or CRDs.
 ifneq ($(filter bmf-netbox,$(BMF_TEST_PHASES)),)
-	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
+ifneq ($(BMF_TEST_IMAGES_PRELOADED),true)
 	$(call kind-load-image,localhost/fulfillment-service:it)
+endif
 	# Recreate the mock so a failed run cannot carry a claimed device into the next run.
 	kubectl delete -n $(NS) deployment/bmf-netbox-fixture --ignore-not-found
 	@initial_token=$$(openssl rand -hex 24); \

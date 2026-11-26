@@ -292,6 +292,10 @@ fulfillment-service-checks:
   - '!fulfillment-service/**/*.md'
   - '!fulfillment-service/docs/**'
 
+# Both modules use local replacements for the operator API, bare-metal operator and proto.
+go-module-tidy:
+  - '{osac-operator/**,fulfillment-service/**,bare-metal-fulfillment-operator/**,proto/**,.github/workflows/go-module-tidy.yml}'
+
 # Gates build-image.yaml.
 build-osac-operator:
   - '{osac-operator/**,.github/workflows/build-image.yaml}'

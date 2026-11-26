@@ -16,11 +16,13 @@ package references
 import (
 	"context"
 	"fmt"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
+	"go.uber.org/mock/gomock"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
@@ -29,12 +31,103 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	testsv1 "github.com/osac-project/osac/proto/gen/osac/tests/v1"
 )
 
 var _ = Describe("Reference validator", func() {
 	var validator *ReferenceValidator
+
+	Describe("Ambient transaction error reporting", func() {
+		It("reports a rejected reference validation to the transaction", func() {
+			ctrl := gomock.NewController(GinkgoT())
+			rValidator, err := NewReferenceValidator().SetLogger(logger).Build()
+			Expect(err).NotTo(HaveOccurred())
+			rValidator.Register("osac.tests.v1.TestTargetReference",
+				func(context.Context, string, string, string, string) (*ResolvedRef, error) {
+					return nil, &errRefNotFound{identifier: "missing-target"}
+				})
+			request := testsv1.CreateTestResourceWithRefsRequest_builder{
+				Object: testsv1.TestResourceWithRefs_builder{
+					Spec: testsv1.TestRefSpec_builder{
+						Target: testsv1.TestTargetReference_builder{Name: "missing-target"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+
+			tx := database.NewMockTx(ctrl)
+			var reported error
+			tx.EXPECT().ReportError(gomock.Any()).Do(func(value *error) { reported = *value })
+			_, err = rValidator.UnaryServer(database.TxIntoContext(context.Background(), tx), request,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.tests.v1.TestService/Create"},
+				func(context.Context, any) (any, error) { return nil, nil })
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(reported).To(BeIdenticalTo(err))
+		})
+
+		It("rolls back a write when reference validation rejects", func(ctx context.Context) {
+			ctx, cancel := context.WithTimeout(ctx, time.Minute)
+			DeferCleanup(cancel)
+
+			server, err := database.NewContainer().SetLogger(logger).Build()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(server.Start(ctx)).To(Succeed())
+			DeferCleanup(func() {
+				stopCtx, stopCancel := context.WithTimeout(context.Background(), time.Minute)
+				defer stopCancel()
+				Expect(server.Stop(stopCtx)).To(Succeed())
+			})
+
+			instance, err := server.NewInstance().Build()
+			Expect(err).NotTo(HaveOccurred())
+			pool, err := instance.Pool(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(pool.Close)
+			_, err = pool.Exec(ctx, `create table reference_validator_rollback_probe (value text primary key)`)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() {
+				_, dropErr := pool.Exec(context.Background(), `drop table if exists reference_validator_rollback_probe`)
+				Expect(dropErr).NotTo(HaveOccurred())
+			})
+
+			manager, err := database.NewTxManager().SetLogger(logger).SetPool(pool).Build()
+			Expect(err).NotTo(HaveOccurred())
+			tx, err := manager.Begin(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = tx.Exec(ctx, `insert into reference_validator_rollback_probe (value) values ('written')`)
+			Expect(err).NotTo(HaveOccurred())
+
+			rValidator, err := NewReferenceValidator().SetLogger(logger).Build()
+			Expect(err).NotTo(HaveOccurred())
+			rValidator.Register("osac.tests.v1.TestTargetReference",
+				func(context.Context, string, string, string, string) (*ResolvedRef, error) {
+					return nil, &errRefNotFound{identifier: "missing-target"}
+				})
+			request := testsv1.CreateTestResourceWithRefsRequest_builder{
+				Object: testsv1.TestResourceWithRefs_builder{
+					Spec: testsv1.TestRefSpec_builder{
+						Target: testsv1.TestTargetReference_builder{Name: "missing-target"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build()
+			handlerCalled := false
+			_, err = rValidator.UnaryServer(database.TxIntoContext(ctx, tx), request,
+				&grpc.UnaryServerInfo{FullMethod: "/osac.tests.v1.TestService/Create"},
+				func(context.Context, any) (any, error) {
+					handlerCalled = true
+					return nil, nil
+				})
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(handlerCalled).To(BeFalse())
+			Expect(tx.End(ctx)).To(Succeed())
+
+			var count int
+			Expect(pool.QueryRow(ctx,
+				`select count(*) from reference_validator_rollback_probe where value = 'written'`).Scan(&count)).To(Succeed())
+			Expect(count).To(BeZero())
+		})
+	})
 
 	Describe("Builder", func() {
 		It("Succeeds when logger is set", func() {

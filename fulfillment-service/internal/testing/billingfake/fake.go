@@ -29,17 +29,16 @@ import (
 // Key is the provider key of a Fake's Provider.
 const Key = "fake"
 
-// Scenario scripts a Fake. It decodes from JSON, see Load. The zero value is an empty, write-unsupported provider.
+// Scenario scripts a Fake. It decodes from JSON, see Load. The zero value is an empty provider.
 type Scenario struct {
 	Accounts []AccountSpec `json:"accounts"`
 	Services []ServiceSpec `json:"services"`
-	// CorrelationWrite makes the provider accept SetCorrelationValue; false mimics M360, which cannot.
-	CorrelationWrite bool `json:"correlationWrite"`
 	// Failures scripts a failure per adapter method name, such as "ListAccounts".
 	Failures map[string]Failure `json:"failures"`
 }
 
 // AccountSpec scripts one provider account. ExternalID is its correlation value, empty when it has none.
+// BaseCurrency is empty when the scripted provider does not supply one, mimicking M360.
 type AccountSpec struct {
 	ID             string               `json:"id"`
 	Name           string               `json:"name"`
@@ -47,6 +46,7 @@ type AccountSpec struct {
 	State          billing.AccountState `json:"state"`
 	RawStatus      string               `json:"rawStatus"`
 	ApprovalStatus string               `json:"approvalStatus"`
+	BaseCurrency   string               `json:"baseCurrency"`
 }
 
 // ServiceSpec scripts one provider service. Rates are keyed by the requested currency; two services with the same
@@ -171,7 +171,7 @@ func (f *Fake) find(id string) (*AccountSpec, error) {
 func toAccount(a *AccountSpec) billing.Account {
 	return billing.Account{
 		Ref: billing.NewAccountRef(a.ID), Name: a.Name, ExternalID: a.ExternalID, State: a.State,
-		RawStatus: a.RawStatus, ApprovalStatus: a.ApprovalStatus,
+		RawStatus: a.RawStatus, ApprovalStatus: a.ApprovalStatus, BaseCurrency: a.BaseCurrency,
 	}
 }
 
@@ -293,22 +293,4 @@ func (f *Fake) GetServiceRateCard(_ context.Context, svc billing.ServiceRef, cur
 // HealthCheck implements billing.Adapter and always succeeds.
 func (f *Fake) HealthCheck(context.Context) error {
 	return f.run("HealthCheck", "", "", func() error { return nil })
-}
-
-// SupportsCorrelationWrite implements billing.Adapter.
-func (f *Fake) SupportsCorrelationWrite() bool { return f.scenario.CorrelationWrite }
-
-// SetCorrelationValue records the attempt even when the provider cannot write, so a test can assert that a
-// write-unsupported provider was never asked to.
-func (f *Fake) SetCorrelationValue(_ context.Context, ref billing.AccountRef, value string) error {
-	return f.run("SetCorrelationValue", ref.ID(), value, func() error {
-		if !f.scenario.CorrelationWrite {
-			return billing.NewError(billing.ReasonUnsupported, "SetCorrelationValue", false, 0)
-		}
-		a, err := f.find(ref.ID())
-		if err == nil {
-			a.ExternalID = value
-		}
-		return err
-	})
 }

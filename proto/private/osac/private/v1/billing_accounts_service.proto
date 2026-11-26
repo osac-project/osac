@@ -1,0 +1,141 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "cleanapi/cleanapi.proto";
+import "google/api/annotations.proto";
+import "google/protobuf/field_mask.proto";
+import "osac/private/v1/billing_account_type.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+option (cleanapi.file).private = true;
+option (cleanapi.file).http_route_prefix_map = "private:fulfillment";
+
+message BillingAccountsListRequest {
+  // Index of the first result. If not specified the default value will be zero.
+  optional int32 offset = 1;
+
+  // Maximum number of results to return. Zero or unset serves a default page of 100; a larger value is clamped to
+  // 1000. Fewer results may be returned, so page with `offset` and compare against `total`.
+  optional int32 limit = 2;
+
+  // Filter criteria.
+  //
+  // The value of this parameter is a [CEL](https://cel.dev) expression used to select which objects to return. The
+  // built-in `this` variable refers to the object being tested. If the expression evaluates to `true` the object
+  // is included in the results. For example, to retrieve only active accounts:
+  //
+  //     this.status.state == 1
+  //
+  // Enum comparisons use numeric values; JSON responses use full type-prefixed protobuf enum names.
+  //
+  // If this isn't provided, or if the value is empty, then all the accounts that the caller has permission to see
+  // will be returned.
+  optional string filter = 3;
+
+  // Order criteria.
+  //
+  // List ordering is not implemented yet, as for other Fulfillment object types: the parameter value is ignored and
+  // callers must not rely on the order of the results.
+  optional string order = 4;
+}
+
+message BillingAccountsListResponse {
+  // Actual number of items returned.
+  int32 size = 1;
+
+  // Total number of items of the collection that match the search criteria, regardless of the number of results
+  // requested with the `limit` parameter.
+  int32 total = 2;
+
+  // Billing accounts in the requested page, selected by `offset` and `limit`. An empty list can mean either that no
+  // accounts match the filter or that `offset` is past the end of the matching collection; compare `total` with zero
+  // to tell these apart. An empty list does not mean billing is disabled.
+  repeated BillingAccount items = 3;
+}
+
+message BillingAccountsGetRequest {
+  string id = 1;
+}
+
+message BillingAccountsGetResponse {
+  BillingAccount object = 1;
+}
+
+message BillingAccountsCreateRequest {
+  BillingAccount object = 1;
+}
+
+message BillingAccountsCreateResponse {
+  BillingAccount object = 1;
+}
+
+message BillingAccountsUpdateRequest {
+  string id = 1;
+  BillingAccount object = 2;
+  google.protobuf.FieldMask update_mask = 3;
+  bool lock = 4;
+}
+
+message BillingAccountsUpdateResponse {
+  BillingAccount object = 1;
+}
+
+message BillingAccountsDeleteRequest {
+  string id = 1;
+}
+
+message BillingAccountsDeleteResponse {}
+
+service BillingAccounts {
+  // Reads the configured billing provider's account list, refreshing the local record, then returns the discovered
+  // accounts. Fails with `BILLING_NOT_CONFIGURED` when billing is disabled and `UNAVAILABLE` when the provider
+  // cannot be reached; it never serves a stale list unmarked as current. Deployment-wide administrator access only.
+  rpc List(BillingAccountsListRequest) returns (BillingAccountsListResponse) {
+    option (google.api.http) = {get: "/api/private/v1/billing/accounts"};
+  }
+
+  // Descriptor-only scaffold: not implemented.
+  rpc Get(BillingAccountsGetRequest) returns (BillingAccountsGetResponse) {
+    option (google.api.http) = {
+      get: "/api/private/v1/billing/accounts/{id}"
+      response_body: "object"
+    };
+  }
+
+  // Descriptor-only scaffold: not implemented. Does not create a local or provider account.
+  rpc Create(BillingAccountsCreateRequest) returns (BillingAccountsCreateResponse) {
+    option (google.api.http) = {
+      post: "/api/private/v1/billing/accounts"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Descriptor-only scaffold: not implemented.
+  rpc Update(BillingAccountsUpdateRequest) returns (BillingAccountsUpdateResponse) {
+    option (google.api.http) = {
+      patch: "/api/private/v1/billing/accounts/{id}"
+      body: "object"
+      response_body: "object"
+    };
+  }
+
+  // Descriptor-only scaffold: not implemented. Does not delete a local or provider account.
+  rpc Delete(BillingAccountsDeleteRequest) returns (BillingAccountsDeleteResponse) {
+    option (google.api.http) = {delete: "/api/private/v1/billing/accounts/{id}"};
+  }
+}

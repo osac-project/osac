@@ -27,6 +27,21 @@ import (
 
 // Parents are seeded directly through DAOs, bypassing the typed servers' create gates.
 
+// These descriptors advertise Delete, but the real servers deliberately do not implement a deletable lifecycle.
+// Each case must prove that boundary before either inventory counts it; implementing Delete requires full CAS cases.
+func descriptorOnlyFinalizerCases() []struct {
+	service string
+	verify  func()
+} {
+	return []struct {
+		service string
+		verify  func()
+	}{
+		{privatev1.BillingAccounts_ServiceDesc.ServiceName, verifyBillingAccountUpdateUnsupported},
+		{privatev1.TenantBillingAssignments_ServiceDesc.ServiceName, verifyAssignmentDeleteUnsupported},
+	}
+}
+
 // finalizerPlatformCases returns the cases for platform-wide private resources.
 func finalizerPlatformCases() []finalizerCase {
 	return []finalizerCase{

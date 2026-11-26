@@ -115,40 +115,20 @@ var _ = Describe("Billing fake", func() {
 			Expect(reasonOf(err)).To(Equal(billing.ReasonNotFound))
 		})
 
-		It("is write-unsupported by default, like M360, and records the attempt", func() {
-			f := billingfake.New(scenario)
-			Expect(f.SupportsCorrelationWrite()).To(BeFalse())
-			err := f.SetCorrelationValue(ctx, billing.NewAccountRef("none"), "x")
-			Expect(reasonOf(err)).To(Equal(billing.ReasonUnsupported))
-			_, ok, _ := f.CorrelationValue(ctx, billing.NewAccountRef("none"))
-			Expect(ok).To(BeFalse())
-			Expect(f.Succeeded("SetCorrelationValue")).To(BeZero())
-		})
-
-		It("stores a written value when write is supported", func() {
+		It("records failed and successful reads without changing provider bytes", func() {
 			s := scenario
-			s.CorrelationWrite = true
-			f := billingfake.New(s)
-			Expect(f.SupportsCorrelationWrite()).To(BeTrue())
-			Expect(f.SetCorrelationValue(ctx, billing.NewAccountRef("none"), "x")).To(Succeed())
-			v, ok, _ := f.CorrelationValue(ctx, billing.NewAccountRef("none"))
-			Expect(ok).To(BeTrue())
-			Expect(v).To(Equal("x"))
-		})
-
-		It("applies a retried write once: the failed attempt has no effect", func() {
-			s := scenario
-			s.CorrelationWrite = true
 			s.Failures = map[string]billingfake.Failure{
-				"SetCorrelationValue": {Reason: billing.ReasonTimeout, Retryable: true, Times: 1}}
+				"CorrelationValue": {Reason: billing.ReasonTimeout, Retryable: true, Times: 1}}
 			f := billingfake.New(s)
-			ref := billing.NewAccountRef("none")
-			Expect(reasonOf(f.SetCorrelationValue(ctx, ref, "x"))).To(Equal(billing.ReasonTimeout))
-			_, ok, _ := f.CorrelationValue(ctx, ref)
-			Expect(ok).To(BeFalse())
-			Expect(f.SetCorrelationValue(ctx, ref, "x")).To(Succeed())
-			Expect(f.Count("SetCorrelationValue")).To(Equal(2))
-			Expect(f.Succeeded("SetCorrelationValue")).To(Equal(1))
+			ref := billing.NewAccountRef("has")
+			_, _, err := f.CorrelationValue(ctx, ref)
+			Expect(reasonOf(err)).To(Equal(billing.ReasonTimeout))
+			value, present, err := f.CorrelationValue(ctx, ref)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(present).To(BeTrue())
+			Expect(value).To(Equal("v"))
+			Expect(f.Count("CorrelationValue")).To(Equal(2))
+			Expect(f.Succeeded("CorrelationValue")).To(Equal(1))
 		})
 	})
 
@@ -243,33 +223,53 @@ var _ = Describe("Billing fake", func() {
 
 	Describe("isolation and fixtures", func() {
 		It("keeps scenario state per instance under parallel use", func() {
-			a := billingfake.New(billingfake.Scenario{CorrelationWrite: true,
-				Accounts: []billingfake.AccountSpec{{ID: "x", State: billing.AccountActive}}})
-			b := billingfake.New(billingfake.Scenario{CorrelationWrite: true,
-				Accounts: []billingfake.AccountSpec{{ID: "x", State: billing.AccountActive}}})
+			a := billingfake.New(billingfake.Scenario{
+				Accounts: []billingfake.AccountSpec{{ID: "x", ExternalID: "A", State: billing.AccountActive}}})
+			b := billingfake.New(billingfake.Scenario{
+				Accounts: []billingfake.AccountSpec{{ID: "x", ExternalID: "B", State: billing.AccountActive}}})
 			var wg sync.WaitGroup
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				defer GinkgoRecover()
-				Expect(a.SetCorrelationValue(ctx, billing.NewAccountRef("x"), "A")).To(Succeed())
+				account, err := a.GetAccount(ctx, billing.NewAccountRef("x"))
+				Expect(err).ToNot(HaveOccurred())
+				Expect(account.ExternalID).To(Equal("A"))
+				account.ExternalID = "changed returned copy"
 			}()
 			wg.Wait()
-			_, ok, _ := b.CorrelationValue(ctx, billing.NewAccountRef("x"))
-			Expect(ok).To(BeFalse())
+			value, ok, err := b.CorrelationValue(ctx, billing.NewAccountRef("x"))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(ok).To(BeTrue())
+			Expect(value).To(Equal("B"))
 			Expect(b.Calls()).To(HaveLen(1))
+			value, _, err = a.CorrelationValue(ctx, billing.NewAccountRef("x"))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(value).To(Equal("A"))
 		})
 
-		It("does not let a test mutate the scenario it passed in", func() {
-			s := billingfake.Scenario{CorrelationWrite: true,
-				Accounts: []billingfake.AccountSpec{{ID: "x", State: billing.AccountActive}}}
-			Expect(billingfake.New(s).SetCorrelationValue(ctx, billing.NewAccountRef("x"), "A")).To(Succeed())
-			_, ok, _ := billingfake.New(s).CorrelationValue(ctx, billing.NewAccountRef("x"))
-			Expect(ok).To(BeFalse())
+		It("copies scenario accounts and returns independent list and call snapshots", func() {
+			s := billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "x", ExternalID: "original"}}}
+			f := billingfake.New(s)
+			s.Accounts[0].ExternalID = "caller changed scenario"
+			page, err := f.ListAccounts(ctx, billing.AccountFilter{}, billing.Page{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(page.Accounts).To(HaveLen(1))
+			Expect(page.Accounts[0].ExternalID).To(Equal("original"))
+			page.Accounts[0].ExternalID = "caller changed result"
+			calls := f.Calls()
+			calls[0].Op = "caller changed log"
+			value, _, err := f.CorrelationValue(ctx, billing.NewAccountRef("x"))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(value).To(Equal("original"))
+			Expect(f.Calls()[0].Op).To(Equal("ListAccounts"))
+			value, _, err = billingfake.New(s).CorrelationValue(ctx, billing.NewAccountRef("x"))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(value).To(Equal("caller changed scenario"))
 		})
 
 		It("loads a JSON fixture and rejects unknown fields", func() {
-			s, err := billingfake.Load([]byte(`{"correlationWrite":true,
+			s, err := billingfake.Load([]byte(`{
 				"accounts":[{"id":"a","externalId":"e","state":"ACTIVE","rawStatus":"active"}],
 				"failures":{"HealthCheck":{"reason":"TIMEOUT","retryable":true,"times":1}}}`))
 			Expect(err).ToNot(HaveOccurred())

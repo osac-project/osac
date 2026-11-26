@@ -15,6 +15,7 @@ package grpcserver
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,6 +25,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
@@ -34,8 +36,11 @@ import (
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/references"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -57,6 +62,100 @@ var _ = Describe("RegisterReferenceLookups", func() {
 			Expect(validator.HasLookup(name)).To(BeTrue(), "missing lookup for %s", name)
 		}
 	})
+
+	It("registers the private billing account reference lookup", func() {
+		name := protoreflect.FullName("osac.private.v1.BillingAccountReference")
+		Expect(validator.HasLookup(name)).To(BeTrue(), "missing lookup for %s", name)
+	})
+
+	DescribeTable("resolves billing-account references through registered DAOs, not account Get RPCs",
+		func(selector string) {
+			db, err := dbContainer.NewInstance().Build()
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(db.Close)
+			pool, err := db.Pool(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(pool.Close)
+			tm, err := database.NewTxManager().SetLogger(logger).SetPool(pool).Build()
+			Expect(err).NotTo(HaveOccurred())
+			tx, err := tm.Begin(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(func() { Expect(tx.End(context.Background())).To(Succeed()) })
+			txCtx := database.TxIntoContext(ctx, tx)
+			const tenantID = "billing-reference-tenant"
+			const accountID = "billing-reference-account"
+			hash := fmt.Sprintf("%x", sha256.Sum256([]byte(accountID)))
+			accountName := "ba-" + hash[:60]
+			tenantDAO, err := dao.NewGenericDAO[*privatev1.Tenant]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).NotTo(HaveOccurred())
+			_, err = tenantDAO.Create().SetObject(privatev1.Tenant_builder{Id: tenantID,
+				Metadata: privatev1.Metadata_builder{Name: tenantID, Tenant: tenantID}.Build(),
+			}.Build()).Do(txCtx)
+			Expect(err).NotTo(HaveOccurred())
+			accountDAO, err := dao.NewGenericDAO[*privatev1.BillingAccount]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).NotTo(HaveOccurred())
+			_, err = accountDAO.Create().SetObject(privatev1.BillingAccount_builder{Id: accountID,
+				Metadata: privatev1.Metadata_builder{Name: accountName, Tenant: auth.SystemTenant, Creator: "system"}.Build(),
+				Status: privatev1.BillingAccountStatus_builder{ProviderKey: "test", ProviderAccountReference: "private-native",
+					State:                     privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE,
+					StateObservationTimestamp: timestamppb.Now(),
+				}.Build(),
+			}.Build()).Do(txCtx)
+			Expect(err).NotTo(HaveOccurred())
+			lookupTenancy := auth.NewMockTenancyLogic(gomock.NewController(GinkgoT()))
+			visibility := auth.TotalVisibility()
+			if selector == "invisible" {
+				visibility, err = auth.NewVisibility().AddVisibleTenant(tenantID).Build()
+				Expect(err).NotTo(HaveOccurred())
+			}
+			lookupTenancy.EXPECT().DetermineVisibility(gomock.Any()).Return(visibility, nil).AnyTimes()
+			v, err := newReferenceValidator(logger, lookupTenancy, prometheus.NewRegistry())
+			Expect(err).NotTo(HaveOccurred())
+			accountRef := fmt.Sprintf(`{"id":%q}`, accountID)
+			switch selector {
+			case "name":
+				accountRef = fmt.Sprintf(`{"name":%q}`, accountName)
+			case "equal":
+				accountRef = fmt.Sprintf(`{"id":%q,"name":%q}`, accountID, accountName)
+			case "contradictory":
+				accountRef = fmt.Sprintf(`{"id":%q,"name":"wrong-account-name"}`, accountID)
+			case "missing":
+				accountRef = `{"id":"missing-account"}`
+			}
+			// Deliberately unrelated project: lookup is platform-scoped, not a claim that
+			// the assignment handler accepts project-scoped ownership (it must reject that).
+			body := fmt.Sprintf(`{"object":{"metadata":{"name":"assignment","tenant":%q,"project":"unrelated"},"spec":{"billing_account":%s}}}`,
+				tenantID, accountRef)
+			request := &privatev1.TenantBillingAssignmentsCreateRequest{}
+			Expect(protojson.Unmarshal([]byte(body), request)).To(Succeed())
+			called := false
+			_, err = v.UnaryServer(txCtx, request, &grpc.UnaryServerInfo{FullMethod: privatev1.TenantBillingAssignments_Create_FullMethodName},
+				func(_ context.Context, actual any) (any, error) {
+					called = true
+					encoded, encodeErr := protojson.MarshalOptions{UseProtoNames: true}.Marshal(actual.(proto.Message))
+					Expect(encodeErr).NotTo(HaveOccurred())
+					canonical := &privatev1.TenantBillingAssignmentsCreateRequest{}
+					Expect(protojson.Unmarshal(encoded, canonical)).To(Succeed())
+					Expect(canonical.GetObject().GetMetadata().GetTenant()).To(Equal(tenantID))
+					Expect(canonical.GetObject().GetSpec().GetBillingAccount().GetId()).To(Equal(accountID))
+					Expect(canonical.GetObject().GetSpec().GetBillingAccount().GetName()).To(Equal(accountName))
+					return "ok", nil
+				})
+			if selector == "contradictory" || selector == "missing" || selector == "invisible" {
+				Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+				Expect(called).To(BeFalse())
+			} else {
+				Expect(err).NotTo(HaveOccurred())
+				Expect(called).To(BeTrue())
+			}
+		},
+		Entry("private id", "id"),
+		Entry("private name", "name"),
+		Entry("private equal pair", "equal"),
+		Entry("private contradictory pair", "contradictory"),
+		Entry("private missing", "missing"),
+		Entry("private invisible account", "invisible"),
+	)
 
 	It("registers lookups for reference uses not handled by their server", func() {
 		var missing []string

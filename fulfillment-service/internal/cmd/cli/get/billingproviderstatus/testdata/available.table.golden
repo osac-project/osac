@@ -1,6 +1,2 @@
-State:                  AVAILABLE
-Provider:               m360
-Message:                -
-Capabilities:           PRICING
-Last successful check:  2026-01-02T03:04:05Z
-Usage delivery:         UNKNOWN
+STATE      PROVIDER  MESSAGE  CAPABILITIES  LAST-SUCCESSFUL-CHECK  USAGE-DELIVERY
+AVAILABLE  m360      -        PRICING       2026-01-02T03:04:05Z   UNKNOWN

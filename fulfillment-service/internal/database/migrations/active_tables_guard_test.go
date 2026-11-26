@@ -62,6 +62,7 @@ var _ = Describe("Active object tables schema guard", Ordered, func() {
 	})
 
 	It("Every object table has an active_* companion table", func(ctx context.Context) {
+		// Deleted identity evidence has a deletion timestamp, but is minimal non-object storage.
 		rows, err := guardConn.Query(ctx, `
 			select c.relname
 			from pg_catalog.pg_class c
@@ -72,6 +73,7 @@ var _ = Describe("Active object tables schema guard", Ordered, func() {
 			  and a.attname = 'deletion_timestamp'
 			  and c.relname not like 'active_%'
 			  and c.relname not like 'archived_%'
+			  and c.relname <> 'deleted_tenant_identities'
 			order by c.relname
 		`)
 		Expect(err).ToNot(HaveOccurred())
@@ -107,6 +109,7 @@ var _ = Describe("Active object tables schema guard", Ordered, func() {
 	})
 
 	It("Every object table has a materialize_active_objects trigger", func(ctx context.Context) {
+		// The identity store must not gain resource materialization or publication triggers.
 		rows, err := guardConn.Query(ctx, `
 			select c.relname
 			from pg_catalog.pg_class c
@@ -117,6 +120,7 @@ var _ = Describe("Active object tables schema guard", Ordered, func() {
 			  and a.attname = 'deletion_timestamp'
 			  and c.relname not like 'active_%'
 			  and c.relname not like 'archived_%'
+			  and c.relname <> 'deleted_tenant_identities'
 			order by c.relname
 		`)
 		Expect(err).ToNot(HaveOccurred())

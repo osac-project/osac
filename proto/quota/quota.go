@@ -52,6 +52,8 @@ var kindsThatUseNothing = []string{
 	"AddOnOperator",
 	"BareMetalInstanceCatalogItem",
 	"BareMetalInstanceTemplate",
+	"BillingAccount",
+	"BillingProviderStatus",
 	"ClusterCatalogItem",
 	"ClusterTemplate",
 	"ClusterVersion",
@@ -80,6 +82,7 @@ var kindsThatUseNothing = []string{
 	"StorageTier",
 	"Subnet",
 	"Tenant",
+	"TenantBillingAssignment",
 	"User",
 }
 

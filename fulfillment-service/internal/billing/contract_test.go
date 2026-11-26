@@ -97,7 +97,6 @@ var _ = Describe("Adapter contract", func() {
 	type provider struct {
 		name      string
 		build     func() billing.Adapter
-		canWrite  bool
 		rawStatus string // the provider-native status text, kept raw for the caller to map
 		afterEach func()
 	}
@@ -120,7 +119,7 @@ var _ = Describe("Adapter contract", func() {
 				}
 			},
 		},
-		{name: "write-capable fake", build: func() billing.Adapter { return seededFake() }, canWrite: true, rawStatus: "enabled"},
+		{name: "native-shape fake", build: func() billing.Adapter { return seededFake() }, rawStatus: "enabled"},
 	}
 
 	for _, p := range providers {
@@ -180,18 +179,6 @@ var _ = Describe("Adapter contract", func() {
 				Expect(err).To(MatchError(billing.ErrRateCardNotFound))
 			})
 
-			It("honours the correlation write capability it advertises", func() {
-				Expect(adapter.SupportsCorrelationWrite()).To(Equal(p.canWrite))
-				err := adapter.SetCorrelationValue(ctx, billing.NewAccountRef("acct-1"), "ext-2")
-				if !p.canWrite {
-					Expect(contractReasonOf(err)).To(Equal(billing.ReasonUnsupported))
-					return
-				}
-				Expect(err).ToNot(HaveOccurred())
-				v, _, err := adapter.CorrelationValue(ctx, billing.NewAccountRef("acct-1"))
-				Expect(err).ToNot(HaveOccurred())
-				Expect(v).To(Equal("ext-2"))
-			})
 		})
 	}
 })

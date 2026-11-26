@@ -1,0 +1,1741 @@
+/*
+Copyright (c) 2026 Red Hat Inc.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the
+License. You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific
+language governing permissions and limitations under the License.
+*/
+
+package servers
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"sync"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/billing"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
+	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
+	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
+)
+
+// billingRPC invokes the actual handler through the ordinary unary transaction boundary. In particular, it does
+// not report handler errors itself: the server must report its final RPC error, including public mapping errors.
+func billingRPC[Request, Response any](ctx context.Context,
+	handler func(context.Context, Request) (Response, error), request Request,
+) (response Response, err error) {
+	manager, err := database.TxManagerFromContext(ctx)
+	if err != nil {
+		return response, err
+	}
+	interceptor, err := database.NewTxInterceptor().SetLogger(logger).SetManager(manager).Build()
+	if err != nil {
+		return response, err
+	}
+	result, err := interceptor.UnaryServer(ctx, request, &grpc.UnaryServerInfo{FullMethod: "/billing-test/RPC"},
+		func(c context.Context, _ any) (any, error) { return handler(c, request) })
+	if result != nil {
+		response = result.(Response)
+	}
+	return response, err
+}
+
+// billingStore exercises the batch operation with the same outer boundary as List while retaining explicit
+// observation times for the lock/merge protocol fixtures.
+func billingStore(ctx context.Context, server *PrivateBillingAccountsServer, accounts []billing.Account, at time.Time) error {
+	_, err := billingRPC(ctx, func(c context.Context, _ struct{}) (_ struct{}, err error) {
+		tx, err := database.TxFromContext(c)
+		if err != nil {
+			return struct{}{}, err
+		}
+		defer tx.ReportError(&err)
+		if _, err := tx.Exec(c, `select pg_advisory_xact_lock(`+billingDiscoveryLockKey+`)`, server.provider.Key()); err != nil {
+			return struct{}{}, err
+		}
+		return struct{}{}, server.storeAccounts(c, accounts, at)
+	}, struct{}{})
+	return err
+}
+
+type billingDiscoveryCountingTx struct {
+	database.Tx
+	statements int
+	updates    int64
+}
+
+func (t *billingDiscoveryCountingTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	t.statements++
+	return t.Tx.QueryRow(ctx, sql, args...)
+}
+
+func (t *billingDiscoveryCountingTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	t.statements++
+	return t.Tx.Query(ctx, sql, args...)
+}
+
+func (t *billingDiscoveryCountingTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	t.statements++
+	tag, err := t.Tx.Exec(ctx, sql, args...)
+	if tag.Update() {
+		t.updates += tag.RowsAffected()
+	}
+	return tag, err
+}
+
+// twoPageThenFailAdapter serves one successful page of one account, then fails every call after that - it
+// reproduces a provider that fails partway through a multi-page discovery.
+type twoPageThenFailAdapter struct {
+	billing.Adapter
+	calls int
+}
+
+// ListAccounts returns one account on the first call and a 503 error on every call after that.
+func (a *twoPageThenFailAdapter) ListAccounts(_ context.Context, _ billing.AccountFilter, _ billing.Page) (
+	billing.AccountPage, error) {
+	a.calls++
+	if a.calls == 1 {
+		return billing.AccountPage{
+			Accounts: []billing.Account{{Ref: billing.NewAccountRef("acct-1"), State: billing.AccountActive}},
+			Next:     "page-2",
+		}, nil
+	}
+	return billing.AccountPage{}, billing.NewError(billing.ReasonUnavailable, "ListAccounts", false, 503)
+}
+
+// endlessDiscoveryAdapter serves the same single-account page with a following page forever - it reproduces a
+// provider that never reports a last page.
+type endlessDiscoveryAdapter struct {
+	billing.Adapter
+}
+
+// ListAccounts always returns one account and a non-empty Next token.
+func (a *endlessDiscoveryAdapter) ListAccounts(_ context.Context, _ billing.AccountFilter, _ billing.Page) (
+	billing.AccountPage, error) {
+	return billing.AccountPage{
+		Accounts: []billing.Account{{Ref: billing.NewAccountRef("acct-1"), State: billing.AccountActive}},
+		Next:     "always-more",
+	}, nil
+}
+
+// hangingDiscoveryAdapter blocks every ListAccounts call until its context is done - it reproduces a provider
+// that accepts requests but never answers, so the discovery deadline is the only way out.
+type hangingDiscoveryAdapter struct {
+	billing.Adapter
+}
+
+// ListAccounts never answers before the caller's context is done.
+func (a *hangingDiscoveryAdapter) ListAccounts(ctx context.Context, _ billing.AccountFilter, _ billing.Page) (
+	billing.AccountPage, error) {
+	<-ctx.Done()
+	return billing.AccountPage{}, billing.NewError(billing.ReasonTimeout, "ListAccounts", true, 0)
+}
+
+// gatedDiscoveryAdapter blocks ListAccounts until released, reproducing a walk in flight while another List
+// arrives. entered closes once the walk reaches the provider, so the suite observes the start without sleeping.
+type gatedDiscoveryAdapter struct {
+	billing.Adapter
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+	calls   int
+}
+
+// ListAccounts signals that a walk has reached the provider and then blocks until released.
+func (a *gatedDiscoveryAdapter) ListAccounts(_ context.Context, _ billing.AccountFilter, _ billing.Page) (
+	billing.AccountPage, error) {
+	a.calls++
+	a.once.Do(func() { close(a.entered) })
+	<-a.release
+	return billing.AccountPage{
+		Accounts: []billing.Account{{Ref: billing.NewAccountRef("acct-1"), State: billing.AccountActive}},
+	}, nil
+}
+
+// gatedTwoPageAdapter serves the first page immediately and holds the second until released, reproducing a
+// multi-page walk waiting on the provider while the suite cancels an occupied ordinary request transaction.
+type gatedTwoPageAdapter struct {
+	billing.Adapter
+	enteredSecondPage chan struct{}
+	release           chan struct{}
+	once              sync.Once
+	calls             int
+}
+
+// ListAccounts returns page one on the first call; every later call signals the walk has reached the
+// provider's slow page and then blocks until released.
+func (a *gatedTwoPageAdapter) ListAccounts(ctx context.Context, _ billing.AccountFilter, _ billing.Page) (
+	billing.AccountPage, error) {
+	a.calls++
+	if a.calls == 1 {
+		return billing.AccountPage{
+			Accounts: []billing.Account{{Ref: billing.NewAccountRef("acct-1"), State: billing.AccountActive}},
+			Next:     "page-2",
+		}, nil
+	}
+	a.once.Do(func() { close(a.enteredSecondPage) })
+	select {
+	case <-a.release:
+	case <-ctx.Done():
+		return billing.AccountPage{}, billing.NewError(billing.ReasonTimeout, "ListAccounts", true, 0)
+	}
+	return billing.AccountPage{}, nil
+}
+
+// canceledCallerAdapter blocks its first ListAccounts call until that walk's context is done, reproducing a caller
+// that cancels its own walk, and serves one active-account page on later calls. entered and calls let the suite
+// observe both without sleeping.
+type canceledCallerAdapter struct {
+	billing.Adapter
+	entered chan struct{}
+	once    sync.Once
+	calls   int
+}
+
+// ListAccounts waits for the walk's context to end on the first call and serves one active account on every
+// later call.
+func (a *canceledCallerAdapter) ListAccounts(ctx context.Context, _ billing.AccountFilter, _ billing.Page) (
+	billing.AccountPage, error) {
+	a.calls++
+	if a.calls == 1 {
+		a.once.Do(func() { close(a.entered) })
+		<-ctx.Done()
+		return billing.AccountPage{}, billing.NewError(billing.ReasonTimeout, "ListAccounts", true, 0)
+	}
+	return billing.AccountPage{
+		Accounts: []billing.Account{{Ref: billing.NewAccountRef("acct-1"), State: billing.AccountActive}},
+	}, nil
+}
+
+var _ = Describe("Private billing accounts server", func() {
+	BeforeEach(func() {
+		Expect(suiteTx.End(ctx)).To(Succeed())
+		suiteTx = nil
+		ctx = database.TxManagerIntoContext(context.Background(), tm)
+	})
+	build := func(p *billing.Provider) *PrivateBillingAccountsServer {
+		server, err := NewPrivateBillingAccountsServer().SetLogger(logger).SetProvider(p).Build()
+		Expect(err).ToNot(HaveOccurred())
+		return server
+	}
+	list := func(s *PrivateBillingAccountsServer, req *privatev1.BillingAccountsListRequest) (
+		*privatev1.BillingAccountsListResponse, error) {
+		if req == nil {
+			req = &privatev1.BillingAccountsListRequest{}
+		}
+		return billingRPC(ctx, s.List, req)
+	}
+	// storedCount reads the billing_accounts row count on the suite pool's own connection, so it observes only
+	// durably committed rows.
+	storedCount := func() int {
+		var count int
+		Expect(testPool.QueryRow(ctx, `select count(*) from billing_accounts`).Scan(&count)).To(Succeed())
+		return count
+	}
+	buildWithLogs := func(p *billing.Provider) (*PrivateBillingAccountsServer, *bytes.Buffer) {
+		logs := &bytes.Buffer{}
+		server, err := NewPrivateBillingAccountsServer().
+			SetLogger(slog.New(slog.NewJSONHandler(logs, nil))).SetProvider(p).Build()
+		Expect(err).ToNot(HaveOccurred())
+		return server, logs
+	}
+	// seedAssignedAccount commits an account that already carries an established assignment token.
+	seedAssignedAccount := func(server *PrivateBillingAccountsServer, id, ref, token string, at time.Time) string {
+		name, err := billingAccountName(id)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = database.WithNewTx(ctx, func(ctx context.Context) (struct{}, error) {
+			_, err := server.dao.Create().SetObject(privatev1.BillingAccount_builder{
+				Id: id,
+				Metadata: privatev1.Metadata_builder{
+					Name: name, Tenant: "system", Creator: "system",
+				}.Build(),
+				Status: privatev1.BillingAccountStatus_builder{
+					ProviderKey: billingfake.Key, ProviderAccountReference: ref,
+					ExternalBillingAccountId:  proto.String(token),
+					State:                     privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE,
+					StateObservationTimestamp: timestamppb.New(at),
+				}.Build(),
+			}.Build()).Do(ctx)
+			return struct{}{}, err
+		})
+		Expect(err).ToNot(HaveOccurred())
+		return id
+	}
+	// seedAssignmentInterval records one assignment row. A nil to leaves the interval open; a non-nil
+	// to records closed history that no longer holds the active-account index.
+	seedAssignmentInterval := func(id, accountID string, from time.Time, to *time.Time) {
+		const tenant = "drift-tenant"
+		_, err := testPool.Exec(ctx, `insert into tenants (id, name, tenant, creator, data)
+			values ($1, $1, $1, 'system', '{}') on conflict do nothing`, tenant)
+		Expect(err).ToNot(HaveOccurred())
+		name, err := billingAccountName(accountID)
+		Expect(err).ToNot(HaveOccurred())
+		status := privatev1.TenantBillingAssignmentStatus_builder{
+			ConnectionState:        privatev1.TenantBillingAssignmentConnectionState_TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED,
+			EffectiveFromTimestamp: timestamppb.New(from),
+		}.Build()
+		if to != nil {
+			status.SetEffectiveToTimestamp(timestamppb.New(*to))
+		}
+		_, err = database.WithNewTx(ctx, func(ctx context.Context) (struct{}, error) {
+			assignments, err := dao.NewGenericDAO[*privatev1.TenantBillingAssignment]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			if err != nil {
+				return struct{}{}, err
+			}
+			_, err = assignments.Create().SetObject(privatev1.TenantBillingAssignment_builder{
+				Id: id,
+				Metadata: privatev1.Metadata_builder{
+					Name: id, Tenant: tenant, Creator: "system",
+					Annotations: map[string]string{"osac.openshift.io/tenant": tenant},
+				}.Build(),
+				Spec: privatev1.TenantBillingAssignmentSpec_builder{
+					BillingAccount: privatev1.BillingAccountReference_builder{Id: accountID, Name: name}.Build(),
+				}.Build(),
+				Status: status,
+			}.Build()).Do(ctx)
+			return struct{}{}, err
+		})
+		Expect(err).ToNot(HaveOccurred())
+	}
+	seedAssignment := func(id, accountID string, at time.Time) {
+		seedAssignmentInterval(id, accountID, at, nil)
+	}
+
+	It("requires a logger and a provider", func() {
+		_, err := NewPrivateBillingAccountsServer().SetProvider(billing.NewProvider("", nil, nil)).Build()
+		Expect(err).To(MatchError("logger is mandatory"))
+		_, err = NewPrivateBillingAccountsServer().SetLogger(logger).Build()
+		Expect(err).To(MatchError("provider is mandatory"))
+	})
+
+	It("fails with FAILED_PRECONDITION/BILLING_NOT_CONFIGURED when billing is off, without calling the provider",
+		func() {
+			fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "a1"}}})
+			server := build(billing.NewProvider("", fake, nil))
+			_, err := list(server, privatev1.BillingAccountsListRequest_builder{Filter: new(`this.state == 1`)}.Build())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.FailedPrecondition))
+			Expect(st.Details()[0].(*errdetails.ErrorInfo).GetReason()).To(Equal("BILLING_NOT_CONFIGURED"))
+			Expect(fake.Calls()).To(BeEmpty())
+		})
+
+	It("fails with UNAVAILABLE and never serves a stale list when the provider cannot be reached", func() {
+		fake := billingfake.New(billingfake.Scenario{
+			Accounts: []billingfake.AccountSpec{{ID: "a1", State: billing.AccountActive}},
+			Failures: map[string]billingfake.Failure{"ListAccounts": {Reason: billing.ReasonUnavailable}},
+		})
+		server := build(fake.Provider())
+		_, err := list(server, nil)
+		st, ok := status.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(st.Code()).To(Equal(codes.Unavailable))
+		Expect(st.Details()[0].(*errdetails.ErrorInfo).GetReason()).To(Equal("BILLING_PROVIDER_UNAVAILABLE"))
+	})
+
+	It("discovers, upserts, and lists accounts with an empty items list meaning none discovered, not disabled",
+		func() {
+			fake := billingfake.New(billingfake.Scenario{})
+			response, err := list(build(fake.Provider()), nil)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetItems()).To(BeEmpty())
+			Expect(response.GetTotal()).To(BeZero())
+		})
+
+	It("maps provider_key, display_name, state, external_billing_account_id and status_observed_at", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", Name: "Acme", ExternalID: "ext-1", State: billing.AccountActive},
+		}})
+		response, err := list(build(fake.Provider()), nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(1))
+		item := response.GetItems()[0]
+		Expect(item.GetStatus().GetProviderKey()).To(Equal("fake"))
+		Expect(item.GetStatus().GetDisplayName()).To(Equal("Acme"))
+		Expect(item.GetStatus().GetState()).To(Equal(privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE))
+		Expect(item.GetStatus().GetProviderExternalId()).To(Equal("ext-1"))
+		Expect(item.GetStatus().GetExternalBillingAccountId()).To(Equal("ext-1"))
+		Expect(item.GetStatus().HasStateObservationTimestamp()).To(BeTrue())
+		Expect(item.GetMetadata().GetTenant()).To(Equal("system"))
+		Expect(item.GetMetadata().GetProject()).To(BeEmpty())
+		Expect(item.GetMetadata().GetCreator()).To(Equal("system"))
+		Expect(item.GetMetadata().GetCreationTimestamp()).ToNot(BeNil())
+		Expect(item.GetMetadata().GetVersion()).To(BeZero())
+		name, err := billingAccountName(item.GetId())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(item.GetMetadata().GetName()).To(Equal(name))
+		Expect(item.GetId()).ToNot(BeEmpty())
+		Expect(item.GetId()).ToNot(Equal("acct-1"), "id must be an OSAC-generated id, not the provider reference")
+	})
+
+	It("adopts a provider external ID into an existing account with no local attribution token", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", ExternalID: "ext-1", State: billing.AccountActive},
+		}})
+		server := build(fake.Provider())
+		start := time.Now().UTC().Add(-time.Minute)
+		Expect(billingStore(ctx, server, []billing.Account{{
+			Ref: billing.NewAccountRef("acct-1"), State: billing.AccountActive,
+		}}, start)).To(Succeed())
+
+		response, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(1))
+		item := response.GetItems()[0]
+		Expect(item.GetStatus().GetProviderExternalId()).To(Equal("ext-1"))
+		Expect(item.GetStatus().GetExternalBillingAccountId()).To(Equal("ext-1"))
+		Expect(item.GetMetadata().GetVersion()).To(Equal(int32(1)))
+	})
+
+	It("keeps an established local attribution token when the provider reports a different external ID", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", ExternalID: "ext-2", State: billing.AccountActive},
+		}})
+		server := build(fake.Provider())
+		seedAssignedAccount(server, "osac-local-1", "acct-1", "local-1", time.Now().UTC().Add(-time.Minute))
+
+		response, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(1))
+		Expect(response.GetItems()[0].GetStatus().GetExternalBillingAccountId()).To(Equal("local-1"))
+		Expect(response.GetItems()[0].GetStatus().GetProviderExternalId()).To(Equal("ext-2"))
+	})
+
+	It("keeps an established local attribution token when the provider external ID is absent", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", State: billing.AccountActive},
+		}})
+		server := build(fake.Provider())
+		seedAssignedAccount(server, "osac-local-1", "acct-1", "local-1", time.Now().UTC().Add(-time.Minute))
+
+		response, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(1))
+		Expect(response.GetItems()[0].GetStatus().GetExternalBillingAccountId()).To(Equal("local-1"))
+		Expect(response.GetItems()[0].GetStatus().GetProviderExternalId()).To(BeEmpty())
+	})
+
+	It("does not generate an attribution token when the provider external ID is absent", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", State: billing.AccountActive},
+		}})
+		response, err := list(build(fake.Provider()), nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(1))
+		Expect(response.GetItems()[0].GetStatus().HasExternalBillingAccountId()).To(BeFalse())
+	})
+
+	It("stores duplicate provider external IDs on both discovered accounts", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", ExternalID: "dup-1", State: billing.AccountActive},
+			{ID: "acct-2", ExternalID: "dup-1", State: billing.AccountActive},
+		}})
+		response, err := list(build(fake.Provider()), nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(2))
+		for _, item := range response.GetItems() {
+			Expect(item.GetStatus().GetExternalBillingAccountId()).To(Equal("dup-1"))
+		}
+	})
+
+	It("sanitizes a provider display name carrying control characters before storing it", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", Name: "Acme\x1b]52;x;wg\x07 production", State: billing.AccountActive},
+		}})
+		response, err := list(build(fake.Provider()), nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(1))
+		// The List serves the stored row, so this asserts the ingest boundary itself: the ESC/BEL pair
+		// must not survive the upsert, whatever later reader or render path touches the stored name.
+		Expect(response.GetItems()[0].GetStatus().GetDisplayName()).To(Equal("Acme]52;x;wg production"))
+	})
+
+	It("leaves base_currency empty: the fake, like M360, supplies none by default", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "acct-1"}}})
+		response, err := list(build(fake.Provider()), nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetItems()[0].GetStatus().GetBaseCurrency()).To(BeEmpty())
+	})
+
+	It("stores an initial lowercase currency in uppercase and refreshes later case variants", func() {
+		accounts := []billingfake.AccountSpec{{ID: "acct-1", BaseCurrency: "usd", State: billing.AccountActive}}
+		var id string
+		for _, currency := range []string{"usd", "USD", "Usd"} {
+			accounts[0].BaseCurrency = currency
+			response, err := list(build(billingfake.New(billingfake.Scenario{Accounts: accounts}).Provider()), nil)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetItems()).To(HaveLen(1))
+			item := response.GetItems()[0]
+			Expect(item.GetStatus().GetBaseCurrency()).To(Equal("USD"))
+			if id == "" {
+				id = item.GetId()
+			}
+			Expect(item.GetId()).To(Equal(id))
+			var stored string
+			Expect(testPool.QueryRow(ctx, `select data->'status'->>'base_currency' from billing_accounts where id = $1`, id).
+				Scan(&stored)).To(Succeed())
+			Expect(stored).To(Equal("USD"))
+		}
+	})
+
+	It("maps an unknown or inactive state and never maps a raw provider value to ACTIVE", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "a1", State: billing.AccountUnknown}, {ID: "a2", State: billing.AccountInactive},
+		}})
+		response, err := list(build(fake.Provider()), &privatev1.BillingAccountsListRequest{})
+		Expect(err).ToNot(HaveOccurred())
+		states := map[privatev1.BillingAccountState]bool{}
+		for _, item := range response.GetItems() {
+			states[item.GetStatus().GetState()] = true
+		}
+		Expect(states).To(HaveKey(privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_UNKNOWN))
+		Expect(states).To(HaveKey(privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_INACTIVE))
+	})
+
+	It("pages through more accounts than the discovery page size", func() {
+		var accounts []billingfake.AccountSpec
+		for i := range 45 {
+			accounts = append(accounts, billingfake.AccountSpec{ID: fmt.Sprintf("acct-%02d", i), State: billing.AccountActive})
+		}
+		fake := billingfake.New(billingfake.Scenario{Accounts: accounts})
+		req := &privatev1.BillingAccountsListRequest{}
+		req.SetLimit(100)
+		response, err := list(build(fake.Provider()), req)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetTotal()).To(Equal(int32(45)))
+		Expect(fake.Count("ListAccounts")).To(BeNumerically(">=", 3), "45 accounts at page size 20 needs 3 pages")
+	})
+
+	It("retains an account that disappears from the provider and marks it UNKNOWN on the next List", func() {
+		scenario := billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", State: billing.AccountActive}, {ID: "acct-2", State: billing.AccountActive},
+		}}
+		fake := billingfake.New(scenario)
+		server := build(fake.Provider())
+		_, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+
+		// acct-2 disappears from the provider's next read:
+		fake2 := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", State: billing.AccountActive},
+		}})
+		server2 := build(fake2.Provider())
+		response, err := list(server2, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetTotal()).To(Equal(int32(2)), "the vanished account's row must be retained, not deleted")
+		var sawUnknown bool
+		for _, item := range response.GetItems() {
+			if item.GetStatus().GetState() == privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_UNKNOWN {
+				sawUnknown = true
+			}
+		}
+		Expect(sawUnknown).To(BeTrue())
+	})
+
+	It("marks every known account UNKNOWN when the provider's list becomes empty", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", State: billing.AccountActive},
+		}})
+		server := build(fake.Provider())
+		_, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+
+		// The provider's list becomes empty: the sweep must still run and mark the stored row UNKNOWN. This is the
+		// nil-seen regression, since pgx encodes a nil slice as SQL NULL, which the not-in predicate never matches.
+		empty := billingfake.New(billingfake.Scenario{})
+		server2 := build(empty.Provider())
+		response, err := list(server2, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetTotal()).To(Equal(int32(1)), "the vanished account's row must be retained, not deleted")
+		Expect(response.GetItems()[0].GetStatus().GetState()).
+			To(Equal(privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_UNKNOWN))
+	})
+
+	It("leaves no row stored when discovery fails partway through pagination", func() {
+		adapter := &twoPageThenFailAdapter{}
+		server := build(billing.NewProvider("m360", adapter, nil))
+		_, err := list(server, nil)
+		Expect(err).To(HaveOccurred())
+
+		// The walk failed on page two, before any store transaction ran. Read back outside any request
+		// transaction, the way a later request would: nothing from page one may have been stored.
+		Expect(storedCount()).To(BeZero(), "the page-1 accounts must not be stored by a failed walk")
+	})
+
+	It("stores the whole walk or nothing, and a failed store does not open the freshness window", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", State: billing.AccountActive},
+			{ID: "acct-2", State: billing.AccountActive},
+		}})
+		server := build(fake.Provider())
+		server.discoverFailureBackoff = 10 * time.Millisecond
+
+		// Reject only the second account's write, the same trigger-injection pattern as
+		// service_account_create_test.go: the first upsert succeeds inside the store transaction, so only a real
+		// rollback keeps it out of the table.
+		_, err := testPool.Exec(ctx, `create function reject_second_billing_account() returns trigger language plpgsql as $$
+		begin
+			if new.data->'status'->>'provider_account_reference' = 'acct-2' then
+				raise exception 'test write failure';
+			end if;
+			return new;
+		end $$;
+		create trigger reject_second_billing_account before insert or update on billing_accounts
+		for each row execute function reject_second_billing_account()`)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = list(server, nil)
+		Expect(err).To(HaveOccurred())
+		Expect(storedCount()).To(BeZero(),
+			"the store transaction must roll back its first upsert together with the failed second")
+
+		_, err = testPool.Exec(ctx, `drop trigger reject_second_billing_account on billing_accounts;
+		drop function reject_second_billing_account()`)
+		Expect(err).ToNot(HaveOccurred())
+
+		// The failed store must not open the freshness window: once the failure backoff has elapsed, the
+		// next List runs a second full walk instead of serving a stored page.
+		var response *privatev1.BillingAccountsListResponse
+		Eventually(func() error {
+			var listErr error
+			response, listErr = list(server, nil)
+			return listErr
+		}, 5*time.Second).Should(Succeed())
+		Expect(response.GetTotal()).To(Equal(int32(2)))
+		Expect(fake.Count("ListAccounts")).To(Equal(2),
+			"only a durably committed walk may open the freshness window")
+	})
+
+	It("commits discovery durably: a later List inside the freshness window still reads the stored rows", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", State: billing.AccountActive},
+		}})
+		server := build(fake.Provider())
+		first, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(first.GetTotal()).To(Equal(int32(1)))
+		// A connection outside any request transaction sees the row: the store committed durably rather
+		// than riding on this test's ambient suite transaction.
+		Expect(storedCount()).To(Equal(1))
+
+		// An invalid filter on a fresh server still fails without disturbing the stored rows:
+		req := &privatev1.BillingAccountsListRequest{}
+		req.SetFilter(`this.state != "ACTIVE"`)
+		_, err = list(server, req)
+		st, ok := status.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(st.Code()).To(Equal(codes.InvalidArgument))
+
+		// ...and a second List inside the freshness window still reads the committed rows through its own
+		// short read transaction, without re-reading the provider.
+		second, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(second.GetTotal()).To(Equal(int32(1)))
+		Expect(fake.Count("ListAccounts")).To(Equal(1), "still inside the freshness window")
+	})
+
+	DescribeTable("keeps committed rows and freshness unchanged across complete discovery failure boundaries", func(fault string, code codes.Code) {
+		baseline := build(billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{
+			ID: "unseen-retained", ExternalID: "retained-token", Name: "Retained", State: billing.AccountActive,
+		}}}).Provider())
+		_, err := list(baseline, nil)
+		Expect(err).NotTo(HaveOccurred())
+		rows := func() string {
+			var value string
+			Expect(testPool.QueryRow(ctx, `select jsonb_agg(to_jsonb(b) order by id)::text from billing_accounts b`).Scan(&value)).To(Succeed())
+			return value
+		}
+		before := rows()
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{
+			ID: "new-account", ExternalID: "new-token", State: billing.AccountActive,
+		}}})
+		server := build(fake.Provider())
+		request := &privatev1.BillingAccountsListRequest{}
+		var cleanup func()
+		switch fault {
+		case "filter", "empty-inventory":
+			// Translation succeeds, but evaluating the filter in PostgreSQL fails after the walk and sweep.
+			request.SetFilter(`1 / 0 == 1`)
+			if fault == "empty-inventory" {
+				fake = billingfake.New(billingfake.Scenario{})
+				server.provider = fake.Provider()
+			}
+		case "late-page":
+			server.provider = billing.NewProvider(billingfake.Key, &twoPageThenFailAdapter{}, nil)
+			server.discoverFailureBackoff = 0
+		case "page":
+			// Run after the projection validator: the insert itself succeeds, but the actual requested page cannot
+			// decode this deliberately corrupt spec. No production mapper/DAO injection seam is added.
+			_, err = testPool.Exec(ctx, `create function corrupt_billing_requested_page() returns trigger language plpgsql as $$
+			begin new.data := jsonb_set(new.data, '{spec}', '42'::jsonb); return new; end $$;
+			create trigger zz_corrupt_billing_requested_page before insert on billing_accounts
+			for each row execute function corrupt_billing_requested_page()`)
+			Expect(err).NotTo(HaveOccurred())
+			cleanup = func() {
+				_, err := testPool.Exec(ctx, `drop trigger zz_corrupt_billing_requested_page on billing_accounts;
+				drop function corrupt_billing_requested_page()`)
+				Expect(err).NotTo(HaveOccurred())
+			}
+		case "commit":
+			_, err = testPool.Exec(ctx, `create function reject_discovery_commit() returns trigger language plpgsql as $$
+			begin raise exception 'deferred discovery fault'; end $$;
+			create constraint trigger reject_discovery_commit after insert on billing_accounts
+			deferrable initially deferred for each row execute function reject_discovery_commit()`)
+			Expect(err).NotTo(HaveOccurred())
+			cleanup = func() {
+				_, err := testPool.Exec(ctx, `drop trigger reject_discovery_commit on billing_accounts;
+				drop function reject_discovery_commit()`)
+				Expect(err).NotTo(HaveOccurred())
+			}
+		}
+		_, err = list(server, request)
+		Expect(status.Code(err)).To(Equal(code))
+		Expect(rows()).To(Equal(before), "tokens, observations, versions and unseen states must all roll back")
+		Expect(server.lastDiscovery).To(BeZero())
+		if cleanup != nil {
+			cleanup()
+		}
+		if fault == "late-page" {
+			server.provider = fake.Provider()
+		}
+		_, err = list(server, nil)
+		Expect(err).NotTo(HaveOccurred(), "a failed RPC must not open freshness")
+		Expect(server.lastDiscovery).NotTo(BeZero())
+		committed := server.lastDiscovery
+		_, err = list(server, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(server.lastDiscovery).To(Equal(committed), "one successful complete store advances freshness only once")
+		walks := 2
+		if fault == "late-page" {
+			walks = 1
+		}
+		Expect(fake.Count("ListAccounts")).To(Equal(walks))
+	},
+		Entry("filter execution after unseen sweep", "filter", codes.Internal),
+		Entry("filter execution after empty inventory sweep", "empty-inventory", codes.Internal),
+		Entry("requested page materialization", "page", codes.Internal),
+		Entry("deferred outer commit", "commit", codes.Internal),
+		Entry("late provider page", "late-page", codes.Unavailable),
+	)
+
+	It("cancels a slow discovery caller and releases its ordinary connection",
+		func() {
+			adapter := &gatedTwoPageAdapter{
+				enteredSecondPage: make(chan struct{}),
+				release:           make(chan struct{}),
+			}
+			// Release the walk whatever happens below: a failed assertion while the provider is still gated
+			// would leave the walk blocked, and the pool cleanup below waits for the connection it holds.
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(adapter.release) }) }
+
+			// One connection makes an unreleased ordinary request transaction observable after cancellation.
+			config, err := pgxpool.ParseConfig(testPool.Config().ConnString())
+			Expect(err).ToNot(HaveOccurred())
+			config.MaxConns = 1
+			singlePool, err := pgxpool.NewWithConfig(ctx, config)
+			Expect(err).ToNot(HaveOccurred())
+			// Cleanups run last-in-first-out, so this one must release the walk itself before closing the
+			// pool: closing the pool waits for the walk's checked-out connection to come back.
+			DeferCleanup(func() {
+				release()
+				singlePool.Close()
+			})
+			singlePoolTm, err := database.NewTxManager().
+				SetLogger(logger).
+				SetPool(singlePool).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+			singlePoolCtx := database.TxManagerIntoContext(ctx, singlePoolTm)
+			singlePoolCtx, cancelRPC := context.WithCancel(singlePoolCtx)
+			DeferCleanup(cancelRPC)
+
+			type listOutcome struct {
+				response *privatev1.BillingAccountsListResponse
+				err      error
+			}
+			server := build(billing.NewProvider("m360", adapter, nil))
+			result := make(chan listOutcome, 1)
+			go func() {
+				response, listErr := billingRPC(singlePoolCtx,
+					func(c context.Context, req *privatev1.BillingAccountsListRequest) (*privatev1.BillingAccountsListResponse, error) {
+						tx, err := database.TxFromContext(c)
+						if err != nil {
+							return nil, err
+						}
+						if _, err = tx.Exec(c, `select 1`); err != nil {
+							return nil, err
+						}
+						return server.List(c, req)
+					}, &privatev1.BillingAccountsListRequest{})
+				result <- listOutcome{response: response, err: listErr}
+			}()
+			Eventually(adapter.enteredSecondPage, 5*time.Second).
+				Should(BeClosed(), "the walk must reach the provider's second page")
+
+			Expect(singlePool.Stat().AcquiredConns()).To(Equal(int32(1)))
+			cancelRPC()
+			var outcome listOutcome
+			Eventually(result, 5*time.Second).Should(Receive(&outcome))
+			Expect(status.Code(outcome.err)).To(Equal(codes.Canceled))
+			Expect(server.lastDiscovery).To(BeZero())
+			Expect(server.lastDiscoveryFailure).To(BeZero())
+			// Cancellation must release the connection within the bounded return window, not leave an orphan walk.
+			probeCtx, probeCancel := context.WithTimeout(ctx, 5*time.Second)
+			defer probeCancel()
+			_, err = singlePool.Exec(probeCtx, `select 1`)
+			Expect(err).ToNot(HaveOccurred())
+
+			release()
+			_, err = billingRPC(database.TxManagerIntoContext(probeCtx, singlePoolTm), server.List, &privatev1.BillingAccountsListRequest{})
+			Expect(err).NotTo(HaveOccurred(), "cancellation must not poison admission or provider backoff")
+		})
+
+	It("fails with FAILED_PRECONDITION/MALFORMED when the provider never reports a last page", func() {
+		server := build(billing.NewProvider("m360", &endlessDiscoveryAdapter{}, nil))
+		_, err := list(server, nil)
+		st, ok := status.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(st.Code()).To(Equal(codes.FailedPrecondition))
+		Expect(st.Details()[0].(*errdetails.ErrorInfo).GetReason()).To(Equal("MALFORMED"))
+	})
+
+	It("fails as UNAVAILABLE when a hanging provider exceeds the discovery deadline", func() {
+		server := build(billing.NewProvider("m360", &hangingDiscoveryAdapter{}, nil))
+		server.discoverDeadline = 50 * time.Millisecond
+
+		// The worker owns a cancellable context so a regressed deadline fails the assertion below instead of
+		// leaving the provider call blocked on the non-cancellable suite context during teardown.
+		workerCtx, cancel := context.WithCancel(ctx)
+		DeferCleanup(cancel)
+		result := make(chan error, 1)
+		go func() {
+			_, err := billingRPC(workerCtx, server.List, &privatev1.BillingAccountsListRequest{})
+			result <- err
+		}()
+		var err error
+		Eventually(result, 5*time.Second).Should(Receive(&err))
+		st, ok := status.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(st.Code()).To(Equal(codes.Unavailable))
+		Expect(st.Details()[0].(*errdetails.ErrorInfo).GetReason()).To(Equal(billingProviderUnavailableReason))
+	})
+
+	It("bounds a real account row lock wait by the discovery deadline", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "locked", Name: "Updated"}}})
+		server := build(fake.Provider())
+		Expect(billingStore(ctx, server, []billing.Account{{Ref: billing.NewAccountRef("locked"), Name: "Before"}},
+			time.Now().Add(-time.Minute))).To(Succeed())
+
+		blocker, err := testPool.Begin(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			rollbackCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			err := blocker.Rollback(rollbackCtx)
+			if !errors.Is(err, pgx.ErrTxClosed) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
+		_, err = blocker.Exec(ctx, `select id from billing_accounts where data->'status'->>'provider_account_reference' = 'locked' for no key update`)
+		Expect(err).NotTo(HaveOccurred())
+		server.discoverDeadline = time.Second
+
+		result := make(chan error, 1)
+		caller, cancel := context.WithTimeout(ctx, 5*time.Second)
+		DeferCleanup(cancel)
+		go func() {
+			_, err := billingRPC(caller, server.List, &privatev1.BillingAccountsListRequest{})
+			result <- err
+		}()
+		probeCtx, cancelProbe := context.WithTimeout(ctx, time.Second)
+		DeferCleanup(cancelProbe)
+		Eventually(func() (bool, error) {
+			var waiting bool
+			err := testPool.QueryRow(probeCtx, `select exists (select 1 from pg_stat_activity
+				where datname = current_database() and wait_event_type = 'Lock' and query like $1)`,
+				`%order by b.id for no key update of b%`).Scan(&waiting)
+			return waiting, err
+		}, time.Second).Should(BeTrue(), "discovery must reach the account lock while the blocker is held")
+
+		Eventually(result, 3*time.Second).Should(Receive(&err))
+		Expect(status.Code(err)).To(Equal(codes.DeadlineExceeded))
+		Expect(caller.Err()).NotTo(HaveOccurred(), "the discovery deadline, not the caller deadline, expired")
+		Expect(server.lastDiscovery).To(BeZero())
+		Expect(server.lastDiscoveryFailure).To(BeZero(), "database contention must not open provider backoff")
+		Expect(fake.Count("ListAccounts")).To(Equal(1))
+		var label string
+		Expect(blocker.QueryRow(ctx, `select data->'status'->>'display_name' from billing_accounts where data->'status'->>'provider_account_reference' = 'locked'`).Scan(&label)).To(Succeed())
+		Expect(label).To(Equal("Before"))
+		Expect(blocker.Rollback(ctx)).To(Succeed())
+		server.discoverDeadline = defaultDiscoverDeadline
+		response, err := list(server, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(1))
+		Expect(response.GetItems()[0].GetStatus().GetDisplayName()).To(Equal("Updated"))
+		Expect(fake.Count("ListAccounts")).To(Equal(2))
+	})
+
+	It("serves the stored page without re-reading the provider within the freshness window", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", State: billing.AccountActive}, {ID: "acct-2", State: billing.AccountActive},
+		}})
+		server := build(fake.Provider())
+		first, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(first.GetTotal()).To(Equal(int32(2)))
+		Expect(fake.Count("ListAccounts")).To(Equal(1))
+
+		second, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(second.GetTotal()).To(Equal(int32(2)), "the stored page must still be served")
+		Expect(fake.Count("ListAccounts")).To(Equal(1), "a List inside the window must not re-read the provider")
+	})
+
+	It("fails fast inside the failure backoff and retries the walk once it has elapsed", func() {
+		fake := billingfake.New(billingfake.Scenario{
+			Accounts: []billingfake.AccountSpec{{ID: "acct-1", State: billing.AccountActive}},
+			Failures: map[string]billingfake.Failure{"ListAccounts": {Reason: billing.ReasonUnavailable, Times: 1}},
+		})
+		server := build(fake.Provider())
+		_, err := list(server, nil)
+		Expect(err).To(HaveOccurred())
+		Expect(fake.Count("ListAccounts")).To(Equal(1))
+
+		// A List inside the backoff window fails fast as UNAVAILABLE rather than stacking another walk:
+		_, err = list(server, nil)
+		st, ok := status.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(st.Code()).To(Equal(codes.Unavailable), "never an unmarked stale list")
+		Expect(fake.Count("ListAccounts")).To(Equal(1), "the backoff window must not re-read the provider")
+
+		// Once the backoff has elapsed, the next List retries the walk and only a success opens the window:
+		server.lastDiscoveryFailure = time.Now().Add(-2 * server.discoverFailureBackoff)
+		response, err := list(server, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response.GetTotal()).To(Equal(int32(1)))
+		Expect(fake.Count("ListAccounts")).To(Equal(2))
+	})
+
+	It("does not open the failure backoff when the caller cancels the walk", func() {
+		adapter := &canceledCallerAdapter{entered: make(chan struct{})}
+		server := build(billing.NewProvider("m360", adapter, nil))
+
+		callerCtx, cancel := context.WithCancel(ctx)
+		DeferCleanup(cancel)
+		first := make(chan error, 1)
+		go func() {
+			_, err := billingRPC(callerCtx, server.List, &privatev1.BillingAccountsListRequest{})
+			first <- err
+		}()
+		Eventually(adapter.entered, 5*time.Second).Should(BeClosed(),
+			"the first List must start the walk and reach the provider")
+
+		// The caller gives up on its own walk: that says nothing about the provider, so it must not open the
+		// server-wide failure backoff for the Lists of every other caller.
+		cancel()
+		var firstErr error
+		Eventually(first, 5*time.Second).Should(Receive(&firstErr))
+		Expect(firstErr).To(HaveOccurred())
+
+		response, err := billingRPC(ctx, server.List, &privatev1.BillingAccountsListRequest{})
+		Expect(err).ToNot(HaveOccurred(), "a live List must walk the provider again, not fail fast")
+		Expect(response.GetTotal()).To(Equal(int32(1)))
+		Expect(adapter.calls).To(Equal(2), "the canceled walk must not have opened the failure backoff")
+	})
+
+	It("runs at most one discovery walk at a time, failing a concurrent stale List fast", func() {
+		adapter := &gatedDiscoveryAdapter{entered: make(chan struct{}), release: make(chan struct{})}
+		server := build(billing.NewProvider("m360", adapter, nil))
+		// Release the walk whatever happens below: a failed assertion while the provider is still gated must
+		// not leave the first discovery blocked for the rest of the suite.
+		var releaseOnce sync.Once
+		release := func() { releaseOnce.Do(func() { close(adapter.release) }) }
+		DeferCleanup(release)
+
+		first := make(chan error, 1)
+		go func() {
+			_, err := list(server, nil)
+			first <- err
+		}()
+		Eventually(adapter.entered, 5*time.Second).Should(BeClosed(), "the first List must start the walk")
+
+		// A second stale List while the walk is in flight fails fast as UNAVAILABLE, without starting a
+		// second walk and without stacking behind the first. Bound it independently so a regression that
+		// stacks the request fails the test instead of hanging it:
+		secondCtx, cancelSecond := context.WithTimeout(ctx, 5*time.Second)
+		DeferCleanup(cancelSecond)
+		_, err := billingRPC(secondCtx, server.List, &privatev1.BillingAccountsListRequest{})
+		st, ok := status.FromError(err)
+		Expect(ok).To(BeTrue())
+		Expect(st.Code()).To(Equal(codes.Unavailable))
+		Expect(st.Details()[0].(*errdetails.ErrorInfo).GetReason()).To(Equal(billingProviderUnavailableReason))
+		Expect(adapter.calls).To(Equal(1), "the concurrent List must not start a second walk")
+		select {
+		case returnedErr := <-first:
+			Fail(fmt.Sprintf("the first discovery must remain blocked until released, but returned: %v",
+				returnedErr))
+		default:
+		}
+
+		release()
+		var firstErr error
+		Eventually(first, 5*time.Second).Should(Receive(&firstErr))
+		Expect(firstErr).ToNot(HaveOccurred())
+
+		// The completed walk opened the freshness window: the next List serves the stored page.
+		response, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetTotal()).To(Equal(int32(1)))
+		Expect(adapter.calls).To(Equal(1), "the freshness window must serve without starting a new walk")
+	})
+
+	DescribeTable("publishes discovery freshness only after the outer transaction commits", func(rollBack bool) {
+		fake := billingfake.New(billingfake.Scenario{})
+		server := build(fake.Provider())
+		commitHookEntered := make(chan struct{})
+		releaseCommitHook := make(chan struct{})
+		DeferCleanup(func() {
+			select {
+			case <-releaseCommitHook:
+			default:
+				close(releaseCommitHook)
+			}
+		})
+		first := make(chan error, 1)
+		go func() {
+			_, err := billingRPC(ctx, func(c context.Context, request *privatev1.BillingAccountsListRequest) (
+				*privatev1.BillingAccountsListResponse, error) {
+				tx, err := database.TxFromContext(c)
+				if err != nil {
+					return nil, err
+				}
+				defer tx.ReportError(&err)
+				if !rollBack {
+					tx.OnCommit(func() {
+						close(commitHookEntered)
+						<-releaseCommitHook
+					})
+				}
+				response, err := server.List(c, request)
+				if rollBack && err == nil {
+					response = nil
+					err = status.Error(codes.InvalidArgument, "reject after successful discovery")
+				}
+				return response, err
+			}, &privatev1.BillingAccountsListRequest{})
+			first <- err
+		}()
+		if rollBack {
+			var err error
+			Eventually(first, 5*time.Second).Should(Receive(&err))
+			Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+			Expect(server.lastDiscovery).To(BeZero())
+			Expect(server.discoverInFlight).To(BeFalse())
+			Expect(storedCount()).To(BeZero())
+			_, err = list(server, nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fake.Count("ListAccounts")).To(Equal(2))
+		} else {
+			Eventually(commitHookEntered, 5*time.Second).Should(BeClosed())
+			Expect(server.lastDiscovery).To(BeZero(), "freshness is not published before all commit hooks complete")
+			Expect(server.discoverInFlight).To(BeFalse(), "local admission is released when the handler returns")
+			close(releaseCommitHook)
+			var firstErr error
+			Eventually(first, 5*time.Second).Should(Receive(&firstErr))
+			Expect(firstErr).NotTo(HaveOccurred())
+			Expect(server.lastDiscovery).NotTo(BeZero())
+			Expect(server.discoverInFlight).To(BeFalse())
+			_, err := list(server, nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(fake.Count("ListAccounts")).To(Equal(1))
+		}
+	}, Entry("commit", false), Entry("rollback", true))
+
+	It("does not publish freshness when a directly supplied managed transaction rolls back", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "direct"}}})
+		server := build(fake.Provider())
+		tx, err := tm.Begin(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		ended := false
+		DeferCleanup(func() {
+			if ended {
+				return
+			}
+			err := errors.New("test cleanup")
+			tx.ReportError(&err)
+			endCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			err = tx.End(endCtx)
+			if !errors.Is(err, pgx.ErrTxClosed) {
+				Expect(err).NotTo(HaveOccurred())
+			}
+		})
+		direct := database.TxIntoContext(context.Background(), tx)
+		_, err = server.List(direct, &privatev1.BillingAccountsListRequest{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(server.lastDiscovery).To(BeZero())
+		Expect(server.discoverInFlight).To(BeFalse(), "local admission is released when the handler returns")
+		err = errors.New("caller chose rollback")
+		tx.ReportError(&err)
+		err = tx.End(ctx)
+		ended = true
+		Expect(err).NotTo(HaveOccurred())
+		Expect(server.lastDiscovery).To(BeZero())
+		Expect(server.discoverInFlight).To(BeFalse())
+		Expect(storedCount()).To(BeZero())
+		_, err = list(server, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fake.Count("ListAccounts")).To(Equal(2))
+	})
+
+	It("re-discovers once the freshness window has passed", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", State: billing.AccountActive},
+		}})
+		server := build(fake.Provider())
+		_, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(fake.Count("ListAccounts")).To(Equal(1))
+
+		server.discoverMu.Lock()
+		server.lastDiscovery = time.Now().Add(-time.Hour)
+		server.discoverMu.Unlock()
+
+		_, err = list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(fake.Count("ListAccounts")).To(Equal(2), "a List after the window must re-read the provider")
+	})
+
+	DescribeTable("rejects an invalid filter before provider work", func(failure string, filter string) {
+		scenario := billingfake.Scenario{Accounts: []billingfake.AccountSpec{{ID: "unused"}}}
+		if failure == "walk" {
+			scenario.Failures = map[string]billingfake.Failure{"ListAccounts": {Reason: billing.ReasonUnavailable}}
+		}
+		fake := billingfake.New(scenario)
+		provider := fake.Provider()
+		if failure == "adapter" {
+			provider = billing.NewProvider(billingfake.Key, nil, errors.New("provider setup failed"))
+		}
+		server := build(provider)
+		_, err := list(server, privatev1.BillingAccountsListRequest_builder{Filter: &filter}.Build())
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(fake.Calls()).To(BeEmpty())
+		Expect(storedCount()).To(BeZero())
+		Expect(server.lastDiscovery).To(BeZero())
+		Expect(server.lastDiscoveryFailure).To(BeZero())
+	},
+		Entry("unknown field with a healthy provider", "", `this.state == 1`),
+		Entry("unknown field with a failing provider", "walk", `this.no_such_field == "unused"`),
+		Entry("unknown field when the adapter failed to initialize", "adapter", `this.no_such_field == "unused"`),
+	)
+
+	It("stores canonical JSON and preserves identity, metadata and version for stale or identical observations", func() {
+		server := build(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		accounts := []billing.Account{{Ref: billing.NewAccountRef("native"), Name: "Known", BaseCurrency: "usd",
+			ExternalID: " raw token ", State: billing.AccountActive}}
+		Expect(billingStore(ctx, server, accounts, start)).To(Succeed())
+		var id, name, data string
+		var version int32
+		Expect(testPool.QueryRow(ctx, `select id, name, data::text, version from billing_accounts`).
+			Scan(&id, &name, &data, &version)).To(Succeed())
+		Expect(data).To(ContainSubstring(`"BILLING_ACCOUNT_STATE_ACTIVE"`))
+		Expect(data).To(ContainSubstring(`"state_observation_timestamp"`))
+		Expect(data).ToNot(ContainSubstring(`"metadata"`))
+		Expect(billingStore(ctx, server, accounts, start)).To(Succeed())
+		accounts[0].Name, accounts[0].ExternalID, accounts[0].State = "stale", "replacement", billing.AccountInactive
+		Expect(billingStore(ctx, server, accounts, start.Add(-time.Second))).To(Succeed())
+		var gotID, gotName, token, label, state string
+		var gotVersion int32
+		Expect(testPool.QueryRow(ctx, `select id, name, data->'status'->>'provider_external_id', data->'status'->>'display_name', data->'status'->>'state', version
+			from billing_accounts`).Scan(&gotID, &gotName, &token, &label, &state, &gotVersion)).To(Succeed())
+		Expect(gotID).To(Equal(id))
+		Expect(gotName).To(Equal(name))
+		Expect(gotVersion).To(Equal(version))
+		Expect(token).To(Equal(" raw token "))
+		Expect(label).To(Equal("Known"))
+		Expect(state).To(Equal(privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE.String()))
+	})
+
+	It("enqueues account creates, observation updates and absence sweeps without suppressing nonbilling enqueue", func() {
+		var before, after int
+		Expect(testPool.QueryRow(ctx, `select count(*) from changes`).Scan(&before)).To(Succeed())
+		server := build(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		accounts := []billing.Account{{Ref: billing.NewAccountRef("a"), State: billing.AccountActive}}
+		Expect(billingStore(ctx, server, accounts, start)).To(Succeed())
+		accounts[0].ExternalID, accounts[0].Name = "new-raw-token", "Refreshed"
+		Expect(billingStore(ctx, server, accounts, start.Add(time.Second))).To(Succeed())
+		Expect(billingStore(ctx, server, nil, start.Add(2*time.Second))).To(Succeed())
+		Expect(testPool.QueryRow(ctx, `select count(*) from changes`).Scan(&after)).To(Succeed())
+		Expect(after).To(Equal(before+3), "account create, observation update and absence sweep each publish")
+		control, err := dao.NewGenericDAO[*privatev1.ServiceAccount]().SetLogger(logger).SetTenancyLogic(tenancy).Build()
+		Expect(err).ToNot(HaveOccurred())
+		_, err = database.WithNewTx(ctx, func(ctx context.Context) (struct{}, error) {
+			_, err := control.Create().SetObject(privatev1.ServiceAccount_builder{Id: "enqueue-control",
+				Metadata: privatev1.Metadata_builder{Name: "enqueue-control", Tenant: "system"}.Build(),
+			}.Build()).Do(ctx)
+			return struct{}{}, err
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(testPool.QueryRow(ctx, `select count(*) from changes`).Scan(&after)).To(Succeed())
+		Expect(after).To(Equal(before+4), "nonbilling enqueue still publishes")
+	})
+
+	It("stores duplicate provider external IDs without reserving them and reflects corrections", func() {
+		server := build(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		accounts := []billing.Account{
+			{Ref: billing.NewAccountRef("a"), ExternalID: " shared ", State: billing.AccountActive},
+			{Ref: billing.NewAccountRef("b"), ExternalID: " shared ", State: billing.AccountActive},
+		}
+		Expect(billingStore(ctx, server, accounts, start)).To(Succeed())
+		check := func(ref string, observedValue, attributionValue *string) string {
+			var id string
+			var observed, token *string
+			Expect(testPool.QueryRow(ctx, `select id, data->'status'->>'provider_external_id', data->'status'->>'external_billing_account_id'
+				from billing_accounts where data->'status'->>'provider_account_reference' = $1`, ref).
+				Scan(&id, &observed, &token)).To(Succeed())
+			Expect(observed).To(Equal(observedValue))
+			Expect(token).To(Equal(attributionValue))
+			return id
+		}
+		a := check("a", proto.String(" shared "), proto.String(" shared "))
+		b := check("b", proto.String(" shared "), proto.String(" shared "))
+		Expect(a).NotTo(Equal(b))
+		accounts[0].ExternalID = "shared" // Not the same value: the provider's bytes are not normalized.
+		Expect(billingStore(ctx, server, accounts, start.Add(time.Second))).To(Succeed())
+		Expect(check("a", proto.String("shared"), proto.String(" shared "))).To(Equal(a))
+		Expect(check("b", proto.String(" shared "), proto.String(" shared "))).To(Equal(b))
+		Expect(billingStore(ctx, server, accounts[1:], start.Add(2*time.Second))).To(Succeed())
+		Expect(check("a", nil, proto.String(" shared "))).To(Equal(a))
+		Expect(storedCount()).To(Equal(2))
+	})
+
+	It("warns about conflicting provider evidence without changing the committed assignment or attribution", func() {
+		server, logs := buildWithLogs(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		id := seedAssignedAccount(server, "osac-drift", "provider-account", "recorded-token", start)
+		seedAssignment("asg-drift", id, start)
+		err := billingStore(ctx, server, []billing.Account{{
+			Ref: billing.NewAccountRef("provider-account"), ExternalID: "observed-token", State: billing.AccountActive,
+		}}, start.Add(time.Second))
+		Expect(err).ToNot(HaveOccurred())
+		var token, observed string
+		Expect(testPool.QueryRow(ctx, `select data->'status'->>'external_billing_account_id',
+			data->'status'->>'provider_external_id' from billing_accounts where id = $1`, id).
+			Scan(&token, &observed)).To(Succeed())
+		Expect(token).To(Equal("recorded-token"), "discovery must not rewrite the established attribution")
+		Expect(observed).To(Equal("observed-token"))
+		var open int
+		Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments
+			where id = 'asg-drift' and data->'status'->>'connection_state' =
+			'TENANT_BILLING_ASSIGNMENT_CONNECTION_STATE_CONNECTED'
+			and coalesce(data->'status'->>'message', '') = ''
+			and data->'status'->>'effective_to_timestamp' is null`).
+			Scan(&open)).To(Succeed())
+		Expect(open).To(Equal(1), "discovery must not close or change the committed assignment")
+		Expect(logs.String()).To(ContainSubstring(
+			"Billing account provider external ID differs from recorded assignment"))
+		Expect(logs.String()).To(ContainSubstring(`"billing_account_id":"` + id + `"`))
+		for _, raw := range []string{"provider-account", "recorded-token", "observed-token"} {
+			Expect(logs.String()).ToNot(ContainSubstring(raw), "the warning carries only stable OSAC identity")
+		}
+		AddReportEntry("drift warning", logs.String())
+	})
+
+	It("does not warn when the observed provider external ID matches the recorded assignment", func() {
+		server, logs := buildWithLogs(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		id := seedAssignedAccount(server, "osac-match", "matching-native", "same-token", start)
+		err := billingStore(ctx, server, []billing.Account{{
+			Ref: billing.NewAccountRef("matching-native"), ExternalID: "same-token", State: billing.AccountActive,
+		}}, start.Add(time.Second))
+		Expect(err).ToNot(HaveOccurred())
+		var token string
+		Expect(testPool.QueryRow(ctx, `select data->'status'->>'external_billing_account_id' from billing_accounts where id = $1`, id).
+			Scan(&token)).To(Succeed())
+		Expect(token).To(Equal("same-token"))
+		Expect(logs.String()).ToNot(ContainSubstring("differs from recorded assignment"))
+	})
+
+	It("does not warn about conflicting provider evidence when no assignment ever referenced the account", func() {
+		server, logs := buildWithLogs(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		// A nonblank token without any assignment row has no assignment to drift from, so there is no
+		// conflict to warn about and the stored token is kept.
+		id := seedAssignedAccount(server, "osac-unassigned", "unassigned-native", "unassigned-token", start)
+		err := billingStore(ctx, server, []billing.Account{{
+			Ref: billing.NewAccountRef("unassigned-native"), ExternalID: "mismatching-token", State: billing.AccountActive,
+		}}, start.Add(time.Second))
+		Expect(err).ToNot(HaveOccurred())
+		var token, observed string
+		Expect(testPool.QueryRow(ctx, `select data->'status'->>'external_billing_account_id',
+			data->'status'->>'provider_external_id' from billing_accounts where id = $1`, id).
+			Scan(&token, &observed)).To(Succeed())
+		Expect(token).To(Equal("unassigned-token"))
+		Expect(observed).To(Equal("mismatching-token"))
+		Expect(logs.String()).ToNot(ContainSubstring("differs from recorded assignment"))
+	})
+
+	It("warns about conflicting provider evidence when the only assignment is closed history", func() {
+		server, logs := buildWithLogs(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		id := seedAssignedAccount(server, "osac-historical", "historical-native", "recorded-token", start)
+		closed := start.Add(time.Minute)
+		seedAssignmentInterval("asg-historical", id, start, &closed)
+		err := billingStore(ctx, server, []billing.Account{{
+			Ref: billing.NewAccountRef("historical-native"), ExternalID: "observed-token", State: billing.AccountActive,
+		}}, start.Add(2*time.Minute))
+		Expect(err).ToNot(HaveOccurred())
+		var token string
+		Expect(testPool.QueryRow(ctx, `select data->'status'->>'external_billing_account_id' from billing_accounts where id = $1`, id).
+			Scan(&token)).To(Succeed())
+		Expect(token).To(Equal("recorded-token"))
+		var untouched int
+		Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments
+			where id = 'asg-historical' and (data->'status'->>'effective_to_timestamp')::timestamptz = $1`, closed).
+			Scan(&untouched)).To(Succeed())
+		Expect(untouched).To(Equal(1), "discovery must not change closed assignment history")
+		Expect(logs.String()).To(ContainSubstring(
+			"Billing account provider external ID differs from recorded assignment"))
+		Expect(logs.String()).To(ContainSubstring(`"billing_account_id":"` + id + `"`))
+		for _, raw := range []string{"historical-native", "recorded-token", "observed-token"} {
+			Expect(logs.String()).ToNot(ContainSubstring(raw), "the warning carries only stable OSAC identity")
+		}
+		AddReportEntry("historical drift warning", logs.String())
+	})
+
+	It("does not treat an assigned account absent from an incomplete walk as a mismatch", func() {
+		server, logs := buildWithLogs(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		id := seedAssignedAccount(server, "osac-absent", "absent-native", "recorded-token", start)
+		// Closed history is enough for the drift check: without an interval the spec could pass even if an
+		// absent assigned account wrongly triggered the warning.
+		closed := start.Add(time.Minute)
+		seedAssignmentInterval("asg-absent", id, start, &closed)
+		err := billingStore(ctx, server, []billing.Account{{
+			Ref: billing.NewAccountRef("present-native"), ExternalID: "present-token", State: billing.AccountActive,
+		}}, start.Add(time.Second))
+
+		Expect(err).ToNot(HaveOccurred())
+		var token string
+		Expect(testPool.QueryRow(ctx, `select data->'status'->>'external_billing_account_id' from billing_accounts where id = $1`, id).
+			Scan(&token)).To(Succeed())
+		Expect(token).To(Equal("recorded-token"))
+		Expect(logs.String()).ToNot(ContainSubstring("differs from recorded assignment"))
+	})
+
+	It("aborts the whole batch on an unexpected native-key conflict without a late-winner retry", func() {
+		server := build(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		Expect(billingStore(ctx, server, []billing.Account{{Ref: billing.NewAccountRef("a"), State: billing.AccountActive}}, start)).To(Succeed())
+		// Deliberately violate the guard protocol at the SQL boundary. This is a real named native-key index
+		// conflict, not an error-string fake. The previously merged unseen observation must roll back too.
+		_, err := testPool.Exec(ctx, `create sequence native_insert_attempts;
+		create function inject_native_conflict() returns trigger language plpgsql as $$
+		begin
+			perform nextval('native_insert_attempts');
+			new.data := jsonb_set(new.data, '{status,provider_account_reference}', '"a"'::jsonb);
+			return new;
+		end $$;
+		create trigger a_inject_native_conflict before insert on billing_accounts
+		for each row execute function inject_native_conflict()`)
+		Expect(err).ToNot(HaveOccurred())
+		err = billingStore(ctx, server, []billing.Account{{Ref: billing.NewAccountRef("b"), State: billing.AccountActive}}, start.Add(time.Second))
+		Expect(status.Code(err)).To(Equal(codes.Aborted))
+		var state string
+		var version, attempts int
+		var called bool
+		Expect(testPool.QueryRow(ctx, `select data->'status'->>'state', version from billing_accounts`).Scan(&state, &version)).To(Succeed())
+		Expect(state).To(Equal(privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE.String()))
+		Expect(version).To(BeZero())
+		Expect(testPool.QueryRow(ctx, `select last_value, is_called from native_insert_attempts`).
+			Scan(&attempts, &called)).To(Succeed())
+		Expect(called).To(BeTrue(), "the injected native-conflict trigger must have run")
+		Expect(attempts).To(Equal(1))
+		Expect(storedCount()).To(Equal(1))
+	})
+
+	It("rejects duplicate native keys before storing any batch", func() {
+		server := build(billingfake.New(billingfake.Scenario{}).Provider())
+		err := billingStore(ctx, server, []billing.Account{
+			{Ref: billing.NewAccountRef("same")}, {Ref: billing.NewAccountRef("same")},
+		}, time.Now())
+		var classified *billing.Error
+		Expect(errors.As(err, &classified)).To(BeTrue())
+		Expect(classified.Reason).To(Equal(billing.ReasonMalformed))
+		Expect(storedCount()).To(BeZero())
+	})
+
+	DescribeTable("rejects provider bytes PostgreSQL cannot store before changing any row",
+		func(mutate func(*billingfake.AccountSpec)) {
+			invalid := billingfake.AccountSpec{
+				ID: "invalid-native", Name: "Invalid", ExternalID: "invalid-token", State: billing.AccountActive,
+			}
+			mutate(&invalid)
+			server := build(billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+				{ID: "valid-new", Name: "Valid", State: billing.AccountActive}, invalid,
+			}}).Provider())
+			start := time.Now().UTC().Truncate(time.Microsecond)
+			Expect(billingStore(ctx, server, []billing.Account{{Ref: billing.NewAccountRef("existing"),
+				ExternalID: "existing-token", State: billing.AccountActive}}, start)).To(Succeed())
+			var before string
+			Expect(testPool.QueryRow(ctx, `select to_jsonb(b)::text from billing_accounts b`).Scan(&before)).
+				To(Succeed())
+
+			_, err := list(server, nil)
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+			Expect(status.Convert(err).Details()[0].(*errdetails.ErrorInfo).GetReason()).To(Equal("MALFORMED"))
+
+			var after string
+			Expect(testPool.QueryRow(ctx, `select to_jsonb(b)::text from billing_accounts b`).Scan(&after)).
+				To(Succeed())
+			Expect(after).To(Equal(before), "a rejected walk stores neither the valid account nor a sweep")
+			Expect(storedCount()).To(Equal(1))
+		},
+		Entry("U+0000 in the native account reference", func(account *billingfake.AccountSpec) {
+			account.ID = "native\x00ref"
+		}),
+		Entry("U+0000 in the provider external ID", func(account *billingfake.AccountSpec) {
+			account.ExternalID = "token\x00bytes"
+		}),
+	)
+
+	It("stores representable provider bytes exactly through discovery", func() {
+		ref := "native-\u00e9\u007f\tref"
+		token := " token-\u00e9\u007f "
+		server := build(billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{{
+			ID: ref, Name: "Representable", ExternalID: token, State: billing.AccountActive,
+		}}}).Provider())
+		_, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		var gotRef, gotToken string
+		Expect(testPool.QueryRow(ctx, `select data->'status'->>'provider_account_reference',
+			data->'status'->>'provider_external_id' from billing_accounts`).Scan(&gotRef, &gotToken)).To(Succeed())
+		Expect(gotRef).To(Equal(ref))
+		Expect(gotToken).To(Equal(token))
+	})
+
+	It("round trips NULL, present-empty, whitespace and raw tokens through GenericDAO and an unseen sweep", func() {
+		server := build(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		tokens := []*string{nil, proto.String(""), proto.String(" \t "), proto.String(" padded ")}
+		for i, token := range tokens {
+			id := fmt.Sprintf("raw-%d", i)
+			name, err := billingAccountName(id)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = database.WithNewTx(ctx, func(ctx context.Context) (struct{}, error) {
+				_, err := server.dao.Create().SetObject(privatev1.BillingAccount_builder{
+					Id: id, Metadata: privatev1.Metadata_builder{Name: name, Tenant: "system", Creator: "system",
+						Labels: map[string]string{"preserved": "label"}, Annotations: map[string]string{"note": "retained"},
+					}.Build(), Status: privatev1.BillingAccountStatus_builder{
+						ProviderKey: "fake", ProviderAccountReference: id, ExternalBillingAccountId: token,
+						State:                     privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE,
+						StateObservationTimestamp: timestamppb.New(start),
+					}.Build(),
+				}.Build()).Do(ctx)
+				return struct{}{}, err
+			})
+			Expect(err).ToNot(HaveOccurred())
+		}
+		Expect(billingStore(ctx, server, nil, start.Add(time.Second))).To(Succeed())
+		// Mark discovery fresh to inspect the exact completed sweep without another provider observation.
+		server.lastDiscovery = time.Now()
+		response, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(4))
+		for i, item := range response.GetItems() {
+			Expect(item.GetId()).To(Equal(fmt.Sprintf("raw-%d", i)))
+			Expect(item.GetStatus().HasExternalBillingAccountId()).To(Equal(tokens[i] != nil))
+			if tokens[i] != nil {
+				Expect(item.GetStatus().GetExternalBillingAccountId()).To(Equal(*tokens[i]))
+			}
+			Expect(item.GetStatus().GetState()).To(Equal(privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_UNKNOWN))
+			Expect(item.GetMetadata().GetLabels()).To(HaveKeyWithValue("preserved", "label"))
+			Expect(item.GetMetadata().GetAnnotations()).To(HaveKeyWithValue("note", "retained"))
+			Expect(item.GetMetadata().GetVersion()).To(Equal(int32(1)))
+		}
+	})
+
+	It("reconciles retained history in bounded statements and only advances absence evidence on repeat misses", func() {
+		server := build(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		const retained = 4000
+		_, err := testPool.Exec(ctx, `insert into billing_accounts (id, name, data)
+			select id, 'ba-' || left(encode(sha256(convert_to(id, 'UTF8')), 'hex'), 60),
+			jsonb_build_object('spec', '{}'::jsonb, 'status', jsonb_build_object(
+				'provider_key', 'fake', 'provider_account_reference', id,
+				'state', 'BILLING_ACCOUNT_STATE_UNKNOWN', 'state_observation_timestamp', $1::text))
+			from (select 'retained-' || n as id from generate_series(1, $2::int) n) h`,
+			start.Format("2006-01-02T15:04:05.000000Z"), retained)
+		Expect(err).ToNot(HaveOccurred())
+		live := []billing.Account{{Ref: billing.NewAccountRef("new-live"), State: billing.AccountActive}}
+		reconcile := func(accounts []billing.Account, at time.Time, unrelated string) (int, int64) {
+			var counted billingDiscoveryCountingTx
+			_, err := billingRPC(ctx, func(c context.Context, _ struct{}) (_ struct{}, err error) {
+				tx, err := database.TxFromContext(c)
+				if err != nil {
+					return struct{}{}, err
+				}
+				defer tx.ReportError(&err)
+				if _, err := tx.Exec(c, `select pg_advisory_xact_lock(`+billingDiscoveryLockKey+`)`, server.provider.Key()); err != nil {
+					return struct{}{}, err
+				}
+				counted.Tx = tx
+				if err := server.storeAccounts(database.TxIntoContext(c, &counted), accounts, at); err != nil {
+					return struct{}{}, err
+				}
+				if unrelated != "" {
+					var id string
+					err = testPool.QueryRow(ctx, `select id from billing_accounts where id = $1 for update nowait`, unrelated).Scan(&id)
+				}
+				return struct{}{}, err
+			}, struct{}{})
+			Expect(err).ToNot(HaveOccurred())
+			AddReportEntry("retained reconciliation", fmt.Sprintf("rows=%d statements=%d updates=%d", retained, counted.statements, counted.updates))
+			return counted.statements, counted.updates
+		}
+		// Exact (not microsecond-rounded) ordering also keeps a stale observation off the retained row locks.
+		statements, updates := reconcile(live, start, "retained-1")
+		Expect(statements).To(Equal(3))
+		Expect(updates).To(BeZero())
+		newer := start.Add(100 * time.Nanosecond)
+		statements, updates = reconcile(nil, newer, "")
+		Expect(statements).To(Equal(3))
+		Expect(updates).To(Equal(int64(retained + 1)))
+		var versions, latest int
+		Expect(testPool.QueryRow(ctx, `select count(*) filter (where version <> 0),
+			count(*) filter (where data#>>'{status,state_observation_timestamp}' = $1) from billing_accounts`,
+			newer.Format("2006-01-02T15:04:05.000000000Z")).Scan(&versions, &latest)).To(Succeed())
+		Expect(versions).To(Equal(1), "only the transition from ACTIVE to UNKNOWN changes the resource version")
+		Expect(latest).To(Equal(retained + 1))
+		statements, updates = reconcile(live, start.Add(50*time.Nanosecond), "retained-1")
+		Expect(statements).To(Equal(3))
+		Expect(updates).To(BeZero(), "the older ACTIVE observation cannot undo the newer absence")
+	})
+
+	It("fully locks the SQL-id-ordered eligible accounts before its first mutation", func() {
+		server := build(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		accounts := []billing.Account{{Ref: billing.NewAccountRef("a"), State: billing.AccountActive},
+			{Ref: billing.NewAccountRef("b"), State: billing.AccountActive}}
+		Expect(billingStore(ctx, server, accounts, start)).To(Succeed())
+		_, err := testPool.Exec(ctx, `create sequence discovery_mutations;
+		create function count_discovery_mutations() returns trigger language plpgsql as $$
+		begin perform nextval('discovery_mutations'); return new; end $$;
+		create trigger count_discovery_mutations before update on billing_accounts
+		for each row execute function count_discovery_mutations()`)
+		Expect(err).ToNot(HaveOccurred())
+		gate, err := tm.Begin(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		ended := false
+		DeferCleanup(func() {
+			if !ended {
+				Expect(gate.End(ctx)).To(Succeed())
+			}
+		})
+		var id string
+		Expect(gate.QueryRow(ctx, `select id from billing_accounts order by id desc limit 1 for update`).Scan(&id)).To(Succeed())
+		var pid int
+		Expect(gate.QueryRow(ctx, `select pg_backend_pid()`).Scan(&pid)).To(Succeed())
+		waitCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		DeferCleanup(cancel)
+		result := make(chan error, 1)
+		go func() { result <- billingStore(waitCtx, server, nil, start.Add(time.Second)) }()
+		probeCtx, cancelProbe := context.WithTimeout(ctx, 5*time.Second)
+		DeferCleanup(cancelProbe)
+		Eventually(func() (int, error) {
+			var count int
+			err := testPool.QueryRow(probeCtx, `select count(*) from pg_stat_activity
+				where datname = current_database() and $1 = any(pg_blocking_pids(pid))`, pid).Scan(&count)
+			return count, err
+		}, 5*time.Second, 10*time.Millisecond).Should(Equal(1))
+		var mutated bool
+		Expect(testPool.QueryRow(ctx, `select is_called from discovery_mutations`).Scan(&mutated)).To(Succeed())
+		Expect(mutated).To(BeFalse(), "even a lower-id row cannot be updated before the full union is locked")
+		Expect(gate.End(ctx)).To(Succeed())
+		ended = true
+		Eventually(result, 5*time.Second).Should(Receive(Succeed()))
+		var mutations int
+		Expect(testPool.QueryRow(ctx, `select last_value from discovery_mutations`).Scan(&mutations)).To(Succeed())
+		Expect(mutations).To(Equal(2))
+	})
+
+	It("preserves billing default-100 and maximum-1000 limits with trusted count and offset", func() {
+		server := build(billingfake.New(billingfake.Scenario{}).Provider())
+		// One row past the maximum proves the 1000-row cap instead of matching an uncapped walk. One store
+		// batch is itself capped at 1000 rows, so the extra row arrives in a second batch.
+		accounts := make([]billing.Account, 1001)
+		for i := range accounts {
+			accounts[i] = billing.Account{Ref: billing.NewAccountRef(fmt.Sprintf("bounded-%04d", i)), State: billing.AccountActive}
+		}
+		Expect(billingStore(ctx, server, accounts[:1000], time.Now().UTC())).To(Succeed())
+		Expect(billingStore(ctx, server, accounts[1000:], time.Now().UTC().Add(time.Second))).To(Succeed())
+		server.lastDiscovery = time.Now()
+		request := privatev1.BillingAccountsListRequest_builder{Limit: proto.Int32(0)}.Build()
+		response, err := list(server, request)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetSize()).To(Equal(int32(100)))
+		Expect(response.GetTotal()).To(Equal(int32(1001)))
+		request.SetLimit(2000)
+		response, err = list(server, request)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetSize()).To(Equal(int32(1000)))
+		request.SetOffset(990)
+		response, err = list(server, request)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetSize()).To(Equal(int32(11)))
+		Expect(response.GetTotal()).To(Equal(int32(1001)))
+	})
+
+	DescribeTable("serializes independent batches before row locks and refreshes the complete provider union after waiting", func(waitingRef, expectedState string, expectedCount int, waitingAge time.Duration) {
+		first := build(billingfake.New(billingfake.Scenario{}).Provider())
+		second := build(billingfake.New(billingfake.Scenario{}).Provider())
+		start := time.Now().UTC().Truncate(time.Microsecond)
+		gate, err := tm.Begin(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		ended := false
+		DeferCleanup(func() {
+			if !ended {
+				Expect(gate.End(ctx)).To(Succeed())
+			}
+		})
+		_, err = gate.Exec(ctx, `select pg_advisory_xact_lock(216004::bigint)`)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = testPool.Exec(ctx, `create function gate_first_discovery() returns trigger language plpgsql as $$
+		begin
+			if new.data->'status'->>'provider_account_reference' = 'a' then
+				perform pg_advisory_xact_lock(216004::bigint);
+			end if;
+			return new;
+		end $$;
+		create trigger gate_first_discovery before insert on billing_accounts
+		for each row execute function gate_first_discovery()`)
+		Expect(err).ToNot(HaveOccurred())
+		waitCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		DeferCleanup(cancel)
+		firstResult, result := make(chan error, 1), make(chan error, 1)
+		go func() {
+			firstResult <- billingStore(waitCtx, first, []billing.Account{{Ref: billing.NewAccountRef("a"),
+				State: billing.AccountActive}}, start)
+		}()
+		firstProbeCtx, cancelFirstProbe := context.WithTimeout(ctx, 5*time.Second)
+		DeferCleanup(cancelFirstProbe)
+		Eventually(func() (int, error) {
+			var count int
+			err := testPool.QueryRow(firstProbeCtx, `select count(*) from pg_locks where locktype = 'advisory'
+				and not granted and objid = 216004 and database = (select oid from pg_database where datname = current_database())`).
+				Scan(&count)
+			return count, err
+		}, 5*time.Second, 10*time.Millisecond).Should(Equal(1))
+		go func() {
+			result <- billingStore(waitCtx, second, []billing.Account{{Ref: billing.NewAccountRef(waitingRef),
+				State: billing.AccountActive}}, start.Add(waitingAge))
+		}()
+		secondProbeCtx, cancelSecondProbe := context.WithTimeout(ctx, 5*time.Second)
+		DeferCleanup(cancelSecondProbe)
+		Eventually(func() (int, error) {
+			var count int
+			err := testPool.QueryRow(secondProbeCtx, `select count(*) from pg_locks
+				where locktype = 'advisory' and not granted and objid <> 216004
+				and database = (select oid from pg_database where datname = current_database())`).
+				Scan(&count)
+			return count, err
+		}, 5*time.Second, 10*time.Millisecond).Should(Equal(1))
+		var rowLocks int
+		Expect(testPool.QueryRow(ctx, `select count(*) from pg_locks where locktype in ('tuple','relation')
+			and relation in ('tenants'::regclass, 'billing_accounts'::regclass)
+			and pid in (select pid from pg_locks where locktype = 'advisory' and not granted and objid <> 216004)`).Scan(&rowLocks)).To(Succeed())
+		Expect(rowLocks).To(BeZero(), "provider guard must precede tenant/account access")
+		Expect(gate.End(ctx)).To(Succeed())
+		ended = true
+		Eventually(firstResult, 5*time.Second).Should(Receive(Succeed()))
+		Eventually(result, 5*time.Second).Should(Receive(Succeed()))
+		var state string
+		Expect(testPool.QueryRow(ctx, `select data->'status'->>'state' from billing_accounts where data->'status'->>'provider_account_reference' = 'a'`).Scan(&state)).To(Succeed())
+		Expect(state).To(Equal(expectedState))
+		Expect(storedCount()).To(Equal(expectedCount))
+	},
+		Entry("new unseen member joins the union", "b", "BILLING_ACCOUNT_STATE_UNKNOWN", 2, time.Second),
+		Entry("older walk cannot demote newer union member", "b", "BILLING_ACCOUNT_STATE_ACTIVE", 2, -time.Second),
+		Entry("same absent native key retains one identity", "a", "BILLING_ACCOUNT_STATE_ACTIVE", 1, time.Second),
+	)
+})
+
+var _ = Describe("Billing account observation merge", func() {
+	DescribeTable("classifies local failures without provider fallback or private details",
+		func(err error, code codes.Code) {
+			mapped := mapBillingDiscoveryError(err)
+			Expect(status.Code(mapped)).To(Equal(code))
+			Expect(mapped.Error()).ToNot(ContainSubstring("private-detail"))
+		},
+		Entry("deadlock", &pgconn.PgError{Code: "40P01", Message: "private-detail"}, codes.Aborted),
+		Entry("serialization", &pgconn.PgError{Code: "40001", Message: "private-detail"}, codes.Aborted),
+		Entry("unplanned native conflict", status.Error(codes.Aborted, "private-detail"), codes.Aborted),
+		Entry("caller cancellation", context.Canceled, codes.Canceled),
+		Entry("local deadline", context.DeadlineExceeded, codes.DeadlineExceeded),
+		Entry("unexpected SQL", errors.New("private-detail"), codes.Internal),
+	)
+
+	It("hashes the UTF-8 OSAC id and rejects an empty id", func() {
+		name, err := billingAccountName("abc")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(name).To(Equal("ba-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f200"))
+		_, err = billingAccountName("")
+		Expect(err).To(HaveOccurred())
+	})
+
+	It("preserves raw optional token presence and usable fields, accepting equal-start state observations", func() {
+		at := timestamppb.New(time.Now().UTC())
+		for _, token := range []*string{nil, proto.String(""), proto.String(" \t "), proto.String(" raw ")} {
+			current := privatev1.BillingAccount_builder{Id: "osac", Metadata: privatev1.Metadata_builder{
+				Name: "stable", Creator: "", Version: 7,
+			}.Build(), Status: privatev1.BillingAccountStatus_builder{
+				ProviderKey: "p", ProviderAccountReference: "native", DisplayName: "Known", BaseCurrency: "USD",
+				State:                     privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE,
+				StateObservationTimestamp: at, ExternalBillingAccountId: token,
+			}.Build()}.Build()
+			before := proto.Clone(current).(*privatev1.BillingAccount)
+			observed := privatev1.BillingAccountStatus_builder{
+				State:                     privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_INACTIVE,
+				StateObservationTimestamp: at, BaseCurrency: "invalid",
+			}.Build()
+			merged, changed := mergeBillingAccountObservation(current, observed)
+			Expect(changed).To(BeTrue())
+			Expect(proto.Equal(current, before)).To(BeTrue(), "merge must not mutate its caller's snapshot")
+			Expect(proto.Equal(merged.GetMetadata(), current.GetMetadata())).To(BeTrue())
+			Expect(merged.GetStatus().GetProviderAccountReference()).To(Equal("native"))
+			Expect(merged.GetStatus().GetDisplayName()).To(Equal("Known"))
+			Expect(merged.GetStatus().GetBaseCurrency()).To(Equal("USD"))
+			Expect(merged.GetStatus().HasExternalBillingAccountId()).To(Equal(token != nil))
+			Expect(merged.GetStatus().GetExternalBillingAccountId()).To(Equal(current.GetStatus().GetExternalBillingAccountId()))
+			again, fresh := mergeBillingAccountObservation(merged, observed)
+			Expect(fresh).To(BeTrue())
+			Expect(proto.Equal(again, merged)).To(BeTrue())
+		}
+	})
+})

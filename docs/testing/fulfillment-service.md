@@ -134,6 +134,21 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   Approve/Deny path under a deployed Cloud Provider Admin identity, and
   enforcement and warning publishing are not exercised; enforcement is
   [OSAC-7614](https://redhat.atlassian.net/browse/OSAC-7614).
+- Billing account discovery, tenant billing assignments, and provider status
+  ([OSAC-6871](https://redhat.atlassian.net/browse/OSAC-6871)): handler/database
+  specs use `internal/testing/billingfake` and real PostgreSQL; protocol specs
+  use the real M360 adapter against `internal/testing/billingstub`. Deployed
+  `it/` billing specs cover disabled mode and configured discovery/assignment
+  through the real adapter and a contract-shaped TLS stub, not real M360. The
+  M360 adapter remains read-only under the merged design; the configured
+  boundary covers provider-side correlation matching and manual remediation.
+  Configured specs require `OSAC_IT_BILLING_STUB_LISTEN` and
+  `OSAC_IT_BILLING_STUB_URL`, with a listener reachable from the cluster. The
+  fulfillment CI leg configures both from the Kind bridge gateway; local runs
+  must supply them explicitly. These specs
+  serially restart and restore the grpc-server. Secret mounts are patched by
+  the fixture, not rendered by the installer, so this does not verify chart
+  wiring. Real-provider and cross-component E2E are outside this boundary.
 
 - **StorageTier/Volume reference guard ([OSAC-7049](https://redhat.atlassian.net/browse/OSAC-7049), DEV):** `internal/cmd/service/start/grpcserver`, `internal/servers` and `internal/database/migrations` exercise production DAOs and in-process handlers against temporary PostgreSQL, including concurrent access. Tenancy and attribution are controlled; deployed service, operator and provider behavior is not covered.
 
@@ -156,6 +171,10 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   and command remain unspecified.
 - Existing-token revocation is separate from fresh-login RoleBinding checks:
   [OSAC-6375](https://redhat.atlassian.net/browse/OSAC-6375).
+- Real-provider billing and cross-component E2E are outside the
+  [OSAC-6871](https://redhat.atlassian.net/browse/OSAC-6871) remediation scope.
+  The contract-shaped stub does not prove that boundary; no owning E2E ticket
+  is assigned by this change.
 
 ## Fulfillment integration reports
 

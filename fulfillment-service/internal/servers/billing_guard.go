@@ -14,7 +14,11 @@ language governing permissions and limitations under the License.
 package servers
 
 import (
+	"context"
+	"fmt"
+
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -49,6 +53,31 @@ func requireAdapter(provider *billing.Provider) (billing.Adapter, error) {
 	return adapter, nil
 }
 
+// NewBillingAvailabilityInterceptor returns a unary interceptor that reports billing availability for the given
+// provider-dependent methods before any later interceptor or handler validates their request. Reference resolution
+// runs after this interceptor, so without it a disabled deployment answered an unresolved account reference with
+// INVALID_ARGUMENT instead of the stable FAILED_PRECONDITION/BILLING_NOT_CONFIGURED. Only a disabled provider
+// short-circuits: a configured but unusable provider keeps the existing order and the handler's
+// UNAVAILABLE/BILLING_PROVIDER_UNAVAILABLE. It makes no provider call.
+func NewBillingAvailabilityInterceptor(provider *billing.Provider,
+	methods ...string) grpc.UnaryServerInterceptor {
+	guarded := make(map[string]struct{}, len(methods))
+	for _, method := range methods {
+		guarded[method] = struct{}{}
+	}
+	return func(ctx context.Context, request any, info *grpc.UnaryServerInfo,
+		handler grpc.UnaryHandler) (any, error) {
+		if provider != nil && !provider.IsConfigured() {
+			if _, ok := guarded[info.FullMethod]; ok {
+				if _, err := requireAdapter(provider); err != nil {
+					return nil, err
+				}
+			}
+		}
+		return handler(ctx, request)
+	}
+}
+
 // billingFailure builds a status error carrying the stable reason as an ErrorInfo detail, falling back to the plain
 // status error when the detail cannot be attached.
 func billingFailure(code codes.Code, message, reason string) error {
@@ -57,4 +86,17 @@ func billingFailure(code codes.Code, message, reason string) error {
 		result = detailed
 	}
 	return result.Err()
+}
+
+// mapClassifiedBillingError classifies a *billing.Error from provider I/O: unavailability or a timeout becomes
+// UNAVAILABLE with unavailableReason, and any other classified failure surfaces the provider's reason as
+// FAILED_PRECONDITION detail. The caller picks unavailableReason so discovery can report a stable token while
+// assignment reports the provider's own reason (e.g. TIMEOUT).
+func mapClassifiedBillingError(err *billing.Error, unavailableReason string) error {
+	if err.Reason == billing.ReasonUnavailable || err.Reason == billing.ReasonTimeout {
+		return billingFailure(codes.Unavailable,
+			fmt.Sprintf("billing provider is unavailable: %s", err.Reason), unavailableReason)
+	}
+	return billingFailure(codes.FailedPrecondition,
+		fmt.Sprintf("billing provider error: %s", err.Reason), string(err.Reason))
 }

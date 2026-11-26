@@ -20,6 +20,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc/codes"
@@ -28,10 +29,13 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	osactesting "github.com/osac-project/osac/fulfillment-service/internal/testing"
+	"github.com/osac-project/osac/fulfillment-service/internal/testing/billingfake"
 	"github.com/osac-project/osac/fulfillment-service/internal/vault"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -357,7 +361,100 @@ func expectStaleTypedWriteRejected(t finalizerTarget, update typedUpdater) {
 	t.expectFinalizerConflict(ctx, err, finalizerController)
 }
 
+func verifyAssignmentDeleteUnsupported() {
+	GinkgoHelper()
+	f := newFinalizerAssignmentFixture(false)
+	for _, object := range []*privatev1.TenantBillingAssignment{f.current, f.history} {
+		_, err := f.private.Delete(f.caller, privatev1.TenantBillingAssignmentsDeleteRequest_builder{Id: object.GetId()}.Build())
+		Expect(status.Code(err)).To(Equal(codes.Unimplemented),
+			"private assignment Delete is now supported: replace the descriptor-only case with full CAS/lifecycle coverage")
+	}
+	f.expectUnchanged()
+	Expect(f.fake.Calls()).To(BeEmpty())
+}
+
+func verifyBillingAccountUpdateUnsupported() {
+	GinkgoHelper()
+	id, token := uuid.NewString(), uuid.NewString()
+	name, err := billingAccountName(id)
+	Expect(err).ToNot(HaveOccurred())
+	_, err = fixtureDAO[*privatev1.BillingAccount]().Create().SetObject(privatev1.BillingAccount_builder{
+		Id: id, Metadata: privatev1.Metadata_builder{
+			Name: name, Tenant: auth.SystemTenant, Creator: "system", Finalizers: []string{finalizerController},
+		}.Build(),
+		Spec: &privatev1.BillingAccountSpec{},
+		Status: privatev1.BillingAccountStatus_builder{
+			ProviderKey: billingfake.Key, ProviderAccountReference: id, ExternalBillingAccountId: &token,
+			State:                     privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE,
+			StateObservationTimestamp: timestamppb.Now(),
+		}.Build(),
+	}.Build()).Do(ctx)
+	Expect(err).ToNot(HaveOccurred())
+	fake := billingfake.New(billingfake.Scenario{})
+	server, err := NewPrivateBillingAccountsServer().SetLogger(logger).SetProvider(fake.Provider()).Build()
+	Expect(err).ToNot(HaveOccurred())
+
+	var before string
+	Expect(suiteTx.QueryRow(ctx, `select to_jsonb(b)::text from billing_accounts b where id = $1`, id).
+		Scan(&before)).To(Succeed())
+	var changesBefore int
+	Expect(suiteTx.QueryRow(ctx, `select count(*) from changes where "table" = 'billing_accounts' and data->>'id' = $1`, id).
+		Scan(&changesBefore)).To(Succeed())
+	object := privatev1.BillingAccount_builder{
+		Id:       id,
+		Metadata: privatev1.Metadata_builder{Finalizers: []string{finalizerController, finalizerHold}}.Build(),
+	}.Build()
+	_, err = server.Update(ctx, privatev1.BillingAccountsUpdateRequest_builder{Object: object}.Build())
+	Expect(status.Code(err)).To(Equal(codes.Unimplemented),
+		"private billing account Update is now supported: replace the descriptor-only case with full CAS coverage")
+
+	var after string
+	Expect(suiteTx.QueryRow(ctx, `select to_jsonb(b)::text from billing_accounts b where id = $1`, id).
+		Scan(&after)).To(Succeed())
+	Expect(after).To(Equal(before), "an unsupported update must not change the billing account row")
+	Expect(fake.Calls()).To(BeEmpty())
+	var changesAfter int
+	Expect(suiteTx.QueryRow(ctx, `select count(*) from changes where "table" = 'billing_accounts' and data->>'id' = $1`, id).
+		Scan(&changesAfter)).To(Succeed())
+	Expect(changesAfter).To(Equal(changesBefore), "an unsupported update must not emit a billing account change")
+}
+
 var _ = Describe("typed finalizer updates", func() {
+	Describe("descriptor-only assignment lifecycle", func() {
+		It("keeps Delete unsupported without mutating current or closed history", verifyAssignmentDeleteUnsupported)
+
+		DescribeTable("rejects a private finalizer mask without changing any stored field or calling the provider",
+			func(mask *fieldmaskpb.FieldMask) {
+				f := newFinalizerAssignmentFixture(false)
+				object := withFinalizers(f.current).(*privatev1.TenantBillingAssignment)
+				var changes int
+				Expect(testPool.QueryRow(f.caller, `select count(*) from changes`).Scan(&changes)).To(Succeed())
+				_, err := billingRPC(f.caller, f.private.Update, privatev1.TenantBillingAssignmentsUpdateRequest_builder{
+					Object: object, UpdateMask: mask,
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+				Expect(status.Convert(err).Message()).To(ContainSubstring("only atomic spec.billing_account is writable"))
+				f.expectUnchanged()
+				var after int
+				Expect(testPool.QueryRow(f.caller, `select count(*) from changes`).Scan(&after)).To(Succeed())
+				Expect(after).To(Equal(changes), "a rejected mask must not write any resource")
+				Expect(f.fake.Calls()).To(BeEmpty())
+			},
+			Entry("finalizers only", finalizersMask()),
+			Entry("finalizers and the writable account", finalizerMaskOf("metadata.finalizers", "spec.billing_account")),
+		)
+
+		It("rejects private updates to closed history before provider I/O", func() {
+			f := newFinalizerAssignmentFixture(false)
+			_, err := billingRPC(f.caller, f.private.Update, privatev1.TenantBillingAssignmentsUpdateRequest_builder{
+				Object: withFinalizers(f.history).(*privatev1.TenantBillingAssignment), UpdateMask: finalizersMask(),
+			}.Build())
+			Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+			f.expectUnchanged()
+			Expect(f.fake.Calls()).To(BeEmpty())
+		})
+	})
+
 	Describe("private wrappers with their own update path", func() {
 		// Volumes merges the request into the stored object, ignoring metadata paths, before the generic update.
 		It("rejects a stale finalizer write through the Volumes server", func() {
@@ -399,6 +496,22 @@ var _ = Describe("typed finalizer updates", func() {
 			for _, c := range slices.Concat(publicFinalizerCases(), catalogItemFinalizerCases()) {
 				covered[string(protoreflect.FullName(c.service).Name())] = true
 			}
+			for _, c := range descriptorOnlyFinalizerCases() {
+				c.verify()
+				covered[string(protoreflect.FullName(c.service).Name())] = true
+			}
+			// Finalizers only matter for a resource that can be deleted. A public service whose private counterpart has
+			// no Delete method never needs a finalizer case; every other public Update is still checked below.
+			noPrivateDelete := map[string]bool{}
+			privatePackage := (privatev1.EventType)(0).Descriptor().FullName().Parent()
+			protoregistry.GlobalFiles.RangeFilesByPackage(privatePackage, func(file protoreflect.FileDescriptor) bool {
+				services := file.Services()
+				for i := range services.Len() {
+					service := services.Get(i)
+					noPrivateDelete[string(service.Name())] = service.Methods().ByName("Delete") == nil
+				}
+				return true
+			})
 			unimplemented := map[string]func() error{
 				"Tenants": func() error {
 					server, err := NewTenantsServer().
@@ -425,6 +538,7 @@ var _ = Describe("typed finalizer updates", func() {
 					name := string(service.Name())
 					switch {
 					case service.Methods().ByName("Update") == nil || covered[name]:
+					case noPrivateDelete[name]:
 					case unimplemented[name] != nil:
 						Expect(status.Code(unimplemented[name]())).To(Equal(codes.Unimplemented),
 							"the public %s server implements Update now, so it needs a case", name)

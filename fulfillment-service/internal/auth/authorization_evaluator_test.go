@@ -887,10 +887,9 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 
 	Describe("billing provider status authorization", func() {
 		const (
-			publicStatusGet  = "/osac.public.v1.BillingProviderStatuses/Get"
 			privateStatusGet = "/osac.private.v1.BillingProviderStatuses/Get"
 		)
-		DescribeTable("only admins may read the status",
+		DescribeTable("only admins may read the status; the unprovisioned cloud-provider-admin claim grants nothing",
 			func(ctx context.Context, method string, username string, roles []any, groups []any, allowed bool) {
 				evaluator, err := NewEvaluator().AddEmergencyServiceAccounts([]string{}).Build()
 				Expect(err).ToNot(HaveOccurred())
@@ -906,23 +905,13 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(decision.Allowed).To(Equal(allowed))
 			},
-			Entry("public: admin group", publicStatusGet, "billing-test", []any{"user"}, []any{"admins"}, true),
-			Entry("public: osac-admin service account", publicStatusGet, "service-account-osac-admin",
-				[]any{}, []any{}, true),
-			Entry("public: osac-controller service account", publicStatusGet, "service-account-osac-controller",
-				[]any{}, []any{}, true),
-			Entry("public: tenant user", publicStatusGet, "billing-test", []any{"user"}, []any{}, false),
-			Entry("public: tenant admin", publicStatusGet, "billing-test", []any{"tenant-admin"}, []any{}, false),
-			Entry("public: tenant IdP manager", publicStatusGet, "billing-test", []any{"tenant-idp-manager"},
-				[]any{}, false),
-			Entry("public: tenant reader", publicStatusGet, "billing-test", []any{"tenant-reader"}, []any{}, false),
-			Entry("public: cloud provider reader", publicStatusGet, "billing-test",
-				[]any{"cloud-provider-reader"}, []any{}, false),
 			Entry("private: admin group", privateStatusGet, "billing-test", []any{"user"}, []any{"admins"}, true),
 			Entry("private: osac-admin service account", privateStatusGet, "service-account-osac-admin",
 				[]any{}, []any{}, true),
 			Entry("private: osac-controller service account", privateStatusGet, "service-account-osac-controller",
 				[]any{}, []any{}, true),
+			Entry("private: cloud-provider-admin realm claim", privateStatusGet, "billing-test",
+				[]any{"cloud-provider-admin"}, []any{}, false),
 			Entry("private: tenant user", privateStatusGet, "billing-test", []any{"user"}, []any{}, false),
 			Entry("private: tenant admin", privateStatusGet, "billing-test", []any{"tenant-admin"}, []any{}, false),
 			Entry("private: tenant IdP manager", privateStatusGet, "billing-test", []any{"tenant-idp-manager"},
@@ -931,5 +920,291 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 			Entry("private: cloud provider reader", privateStatusGet, "billing-test",
 				[]any{"cloud-provider-reader"}, []any{}, false),
 		)
+	})
+
+	Describe("billing accounts authorization", func() {
+		const (
+			privateAccountsList = "/osac.private.v1.BillingAccounts/List"
+		)
+		DescribeTable("only admins may list billing accounts; the unprovisioned cloud-provider-admin claim grants nothing",
+			func(ctx context.Context, method string, username string, roles []any, groups []any, allowed bool) {
+				evaluator, err := NewEvaluator().AddEmergencyServiceAccounts([]string{}).Build()
+				Expect(err).ToNot(HaveOccurred())
+				authContext := &AuthContext{
+					Username:     username,
+					Groups:       groups,
+					AuthMethod:   "jwt",
+					Organization: []any{"acme-corp"},
+					RealmAccess:  map[string]any{"roles": roles},
+					Tenant:       "acme-corp",
+				}
+				decision, err := evaluator.Evaluate(ctx, authContext, method)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(Equal(allowed))
+			},
+			Entry("private: admin group", privateAccountsList, "billing-test", []any{"user"}, []any{"admins"}, true),
+			Entry("private: osac-admin service account", privateAccountsList, "service-account-osac-admin",
+				[]any{}, []any{}, true),
+			Entry("private: osac-controller service account", privateAccountsList, "service-account-osac-controller",
+				[]any{}, []any{}, true),
+			Entry("private: cloud-provider-admin realm claim", privateAccountsList, "billing-test",
+				[]any{"cloud-provider-admin"}, []any{}, false),
+			Entry("private: tenant user", privateAccountsList, "billing-test", []any{"user"}, []any{}, false),
+			Entry("private: tenant admin", privateAccountsList, "billing-test", []any{"tenant-admin"}, []any{}, false),
+			Entry("private: tenant IdP manager", privateAccountsList, "billing-test", []any{"tenant-idp-manager"},
+				[]any{}, false),
+			Entry("private: tenant reader", privateAccountsList, "billing-test", []any{"tenant-reader"}, []any{}, false),
+			Entry("private: cloud provider reader", privateAccountsList, "billing-test",
+				[]any{"cloud-provider-reader"}, []any{}, false),
+		)
+	})
+
+	Describe("tenant billing assignments authorization", func() {
+		const (
+			privateAssignmentsList   = "/osac.private.v1.TenantBillingAssignments/List"
+			privateAssignmentsGet    = "/osac.private.v1.TenantBillingAssignments/Get"
+			privateAssignmentsCreate = "/osac.private.v1.TenantBillingAssignments/Create"
+			privateAssignmentsUpdate = "/osac.private.v1.TenantBillingAssignments/Update"
+		)
+		DescribeTable("only admins may read or write assignments; there is no tenant self-service path",
+			func(ctx context.Context, method string, username string, roles []any, groups []any, allowed bool) {
+				evaluator, err := NewEvaluator().AddEmergencyServiceAccounts([]string{}).Build()
+				Expect(err).ToNot(HaveOccurred())
+				authContext := &AuthContext{
+					Username:     username,
+					Groups:       groups,
+					AuthMethod:   "jwt",
+					Organization: []any{"acme-corp"},
+					RealmAccess:  map[string]any{"roles": roles},
+					Tenant:       "acme-corp",
+				}
+				decision, err := evaluator.Evaluate(ctx, authContext, method)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(Equal(allowed))
+			},
+			Entry("List: admin group", privateAssignmentsList, "billing-test", []any{"user"}, []any{"admins"}, true),
+			Entry("List: osac-admin service account", privateAssignmentsList, "service-account-osac-admin",
+				[]any{}, []any{}, true),
+			Entry("List: osac-controller service account", privateAssignmentsList, "service-account-osac-controller",
+				[]any{}, []any{}, true),
+			Entry("List: cloud-provider-admin realm claim", privateAssignmentsList, "billing-test",
+				[]any{"cloud-provider-admin"}, []any{}, false),
+			Entry("List: tenant user", privateAssignmentsList, "billing-test", []any{"user"}, []any{}, false),
+			Entry("List: tenant admin", privateAssignmentsList, "billing-test", []any{"tenant-admin"}, []any{}, false),
+			Entry("List: tenant IdP manager", privateAssignmentsList, "billing-test", []any{"tenant-idp-manager"}, []any{}, false),
+			Entry("List: tenant reader", privateAssignmentsList, "billing-test", []any{"tenant-reader"}, []any{}, false),
+			Entry("List: cloud provider reader", privateAssignmentsList, "billing-test",
+				[]any{"cloud-provider-reader"}, []any{}, false),
+			Entry("Get: admin group", privateAssignmentsGet, "billing-test", []any{"user"}, []any{"admins"}, true),
+			Entry("Get: cloud-provider-admin realm claim", privateAssignmentsGet, "billing-test",
+				[]any{"cloud-provider-admin"}, []any{}, false),
+			Entry("Get: tenant user", privateAssignmentsGet, "billing-test", []any{"user"}, []any{}, false),
+			Entry("Get: tenant reader", privateAssignmentsGet, "billing-test", []any{"tenant-reader"}, []any{}, false),
+			Entry("Create: admin group", privateAssignmentsCreate, "billing-test", []any{"user"}, []any{"admins"}, true),
+			Entry("Create: cloud-provider-admin realm claim", privateAssignmentsCreate, "billing-test",
+				[]any{"cloud-provider-admin"}, []any{}, false),
+			Entry("Create: tenant user", privateAssignmentsCreate, "billing-test", []any{"user"}, []any{}, false),
+			Entry("Create: tenant admin", privateAssignmentsCreate, "billing-test", []any{"tenant-admin"}, []any{}, false),
+			Entry("Update: admin group", privateAssignmentsUpdate, "billing-test", []any{"user"}, []any{"admins"}, true),
+			Entry("Update: cloud-provider-admin realm claim", privateAssignmentsUpdate, "billing-test",
+				[]any{"cloud-provider-admin"}, []any{}, false),
+			Entry("Update: tenant user", privateAssignmentsUpdate, "billing-test", []any{"user"}, []any{}, false),
+		)
+	})
+
+	Describe("billing authorization is admin-only", func() {
+		const cloudProviderAdminRole = "cloud-provider-admin"
+
+		// Billing endpoints are private and only accessible to platform admins and controllers.
+		billingAllowedMethods := []string{
+			"/osac.private.v1.BillingAccounts/List",
+			"/osac.private.v1.BillingProviderStatuses/Get",
+			"/osac.private.v1.TenantBillingAssignments/List",
+			"/osac.private.v1.TenantBillingAssignments/Get",
+			"/osac.private.v1.TenantBillingAssignments/Create",
+			"/osac.private.v1.TenantBillingAssignments/Update",
+		}
+		const privateSignalMethod = "/osac.private.v1.TenantBillingAssignments/Signal"
+
+		// Determine the namespace the evaluator will use, mirroring the Evaluate suite above so emergency service
+		// account usernames match the registered accounts.
+		testNamespace := grpcAuthzDefaultNamespace
+		if nsBytes, err := os.ReadFile(k8sfiles.ServiceAccountNamespace); err == nil {
+			if ns := strings.TrimSpace(string(nsBytes)); ns != "" {
+				testNamespace = ns
+			}
+		}
+
+		makeJWTSubject := func(username string, roles []any, groups []any) *AuthContext {
+			return &AuthContext{
+				Username:     username,
+				Groups:       groups,
+				AuthMethod:   "jwt",
+				Organization: []any{"acme-corp"},
+				RealmAccess:  map[string]any{"roles": roles},
+				Tenant:       "acme-corp",
+			}
+		}
+
+		makeEmergencyAdmin := func() *AuthContext {
+			return &AuthContext{
+				Username:   fmt.Sprintf("system:serviceaccount:%s:admin", testNamespace),
+				Groups:     []any{"system:serviceaccounts", fmt.Sprintf("system:serviceaccounts:%s", testNamespace)},
+				AuthMethod: "serviceaccount",
+			}
+		}
+
+		It("grants platform admins access to private billing methods", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().AddEmergencyServiceAccounts([]string{"admin"}).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			admins := map[string]*AuthContext{
+				"admin group":                     makeJWTSubject("billing-test", []any{"user"}, []any{"admins"}),
+				"osac-admin service account":      makeJWTSubject("service-account-osac-admin", []any{}, []any{}),
+				"osac-controller service account": makeJWTSubject("service-account-osac-controller", []any{}, []any{}),
+				"emergency service account":       makeEmergencyAdmin(),
+			}
+			methods := append([]string{}, billingAllowedMethods...)
+			methods = append(methods, privateSignalMethod)
+			for admin, authContext := range admins {
+				for _, method := range methods {
+					decision, evaluateErr := evaluator.Evaluate(ctx, authContext, method)
+					Expect(evaluateErr).ToNot(HaveOccurred())
+					Expect(decision.Allowed).To(BeTrue(), "admin %q on %q", admin, method)
+				}
+			}
+		})
+
+		It("denies the unprovisioned cloud-provider-admin realm claim every billing method", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().AddEmergencyServiceAccounts([]string{}).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			authContext := makeJWTSubject("provider-admin-test", []any{cloudProviderAdminRole}, []any{})
+			methods := append([]string{}, billingAllowedMethods...)
+			methods = append(methods, privateSignalMethod)
+			for _, method := range methods {
+				decision, evaluateErr := evaluator.Evaluate(ctx, authContext, method)
+				Expect(evaluateErr).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(BeFalse(), method)
+			}
+		})
+
+		DescribeTable("does not let the unprovisioned cloud-provider-admin claim add nonbilling privileges",
+			func(ctx context.Context, method string, allowed bool) {
+				evaluator, err := NewEvaluator().AddEmergencyServiceAccounts([]string{}).Build()
+				Expect(err).ToNot(HaveOccurred())
+				baseline := makeJWTSubject("provider-admin-test", []any{"user"}, []any{})
+				before, err := evaluator.Evaluate(ctx, baseline, method)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(before.Allowed).To(Equal(allowed), "ordinary client baseline on %s", method)
+				authContext := makeJWTSubject("provider-admin-test", []any{cloudProviderAdminRole}, []any{})
+				decision, err := evaluator.Evaluate(ctx, authContext, method)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(Equal(before.Allowed), method)
+				Expect(decision.SubjectTenants).To(Equal(before.SubjectTenants), method)
+			},
+			Entry("public cluster list", "/osac.public.v1.Clusters/List", true),
+			Entry("public cluster create", "/osac.public.v1.Clusters/Create", true),
+			Entry("public user create", "/osac.public.v1.Users/Create", false),
+			Entry("public tenant get", "/osac.public.v1.Tenants/Get", false),
+			Entry("public self access review", "/osac.public.v1.SelfSubjectAccessReviews/Create", true),
+			Entry("public project list", "/osac.public.v1.Projects/List", true),
+			Entry("private hub create", "/osac.private.v1.Hubs/Create", false),
+			Entry("private installation settings get", "/osac.private.v1.InstallationSettings/Get", false),
+		)
+
+		It("denies tenant personas, readers, and automation on every billing method", func(ctx context.Context) {
+			evaluator, err := NewEvaluator().AddEmergencyServiceAccounts([]string{}).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			personas := map[string][]any{
+				"tenant user":           {"user"},
+				"tenant admin":          {"tenant-admin"},
+				"tenant IdP manager":    {"tenant-idp-manager"},
+				"tenant reader":         {"tenant-reader"},
+				"cloud provider reader": {"cloud-provider-reader"},
+				"tenant automation":     {"tenant-automation"},
+			}
+			methods := append([]string{}, billingAllowedMethods...)
+			methods = append(methods, privateSignalMethod)
+			for persona, roles := range personas {
+				authContext := makeJWTSubject("billing-test", roles, []any{})
+				for _, method := range methods {
+					decision, evaluateErr := evaluator.Evaluate(ctx, authContext, method)
+					Expect(evaluateErr).ToNot(HaveOccurred())
+					Expect(decision.Allowed).To(BeFalse(), "persona %q on %q", persona, method)
+				}
+			}
+		})
+
+		DescribeTable("keeps the private billing Signal endpoint admin and controller only",
+			func(ctx context.Context, authContext *AuthContext, allowed bool) {
+				evaluator, err := NewEvaluator().AddEmergencyServiceAccounts([]string{"admin"}).Build()
+				Expect(err).ToNot(HaveOccurred())
+				decision, err := evaluator.Evaluate(ctx, authContext, privateSignalMethod)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(Equal(allowed))
+			},
+			Entry("admin group", makeJWTSubject("billing-test", []any{"user"}, []any{"admins"}), true),
+			Entry("osac-admin service account", makeJWTSubject("service-account-osac-admin", []any{}, []any{}), true),
+			Entry("osac-controller service account",
+				makeJWTSubject("service-account-osac-controller", []any{}, []any{}), true),
+			Entry("emergency service account", makeEmergencyAdmin(), true),
+			Entry("cloud-provider-admin realm claim",
+				makeJWTSubject("provider-admin-test", []any{cloudProviderAdminRole}, []any{}), false),
+			Entry("tenant admin", makeJWTSubject("billing-test", []any{"tenant-admin"}, []any{}), false),
+			Entry("tenant reader", makeJWTSubject("billing-test", []any{"tenant-reader"}, []any{}), false),
+			Entry("tenant user", makeJWTSubject("billing-test", []any{"user"}, []any{}), false),
+		)
+
+		It("denies managed service accounts every billing method, including forged admin claims", func(ctx context.Context) {
+			resolvedRoles := []string{"tenant-automation"}
+			evaluator, err := NewEvaluator().
+				SetManagedServiceAccountResolver(func(_ context.Context, clientID, tenant string) (*serviceaccounts.AuthorizationIdentity, error) {
+					return &serviceaccounts.AuthorizationIdentity{
+						ClientID: clientID,
+						Tenant:   tenant,
+						Roles:    resolvedRoles,
+					}, nil
+				}).Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			// Forged token claims: the managed candidate carries the unprovisioned provider-admin realm role and
+			// the admins group, neither of which may reach a billing grant.
+			authContext := &AuthContext{
+				AuthMethod:                       "jwt",
+				Username:                         "machine-user",
+				Groups:                           []any{"admins"},
+				RealmAccess:                      map[string]any{"roles": []any{cloudProviderAdminRole}},
+				ManagedServiceAccountCandidate:   true,
+				ManagedServiceAccountClaimsValid: true,
+				ManagedServiceAccountClientID:    "osac-sa-tenant-a-d3c4e3db-95b8-481d-8b5c-963da477da12",
+				ManagedServiceAccountTenantClaim: "tenant-a",
+			}
+
+			methods := append([]string{}, billingAllowedMethods...)
+			methods = append(methods, privateSignalMethod)
+			for _, method := range methods {
+				decision, evaluateErr := evaluator.Evaluate(ctx, authContext, method)
+				Expect(evaluateErr).ToNot(HaveOccurred())
+				Expect(decision.Allowed).To(BeFalse(), "forged claim on %q", method)
+			}
+
+			// No database-resolved role reaches billing through a managed grant path: tenant and automation
+			// roles grant only their reviewed non-billing method sets.
+			for _, roles := range [][]string{
+				{"tenant-automation"},
+				{"tenant-admin"},
+				{"tenant-idp-manager"},
+				{cloudProviderAdminRole},
+			} {
+				resolvedRoles = roles
+				for _, method := range methods {
+					decision, evaluateErr := evaluator.Evaluate(ctx, authContext, method)
+					Expect(evaluateErr).ToNot(HaveOccurred())
+					Expect(decision.Allowed).To(BeFalse(), "resolved roles %v on %q", roles, method)
+				}
+			}
+		})
 	})
 })

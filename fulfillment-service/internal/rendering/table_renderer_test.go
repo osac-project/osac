@@ -16,18 +16,25 @@ package rendering
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"path/filepath"
 	"strings"
+	"text/tabwriter"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
+	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
 	"go.uber.org/mock/gomock"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gopkg.in/yaml.v3"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -55,8 +62,11 @@ var _ = Describe("Table renderer", func() {
 		helper.EXPECT().String().
 			Return(string(fullName)).
 			AnyTimes()
+		// Billing accounts are platform-scoped despite having metadata. Assignments
+		// remain tenant-scoped; ordinary resource fixtures retain tenant injection.
+		tenantScoped := descriptor.Fields().ByName("metadata") != nil && descriptor.Name() != "BillingAccount"
 		helper.EXPECT().IsTenantScoped().
-			Return(true).
+			Return(tenantScoped).
 			AnyTimes()
 		return helper
 	}
@@ -291,6 +301,277 @@ var _ = Describe("Table renderer", func() {
 			Expect(output).To(ContainSubstring("GPU NAME"))
 			Expect(output).To(MatchRegexp(`16\s+0\s+-\s+ACTIVE`))
 		})
+	})
+
+	Describe("Billing layouts", func() {
+		accountHeaders := []string{
+			"ID", "NAME", "PROVIDER", "DISPLAY-NAME", "CURRENCY", "STATE",
+			"EXTERNAL-BILLING-ACCOUNT-ID", "STATUS-OBSERVED",
+		}
+		assignmentHeaders := []string{
+			"ID", "NAME", "TENANT", "ACCOUNT", "STATE", "EFFECTIVE-FROM", "EFFECTIVE-TO", "MESSAGE",
+		}
+		// An inventory of existing files cannot detect a missing domain layout.
+		DescribeTable("Requires both private billing collection layouts and their domain headers",
+			func(filename string, headers []string) {
+				data, err := tablesFS.ReadFile("tables/" + filename)
+				Expect(err).NotTo(HaveOccurred())
+				var layout tableLayout
+				Expect(yaml.Unmarshal(data, &layout)).To(Succeed())
+				actual := make([]string, len(layout.Columns))
+				for i, col := range layout.Columns {
+					actual[i] = col.Header
+				}
+				Expect(actual).To(Equal(headers))
+			},
+			Entry("private account", "osac.private.v1.BillingAccount.yaml", accountHeaders),
+			Entry("private assignment", "osac.private.v1.TenantBillingAssignment.yaml", assignmentHeaders),
+		)
+
+		// Decode fixtures into the actual generated types, not synthetic descriptors.
+		billingObject := func(prototype proto.Message, fields map[string]any) proto.Message {
+			data, err := json.Marshal(fields)
+			Expect(err).NotTo(HaveOccurred())
+			object := prototype.ProtoReflect().New().Interface()
+			Expect(protojson.Unmarshal(data, object)).To(Succeed())
+			return object
+		}
+		renderBilling := func(ctx context.Context, objects ...proto.Message) string {
+			before := make([]proto.Message, len(objects))
+			beforeJSON := make([]map[string]any, len(objects))
+			for i, object := range objects {
+				before[i] = proto.Clone(object)
+				data, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(object)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(json.Unmarshal(data, &beforeJSON[i])).To(Succeed())
+			}
+			objectHelper := makeObjectHelper(objects[0])
+			helper := reflection.NewMockHelper(ctrl)
+			// No catch-all lookup or RPC expectations: references must render stored
+			// identity directly, without attempting account Get or name resolution.
+			helper.EXPECT().Lookup(objectHelper.String()).Return(objectHelper).AnyTimes()
+			var output bytes.Buffer
+			renderer, err := NewTableRenderer().SetLogger(logger).SetHelper(helper).SetWriter(&output).Build()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(renderer.Render(ctx, objects)).To(Succeed())
+			for i, object := range objects {
+				Expect(proto.Equal(object, before[i])).To(BeTrue(), "table formatting must not mutate protobufs")
+				data, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(object)
+				Expect(err).NotTo(HaveOccurred())
+				var afterJSON map[string]any
+				Expect(json.Unmarshal(data, &afterJSON)).To(Succeed())
+				Expect(afterJSON).To(Equal(beforeJSON[i]), "raw structured values must remain unchanged")
+			}
+			return output.String()
+		}
+		expectBillingRows := func(output string, headers []string, rows ...[]string) {
+			// Compare complete rendered cells, including whitespace tokens. Splitting
+			// on spaces would accidentally equate such tokens with missing values.
+			var expected bytes.Buffer
+			writer := tabwriter.NewWriter(&expected, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(writer, strings.Join(headers, "\t"))
+			for _, row := range rows {
+				Expect(row).To(HaveLen(len(headers)))
+				fmt.Fprintln(writer, strings.Join(row, "\t"))
+			}
+			Expect(writer.Flush()).To(Succeed())
+			Expect(output).To(Equal(expected.String()))
+		}
+		withDeleting := func(cells []string) []string {
+			return append([]string{cells[0], "-"}, cells[1:]...)
+		}
+		domainHeaders := func(headers []string) []string {
+			return append([]string{headers[0], "DELETING"}, headers[1:]...)
+		}
+		var controls strings.Builder
+		for c := rune(0); c <= '\u009f'; c++ {
+			if c < ' ' || c >= '\u007f' {
+				controls.WriteRune(c)
+			}
+		}
+		controlText := controls.String()
+		controlSpaces := strings.Repeat(" ", 65)
+
+		for _, prototype := range []proto.Message{&privatev1.BillingAccount{}} {
+			Describe(string(prototype.ProtoReflect().Descriptor().FullName()), func() {
+				It("Renders empty and partial nested objects with unknown state and dash placeholders", func(ctx context.Context) {
+					for _, fields := range []map[string]any{
+						{}, {"metadata": map[string]any{}}, {"status": map[string]any{}},
+						{"status": map[string]any{"base_currency": "", "external_billing_account_id": ""}},
+					} {
+						object := billingObject(prototype, fields)
+						output := renderBilling(ctx, object)
+						expectBillingRows(output, domainHeaders(accountHeaders),
+							withDeleting([]string{"-", "-", "-", "-", "-", "UNKNOWN", "-", "-"}))
+					}
+				})
+
+				It("Retains public domain columns and observation start with selected tenant and project", func(ctx context.Context) {
+					status := map[string]any{
+						"provider_key": "m360", "display_name": "Provider Label", "base_currency": "EUR", "state": 1,
+						"external_billing_account_id": "local-attribution", "state_observation_timestamp": "2026-11-17T01:02:03.123456789Z",
+					}
+					if prototype.ProtoReflect().Descriptor().FullName().Parent() == "osac.private.v1" {
+						status["provider_account_reference"] = "native-identity-must-not-be-a-column"
+					}
+					object := billingObject(prototype, map[string]any{
+						"id": "opaque-id", "metadata": map[string]any{
+							"name": "ba-stable-name", "tenant": "system", "creation_timestamp": "2001-01-01T00:00:00Z",
+							"deletion_timestamp": "2026-11-17T02:00:00Z",
+						}, "status": status,
+					})
+					for _, tenant := range []string{"", "selected-tenant"} {
+						scoped := config.ProjectIntoContext(config.TenantIntoContext(ctx, tenant), "selected-project")
+						expectBillingRows(renderBilling(scoped, object), domainHeaders(accountHeaders), []string{
+							"opaque-id", "Yes", "ba-stable-name", "m360", "Provider Label", "EUR", "ACTIVE",
+							"local-attribution", "2026-11-17T01:02:03.123456789Z",
+						})
+					}
+				})
+
+				It("Shortens every declared account state and retains future enum numbers", func(ctx context.Context) {
+					states := prototype.ProtoReflect().Descriptor().Fields().ByName("status").Message().Fields().ByName("state").Enum().Values()
+					expected := map[protoreflect.EnumNumber]string{0: "UNKNOWN", 1: "ACTIVE", 2: "INACTIVE", 3: "UNKNOWN"}
+					for i := range states.Len() {
+						number := states.Get(i).Number()
+						Expect(expected).To(HaveKey(number))
+					}
+					expected[991], expected[-7] = "UNKNOWN:991", "UNKNOWN:-7"
+					for number, text := range expected {
+						object := billingObject(prototype, map[string]any{"status": map[string]any{"state": int32(number)}})
+						expectBillingRows(renderBilling(ctx, object), domainHeaders(accountHeaders),
+							withDeleting([]string{"-", "-", "-", "-", "-", text, "-", "-"}))
+					}
+				})
+
+				It("Distinguishes missing observation from real epoch and fractional timestamps", func(ctx context.Context) {
+					for _, timestamp := range []string{"", "1970-01-01T00:00:00Z", "1970-01-01T00:00:00.000000001Z", "2026-11-17T01:02:03.1Z"} {
+						status := map[string]any{}
+						cell := "-"
+						if timestamp != "" {
+							status["state_observation_timestamp"], cell = timestamp, timestamp
+						}
+						object := billingObject(prototype, map[string]any{"status": status})
+						expectBillingRows(renderBilling(ctx, object), domainHeaders(accountHeaders),
+							withDeleting([]string{"-", "-", "-", "-", "-", "UNKNOWN", "-", cell}))
+					}
+				})
+
+				It("Sanitizes all C0/C1 controls only in table cells without truncating Unicode labels or raw tokens", func(ctx context.Context) {
+					label := strings.Repeat("Étiquette 雲 ☁ — ", 100)
+					for _, token := range []string{"", "   ", "  exact-token  ", "before" + controlText + "after"} {
+						object := billingObject(prototype, map[string]any{"status": map[string]any{
+							"provider_key": "m" + controlText + "360", "display_name": label + controlText + "end",
+							"base_currency": "E" + controlText + "UR", "external_billing_account_id": token,
+						}})
+						cell := token
+						if token == "" {
+							cell = "-"
+						} else if strings.Contains(token, controlText) {
+							cell = "before" + controlSpaces + "after"
+						}
+						expectBillingRows(renderBilling(ctx, object), domainHeaders(accountHeaders), withDeleting([]string{
+							"-", "-", "m" + controlSpaces + "360", label + controlSpaces + "end", "E" + controlSpaces + "UR", "UNKNOWN", cell, "-",
+						}))
+						actual, ok := reflection.ResolveFieldPath[string](object, "status.external_billing_account_id")
+						Expect(ok).To(BeTrue())
+						Expect(actual).To(Equal(token), "equality/uniqueness uses the original token bytes")
+					}
+				})
+			})
+		}
+
+		for _, prototype := range []proto.Message{&privatev1.TenantBillingAssignment{}} {
+			Describe(string(prototype.ProtoReflect().Descriptor().FullName()), func() {
+				It("Renders empty and partial nested objects without account lookups", func(ctx context.Context) {
+					for _, fields := range []map[string]any{
+						{}, {"metadata": map[string]any{}}, {"status": map[string]any{}}, {"spec": map[string]any{}},
+						{"spec": map[string]any{"billing_account": map[string]any{}}},
+					} {
+						object := billingObject(prototype, fields)
+						expectBillingRows(renderBilling(ctx, object), domainHeaders(assignmentHeaders),
+							withDeleting([]string{"-", "-", "-", "-", "UNKNOWN", "-", "-", "-"}))
+					}
+				})
+
+				It("Renders canonical stored reference ids and exactly one explicit tenant with either selection", func(ctx context.Context) {
+					object := billingObject(prototype, map[string]any{
+						"id": "interval-id", "metadata": map[string]any{"name": "assignment-name", "tenant": "tenant-id"},
+						"spec":   map[string]any{"billing_account": map[string]any{"id": "account-id", "name": "ba-name"}},
+						"status": map[string]any{"connection_state": 2},
+					})
+					for _, tenant := range []string{"", "selected-tenant"} {
+						scoped := config.ProjectIntoContext(config.TenantIntoContext(ctx, tenant), "selected-project")
+						expectBillingRows(renderBilling(scoped, object), domainHeaders(assignmentHeaders),
+							withDeleting([]string{"interval-id", "assignment-name", "tenant-id", "account-id", "CONNECTED", "-", "-", "-"}))
+					}
+				})
+
+				It("Renders stored tenant and account independently when either is missing", func(ctx context.Context) {
+					object := billingObject(prototype, map[string]any{"metadata": map[string]any{"tenant": "stored-tenant"}})
+					expectBillingRows(renderBilling(ctx, object), domainHeaders(assignmentHeaders),
+						withDeleting([]string{"-", "-", "stored-tenant", "-", "UNKNOWN", "-", "-", "-"}))
+					object = billingObject(prototype, map[string]any{"spec": map[string]any{
+						"billing_account": map[string]any{"id": "stored-reference-id"},
+					}})
+					expectBillingRows(renderBilling(ctx, object), domainHeaders(assignmentHeaders),
+						withDeleting([]string{"-", "-", "-", "stored-reference-id", "UNKNOWN", "-", "-", "-"}))
+				})
+
+				It("Shortens every declared connection state without inventing a successful default", func(ctx context.Context) {
+					states := prototype.ProtoReflect().Descriptor().Fields().ByName("status").Message().Fields().ByName("connection_state").Enum().Values()
+					expected := map[protoreflect.EnumNumber]string{0: "UNKNOWN", 1: "PENDING", 2: "CONNECTED", 3: "FAILED"}
+					for i := range states.Len() {
+						Expect(expected).To(HaveKey(states.Get(i).Number()))
+					}
+					expected[991], expected[-7] = "UNKNOWN:991", "UNKNOWN:-7"
+					for number, text := range expected {
+						object := billingObject(prototype, map[string]any{"status": map[string]any{"connection_state": int32(number)}})
+						expectBillingRows(renderBilling(ctx, object), domainHeaders(assignmentHeaders),
+							withDeleting([]string{"-", "-", "-", "-", text, "-", "-", "-"}))
+					}
+				})
+
+				It("Preserves absent/current, epoch, fractional, contiguous and zero-length interval boundaries", func(ctx context.Context) {
+					boundary := "2026-11-17T01:02:03.123456789Z"
+					intervals := [][2]string{
+						{"", ""}, {"1970-01-01T00:00:00Z", ""},
+						{"1970-01-01T00:00:00.000000001Z", boundary}, {boundary, ""}, {boundary, boundary},
+					}
+					var objects []proto.Message
+					var rows [][]string
+					for _, interval := range intervals {
+						status := map[string]any{}
+						cells := []string{"-", "-"}
+						for i, field := range []string{"effective_from_timestamp", "effective_to_timestamp"} {
+							if interval[i] != "" {
+								status[field], cells[i] = interval[i], interval[i]
+							}
+						}
+						objects = append(objects, billingObject(prototype, map[string]any{
+							"metadata": map[string]any{"creation_timestamp": "2001-01-01T00:00:00Z"}, "status": status,
+						}))
+						rows = append(rows, withDeleting([]string{"-", "-", "-", "-", "UNKNOWN", cells[0], cells[1], "-"}))
+					}
+					// The old end and replacement start are the same stored instant;
+					// rendering makes no claim about elapsed time or connection state.
+					expectBillingRows(renderBilling(ctx, objects...), domainHeaders(assignmentHeaders), rows...)
+				})
+
+				It("Retains full remediation and tombstone text while removing only table controls", func(ctx context.Context) {
+					for _, message := range []string{
+						"BILLING_PROVIDER_CORRELATION_WRITE_UNSUPPORTED " + strings.Repeat("Réparer 雲; ", 100),
+						"Tenant deleted; retained billing history — 終了",
+					} {
+						object := billingObject(prototype, map[string]any{"status": map[string]any{
+							"message": message + controlText + "end", "connection_state": 1,
+						}})
+						expectBillingRows(renderBilling(ctx, object), domainHeaders(assignmentHeaders),
+							withDeleting([]string{"-", "-", "-", "-", "PENDING", "-", "-", message + controlSpaces + "end"}))
+					}
+				})
+			})
+		}
 	})
 
 	It("Compiles CEL expressions successfully for all table definitions", func(ctx context.Context) {

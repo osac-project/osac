@@ -159,22 +159,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 
 	// Create the gateway multiplexer:
 	c.logger.InfoContext(ctx, "Creating REST gateway server")
-	gatewayMarshaller := &runtime.JSONPb{
-		MarshalOptions: protojson.MarshalOptions{
-			UseProtoNames: true,
-		},
-	}
-	gatewayMux := runtime.NewServeMux(
-		runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.HTTPBodyMarshaler{
-			Marshaler: gatewayMarshaller,
-		}),
-		runtime.WithIncomingHeaderMatcher(func(key string) (string, bool) {
-			if strings.EqualFold(key, servers.DryRunHTTPHeader) {
-				return servers.DryRunMetadataKey, true
-			}
-			return runtime.DefaultHeaderMatcher(key)
-		}),
-	)
+	gatewayMux := newGatewayMux()
 
 	// Register the public and private API service handlers:
 	err = c.registerHandlers(ctx, gatewayMux)
@@ -268,6 +253,22 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 	return shutdown.Wait()
 }
 
+func newGatewayMux() *runtime.ServeMux {
+	return runtime.NewServeMux(
+		runtime.WithMarshalerOption(runtime.MIMEWildcard, &runtime.HTTPBodyMarshaler{
+			Marshaler: &runtime.JSONPb{
+				MarshalOptions: protojson.MarshalOptions{UseProtoNames: true},
+			},
+		}),
+		runtime.WithIncomingHeaderMatcher(func(key string) (string, bool) {
+			if strings.EqualFold(key, servers.DryRunHTTPHeader) {
+				return servers.DryRunMetadataKey, true
+			}
+			return runtime.DefaultHeaderMatcher(key)
+		}),
+	)
+}
+
 func (c *runnerContext) handleHealth(
 	w http.ResponseWriter, r *http.Request, p map[string]string) {
 	response, err := c.healthClient.Check(r.Context(), &healthv1.HealthCheckRequest{})
@@ -312,7 +313,6 @@ func buildHandlerList() []handlerRegistrar {
 	return []handlerRegistrar{
 		// Shared public API:
 		publicv1.RegisterCapabilitiesHandler,
-		publicv1.RegisterBillingProviderStatusesHandler,
 		publicv1.RegisterVirtualNetworksHandler,
 		publicv1.RegisterSubnetsHandler,
 		publicv1.RegisterSecurityGroupsHandler,
@@ -337,7 +337,9 @@ func buildHandlerList() []handlerRegistrar {
 		publicv1.RegisterQuotaDefaultLimitsHandler,
 		// Shared private API:
 		privatev1.RegisterCapabilitiesHandler,
+		privatev1.RegisterBillingAccountsHandler,
 		privatev1.RegisterBillingProviderStatusesHandler,
+		privatev1.RegisterTenantBillingAssignmentsHandler,
 		privatev1.RegisterEventsHandler,
 		privatev1.RegisterHubsHandler,
 		privatev1.RegisterNetworkClassesHandler,

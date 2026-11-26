@@ -287,6 +287,12 @@ func (t *FilterTranslator) Translate(ctx context.Context, filter string) (sql st
 		err = errors.New("filter references reserved metadata key")
 		return
 	}
+	// Leave dynamically typed expressions to the existing lowering rules.
+	switch tree.OutputType().Kind() {
+	case cel.BoolKind, cel.DynKind, cel.AnyKind:
+	default:
+		return "", &ErrValidation{Reason: fmt.Sprintf("filter must return a Boolean, got %s", tree.OutputType())}
+	}
 	translation := *t
 	translation.sourceInfo = tree.NativeRep().SourceInfo()
 	result, err := translation.translate(expr)
@@ -648,8 +654,23 @@ func (t *FilterTranslator) translateLiteral(value ref.Val) (result filterTransla
 func (t *FilterTranslator) translateString(value, special string) (text string, escaped bool) {
 	var buffer bytes.Buffer
 	buffer.Grow(len(value))
+	if special != "" {
+		// E-string syntax doubles backslashes; decide it first.
+		escaped = strings.ContainsFunc(value, func(r rune) bool {
+			return r == '\\' || r == '\'' || !unicode.IsPrint(r) || r > unicode.MaxASCII
+		})
+	}
 	for _, r := range value {
-		if r == '\\' || strings.ContainsRune(special, r) {
+		if r == '\\' {
+			buffer.WriteString(`\\`)
+			if special != "" {
+				buffer.WriteString(`\\`)
+			}
+			escaped = true
+		} else if strings.ContainsRune(special, r) {
+			if escaped {
+				buffer.WriteRune('\\')
+			}
 			buffer.WriteRune('\\')
 			buffer.WriteRune(r)
 		} else if r == '\'' {
@@ -1005,6 +1026,9 @@ func (t *FilterTranslator) translateSelectField(expr ast.SelectExpr) (result fil
 		result, err = t.translateSelectThisMdField(fieldName, testOnly)
 	case filterTranslatorJsonKind:
 		result, err = t.translateSelectJsonField(operandTr.sql, operandTr.desc, fieldName, testOnly)
+		if err == nil && testOnly {
+			result.sql = "coalesce(" + result.sql + ", false)"
+		}
 	default:
 		err = fmt.Errorf("select of field '%s' of kind '%s' isn't supported", fieldName, operandTr.kind)
 		return

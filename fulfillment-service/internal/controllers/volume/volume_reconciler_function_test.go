@@ -1119,6 +1119,106 @@ var _ = Describe("selectHub", func() {
 		Expect(t.hubNamespace).To(Equal("ci-hub-ns"))
 	})
 
+	It("fails when the owning ComputeInstance belongs to another tenant", func() {
+		parent := privatev1.ComputeInstance_builder{
+			Id:       "ci-01a1",
+			Metadata: privatev1.Metadata_builder{Tenant: "other-tenant", Project: "proj"}.Build(),
+			Status:   privatev1.ComputeInstanceStatus_builder{Hub: "hub-ci"}.Build(),
+		}.Build()
+		client := &inventoryParentClient{parent: parent}
+
+		t := &task{
+			r: &function{
+				logger:                 logger,
+				computeInstancesClient: client,
+			},
+			volume: privatev1.Volume_builder{
+				Id:       "vol-foreign-owner",
+				Metadata: privatev1.Metadata_builder{Tenant: "tenant-a", Project: "proj"}.Build(),
+				Spec: privatev1.VolumeSpec_builder{
+					Owner: privatev1.VolumeOwner_builder{
+						Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+						Reference: "ci-01a1",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		err := t.selectHub(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, errOwnerScopeMismatch)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("other-tenant"))
+	})
+
+	It("fails when the owning ComputeInstance belongs to another project", func() {
+		parent := privatev1.ComputeInstance_builder{
+			Id:       "ci-01a1",
+			Metadata: privatev1.Metadata_builder{Tenant: "tenant-a", Project: "other-project"}.Build(),
+			Status:   privatev1.ComputeInstanceStatus_builder{Hub: "hub-ci"}.Build(),
+		}.Build()
+		client := &inventoryParentClient{parent: parent}
+
+		t := &task{
+			r: &function{
+				logger:                 logger,
+				computeInstancesClient: client,
+			},
+			volume: privatev1.Volume_builder{
+				Id:       "vol-foreign-project-owner",
+				Metadata: privatev1.Metadata_builder{Tenant: "tenant-a", Project: "proj"}.Build(),
+				Spec: privatev1.VolumeSpec_builder{
+					Owner: privatev1.VolumeOwner_builder{
+						Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+						Reference: "ci-01a1",
+					}.Build(),
+				}.Build(),
+			}.Build(),
+		}
+
+		err := t.selectHub(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, errOwnerScopeMismatch)).To(BeTrue())
+		Expect(err.Error()).To(ContainSubstring("other-project"))
+	})
+
+	It("marks the volume FAILED instead of requeueing when the owner is out of scope", func() {
+		parent := privatev1.ComputeInstance_builder{
+			Id:       "ci-01a1",
+			Metadata: privatev1.Metadata_builder{Tenant: "other-tenant", Project: "proj"}.Build(),
+			Status:   privatev1.ComputeInstanceStatus_builder{Hub: "hub-ci"}.Build(),
+		}.Build()
+		client := &inventoryParentClient{parent: parent}
+
+		volume := privatev1.Volume_builder{
+			Id: "vol-foreign-owner-update",
+			Metadata: privatev1.Metadata_builder{
+				Tenant:     "tenant-a",
+				Project:    "proj",
+				Finalizers: []string{finalizers.Controller},
+			}.Build(),
+			Spec: privatev1.VolumeSpec_builder{
+				Owner: privatev1.VolumeOwner_builder{
+					Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+					Reference: "ci-01a1",
+				}.Build(),
+			}.Build(),
+		}.Build()
+
+		t := &task{
+			r: &function{
+				logger:                 logger,
+				computeInstancesClient: client,
+			},
+			volume: volume,
+		}
+
+		err := t.update(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(volume.GetStatus().GetState()).To(Equal(privatev1.VolumeState_VOLUME_STATE_FAILED))
+		Expect(volume.GetStatus().GetMessage()).To(ContainSubstring("different tenant"))
+		Expect(volume.GetStatus().GetHub()).To(BeEmpty())
+	})
+
 	It("fails when the owning ComputeInstance is not found", func() {
 		parent := privatev1.ComputeInstance_builder{
 			Id:     "ci-other",

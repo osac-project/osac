@@ -48,6 +48,11 @@ const objectPrefix = "vol-"
 // hub cannot be resolved yet.
 const requeueOwnerHubDelay = time.Second
 
+// errOwnerScopeMismatch signals that a volume's owner belongs to another
+// tenant or project. The condition is permanent, so the reconcile marks the
+// volume FAILED instead of requeueing.
+var errOwnerScopeMismatch = errors.New("volume owner belongs to a different tenant or project")
+
 // FunctionBuilder contains the data and logic needed to build a function that
 // reconciles volumes. It follows the same builder pattern as other reconciler
 // functions (NATGateway, ComputeInstance, etc.).
@@ -193,6 +198,10 @@ func (t *task) update(ctx context.Context) error {
 
 	hubJustSelected := t.volume.GetStatus().GetHub() == ""
 	if err := t.selectHub(ctx); err != nil {
+		if errors.Is(err, errOwnerScopeMismatch) {
+			t.setFailed(err)
+			return nil
+		}
 		return err
 	}
 	t.volume.GetStatus().SetHub(t.hubId)
@@ -375,7 +384,9 @@ func (t *task) selectHub(ctx context.Context) error {
 
 // ownerHub resolves the hub of the workload that owns the volume. It
 // returns a retryable error — the reconcile is requeued — when the owner
-// cannot be fetched or has no hub assigned yet.
+// cannot be fetched or has no hub assigned yet. An owner that belongs to a
+// different tenant or project than the volume fails the reconcile
+// permanently: the mismatch never resolves on retry.
 func (t *task) ownerHub(ctx context.Context, owner *privatev1.VolumeOwner) (string, error) {
 	if t.r.computeInstancesClient == nil {
 		return "", fmt.Errorf("ComputeInstances client is required to resolve the owning workload %q", owner.GetReference())
@@ -389,7 +400,18 @@ func (t *task) ownerHub(ctx context.Context, owner *privatev1.VolumeOwner) (stri
 			requeueOwnerHubDelay,
 		)
 	}
-	hubId := response.GetObject().GetStatus().GetHub()
+	instance := response.GetObject()
+	if instance.GetMetadata().GetTenant() != t.volume.GetMetadata().GetTenant() ||
+		instance.GetMetadata().GetProject() != t.volume.GetMetadata().GetProject() {
+		return "", fmt.Errorf(
+			"%w: owning compute instance %q belongs to tenant %q (project %q), but the volume belongs to tenant %q (project %q)",
+			errOwnerScopeMismatch,
+			owner.GetReference(),
+			instance.GetMetadata().GetTenant(), instance.GetMetadata().GetProject(),
+			t.volume.GetMetadata().GetTenant(), t.volume.GetMetadata().GetProject(),
+		)
+	}
+	hubId := instance.GetStatus().GetHub()
 	if hubId == "" {
 		return "", controllers.RequeueAfter(
 			fmt.Errorf("owning compute instance %q has no hub assigned", owner.GetReference()),

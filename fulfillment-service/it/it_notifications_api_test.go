@@ -208,7 +208,7 @@ var _ = Describe("Notifications API", Label("notifications"), func() {
 		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
 	})
 
-	It("lists and deletes announcements that include a resource reference", func(ctx context.Context) {
+	It("lists and deletes announcements that include an object reference", func(ctx context.Context) {
 		_, conn := createCatalogItemTenantAdminFixture(ctx)
 		publicClient := publicv1.NewNotificationsClient(conn)
 
@@ -222,10 +222,11 @@ var _ = Describe("Notifications API", Label("notifications"), func() {
 					Severity: publicv1.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
 					Type:     "osac.notification.announcement.maintenance",
 					Scope:    publicv1.NotificationScope_NOTIFICATION_SCOPE_TENANT,
-					Title:    "With resource",
+					Title:    "With object",
 					Object: publicv1.NotificationObjectReference_builder{
 						Cluster: publicv1.ClusterReference_builder{
-							Id: "nonexistent-cluster",
+							Id:      "nonexistent-cluster",
+							Project: "default",
 						}.Build(),
 					}.Build(),
 				}.Build(),

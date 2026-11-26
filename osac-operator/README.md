@@ -37,6 +37,9 @@ backoff and `False/RetryRunning` while a retry with a saved failure is running.
 fixed public message, failed attempt number and original observation time.
 The failed attempt number can differ from the current job's attempt number.
 Provider messages and operational job details are not public diagnostics.
+Manual management suppresses retry progress and clears stale retry conditions
+while preserving the latest failure details and saved job state. Returning to
+managed mode resumes normal retry handling.
 
 A terminal job failure reports `False/ProvisioningFailed` and retains its
 diagnostics. Job success clears the failure and retry reason, while

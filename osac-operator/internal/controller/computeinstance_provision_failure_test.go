@@ -441,6 +441,49 @@ var _ = Describe("ComputeInstance public retry projection", func() {
 		reconcileOK()
 	})
 
+	DescribeTable("suppresses saved retry progress in manual mode and resumes in managed mode", func(running bool) {
+		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
+		result := reconcileOK()
+		wantReason := "RetryScheduled"
+		if running {
+			clock.Step(result.RequeueAfter)
+			reconcileOK()
+			wantReason = "RetryRunning"
+		}
+		expectReason(wantReason)
+		failure := instance.Status.LastProvisioningFailure.DeepCopy()
+		jobs := instance.DeepCopy().Status.Jobs
+		instance.Annotations[osacComputeInstanceManagementStateAnnotation] = ManagementStateManual
+		Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+		clock.Step(time.Hour)
+		recreate()
+		for range 2 {
+			reconcileOK()
+			expectReason(osacv1alpha1.ReasonWaitingForVM)
+			Expect(instance.Status.LastProvisioningFailure).To(Equal(failure))
+			Expect(instance.Status.Jobs).To(Equal(jobs))
+		}
+		delete(instance.Annotations, osacComputeInstanceManagementStateAnnotation)
+		Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+		result = reconcileOK()
+		if !running {
+			// A recreated engine restores the retry wait from the saved job.
+			expectReason("RetryScheduled")
+			clock.Step(result.RequeueAfter)
+			reconcileOK()
+		}
+		expectReason("RetryRunning")
+		Expect(instance.Status.LastProvisioningFailure).To(Equal(failure))
+		if running {
+			Expect(instance.Status.Jobs).To(Equal(jobs))
+		} else {
+			Expect(instance.Status.Jobs[0].Attempt).To(Equal(jobs[0].Attempt + 1))
+		}
+	},
+		Entry("scheduled retry", false),
+		Entry("running retry", true),
+	)
+
 	It("replays the latest failure and successful clearing across real projection conflicts and restart", func() {
 		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
 		result := reconcileOK()

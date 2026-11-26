@@ -582,7 +582,7 @@ func (r *ComputeInstanceReconciler) handleUpdate(ctx context.Context, _ reconcil
 			provision.LastFailure = entry.LastFailure
 		}
 	}
-	projectComputeInstanceProvisioningStatus(instance, provision)
+	updateComputeInstanceProvisioningStatus(instance, provision)
 	return result, nil
 }
 
@@ -2057,7 +2057,7 @@ func filterStorageClassesToRequestedTiers(
 	return filtered
 }
 
-func projectComputeInstanceProvisioningStatus(instance *v1alpha1.ComputeInstance, provision networktask.Outcome) {
+func updateComputeInstanceProvisioningStatus(instance *v1alpha1.ComputeInstance, provision networktask.Outcome) {
 	instance.Status.LastProvisioningFailure = nil
 	if failure := provision.LastFailure; failure != nil && instance.Status.ProvisionConfigVersion == instance.Status.DesiredConfigVersion {
 		instance.Status.LastProvisioningFailure = &v1alpha1.ComputeInstanceProvisioningFailure{
@@ -2065,11 +2065,12 @@ func projectComputeInstanceProvisioningStatus(instance *v1alpha1.ComputeInstance
 			ObservedAt: failure.ObservedAt.DeepCopy(),
 		}
 	}
+	manual := instance.Annotations[osacComputeInstanceManagementStateAnnotation] == ManagementStateManual
 	reason, message := "", ""
 	switch {
-	case provision.Retrying():
+	case !manual && provision.Retrying():
 		reason, message = "RetryScheduled", "A provisioning attempt failed; another attempt is scheduled."
-	case provision.Entry.State == v1alpha1.NetworkJobStateRunning && instance.Status.LastProvisioningFailure != nil:
+	case !manual && provision.Entry.State == v1alpha1.NetworkJobStateRunning && instance.Status.LastProvisioningFailure != nil:
 		reason, message = "RetryRunning", "A provisioning retry is running."
 	case provision.Failed() && instance.Status.ProvisionConfigVersion == instance.Status.DesiredConfigVersion:
 		reason, message = v1alpha1.ReasonProvisioningFailed, "Provisioning failed; no retry is scheduled."

@@ -32,13 +32,9 @@ envtest specs cover selection, allocation, release, and claim recovery with
 an in-process reconciler. The Kind case uses the same NetBox WireMock
 mappings and checks deployed credential lookup and token reload after a rollout.
 
-Envtest and Kind pull the same digest-pinned WireMock image from Quay.
-Each NetBox envtest spec starts its own container. Select Podman with
-`CONTAINER_TOOL=podman`.
-
-For ARM64, build a native image with `make wiremock-image` from the BMF
-directory. Run either suite with `WIREMOCK_IMAGE=localhost/osac-wiremock:it`
-using the same container engine.
+Envtest and Kind pull the same digest-pinned Linux AMD64 WireMock image
+from Quay. Each NetBox envtest spec starts its own container. Select Podman
+with `CONTAINER_TOOL=podman`.
 
 ## Coverage notes
 

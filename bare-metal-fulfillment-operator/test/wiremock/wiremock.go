@@ -47,10 +47,7 @@ func Start(ctx context.Context) (baseURL string, stop func() error, err error) {
 		}
 	}
 
-	image := os.Getenv("WIREMOCK_IMAGE")
-	if image == "" {
-		image = strings.TrimSpace(wireMockImage)
-	}
+	image := strings.TrimSpace(wireMockImage)
 
 	startCtx, cancelStart := context.WithTimeout(ctx, 3*time.Minute)
 	output, err := exec.CommandContext(startCtx, tool,

@@ -16,8 +16,7 @@ endif
 # tools. (i.e. podman)
 CONTAINER_TOOL ?= podman
 
-# Prefer Docker for WireMock when available, as on the CI runner. Honor an
-# explicit runtime choice for both building and running the fixture.
+# Prefer Docker for WireMock when available, as on the CI runner.
 WIREMOCK_CONTAINER_TOOL = $(if $(filter command line environment,$(origin CONTAINER_TOOL)),$(CONTAINER_TOOL),$(or $(shell command -v docker 2>/dev/null),$(CONTAINER_TOOL)))
 
 # Setting SHELL to bash allows bash commands to be executed by recipes.
@@ -66,10 +65,6 @@ vet: ## Run go vet against code.
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	CONTAINER_TOOL="$(WIREMOCK_CONTAINER_TOOL)" KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /test/integration) -coverprofile cover.out
-
-.PHONY: wiremock-image
-wiremock-image: ## Build a local WireMock fixture image.
-	$(WIREMOCK_CONTAINER_TOOL) build -t localhost/osac-wiremock:it -f Containerfile.wiremock .
 
 # Run integration tests against a pre-existing Kind cluster deployed via
 # the root Makefile's `make dev-env` + `make integration-test-bmf`.

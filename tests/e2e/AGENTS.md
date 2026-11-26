@@ -53,6 +53,7 @@ status and pool accounting, not provider IPAM visibility; see the canonical
 |---|---|
 | Shared helpers, cleanup, reference oracles and failure/telemetry plugins | Collect affected deployed suites; run focused existing checks when behavior changes |
 | VMaaS/CaaS/BMaaS/storage/reference lifecycles | QE deployed E2E: collect and run the affected service/tier under `tests/e2e/` with real dependencies |
+| BMaaS inventory backend (metal3/netbox) | Deployed backend routing via the bmaas service suites |
 | Netris VMaaS networking and billing | Whole ordered lifecycle: `uv run pytest -n 0 -x tests/e2e/networking/vmaas/test_vmaas_networking.py` |
 | Netris BMaaS connectivity/isolation | `uv run pytest -n 0 tests/e2e/networking/bmaas` against its real backend |
 | Stretched networking | `uv run pytest -n 0 tests/e2e/networking/stretched` against its real backends |

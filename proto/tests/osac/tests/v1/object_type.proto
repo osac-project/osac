@@ -70,6 +70,7 @@ message Metadata {
   map<string, string> labels = 7;
   map<string, string> annotations = 8;
   int32 version = 9;
+  optional string description = 11;
 }
 
 message Spec {

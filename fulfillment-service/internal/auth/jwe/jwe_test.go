@@ -597,8 +597,8 @@ var _ = Describe("Token", func() {
 			Expect(parsed2.Subject).To(Equal("jane"))
 		})
 
-		It("Concurrent Open calls succeed when refresh is in-flight", func() {
-			jwksServer, jwksCAPool, reqCount := serveSlowJWKS(sealer, 200*time.Millisecond)
+		It("Concurrent Open calls succeed with one JWKS refresh after rotation", func() {
+			jwksServer, jwksCAPool, reqCount := serveCountedJWKS(sealer)
 			defer jwksServer.Close()
 
 			opener, err := NewOpener().
@@ -645,8 +645,19 @@ var _ = Describe("Token", func() {
 				Expect(subs[i]).To(Equal(fmt.Sprintf("user-%d", i)))
 			}
 
-			// Build() fetches once. After rotation, singleflight coalesces
-			// all concurrent refreshes into one additional request.
+			// Cache registration and key rotation each fetch once.
+			Expect(reqCount.Load()).To(Equal(int32(2)))
+
+			// Model a caller that saw the old set but reached refreshJWKS
+			// after the first refresh finished.
+			set, err := sealer.JWKSet(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			key, ok := set.Key(0)
+			Expect(ok).To(BeTrue())
+			kid, ok := key.KeyID()
+			Expect(ok).To(BeTrue())
+			_, err = opener.refreshJWKS(ctx, kid)
+			Expect(err).ToNot(HaveOccurred())
 			Expect(reqCount.Load()).To(Equal(int32(2)))
 		})
 	})
@@ -702,14 +713,11 @@ func serveJWKS(sealer *Sealer) (*httptest.Server, *x509.CertPool) {
 	return server, pool
 }
 
-// serveSlowJWKS is like serveJWKS but delays the first response by the
-// given duration. Returns an atomic request counter.
-func serveSlowJWKS(sealer *Sealer, firstDelay time.Duration) (*httptest.Server, *x509.CertPool, *atomic.Int32) {
+// serveCountedJWKS is like serveJWKS but counts requests.
+func serveCountedJWKS(sealer *Sealer) (*httptest.Server, *x509.CertPool, *atomic.Int32) {
 	var reqCount atomic.Int32
-	var once sync.Once
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqCount.Add(1)
-		once.Do(func() { time.Sleep(firstDelay) })
 		set, err := sealer.JWKSet(r.Context())
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

@@ -241,7 +241,7 @@ func (o *Opener) resolveKeySet(ctx context.Context, jwsPayload []byte) (jwk.Set,
 
 	set, err := o.cache.Lookup(ctx, o.jwksURL)
 	if err != nil {
-		return o.refreshJWKS(ctx)
+		return o.refreshJWKS(ctx, "")
 	}
 
 	sigs := jwsMsg.Signatures()
@@ -255,18 +255,26 @@ func (o *Opener) resolveKeySet(ctx context.Context, jwsPayload []byte) (jwk.Set,
 	if _, found := set.LookupKeyID(kid); found {
 		return set, nil
 	}
-	return o.refreshJWKS(ctx)
+	return o.refreshJWKS(ctx, kid)
 }
 
-// refreshJWKS forces an immediate JWKS re-fetch via the cache, coalescing
-// concurrent callers via singleflight.
-func (o *Opener) refreshJWKS(ctx context.Context) (jwk.Set, error) {
+// refreshJWKS coalesces concurrent fetches and avoids a redundant fetch if
+// the requested key has already arrived in the cache.
+func (o *Opener) refreshJWKS(ctx context.Context, kid string) (jwk.Set, error) {
 	// Detach from the caller's context so one cancelled request does
 	// not abort the shared fetch. Also strips deadline intentionally —
 	// the HTTP transport timeout bounds the fetch.
 	ctx = context.WithoutCancel(ctx)
 
-	v, err, _ := o.refreshGroup.Do("jwks", func() (any, error) {
+	type reusedSet struct{ jwk.Set }
+	refresh := func() (any, error) {
+		if kid != "" {
+			if cached, err := o.cache.Lookup(ctx, o.jwksURL); err == nil {
+				if _, found := cached.LookupKeyID(kid); found {
+					return reusedSet{cached}, nil
+				}
+			}
+		}
 		set, err := o.cache.Refresh(ctx, o.jwksURL)
 		if err != nil {
 			o.logger.WarnContext(ctx, "JWKS refresh failed, using cached keyset",
@@ -280,11 +288,21 @@ func (o *Opener) refreshJWKS(ctx context.Context) (jwk.Set, error) {
 			return cached, nil
 		}
 		return set, nil
-	})
-	if err != nil {
-		return nil, err
 	}
-	return v.(jwk.Set), nil
+	for {
+		v, err, _ := o.refreshGroup.Do("jwks", refresh)
+		if err != nil {
+			return nil, err
+		}
+		if cached, ok := v.(reusedSet); ok {
+			if _, found := cached.LookupKeyID(kid); kid != "" && found {
+				return cached.Set, nil
+			}
+			// The shared call skipped the fetch for a different key.
+			continue
+		}
+		return v.(jwk.Set), nil
+	}
 }
 
 // extractClaims reads standard and custom claims from a verified JWT token.

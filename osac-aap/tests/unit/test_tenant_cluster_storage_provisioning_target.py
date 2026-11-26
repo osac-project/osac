@@ -31,11 +31,14 @@ def _all_tasks(play):
 
 
 def _storage_provider_includes(play):
+    # ensure_csi_driver is the Tenant-only native driver action; it dispatches no
+    # provider role, so the routing target does not apply to it.
     return [
         task
         for task in _all_tasks(play)
         if isinstance(task.get("ansible.builtin.include_role"), dict)
         and task["ansible.builtin.include_role"].get("name") == STORAGE_PROVIDER
+        and task.get("vars", {}).get("storage_provider_action") != "ensure_csi_driver"
     ]
 
 

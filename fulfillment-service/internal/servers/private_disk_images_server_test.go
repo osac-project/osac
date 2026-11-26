@@ -22,12 +22,15 @@ import (
 	"buf.build/go/protovalidate"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
+	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -1128,6 +1131,396 @@ var _ = Describe("Private disk images server", func() {
 				Expect(err).NotTo(HaveOccurred())
 				Expect(proto.Equal(stored.GetObject(), image)).To(BeTrue(), "the image, metadata, lifecycle timestamps, and version must be unchanged")
 			})
+		})
+	})
+
+	Describe("pull_secret", func() {
+		var (
+			server     *PrivateDiskImagesServer
+			secretsDao *dao.GenericDAO[*privatev1.Secret]
+		)
+
+		BeforeEach(func() {
+			var err error
+			server, err = NewPrivateDiskImagesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			secretsDao, err = dao.NewGenericDAO[*privatev1.Secret]().
+				SetLogger(logger).
+				SetTenancyLogic(tenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+		})
+
+		createPullSecret := func(name string) *privatev1.Secret {
+			GinkgoHelper()
+			response, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Type: privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
+				Metadata: privatev1.Metadata_builder{
+					Name:   name,
+					Tenant: testTenant,
+				}.Build(),
+				Data: map[string][]byte{
+					".dockerconfigjson": []byte(`{"auths":{}}`),
+				},
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+			return response.GetObject()
+		}
+
+		createImage := func(name string, pullSecret *privatev1.SecretReference) *privatev1.DiskImage {
+			GinkgoHelper()
+			response, err := server.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   name,
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  "quay.io/containerdisks/fedora:41",
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+						PullSecret: pullSecret,
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			return response.GetObject()
+		}
+
+		It("sets, changes, and clears pull_secret", func() {
+			secretA := createPullSecret("pull-a")
+			secretB := createPullSecret("pull-b")
+
+			image := createImage("image-with-pull", privatev1.SecretReference_builder{
+				Name: secretA.GetMetadata().GetName(),
+			}.Build())
+			Expect(image.GetSpec().GetPullSecret().GetId()).To(Equal(secretA.GetId()))
+			Expect(image.GetSpec().GetPullSecret().GetName()).To(Equal(secretA.GetMetadata().GetName()))
+
+			updated, err := server.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: image.GetId(),
+					Spec: privatev1.DiskImageSpec_builder{
+						PullSecret: privatev1.SecretReference_builder{Id: secretB.GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.pull_secret"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updated.GetObject().GetSpec().GetPullSecret().GetId()).To(Equal(secretB.GetId()))
+
+			cleared, err := server.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Id:   image.GetId(),
+					Spec: privatev1.DiskImageSpec_builder{}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.pull_secret"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(cleared.GetObject().GetSpec().GetPullSecret()).To(BeNil())
+		})
+
+		It("rejects pull_secret subpath update masks", func() {
+			secret := createPullSecret("pull-subpath")
+			image := createImage("image-subpath-mask", privatev1.SecretReference_builder{
+				Id: secret.GetId(),
+			}.Build())
+
+			_, err := server.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: image.GetId(),
+					Spec: privatev1.DiskImageSpec_builder{
+						PullSecret: privatev1.SecretReference_builder{Id: "other-id"}.Build(),
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.pull_secret.id"}},
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("spec.pull_secret.id"))
+			Expect(err.Error()).To(ContainSubstring("spec.pull_secret"))
+		})
+
+		It("replaces pull_secret on a no-mask name-only update", func() {
+			secretA := createPullSecret("pull-merge-a")
+			secretB := createPullSecret("pull-merge-b")
+			image := createImage("image-merge-pull", privatev1.SecretReference_builder{
+				Id: secretA.GetId(),
+			}.Build())
+
+			updated, err := server.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: image.GetId(),
+					Metadata: privatev1.Metadata_builder{
+						Version: image.GetMetadata().GetVersion(),
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  image.GetSpec().GetSourceRef(),
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+						Lifecycle: image.GetSpec().GetLifecycle(),
+						PullSecret: privatev1.SecretReference_builder{
+							Name: secretB.GetMetadata().GetName(),
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updated.GetObject().GetSpec().GetPullSecret().GetId()).To(Equal(secretB.GetId()))
+			Expect(updated.GetObject().GetSpec().GetPullSecret().GetName()).To(
+				Equal(secretB.GetMetadata().GetName()))
+		})
+
+		It("allows unrelated updates without re-resolving an undiscoverable pull_secret", func() {
+			projects, err := dao.NewGenericDAO[*privatev1.Project]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = projects.Create().SetObject(privatev1.Project_builder{
+				Id: "diskimage-keep-pull",
+				Metadata: privatev1.Metadata_builder{
+					Name: "diskimage-keep-pull", Tenant: testTenant,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			hiddenSecret, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Type: privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
+				Metadata: privatev1.Metadata_builder{
+					Name:    "keep-pull",
+					Tenant:  testTenant,
+					Project: "diskimage-keep-pull",
+				}.Build(),
+				Data: map[string][]byte{".dockerconfigjson": []byte(`{"auths":{}}`)},
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			image := createImage("image-keep-pull", privatev1.SecretReference_builder{
+				Id: hiddenSecret.GetObject().GetId(),
+			}.Build())
+
+			restrictedVisibility, err := auth.NewVisibility().AddVisibleTenant(testTenant).Build()
+			Expect(err).ToNot(HaveOccurred())
+			restrictedTenancy := auth.NewMockTenancyLogic(ctrl)
+			restrictedTenancy.EXPECT().DetermineAssignableTenants(gomock.Any()).
+				Return(auth.AllTenants, nil).AnyTimes()
+			restrictedTenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
+				Return(testTenant, nil).AnyTimes()
+			restrictedTenancy.EXPECT().DetermineVisibility(gomock.Any()).
+				Return(restrictedVisibility, nil).AnyTimes()
+
+			restrictedServer, err := NewPrivateDiskImagesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(restrictedTenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			updated, err := restrictedServer.Update(ctx, privatev1.DiskImagesUpdateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Id: image.GetId(),
+					Metadata: privatev1.Metadata_builder{
+						Labels: map[string]string{"env": "test"},
+					}.Build(),
+				}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(updated.GetObject().GetMetadata().GetLabels()).To(HaveKeyWithValue("env", "test"))
+			// Redaction still hides the undiscoverable Secret on the response.
+			Expect(updated.GetObject().GetSpec().GetPullSecret()).To(BeNil())
+
+			stored, err := server.Get(ctx, privatev1.DiskImagesGetRequest_builder{
+				Id: image.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetSpec().GetPullSecret().GetId()).To(
+				Equal(hiddenSecret.GetObject().GetId()))
+		})
+
+		It("allows create without a pull_secret", func() {
+			image := createImage("public-image", nil)
+			Expect(image.GetSpec().GetPullSecret()).To(BeNil())
+		})
+
+		It("rejects a wrong secret type", func() {
+			opaque, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Type: privatev1.SecretType_SECRET_TYPE_OPAQUE,
+				Metadata: privatev1.Metadata_builder{
+					Name:   "opaque-secret",
+					Tenant: testTenant,
+				}.Build(),
+				Data: map[string][]byte{"key": []byte("value")},
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = server.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "wrong-type-image",
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  "quay.io/containerdisks/fedora:41",
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+						PullSecret: privatev1.SecretReference_builder{Id: opaque.GetObject().GetId()}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("SECRET_TYPE_PULL_SECRET"))
+		})
+
+		It("rejects a nonexistent pull_secret", func() {
+			_, err := server.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "missing-secret-image",
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  "quay.io/containerdisks/fedora:41",
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+						PullSecret: privatev1.SecretReference_builder{Id: "missing-secret-id"}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+		})
+
+		It("rejects a pull_secret the caller cannot discover", func() {
+			projects, err := dao.NewGenericDAO[*privatev1.Project]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = projects.Create().SetObject(privatev1.Project_builder{
+				Id: "diskimage-hidden-creds",
+				Metadata: privatev1.Metadata_builder{
+					Name: "diskimage-hidden-creds", Tenant: testTenant,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			hiddenSecret, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Type: privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
+				Metadata: privatev1.Metadata_builder{
+					Name:    "hidden-pull",
+					Tenant:  testTenant,
+					Project: "diskimage-hidden-creds",
+				}.Build(),
+				Data: map[string][]byte{".dockerconfigjson": []byte(`{"auths":{}}`)},
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			// Default-project visibility only — the Secret's project is hidden.
+			restrictedVisibility, err := auth.NewVisibility().AddVisibleTenant(testTenant).Build()
+			Expect(err).ToNot(HaveOccurred())
+			restrictedTenancy := auth.NewMockTenancyLogic(ctrl)
+			restrictedTenancy.EXPECT().DetermineAssignableTenants(gomock.Any()).
+				Return(auth.AllTenants, nil).AnyTimes()
+			restrictedTenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
+				Return(testTenant, nil).AnyTimes()
+			restrictedTenancy.EXPECT().DetermineVisibility(gomock.Any()).
+				Return(restrictedVisibility, nil).AnyTimes()
+
+			restrictedServer, err := NewPrivateDiskImagesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(restrictedTenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = restrictedServer.Create(ctx, privatev1.DiskImagesCreateRequest_builder{
+				Object: privatev1.DiskImage_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name:   "no-permission-image",
+						Tenant: testTenant,
+					}.Build(),
+					Spec: privatev1.DiskImageSpec_builder{
+						SourceType: privatev1.SourceType_SOURCE_TYPE_REGISTRY,
+						SourceRef:  "quay.io/containerdisks/fedora:41",
+						Architecture: []privatev1.Architecture{
+							privatev1.Architecture_ARCHITECTURE_AMD64,
+						},
+						PullSecret: privatev1.SecretReference_builder{
+							Id: hiddenSecret.GetObject().GetId(),
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			Expect(err.Error()).To(ContainSubstring("not found"))
+		})
+
+		It("hides pull_secret on Get and List when the caller cannot discover it", func() {
+			projects, err := dao.NewGenericDAO[*privatev1.Project]().
+				SetLogger(logger).SetTenancyLogic(tenancy).Build()
+			Expect(err).ToNot(HaveOccurred())
+			_, err = projects.Create().SetObject(privatev1.Project_builder{
+				Id: "diskimage-redact-creds",
+				Metadata: privatev1.Metadata_builder{
+					Name: "diskimage-redact-creds", Tenant: testTenant,
+				}.Build(),
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			hiddenSecret, err := secretsDao.Create().SetObject(privatev1.Secret_builder{
+				Type: privatev1.SecretType_SECRET_TYPE_PULL_SECRET,
+				Metadata: privatev1.Metadata_builder{
+					Name:    "provider-pull",
+					Tenant:  testTenant,
+					Project: "diskimage-redact-creds",
+				}.Build(),
+				Data: map[string][]byte{".dockerconfigjson": []byte(`{"auths":{}}`)},
+			}.Build()).Do(ctx)
+			Expect(err).ToNot(HaveOccurred())
+
+			image := createImage("image-redact-pull", privatev1.SecretReference_builder{
+				Id: hiddenSecret.GetObject().GetId(),
+			}.Build())
+			Expect(image.GetSpec().GetPullSecret().GetId()).To(Equal(hiddenSecret.GetObject().GetId()))
+
+			restrictedVisibility, err := auth.NewVisibility().AddVisibleTenant(testTenant).Build()
+			Expect(err).ToNot(HaveOccurred())
+			restrictedTenancy := auth.NewMockTenancyLogic(ctrl)
+			restrictedTenancy.EXPECT().DetermineAssignableTenants(gomock.Any()).
+				Return(auth.AllTenants, nil).AnyTimes()
+			restrictedTenancy.EXPECT().DetermineDefaultTenant(gomock.Any()).
+				Return(testTenant, nil).AnyTimes()
+			restrictedTenancy.EXPECT().DetermineVisibility(gomock.Any()).
+				Return(restrictedVisibility, nil).AnyTimes()
+
+			restrictedServer, err := NewPrivateDiskImagesServer().
+				SetLogger(logger).
+				SetAttributionLogic(attribution).
+				SetTenancyLogic(restrictedTenancy).
+				Build()
+			Expect(err).ToNot(HaveOccurred())
+
+			got, err := restrictedServer.Get(ctx, privatev1.DiskImagesGetRequest_builder{
+				Id: image.GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(got.GetObject().GetSpec().GetPullSecret()).To(BeNil())
+
+			listed, err := restrictedServer.List(ctx, privatev1.DiskImagesListRequest_builder{
+				Filter: new(fmt.Sprintf("this.id == '%s'", image.GetId())),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(listed.GetItems()).To(HaveLen(1))
+			Expect(listed.GetItems()[0].GetSpec().GetPullSecret()).To(BeNil())
 		})
 	})
 })

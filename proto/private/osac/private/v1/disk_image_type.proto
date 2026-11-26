@@ -21,6 +21,7 @@ import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/quota_type.proto";
+import "osac/private/v1/secret_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
@@ -114,8 +115,8 @@ message DiskImage {
 // Defines the desired configuration for a DiskImage.
 //
 // The spec contains admin-specified parameters that define the disk image. The `source_type`, `source_ref`,
-// and `guest_os_family` fields are immutable after creation. The `architecture`, `lifecycle`, and `deprecation`
-// fields may be updated.
+// and `guest_os_family` fields are immutable after creation. The `architecture`, `lifecycle`, `deprecation`,
+// and `pull_secret` fields may be updated.
 message DiskImageSpec {
   // Type of source reference. Immutable after creation.
   SourceType source_type = 1 [(buf.validate.field).enum.defined_only = true];
@@ -140,6 +141,11 @@ message DiskImageSpec {
 
   // Deprecation details. Only meaningful when lifecycle is DEPRECATED or OBSOLETE.
   DiskImageDeprecation deprecation = 6;
+
+  // Optional reference to a pull Secret used when downloading the image from a private registry.
+  // Empty / cleared means the image needs no registry credentials (public images).
+  // Must reference a Secret of type SECRET_TYPE_PULL_SECRET when set.
+  SecretReference pull_secret = 7;
 }
 
 // Contains the system-provided status of a DiskImage.

@@ -152,8 +152,21 @@ func setTemplateParameter(specMap map[string]any, name, rawValue string) {
 // reference. It accepts a bare Secret name, which selects the tenant's unnamed
 // project, or key=value fragments of the form name=<name>[,project=<project>].
 func ParseSSHKeyFlag(value string) (*publicv1.SecretReference, error) {
+	return parseSecretReferenceFlag("ssh-key", value, false)
+}
+
+// ParsePullSecretFlag converts a CLI --pull-secret value into a Secret
+// reference. It accepts the same name/project forms as ParseSSHKeyFlag, plus
+// optional shared=true for selecting a shared-tenant Secret.
+func ParsePullSecretFlag(value string) (*publicv1.SecretReference, error) {
+	return parseSecretReferenceFlag("pull-secret", value, true)
+}
+
+func parseSecretReferenceFlag(
+	flagName, value string, allowShared bool,
+) (*publicv1.SecretReference, error) {
 	invalid := func(msg string, args ...any) (*publicv1.SecretReference, error) {
-		return nil, fmt.Errorf("invalid --ssh-key value %q: %s", value, fmt.Sprintf(msg, args...))
+		return nil, fmt.Errorf("invalid --%s value %q: %s", flagName, value, fmt.Sprintf(msg, args...))
 	}
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -167,7 +180,8 @@ func ParseSSHKeyFlag(value string) (*publicv1.SecretReference, error) {
 	}
 
 	var name, project string
-	var hasName, hasProject bool
+	var shared bool
+	var hasName, hasProject, hasShared bool
 	for _, fragment := range strings.Split(value, ",") {
 		fragment = strings.TrimSpace(fragment)
 		if fragment == "" {
@@ -193,6 +207,21 @@ func ParseSSHKeyFlag(value string) (*publicv1.SecretReference, error) {
 				return invalid("project appears more than once")
 			}
 			project, hasProject = item, true
+		case "shared":
+			if !allowShared {
+				return invalid("unknown key %q", key)
+			}
+			if hasShared {
+				return invalid("shared appears more than once")
+			}
+			switch item {
+			case "true":
+				shared, hasShared = true, true
+			case "false":
+				shared, hasShared = false, true
+			default:
+				return invalid("shared must be true or false")
+			}
 		default:
 			return invalid("unknown key %q", key)
 		}
@@ -200,5 +229,5 @@ func ParseSSHKeyFlag(value string) (*publicv1.SecretReference, error) {
 	if !hasName {
 		return invalid("name is required")
 	}
-	return publicv1.SecretReference_builder{Name: name, Project: project}.Build(), nil
+	return publicv1.SecretReference_builder{Name: name, Project: project, Shared: shared}.Build(), nil
 }

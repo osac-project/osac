@@ -7,8 +7,8 @@ License. You may obtain a copy of the License at
   http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an
-"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific
-language governing permissions and limitations under the License.
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
 */
 
 package diskimage
@@ -82,50 +82,83 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	renderDiskImage(c.console, matched)
-
-	return nil
+	return renderDiskImage(c.console, matched)
 }
 
-func renderDiskImage(w io.Writer, di *publicv1.DiskImage) {
+func renderDiskImage(w io.Writer, di *publicv1.DiskImage) error {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 
-	fmt.Fprintf(writer, "Name:\t%s\n", di.GetMetadata().GetName())
+	if _, err := fmt.Fprintf(writer, "Name:\t%s\n", di.GetMetadata().GetName()); err != nil {
+		return err
+	}
 
 	spec := di.GetSpec()
 	if spec != nil {
 		sourceType := strings.TrimPrefix(spec.GetSourceType().String(), "SOURCE_TYPE_")
-		fmt.Fprintf(writer, "Source Type:\t%s\n", sourceType)
+		if _, err := fmt.Fprintf(writer, "Source Type:\t%s\n", sourceType); err != nil {
+			return err
+		}
 
-		fmt.Fprintf(writer, "Source Ref:\t%s\n", spec.GetSourceRef())
+		if _, err := fmt.Fprintf(writer, "Source Ref:\t%s\n", spec.GetSourceRef()); err != nil {
+			return err
+		}
 
 		guestOsFamily := strings.TrimPrefix(spec.GetGuestOsFamily().String(), "GUEST_OS_FAMILY_")
-		fmt.Fprintf(writer, "Guest OS Family:\t%s\n", guestOsFamily)
+		if _, err := fmt.Fprintf(writer, "Guest OS Family:\t%s\n", guestOsFamily); err != nil {
+			return err
+		}
 
 		archStrings := make([]string, len(spec.GetArchitecture()))
 		for i, a := range spec.GetArchitecture() {
 			archStrings[i] = strings.ToLower(strings.TrimPrefix(a.String(), "ARCHITECTURE_"))
 		}
-		fmt.Fprintf(writer, "Architecture:\t%s\n", strings.Join(archStrings, ", "))
+		if _, err := fmt.Fprintf(writer, "Architecture:\t%s\n", strings.Join(archStrings, ", ")); err != nil {
+			return err
+		}
 
 		lifecycle := strings.TrimPrefix(spec.GetLifecycle().String(), "DISK_IMAGE_LIFECYCLE_")
-		fmt.Fprintf(writer, "Lifecycle:\t%s\n", lifecycle)
+		if _, err := fmt.Fprintf(writer, "Lifecycle:\t%s\n", lifecycle); err != nil {
+			return err
+		}
+
+		if pullSecret := spec.GetPullSecret(); pullSecret != nil &&
+			(pullSecret.GetId() != "" || pullSecret.GetName() != "") {
+			switch {
+			case pullSecret.GetName() != "" && pullSecret.GetProject() != "":
+				if _, err := fmt.Fprintf(writer, "Pull Secret:\t%s (project %s)\n",
+					pullSecret.GetName(), pullSecret.GetProject()); err != nil {
+					return err
+				}
+			case pullSecret.GetName() != "":
+				if _, err := fmt.Fprintf(writer, "Pull Secret:\t%s\n", pullSecret.GetName()); err != nil {
+					return err
+				}
+			default:
+				if _, err := fmt.Fprintf(writer, "Pull Secret:\t%s\n", pullSecret.GetId()); err != nil {
+					return err
+				}
+			}
+		}
 
 		if dep := spec.GetDeprecation(); dep != nil {
 			hasContent := dep.GetDeprecationTimestamp() != nil ||
 				dep.GetObsolescenceTimestamp() != nil
 			if hasContent {
 				if ts := dep.GetDeprecationTimestamp(); ts != nil {
-					fmt.Fprintf(writer, "Deprecated At:\t%s\n", ts.AsTime().Format(time.RFC3339))
+					if _, err := fmt.Fprintf(writer, "Deprecated At:\t%s\n", ts.AsTime().Format(time.RFC3339)); err != nil {
+						return err
+					}
 				}
 				if ts := dep.GetObsolescenceTimestamp(); ts != nil {
-					fmt.Fprintf(writer, "Obsolete At:\t%s\n", ts.AsTime().Format(time.RFC3339))
+					if _, err := fmt.Fprintf(writer, "Obsolete At:\t%s\n", ts.AsTime().Format(time.RFC3339)); err != nil {
+						return err
+					}
 				}
 			}
 		}
 	}
 
-	writer.Flush()
+	return writer.Flush()
 }
 
 const shortHelp = `Describe a disk image`

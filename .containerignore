@@ -34,3 +34,7 @@ tests/integration/caas/go.work.sum
 # packaged tests. Both are excluded by the allowlist above.
 !pyproject.toml
 !tests/
+
+# The conformance harness's own unit tests: they run in CI, not inside the
+# shipped suite image.
+tests/conformance/unit

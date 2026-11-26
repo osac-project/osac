@@ -62,6 +62,13 @@
   group: unit
   kind: helm-unit
   filters: [code, unit-tests-osac-installer]
+# The conformance suite's own unit tests: pure Python, no cluster and no target installation. They import the shared E2E
+# core helpers, so a change there needs them too (see unit-tests-conformance in ci-filters.yml).
+- id: Unit tests (conformance)
+  group: unit
+  kind: python-unit
+  timeout: 10
+  filters: [code, unit-tests-conformance]
 - id: Integration test (CaaS)
   group: integration
   kind: it-caas

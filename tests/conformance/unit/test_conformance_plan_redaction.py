@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 from tests.conformance.model import Classification, Plan, Selector, TestIdentity
-from tests.conformance.output import write_plan
+from tests.conformance.output import plan_key, write_plan
 from tests.conformance.redact import Redactor
 
 _REDACTION_MARKER = "redaction-marker"
@@ -32,4 +34,8 @@ def test_write_plan_redacts_profile_selector_and_marker_fields(tmp_path: Path) -
     text = path.read_text()
     assert _REDACTION_MARKER not in text
     assert "<redacted>" in text
-    assert "key:" in text
+    document = yaml.safe_load(text)
+    written = document["tests"][0]
+    assert written["id"] == "TC-1"
+    # The replay handle stays raw: it is a digest, not environment data.
+    assert written["key"] == plan_key("TC-1")

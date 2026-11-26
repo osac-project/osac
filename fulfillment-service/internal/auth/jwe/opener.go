@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lestrrat-go/httprc/v3"
 	"github.com/lestrrat-go/jwx/v3/jwa"
 	"github.com/lestrrat-go/jwx/v3/jwe"
 	"github.com/lestrrat-go/jwx/v3/jwk"
@@ -245,9 +246,13 @@ func (o *Opener) resolveKeySet(ctx context.Context, jwsPayload []byte) (jwk.Set,
 		return nil, fmt.Errorf("parse JWS: %w", err)
 	}
 
-	set, err := o.cache.Lookup(ctx, o.jwksURL)
+	resource, err := o.cache.LookupResource(ctx, o.jwksURL)
 	if err != nil {
-		return o.refreshJWKS(ctx, "")
+		return o.refreshJWKS(ctx, "", nil)
+	}
+	set := resource.Resource()
+	if set == nil {
+		return o.refreshJWKS(ctx, "", nil)
 	}
 
 	sigs := jwsMsg.Signatures()
@@ -261,12 +266,12 @@ func (o *Opener) resolveKeySet(ctx context.Context, jwsPayload []byte) (jwk.Set,
 	if _, found := set.LookupKeyID(kid); found {
 		return set, nil
 	}
-	return o.refreshJWKS(ctx, kid)
+	return o.refreshJWKS(ctx, kid, resource)
 }
 
 // refreshJWKS coalesces concurrent fetches and avoids a redundant fetch if
 // the requested key has already arrived in the cache.
-func (o *Opener) refreshJWKS(ctx context.Context, kid string) (jwk.Set, error) {
+func (o *Opener) refreshJWKS(ctx context.Context, kid string, resource *httprc.ResourceBase[jwk.Set]) (jwk.Set, error) {
 	o.refreshMu.Lock()
 	if refresh := o.refresh; refresh != nil {
 		o.refreshMu.Unlock()
@@ -278,9 +283,10 @@ func (o *Opener) refreshJWKS(ctx context.Context, kid string) (jwk.Set, error) {
 		}
 	}
 	// Check and register a refresh under the same lock so a late caller
-	// either joins a fetch or sees its result in the cache.
-	if kid != "" {
-		if cached, err := o.cache.Lookup(ctx, o.jwksURL); err == nil {
+	// either joins a fetch or sees its result in the cache. Resource()
+	// reads the cached value without waiting on the cache controller.
+	if kid != "" && resource != nil {
+		if cached := resource.Resource(); cached != nil {
 			if _, found := cached.LookupKeyID(kid); found {
 				o.refreshMu.Unlock()
 				return cached, nil

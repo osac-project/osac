@@ -8,6 +8,9 @@
 # CaaS teardown pattern in storage_controller.go.
 # Called only when _remote_kubeconfig is defined (CaaS path).
 
+# Checks only that a target kubeconfig was passed. It cannot tell a guest
+# cluster's kubeconfig from the hub's: a caller that passes the hub kubeconfig
+# acts on the hub.
 - name: Fail when called without a guest-cluster kubeconfig (hub path unsupported)
   ansible.builtin.fail:
     msg: >-

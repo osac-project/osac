@@ -22,6 +22,9 @@
       - _provider_tiers | length > 0
     fail_msg: _provider_tiers must be provided by the service role dispatcher.
 
+# Checks only that a target kubeconfig was passed. It cannot tell a guest
+# cluster's kubeconfig from the hub's: a caller that passes the hub kubeconfig
+# acts on the hub.
 - name: Fail when called without a guest-cluster kubeconfig (hub path unsupported)
   ansible.builtin.fail:
     msg: >-

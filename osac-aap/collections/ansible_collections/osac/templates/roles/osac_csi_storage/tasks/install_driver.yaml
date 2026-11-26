@@ -28,6 +28,9 @@
 # is left as is and Helm upgrade --install does nothing when the release is
 # unchanged. Creates no credential Secret.
 
+# Checks only that a target kubeconfig was passed. It cannot tell a guest
+# cluster's kubeconfig from the hub's: a caller that passes the hub kubeconfig
+# acts on the hub.
 - name: Fail when called without a guest-cluster kubeconfig (hub path unsupported)
   ansible.builtin.fail:
     msg: >-

@@ -22,7 +22,7 @@ import (
 
 var _ = DescribeMigration("Create documents tables", func() {
 	BeforeEach(func(ctx context.Context) {
-		Expect(tool.Migrate(ctx, 157)).To(Succeed())
+		Expect(tool.Migrate(ctx, 158)).To(Succeed())
 		_, err := conn.Exec(ctx, `insert into tenants (id, name, tenant, creator, data)
 			values ('doc-tenant-a', 'doc-tenant-a', 'doc-tenant-a', 'system', '{}')`)
 		Expect(err).ToNot(HaveOccurred())

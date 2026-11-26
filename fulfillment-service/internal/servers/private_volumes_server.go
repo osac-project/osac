@@ -267,6 +267,14 @@ func (s *PrivateVolumesServer) validateVolumeCreate(vol *privatev1.Volume) error
 	if spec.GetAccessMode() == privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_UNSPECIFIED {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument, "field 'spec.access_mode' is required")
 	}
+	// The CRD requires diskImage.id (minLength 1), and the reconciler carries
+	// the reference verbatim — a name-only reference could never project onto
+	// a valid Volume CR. The ComputeInstance path resolves name-based
+	// references before storing them, so the ID is always present there.
+	if spec.HasDiskImage() && spec.GetDiskImage().GetId() == "" {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.disk_image.id' is required when disk_image is set")
+	}
 	return nil
 }
 
@@ -355,8 +363,9 @@ func applyVolumeUpdate(base, update *privatev1.Volume, mask *fieldmaskpb.FieldMa
 }
 
 // validateVolumeImmutability checks that immutable volume fields have not been changed.
-// storage_tier, size_gib, access_mode, provider, and protocol are immutable after creation because
-// they are provisioned directly into the vendor CSI call and cannot be modified post-creation.
+// storage_tier, size_gib, access_mode, topology, owner, disk_image, target, provider, and protocol
+// are immutable after creation because they are provisioned directly into the vendor CSI call and
+// cannot be modified post-creation.
 func validateVolumeImmutability(merged, existing *privatev1.Volume) error {
 	if merged.GetSpec().GetStorageTier() != existing.GetSpec().GetStorageTier() {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
@@ -373,6 +382,18 @@ func validateVolumeImmutability(merged, existing *privatev1.Volume) error {
 	if !proto.Equal(merged.GetSpec().GetTopology(), existing.GetSpec().GetTopology()) {
 		return grpcstatus.Errorf(grpccodes.InvalidArgument,
 			"field 'spec.topology' is immutable and cannot be changed after creation")
+	}
+	if !proto.Equal(merged.GetSpec().GetOwner(), existing.GetSpec().GetOwner()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.owner' is immutable and cannot be changed after creation")
+	}
+	if !proto.Equal(merged.GetSpec().GetDiskImage(), existing.GetSpec().GetDiskImage()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.disk_image' is immutable and cannot be changed after creation")
+	}
+	if !proto.Equal(merged.GetSpec().GetTarget(), existing.GetSpec().GetTarget()) {
+		return grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.target' is immutable and cannot be changed after creation")
 	}
 	if existing.GetStatus().GetProvider() != "" &&
 		merged.GetStatus().GetProvider() != existing.GetStatus().GetProvider() {

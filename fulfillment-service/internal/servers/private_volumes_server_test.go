@@ -179,6 +179,71 @@ var _ = Describe("Private volumes server", func() {
 			return response.GetObject()
 		}
 
+		createVolumeWithOwner := func(reference string) *privatev1.Volume {
+			response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "owned-volume",
+					}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Owner: privatev1.VolumeOwner_builder{
+							Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+							Reference: reference,
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			return response.GetObject()
+		}
+
+		createVolumeWithDiskImage := func(imageID string) *privatev1.Volume {
+			response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "image-backed-volume",
+					}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						DiskImage: privatev1.DiskImageReference_builder{
+							Id:      imageID,
+							Name:    "test-image",
+							Project: "test-project",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			return response.GetObject()
+		}
+
+		createVolumeWithTarget := func(diskKey, namespace, dataVolumeName string) *privatev1.Volume {
+			response, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "targeted-volume",
+					}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Target: privatev1.VolumeTarget_builder{
+							DiskKey:        diskKey,
+							Namespace:      namespace,
+							DataVolumeName: dataVolumeName,
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			return response.GetObject()
+		}
+
 		It("Creates and gets a volume", func() {
 			created := createVolume()
 
@@ -699,6 +764,141 @@ var _ = Describe("Private volumes server", func() {
 			Expect(ok).To(BeTrue())
 			Expect(st.Code()).To(Equal(codes.InvalidArgument))
 			Expect(st.Message()).To(ContainSubstring("status.protocol"))
+			Expect(st.Message()).To(ContainSubstring("immutable"))
+		})
+
+		It("Rejects creation of a volume whose owner has an unspecified type", func() {
+			_, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "unspecified-owner-volume",
+					}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Owner: privatev1.VolumeOwner_builder{
+							Reference: "ci-01a1",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("owner"))
+		})
+
+		It("Rejects creation of a volume whose disk image has no ID", func() {
+			_, err := server.Create(ctx, privatev1.VolumesCreateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: "name-only-disk-image-volume",
+					}.Build(),
+					Spec: privatev1.VolumeSpec_builder{
+						StorageTier: "gold",
+						SizeGib:     100,
+						AccessMode:  privatev1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						DiskImage: privatev1.DiskImageReference_builder{
+							Name:    "rhel-10",
+							Project: "test-project",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("spec.disk_image.id"))
+		})
+
+		It("Rejects updates that change the owner", func() {
+			created := createVolumeWithOwner("ci-original")
+
+			_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Id: created.GetId(),
+					Spec: privatev1.VolumeSpec_builder{
+						Owner: privatev1.VolumeOwner_builder{
+							Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+							Reference: "ci-other",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("spec.owner"))
+			Expect(st.Message()).To(ContainSubstring("immutable"))
+		})
+
+		It("Rejects updates that add an owner to an ownerless volume", func() {
+			created := createVolume()
+
+			_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Id: created.GetId(),
+					Spec: privatev1.VolumeSpec_builder{
+						Owner: privatev1.VolumeOwner_builder{
+							Type:      privatev1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+							Reference: "ci-added",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("spec.owner"))
+			Expect(st.Message()).To(ContainSubstring("immutable"))
+		})
+
+		It("Rejects updates that change the disk image", func() {
+			created := createVolumeWithDiskImage("img-original")
+
+			_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Id: created.GetId(),
+					Spec: privatev1.VolumeSpec_builder{
+						DiskImage: privatev1.DiskImageReference_builder{
+							Id: "img-other",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("spec.disk_image"))
+			Expect(st.Message()).To(ContainSubstring("immutable"))
+		})
+
+		It("Rejects updates that change the target", func() {
+			created := createVolumeWithTarget("boot", "vm-namespace", "vm-root-disk")
+
+			_, err := server.Update(ctx, privatev1.VolumesUpdateRequest_builder{
+				Object: privatev1.Volume_builder{
+					Id: created.GetId(),
+					Spec: privatev1.VolumeSpec_builder{
+						Target: privatev1.VolumeTarget_builder{
+							DiskKey:        "disk-1",
+							Namespace:      "vm-namespace",
+							DataVolumeName: "vm-root-disk",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := status.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(codes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("spec.target"))
 			Expect(st.Message()).To(ContainSubstring("immutable"))
 		})
 

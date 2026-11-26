@@ -68,7 +68,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	client := publicv1.NewComputeInstancesClient(conn)
 
-	matched, err := lookup.Find(ref, "compute instance", func(filter string, limit int32) ([]*publicv1.ComputeInstance, error) {
+	matched, err := lookup.FindScoped(ctx, ref, "compute instance", func(filter string, limit int32) ([]*publicv1.ComputeInstance, error) {
 		resp, err := client.List(ctx, publicv1.ComputeInstancesListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),

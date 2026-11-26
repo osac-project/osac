@@ -158,7 +158,7 @@ func (c *runnerContext) run(cmd *cobra.Command, _ []string) error {
 	defer conn.Close()
 
 	catalogItemsClient := publicv1.NewBareMetalInstanceCatalogItemsClient(conn)
-	catalogItem, err := lookup.Find(c.args.catalogItem, "bare metal instance catalog item",
+	catalogItem, err := lookup.FindScopedOrShared(ctx, c.args.catalogItem, "bare metal instance catalog item",
 		func(filter string, limit int32) ([]*publicv1.BareMetalInstanceCatalogItem, error) {
 			resp, err := catalogItemsClient.List(ctx, publicv1.BareMetalInstanceCatalogItemsListRequest_builder{
 				Filter: proto.String(filter),

@@ -75,9 +75,16 @@ func (c *listRunner) run(cmd *cobra.Command, args []string) (err error) {
 
 	client := publicv1.NewVolumesClient(conn)
 
-	var filter *string
+	var predicates []string
+	if tenant := config.TenantFromContext(ctx); tenant != "" {
+		predicates = append(predicates, fmt.Sprintf("this.metadata.tenant == %s", strconv.Quote(tenant)))
+	}
 	if c.project != "" {
-		f := fmt.Sprintf("this.metadata.project == %s", strconv.Quote(c.project))
+		predicates = append(predicates, fmt.Sprintf("this.metadata.project == %s", strconv.Quote(c.project)))
+	}
+	var filter *string
+	if len(predicates) > 0 {
+		f := strings.Join(predicates, " && ")
 		filter = &f
 	}
 

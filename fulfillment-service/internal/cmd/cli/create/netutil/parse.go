@@ -118,7 +118,7 @@ func ResolveNetworkAttachment(ctx context.Context, conn grpc.ClientConnInterface
 	if flag.Subnet != "" {
 		subnets := publicv1.NewSubnetsClient(conn)
 		var found *publicv1.Subnet
-		found, err = lookup.Find(flag.Subnet, "subnet", func(filter string, limit int32) ([]*publicv1.Subnet, error) {
+		found, err = lookup.FindScoped(ctx, flag.Subnet, "subnet", func(filter string, limit int32) ([]*publicv1.Subnet, error) {
 			response, err := subnets.List(ctx, publicv1.SubnetsListRequest_builder{
 				Filter: &filter,
 				Limit:  &limit,
@@ -137,7 +137,7 @@ func ResolveNetworkAttachment(ctx context.Context, conn grpc.ClientConnInterface
 		securityGroups := publicv1.NewSecurityGroupsClient(conn)
 		for _, ref := range flag.SecurityGroups {
 			var found *publicv1.SecurityGroup
-			found, err = lookup.Find(ref, "security group",
+			found, err = lookup.FindScoped(ctx, ref, "security group",
 				func(filter string, limit int32) ([]*publicv1.SecurityGroup, error) {
 					response, err := securityGroups.List(ctx, publicv1.SecurityGroupsListRequest_builder{
 						Filter: &filter,

@@ -66,7 +66,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	client := publicv1.NewSecretsClient(conn)
 
-	matched, err := lookup.Find(ref, "secret", func(filter string, limit int32) ([]*publicv1.Secret, error) {
+	matched, err := lookup.FindScoped(ctx, ref, "secret", func(filter string, limit int32) ([]*publicv1.Secret, error) {
 		resp, err := client.List(ctx, publicv1.SecretsListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),

@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -105,7 +106,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	defer conn.Close()
 
 	templatesClient := publicv1.NewBareMetalInstanceTemplatesClient(conn)
-	template, err := lookup.Find(c.args.template, "bare metal instance template",
+	template, err := lookup.FindScopedOrShared(ctx, c.args.template, "bare metal instance template",
 		func(filter string, limit int32) ([]*publicv1.BareMetalInstanceTemplate, error) {
 			response, err := templatesClient.List(ctx, publicv1.BareMetalInstanceTemplatesListRequest_builder{
 				Filter: proto.String(filter),
@@ -123,9 +124,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	client := publicv1.NewBareMetalInstanceCatalogItemsClient(conn)
 
 	catalogItem := publicv1.BareMetalInstanceCatalogItem_builder{
-		Metadata: publicv1.Metadata_builder{
-			Name: c.args.name,
-		}.Build(),
+		Metadata:    metautil.ForCreate(ctx, c.args.name).Build(),
 		Title:       c.args.title,
 		Description: c.args.description,
 		Template:    &publicv1.BareMetalInstanceTemplateReference{Id: template.GetId()},

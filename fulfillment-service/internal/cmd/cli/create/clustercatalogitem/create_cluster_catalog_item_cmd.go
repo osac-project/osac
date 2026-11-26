@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -105,7 +106,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	defer conn.Close()
 
 	templatesClient := publicv1.NewClusterTemplatesClient(conn)
-	template, err := lookup.Find(c.args.template, "cluster template",
+	template, err := lookup.FindScopedOrShared(ctx, c.args.template, "cluster template",
 		func(filter string, limit int32) ([]*publicv1.ClusterTemplate, error) {
 			response, err := templatesClient.List(ctx, publicv1.ClusterTemplatesListRequest_builder{
 				Filter: proto.String(filter),
@@ -123,9 +124,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	client := publicv1.NewClusterCatalogItemsClient(conn)
 
 	catalogItem := publicv1.ClusterCatalogItem_builder{
-		Metadata: publicv1.Metadata_builder{
-			Name: c.args.name,
-		}.Build(),
+		Metadata:    metautil.ForCreate(ctx, c.args.name).Build(),
 		Title:       c.args.title,
 		Description: c.args.description,
 		Template:    &publicv1.ClusterTemplateReference{Id: template.GetId()},

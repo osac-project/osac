@@ -15,7 +15,11 @@ language governing permissions and limitations under the License.
 package lookup
 
 import (
+	"context"
 	"fmt"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/config"
 )
 
 // ListFunc fetches up to limit objects matching the given CEL filter.
@@ -63,4 +67,53 @@ func Find[T any](ref, kind string, list ListFunc[T]) (result T, err error) {
 		err = &ErrAmbiguous{Ref: ref, Kind: kind}
 	}
 	return
+}
+
+// FindScoped resolves a name-or-ID reference within the effective tenant
+// selected by the CLI. It preserves the original ID/name predicate and
+// combines it with the tenant predicate using &&. Project scoping is
+// intentionally left to callers because not all tenant-scoped resources are
+// project-scoped.
+func FindScoped[T any](ctx context.Context, ref, kind string, list ListFunc[T]) (result T, err error) {
+	tenant := config.TenantFromContext(ctx)
+	if tenant == "" {
+		return Find(ref, kind, list)
+	}
+	scope := fmt.Sprintf("this.metadata.tenant == %q", tenant)
+	return findWithScope(ref, kind, scope, list)
+}
+
+// FindScopedOrShared resolves a name-or-ID reference that may belong to either
+// the effective tenant selected by the CLI or the shared tenant. Use it for
+// dependency lookups where shared objects are valid inputs; do not use it for
+// commands that edit or delete the referenced object.
+func FindScopedOrShared[T any](ctx context.Context, ref, kind string, list ListFunc[T]) (result T, err error) {
+	return Find(ref, kind, func(filter string, limit int32) ([]T, error) {
+		return list(ScopedOrSharedFilter(ctx, filter), limit)
+	})
+}
+
+// ScopedOrSharedFilter adds the effective tenant or shared tenant predicate to
+// an existing CEL filter. It is useful for callers that need to preserve custom
+// conflict and not-found handling while still resolving shared dependencies.
+func ScopedOrSharedFilter(ctx context.Context, filter string) string {
+	tenant := config.TenantFromContext(ctx)
+	if tenant == "" {
+		return filter
+	}
+	scope := fmt.Sprintf(
+		"(this.metadata.tenant == %q || this.metadata.tenant == %q)",
+		tenant, auth.SharedTenant,
+	)
+	if filter == "" {
+		return scope
+	}
+	return fmt.Sprintf("(%s) && %s", filter, scope)
+}
+
+func findWithScope[T any](ref, kind, scope string, list ListFunc[T]) (result T, err error) {
+	return Find(ref, kind, func(filter string, limit int32) ([]T, error) {
+		scopedFilter := fmt.Sprintf("(%s) && %s", filter, scope)
+		return list(scopedFilter, limit)
+	})
 }

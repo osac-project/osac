@@ -70,7 +70,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	client := publicv1.NewExternalIPAttachmentsClient(conn)
 
-	matched, err := lookup.Find(ref, "external IP attachment", func(filter string, limit int32) ([]*publicv1.ExternalIPAttachment, error) {
+	matched, err := lookup.FindScoped(ctx, ref, "external IP attachment", func(filter string, limit int32) ([]*publicv1.ExternalIPAttachment, error) {
 		resp, err := client.List(ctx, publicv1.ExternalIPAttachmentsListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),

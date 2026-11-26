@@ -68,7 +68,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	client := publicv1.NewDiskImagesClient(conn)
 
-	matched, err := lookup.Find(ref, "disk image", func(filter string, limit int32) ([]*publicv1.DiskImage, error) {
+	matched, err := lookup.FindScoped(ctx, ref, "disk image", func(filter string, limit int32) ([]*publicv1.DiskImage, error) {
 		resp, err := client.List(ctx, publicv1.DiskImagesListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),

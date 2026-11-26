@@ -73,7 +73,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	client := publicv1.NewClustersClient(conn)
 
-	matched, err := lookup.Find(ref, "cluster", func(filter string, limit int32) ([]*publicv1.Cluster, error) {
+	matched, err := lookup.FindScoped(ctx, ref, "cluster", func(filter string, limit int32) ([]*publicv1.Cluster, error) {
 		resp, err := client.List(ctx, publicv1.ClustersListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),

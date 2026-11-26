@@ -71,7 +71,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	client := publicv1.NewVirtualNetworksClient(conn)
 
-	matched, err := lookup.Find(ref, "virtual network", func(filter string, limit int32) ([]*publicv1.VirtualNetwork, error) {
+	matched, err := lookup.FindScoped(ctx, ref, "virtual network", func(filter string, limit int32) ([]*publicv1.VirtualNetwork, error) {
 		resp, err := client.List(ctx, publicv1.VirtualNetworksListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),

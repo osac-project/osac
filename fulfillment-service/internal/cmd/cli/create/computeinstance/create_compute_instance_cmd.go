@@ -282,7 +282,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	if c.args.catalogItem != "" {
 		// Catalog item path: resolve an ID or visible name, then skip template lookup (per D-04).
-		catalogItem, err := lookup.Find(c.args.catalogItem, "compute instance catalog item",
+		catalogItem, err := lookup.FindScopedOrShared(ctx, c.args.catalogItem, "compute instance catalog item",
 			func(filter string, limit int32) ([]*publicv1.ComputeInstanceCatalogItem, error) {
 				response, err := c.catalogItemsClient.List(ctx, publicv1.ComputeInstanceCatalogItemsListRequest_builder{
 					Filter: proto.String(filter),
@@ -410,6 +410,7 @@ func (c *runnerContext) findTemplate(ctx context.Context) (result *publicv1.Comp
 		"this.id == %[1]q || this.metadata.name == %[1]q",
 		c.args.template,
 	)
+	filter = lookup.ScopedOrSharedFilter(ctx, filter)
 	response, err := c.templatesClient.List(ctx, publicv1.ComputeInstanceTemplatesListRequest_builder{
 		Filter: proto.String(filter),
 		Limit:  proto.Int32(10),

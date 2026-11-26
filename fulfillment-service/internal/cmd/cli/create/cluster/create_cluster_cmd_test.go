@@ -15,11 +15,16 @@ package cluster
 
 import (
 	"context"
+	"io"
 	"log/slog"
+	"strconv"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc"
+
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
@@ -485,4 +490,107 @@ var _ = Describe("Create cluster add-on operators", func() {
 		Expect(operators[0].GetName()).To(Equal("cert-manager"))
 		Expect(operators[1].GetName()).To(Equal("gpu-operator"))
 	})
+})
+
+type fakeClusterTemplatesClient struct {
+	publicv1.ClusterTemplatesClient
+	filter      string
+	firstFilter string
+	items       []*publicv1.ClusterTemplate
+}
+
+func (f *fakeClusterTemplatesClient) List(
+	_ context.Context, request *publicv1.ClusterTemplatesListRequest, _ ...grpc.CallOption,
+) (*publicv1.ClusterTemplatesListResponse, error) {
+	f.filter = request.GetFilter()
+	if f.firstFilter == "" {
+		f.firstFilter = f.filter
+	}
+	items := f.items
+	if f.filter != "" {
+		items = filterClusterTemplates(items, f.filter)
+	}
+	return publicv1.ClusterTemplatesListResponse_builder{
+		Items: items,
+		Size:  int32(len(items)),
+		Total: int32(len(items)),
+	}.Build(), nil
+}
+
+func filterClusterTemplates(items []*publicv1.ClusterTemplate, filter string) []*publicv1.ClusterTemplate {
+	result := make([]*publicv1.ClusterTemplate, 0, len(items))
+	for _, item := range items {
+		tenant := item.GetMetadata().GetTenant()
+		if strings.Contains(filter, strconv.Quote(tenant)) {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func clusterTemplate(id, name, tenant string) *publicv1.ClusterTemplate {
+	return publicv1.ClusterTemplate_builder{
+		Id: id,
+		Metadata: publicv1.Metadata_builder{
+			Name:   name,
+			Tenant: tenant,
+		}.Build(),
+	}.Build()
+}
+
+var _ = Describe("Create cluster template lookup", func() {
+	DescribeTable("uses the effective tenant or shared tenant",
+		func(ref string, items []*publicv1.ClusterTemplate, expectSuccess bool, expectedTenant string) {
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			console, err := terminal.NewConsole().
+				SetLogger(logger).
+				SetStdout(io.Discard).
+				SetStderr(io.Discard).
+				Build()
+			Expect(err).NotTo(HaveOccurred())
+			Expect(console.AddTemplates(templatesFS, "templates")).To(Succeed())
+
+			client := &fakeClusterTemplatesClient{items: items}
+			runner := &runnerContext{
+				templatesClient: client,
+				console:         console,
+			}
+			runner.args.template = ref
+			ctx := config.TenantIntoContext(context.Background(), "tenant-a")
+
+			template, err := runner.findTemplate(ctx)
+			Expect(client.firstFilter).To(ContainSubstring(
+				`this.metadata.tenant == "tenant-a" || this.metadata.tenant == "shared"`,
+			))
+			if expectSuccess {
+				Expect(err).NotTo(HaveOccurred())
+				Expect(template.GetMetadata().GetTenant()).To(Equal(expectedTenant))
+			} else {
+				Expect(err).To(HaveOccurred())
+			}
+		},
+		Entry("tenant-local template by ID",
+			"tenant-local-id",
+			[]*publicv1.ClusterTemplate{clusterTemplate("tenant-local-id", "template", "tenant-a")},
+			true,
+			"tenant-a"),
+		Entry("shared template by ID",
+			"shared-id",
+			[]*publicv1.ClusterTemplate{clusterTemplate("shared-id", "template", "shared")},
+			true,
+			"shared"),
+		Entry("unrelated tenant template is not selected",
+			"unrelated-id",
+			[]*publicv1.ClusterTemplate{clusterTemplate("unrelated-id", "template", "tenant-b")},
+			false,
+			""),
+		Entry("tenant-local and shared matches remain ambiguous",
+			"ambiguous-id",
+			[]*publicv1.ClusterTemplate{
+				clusterTemplate("ambiguous-id", "template", "tenant-a"),
+				clusterTemplate("ambiguous-id", "template", "shared"),
+			},
+			false,
+			""),
+	)
 })

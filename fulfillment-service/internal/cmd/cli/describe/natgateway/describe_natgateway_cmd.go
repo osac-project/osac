@@ -70,7 +70,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	client := publicv1.NewNATGatewaysClient(conn)
 
-	matched, err := lookup.Find(ref, "NAT gateway", func(filter string, limit int32) ([]*publicv1.NATGateway, error) {
+	matched, err := lookup.FindScoped(ctx, ref, "NAT gateway", func(filter string, limit int32) ([]*publicv1.NATGateway, error) {
 		resp, err := client.List(ctx, publicv1.NATGatewaysListRequest_builder{
 			Filter: proto.String(filter),
 			Limit:  proto.Int32(limit),

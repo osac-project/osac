@@ -33,7 +33,7 @@ func BareMetalCmd() *cobra.Command {
 
 func fetchBareMetal(ctx context.Context, conn *grpc.ClientConn, ref string) (view, error) {
 	client := publicv1.NewBareMetalInstanceCatalogItemsClient(conn)
-	matched, err := lookup.Find(ref, "bare metal instance catalog item", func(filter string, limit int32) ([]*publicv1.BareMetalInstanceCatalogItem, error) {
+	matched, err := lookup.FindScoped(ctx, ref, "bare metal instance catalog item", func(filter string, limit int32) ([]*publicv1.BareMetalInstanceCatalogItem, error) {
 		response, err := client.List(ctx, publicv1.BareMetalInstanceCatalogItemsListRequest_builder{Filter: proto.String(filter), Limit: proto.Int32(limit)}.Build())
 		if err != nil {
 			return nil, fmt.Errorf("failed to list bare metal instance catalog items: %w", err)

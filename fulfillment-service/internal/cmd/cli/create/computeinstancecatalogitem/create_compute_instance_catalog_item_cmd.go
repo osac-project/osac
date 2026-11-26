@@ -20,6 +20,7 @@ import (
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/lookup"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -105,7 +106,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	defer conn.Close()
 
 	templatesClient := publicv1.NewComputeInstanceTemplatesClient(conn)
-	template, err := lookup.Find(c.args.template, "compute instance template",
+	template, err := lookup.FindScopedOrShared(ctx, c.args.template, "compute instance template",
 		func(filter string, limit int32) ([]*publicv1.ComputeInstanceTemplate, error) {
 			response, err := templatesClient.List(ctx, publicv1.ComputeInstanceTemplatesListRequest_builder{
 				Filter: proto.String(filter),
@@ -123,9 +124,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	client := publicv1.NewComputeInstanceCatalogItemsClient(conn)
 
 	catalogItem := publicv1.ComputeInstanceCatalogItem_builder{
-		Metadata: publicv1.Metadata_builder{
-			Name: c.args.name,
-		}.Build(),
+		Metadata:    metautil.ForCreate(ctx, c.args.name).Build(),
 		Title:       c.args.title,
 		Description: c.args.description,
 		Template:    &publicv1.ComputeInstanceTemplateReference{Id: template.GetId()},

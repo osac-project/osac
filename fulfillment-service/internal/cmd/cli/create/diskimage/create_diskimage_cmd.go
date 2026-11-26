@@ -20,6 +20,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/config"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
@@ -141,10 +142,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	client := publicv1.NewDiskImagesClient(conn)
 
 	diskImage := publicv1.DiskImage_builder{
-		Id: c.name,
-		Metadata: publicv1.Metadata_builder{
-			Name: c.name,
-		}.Build(),
+		Id:       c.name,
+		Metadata: metautil.ForCreate(ctx, c.name).Build(),
 		Spec: publicv1.DiskImageSpec_builder{
 			SourceType:    sourceType,
 			SourceRef:     c.sourceRef,

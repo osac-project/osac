@@ -6,7 +6,6 @@ from __future__ import annotations
 import subprocess
 
 import yaml
-
 from _render import INSTALLER, PROFILES, select_one, template_command
 
 CHART = INSTALLER / "charts/osac"
@@ -99,8 +98,8 @@ def render_infra(extra: list[str]) -> subprocess.CompletedProcess[str]:
             str(INSTALLER / "values/dev/kind-infra.yaml"),
             "--set",
             "osacNamespace=osac",
-        ]
-        + extra,
+            *extra,
+        ],
         check=True,
         capture_output=True,
         text=True,
@@ -113,7 +112,7 @@ def check_infra_enabled() -> None:
     result = render_infra(["--values", str(INSTALLER / "values/dev/mcp.yaml")])
     assert "name: keycloak-mcp-client\n" in result.stdout
     assert "name: osac-mcp-exchange-credentials\n" in result.stdout
-    assert "name: MCP_RESOURCE_URL\n" in result.stdout
+    assert 'name: MCP_RESOURCE_URL\n          value: "https://mcp.osac.localhost:8443/"\n' in result.stdout
     assert "name: mcp-client\n" in result.stdout
 
 
@@ -138,6 +137,9 @@ def check_enabled() -> None:
         "--oauth-api-audience=osac-api",
         "--oauth-exchange-client-secret-file=/etc/fulfillment-mcp-server/oauth/client-secret",
         "--ca-file=/etc/fulfillment-mcp-server/tls/cas",
+        "--mcp-request-body-limit=1Mi",
+        "--mcp-concurrency-limit=100",
+        "--mcp-request-timeout=30s",
     )
     for part in expected_command_parts:
         assert part in command, part
@@ -210,7 +212,8 @@ def check_dev_overlay() -> None:
 def check_rejected(values: list[str], reason: str) -> None:
     result = render_status(values)
     assert result.returncode != 0, values
-    assert reason in result.stderr, f"{values}: {result.stderr}"
+    dotted_reason = reason.replace("/", ".")
+    assert reason in result.stderr or dotted_reason in result.stderr, f"{values}: {result.stderr}"
 
 
 def check_schema() -> None:
@@ -228,7 +231,7 @@ def check_schema() -> None:
     )
     check_rejected(
         ["--set", "service.mcp.enabled=true"],
-        "additional properties 'mcp' not allowed",
+        "mcp is not allowed",
     )
     check_rejected(
         ["--set", "global.mcp.limits.requestSize=not-a-quantity"],
@@ -242,6 +245,30 @@ def check_schema() -> None:
         ["--set-string", "global.mcp.limits.timeout=soon"],
         "global/mcp/limits/timeout",
     )
+    check_rejected(
+        ["--set-string", "global.mcp.limits.requestSize=64ki"],
+        "global/mcp/limits/requestSize",
+    )
+
+
+def check_runtime_limit_override() -> None:
+    docs = render(
+        [
+            "--set-string",
+            "global.mcp.limits.requestSize=64Ki",
+            "--set",
+            "global.mcp.limits.concurrency=7",
+            "--set-string",
+            "global.mcp.limits.timeout=2s",
+        ]
+    )
+    deployment_doc = document(docs, DEPLOYMENT_SOURCE, "MCP Deployment")
+    for part in (
+        "--mcp-request-body-limit=64Ki",
+        "--mcp-concurrency-limit=7",
+        "--mcp-request-timeout=2s",
+    ):
+        assert part in deployment_doc, part
 
 
 if __name__ == "__main__":
@@ -250,5 +277,6 @@ if __name__ == "__main__":
     check_enabled()
     check_infra_enabled()
     check_dev_overlay()
+    check_runtime_limit_override()
     check_schema()
     print("MCP installer render checks passed.")

@@ -112,6 +112,9 @@ spec:
         - --oauth-exchange-client-id={{ $exchangeClientID }}
         - --oauth-api-audience={{ $audience }}
         - --oauth-exchange-client-secret-file=/etc/fulfillment-mcp-server/oauth/client-secret
+        - --mcp-request-body-limit={{ $mcp.limits.requestSize }}
+        - --mcp-concurrency-limit={{ $mcp.limits.concurrency }}
+        - --mcp-request-timeout={{ $mcp.limits.timeout }}
         ports:
         - name: mcp
           containerPort: 8000

@@ -16,9 +16,14 @@
               "type": "boolean",
               "description": "Register MCP development fixtures and client credentials",
               "default": false
+            },
+            "exchangeClientID": {
+              "type": "string",
+              "description": "Canonical MCP public URL used as the development exchange client ID",
+              "default": ""
             }
           },
-          "required": ["enabled"],
+          "required": ["enabled", "exchangeClientID"],
           "additionalProperties": false
         }
       },

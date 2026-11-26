@@ -882,7 +882,7 @@ spec:
         - name: MCP_ENABLED
           value: "true"
         - name: MCP_RESOURCE_URL
-          value: {{ .Values.keycloak.devFixtures.mcpResourceURL | quote }}
+          value: {{ required "global.mcp.exchangeClientID is required when global.mcp.enabled=true" .Values.global.mcp.exchangeClientID | quote }}
         - name: MCP_EXCHANGE_SECRET
           valueFrom:
             secretKeyRef:

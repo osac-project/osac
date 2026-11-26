@@ -26,8 +26,8 @@ export PROFILE=dev-full
 export KUBECONFIG="$HOME/.kube/osac-dev-kind-root.kubeconfig"
 make -C osac-installer install \
   PLATFORM=kind PROFILE="$PROFILE" NS=osac \
-  INFRA_VALUES_EXTRA='--values values/dev/mcp.yaml' \
-  EXTRA_HELM_ARGS='--values values/dev/mcp.yaml'
+  INFRA_VALUES_EXTRA='--values values/dev/kind-infra-devfull.yaml --values values/dev/mcp.yaml' \
+  EXTRA_HELM_ARGS='--values values/dev/mcp.yaml --set-string global.mcp.issuerURL=https://keycloak.osac.localhost:8443/realms/osac --set-string global.mcp.exchangeTokenEndpoint=https://keycloak.osac.localhost:8443/realms/osac/protocol/openid-connect/token'
 ```
 
 This profile also installs the local VM stack, seeds a sample catalog, and
@@ -48,12 +48,12 @@ make -C osac-installer install-infra PLATFORM=kind PROFILE="$PROFILE" NS=osac
 
 The MCP client's access token is scoped to the MCP URL; the server exchanges
 it for a separate API token for the same user when a tool runs.
-If you change the MCP host or port, set
-`keycloak.devFixtures.mcpResourceURL` on `install-infra` and
-`global.mcp.exchangeClientID` on `install-osac` to the same external HTTPS
-URL, including its nonstandard port and a trailing `/`. The connection URL
-used by Codex or Inspector may omit that slash; the OAuth resource identifier
-must be identical in Keycloak, the MCP metadata, and the exchange client ID.
+If you change the MCP host or port, set `global.mcp.exchangeClientID` on
+`install-osac` to the external HTTPS URL, including its nonstandard port and a
+trailing `/`; the infrastructure fixtures derive the Keycloak client ID from
+that same value. The connection URL used by Codex or Inspector may omit that
+slash; the OAuth resource identifier must be identical in Keycloak, the MCP
+metadata, and the exchange client ID.
 
 MCP runs from the **Fulfillment service image**; it has no separate image to
 build or push. To update an existing `dev-full` Kind installation with current
@@ -70,7 +70,7 @@ make -C fulfillment-service kind-load-image \
   IMG="localhost/fulfillment-service:$FULFILLMENT_IMAGE_TAG" NS=osac
 make -C osac-installer install-osac \
   PLATFORM=kind PROFILE="$PROFILE" NS=osac \
-  EXTRA_HELM_ARGS="--values values/dev/mcp.yaml --set-string service.images.service.repository=localhost/fulfillment-service --set-string service.images.service.tag=$FULFILLMENT_IMAGE_TAG --set service.images.service.pullPolicy=Never"
+  EXTRA_HELM_ARGS="--values values/dev/mcp.yaml --set-string global.mcp.issuerURL=https://keycloak.osac.localhost:8443/realms/osac --set-string global.mcp.exchangeTokenEndpoint=https://keycloak.osac.localhost:8443/realms/osac/protocol/openid-connect/token --set-string service.images.service.repository=localhost/fulfillment-service --set-string service.images.service.tag=$FULFILLMENT_IMAGE_TAG --set service.images.service.pullPolicy=Never"
 ```
 
 On a fresh cluster, run
@@ -342,9 +342,8 @@ issuer, while `PROFILE=dev` uses `keycloak.keycloak.svc.cluster.local`.
   block above.
 - If Inspector reports `The requested resource is invalid, missing, unknown,
   or malformed`, compare its OAuth request's `resource` parameter with the
-  protected-resource metadata `resource`,
-  `keycloak.devFixtures.mcpResourceURL`, and `global.mcp.exchangeClientID`.
-  For the Kind example all three must be
+  protected-resource metadata `resource` and `global.mcp.exchangeClientID`.
+  For the Kind example both must be
   `https://mcp.osac.localhost:8443/`, including the trailing slash. Inspector
   sends the slash for a root URL. From this worktree, rerun `install-infra`,
   rebuild and load the Fulfillment image, and rerun `install-osac` with the

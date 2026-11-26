@@ -289,7 +289,7 @@
                   "type": "string",
                   "description": "Maximum accepted MCP request body size as a Kubernetes quantity",
                   "minLength": 1,
-                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)(?:E|P|T|G|M|k|Ei|Pi|Ti|Gi|Mi|ki)?$",
+                  "pattern": "^(?:[1-9][0-9]*(?:\\.[0-9]+)?|0\\.[0-9]*[1-9][0-9]*)(?:E|P|T|G|M|k|Ei|Pi|Ti|Gi|Mi|Ki)?$",
                   "default": "1Mi"
                 },
                 "concurrency": {

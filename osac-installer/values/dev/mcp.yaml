@@ -5,3 +5,4 @@
 global:
   mcp:
     enabled: true
+    exchangeClientID: "https://mcp.osac.localhost:8443/"

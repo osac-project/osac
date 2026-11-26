@@ -36,6 +36,7 @@ import (
 	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
+	"k8s.io/apimachinery/pkg/api/resource"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
 	"github.com/osac-project/osac/fulfillment-service/internal/logging"
@@ -89,6 +90,9 @@ func Cmd() *cobra.Command {
 	flags.StringVar(&runner.args.oauthExchangeClientID, "oauth-exchange-client-id", "", "Confidential token exchange client ID")
 	flags.StringVar(&runner.args.oauthExchangeClientSecretFile, "oauth-exchange-client-secret-file", "", "Path to token exchange client secret")
 	flags.StringVar(&runner.args.oauthAPIAudience, "oauth-api-audience", auth.Audience, "Audience required in tokens exchanged for Fulfillment API calls")
+	flags.StringVar(&runner.args.mcpRequestBodyLimit, "mcp-request-body-limit", "1Mi", "Maximum MCP request body size as a Kubernetes quantity")
+	flags.IntVar(&runner.args.mcpConcurrencyLimit, "mcp-concurrency-limit", 100, "Maximum concurrent in-flight MCP requests")
+	flags.DurationVar(&runner.args.mcpRequestTimeout, "mcp-request-timeout", 30*time.Second, "Maximum MCP request duration")
 	return command
 }
 
@@ -105,6 +109,30 @@ type runnerContext struct {
 		oauthExchangeClientID         string
 		oauthExchangeClientSecretFile string
 		oauthAPIAudience              string
+		mcpRequestBodyLimit           string
+		mcpConcurrencyLimit           int
+		mcpRequestTimeout             time.Duration
+	}
+}
+
+// RuntimeLimits configures the request bounds enforced by the MCP HTTP handler.
+type RuntimeLimits struct {
+	RequestBodySize int64
+	Concurrency     int
+	Timeout         time.Duration
+}
+
+// HandlerOption customizes the MCP HTTP handler.
+type HandlerOption func(*handlerConfig)
+
+type handlerConfig struct {
+	runtimeLimits RuntimeLimits
+}
+
+// WithRuntimeLimits overrides the MCP runtime request bounds.
+func WithRuntimeLimits(limits RuntimeLimits) HandlerOption {
+	return func(config *handlerConfig) {
+		config.runtimeLimits = limits
 	}
 }
 
@@ -282,8 +310,17 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 	defer grpcClient.Close()
 
 	// Build the MCP server and wrap it with bearer-token authentication:
+	requestBodySize, err := parseRequestBodyLimit(c.args.mcpRequestBodyLimit)
+	if err != nil {
+		return err
+	}
 	handler, err := NewHandler(
 		NewServerDeps(grpcClient), jwtValidator, c.args.oauthAuthorizationServer, c.args.oauthResourceURL, exchanger,
+		WithRuntimeLimits(RuntimeLimits{
+			RequestBodySize: requestBodySize,
+			Concurrency:     c.args.mcpConcurrencyLimit,
+			Timeout:         c.args.mcpRequestTimeout,
+		}),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create MCP handler: %w", err)
@@ -333,6 +370,17 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 	// Keep running till the shutdown sequence completes:
 	c.logger.InfoContext(ctx, "Waiting for shutdown sequence to complete")
 	return shutdown.Wait()
+}
+
+func parseRequestBodyLimit(value string) (int64, error) {
+	quantity, err := resource.ParseQuantity(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid --mcp-request-body-limit %q: %w", value, err)
+	}
+	if quantity.IsZero() || quantity.Sign() < 0 {
+		return 0, fmt.Errorf("--mcp-request-body-limit must be positive, got %q", value)
+	}
+	return quantity.Value(), nil
 }
 
 func newMCPJWTValidator(logger *slog.Logger, jwksCache auth.JwksCache, resourceURL string) (auth.JwtValidator, error) {
@@ -953,7 +1001,22 @@ const oauthProtectedResourcePath = "/.well-known/oauth-protected-resource"
 
 // NewHandler builds the MCP HTTP handler with bearer-token authentication and optional OAuth resource discovery.
 func NewHandler(
-	deps ServerDeps, validator auth.JwtValidator, oauthAuthorizationServer, oauthResourceURL string, exchanger TokenExchanger,
+	deps ServerDeps,
+	validator auth.JwtValidator,
+	oauthAuthorizationServer, oauthResourceURL string,
+	exchanger TokenExchanger,
+	options ...HandlerOption,
+) (http.Handler, error) {
+	return NewHandlerWithOptions(deps, validator, oauthAuthorizationServer, oauthResourceURL, exchanger)
+}
+
+// NewHandlerWithOptions builds the MCP HTTP handler with custom runtime limits.
+func NewHandlerWithOptions(
+	deps ServerDeps,
+	validator auth.JwtValidator,
+	oauthAuthorizationServer, oauthResourceURL string,
+	exchanger TokenExchanger,
+	options ...HandlerOption,
 ) (http.Handler, error) {
 	if exchanger == nil {
 		return nil, errors.New("MCP token exchanger is required")
@@ -979,10 +1042,29 @@ func NewHandler(
 		}
 	}
 	server := newServer(deps, oauthResourceURL)
+	config := handlerConfig{runtimeLimits: RuntimeLimits{
+		RequestBodySize: 1024 * 1024,
+		Concurrency:     100,
+		Timeout:         30 * time.Second,
+	}}
+	for _, option := range options {
+		option(&config)
+	}
+	limits := config.runtimeLimits
+	if limits.RequestBodySize <= 0 {
+		return nil, errors.New("MCP request body limit must be positive")
+	}
+	if limits.Concurrency <= 0 {
+		return nil, errors.New("MCP concurrency limit must be positive")
+	}
+	if limits.Timeout <= 0 {
+		return nil, errors.New("MCP request timeout must be positive")
+	}
 	streamableHandler := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return server },
 		&mcp.StreamableHTTPOptions{
-			Stateless: true,
+			Stateless:           true,
+			MaxRequestBodyBytes: limits.RequestBodySize,
 		},
 	)
 	var resourceMetadataURL string
@@ -996,7 +1078,7 @@ func NewHandler(
 		ResourceMetadataURL: resourceMetadataURL,
 	})(streamableHandler)
 	if oauthAuthorizationServer == "" {
-		return authenticatedHandler, nil
+		return newRuntimeLimitsMiddleware(limits.Concurrency, limits.Timeout)(authenticatedHandler), nil
 	}
 	// The metadata document itself must never require the very bearer token clients are trying to discover how to
 	// obtain, so it's mounted unauthenticated, on a mux alongside (not wrapped by) the authenticated MCP endpoint.
@@ -1006,7 +1088,26 @@ func NewHandler(
 		AuthorizationServers: []string{oauthAuthorizationServer},
 	}))
 	mux.Handle("/", authenticatedHandler)
-	return mux, nil
+	return newRuntimeLimitsMiddleware(limits.Concurrency, limits.Timeout)(mux), nil
+}
+
+func newRuntimeLimitsMiddleware(maxConcurrency int, timeout time.Duration) func(http.Handler) http.Handler {
+	inFlight := make(chan struct{}, maxConcurrency)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			select {
+			case inFlight <- struct{}{}:
+				defer func() { <-inFlight }()
+			default:
+				writer.Header().Set("Retry-After", "1")
+				http.Error(writer, "MCP server is busy", http.StatusServiceUnavailable)
+				return
+			}
+			ctx, cancel := context.WithTimeout(request.Context(), timeout)
+			defer cancel()
+			next.ServeHTTP(writer, request.WithContext(ctx))
+		})
+	}
 }
 
 const exchangeTokenExtraKey = "exchange_token"

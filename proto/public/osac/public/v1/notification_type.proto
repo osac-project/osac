@@ -42,13 +42,13 @@ enum NotificationSeverity {
   // The severity is unspecified.
   NOTIFICATION_SEVERITY_UNSPECIFIED = 0;
 
-  // An informational notice.
+  // Informational; no action required. Example: a compute instance became ready.
   NOTIFICATION_SEVERITY_INFO = 1;
 
-  // A warning notice.
+  // Needs attention soon. Example: quota usage crossed a warning threshold.
   NOTIFICATION_SEVERITY_WARNING = 2;
 
-  // A critical notice.
+  // Urgent. Example: provisioning failed or a quota hard limit was hit.
   NOTIFICATION_SEVERITY_CRITICAL = 3;
 }
 
@@ -103,7 +103,7 @@ message NotificationObjectReference {
 
 // Desired configuration for a Notification.
 message NotificationSpec {
-  // Kind of the notification.
+  // EVENT for a per-user inbox item, or ANNOUNCEMENT for a tenant/platform banner.
   NotificationKind kind = 1 [
     (google.api.field_behavior) = IMMUTABLE,
     (buf.validate.field).enum = {
@@ -112,7 +112,7 @@ message NotificationSpec {
     }
   ];
 
-  // Severity of the notification.
+  // How urgent the notice is for the user (INFO, WARNING, or CRITICAL).
   NotificationSeverity severity = 2 [
     (google.api.field_behavior) = IMMUTABLE,
     (buf.validate.field).enum = {

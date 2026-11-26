@@ -92,11 +92,11 @@ type NotificationSeverity int32
 const (
 	// The severity is unspecified.
 	NotificationSeverity_NOTIFICATION_SEVERITY_UNSPECIFIED NotificationSeverity = 0
-	// An informational notice.
+	// Informational; no action required. Example: a compute instance became ready.
 	NotificationSeverity_NOTIFICATION_SEVERITY_INFO NotificationSeverity = 1
-	// A warning notice.
+	// Needs attention soon. Example: quota usage crossed a warning threshold.
 	NotificationSeverity_NOTIFICATION_SEVERITY_WARNING NotificationSeverity = 2
-	// A critical notice.
+	// Urgent. Example: provisioning failed or a quota hard limit was hit.
 	NotificationSeverity_NOTIFICATION_SEVERITY_CRITICAL NotificationSeverity = 3
 )
 
@@ -774,9 +774,9 @@ func (x *NotificationSpec) ClearObject() {
 type NotificationSpec_builder struct {
 	_ [0]func() // Prevents comparability and use of unkeyed literals for the builder.
 
-	// Kind of the notification.
+	// EVENT for a per-user inbox item, or ANNOUNCEMENT for a tenant/platform banner.
 	Kind NotificationKind
-	// Severity of the notification.
+	// How urgent the notice is for the user (INFO, WARNING, or CRITICAL).
 	Severity NotificationSeverity
 	// Type string in the form osac.notification.<kind>.<name>.
 	Type string

@@ -538,6 +538,7 @@ var _ = Describe("Conditional service registration", func() {
 		"osac.public.v1.Users",
 		"osac.public.v1.Secrets",
 		"osac.public.v1.StorageTiers",
+		"osac.public.v1.Documents",
 		"osac.private.v1.Hubs",
 		"osac.private.v1.VirtualNetworks",
 		"osac.private.v1.Subnets",
@@ -558,6 +559,7 @@ var _ = Describe("Conditional service registration", func() {
 		"osac.private.v1.StorageBackends",
 		"osac.private.v1.Secrets",
 		"osac.private.v1.StorageTiers",
+		"osac.private.v1.Documents",
 	}
 
 	It("registers all services when all flags are enabled", func() {

@@ -14,6 +14,12 @@ Resize test coverage is split between VMaaS sanity and regression suites.
 | TC-FR4-02 | Regression | `test_resize_to_current_obsolete_type_is_noop_via_cli` |
 | TC-FR5-01, TC-FR6-01 | Sanity | Existing `test_compute_instance_resize_requires_restart_and_applies_new_resources` sanity case checks staging, restart, and live VMI resources |
 
+**CLI coverage:** The resize lifecycle and stopped-VM sanity tests use gRPC
+updates to verify functional behavior. Separate CLI tests cover upsize and
+downsize staging, and the mixed-direction regression covers a CLI resize
+followed by a CLI restart. The original Ansible upsize/downsize and stopped-VM
+sequences are therefore not exercised entirely through `osac edit`.
+
 Run the migrated regression cases from the repository root:
 
 ```bash

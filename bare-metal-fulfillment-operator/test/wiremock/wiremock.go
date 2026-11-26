@@ -18,6 +18,7 @@ limitations under the License.
 package wiremock
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	_ "embed"
@@ -27,7 +28,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"sync"
+	"testing"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
@@ -36,9 +40,34 @@ import (
 //go:embed image.txt
 var wireMockImage string
 
-// Start runs an isolated WireMock instance on a dynamically assigned loopback
-// port. Call stop to remove it when the spec finishes.
-func Start(ctx context.Context) (baseURL string, stop func() error, err error) {
+// Launcher builds and runs the Testcontainers executable for envtest.
+type Launcher struct {
+	executable func() (string, error)
+}
+
+// NewLauncher builds on first use so tests without WireMock skip the build.
+// The executable's module keeps Testcontainers out of BMF's module graph.
+func NewLauncher(t *testing.T, sourceDir string) *Launcher {
+	return &Launcher{executable: sync.OnceValues(func() (string, error) {
+		binary := filepath.Join(t.TempDir(), "wiremock-launcher")
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "go", "build", "-o", binary, ".")
+		cmd.Dir = sourceDir
+		cmd.Env = append(cmd.Environ(), "GOWORK=off")
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("build WireMock launcher: %w: %s", err, output)
+		}
+		return binary, nil
+	})}
+}
+
+// Start runs an isolated WireMock instance and returns the spec's cleanup.
+func (l *Launcher) Start(ctx context.Context) (string, func() error, error) {
+	binary, err := l.executable()
+	if err != nil {
+		return "", nil, err
+	}
 	tool := os.Getenv("CONTAINER_TOOL")
 	if tool == "" {
 		tool = "docker"
@@ -46,55 +75,42 @@ func Start(ctx context.Context) (baseURL string, stop func() error, err error) {
 			tool = "podman"
 		}
 	}
-
-	image := strings.TrimSpace(wireMockImage)
-
-	startCtx, cancelStart := context.WithTimeout(ctx, 3*time.Minute)
-	output, err := exec.CommandContext(startCtx, tool,
-		"run", "--detach", "--rm", "--pull=missing", "--publish", "127.0.0.1::8080", image,
-	).Output()
-	cancelStart()
+	cmd := exec.Command(binary, strings.TrimSpace(wireMockImage))
+	// The launcher cleans up on stdin EOF. This also keeps Ryuk's image pull
+	// out of the Quay-only fixture path.
+	cmd.Env = append(cmd.Environ(),
+		"TESTCONTAINERS_PROVIDER="+filepath.Base(tool),
+		"TESTCONTAINERS_RYUK_DISABLED=true",
+	)
+	var logs bytes.Buffer
+	cmd.Stderr = &logs
+	input, err := cmd.StdinPipe()
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return "", nil, fmt.Errorf("start WireMock image %s: %w: %s", image, err, exitErr.Stderr)
-		}
-		return "", nil, fmt.Errorf("start WireMock: %w", err)
+		return "", nil, fmt.Errorf("open WireMock launcher input: %w", err)
+	}
+	output, err := cmd.StdoutPipe()
+	if err != nil {
+		_ = input.Close()
+		return "", nil, fmt.Errorf("open WireMock launcher output: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return "", nil, fmt.Errorf("start WireMock launcher: %w", err)
 	}
 
-	id := strings.TrimSpace(string(output))
-	stop = func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		output, err := exec.CommandContext(ctx, tool, "stop", "--time", "1", id).CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("stop WireMock: %w: %s", err, output)
+	stop := func() error {
+		_ = input.Close()
+		if err := cmd.Wait(); err != nil {
+			return fmt.Errorf("WireMock launcher: %w: %s", err, logs.String())
 		}
 		return nil
 	}
-
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	output, err = exec.CommandContext(ctx, tool, "port", id, "8080/tcp").CombinedOutput()
+	stopStartupWatch := context.AfterFunc(ctx, func() { _ = input.Close() })
+	defer stopStartupWatch()
+	endpoint, err := bufio.NewReader(output).ReadString('\n')
 	if err != nil {
-		_ = stop()
-		return "", nil, fmt.Errorf("discover WireMock port: %w: %s", err, output)
+		return "", nil, errors.Join(fmt.Errorf("read WireMock endpoint: %w", err), stop())
 	}
-	baseURL = "http://" + strings.TrimSpace(string(output))
-	admin := HTTPAdmin(baseURL)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if _, err := admin(ctx, http.MethodGet, "/__admin/health", nil); err == nil {
-			return baseURL, stop, nil
-		}
-		select {
-		case <-ctx.Done():
-			_ = stop()
-			return "", nil, fmt.Errorf("wait for WireMock readiness: %w", ctx.Err())
-		case <-ticker.C:
-		}
-	}
+	return strings.TrimSpace(endpoint), stop, nil
 }
 
 // Admin sends fixture setup and inspection requests to WireMock. Kind supplies

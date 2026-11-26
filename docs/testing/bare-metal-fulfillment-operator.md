@@ -33,8 +33,9 @@ an in-process reconciler. The Kind case uses the same NetBox WireMock
 mappings and checks deployed credential lookup and token reload after a rollout.
 
 Envtest and Kind pull the same digest-pinned Linux AMD64 WireMock image
-from Quay. Each NetBox envtest spec starts its own container. Select Podman
-with `CONTAINER_TOOL=podman`.
+from Quay. Testcontainers starts a fresh container for each NetBox envtest spec.
+To use Podman, configure its API socket and set `CONTAINER_TOOL=podman`.
+[Testcontainers Podman setup](https://golang.testcontainers.org/system_requirements/using_podman/#podman-socket-activation).
 
 ## Coverage notes
 

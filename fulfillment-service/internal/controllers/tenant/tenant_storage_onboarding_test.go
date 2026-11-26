@@ -149,18 +149,16 @@ var _ = Describe("Tenant storage onboarding feedback", func() {
 			Fields().ByName("status").Message()
 		Expect(privateStatus.Fields().ByName("onboarded").Number()).
 			To(Equal(protoreflect.FieldNumber(1)))
-		Expect(privateStatus.Fields().ByName("break_glass_credentials").Number()).
-			To(Equal(protoreflect.FieldNumber(2)))
 		Expect(privateStatus.Fields().ByName("state").Number()).
-			To(Equal(protoreflect.FieldNumber(3)))
+			To(Equal(protoreflect.FieldNumber(2)))
 		Expect(privateStatus.Fields().ByName("message").Number()).
-			To(Equal(protoreflect.FieldNumber(4)))
+			To(Equal(protoreflect.FieldNumber(3)))
 		Expect(privateStatus.Fields().ByName("idp_tenant_name").Number()).
-			To(Equal(protoreflect.FieldNumber(5)))
+			To(Equal(protoreflect.FieldNumber(4)))
 		Expect(privateStatus.Fields().ByName("break_glass_user_id").Number()).
-			To(Equal(protoreflect.FieldNumber(6)))
+			To(Equal(protoreflect.FieldNumber(5)))
 		Expect(privateStatus.Fields().ByName("conditions").Number()).
-			To(Equal(protoreflect.FieldNumber(7)))
+			To(Equal(protoreflect.FieldNumber(6)))
 	})
 	DescribeTable("copies the operator condition exactly", func(status metav1.ConditionStatus, want privatev1.ConditionStatus) {
 		observe(clientWith(object(status)))

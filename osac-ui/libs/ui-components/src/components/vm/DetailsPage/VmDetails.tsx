@@ -27,6 +27,7 @@ const VmDetails = ({ vm }: Props) => {
   const { t } = useTranslation();
   const id = vm.spec?.instanceType?.id;
   const diskImageId = vm.spec?.diskImage?.id;
+  const isDeleting = vm.status?.state === ComputeInstanceState.DELETING;
   const {
     data: instanceType,
     isLoading: isInstanceTypeLoading,
@@ -45,15 +46,6 @@ const VmDetails = ({ vm }: Props) => {
     <>
       <PageSection hasBodyWrapper={false}>
         <Stack hasGutter>
-          <StackItem>
-            <AlertGroup isLiveRegion>
-              {vm.status?.state === ComputeInstanceState.DELETING && (
-                <Alert variant="warning" title={t('Virtual machine deletion in progress')} isInline>
-                  {t('Information on this page may be outdated.')}
-                </Alert>
-              )}
-            </AlertGroup>
-          </StackItem>
           {instanceTypeError ? (
             <StackItem>
               <Alert variant="danger" title={t('Could not load instance types')} isInline>
@@ -98,6 +90,15 @@ const VmDetails = ({ vm }: Props) => {
           <StackItem>
             <Divider />
           </StackItem>
+          {isDeleting ? (
+            <StackItem>
+              <AlertGroup isLiveRegion>
+                <Alert variant="warning" title={t('Virtual machine deletion in progress')} isInline>
+                  {t('Information on this page may be outdated.')}
+                </Alert>
+              </AlertGroup>
+            </StackItem>
+          ) : null}
         </Stack>
       </PageSection>
 

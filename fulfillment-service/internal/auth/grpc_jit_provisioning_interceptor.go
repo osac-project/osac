@@ -117,7 +117,7 @@ func (i *GrpcJitProvisioningInterceptor) provisionIfNeeded(ctx context.Context) 
 	}
 
 	tenant := subject.Tenant
-	if tenant == "" || tenant == SystemTenant || tenant == SharedTenant {
+	if tenant == "" || tenant == SharedTenant {
 		// Only provision user records for a known home tenant other than system or shared.
 		return nil
 	}

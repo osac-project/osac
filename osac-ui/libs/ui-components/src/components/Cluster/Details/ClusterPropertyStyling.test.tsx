@@ -13,7 +13,7 @@ describe('Cluster property styling', () => {
   it('uses native compact PatternFly terms and descriptions without decorative typography', () => {
     const cluster = create(ClusterSchema, {
       metadata: { project: 'example-project' },
-      spec: { sshPublicKey: 'PUBLIC_EXAMPLE_ONLY' },
+      spec: { sshKey: { id: 'secret-ssh-1', name: 'tenant-ssh-key' } },
     });
     renderWithProviders(
       <>
@@ -39,8 +39,7 @@ describe('Cluster property styling', () => {
         ),
       ).toBeNull();
     }
-    const sshKey = screen.getByText('PUBLIC_EXAMPLE_ONLY').closest('dd');
+    const sshKey = screen.getByRole('link', { name: 'tenant-ssh-key' }).closest('dd');
     expect(sshKey).toHaveClass('cluster-details__ssh-key');
-    expect(sshKey).toHaveAttribute('tabindex', '0');
   });
 });

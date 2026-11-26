@@ -86,7 +86,21 @@ superseded or extended design explicitly.
     ready at creation. Internal/default/auto-provisioning flows observe the same
     readiness gates and create dependencies in order. Delete is allowed only
     when no active resource references the target, subject to the accepted
-    auto-created resource cleanup rules.
+    auto-created resource cleanup rules. For BMaaS, a BMI's assigned host name
+    is carried into private Fulfillment status. A FabricDomain can list only a
+    same-project BMI host that is not being deleted; BMI deletion is rejected
+    while any same-project FabricDomain record lists that host, including a
+    FabricDomain already being deleted. The dependency ends when the
+    FabricDomain record is removed, so tenants delete the FabricDomain first.
+    For a projected host, the API rejects BMI deletion before accepting it. If
+    the host is not yet projected, the delete reconciler checks the live
+    operator host before setting DELETING; a discovered reference leaves the
+    lifecycle state unchanged until the tenant removes the FabricDomain.
+    FabricDomain create locks the matching BMI rows so create and delete cannot
+    both succeed; BMI delete relies on that lock plus the reconciler live-host
+    check for the unprojected window. A private synchronization marker keeps
+    legacy BMI records from creating FabricDomains until Fulfillment has read a
+    concrete host assignment.
 
 ## EVPN handoff implementation status
 

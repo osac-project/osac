@@ -104,6 +104,65 @@ jobs:
       OSAC_CI_APP_ID: ${{ secrets.OSAC_CI_APP_ID }}
       OSAC_CI_APP_PRIVATE_KEY: ${{ secrets.OSAC_CI_APP_PRIVATE_KEY }}
 
+  # The Netris suites, only for an entry with a networking change (the `connectivity` filter of .github/e2e-policy.yml).
+  # Each runs as `<suite>-run`, and the job named after the suite only reports how that ended. The result job of osac-ci
+  # follows a suite by its deepest jobs, but a Netris suite is several jobs in a row (provision, push-secrets, e2e,
+  # teardown) of which GitHub lists only those that have started, and provision and teardown sit deeper than the tests:
+  # followed directly, the suite would count as passed after provisioning, before its tests. The job named after the
+  # suite starts only once the whole suite has ended, and passes only when GitHub's own result of it is success.
+  # No pr-number: with one, the Netris workflow would take the entry's commit for the head of a pull request.
+  bmaas-netris-run:
+    needs: plan
+    if: ${{ needs.plan.result == 'success' && contains(needs.plan.outputs.suites, '"bmaas-netris"') }}
+    permissions:
+      contents: read
+      id-token: write
+      checks: write
+      pull-requests: read
+    uses: ./.github/workflows/e2e-bmaas-netris-full-install.yml
+    with:
+      repo: ${{ github.repository }}
+      sha: ${{ github.event.merge_group.head_sha }}
+
+  bmaas-netris:
+    needs: [plan, bmaas-netris-run]
+    if: ${{ always() && needs.plan.result == 'success' && contains(needs.plan.outputs.suites, '"bmaas-netris"') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - env:
+          RESULT: ${{ needs['bmaas-netris-run'].result }}
+        run: |
+          echo "bmaas-netris ended: ${RESULT}"
+          [ "${RESULT}" = success ]
+
+  vmaas-netris-run:
+    needs: plan
+    if: ${{ needs.plan.result == 'success' && contains(needs.plan.outputs.suites, '"vmaas-netris"') }}
+    permissions:
+      contents: read
+      id-token: write
+      checks: write
+      pull-requests: read
+    uses: ./.github/workflows/e2e-vmaas-netris-full-install.yml
+    with:
+      repo: ${{ github.repository }}
+      sha: ${{ github.event.merge_group.head_sha }}
+
+  vmaas-netris:
+    needs: [plan, vmaas-netris-run]
+    if: ${{ always() && needs.plan.result == 'success' && contains(needs.plan.outputs.suites, '"vmaas-netris"') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - env:
+          RESULT: ${{ needs['vmaas-netris-run'].result }}
+        run: |
+          echo "vmaas-netris ended: ${RESULT}"
+          [ "${RESULT}" = success ]
+
   # One job that looks after the queue entry: it watches the suites and the other required checks of the commit (the
   # unit and integration tests of CI, the Jira check), writes the required E2E check at once when one of them fails, and
   # stops everything that still runs for the commit, so the entry leaves the queue instead of holding its place until

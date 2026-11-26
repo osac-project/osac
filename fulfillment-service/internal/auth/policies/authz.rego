@@ -59,6 +59,11 @@ admin_groups := {
   "admins",
 }
 
+# Cloud provider admin roles - users that are allowed to act as administrators.
+cloud_provider_admin_roles := {
+  "cloud-provider-admin",
+}
+
 # Tenant admin roles - users with these roles can manage users in their tenant
 tenant_admin_roles := {
   "tenant-admin",
@@ -173,6 +178,11 @@ is_admin if {
   not is_managed_service_account_candidate
   some group in subject_groups
   group in admin_groups
+}
+is_admin if {
+  not is_managed_service_account_candidate
+  some role in subject_realm_roles
+  role in cloud_provider_admin_roles
 }
 
 # Check if an account is a tenant admin (can manage users AND IdP in their tenant):
@@ -357,11 +367,14 @@ client_permission_methods := {
     "/osac.public.v1.Volumes/Get",
     "/osac.public.v1.Volumes/List",
     "/osac.public.v1.Volumes/Update",
+    # Tenant users read their quota usage.
+    "/osac.public.v1.QuotaUsage/Get",
 }
 
 # Service-account grants use a deliberately bounded copy of the current public
 # client methods. Private methods and methods with broader information exposure
-# are excluded; adding a new API method does not grant it automatically.
+# are excluded; the methods are enumerated here, and every addition is a
+# deliberate grant.
 managed_automation_methods := {method |
   some method in client_permission_methods
   startswith(method, "/osac.public.v1.")
@@ -432,6 +445,22 @@ managed_tenant_admin_methods := {
   "/osac.public.v1.ServiceAccounts/Delete",
   "/osac.public.v1.ServiceAccounts/RegenerateSecret",
   "/osac.public.v1.Secrets/Get",
+  # Tenant admins manage their tenant's quota: project limits, thresholds, and limit requests.
+  "/osac.public.v1.QuotaLimits/Create",
+  "/osac.public.v1.QuotaLimits/Delete",
+  "/osac.public.v1.QuotaLimits/Get",
+  "/osac.public.v1.QuotaLimits/List",
+  "/osac.public.v1.QuotaLimits/Update",
+  "/osac.public.v1.QuotaThresholds/Create",
+  "/osac.public.v1.QuotaThresholds/Delete",
+  "/osac.public.v1.QuotaThresholds/Get",
+  "/osac.public.v1.QuotaThresholds/List",
+  "/osac.public.v1.QuotaThresholds/Update",
+  "/osac.public.v1.QuotaLimitRequests/Create",
+  "/osac.public.v1.QuotaLimitRequests/Delete",
+  "/osac.public.v1.QuotaLimitRequests/Get",
+  "/osac.public.v1.QuotaLimitRequests/List",
+  "/osac.public.v1.QuotaLimitRequests/Update",
 }
 
 managed_csi_methods := {
@@ -537,6 +566,21 @@ legacy_allow if {
     "/osac.public.v1.RoleBindings/List",
     "/osac.public.v1.RoleBindings/Update",
     "/osac.public.v1.RoleBindings/Delete",
+    "/osac.public.v1.QuotaLimits/Create",
+    "/osac.public.v1.QuotaLimits/Delete",
+    "/osac.public.v1.QuotaLimits/Get",
+    "/osac.public.v1.QuotaLimits/List",
+    "/osac.public.v1.QuotaLimits/Update",
+    "/osac.public.v1.QuotaThresholds/Create",
+    "/osac.public.v1.QuotaThresholds/Delete",
+    "/osac.public.v1.QuotaThresholds/Get",
+    "/osac.public.v1.QuotaThresholds/List",
+    "/osac.public.v1.QuotaThresholds/Update",
+    "/osac.public.v1.QuotaLimitRequests/Create",
+    "/osac.public.v1.QuotaLimitRequests/Delete",
+    "/osac.public.v1.QuotaLimitRequests/Get",
+    "/osac.public.v1.QuotaLimitRequests/List",
+    "/osac.public.v1.QuotaLimitRequests/Update",
   }
 }
 

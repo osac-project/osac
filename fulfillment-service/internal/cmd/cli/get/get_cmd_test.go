@@ -16,13 +16,18 @@ package get
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/help"
 	"github.com/spf13/cobra"
 	"go.uber.org/mock/gomock"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+	"sigs.k8s.io/yaml"
+	"time"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/reflection"
 	"github.com/osac-project/osac/fulfillment-service/internal/terminal"
@@ -168,4 +173,67 @@ var _ = Describe("Get command", func() {
 			Expect(stdout.String()).NotTo(ContainSubstring("volume_registration"))
 		})
 	}
+})
+
+var _ = Describe("Compute instance status formats", func() {
+	for _, format := range []string{outputFormatJson, outputFormatYaml} {
+		It("preserves the provisioning contract in "+format, func() {
+			var stdout bytes.Buffer
+			console, err := terminal.NewConsole().SetLogger(logger).
+				SetStdout(&stdout).SetStderr(&bytes.Buffer{}).Build()
+			Expect(err).NotTo(HaveOccurred())
+			instance := publicv1.ComputeInstance_builder{
+				Status: publicv1.ComputeInstanceStatus_builder{
+					Conditions: []*publicv1.ComputeInstanceCondition{
+						publicv1.ComputeInstanceCondition_builder{
+							Type:   publicv1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED,
+							Status: publicv1.ConditionStatus_CONDITION_STATUS_FALSE,
+							Reason: proto.String("RetryScheduled"),
+						}.Build(),
+					},
+					LastProvisioningFailure: publicv1.ComputeInstanceProvisioningFailure_builder{
+						Reason:  publicv1.ComputeInstanceProvisioningFailureReason_COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_PROVIDER_REPORTED,
+						Message: "Provisioning failed.", Attempt: 2,
+						ObservedAt: timestamppb.New(time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)),
+					}.Build(),
+				}.Build(),
+			}.Build()
+			original := proto.Clone(instance)
+			runner := &runnerContext{console: console, marshalOptions: protojson.MarshalOptions{UseProtoNames: true}}
+			if format == outputFormatJson {
+				Expect(runner.renderJson(context.Background(), []proto.Message{instance})).To(Succeed())
+			} else {
+				Expect(runner.renderYaml(context.Background(), []proto.Message{instance})).To(Succeed())
+			}
+			data := stdout.Bytes()
+			if format == outputFormatYaml {
+				data, err = yaml.YAMLToJSON(data)
+				Expect(err).NotTo(HaveOccurred())
+			}
+			var actual map[string]any
+			Expect(json.Unmarshal(data, &actual)).To(Succeed())
+			expectedData, err := runner.marshalOptions.Marshal(instance)
+			Expect(err).NotTo(HaveOccurred())
+			var expected map[string]any
+			Expect(json.Unmarshal(expectedData, &expected)).To(Succeed())
+			Expect(actual["status"]).To(Equal(expected["status"]))
+			Expect(actual).NotTo(HaveKey("PROVISIONING"))
+			Expect(actual).NotTo(HaveKey("LAST FAILURE"))
+			Expect(proto.Equal(instance, original)).To(BeTrue())
+		})
+	}
+
+	It("documents provisioning list columns in rendered help", func() {
+		cmd := Cmd()
+		help.Setup(cmd)
+		var output bytes.Buffer
+		cmd.SetOut(&output)
+		cmd.SetErr(&output)
+		cmd.SetArgs([]string{"--help"})
+		Expect(cmd.Execute()).To(Succeed())
+		Expect(output.String()).To(ContainSubstring("PROVISIONING"))
+		Expect(output.String()).To(ContainSubstring("LAST FAILURE"))
+		Expect(output.String()).To(ContainSubstring("Retrying"))
+		Expect(output.String()).NotTo(ContainSubstring("{{"))
+	})
 })

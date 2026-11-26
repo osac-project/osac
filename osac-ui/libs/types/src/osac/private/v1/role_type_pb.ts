@@ -17,6 +17,7 @@
 
 import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import { file_buf_validate_validate } from "../../../buf/validate/validate_pb";
 import { file_cleanapi_cleanapi } from "../../../cleanapi/cleanapi_pb";
 import { file_google_api_field_behavior } from "../../../google/api/field_behavior_pb";
 import type { Metadata } from "./metadata_type_pb";
@@ -27,14 +28,14 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file osac/private/v1/role_type.proto.
  */
 export const file_osac_private_v1_role_type: GenFile = /*@__PURE__*/
-  fileDesc("Ch9vc2FjL3ByaXZhdGUvdjEvcm9sZV90eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEimwEKBFJvbGUSCgoCaWQYASABKAkSKwoIbWV0YWRhdGEYAiABKAsyGS5vc2FjLnByaXZhdGUudjEuTWV0YWRhdGESJwoEc3BlYxgDIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5Sb2xlU3BlYxIxCgZzdGF0dXMYBCABKAsyGy5vc2FjLnByaXZhdGUudjEuUm9sZVN0YXR1c0IE4kEBAyIuCghSb2xlU3BlYxINCgV0aXRsZRgBIAEoCRITCgtkZXNjcmlwdGlvbhgCIAEoCSJZCgpSb2xlU3RhdHVzEikKBXN0YXRlGAEgASgOMhoub3NhYy5wcml2YXRlLnYxLlJvbGVTdGF0ZRIUCgdtZXNzYWdlGAIgASgJSACIAQFCCgoIX21lc3NhZ2UiSgoNUm9sZVJlZmVyZW5jZRIKCgJpZBgBIAEoCRIMCgRuYW1lGAIgASgJEg8KB3Byb2plY3QYAyABKAkSDgoGc2hhcmVkGAQgASgIKmwKCVJvbGVTdGF0ZRIaChZST0xFX1NUQVRFX1VOU1BFQ0lGSUVEEAASFgoSUk9MRV9TVEFURV9QRU5ESU5HEAESFAoQUk9MRV9TVEFURV9SRUFEWRACEhUKEVJPTEVfU1RBVEVfRkFJTEVEEANCFIq1GBASDm9zYWMucHVibGljLnYxYgZwcm90bzM", [file_cleanapi_cleanapi, file_google_api_field_behavior, file_osac_private_v1_metadata_type]);
+  fileDesc("Ch9vc2FjL3ByaXZhdGUvdjEvcm9sZV90eXBlLnByb3RvEg9vc2FjLnByaXZhdGUudjEimwEKBFJvbGUSCgoCaWQYASABKAkSKwoIbWV0YWRhdGEYAiABKAsyGS5vc2FjLnByaXZhdGUudjEuTWV0YWRhdGESJwoEc3BlYxgDIAEoCzIZLm9zYWMucHJpdmF0ZS52MS5Sb2xlU3BlYxIxCgZzdGF0dXMYBCABKAsyGy5vc2FjLnByaXZhdGUudjEuUm9sZVN0YXR1c0IE4kEBAyJkCghSb2xlU3BlYxINCgV0aXRsZRgBIAEoCRITCgtkZXNjcmlwdGlvbhgCIAEoCRI0CgtwZXJtaXNzaW9ucxgDIAMoCzIfLm9zYWMucHJpdmF0ZS52MS5QZXJtaXNzaW9uUnVsZSKYAQoOUGVybWlzc2lvblJ1bGUSWAoHc2VydmljZRgBIAEoCUJHukhEckIyQF4oXCp8b3NhY1wuKHB1YmxpY3xwcml2YXRlKVwuXCp8b3NhY1wuKHB1YmxpY3xwcml2YXRlKVwuW2Etel0rKSQSLAoHbWV0aG9kcxgCIAMoCUIbukgYkgEVCAEiEXIPMg1eKFwqfFthLXpdKykkIlkKClJvbGVTdGF0dXMSKQoFc3RhdGUYASABKA4yGi5vc2FjLnByaXZhdGUudjEuUm9sZVN0YXRlEhQKB21lc3NhZ2UYAiABKAlIAIgBAUIKCghfbWVzc2FnZSJKCg1Sb2xlUmVmZXJlbmNlEgoKAmlkGAEgASgJEgwKBG5hbWUYAiABKAkSDwoHcHJvamVjdBgDIAEoCRIOCgZ0ZW5hbnQYBCABKAkqbAoJUm9sZVN0YXRlEhoKFlJPTEVfU1RBVEVfVU5TUEVDSUZJRUQQABIWChJST0xFX1NUQVRFX1BFTkRJTkcQARIUChBST0xFX1NUQVRFX1JFQURZEAISFQoRUk9MRV9TVEFURV9GQUlMRUQQA0IUirUYEBIOb3NhYy5wdWJsaWMudjFiBnByb3RvMw", [file_buf_validate_validate, file_cleanapi_cleanapi, file_google_api_field_behavior, file_osac_private_v1_metadata_type]);
 
 /**
  * Represents a role that can be assigned to groups.
  *
- * Roles are predefined named entities that represent a set of permissions within the system. They are assigned to
- * groups to control what actions the members of those groups can perform. Roles themselves do not carry any data
- * beyond their identity and metadata; the actual permissions are determined by the system based on the role name.
+ * Roles are named entities that represent a set of permissions within the system. They are assigned to
+ * groups to control what actions the members of those groups can perform. The permissions of a role are
+ * defined by the rules of its spec
  *
  * Predefined roles include `cloud-provider-admin`, `cloud-provider-reader`, `tenant-idp-manager`, `tenant-admin`, and `tenant-reader`.
  *
@@ -98,6 +99,14 @@ export type RoleSpec = Message<"osac.private.v1.RoleSpec"> & {
    * @generated from field: string description = 2;
    */
   description: string;
+
+  /**
+   * Permission rules that define what the role grants. Each rule names one service and the methods of that service
+   * that are granted.
+   *
+   * @generated from field: repeated osac.private.v1.PermissionRule permissions = 3;
+   */
+  permissions: PermissionRule[];
 };
 
 /**
@@ -106,6 +115,39 @@ export type RoleSpec = Message<"osac.private.v1.RoleSpec"> & {
  */
 export const RoleSpecSchema: GenMessage<RoleSpec> = /*@__PURE__*/
   messageDesc(file_osac_private_v1_role_type, 1);
+
+/**
+ * A permission rule granting a set of methods of one API service.
+ *
+ * @generated from message osac.private.v1.PermissionRule
+ */
+export type PermissionRule = Message<"osac.private.v1.PermissionRule"> & {
+  /**
+   * Name of the service that the methods belong to, in lower case and without the version segment, for example
+   * "osac.public.clusters" or "osac.private.volumes". The wildcards "*" (every service), "osac.public.*" and
+   * "osac.private.*" (every service of one API layer) select multiple services. The server resolves the name
+   * against a permission catalog and rejects names that don't correspond to a cataloged service.
+   *
+   * @generated from field: string service = 1;
+   */
+  service: string;
+
+  /**
+   * Names of the methods that the rule grants, in lower case, for example "get" or "create". The
+   * wildcard "*" selects all the methods of the service. The server rejects names that don't correspond to a
+   * method of the selected service.
+   *
+   * @generated from field: repeated string methods = 2;
+   */
+  methods: string[];
+};
+
+/**
+ * Describes the message osac.private.v1.PermissionRule.
+ * Use `create(PermissionRuleSchema)` to create a new message.
+ */
+export const PermissionRuleSchema: GenMessage<PermissionRule> = /*@__PURE__*/
+  messageDesc(file_osac_private_v1_role_type, 2);
 
 /**
  * Current observed state of a role, reflecting its synchronization with the underlying authorization system.
@@ -134,7 +176,7 @@ export type RoleStatus = Message<"osac.private.v1.RoleStatus"> & {
  * Use `create(RoleStatusSchema)` to create a new message.
  */
 export const RoleStatusSchema: GenMessage<RoleStatus> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_role_type, 2);
+  messageDesc(file_osac_private_v1_role_type, 3);
 
 /**
  * Reference to a Role resource.
@@ -158,9 +200,11 @@ export type RoleReference = Message<"osac.private.v1.RoleReference"> & {
   project: string;
 
   /**
-   * @generated from field: bool shared = 4;
+   * Tenant where the referenced object lives. If omitted, the owner tenant is used.
+   *
+   * @generated from field: string tenant = 4;
    */
-  shared: boolean;
+  tenant: string;
 };
 
 /**
@@ -168,7 +212,7 @@ export type RoleReference = Message<"osac.private.v1.RoleReference"> & {
  * Use `create(RoleReferenceSchema)` to create a new message.
  */
 export const RoleReferenceSchema: GenMessage<RoleReference> = /*@__PURE__*/
-  messageDesc(file_osac_private_v1_role_type, 3);
+  messageDesc(file_osac_private_v1_role_type, 4);
 
 /**
  * Synchronization states for Role resources with the underlying authorization system.

@@ -184,6 +184,9 @@ func (r *hubCache) create(ctx context.Context, id string) (result *HubEntry, err
 	if err != nil {
 		return
 	}
+	if config.QPS == 0 {
+		config.QPS = -1
+	}
 	client, err := clnt.New(config, clnt.Options{Scheme: r.scheme})
 	if err != nil {
 		return

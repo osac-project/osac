@@ -652,24 +652,16 @@ func createCatalogItemTenantAdminIdentityFixture(ctx context.Context) metadataTe
 	publicConn, err := tool.makeGrpcConn(externalServiceAddr, token)
 	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(publicConn.Close)
-	credentials := tenant.GetObject().GetStatus().GetBreakGlassCredentials()
-	username, password := "", ""
-	if credentials != nil {
-		username = credentials.GetUsername()
-		password = credentials.GetPassword()
-	}
-	if password == "" {
-		username = fmt.Sprintf("%s-osac-break-glass", name)
-		password = "test-break-glass-pass-123!"
-	}
+	testBreakGlassUsername := fmt.Sprintf("%s-osac-break-glass", name)
+	testBreakGlassPassword := "test-break-glass-pass-123!"
 	httpClient := tool.makeHttpClient(externalServiceAddr, token)
 	DeferCleanup(func() { httpClient.CloseIdleConnections() })
 	return metadataTestIdentity{
 		Conn:       publicConn,
 		HTTPClient: httpClient,
 		TenantID:   name,
-		Username:   username,
-		Password:   password,
+		Username:   testBreakGlassUsername,
+		Password:   testBreakGlassPassword,
 	}
 }
 
@@ -1115,6 +1107,12 @@ func ensureTenantDefaultNetworkingFixture(ctx context.Context, tenant, project s
 
 	cleanupIncompleteTenantDefaultNetworkingFixture(ctx, tenant, project, networks)
 	scheduleTenantDefaultNetworkingFixtureCleanup(ctx, tenant)
+
+	// The operator is off in service-only tests, so the fixture reports READY.
+	// Check the Hub and its Kubernetes objects before clearing stale failures.
+	expectNetworkClassStatus(ctx, classes, classID,
+		privatev1.NetworkClassState_NETWORK_CLASS_STATE_READY, hubId, "")
+
 	defaultLabels := map[string]string{tenantDefaultNetworkingLabel: "true"}
 	meta := privatev1.Metadata_builder{
 		Name:    "default",
@@ -1152,7 +1150,11 @@ func ensureTenantDefaultNetworkingFixture(ctx context.Context, tenant, project s
 		r, e := networks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: networkID}.Build())
 		Expect(e).NotTo(HaveOccurred())
 		return r.GetObject().GetStatus().GetState()
-	}, time.Minute, time.Second).Should(Equal(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING))
+	}, time.Minute, time.Second).Should(BeElementOf(
+		privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_PENDING,
+		privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY,
+		privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_FAILED,
+	))
 	waitForNetworkingCR(ctx, listNetworkingCR(
 		tool.KubeClient(),
 		labels.VirtualNetworkUuid,
@@ -1169,12 +1171,15 @@ func ensureTenantDefaultNetworkingFixture(ctx context.Context, tenant, project s
 	})
 	currentVN, err := networks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: networkID}.Build())
 	Expect(err).NotTo(HaveOccurred())
-	currentVN.GetObject().GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY)
-	_, err = networks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
-		Object:     currentVN.GetObject(),
-		UpdateMask: catalogItemUpdateMask("status.state"),
-	}.Build())
-	Expect(err).NotTo(HaveOccurred())
+	if currentVN.GetObject().GetStatus().GetState() != privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY {
+		currentVN.GetObject().GetStatus().SetState(privatev1.VirtualNetworkState_VIRTUAL_NETWORK_STATE_READY)
+		currentVN.GetObject().GetStatus().ClearMessage()
+		_, err = networks.Update(ctx, privatev1.VirtualNetworksUpdateRequest_builder{
+			Object:     currentVN.GetObject(),
+			UpdateMask: catalogItemUpdateMask("status.state", "status.message"),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+	}
 	Eventually(func(g Gomega) {
 		current, getErr := networks.Get(ctx, privatev1.VirtualNetworksGetRequest_builder{Id: networkID}.Build())
 		g.Expect(getErr).NotTo(HaveOccurred())
@@ -1221,7 +1226,11 @@ func ensureTenantDefaultNetworkingFixture(ctx context.Context, tenant, project s
 		r, e := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
 		Expect(e).NotTo(HaveOccurred())
 		return r.GetObject().GetStatus().GetState()
-	}, time.Minute, time.Second).Should(Equal(privatev1.SubnetState_SUBNET_STATE_PENDING))
+	}, time.Minute, time.Second).Should(BeElementOf(
+		privatev1.SubnetState_SUBNET_STATE_PENDING,
+		privatev1.SubnetState_SUBNET_STATE_READY,
+		privatev1.SubnetState_SUBNET_STATE_FAILED,
+	))
 	waitForNetworkingCR(ctx, listNetworkingCR(
 		tool.KubeClient(),
 		labels.SubnetUuid,
@@ -1238,12 +1247,15 @@ func ensureTenantDefaultNetworkingFixture(ctx context.Context, tenant, project s
 	})
 	currentSubnet, err := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
 	Expect(err).NotTo(HaveOccurred())
-	currentSubnet.GetObject().GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_READY)
-	_, err = subnets.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
-		Object:     currentSubnet.GetObject(),
-		UpdateMask: catalogItemUpdateMask("status.state"),
-	}.Build())
-	Expect(err).NotTo(HaveOccurred())
+	if currentSubnet.GetObject().GetStatus().GetState() != privatev1.SubnetState_SUBNET_STATE_READY {
+		currentSubnet.GetObject().GetStatus().SetState(privatev1.SubnetState_SUBNET_STATE_READY)
+		currentSubnet.GetObject().GetStatus().ClearMessage()
+		_, err = subnets.Update(ctx, privatev1.SubnetsUpdateRequest_builder{
+			Object:     currentSubnet.GetObject(),
+			UpdateMask: catalogItemUpdateMask("status.state", "status.message"),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+	}
 	Eventually(func(g Gomega) {
 		current, getErr := subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
 		g.Expect(getErr).NotTo(HaveOccurred())
@@ -1288,7 +1300,11 @@ func ensureTenantDefaultNetworkingFixture(ctx context.Context, tenant, project s
 		r, e := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
 		Expect(e).NotTo(HaveOccurred())
 		return r.GetObject().GetStatus().GetState()
-	}, time.Minute, time.Second).Should(Equal(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING))
+	}, time.Minute, time.Second).Should(BeElementOf(
+		privatev1.SecurityGroupState_SECURITY_GROUP_STATE_PENDING,
+		privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY,
+		privatev1.SecurityGroupState_SECURITY_GROUP_STATE_FAILED,
+	))
 	waitForNetworkingCR(ctx, listNetworkingCR(
 		tool.KubeClient(),
 		labels.SecurityGroupUuid,
@@ -1305,12 +1321,15 @@ func ensureTenantDefaultNetworkingFixture(ctx context.Context, tenant, project s
 	})
 	currentSG, err := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
 	Expect(err).NotTo(HaveOccurred())
-	currentSG.GetObject().GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY)
-	_, err = groups.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
-		Object:     currentSG.GetObject(),
-		UpdateMask: catalogItemUpdateMask("status.state"),
-	}.Build())
-	Expect(err).NotTo(HaveOccurred())
+	if currentSG.GetObject().GetStatus().GetState() != privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY {
+		currentSG.GetObject().GetStatus().SetState(privatev1.SecurityGroupState_SECURITY_GROUP_STATE_READY)
+		currentSG.GetObject().GetStatus().ClearMessage()
+		_, err = groups.Update(ctx, privatev1.SecurityGroupsUpdateRequest_builder{
+			Object:     currentSG.GetObject(),
+			UpdateMask: catalogItemUpdateMask("status.state", "status.message"),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+	}
 	Eventually(func(g Gomega) {
 		current, getErr := groups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{Id: groupID}.Build())
 		g.Expect(getErr).NotTo(HaveOccurred())
@@ -1335,9 +1354,9 @@ func defaultSubnetCIDRWithin(vnCIDR string) string {
 	return netip.PrefixFrom(netip.AddrFrom4(octets), 24).String()
 }
 
-// cleanupIncompleteTenantDefaultNetworkingFixture recovers a default fixture
-// that cannot be reused because it has no matching READY Subnet and SecurityGroup.
-// These test-owned resources otherwise block the next run with AlreadyExists.
+// cleanupIncompleteTenantDefaultNetworkingFixture removes incomplete defaults
+// only when no live tenant owns them. The tenant reconciler recreates defaults
+// for live tenants, so the fixture must reuse them instead.
 func cleanupIncompleteTenantDefaultNetworkingFixture(
 	ctx context.Context,
 	tenant, project string,
@@ -1351,6 +1370,11 @@ func cleanupIncompleteTenantDefaultNetworkingFixture(
 	networkResponse, err := networks.List(ctx, privatev1.VirtualNetworksListRequest_builder{Filter: &networkFilter}.Build())
 	Expect(err).NotTo(HaveOccurred())
 	if len(networkResponse.GetItems()) == 0 {
+		return
+	}
+	live, err := tenantIsLive(ctx, tenant)
+	Expect(err).NotTo(HaveOccurred())
+	if live {
 		return
 	}
 	manager, managerErr := newTestDefaultNetworkingManager()

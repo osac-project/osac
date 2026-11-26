@@ -16,11 +16,13 @@ auto-merge (`e2e-pr.yml`, job `Auto-merge`). To keep one pull request from mergi
 convert it to a draft. The queue runs `CI` and
 `E2E` again on the result of merging, so what lands is what was tested.
 
-## Optional: BMaaS Netris
+## BMaaS Netris
 
-The BMaaS Netris end-to-end test (a real Netris lab on an AWS box) is not part of `E2E` and is not
-required: the policy marks it `manual_only`, so the decision never chooses it and the `E2E` check does not wait for it.
-Start it on a pull request with the comment `/test bmaas-netris` (any member of the organization, any approval state), or by
+The BMaaS Netris end-to-end test (a real Netris lab on an AWS box) runs for networking changes only: the policy gives it
+the `connectivity` filter of `filters/ci-filters.yml` (the networking paths, kept by hand). For such a change the
+decision chooses it like any suite, the `E2E` check waits for it and counts it, and the merge queue runs it
+(`e2e-queue.yml`); any other change does not run it.
+Start it by hand on any pull request with the comment `/test bmaas-netris` (any member of the organization, any approval state), or by
 checking its box in the E2E comment of the pull request; the suite has its own line, `E2E / BMaaS Netris Full Install`, and
 the decision runs it through `workflows/e2e-pr-bmaas-netris.yml`, which calls `workflows/e2e-bmaas-netris-full-install.yml`. It can also be started from the Actions page
 ("E2E BMaaS Netris Full Install", Run workflow, with the pull request's number, repository, branch and commit). A label no longer
@@ -39,29 +41,34 @@ that, which can take a few minutes, without holding the queue. Only the first fa
 running are cancelled, so a second failure shows on the next attempt. Workflows that provide no required check (CodeQL,
 dependency review) do not stop an entry. When every suite passed, `result` writes `E2E` as passed.
 
-## Optional: CaaS regression tests on a pull request
+## Optional: full regression tests on a pull request
 
-A pull request gets the CaaS sanity tests (`tests/e2e/caas/sanity`); the regression tests (`tests/e2e/caas/regression`) run
-every 5 hours on `main`. To try a new or changed regression test before it merges, start CaaS with both: check
-**CaaS Full Install · sanity + regression** in the E2E comment of the pull request (any member of the organization, any
-approval state), or comment `/test caas-full`. It is a second box of the CaaS suite, not a suite of its own: the same job
-and the same line, `E2E / CaaS Full Install` (which then says `· full`), so the required `E2E` check counts it exactly
-like the CaaS suite, and a CaaS run that passed this way satisfies it. It runs the same tests as the schedule (sanity and
-regression, with the CaaS references).
+A pull request and merge queue entry get the sanity tests for VMaaS, CaaS, and BMaaS. The scheduled jobs run sanity and
+regression every 5 hours on `main`, with each service's applicable reference tests. BMaaS runs its full service root
+serially (`-n 0`), including sanity, regression, serial, and reference-marked tests. To validate a new or changed
+regression test before it merges, select **<service> Full Install · sanity + regression** in the E2E comment or comment
+`/test vmaas-full`, `/test caas-full`, or `/test bmaas-full`. The full selection uses the same suite job and check line as
+the sanity selection, and it runs the same cohort as the service's schedule.
 
-- Asking for the same thing while it runs does nothing. Asking for the other version of CaaS while one runs (the sanity
-  box while the full one runs, or the other way round) stops that run and starts the one asked for.
+Scheduled runs are non-gating and send a Slack notification on failure. `wg-infra` owns workflow and runner failures; the
+working group for the affected service owns test failures and their follow-up. The expanded BMaaS schedule's duration and
+overlap behavior still need to be confirmed from a full run; the workflow does not currently serialize it against other
+scheduled suites.
+
+- Asking for the same thing while it runs does nothing. Asking for the other tier while one runs stops that run and starts
+  the tier requested.
 - A suite asked for by name runs again whatever it ended with; the bare `/test` only starts what has not passed.
-- The decision never chooses it, so a pull request still gets the CaaS sanity tests alone by default, and the merge queue
-  does not run it. VMaaS and BMaaS already run their regression tests on every pull request that needs their suite.
-- In the policy it is `e2e-caas-full` (`variant_of: caas`, `tier: full`); the decision starts `e2e-pr-caas.yml` with the input
-  `tier` (`full`), and that workflow passes it to the wrapper (`e2e-caas-full-install.yml`, input `tier`).
+- The decision never chooses a full variant, and the merge queue has no full-variant jobs. Automatic runs remain sanity
+  only.
+- Each policy variant uses `variant_of: <service>` and `tier: full`; the service's PR workflow passes the tier to its
+  full-install wrapper.
 
-## Optional: VMaaS Netris
+## VMaaS Netris
 
 The VMaaS Netris suite uses the `vmaas-ci` profile with `values/vmaas-ci/netris.yaml`
 (which sets the operator's AAP status poll interval to 5s) and the Netris backend of
-osac-test-infra. It is manual-only: start it with `/test vmaas-netris` or its checkbox in
+osac-test-infra. Like the BMaaS Netris suite it runs for networking changes (the `connectivity`
+filter), counts in `E2E` and runs in the merge queue; start it by hand with `/test vmaas-netris` or its checkbox in
 the pull request comment. The job runs `test_vmaas_networking.py` with `-x`, so it stops at
 the first failed test: `test_00`..`test_13`, and
 the single teardown test `test_14`. Its NAT and ExternalIP tests always run and fail with a
@@ -114,6 +121,14 @@ change also runs `pre-commit` and `dependency-review`. `ci-tests.yml` and `filte
 | `tests/e2e/` and the E2E workflows | the `E2E` suites the change affects (`e2e-policy.yml`) |
 
 The CaaS Kind integration test is separate from full-install `E2E`.
+
+## A leg that repeats on a pull request
+
+A leg in `ci-tests.yml` that sets `pr_repetitions` runs that many times, in parallel, on a pull request. Today that is
+only the fulfillment-service integration test: five jobs over the same commit, so a test that fails once in a while is
+caught before the change merges. Every repetition must pass: one failure fails `CI` like any other leg, and the run
+shows the five as separate rows. The merge queue, the scheduled and manual runs of `integration-tests.yml` and the
+flake-detection campaigns keep one execution per leg.
 
 A rule that a change must also add or change tests is not enforced: `CI` checks that the tests which exist pass.
 

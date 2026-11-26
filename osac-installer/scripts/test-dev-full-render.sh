@@ -226,7 +226,7 @@ fi
 
 if ! grep -Fq 'FULFILLMENT_TLS_CA_FILE: "/etc/osac-ui/tls/api/bundle.pem"' <<<"$chart_render" \
   || ! grep -Fq 'OIDC_TLS_CA_FILE: "/etc/osac-ui/tls/auth/bundle.pem"' <<<"$chart_render" \
-  || ! grep -Fq 'FULFILLMENT_API_URL: "https://fulfillment-api.osac.localhost:8000"' <<<"$chart_render" \
+  || ! grep -Fq 'FULFILLMENT_API_URL: "https://fulfillment-internal-api:8001"' <<<"$chart_render" \
   || ! grep -Fq 'OIDC_ISSUER_URL: "https://keycloak.osac.localhost:8443/realms/osac"' <<<"$chart_render" \
   || ! grep -Fq 'imagePullPolicy: IfNotPresent' <<<"$chart_render" \
   || ! grep -Fq 'mountPath: /etc/osac-ui/tls/api' <<<"$chart_render" \

@@ -618,6 +618,17 @@ jobs:
     # than resting entirely on that one git-side safeguard: it also
     # catches the case of someone manually force-moving this specific
     # tag outside of normal automation.
+    # actions/checkout cleans the workspace, which is where oc-login wrote
+    # kubeconfig.yaml, so the login at the top of this job is gone by now.
+    # Log in again before the next oc call.
+    - name: Log in to Konflux cluster again after checkout
+      if: steps.dedup.outputs.already-released != 'true'
+      uses: redhat-actions/oc-login@2a1614bc977c054c8786c8e35fc9534bd0ddc156  # v2.0.1
+      with:
+        openshift_server_url: ${{ vars.KONFLUX_API_URL }}
+        openshift_token: ${{ secrets.KONFLUX_SA_TOKEN }}
+        namespace: osac-tenant
+
     - name: Verify checked-out commit matches the validated chart Snapshot
       if: steps.dedup.outputs.already-released != 'true'
       run: |
@@ -666,7 +677,10 @@ jobs:
         set -euo pipefail
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        git add -A
+        # Stage tracked files only. The re-login above leaves an untracked
+        # kubeconfig.yaml (with the service-account token) in the workspace,
+        # which a blanket "git add -A" would commit and push in the tag.
+        git add -u
         if git diff --cached --quiet; then
           echo "::error::No chart stamping changes staged -- refusing to push" >&2
           exit 1

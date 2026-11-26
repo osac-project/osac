@@ -33,8 +33,8 @@ const bareMetalCatalogItem = create(BareMetalInstanceCatalogItemSchema, {
   description: 'A small bare metal instance',
   published: true,
   fields: {
-    sshPublicKey: {
-      behavior: { case: 'locked', value: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample' },
+    sshKey: {
+      behavior: { case: 'locked', value: { name: 'tenant-ssh-key' } },
     },
     runStrategy: { behavior: { case: 'locked', value: BareMetalInstanceRunStrategy.HALTED } },
     userDataSource: {

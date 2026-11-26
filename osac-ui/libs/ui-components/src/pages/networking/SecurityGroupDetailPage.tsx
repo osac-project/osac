@@ -26,14 +26,10 @@ import {
   SecurityGroups,
   VirtualNetworks,
 } from '@osac/types';
+import SecurityGroupDeleteConfirmModal from '@osac/ui-components/components/networking/SecurityGroupDeleteConfirmModal';
 import DeleteResourceButton from '@osac/ui-components/components/Resource/DeleteResourceButton';
 
-import {
-  useDeleteResource,
-  useGetResource,
-  useListResource,
-  useUpdateResource,
-} from '../../api/use-resource';
+import { useGetResource, useListResource, useUpdateResource } from '../../api/use-resource';
 import { isDefaultNetworkingResource, resourceDisplayName } from '../../api/v1/networking';
 import { SecurityGroupRuleModal } from '../../components/networking/SecurityGroupRuleModal';
 import { SecurityGroupRulesTable } from '../../components/networking/SecurityGroupRulesTable';
@@ -114,7 +110,6 @@ export const SecurityGroupDetailPage = () => {
   const sg = securityGroupResponse?.object;
   const { data: virtualNetworksResponse } = useListResource(VirtualNetworks);
   const virtualNetworks = virtualNetworksResponse?.items ?? [];
-  const deleteSecurityGroup = useDeleteResource(SecurityGroups);
   const updateSecurityGroup = useUpdateResource(SecurityGroups);
   const editingDisabledReason = securityGroupRuleEditingDisabledReason(
     sg,
@@ -286,17 +281,11 @@ export const SecurityGroupDetailPage = () => {
         />
       )}
 
-      {showDeleteSgModal && canDeleteSg && (
-        <DeleteResourceModal
-          resourceName={sgName}
-          label={t(
-            'This will permanently delete the security group and all its rules. This action cannot be undone.',
-          )}
-          errorLabel={t('Failed to delete security group')}
+      {showDeleteSgModal && canDeleteSg && sg && (
+        <SecurityGroupDeleteConfirmModal
+          securityGroup={sg}
           onClose={() => setShowDeleteSgModal(false)}
           onSuccess={() => navigate('/networking/security-groups')}
-          mutation={deleteSecurityGroup}
-          variables={{ id }}
         />
       )}
     </ListPage>

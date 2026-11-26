@@ -2,6 +2,7 @@ import { type Page, expect } from '@playwright/test';
 
 import { CatalogMainPage } from '../../locators/catalog';
 import { DiskImagesMainPage } from '../../locators/disk_images';
+import { ExternalIpPoolsPage, ExternalIpsPage } from '../../locators/external_ips';
 import { InstanceTypesMainPage } from '../../locators/instance_types';
 import { MainPage } from '../../locators/main_page';
 import { StorageBackendsPage, StorageTiersPage } from '../../locators/storage';
@@ -105,4 +106,18 @@ export const openStorageTiersPage = async (page: Page): Promise<void> => {
   await openMainPageOption(page, 'storageTiers');
 
   await expect(page.getByRole(...StorageTiersPage.pageTitle)).toBeVisible();
+};
+
+/** Open Networking > External IPs and verify the page title. */
+export const openExternalIpsPage = async (page: Page): Promise<void> => {
+  await openMainPageOption(page, 'externalIps');
+
+  await expect(page.getByRole(...ExternalIpsPage.pageTitle)).toBeVisible();
+};
+
+/** Open Infrastructure > External IP pools and verify the page title. */
+export const openExternalIpPoolsPage = async (page: Page): Promise<void> => {
+  await openMainPageOption(page, 'externalIpPools');
+
+  await expect(page.getByRole(...ExternalIpPoolsPage.pageTitle)).toBeVisible();
 };

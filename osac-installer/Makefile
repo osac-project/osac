@@ -60,6 +60,13 @@ OIDC_IDP_CA_HELM_ARGS = $(if $(strip $(OIDC_IDP_CA_FILE)),--set-file keycloak.oi
 FULFILLMENT_GINKGO_ARGS ?=
 FULFILLMENT_IT_REPORT_DIR ?=
 fulfillment-json-report = $(if $(strip $(FULFILLMENT_IT_REPORT_DIR)),--json-report="$(abspath $(FULFILLMENT_IT_REPORT_DIR)/$(1).json)")
+# Optional JUnit output, same contract as the JSON reports above: one file
+# per ginkgo phase (<dir>/<phase>.xml), written only when the directory is
+# set. CI passes it in and merges the phase files into the run's single
+# junit.xml log bundle; the phases of one suite share Ginkgo's suite
+# description, so the phase file names carry which phase ran which specs.
+JUNIT_REPORT_DIR ?=
+junit-report = $(if $(strip $(JUNIT_REPORT_DIR)),--junit-report="$(abspath $(JUNIT_REPORT_DIR)/$(1).xml)")
 MCP_TEST_ENABLED ?= false
 
 ifeq ($(MCP_TEST_ENABLED),true)
@@ -1272,6 +1279,10 @@ ifneq ($(strip $(FULFILLMENT_IT_REPORT_DIR)),)
 # A reused local output directory must not retain old reports for phases a failed run never reaches.
 	rm -f $(foreach phase,$(if $(filter fulfillment,$(SUITE)),service-only networking-operator bmaas-disabled) compute-storage,"$(abspath $(FULFILLMENT_IT_REPORT_DIR)/$(phase).json)")
 endif
+ifneq ($(strip $(JUNIT_REPORT_DIR)),)
+# Same contract for the JUnit phase reports CI merges into one junit.xml.
+	rm -f $(foreach phase,$(if $(filter fulfillment,$(SUITE)),service-only networking-operator bmaas-disabled) compute-storage,"$(abspath $(JUNIT_REPORT_DIR)/$(phase).xml)")
+endif
 # Exercise event-driven reconciliation without full synchronization in every test phase.
 	python3 -m unittest discover -s ../fulfillment-service/it/testdata -p test_compute_storage_aap.py
 	$(MAKE) test-platform-images
@@ -1285,20 +1296,24 @@ ifeq ($(SUITE),fulfillment)
 # No operator runs in this phase: the specs report networking and tenant status
 # through the private API as the operator's feedback controllers would, so a
 # running operator would race them. The networking-operator phase covers it.
-	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_MCP_DEPLOYED_URL="$(MCP_TEST_URL)" ginkgo run $(call fulfillment-json-report,service-only) --timeout 1h15m -v --skip 'Networking with operator|ComputeInstance storage handoff' $(FULFILLMENT_GINKGO_ARGS) it
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_MCP_DEPLOYED_URL="$(MCP_TEST_URL)" ginkgo run $(call fulfillment-json-report,service-only) $(call junit-report,service-only) --timeout 1h30m -v --skip 'Networking with operator|ComputeInstance storage handoff' $(FULFILLMENT_GINKGO_ARGS) it
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.controllers.tenant=false --set operator.controllers.storage=false --set operator.controllers.volume=false --set operator.controllers.networking=true --set operator.controllers.computeInstance=false --set operator.controllers.clusterOrder=false --set operator.networkManagers.enabled=false --set global.services.bmaas.enabled=false --set global.services.maas.enabled=false --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
-	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" ginkgo run $(call fulfillment-json-report,networking-operator) --timeout 30m -v --label-filter 'networking-operator' it
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" ginkgo run $(call fulfillment-json-report,networking-operator) $(call junit-report,networking-operator) --timeout 30m -v --label-filter 'networking-operator' it
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set global.services.bmaas.enabled=false --set operator.enabled=false --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
-	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=bmaas-disabled ginkgo run $(call fulfillment-json-report,bmaas-disabled) --timeout 1h -v --focus 'Service enablement' it
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=bmaas-disabled ginkgo run $(call fulfillment-json-report,bmaas-disabled) $(call junit-report,bmaas-disabled) --timeout 1h -v --focus 'Service enablement' it
 endif
 ifneq ($(filter $(SUITE),fulfillment compute-storage),)
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set operator.enabled=true --set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.controllers.tenant=false --set operator.controllers.storage=true --set operator.controllers.volume=false --set operator.controllers.networking=false --set operator.controllers.computeInstance=true --set operator.controllers.clusterOrder=false --set operator.networkManagers.enabled=false --set-string operator.aap.url=http://compute-storage-aap.$(NS).svc.cluster.local:8080/api --set operator.aap.statusPollInterval=1s --set global.services.bmaas.enabled=false --set global.services.maas.enabled=false --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
-	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=compute-storage ginkgo run $(call fulfillment-json-report,compute-storage) --timeout 30m -v --label-filter 'compute-storage' it
+	cd ../fulfillment-service && KIND_CLUSTER="$(KIND_CLUSTER_NAME)" IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" IT_TEST_SUITE=compute-storage ginkgo run $(call fulfillment-json-report,compute-storage) $(call junit-report,compute-storage) --timeout 30m -v --label-filter 'compute-storage' it
 endif
 ifeq ($(SUITE),operator)
+ifneq ($(strip $(JUNIT_REPORT_DIR)),)
+# A reused local output directory must not retain old reports for phases a failed run never reaches.
+	rm -f "$(abspath $(JUNIT_REPORT_DIR)/operator.xml)" "$(abspath $(JUNIT_REPORT_DIR)/networkclass.xml)"
+endif
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/osac-operator:it -f ../osac-operator/Containerfile ..)
 	$(call kind-load-image,localhost/osac-operator:it)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
@@ -1308,15 +1323,18 @@ ifeq ($(SUITE),operator)
 	# above, so the operator phase needs no extra values file.
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.fulfillment.serverAddress= --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.provisioningEnabled=false --set-string operator.aap.url=http://osac-aap-recorder.$(NS).svc.cluster.local:8080/api --set operator.aap.statusPollInterval=1s $(METERING_IT_IMAGE_ARGS)"
-	cd ../osac-operator && IT_TEST_SUITE=operator ginkgo run --timeout 30m -v test/integration
+	cd ../osac-operator && IT_TEST_SUITE=operator ginkgo run $(call junit-report,operator) --timeout 30m -v test/integration
 	# Provisioning-enabled phase: the operator resolves NetworkClass manager
 	# registrations (chart-rendered netris and cudn_evpn), which
 	# it skips when provider networking is disabled. No AAP or networking CR is needed.
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set operator.image.repository=localhost/osac-operator --set operator.image.tag=it --set operator.image.pullPolicy=Never --set operator.fulfillment.serverAddress= --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.fulfillmentTrust.enabled=false --set global.networking.provisioningEnabled=true --set global.networking.fabricManager=netris --set global.networking.k8sManager=cudn_evpn $(METERING_IT_IMAGE_ARGS)"
-	cd ../osac-operator && ginkgo run --timeout 15m -v --label-filter 'networkclass' test/integration
+	cd ../osac-operator && ginkgo run $(call junit-report,networkclass) --timeout 15m -v --label-filter 'networkclass' test/integration
 endif
 ifeq ($(SUITE),bmf)
+ifneq ($(strip $(JUNIT_REPORT_DIR)),)
+	rm -f "$(abspath $(JUNIT_REPORT_DIR)/bmf.xml)"
+endif
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/bmf-operator:it -f ../bare-metal-fulfillment-operator/Containerfile ..)
 	$(call kind-load-image,localhost/bmf-operator:it)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t $(METERING_IT_IMAGE) -f ../osac-metering/metering-service/Containerfile ..)
@@ -1324,7 +1342,7 @@ ifeq ($(SUITE),bmf)
 	kubectl apply --server-side --force-conflicts -f ../bare-metal-fulfillment-operator/test/crds/
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
 		EXTRA_HELM_ARGS="--set global.services.bmaas.enabled=true --set bmf.replicaCount=1 --set bmf.image.repository=localhost/bmf-operator --set bmf.image.tag=it --set bmf.image.pullPolicy=Never --set bmf.secretAPI.url= --set operator.enabled=false --set operator.networkManagers.enabled=true --set service.enabled=false --set hubAccess.enabled=false --set validation.enabled=false --set global.networking.provisioningEnabled=true $(METERING_IT_IMAGE_ARGS)"
-	cd ../bare-metal-fulfillment-operator && ginkgo run --timeout 30m -v test/integration
+	cd ../bare-metal-fulfillment-operator && ginkgo run $(call junit-report,bmf) --timeout 30m -v test/integration
 endif
 
 ##@ Charts

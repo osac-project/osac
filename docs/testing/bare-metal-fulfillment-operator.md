@@ -40,7 +40,12 @@ readiness, DHCP lease, and fake Metal3 power state to verify BMF mirrors the
 lease and query-job status. This covers the deployed BMF/API wiring; it does not
 run the Fabric Manager or AAP DHCP task, and it does not cover reusing a legacy
 NetworkAttachment. Unit and Envtest cases cover selection, reuse, diagnostics,
-and lease handling in isolation. Real provider and power behavior remains under
+and lease handling in isolation. The same test deletes the instance with a
+simulated network-controller finalizer,
+checks that BMF powers off the fake host and retains its assignment until cleanup,
+then checks that BMF returns the host to inventory. This test covers this
+change's BMI deletion path. It does not exercise the real network controller,
+Fabric Manager, or provider power behavior, which remains under
 [OSAC-4843](https://redhat.atlassian.net/browse/OSAC-4843).
 
 ## Networking cleanup ownership (NET-CLEAN-08)

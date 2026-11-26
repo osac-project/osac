@@ -32,7 +32,11 @@ import {
   emptyResourceSelectValue,
 } from '../../Form/ResourceSelectField';
 import { useUpdateVmInstanceType } from '../useUpdateVmInstanceType';
-import { formatInstanceTypeOptionLabel } from '../utils';
+import {
+  formatInstanceTypeDisplayName,
+  formatInstanceTypeSizing,
+  isGpuCompatibleInstanceType,
+} from '../utils';
 
 interface EditInstanceTypeModalProps {
   vm: ComputeInstance;
@@ -44,9 +48,6 @@ interface FormValues {
 }
 
 type CurrentTypeStatus = 'loading' | 'ready' | 'error';
-
-const hasGpu = (item: { spec?: { gpu?: unknown } } | undefined): boolean =>
-  Boolean(item?.spec?.gpu);
 
 const validationSchema = (t: TFunction) =>
   Yup.object({
@@ -140,6 +141,13 @@ const EditInstanceTypeModal = ({ vm, onClose }: EditInstanceTypeModalProps) => {
               <Content component="p">
                 {t('Select a new instance type for this virtual machine.')}
               </Content>
+              {currentTypeStatus === 'ready' && currentType?.spec?.gpu ? (
+                <Content component="p">
+                  {t(
+                    'GPU configuration cannot change during resize. Only instance types with the same GPU configuration are listed.',
+                  )}
+                </Content>
+              ) : null}
               {currentTypeStatus === 'error' ? (
                 <Alert
                   variant="danger"
@@ -165,9 +173,15 @@ const EditInstanceTypeModal = ({ vm, onClose }: EditInstanceTypeModalProps) => {
                     if (currentTypeStatus !== 'ready' || !currentType) {
                       return true;
                     }
-                    return hasGpu(item as InstanceType) === hasGpu(currentType);
+                    return isGpuCompatibleInstanceType(currentType, item as InstanceType);
                   }}
-                  formatOptionLabel={(item) => formatInstanceTypeOptionLabel(item as InstanceType)}
+                  formatOptionLabel={(item) =>
+                    formatInstanceTypeDisplayName(item as InstanceType, ` (${t('deprecated')})`)
+                  }
+                  getOptionDescription={(item) => {
+                    const sizing = formatInstanceTypeSizing(item as InstanceType);
+                    return sizing === '—' ? undefined : sizing;
+                  }}
                   placeholder={t('Select an instance type')}
                   loadErrorTitle={t('Error loading instance types')}
                   emptyTitle={t('No instance types available')}

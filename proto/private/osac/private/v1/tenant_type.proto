@@ -21,7 +21,7 @@ import "google/api/field_behavior.proto";
 import "google/protobuf/timestamp.proto";
 import "osac/private/v1/condition_status_type.proto";
 import "osac/private/v1/metadata_type.proto";
-import "osac/private/v1/break_glass_credentials_type.proto";
+import "osac/private/v1/role_type.proto";
 import "osac/private/v1/secret_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
@@ -95,6 +95,11 @@ message TenantSpec {
   optional string external_billing_id = 3
     [(cleanapi.field).private = true,
      (buf.validate.field).string.max_len = 256];
+
+  // Role selected for onboarding. It must belong to this tenant or to shared.
+  // An unset value on an ordinary tenant inherits the shared tenant's selection.
+  // An unset value on shared means there is no platform default.
+  RoleReference default_role = 4;
 }
 
 // Represents the current operational state of a Tenant.
@@ -107,51 +112,28 @@ message TenantStatus {
     (google.api.field_behavior) = OUTPUT_ONLY
   ];
 
-  // Break-glass account credentials.
-  // Only populated on successful creation. These credentials must be stored securely.
-  // This field is not persisted; Get and List responses omit it. The durable copy is the
-  // Secret referenced by spec.break_glass_credentials_secret.
-  BreakGlassCredentials break_glass_credentials = 2 [
-    (cleanapi.field).private = true
-  ];
-
   // Current lifecycle state of the tenant's IDP synchronization.
-  TenantState state = 3 [
+  TenantState state = 2 [
     (cleanapi.field).private = true
   ];
 
   // Human-readable message providing additional details about the current state.
-  //
-  // For PENDING state, this might contain progress information like "Waiting for IDP sync" or
-  // "Creating tenant in identity provider".
-  //
-  // For FAILED state, this contains error details explaining what went wrong, such as "IDP connection timeout",
-  // "Tenant name already exists in IDP", or "Invalid tenant name format".
-  //
-  // For SYNCED state, this is typically empty or contains confirmation like "Tenant synced to IDP".
-  optional string message = 4 [
+  optional string message = 3 [
     (cleanapi.field).private = true
   ];
 
   // Name of the tenant created in the identity provider.
-  // Typically matches the tenant name but stored here for reference.
-  // This is set by the controller after successful IDP sync.
-  // Empty string when state is PENDING or FAILED.
-  string idp_tenant_name = 5 [
+  string idp_tenant_name = 4 [
     (cleanapi.field).private = true
   ];
 
   // User ID of the break-glass account created in the identity provider.
-  // This account has limited administrative permissions for managing users and identity providers.
-  // The break-glass password is NOT stored here for security reasons - it is only returned once
-  // during tenant creation.
-  // Empty string when state is PENDING or FAILED.
-  string break_glass_user_id = 6 [
+  string break_glass_user_id = 5 [
     (cleanapi.field).private = true
   ];
 
   // Conditions provide detailed status information about various subsystems of the tenant.
-  repeated TenantCondition conditions = 7 [
+  repeated TenantCondition conditions = 6 [
     (cleanapi.field).private = true
   ];
 }

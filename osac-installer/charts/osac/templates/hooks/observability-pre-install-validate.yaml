@@ -1,0 +1,149 @@
+{{- if .Values.global.observability.enabled }}
+{{- $fullname := include "osac.fullname" . -}}
+{{- $observability := .Values.global.observability | default dict -}}
+{{- $objectStorage := $observability.objectStorage | default dict -}}
+{{- $secretName := $objectStorage.secretName | default "" -}}
+{{- $name := printf "%s-observability-preflight" $fullname -}}
+{{- /* A pre-install hook runs before Helm applies any release object, so a
+       Namespace marked helm.sh/resource-policy: keep cannot satisfy the
+       first-install check: it does not exist yet, and the Secret must already
+       be in osac-observability before any chart resource is applied. The gate
+       therefore creates and labels that namespace itself, which also keeps the
+       namespace, the admin's Secret and the Receive and Compactor PVCs out of
+       Helm's ownership when observability is later disabled.
+       The get/patch/update rule is limited by resourceNames to that one
+       namespace. Kubernetes cannot name-restrict `create`, so that verb stands
+       alone and can create any namespace, and the Secret `get` matches the
+       configured name in every namespace. Both grants exist only while the
+       hook runs: the delete policy includes hook-failed, so a missing Secret
+       removes the ClusterRole and its binding instead of leaving the
+       cluster-wide create behind. */ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-30"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-30"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    resourceNames: ["osac-observability"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: [{{ $secretName | quote }}]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-30"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "osac.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-20"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+    "helm.sh/hook-output-log-policy": hook-failed
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        {{- include "osac.labels" . | nindent 8 }}
+      annotations:
+        openshift.io/required-scc: restricted-v2
+    spec:
+      serviceAccountName: {{ $name }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        {{- if not (.Capabilities.APIVersions.Has "security.openshift.io/v1") }}
+        runAsUser: 1000
+        fsGroup: 1000
+        {{- end }}
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: validate
+          image: {{ .Values.cliImage }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -e
+              echo "=== Observability Prerequisite Validation ==="
+{{ .Files.Get "files/validate-observability.sh" | indent 14 }}
+              echo "=== Observability prerequisites passed ==="
+          env:
+            - name: HOME
+              value: /tmp
+            - name: OBSERVABILITY_ENABLED
+              value: {{ $observability.enabled | default false | quote }}
+            - name: OBS_SECRET_NAME
+              value: {{ $secretName | quote }}
+            - name: OBS_SECRET_NAMESPACE
+              value: "osac-observability"
+            - name: OBS_ENDPOINT
+              value: {{ $objectStorage.endpoint | default "" | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

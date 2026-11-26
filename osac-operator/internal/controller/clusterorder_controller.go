@@ -33,6 +33,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -84,21 +85,28 @@ type ClusterOrderReconciler struct {
 	NetworkingNamespace   string
 	// NetworkingProvisioningEnabled is global.networking.provisioningEnabled.
 	NetworkingProvisioningEnabled bool
-	ClustersClient                automaticClustersGetter
-	ExternalIPAttachmentsClient   automaticExternalIPAttachmentsClient
-	managementProbe               managementEndpointProbe
-	ManagementRootCAs             *x509.CertPool
-	Engine                        *networktask.Engine
-	ProvisioningProvider          provisioning.ProvisioningProvider
-	StatusPollInterval            time.Duration
-	MaxJobHistory                 int
-	StallThresholds               ClusterOrderStallThresholds
-	Recorder                      events.EventRecorder
+	// MetricsWrite is global.observability.clusterRemoteWrite plus the scrape
+	// interval. The zero value configures no tenant cluster.
+	MetricsWrite                MetricsWriteConfig
+	ClustersClient              automaticClustersGetter
+	ExternalIPAttachmentsClient automaticExternalIPAttachmentsClient
+	managementProbe             managementEndpointProbe
+	ManagementRootCAs           *x509.CertPool
+	Engine                      *networktask.Engine
+	ProvisioningProvider        provisioning.ProvisioningProvider
+	StatusPollInterval          time.Duration
+	MaxJobHistory               int
+	StallThresholds             ClusterOrderStallThresholds
+	Recorder                    events.EventRecorder
 	// SecretsClient resolves the Cluster's registered SSH-key Secret through
 	// the fulfillment private API. The resolved material is passed only as an
 	// AAP launch variable; it is never persisted on the ClusterOrder.
 	SecretsClient SecretsClient
 	now           func() time.Time
+	// guestClusterClientOverride substitutes the tenant cluster client resolved
+	// from the HostedControlPlane kubeconfig. Tests set it to observe the
+	// cross-cluster writes without a running hosted cluster.
+	guestClusterClientOverride func(context.Context, *hypershiftv1beta1.HostedCluster) (kubernetes.Interface, bool, bool, error)
 }
 
 const (
@@ -701,6 +709,13 @@ func (r *ClusterOrderReconciler) handleUpdateWithClusterLookup(
 		// route/InfraEnv status changes do not all have dedicated watches.
 		result = mergeReconcileResult(result, ctrl.Result{RequeueAfter: r.StatusPollInterval})
 	}
+	if hc != nil {
+		metricsResult, metricsErr := r.reconcileClusterMetricsWrite(ctx, instance, hc)
+		if metricsErr != nil {
+			return ctrl.Result{}, metricsErr
+		}
+		result = mergeReconcileResult(result, metricsResult)
+	}
 	return result, nil
 }
 
@@ -1298,6 +1313,16 @@ func (r *ClusterOrderReconciler) handleDelete(ctx context.Context, _ reconcile.R
 	// cancel active jobs. Job state itself must not block ClusterOrder teardown.
 	if controllerutil.ContainsFinalizer(instance, osacAddOnOperatorFinalizer) {
 		return ctrl.Result{RequeueAfter: r.StatusPollInterval}, nil
+	}
+
+	// Withdraw the tenant identity while the issued Secret and the tenant
+	// cluster still exist, and before provisioning teardown removes them.
+	revoked, revokeResult, err := r.revokeClusterMetricsWrite(ctx, instance)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !revoked {
+		return revokeResult, nil
 	}
 
 	// Stop any in-flight endpoint or Fabric Manager work before starting cleanup.

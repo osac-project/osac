@@ -1,0 +1,4 @@
+prometheusK8s:
+  remoteWrite:
+    - name: guest
+      url: https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive

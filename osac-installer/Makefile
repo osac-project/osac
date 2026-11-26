@@ -508,8 +508,10 @@ KIND_FULFILLMENT_IMAGE := ghcr.io/osac-project/fulfillment-service:latest
 KIND_OPERATOR_IMAGE := ghcr.io/osac-project/osac-operator:latest
 KIND_METERING_IMAGE := ghcr.io/osac-project/metering-service:latest
 KIND_AAP_IMAGE := ghcr.io/osac-project/osac-aap:latest
-# UI has no component Makefile, so the installer keeps its local image reference.
+# UI and observability have no component Makefile, so the installer keeps
+# their local image references.
 KIND_UI_IMAGE := ghcr.io/osac-project/osac-ui:latest
+KIND_OBSERVABILITY_IMAGE := ghcr.io/osac-project/osac-observability:latest
 KIND_LOAD_IMAGE_SCRIPT ?= $(abspath scripts/dev-full/kind-load-image.sh)
 define kind-load-local-image
 	$(KIND_RUNTIME_ENV) NS="$(NS)" \
@@ -537,6 +539,7 @@ kind-load-images: validate-ns ## Load previously built dev-full images into Kind
 	$(MAKE) -C ../osac-aap kind-load-image IMG=$(KIND_AAP_IMAGE) NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
 	$(call kind-load-local-image,$(KIND_METERING_IMAGE))
 	$(call kind-load-local-image,$(KIND_UI_IMAGE))
+	$(call kind-load-local-image,$(KIND_OBSERVABILITY_IMAGE))
 
 .PHONY: kind-build-load-images
 kind-build-load-images: ## Build and load dev-full images into Kind (PLATFORM=kind PROFILE=dev-full NS= required)
@@ -561,6 +564,7 @@ endif
 endif
 	$(MAKE) -C ../osac-aap execution-environment-build IMG=$(KIND_AAP_IMAGE) CONTAINER_TOOL=$(CONTAINER_TOOL)
 	$(CONTAINER_TOOL) build -f ../osac-ui/Containerfile -t $(KIND_UI_IMAGE) ..
+	$(CONTAINER_TOOL) build -f ../osac-observability/Containerfile -t $(KIND_OBSERVABILITY_IMAGE) ..
 	$(MAKE) kind-load-images PLATFORM=kind PROFILE=dev-full NS=$(NS) KIND_CLUSTER_NAME=$(KIND_CLUSTER_NAME) CONTAINER_TOOL=$(CONTAINER_TOOL)
 ##@ Entity: Infra
 
@@ -1394,6 +1398,18 @@ helm-template: helm-infra-deps ## Dry-run render all templates
 	helm template osac $(OSAC_CHART) --values $(HELM_VALIDATION_VALUES)
 
 # Schema-error patterns accept Helm 3 dotted paths and Helm 4 JSON pointers.
+
+.PHONY: helm-unit
+helm-unit: helm-deps ## Run Helm unit tests
+	@helm plugin list | grep -q '^unittest' || { \
+		echo "ERROR: the helm-unittest plugin is required. Install it with:" >&2; \
+		echo "  helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.8.2" >&2; \
+		exit 1; \
+	}
+	helm unittest $(OSAC_CHART) -s=false
+	helm unittest ../osac-metering/charts/osac-metering
+	helm unittest ../fulfillment-service/charts/service
+
 .PHONY: csi-render-test
 csi-render-test: helm-deps helm-infra-deps ## Verify CSI and storage-provider chart rendering
 	@set -euo pipefail; \
@@ -1551,7 +1567,7 @@ chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/
 	uv run --project .. python scripts/test-chart-name-independence-render.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test network-class-step-test input-validation-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test lvms-optional-path-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint helm-unit service-account-idp-render-test csi-render-test helm-networking-test observability-render-test observability-hook-test observability-unit-test netris-ca-lifecycle-test network-class-step-test input-validation-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test lvms-optional-path-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \
@@ -1576,6 +1592,20 @@ helm-networking-test: helm-deps ## Test global.networking values, validation, an
 	uv run --project .. python scripts/test-networking-values.py
 	python3 scripts/test_it_networking_checks.py
 	uv run --with ansible-core --project .. python scripts/test-networking-provisioning-overlay.py
+
+.PHONY: observability-render-test
+observability-render-test: helm-deps ## Check the metrics scrape wiring renders as designed
+	./scripts/test-observability-render.sh
+
+.PHONY: observability-hook-test
+observability-hook-test: ## Check the observability prerequisite gate aborts on each missing prerequisite
+	./scripts/test-observability-hook.sh
+
+.PHONY: observability-unit-test
+observability-unit-test: helm-osac-deps ## Run the observability render, chart and helper tests
+	helm unittest $(OSAC_CHART) -f tests/observability_test.yaml
+	$(MAKE) -C $(abspath $(CURDIR)/../osac-observability) test
+	./scripts/test-observability-realm.sh
 
 .PHONY: network-class-step-test
 network-class-step-test: ## Test the installer NetworkClass step against a fake fulfillment API

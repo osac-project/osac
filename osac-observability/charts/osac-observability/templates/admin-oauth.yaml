@@ -1,0 +1,20 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $ns := include "osac-observability.namespace" . -}}
+{{- /* The ose-oauth-proxy acts as this service account: OpenShift treats an
+       annotated service account as an OAuth client and derives the redirect
+       URI from the referenced Route. The proxy reads its client id and secret
+       from the mounted service-account token, so no Secret is rendered and no
+       credential appears in values. The cookie secret is created by the
+       credential hook (thanos-admin-openshift-oauth). */ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: thanos-query-admin-openshift
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+  annotations:
+    serviceaccounts.openshift.io/oauth-redirectreference.thanos-query-admin-openshift: >-
+      {"kind":"OAuthRedirectReference","apiVersion":"v1",
+      "reference":{"kind":"Route","name":"thanos-query-admin-openshift"}}
+{{- end }}

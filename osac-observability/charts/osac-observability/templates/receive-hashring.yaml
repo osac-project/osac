@@ -1,0 +1,26 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $thanos := .Values.global.observability.thanos | default dict -}}
+{{- $receive := $thanos.receive | default dict -}}
+{{- $replicas := $receive.replicas | default 2 | int -}}
+{{- $ns := include "osac-observability.namespace" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: thanos-receive-hashring
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+data:
+  # Receive pods re-read this file, so a replica change only needs a ConfigMap
+  # update and the pods pick the new endpoints up without a restart.
+  hashring.json: |
+    [
+      {
+        "endpoints": [
+    {{- range $i := until $replicas }}
+          "thanos-receive-{{ $i }}.thanos-receive-headless.{{ $ns }}.svc.cluster.local:10901"{{ if lt (add1 $i) $replicas }},{{ end }}
+    {{- end }}
+        ]
+      }
+    ]
+{{- end }}

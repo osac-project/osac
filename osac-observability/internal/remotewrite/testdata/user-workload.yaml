@@ -1,0 +1,2 @@
+prometheusK8s:
+  enableUserWorkload: true

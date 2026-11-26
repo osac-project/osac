@@ -124,6 +124,19 @@ const (
 	envEnableFulfillmentTrust                       = "OSAC_ENABLE_FULFILLMENT_TRUST_RECONCILER"
 	envFulfillmentTrustTenantNamespace              = "OSAC_FULFILLMENT_TRUST_TENANT_NAMESPACE"
 
+	// global.observability.clusterRemoteWrite: the tenant-cluster remote-write
+	// path this operator configures through the write proxy.
+	envObservabilityRemoteWriteEnabled  = "OSAC_OBSERVABILITY_CLUSTER_REMOTE_WRITE_ENABLED"
+	envObservabilityNamespace           = "OSAC_OBSERVABILITY_NAMESPACE"
+	envObservabilityWriteURL            = "OSAC_OBSERVABILITY_WRITE_URL"
+	envObservabilityWriteCAIssuer       = "OSAC_OBSERVABILITY_WRITE_CA_ISSUER"
+	envObservabilityRevocationConfigMap = "OSAC_OBSERVABILITY_REVOCATION_CONFIGMAP"
+	envObservabilityCertDuration        = "OSAC_OBSERVABILITY_CERT_DURATION"
+	envObservabilityCertRenewBefore     = "OSAC_OBSERVABILITY_CERT_RENEW_BEFORE"
+	envObservabilityKeepKubePrefix      = "OSAC_OBSERVABILITY_KEEP_KUBE_PREFIX"
+	envObservabilityDropPrefixes        = "OSAC_OBSERVABILITY_DROP_PREFIXES"
+	envObservabilityScrapeInterval      = "OSAC_OBSERVABILITY_SCRAPE_INTERVAL"
+
 	// Storage controller AAP template overrides
 	envStorageBackendProvisionTemplate   = "OSAC_STORAGE_BACKEND_AAP_PROVISION_TEMPLATE"
 	envStorageBackendDeprovisionTemplate = "OSAC_STORAGE_BACKEND_AAP_DEPROVISION_TEMPLATE"
@@ -551,6 +564,10 @@ func setupClusterControllers(
 				provider, pollInterval, maxJobHistory,
 			)
 			reconciler.NetworkingProvisioningEnabled = networkingProvisioningEnabled()
+			reconciler.MetricsWrite = metricsWriteConfigFromEnv()
+			if err := reconciler.MetricsWrite.Validate(); err != nil {
+				return err
+			}
 			reconciler.ManagementRootCAs = managementRoots
 			reconciler.Engine = engine
 			reconciler.StallThresholds = clusterOrderStallThresholdsFromEnv()
@@ -983,6 +1000,38 @@ func networkingProvisioningEnabled() bool {
 	return helpers.GetEnvWithDefault(envNetworkingProvisioningEnabled, true)
 }
 
+// metricsWriteConfigFromEnv reads the tenant remote-write configuration the
+// operator chart renders from global.observability.
+func metricsWriteConfigFromEnv() controller.MetricsWriteConfig {
+	return controller.MetricsWriteConfig{
+		Enabled:             helpers.GetEnvWithDefault(envObservabilityRemoteWriteEnabled, false),
+		Namespace:           os.Getenv(envObservabilityNamespace),
+		WriteURL:            os.Getenv(envObservabilityWriteURL),
+		Issuer:              os.Getenv(envObservabilityWriteCAIssuer),
+		RevocationConfigMap: os.Getenv(envObservabilityRevocationConfigMap),
+		CertificateDuration: os.Getenv(envObservabilityCertDuration),
+		RenewBefore:         os.Getenv(envObservabilityCertRenewBefore),
+		ScrapeInterval:      os.Getenv(envObservabilityScrapeInterval),
+		KeepKubePrefix:      os.Getenv(envObservabilityKeepKubePrefix),
+		DropPrefixes:        splitEnvList(os.Getenv(envObservabilityDropPrefixes)),
+	}
+}
+
+// splitEnvList splits a comma-separated environment value, dropping blanks so a
+// trailing comma does not produce an empty prefix.
+func splitEnvList(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	items := make([]string, 0, 4)
+	for _, part := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			items = append(items, trimmed)
+		}
+	}
+	return items
+}
+
 // newNetworkTaskEngine creates the network task engine shared by the
 // networking, ClusterOrder and ComputeInstance controllers (network manager
 // contract §4.3-§4.7).
@@ -1109,6 +1158,7 @@ func main() { //nolint:gocyclo // Startup orchestrates many optional controllers
 	var err error
 
 	var metricsAddr string
+	var metricsCertPath, metricsCertName, metricsCertKey string
 	var enableLeaderElection bool
 	var probeAddr string
 	var secureMetrics bool
@@ -1127,6 +1177,10 @@ func main() { //nolint:gocyclo // Startup orchestrates many optional controllers
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", true,
 		"If set, the metrics endpoint is served securely via HTTPS. Use --metrics-secure=false to use HTTP instead.")
+	flag.StringVar(&metricsCertPath, "metrics-cert-path", "",
+		"The directory that contains the metrics server certificate.")
+	flag.StringVar(&metricsCertName, "metrics-cert-name", "tls.crt", "The name of the metrics server certificate file.")
+	flag.StringVar(&metricsCertKey, "metrics-cert-key", "tls.key", "The name of the metrics server key file.")
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.BoolVar(&grpcPlaintext,
@@ -1198,6 +1252,14 @@ func main() { //nolint:gocyclo // Startup orchestrates many optional controllers
 		tlsOpts = append(tlsOpts, disableHTTP2)
 	}
 
+	metricsTLSOpts, metricsCertWatcher, err := metricsCertificateTLSOpts(
+		metricsCertPath, metricsCertName, metricsCertKey, tlsOpts, setupLog,
+	)
+	if err != nil {
+		setupLog.Error(err, "unable to configure the metrics serving certificate")
+		os.Exit(1)
+	}
+
 	webhookServer := webhook.NewServer(webhook.Options{
 		TLSOpts: tlsOpts,
 	})
@@ -1209,13 +1271,10 @@ func main() { //nolint:gocyclo // Startup orchestrates many optional controllers
 	metricsServerOptions := metricsserver.Options{
 		BindAddress:   metricsAddr,
 		SecureServing: secureMetrics,
-		// TODO(user): TLSOpts is used to allow configuring the TLS config used for the server. If certificates are
-		// not provided, self-signed certificates will be generated by default. This option is not recommended for
-		// production environments as self-signed certificates do not offer the same level of trust and security
-		// as certificates issued by a trusted Certificate Authority (CA). The primary risk is potentially allowing
-		// unauthorized access to sensitive metrics data. Consider replacing with CertDir, CertName, and KeyName
-		// to provide certificates, ensuring the server communicates using trusted and secure certificates.
-		TLSOpts: tlsOpts,
+		// TLSOpts serves the certificate mounted from the service-CA Secret when
+		// --metrics-cert-path is set. Without one, controller-runtime generates
+		// a self-signed certificate.
+		TLSOpts: metricsTLSOpts,
 	}
 
 	if secureMetrics {
@@ -1298,6 +1357,14 @@ func main() { //nolint:gocyclo // Startup orchestrates many optional controllers
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
+	}
+
+	if metricsCertWatcher != nil {
+		setupLog.Info("adding metrics certificate watcher to manager")
+		if err := mgr.GetLocalManager().Add(metricsCertWatcher); err != nil {
+			setupLog.Error(err, "unable to add metrics certificate watcher to manager")
+			os.Exit(1)
+		}
 	}
 
 	// Create the gRPC connection:

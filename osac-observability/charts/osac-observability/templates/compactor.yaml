@@ -1,0 +1,96 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $obs := .Values.global.observability -}}
+{{- $thanos := $obs.thanos | default dict -}}
+{{- $compactor := $thanos.compactor | default dict -}}
+{{- $storage := $obs.objectStorage | default dict -}}
+{{- $downsampling := (($thanos.downsampling | default dict).enabled) | default false -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: thanos-compactor
+  namespace: {{ include "osac-observability.namespace" . }}
+  labels:
+    {{- include "osac-observability.componentLabels" (dict "root" . "component" "compactor") | nindent 4 }}
+spec:
+  serviceName: thanos-compactor-headless
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "osac-observability.componentSelectorLabels" (dict "root" . "component" "compactor") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "osac-observability.componentLabels" (dict "root" . "component" "compactor") | nindent 8 }}
+    spec:
+      securityContext:
+        {{- include "osac-observability.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: thanos-compactor
+          image: "{{ include "osac-observability.image" $thanos.image }}"
+          imagePullPolicy: IfNotPresent
+          args:
+            - compact
+            - --data-dir=/var/thanos/compact
+            - --http-address=0.0.0.0:10902
+            - --objstore.config-file=/etc/thanos/objstore/objstore.yml
+            - --retention.resolution-raw={{ $thanos.retention }}
+            {{- if $downsampling }}
+            - --retention.resolution-5m={{ index $thanos.resolution "5m" }}
+            - --retention.resolution-1h={{ index $thanos.resolution "1h" }}
+            {{- else }}
+            # Aggregates would rewrite long-range results to coarser points, so
+            # they stay off unless the operator opted in.
+            - --downsampling.disable
+            {{- end }}
+            - --deduplication.replica-label={{ (($thanos.deduplication | default dict).replicaLabel) | default "replica" }}
+            - --wait
+          ports:
+            - name: http
+              containerPort: 10902
+              protocol: TCP
+            - name: grpc
+              containerPort: 10901
+              protocol: TCP
+          env:
+            - name: HOME
+              value: /tmp
+          envFrom:
+            - secretRef:
+                name: {{ required "global.observability.objectStorage.secretName is required when observability is enabled" $storage.secretName }}
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml $compactor.resources | nindent 12 }}
+          securityContext:
+            {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/thanos/compact
+            - name: objstore
+              mountPath: /etc/thanos/objstore
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: objstore
+          configMap:
+            name: thanos-object-storage
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        {{- with $thanos.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $compactor.pvcSize | default "100Gi" }}
+{{- end }}

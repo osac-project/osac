@@ -198,6 +198,47 @@ stamp_component_image_refs() {
                 yq -i '.images.ui = strenv(IMAGE_REF)' "osac-ui/charts/ui/values.yaml"
             stamp_umbrella_nested_field "${umbrella_values}" ui images ui "ghcr.io/osac-project/osac-ui:${tag_value}"
             ;;
+        osac-observability)
+            # The helper image (remote-write-config, query-allowlist,
+            # admin-credentials, query-auth-gate) is OSAC's own; the other
+            # two service images are third-party and pinned by their
+            # upstream tag, so only metricsAuth is stamped. The chart reads
+            # the ref from global.observability.services.metricsAuth, which
+            # Helm propagates from the umbrella -- there is no field in the
+            # sub-chart's own values.yaml to stamp.
+            #
+            # Stamp tag in the umbrella values (5-level path:
+            # global.observability.services.metricsAuth.tag). Uses awk (same
+            # rationale as stamp_umbrella_nested_field) to preserve
+            # formatting -- yq -i reformats the file and breaks ct-lint's
+            # yamllint.
+            local _tmp; _tmp="$(mktemp)"
+            if ! awk -v val="${tag_value}" '
+                BEGIN { depth=0; stamped=0 }
+                /^global:/ { depth=1; print; next }
+                depth==1 && /^  observability:/ { depth=2; print; next }
+                depth==2 && /^    services:/ { depth=3; print; next }
+                depth==3 && /^      metricsAuth:/ { depth=4; print; next }
+                depth==4 && /^        tag:/ {
+                    match($0, /^[[:space:]]+/)
+                    pfx = substr($0, RSTART, RLENGTH)
+                    print pfx "tag: " val
+                    depth=0; stamped=1; next
+                }
+                /^[^ #\t]/ && depth > 0 { depth=0 }
+                { print }
+                END { exit(stamped ? 0 : 1) }
+            ' "${umbrella_values}" > "${_tmp}"; then
+                rm -f "${_tmp}"
+                echo "::error::global.observability.services.metricsAuth.tag not found in ${umbrella_values}" >&2
+                return 1
+            fi
+            # Write through rather than mv, so the destination keeps its own
+            # mode without the GNU-only `chmod --reference` (this function is
+            # unit-tested from a developer checkout on macOS too).
+            cat "${_tmp}" > "${umbrella_values}"
+            rm -f "${_tmp}"
+            ;;
         *)
             echo "::error::stamp_component_image_refs: unknown component '${component}'" >&2
             return 1

@@ -517,6 +517,9 @@ func hostedControlPlaneNamespace(hc *hypershiftv1beta1.HostedCluster) string {
 func (r *ClusterOrderReconciler) guestClusterClient(
 	ctx context.Context, hc *hypershiftv1beta1.HostedCluster,
 ) (kubernetes.Interface, bool, bool, error) {
+	if r.guestClusterClientOverride != nil {
+		return r.guestClusterClientOverride(ctx, hc)
+	}
 	if hc == nil || !hostedClusterControlPlaneIsAvailable(hc) {
 		return nil, false, false, nil
 	}

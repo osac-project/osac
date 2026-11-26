@@ -99,3 +99,31 @@ Otherwise, falls back to global.services.<serviceKey>.enabled (default true).
 {{- $enabled -}}
 {{- end -}}
 {{- end }}
+
+{{/*
+The ServiceMonitor renders when the standalone override is set or the umbrella
+chart enabled observability. Keep in sync with the identical helper in the
+other OSAC component charts; subcharts cannot call sibling templates.
+*/}}
+{{- define "osac-operator.serviceMonitorEnabled" -}}
+{{- $serviceMonitor := .Values.serviceMonitor | default dict -}}
+{{- $globalObservability := (.Values.global | default dict).observability | default dict -}}
+{{- if or $serviceMonitor.enabled $globalObservability.enabled -}}true{{- end -}}
+{{- end }}
+
+{{/*
+Resolve the scrape interval. Fails rather than hardcoding a default.
+*/}}
+{{- define "osac-operator.serviceMonitorInterval" -}}
+{{- $serviceMonitor := .Values.serviceMonitor | default dict -}}
+{{- $globalObservability := (.Values.global | default dict).observability | default dict -}}
+{{- $collection := $globalObservability.collection | default dict -}}
+{{- $interval := $serviceMonitor.interval | default "" | toString -}}
+{{- if not $interval -}}
+{{- $interval = $collection.osacControlPlane | default "" | toString -}}
+{{- end -}}
+{{- if not $interval -}}
+{{- fail "serviceMonitor.interval or global.observability.collection.osacControlPlane must be set" -}}
+{{- end -}}
+{{- $interval -}}
+{{- end }}

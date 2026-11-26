@@ -1,0 +1,204 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $obs := .Values.global.observability | default dict -}}
+{{- $write := $obs.clusterRemoteWrite | default dict -}}
+{{- if $write.enabled }}
+{{- $ns := include "osac-observability.namespace" . -}}
+{{- $clusterDomain := (.Values.global | default dict).clusterDomain | default "" -}}
+{{- $metricsAuth := ($obs.services | default dict).metricsAuth | default dict -}}
+{{- $routeName := $write.routeName | default "thanos-receive-managed" -}}
+{{- $serving := $write.servingCertificate | default "thanos-receive-managed-tls" -}}
+{{- $issuer := $write.writeCAIssuer | default "osac-metrics-write-ca" -}}
+{{- $revocation := $write.revocationConfigMap | default "osac-metrics-write-revocation" -}}
+{{- $dropRule := $write.dropRule | default dict -}}
+{{- $keepKube := $dropRule.keepKubePrefix | default "kube_node_" -}}
+{{- $dropPrefixes := join "," ($dropRule.dropPrefixes | default (list "container_" "claim" "mount" "kserve_" "vllm_" "dcgm_")) -}}
+{{- $upstream := printf "https://thanos-receive.%s.svc.cluster.local:19291/api/v1/receive" $ns -}}
+{{- /* The proxy reads the revocation denylist through the API and watches it,
+       so it needs list/watch on ConfigMaps. RBAC cannot scope list/watch by
+       resourceName, so the grant covers ConfigMaps in this namespace only. */ -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $routeName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $routeName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $routeName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $routeName }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $routeName }}
+    namespace: {{ $ns }}
+---
+{{- /* The proxy terminates mTLS itself (the Route passes TLS through), so the
+       serving certificate must name the external Route host the tenant clusters
+       call as well as the in-cluster Service. */ -}}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $serving }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+spec:
+  secretName: {{ $serving }}
+  commonName: {{ $routeName }}.{{ $ns }}.svc
+  duration: {{ $write.certificateDuration | default "90d" }}
+  renewBefore: {{ $write.renewBefore | default "30d" }}
+  dnsNames:
+    - {{ $routeName }}.{{ $ns }}.svc
+    - {{ $routeName }}.{{ $ns }}.svc.cluster.local
+    {{- if $clusterDomain }}
+    - {{ $routeName }}-{{ $ns }}.{{ $clusterDomain }}
+    {{- end }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ $issuer }}
+    kind: Issuer
+    group: cert-manager.io
+  usages:
+    - server auth
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $routeName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.componentLabels" (dict "root" . "component" "write-proxy") | nindent 4 }}
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      {{- include "osac-observability.componentSelectorLabels" (dict "root" . "component" "write-proxy") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "osac-observability.componentLabels" (dict "root" . "component" "write-proxy") | nindent 8 }}
+        # The Receive NetworkPolicy admits only this label on 19291.
+        osac.openshift.io/observability-role: write-proxy
+    spec:
+      serviceAccountName: {{ $routeName }}
+      automountServiceAccountToken: true
+      securityContext:
+        {{- include "osac-observability.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: write-proxy
+          image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag }}"
+          imagePullPolicy: IfNotPresent
+          command:
+            - /metrics-auth
+          args:
+            - write-proxy
+            - --listen=:8443
+            - --probe-listen=:8080
+            - --tls-cert-file=/etc/tls/tls.crt
+            - --tls-key-file=/etc/tls/tls.key
+            - --client-ca-file=/etc/write-ca/ca.crt
+            - --upstream-ca-file=/etc/service-ca/service-ca.crt
+            - --upstream={{ $upstream }}
+            - --revocation-namespace={{ $ns }}
+            - --revocation-name={{ $revocation }}
+            - --keep-kube-prefix={{ $keepKube }}
+            - --drop-prefixes={{ $dropPrefixes }}
+          ports:
+            - name: https
+              containerPort: 8443
+              protocol: TCP
+            - name: probes
+              containerPort: 8080
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: probes
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: probes
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: tls
+              mountPath: /etc/tls
+              readOnly: true
+            - name: write-ca
+              mountPath: /etc/write-ca
+              readOnly: true
+            - name: receive-ca
+              mountPath: /etc/service-ca
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: {{ $serving }}
+        # The CA certificate is public material; only tls.crt is mounted, so the
+        # CA private key never enters this pod.
+        - name: write-ca
+          secret:
+            secretName: {{ $issuer }}
+            items:
+              - key: tls.crt
+                path: ca.crt
+        # Receive serves TLS with the service-CA certificate; its ca.crt key is
+        # the bundle the proxy uses to verify the upstream.
+        - name: receive-ca
+          secret:
+            secretName: thanos-receive-tls
+            items:
+              - key: ca.crt
+                path: service-ca.crt
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $routeName }}
+  namespace: {{ $ns }}
+  labels:
+    {{- include "osac-observability.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "osac-observability.componentSelectorLabels" (dict "root" . "component" "write-proxy") | nindent 4 }}
+  ports:
+    - name: https
+      port: 8443
+      targetPort: https
+      protocol: TCP
+{{- end }}
+{{- end }}

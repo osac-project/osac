@@ -264,12 +264,74 @@ sys.stdout.write(token)
       drop: ["ALL"]
 {{- end }}
 
+{{/* Convert a Prometheus duration ("30s", "1m30s", "2h") to whole seconds. */}}
+{{- define "osac.durationSeconds" -}}
+{{- $total := 0 -}}
+{{- range $part := regexFindAll "[0-9]+(ms|s|m|h|d|w|y)" (. | toString) -1 -}}
+  {{- $number := regexFind "^[0-9]+" $part | int -}}
+  {{- $unit := regexFind "(ms|s|m|h|d|w|y)$" $part -}}
+  {{- if eq $unit "ms" -}}{{- $total = add $total (div $number 1000) -}}
+  {{- else if eq $unit "s" -}}{{- $total = add $total $number -}}
+  {{- else if eq $unit "m" -}}{{- $total = add $total (mul $number 60) -}}
+  {{- else if eq $unit "h" -}}{{- $total = add $total (mul $number 3600) -}}
+  {{- else if eq $unit "d" -}}{{- $total = add $total (mul $number 86400) -}}
+  {{- else if eq $unit "w" -}}{{- $total = add $total (mul $number 604800) -}}
+  {{- else if eq $unit "y" -}}{{- $total = add $total (mul $number 31536000) -}}
+  {{- end -}}
+{{- end -}}
+{{- $total -}}
+{{- end -}}
+
 {{/*
 Fail helm template when values break a cross-field rule that JSON Schema
 cannot express.
 */}}
 {{- define "osac.validateValues" -}}
 {{- include "osac.networking.validate" . -}}
+{{- /* global.observability is the single enablement switch: it reaches both the
+     umbrella templates and the subcharts, so there is no second copy to compare
+     against. The interval is validated here, on every render, because the
+     component charts cannot see the umbrella's defaults. Never default the
+     value here: an empty interval must fail, not silently become 30s. */ -}}
+{{- $globalObservability := (.Values.global | default dict).observability | default dict -}}
+{{- $collection := $globalObservability.collection | default dict -}}
+{{- $observabilityInterval := $collection.osacControlPlane | default "" | toString -}}
+{{- $observabilityPattern := "^([0-9]+(ms|s|m|h|d|w|y))+$" -}}
+{{- if or (not (regexMatch $observabilityPattern $observabilityInterval)) (not (regexMatch "[1-9]" $observabilityInterval)) -}}
+  {{- fail (printf "global.observability.collection.osacControlPlane must be a positive Prometheus duration (got %q)" $observabilityInterval) }}
+{{- end -}}
+{{- $infrastructureInterval := $collection.infrastructure | default "" | toString -}}
+{{- if or (not (regexMatch $observabilityPattern $infrastructureInterval)) (not (regexMatch "[1-9]" $infrastructureInterval)) -}}
+  {{- fail (printf "global.observability.collection.infrastructure must be a positive Prometheus duration (got %q)" $infrastructureInterval) }}
+{{- end -}}
+{{- /* The stopped-cluster query compares sample age against the slower
+     collection interval plus 30s of tolerance. Its range selector spans the
+     Thanos retention window, so the threshold is not bounded by the
+     instant-query lookback and a large interval simply names stops later. */ -}}
+{{- /* Thanos keeps one retention value for every resolution. Each level must be a
+     positive duration and equal thanos.retention, otherwise the Compactor drops
+     data one level still serves or the Store keeps data no level may return. */ -}}
+{{- $thanos := $globalObservability.thanos | default dict -}}
+{{- $retention := $thanos.retention | default "" | toString -}}
+{{- if or (not (regexMatch $observabilityPattern $retention)) (not (regexMatch "[1-9]" $retention)) -}}
+  {{- fail (printf "global.observability.thanos.retention must be a positive Prometheus duration (got %q)" $retention) }}
+{{- end -}}
+{{- $resolution := $thanos.resolution | default dict -}}
+{{- range $level := list "raw" "5m" "1h" -}}
+  {{- $value := index $resolution $level | default "" | toString -}}
+  {{- if ne $value $retention -}}
+    {{- fail (printf "global.observability.thanos.resolution.%s must equal global.observability.thanos.retention (got %q and %q)" $level $value $retention) }}
+  {{- end -}}
+{{- end -}}
+{{- /* Receive rejects a write it cannot replicate to as many pods as the
+     replication factor asks for, so a factor above the replica count drops
+     every sample. */ -}}
+{{- $receive := $thanos.receive | default dict -}}
+{{- $receiveReplicas := $receive.replicas | default 2 | int -}}
+{{- $replicationFactor := $receive.replicationFactor | default 2 | int -}}
+{{- if gt $replicationFactor $receiveReplicas -}}
+  {{- fail (printf "global.observability.thanos.receive.replicationFactor (%d) must not exceed global.observability.thanos.receive.replicas (%d)" $replicationFactor $receiveReplicas) }}
+{{- end -}}
 {{- end -}}
 
 {{/*

@@ -4,36 +4,50 @@ Prometheus operator or OpenShift user-workload monitoring to select the
 ServiceMonitors. The meters matter because billing can stop while the pod
 stays ready, and the metrics are the only signal that shows it.
 */}}
-{{- if .Values.serviceMonitor.enabled }}
-{{- $monitors := list (dict "component" "metering" "port" "metrics" "suffix" "") }}
-{{- if .Values.echoAdapter.enabled }}
-{{- $monitors = append $monitors (dict "component" "echo-adapter" "port" "http" "suffix" "-echo-adapter") }}
-{{- end }}
-{{- if .Values.m360Adapter.enabled }}
-{{- $monitors = append $monitors (dict "component" "m360-adapter" "port" "http" "suffix" "-m360-adapter") }}
-{{- end }}
-{{- range $i, $monitor := $monitors }}
-{{- if $i }}
----
-{{- end }}
+{{- $adaptersEnabled := or .Values.echoAdapter.enabled .Values.m360Adapter.enabled -}}
+{{- if include "osac-metering.serviceMonitorEnabled" . }}
+{{- if .Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor" }}
+# One monitor for the metering service and, when enabled, both billing
+# adapters. All three Services carry the chart's app.kubernetes.io/name and
+# instance labels; the endpoint port name selects which listener is scraped.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: {{ include "osac-metering.fullname" $ }}{{ $monitor.suffix }}
+  name: {{ include "osac-metering.fullname" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "osac-metering.labels" $ | nindent 4 }}
-    app.kubernetes.io/component: {{ $monitor.component }}
-    {{- with $.Values.serviceMonitor.labels }}
+    {{- include "osac-metering.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 spec:
+  namespaceSelector:
+    matchNames:
+    - {{ .Release.Namespace }}
   selector:
     matchLabels:
-      {{- include "osac-metering.selectorLabels" $ | nindent 6 }}
-      app.kubernetes.io/component: {{ $monitor.component }}
+      app.kubernetes.io/name: {{ include "osac-metering.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
   endpoints:
-    - port: {{ $monitor.port }}
-      path: /metrics
-      interval: 60s
+  - port: metrics
+    scheme: http
+    path: /metrics
+    interval: {{ include "osac-metering.serviceMonitorInterval" . | quote }}
+    relabelings:
+    - targetLabel: job
+      replacement: osac-metering
+{{- if $adaptersEnabled }}
+  # The adapters serve /metrics on the same listener as their health checks.
+  # The chart sets METRICS_ADDR=:8080; 2112 is only the binary default and is
+  # not a Service port. Prometheus turns the endpoint port name into a keep
+  # rule, so a Service without the port simply produces no target.
+  - port: http
+    scheme: http
+    path: /metrics
+    interval: {{ include "osac-metering.serviceMonitorInterval" . | quote }}
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_service_label_app_kubernetes_io_component]
+      targetLabel: job
+{{- end }}
 {{- end }}
 {{- end }}

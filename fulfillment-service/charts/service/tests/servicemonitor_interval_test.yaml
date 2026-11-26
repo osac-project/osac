@@ -1,0 +1,20 @@
+suite: fulfillment ServiceMonitor interval resolution
+templates:
+  - templates/grpc-server/servicemonitor.yaml
+release:
+  name: osac
+  namespace: osac
+capabilities:
+  apiVersions:
+    - monitoring.coreos.com/v1
+    - monitoring.coreos.com/v1/ServiceMonitor
+
+tests:
+  - it: fails when no interval is configured
+    set:
+      serviceMonitor.enabled: true
+      serviceMonitor.interval: ""
+      global.observability.collection.osacControlPlane: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "serviceMonitor.interval or global.observability.collection.osacControlPlane must be set"

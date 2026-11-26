@@ -1,0 +1,74 @@
+{{- if dig "observability" "enabled" false (.Values.global | default dict) }}
+{{- $obs := .Values.global.observability -}}
+{{- $thanos := $obs.thanos | default dict -}}
+{{- $store := $thanos.store | default dict -}}
+{{- $storage := $obs.objectStorage | default dict -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: thanos-store
+  namespace: {{ include "osac-observability.namespace" . }}
+  labels:
+    {{- include "osac-observability.componentLabels" (dict "root" . "component" "store") | nindent 4 }}
+spec:
+  replicas: {{ $store.replicas | default 2 }}
+  selector:
+    matchLabels:
+      {{- include "osac-observability.componentSelectorLabels" (dict "root" . "component" "store") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "osac-observability.componentLabels" (dict "root" . "component" "store") | nindent 8 }}
+    spec:
+      securityContext:
+        {{- include "osac-observability.podSecurityContext" . | nindent 8 }}
+      containers:
+        - name: thanos-store
+          image: "{{ include "osac-observability.image" $thanos.image }}"
+          imagePullPolicy: IfNotPresent
+          args:
+            - store
+            - --grpc-address=0.0.0.0:10901
+            - --http-address=0.0.0.0:10902
+            - --objstore.config-file=/etc/thanos/objstore/objstore.yml
+            - --data-dir=/var/thanos/store
+          ports:
+            - name: grpc
+              containerPort: 10901
+              protocol: TCP
+            - name: http
+              containerPort: 10902
+              protocol: TCP
+          env:
+            - name: HOME
+              value: /tmp
+          envFrom:
+            - secretRef:
+                name: {{ required "global.observability.objectStorage.secretName is required when observability is enabled" $storage.secretName }}
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            {{- toYaml $store.resources | nindent 12 }}
+          securityContext:
+            {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
+          volumeMounts:
+            - name: objstore
+              mountPath: /etc/thanos/objstore
+              readOnly: true
+            - name: data
+              mountPath: /var/thanos/store
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: objstore
+          configMap:
+            name: thanos-object-storage
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+{{- end }}

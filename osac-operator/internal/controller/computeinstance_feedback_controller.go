@@ -99,7 +99,7 @@ func newComputeInstanceFeedbackBridge(hubClient clnt.Client, ciClient privatev1.
 				Object: remote,
 				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{
 					feedbackStatusConditionsPath, feedbackStatusStatePath, feedbackStatusStateTransitionTimePath,
-					"status.external_ip_address", "status.internal_ip_address",
+					"status.external_ip_address", "status.internal_ip_address", "status.mac_addresses",
 					"status.compute_network_attachment_statuses", "status.last_restarted_at",
 					"status.instance_type", "status.instance_type_transition_time",
 				}},
@@ -121,6 +121,11 @@ func syncComputeInstanceUpdate(ctx context.Context, obj *ckv1alpha1.ComputeInsta
 	syncCIConditions(obj, remote)
 	syncCIPhase(ctx, obj, remote)
 	syncCIIPAddresses(obj, remote)
+	macs := obj.Status.MACAddresses
+	if !obj.GetDeletionTimestamp().IsZero() {
+		macs = nil
+	}
+	remote.GetStatus().SetMacAddresses(macs)
 	syncCILastRestartedAt(obj, remote)
 	syncCIRunningInstanceType(obj, remote)
 	return nil

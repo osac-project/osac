@@ -384,6 +384,11 @@ type ComputeInstanceStatus struct {
 	// +kubebuilder:validation:Optional
 	IPAddress string `json:"ipAddress,omitempty"`
 
+	// MACAddresses lists observed guest-facing MACs of the running VMI's OSAC-managed interfaces.
+	// Entries can appear before IP discovery; the list is empty when no MAC is observed.
+	// +kubebuilder:validation:Optional
+	MACAddresses []string `json:"macAddresses,omitempty"`
+
 	// ExternalIPAddress is the external IP address attached to this instance via an ExternalIPAttachment.
 	// Populated when an ExternalIPAttachment in state "Ready" references this ComputeInstance.
 	// +kubebuilder:validation:Optional

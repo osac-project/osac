@@ -448,6 +448,13 @@ spec:
                   It will be empty if no restart has been performed yet.
                 format: date-time
                 type: string
+              macAddresses:
+                description: |-
+                  MACAddresses lists observed guest-facing MACs of the running VMI's OSAC-managed interfaces.
+                  Entries can appear before IP discovery; the list is empty when no MAC is observed.
+                items:
+                  type: string
+                type: array
               phase:
                 description: Phase provides a single-value overview of the state of
                   the ComputeInstance

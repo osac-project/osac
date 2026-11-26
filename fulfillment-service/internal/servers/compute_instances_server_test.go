@@ -1262,7 +1262,8 @@ var _ = Describe("Compute instances server", func() {
 			Expect(err).ToNot(HaveOccurred())
 			id := createResponse.GetObject().GetId()
 
-			// Report a state transition and attachment feedback through the private API.
+			// Report state, attachment feedback, and the MAC list through the private API.
+			macs := []string{"02:aa:00:00:00:02", "02:aa:00:00:00:03"}
 			// The time must be after creation: the source contract clamps a first time on
 			// or before it.
 			feedbackTime := timestamppb.New(time.Now().Truncate(time.Second))
@@ -1272,6 +1273,7 @@ var _ = Describe("Compute instances server", func() {
 					Status: privatev1.ComputeInstanceStatus_builder{
 						State:               privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING,
 						StateTransitionTime: feedbackTime,
+						MacAddresses:        macs,
 						ComputeNetworkAttachmentStatuses: []*privatev1.ComputeNetworkAttachmentStatus{
 							privatev1.ComputeNetworkAttachmentStatus_builder{
 								SubnetRef: "test-subnet",
@@ -1281,14 +1283,18 @@ var _ = Describe("Compute instances server", func() {
 					}.Build(),
 				}.Build(),
 				UpdateMask: &fieldmaskpb.FieldMask{
-					Paths: []string{"status.state", "status.state_transition_time", "status.compute_network_attachment_statuses"},
+					Paths: []string{"status.state", "status.state_transition_time", "status.compute_network_attachment_statuses", "status.mac_addresses"},
 				},
 			}.Build())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(updateResponse.GetObject().GetStatus().GetState()).To(
 				Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
 
-			// The feedback is visible through the public API:
+			privateGet, err := privateServer.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(privateGet.GetObject().GetStatus().GetMacAddresses()).To(Equal(macs))
+
+			// Only state and attachment feedback are visible through the public API:
 			getResponse, err := server.Get(ctx, publicv1.ComputeInstancesGetRequest_builder{
 				Id: id,
 			}.Build())
@@ -1300,6 +1306,20 @@ var _ = Describe("Compute instances server", func() {
 			Expect(statusObject.GetComputeNetworkAttachmentStatuses()).To(HaveLen(1))
 			Expect(statusObject.GetComputeNetworkAttachmentStatuses()[0].GetSubnetRef()).To(Equal("test-subnet"))
 			Expect(statusObject.GetComputeNetworkAttachmentStatuses()[0].GetIpAddress()).To(Equal("192.0.2.11"))
+			publicJSON, err := protojson.Marshal(statusObject)
+			Expect(err).NotTo(HaveOccurred())
+			for _, mac := range macs {
+				Expect(string(publicJSON)).NotTo(ContainSubstring(mac))
+			}
+
+			_, err = privateServer.Update(ctx, privatev1.ComputeInstancesUpdateRequest_builder{
+				Object:     privatev1.ComputeInstance_builder{Id: id, Status: &privatev1.ComputeInstanceStatus{}}.Build(),
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"status.mac_addresses"}},
+			}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			privateGet, err = privateServer.Get(ctx, privatev1.ComputeInstancesGetRequest_builder{Id: id}.Build())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(privateGet.GetObject().GetStatus().GetMacAddresses()).To(BeEmpty())
 		})
 
 		It("Infers supplied writable fields from a maskless update", func() {

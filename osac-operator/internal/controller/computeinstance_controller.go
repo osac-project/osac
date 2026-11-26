@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/netip"
 	"strings"
 	"sync"
@@ -863,7 +864,7 @@ func computeInstanceConfigApplied(instance *v1alpha1.ComputeInstance) bool {
 		instance.Status.ProvisionConfigVersion == instance.Status.DesiredConfigVersion
 }
 
-// reconcileNetworkStatus discovers the VM address and sets NetworkReady
+// reconcileNetworkStatus discovers the VM's MAC and IP addresses and sets NetworkReady
 // (VMaaS design, Network status and address discovery).
 func (r *ComputeInstanceReconciler) reconcileNetworkStatus(ctx context.Context, instance *v1alpha1.ComputeInstance,
 	na *v1alpha1.NetworkAttachment, kv *kubevirtv1.VirtualMachine) (ctrl.Result, error) {
@@ -874,6 +875,14 @@ func (r *ComputeInstanceReconciler) reconcileNetworkStatus(ctx context.Context, 
 	vmi, err := r.runningVMI(ctx, instance, kv)
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	ifaceName := vmNetworkTenant
+	if !enabled {
+		ifaceName = vmNetworkDefault
+	}
+	instance.Status.MACAddresses = nil
+	if mac := vmiInterfaceMAC(vmi, ifaceName); mac != "" {
+		instance.Status.MACAddresses = []string{mac}
 	}
 	if vmi == nil {
 		instance.Status.ComputeNetworkAttachmentStatuses = nil
@@ -1025,6 +1034,22 @@ func (r *ComputeInstanceReconciler) subnetOverlayCIDRs(ctx context.Context, subn
 		return nil, nil
 	}
 	return list.Items[0].Status.IPAM.OverlayIPv4CIDRs, nil
+}
+
+// vmiInterfaceMAC returns the canonical MAC of the named VM interface, not a guest-only interface.
+func vmiInterfaceMAC(vmi *kubevirtv1.VirtualMachineInstance, name string) string {
+	if vmi == nil || !vmi.DeletionTimestamp.IsZero() {
+		return ""
+	}
+	for _, iface := range vmi.Status.Interfaces {
+		if iface.Name != name {
+			continue
+		}
+		if mac, err := net.ParseMAC(iface.MAC); err == nil && len(mac) == 6 {
+			return mac.String()
+		}
+	}
+	return ""
 }
 
 // firstIPv4OfInterface returns the first canonical IPv4 address of the VMI

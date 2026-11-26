@@ -326,6 +326,10 @@ message ComputeInstanceStatus {
   // Latest provisioning failure retained while a retry is pending or running, or after a terminal failure.
   // The system removes this field when provisioning succeeds, is cancelled for deletion, or starts for a new configuration.
   optional ComputeInstanceProvisioningFailure last_provisioning_failure = 13;
+
+  // Guest-facing MACs of the running VM's OSAC-managed interfaces, observed by the system.
+  // May be populated before IP discovery. Empty when no MACs are observed or during deletion.
+  repeated string mac_addresses = 14 [(cleanapi.field).private = true];
 }
 
 // Describes the latest system-observed provisioning failure.

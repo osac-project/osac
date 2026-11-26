@@ -1178,7 +1178,12 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(controllerutil.ContainsFinalizer(updated, osacComputeInstanceFeedbackFinalizer)).To(BeTrue())
 		})
 
-		It("should successfully sync conditions and phase", func() {
+		It("should successfully sync conditions, phase, and the observed MAC", func() {
+			ci := &osacv1alpha1.ComputeInstance{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, ci)).To(Succeed())
+			ci.Status.MACAddresses = []string{"02:aa:00:00:00:02"}
+			Expect(k8sClient.Status().Update(ctx, ci)).To(Succeed())
+
 			request := reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			}
@@ -1190,6 +1195,8 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 			Expect(mockClient.lastUpdate.GetStatus().GetState()).To(Equal(privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING))
 			Expect(mockClient.lastUpdateMask).NotTo(BeNil())
 			Expect(mockClient.lastUpdateMask.GetPaths()).To(ContainElement("status.compute_network_attachment_statuses"))
+			Expect(mockClient.lastUpdateMask.GetPaths()).To(ContainElement("status.mac_addresses"))
+			Expect(mockClient.lastUpdate.GetStatus().GetMacAddresses()).To(ConsistOf("02:aa:00:00:00:02"))
 			Expect(mockClient.lastUpdateMask.GetPaths()).ToNot(ContainElement("status.volumes"))
 			Expect(mockClient.lastUpdateMask.GetPaths()).ToNot(ContainElement("status.volume_registration"))
 			Expect(mockClient.lastUpdate.GetStatus().GetVolumes()).To(HaveLen(1))
@@ -1201,6 +1208,15 @@ var _ = Describe("ComputeInstanceFeedbackReconciler", func() {
 				Equal(privatev1.ComputeInstanceVolumeRegistration_STATE_RESOLVED))
 			Expect(mockClient.lastUpdate.GetStatus().GetVolumeRegistration()[1].GetState()).To(
 				Equal(privatev1.ComputeInstanceVolumeRegistration_STATE_UNKNOWN))
+
+			By("clearing the private MAC when the VMI no longer reports it")
+			Expect(k8sClient.Get(ctx, typeNamespacedName, ci)).To(Succeed())
+			ci.Status.MACAddresses = nil
+			Expect(k8sClient.Status().Update(ctx, ci)).To(Succeed())
+			_, err = reconciler.Reconcile(ctx, request)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(mockClient.updateCount).To(Equal(2))
+			Expect(mockClient.lastUpdate.GetStatus().GetMacAddresses()).To(BeEmpty())
 		})
 
 		It("should sync ConfigurationApplied condition", func() {

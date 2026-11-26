@@ -181,6 +181,9 @@ jobs:
           persist-credentials: false
       - name: Check out osac-test-infra
         if: inputs.kind == 'it-caas'
+        # Best effort: only the prepull step uses this checkout, and it warns
+        # on a miss so the CaaS prepare can fall back to the source registry.
+        continue-on-error: true
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           repository: osac-project/osac-test-infra

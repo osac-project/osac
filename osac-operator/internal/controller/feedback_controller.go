@@ -637,6 +637,13 @@ var clusterOrderConditionMappings = map[string]privatev1.ClusterConditionType{
 	ckv1alpha1.ConditionClusterAvailable: privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_READY,
 }
 
+// clusterOrderReadinessConditionMappings maps the orthogonal readiness axes
+// that must not append a fresh False condition to an otherwise clean remote.
+var clusterOrderReadinessConditionMappings = map[string]privatev1.ClusterConditionType{
+	ckv1alpha1.ConditionControlPlaneAvailable: privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_CONTROL_PLANE_AVAILABLE,
+	ckv1alpha1.ConditionWorkersReady:          privatev1.ClusterConditionType_CLUSTER_CONDITION_TYPE_WORKERS_READY,
+}
+
 // clusterOrderProvisioningStages are the ClusterOrder conditions that mark individual
 // installation steps, ordered from earliest to furthest-advanced. While the cluster is
 // still installing, they do not become their own fulfillment conditions; instead they
@@ -645,15 +652,13 @@ var clusterOrderConditionMappings = map[string]privatev1.ClusterConditionType{
 // rather than from the order the conditions happen to appear in the CR status, keeps the
 // result deterministic (order-independent).
 //
-// ControlPlaneAvailable also refines PROGRESSING today; in Epic 2 it additionally gains
-// its own orthogonal CONTROL_PLANE_AVAILABLE fulfillment condition. ClusterStorageReady
-// is written by the storage controller, which uses the typed
-// ClusterOrderConditionClusterStorageReady constant, so we key off that same constant to
-// avoid reader/writer drift.
+// ControlPlaneAvailable and WorkersReady are mapped to their own orthogonal
+// fulfillment conditions. ClusterStorageReady is written by the storage controller,
+// which uses the typed ClusterOrderConditionClusterStorageReady constant, so we key off
+// that same constant to avoid reader/writer drift.
 var clusterOrderProvisioningStages = []string{
 	ckv1alpha1.ConditionAccepted,
 	ckv1alpha1.ConditionControlPlaneCreated,
-	ckv1alpha1.ConditionControlPlaneAvailable,
 	string(ckv1alpha1.ClusterOrderConditionClusterStorageReady),
 }
 
@@ -683,6 +688,10 @@ func syncClusterOrderConditions(ctx context.Context, clusterOrder *ckv1alpha1.Cl
 
 	for i := range clusterOrder.Status.Conditions {
 		condition := clusterOrder.Status.Conditions[i]
+		if protoType, ok := clusterOrderReadinessConditionMappings[condition.Type]; ok {
+			syncClusterReadinessCondition(remote, protoType, condition)
+			continue
+		}
 		if protoType, ok := clusterOrderConditionMappings[condition.Type]; ok {
 			if condition.Type == ckv1alpha1.ConditionClusterAvailable &&
 				clusterOrder.Status.Phase != ckv1alpha1.ClusterOrderPhaseReady {
@@ -895,6 +904,17 @@ func buildWorkerFailedMessage(workers []ckv1alpha1.WorkerStatus, desired int32) 
 		msg += "; " + baremetalworker.FormatWorkersFailed(workers)
 	}
 	return msg
+}
+
+// syncClusterReadinessCondition publishes a readiness condition only when it
+// is True or when an older remote value must be cleared. This avoids adding a
+// fresh False condition—and therefore a needless remote update—while a cluster
+// is still being provisioned.
+func syncClusterReadinessCondition(remote *privatev1.Cluster, condType privatev1.ClusterConditionType, condition metav1.Condition) {
+	if condition.Status != metav1.ConditionTrue && findExistingClusterCondition(remote, condType) == nil {
+		return
+	}
+	syncClusterConditionFromCR(remote, condType, condition)
 }
 
 func syncClusterConditionFromCR(remote *privatev1.Cluster, condType privatev1.ClusterConditionType, condition metav1.Condition) {

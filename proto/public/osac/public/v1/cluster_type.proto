@@ -485,6 +485,12 @@ enum ClusterConditionType {
   // the provisioning environment or the required RHCOS image. Cloud Infrastructure Admin intervention is required.
   // The message provides a generic explanation without exposing infrastructure details.
   CLUSTER_CONDITION_TYPE_WORKER_PROVISIONING_BLOCKED = 6;
+
+  // Indicates whether the tenant cluster control plane is available.
+  CLUSTER_CONDITION_TYPE_CONTROL_PLANE_AVAILABLE = 7;
+
+  // Indicates whether every requested node set is ready.
+  CLUSTER_CONDITION_TYPE_WORKERS_READY = 8;
 }
 
 // Defines a set of cluster nodes sharing the same bare metal instance type.

@@ -80,6 +80,8 @@ create trigger enqueue_change
   for each row execute function enqueue_change();
 
 -- Add the metadata.description reference column to every existing object table.
+alter table objects add column if not exists description text;
+alter table archived_objects add column if not exists description text;
 alter table add_on_operators add column if not exists description text;
 alter table archived_add_on_operators add column if not exists description text;
 alter table bare_metal_instances add column if not exists description text;

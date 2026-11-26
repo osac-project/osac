@@ -42,7 +42,8 @@ var _ = DescribeMigration("Create documents tables", func() {
 
 	It("adds a nullable description column to every object table", func(ctx context.Context) {
 		tables := []string{
-			"add_on_operators", "bare_metal_instances", "bare_metal_instance_catalog_items",
+			"objects", "add_on_operators", "bare_metal_instances",
+			"bare_metal_instance_catalog_items",
 			"bare_metal_instance_templates", "bare_metal_instance_types", "clusters",
 			"cluster_catalog_items", "cluster_templates", "cluster_versions",
 			"compute_instances", "compute_instance_catalog_items", "compute_instance_templates",

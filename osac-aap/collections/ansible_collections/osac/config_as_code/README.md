@@ -295,6 +295,78 @@ API identity. Its projected Kubernetes token is separate from the Keycloak
 client-credentials token used for Fulfillment requests; it no longer needs
 permission to create service-account tokens.
 
+#### Fulfillment Secret reader
+
+The platform configures the bundled Keycloak client `osac-aap-secret-reader`.
+When Fulfillment is enabled, AAP bootstrap registers the custom credential
+`<prefix>-fulfillment-secret-reader`. Fulfillment limits this identity to
+private `Secrets/Get` in all customer tenants and in the `shared` and
+`system` scopes. Fulfillment denies reads of Secrets with names containing
+`break-glass-credentials` and Secrets of type `SERVICE_ACCOUNT_CREDENTIAL`.
+Restrict access to the credential and any associated job
+template, project, and runner to trusted automation.
+
+To enable a playbook to read private Fulfillment Secrets, explicitly attach
+`<prefix>-fulfillment-secret-reader` to the trusted AAP job template that runs it.
+For a job template managed by config as code, add the credential name to that
+template's `credentials` list.
+
+Fulfillment binds the reader grant to the sole trusted OIDC issuer, which
+Helm configures from `service.auth.issuerUrl`. For a server configured with
+multiple trusted issuers, set `--aap-secret-reader-issuer` to the reader
+client's issuer from `--grpc-authn-trusted-token-issuers`. The reader grant
+is disabled when no issuer is selected.
+
+The bootstrap Job reads `client-secret` from the
+`aap-fulfillment-secret-reader` Secret in its namespace. For an external
+Keycloak deployment, create a confidential service-account-only client with
+the ID `osac-aap-secret-reader`, the `osac-api` audience, a `client_id` claim,
+the service-account username `service-account-osac-aap-secret-reader`, and
+no administrative roles. Provision the Kubernetes Secret through your
+secret-management system before running bootstrap.
+
+For standalone bootstrap with the reader enabled, provision the Secret and
+create this ConfigMap in `fulfillment-aap`, the Job's namespace. Replace the
+example URLs with your reader client's issuer and a private API HTTPS listener
+the runner can reach. If you do not use the reader, omit both resources.
+
+    apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: aap-fulfillment-secret-reader
+      namespace: fulfillment-aap
+    data:
+      OSAC_AAP_SECRET_READER_ISSUER_URL: https://keycloak.example.com/realms/osac
+      OSAC_AAP_SECRET_READER_API_URL: https://fulfillment-api.example.com
+
+The credential injects a client secret file, client ID, issuer URL, private
+API URL, and CA bundle path into the runner. Configure the job's instance
+group to mount the `ca-bundle` ConfigMap at `/etc/ca-bundle`. The default
+private API URL is `https://fulfillment-internal-api:8001`. If the runner
+cannot reach the Service, point `aap.configAsCode.fulfillmentInternalApiUrl`
+at the HTTPS listener root of the internal API Route. Use the host with an
+optional port and trailing slash. Omit path prefixes, credentials, query
+strings, and fragments. Ensure the bundle trusts both the Route and the issuer.
+
+Pass the canonical Secret ID to the playbook. Use
+`query('osac.service.fulfillment_secret_data', secret_id, data_key='key') | first`
+with the desired data key in a task with `no_log: true`. Check for the sanitized
+`error` before consuming the base64-encoded `value`. The lookup uses Fulfillment's
+private API and retries once on HTTP 401 with a fresh Keycloak token. Use
+`no_log: true` on tasks that consume the value and keep it out of persistent
+facts, job extra vars, and job artifacts. Jobs that call other Fulfillment
+methods can reuse `osac.service.fulfillment_token` with their own identity and
+grant. The template publisher can supply its secret through
+`OSAC_FULFILLMENT_CLIENT_SECRET`.
+
+For bundled Keycloak, rotate the credential by updating the
+`osac-aap-secret-reader` key in the `keycloak-client-secrets` Secret and
+rerunning the infrastructure upgrade. The upgrade applies the new secret
+to the Keycloak client before publishing it to the bootstrap Secret.
+For external Keycloak, rotate the client secret there and update the
+bootstrap Secret. In either case, rerun platform bootstrap to update the
+AAP credential and launch a fresh job to use the new credential file.
+
 #### Bootstrap AAP configuration
 
 Use the execution environment built in the scope of `osac-aap` to run the
@@ -318,7 +390,16 @@ playbook that will perform the initial configuration of AAP:
               envFrom:
                 - secretRef:
                     name: config-as-code-ig
+                - configMapRef:
+                    name: aap-fulfillment-secret-reader
+                    optional: true
               env:
+                - name: OSAC_AAP_SECRET_READER_CLIENT_SECRET
+                  valueFrom:
+                    secretKeyRef:
+                      name: aap-fulfillment-secret-reader
+                      key: client-secret
+                      optional: true
                 - name: AAP_USERNAME
                   value: admin
                 - name: AAP_PASSWORD
@@ -326,16 +407,16 @@ playbook that will perform the initial configuration of AAP:
                     secretKeyRef:
                       name: fulfillment-admin-password
                       key: password
-                  - name: LICENSE_MANIFEST_PATH
-                    value: /var/secrets/config-as-code-manifest/license.zip
+                - name: LICENSE_MANIFEST_PATH
+                  value: /var/secrets/config-as-code-manifest/license.zip
               volumeMounts:
                 - name: config-as-code-manifest-volume
                   mountPath: /var/secrets/config-as-code-manifest
                   readOnly: true
-            volumes:
-              - name: config-as-code-manifest-volume
-                secret:
-                  secretName: config-as-code-manifest-ig
+          volumes:
+            - name: config-as-code-manifest-volume
+              secret:
+                secretName: config-as-code-manifest-ig
           restartPolicy: Never
       backoffLimit: 4
     EOF

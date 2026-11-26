@@ -749,6 +749,11 @@
       ]
     },
     {
+      "username": "service-account-osac-aap-secret-reader",
+      "enabled": true,
+      "serviceAccountClientId": "osac-aap-secret-reader"
+    },
+    {
       "id": "b6c7d8e9-f0a1-2345-6789-abcdef012345",
       "username": "service-account-osac-controller",
       "enabled": true,
@@ -1147,6 +1152,31 @@
         "organization",
         "roles",
         "osac-api"
+      ],
+      "optionalClientScopes": []
+    },
+    {
+      "clientId": "osac-aap-secret-reader",
+      "name": "OSAC AAP Secret reader",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "clientAuthenticatorType": "client-secret",
+      "secret": "__OSAC_AAP_SECRET_READER_CLIENT_SECRET__",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "fullScopeAllowed": false,
+      "attributes": {
+        "standard.token.exchange.enabled": "false",
+        "oauth2.device.authorization.grant.enabled": "false"
+      },
+      "defaultClientScopes": [
+        "basic",
+        "profile",
+        "osac-api",
+        "service_account"
       ],
       "optionalClientScopes": []
     },

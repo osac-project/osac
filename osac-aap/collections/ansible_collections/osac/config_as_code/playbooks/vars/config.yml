@@ -37,3 +37,6 @@ osac_import_bcm_agents_enabled: "{{ lookup('env', 'OSAC_IMPORT_BCM_AGENTS_ENABLE
 addon_operator_max_concurrent_jobs: "{{ lookup('env', 'AAP_ADDON_OPERATOR_MAX_CONCURRENT_JOBS', default='50') | int }}"
 netris_ca_config_map_name: "{{ lookup('env', 'NETRIS_CA_CONFIGMAP', default='') }}"
 netris_ca_path: "{{ '/etc/netris/ca/bundle.pem' if netris_ca_config_map_name else '' }}"
+
+aap_fulfillment_reader_issuer_url: "{{ lookup('ansible.builtin.env', 'OSAC_AAP_SECRET_READER_ISSUER_URL') }}"
+aap_fulfillment_reader_api_url: "{{ lookup('ansible.builtin.env', 'OSAC_AAP_SECRET_READER_API_URL') }}"

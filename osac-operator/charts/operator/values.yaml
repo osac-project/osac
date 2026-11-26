@@ -69,15 +69,17 @@ controllers:
   # Progressing) and never fails operator startup.
   volume: true
 
-# vendorControllers maps provider identifiers to their vendor CSI controller
-# gRPC endpoints, rendered into OSAC_VENDOR_CONTROLLERS for the Volume
-# controller. Optional: leave empty on setups with no vendor storage backend.
+# vendorControllers maps provider routes to vendor CSI controller gRPC
+# endpoints, rendered into OSAC_VENDOR_CONTROLLERS for the Volume controller.
+# VAST uses separate controller processes for block and NFS. The current
+# csi-backends chart creates only the block controller; `vast/nfs` must target
+# a separately deployed NFS controller (tracked by OSAC-4262).
+#   vendorControllers:
+#     vast: vast-csi-controller.osac-csi-backends.svc:50051
+#     "vast/nfs": <separately-deployed-nfs-controller-service>:50051
 # For non-production LVMS/dev, use the same provider key as the CSI route:
 #   vendorControllers:
 #     lvms: none
-# Example:
-#   vendorControllers:
-#     vast: vast-csi-controller.osac-csi-backends.svc:50051
 vendorControllers: {}
 
 configSecret:

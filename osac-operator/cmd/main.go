@@ -910,11 +910,10 @@ func setupVolumeControllers(mgr mcmanager.Manager, grpcConn grpc.ClientConnInter
 }
 
 // newVendorProvisionerRegistry constructs the provider implementations known
-// to this operator. Every configured endpoint key is seeded as a nil entry so
-// that Lookup returns ProviderNotImplementedError for unsupported providers
-// instead of treating the registry as empty (which leaves volumes stuck in
-// Progressing). Supported providers then overwrite their nil entry with a real
-// provisioner.
+// to this operator. Configured provider/protocol routes are normalized to
+// their provider key so Lookup can select a provider provisioner. Unsupported
+// providers retain a nil entry and report ProviderNotImplementedError instead
+// of leaving volumes stuck in Progressing.
 func newVendorProvisionerRegistry(
 	reader client.Reader,
 	writer client.Client,
@@ -928,7 +927,11 @@ func newVendorProvisionerRegistry(
 	// silently treating the registry as empty (→ VolumePhaseFailed, not
 	// Progressing).
 	for key := range endpoints {
-		registry[key] = nil
+		provider := key
+		if providerName, _, protocolScoped := strings.Cut(key, "/"); protocolScoped {
+			provider = providerName
+		}
+		registry[provider] = nil
 	}
 	if _, ok := endpoints["lvms"]; ok {
 		// LVMS is in-cluster and uses Kubernetes resources directly; the
@@ -937,15 +940,15 @@ func newVendorProvisionerRegistry(
 		registry["lvms"] = controller.NewLvmsVendorProvisioner(writer, reader)
 	}
 
-	vastEndpoint, ok := endpoints["vast"]
-	if !ok {
+	vastEndpoints := vastVendorControllerEndpoints(endpoints)
+	if len(vastEndpoints) == 0 {
 		return registry, nil
 	}
 
 	provisioner, err := controller.NewVastVendorProvisioner(
 		reader,
 		configNamespace,
-		map[string]string{"vast": vastEndpoint},
+		vastEndpoints,
 	)
 	if err != nil {
 		return registry, err
@@ -955,11 +958,20 @@ func newVendorProvisionerRegistry(
 	return registry, nil
 }
 
-// parseVendorControllers parses a comma-separated list of provider=endpoint
-// pairs (e.g. "vast=vast-csi-controller.osac-csi-backends.svc:50051") into a
-// map from provider name to vendor CSI controller gRPC endpoint. The in-cluster
-// LVMS provider uses "lvms=none" as an enablement marker. An empty input yields
-// an empty map, which leaves volume provisioning disabled.
+func vastVendorControllerEndpoints(endpoints map[string]string) map[string]string {
+	result := make(map[string]string, 2)
+	for _, key := range []string{"vast", "vast/nfs"} {
+		if endpoint, ok := endpoints[key]; ok {
+			result[key] = endpoint
+		}
+	}
+	return result
+}
+
+// parseVendorControllers accepts provider=endpoint and
+// provider/protocol=endpoint pairs, then returns a route-to-endpoint map. The
+// in-cluster LVMS provider uses "lvms=none" as an enablement marker. Empty
+// input disables volume provisioning.
 func parseVendorControllers(s string) (map[string]string, error) {
 	result := make(map[string]string)
 	if s == "" {

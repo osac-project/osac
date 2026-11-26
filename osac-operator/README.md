@@ -26,7 +26,7 @@ custom resources and reconciles them to their desired state:
   **ExternalIPAttachment**, **NATGateway**, **FabricDomain** — the other
   networking resources. Networking CRs report the `Ready` condition and their
   network manager jobs in `status.jobs` (see `internal/networktask/doc.go`).
-- **Volume** (`vol`) — provisions block storage on vendor arrays via the
+- **Volume** (`vol`) — provisions block and NFS storage on vendor arrays via the
   VendorProvisioner interface (vendor CSI controllers).
 
 ## Configuration
@@ -93,6 +93,23 @@ Networking controllers launch one job template per network manager task:
   When discovery ignition trust is enabled, a missing or invalid bundle prevents
   controller startup rather than disabling TLS verification. Restart the
   operator after an ingress CA rotation so it loads the new bundle.
+
+### Vendor CSI controller routes
+
+`OSAC_VENDOR_CONTROLLERS` maps a provider route to a vendor CSI controller's
+gRPC endpoint. VAST uses separate controller processes for block and NFS, so
+configure a separate `vast/nfs` route for NFS volumes when its NFS controller
+Service is deployed:
+
+```text
+OSAC_VENDOR_CONTROLLERS=vast=vast-csi-controller:50051,vast/nfs=nfs-csi-controller.example.svc:50051
+```
+
+The Volume status selects provider `vast`; the provisioner then selects the
+protocol-specific endpoint. The Helm value is `vendorControllers`, with keys
+`vast` and `vast/nfs` as shown in `charts/operator/values.yaml`. The current
+`csi-backends` chart creates only the block-mode VAST controller. The separate
+NFS-mode deployment and Service are a prerequisite tracked in OSAC-4262.
 
 ### Namespaces
 

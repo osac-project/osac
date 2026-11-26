@@ -755,7 +755,7 @@
         },
         "vendorControllers": {
           "type": "object",
-          "description": "Map provider identifiers to vendor controller gRPC endpoints consumed by the Volume controller. Use 'none' for node-local providers such as LVMS.",
+          "description": "Map provider or provider/protocol routes to vendor controller gRPC endpoints consumed by the Volume controller. Use 'none' for node-local providers such as LVMS.",
           "default": {},
           "additionalProperties": {
             "type": "string",

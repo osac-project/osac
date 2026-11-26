@@ -22,6 +22,7 @@ import (
 	. "github.com/onsi/ginkgo/v2" //nolint:revive,staticcheck
 	. "github.com/onsi/gomega"    //nolint:revive,staticcheck
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -70,14 +71,24 @@ var _ = Describe("Volume CRD optional-field immutability", func() {
 		Expect(k8sClient.Create(testCtx, vol)).To(Succeed())
 	})
 
-	AfterEach(func() {
-		volKey := types.NamespacedName{Name: vol.Name, Namespace: vol.Namespace}
+	// cleanupVolume deletes a test volume, surfacing teardown failures so a
+	// fixture cannot silently linger in the API server. A NotFound result is
+	// the expected end state and is ignored.
+	cleanupVolume := func(name string) {
+		key := types.NamespacedName{Name: name, Namespace: "default"}
 		existing := &osacv1alpha1.Volume{}
-		if err := k8sClient.Get(testCtx, volKey, existing); err == nil {
-			existing.Finalizers = nil
-			_ = k8sClient.Update(testCtx, existing)
-			_ = k8sClient.Delete(testCtx, existing)
+		err := k8sClient.Get(testCtx, key, existing)
+		if apierrors.IsNotFound(err) {
+			return
 		}
+		ExpectWithOffset(1, err).NotTo(HaveOccurred())
+		existing.Finalizers = nil
+		ExpectWithOffset(1, k8sClient.Update(testCtx, existing)).To(Succeed())
+		ExpectWithOffset(1, k8sClient.Delete(testCtx, existing)).To(Succeed())
+	}
+
+	AfterEach(func() {
+		cleanupVolume(vol.Name)
 	})
 
 	// fetch returns a fresh copy of the stored volume.
@@ -127,13 +138,7 @@ var _ = Describe("Volume CRD optional-field immutability", func() {
 		}
 		Expect(k8sClient.Create(testCtx, ownerless)).To(Succeed())
 		DeferCleanup(func() {
-			key := types.NamespacedName{Name: ownerless.Name, Namespace: ownerless.Namespace}
-			existing := &osacv1alpha1.Volume{}
-			if err := k8sClient.Get(testCtx, key, existing); err == nil {
-				existing.Finalizers = nil
-				_ = k8sClient.Update(testCtx, existing)
-				_ = k8sClient.Delete(testCtx, existing)
-			}
+			cleanupVolume(ownerless.Name)
 		})
 
 		updated := &osacv1alpha1.Volume{}

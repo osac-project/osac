@@ -98,6 +98,25 @@ var _ = Describe("OAuth token exchange", func() {
 		Expect(sameCaller(incoming, outgoing)).To(MatchError("OAuth token exchange changed the caller identity"))
 	})
 
+	It("ignores realm role order but rejects added or removed roles", func() {
+		expiration := float64(time.Now().Add(time.Minute).Unix())
+		tokenWithRoles := func(roles ...any) *jwt.Token {
+			return jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
+				"iss": "https://issuer.example.com/realms/osac", "sub": "user-1",
+				"preferred_username": "alice", "groups": []any{"tenant1"},
+				"realm_access": map[string]any{"roles": roles}, "exp": expiration,
+			})
+		}
+
+		subject := tokenWithRoles("offline_access", "uma_authorization")
+		Expect(sameCaller(subject, tokenWithRoles("offline_access", "uma_authorization"))).To(Succeed())
+		Expect(sameCaller(subject, tokenWithRoles("uma_authorization", "offline_access"))).To(Succeed())
+		Expect(sameCaller(subject, tokenWithRoles("offline_access"))).
+			To(MatchError("OAuth token exchange changed the caller permissions"))
+		Expect(sameCaller(subject, tokenWithRoles("uma_authorization", "offline_access", "tenant-admin"))).
+			To(MatchError("OAuth token exchange changed the caller permissions"))
+	})
+
 	It("caches a repeated exchange until the API token expires", func() {
 		now := time.Now()
 		subject := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{

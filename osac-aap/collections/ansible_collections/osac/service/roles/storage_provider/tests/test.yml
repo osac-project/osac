@@ -1685,18 +1685,19 @@
             success_msg: "Resolver rejected the unknown provisioning target"
 
 # ──────────────────────────────────────────────────────────────
-# Regression: the legacy CaaS VAST path validates the native CSI matrix.
+# Regression: a VAST StorageClass dispatch installs no CSI operator, so it never
+# consults the native CSI install matrix, whatever flags the caller passes.
 # This lives last so run_tests.sh's second invocation exercises it after its
 # start-at-task split around the invalid-provider runner failure.
 # ──────────────────────────────────────────────────────────────
-- name: Test storage_provider -- validate matrix for legacy CaaS VAST installation
+- name: Test storage_provider -- VAST StorageClass dispatch ignores the native CSI matrix
   hosts: localhost
   gather_facts: false
 
   tasks:
-    - name: Run legacy CaaS install with an overridden native CSI matrix
+    - name: Run a VAST StorageClass dispatch with an overridden native CSI matrix
       block:
-        - name: Include storage_provider with a legacy VAST matrix override
+        - name: Include storage_provider with a matrix override and the removed CaaS install flag
           ansible.builtin.include_role:
             name: osac.service.storage_provider
           vars:
@@ -1712,16 +1713,25 @@
             tenant_name: tenant-acme
             tenant_namespace: osac-tenants
 
-        - name: Fail if the legacy path accepts the matrix override
-          ansible.builtin.fail:
-            msg: "Legacy CaaS VAST installation accepted an untrusted native CSI matrix"
+        - name: Record that the dispatch did not fail
+          ansible.builtin.set_fact:
+            _matrix_probe_failure: {}
 
       rescue:
-        - name: Verify the legacy path rejected the matrix before dispatch
-          ansible.builtin.assert:
-            that:
-              - "'configured in defaults' in (ansible_failed_result.msg | default(''))"
-            fail_msg: >-
-              Legacy CaaS VAST validation failed for an unexpected reason:
-              {{ ansible_failed_result.msg | default('unknown error') }}
-            success_msg: "Legacy CaaS VAST installation rejected the matrix override before dispatch"
+        - name: Record where the dispatch failed
+          ansible.builtin.set_fact:
+            _matrix_probe_failure:
+              msg: "{{ ansible_failed_result.msg | default('') }}"
+              task: "{{ ansible_failed_task.name | default('') }}"
+
+    - name: Verify the dispatch neither checked the matrix nor reached a CSI operator install
+      ansible.builtin.assert:
+        that:
+          - "'configured in defaults' not in (_matrix_probe_failure.msg | default(''))"
+          - "'CSI operator' not in (_matrix_probe_failure.task | default(''))"
+          - "'CSI driver' not in (_matrix_probe_failure.task | default(''))"
+        fail_msg: >-
+          A VAST StorageClass dispatch must not validate or use the native CSI install
+          matrix. Failed task: {{ _matrix_probe_failure.task | default('none') }};
+          message: {{ _matrix_probe_failure.msg | default('none') }}
+        success_msg: "The VAST StorageClass dispatch ignored the native CSI matrix"

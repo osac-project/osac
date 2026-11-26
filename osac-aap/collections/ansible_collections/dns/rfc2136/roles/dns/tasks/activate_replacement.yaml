@@ -1,0 +1,5 @@
+---
+- name: Activate the RFC 2136 replacement marker
+  ansible.builtin.include_tasks: endpoint_operation.yaml
+  vars:
+    _dns_rfc2136_operation: activate_replacement

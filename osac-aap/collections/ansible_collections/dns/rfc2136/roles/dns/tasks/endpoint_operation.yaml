@@ -1,0 +1,65 @@
+---
+- name: Run the generation-aware RFC 2136 operation
+  block:
+    - name: Validate RFC 2136 identity types before templating module arguments
+      ansible.builtin.assert:
+        that:
+          - dns_cluster_name | default(none) is string
+          - dns_base_domain | default(none) is string
+          - dns_zone | default(none) is none or dns_zone is string
+        quiet: true
+      no_log: true
+
+    - name: Submit the signed RFC 2136 endpoint operation
+      dns.rfc2136.endpoint_dns:
+        operation: "{{ _dns_rfc2136_operation }}"
+        endpoint_kind: "{{ dns_endpoint_kind | default(omit) }}"
+        cluster_name: "{{ dns_cluster_name | default(omit) }}"
+        base_domain: "{{ dns_base_domain | default(omit) }}"
+        generation: "{{ dns_generation | default(omit) }}"
+        predecessor_generation: >-
+          {{ dns_predecessor_generation
+             if dns_predecessor_generation | default(none) is not none
+             else omit }}
+        zone: "{{ dns_zone if dns_zone | default(none) is not none else omit }}"
+        address: >-
+          {{ dns_address if dns_address | default(none) is not none else omit }}
+        ttl: "{{ dns_ttl if dns_ttl | default(none) is not none else omit }}"
+        server: "{{ dns_rfc2136_server }}"
+        port: "{{ dns_rfc2136_port }}"
+        protocol: "{{ dns_rfc2136_protocol }}"
+        key_name: "{{ dns_rfc2136_key_name }}"
+        key_algorithm: "{{ dns_rfc2136_key_algorithm }}"
+        key_secret: "{{ dns_rfc2136_key_secret }}"
+      no_log: true
+  rescue:
+    - name: Report the RFC 2136 failure without request data
+      ansible.builtin.fail:
+        msg: >-
+          RFC 2136 endpoint operation failed.
+          {{ _dns_rfc2136_diagnostics.get(
+             ansible_failed_result.failure | default(''),
+             'Check the endpoint inputs and DNS_RFC2136 settings.') }}
+      vars:
+        _dns_rfc2136_diagnostics:
+          invalid_input: Check the endpoint generation and predecessor.
+          invalid_name: Check the HostedCluster name, base domain and DNS_ZONE.
+          out_of_zone: Check that all endpoint owners belong to DNS_ZONE.
+          invalid_address: Check the IPv4 endpoint address.
+          invalid_ttl: Check the endpoint TTL.
+          invalid_server: Check the literal address in DNS_RFC2136_SERVER.
+          invalid_port: Check DNS_RFC2136_PORT.
+          invalid_key: Check DNS_RFC2136_KEY_NAME and DNS_RFC2136_KEY_SECRET.
+          authentication: >-
+            Check DNS_RFC2136_KEY_NAME, DNS_RFC2136_KEY_ALGORITHM and
+            DNS_RFC2136_KEY_SECRET.
+          refused: REFUSED. Check the primary's DNS update and query policies.
+          zone: Check DNS_ZONE and the authoritative DNS_RFC2136_SERVER.
+          prerequisite: >-
+            DNS prerequisite failed. Check generation and record ownership.
+          verification: Could not verify the exact active marker on the primary.
+          transport: >-
+            Check DNS_RFC2136_SERVER reachability with the configured transport.
+          invalid_response: >-
+            Check the primary's DNS update and authoritative query service.
+          missing_dependency: Install dnspython in the execution environment.

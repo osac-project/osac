@@ -1,0 +1,5 @@
+---
+- name: Initialize the RFC 2136 endpoint marker
+  ansible.builtin.include_tasks: endpoint_operation.yaml
+  vars:
+    _dns_rfc2136_operation: initialize

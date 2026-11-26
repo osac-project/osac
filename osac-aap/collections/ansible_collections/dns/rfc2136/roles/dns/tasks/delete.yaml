@@ -1,0 +1,3 @@
+---
+- name: Reject legacy RFC 2136 delete
+  ansible.builtin.import_tasks: main.yaml

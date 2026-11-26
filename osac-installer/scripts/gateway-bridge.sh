@@ -97,12 +97,15 @@ for service in fulfillment-api fulfillment-internal-api; do
   done
 done
 
-# Remove stale slices of the two Services before applying the bridge: the
-# Services are selectorless now, so the EndpointSlice controller no longer
-# reconciles them and cannot recreate what is deleted. Without this,
-# Envoy-era slices from a driver switch would keep sending consumers to the
-# removed Envoy Pods next to the bridge endpoints.
+# Remove the Envoy-era leftovers of the two Services at their source. The
+# Services are selectorless now, so the endpoints controllers no longer
+# reconcile them - but the legacy Endpoints object and the slices the
+# mirroring controller keeps deriving from it survive a driver switch, and
+# deleting slices alone is futile: the mirroring controller recreates them
+# from the Endpoints object (observed live). Delete the Endpoints object
+# first, then every slice that is not a bridge slice.
 for service in fulfillment-api fulfillment-internal-api; do
+  oc delete endpoints -n "${NS}" "${service}" --ignore-not-found
   oc get endpointslices -n "${NS}" -l "kubernetes.io/service-name=${service}" \
     -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
     | { grep -v -- '-gateway$' || true; } \
@@ -115,5 +118,20 @@ done
 
 bridge fulfillment-api external-api
 bridge fulfillment-internal-api internal-api
+
+# Post-apply sweep: verify nothing foreign reappeared behind the bridge.
+# With the Endpoints objects gone the mirroring controller has no source,
+# so any survivor here means an unexpected reconciler - fail loudly
+# instead of leaving consumers with split traffic.
+sleep 10
+for service in fulfillment-api fulfillment-internal-api; do
+  foreign=$(oc get endpointslices -n "${NS}" -l "kubernetes.io/service-name=${service}" \
+    -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}' 2>/dev/null \
+    | tr ' ' '\n' | { grep -v -- '-gateway$' || true; } | grep -c . || true)
+  if [ "${foreign:-0}" -gt 0 ]; then
+    echo "ERROR: foreign EndpointSlices remain for ${service} after the bridge was applied" >&2
+    exit 1
+  fi
+done
 
 echo "Bridge EndpointSlices applied in ${NS}."

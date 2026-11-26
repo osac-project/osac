@@ -50,7 +50,7 @@ case "\$1 \$2" in
 esac
 case "\$1" in
   get)
-    if [[ "\$*" == *"endpointslices"* ]]; then echo "1.2.3.4"; fi
+    if [[ "\$*" == *"endpointslices"* ]]; then echo "stub-slice-gateway"; fi
     exit 0 ;;
   apply)
     input=\$(cat)

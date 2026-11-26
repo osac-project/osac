@@ -14,6 +14,9 @@ from enum import StrEnum
 
 class WaitResourceKind(StrEnum):
     COMPUTE_INSTANCE = "ComputeInstance"
+    COMPUTE_INSTANCE_CATALOG_ITEM = "ComputeInstanceCatalogItem"
+    INSTANCE_TYPE = "InstanceType"
+    DISK_IMAGE = "DiskImage"
     VIRTUAL_MACHINE = "VirtualMachine"
     VIRTUAL_MACHINE_INSTANCE = "VirtualMachineInstance"
     VIRTUAL_NETWORK = "VirtualNetwork"

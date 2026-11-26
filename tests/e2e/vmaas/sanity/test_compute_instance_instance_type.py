@@ -2,11 +2,8 @@ from __future__ import annotations
 
 import re
 import subprocess
-import sys
 from collections.abc import Callable, Iterator
-from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -27,6 +24,7 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until, run_unchecked
 from tests.e2e.core.wait_kinds import WaitResourceKind
+from tests.e2e.vmaas.compute_instance_helpers import next_restart_timestamp
 
 pytestmark = pytest.mark.sanity
 
@@ -204,15 +202,6 @@ def _wait_for_vmi_resources(k8s: K8sClient, *, vmi_namespace: str, ci_name: str,
     )
 
 
-def _next_restart_timestamp(last_restarted_at: str) -> str:
-    timestamp = datetime.now(tz=UTC).replace(microsecond=0)
-    if last_restarted_at:
-        previous = datetime.fromisoformat(last_restarted_at.replace("Z", "+00:00"))
-        if timestamp <= previous:
-            timestamp = previous + timedelta(seconds=1)
-    return timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def _wait_for_resize_staged(
     k8s_hub: K8sClient,
     k8s_virt: K8sClient,
@@ -318,7 +307,7 @@ def _resize_and_restart_compute_instance(
         previous_config_version=previous_config_version,
     )
     previous_last_restarted = k8s_hub.get_compute_instance_last_restarted_at(name=ci_name)
-    restart_timestamp = _next_restart_timestamp(previous_last_restarted)
+    restart_timestamp = next_restart_timestamp(previous_last_restarted)
     grpc.update_restart(uuid=ci_uuid, template=vm_template, timestamp=restart_timestamp)
     _wait_for_resized_restart(
         k8s_hub,
@@ -331,26 +320,6 @@ def _resize_and_restart_compute_instance(
         target_vcpus=target_vcpus,
         target_memory_gib=target_memory_gib,
     )
-
-
-@pytest.fixture
-def compute_instance_type_editor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    editor = tmp_path / "edit-compute-instance.py"
-    editor.write_text(
-        f"#!{sys.executable}\n"
-        "import json\n"
-        "import os\n"
-        "import sys\n"
-        "from pathlib import Path\n"
-        "\n"
-        "path = Path(sys.argv[1])\n"
-        "compute_instance = json.loads(path.read_text())\n"
-        "compute_instance['spec']['instance_type'] = {'id': os.environ['OSAC_E2E_TARGET_INSTANCE_TYPE']}\n"
-        "path.write_text(json.dumps(compute_instance))\n",
-        encoding="utf-8",
-    )
-    editor.chmod(0o700)
-    monkeypatch.setenv("EDITOR", str(editor))
 
 
 @pytest.fixture
@@ -589,7 +558,6 @@ def test_compute_instance_obsolete_instance_type(
     )
 
 
-@pytest.mark.usefixtures("compute_instance_type_editor")
 @pytest.mark.parametrize(
     ("source_type", "target_type", "target_vcpus", "target_memory_gib"),
     (("active", "medium", MEDIUM_IT_VCPUS, MEDIUM_IT_MEMORY_GIB), ("medium", "active", IT_VCPUS, IT_MEMORY_GIB)),
@@ -602,7 +570,7 @@ def test_compute_instance_resize_via_cli(
     active_instance_type: str,
     medium_instance_type: str,
     running_compute_instance_factory: Callable[[str], tuple[str, str]],
-    monkeypatch: pytest.MonkeyPatch,
+    compute_instance_spec_editor: Callable[[dict[str, object]], None],
     source_type: str,
     target_type: str,
     target_vcpus: int,
@@ -615,7 +583,7 @@ def test_compute_instance_resize_via_cli(
     original_version = original.get("status", {}).get("desiredConfigVersion", "")
 
     target_instance_type = instance_type_names[target_type]
-    monkeypatch.setenv("OSAC_E2E_TARGET_INSTANCE_TYPE", target_instance_type)
+    compute_instance_spec_editor({"instance_type": {"id": target_instance_type}})
     cli.edit_compute_instance(uuid=ci_uuid)
 
     response = grpc.get_compute_instance(ci_id=ci_uuid)
@@ -640,7 +608,6 @@ def test_compute_instance_resize_via_cli(
     )
 
 
-@pytest.mark.usefixtures("compute_instance_type_editor")
 def test_compute_instance_resize_to_deprecated_type_warns_via_cli(
     cli: OsacCLI,
     grpc: GRPCClient,
@@ -649,7 +616,7 @@ def test_compute_instance_resize_to_deprecated_type_warns_via_cli(
     active_instance_type: str,
     medium_instance_type: str,
     running_compute_instance_factory: Callable[[str], tuple[str, str]],
-    monkeypatch: pytest.MonkeyPatch,
+    compute_instance_spec_editor: Callable[[dict[str, object]], None],
 ) -> None:
     """TC-FR3-01: warn while accepting a deprecated resize target."""
     ci_uuid, ci_name = running_compute_instance_factory("active")
@@ -673,7 +640,7 @@ def test_compute_instance_resize_to_deprecated_type_warns_via_cli(
         },
     )
 
-    monkeypatch.setenv("OSAC_E2E_TARGET_INSTANCE_TYPE", target)
+    compute_instance_spec_editor({"instance_type": {"id": target}})
     result = cli.edit_compute_instance(uuid=ci_uuid)
 
     warnings = [line for line in result.stderr.splitlines() if line.startswith("Warning: ")]
@@ -704,7 +671,6 @@ def test_compute_instance_resize_to_deprecated_type_warns_via_cli(
     )
 
 
-@pytest.mark.usefixtures("compute_instance_type_editor")
 def test_compute_instance_resize_to_obsolete_type_is_rejected_via_cli(
     cli: OsacCLI,
     grpc: GRPCClient,
@@ -712,13 +678,13 @@ def test_compute_instance_resize_to_obsolete_type_is_rejected_via_cli(
     k8s_hub_client: K8sClient,
     medium_instance_type: str,
     running_compute_instance_factory: Callable[[str], tuple[str, str]],
-    monkeypatch: pytest.MonkeyPatch,
+    compute_instance_spec_editor: Callable[[dict[str, object]], None],
 ) -> None:
     """TC-FR3-02: reject resizing to an obsolete target."""
     ci_uuid, ci_name = running_compute_instance_factory("active")
     target = medium_instance_type
     private_grpc.update_instance_type(name=target, state="INSTANCE_TYPE_STATE_OBSOLETE")
-    monkeypatch.setenv("OSAC_E2E_TARGET_INSTANCE_TYPE", target)
+    compute_instance_spec_editor({"instance_type": {"id": target}})
     _assert_cli_resize_rejected_without_changes(
         cli,
         grpc,
@@ -729,14 +695,13 @@ def test_compute_instance_resize_to_obsolete_type_is_rejected_via_cli(
     )
 
 
-@pytest.mark.usefixtures("compute_instance_type_editor")
 def test_compute_instance_resize_to_current_type_is_noop(
     cli: OsacCLI,
     grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     active_instance_type: str,
     running_compute_instance_factory: Callable[[str], tuple[str, str]],
-    monkeypatch: pytest.MonkeyPatch,
+    compute_instance_spec_editor: Callable[[dict[str, object]], None],
 ) -> None:
     """TC-FR4-01: keep the current instance type without reconciliation."""
     ci_uuid, ci_name = running_compute_instance_factory("active")
@@ -748,7 +713,7 @@ def test_compute_instance_resize_to_current_type_is_noop(
 
     assert response.get("warnings", []) == []
     assert _instance_type_name(response) == _instance_type_name(original_api)
-    monkeypatch.setenv("OSAC_E2E_TARGET_INSTANCE_TYPE", active_instance_type)
+    compute_instance_spec_editor({"instance_type": {"id": active_instance_type}})
     cli.edit_compute_instance(uuid=ci_uuid)
     current_cr = k8s_hub_client.get_json(resource="computeinstance", name=ci_name)
     assert _configuration_snapshot(current_cr) == original_snapshot
@@ -756,14 +721,13 @@ def test_compute_instance_resize_to_current_type_is_noop(
     assert _instance_type_name(grpc.get_compute_instance(ci_id=ci_uuid)) == active_instance_type
 
 
-@pytest.mark.usefixtures("compute_instance_type_editor")
 def test_compute_instance_resize_rejects_different_gpu_spec_via_cli(
     cli: OsacCLI,
     grpc: GRPCClient,
     private_grpc: GRPCClient,
     k8s_hub_client: K8sClient,
     running_compute_instance_factory: Callable[[str], tuple[str, str]],
-    monkeypatch: pytest.MonkeyPatch,
+    compute_instance_spec_editor: Callable[[dict[str, object]], None],
 ) -> None:
     ci_uuid, ci_name = running_compute_instance_factory("active")
     gpu_type = f"e2e-resize-gpu-{uuid4().hex[:8]}"
@@ -776,7 +740,7 @@ def test_compute_instance_resize_rejects_different_gpu_spec_via_cli(
     )
 
     try:
-        monkeypatch.setenv("OSAC_E2E_TARGET_INSTANCE_TYPE", gpu_type)
+        compute_instance_spec_editor({"instance_type": {"id": gpu_type}})
         _assert_cli_resize_rejected_without_changes(
             cli,
             grpc,

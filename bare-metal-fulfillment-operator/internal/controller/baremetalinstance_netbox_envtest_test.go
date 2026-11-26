@@ -155,7 +155,7 @@ var _ = Describe("BareMetalInstance NetBox Integration", func() {
 
 	BeforeEach(func(specCtx SpecContext) {
 		ensureTestNamespace(netboxTestNS)
-		baseURL, stop, err := wireMockLauncher.Start(specCtx)
+		baseURL, stop, err := wiremock.Start(specCtx)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(stop)
 		admin = wiremock.HTTPAdmin(baseURL)

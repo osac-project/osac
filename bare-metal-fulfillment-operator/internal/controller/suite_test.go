@@ -34,7 +34,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	osacv1alpha1 "github.com/osac-project/osac/bare-metal-fulfillment-operator/api/v1alpha1"
-	"github.com/osac-project/osac/bare-metal-fulfillment-operator/test/wiremock"
 	opv1alpha1 "github.com/osac-project/osac/osac-operator/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
@@ -43,17 +42,20 @@ import (
 // http://onsi.github.io/ginkgo/ to learn more about Ginkgo.
 
 var (
-	ctx              context.Context
-	cancel           context.CancelFunc
-	testEnv          *envtest.Environment
-	cfg              *rest.Config
-	k8sClient        client.Client
-	wireMockLauncher *wiremock.Launcher
+	ctx       context.Context
+	cancel    context.CancelFunc
+	testEnv   *envtest.Environment
+	cfg       *rest.Config
+	k8sClient client.Client
 )
 
 func TestControllers(t *testing.T) {
+	// Per-spec cleanup removes the containers. Disable Ryuk's separate image pull.
+	t.Setenv("TESTCONTAINERS_RYUK_DISABLED", "true")
+	if tool := os.Getenv("CONTAINER_TOOL"); tool != "" {
+		t.Setenv("TESTCONTAINERS_PROVIDER", filepath.Base(tool))
+	}
 	RegisterFailHandler(Fail)
-	wireMockLauncher = wiremock.NewLauncher(t, filepath.Join("..", "..", "..", "tests", "integration", "wiremock"))
 
 	RunSpecs(t, "Controller Suite")
 }

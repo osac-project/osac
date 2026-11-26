@@ -213,7 +213,9 @@ endif
 # old addresses until the installer is re-run (manual recovery).
 INGRESS_DRIVER ?= envoy
 GATEWAY_NAMESPACE ?= openshift-ingress
-GATEWAY_NAME ?= osac-gateway
+# Release-qualified by default: gateway-namespace objects are shared between
+# releases and must not collide (the chart computes the same default).
+GATEWAY_NAME ?= osac-gateway-$(NS)
 GATEWAY_CLASS_NAME ?= openshift-default
 # One source of truth shared by install-osac, install-dry-run and the
 # input-validation gate: the driver is ALWAYS passed so an instance-values
@@ -704,6 +706,7 @@ else
 		--values $(INFRA_VALUES) $${INFRA_VALUES_EXTRA} \
 		--set osacNamespace=$(NS) \
 		--set lvms.channel=stable-$(OCP_VERSION) \
+		--set gatewayapi.gatewayClassName=$(GATEWAY_CLASS_NAME) \
 		--set keycloak.hostname=https://keycloak-keycloak.$(DOMAIN) \
 		--set keycloak.route.hostname=keycloak-keycloak.$(DOMAIN) \
 		--set keycloak.uiUrl=https://$(UI_HOSTNAME) \
@@ -1015,6 +1018,7 @@ endif
 		validate_remote_kubeconfig_secret "$${REMOTE_KUBECONFIG_SECRET_NAME}" "$${REMOTE_KUBECONFIG_SECRET_KEY}"; \
 	fi; \
 	split_argv EXTRA_HELM_ARGS "$${EXTRA_HELM_ARGS}"; \
+	bridge_pid=""; \
 	if [ "$(INGRESS_DRIVER)" = "gatewayapi" ] && [ "$(PLATFORM)" != "kind" ]; then \
 		gwclass_err=$$(oc get gatewayclass "$(GATEWAY_CLASS_NAME)" 2>&1 >/dev/null) || { \
 			case "$$gwclass_err" in *"(NotFound)"*) \
@@ -1034,13 +1038,25 @@ endif
 		$(INSTANCE_HELM_ARGS) \
 		$(INGRESS_DRIVER_HELM_ARGS) \
 		$${ARGV[@]+"$${ARGV[@]}"} $(OSAC_HELM_FORCE_CONFLICTS) $(REMOTE_CLUSTER_HELM_ARGS) \
-		$(INSTALL_HELM_TARGET) --wait --timeout 40m || rc=$$?; \
-	if [ -n "$${bridge_pid:-}" ]; then \
-		if [ $$rc -eq 0 ]; then \
-			wait $${bridge_pid} || { echo "ERROR: the gateway bridge failed; in-cluster callers cannot reach the APIs through the selectorless Services" >&2; rc=1; }; \
-		else \
-			kill $${bridge_pid} 2>/dev/null || true; wait $${bridge_pid} 2>/dev/null || true; \
+		$(INSTALL_HELM_TARGET) --wait --timeout 40m & helm_pid=$$!; \
+	# Watchdog: a bridge that fails early must stop helm instead of letting \
+	# --wait burn its 40m timeout; a bridge that succeeds early is fine. \
+	while kill -0 $${helm_pid} 2>/dev/null; do \
+		if [ -n "$${bridge_pid}" ] && ! kill -0 $${bridge_pid} 2>/dev/null; then \
+			if wait $${bridge_pid}; then \
+				bridge_pid=""; \
+			else \
+				echo "ERROR: the gateway bridge failed; in-cluster callers cannot reach the APIs through the selectorless Services" >&2; \
+				kill $${helm_pid} 2>/dev/null || true; \
+				rc=1; \
+				bridge_pid=""; \
+			fi; \
 		fi; \
+		sleep 10; \
+	done; \
+	wait $${helm_pid} || rc=$$?; \
+	if [ -n "$${bridge_pid}" ]; then \
+		wait $${bridge_pid} || { echo "ERROR: the gateway bridge failed; in-cluster callers cannot reach the APIs through the selectorless Services" >&2; rc=1; }; \
 	fi; \
 	exit $$rc
 .PHONY: uninstall-osac

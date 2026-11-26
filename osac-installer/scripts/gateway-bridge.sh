@@ -32,15 +32,19 @@ TIMEOUT_SECONDS="${4:-1800}"
 deadline=$(( SECONDS + TIMEOUT_SECONDS ))
 gateway_ips=""
 while :; do
+  # IPv4 only: the bridge slice is addressType IPv4, and a dual-stack gateway
+  # Service has one slice per family, so an unfiltered query would mix them.
+  # IPv6 gateways are not bridged (v1 constraint; the chart's static
+  # gatewayAddress path handles both families).
   gateway_ips=$(oc get endpointslices -n "${GATEWAY_NAMESPACE}" \
     -l "kubernetes.io/service-name=${GATEWAY_SERVICE}" \
-    -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.addresses[*]}{" "}{end}' 2>/dev/null || true)
+    -o jsonpath='{range .items[?(@.addressType=="IPv4")].endpoints[?(@.conditions.ready==true)]}{.addresses[*]}{" "}{end}' 2>/dev/null || true)
   # A terminating endpoint can still report ready=true; snapshotting it
   # would freeze a dead Pod IP into the bridge (nothing reconciles the
   # bridge afterwards). Wait until no endpoint is terminating.
   terminating=$(oc get endpointslices -n "${GATEWAY_NAMESPACE}" \
     -l "kubernetes.io/service-name=${GATEWAY_SERVICE}" \
-    -o jsonpath='{.items[*].endpoints[*].conditions.terminating}' 2>/dev/null || true)
+    -o jsonpath='{.items[?(@.addressType=="IPv4")].endpoints[*].conditions.terminating}' 2>/dev/null || true)
   if [[ -n "${gateway_ips// /}" && "${terminating}" != *"true"* ]]; then
     echo "Gateway ${GATEWAY_NAMESPACE}/${GATEWAY_SERVICE} Pod IPs: ${gateway_ips}"
     break

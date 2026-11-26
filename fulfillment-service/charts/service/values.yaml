@@ -70,6 +70,10 @@ externalHostname:
 # additional layer of defense.
 internalHostname:
 
+# Image for small cli hook Jobs (Envoy EndpointSlice cleanup on driver
+# switches). Version-pinned, like the osac-infra hook images.
+cliImage: quay.io/openshift/origin-cli:4.20.0
+
 # Ingress driver: how the public and internal APIs are exposed.
 #   envoy      - bundled fulfillment-ingress-proxy Envoy (default; current behavior)
 #   gatewayapi - OpenShift CIO-managed Gateway API; the bundled Envoy is not deployed
@@ -81,7 +85,10 @@ ingress:
     gatewayNamespace: openshift-ingress
     # GatewayClass installed as a cluster prerequisite by osac-installer.
     gatewayClassName: openshift-default
-    gatewayName: osac-gateway
+    # Gateway name. Empty defaults to osac-gateway-<release-namespace>: the
+    # Gateway, its Certificate and the TLS Secret live in the shared gateway
+    # namespace and must not collide between two gatewayapi releases.
+    gatewayName: ""
     # In-cluster reachable address of the gateway (a Pod IP; an EndpointSlice
     # address may NOT be another Service's ClusterIP — the API server rejects
     # it for non-privileged identities). When empty the bridge EndpointSlices

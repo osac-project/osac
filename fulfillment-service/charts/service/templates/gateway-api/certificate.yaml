@@ -22,7 +22,7 @@ apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   namespace: {{ .Values.ingress.gatewayapi.gatewayNamespace }}
-  name: fulfillment-api-gateway
+  name: fulfillment-api-gateway-{{ .Release.Namespace }}
 spec:
   issuerRef:
     kind: {{ .Values.certs.issuerRef.kind }}
@@ -37,7 +37,7 @@ spec:
   - fulfillment-internal-api.{{ .Release.Namespace }}.svc.cluster.local
   - {{ include "fulfillment-api.hostname" . | quote }}
   - {{ include "fulfillment-internal-api.hostname" . | quote }}
-  secretName: fulfillment-api-tls
+  secretName: {{ include "fulfillment-api.gatewaySecretName" . }}
   privateKey:
     rotationPolicy: Always
     algorithm: ECDSA

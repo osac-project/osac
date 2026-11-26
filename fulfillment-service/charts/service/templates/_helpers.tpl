@@ -101,3 +101,23 @@ Renders the command line arguments shared by the gRPC server and the controllers
 - --networking-excluded-ipv4-cidrs={{ join "," . }}
 {{- end }}
 {{- end }}
+
+{{/*
+Gateway API identity for the gatewayapi ingress driver. The Gateway, its
+Certificate and the TLS Secret live in the shared gateway namespace, so the
+defaults carry the release namespace: two gatewayapi releases on one cluster
+would otherwise fight over the same objects. An explicitly configured
+ingress.gatewayapi.gatewayName wins unchanged.
+*/}}
+{{- define "fulfillment-api.gatewayName" -}}
+{{- .Values.ingress.gatewayapi.gatewayName | default (printf "osac-gateway-%s" .Release.Namespace) -}}
+{{- end -}}
+
+{{/*
+Name of the frontend TLS Secret in the gateway namespace (distinct from the
+release-namespace envoy secret of the same base name; the gateway copy must
+also be unique per release).
+*/}}
+{{- define "fulfillment-api.gatewaySecretName" -}}
+{{- printf "fulfillment-api-tls-%s" .Release.Namespace -}}
+{{- end -}}

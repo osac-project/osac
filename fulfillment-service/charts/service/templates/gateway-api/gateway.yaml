@@ -16,7 +16,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   namespace: {{ .Values.ingress.gatewayapi.gatewayNamespace }}
-  name: {{ .Values.ingress.gatewayapi.gatewayName }}
+  name: {{ include "fulfillment-api.gatewayName" . }}
 spec:
   gatewayClassName: {{ .Values.ingress.gatewayapi.gatewayClassName }}
   listeners:
@@ -28,7 +28,7 @@ spec:
     tls:
       mode: Terminate
       certificateRefs:
-      - name: fulfillment-api-tls
+      - name: {{ include "fulfillment-api.gatewaySecretName" $ }}
     allowedRoutes:
       namespaces:
         from: Selector

@@ -62,7 +62,9 @@
             "type": "string",
             "minLength": 1
           },
-          "default": ["192.168.100.240-192.168.100.250"]
+          "default": [
+            "192.168.100.240-192.168.100.250"
+          ]
         },
         "derivePoolFromNodeIP": {
           "type": "boolean",
@@ -177,32 +179,55 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Deploy a bundled OpenBao instance. Disabled by default — enable in a profile infra.yaml and set keycloakIssuerUrl.",
+          "description": "Deploy a bundled OpenBao instance. Disabled by default \u2014 enable in a profile infra.yaml and set keycloakIssuerUrl.",
           "default": false
         },
         "image": {
           "type": "string",
-          "description": "OpenBao container image (must be 2.5+ for namespace support)",
+          "description": "Container image. Empty derives from flavor: openbao -> ghcr.io/openbao/openbao:2.6.2, vault -> hashicorp/vault-enterprise:1.21.14-ent.",
           "default": "ghcr.io/openbao/openbao:2.6.1"
         },
         "podSecurityContext": {
           "type": "object",
-          "description": "Pod-level securityContext for the OpenBao deployment. The chart default is {runAsNonRoot: true} with seccompProfile RuntimeDefault — no hardcoded UID, so OpenShift's restricted-v2 SCC can allocate from the namespace UID range. A profile override is merged with this chart default, so keys the override does not set (such as seccompProfile) keep their default values; the merged map replaces the template fallback, which applies only when podSecurityContext is empty. runAsUser 0 is rejected while runAsNonRoot is true (the default): the kubelet refuses to start a root container flagged non-root, so the combination fails only at provisioning.",
+          "description": "Pod-level securityContext for the OpenBao deployment. The chart default is {runAsNonRoot: true} with seccompProfile RuntimeDefault \u2014 no hardcoded UID, so OpenShift's restricted-v2 SCC can allocate from the namespace UID range. A profile override is merged with this chart default, so keys the override does not set (such as seccompProfile) keep their default values; the merged map replaces the template fallback, which applies only when podSecurityContext is empty. runAsUser 0 is rejected while runAsNonRoot is true (the default): the kubelet refuses to start a root container flagged non-root, so the combination fails only at provisioning.",
           "properties": {
-            "runAsNonRoot": { "type": "boolean" },
-            "runAsUser": { "type": "integer", "minimum": 0 },
-            "runAsGroup": { "type": "integer", "minimum": 0 },
-            "fsGroup": { "type": "integer", "minimum": 0 }
+            "runAsNonRoot": {
+              "type": "boolean"
+            },
+            "runAsUser": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "runAsGroup": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "fsGroup": {
+              "type": "integer",
+              "minimum": 0
+            }
           },
           "not": {
             "allOf": [
               {
-                "properties": { "runAsUser": { "const": 0 } },
-                "required": ["runAsUser"]
+                "properties": {
+                  "runAsUser": {
+                    "const": 0
+                  }
+                },
+                "required": [
+                  "runAsUser"
+                ]
               },
               {
-                "properties": { "runAsNonRoot": { "const": true } },
-                "required": ["runAsNonRoot"]
+                "properties": {
+                  "runAsNonRoot": {
+                    "const": true
+                  }
+                },
+                "required": [
+                  "runAsNonRoot"
+                ]
               }
             ]
           }
@@ -214,15 +239,27 @@
             "limits": {
               "type": "object",
               "properties": {
-                "cpu": { "type": "string", "description": "CPU limit" },
-                "memory": { "type": "string", "description": "Memory limit" }
+                "cpu": {
+                  "type": "string",
+                  "description": "CPU limit"
+                },
+                "memory": {
+                  "type": "string",
+                  "description": "Memory limit"
+                }
               }
             },
             "requests": {
               "type": "object",
               "properties": {
-                "cpu": { "type": "string", "description": "CPU request" },
-                "memory": { "type": "string", "description": "Memory request" }
+                "cpu": {
+                  "type": "string",
+                  "description": "CPU request"
+                },
+                "memory": {
+                  "type": "string",
+                  "description": "Memory request"
+                }
               }
             }
           }
@@ -241,6 +278,20 @@
           "type": "string",
           "description": "OpenBao/Vault logical namespace (not Kubernetes namespace). The init script creates this as a child namespace inside the OpenBao server and configures JWT auth and policies within it.",
           "default": "osac"
+        },
+        "flavor": {
+          "type": "string",
+          "enum": [
+            "openbao",
+            "vault"
+          ],
+          "description": "Secret store backend: openbao (default, no license) or vault (HashiCorp Vault Enterprise; requires licenseSecret).",
+          "default": "openbao"
+        },
+        "licenseSecret": {
+          "type": "string",
+          "description": "Name of a Secret (key 'license') holding the HashiCorp Vault Enterprise license. Required when flavor is vault.",
+          "default": ""
         }
       }
     },
@@ -270,7 +321,10 @@
               "default": "stable"
             }
           },
-          "required": ["install", "channel"]
+          "required": [
+            "install",
+            "channel"
+          ]
         },
         "configureClusterNetwork": {
           "type": "boolean",
@@ -315,7 +369,12 @@
               "default": 900
             }
           },
-          "required": ["asn", "acceptPrefixes", "waitForEstablished", "timeoutSeconds"]
+          "required": [
+            "asn",
+            "acceptPrefixes",
+            "waitForEstablished",
+            "timeoutSeconds"
+          ]
         },
         "nodes": {
           "type": "array",
@@ -369,16 +428,31 @@
                       "description": "Fabric leaf BGP ASN."
                     }
                   },
-                  "required": ["interface", "peerAddress", "peerASN"]
+                  "required": [
+                    "interface",
+                    "peerAddress",
+                    "peerASN"
+                  ]
                 }
               }
             },
-            "required": ["name", "vtepIP", "uplinks"]
+            "required": [
+              "name",
+              "vtepIP",
+              "uplinks"
+            ]
           },
           "default": []
         }
       },
-      "required": ["enabled", "nmstate", "configureClusterNetwork", "vtepCIDR", "bgp", "nodes"]
+      "required": [
+        "enabled",
+        "nmstate",
+        "configureClusterNetwork",
+        "vtepCIDR",
+        "bgp",
+        "nodes"
+      ]
     }
   },
   "allOf": [
@@ -386,24 +460,40 @@
       "if": {
         "properties": {
           "evpn": {
-            "properties": {"enabled": {"const": true}},
-            "required": ["enabled"]
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            },
+            "required": [
+              "enabled"
+            ]
           }
         },
-        "required": ["evpn"]
+        "required": [
+          "evpn"
+        ]
       },
       "then": {
         "properties": {
           "evpn": {
             "properties": {
-              "vtepCIDR": {"minLength": 1},
+              "vtepCIDR": {
+                "minLength": 1
+              },
               "bgp": {
                 "properties": {
-                  "asn": {"minimum": 1},
-                  "acceptPrefixes": {"minItems": 1}
+                  "asn": {
+                    "minimum": 1
+                  },
+                  "acceptPrefixes": {
+                    "minItems": 1
+                  }
                 }
               },
-              "nodes": {"minItems": 1}
+              "nodes": {
+                "minItems": 1
+              }
             }
           }
         }

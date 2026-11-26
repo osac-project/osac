@@ -25,10 +25,10 @@ metadata:
   name: fulfillment-external
 spec:
   parentRefs:
-  - name: {{ .Values.ingress.gatewayapi.gatewayName }}
+  - name: {{ include "fulfillment-api.gatewayName" . }}
     namespace: {{ .Values.ingress.gatewayapi.gatewayNamespace }}
     sectionName: external
-  - name: {{ .Values.ingress.gatewayapi.gatewayName }}
+  - name: {{ include "fulfillment-api.gatewayName" . }}
     namespace: {{ .Values.ingress.gatewayapi.gatewayNamespace }}
     sectionName: ext-svc
   hostnames:

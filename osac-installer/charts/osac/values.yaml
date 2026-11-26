@@ -226,7 +226,9 @@ service:
       gatewayNamespace: openshift-ingress
       # GatewayClass installed as a cluster prerequisite by osac-infra.
       gatewayClassName: openshift-default
-      gatewayName: osac-gateway
+      # Empty defaults to osac-gateway-<release-namespace> in the service chart
+      # (gateway-namespace objects must not collide between releases).
+      gatewayName: ""
       # In-cluster reachable address of the gateway (a Pod IP; an
       # EndpointSlice address may NOT be another Service's ClusterIP —
       # the API server rejects it for non-privileged identities). Leave

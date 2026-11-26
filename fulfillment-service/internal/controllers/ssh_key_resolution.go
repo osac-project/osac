@@ -17,6 +17,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -25,16 +26,36 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+// Reasons classifying an SSH-key Secret resolution failure. Permanent reports
+// which of them are terminal.
 const (
-	sshKeyResolutionReasonSecretInvalid  = "SecretInvalid"
-	sshKeyResolutionReasonSecretNotFound = "SecretNotFound"
+	SSHKeyResolutionReasonSecretNotFound    = "SecretNotFound"
+	SSHKeyResolutionReasonSecretInvalid     = "SecretInvalid"
+	SSHKeyResolutionReasonSecretUnavailable = "SecretUnavailable"
+	SSHKeyResolutionReasonInternalError     = "InternalError"
 )
 
-// SSHKeyResolutionError carries failure details and whether it should mark reconciliation failed.
+// SSHKeyResolutionRetryDelay is the initial delay callers should use when
+// wrapping a retryable SSH-key Secret resolution failure with RequeueAfter.
+// The shared reconciler doubles it after each failed retry, up to one minute.
+const SSHKeyResolutionRetryDelay = time.Second
+
+// SSHKeyResolutionError marks an SSH-key Secret resolution failure, classified
+// by Reason. It intentionally does not implement RequeueAfter, so an unwrapped
+// error is never requeued.
 type SSHKeyResolutionError struct {
-	Permanent bool
-	Reason    string
-	Err       error
+	Reason string
+	Err    error
+}
+
+// Permanent reports whether the failure is terminal: retrying cannot succeed.
+func (e *SSHKeyResolutionError) Permanent() bool {
+	switch e.Reason {
+	case SSHKeyResolutionReasonSecretNotFound, SSHKeyResolutionReasonSecretInvalid:
+		return true
+	default:
+		return false
+	}
 }
 
 func (e *SSHKeyResolutionError) Error() string {
@@ -50,15 +71,14 @@ func ResolveSSHKey(
 	ctx context.Context,
 	secretsClient privatev1.SecretsClient,
 	reference *privatev1.SecretReference,
-) (string, *SSHKeyResolutionError) {
+) (string, error) {
 	if reference == nil {
 		return "", nil
 	}
 	if reference.GetId() == "" {
 		return "", &SSHKeyResolutionError{
-			Permanent: true,
-			Reason:    sshKeyResolutionReasonSecretInvalid,
-			Err:       status.Error(codes.InvalidArgument, "SSH key Secret reference has no id"),
+			Reason: SSHKeyResolutionReasonSecretInvalid,
+			Err:    status.Error(codes.InvalidArgument, "SSH key Secret reference has no id"),
 		}
 	}
 
@@ -66,22 +86,23 @@ func ResolveSSHKey(
 		Id: reference.GetId(),
 	}.Build())
 	if err != nil {
-		resolutionErr := &SSHKeyResolutionError{Err: err}
+		var reason string
 		switch status.Code(err) {
 		case codes.NotFound:
-			resolutionErr.Permanent = true
-			resolutionErr.Reason = sshKeyResolutionReasonSecretNotFound
+			reason = SSHKeyResolutionReasonSecretNotFound
 		case codes.InvalidArgument:
-			resolutionErr.Permanent = true
-			resolutionErr.Reason = sshKeyResolutionReasonSecretInvalid
+			reason = SSHKeyResolutionReasonSecretInvalid
+		case codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted:
+			reason = SSHKeyResolutionReasonSecretUnavailable
+		default:
+			reason = SSHKeyResolutionReasonInternalError
 		}
-		return "", resolutionErr
+		return "", &SSHKeyResolutionError{Reason: reason, Err: err}
 	}
 	secret := response.GetObject()
 	if err := sshkey.ValidateSSHKeySecretData(secret.GetType(), secret.GetData()); err != nil {
 		return "", &SSHKeyResolutionError{
-			Permanent: true,
-			Reason:    sshKeyResolutionReasonSecretInvalid,
+			Reason: SSHKeyResolutionReasonSecretInvalid,
 			Err: status.Errorf(
 				codes.InvalidArgument,
 				"SSH key Secret %q is invalid: %v",

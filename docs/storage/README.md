@@ -8,10 +8,16 @@ storage is operated.
 This area explains the storage concepts, the models that shape a deployment,
 and the guides for administering and consuming storage.
 
-> **Note:** The OSAC chart does not deploy a CSI driver itself. Vendor CSI
-> drivers (for example, Trident for NetApp) are prepared and operated according
-> to the [ownership model](#how-to-read-these-documents) selected for the
-> deployment.
+> **Note:** The `osac` instance chart does not itself deploy the OSAC CSI
+> routing driver. The AAP install role deploys it only when
+> `csi_driver_install_enabled` is true and a supported provider (`vast`,
+> `netapp`, or `pure`) is dispatched. An LVMS-only dispatch can create the
+> local StorageClass when opted in, but does not install the driver. The SNO
+> VMaaS development/CI opt-in is described
+> in [Local LVMS CSI StorageClasses](../../osac-aap/README.md#local-lvms-csi-storageclasses).
+> Vendor CSI drivers (for example, Trident for NetApp) are prepared and
+> operated according to the [ownership model](#how-to-read-these-documents)
+> selected for the deployment.
 
 ## How to read these documents
 
@@ -45,7 +51,8 @@ deployment is a *profile* that combines one choice from each dimension; the
 | CSP-managed storage for providers other than NetApp | Planned |
 | Dedicated-SVM CSP-managed profiles | Planned |
 | CaaS tenant-cluster storage tiers | Planned |
-| OSAC CSI routing meta-driver | Planned |
+| OSAC CSI routing meta-driver (VAST, NetApp/Trident, Pure) | Router/chart implemented; full vendor integration unverified ([driver overview](../../osac-csi-driver/README.md)) |
+| Local LVMS StorageClasses through OSAC CSI | Dev/CI: [SNO VMaaS](../../osac-aap/README.md#local-lvms-csi-storageclasses) |
 | File API | Planned |
 
 ## Reading paths

@@ -59,6 +59,11 @@ admin_groups := {
   "admins",
 }
 
+# Cloud provider admin roles - users that are allowed to act as administrators.
+cloud_provider_admin_roles := {
+  "cloud-provider-admin",
+}
+
 # Tenant admin roles - users with these roles can manage users in their tenant
 tenant_admin_roles := {
   "tenant-admin",
@@ -173,6 +178,11 @@ is_admin if {
   not is_managed_service_account_candidate
   some group in subject_groups
   group in admin_groups
+}
+is_admin if {
+  not is_managed_service_account_candidate
+  some role in subject_realm_roles
+  role in cloud_provider_admin_roles
 }
 
 # Check if an account is a tenant admin (can manage users AND IdP in their tenant):

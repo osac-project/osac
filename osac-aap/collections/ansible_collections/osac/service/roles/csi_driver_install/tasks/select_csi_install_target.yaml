@@ -1,0 +1,14 @@
+# This opt-in hook lets component-integration tests substitute a local
+# installer for external CSI installation. The environment gate defaults to
+# false; without it, job extra vars cannot select an arbitrary role.
+---
+- name: Validate the configured CSI installer override
+  when:
+    - lookup('env', 'OSAC_AAP_ENABLE_TEST_INSTALL_OVERRIDES', default='false') | bool
+    - csi_driver_install_override is defined
+  ansible.builtin.assert:
+    that:
+      - csi_driver_install_override is mapping
+      - csi_driver_install_override.name is defined
+      - csi_driver_install_override.tasks_from is defined
+    fail_msg: "The CSI installer override must provide a role name and tasks_from"

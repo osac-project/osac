@@ -240,7 +240,6 @@ func (s *PrivateTenantsServer) Update(ctx context.Context,
 	if err != nil {
 		return
 	}
-	stripBreakGlassCredentials(response.GetObject())
 	if err = s.clearStaleBreakGlassCredentialsSecretRef(ctx, response.GetObject()); err != nil {
 		return
 	}
@@ -355,12 +354,6 @@ func (s *PrivateTenantsServer) Signal(ctx context.Context,
 	request *privatev1.TenantsSignalRequest) (response *privatev1.TenantsSignalResponse, err error) {
 	err = s.generic.Signal(ctx, request, &response)
 	return
-}
-
-func stripBreakGlassCredentials(tenant *privatev1.Tenant) {
-	if tenant.HasStatus() && tenant.GetStatus().HasBreakGlassCredentials() {
-		tenant.GetStatus().ClearBreakGlassCredentials()
-	}
 }
 
 const breakGlassCredentialsSecretName = "break-glass-credentials"

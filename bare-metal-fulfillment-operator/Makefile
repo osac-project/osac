@@ -64,11 +64,11 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 .PHONY: test
-test: manifests generate fmt vet setup-envtest wiremock-image ## Run tests.
+test: manifests generate fmt vet setup-envtest ## Run tests.
 	CONTAINER_TOOL="$(WIREMOCK_CONTAINER_TOOL)" KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /test/integration) -coverprofile cover.out
 
 .PHONY: wiremock-image
-wiremock-image: ## Build the WireMock fixture image for Envtest.
+wiremock-image: ## Build a local WireMock fixture image.
 	$(WIREMOCK_CONTAINER_TOOL) build -t localhost/osac-wiremock:it -f Containerfile.wiremock .
 
 # Run integration tests against a pre-existing Kind cluster deployed via

@@ -46,8 +46,8 @@ spec:
           emptyDir: {}
       containers:
         - name: wiremock
-          image: localhost/osac-wiremock:it
-          imagePullPolicy: Never
+          image: "@WIREMOCK_IMAGE@"
+          imagePullPolicy: IfNotPresent
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000

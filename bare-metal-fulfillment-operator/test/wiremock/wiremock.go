@@ -20,6 +20,7 @@ package wiremock
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -32,7 +33,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-const image = "localhost/osac-wiremock:it"
+//go:embed image.txt
+var wireMockImage string
 
 // Start runs an isolated WireMock instance on a dynamically assigned loopback
 // port. Call stop to remove it when the spec finishes.
@@ -45,15 +47,20 @@ func Start(ctx context.Context) (baseURL string, stop func() error, err error) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	output, err := exec.CommandContext(ctx, tool,
-		"run", "--detach", "--rm", "--pull=never", "--publish", "127.0.0.1::8080", image,
+	image := os.Getenv("WIREMOCK_IMAGE")
+	if image == "" {
+		image = strings.TrimSpace(wireMockImage)
+	}
+
+	startCtx, cancelStart := context.WithTimeout(ctx, 3*time.Minute)
+	output, err := exec.CommandContext(startCtx, tool,
+		"run", "--detach", "--rm", "--pull=missing", "--publish", "127.0.0.1::8080", image,
 	).Output()
+	cancelStart()
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			return "", nil, fmt.Errorf("start WireMock (build with make wiremock-image): %w: %s", err, exitErr.Stderr)
+			return "", nil, fmt.Errorf("start WireMock image %s: %w: %s", image, err, exitErr.Stderr)
 		}
 		return "", nil, fmt.Errorf("start WireMock: %w", err)
 	}
@@ -69,6 +76,8 @@ func Start(ctx context.Context) (baseURL string, stop func() error, err error) {
 		return nil
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	output, err = exec.CommandContext(ctx, tool, "port", id, "8080/tcp").CombinedOutput()
 	if err != nil {
 		_ = stop()

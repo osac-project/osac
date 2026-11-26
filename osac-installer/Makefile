@@ -1355,13 +1355,16 @@ endif
 ifneq ($(filter bmf-netbox,$(BMF_TEST_PHASES)),)
 	$(call kind-container-build,--build-arg GODEBUG=$(GODEBUG) -t localhost/fulfillment-service:it -f ../fulfillment-service/Containerfile ..)
 	$(call kind-load-image,localhost/fulfillment-service:it)
-	$(call kind-container-build,-t localhost/osac-wiremock:it -f ../bare-metal-fulfillment-operator/Containerfile.wiremock ../bare-metal-fulfillment-operator)
+ifeq ($(WIREMOCK_IMAGE),localhost/osac-wiremock:it)
 	$(call kind-load-image,localhost/osac-wiremock:it)
+endif
 	# Recreate the mock so a failed run cannot carry a claimed device into the next run.
 	kubectl delete -n $(NS) deployment/bmf-netbox-fixture --ignore-not-found
 	@initial_token=$$(openssl rand -hex 24); \
 		rotated_token=$$(openssl rand -hex 24); \
-		sed -e "s/@NETBOX_TOKEN@/$$initial_token/" \
+		wiremock_image="$${WIREMOCK_IMAGE:-$$(cat ../bare-metal-fulfillment-operator/test/wiremock/image.txt)}"; \
+		sed -e "s|@WIREMOCK_IMAGE@|$$wiremock_image|" \
+			-e "s/@NETBOX_TOKEN@/$$initial_token/" \
 			-e "s/@NETBOX_ROTATED_TOKEN@/$$rotated_token/" \
 			../bare-metal-fulfillment-operator/test/integration/testdata/netbox.yaml \
 		| kubectl apply -n $(NS) -f -

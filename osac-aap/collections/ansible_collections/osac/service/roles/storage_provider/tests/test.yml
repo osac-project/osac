@@ -1685,6 +1685,28 @@
             success_msg: "Resolver rejected the unknown provisioning target"
 
 # ──────────────────────────────────────────────────────────────
+# VMaaS cluster storage accepts only the providers it supports
+# Expected: on the vmaas target, ensure_storage_class and teardown_cluster_storage
+# fail before any provider role runs for a provider outside
+# storage_provider_vmaas_supported_providers, and the message names the provider
+# and its gap. A backend setup job is not affected.
+# ──────────────────────────────────────────────────────────────
+- name: Test storage_provider -- vmaas refuses unsupported providers for cluster storage
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Check each unsupported provider and cluster action on vmaas
+      ansible.builtin.include_tasks: _assert_vmaas_unsupported.yml
+      loop:
+        - {provider: netapp, protocol: block, action: ensure_storage_class, gap: cspManaged}
+        - {provider: pure, protocol: block, action: ensure_storage_class, gap: '#1531'}
+        - {provider: netapp, protocol: block, action: teardown_cluster_storage, gap: cspManaged}
+      loop_control:
+        loop_var: _vmaas_case
+        label: "{{ _vmaas_case.provider }} {{ _vmaas_case.action }}"
+
+# ──────────────────────────────────────────────────────────────
 # Regression: a VAST StorageClass dispatch installs no CSI operator, so it never
 # consults the native CSI install matrix, whatever flags the caller passes.
 # This lives last so run_tests.sh's second invocation exercises it after its

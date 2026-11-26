@@ -92,7 +92,15 @@ type VolumeTarget struct {
 	DataVolumeName string `json:"dataVolumeName"`
 }
 
-// VolumeSpec defines the desired state of Volume.
+// VolumeSpec defines the desired state of Volume. The type-level rules keep
+// the optional immutable fields' presence stable across updates: a field-level
+// self == oldSelf rule alone is skipped by the API server when the field is
+// absent from the old or the new object, so removing and re-adding the field
+// would bypass the value check.
+// +kubebuilder:validation:XValidation:rule="has(self.topology) == has(oldSelf.topology) && (!has(self.topology) || self.topology == oldSelf.topology)",message="topology is immutable"
+// +kubebuilder:validation:XValidation:rule="has(self.owner) == has(oldSelf.owner) && (!has(self.owner) || self.owner == oldSelf.owner)",message="owner is immutable"
+// +kubebuilder:validation:XValidation:rule="has(self.diskImage) == has(oldSelf.diskImage) && (!has(self.diskImage) || self.diskImage == oldSelf.diskImage)",message="diskImage is immutable"
+// +kubebuilder:validation:XValidation:rule="has(self.target) == has(oldSelf.target) && (!has(self.target) || self.target == oldSelf.target)",message="target is immutable"
 type VolumeSpec struct {
 	// StorageTier is the name of the StorageTier that determines which provider
 	// and protocol serve this volume.
@@ -123,7 +131,6 @@ type VolumeSpec struct {
 	// advertise VOLUME_ACCESSIBILITY_CONSTRAINTS for topology to take
 	// effect. Immutable after creation.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="topology is immutable"
 	Topology *VolumeTopology `json:"topology,omitempty"`
 
 	// Owner identifies the fulfillment workload that owns this volume.
@@ -132,19 +139,16 @@ type VolumeSpec struct {
 	// work — today this field distinguishes VMaaS volumes only. Immutable
 	// after creation.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="owner is immutable"
 	Owner *VolumeOwner `json:"owner,omitempty"`
 
 	// DiskImage references the DiskImage catalog object the volume is
 	// provisioned from. Absent for blank disks. Immutable after creation.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="diskImage is immutable"
 	DiskImage *DiskImageReference `json:"diskImage,omitempty"`
 
 	// Target records where an owned volume's storage is provisioned.
 	// Immutable after creation.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="target is immutable"
 	Target *VolumeTarget `json:"target,omitempty"`
 }
 

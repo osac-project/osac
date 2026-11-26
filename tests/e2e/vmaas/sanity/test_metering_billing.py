@@ -357,9 +357,7 @@ def test_metering_stop_ends_billing(
             else:
                 stopped_at = fulfillment_stopped_at
             logger.info(
-                "stop timestamp: fulfillment=%s, anchor=%s",
-                fulfillment_stopped_at.isoformat(),
-                stopped_at.isoformat(),
+                "stop timestamp: fulfillment=%s, anchor=%s", fulfillment_stopped_at.isoformat(), stopped_at.isoformat()
             )
 
         # The stop reaches metering through several steps: operator feedback, a

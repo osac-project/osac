@@ -131,7 +131,9 @@ def test_baremetal_instance_bills_allocation_and_consumption(
     # intervals after the deletion, and reading the end before they land
     # anchors on an intermediate round, making the pieces read as billing past
     # the anchor.
-    billing_end = metering.wait_for_billing_end(bmi_id, deletion=deletion_recorded)
+    # Allocation may keep billing until the host is released, after the CR
+    # deletion request; consumption must still end at the recorded deletion.
+    billing_end = metering.wait_for_billing_end(bmi_id, deletion=deletion_recorded, late_meters={"allocation"})
 
     # Each meter ends at or after the recorded deletion: its final partial
     # interval is billed, not dropped, and its typed heartbeats collapse into

@@ -39,6 +39,7 @@ def _heartbeat(
     end: datetime,
     quantity: str,
     *,
+    meter: str = "compute",
     instance_type: str | None = "m-small",
     project: str | None = "billing",
 ) -> dict[str, Any]:
@@ -67,8 +68,8 @@ def _heartbeat(
             "resource_id": "vm-7",
             "resource_type": "compute_instance",
             "tenant_id": "tenant1",
-            "meter": "compute",
-            "component": "compute",
+            "meter": meter,
+            "component": meter,
             "heartbeat_time": end.isoformat(),
             "rules_revision": "0001",
             "billing_dimensions": dimensions,
@@ -333,6 +334,23 @@ def test_billing_end_wait_retries_transient_fetch_errors(monkeypatch: pytest.Mon
 
     assert calls == 2, f"the helper gave up after {calls} fetch attempt(s)"
     assert end == START + timedelta(seconds=45)
+
+
+def test_billing_end_wait_allows_a_named_late_meter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """BMaaS allocation may bill until the host is released, after the
+    recorded deletion; consumption must still end at the anchor."""
+    events = [
+        _heartbeat("allocation", START, START + timedelta(minutes=1), "60.000000", meter="allocation"),
+        _heartbeat("consumption", START, START + timedelta(seconds=45), "45.000000", meter="consumption"),
+    ]
+    collector = _serve(monkeypatch, events)
+    monkeypatch.setattr(metering_core.time, "sleep", lambda *_args: None)
+
+    end = collector.wait_for_billing_end(
+        "vm-7", deletion=START + timedelta(seconds=45), late_meters={"allocation"}, quiet=0, timeout=5
+    )
+
+    assert end == START + timedelta(minutes=1)
 
 
 def test_billing_end_wait_accepts_one_second_of_clock_slop(monkeypatch: pytest.MonkeyPatch) -> None:

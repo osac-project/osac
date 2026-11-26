@@ -7,7 +7,7 @@ import logging
 import re
 import time
 import urllib.error
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -528,7 +528,13 @@ class MeteringCollector:
         return typed
 
     def wait_for_billing_end(
-        self, resource_id: str, *, deletion: datetime, quiet: int = 150, timeout: int = 600
+        self,
+        resource_id: str,
+        *,
+        deletion: datetime,
+        late_meters: Collection[str] = (),
+        quiet: int = 150,
+        timeout: int = 600,
     ) -> datetime:
         """The end of the resource's billed life: the latest net interval end
         across its meters, read only once every meter reaches the recorded
@@ -547,7 +553,10 @@ class MeteringCollector:
         the life without moving the end. Each meter's last end must sit
         within the clock tolerance of the deletion: a final interval that
         ends a little early is still the recorded boundary, while a larger
-        overrun is an uncorrected overshoot and keeps the wait open. Each
+        overrun is an uncorrected overshoot and keeps the wait open. A meter
+        named in ``late_meters`` may end after the deletion: BMaaS allocation
+        bills the host until it is released, which can follow the CR deletion
+        request. Every other meter stays inside the clock tolerance. Each
         meter is tracked separately, so one meter's final piece landing does
         not end the wait for another meter's.
         """
@@ -577,7 +586,11 @@ class MeteringCollector:
                 latest
                 and unchanged_since is not None
                 and now - unchanged_since >= quiet
-                and all(abs(net[-1][1] - deletion) <= CR_STAMP_TOLERANCE for net in latest.values())
+                and all(
+                    net[-1][1] >= deletion - CR_STAMP_TOLERANCE
+                    and (meter in late_meters or net[-1][1] <= deletion + CR_STAMP_TOLERANCE)
+                    for meter, net in latest.items()
+                )
             ):
                 return max(net[-1][1] for net in latest.values())
             if now >= deadline:

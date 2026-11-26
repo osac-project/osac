@@ -1368,7 +1368,12 @@ ifneq ($(filter bmf-netbox,$(BMF_TEST_PHASES)),)
 	kubectl rollout status -n $(NS) deployment/bmf-netbox-fixture --timeout=3m
 	# Kind mirrors the BMaaS profile's in-cluster HTTP. The NetBox client tests cover TLS and CA trust.
 	$(MAKE) install-osac PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS) \
-		EXTRA_HELM_ARGS="--set service.enabled=true --set service.images.service.repository=localhost/fulfillment-service --set service.images.service.tag=it --set service.images.service.pullPolicy=Never --set service.controller.sync=false --set service.internalHostname=fulfillment-internal-api.$(NS).svc.cluster.local --set bmf.replicaCount=1 --set bmf.image.repository=localhost/bmf-operator --set bmf.image.tag=it --set bmf.image.pullPolicy=Never --set bmf.testBackend.metal3.enabled=false --set bmf.secrets.inventoryConfig=osac-inventory-config --set bmf.secrets.managementConfig=osac-management-config --set bmf.secrets.netboxToken=bmf-netbox-fixture-token --set bmf.netbox.enabled=true --set bmf.netbox.bmhNamespace=$(NS) --set bmf.netbox.url=http://bmf-netbox-fixture.$(NS).svc.cluster.local:8080 --set bmf.netbox.clientAllowInsecureHTTP=true --set bmf.secretAPI.url=https://fulfillment-internal-api.$(NS).svc.cluster.local:8001 --set operator.enabled=false --set operator.networkManagers.enabled=false --set global.services.bmaas.enabled=true --set global.networking.provisioningEnabled=false $(METERING_IT_IMAGE_ARGS)"
+		INSTANCE_VALUES_EXTRA="$${INSTANCE_VALUES_EXTRA} -f ../bare-metal-fulfillment-operator/test/integration/testdata/netbox-values.yaml" \
+		EXTRA_HELM_ARGS="--set service.internalHostname=fulfillment-internal-api.$(NS).svc.cluster.local \
+			--set bmf.netbox.bmhNamespace=$(NS) \
+			--set bmf.netbox.url=http://bmf-netbox-fixture.$(NS).svc.cluster.local:8080 \
+			--set bmf.secretAPI.url=https://fulfillment-internal-api.$(NS).svc.cluster.local:8001 \
+			$(METERING_IT_IMAGE_ARGS)"
 	cd ../bare-metal-fulfillment-operator && BMF_NETBOX_IT_NAMESPACE="$(NS)" BMF_NETBOX_IT_HTTPS_PORT="$(FULFILLMENT_IT_HTTPS_PORT)" ginkgo run $(call junit-report,bmf-netbox) --timeout 30m -v --label-filter bmf-netbox test/integration
 endif
 

@@ -201,7 +201,17 @@ def read_network_classes(c: Checks, ns: str, job: dict) -> list | None:
         done = run(
             ["kubectl", "wait", "-n", ns, f"job/{name}", "--for=condition=complete", "--timeout=300s"], check=False
         )
-        logs = run(["kubectl", "logs", "-n", ns, f"job/{name}", "--all-containers"], check=False).stdout
+        log_target = f"job/{name}"
+        if done.returncode == 0:
+            # Job-level logs may come from a failed attempt even after a retry succeeds.
+            pods = run([
+                "kubectl", "get", "pods", "-n", ns, "-l", f"batch.kubernetes.io/job-name={name}",
+                "--field-selector=status.phase=Succeeded", "-o", "name",
+            ]).stdout.splitlines()
+            if not pods:
+                raise RuntimeError(f"Job {ns}/{name} completed but has no succeeded pod")
+            log_target = pods[0]
+        logs = run(["kubectl", "logs", "-n", ns, log_target, "--all-containers"], check=False).stdout
         c.info(f"Job {name} logs: {short(logs, 3000)}")
         if not c.check(f"read-only Job {name} completed", done.returncode == 0, done.stderr.strip()):
             return None

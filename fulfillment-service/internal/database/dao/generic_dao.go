@@ -102,6 +102,8 @@ type metadataIface interface {
 	SetTenant(string)
 	GetProject() string
 	SetProject(string)
+	GetDescription() string
+	SetDescription(string)
 	GetLabels() map[string]string
 	SetLabels(map[string]string)
 	GetAnnotations() map[string]string

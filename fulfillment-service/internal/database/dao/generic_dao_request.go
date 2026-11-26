@@ -55,6 +55,7 @@ type archiveArgs struct {
 	tenant          string
 	project         string
 	name            string
+	description     *string
 	labelsData      []byte
 	annotationsData []byte
 	version         int32
@@ -70,6 +71,7 @@ type storedObject struct {
 	creator         string
 	tenant          string
 	project         string
+	description     *string
 	labelsData      []byte
 	annotationsData []byte
 	version         int32
@@ -100,6 +102,7 @@ func (r *request[O]) objectFromRow(row storedObject) (O, error) {
 		name:        row.name,
 		labels:      labels,
 		annotations: annotations,
+		description: derefString(row.description),
 		version:     row.version,
 	}))
 	object.SetId(row.id)
@@ -118,6 +121,7 @@ func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 			creator,
 			tenant,
 			project,
+			description,
 			labels,
 			annotations,
 			version,
@@ -133,7 +137,8 @@ func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 			$8,
 			$9,
 			$10,
-			$11
+			$11,
+			$12
 		)
 		`,
 		r.dao.table,
@@ -149,6 +154,7 @@ func (r *request[O]) archive(ctx context.Context, args archiveArgs) error {
 		args.creator,
 		args.tenant,
 		args.project,
+		args.description,
 		args.labelsData,
 		args.annotationsData,
 		args.version,
@@ -350,6 +356,7 @@ type makeMetadataArgs struct {
 	tenant      string
 	project     string
 	name        string
+	description string
 	labels      map[string]string
 	annotations map[string]string
 	version     int32
@@ -368,6 +375,7 @@ func (r *request[O]) makeMetadata(args makeMetadataArgs) metadataIface {
 	result.SetCreator(args.creator)
 	result.SetTenant(args.tenant)
 	result.SetProject(args.project)
+	result.SetDescription(args.description)
 	result.SetLabels(args.labels)
 	result.SetAnnotations(args.annotations)
 	result.SetVersion(args.version)
@@ -549,4 +557,12 @@ func (r *request[O]) cleanSQL(sql string) string {
 		result = result[:len(result)-1]
 	}
 	return result
+}
+
+// derefString returns the pointed-to string, or the empty string when the pointer is nil.
+func derefString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }

@@ -24,6 +24,7 @@ import (
 	"net"
 	"net/url"
 	posixpath "path"
+	"strconv"
 	"strings"
 
 	"google.golang.org/grpc"
@@ -127,18 +128,37 @@ func normalizeVASTManagementEndpoint(endpoint string) (string, error) {
 	if endpoint == "" {
 		return "", fmt.Errorf("management endpoint is empty")
 	}
-	if strings.Contains(endpoint, "://") {
-		parsed, err := url.Parse(endpoint)
-		if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" || parsed.User != nil ||
-			(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
-			return "", fmt.Errorf("management endpoint must be an HTTPS origin without credentials, path, query or fragment")
+
+	urlValue := endpoint
+	if !strings.Contains(endpoint, "://") {
+		if strings.ContainsAny(endpoint, "/?#@ \t\r\n") {
+			return "", fmt.Errorf("management endpoint must be a hostname or IP address")
 		}
-		endpoint = parsed.Host
+		urlValue = "https://" + endpoint
 	}
-	if strings.ContainsAny(endpoint, "/?#@ \t\r\n") {
-		return "", fmt.Errorf("management endpoint must be a hostname or IP address")
+	parsed, err := url.Parse(urlValue)
+	if err != nil || !strings.EqualFold(parsed.Scheme, "https") || parsed.Host == "" || parsed.User != nil ||
+		(parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("management endpoint must be an HTTPS origin without credentials, path, query or fragment")
 	}
-	return endpoint, nil
+
+	host := parsed.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("management endpoint host is empty")
+	}
+	if strings.HasSuffix(parsed.Host, ":") {
+		return "", fmt.Errorf("management endpoint port cannot be empty")
+	}
+	if net.ParseIP(host) == nil && len(validation.IsDNS1123Subdomain(strings.ToLower(strings.TrimSuffix(host, ".")))) != 0 {
+		return "", fmt.Errorf("management endpoint host must be a valid DNS name or IP address")
+	}
+	if port := parsed.Port(); port != "" {
+		portNumber, err := strconv.Atoi(port)
+		if err != nil || portNumber < 1 || portNumber > 65535 {
+			return "", fmt.Errorf("management endpoint port must be between 1 and 65535")
+		}
+	}
+	return parsed.Host, nil
 }
 
 func matchesVASTNFSSecret(secret *privatev1.Secret, name string) bool {

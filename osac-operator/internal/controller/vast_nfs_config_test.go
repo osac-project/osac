@@ -139,11 +139,20 @@ func TestNormalizeVASTManagementEndpoint(t *testing.T) {
 	}{
 		{name: "HTTPS URL strips scheme", input: "https://vast-manager.example.com", want: "vast-manager.example.com"},
 		{name: "HTTPS URL with root slash strips scheme", input: "https://vast-manager.example.com/", want: "vast-manager.example.com"},
+		{name: "uppercase hostname is retained", input: "https://VAST-Manager.Example.com.", want: "VAST-Manager.Example.com."},
+		{name: "HTTPS URL with port strips scheme", input: "https://vast-manager.example.com:9443", want: "vast-manager.example.com:9443"},
 		{name: "bare hostname is retained", input: "vast-manager.example.com", want: "vast-manager.example.com"},
+		{name: "bare hostname with port is retained", input: "vast-manager.example.com:9443", want: "vast-manager.example.com:9443"},
 		{name: "bare IP with port is retained", input: "192.0.2.10:443", want: "192.0.2.10:443"},
 		{name: "HTTP URL rejected", input: "http://vast-manager.example.com", wantErr: true},
 		{name: "path rejected", input: "https://vast-manager.example.com/api", wantErr: true},
 		{name: "query rejected", input: "https://vast-manager.example.com?tenant=acme", wantErr: true},
+		{name: "non-numeric port rejected", input: "vast-manager.example.com:not-a-port", wantErr: true},
+		{name: "empty bare port rejected", input: "vast-manager.example.com:", wantErr: true},
+		{name: "empty HTTPS port rejected", input: "https://vast-manager.example.com:", wantErr: true},
+		{name: "out-of-range port rejected", input: "vast-manager.example.com:65536", wantErr: true},
+		{name: "zero port rejected", input: "vast-manager.example.com:0", wantErr: true},
+		{name: "invalid DNS host rejected", input: "vast_manager.example.com", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := normalizeVASTManagementEndpoint(tc.input)

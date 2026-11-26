@@ -115,8 +115,9 @@ The resolver passes the management host to VAST CSI without its optional
 `https://` prefix. VAST CSI adds that scheme when connecting to the management
 API, so a configured URL does not become `https://https://...`.
 
-Use the private API as a Cloud Provider Admin to create the Secret in the
-default project of the `system` tenant. Name it `<osac-tenant>--<registered-backend>`.
+Use the OSAC CLI as a Cloud Provider Admin to create the Secret through the
+public Secrets API, in the default project of the `system` tenant. Name it
+`<osac-tenant>--<registered-backend>`.
 For example, tenant `acme` and backend `vast-east` use `acme--vast-east`.
 Use your own names in the command below. Single hyphens are allowed in either
 name. Reserve the double hyphen for the separator and keep the full Secret

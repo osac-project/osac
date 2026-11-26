@@ -13,7 +13,7 @@ permissions: {}
 
 jobs:
   stale:
-    name: 'Mark stale issues'
+    name: 'Mark stale issues and manage stale PRs'
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -24,12 +24,17 @@ jobs:
         with:
           days-before-stale: 30
           days-before-close: -1
-          days-before-pr-stale: -1
-          days-before-pr-close: -1
-          remove-pr-stale-when-updated: false
-          operations-per-run: 200
+          days-before-pr-stale: 10
+          days-before-pr-close: 7
+          operations-per-run: 500
           stale-issue-label: 'lifecycle/stale'
+          stale-pr-label: 'lifecycle/pr-stale'
           exempt-issue-labels: 'lifecycle/frozen,pinned,lifecycle/rotten'
+          exempt-draft-pr: true
+          exempt-pr-labels: >-
+            lifecycle/frozen,pinned,approved,lgtm,ready-for-merge,do-not-merge/hold
+          remove-pr-stale-when-updated: true
+          delete-branch: false
           stale-issue-message: |
             This issue has been automatically labeled as `lifecycle/stale` because it has not had any activity for 30 days.
 
@@ -45,6 +50,13 @@ jobs:
             - Apply the `lifecycle/frozen` label to this issue.
 
             Closed issues can be reopened at any time if they are still relevant.
+          stale-pr-message: >-
+            This PR has been inactive for at least 10 days and may close after
+            7 more days without activity. Comment, push a commit, or update the
+            PR to keep it open, or ask a maintainer to apply `lifecycle/frozen`.
+          close-pr-message: >-
+            This PR was closed after at least 7 days without activity following
+            the stale warning. You can reopen it when work resumes.
 
   rotten:
     name: 'Mark rotten issues'
@@ -61,9 +73,7 @@ jobs:
           days-before-stale: 7
           days-before-close: -1
           days-before-pr-stale: -1
-          days-before-pr-close: -1
           remove-pr-stale-when-updated: false
-          operations-per-run: 200
           stale-issue-label: 'lifecycle/rotten'
           labels-to-remove-when-stale: 'lifecycle/stale'
           exempt-issue-labels: 'lifecycle/frozen,pinned'
@@ -96,57 +106,10 @@ jobs:
           stale-issue-label: 'lifecycle/rotten'
           days-before-stale: -1
           days-before-close: 7
-          days-before-pr-stale: -1
           days-before-pr-close: -1
           remove-pr-stale-when-updated: false
-          operations-per-run: 200
           exempt-issue-labels: 'lifecycle/frozen,pinned'
           close-issue-message: |
             This issue has been automatically closed after 44+ days of inactivity (30 days until stale, 7 days until rotten, 7 days until close).
 
             If this issue is still relevant, you can reopen it at any time. To prevent future automatic closure, apply the `lifecycle/frozen` label.
-
-  # Start with OSAC_PR_STALE_MODE unset to preview the PR pass. All passes
-  # share state. Check that each reaches the end within its operation budget.
-  # Create lifecycle/frozen and lifecycle/pr-stale before enabling warnings.
-  # Reserve lifecycle/pr-stale for this action. Leave old PR labels in place.
-  # Use warn for at least one full week before switching to close.
-  # Roll back to warn to stop closing, or unset the variable for PR preview.
-  pr-stale:
-    name: 'Manage stale pull requests'
-    needs: close
-    if: >-
-      ${{ github.repository == 'osac-project/osac' &&
-          github.ref == 'refs/heads/main' }}
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      issues: read  # The action lists PRs through the repository issues API.
-      pull-requests: write
-    steps:
-      - uses: actions/stale@4391f3da665fdf50b6810c1a66712fb9ba21aa93  # v11.0.0
-        with:
-          operations-per-run: 200
-          days-before-issue-stale: -1
-          days-before-issue-close: -1
-          remove-issue-stale-when-updated: false
-          days-before-pr-stale: 10
-          days-before-pr-close: >-
-            ${{ vars.OSAC_PR_STALE_MODE == 'close' && '7' || '-1' }}
-          debug-only: >-
-            ${{ vars.OSAC_PR_STALE_MODE != 'warn' &&
-                vars.OSAC_PR_STALE_MODE != 'close' }}
-          stale-pr-label: 'lifecycle/pr-stale'
-          exempt-draft-pr: true
-          exempt-pr-labels: "lifecycle/frozen,pinned,approved,lgtm,\
-            ready-for-merge,do-not-merge/hold"
-          remove-pr-stale-when-updated: true
-          delete-branch: false
-          stale-pr-message: >-
-            This pull request has been inactive for 10 days and may close after
-            at least another 7 days once automatic closing is enabled. Comment
-            or push a commit to keep it active, or ask a maintainer to apply
-            `lifecycle/frozen`.
-          close-pr-message: >-
-            This pull request was closed after at least 7 days of inactivity
-            following the stale warning. You can reopen it if work resumes.

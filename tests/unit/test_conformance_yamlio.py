@@ -10,7 +10,7 @@ from tests.conformance.errors import ConfigError
 
 def test_duplicate_mapping_keys_are_rejected() -> None:
     with pytest.raises(ConfigError, match="duplicate key"):
-        yamlio.loads("profiles: [vm]\nprofiles: [network]\n", "conformance.yaml")
+        yamlio.loads("profiles: [vm]\nprofiles: [netris]\n", "conformance.yaml")
 
 
 def test_unhashable_mapping_keys_are_rejected() -> None:

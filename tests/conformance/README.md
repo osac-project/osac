@@ -22,7 +22,7 @@ says whether a failure can fail a check.
 | `conformance_vmaas` | selected by the `vmaas` selector (`vm` profile) |
 | `conformance_bmaas` | selected by the `bmaas` selector (`baremetal` profile) |
 | `conformance_caas` | selected by the `caas` selector (`cluster` profile) |
-| `conformance_network` | selected by the `network` selector (`network` profile) |
+| `conformance_netris` | selected by the `netris` selector (`netris` profile) |
 | `conformance_non_blocking` | a failure is reported in `tests[]` but never fails a check; tests are blocking by default |
 
 A non-blocking settings check:
@@ -30,7 +30,7 @@ A non-blocking settings check:
 ```python
 import pytest
 
-@pytest.mark.conformance_network
+@pytest.mark.conformance_netris
 @pytest.mark.conformance_non_blocking
 def test_netris_settings_are_present() -> None:
     ...
@@ -73,9 +73,9 @@ selectors:
   - id: caas
     type: marker
     markers: [conformance_caas]
-  - id: network
+  - id: netris
     type: marker
-    markers: [conformance_network]
+    markers: [conformance_netris]
 
 profiles:
   - id: generic
@@ -86,8 +86,8 @@ profiles:
     selectors: [bmaas]
   - id: cluster
     selectors: [caas]
-  - id: network
-    selectors: [network]
+  - id: netris
+    selectors: [netris]
 ```
 
 `generic` always applies, even when the configuration does not name it. The
@@ -98,7 +98,7 @@ plan is the deduplicated union of the selected profiles' selectors.
 ```yaml
 # /config/conformance.yaml
 osacRelease: "0.0.1"
-profiles: [network]
+profiles: [netris]
 target:
   namespace: osac-e2e-ci                     # defaults to osac
   kubeconfig: /config/hub.kubeconfig         # target installation kubeconfig
@@ -140,7 +140,7 @@ Write `config/conformance.yaml`:
 
 ```yaml
 osacRelease: "0.0.1"
-profiles: [network]
+profiles: [netris]
 target:
   namespace: osac-e2e-ci
   kubeconfig: /config/hub.kubeconfig

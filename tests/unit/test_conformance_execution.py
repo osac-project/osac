@@ -93,7 +93,7 @@ def test_collect_maps_the_non_blocking_marker_to_a_classification(tmp_path: Path
         "@pytest.mark.conformance_generic\n"
         "def test_blocking():\n"
         "    pass\n"
-        "@pytest.mark.conformance_network\n"
+        "@pytest.mark.conformance_netris\n"
         "@pytest.mark.conformance_non_blocking\n"
         "def test_non_blocking():\n"
         "    pass\n"

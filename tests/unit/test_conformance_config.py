@@ -25,7 +25,7 @@ def _write(path: Path, data: dict[str, object]) -> Path:
 def _valid_data() -> dict[str, object]:
     return {
         "osacRelease": "1.4.0",
-        "profiles": ["vm", "network"],
+        "profiles": ["vm", "netris"],
         "target": {
             "namespace": "osac-devel",
             "kubeconfig": "/config/target-hub.kubeconfig",
@@ -39,7 +39,7 @@ def test_loads_common_keys(tmp_path: Path) -> None:
     cfg = load_config(_write(tmp_path / "conformance.yaml", _valid_data()))
 
     assert cfg.osac_release == "1.4.0"
-    assert cfg.profiles == ("vm", "network")
+    assert cfg.profiles == ("vm", "netris")
     assert cfg.target_namespace == "osac-devel"
     assert cfg.target_api_url == "https://fulfillment.example.test"
     assert cfg.target_kubeconfig == Path("/config/target-hub.kubeconfig")

@@ -67,12 +67,12 @@ def test_write_plan_records_selectors_and_tests(tmp_path: Path) -> None:
 
 
 def test_write_plan_omits_the_non_blocking_marker(tmp_path: Path) -> None:
-    test = _test(labels=frozenset({"conformance_network", "conformance_non_blocking"}))
-    plan = Plan((test,), ("network",), (Selector("network", "marker", ("conformance_network",)),), True)
+    test = _test(labels=frozenset({"conformance_netris", "conformance_non_blocking"}))
+    plan = Plan((test,), ("netris",), (Selector("netris", "marker", ("conformance_netris",)),), True)
 
     data = yaml.safe_load(write_plan(plan, tmp_path, Redactor()).read_text())
 
-    assert data["tests"][0]["markers"] == ["conformance_network"]
+    assert data["tests"][0]["markers"] == ["conformance_netris"]
 
 
 def test_write_plan_redacts_test_ids_and_names(tmp_path: Path) -> None:

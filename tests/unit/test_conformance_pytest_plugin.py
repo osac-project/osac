@@ -45,7 +45,7 @@ def _tree(tmp_path: Path) -> Path:
         "@pytest.mark.conformance_generic\n"
         "def test_passes():\n"
         "    assert True\n"
-        "@pytest.mark.conformance_network\n"
+        "@pytest.mark.conformance_netris\n"
         "@pytest.mark.conformance_non_blocking\n"
         "def test_fails():\n"
         "    assert False\n"

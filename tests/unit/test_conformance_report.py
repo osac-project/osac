@@ -96,7 +96,7 @@ def test_report_records_a_non_blocking_classification(tmp_path: Path) -> None:
         id="TC-2",
         name="TC-2: test",
         nodeid="tests/e2e/test_tc2.py::test_tc2",
-        labels=frozenset({"conformance_network", "conformance_non_blocking"}),
+        labels=frozenset({"conformance_netris", "conformance_non_blocking"}),
         profiles=(),
         classification=Classification.NON_BLOCKING,
     )

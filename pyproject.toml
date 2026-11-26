@@ -30,7 +30,7 @@ markers = [
     "conformance_vmaas: test selected by the vmaas selector",
     "conformance_bmaas: test selected by the bmaas selector",
     "conformance_caas: test selected by the caas selector",
-    "conformance_network: test selected by the network selector",
+    "conformance_netris: test selected by the netris selector",
     "conformance_non_blocking: a failure is reported but never fails a check",
     "sig_networking: test belongs to the networking domain",
 ]

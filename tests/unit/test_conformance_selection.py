@@ -26,12 +26,12 @@ def _catalog() -> Catalog:
     selectors = {
         "generic": Selector("generic", "marker", ("conformance_generic",)),
         "vmaas": Selector("vmaas", "marker", ("conformance_vmaas",)),
-        "network": Selector("network", "marker", ("conformance_network",)),
+        "netris": Selector("netris", "marker", ("conformance_netris",)),
     }
     profiles = {
         "generic": ProfileDefinition("generic", ("generic",)),
         "vm": ProfileDefinition("vm", ("vmaas",)),
-        "network": ProfileDefinition("network", ("network",)),
+        "netris": ProfileDefinition("netris", ("netris",)),
     }
     return Catalog(selectors=selectors, profiles=profiles)
 
@@ -42,10 +42,10 @@ def _selector_ids(catalog: Catalog, selector_ids: tuple[str, ...]) -> tuple[Sele
 
 def test_expand_profiles_adds_generic_and_unions_selectors() -> None:
     catalog = _catalog()
-    names, selectors = expand_profiles(["vm", "network"], catalog)
+    names, selectors = expand_profiles(["vm", "netris"], catalog)
 
-    assert names == ("generic", "vm", "network")
-    assert tuple(selector.id for selector in selectors) == ("generic", "vmaas", "network")
+    assert names == ("generic", "vm", "netris")
+    assert tuple(selector.id for selector in selectors) == ("generic", "vmaas", "netris")
 
 
 def test_plan_is_the_union_with_generic_first_and_deduplicated() -> None:
@@ -53,20 +53,20 @@ def test_plan_is_the_union_with_generic_first_and_deduplicated() -> None:
     tests = [
         _test("A", "conformance_generic"),
         _test("B", "conformance_generic", "conformance_vmaas"),
-        _test("C", "conformance_network"),
+        _test("C", "conformance_netris"),
     ]
 
-    plan = compute_plan(tests, _selector_ids(catalog, ("generic", "vmaas", "network")), ("generic", "vm", "network"))
+    plan = compute_plan(tests, _selector_ids(catalog, ("generic", "vmaas", "netris")), ("generic", "vm", "netris"))
 
     assert tuple(t.id for t in plan.tests) == ("A", "B", "C")
-    assert plan.profiles == ("generic", "vm", "network")
-    assert tuple(selector.id for selector in plan.selectors) == ("generic", "vmaas", "network")
+    assert plan.profiles == ("generic", "vm", "netris")
+    assert tuple(selector.id for selector in plan.selectors) == ("generic", "vmaas", "netris")
     assert plan.complete is True
 
 
 def test_selectors_do_not_imply_one_another() -> None:
     catalog = _catalog()
-    tests = [_test("A", "conformance_generic"), _test("B", "conformance_network")]
+    tests = [_test("A", "conformance_generic"), _test("B", "conformance_netris")]
 
     plan = compute_plan(tests, _selector_ids(catalog, ("generic", "vmaas")), ("generic", "vm"))
 
@@ -109,7 +109,7 @@ def test_plan_from_names_rejects_an_unknown_test() -> None:
 
 def test_plan_from_names_rejects_a_test_no_selected_profile_selects() -> None:
     catalog = _catalog()
-    tests = [_test("A", "conformance_generic"), _test("B", "conformance_network")]
+    tests = [_test("A", "conformance_generic"), _test("B", "conformance_netris")]
 
     with pytest.raises(ConfigError) as exc:
         plan_from_names(tests, ["B"], _selector_ids(catalog, ("generic", "vmaas")), ("generic", "vm"))

@@ -84,9 +84,9 @@ func (b *PrivateQuotaUsageServerBuilder) Build() (result *PrivateQuotaUsageServe
 	if err != nil {
 		return
 	}
-	counter, err := quotausage.NewCounter().
-		SetLogger(b.logger).
-		Build()
+	// The report's counter is the shared one, built once from the installation's uncreated
+	// kinds, so the usage it reports is the usage the check enforces:
+	parts, err := loadSharedEnforcerParts()
 	if err != nil {
 		return
 	}
@@ -95,7 +95,7 @@ func (b *PrivateQuotaUsageServerBuilder) Build() (result *PrivateQuotaUsageServe
 		defaults: defaults,
 		limits:   limits,
 		projects: projects,
-		counter:  counter,
+		counter:  parts.counter,
 	}
 	return
 }
@@ -153,9 +153,12 @@ func (s *PrivateQuotaUsageServer) buildReport(
 		return nil, grpcstatus.Errorf(grpccodes.NotFound, "tenant '%s' doesn't exist", tenant)
 	}
 
+	// The limits in the resolution order the check uses, so the report and the check agree:
+	state := &quotaLimits{defaults: defaults, overrides: limits, projects: projectLimits}
+
 	// The tenant's usage is the sum over its projects. The report covers every dimension
-	// that has a default, an override or usage, so the dimensions with a limit and no
-	// usage enter the map at zero:
+	// that has a default, an override or usage, so the dimensions with a limit and no usage
+	// enter the map at zero:
 	tenantUsage := map[string]int64{}
 	quotaUsageSeed(tenantUsage, defaults, limits)
 	for _, dimensions := range usage {
@@ -167,7 +170,7 @@ func (s *PrivateQuotaUsageServer) buildReport(
 	report = &privatev1.QuotaUsageReport{}
 	report.SetTenant(tenant)
 	report.SetDimensions(quotaUsageDimensions(tenantUsage, func(dimension string) int64 {
-		return resolveQuotaLimit(limits, defaults, dimension)
+		return state.limitOf("", dimension)
 	}))
 	var projects []*privatev1.QuotaUsageProject
 	for _, project := range projectNames {
@@ -182,10 +185,7 @@ func (s *PrivateQuotaUsageServer) buildReport(
 		projects = append(projects, privatev1.QuotaUsageProject_builder{
 			Project: project,
 			Dimensions: quotaUsageDimensions(projectUsage, func(dimension string) int64 {
-				if value, ok := resolveQuotaLimitAt(limits, defaults, projectLimits, project, dimension); ok {
-					return value
-				}
-				return 0
+				return state.effectiveLimitOf(project, dimension)
 			}),
 		}.Build())
 	}

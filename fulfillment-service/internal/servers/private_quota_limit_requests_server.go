@@ -327,5 +327,39 @@ func (s *PrivateQuotaLimitRequestsServer) reviewRequest(
 	if state == privatev1.QuotaLimitRequestState_QUOTA_LIMIT_REQUEST_STATE_DENIED {
 		return nil
 	}
-	return s.applyRequestedLimit(ctx, candidate)
+	// An approval under a dry run is refused: the update would save the state and skip the
+	// limit, and a dry run can't preview the change, so it refuses instead of saving half of
+	// it:
+	if err := rejectUpdateDryRun(ctx); err != nil {
+		return err
+	}
+	// The tenant lock comes first, before the limit read below, so the warning an approval
+	// writes is measured against a state no admission can move while the approval runs:
+	if err := s.generic.quota.lockTenant(ctx, candidate.GetMetadata().GetTenant()); err != nil {
+		return err
+	}
+	// The tenant's effective limit before the approval tells the warning whether the change
+	// tightened it:
+	limits, limitsErr := s.generic.quota.readLimits(ctx, candidate.GetMetadata().GetTenant())
+	if limitsErr != nil {
+		s.logger.ErrorContext(ctx, "Failed to read the tenant's quota limits",
+			slog.String("tenant", candidate.GetMetadata().GetTenant()),
+			slog.String("dimension", candidate.GetSpec().GetDimension()),
+			slog.Any("error", limitsErr))
+		return grpcstatus.Errorf(grpccodes.Internal, "failed to read the tenant's limits")
+	}
+	oldLimit := limits.limitOf("", candidate.GetSpec().GetDimension())
+	if err := s.applyRequestedLimit(ctx, candidate); err != nil {
+		return err
+	}
+	// The approval and its limit roll back with the failed warning, so a client never sees an
+	// approved request whose warning didn't land:
+	return warnOrRollback(ctx, s.logger,
+		"Failed to write the quota warnings of an approval",
+		"failed to write the quota warnings",
+		func() error {
+			return s.generic.quota.warnScopeAtOrAbove(ctx,
+				candidate.GetMetadata().GetTenant(), "", candidate.GetSpec().GetDimension(),
+				oldLimit)
+		})
 }

@@ -161,8 +161,22 @@ func (s *PrivateQuotaThresholdsServer) Create(ctx context.Context,
 	fillQuotaName(threshold, threshold.GetSpec().GetDimension())
 	err = s.generic.CreateWithCandidatePreparation(ctx, request, &response,
 		func(ctx context.Context, _, candidate *privatev1.QuotaThreshold) error {
+			// The tenant lock comes first, before the limit reads below, so a threshold a
+			// request sets is measured against the usage and limits of a state no admission
+			// can move while the write runs:
+			if err := s.generic.quota.lockTenant(ctx,
+				candidate.GetMetadata().GetTenant()); err != nil {
+				return err
+			}
 			return s.checkScopeLimit(ctx, candidate)
 		})
+	// The generic create returns before the write on a dry run, so the warning is the only
+	// thing left to skip there; an update commits, so it refuses a dry run instead. A dry run
+	// saves nothing, so it leaves no warning: the change it would warn of never happened.
+	if err == nil && !isDryRun(ctx) {
+		created := response.GetObject()
+		err = s.warnThresholdChange(ctx, created, 0)
+	}
 	return
 }
 
@@ -173,8 +187,49 @@ func (s *PrivateQuotaThresholdsServer) Update(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
+	if err = rejectUpdateDryRun(ctx); err != nil {
+		return
+	}
+	// Read the stored tenant before any row lock, then take the tenant lock, then lock the
+	// threshold's row: the tenant lock comes first, so this warning-bearing write serializes
+	// with admission the same way the check does. The stored tenant never changes.
+	unlocked, err := s.generic.dao.Get().SetId(id).Do(ctx)
+	if err != nil {
+		err = ConvertDAOErrorToGRPC(err, "get", id)
+		return
+	}
+	if err = s.generic.quota.lockTenant(ctx, unlocked.GetObject().GetMetadata().GetTenant()); err != nil {
+		return
+	}
+	// Read the old value with the row locked, so a concurrent update can't change it between
+	// this read and the update below:
+	getResponse, err := s.generic.dao.Get().SetId(id).SetLock(true).Do(ctx)
+	if err != nil {
+		err = ConvertDAOErrorToGRPC(err, "get", id)
+		return
+	}
+	oldPercent := getResponse.GetObject().GetSpec().GetPercent()
 	err = s.generic.UpdateWithValidation(ctx, request, &response, s.validateThresholdUpdate)
+	if err == nil {
+		err = s.warnThresholdChange(ctx, response.GetObject(), oldPercent)
+	}
 	return
+}
+
+// warnThresholdChange writes a warning when setting the threshold puts its scope at or above
+// it: the usage reached the new percent of the limit and was below the old one. The failure
+// is reported to the transaction, so the threshold change it follows rolls back with it.
+func (s *PrivateQuotaThresholdsServer) warnThresholdChange(
+	ctx context.Context, threshold *privatev1.QuotaThreshold, oldPercent int32) error {
+	metadata := threshold.GetMetadata()
+	return warnOrRollback(ctx, s.logger,
+		"Failed to write the quota warning of a threshold change",
+		"failed to write the quota warning",
+		func() error {
+			return s.generic.quota.warnThresholdChange(ctx, metadata.GetTenant(),
+				metadata.GetProject(), threshold.GetSpec().GetDimension(), oldPercent,
+				threshold.GetSpec().GetPercent())
+		})
 }
 
 func (s *PrivateQuotaThresholdsServer) Delete(ctx context.Context,
@@ -190,9 +245,9 @@ func (s *PrivateQuotaThresholdsServer) Signal(ctx context.Context,
 }
 
 // checkScopeLimit refuses a threshold on a dimension whose scope resolves to no limit, so a
-// warning always has a limit to be measured against. The scope resolves the way the usage report
-// resolves it: the scope's own limit, the nearest ancestor project's, the tenant's override, the
-// default.
+// warning always has a limit to be measured against. A limit exists for the scope when its own or
+// an ancestor project's limit, the tenant's override, or the default holds one, the scopes the
+// usage report's limit is the tightest of.
 func (s *PrivateQuotaThresholdsServer) checkScopeLimit(ctx context.Context,
 	threshold *privatev1.QuotaThreshold) error {
 	metadata := threshold.GetMetadata()

@@ -34,6 +34,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/clusterversions"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/fieldutil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/metautil"
 	"github.com/osac-project/osac/fulfillment-service/internal/cmd/cli/create/netutil"
@@ -256,7 +257,7 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 
 	// Resolve the version reference to a ClusterVersion metadata.name:
 	if c.args.version != "" {
-		version, err := c.findVersion(ctx)
+		version, err := clusterversions.Find(ctx, c.clusterVersionsClient, c.console, c.args.version)
 		if err != nil {
 			return err
 		}
@@ -457,61 +458,6 @@ func (c *runnerContext) findTemplate(ctx context.Context) (result *publicv1.Clus
 	c.console.Render(ctx, "template_not_found.txt", map[string]any{
 		"Examples": examples,
 		"Ref":      c.args.template,
-	})
-	err = exit.Error(1)
-	return
-}
-
-// findVersion finds a cluster version by metadata.name or spec.version. If the reference matches a metadata.name and a
-// spec.version of different versions, the metadata.name match takes precedence. If no match is found it displays
-// available versions and returns an error.
-func (c *runnerContext) findVersion(ctx context.Context) (result *publicv1.ClusterVersion, err error) {
-	// Try to find the version by metadata.name or spec.version using a filter:
-	filter := fmt.Sprintf(
-		"this.metadata.name == %[1]q || this.spec.version == %[1]q",
-		c.args.version,
-	)
-	// At most 2 matches: one by metadata.name + one by spec.version (both are unique per tenant).
-	response, err := c.clusterVersionsClient.List(ctx, publicv1.ClusterVersionsListRequest_builder{
-		Filter: proto.String(filter),
-		Limit:  proto.Int32(2),
-	}.Build())
-	if err != nil {
-		return nil, fmt.Errorf("failed to list cluster versions: %w", err)
-	}
-	matches := response.GetItems()
-
-	// If there is exactly one match, use it:
-	if len(matches) == 1 {
-		result = matches[0]
-		return
-	}
-
-	// If there are two matches, one matched by metadata.name and one by spec.version. The metadata.name match takes
-	// precedence:
-	if len(matches) == 2 {
-		for _, m := range matches {
-			if m.GetMetadata().GetName() == c.args.version {
-				result = m
-				return
-			}
-		}
-		// Both matched but neither has metadata.name == ref; fall back to the first match:
-		result = matches[0]
-		return
-	}
-
-	// If we are here then no matches were found, we will show to the user some of the available versions:
-	response, err = c.clusterVersionsClient.List(ctx, publicv1.ClusterVersionsListRequest_builder{
-		Limit: proto.Int32(10),
-	}.Build())
-	if err != nil {
-		return nil, fmt.Errorf("failed to list cluster versions: %w", err)
-	}
-	examples := response.GetItems()
-	c.console.Render(ctx, "version_not_found.txt", map[string]any{
-		"Examples": examples,
-		"Ref":      c.args.version,
 	})
 	err = exit.Error(1)
 	return

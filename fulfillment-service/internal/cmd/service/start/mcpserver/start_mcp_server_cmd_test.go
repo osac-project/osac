@@ -104,7 +104,7 @@ var _ = Describe("newServer", func() {
 
 		response, err := clientSession.ListTools(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(response.Tools).To(HaveLen(16))
+		Expect(response.Tools).To(HaveLen(17))
 
 		tools := make(map[string]*mcp.Tool, len(response.Tools))
 		for _, tool := range response.Tools {
@@ -122,6 +122,7 @@ var _ = Describe("newServer", func() {
 		Expect(tools).To(HaveKey("list_resources"))
 		Expect(tools).To(HaveKey("get_resource"))
 		Expect(tools).To(HaveKey("create_network_resource"))
+		Expect(tools).To(HaveKey("expose_network_resource"))
 		Expect(tools).To(HaveKey("delete_network_resource"))
 		Expect(tools).To(HaveKey("create_compute_instance"))
 		Expect(tools).To(HaveKey("update_compute_instance"))
@@ -138,6 +139,9 @@ var _ = Describe("newServer", func() {
 		Expect(tools["get_resource"].Description).To(ContainSubstring("Use this tool to inspect"))
 		Expect(tools["create_network_resource"].Description).To(ContainSubstring("only after the user confirms"))
 		Expect(tools["create_network_resource"].Description).To(ContainSubstring("canonical IPv4"))
+		Expect(tools["expose_network_resource"].Description).To(ContainSubstring("only after the user confirms"))
+		Expect(tools["expose_network_resource"].Description).To(ContainSubstring("external_ip"))
+		Expect(tools["expose_network_resource"].Description).To(ContainSubstring("nat_gateway"))
 		Expect(tools["delete_network_resource"].Description).To(ContainSubstring("only when the user explicitly requests"))
 		Expect(tools["get_resource"].Description).To(ContainSubstring("Only resource types with Get support are accepted"))
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("only after the user confirms"))
@@ -162,6 +166,7 @@ var _ = Describe("newServer", func() {
 		expectToolAnnotations(tools["list_resources"], "List OSAC deployment resources", true, false, true, true)
 		expectToolAnnotations(tools["get_resource"], "Get OSAC deployment resource", true, false, true, true)
 		expectToolAnnotations(tools["create_network_resource"], "Create OSAC network resource", false, false, false, true)
+		expectToolAnnotations(tools["expose_network_resource"], "Expose OSAC network resource", false, true, false, true)
 		expectToolAnnotations(tools["delete_network_resource"], "Delete OSAC network resource", false, true, false, true)
 		expectToolAnnotations(tools["create_compute_instance"], "Create OSAC compute instance", false, false, false, true)
 		expectToolAnnotations(tools["update_compute_instance"], "Update OSAC compute instance", false, true, false, true)
@@ -177,6 +182,7 @@ var _ = Describe("newServer", func() {
 		expectComputeInstanceCreateSchema(tools["create_compute_instance"].InputSchema)
 		expectTypedWriteSchema(tools["create_network_resource"].InputSchema, "resource_type", "name")
 		expectNetworkCreateSchema(tools["create_network_resource"].InputSchema)
+		expectTypedWriteSchema(tools["expose_network_resource"].InputSchema, "resource_type", "name")
 		expectTypedWriteSchema(tools["delete_network_resource"].InputSchema, "resource_type", "id")
 		expectComputeInstanceUpdateSchema(tools["update_compute_instance"].InputSchema)
 		expectComputeInstancePowerSchema(tools["set_compute_instance_power"].InputSchema)
@@ -221,6 +227,10 @@ var _ = Describe("newServer", func() {
 			ResourceTypeSubnet,
 			ResourceTypeSecurityGroup,
 			ResourceTypeComputeInstance,
+			ResourceTypeExternalIP,
+			ResourceTypeExternalIPPool,
+			ResourceTypeExternalIPAttachment,
+			ResourceTypeNATGateway,
 			ResourceTypeProject,
 			ResourceTypeSecretReference,
 		})
@@ -239,6 +249,10 @@ var _ = Describe("newServer", func() {
 			ResourceTypeSubnet,
 			ResourceTypeSecurityGroup,
 			ResourceTypeComputeInstance,
+			ResourceTypeExternalIP,
+			ResourceTypeExternalIPPool,
+			ResourceTypeExternalIPAttachment,
+			ResourceTypeNATGateway,
 			ResourceTypeProject,
 		})
 	})
@@ -313,6 +327,10 @@ var _ = Describe("newServer", func() {
 			ResourceTypeSubnet,
 			ResourceTypeSecurityGroup,
 			ResourceTypeComputeInstance,
+			ResourceTypeExternalIP,
+			ResourceTypeExternalIPPool,
+			ResourceTypeExternalIPAttachment,
+			ResourceTypeNATGateway,
 			ResourceTypeProject,
 		})
 	})

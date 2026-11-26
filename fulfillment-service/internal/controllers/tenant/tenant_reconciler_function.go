@@ -383,7 +383,6 @@ func (t *task) syncToIDP(ctx context.Context) error {
 
 	t.tenant.GetStatus().SetState(privatev1.TenantState_TENANT_STATE_SYNCED)
 	t.tenant.GetStatus().ClearMessage()
-	t.tenant.GetStatus().ClearBreakGlassCredentials()
 
 	t.r.logger.DebugContext(ctx, "Tenant synced to IDP",
 		slog.String("tenant_id", t.tenant.GetId()),

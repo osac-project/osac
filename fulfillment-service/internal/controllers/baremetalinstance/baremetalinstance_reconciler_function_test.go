@@ -120,11 +120,11 @@ var _ = Describe("BMaaS registered SSH-key resolution", func() {
 			privatev1.SecretReference_builder{Name: "login"}.Build())
 		var resolutionErr *controllers.SSHKeyResolutionError
 		Expect(errors.As(err, &resolutionErr)).To(BeTrue())
-		Expect(resolutionErr.Permanent).To(BeTrue())
 		Expect(resolutionErr.Reason).To(Equal("SecretInvalid"))
+		Expect(controllers.IsRequeueable(err)).To(BeFalse())
 	})
 
-	DescribeTable("classifies registered SSH-key lookup failures", func(code codes.Code, permanent bool, reason string) {
+	DescribeTable("forwards SSH-key lookup failure reasons", func(code codes.Code, reason string) {
 		ctrl := gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
 		secrets := NewMockSecretsClient(ctrl)
@@ -142,14 +142,13 @@ var _ = Describe("BMaaS registered SSH-key resolution", func() {
 		err := t.resolveSSHKey(context.Background(), nil)
 		var resolutionErr *controllers.SSHKeyResolutionError
 		Expect(errors.As(err, &resolutionErr)).To(BeTrue())
-		Expect(resolutionErr.Permanent).To(Equal(permanent))
 		Expect(resolutionErr.Reason).To(Equal(reason))
+		// The resolver classifies only; run() decides the retry policy. The
+		// full code-to-reason matrix lives in the controllers suite.
+		Expect(controllers.IsRequeueable(err)).To(BeFalse())
 	},
-		Entry("not found", codes.NotFound, true, "SecretNotFound"),
-		Entry("invalid", codes.InvalidArgument, true, "SecretInvalid"),
-		Entry("unavailable", codes.Unavailable, false, ""),
-		Entry("deadline exceeded", codes.DeadlineExceeded, false, ""),
-		Entry("canceled", codes.Canceled, false, ""),
+		Entry("not found", codes.NotFound, controllers.SSHKeyResolutionReasonSecretNotFound),
+		Entry("unavailable", codes.Unavailable, controllers.SSHKeyResolutionReasonSecretUnavailable),
 	)
 })
 
@@ -220,7 +219,7 @@ var _ = Describe("run SSH-key failure handling", func() {
 		Expect(object.GetStatus().GetHub()).To(Equal("hub-1"))
 	})
 
-	It("returns transient SSH-key resolution failures without persisting status", func() {
+	It("requeues retryable SSH-key resolution failures without persisting status", func() {
 		ctrl := gomock.NewController(GinkgoT())
 		DeferCleanup(ctrl.Finish)
 		f, bmi, instances := newRunner(ctrl, status.Error(codes.Unavailable, "api unavailable"))
@@ -228,9 +227,19 @@ var _ = Describe("run SSH-key failure handling", func() {
 
 		err := f.run(context.Background(), bmi)
 		Expect(err).To(HaveOccurred())
-		var resolutionErr *controllers.SSHKeyResolutionError
-		Expect(errors.As(err, &resolutionErr)).To(BeTrue())
-		Expect(resolutionErr.Permanent).To(BeFalse())
+		// The wrapped error still carries the resolution failure and its reason.
+		var secretErr *controllers.SSHKeyResolutionError
+		Expect(errors.As(err, &secretErr)).To(BeTrue())
+		Expect(secretErr.Reason).To(Equal(controllers.SSHKeyResolutionReasonSecretUnavailable))
+		// OSAC-7245: run() wraps the retryable failure so the shared
+		// reconciler schedules a bounded retry instead of waiting for an
+		// unrelated event or the periodic sync.
+		Expect(controllers.IsRequeueable(err)).To(BeTrue())
+		var retryable interface{ RequeueAfter() time.Duration }
+		Expect(errors.As(err, &retryable)).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(controllers.SSHKeyResolutionRetryDelay))
+		// No update is sent, so the instance keeps its persisted status while
+		// the retryable failure is retried.
 	})
 })
 

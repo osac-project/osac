@@ -97,7 +97,11 @@ func safeMissingPrerequisiteError(kind, id string) error {
 		"A required prerequisite is missing. The dependent operation was not performed.",
 		false,
 	)
-	envelope.Details = []string{fmt.Sprintf("%s %s is missing", kind, id)}
+	detail := fmt.Sprintf("%s %s is missing", kind, id)
+	if id == "" {
+		detail = fmt.Sprintf("%s is not configured", kind)
+	}
+	envelope.Details = []string{detail}
 	return envelope
 }
 

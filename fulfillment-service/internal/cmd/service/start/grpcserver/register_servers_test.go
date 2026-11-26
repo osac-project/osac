@@ -616,12 +616,12 @@ var _ = Describe("Production request transaction boundary", func() {
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.FailedPrecondition))
 			err = update(admin, "current", tenantID, accountID, accountName(), nil)
 			Expect(grpcstatus.Code(err)).To(Equal(grpccodes.InvalidArgument))
+			// These zero-effect assertions run before the authorized update.
+			assertUserEffects("billing-admin", 0)
+			assertUserEffects("tenant-admin", 0)
 			err = update(admin, "current", foreignTenant, accountID, accountName(), &fieldmaskpb.FieldMask{})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(fake.Calls()).To(BeEmpty())
-			// Authorized billing admins are universal in production policy and skip JIT.
-			assertUserEffects("billing-admin", 0)
-			assertUserEffects("tenant-admin", 0)
 			// Valid references reach provider revalidation.
 			err = update(caller("billing-admin", true), "current", foreignTenant, accountID, accountName(), nil)
 			Expect(err).ToNot(HaveOccurred())

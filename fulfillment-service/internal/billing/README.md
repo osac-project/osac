@@ -17,9 +17,9 @@ The Cloud Provider Admin workflow uses the private API to discover accounts with
 create, or update tenant billing assignments. The private API also provides assignment `Signal` for
 administrators/controllers. Assignment reads and writes are additionally constrained by the
 authenticated subject's trusted tenant scope; current platform administrators have universal
-tenant scope. A `cloud-provider-admin` realm claim alone grants no access. There is no tenant
-self-service assignment read. The assignment's `metadata.tenant` is data, not an authorization
-credential. The private metering read and identity are owned by
+tenant scope, including holders of the provisioned `cloud-provider-admin` Keycloak realm role.
+There is no tenant self-service assignment read. The assignment's `metadata.tenant` is data, not
+an authorization credential. The private metering read and identity are owned by
 [OSAC-6888](https://redhat.atlassian.net/browse/OSAC-6888), not this administrative API.
 
 Account `Get`, `Create`, `Update` and `Delete`, and assignment `Delete`, are descriptor-only
@@ -148,12 +148,10 @@ never-known names.
 
 ## Authorization and attribution
 
-Billing is private API functionality for Cloud Provider Admins (`is_admin`), with assignment access
-additionally limited to the subject's trusted tenant scope. Current platform administrators have
-universal tenant scope. `TenantBillingAssignments.Signal` is admin-only. No tenant role or other
-realm role grants billing access. No `cloud-provider-admin` realm role is provisioned; a token that
-claims it grants nothing. Cloud Provider Admin names a workflow/persona using an existing `is_admin`
-identity, not a new realm-role grant.
+Billing endpoints are private and reachable only by platform admins (`is_admin`), including holders
+of the provisioned `cloud-provider-admin` Keycloak realm role. Assignment access is additionally
+limited to the subject's trusted tenant scope; platform admins have universal scope.
+`TenantBillingAssignments.Signal` is admin-only. No tenant role grants billing access.
 
 Account `Get`, `Create`, `Update` and `Delete`, and assignment `Delete`, are descriptor-only
 scaffolds: administrators can reach them through the private API, where their generated handlers

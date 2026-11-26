@@ -83,7 +83,7 @@ def _https_context() -> ssl.SSLContext:
         raise KeycloakError(f"could not load the Keycloak CA certificate from {ca_path}: {error}") from None
 
 
-def _decode_json(body: bytes, description: str) -> Any:
+def _decode_json(body: bytes, description: str) -> Any:  # noqa: ANN401
     try:
         return json.loads(body) if body else None
     except json.JSONDecodeError as error:
@@ -114,7 +114,7 @@ def admin_request(
     method: str,
     path: str,
     payload: dict[str, Any] | None = None,
-) -> Any:
+) -> Any:  # noqa: ANN401
     """Call the Keycloak Admin API and decode its optional JSON response."""
     headers = {"Authorization": f"Bearer {token}"}
     body = None
@@ -125,7 +125,7 @@ def admin_request(
     return _decode_json(response, f"{method} {path}")
 
 
-def _list(response: Any, description: str) -> list[dict[str, Any]]:
+def _list(response: Any, description: str) -> list[dict[str, Any]]:  # noqa: ANN401
     if not isinstance(response, list) or any(not isinstance(item, dict) for item in response):
         raise KeycloakError(f"Keycloak returned an invalid {description} list")
     return response
@@ -205,7 +205,18 @@ def _ensure_scope(keycloak_url: str, token: str) -> dict[str, Any]:
     mapper = _find_audience_mapper(mappers)
     mapper_payload = dict(AUDIENCE_MAPPER)
     mapper_was_current = mapper is not None and _audience_mapper_is_current(mapper)
-    if mapper is None:
+    mapper_protocol_is_wrong = mapper is not None and mapper.get("protocol") != AUDIENCE_MAPPER["protocol"]
+    if mapper is None or mapper_protocol_is_wrong:
+        if mapper is not None:
+            if not mapper.get("id"):
+                raise KeycloakError(f"Keycloak returned the existing {SCOPE_NAME} audience mapper without an ID")
+            mapper_id = urllib.parse.quote(str(mapper.get("id", "")), safe="")
+            try:
+                admin_request(keycloak_url, token, "DELETE", f"{mappers_path}/{mapper_id}")
+            except KeycloakError as error:
+                raise KeycloakError(
+                    f"could not replace the {SCOPE_NAME} audience mapper with an incompatible protocol: {error}"
+                ) from None
         try:
             admin_request(keycloak_url, token, "POST", mappers_path, mapper_payload)
         except KeycloakError as error:
@@ -261,6 +272,19 @@ def _ensure_default_scope_assignment(
     )
     if any(item.get("id") == scope["id"] and item.get("name") == SCOPE_NAME for item in default_scopes):
         return
+
+    optional_scopes = _list(
+        admin_request(keycloak_url, token, "GET", f"{clients_path}/{client_uuid}/optional-client-scopes"),
+        "optional client scope",
+    )
+    if any(item.get("id") == scope["id"] and item.get("name") == SCOPE_NAME for item in optional_scopes):
+        optional_assignment_path = f"{clients_path}/{client_uuid}/optional-client-scopes/{scope_uuid}"
+        try:
+            admin_request(keycloak_url, token, "DELETE", optional_assignment_path)
+        except KeycloakError as error:
+            raise KeycloakError(
+                f"could not promote {SCOPE_NAME} from optional to default scope on {client_description}: {error}"
+            ) from None
 
     try:
         admin_request(keycloak_url, token, "PUT", assignment_path)

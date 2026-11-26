@@ -37,20 +37,28 @@ class FakeKeycloak(ThreadingHTTPServer):
                 "id": "exchange-client-id",
                 "clientId": "https://mcp.example.test/",
                 "defaultClientScopeIds": [],
+                "optionalClientScopeIds": [],
             }
         ] + [
-            {"id": f"{client_id}-id", "clientId": client_id, "defaultClientScopeIds": []}
+            {
+                "id": f"{client_id}-id",
+                "clientId": client_id,
+                "defaultClientScopeIds": [],
+                "optionalClientScopeIds": [],
+            }
             for client_id in API_CLIENT_IDS
         ]
         self.fail_scope_assignment: str | None = None
         self.scope_creates = 0
         self.mapper_creates = 0
+        self.mapper_deletes = 0
         self.client_creates = 0
         self.scope_assignment_puts = 0
+        self.optional_scope_deletes = 0
 
 
 class FakeKeycloakHandler(BaseHTTPRequestHandler):
-    def log_message(self, _format: str, *_args: Any) -> None:
+    def log_message(self, _format: str, *_args: Any) -> None:  # noqa: ANN401
         return
 
     @property
@@ -61,7 +69,7 @@ class FakeKeycloakHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         return json.loads(self.rfile.read(length)) if length else {}
 
-    def _reply(self, status: int, payload: Any = None) -> None:
+    def _reply(self, status: int, payload: Any = None) -> None:  # noqa: ANN401
         body = json.dumps(payload).encode() if payload is not None else b""
         self.send_response(status)
         if body:
@@ -94,7 +102,9 @@ class FakeKeycloakHandler(BaseHTTPRequestHandler):
             self._reply(201)
         elif path == "/admin/realms/osac/clients":
             self.state.client_creates += 1
-            self.state.clients.append(dict(payload, id="new-exchange-client", defaultClientScopeIds=[]))
+            self.state.clients.append(
+                dict(payload, id="new-exchange-client", defaultClientScopeIds=[], optionalClientScopeIds=[])
+            )
             self._reply(201)
         else:
             self._reply(404)
@@ -115,6 +125,11 @@ class FakeKeycloakHandler(BaseHTTPRequestHandler):
         elif len(parts) == 6 and parts[3] == "clients" and parts[5:] == ["default-client-scopes"]:
             client = next((item for item in self.state.clients if item.get("id") == parts[4]), None)
             scope_ids = client.get("defaultClientScopeIds", []) if client else []
+            scopes = [item for item in self.state.scopes if item.get("id") in scope_ids]
+            self._reply(200, scopes)
+        elif len(parts) == 6 and parts[3] == "clients" and parts[5:] == ["optional-client-scopes"]:
+            client = next((item for item in self.state.clients if item.get("id") == parts[4]), None)
+            scope_ids = client.get("optionalClientScopeIds", []) if client else []
             scopes = [item for item in self.state.scopes if item.get("id") in scope_ids]
             self._reply(200, scopes)
         else:
@@ -157,6 +172,31 @@ class FakeKeycloakHandler(BaseHTTPRequestHandler):
             if client and parts[6] not in client["defaultClientScopeIds"]:
                 client["defaultClientScopeIds"].append(parts[6])
             self._reply(204 if client else 404)
+        else:
+            self._reply(404)
+
+    def do_DELETE(self) -> None:
+        path = urlsplit(self.path).path
+        parts = path.strip("/").split("/")
+        if len(parts) == 8 and parts[3] == "client-scopes" and parts[5:7] == ["protocol-mappers", "models"]:
+            scope = next((item for item in self.state.scopes if item.get("id") == parts[4]), None)
+            if scope:
+                before = len(scope["protocolMappers"])
+                scope["protocolMappers"] = [
+                    item for item in scope["protocolMappers"] if item.get("id") != parts[7]
+                ]
+                self.state.mapper_deletes += before - len(scope["protocolMappers"])
+                self._reply(204)
+            else:
+                self._reply(404)
+        elif len(parts) == 7 and parts[3] == "clients" and parts[5] == "optional-client-scopes":
+            client = next((item for item in self.state.clients if item.get("id") == parts[4]), None)
+            if client and parts[6] in client["optionalClientScopeIds"]:
+                client["optionalClientScopeIds"].remove(parts[6])
+                self.state.optional_scope_deletes += 1
+                self._reply(204)
+            else:
+                self._reply(404)
         else:
             self._reply(404)
 
@@ -229,9 +269,11 @@ class KeycloakReconciliationTest(unittest.TestCase):
         self.assertEqual(server.scope_assignment_puts, len(API_CLIENT_IDS) + 1)
 
     def test_https_requires_a_configured_ca(self) -> None:
-        with patch.dict(os.environ, {"KEYCLOAK_CA_PATH": ""}):
-            with self.assertRaisesRegex(RECONCILER.KeycloakError, "KEYCLOAK_CA_PATH is required"):
-                self.reconcile("https://keycloak:443")
+        with patch.dict(os.environ, {"KEYCLOAK_CA_PATH": ""}), self.assertRaisesRegex(
+            RECONCILER.KeycloakError,
+            "KEYCLOAK_CA_PATH is required",
+        ):
+            self.reconcile("https://keycloak:443")
 
     def test_existing_bundled_scope_mapper_is_not_duplicated(self) -> None:
         server, keycloak_url = self.start_keycloak()
@@ -275,6 +317,51 @@ class KeycloakReconciliationTest(unittest.TestCase):
             "osac-api",
         )
         self.assert_api_clients_have_scope(server)
+
+    def test_wrong_protocol_audience_mapper_is_replaced(self) -> None:
+        server, keycloak_url = self.start_keycloak()
+        server.scopes.append(
+            {
+                "id": "scope-osac-api",
+                "name": "osac-api",
+                "protocol": "openid-connect",
+                "attributes": RECONCILER.SCOPE_ATTRIBUTES,
+                "protocolMappers": [
+                    {
+                        "id": "audience-mapper",
+                        "name": RECONCILER.AUDIENCE_MAPPER["name"],
+                        "protocol": "saml",
+                        "protocolMapper": "saml-audience-mapper",
+                        "consentRequired": False,
+                        "config": {"included.custom.audience": "osac-api"},
+                    }
+                ],
+            }
+        )
+
+        self.reconcile(keycloak_url)
+
+        self.assertEqual(server.mapper_deletes, 1)
+        self.assertEqual(server.mapper_creates, 1)
+        mapper = server.scopes[0]["protocolMappers"][0]
+        self.assertEqual(mapper["protocol"], "openid-connect")
+        self.assertEqual(mapper["protocolMapper"], "oidc-audience-mapper")
+        self.assertEqual(mapper["config"]["included.custom.audience"], "osac-api")
+        self.assert_api_clients_have_scope(server)
+
+    def test_optional_scope_assignment_is_promoted_to_default(self) -> None:
+        server, keycloak_url = self.start_keycloak()
+        self.reconcile(keycloak_url)
+        scope_id = server.scopes[0]["id"]
+        osac_cli = next(client for client in server.clients if client["clientId"] == "osac-cli")
+        osac_cli["defaultClientScopeIds"] = []
+        osac_cli["optionalClientScopeIds"] = [scope_id]
+
+        self.reconcile(keycloak_url)
+
+        self.assertEqual(server.optional_scope_deletes, 1)
+        self.assertEqual(osac_cli["optionalClientScopeIds"], [])
+        self.assertEqual(osac_cli["defaultClientScopeIds"], [scope_id])
 
     def test_existing_incorrect_scope_is_repaired(self) -> None:
         server, keycloak_url = self.start_keycloak()

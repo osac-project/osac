@@ -1274,12 +1274,6 @@ ifeq ($(SUITE),all)
 	$(MAKE) test SUITE=operator
 	$(MAKE) test SUITE=bmf
 endif
-ifeq ($(SUITE),fulfillment)
-ifeq ($(MCP_TEST_ENABLED),true)
-	python3 scripts/prepare-mcp-scope-regression.py $(KIND_CLUSTER_NAME)
-	$(MAKE) install-infra PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS)
-endif
-endif
 ifneq ($(filter $(SUITE),fulfillment compute-storage),)
 ifneq ($(strip $(FULFILLMENT_IT_REPORT_DIR)),)
 # A reused local output directory must not retain old reports for phases a failed run never reaches.
@@ -1288,6 +1282,12 @@ endif
 ifneq ($(strip $(JUNIT_REPORT_DIR)),)
 # Same contract for the JUnit phase reports CI merges into one junit.xml.
 	rm -f $(foreach phase,$(if $(filter fulfillment,$(SUITE)),service-only networking-operator bmaas-disabled) compute-storage,"$(abspath $(JUNIT_REPORT_DIR)/$(phase).xml)")
+endif
+ifeq ($(SUITE),fulfillment)
+ifeq ($(MCP_TEST_ENABLED),true)
+	python3 scripts/prepare-mcp-scope-regression.py $(KIND_CLUSTER_NAME)
+	$(MAKE) install-infra PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS)
+endif
 endif
 # Exercise event-driven reconciliation without full synchronization in every test phase.
 	python3 -m unittest discover -s ../fulfillment-service/it/testdata -p test_compute_storage_aap.py

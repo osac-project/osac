@@ -565,7 +565,8 @@ to that scope with type `oidc-audience-mapper`, protocol `openid-connect`,
 consent not required, `included.custom.audience` set to `osac-api`, and
 `access.token.claim` set to `true`. Assign `osac-api` as a default client scope
 on `osac-cli`, `osac-ui`, `osac-admin`, `osac-ui-backend`, and
-`osac-csi-driver`.
+`osac-csi-driver`. Also assign it to the confidential MCP token-exchange client
+whose client ID is the canonical MCP public URL ending in `/`.
 
 ### Phase 2: install the OSAC platform
 

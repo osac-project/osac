@@ -32,7 +32,11 @@ OSAC side, but it never copies it to M360. When no provider account carries that
 the assignment stays `PENDING` with the
 stable reason `BILLING_PROVIDER_CORRELATION_WRITE_UNSUPPORTED` until the Cloud Provider Admin
 sets the matching `externalId` on the M360 account (the value is shown by
-`BillingAccounts.List`) and re-submits `Update`. See the merged design §4.1 note, §4.6, and the
+`BillingAccounts.List`) and re-submits `Update`. When the selected account already reports an
+`externalId` that differs from the value OSAC stores, the assignment fails with the stable reason
+`BILLING_CORRELATION_ID_CONFLICT`; that is a conflict, not a missing carrier. Its remediation is the
+reverse: restore the OSAC-stored value (shown by `BillingAccounts.List`) on the provider and re-submit
+`Update`; do not set a new value. See the merged design §4.1 note, §4.6, and the
 correlation-id drawback. Revalidation uses one account correlation read and one complete,
 exact-value carrier walk (at most 50 pages). `CONNECTED` requires the selected native account
 to report the value and be its sole listed carrier. A foreign, multiple, or contradictory

@@ -363,7 +363,7 @@ var _ = Describe("Billing provider status with a stub M360", Label("billing", "b
 		Expect(response).To(BeNil())
 		expectBillingReason(err, "MALFORMED")
 		Expect(stub.Succeeded("ListAccounts")).To(Equal(50))
-		home := newBillingCLI(ctx, newTenant(ctx), false)
+		home := newBillingCLI(ctx, newTenant(ctx), true)
 		for _, format := range []string{"table", "json", "yaml"} {
 			// The failed API call above opens the deployment's discovery-failure backoff. Poll until a fresh walk is
 			// admitted and prove the stub served that walk for this format instead of passing on UNAVAILABLE.

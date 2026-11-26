@@ -51,11 +51,11 @@ type TenantBillingAssignmentsListRequest struct {
 	// built-in `this` variable refers to the object being tested. For example, to retrieve only the assignments for
 	// one tenant:
 	//
-	//	this.metadata.tenant.id == "tenant-a"
+	//	this.metadata.tenant == "tenant-a"
 	//
 	// To select a tenant's current validated assignment:
 	//
-	//	this.metadata.tenant.id == "tenant-a" && !has(this.status.effective_to_timestamp) && this.status.connection_state == 2
+	//	this.metadata.tenant == "tenant-a" && !has(this.status.effective_to_timestamp) && this.status.connection_state == 2
 	//
 	// Enum comparisons use numeric values; JSON responses use full type-prefixed protobuf enum names.
 	Filter *string `protobuf:"bytes,3,opt,name=filter,proto3,oneof" json:"filter,omitempty"`
@@ -195,11 +195,11 @@ type TenantBillingAssignmentsListRequest_builder struct {
 	// built-in `this` variable refers to the object being tested. For example, to retrieve only the assignments for
 	// one tenant:
 	//
-	//	this.metadata.tenant.id == "tenant-a"
+	//	this.metadata.tenant == "tenant-a"
 	//
 	// To select a tenant's current validated assignment:
 	//
-	//	this.metadata.tenant.id == "tenant-a" && !has(this.status.effective_to_timestamp) && this.status.connection_state == 2
+	//	this.metadata.tenant == "tenant-a" && !has(this.status.effective_to_timestamp) && this.status.connection_state == 2
 	//
 	// Enum comparisons use numeric values; JSON responses use full type-prefixed protobuf enum names.
 	Filter *string

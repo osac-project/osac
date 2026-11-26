@@ -27,6 +27,8 @@ const SecretCard = ({ secret, onEdit, onDelete }: SecretCardProps) => {
   const secretTypes = getSecretType(t);
   const typeLabel = secretTypes[secret.type] || secretTypes[SecretType.UNSPECIFIED];
   const dataKeys = getSecretTypeDataKeys(secret.type);
+  const dataKeysDescription =
+    dataKeys ?? (secret.type === SecretType.OPAQUE ? t('Unknown') : '-');
 
   return (
     <ListPageCard
@@ -42,7 +44,7 @@ const SecretCard = ({ secret, onEdit, onDelete }: SecretCardProps) => {
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Keys')}</DescriptionListTerm>
-            <DescriptionListDescription>{dataKeys || '-'}</DescriptionListDescription>
+            <DescriptionListDescription>{dataKeysDescription}</DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>
             <DescriptionListTerm>{t('Added')}</DescriptionListTerm>

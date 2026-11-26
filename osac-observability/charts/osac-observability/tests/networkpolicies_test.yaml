@@ -15,8 +15,6 @@ set:
   global.observability.thanos.image.repository: openshift4/ose-thanos-rhel8
   global.observability.thanos.image.tag: test-thanos
   global.observability.services.metricsAuth.tag: test-metrics-auth
-  global.observability.services.oauth2Proxy.tag: test-oauth2-proxy
-  global.observability.services.openshiftOauthProxy.tag: test-ose-oauth-proxy
   global.observability.thanos.retention: 365d
   global.observability.thanos.resolution.raw: 365d
   global.observability.thanos.resolution.5m: 365d

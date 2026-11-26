@@ -168,13 +168,12 @@ spec:
   ingress: []
 ---
 # The admin Route reaches the gate on the container port 9092. The same pod
-# also runs the two OAuth proxies on 4180 and 4181 and the allowlist on 9091;
-# those stay closed to every other pod, so nothing can skip the gate by
-# connecting to the pod IP. Traffic between the containers inside the pod uses
-# loopback and is not filtered by NetworkPolicy. The Route enters through the
-# OpenShift router namespace, which carries this policy-group label. Kubelet
-# probes come from the node and are not filtered, so the containers keep their
-# httpGet and tcpSocket probes.
+# also runs the allowlist on 9091; that stays closed to every other pod, so
+# nothing can skip the gate by connecting to the pod IP. Traffic between the
+# containers inside the pod uses loopback and is not filtered by NetworkPolicy.
+# The Route enters through the OpenShift router namespace, which carries this
+# policy-group label. Kubelet probes come from the node and are not filtered, so
+# the containers keep their httpGet and tcpSocket probes.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

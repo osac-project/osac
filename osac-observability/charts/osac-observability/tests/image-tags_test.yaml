@@ -14,8 +14,6 @@ set:
   global.observability.thanos.image.repository: openshift4/ose-thanos-rhel8
   global.observability.thanos.image.tag: test-thanos
   global.observability.services.metricsAuth.tag: test-metrics-auth
-  global.observability.services.oauth2Proxy.tag: test-oauth2-proxy
-  global.observability.services.openshiftOauthProxy.tag: test-ose-oauth-proxy
   global.observability.keycloak.issuerUrl: https://keycloak.example.com/realms/osac
 
 tests:
@@ -36,22 +34,6 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "observability image tags must be set when observability is enabled: global.observability.services.metricsAuth.tag"
-
-  - it: fails the render when the oauth2-proxy image tag is empty
-    template: templates/validate.yaml
-    set:
-      global.observability.services.oauth2Proxy.tag: ""
-    asserts:
-      - failedTemplate:
-          errorMessage: "observability image tags must be set when observability is enabled: global.observability.services.oauth2Proxy.tag"
-
-  - it: fails the render when the OpenShift oauth-proxy image tag is empty
-    template: templates/validate.yaml
-    set:
-      global.observability.services.openshiftOauthProxy.tag: ""
-    asserts:
-      - failedTemplate:
-          errorMessage: "observability image tags must be set when observability is enabled: global.observability.services.openshiftOauthProxy.tag"
 
   # An empty issuer renders an empty --oidc-issuer-url, which would accept a
   # token from any realm, so the render fails and names the key.
@@ -84,8 +66,6 @@ tests:
       global.observability.enabled: false
       global.observability.thanos.image.tag: ""
       global.observability.services.metricsAuth.tag: ""
-      global.observability.services.oauth2Proxy.tag: ""
-      global.observability.services.openshiftOauthProxy.tag: ""
     asserts:
       - hasDocuments:
           count: 0

@@ -135,16 +135,9 @@ global:
         enabled: false
     services:
       metricsAuth:
-        # Builds the remote-write and query-allowlist helpers.
+        # Builds the remote-write and query-allowlist helpers plus the admin
+        # query gate.
         repository: ghcr.io/osac-project/osac-observability
-        # Placeholder; overwritten at release time.
-        tag: ""
-      oauth2Proxy:
-        repository: quay.io/oauth2-proxy/oauth2-proxy
-        # Placeholder; overwritten at release time.
-        tag: ""
-      openshiftOauthProxy:
-        repository: registry.redhat.io/openshift4/ose-oauth-proxy
         # Placeholder; overwritten at release time.
         tag: ""
     clusterRemoteWrite:
@@ -181,11 +174,10 @@ global:
     keycloak:
       realm: osac
       keycloakAdminRole: cloud-provider-admin
-      adminClientId: thanos-admin
       tenantClientId: thanos-tenant
       # Accepted bearer audiences: the clients OSAC users log in with
-      # (ui.auth.oidcClientId and the CLI client). thanos-admin is only the
-      # browser OAuth client and is deliberately not an accepted audience.
+      # (ui.auth.oidcClientId and the CLI client). The admin Routes serve API
+      # clients only; interactive access belongs to the OSAC UI.
       adminAudience: "osac-ui,osac-cli"
       # tpl is applied at render time -- {{ .Values.global.clusterDomain }}
       # expands via global.clusterDomain. The admin gates verify tokens against

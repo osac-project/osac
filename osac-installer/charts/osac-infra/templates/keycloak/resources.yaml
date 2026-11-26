@@ -121,14 +121,8 @@ rules:
   - secrets
   resourceNames:
   - keycloak-client-secrets
-  # The resolve-realm-secrets init container patches this Secret on upgrade
-  # when it predates a client (osac-csi-driver, osac-ui-backend, thanos-admin,
-  # osac-mcp-exchange). Without `patch` the upgrade path fails closed and the
-  # Keycloak pod never starts. `create` above cannot be name-scoped, so it
-  # stays in its own rule.
   verbs:
   - get
-  - patch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -425,13 +419,6 @@ spec:
           value: /realm/realm.json
         - name: OSAC_UI_URL
           value: {{ .Values.keycloak.uiUrl | quote }}
-        # The thanos-admin callback Route host is thanos-query-admin-<namespace>
-        # .<clusterDomain>; the resolver fails when the domain is empty rather
-        # than write a wildcard redirect.
-        - name: CLUSTER_DOMAIN
-          value: {{ (.Values.global | default dict).clusterDomain | default "" | quote }}
-        - name: OBS_NAMESPACE
-          value: osac-observability
         - name: REALM_ADMIN_USERNAME
           valueFrom:
             secretKeyRef:

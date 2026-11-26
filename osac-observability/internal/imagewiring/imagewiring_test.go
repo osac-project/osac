@@ -28,16 +28,9 @@ const sampleValues = `global:
   observability:
     services:
       metricsAuth:
-        # Builds the remote-write and query-allowlist helpers.
+        # Builds the remote-write, query-allowlist and admin-gate helpers.
         repository: ghcr.io/osac-project/osac-observability
         # Placeholder; overwritten at release time.
-        tag: ""
-      oauth2Proxy:
-        repository: quay.io/oauth2-proxy/oauth2-proxy
-        # Placeholder; overwritten at release time.
-        tag: ""
-      openshiftOauthProxy:
-        repository: registry.redhat.io/openshift4/ose-oauth-proxy
         tag: ""
 `
 
@@ -151,13 +144,6 @@ func TestStampComponentImageRefsStampsOnlyMetricsAuth(t *testing.T) {
 	services := got.Global.Observability.Services
 	if tag := services["metricsAuth"].Tag; tag != "1.2.3" {
 		t.Errorf("metricsAuth tag = %q, want 1.2.3", tag)
-	}
-	// The third-party proxies keep their pinned upstream tags; only OSAC's
-	// own helper image is stamped.
-	for _, name := range []string{"oauth2Proxy", "openshiftOauthProxy"} {
-		if tag := services[name].Tag; tag != "" {
-			t.Errorf("%s tag = %q, want it left untouched", name, tag)
-		}
 	}
 	// awk is used instead of yq -i precisely to preserve formatting and
 	// comments; yq would strip them and break ct-lint's yamllint.

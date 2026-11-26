@@ -4,19 +4,15 @@
 {{- $admin := $observability.admin | default dict -}}
 {{- $services := $observability.services | default dict -}}
 {{- $metricsAuth := $services.metricsAuth | default dict -}}
-{{- $oauth2Proxy := $services.oauth2Proxy | default dict -}}
-{{- $openshiftOAuthProxy := $services.openshiftOauthProxy | default dict -}}
 {{- $ns := include "osac-observability.namespace" . -}}
-{{- $clusterDomain := (.Values.global | default dict).clusterDomain | default "" -}}
 {{- $queryURL := printf "http://thanos-query.%s.svc.cluster.local:9090" $ns -}}
-{{- /* Authentication comes first: the Route reaches the gate, which decides
-       with a plain 401 or 403 on the bearer path and forwards a browser
-       session to the OAuth proxy. The proxy forwards the signed-in request to
-       the allowlist sidecar on loopback. The sidecar forwards only the five
-       documented endpoints to Thanos Query and answers every other Prometheus
-       API path with 501. This order keeps the proxy's own /oauth2/* login and
-       callback paths at the proxy, and the gate exempts them, instead of
-       turning them into 401s or 501s. */ -}}
+{{- /* Authentication comes first: the Route reaches the gate, which answers
+       with a plain 401 or 403 on the bearer path and forwards an authorised
+       request to the allowlist sidecar on loopback. The sidecar forwards only
+       the five documented endpoints to Thanos Query and answers every other
+       Prometheus API path with 501. There is no browser sign-in here: the
+       Routes serve API clients, and interactive access belongs to the OSAC UI
+       and the dashboards built into it. */ -}}
 {{- $allowlistURL := "http://127.0.0.1:9091" -}}
 {{- /* The umbrella defaults this to a tpl string backed by
        global.clusterDomain; validate.yaml fails the render when it is empty. */ -}}
@@ -24,37 +20,9 @@
 {{- $audiences := $keycloak.adminAudience | default "osac-ui,osac-cli" | toString -}}
 {{- $adminRole := $keycloak.keycloakAdminRole | default "cloud-provider-admin" -}}
 {{- $openshiftGroup := $admin.openshiftGroup | default "osac-cloud-infrastructure-admins" -}}
-{{- $keycloakHost := printf "thanos-query-admin-%s" $ns -}}
-{{- $openshiftHost := printf "thanos-query-admin-openshift-%s" $ns -}}
-{{- /* The Keycloak Route certificate is signed by a cluster CA, which the image
-       does not trust. --provider-ca-file reads the copy the credentials job
-       places beside the proxies, and --use-system-trust-store keeps the public
-       roots so an externally signed identity provider still verifies. */ -}}
-{{- $keycloakArgs := list "--provider=keycloak-oidc"
-      (printf "--oidc-issuer-url=%s" $issuer)
-      (printf "--client-id=%s" ($keycloak.adminClientId | default "thanos-admin"))
-      "--client-secret-file=/etc/thanos-oauth2/client-secret/client-secret"
-      "--provider-ca-file=/etc/keycloak-ca/bundle.pem"
-      "--use-system-trust-store=true"
-      "--email-domain=*"
-      "--http-address=0.0.0.0:4180"
-      (printf "--upstream=%s" $allowlistURL)
-      "--skip-provider-button"
-      "--pass-access-token"
-      "--set-authorization-header"
-      "--reverse-proxy=true"
-      (printf "--allowed-role=%s" $adminRole)
-      "--skip-jwt-bearer-tokens=true"
--}}
-{{- range $audience := splitList "," $audiences }}
-{{- $keycloakArgs = append $keycloakArgs (printf "--extra-jwt-issuers=%s=%s" $issuer (trim $audience)) -}}
-{{- end }}
-{{- if $clusterDomain }}
-{{- $keycloakArgs = append $keycloakArgs (printf "--redirect-url=https://%s.%s/oauth2/callback" $keycloakHost $clusterDomain) -}}
-{{- end }}
 {{- /* Both admin paths share one implementation of the endpoint set and
        neither adds a matcher: the sidecar forwards the request exactly as the
-       signed-in admin sent it. */ -}}
+       authorised admin sent it. */ -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -88,8 +56,6 @@ spec:
               value: ":9092"
             - name: MODE
               value: keycloak
-            - name: PROXY_URL
-              value: "http://127.0.0.1:4180"
             - name: ALLOWLIST_URL
               value: {{ $allowlistURL | quote }}
             - name: OIDC_ISSUER_URL
@@ -125,49 +91,6 @@ spec:
             - name: keycloak-ca
               mountPath: /etc/keycloak-ca
               readOnly: true
-        - name: oauth2-proxy
-          image: "{{ $oauth2Proxy.repository }}:{{ $oauth2Proxy.tag }}"
-          imagePullPolicy: IfNotPresent
-          args:
-            {{- toYaml $keycloakArgs | nindent 12 }}
-          env:
-            # oauth2-proxy v7 rejects --cookie-secret-file as an unknown flag.
-            # The environment variable is the supported way to feed the value
-            # from a Secret without putting it in the pod spec.
-            - name: OAUTH2_PROXY_COOKIE_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: thanos-admin-oauth2-proxy
-                  key: cookie-secret
-          ports:
-            - name: oauth2-proxy
-              containerPort: 4180
-              protocol: TCP
-          readinessProbe:
-            httpGet:
-              path: /ping
-              port: oauth2-proxy
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          resources:
-            requests:
-              cpu: 10m
-              memory: 32Mi
-            limits:
-              cpu: 100m
-              memory: 128Mi
-          securityContext:
-            {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
-          # Directory mount, not subPath: a subPath mount keeps the old value
-          # after Keycloak rotates the client Secret. The Secret keys are the
-          # file names inside the directory.
-          volumeMounts:
-            - name: oauth2-client-secret
-              mountPath: /etc/thanos-oauth2/client-secret
-              readOnly: true
-            - name: keycloak-ca
-              mountPath: /etc/keycloak-ca
-              readOnly: true
         - name: query-allowlist
           image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag }}"
           imagePullPolicy: IfNotPresent
@@ -206,9 +129,6 @@ spec:
         - name: query-allowlist
           configMap:
             name: osac-observability-query-allowlist
-        - name: oauth2-client-secret
-          secret:
-            secretName: thanos-admin-client-secret
         # Written by the admin-credentials job: a volume cannot cross
         # namespaces, so the bundle the Keycloak chart publishes is copied here.
         - name: keycloak-ca
@@ -236,8 +156,9 @@ spec:
         osac.openshift.io/observability-role: query-auth-proxy
     spec:
       serviceAccountName: thanos-query-admin-openshift
-      # Only this pod needs its token: ose-oauth-proxy reads the client id and
-      # secret of its service-account OAuth client from the mounted token.
+      # The gate validates the caller's token with a TokenReview and reads the
+      # configured OpenShift group, so it needs its own token and the
+      # cluster-scoped ClusterRoleBinding that admin-gate-rbac.yaml creates.
       automountServiceAccountToken: true
       securityContext:
         {{- include "osac-observability.podSecurityContext" . | nindent 8 }}
@@ -252,8 +173,6 @@ spec:
               value: ":9092"
             - name: MODE
               value: openshift
-            - name: PROXY_URL
-              value: "http://127.0.0.1:4181"
             - name: ALLOWLIST_URL
               value: {{ $allowlistURL | quote }}
             - name: OPENSHIFT_GROUP
@@ -277,44 +196,6 @@ spec:
               memory: 64Mi
           securityContext:
             {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
-        - name: ose-oauth-proxy
-          image: "{{ $openshiftOAuthProxy.repository }}:{{ $openshiftOAuthProxy.tag }}"
-          imagePullPolicy: IfNotPresent
-          args:
-            - --provider=openshift
-            - --http-address=0.0.0.0:4181
-            # The Route terminates TLS; the proxy serves plain HTTP on loopback.
-            - --https-address=
-            - --upstream={{ $allowlistURL }}
-            - --openshift-service-account=thanos-query-admin-openshift
-            - --openshift-group={{ $openshiftGroup }}
-            - --cookie-secret-file=/etc/thanos-oauth/cookie-secret/cookie-secret
-            - --email-domain=*
-            - --skip-provider-button
-          ports:
-            - name: oauth-proxy
-              containerPort: 4181
-              protocol: TCP
-          readinessProbe:
-            httpGet:
-              path: /oauth2/healthz
-              port: oauth-proxy
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          resources:
-            requests:
-              cpu: 10m
-              memory: 32Mi
-            limits:
-              cpu: 100m
-              memory: 128Mi
-          securityContext:
-            {{- include "osac-observability.containerSecurityContext" . | nindent 12 }}
-          # Directory mount for the same reason as the Keycloak proxy.
-          volumeMounts:
-            - name: oauth-cookie-secret
-              mountPath: /etc/thanos-oauth/cookie-secret
-              readOnly: true
         - name: query-allowlist
           image: "{{ $metricsAuth.repository }}:{{ $metricsAuth.tag }}"
           imagePullPolicy: IfNotPresent
@@ -353,7 +234,4 @@ spec:
         - name: query-allowlist
           configMap:
             name: osac-observability-query-allowlist
-        - name: oauth-cookie-secret
-          secret:
-            secretName: thanos-admin-openshift-oauth
 {{- end }}

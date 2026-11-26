@@ -474,38 +474,6 @@
                     }
                   },
                   "additionalProperties": false
-                },
-                "oauth2Proxy": {
-                  "type": "object",
-                  "description": "oauth2-proxy image, used by the Keycloak admin Route",
-                  "properties": {
-                    "repository": {
-                      "type": "string",
-                      "default": "quay.io/oauth2-proxy/oauth2-proxy"
-                    },
-                    "tag": {
-                      "type": "string",
-                      "description": "Image tag; overwritten at release time",
-                      "default": ""
-                    }
-                  },
-                  "additionalProperties": false
-                },
-                "openshiftOauthProxy": {
-                  "type": "object",
-                  "description": "ose-oauth-proxy image, used by the OpenShift admin Route",
-                  "properties": {
-                    "repository": {
-                      "type": "string",
-                      "default": "registry.redhat.io/openshift4/ose-oauth-proxy"
-                    },
-                    "tag": {
-                      "type": "string",
-                      "description": "Image tag; overwritten at release time",
-                      "default": ""
-                    }
-                  },
-                  "additionalProperties": false
                 }
               },
               "additionalProperties": false
@@ -646,11 +614,6 @@
                   "type": "string",
                   "description": "Realm role a Cloud Provider Admin must hold",
                   "default": "cloud-provider-admin"
-                },
-                "adminClientId": {
-                  "type": "string",
-                  "description": "Keycloak client used by the admin Route",
-                  "default": "thanos-admin"
                 },
                 "tenantClientId": {
                   "type": "string",

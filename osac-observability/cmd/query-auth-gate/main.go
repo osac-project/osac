@@ -23,8 +23,6 @@ import (
 	"github.com/osac-project/osac/osac-observability/internal/authgate"
 )
 
-const defaultExemptPaths = "/oauth2/,/healthz,/ping"
-
 // inClusterConfig is a seam for the tests: the OpenShift mode is the only one
 // that talks to the API server.
 var inClusterConfig = rest.InClusterConfig
@@ -32,10 +30,7 @@ var inClusterConfig = rest.InClusterConfig
 type config struct {
 	listenAddr    string
 	mode          string
-	proxyURL      string
 	allowlistURL  string
-	cookieName    string
-	exempt        []string
 	authenticator authgate.Authenticator
 }
 
@@ -45,11 +40,8 @@ func main() {
 		log.Fatalf("query-auth-gate: %v", err)
 	}
 	gate, err := authgate.New(authgate.Config{
-		ProxyURL:          cfg.proxyURL,
-		AllowlistURL:      cfg.allowlistURL,
-		SessionCookieName: cfg.cookieName,
-		Authenticator:     cfg.authenticator,
-		ExemptPaths:       cfg.exempt,
+		AllowlistURL:  cfg.allowlistURL,
+		Authenticator: cfg.authenticator,
 	})
 	if err != nil {
 		log.Fatalf("query-auth-gate: %v", err)
@@ -89,29 +81,16 @@ func loadConfig(getenv func(string) string) (config, error) {
 	cfg := config{
 		listenAddr:   getenv("LISTEN_ADDR"),
 		mode:         strings.ToLower(strings.TrimSpace(getenv("MODE"))),
-		proxyURL:     getenv("PROXY_URL"),
 		allowlistURL: getenv("ALLOWLIST_URL"),
-		cookieName:   getenv("SESSION_COOKIE_NAME"),
 	}
 	if cfg.listenAddr == "" {
 		cfg.listenAddr = ":9092"
 	}
-	if cfg.proxyURL == "" {
-		return config{}, errors.New("PROXY_URL is required")
-	}
 	if cfg.allowlistURL == "" {
 		return config{}, errors.New("ALLOWLIST_URL is required")
 	}
-	exempt := getenv("EXEMPT_PATHS")
-	if exempt == "" {
-		exempt = defaultExemptPaths
-	}
-	cfg.exempt = splitList(exempt)
 	switch cfg.mode {
 	case "keycloak":
-		if cfg.cookieName == "" {
-			cfg.cookieName = "_oauth2_proxy"
-		}
 		client, err := authgate.NewHTTPClient(getenv("OIDC_CA_FILE"))
 		if err != nil {
 			return config{}, err
@@ -127,9 +106,6 @@ func loadConfig(getenv func(string) string) (config, error) {
 		}
 		cfg.authenticator = authenticator
 	case "openshift":
-		if cfg.cookieName == "" {
-			cfg.cookieName = "_oauth_proxy"
-		}
 		group := getenv("OPENSHIFT_GROUP")
 		if group == "" {
 			return config{}, errors.New("OPENSHIFT_GROUP is required")

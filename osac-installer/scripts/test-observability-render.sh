@@ -44,8 +44,6 @@ OBS_ARGS=(
   # The chart refuses an empty image tag; these renders never pull.
   --set global.observability.services.metricsAuth.tag=test-metrics-auth
   --set global.observability.thanos.image.tag=test-thanos
-  --set global.observability.services.oauth2Proxy.tag=test-oauth2-proxy
-  --set global.observability.services.openshiftOauthProxy.tag=test-ose-oauth-proxy
   # The gate refuses an empty issuer; the render never reaches Keycloak.
   --set global.observability.keycloak.issuerUrl=https://keycloak.example.com/realms/osac
 )
@@ -331,14 +329,12 @@ for policy in thanos-query thanos-authorizer thanos-store thanos-receive \
   thanos-compactor thanos-query-auth-proxy; do
   require "${enabled_policies}" "name: ${policy}"
 done
-# The admin Route reaches the gate on 9092. The allowlist (9091) and the two
-# OAuth proxies (4180, 4181) must not be admitted from anywhere else, or a pod
-# can skip the gate by connecting to the proxy pod IP.
+# The admin Route reaches the gate on 9092. The allowlist (9091) must not be
+# admitted from anywhere else, or a pod can skip the gate by connecting to the
+# pod IP.
 require "${enabled_policies}" 'network.openshift.io/policy-group: ingress'
 require "${enabled_policies}" 'port: 9092'
 reject "${enabled_policies}" 'port: 9091'
-reject "${enabled_policies}" 'port: 4180'
-reject "${enabled_policies}" 'port: 4181'
 require "${enabled_policies}" 'app.kubernetes.io/component: receive'
 require "${enabled_policies}" 'app.kubernetes.io/component: store'
 require "${enabled_policies}" 'app.kubernetes.io/component: query'
@@ -419,13 +415,12 @@ for proxy in thanos-query-admin thanos-query-admin-openshift; do
   require "${proxy_doc}" '- name: query-allowlist'
   require "${proxy_doc}" '- /query-allowlist'
   require "${proxy_doc}" 'name: osac-observability-query-allowlist'
-  require "${proxy_doc}" '--upstream=http://127.0.0.1:9091'
+  reject "${proxy_doc}" 'oauth2-proxy'
+  reject "${proxy_doc}" 'ose-oauth-proxy'
 done
-require "${TMP_DIR}/deployment-thanos-query-admin.yaml" '--client-id=thanos-admin'
-require "${TMP_DIR}/deployment-thanos-query-admin.yaml" \
-  '--allowed-role=cloud-provider-admin'
+require "${TMP_DIR}/deployment-thanos-query-admin.yaml" 'value: "cloud-provider-admin"'
 require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" \
-  '--openshift-group=osac-cloud-infrastructure-admins'
+  'value: "osac-cloud-infrastructure-admins"'
 require "${TMP_DIR}/deployment-thanos-query-admin.yaml" 'value: keycloak'
 require "${TMP_DIR}/deployment-thanos-query-admin.yaml" \
   'value: "https://keycloak.example.com/realms/osac"'

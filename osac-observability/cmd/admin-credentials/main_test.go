@@ -25,18 +25,8 @@ func TestLoadConfigDefaultsToTheDeployedObjectNames(t *testing.T) {
 	}
 
 	want := admincreds.Config{
-		KeycloakNamespace:  "keycloak",
-		KeycloakSecretName: "keycloak-client-secrets",
-		KeycloakKey:        "thanos-admin",
-		Namespace:          "osac-observability",
-		ClientSecretName:   "thanos-admin-client-secret",
-		ClientSecretKey:    "client-secret",
-		CookieSecrets: []admincreds.CookieSecret{
-			{Name: "thanos-admin-oauth2-proxy"},
-			{Name: "thanos-admin-openshift-oauth", Base64: true},
-		},
-		CookieSecretKey: "cookie-secret",
-		// The proxies verify the Keycloak Route through a copy of the cluster
+		Namespace: "osac-observability",
+		// The gate verifies the Keycloak Route through a copy of the cluster
 		// trust bundle; the chart mounts it at a fixed path, so the names are
 		// fixed too.
 		CABundle: admincreds.CABundle{
@@ -52,36 +42,12 @@ func TestLoadConfigDefaultsToTheDeployedObjectNames(t *testing.T) {
 	}
 }
 
-func TestLoadConfigHonorsOverrides(t *testing.T) {
-	cfg, err := loadConfig(env(map[string]string{
-		"KEYCLOAK_NAMESPACE":       "idp",
-		"KEYCLOAK_SECRET_NAME":     "clients",
-		"KEYCLOAK_SECRET_KEY":      "admin",
-		"OBS_NAMESPACE":            "obs",
-		"ADMIN_CLIENT_SECRET_NAME": "admin-secret",
-		"ADMIN_CLIENT_SECRET_KEY":  "value",
-		"ADMIN_COOKIE_SECRET_KEY":  "cookie",
-		"ADMIN_COOKIE_SECRETS":     `[{"name":"cookie-a"},{"name":"cookie-b","base64":true}]`,
-	}))
+func TestLoadConfigHonorsTheNamespaceOverride(t *testing.T) {
+	cfg, err := loadConfig(env(map[string]string{"OBS_NAMESPACE": "obs"}))
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
-
-	if cfg.KeycloakNamespace != "idp" || cfg.KeycloakSecretName != "clients" ||
-		cfg.KeycloakKey != "admin" || cfg.Namespace != "obs" ||
-		cfg.ClientSecretName != "admin-secret" || cfg.ClientSecretKey != "value" ||
-		cfg.CookieSecretKey != "cookie" {
-		t.Errorf("overrides were not applied: %+v", cfg)
-	}
-	want := []admincreds.CookieSecret{{Name: "cookie-a"}, {Name: "cookie-b", Base64: true}}
-	if !reflect.DeepEqual(cfg.CookieSecrets, want) {
-		t.Errorf("cookie secrets = %v, want %v", cfg.CookieSecrets, want)
-	}
-}
-
-func TestLoadConfigRejectsMalformedCookieSecrets(t *testing.T) {
-	_, err := loadConfig(env(map[string]string{"ADMIN_COOKIE_SECRETS": "not-json"}))
-	if err == nil {
-		t.Fatal("loadConfig accepted malformed ADMIN_COOKIE_SECRETS")
+	if cfg.Namespace != "obs" {
+		t.Errorf("Namespace = %q, want obs", cfg.Namespace)
 	}
 }

@@ -14,7 +14,6 @@ func env(values map[string]string) func(string) string {
 func validKeycloakEnv() map[string]string {
 	return map[string]string{
 		"MODE":            "keycloak",
-		"PROXY_URL":       "http://127.0.0.1:4180",
 		"ALLOWLIST_URL":   "http://127.0.0.1:9091",
 		"OIDC_ISSUER_URL": "https://keycloak.example.com/realms/osac",
 		"OIDC_AUDIENCE":   "osac-ui, osac-cli",
@@ -25,7 +24,6 @@ func validKeycloakEnv() map[string]string {
 func validOpenShiftEnv() map[string]string {
 	return map[string]string{
 		"MODE":            "openshift",
-		"PROXY_URL":       "http://127.0.0.1:4181",
 		"ALLOWLIST_URL":   "http://127.0.0.1:9091",
 		"OPENSHIFT_GROUP": "osac-cloud-infrastructure-admins",
 	}
@@ -38,13 +36,6 @@ func TestLoadConfigDefaults(t *testing.T) {
 	}
 	if cfg.listenAddr != ":9092" {
 		t.Fatalf("listenAddr = %q, want :9092", cfg.listenAddr)
-	}
-	if cfg.cookieName != "_oauth2_proxy" {
-		t.Fatalf("cookieName = %q, want _oauth2_proxy", cfg.cookieName)
-	}
-	want := []string{"/oauth2/", "/healthz", "/ping"}
-	if strings.Join(cfg.exempt, ",") != strings.Join(want, ",") {
-		t.Fatalf("exempt = %v, want %v", cfg.exempt, want)
 	}
 	if cfg.authenticator == nil {
 		t.Fatalf("no authenticator")
@@ -60,32 +51,12 @@ func stubInClusterConfig(t *testing.T) {
 	t.Cleanup(func() { inClusterConfig = previous })
 }
 
-func TestLoadConfigUsesTheOpenShiftCookieName(t *testing.T) {
-	stubInClusterConfig(t)
-	cfg, err := loadConfig(env(validOpenShiftEnv()))
-	if err != nil {
-		t.Fatalf("loadConfig: %v", err)
-	}
-	if cfg.cookieName != "_oauth_proxy" {
-		t.Fatalf("cookieName = %q, want _oauth_proxy", cfg.cookieName)
-	}
-}
-
 func TestLoadConfigRejectsAnUnknownMode(t *testing.T) {
 	values := validKeycloakEnv()
 	values["MODE"] = "basic"
 	_, err := loadConfig(env(values))
 	if err == nil || !strings.Contains(err.Error(), "MODE") {
 		t.Fatalf("error = %v, want one naming MODE", err)
-	}
-}
-
-func TestLoadConfigRejectsAMissingProxyURL(t *testing.T) {
-	values := validKeycloakEnv()
-	delete(values, "PROXY_URL")
-	_, err := loadConfig(env(values))
-	if err == nil || !strings.Contains(err.Error(), "PROXY_URL") {
-		t.Fatalf("error = %v, want one naming PROXY_URL", err)
 	}
 }
 

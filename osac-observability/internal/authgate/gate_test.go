@@ -29,108 +29,96 @@ const (
 	testIssuer   = "https://keycloak.example.com/realms/osac"
 	testAudience = "osac-ui"
 	testRole     = "cloud-provider-admin"
-	testCookie   = "_oauth2_proxy"
 )
 
-func TestGateReturnsUnauthorizedWithoutACookieOrBearerToken(t *testing.T) {
-	gate, proxy, allowlist := newTestGate(t, &stubAuth{})
+func TestGateReturnsUnauthorizedWithoutABearerToken(t *testing.T) {
+	gate, allowlist := newTestGate(t, &stubAuth{})
 	rec := httptest.NewRecorder()
 	gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/query?query=up", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}
-	if proxy.hits.Load() != 0 || allowlist.hits.Load() != 0 {
-		t.Fatalf("upstream reached without credentials: proxy=%d allowlist=%d",
-			proxy.hits.Load(), allowlist.hits.Load())
+	if allowlist.hits.Load() != 0 {
+		t.Fatalf("allowlist reached without a credential: %d", allowlist.hits.Load())
+	}
+	if got := rec.Header().Get("WWW-Authenticate"); got != `Bearer realm="osac"` {
+		t.Fatalf("WWW-Authenticate = %q", got)
 	}
 }
 
-func TestGateForwardsASessionCookieToTheOAuthProxy(t *testing.T) {
-	gate, proxy, allowlist := newTestGate(t, &stubAuth{})
+func TestGateDoesNotAcceptASessionCookie(t *testing.T) {
+	gate, allowlist := newTestGate(t, &stubAuth{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/query", nil)
-	req.AddCookie(&http.Cookie{Name: testCookie, Value: "session"})
+	req.AddCookie(&http.Cookie{Name: "_oauth2_proxy", Value: "session"})
 	rec := httptest.NewRecorder()
 	gate.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", rec.Code)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
 	}
-	if proxy.hits.Load() != 1 || allowlist.hits.Load() != 0 {
-		t.Fatalf("routing: proxy=%d allowlist=%d", proxy.hits.Load(), allowlist.hits.Load())
+	if allowlist.hits.Load() != 0 {
+		t.Fatalf("allowlist reached with only a cookie")
 	}
 }
 
-func TestGateExemptsTheOAuthCallbackAndHealthPaths(t *testing.T) {
-	gate, proxy, _ := newTestGate(t, &stubAuth{})
+func TestGateDoesNotExemptOAuthOrHealthPaths(t *testing.T) {
+	gate, allowlist := newTestGate(t, &stubAuth{})
 	for _, path := range []string{"/oauth2/callback", "/oauth2/sign_in", "/healthz", "/ping"} {
-		proxy.hits.Store(0)
 		rec := httptest.NewRecorder()
 		gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
-		if rec.Code != http.StatusOK {
-			t.Fatalf("%s: status = %d, want 200", path, rec.Code)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("%s: status = %d, want 401", path, rec.Code)
 		}
-		if proxy.hits.Load() != 1 {
-			t.Fatalf("%s did not reach the OAuth proxy", path)
-		}
+	}
+	if allowlist.hits.Load() != 0 {
+		t.Fatalf("allowlist reached without a credential")
 	}
 }
 
 func TestGateAnswersItsOwnLivenessProbe(t *testing.T) {
-	gate, proxy, allowlist := newTestGate(t, &stubAuth{})
+	gate, allowlist := newTestGate(t, &stubAuth{})
 	rec := httptest.NewRecorder()
 	gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/livez", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	if proxy.hits.Load() != 0 || allowlist.hits.Load() != 0 {
-		t.Fatalf("liveness probe reached an upstream")
-	}
-}
-
-func TestGateDoesNotExemptACleanedOAuthPath(t *testing.T) {
-	gate, proxy, allowlist := newTestGate(t, &stubAuth{})
-	rec := httptest.NewRecorder()
-	gate.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/oauth2/../api/v1/query", nil))
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("status = %d, want 401", rec.Code)
-	}
-	if proxy.hits.Load() != 0 || allowlist.hits.Load() != 0 {
-		t.Fatalf("upstream reached through a path traversal")
+	if allowlist.hits.Load() != 0 {
+		t.Fatalf("liveness probe reached the allowlist")
 	}
 }
 
 func TestGateRejectsAnInvalidBearerToken(t *testing.T) {
-	gate, proxy, allowlist := newTestGate(t, &stubAuth{err: ErrUnauthenticated})
+	gate, allowlist := newTestGate(t, &stubAuth{err: ErrUnauthenticated})
 	rec := httptest.NewRecorder()
 	gate.ServeHTTP(rec, bearerRequest("/api/v1/query", "bad"))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", rec.Code)
 	}
-	if proxy.hits.Load() != 0 || allowlist.hits.Load() != 0 {
-		t.Fatalf("upstream reached with a bad token")
+	if allowlist.hits.Load() != 0 {
+		t.Fatalf("allowlist reached with a bad token")
 	}
 }
 
 func TestGateForbidsABearerTokenWithoutTheRole(t *testing.T) {
-	gate, proxy, allowlist := newTestGate(t, &stubAuth{err: ErrForbidden})
+	gate, allowlist := newTestGate(t, &stubAuth{err: ErrForbidden})
 	rec := httptest.NewRecorder()
 	gate.ServeHTTP(rec, bearerRequest("/api/v1/query", "valid"))
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403", rec.Code)
 	}
-	if proxy.hits.Load() != 0 || allowlist.hits.Load() != 0 {
-		t.Fatalf("upstream reached without the role")
+	if allowlist.hits.Load() != 0 {
+		t.Fatalf("allowlist reached without the role")
 	}
 }
 
 func TestGateForwardsAnAuthorizedBearerTokenToTheAllowlist(t *testing.T) {
-	gate, proxy, allowlist := newTestGate(t, &stubAuth{})
+	gate, allowlist := newTestGate(t, &stubAuth{})
 	rec := httptest.NewRecorder()
 	gate.ServeHTTP(rec, bearerRequest("/api/v1/query", "valid"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
-	if allowlist.hits.Load() != 1 || proxy.hits.Load() != 0 {
-		t.Fatalf("routing: proxy=%d allowlist=%d", proxy.hits.Load(), allowlist.hits.Load())
+	if allowlist.hits.Load() != 1 {
+		t.Fatalf("routing: allowlist=%d", allowlist.hits.Load())
 	}
 }
 
@@ -446,21 +434,17 @@ func newCountingServer(t *testing.T, handler func(http.ResponseWriter, *http.Req
 	return c
 }
 
-func newTestGate(t *testing.T, auth Authenticator) (*Gate, *countingServer, *countingServer) {
+func newTestGate(t *testing.T, auth Authenticator) (*Gate, *countingServer) {
 	t.Helper()
-	proxy := newCountingServer(t, nil)
 	allowlist := newCountingServer(t, nil)
 	gate, err := New(Config{
-		ProxyURL:          proxy.URL,
-		AllowlistURL:      allowlist.URL,
-		SessionCookieName: testCookie,
-		Authenticator:     auth,
-		ExemptPaths:       []string{"/oauth2/", "/healthz", "/ping"},
+		AllowlistURL:  allowlist.URL,
+		Authenticator: auth,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	return gate, proxy, allowlist
+	return gate, allowlist
 }
 
 func bearerRequest(path, token string) *http.Request {

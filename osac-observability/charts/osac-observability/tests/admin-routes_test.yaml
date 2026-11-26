@@ -9,7 +9,6 @@ set:
   global.observability.admin.openshiftGroup: osac-cloud-infrastructure-admins
   global.observability.keycloak.realm: osac
   global.observability.keycloak.keycloakAdminRole: cloud-provider-admin
-  global.observability.keycloak.adminClientId: thanos-admin
   global.observability.keycloak.issuerUrl: https://keycloak.example.com/realms/osac
   global.clusterDomain: apps.example.com
   global.observability.objectStorage.secretName: thanos-object-storage
@@ -19,12 +18,8 @@ set:
   global.observability.thanos.image.registry: registry.redhat.io
   global.observability.thanos.image.repository: openshift4/ose-thanos-rhel8
   global.observability.services.metricsAuth.repository: ghcr.io/osac-project/osac-observability
-  global.observability.services.oauth2Proxy.repository: quay.io/oauth2-proxy/oauth2-proxy
-  global.observability.services.openshiftOauthProxy.repository: registry.redhat.io/openshift4/ose-oauth-proxy
   global.observability.thanos.image.tag: test-thanos
   global.observability.services.metricsAuth.tag: test-metrics-auth
-  global.observability.services.oauth2Proxy.tag: test-oauth2-proxy
-  global.observability.services.openshiftOauthProxy.tag: test-ose-oauth-proxy
 
 tests:
   - it: lists exactly the five documented endpoints once
@@ -38,7 +33,7 @@ tests:
       - equal:
           path: metadata.namespace
           value: osac-observability
-      # The key is the file name the proxies read under their directory mount
+      # The key is the file name the allowlist reads under its directory mount
       # (/etc/query-allowlist/endpoints.txt); any other key leaves the sidecar
       # reading a missing file and failing to start.
       - notExists:
@@ -57,7 +52,7 @@ tests:
             /api/v1/labels
             /api/v1/label/<name>/values
 
-  - it: runs the Keycloak gate, proxy and allowlist sidecar in order
+  - it: runs the Keycloak gate and allowlist, with no browser sign-in
     template: templates/admin-proxies.yaml
     documentSelector:
       path: metadata.name
@@ -65,17 +60,16 @@ tests:
     asserts:
       - isKind:
           of: Deployment
+      # Two containers: the gate and the allowlist. The OAuth proxy is gone,
+      # so a browser session cannot reach the Route at all.
       - lengthEqual:
           path: spec.template.spec.containers
-          count: 3
+          count: 2
       - equal:
           path: spec.template.spec.containers[0].name
           value: query-auth-gate
       - equal:
           path: spec.template.spec.containers[1].name
-          value: oauth2-proxy
-      - equal:
-          path: spec.template.spec.containers[2].name
           value: query-allowlist
       - equal:
           path: spec.template.spec.containers[0].image
@@ -92,16 +86,6 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: PROXY_URL
-            value: http://127.0.0.1:4180
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: ALLOWLIST_URL
-            value: http://127.0.0.1:9091
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
             name: OIDC_ISSUER_URL
             value: https://keycloak.example.com/realms/osac
       - contains:
@@ -114,181 +98,24 @@ tests:
           content:
             name: ADMIN_ROLE
             value: cloud-provider-admin
-      # The Keycloak Route certificate is signed by a cluster CA the image does
-      # not trust, so the gate reads the copy of the bundle placed beside it.
+      # The gate fetches discovery and the JWK set from the cluster-signed
+      # Route, so it reads the copied trust bundle.
       - contains:
           path: spec.template.spec.containers[0].env
           content:
             name: OIDC_CA_FILE
             value: /etc/keycloak-ca/bundle.pem
       - equal:
-          path: spec.template.spec.containers[0].volumeMounts[0].mountPath
-          value: /etc/keycloak-ca
-      - equal:
-          path: spec.template.spec.containers[0].volumeMounts[0].readOnly
-          value: true
-      - equal:
-          path: spec.template.spec.containers[0].ports[0].name
-          value: gate
-      - equal:
-          path: spec.template.spec.containers[0].ports[0].containerPort
-          value: 9092
-      - equal:
-          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
-          value: /livez
-      - equal:
-          path: spec.template.spec.containers[2].image
-          value: ghcr.io/osac-project/osac-observability:test-metrics-auth
-      - equal:
-          path: spec.template.spec.containers[2].command
-          value:
-            - /query-allowlist
-      - contains:
-          path: spec.template.spec.containers[2].env
-          content:
-            name: UPSTREAM_URL
-            value: http://thanos-query.osac-observability.svc.cluster.local:9090
-      - contains:
-          path: spec.template.spec.containers[2].env
-          content:
-            name: LISTEN_ADDR
-            value: ":9091"
-      - contains:
-          path: spec.template.spec.containers[2].env
-          content:
-            name: ALLOWLIST_FILE
-            value: /etc/query-allowlist/endpoints.txt
-      - equal:
-          path: spec.template.spec.containers[2].ports[0].containerPort
+          path: spec.template.spec.containers[1].ports[0].containerPort
           value: 9091
       - equal:
-          path: spec.template.spec.containers[2].volumeMounts[0].mountPath
+          path: spec.template.spec.containers[1].volumeMounts[0].mountPath
           value: /etc/query-allowlist
-      - equal:
-          path: spec.template.spec.containers[2].volumeMounts[0].readOnly
-          value: true
       - equal:
           path: spec.template.spec.volumes[0].configMap.name
           value: osac-observability-query-allowlist
 
-  - it: requires the cloud-provider-admin role through Keycloak
-    template: templates/admin-proxies.yaml
-    documentSelector:
-      path: metadata.name
-      value: thanos-query-admin
-    asserts:
-      - equal:
-          path: spec.template.spec.containers[1].image
-          value: quay.io/oauth2-proxy/oauth2-proxy:test-oauth2-proxy
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --provider=keycloak-oidc
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --oidc-issuer-url=https://keycloak.example.com/realms/osac
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --client-id=thanos-admin
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --client-secret-file=/etc/thanos-oauth2/client-secret/client-secret
-      # Discovery and the JWK set are fetched from the same cluster-signed
-      # Route; --use-system-trust-store keeps the public roots for an
-      # externally signed identity provider.
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --provider-ca-file=/etc/keycloak-ca/bundle.pem
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --use-system-trust-store=true
-      - equal:
-          path: spec.template.spec.containers[1].volumeMounts[1].mountPath
-          value: /etc/keycloak-ca
-      # oauth2-proxy v7 has no --cookie-secret-file flag and exits at startup
-      # with "unknown flag" when it is passed, so the cookie secret reaches the
-      # proxy through the environment instead of a mounted file.
-      - notContains:
-          path: spec.template.spec.containers[1].args
-          content: --cookie-secret-file=/etc/thanos-oauth2/cookie-secret/cookie-secret
-      - contains:
-          path: spec.template.spec.containers[1].env
-          content:
-            name: OAUTH2_PROXY_COOKIE_SECRET
-            valueFrom:
-              secretKeyRef:
-                name: thanos-admin-oauth2-proxy
-                key: cookie-secret
-      # Directory mount, not subPath: a subPath mount keeps the old value after
-      # Keycloak rotates the client Secret.
-      - lengthEqual:
-          path: spec.template.spec.containers[1].volumeMounts
-          count: 2
-      - notExists:
-          path: spec.template.spec.containers[1].volumeMounts[0].subPath
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --email-domain=*
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --http-address=0.0.0.0:4180
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --upstream=http://127.0.0.1:9091
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --skip-provider-button
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --pass-access-token
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --set-authorization-header
-      # A valid Keycloak login without this role gets 403.
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --allowed-role=cloud-provider-admin
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --redirect-url=https://thanos-query-admin-osac-observability.apps.example.com/oauth2/callback
-      # The proxy also verifies a bearer token directly if the gate is ever
-      # bypassed, using the OSAC login clients as the accepted audiences.
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --skip-jwt-bearer-tokens=true
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --extra-jwt-issuers=https://keycloak.example.com/realms/osac=osac-ui
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --extra-jwt-issuers=https://keycloak.example.com/realms/osac=osac-cli
-
-  - it: reads both Keycloak proxy secrets from Secrets, never from values
-    template: templates/admin-proxies.yaml
-    documentSelector:
-      path: metadata.name
-      value: thanos-query-admin
-    asserts:
-      # The allowlist, the client secret and the copied trust bundle.
-      - lengthEqual:
-          path: spec.template.spec.volumes
-          count: 3
-      - equal:
-          path: spec.template.spec.volumes[1].secret.secretName
-          value: thanos-admin-client-secret
-      - equal:
-          path: spec.template.spec.volumes[2].configMap.name
-          value: keycloak-ca-bundle
-      - equal:
-          path: spec.template.spec.containers[1].env[0].valueFrom.secretKeyRef.name
-          value: thanos-admin-oauth2-proxy
-      - notContains:
-          path: spec.template.spec.containers[1].args
-          content: --client-secret=
-      - notContains:
-          path: spec.template.spec.containers[1].args
-          content: --cookie-secret=
-
-  - it: runs the OpenShift proxy with the same allowlist sidecar
+  - it: runs the OpenShift gate and allowlist for bearer tokens
     template: templates/admin-proxies.yaml
     documentSelector:
       path: metadata.name
@@ -298,16 +125,10 @@ tests:
           of: Deployment
       - lengthEqual:
           path: spec.template.spec.containers
-          count: 3
+          count: 2
       - equal:
           path: spec.template.spec.containers[0].name
           value: query-auth-gate
-      - equal:
-          path: spec.template.spec.containers[1].name
-          value: ose-oauth-proxy
-      - equal:
-          path: spec.template.spec.containers[2].name
-          value: query-allowlist
       - contains:
           path: spec.template.spec.containers[0].env
           content:
@@ -316,56 +137,15 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
-            name: PROXY_URL
-            value: http://127.0.0.1:4181
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
             name: OPENSHIFT_GROUP
             value: osac-cloud-infrastructure-admins
-      - equal:
-          path: spec.template.spec.containers[0].ports[0].containerPort
-          value: 9092
-      - equal:
-          path: spec.template.spec.containers[1].image
-          value: registry.redhat.io/openshift4/ose-oauth-proxy:test-ose-oauth-proxy
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --http-address=0.0.0.0:4181
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --https-address=
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --provider=openshift
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --upstream=http://127.0.0.1:9091
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --openshift-service-account=thanos-query-admin-openshift
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --openshift-group=osac-cloud-infrastructure-admins
-      - contains:
-          path: spec.template.spec.containers[1].args
-          content: --cookie-secret-file=/etc/thanos-oauth/cookie-secret/cookie-secret
-      - notExists:
-          path: spec.template.spec.containers[1].volumeMounts[0].subPath
+      # The gate calls TokenReview and reads the group, so it needs its token.
       - equal:
           path: spec.template.spec.serviceAccountName
           value: thanos-query-admin-openshift
       - equal:
           path: spec.template.spec.automountServiceAccountToken
           value: true
-      - contains:
-          path: spec.template.spec.containers[2].env
-          content:
-            name: UPSTREAM_URL
-            value: http://thanos-query.osac-observability.svc.cluster.local:9090
-      - equal:
-          path: spec.template.spec.volumes[0].configMap.name
-          value: osac-observability-query-allowlist
 
   - it: grants the OpenShift gate only TokenReview and group reads
     template: templates/admin-gate-rbac.yaml
@@ -415,7 +195,7 @@ tests:
               name: thanos-query-admin-openshift
               namespace: osac-observability
 
-  - it: annotates the OpenShift proxy service account for the admin Route
+  - it: renders the OpenShift gate service account without an OAuth client
     template: templates/admin-oauth.yaml
     asserts:
       - isKind:
@@ -426,9 +206,10 @@ tests:
       - equal:
           path: metadata.namespace
           value: osac-observability
-      - matchRegex:
-          path: metadata.annotations["serviceaccounts.openshift.io/oauth-redirectreference.thanos-query-admin-openshift"]
-          pattern: '"name":"thanos-query-admin-openshift"'
+      # No annotation: without the oauth-proxy this account is not an
+      # OpenShift OAuth client.
+      - notExists:
+          path: metadata.annotations
 
   - it: serves the Keycloak Route through the gate on 9091
     template: templates/services.yaml
@@ -463,39 +244,13 @@ tests:
           path: spec.selector["app.kubernetes.io/instance"]
           value: thanos-query-admin-openshift
       - equal:
-          path: spec.selector["app.kubernetes.io/component"]
-          value: query-auth-proxy
-      - equal:
           path: spec.ports[0].port
           value: 9091
       - equal:
           path: spec.ports[0].targetPort
           value: gate
 
-  - it: marks both proxy pods as admitted query-auth-proxy peers
-    template: templates/admin-proxies.yaml
-    documentSelector:
-      path: metadata.name
-      value: thanos-query-admin
-    asserts:
-      - equal:
-          path: spec.template.metadata.labels["osac.openshift.io/observability-role"]
-          value: query-auth-proxy
-      - equal:
-          path: spec.template.metadata.labels["app.kubernetes.io/component"]
-          value: query-auth-proxy
-
-  - it: marks the OpenShift proxy pod as an admitted query-auth-proxy peer
-    template: templates/admin-proxies.yaml
-    documentSelector:
-      path: metadata.name
-      value: thanos-query-admin-openshift
-    asserts:
-      - equal:
-          path: spec.template.metadata.labels["osac.openshift.io/observability-role"]
-          value: query-auth-proxy
-
-  - it: exposes the Keycloak Route only through its own proxy
+  - it: exposes the Keycloak Route only through its own gate
     template: templates/admin-routes.yaml
     documentSelector:
       path: metadata.name
@@ -526,7 +281,7 @@ tests:
       - notExists:
           path: spec.alternateBackends
 
-  - it: exposes the OpenShift Route only through its own proxy
+  - it: exposes the OpenShift Route only through its own gate
     template: templates/admin-routes.yaml
     documentSelector:
       path: metadata.name
@@ -554,30 +309,25 @@ tests:
       - notExists:
           path: spec.alternateBackends
 
-  - it: adds no selector, matcher or filter to either proxy
+  - it: admits both gate pods as query-auth-proxy peers
     template: templates/admin-proxies.yaml
     documentSelector:
       path: metadata.name
       value: thanos-query-admin
     asserts:
-      - notContains:
-          path: spec.template.spec.containers[1].args
-          content: --query
-      - notContains:
-          path: spec.template.spec.containers[2].args
-          content: --query
-      - notContains:
-          path: spec.template.spec.containers[1].args
-          content: --match
-      - notContains:
-          path: spec.template.spec.containers[1].args
-          content: --start
-      - notContains:
-          path: spec.template.spec.containers[1].args
-          content: --end
-      - notContains:
-          path: spec.template.spec.containers[1].args
-          content: --selector
+      - equal:
+          path: spec.template.metadata.labels["osac.openshift.io/observability-role"]
+          value: query-auth-proxy
+
+  - it: marks the OpenShift gate pod as an admitted query-auth-proxy peer
+    template: templates/admin-proxies.yaml
+    documentSelector:
+      path: metadata.name
+      value: thanos-query-admin-openshift
+    asserts:
+      - equal:
+          path: spec.template.metadata.labels["osac.openshift.io/observability-role"]
+          value: query-auth-proxy
 
   - it: omits the Route host when no cluster domain is configured
     template: templates/admin-routes.yaml

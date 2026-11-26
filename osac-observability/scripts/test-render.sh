@@ -116,8 +116,6 @@ OBS_ARGS=(
   # The chart refuses an empty image tag; these renders never pull.
   --set global.observability.services.metricsAuth.tag=test-metrics-auth
   --set global.observability.thanos.image.tag=test-thanos
-  --set global.observability.services.oauth2Proxy.tag=test-oauth2-proxy
-  --set global.observability.services.openshiftOauthProxy.tag=test-ose-oauth-proxy
   # The gate refuses an empty issuer; the render never reaches Keycloak.
   --set global.observability.keycloak.issuerUrl=https://keycloak.example.com/realms/osac
 )
@@ -244,28 +242,28 @@ for route in thanos-query-admin thanos-query-admin-openshift; do
 done
 expect_count "${admin_routes}" '^    name: thanos-query$' 0
 
-# Both proxies serve the same five-endpoint allowlist through one shared
-# implementation, so both must mount the same ConfigMap.
+# Both admin Routes serve the same five-endpoint allowlist through one shared
+# implementation, so both must mount the same ConfigMap, and neither may carry
+# a browser sign-in container.
 for proxy in thanos-query-admin thanos-query-admin-openshift; do
   proxy_doc="${TMP_DIR}/deployment-${proxy}.yaml"
   extract_kind_name "${enabled}" Deployment "${proxy}" >"${proxy_doc}"
   require "${proxy_doc}" "name: ${proxy}"
   require "${proxy_doc}" 'osac.openshift.io/observability-role: query-auth-proxy'
-  # The gate is the only way in: it answers 401/403 itself and forwards a
-  # cookie session to the proxy, which forwards to the allowlist sidecar.
+  # The gate is the only way in: it answers 401/403 itself for bearer clients
+  # and forwards an authorised request to the allowlist sidecar.
   require "${proxy_doc}" '- name: query-auth-gate'
   require "${proxy_doc}" '- /query-auth-gate'
   require "${proxy_doc}" '- name: query-allowlist'
   require "${proxy_doc}" 'name: osac-observability-query-allowlist'
-  require "${proxy_doc}" '--upstream=http://127.0.0.1:9091'
   require "${proxy_doc}" \
     'value: http://thanos-query.osac-observability.svc.cluster.local:9090'
+  reject "${proxy_doc}" 'oauth2-proxy'
+  reject "${proxy_doc}" 'ose-oauth-proxy'
 done
-require "${TMP_DIR}/deployment-thanos-query-admin.yaml" '--client-id=thanos-admin'
-require "${TMP_DIR}/deployment-thanos-query-admin.yaml" \
-  '--allowed-role=cloud-provider-admin'
+require "${TMP_DIR}/deployment-thanos-query-admin.yaml" 'value: "cloud-provider-admin"'
 require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" \
-  '--openshift-group=osac-cloud-infrastructure-admins'
+  'value: "osac-cloud-infrastructure-admins"'
 require "${TMP_DIR}/deployment-thanos-query-admin.yaml" 'value: keycloak'
 require "${TMP_DIR}/deployment-thanos-query-admin.yaml" \
   'value: "https://keycloak.example.com/realms/osac"'

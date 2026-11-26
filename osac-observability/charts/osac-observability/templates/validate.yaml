@@ -10,12 +10,6 @@
 {{- if not (dig "services" "metricsAuth" "tag" "" $obs) -}}
 {{- $missing = append $missing "global.observability.services.metricsAuth.tag" -}}
 {{- end -}}
-{{- if not (dig "services" "oauth2Proxy" "tag" "" $obs) -}}
-{{- $missing = append $missing "global.observability.services.oauth2Proxy.tag" -}}
-{{- end -}}
-{{- if not (dig "services" "openshiftOauthProxy" "tag" "" $obs) -}}
-{{- $missing = append $missing "global.observability.services.openshiftOauthProxy.tag" -}}
-{{- end -}}
 {{- if $missing -}}
 {{- fail (printf "observability image tags must be set when observability is enabled: %s" (join ", " $missing)) -}}
 {{- end -}}

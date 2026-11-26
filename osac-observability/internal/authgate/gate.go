@@ -1,7 +1,7 @@
-// Package authgate authenticates the admin query Routes before either OAuth
-// proxy sees the request, so a bearer client gets a plain 401 or 403 instead of
-// a login redirect from the stock proxies. Browser sessions and the OAuth
-// callback path are passed through to the proxy unchanged.
+// Package authgate authenticates the admin query Routes. Every request must
+// carry a bearer token: invalid is 401, valid without the required role or
+// group is 403, otherwise the request is forwarded to the allowlist sidecar.
+// There is no browser sign-in on these Routes.
 package authgate
 
 import (
@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"path"
 	"strings"
 )
 
@@ -28,47 +27,31 @@ type Authenticator interface {
 	Authenticate(ctx context.Context, token string) error
 }
 
-// Config carries the gate's upstreams, cookie name and exempt paths.
+// Config carries the gate's upstream and authenticator.
 type Config struct {
-	ProxyURL          string
-	AllowlistURL      string
-	SessionCookieName string
-	Authenticator     Authenticator
-	ExemptPaths       []string
+	AllowlistURL  string
+	Authenticator Authenticator
 }
 
-// Gate routes one request to the OAuth proxy or the allowlist sidecar.
+// Gate routes one authenticated request to the allowlist sidecar.
 type Gate struct {
-	proxy     *httputil.ReverseProxy
 	allowlist *httputil.ReverseProxy
 	auth      Authenticator
-	cookie    string
-	exempt    []string
 }
 
-// New builds a Gate. Both upstreams must be absolute URLs and an
+// New builds a Gate. The upstream must be an absolute URL and an
 // authenticator is mandatory: a gate that cannot decide is not a gate.
 func New(cfg Config) (*Gate, error) {
 	if cfg.Authenticator == nil {
 		return nil, errors.New("an authenticator is required")
 	}
-	proxy, err := newProxy(cfg.ProxyURL)
-	if err != nil {
-		return nil, fmt.Errorf("PROXY_URL: %w", err)
-	}
 	allowlist, err := newProxy(cfg.AllowlistURL)
 	if err != nil {
 		return nil, fmt.Errorf("ALLOWLIST_URL: %w", err)
 	}
-	if cfg.SessionCookieName == "" {
-		return nil, errors.New("a session cookie name is required")
-	}
 	return &Gate{
-		proxy:     proxy,
 		allowlist: allowlist,
 		auth:      cfg.Authenticator,
-		cookie:    cfg.SessionCookieName,
-		exempt:    cfg.ExemptPaths,
 	}, nil
 }
 
@@ -90,18 +73,12 @@ func newProxy(raw string) (*httputil.ReverseProxy, error) {
 // ServeHTTP applies the contract:
 //
 //   - the gate answers its own liveness probe;
-//   - an exempt path (OAuth callback, health) goes to the proxy;
 //   - a bearer token is validated here: 401 invalid, 403 valid without the
-//     role or group, otherwise the request goes straight to the allowlist;
-//   - a session cookie goes to the proxy, which owns the browser login state;
+//     role or group, otherwise the request goes to the allowlist;
 //   - anything else is 401.
 func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/livez" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 		w.WriteHeader(http.StatusOK)
-		return
-	}
-	if g.isExempt(path.Clean(r.URL.Path)) {
-		g.proxy.ServeHTTP(w, r)
 		return
 	}
 	if token := bearerToken(r); token != "" {
@@ -117,10 +94,6 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	if _, err := r.Cookie(g.cookie); err == nil {
-		g.proxy.ServeHTTP(w, r)
-		return
-	}
 	w.Header().Set("WWW-Authenticate", `Bearer realm="osac"`)
 	http.Error(w, "authentication required", http.StatusUnauthorized)
 }
@@ -132,22 +105,4 @@ func bearerToken(r *http.Request) string {
 		return ""
 	}
 	return strings.TrimSpace(header[len(prefix):])
-}
-
-func (g *Gate) isExempt(path string) bool {
-	for _, prefix := range g.exempt {
-		if prefix == "" {
-			continue
-		}
-		if strings.HasSuffix(prefix, "/") {
-			if strings.HasPrefix(path, prefix) {
-				return true
-			}
-			continue
-		}
-		if path == prefix {
-			return true
-		}
-	}
-	return false
 }

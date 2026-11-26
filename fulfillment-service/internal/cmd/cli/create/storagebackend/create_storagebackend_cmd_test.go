@@ -40,7 +40,7 @@ func (s *storageBackendsServer) Create(_ context.Context, request *privatev1.Sto
 
 var _ = Describe("Create storage backend", func() {
 	DescribeTable("sends the requested ownership and only supplied credentials",
-		func(flags []string, expectedError string, cspManaged, credentials bool) {
+		func(provider string, flags []string, expectedError string, cspManaged, credentials bool) {
 			server := testing.NewServer()
 			DeferCleanup(server.Stop)
 			backends := &storageBackendsServer{}
@@ -60,7 +60,7 @@ var _ = Describe("Create storage backend", func() {
 			cmd.SetContext(ctx)
 			cmd.SetOut(io.Discard)
 			cmd.SetErr(io.Discard)
-			cmd.SetArgs(append([]string{"--name", "customer-storage", "--provider", "netapp"}, flags...))
+			cmd.SetArgs(append([]string{"--name", "customer-storage", "--provider", provider}, flags...))
 			err = cmd.Execute()
 			if expectedError != "" {
 				Expect(err).To(MatchError(ContainSubstring(expectedError)))
@@ -78,14 +78,22 @@ var _ = Describe("Create storage backend", func() {
 				Expect(spec.GetCredentials()).To(BeNil())
 			}
 		},
-		Entry("CSP-managed without connection details", []string{"--csp-managed"}, "", true, false),
-		Entry("CSP-managed with endpoint only", []string{"--csp-managed", "--endpoint", "https://storage.example.com"}, "", true, false),
-		Entry("CSP-managed supplied credentials", []string{"--csp-managed", "--username", "admin", "--password", "fixture-password"}, "", true, true),
-		Entry("CSP-managed incomplete username", []string{"--csp-managed", "--password", "fixture-password"}, "username is required", true, false),
-		Entry("CSP-managed incomplete password", []string{"--csp-managed", "--username", "admin"}, "password is required", true, false),
-		Entry("default ownership requires endpoint", []string{}, "endpoint is required", false, false),
-		Entry("default ownership requires username", []string{"--endpoint", "https://storage.example.com"}, "username is required", false, false),
-		Entry("default ownership requires password", []string{"--endpoint", "https://storage.example.com", "--username", "admin"}, "password is required", false, false),
-		Entry("default ownership sends valid credentials", []string{"--endpoint", "https://storage.example.com", "--username", "admin", "--password", "fixture-password"}, "", false, true),
+		Entry("CSP-managed without connection details", "netapp", []string{"--csp-managed"}, "", true, false),
+		Entry("CSP-managed with endpoint only", "netapp", []string{"--csp-managed", "--endpoint", "https://storage.example.com"}, "", true, false),
+		Entry("CSP-managed supplied credentials", "netapp", []string{"--csp-managed", "--username", "admin", "--password", "fixture-password"}, "", true, true),
+		Entry("CSP-managed incomplete username", "netapp", []string{"--csp-managed", "--password", "fixture-password"}, "username is required", true, false),
+		Entry("CSP-managed incomplete password", "netapp", []string{"--csp-managed", "--username", "admin"}, "password is required", true, false),
+		Entry("default ownership requires endpoint", "netapp", []string{}, "endpoint is required", false, false),
+		Entry("default ownership requires username", "netapp", []string{"--endpoint", "https://storage.example.com"}, "username is required", false, false),
+		Entry("default ownership requires password", "netapp", []string{"--endpoint", "https://storage.example.com", "--username", "admin"}, "password is required", false, false),
+		Entry("default ownership sends valid credentials", "netapp", []string{"--endpoint", "https://storage.example.com", "--username", "admin", "--password", "fixture-password"}, "", false, true),
+		Entry("VAST endpoint only", "vast", []string{"--endpoint", "https://storage.example.com"}, "", false, false),
+		Entry("VAST still requires endpoint", "vast", []string{}, "endpoint is required", false, false),
+		Entry("VAST explicitly empty login", "vast", []string{"--endpoint", "https://storage.example.com", "--username=", "--password="}, "username is required", false, false),
+		Entry("VAST explicitly empty password alone", "vast", []string{"--endpoint", "https://storage.example.com", "--password="}, "username is required", false, false),
+		Entry("VAST supplied username requires password", "vast", []string{"--endpoint", "https://storage.example.com", "--username", "admin"}, "password is required", false, false),
+		Entry("VAST supplied password requires username", "vast", []string{"--endpoint", "https://storage.example.com", "--password", "fixture-password"}, "username is required", false, false),
+		Entry("VAST can send backend credentials", "vast", []string{"--endpoint", "https://storage.example.com", "--username", "admin", "--password", "fixture-password"}, "", false, true),
+		Entry("Pure still requires credentials", "pure", []string{"--endpoint", "https://storage.example.com"}, "username is required", false, false),
 	)
 })

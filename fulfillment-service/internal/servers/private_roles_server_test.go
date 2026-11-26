@@ -181,7 +181,7 @@ var _ = Describe("Private roles server", func() {
 				Expect(suiteTx.End(ctx)).To(Succeed())
 				suiteTx = nil
 
-				secondErr := runRoleDeleteRace(specCtx, first, second)
+				secondErr := runRequestsWithLockContention(specCtx, first, second)
 				Expect(status.Code(secondErr)).To(Equal(secondCode), "%v", secondErr)
 
 				readCtx := database.TxManagerIntoContext(specCtx, tm)
@@ -689,11 +689,11 @@ var _ = Describe("Private roles server", func() {
 	})
 })
 
-// runRoleDeleteRace commits the first request only after the second is waiting
+// runRequestsWithLockContention commits the first request only after the second is waiting
 // for a lock in the spec's isolated database.
-func runRoleDeleteRace(ctx SpecContext, first, second func(context.Context) error) error {
+func runRequestsWithLockContention(ctx SpecContext, first, second func(context.Context) error) error {
 	GinkgoHelper()
-	const applicationName = "role-delete-race"
+	const applicationName = "request-lock-contention"
 
 	raceCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

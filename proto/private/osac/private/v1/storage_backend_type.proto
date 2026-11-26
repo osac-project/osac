@@ -75,8 +75,8 @@ message StorageBackendSpec {
   };
   option (buf.validate.message).cel = {
     id: "osac_managed_credentials_required"
-    message: "credentials are required for OSAC-managed storage backends"
-    expression: "this.csp_managed || has(this.credentials)"
+    message: "credentials are required for OSAC-managed storage backends other than VAST"
+    expression: "this.csp_managed || this.provider == 'vast' || has(this.credentials)"
   };
 
   // Provider routing key. New StorageBackends may use "vast", "netapp", or
@@ -103,8 +103,8 @@ message StorageBackendSpec {
   // Required for OSAC-managed backends; optional for CSP-managed backends.
   string endpoint = 3;
 
-  // Credentials for authenticating with the storage management API.
-  // Required for OSAC-managed backends; optional for CSP-managed backends.
+  // Backend-wide credentials for the management API. Optional for CSP-managed backends.
+  // OSAC-managed VAST can omit these for NFS tiers. Other OSAC-managed providers require them.
   StorageBackendCredentials credentials = 4;
 
   // When true, storage resources are managed by the Cloud Provider Admin.

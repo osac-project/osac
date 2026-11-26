@@ -142,7 +142,20 @@ var _ = Describe("newServer", func() {
 		Expect(tools["expose_network_resource"].Description).To(ContainSubstring("only after the user confirms"))
 		Expect(tools["expose_network_resource"].Description).To(ContainSubstring("external_ip"))
 		Expect(tools["expose_network_resource"].Description).To(ContainSubstring("nat_gateway"))
+		Expect(tools["create_network_resource"].Description).To(ContainSubstring("replacement"))
+		Expect(tools["create_network_resource"].Description).To(ContainSubstring("omit id from the create input"))
+		Expect(tools["create_network_resource"].Description).To(ContainSubstring("Create response returns the new resource ID"))
+		Expect(tools["create_network_resource"].Description).To(ContainSubstring("one write at a time"))
+		Expect(tools["create_network_resource"].Description).To(ContainSubstring("Never infer deletion"))
+		Expect(tools["create_network_resource"].Description).To(
+			ContainSubstring("Tenant default resources cannot be deleted individually"),
+		)
 		Expect(tools["delete_network_resource"].Description).To(ContainSubstring("only when the user explicitly requests"))
+		Expect(tools["delete_network_resource"].Description).To(ContainSubstring("never inferred from a replacement"))
+		Expect(tools["delete_network_resource"].Description).To(
+			ContainSubstring("Tenant default resources cannot be deleted individually"),
+		)
+		Expect(tools).ToNot(HaveKey("update_network_resource"))
 		Expect(tools["get_resource"].Description).To(ContainSubstring("Only resource types with Get support are accepted"))
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("only after the user confirms"))
 		Expect(tools["create_compute_instance"].Description).To(ContainSubstring("get_resource"))

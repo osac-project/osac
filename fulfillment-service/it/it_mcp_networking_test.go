@@ -347,6 +347,7 @@ var _ = Describe("MCP network resources", func() {
 		Expect(virtualNetwork.GetMetadata().GetName()).To(Equal(virtualNetworkName))
 		Expect(virtualNetwork.GetMetadata().GetTenant()).To(Equal(usersGroup))
 		Expect(virtualNetwork.GetSpec().GetIpv4Cidr()).To(Equal(virtualNetworkCIDR))
+		originalVirtualNetworkVersion := virtualNetwork.GetMetadata().GetVersion()
 
 		_, err = callMCPTool[mcpserver.CreateNetworkResourceOutput](
 			ctx, session, "create_network_resource", mcpserver.CreateNetworkResourceInput{
@@ -360,12 +361,41 @@ var _ = Describe("MCP network resources", func() {
 		Expect(err.Error()).To(ContainSubstring("unsupported_in_place"))
 		Expect(err.Error()).To(ContainSubstring(`"category":"invalid_request"`))
 		Expect(err.Error()).To(ContainSubstring(`"grpc_code":"InvalidArgument"`))
+		Expect(err.Error()).To(ContainSubstring("spec.ipv4_cidr"))
+		Expect(err.Error()).To(ContainSubstring("Subnets"))
 		virtualNetworkResponse, err = publicVirtualNetworks.Get(ctx, publicv1.VirtualNetworksGetRequest_builder{
 			Id: virtualNetworkID,
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
+		virtualNetwork = virtualNetworkResponse.GetObject()
+		Expect(virtualNetwork.GetId()).To(Equal(virtualNetworkID))
+		Expect(virtualNetwork.GetMetadata().GetName()).To(Equal(virtualNetworkName))
+		Expect(virtualNetwork.GetMetadata().GetVersion()).To(BeNumerically(">=", originalVirtualNetworkVersion))
+		Expect(virtualNetwork.GetSpec().GetIpv4Cidr()).To(Equal(virtualNetworkCIDR))
+		Expect(virtualNetwork.GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+
+		replacementVirtualNetworkName := ndUniqueName("mcp-vn-replacement")
+		replacementVirtualNetworkCIDR := ndVirtualNetworkCIDR()
+		replacementVirtualNetworkID := createMCPVirtualNetworkReplacement(
+			ctx, session, virtualNetworks, virtualNetworkID,
+			replacementVirtualNetworkName, replacementVirtualNetworkCIDR,
+		)
+		replacementResponse, err := publicVirtualNetworks.Get(ctx,
+			publicv1.VirtualNetworksGetRequest_builder{Id: replacementVirtualNetworkID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(replacementResponse.GetObject().GetMetadata().GetName()).To(Equal(replacementVirtualNetworkName))
+		Expect(replacementResponse.GetObject().GetSpec().GetIpv4Cidr()).To(Equal(replacementVirtualNetworkCIDR))
+
+		virtualNetworkResponse, err = publicVirtualNetworks.Get(ctx,
+			publicv1.VirtualNetworksGetRequest_builder{Id: virtualNetworkID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(virtualNetworkResponse.GetObject().GetId()).To(Equal(virtualNetworkID))
+		Expect(virtualNetworkResponse.GetObject().GetMetadata().GetName()).To(Equal(virtualNetworkName))
 		Expect(virtualNetworkResponse.GetObject().GetSpec().GetIpv4Cidr()).To(Equal(virtualNetworkCIDR))
 		Expect(virtualNetworkResponse.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+
+		assertMCPResourceDiscoverable(ctx, session, mcpserver.ResourceTypeVirtualNetwork, virtualNetworkID)
+		assertMCPResourceDiscoverable(ctx, session, mcpserver.ResourceTypeVirtualNetwork, replacementVirtualNetworkID)
 
 		invalidName := ndUniqueName("mcp-vn-ipv6")
 		_, err = callMCPTool[mcpserver.CreateNetworkResourceOutput](
@@ -408,6 +438,8 @@ var _ = Describe("MCP network resources", func() {
 		))
 		Expect(subnet.GetSpec().GetVirtualNetwork().GetId()).To(Equal(virtualNetworkID))
 		Expect(subnet.GetSpec().GetIpv4Cidr()).To(Equal(subnetCIDR))
+		originalSubnetVersion := subnet.GetMetadata().GetVersion()
+		originalSubnetState := subnet.GetStatus().GetState()
 
 		securityGroupName := ndUniqueName("mcp-sg")
 		port := int32(443)
@@ -439,6 +471,78 @@ var _ = Describe("MCP network resources", func() {
 		Expect(securityGroup.GetSpec().GetVirtualNetwork().GetId()).To(Equal(virtualNetworkID))
 		Expect(securityGroup.GetSpec().GetIngress()).To(HaveLen(1))
 		Expect(securityGroup.GetSpec().GetIngress()[0].GetPortFrom()).To(Equal(int32(443)))
+		originalSecurityGroupVersion := securityGroup.GetMetadata().GetVersion()
+		originalSecurityGroupState := securityGroup.GetStatus().GetState()
+
+		By("rejecting edit-shaped Subnet and SecurityGroup creates without mutation")
+		replacementSubnetName := ndUniqueName("mcp-subnet-replacement")
+		replacementSubnetCIDR := netip.PrefixFrom(parentPrefix.Addr(), 25).String()
+		_, err = callMCPTool[mcpserver.CreateNetworkResourceOutput](
+			ctx, session, "create_network_resource", mcpserver.CreateNetworkResourceInput{
+				ID:               subnetID,
+				ResourceType:     mcpserver.NetworkResourceTypeSubnet,
+				Name:             replacementSubnetName,
+				VirtualNetworkID: virtualNetworkID,
+				IPv4Cidr:         replacementSubnetCIDR,
+			},
+		)
+		expectMCPSafeError(
+			err, "invalid_request", "InvalidArgument", "unsupported_in_place",
+			"metadata.name, spec.virtual_network, and spec.ipv4_cidr are immutable",
+			"ComputeInstances, Clusters, or BaremetalInstances",
+		)
+		subnetResponse, err = subnets.Get(ctx, privatev1.SubnetsGetRequest_builder{Id: subnetID}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		subnet = subnetResponse.GetObject()
+		Expect(subnet.GetId()).To(Equal(subnetID))
+		Expect(subnet.GetMetadata().GetName()).To(Equal(subnetName))
+		Expect(subnet.GetMetadata().GetVersion()).To(BeNumerically(">=", originalSubnetVersion))
+		Expect(subnet.GetMetadata().GetAnnotations()).To(HaveKeyWithValue(
+			"osac.openshift.io/owner-reference", virtualNetworkID,
+		))
+		Expect(subnet.GetSpec().GetVirtualNetwork().GetId()).To(Equal(virtualNetworkID))
+		Expect(subnet.GetSpec().GetIpv4Cidr()).To(Equal(subnetCIDR))
+		Expect(subnet.GetStatus().GetState()).To(Equal(originalSubnetState))
+		Expect(subnet.GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+
+		replacementSecurityGroupName := ndUniqueName("mcp-sg-replacement")
+		replacementPort := int32(8443)
+		_, err = callMCPTool[mcpserver.CreateNetworkResourceOutput](
+			ctx, session, "create_network_resource", mcpserver.CreateNetworkResourceInput{
+				ID:               securityGroupID,
+				ResourceType:     mcpserver.NetworkResourceTypeSecurityGroup,
+				Name:             replacementSecurityGroupName,
+				VirtualNetworkID: virtualNetworkID,
+				IngressRules: []mcpserver.NetworkSecurityRuleInput{{
+					Protocol: "tcp",
+					PortFrom: &replacementPort,
+					PortTo:   &replacementPort,
+					IPv4Cidr: "0.0.0.0/0",
+				}},
+			},
+		)
+		expectMCPSafeError(
+			err, "invalid_request", "InvalidArgument", "unsupported_in_place",
+			"metadata.name and spec.virtual_network are immutable in this MCP tool",
+			"ingress and egress rule lists",
+			"ComputeInstances, Clusters, or BaremetalInstances",
+		)
+		securityGroupResponse, err = securityGroups.Get(ctx, privatev1.SecurityGroupsGetRequest_builder{
+			Id: securityGroupID,
+		}.Build())
+		Expect(err).ToNot(HaveOccurred())
+		securityGroup = securityGroupResponse.GetObject()
+		Expect(securityGroup.GetId()).To(Equal(securityGroupID))
+		Expect(securityGroup.GetMetadata().GetName()).To(Equal(securityGroupName))
+		Expect(securityGroup.GetMetadata().GetVersion()).To(BeNumerically(">=", originalSecurityGroupVersion))
+		Expect(securityGroup.GetMetadata().GetAnnotations()).To(HaveKeyWithValue(
+			"osac.openshift.io/owner-reference", virtualNetworkID,
+		))
+		Expect(securityGroup.GetSpec().GetVirtualNetwork().GetId()).To(Equal(virtualNetworkID))
+		Expect(securityGroup.GetSpec().GetIngress()).To(HaveLen(1))
+		Expect(securityGroup.GetSpec().GetIngress()[0].GetPortFrom()).To(Equal(int32(443)))
+		Expect(securityGroup.GetStatus().GetState()).To(Equal(originalSecurityGroupState))
+		Expect(securityGroup.GetMetadata().HasDeletionTimestamp()).To(BeFalse())
 
 		otherSession := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-other-network", "ben")
 
@@ -489,6 +593,11 @@ var _ = Describe("MCP network resources", func() {
 		}.Build())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(virtualNetworkResponse.GetObject().GetMetadata().HasDeletionTimestamp()).To(BeFalse())
+		Expect(virtualNetworkResponse.GetObject().GetId()).To(Equal(virtualNetworkID))
+		Expect(virtualNetworkResponse.GetObject().GetMetadata().GetName()).To(Equal(virtualNetworkName))
+		Expect(virtualNetworkResponse.GetObject().GetSpec().GetIpv4Cidr()).To(Equal(virtualNetworkCIDR))
+		assertMCPResourceDiscoverable(ctx, session, mcpserver.ResourceTypeVirtualNetwork, virtualNetworkID)
+		assertMCPResourceDiscoverable(ctx, session, mcpserver.ResourceTypeVirtualNetwork, replacementVirtualNetworkID)
 
 		deletedSecurityGroup, err := callMCPTool[mcpserver.DeleteNetworkResourceOutput](
 			ctx, session, "delete_network_resource", mcpserver.DeleteNetworkResourceInput{
@@ -525,6 +634,16 @@ var _ = Describe("MCP network resources", func() {
 		Expect(deletedVirtualNetwork.ID).To(Equal(virtualNetworkID))
 		Expect(cleanupVirtualNetworkFixture(ctx, virtualNetworks, virtualNetworkID)).To(Succeed())
 		virtualNetworkID = ""
+
+		deletedReplacementVirtualNetwork, err := callMCPTool[mcpserver.DeleteNetworkResourceOutput](
+			ctx, session, "delete_network_resource", mcpserver.DeleteNetworkResourceInput{
+				ResourceType: mcpserver.NetworkResourceTypeVirtualNetwork,
+				ID:           replacementVirtualNetworkID,
+			},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(deletedReplacementVirtualNetwork.ID).To(Equal(replacementVirtualNetworkID))
+		Expect(cleanupVirtualNetworkFixture(ctx, virtualNetworks, replacementVirtualNetworkID)).To(Succeed())
 	})
 
 	It("rejects an oversized SecurityGroup rule request without mutation", func() {

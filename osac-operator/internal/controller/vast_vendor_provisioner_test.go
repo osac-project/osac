@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"maps"
 	"testing"
 
 	csi "github.com/container-storage-interface/spec/lib/go/csi"
@@ -254,8 +255,9 @@ func TestNewVastVendorProvisionerFailFast(t *testing.T) {
 }
 
 func TestVastVendorProvisionerNFSUsesResolvedPreparation(t *testing.T) {
-	csiClient := &fakeCSIClient{createResp: nfsVendorResponse()}
-	provisioner, _ := newProvisionerWithEndpoints(t, csiClient, nil, perProtocolEndpoints())
+	csiClient := &fakeCSIClient{createResp: vastNFSPreparedVendorResponse()}
+	provisioner, _ := newProvisioner(t, csiClient, nil)
+	provisioner.endpoints["vast/nfs"] = "nfs.svc:50051"
 	config := &VASTNFSConfig{
 		ManagementEndpoint: "https://vast-manager.example.com",
 		StorageTenant:      "acme-on-vast",
@@ -265,7 +267,9 @@ func TestVastVendorProvisionerNFSUsesResolvedPreparation(t *testing.T) {
 		ViewPolicy:         "acme-claas",
 		NFSAddress:         "acme-nfs.example.com",
 	}
-	req := nfsCreateReq()
+	req := blockCreateReq()
+	req.Name = "pvc-n"
+	req.Protocol = v1alpha1.VolumeProtocolNFS
 	req.NFS = nil
 	req.VASTNFSConfig = config
 
@@ -295,9 +299,22 @@ func TestVastVendorProvisionerNFSUsesResolvedPreparation(t *testing.T) {
 	}
 }
 
+func vastNFSPreparedVendorResponse() *csi.CreateVolumeResponse {
+	return &csi.CreateVolumeResponse{Volume: &csi.Volume{
+		VolumeId: "pvc-n",
+		VolumeContext: map[string]string{
+			"root_export":   "/fixture",
+			"view_policy":   "fixture-policy",
+			"vip_pool_fqdn": "acme-nfs.example.com",
+			"protocol":      "NFS",
+		},
+	}}
+}
+
 func TestVastVendorProvisionerNFSDeleteUsesResolvedPreparation(t *testing.T) {
 	csiClient := &fakeCSIClient{}
-	provisioner, _ := newProvisionerWithEndpoints(t, csiClient, nil, perProtocolEndpoints())
+	provisioner, _ := newProvisioner(t, csiClient, nil)
+	provisioner.endpoints["vast/nfs"] = "nfs.svc:50051"
 	config := &VASTNFSConfig{
 		ManagementEndpoint: "https://vast-manager.example.com",
 		StorageTenant:      "acme-on-vast",

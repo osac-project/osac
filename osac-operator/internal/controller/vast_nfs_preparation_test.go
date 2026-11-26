@@ -30,6 +30,11 @@ import (
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
+const vastNFSPreparationFixtureBundle = "schema_version: 1\nprovider: vast\nstorage_tenant: acme-on-vast\n" +
+	"credentials:\n  username: fixture-user\n  password: fixture-password\n" +
+	"endpoints:\n  data: acme-nfs.example.com\n" +
+	"options:\n  root_export: /fixture\n  view_policy: fixture-policy\n"
+
 type preparationTestBackends struct {
 	items map[string]*privatev1.StorageBackend
 	calls map[string]int
@@ -68,7 +73,7 @@ func (f *preparationTestSecrets) Get(_ context.Context, in *privatev1.SecretsGet
 			copy := item
 			payload := f.payload
 			if payload == "" {
-				payload = vastNFSFixtureBundle
+				payload = vastNFSPreparationFixtureBundle
 			}
 			copy.SetData(map[string][]byte{"config.yaml": []byte(payload)})
 			return privatev1.SecretsGetResponse_builder{Object: copy}.Build(), nil

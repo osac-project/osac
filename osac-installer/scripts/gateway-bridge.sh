@@ -79,6 +79,22 @@ ${eps}ports:
 EOF
 }
 
+# Remove stale slices of the two Services before applying the bridge. This
+# runs after the release made the Services selectorless, so the EndpointSlice
+# controller no longer reconciles them and cannot recreate what is deleted;
+# without this, Envoy-era slices from a driver switch would keep sending
+# consumers to the removed Envoy Pods next to the bridge endpoints.
+for service in fulfillment-api fulfillment-internal-api; do
+  oc get endpointslices -n "${NS}" -l "kubernetes.io/service-name=${service}" \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
+    | grep -v -- '-gateway$' \
+    | while read -r stale; do
+        [ -n "${stale}" ] || continue
+        echo "removing stale EndpointSlice ${NS}/${stale} (service ${service})"
+        oc delete endpointslice -n "${NS}" "${stale}"
+      done
+done
+
 bridge fulfillment-api external-api
 bridge fulfillment-internal-api internal-api
 

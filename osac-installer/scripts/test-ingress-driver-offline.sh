@@ -234,6 +234,13 @@ if ok "$rc" && ! grep -q "get endpointslices" "$WORK/s10/logs/oc.log" \
   pass "10 default envoy install runs no bridge or preflight"
 else fail "10 default envoy install runs no bridge or preflight (rc=$rc)"; fi
 
+# ---------------------------------------------------------------- 10c
+# Switching to envoy must remove the installer-owned bridge slices.
+rc=$(run_make "$WORK/s10c" -- install-osac)
+if ok "$rc" && grep -q "delete endpointslice -n gwtest fulfillment-api-gateway fulfillment-internal-api-gateway" "$WORK/s10c/logs/oc.log"; then
+  pass "10c envoy install removes stale bridge slices"
+else fail "10c envoy install removes stale bridge slices (rc=$rc)"; fi
+
 # ---------------------------------------------------------------- 10b
 # An instance-values overlay selecting gatewayapi must not beat the
 # installer: INGRESS_DRIVER=envoy (the default) still forces envoy in the

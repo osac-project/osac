@@ -70,10 +70,6 @@ externalHostname:
 # additional layer of defense.
 internalHostname:
 
-# Image for small cli hook Jobs (Envoy EndpointSlice cleanup on driver
-# switches). Version-pinned, like the osac-infra hook images.
-cliImage: quay.io/openshift/origin-cli:4.20.0
-
 # Ingress driver: how the public and internal APIs are exposed.
 #   envoy      - bundled fulfillment-ingress-proxy Envoy (default; current behavior)
 #   gatewayapi - OpenShift CIO-managed Gateway API; the bundled Envoy is not deployed

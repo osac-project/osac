@@ -1019,6 +1019,12 @@ endif
 	fi; \
 	split_argv EXTRA_HELM_ARGS "$${EXTRA_HELM_ARGS}"; \
 	bridge_pid=""; \
+	if [ "$(INGRESS_DRIVER)" != "gatewayapi" ]; then \
+		# A release switching from gatewayapi to envoy leaves the installer's \
+		# bridge EndpointSlices in place (helm never owned them); consumers \
+		# would keep splitting traffic to the gateway next to the new Envoy. \
+		oc delete endpointslice -n $(NS) fulfillment-api-gateway fulfillment-internal-api-gateway --ignore-not-found 2>/dev/null || true; \
+	fi; \
 	if [ "$(INGRESS_DRIVER)" = "gatewayapi" ] && [ "$(PLATFORM)" != "kind" ]; then \
 		gwclass_err=$$(oc get gatewayclass "$(GATEWAY_CLASS_NAME)" 2>&1 >/dev/null) || { \
 			case "$$gwclass_err" in *"(NotFound)"*) \

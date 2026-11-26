@@ -16,7 +16,6 @@ package mcpserver
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"google.golang.org/protobuf/proto"
 
@@ -45,17 +44,9 @@ func typedResourceOutcome[
 func computeInstanceOutcome(item *publicv1.ComputeInstance) GetResourceOutcomeOutput {
 	outcome := newResourceOutcome(ResourceTypeComputeInstance, item.GetId(), item.GetMetadata().GetVersion())
 	status := item.GetStatus()
-	outcome.LifecycleState = normalizeLifecycleState(status.GetState().String())
+	outcome.LifecycleState = "unknown"
 	outcome.Timing.StateTransitionTime = formatTimestamp(status.GetStateTransitionTime())
 	outcome.Timing.LastRestartedAt = formatTimestamp(status.GetLastRestartedAt())
-	for _, condition := range status.GetConditions() {
-		outcome.Conditions = append(outcome.Conditions, ResourceOutcomeCondition{
-			Type:               normalizeEnumName(condition.GetType().String()),
-			Status:             normalizeEnumName(condition.GetStatus().String()),
-			Reason:             condition.GetReason(),
-			LastTransitionTime: formatTimestamp(condition.GetLastTransitionTime()),
-		})
-	}
 	appendStringFact(&outcome, "internal_ip_address", status.GetInternalIpAddress())
 	appendStringFact(&outcome, "external_ip_address", status.GetExternalIpAddress())
 	if status.GetInstanceType() != nil {
@@ -65,12 +56,7 @@ func computeInstanceOutcome(item *publicv1.ComputeInstance) GetResourceOutcomeOu
 		appendStringFact(&outcome, "network_attachment_subnet_id", attachment.GetSubnetRef())
 		appendStringFact(&outcome, "network_attachment_ip_address", attachment.GetIpAddress())
 	}
-	if status.GetState() == 0 {
-		outcome.Unknowns = append(outcome.Unknowns, "lifecycle_state")
-	}
-	if len(status.GetConditions()) == 0 {
-		outcome.Unknowns = append(outcome.Unknowns, "conditions")
-	}
+	outcome.Unknowns = append(outcome.Unknowns, "readiness_freshness")
 	if outcome.Timing.StateTransitionTime == "" {
 		outcome.Unknowns = append(outcome.Unknowns, "state_transition_time")
 	}
@@ -122,12 +108,4 @@ func appendStringFact(outcome *GetResourceOutcomeOutput, name, value string) {
 		return
 	}
 	outcome.Facts = append(outcome.Facts, ResourceOutcomeFact{Name: name, Value: value})
-}
-
-func normalizeEnumName(value string) string {
-	parts := strings.Split(value, "_")
-	if len(parts) == 0 {
-		return strings.ToLower(value)
-	}
-	return strings.ToLower(parts[len(parts)-1])
 }

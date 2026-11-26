@@ -137,6 +137,11 @@ func outcomeFromGet(
 
 func summaryOutcome(resourceType ResourceType, summary ResourceSummary) GetResourceOutcomeOutput {
 	outcome := newResourceOutcome(resourceType, summary.ID, summary.Version)
+	if resourceType == ResourceTypeComputeInstance {
+		outcome.LifecycleState = "unknown"
+		outcome.Unknowns = append(outcome.Unknowns, "readiness_freshness")
+		return outcome
+	}
 	outcome.LifecycleState = normalizeLifecycleState(summary.State)
 	if summary.Type != "" {
 		outcome.Facts = append(outcome.Facts, ResourceOutcomeFact{Name: "type", Value: summary.Type})

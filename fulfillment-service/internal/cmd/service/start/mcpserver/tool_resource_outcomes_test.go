@@ -142,8 +142,8 @@ var _ = DescribeTable("resource outcome summaries",
 		ID: "compute-instance-1", Version: 7, State: "COMPUTE_INSTANCE_STATE_RUNNING",
 	}, GetResourceOutcomeOutput{
 		Resource:       ResourceOutcomeResource{Type: "compute_instance", ID: "compute-instance-1", Version: 7},
-		LifecycleState: "COMPUTE_INSTANCE_STATE_RUNNING", Conditions: []ResourceOutcomeCondition{},
-		Facts: []ResourceOutcomeFact{}, Unknowns: []string{}, NextActions: []string{},
+		LifecycleState: "unknown", Conditions: []ResourceOutcomeCondition{},
+		Facts: []ResourceOutcomeFact{}, Unknowns: []string{"readiness_freshness"}, NextActions: []string{},
 	}),
 )
 
@@ -248,10 +248,8 @@ var _ = Describe("handleGetResourceOutcome", func() {
 		Expect(output.Resource).To(Equal(ResourceOutcomeResource{
 			Type: "compute_instance", ID: "instance-1", Version: 4,
 		}))
-		Expect(output.LifecycleState).To(Equal("COMPUTE_INSTANCE_STATE_RUNNING"))
-		Expect(output.Conditions).To(Equal([]ResourceOutcomeCondition{{
-			Type: "ready", Status: "true", Reason: "Provisioned", LastTransitionTime: "2026-09-30T14:08:00Z",
-		}}))
+		Expect(output.LifecycleState).To(Equal("unknown"))
+		Expect(output.Conditions).To(BeEmpty())
 		Expect(output.Timing.StateTransitionTime).To(Equal("2026-09-30T14:08:00Z"))
 		Expect(output.Timing.LastRestartedAt).To(Equal("2026-09-30T13:00:00Z"))
 		Expect(output.Facts).To(Equal([]ResourceOutcomeFact{
@@ -261,7 +259,7 @@ var _ = Describe("handleGetResourceOutcome", func() {
 			{Name: "network_attachment_subnet_id", Value: "subnet-1"},
 			{Name: "network_attachment_ip_address", Value: "10.0.0.8"},
 		}))
-		Expect(output.Unknowns).To(BeEmpty())
+		Expect(output.Unknowns).To(ConsistOf("readiness_freshness"))
 		encoded, err := json.Marshal(output)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(string(encoded)).ToNot(ContainSubstring("raw-provider-payload"))
@@ -332,7 +330,7 @@ var _ = Describe("handleGetResourceOutcome", func() {
 		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(output.LifecycleState).To(Equal("unknown"))
-		Expect(output.Unknowns).To(ConsistOf("lifecycle_state", "conditions", "state_transition_time"))
+		Expect(output.Unknowns).To(ConsistOf("readiness_freshness", "state_transition_time"))
 		Expect(output.NextActions).To(BeEmpty())
 	})
 

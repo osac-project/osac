@@ -65,6 +65,11 @@ task, grant, operation, or write-record cache. `timing.observed_at` is the MCP
 call time and can change between otherwise identical outcomes; compare it
 separately or ignore it when checking outcome stability.
 
+ComputeInstance status does not yet expose a value identifying the spec version
+it observed. Until that freshness contract exists, `get_resource_outcome` does
+not present ComputeInstance lifecycle state or readiness conditions as current;
+it names `readiness_freshness` in `unknowns`.
+
 When Fulfillment returns the missing-Secret validation error recognized by the
 MCP mapper, typed write tools return the shared `not_found` safe-error
 envelope. The result names the missing Secret reference and directs the caller

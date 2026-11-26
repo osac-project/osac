@@ -336,6 +336,49 @@ var _ = Describe("Private secrets server", func() {
 				HaveKeyWithValue("new-key", []byte("new-value")))
 		})
 
+		DescribeTable("Rejects unsupported Vault data mask paths",
+			func(paths []string) {
+				initialData := map[string][]byte{
+					".dockerconfigjson": []byte("credential"),
+					"dockerconfigjson":  []byte("other"),
+				}
+				created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "invalid-mask-" + uuid.NewString(),
+						}.Build(),
+						Data: initialData,
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				storesBefore := secretStore.storeCount()
+
+				_, err = server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Id:   created.GetObject().GetId(),
+						Data: map[string][]byte{".dockerconfigjson": []byte("changed")},
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: paths},
+				}.Build())
+				Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+				Expect(status.Convert(err).Message()).To(ContainSubstring("unsupported data mask path"))
+				Expect(secretStore.storeCount()).To(Equal(storesBefore))
+
+				stored, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{
+					Id: created.GetObject().GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetData()).To(Equal(initialData))
+			},
+			Entry("empty segment", []string{"data..dockerconfigjson"}),
+			Entry("empty key", []string{"data."}),
+			Entry("extra segment", []string{"data.a.b"}),
+			Entry("leading empty segment", []string{".data.a"}),
+			Entry("whitespace-only key", []string{"data. "}),
+			Entry("trimmed key", []string{"data. a"}),
+			Entry("exact data does not hide an unsupported path", []string{"data", "data..dockerconfigjson"}),
+		)
+
 		DescribeTable("Persists Vault data only when the update mask selects data",
 			func(
 				secretType privatev1.SecretType,
@@ -376,14 +419,7 @@ var _ = Describe("Private secrets server", func() {
 				stored := getResponse.GetObject()
 				Expect(stored.GetMetadata().GetLabels()).To(Equal(expectedLabels))
 				Expect(stored.GetData()).To(Equal(expectedData))
-				Expect(secretStore.data).To(HaveKeyWithValue(
-					secretStore.key(
-						stored.GetMetadata().GetTenant(),
-						stored.GetMetadata().GetProject(),
-						stored.GetMetadata().GetName(),
-					),
-					expectedData,
-				))
+				Expect(stored.GetDataRevision()).To(Equal(created.GetObject().GetDataRevision() + uint64(expectedStores)))
 			},
 			Entry("metadata-only user-data update preserves stored data",
 				privatev1.SecretType_SECRET_TYPE_USER_DATA,
@@ -395,15 +431,45 @@ var _ = Describe("Private secrets server", func() {
 				map[string]string{"updated": "true"},
 				0,
 			),
-			Entry("data mask updates opaque data",
+			Entry("per-key mask deletes the last key",
 				privatev1.SecretType_SECRET_TYPE_OPAQUE,
 				map[string][]byte{"key": []byte("original")},
-				map[string][]byte{"key": []byte("changed")},
 				nil,
-				&fieldmaskpb.FieldMask{Paths: []string{"data"}},
-				map[string][]byte{"key": []byte("changed")},
+				nil,
+				&fieldmaskpb.FieldMask{Paths: []string{"data.key"}},
+				nil,
 				map[string]string{},
 				1,
+			),
+			Entry("data mask replaces the map with literal dotted keys",
+				privatev1.SecretType_SECRET_TYPE_OPAQUE,
+				map[string][]byte{".dockerconfigjson": []byte("original"), "other": []byte("removed")},
+				map[string][]byte{".dockerconfigjson": []byte("changed")},
+				nil,
+				&fieldmaskpb.FieldMask{Paths: []string{"data"}},
+				map[string][]byte{".dockerconfigjson": []byte("changed")},
+				map[string]string{},
+				1,
+			),
+			Entry("nil mask with omitted data preserves stored opaque data",
+				privatev1.SecretType_SECRET_TYPE_OPAQUE,
+				map[string][]byte{"key": []byte("original")},
+				nil,
+				nil,
+				nil,
+				map[string][]byte{"key": []byte("original")},
+				map[string]string{},
+				0,
+			),
+			Entry("data mask with an empty map preserves stored opaque data",
+				privatev1.SecretType_SECRET_TYPE_OPAQUE,
+				map[string][]byte{"key": []byte("original")},
+				map[string][]byte{},
+				nil,
+				&fieldmaskpb.FieldMask{Paths: []string{"data"}},
+				map[string][]byte{"key": []byte("original")},
+				map[string]string{},
+				0,
 			),
 			Entry("nil mask replaces opaque data",
 				privatev1.SecretType_SECRET_TYPE_OPAQUE,
@@ -467,11 +533,12 @@ var _ = Describe("Private secrets server", func() {
 			Expect(st.Message()).To(ContainSubstring("in use"))
 		})
 
-		It("Generates UUID for id ignoring caller-provided value", func() {
+		It("Ignores caller-provided id and data revision on create", func() {
 			callerProvidedId := "my-custom-id"
 			response, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
 				Object: privatev1.Secret_builder{
-					Id: callerProvidedId,
+					Id:           callerProvidedId,
+					DataRevision: 999,
 					Metadata: privatev1.Metadata_builder{
 						Name: "my-secret",
 					}.Build(),
@@ -484,6 +551,13 @@ var _ = Describe("Private secrets server", func() {
 			Expect(response.GetObject().GetId()).ToNot(Equal(callerProvidedId))
 			_, err = uuid.Parse(response.GetObject().GetId())
 			Expect(err).ToNot(HaveOccurred())
+			Expect(response.GetObject().GetDataRevision()).To(BeZero())
+
+			stored, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{
+				Id: response.GetObject().GetId(),
+			}.Build())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(stored.GetObject().GetDataRevision()).To(BeZero())
 		})
 
 		Describe("Validation", func() {
@@ -769,12 +843,110 @@ var _ = Describe("Private secrets server", func() {
 		})
 
 		Describe("Optimistic locking", func() {
-			It("Update with stale version and lock=true fails", func() {
+			DescribeTable("Advances revisions after a Vault-only data update", func(updateMask *fieldmaskpb.FieldMask) {
+				created := createVaultSecret()
+
+				response, err := server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Id:       created.GetId(),
+						Metadata: proto.Clone(created.GetMetadata()).(*privatev1.Metadata),
+						Data:     map[string][]byte{"key": []byte("first-update")},
+					}.Build(),
+					UpdateMask: updateMask,
+					Lock:       true,
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetMetadata().GetVersion()).To(
+					Equal(created.GetMetadata().GetVersion() + 1))
+				Expect(response.GetObject().GetDataRevision()).To(Equal(created.GetDataRevision() + 1))
+
+				stored, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{Id: created.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetMetadata().GetVersion()).To(
+					Equal(response.GetObject().GetMetadata().GetVersion()))
+				Expect(stored.GetObject().GetDataRevision()).To(Equal(response.GetObject().GetDataRevision()))
+			},
+				Entry("whole map", &fieldmaskpb.FieldMask{Paths: []string{"data"}}),
+				Entry("per-key", &fieldmaskpb.FieldMask{Paths: []string{"data.key"}}),
+			)
+
+			DescribeTable("Preserves revisions and Vault data during a data-only dry run", func(updateMask *fieldmaskpb.FieldMask) {
+				created := createVaultSecret()
+				storesBefore := secretStore.storeCount()
+				response, err := server.Update(dryRunCtx(), privatev1.SecretsUpdateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Id:       created.GetId(),
+						Metadata: proto.Clone(created.GetMetadata()).(*privatev1.Metadata),
+						Data:     map[string][]byte{"key": []byte("simulated-update")},
+					}.Build(),
+					UpdateMask: updateMask,
+					Lock:       true,
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(response.GetObject().GetDataRevision()).To(Equal(created.GetDataRevision()))
+				Expect(response.GetObject().GetMetadata().GetVersion()).To(Equal(created.GetMetadata().GetVersion()))
+				Expect(secretStore.storeCount()).To(Equal(storesBefore))
+
+				stored, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{Id: created.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetDataRevision()).To(Equal(created.GetDataRevision()))
+				Expect(stored.GetObject().GetMetadata().GetVersion()).To(Equal(created.GetMetadata().GetVersion()))
+				Expect(stored.GetObject().GetData()).To(Equal(map[string][]byte{"key": []byte("value")}))
+			},
+				Entry("whole map", &fieldmaskpb.FieldMask{Paths: []string{"data"}}),
+				Entry("per-key", &fieldmaskpb.FieldMask{Paths: []string{"data.key"}}),
+			)
+
+			DescribeTable("Ignores caller-supplied data revision", func(updateMask *fieldmaskpb.FieldMask, data map[string][]byte, writesVault bool) {
+				created := createVaultSecret()
+				seeded, err := server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Id:   created.GetId(),
+						Data: map[string][]byte{"key": []byte("first-update")},
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(seeded.GetObject().GetDataRevision()).To(BeNumerically(">", 0))
+
+				updated := proto.Clone(seeded.GetObject()).(*privatev1.Secret)
+				updated.SetDataRevision(999)
+				updated.SetData(data)
+				updated.GetMetadata().SetLabels(map[string]string{"env": "test"})
+				storesBefore := secretStore.storeCount()
+				response, err := server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+					Object:     updated,
+					UpdateMask: updateMask,
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				expectedRevision := seeded.GetObject().GetDataRevision()
+				expectedStores := storesBefore
+				if writesVault {
+					expectedRevision++
+					expectedStores++
+				}
+				Expect(response.GetObject().GetDataRevision()).To(Equal(expectedRevision))
+				Expect(secretStore.storeCount()).To(Equal(expectedStores))
+				stored, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{Id: created.GetId()}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetDataRevision()).To(Equal(expectedRevision))
+			},
+				Entry("nil mask with omitted data", nil, nil, false),
+				Entry("metadata-only mask", &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}}, nil, false),
+				Entry("revision-only mask", &fieldmaskpb.FieldMask{Paths: []string{"data_revision"}}, nil, false),
+				Entry("empty whole-map update", &fieldmaskpb.FieldMask{Paths: []string{"data"}}, nil, false),
+				Entry("data and revision mask", &fieldmaskpb.FieldMask{Paths: []string{"data", "data_revision"}},
+					map[string][]byte{"key": []byte("second-update")}, true),
+			)
+
+			It("Rejects a stale version after a Vault-only data update without writing to Vault", func() {
 				created := createVaultSecret()
 
 				_, err := server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
 					Object: privatev1.Secret_builder{
-						Id: created.GetId(),
+						Id:       created.GetId(),
+						Metadata: proto.Clone(created.GetMetadata()).(*privatev1.Metadata),
 						Data: map[string][]byte{
 							"key": []byte("first-update"),
 						},
@@ -783,6 +955,7 @@ var _ = Describe("Private secrets server", func() {
 					Lock:       true,
 				}.Build())
 				Expect(err).ToNot(HaveOccurred())
+				storesBefore := secretStore.storeCount()
 
 				_, err = server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
 					Object: privatev1.Secret_builder{
@@ -794,9 +967,11 @@ var _ = Describe("Private secrets server", func() {
 							Version: created.GetMetadata().GetVersion(),
 						}.Build(),
 					}.Build(),
-					Lock: true,
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data"}},
+					Lock:       true,
 				}.Build())
-				Expect(err).To(HaveOccurred())
+				Expect(status.Code(err)).To(Equal(codes.Aborted))
+				Expect(secretStore.storeCount()).To(Equal(storesBefore))
 			})
 		})
 
@@ -1559,7 +1734,137 @@ var _ = Describe("Private secrets server", func() {
 				Expect(updateResponse.GetObject().GetData()).To(BeEmpty())
 			})
 
-			It("Vault store unavailability on update returns Unavailable", func() {
+			It("Merges per-key data updates with stored vault data", func() {
+				mockStore.EXPECT().
+					Store(gomock.Any(), testTenant, "", "per-key-update-secret",
+						map[string][]byte{
+							"a": []byte("old-a"),
+							"b": []byte("old-b"),
+						}).
+					Return(nil)
+
+				created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "per-key-update-secret",
+						}.Build(),
+						Data: map[string][]byte{
+							"a": []byte("old-a"),
+							"b": []byte("old-b"),
+						},
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				mockStore.EXPECT().
+					Fetch(gomock.Any(), testTenant, "", "per-key-update-secret").
+					Return(map[string][]byte{
+						"a": []byte("old-a"),
+						"b": []byte("old-b"),
+					}, nil)
+				mockStore.EXPECT().
+					Store(gomock.Any(), testTenant, "", "per-key-update-secret",
+						map[string][]byte{
+							"a": []byte("new-a"),
+							"b": []byte("old-b"),
+						}).
+					Return(nil)
+
+				updateResponse, err := server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Id: created.GetObject().GetId(),
+						Data: map[string][]byte{
+							"a": []byte("new-a"),
+							"b": []byte("new-b"),
+						},
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data.a"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updateResponse.GetObject().GetData()).To(BeEmpty())
+			})
+
+			It("Does not write vault data for metadata-only updates", func() {
+				mockStore.EXPECT().
+					Store(gomock.Any(), testTenant, "", "metadata-only-secret",
+						map[string][]byte{"key": []byte("value")}).
+					Return(nil)
+
+				created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "metadata-only-secret",
+						}.Build(),
+						Data: map[string][]byte{"key": []byte("value")},
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				updateResponse, err := server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Id: created.GetObject().GetId(),
+						Metadata: privatev1.Metadata_builder{
+							Labels: map[string]string{"env": "test"},
+						}.Build(),
+						Data: map[string][]byte{"key": []byte("unused")},
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"metadata.labels"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updateResponse.GetObject().GetData()).To(BeEmpty())
+			})
+
+			It("Validates merged data for typed secrets", func() {
+				mockStore.EXPECT().
+					Store(gomock.Any(), testTenant, "", "typed-per-key-secret",
+						map[string][]byte{
+							"kubeconfig": []byte("old-kubeconfig"),
+							"other":      []byte("old-other"),
+						}).
+					Return(nil)
+
+				created, err := server.Create(ctx, privatev1.SecretsCreateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Metadata: privatev1.Metadata_builder{
+							Name: "typed-per-key-secret",
+						}.Build(),
+						Type: privatev1.SecretType_SECRET_TYPE_KUBECONFIG,
+						Data: map[string][]byte{
+							"kubeconfig": []byte("old-kubeconfig"),
+							"other":      []byte("old-other"),
+						},
+					}.Build(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+
+				mockStore.EXPECT().
+					Fetch(gomock.Any(), testTenant, "", "typed-per-key-secret").
+					Return(map[string][]byte{
+						"kubeconfig": []byte("old-kubeconfig"),
+						"other":      []byte("old-other"),
+					}, nil)
+				mockStore.EXPECT().
+					Store(gomock.Any(), testTenant, "", "typed-per-key-secret",
+						map[string][]byte{
+							"kubeconfig": []byte("old-kubeconfig"),
+							"other":      []byte("new-other"),
+						}).
+					Return(nil)
+
+				updateResponse, err := server.Update(ctx, privatev1.SecretsUpdateRequest_builder{
+					Object: privatev1.Secret_builder{
+						Id: created.GetObject().GetId(),
+						Data: map[string][]byte{
+							"other": []byte("new-other"),
+						},
+					}.Build(),
+					UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"data.other"}},
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(updateResponse.GetObject().GetData()).To(BeEmpty())
+			})
+
+			It("Vault store unavailability on update rolls back revisions and returns Unavailable", func() {
 				mockStore.EXPECT().
 					Store(gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).
 					Return(nil)
@@ -1591,6 +1896,16 @@ var _ = Describe("Private secrets server", func() {
 				}.Build())
 				Expect(err).To(HaveOccurred())
 				Expect(status.Code(err)).To(Equal(codes.Unavailable))
+
+				mockStore.EXPECT().
+					Fetch(gomock.Any(), testTenant, "", "fail-update-secret").
+					Return(map[string][]byte{"key": []byte("value")}, nil)
+				stored, err := server.Get(ctx, privatev1.SecretsGetRequest_builder{
+					Id: created.GetObject().GetId(),
+				}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(stored.GetObject().GetDataRevision()).To(Equal(created.GetObject().GetDataRevision()))
+				Expect(stored.GetObject().GetMetadata().GetVersion()).To(Equal(created.GetObject().GetMetadata().GetVersion()))
 			})
 		})
 

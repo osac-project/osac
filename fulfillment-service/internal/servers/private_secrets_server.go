@@ -214,6 +214,7 @@ func (s *PrivateSecretsServer) Create(ctx context.Context,
 	}
 
 	secret.SetId("")
+	secret.SetDataRevision(0)
 
 	// Default unspecified backend to Vault.
 	if secret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_UNSPECIFIED {
@@ -296,33 +297,83 @@ func (s *PrivateSecretsServer) Update(ctx context.Context,
 		return
 	}
 
-	err = s.validateSecretUpdate(ctx, request.GetObject(), request.GetUpdateMask(), existingSecret)
-	if err != nil {
-		return
-	}
-
-	persistInVault := existingSecret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT &&
-		updateIncludesField(request.GetUpdateMask(), "data") &&
-		len(request.GetObject().GetData()) > 0
-	var data map[string][]byte
-	if persistInVault {
-		data = request.GetObject().GetData()
-		request.GetObject().SetData(nil)
+	if existingSecret.GetBackend() == privatev1.SecretBackend_SECRET_BACKEND_VAULT {
+		if err = validateSecretDataMask(request.GetUpdateMask()); err != nil {
+			return
+		}
 	}
 
 	update := func(opCtx context.Context) error {
-		if updateErr := s.generic.Update(opCtx, request, &response); updateErr != nil {
-			return updateErr
+		var (
+			storeInVault bool
+			mergedData   map[string][]byte
+			vaultSecret  *privatev1.Secret
+		)
+
+		prepare := func(ctx context.Context, current, candidate *privatev1.Secret) error {
+			candidate.SetDataRevision(current.GetDataRevision())
+			dataPaths := secretDataPaths(request.GetUpdateMask())
+
+			if current.GetBackend() != privatev1.SecretBackend_SECRET_BACKEND_VAULT ||
+				len(dataPaths) == 0 {
+				return s.validateSecretUpdate(ctx, candidate, request.GetUpdateMask(), current)
+			}
+
+			vaultSecret = current
+
+			if len(dataPaths) == 1 && dataPaths[0] == "data" {
+				mergedData = request.GetObject().GetData()
+				storeInVault = len(mergedData) > 0
+			} else {
+				vaultData, fetchErr := s.secretStore.Fetch(ctx,
+					current.GetMetadata().GetTenant(),
+					current.GetMetadata().GetProject(),
+					current.GetMetadata().GetName())
+				if fetchErr != nil {
+					return vault.ToGrpcError(fetchErr)
+				}
+
+				scratchSecret := proto.Clone(current).(*privatev1.Secret)
+				scratchSecret.SetData(vaultData)
+
+				mergedSecret, mergeErr := s.generic.applyMaskAndRestoreProtectedFields(
+					ctx,
+					request.GetObject(),
+					scratchSecret,
+					&fieldmaskpb.FieldMask{Paths: dataPaths},
+				)
+				if mergeErr != nil {
+					return mergeErr
+				}
+				mergedData = mergedSecret.GetData()
+				storeInVault = true
+			}
+			candidate.SetData(mergedData)
+
+			if err := s.validateSecretUpdate(ctx, candidate, request.GetUpdateMask(), current); err != nil {
+				return err
+			}
+
+			candidate.SetData(nil)
+			if storeInVault && !isDryRun(ctx) {
+				candidate.SetDataRevision(current.GetDataRevision() + 1)
+			}
+			return nil
 		}
-		if !persistInVault || isDryRun(opCtx) {
+
+		if err := s.generic.UpdateWithCandidatePreparation(opCtx, request, &response, prepare); err != nil {
+			return err
+		}
+
+		if !storeInVault || isDryRun(opCtx) {
 			return nil
 		}
 		storeErr := s.secretStore.Store(
 			opCtx,
-			existingSecret.GetMetadata().GetTenant(),
-			existingSecret.GetMetadata().GetProject(),
-			existingSecret.GetMetadata().GetName(),
-			data,
+			vaultSecret.GetMetadata().GetTenant(),
+			vaultSecret.GetMetadata().GetProject(),
+			vaultSecret.GetMetadata().GetName(),
+			mergedData,
 		)
 		return vault.ToGrpcError(storeErr)
 	}
@@ -551,6 +602,45 @@ func (s *PrivateSecretsServer) validateHubSecretCreate(secret *privatev1.Secret)
 			"field 'data' must be empty when backend is HUB")
 	}
 	return nil
+}
+
+func validateSecretDataMask(mask *fieldmaskpb.FieldMask) error {
+	for _, path := range mask.GetPaths() {
+		normalized := normalizeFieldMaskPath(path)
+		if normalized != "data" && !strings.HasPrefix(normalized, "data.") {
+			continue
+		}
+		// Check the original segments before the mask compiler drops empty ones or trims keys.
+		parts := strings.Split(path, ".")
+		if len(parts) > 2 || strings.TrimSpace(parts[0]) != "data" ||
+			(len(parts) == 2 && (parts[1] == "" || parts[1] != strings.TrimSpace(parts[1]))) {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument,
+				"unsupported data mask path %q: expected 'data' or 'data.<key>'",
+				path)
+		}
+	}
+	return nil
+}
+
+// secretDataPaths returns the normalized update-mask paths that select secret data.
+// A nil mask means full replacement, so it selects the whole data field.
+// An exact data path also selects the whole field and takes precedence over child paths.
+func secretDataPaths(mask *fieldmaskpb.FieldMask) []string {
+	if mask == nil {
+		return []string{"data"}
+	}
+
+	paths := make([]string, 0, len(mask.GetPaths()))
+	for _, path := range mask.GetPaths() {
+		normalized := normalizeFieldMaskPath(path)
+		if normalized == "data" {
+			return []string{"data"}
+		}
+		if strings.HasPrefix(normalized, "data.") {
+			paths = append(paths, normalized)
+		}
+	}
+	return paths
 }
 
 func (s *PrivateSecretsServer) validateSecretUpdate(_ context.Context,

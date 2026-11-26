@@ -632,6 +632,16 @@ The REST gateway normally builds the update mask from fields present in the JSON
 Unmasked-update behavior otherwise remains object-type-specific; an explicit metadata map path
 makes the intended replacement or clear explicit where that object type supports the path.
 
+For mutable Vault-backed Secrets, a `data.a` mask updates only key `a`. If the
+request's data map omits `a`, the stored key is deleted, even if it was the last key.
+Keys containing dots, such as `.dockerconfigjson`, are valid but cannot currently
+be selected individually: those mask paths return `InvalidArgument`. To update
+them, use mask `data` and send every key you want to keep.
+An exact `data` or omitted RPC mask replaces
+Vault data only when the supplied map is nonempty; empty maps skip the write,
+subject to type validation. REST-inferred masks select the whole map. Successful
+data writes advance `metadata.version`.
+
 ### Delete
 
 The request contains only the `id`. The response is empty.

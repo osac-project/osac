@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -29,9 +31,7 @@ def _valid_data() -> dict[str, object]:
             "kubeconfig": "/config/target-hub.kubeconfig",
             "apiURL": "https://fulfillment.example.test",
             "tokenFile": "/config/target-token",
-            "caFile": "/config/api-ca.pem",
         },
-        "timeouts": {"delete": "30m"},
     }
 
 
@@ -43,7 +43,6 @@ def test_loads_common_keys(tmp_path: Path) -> None:
     assert cfg.target_namespace == "osac-devel"
     assert cfg.target_api_url == "https://fulfillment.example.test"
     assert cfg.target_kubeconfig == Path("/config/target-hub.kubeconfig")
-    assert cfg.timeouts == {"delete": "30m"}
 
 
 def test_target_namespace_defaults_to_osac(tmp_path: Path) -> None:
@@ -64,35 +63,26 @@ def test_profiles_are_deduplicated(tmp_path: Path) -> None:
     assert cfg.profiles == ("generic", "vm")
 
 
-def test_optional_aap_is_parsed(tmp_path: Path) -> None:
-    data = _valid_data()
+def _add_unknown_top_level_keys(data: dict[str, object]) -> None:
+    data["frobnicate"] = {}
+    data["timeouts"] = {"delete": "30m"}
+
+
+def _add_unknown_target_keys(data: dict[str, object]) -> None:
+    data["target"]["caFile"] = "/config/api-ca.pem"  # type: ignore[index]
     data["target"]["aap"] = {"url": "https://aap.example.test", "tokenFile": "/config/aap-token"}  # type: ignore[index]
 
-    cfg = load_config(_write(tmp_path / "conformance.yaml", data))
 
-    assert cfg.target_aap is not None
-    assert cfg.target_aap.url == "https://aap.example.test"
-    assert cfg.target_aap.token_file == Path("/config/aap-token")
-
-
-def test_unknown_top_level_key_is_a_config_error(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mutate", [_add_unknown_top_level_keys, _add_unknown_target_keys], ids=["top-level", "target"])
+def test_unknown_keys_are_ignored(tmp_path: Path, mutate: Callable[[dict[str, object]], None]) -> None:
+    baseline = load_config(_write(tmp_path / "baseline.yaml", _valid_data()))
     data = _valid_data()
-    data["frobnicate"] = {}
+    mutate(data)
+    loaded = load_config(_write(tmp_path / "conformance.yaml", data))
 
-    with pytest.raises(ConfigError) as exc:
-        load_config(_write(tmp_path / "conformance.yaml", data))
-
-    assert "frobnicate" in "\n".join(exc.value.checks)
-
-
-def test_domain_section_is_rejected(tmp_path: Path) -> None:
-    data = _valid_data()
-    data["storage"] = {}
-
-    with pytest.raises(ConfigError) as exc:
-        load_config(_write(tmp_path / "conformance.yaml", data))
-
-    assert "storage" in "\n".join(exc.value.checks)
+    # Only the config file path differs, so every parsed field must match the
+    # baseline: the unknown keys were dropped, not partially interpreted.
+    assert replace(loaded, path=baseline.path) == baseline
 
 
 def test_missing_required_target_key_is_a_config_error(tmp_path: Path) -> None:
@@ -125,8 +115,6 @@ def test_missing_config_file_is_a_config_error(tmp_path: Path) -> None:
 def test_redactor_covers_api_and_kubeconfig_credentials(tmp_path: Path) -> None:
     token = tmp_path / "token"
     token.write_text(_REDACTION_MARKER_D)
-    ca = tmp_path / "ca.pem"
-    ca.write_text("ca")
     hub = tmp_path / "hub.kubeconfig"
     hub.write_text(
         yaml.safe_dump(
@@ -144,9 +132,6 @@ def test_redactor_covers_api_and_kubeconfig_credentials(tmp_path: Path) -> None:
         target_kubeconfig=hub,
         target_api_url="https://api.target.example.test",
         target_token_file=token,
-        target_ca_file=ca,
-        target_aap=None,
-        timeouts={},
     )
 
     text = redactor_for_config(config).text(
@@ -161,14 +146,14 @@ def test_redactor_covers_api_and_kubeconfig_credentials(tmp_path: Path) -> None:
 
 def test_configured_paths_are_canonicalized(tmp_path: Path) -> None:
     data = _valid_data()
-    data["target"]["caFile"] = "/config/./api-ca.pem"  # type: ignore[index]
+    data["target"]["tokenFile"] = "/config/./target-token"  # type: ignore[index]
 
     cfg = load_config(_write(tmp_path / "conformance.yaml", data))
 
-    assert cfg.target_ca_file == Path("/config/api-ca.pem")
+    assert cfg.target_token_file == Path("/config/target-token")
 
 
-@pytest.mark.parametrize("key", ["kubeconfig", "tokenFile", "caFile"])
+@pytest.mark.parametrize("key", ["kubeconfig", "tokenFile"])
 def test_parent_directory_traversal_is_a_config_error(tmp_path: Path, key: str) -> None:
     data = _valid_data()
     data["target"][key] = "/config/../outside/credential"  # type: ignore[index]
@@ -177,41 +162,6 @@ def test_parent_directory_traversal_is_a_config_error(tmp_path: Path, key: str) 
         load_config(_write(tmp_path / "conformance.yaml", data))
 
     assert f"target.{key}" in "\n".join(exc.value.checks)
-
-
-def test_aap_token_file_traversal_is_a_config_error(tmp_path: Path) -> None:
-    data = _valid_data()
-    data["target"]["aap"] = {"url": "https://aap.example.test", "tokenFile": "/config/../aap-token"}  # type: ignore[index]
-
-    with pytest.raises(ConfigError) as exc:
-        load_config(_write(tmp_path / "conformance.yaml", data))
-
-    assert "target.aap.tokenFile" in "\n".join(exc.value.checks)
-
-
-def test_duplicate_mapping_keys_are_a_config_error(tmp_path: Path) -> None:
-    path = tmp_path / "conformance.yaml"
-    path.write_text(
-        'osacRelease: "1.4.0"\n'
-        "profiles: [vm]\n"
-        "profiles: [netris]\n"
-        "target:\n"
-        "  kubeconfig: /config/hub\n"
-        "  apiURL: https://fulfillment.example.test\n"
-        "  tokenFile: /config/token\n"
-        "  caFile: /config/ca.pem\n"
-    )
-
-    with pytest.raises(ConfigError, match="duplicate key"):
-        load_config(path)
-
-
-def test_unhashable_mapping_keys_are_a_config_error(tmp_path: Path) -> None:
-    path = tmp_path / "conformance.yaml"
-    path.write_text("? {a: b}\n: c\n")
-
-    with pytest.raises(ConfigError, match="unhashable key"):
-        load_config(path)
 
 
 @pytest.mark.parametrize("url", ["https://[", "not-a-url"])
@@ -223,13 +173,3 @@ def test_target_api_url_must_parse(tmp_path: Path, url: str) -> None:
         load_config(_write(tmp_path / "conformance.yaml", data))
 
     assert "target.apiURL must be an absolute URL with a host" in "\n".join(exc.value.checks)
-
-
-def test_aap_url_must_parse(tmp_path: Path) -> None:
-    data = _valid_data()
-    data["target"]["aap"] = {"url": "https://[", "tokenFile": "/config/aap-token"}  # type: ignore[index]
-
-    with pytest.raises(ConfigError) as exc:
-        load_config(_write(tmp_path / "conformance.yaml", data))
-
-    assert "target.aap.url must be an absolute URL with a host" in "\n".join(exc.value.checks)

@@ -22,7 +22,4 @@ def make_config(root: Path, *, namespace: str = "osac") -> Config:
         target_kubeconfig=root / "target-hub.kubeconfig",
         target_api_url="https://fulfillment.example.test",
         target_token_file=root / "target-token",
-        target_ca_file=root / "api-ca.pem",
-        target_aap=None,
-        timeouts={},
     )

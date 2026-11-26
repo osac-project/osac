@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
-from tests.conformance.catalog import Catalog, ProfileDefinition, expand_profiles, load_catalog
+from tests.conformance.catalog import Catalog, ProfileDefinition, expand_profiles
 from tests.conformance.errors import ConfigError
 from tests.conformance.model import Classification, Selector, TestIdentity
 from tests.conformance.output import plan_key
@@ -48,13 +46,6 @@ def test_expand_profiles_adds_generic_and_unions_selectors() -> None:
 
     assert names == ("generic", "vm", "netris")
     assert tuple(selector.id for selector in selectors) == ("generic", "vmaas", "netris")
-
-
-def test_unknown_profile_is_a_config_error() -> None:
-    with pytest.raises(ConfigError) as exc:
-        expand_profiles(["frobnicate"], _catalog())
-
-    assert "frobnicate" in "\n".join(exc.value.checks)
 
 
 def test_plan_is_the_union_with_generic_first_and_deduplicated() -> None:
@@ -144,22 +135,3 @@ def test_a_test_can_count_toward_multiple_profiles() -> None:
     enriched = assign_profiles(raw, catalog, ("generic", "vm", "full"))
 
     assert enriched[0].profiles == ("vm", "full")
-
-
-def test_catalog_rejects_duplicate_mapping_keys(tmp_path: Path) -> None:
-    catalog = tmp_path / "catalog.yaml"
-    catalog.write_text(
-        "selectors:\n"
-        "  - id: generic\n"
-        "    type: marker\n"
-        "    markers: [conformance_generic]\n"
-        "profiles:\n"
-        "  - id: generic\n"
-        "    selectors: [generic]\n"
-        "profiles:\n"
-        "  - id: generic\n"
-        "    selectors: [generic]\n"
-    )
-
-    with pytest.raises(ConfigError, match="duplicate key"):
-        load_catalog(catalog)

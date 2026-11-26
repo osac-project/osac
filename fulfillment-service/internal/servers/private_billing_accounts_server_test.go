@@ -376,7 +376,7 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(item.GetStatus().GetDisplayName()).To(Equal("Acme"))
 		Expect(item.GetStatus().GetState()).To(Equal(privatev1.BillingAccountState_BILLING_ACCOUNT_STATE_ACTIVE))
 		Expect(item.GetStatus().GetProviderExternalId()).To(Equal("ext-1"))
-		Expect(item.GetStatus().HasExternalBillingAccountId()).To(BeFalse())
+		Expect(item.GetStatus().GetExternalBillingAccountId()).To(Equal("ext-1"))
 		Expect(item.GetStatus().HasStateObservationTimestamp()).To(BeTrue())
 		Expect(item.GetMetadata().GetTenant()).To(Equal("system"))
 		Expect(item.GetMetadata().GetProject()).To(BeEmpty())
@@ -388,6 +388,76 @@ var _ = Describe("Private billing accounts server", func() {
 		Expect(item.GetMetadata().GetName()).To(Equal(name))
 		Expect(item.GetId()).ToNot(BeEmpty())
 		Expect(item.GetId()).ToNot(Equal("acct-1"), "id must be an OSAC-generated id, not the provider reference")
+	})
+
+	It("adopts a provider external ID into an existing account with no local attribution token", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", ExternalID: "ext-1", State: billing.AccountActive},
+		}})
+		server := build(fake.Provider())
+		start := time.Now().UTC().Add(-time.Minute)
+		Expect(billingStore(ctx, server, []billing.Account{{
+			Ref: billing.NewAccountRef("acct-1"), State: billing.AccountActive,
+		}}, start)).To(Succeed())
+
+		response, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(1))
+		item := response.GetItems()[0]
+		Expect(item.GetStatus().GetProviderExternalId()).To(Equal("ext-1"))
+		Expect(item.GetStatus().GetExternalBillingAccountId()).To(Equal("ext-1"))
+		Expect(item.GetMetadata().GetVersion()).To(Equal(int32(1)))
+	})
+
+	It("keeps an established local attribution token when the provider reports a different external ID", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", ExternalID: "ext-2", State: billing.AccountActive},
+		}})
+		server := build(fake.Provider())
+		seedAssignedAccount(server, "osac-local-1", "acct-1", "local-1", time.Now().UTC().Add(-time.Minute))
+
+		response, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(1))
+		Expect(response.GetItems()[0].GetStatus().GetExternalBillingAccountId()).To(Equal("local-1"))
+		Expect(response.GetItems()[0].GetStatus().GetProviderExternalId()).To(Equal("ext-2"))
+	})
+
+	It("keeps an established local attribution token when the provider external ID is absent", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", State: billing.AccountActive},
+		}})
+		server := build(fake.Provider())
+		seedAssignedAccount(server, "osac-local-1", "acct-1", "local-1", time.Now().UTC().Add(-time.Minute))
+
+		response, err := list(server, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(1))
+		Expect(response.GetItems()[0].GetStatus().GetExternalBillingAccountId()).To(Equal("local-1"))
+		Expect(response.GetItems()[0].GetStatus().GetProviderExternalId()).To(BeEmpty())
+	})
+
+	It("does not generate an attribution token when the provider external ID is absent", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", State: billing.AccountActive},
+		}})
+		response, err := list(build(fake.Provider()), nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(1))
+		Expect(response.GetItems()[0].GetStatus().HasExternalBillingAccountId()).To(BeFalse())
+	})
+
+	It("stores duplicate provider external IDs on both discovered accounts", func() {
+		fake := billingfake.New(billingfake.Scenario{Accounts: []billingfake.AccountSpec{
+			{ID: "acct-1", ExternalID: "dup-1", State: billing.AccountActive},
+			{ID: "acct-2", ExternalID: "dup-1", State: billing.AccountActive},
+		}})
+		response, err := list(build(fake.Provider()), nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(response.GetItems()).To(HaveLen(2))
+		for _, item := range response.GetItems() {
+			Expect(item.GetStatus().GetExternalBillingAccountId()).To(Equal("dup-1"))
+		}
 	})
 
 	It("sanitizes a provider display name carrying control characters before storing it", func() {
@@ -1143,25 +1213,25 @@ var _ = Describe("Private billing accounts server", func() {
 			{Ref: billing.NewAccountRef("b"), ExternalID: " shared ", State: billing.AccountActive},
 		}
 		Expect(billingStore(ctx, server, accounts, start)).To(Succeed())
-		check := func(ref string, value *string) string {
+		check := func(ref string, observedValue, attributionValue *string) string {
 			var id string
 			var observed, token *string
 			Expect(testPool.QueryRow(ctx, `select id, data->'status'->>'provider_external_id', data->'status'->>'external_billing_account_id'
 				from billing_accounts where data->'status'->>'provider_account_reference' = $1`, ref).
 				Scan(&id, &observed, &token)).To(Succeed())
-			Expect(observed).To(Equal(value))
-			Expect(token).To(BeNil())
+			Expect(observed).To(Equal(observedValue))
+			Expect(token).To(Equal(attributionValue))
 			return id
 		}
-		a := check("a", proto.String(" shared "))
-		b := check("b", proto.String(" shared "))
+		a := check("a", proto.String(" shared "), proto.String(" shared "))
+		b := check("b", proto.String(" shared "), proto.String(" shared "))
 		Expect(a).NotTo(Equal(b))
 		accounts[0].ExternalID = "shared" // Not the same value: the provider's bytes are not normalized.
 		Expect(billingStore(ctx, server, accounts, start.Add(time.Second))).To(Succeed())
-		Expect(check("a", proto.String("shared"))).To(Equal(a))
-		Expect(check("b", proto.String(" shared "))).To(Equal(b))
+		Expect(check("a", proto.String("shared"), proto.String(" shared "))).To(Equal(a))
+		Expect(check("b", proto.String(" shared "), proto.String(" shared "))).To(Equal(b))
 		Expect(billingStore(ctx, server, accounts[1:], start.Add(2*time.Second))).To(Succeed())
-		Expect(check("a", nil)).To(Equal(a))
+		Expect(check("a", nil, proto.String(" shared "))).To(Equal(a))
 		Expect(storedCount()).To(Equal(2))
 	})
 

@@ -368,6 +368,9 @@ const billingDiscoveryInput = `with incoming as (
 	from jsonb_to_recordset($2::jsonb) as x(id text, name text, status jsonb, label text)
 )`
 
+// billingDiscoveryTrimSet matches the Unicode whitespace trimmed by strings.TrimSpace in correlation resolution.
+const billingDiscoveryTrimSet = `U&'\0009\000A\000B\000C\000D\0020\0085\00A0\1680\2000\2001\2002\2003\2004\2005\2006\2007\2008\2009\200A\2028\2029\202F\205F\3000'`
+
 // storeAccounts requires the transaction-scoped provider guard. Provider I/O is finished. Lock the live system
 // tenant, then the eligible account IDs in the same SQL order used by assignment before changing any rows.
 func (s *PrivateBillingAccountsServer) storeAccounts(
@@ -447,8 +450,9 @@ func (s *PrivateBillingAccountsServer) storeAccounts(
 		return err
 	}
 	if len(ids) != 0 {
-		// Re-read after acquiring the locks. Merge only observation fields; identity, attribution and all
-		// metadata remain unchanged. Repeated absence advances the timestamp but not the resource version.
+		// Re-read after acquiring the locks. Merge observation fields and adopt provider attribution only when
+		// the local token is blank; identity, established attribution and all metadata remain unchanged. Repeated
+		// absence advances the timestamp but not the resource version.
 		if _, err := tx.Exec(ctx, billingDiscoveryInput+`, merged as (
 			select b.id, b.data->'status' as previous, (
 				((b.data->'status') - 'provider_external_id') ||
@@ -457,7 +461,13 @@ func (s *PrivateBillingAccountsServer) storeAccounts(
 					'state_observation_timestamp', $3::text,
 					'display_name', i.label,
 					'base_currency', nullif(i.status->>'base_currency',''),
-					'provider_external_id', i.status->>'provider_external_id'))) as next,
+					'provider_external_id', i.status->>'provider_external_id',
+					'external_billing_account_id', case
+						when btrim(coalesce(b.data->'status'->>'external_billing_account_id',''), `+
+			billingDiscoveryTrimSet+`) = ''
+							and btrim(coalesce(i.status->>'provider_external_id',''), `+billingDiscoveryTrimSet+`) <> ''
+						then i.status->>'provider_external_id'
+					end))) as next,
 				i.ref is not null as seen
 			from billing_accounts b left join incoming i on i.ref = b.data->'status'->>'provider_account_reference'
 			where b.data->'status'->>'provider_key' = $1 and b.id = any($4::text[])
@@ -477,7 +487,11 @@ func (s *PrivateBillingAccountsServer) storeAccounts(
 	}
 	_, err = tx.Exec(ctx, billingDiscoveryInput+`
 		insert into billing_accounts (id, name, data)
-		select i.id, i.name, jsonb_build_object('spec', '{}'::jsonb, 'status', i.status)
+		select i.id, i.name, jsonb_build_object('spec', '{}'::jsonb, 'status', i.status ||
+			jsonb_strip_nulls(jsonb_build_object('external_billing_account_id', case
+				when btrim(coalesce(i.status->>'provider_external_id',''), `+billingDiscoveryTrimSet+`) <> ''
+				then i.status->>'provider_external_id'
+			end)))
 		from incoming i where not exists (select 1 from billing_accounts b
 			where b.data->'status'->>'provider_key' = $1
 				and b.data->'status'->>'provider_account_reference' = i.ref)

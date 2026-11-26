@@ -406,7 +406,7 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 		Entry("UNKNOWN carrier", "Active", "", "ACCOUNT_STATE_UNKNOWN"),
 	)
 
-	It("adopts only the verified corrected token after an ambiguous assignment attempt", func() {
+	It("keeps the token adopted from discovery after an ambiguous assignment and provider correction", func() {
 		scenario := billingfake.Scenario{Accounts: []billingfake.AccountSpec{
 			activeAccount(nativeOne, "Acme", "duplicate"), activeAccount(nativeTwo, "Beta", "duplicate"),
 		}}
@@ -426,29 +426,31 @@ var _ = Describe("Private tenant billing assignments with the real M360 adapter"
 		}
 		observed, retained := storedTokens()
 		Expect(observed).To(Equal("duplicate"))
-		Expect(retained).To(BeNil())
+		Expect(retained).To(Equal(proto.String("duplicate")))
 		request := createRequest(testTenant, accountID, "corrected-token")
 		_, err = billingRPC(adminCtx(), server.Create, request)
 		Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
 		Expect(reason(err)).To(Equal(billing.ReasonAccountAmbiguous))
 		_, retained = storedTokens()
-		Expect(retained).To(BeNil())
+		Expect(retained).To(Equal(proto.String("duplicate")))
 		var count int
 		Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
 		Expect(count).To(BeZero())
 
-		// Only the provider changes. The last discovered token must neither conflict nor be silently adopted.
+		// A later provider correction conflicts with the now-established local token; assignment cannot rotate it.
 		scenario.Accounts[0].ExternalID = " corrected "
 		stub.SetScenario(scenario)
 		before := stub.Count("GetAccount")
-		created, err := billingRPC(adminCtx(), server.Create, request)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(created.GetObject().GetStatus().GetConnectionState()).To(Equal(mapTenantBillingAssignmentConnectionState(tbaStateConnected)))
+		_, err = billingRPC(adminCtx(), server.Create, request)
+		Expect(status.Code(err)).To(Equal(codes.FailedPrecondition))
+		Expect(reason(err)).To(Equal(billing.ReasonBillingCorrelationIDConflict))
 		observed, retained = storedTokens()
 		Expect(observed).To(Equal("duplicate"), "assignment does not rewrite the discovery token")
-		Expect(retained).To(Equal(proto.String(" corrected ")))
+		Expect(retained).To(Equal(proto.String("duplicate")))
 		Expect(stub.Count("GetAccount") - before).To(Equal(1))
 		Expect(stub.Writes()).To(BeEmpty())
+		Expect(testPool.QueryRow(ctx, `select count(*) from tenant_billing_assignments`).Scan(&count)).To(Succeed())
+		Expect(count).To(BeZero())
 	})
 
 	It("persists no assignment and no observation when the real adapter read fails", func() {

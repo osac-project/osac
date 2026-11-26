@@ -212,6 +212,8 @@ def run_dispatches(tmp_path, targets, remote_env="", provider="lvms", module_opt
                 "ansible.builtin.include_role": {"name": "osac.service.storage_provider"},
                 "vars": {
                     "storage_provider_action": "ensure_storage_class",
+                    # The fixture provider stands in for a VMaaS-supported one.
+                    "storage_provider_vmaas_supported_providers": [provider],
                     "storage_provider_tiers": [
                         {
                             "name": "fast",

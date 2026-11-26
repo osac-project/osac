@@ -35,6 +35,28 @@
     _current_provider: "{{ _current_pair.provider }}"
     _current_backend_id: "{{ _current_pair.backend_id | string }}"
 
+- name: "Refuse cluster storage on vmaas for a provider the target does not support"
+  vars:
+    _vmaas_base: "{{ _current_provider | replace('-', '_') | regex_replace('_storage$', '') }}"
+    _vmaas_supported: >-
+      {{ storage_provider_vmaas_supported_providers | default(['vast', 'lvms'])
+         | map('replace', '-', '_') | map('regex_replace', '_storage$', '') | list }}
+    _vmaas_gaps:
+      netapp: >-
+        the API accepts a netapp StorageBackend only with cspManaged: true
+        (netapp_requires_csp_managed)
+      pure: its VMaaS template role is not registered yet (osac-project/osac#1531)
+  ansible.builtin.fail:
+    msg: >-
+      Provider '{{ _current_provider }}' (backend '{{ _current_backend_id }}') is not
+      supported for {{ _dispatch_action }} on the vmaas target:
+      {{ _vmaas_gaps[_vmaas_base] | default('it is not in storage_provider_vmaas_supported_providers') }}.
+      Supported on vmaas: {{ _vmaas_supported | join(', ') }}.
+  when:
+    - storage_provider_provisioning_target | default('vmaas') == 'vmaas'
+    - _dispatch_action in ['ensure_storage_class', 'teardown_cluster_storage']
+    - _vmaas_base not in _vmaas_supported
+
 - name: "Resolve the role that serves the current provider"
   ansible.builtin.include_tasks: _resolve_provider_role.yaml
 

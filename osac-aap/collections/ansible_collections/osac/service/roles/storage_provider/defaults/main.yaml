@@ -63,7 +63,15 @@ storage_provider_olm_subscription_spec:
 # Target the job provisions for: vmaas (hub or VM-hosting cluster) or caas
 # (tenant guest cluster). See tasks/_resolve_provider_role.yaml.
 storage_provider_provisioning_target: vmaas
-# Providers that run their own CSI driver on a guest cluster, so they keep
-# their own role on the caas target instead of the OSAC CSI role.
+# Providers that keep their own role on the caas target instead of the OSAC CSI
+# role. lvms is the dev/CI-only local tier: its driver (the LVMS operator and an
+# LVMCluster on the worker's second disk) has to be installed on the guest itself,
+# which the OSAC CSI driver cannot do.
 storage_provider_guest_native_providers:
+  - lvms
+# Providers the vmaas target can create and tear down StorageClasses for. On
+# vmaas, ensure_storage_class and teardown_cluster_storage fail for any other
+# provider before a provider role runs.
+storage_provider_vmaas_supported_providers:
+  - vast
   - lvms

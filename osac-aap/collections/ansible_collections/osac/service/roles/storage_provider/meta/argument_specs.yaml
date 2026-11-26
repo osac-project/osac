@@ -89,8 +89,22 @@ argument_specs:
           - lvms
         description: >
           Providers that keep their own template role on the caas target instead of
-          being served by osac.templates.osac_csi_storage. Names are compared with
-          hyphens read as underscores and a trailing _storage removed.
+          being served by osac.templates.osac_csi_storage. lvms is the dev/CI-only
+          local tier, whose driver must be installed on the guest itself, which the
+          OSAC CSI driver cannot do. Names are compared with hyphens read as
+          underscores and a trailing _storage removed.
+      storage_provider_vmaas_supported_providers:
+        type: list
+        elements: str
+        required: false
+        default:
+          - vast
+          - lvms
+        description: >
+          Providers the vmaas target can create and tear down StorageClasses for.
+          On vmaas, ensure_storage_class and teardown_cluster_storage fail for any
+          other provider before a provider role runs. Names are compared the same
+          way as storage_provider_guest_native_providers.
       storage_provider_target_kubeconfig:
         type: str
         required: false

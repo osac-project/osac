@@ -306,7 +306,12 @@ value is refused). It picks the role in this order:
 3. Provider name already ends in `_storage`: that role.
 4. Otherwise: `{provider}_storage`.
 
-On `vmaas` only rules 2 to 4 apply, so existing VMaaS routing is unchanged. On `caas`, every
+On `vmaas` only rules 2 to 4 apply, so existing VMaaS routing is unchanged. Before the
+resolver runs, a `vmaas` `ensure_storage_class` or `teardown_cluster_storage` dispatch fails
+for a provider outside `storage_provider_vmaas_supported_providers` (default
+`[vast, lvms]`), naming the provider and its gap (netapp: the API accepts it only with
+`cspManaged: true`; pure: its VMaaS role is not registered yet). Backend `setup` and
+`teardown_backend` are not affected. On `caas`, every
 tier (nfs or block) of a non-guest-native provider routes to `osac_csi_storage`. On `caas`,
 VAST block tiers are refused after all other StorageClasses are created (reason
 `vast_block_unsupported_on_caas`, no StorageClass for them); NFS tiers, including those on

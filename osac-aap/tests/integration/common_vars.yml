@@ -1,3 +1,4 @@
+---
 # Common OSAC label variables (from group_vars/all/osac_common_labels.yaml)
 cluster_order_label: "osac.openshift.io/clusterorder"
 cluster_order_infrastructure_finalizer: "osac.openshift.io/infrastructure"

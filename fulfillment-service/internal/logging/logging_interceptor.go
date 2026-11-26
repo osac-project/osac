@@ -139,6 +139,9 @@ func (i *Interceptor) UnaryServer(ctx context.Context, request any, info *grpc.U
 
 	// Get the time before calling the handler so that we can later compute the duration of the call:
 	timeBefore := time.Now()
+	customerNetworkMethod := isCustomerNetworkMethod(info.FullMethod)
+	catalogMethod := isCatalogItemsMethod(info.FullMethod)
+	logBodies := i.bodies && !customerNetworkMethod && !catalogMethod
 
 	// Write the details of the request:
 	methodField := slog.String("method", info.FullMethod)
@@ -163,8 +166,7 @@ func (i *Interceptor) UnaryServer(ctx context.Context, request any, info *grpc.U
 			requestFields = append(requestFields, mdField)
 		}
 	}
-	catalogMethod := isCatalogItemsMethod(info.FullMethod)
-	if i.bodies && request != nil && !catalogMethod {
+	if logBodies && request != nil {
 		bodyField, ok := i.dumpMessage(ctx, "request", request)
 		if ok {
 			requestFields = append(requestFields, bodyField)
@@ -184,13 +186,13 @@ func (i *Interceptor) UnaryServer(ctx context.Context, request any, info *grpc.U
 		timeField,
 		codeField,
 	}
-	if i.bodies && response != nil && !isCatalogItemsMethod(info.FullMethod) {
+	if logBodies && response != nil {
 		bodyField, ok := i.dumpMessage(ctx, "response", response)
 		if ok {
 			responseFields = append(responseFields, bodyField)
 		}
 	}
-	if err != nil && !catalogMethod {
+	if err != nil && !customerNetworkMethod && !catalogMethod {
 		loggedError := err
 		if i.redact && isComputeInstancesListMethod(info.FullMethod) {
 			loggedError = errors.New(redactMark)
@@ -284,6 +286,9 @@ func (i *Interceptor) UnaryClient(ctx context.Context, method string, request, r
 
 	// Get the time before calling the invoker so that we can later compute the duration of the call:
 	timeBefore := time.Now()
+	customerNetworkMethod := isCustomerNetworkMethod(method)
+	catalogMethod := isCatalogItemsMethod(method)
+	logBodies := i.bodies && !customerNetworkMethod && !catalogMethod
 
 	// Write the details of the request:
 	methodField := slog.String("method", method)
@@ -306,8 +311,7 @@ func (i *Interceptor) UnaryClient(ctx context.Context, method string, request, r
 			requestFields = append(requestFields, mdField)
 		}
 	}
-	catalogMethod := isCatalogItemsMethod(method)
-	if i.bodies && request != nil && !catalogMethod {
+	if logBodies && request != nil {
 		bodyField, ok := i.dumpMessage(ctx, "request", request)
 		if ok {
 			requestFields = append(requestFields, bodyField)
@@ -330,7 +334,7 @@ func (i *Interceptor) UnaryClient(ctx context.Context, method string, request, r
 	if ok {
 		codeField := slog.String("code", status.Code().String())
 		responseFields = append(responseFields, codeField)
-		if !catalogMethod {
+		if !customerNetworkMethod && !catalogMethod {
 			redactStatus := i.redact && isComputeInstancesListMethod(method)
 			message := status.Message()
 			if message != "" {
@@ -349,14 +353,14 @@ func (i *Interceptor) UnaryClient(ctx context.Context, method string, request, r
 				responseFields = append(responseFields, detailsField)
 			}
 		}
-	} else if catalogMethod {
+	} else if customerNetworkMethod || catalogMethod {
 		codeField := slog.String("code", grpcstatus.Code(err).String())
 		responseFields = append(responseFields, codeField)
 	} else {
 		errField := slog.Any("error", err)
 		responseFields = append(responseFields, errField)
 	}
-	if i.bodies && response != nil && !catalogMethod {
+	if logBodies && response != nil {
 		bodyField, ok := i.dumpMessage(ctx, "response", response)
 		if ok {
 			responseFields = append(responseFields, bodyField)
@@ -436,6 +440,25 @@ func (i *Interceptor) redactMDAuthorization(value string) string {
 	}
 	scheme := value[0:position]
 	return fmt.Sprintf("%s %s", scheme, redactMark)
+}
+
+// isCustomerNetworkMethod reports whether the method handles network data that
+// must be omitted from diagnostic logs.
+func isCustomerNetworkMethod(method string) bool {
+	return strings.Contains(method, "/osac.public.v1.VirtualNetworks/") ||
+		strings.Contains(method, "/osac.public.v1.Subnets/") ||
+		strings.Contains(method, "/osac.public.v1.SecurityGroups/") ||
+		strings.Contains(method, "/osac.public.v1.ExternalIPs/") ||
+		strings.Contains(method, "/osac.public.v1.ExternalIPPools/") ||
+		strings.Contains(method, "/osac.public.v1.ExternalIPAttachments/") ||
+		strings.Contains(method, "/osac.private.v1.ExternalIPAttachments/") ||
+		strings.Contains(method, "/osac.private.v1.ExternalIPs/") ||
+		strings.Contains(method, "/osac.private.v1.ExternalIPPools/") ||
+		strings.Contains(method, "/osac.private.v1.NATGateways/") ||
+		strings.Contains(method, "/osac.private.v1.VirtualNetworks/") ||
+		strings.Contains(method, "/osac.private.v1.Subnets/") ||
+		strings.Contains(method, "/osac.private.v1.SecurityGroups/") ||
+		strings.Contains(method, "/osac.public.v1.NATGateways/")
 }
 
 // messageLogFields returns log fields for a stream message: the serialized size (if debug is enabled) and the

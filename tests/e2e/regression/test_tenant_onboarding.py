@@ -29,7 +29,6 @@ pytestmark = pytest.mark.regression
 
 _CREATED_ID = re.compile(r"identifier '([^']+)'")
 _TENANT_NAME = re.compile(r"^test-onboard-[0-9a-f]{8}$")
-_BREAK_GLASS_PASSWORD = re.compile(r"Password:\s+(\S+)")
 _SECRET_VALUE = re.compile(r"(?i)((?:password|token|secret|authorization|bearer)[:\s=]+)\S+")
 
 
@@ -255,7 +254,7 @@ def test_tenant_onboarding_demo1_milestone_02(
 
     assert _TENANT_NAME.fullmatch(tenant_name), tenant_name
 
-    # Flow 1: CPA creates tenant on the private API; break-glass password is only on create stdout.
+    # Flow 1: CPA creates tenant on the private API.
     tenant_yaml = _write_manifest(
         private_cli.config_dir,
         "tenant.yaml",
@@ -270,12 +269,6 @@ def test_tenant_onboarding_demo1_milestone_02(
     create_out = private_cli._run("create", "-f", tenant_yaml)
     tenant_id = _parse_created_id(create_out)
     resources["tenant_id"] = tenant_id
-    password_match = _BREAK_GLASS_PASSWORD.search(create_out)
-    assert password_match, "create stdout missing break-glass password"
-    break_glass_password = password_match.group(1)
-    has_break_glass_user = "break-glass" in create_out.lower()
-    assert has_break_glass_user, "create stdout missing break-glass user"
-
     _wait_private_status(
         private_grpc,
         service=f"{PRIVATE_API}.Tenants/Get",
@@ -286,19 +279,10 @@ def test_tenant_onboarding_demo1_milestone_02(
         description=f"tenant {tenant_name} SYNCED",
     )
 
-    # Flow 2: Get tenant has break_glass_user_id and must not echo the create password.
+    # Flow 2: Get tenant has break_glass_user_id.
     get_tenant = private_grpc.call(service=f"{PRIVATE_API}.Tenants/Get", data={"id": tenant_id})
     bg_user_id = _status_value(get_tenant, "break_glass_user_id")
     assert bg_user_id, "break_glass_user_id missing after SYNCED"
-    get_leaked = _secret_matches_any(break_glass_password, _collect_strings(get_tenant))
-    assert not get_leaked, "Tenants/Get echoed break-glass password"
-    get_cli_raw = private_cli._run("get", "tenant", tenant_id, "-o", "json")
-    try:
-        get_cli = json.loads(get_cli_raw)
-    except json.JSONDecodeError:
-        pytest.fail("CLI get tenant did not return JSON")
-    yaml_leaked = _secret_matches_any(break_glass_password, _collect_strings(get_cli))
-    assert not yaml_leaked, "CLI get tenant echoed break-glass password"
 
     # Flow 3: Keycloak org enabled; tenant namespace Active with tenant-ref label.
     admin_token = get_admin_token(keycloak_url=keycloak_url, username="admin", password=keycloak_admin_password)

@@ -422,10 +422,6 @@ var _ = Describe("Calculator", func() {
 				Status: privatev1.TenantStatus_builder{
 					State:         privatev1.TenantState_TENANT_STATE_PENDING,
 					IdpTenantName: "my-tenant",
-					BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{
-						Username: "my-tenant-osac-break-glass",
-						Password: "secret",
-					}.Build(),
 				}.Build(),
 			}.Build()
 
@@ -438,7 +434,6 @@ var _ = Describe("Calculator", func() {
 
 			mask := calculator.Calculate(before, after)
 			Expect(mask.Paths).To(ContainElement("status.state"))
-			Expect(mask.Paths).To(ContainElement("status.break_glass_credentials"))
 		})
 
 		It("should detect cleared top-level message field", func() {

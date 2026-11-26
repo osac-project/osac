@@ -1096,7 +1096,6 @@ var _ = Describe("Break-glass credentials secret reference", func() {
 		ref := response.GetObject().GetSpec().GetBreakGlassCredentialsSecret()
 		Expect(ref.GetId()).To(Equal("existing-bg-secret"))
 		Expect(ref.GetName()).To(Equal("existing-bg"))
-		Expect(response.GetObject().GetStatus().GetBreakGlassCredentials()).To(BeNil())
 	})
 
 	It("Deletes the break-glass secret on soft-delete even when projects remain", func() {

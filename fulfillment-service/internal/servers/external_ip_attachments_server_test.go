@@ -353,6 +353,106 @@ var _ = Describe("External IP attachments server", func() {
 			Expect(err).ToNot(HaveOccurred())
 		})
 
+		Describe("Exposure lifecycle", func() {
+			createRequest := func(name, externalIPID, computeInstanceID string) *publicv1.ExternalIPAttachmentsCreateRequest {
+				return publicv1.ExternalIPAttachmentsCreateRequest_builder{
+					Object: publicv1.ExternalIPAttachment_builder{
+						Metadata: publicv1.Metadata_builder{Name: name}.Build(),
+						Spec: publicv1.ExternalIPAttachmentSpec_builder{
+							ExternalIp:      publicv1.ExternalIPLocalReference_builder{Id: externalIPID}.Build(),
+							ComputeInstance: publicv1.ComputeInstanceLocalReference_builder{Id: computeInstanceID}.Build(),
+						}.Build(),
+					}.Build(),
+				}.Build()
+			}
+
+			expectNoAttachmentNamed := func(name string) {
+				response, err := externalIPAttachmentsServer.List(ctx, publicv1.ExternalIPAttachmentsListRequest_builder{
+					Filter: proto.String(fmt.Sprintf("this.metadata.name == %q", name)),
+				}.Build())
+				ExpectWithOffset(1, err).ToNot(HaveOccurred())
+				ExpectWithOffset(1, response.GetItems()).To(BeEmpty())
+			}
+
+			It("creates, gets, and deletes an exposure attachment", func() {
+				externalIP := createExternalIPInState(ctx, externalIPDao, sharedPoolID,
+					privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+				computeInstance := createComputeInstanceInState(ctx, computeInstanceDao,
+					privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+				name := fmt.Sprintf("exposure-lifecycle-%s", uuid.NewString()[:8])
+
+				createResponse, err := externalIPAttachmentsServer.Create(ctx, createRequest(
+					name, externalIP.GetId(), computeInstance.GetId(),
+				))
+				Expect(err).ToNot(HaveOccurred())
+				attachmentID := createResponse.GetObject().GetId()
+
+				getResponse, err := externalIPAttachmentsServer.Get(ctx,
+					publicv1.ExternalIPAttachmentsGetRequest_builder{Id: attachmentID}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				Expect(getResponse.GetObject().GetSpec().GetExternalIp().GetId()).To(Equal(externalIP.GetId()))
+				Expect(getResponse.GetObject().GetStatus().GetState()).To(Equal(
+					publicv1.ExternalIPAttachmentState_EXTERNAL_IP_ATTACHMENT_STATE_PENDING,
+				))
+
+				_, err = externalIPAttachmentsServer.Delete(ctx,
+					publicv1.ExternalIPAttachmentsDeleteRequest_builder{Id: attachmentID}.Build())
+				Expect(err).ToNot(HaveOccurred())
+				_, err = externalIPAttachmentsServer.Get(ctx,
+					publicv1.ExternalIPAttachmentsGetRequest_builder{Id: attachmentID}.Build())
+				Expect(err).To(HaveOccurred())
+				expectNoAttachmentNamed(name)
+
+				externalIPResponse, err := externalIPDao.Get().SetId(externalIP.GetId()).Do(ctx)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(externalIPResponse.GetObject().GetStatus().GetAttached()).To(BeFalse())
+			})
+
+			It("rejects missing and unready prerequisites without persistence", func() {
+				computeInstance := createComputeInstanceInState(ctx, computeInstanceDao,
+					privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+				missingName := fmt.Sprintf("exposure-missing-%s", uuid.NewString()[:8])
+				_, err := externalIPAttachmentsServer.Create(ctx, createRequest(
+					missingName, "external-ip-does-not-exist", computeInstance.GetId(),
+				))
+				Expect(grpcstatus.Code(err)).To(Equal(codes.InvalidArgument))
+				Expect(err.Error()).To(ContainSubstring("ExternalIP 'external-ip-does-not-exist' does not exist"))
+				expectNoAttachmentNamed(missingName)
+
+				externalIP := createExternalIPInState(ctx, externalIPDao, sharedPoolID,
+					privatev1.ExternalIPState_EXTERNAL_IP_STATE_PENDING, false)
+				unreadyName := fmt.Sprintf("exposure-unready-%s", uuid.NewString()[:8])
+				_, err = externalIPAttachmentsServer.Create(ctx, createRequest(
+					unreadyName, externalIP.GetId(), computeInstance.GetId(),
+				))
+				Expect(grpcstatus.Code(err)).To(Equal(codes.FailedPrecondition))
+				Expect(err.Error()).To(ContainSubstring("is not in ALLOCATED state"))
+				expectNoAttachmentNamed(unreadyName)
+			})
+
+			It("rejects attachment creation when provider networking is disabled", func() {
+				externalIP := createExternalIPInState(ctx, externalIPDao, sharedPoolID,
+					privatev1.ExternalIPState_EXTERNAL_IP_STATE_ALLOCATED, false)
+				computeInstance := createComputeInstanceInState(ctx, computeInstanceDao,
+					privatev1.ComputeInstanceState_COMPUTE_INSTANCE_STATE_RUNNING)
+				disabledServer, err := NewExternalIPAttachmentsServer().
+					SetLogger(logger).
+					SetAttributionLogic(attribution).
+					SetTenancyLogic(tenancy).
+					SetNetworkingSettings(NetworkingSettings{ProvisioningEnabled: false}).
+					Build()
+				Expect(err).ToNot(HaveOccurred())
+				name := fmt.Sprintf("exposure-disabled-%s", uuid.NewString()[:8])
+
+				_, err = disabledServer.Create(ctx, createRequest(
+					name, externalIP.GetId(), computeInstance.GetId(),
+				))
+				Expect(grpcstatus.Code(err)).To(Equal(codes.FailedPrecondition))
+				Expect(err.Error()).To(ContainSubstring("provider networking is disabled"))
+				expectNoAttachmentNamed(name)
+			})
+		})
+
 		Describe("Create through the reference interceptor", func() {
 			var create func(externalIP *publicv1.ExternalIPLocalReference,
 				computeInstance *publicv1.ComputeInstanceLocalReference) error

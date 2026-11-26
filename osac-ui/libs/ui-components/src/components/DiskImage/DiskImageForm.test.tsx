@@ -1,6 +1,6 @@
 import { create } from '@bufbuild/protobuf';
 import { Code, ConnectError } from '@connectrpc/connect';
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -17,6 +17,13 @@ import type { MockTransportOverrides } from '../../test-utils/createMockConnectT
 import { renderWithProviders } from '../../test-utils/TestProviders';
 
 const makeTenant = (id: string, name: string): Tenant => ({ id, metadata: { name } }) as Tenant;
+
+// Flush pending async validation and the React updates it schedules before
+// asserting (OSAC-7737 was a race between two such validations).
+const flushPendingValidations = () =>
+  act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
 
 const mockNavigate = vi.fn();
 vi.mock('react-router-dom', async (importOriginal) => {
@@ -88,6 +95,15 @@ describe('DiskImageForm', () => {
     await waitFor(() => {
       expect(screen.getByText('Select at least one architecture')).toBeInTheDocument();
     });
+  });
+
+  it('does not mark Architecture invalid immediately after selecting an architecture', async () => {
+    const { user } = renderForm();
+
+    await fillValidForm(user);
+    await flushPendingValidations();
+
+    expect(screen.queryByText('Select at least one architecture')).not.toBeInTheDocument();
   });
 
   it('navigates back to the disk image list on cancel', async () => {

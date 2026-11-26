@@ -240,6 +240,14 @@ func (s *VolumesServer) Create(ctx context.Context,
 		return
 	}
 
+	// The owner is assigned by the system when a workload owns the volume;
+	// a caller-supplied owner must never reach the stored object, because a
+	// stored owner drives hub selection for the volume.
+	if publicVolume.GetSpec().HasOwner() {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument,
+			"field 'spec.owner' is set by the system and cannot be provided by callers")
+	}
+
 	// Block-protocol validation: resolve the tier and reject non-block protocols.
 	tierName := publicVolume.GetSpec().GetStorageTier()
 	if tierName != "" {

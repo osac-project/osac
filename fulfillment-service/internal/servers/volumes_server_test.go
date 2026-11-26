@@ -342,6 +342,32 @@ var _ = Describe("Public volumes server", func() {
 			Expect(object.GetStatus().GetMessage()).To(BeEmpty())
 		})
 
+		// TC-C1b: Create carrying a caller-supplied owner is rejected: the owner
+		// is system-assigned and a stored owner drives hub selection.
+		It("Returns InvalidArgument for create with a caller-supplied owner", func() {
+			_, err := server.Create(ctx, publicv1.VolumesCreateRequest_builder{
+				Object: publicv1.Volume_builder{
+					Metadata: publicv1.Metadata_builder{
+						Name: "spoofed-owner-volume",
+					}.Build(),
+					Spec: publicv1.VolumeSpec_builder{
+						StorageTier: "standard-block",
+						SizeGib:     100,
+						AccessMode:  publicv1.VolumeAccessMode_VOLUME_ACCESS_MODE_READ_WRITE_ONCE,
+						Owner: publicv1.VolumeOwner_builder{
+							Type:      publicv1.VolumeOwnerType_VOLUME_OWNER_TYPE_COMPUTE_INSTANCE,
+							Reference: "ci-01a1",
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			Expect(err).To(HaveOccurred())
+			st, ok := grpcstatus.FromError(err)
+			Expect(ok).To(BeTrue())
+			Expect(st.Code()).To(Equal(grpccodes.InvalidArgument))
+			Expect(st.Message()).To(ContainSubstring("spec.owner"))
+		})
+
 		// TC-C2: Create with missing metadata.name returns InvalidArgument.
 		It("Returns InvalidArgument for create without name", func() {
 			_, err := server.Create(ctx, publicv1.VolumesCreateRequest_builder{

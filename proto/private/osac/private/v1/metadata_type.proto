@@ -106,8 +106,8 @@ message Metadata {
   // For organization objects this field is always empty, as organizations don't belong to a project.
   string project = 9;
 
-  reserved 10, 11;
-  reserved "display_name", "description";
+  // Reference to the Document describing this object, by document id.
+  optional string description = 10;
 
   // Finalizers indicate tasks that need to be completed before the object can be completely deleted. When the object
   // has been deleted and this list is empty the system will automatically archive the object.

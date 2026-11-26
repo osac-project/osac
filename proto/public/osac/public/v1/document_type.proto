@@ -1,0 +1,83 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.public.v1;
+
+import "buf/validate/validate.proto";
+import "osac/public/v1/document_owner_type.proto";
+import "osac/public/v1/metadata_type.proto";
+
+// buf:lint:ignore OSAC_OBJECT_SHAPE
+message Document {
+  string id = 1;
+  Metadata metadata = 2;
+  DocumentSpec spec = 3;
+}
+
+message DocumentSpec {
+  DocumentOwner owner = 1;
+  optional string fallback = 2 [(buf.validate.field).string = {max_bytes: 255}];
+  map<string, DocumentVariant> variants = 3 [(buf.validate.field).map = {min_pairs: 1, max_pairs: 32}];
+}
+
+message DocumentOwner {
+  oneof object {
+    DocumentAddOnOperatorOwner add_on_operator = 1;
+    DocumentBareMetalInstanceOwner bare_metal_instance = 2;
+    DocumentBareMetalInstanceCatalogItemOwner bare_metal_instance_catalog_item = 3;
+    DocumentBareMetalInstanceTemplateOwner bare_metal_instance_template = 4;
+    DocumentBareMetalInstanceTypeOwner bare_metal_instance_type = 5;
+    DocumentClusterOwner cluster = 6;
+    DocumentClusterCatalogItemOwner cluster_catalog_item = 7;
+    DocumentClusterTemplateOwner cluster_template = 8;
+    DocumentClusterVersionOwner cluster_version = 9;
+    DocumentComputeInstanceOwner compute_instance = 10;
+    DocumentComputeInstanceCatalogItemOwner compute_instance_catalog_item = 11;
+    DocumentComputeInstanceTemplateOwner compute_instance_template = 12;
+    DocumentDiskImageOwner disk_image = 13;
+    DocumentExternalIPOwner external_ip = 14;
+    DocumentExternalIPAttachmentOwner external_ip_attachment = 15;
+    DocumentExternalIPPoolOwner external_ip_pool = 16;
+    DocumentFabricDomainOwner fabric_domain = 17;
+    DocumentHubOwner hub = 18;
+    DocumentIdentityProviderOwner identity_provider = 19;
+    DocumentInstanceTypeOwner instance_type = 20;
+    DocumentNATGatewayOwner nat_gateway = 21;
+    DocumentNetworkClassOwner network_class = 22;
+    DocumentProjectOwner project = 23;
+    DocumentProjectMembershipOwner project_membership = 24;
+    DocumentQuotaDefaultLimitOwner quota_default_limit = 25;
+    DocumentQuotaLimitOwner quota_limit = 26;
+    DocumentQuotaLimitRequestOwner quota_limit_request = 27;
+    DocumentQuotaThresholdOwner quota_threshold = 28;
+    DocumentRoleOwner role = 29;
+    DocumentRoleBindingOwner role_binding = 30;
+    DocumentSecretOwner secret = 31;
+    DocumentSecurityGroupOwner security_group = 32;
+    DocumentServiceAccountOwner service_account = 33;
+    DocumentStorageBackendOwner storage_backend = 34;
+    DocumentStorageTierOwner storage_tier = 35;
+    DocumentSubnetOwner subnet = 36;
+    DocumentTenantOwner tenant = 37;
+    DocumentUserOwner user = 38;
+    DocumentVirtualNetworkOwner virtual_network = 39;
+    DocumentVolumeOwner volume = 40;
+  }
+}
+
+message DocumentVariant {
+  string title = 1;
+  bytes content = 2;
+}

@@ -57,6 +57,7 @@ var kindsThatUseNothing = []string{
 	"ClusterVersion",
 	"ComputeInstanceCatalogItem",
 	"ComputeInstanceTemplate",
+	"Document",
 	"Event",
 	"ExternalIPAttachment",
 	"ExternalIPPool",

@@ -1,0 +1,260 @@
+//
+// Copyright (c) 2026 Red Hat, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with
+// the License. You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on
+// an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the
+// specific language governing permissions and limitations under the License.
+//
+
+syntax = "proto3";
+
+package osac.private.v1;
+
+import "cleanapi/cleanapi.proto";
+
+option (cleanapi.file).package = "osac.public.v1";
+
+// Owner reference for a AddOnOperator resource.
+message DocumentAddOnOperatorOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a BareMetalInstance resource.
+message DocumentBareMetalInstanceOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a BareMetalInstanceCatalogItem resource.
+message DocumentBareMetalInstanceCatalogItemOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a BareMetalInstanceTemplate resource.
+message DocumentBareMetalInstanceTemplateOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a BareMetalInstanceType resource.
+message DocumentBareMetalInstanceTypeOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a Cluster resource.
+message DocumentClusterOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a ClusterCatalogItem resource.
+message DocumentClusterCatalogItemOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a ClusterTemplate resource.
+message DocumentClusterTemplateOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a ClusterVersion resource.
+message DocumentClusterVersionOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a ComputeInstance resource.
+message DocumentComputeInstanceOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a ComputeInstanceCatalogItem resource.
+message DocumentComputeInstanceCatalogItemOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a ComputeInstanceTemplate resource.
+message DocumentComputeInstanceTemplateOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a DiskImage resource.
+message DocumentDiskImageOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a ExternalIP resource.
+message DocumentExternalIPOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a ExternalIPAttachment resource.
+message DocumentExternalIPAttachmentOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a ExternalIPPool resource.
+message DocumentExternalIPPoolOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a FabricDomain resource.
+message DocumentFabricDomainOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a Hub resource.
+message DocumentHubOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a IdentityProvider resource.
+message DocumentIdentityProviderOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a InstanceType resource.
+message DocumentInstanceTypeOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a NATGateway resource.
+message DocumentNATGatewayOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a NetworkClass resource.
+message DocumentNetworkClassOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a Project resource.
+message DocumentProjectOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a ProjectMembership resource.
+message DocumentProjectMembershipOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a QuotaDefaultLimit resource.
+message DocumentQuotaDefaultLimitOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a QuotaLimit resource.
+message DocumentQuotaLimitOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a QuotaLimitRequest resource.
+message DocumentQuotaLimitRequestOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a QuotaThreshold resource.
+message DocumentQuotaThresholdOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a Role resource.
+message DocumentRoleOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a RoleBinding resource.
+message DocumentRoleBindingOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a Secret resource.
+message DocumentSecretOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a SecurityGroup resource.
+message DocumentSecurityGroupOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a ServiceAccount resource.
+message DocumentServiceAccountOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a StorageBackend resource.
+message DocumentStorageBackendOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a StorageTier resource.
+message DocumentStorageTierOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a Subnet resource.
+message DocumentSubnetOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a Tenant resource.
+message DocumentTenantOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a User resource.
+message DocumentUserOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a VirtualNetwork resource.
+message DocumentVirtualNetworkOwner {
+  string id = 1;
+  string name = 2;
+}
+
+// Owner reference for a Volume resource.
+message DocumentVolumeOwner {
+  string id = 1;
+  string name = 2;
+}

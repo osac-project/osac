@@ -296,6 +296,12 @@ func createMCPProjectMembership(
 		if status.Code(err) != codes.NotFound {
 			ExpectWithOffset(1, err).ToNot(HaveOccurred())
 		}
+		Eventually(func(g Gomega) {
+			_, err := client.Get(ctx, privatev1.ProjectMembershipsGetRequest_builder{
+				Id: membershipID,
+			}.Build())
+			g.Expect(status.Code(err)).To(Equal(codes.NotFound))
+		}, time.Minute, time.Second).WithContext(ctx).Should(Succeed())
 	})
 	EventuallyWithOffset(1, func(g Gomega) {
 		getResponse, err := client.Get(ctx, privatev1.ProjectMembershipsGetRequest_builder{

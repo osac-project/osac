@@ -51,9 +51,26 @@ func (e *toolError) Error() string {
 	return string(encoded)
 }
 
+type toolRequestIDKey struct{}
+
+func newToolRequestID() string { return uuid.NewString() }
+
+func withToolRequestID(ctx context.Context, requestID string) context.Context {
+	return context.WithValue(ctx, toolRequestIDKey{}, requestID)
+}
+
+func toolRequestIDFromContext(ctx context.Context) string {
+	requestID, _ := ctx.Value(toolRequestIDKey{}).(string)
+	return requestID
+}
+
 func newToolError(category, grpcCode, message string, retryable bool) *toolError {
+	return newToolErrorWithRequestID(newToolRequestID(), category, grpcCode, message, retryable)
+}
+
+func newToolErrorWithRequestID(requestID, category, grpcCode, message string, retryable bool) *toolError {
 	return &toolError{
-		RequestID: uuid.NewString(),
+		RequestID: requestID,
 		Category:  category,
 		GRPCCode:  grpcCode,
 		Message:   message,
@@ -63,15 +80,21 @@ func newToolError(category, grpcCode, message string, retryable bool) *toolError
 }
 
 func safeTokenExchangeError(err error) error {
+	return safeTokenExchangeErrorWithRequestID(err, newToolRequestID())
+}
+
+func safeTokenExchangeErrorWithRequestID(err error, requestID string) error {
 	if errors.Is(err, errOAuthTokenExchangeUnavailable) {
-		return newToolError(
+		return newToolErrorWithRequestID(
+			requestID,
 			"service_unavailable",
 			"Unavailable",
 			"The authentication service is currently unavailable. Retry after checking service status.",
 			true,
 		)
 	}
-	return newToolError(
+	return newToolErrorWithRequestID(
+		requestID,
 		"authentication",
 		"Unauthenticated",
 		"MCP authentication failed. Sign in again and retry.",

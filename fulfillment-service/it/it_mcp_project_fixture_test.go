@@ -7,8 +7,6 @@ import (
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/gomega"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
@@ -58,10 +56,7 @@ func createMCPProjectFixture(
 	_, err = adminProjects.Signal(ctx, privatev1.ProjectsSignalRequest_builder{Id: projectID}.Build())
 	ExpectWithOffset(1, err).ToNot(HaveOccurred())
 	DeferCleanup(func(ctx context.Context) {
-		_, err := adminProjects.Delete(ctx, privatev1.ProjectsDeleteRequest_builder{Id: projectID}.Build())
-		if status.Code(err) != codes.NotFound {
-			ExpectWithOffset(1, err).ToNot(HaveOccurred())
-		}
+		deleteProject(ctx, adminProjects, projectID)
 	})
 	EventuallyWithOffset(1, func(g Gomega) {
 		getResponse, err := adminProjects.Get(ctx, privatev1.ProjectsGetRequest_builder{Id: projectID}.Build())

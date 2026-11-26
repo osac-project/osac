@@ -262,6 +262,9 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error {
 	if err != nil {
 		return err
 	}
+	if expiringExchanger, ok := exchanger.(expiringTokenExchanger); ok {
+		exchanger = withTokenExchangeLogging(newCachingTokenExchanger(expiringExchanger), c.logger)
+	}
 
 	// Calculate the user agent:
 	userAgent := fmt.Sprintf("%s/%s", userAgent, version.Get())
@@ -1041,19 +1044,24 @@ func newTokenVerifier(validator auth.JwtValidator, exchanger TokenExchanger) sdk
 
 // forwardAPIToken exchanges the caller's MCP token once for this tool call and attaches only the API token.
 func forwardAPIToken(ctx context.Context, req *mcp.CallToolRequest) (context.Context, error) {
+	requestID := newToolRequestID()
 	if req == nil || req.Extra == nil || req.Extra.TokenInfo == nil {
-		return nil, safeTokenExchangeError(errors.New("MCP caller token is missing"))
+		return nil, safeTokenExchangeErrorWithRequestID(errors.New("MCP caller token is missing"), requestID)
 	}
 	source, ok := req.Extra.TokenInfo.Extra[exchangeTokenExtraKey].(apiTokenSource)
 	if !ok || source == nil {
-		return nil, safeTokenExchangeError(errors.New("MCP caller token exchange is unavailable"))
+		return nil, safeTokenExchangeErrorWithRequestID(
+			errors.New("MCP caller token exchange is unavailable"), requestID,
+		)
 	}
-	apiToken, err := source(ctx)
+	apiToken, err := source(withToolRequestID(ctx, requestID))
 	if err != nil {
-		return nil, safeTokenExchangeError(err)
+		return nil, safeTokenExchangeErrorWithRequestID(err, requestID)
 	}
 	if apiToken == "" {
-		return nil, safeTokenExchangeError(errors.New("OAuth token exchange returned no API token"))
+		return nil, safeTokenExchangeErrorWithRequestID(
+			errors.New("OAuth token exchange returned no API token"), requestID,
+		)
 	}
 	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+apiToken), nil
 }

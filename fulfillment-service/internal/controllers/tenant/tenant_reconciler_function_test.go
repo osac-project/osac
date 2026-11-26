@@ -326,7 +326,6 @@ var _ = Describe("IDP Sync", func() {
 		Expect(tenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
 		Expect(tenant.GetStatus().GetIdpTenantName()).To(Equal("test-org"))
 		Expect(tenant.GetStatus().GetBreakGlassUserId()).To(Equal("user-123"))
-		Expect(tenant.GetStatus().HasBreakGlassCredentials()).To(BeFalse())
 	})
 
 	It("should set state to PENDING before sync", func() {
@@ -335,12 +334,6 @@ var _ = Describe("IDP Sync", func() {
 				Name:       "test-org",
 				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
-			}.Build(),
-			Status: privatev1.TenantStatus_builder{
-				BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{
-					Username: "test-org-osac-break-glass",
-					Password: testPreGeneratedPassword,
-				}.Build(),
 			}.Build(),
 		}.Build()
 
@@ -475,12 +468,6 @@ var _ = Describe("IDP Sync", func() {
 				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
-			Status: privatev1.TenantStatus_builder{
-				BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{
-					Username: auth.SharedTenant + "-osac-break-glass",
-					Password: testPreGeneratedPassword,
-				}.Build(),
-			}.Build(),
 		}.Build()
 
 		mockClient.EXPECT().
@@ -495,16 +482,6 @@ var _ = Describe("IDP Sync", func() {
 			}).
 			Times(1)
 
-		mockClient.EXPECT().
-			CreateUser(gomock.Any(), auth.SharedTenant, gomock.Any()).
-			Return(&idp.User{ID: "user-shared"}, nil).
-			Times(1)
-
-		mockClient.EXPECT().
-			AssignIdpManagerPermissions(gomock.Any(), "user-shared").
-			Return(nil).
-			Times(1)
-
 		task := &task{
 			r:      reconciler,
 			tenant: tenant,
@@ -513,6 +490,8 @@ var _ = Describe("IDP Sync", func() {
 		err := task.update(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(tenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
+		Expect(tenant.GetStatus().GetBreakGlassUserId()).To(BeEmpty())
+		Expect(tenant.GetSpec().GetBreakGlassCredentialsSecret()).To(BeNil())
 	})
 
 	It("should create system tenant as disabled", func() {
@@ -522,12 +501,6 @@ var _ = Describe("IDP Sync", func() {
 				Name:       auth.SystemTenant,
 				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
-			}.Build(),
-			Status: privatev1.TenantStatus_builder{
-				BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{
-					Username: auth.SystemTenant + "-osac-break-glass",
-					Password: testPreGeneratedPassword,
-				}.Build(),
 			}.Build(),
 		}.Build()
 
@@ -609,12 +582,6 @@ var _ = Describe("IDP Sync", func() {
 					"example.com",
 					"corp.example.org",
 				},
-			}.Build(),
-			Status: privatev1.TenantStatus_builder{
-				BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{
-					Username: "domain-org-osac-break-glass",
-					Password: testPreGeneratedPassword,
-				}.Build(),
 			}.Build(),
 		}.Build()
 
@@ -792,63 +759,6 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 		Expect(tenant.GetStatus().GetBreakGlassUserId()).To(Equal("user-123"))
 	})
 
-	It("should prefer inline status credentials over the Secret reference", func() {
-		reconciler = &function{
-			logger:     logger,
-			idpManager: idpManager,
-			secretsClient: &mockSecretsClient{
-				getFunc: func(context.Context, *privatev1.SecretsGetRequest) (*privatev1.SecretsGetResponse, error) {
-					return privatev1.SecretsGetResponse_builder{
-						Object: privatev1.Secret_builder{
-							Id: "secret-id",
-							Data: map[string][]byte{
-								"username": []byte("test-org-osac-break-glass"),
-								"password": []byte(testInlinePassword),
-							},
-						}.Build(),
-					}.Build(), nil
-				},
-			},
-		}
-
-		tenant := privatev1.Tenant_builder{
-			Id: "org-123",
-			Metadata: privatev1.Metadata_builder{
-				Name:       "test-org",
-				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
-				Tenant:     "tenant-1",
-			}.Build(),
-			Spec: privatev1.TenantSpec_builder{
-				BreakGlassCredentialsSecret: privatev1.SecretLocalReference_builder{
-					Id: "secret-id",
-				}.Build(),
-			}.Build(),
-			Status: privatev1.TenantStatus_builder{
-				BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{
-					Username: "test-org-osac-break-glass",
-					Password: testInlinePassword,
-				}.Build(),
-			}.Build(),
-		}.Build()
-
-		mockClient.EXPECT().
-			CreateTenant(gomock.Any(), gomock.Any()).
-			Return(&idp.Tenant{Name: "test-org", Enabled: true}, nil)
-		mockClient.EXPECT().
-			CreateUser(gomock.Any(), "test-org", gomock.Any()).
-			DoAndReturn(func(_ context.Context, _ string, user *idp.User) (*idp.User, error) {
-				Expect(user.Credentials[0].Value).To(Equal(testInlinePassword))
-				user.ID = "user-123"
-				return user, nil
-			})
-		mockClient.EXPECT().
-			AssignIdpManagerPermissions(gomock.Any(), "user-123").
-			Return(nil)
-
-		task := &task{r: reconciler, tenant: tenant}
-		Expect(task.update(ctx)).To(Succeed())
-	})
-
 	It("should return an error when the Secret is missing required data", func() {
 		reconciler = &function{
 			logger:     logger,
@@ -987,7 +897,6 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 		Expect(ref).ToNot(BeNil())
 		Expect(ref.GetId()).To(Equal("created-secret-id"))
 		Expect(ref.GetName()).To(Equal("break-glass-credentials"))
-		Expect(tenant.GetStatus().HasBreakGlassCredentials()).To(BeFalse())
 	})
 
 	It("should adopt an existing Secret when Create returns AlreadyExists", func() {
@@ -1037,12 +946,6 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
 			}.Build(),
-			Status: privatev1.TenantStatus_builder{
-				BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{
-					Username: "test-org-osac-break-glass",
-					Password: testPreGeneratedPassword,
-				}.Build(),
-			}.Build(),
 		}.Build()
 
 		mockClient.EXPECT().
@@ -1086,12 +989,6 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 				Name:       "test-org",
 				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
 				Tenant:     "tenant-1",
-			}.Build(),
-			Status: privatev1.TenantStatus_builder{
-				BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{
-					Username: "test-org-osac-break-glass",
-					Password: testPreGeneratedPassword,
-				}.Build(),
 			}.Build(),
 		}.Build()
 
@@ -1196,9 +1093,6 @@ var _ = Describe("Break-glass credentials secret resolution", func() {
 			Metadata: privatev1.Metadata_builder{Name: "test-org", Tenant: "tenant-1"}.Build(),
 			Spec: privatev1.TenantSpec_builder{
 				BreakGlassCredentialsSecret: privatev1.SecretLocalReference_builder{Id: "deleted-secret"}.Build(),
-			}.Build(),
-			Status: privatev1.TenantStatus_builder{
-				BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{Password: testInlinePassword}.Build(),
 			}.Build(),
 		}.Build()
 		mockClient.EXPECT().CreateTenant(gomock.Any(), gomock.Any()).Return(&idp.Tenant{Name: "test-org"}, nil)
@@ -2859,12 +2753,6 @@ var _ = Describe("Vault namespace provisioning", func() {
 				Name:       "vault-fail-org",
 				Finalizers: []string{finalizers.Controller},
 				Tenant:     "tenant-1",
-			}.Build(),
-			Status: privatev1.TenantStatus_builder{
-				BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{
-					Username: "vault-fail-org-osac-break-glass",
-					Password: testPreGeneratedPassword,
-				}.Build(),
 			}.Build(),
 		}.Build()
 

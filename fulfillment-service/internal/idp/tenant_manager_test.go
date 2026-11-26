@@ -21,6 +21,8 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+const testBreakGlassPassword = "***REDACTED_SECRET_ASSIGNMENT***"
+
 // mockClient is a mock Keycloak client for testing.
 type mockClient struct {
 	createdTenant       *Tenant
@@ -315,10 +317,11 @@ var _ = Describe("TenantManager", func() {
 	Describe("CreateTenant", func() {
 		It("creates a tenant with break-glass account", func() {
 			config := &TenantConfig{
-				Name:               "test-tenant",
-				DisplayName:        "Test Tenant",
-				Enabled:            new(true),
-				BreakGlassPassword: "breakglass123",
+				Name:                    "test-tenant",
+				DisplayName:             "Test Tenant",
+				Enabled:                 new(true),
+				CreateBreakGlassAccount: true,
+				BreakGlassPassword:      testBreakGlassPassword,
 			}
 
 			credentials, err := manager.CreateTenant(ctx, config)
@@ -342,7 +345,7 @@ var _ = Describe("TenantManager", func() {
 			Expect(credentials.UserID).To(Equal(breakGlassUser.ID))
 			Expect(credentials.Username).To(Equal("test-tenant-osac-break-glass"))
 			Expect(credentials.Email).To(Equal("break-glass@test-tenant.osac.local"))
-			Expect(credentials.Password).To(Equal("breakglass123"))
+			Expect(credentials.Password).To(Equal(testBreakGlassPassword))
 
 			// Verify password is temporary
 			Expect(breakGlassUser.Credentials).To(HaveLen(1))
@@ -351,10 +354,11 @@ var _ = Describe("TenantManager", func() {
 
 		It("creates a disabled tenant when Enabled is false", func() {
 			config := &TenantConfig{
-				Name:               "test-tenant",
-				DisplayName:        "Test Tenant",
-				Enabled:            new(false),
-				BreakGlassPassword: "breakglass123",
+				Name:                    "test-tenant",
+				DisplayName:             "Test Tenant",
+				Enabled:                 new(false),
+				CreateBreakGlassAccount: true,
+				BreakGlassPassword:      testBreakGlassPassword,
 			}
 
 			credentials, err := manager.CreateTenant(ctx, config)
@@ -366,12 +370,26 @@ var _ = Describe("TenantManager", func() {
 			Expect(mock.createdTenant.Enabled).To(BeFalse())
 		})
 
+		It("skips the break-glass account when disabled", func() {
+			config := &TenantConfig{
+				Name:                    "shared",
+				CreateBreakGlassAccount: false,
+			}
+
+			credentials, err := manager.CreateTenant(ctx, config)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(credentials).To(BeNil())
+			Expect(mock.createdTenant.Name).To(Equal("shared"))
+			Expect(mock.createdUsers).To(BeEmpty())
+		})
+
 		It("assigns IdP manager roles to break-glass account", func() {
 			config := &TenantConfig{
-				Name:               "test-tenant",
-				DisplayName:        "Test Tenant",
-				Enabled:            new(true),
-				BreakGlassPassword: "breakglass123",
+				Name:                    "test-tenant",
+				DisplayName:             "Test Tenant",
+				Enabled:                 new(true),
+				CreateBreakGlassAccount: true,
+				BreakGlassPassword:      testBreakGlassPassword,
 			}
 
 			credentials, err := manager.CreateTenant(ctx, config)
@@ -414,12 +432,13 @@ var _ = Describe("TenantManager", func() {
 
 		It("uses custom break-glass username and email when provided", func() {
 			config := &TenantConfig{
-				Name:               "test-tenant",
-				DisplayName:        "Test Tenant",
-				Enabled:            new(true),
-				BreakGlassUsername: "custom-break-glass",
-				BreakGlassEmail:    "custom@example.com",
-				BreakGlassPassword: "breakglass123",
+				Name:                    "test-tenant",
+				DisplayName:             "Test Tenant",
+				Enabled:                 new(true),
+				CreateBreakGlassAccount: true,
+				BreakGlassUsername:      "custom-break-glass",
+				BreakGlassEmail:         "custom@example.com",
+				BreakGlassPassword:      testBreakGlassPassword,
 			}
 
 			credentials, err := manager.CreateTenant(ctx, config)
@@ -432,15 +451,16 @@ var _ = Describe("TenantManager", func() {
 
 			Expect(credentials.Username).To(Equal("custom-break-glass"))
 			Expect(credentials.Email).To(Equal("custom@example.com"))
-			Expect(credentials.Password).To(Equal("breakglass123"))
+			Expect(credentials.Password).To(Equal(testBreakGlassPassword))
 			Expect(credentials.UserID).To(Equal(breakGlassUser.ID))
 		})
 
 		It("generates a password when not provided", func() {
 			config := &TenantConfig{
-				Name:        "test-tenant",
-				DisplayName: "Test Tenant",
-				Enabled:     new(true),
+				Name:                    "test-tenant",
+				DisplayName:             "Test Tenant",
+				Enabled:                 new(true),
+				CreateBreakGlassAccount: true,
 			}
 
 			credentials, err := manager.CreateTenant(ctx, config)
@@ -463,10 +483,11 @@ var _ = Describe("TenantManager", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			config := &TenantConfig{
-				Name:               "test-tenant",
-				DisplayName:        "Test Tenant",
-				Enabled:            new(true),
-				BreakGlassPassword: "breakglass123",
+				Name:                    "test-tenant",
+				DisplayName:             "Test Tenant",
+				Enabled:                 new(true),
+				CreateBreakGlassAccount: true,
+				BreakGlassPassword:      testBreakGlassPassword,
 			}
 
 			credentials, err := failingManager.CreateTenant(ctx, config)
@@ -492,10 +513,11 @@ var _ = Describe("TenantManager", func() {
 			Expect(err).ToNot(HaveOccurred())
 
 			config := &TenantConfig{
-				Name:               "test-tenant",
-				DisplayName:        "Test Tenant",
-				Enabled:            new(true),
-				BreakGlassPassword: "breakglass123",
+				Name:                    "test-tenant",
+				DisplayName:             "Test Tenant",
+				Enabled:                 new(true),
+				CreateBreakGlassAccount: true,
+				BreakGlassPassword:      testBreakGlassPassword,
 			}
 
 			credentials, err := failingManager.CreateTenant(ctx, config)
@@ -530,10 +552,11 @@ var _ = Describe("TenantManager", func() {
 			cancel()
 
 			config := &TenantConfig{
-				Name:               "test-tenant",
-				DisplayName:        "Test Tenant",
-				Enabled:            new(true),
-				BreakGlassPassword: "breakglass123",
+				Name:                    "test-tenant",
+				DisplayName:             "Test Tenant",
+				Enabled:                 new(true),
+				CreateBreakGlassAccount: true,
+				BreakGlassPassword:      testBreakGlassPassword,
 			}
 
 			credentials, err := failingManager.CreateTenant(cancelledCtx, config)
@@ -554,7 +577,7 @@ var _ = Describe("TenantManager", func() {
 				Name:               "test-tenant",
 				Enabled:            new(true),
 				Domains:            []string{"a.example.com", "b.example.com"},
-				BreakGlassPassword: "breakglass123",
+				BreakGlassPassword: testBreakGlassPassword,
 			}
 			_, err := manager.CreateTenant(ctx, config)
 			Expect(err).ToNot(HaveOccurred())
@@ -573,7 +596,7 @@ var _ = Describe("TenantManager", func() {
 				Name:               "test-tenant",
 				Enabled:            new(true),
 				Domains:            []string{"example.com"},
-				BreakGlassPassword: "breakglass123",
+				BreakGlassPassword: testBreakGlassPassword,
 			}
 			_, err := manager.CreateTenant(ctx, config)
 			Expect(err).ToNot(HaveOccurred())
@@ -588,7 +611,7 @@ var _ = Describe("TenantManager", func() {
 				Name:               "test-tenant",
 				Enabled:            new(true),
 				Domains:            []string{"example.com"},
-				BreakGlassPassword: "breakglass123",
+				BreakGlassPassword: testBreakGlassPassword,
 			}
 			_, err := manager.CreateTenant(ctx, config)
 			Expect(err).ToNot(HaveOccurred())
@@ -604,7 +627,7 @@ var _ = Describe("TenantManager", func() {
 				Name:               "test-tenant",
 				Enabled:            new(true),
 				Domains:            []string{"example.com"},
-				BreakGlassPassword: "breakglass123",
+				BreakGlassPassword: testBreakGlassPassword,
 			}
 			_, err := manager.CreateTenant(ctx, config)
 			Expect(err).ToNot(HaveOccurred())

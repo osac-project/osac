@@ -606,3 +606,5 @@ rejections with different status codes.
 
 With networking in place, you can create compute instances that attach to your Subnets
 (and optionally SecurityGroups). See [Creating a VM with OSAC](computeinstance-guide.md).
+
+For bare-metal host networking, see [Networking a BareMetalInstance](baremetalinstance-guide.md#networking).

@@ -1,6 +1,5 @@
 export const instanceTypeFieldIds = {
   name: 'metadata-name',
-  description: 'instance-type-description',
   vcpus: 'instance-type-vcpus',
   memoryGib: 'instance-type-memory-gib',
   gpuCount: 'instance-type-gpu-count',

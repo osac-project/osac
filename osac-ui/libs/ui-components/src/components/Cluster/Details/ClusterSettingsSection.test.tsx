@@ -9,24 +9,24 @@ import { createMockConnectTransport } from '../../../test-utils/createMockConnec
 import { renderWithProviders } from '../../../test-utils/TestProviders';
 
 describe('ClusterSettingsSection', () => {
-  it('shows only the typed inline SSH public key and both CIDRs without fetching secrets', () => {
+  it('shows the SSH Secret reference and both CIDRs without fetching Secrets', () => {
     const transport = createMockConnectTransport();
     const unary = vi.spyOn(transport, 'unary');
     renderWithProviders(
       <ClusterSettingsSection
         cluster={create(ClusterSchema, {
           spec: {
-            sshPublicKey: 'ssh-ed25519 PUBLIC_EXAMPLE_ONLY example',
+            sshKey: { id: 'secret-ssh-1', name: 'tenant-ssh-key' },
             network: { podCidr: '10.128.0.0/14', serviceCidr: '172.30.0.0/16' },
           },
         })}
       />,
       { transport },
     );
-    expect(screen.getByText('ssh-ed25519 PUBLIC_EXAMPLE_ONLY example')).toBeInTheDocument();
-    expect(
-      screen.getByText('ssh-ed25519 PUBLIC_EXAMPLE_ONLY example').closest('dd'),
-    ).toHaveAttribute('tabindex', '0');
+    expect(screen.getByRole('link', { name: 'tenant-ssh-key' })).toHaveAttribute(
+      'href',
+      '/secrets/secret-ssh-1',
+    );
     expect(screen.getByText('10.128.0.0/14')).toBeInTheDocument();
     expect(screen.getByText('172.30.0.0/16')).toBeInTheDocument();
     expect(

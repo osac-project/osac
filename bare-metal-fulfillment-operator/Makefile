@@ -65,7 +65,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest wiremock-image ## Run tests.
-	TESTCONTAINERS_PROVIDER="$(notdir $(WIREMOCK_CONTAINER_TOOL))" KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /test/integration) -coverprofile cover.out
+	CONTAINER_TOOL="$(WIREMOCK_CONTAINER_TOOL)" KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /test/integration) -coverprofile cover.out
 
 .PHONY: wiremock-image
 wiremock-image: ## Build the WireMock fixture image for Envtest.

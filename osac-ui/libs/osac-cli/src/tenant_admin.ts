@@ -134,7 +134,7 @@ export const createTenantAdminRoleBinding = async (
         '@type': 'type.googleapis.com/osac.public.v1.RoleBinding',
         metadata: { name: roleBindingName, tenant: tenantName },
         spec: {
-          role: { name: 'tenant-admin', shared: true },
+          role: { name: 'tenant-admin', tenant: 'shared' },
           users: [{ id: user.id }],
         },
       }),

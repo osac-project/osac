@@ -62,19 +62,21 @@ jobs:
     variant_of: bmaas
     tier: full
     label: "BMaaS Full Install · sanity + regression"
-  # Netris suites use a real lab, so they are started only by hand and do not block the E2E check.
+  # The BMaaS and VMaaS Netris suites (a real lab) run for networking changes only: the `connectivity` filter of
+  # ci-filters.yml. Like the others they count in the E2E check and run in the merge queue; any other change does not
+  # run them (`/test bmaas-netris` still does). The stretched suite is started only by hand.
   e2e-bmaas-netris:
     kind: e2e
     check: "E2E / BMaaS Netris Full Install"
     suite: bmaas-netris
     workflow: e2e-pr-bmaas-netris.yml
-    manual_only: true
+    filters: [connectivity]
   e2e-vmaas-netris:
     kind: e2e
     check: "E2E / VMaaS Netris Full Install"
     suite: vmaas-netris
     workflow: e2e-pr-vmaas-netris.yml
-    manual_only: true
+    filters: [connectivity]
   e2e-stretched-netris:
     kind: e2e
     check: "E2E / Stretched Netris Full Install"

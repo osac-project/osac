@@ -135,7 +135,9 @@ def test_the_policy_loads_with_the_shared_rules_and_the_decision_never_chooses_t
     suites = {s.name: s for s in e2e_start.suites_of(policy)}
     for service in SERVICES:
         assert suites[f"{service}-full"].variant_of == service and suites[f"{service}-full"].tier == "full"
-    assert [s.name for s in e2e_start.automatic(suites.values())] == ["vmaas", "caas", "bmaas"]
+    # The Netris suites are automatic too, for networking changes (their own filter).
+    automatic = [s.name for s in e2e_start.automatic(suites.values())]
+    assert automatic == ["vmaas", "caas", "bmaas", "bmaas-netris", "vmaas-netris"]
 
 
 @pytest.mark.parametrize("service", SERVICES)

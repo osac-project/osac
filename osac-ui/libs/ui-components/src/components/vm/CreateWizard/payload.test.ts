@@ -33,7 +33,7 @@ const vmCatalogItem: ComputeInstanceCatalogItem = {
     id: 'tpl-rhel-9',
     name: 'tpl-rhel-9',
     project: '',
-    shared: false,
+    tenant: 'foo',
   },
   published: true,
   templateParameters: {},
@@ -443,7 +443,7 @@ describe('getComputeInstanceInitialValues — instance type', () => {
         instanceType: {
           behavior: {
             case: 'editable',
-            value: { defaultValue: { id: 'it-small', name: 'u1-small', shared: true } },
+            value: { defaultValue: { id: 'it-small', name: 'u1-small', tenant: 'shared' } },
           },
         },
       },
@@ -462,7 +462,7 @@ describe('getComputeInstanceInitialValues — instance type', () => {
         instanceType: {
           behavior: {
             case: 'locked',
-            value: { id: 'it-small', name: 'u1-small', shared: true },
+            value: { id: 'it-small', name: 'u1-small', tenant: 'shared' },
           },
         },
       },

@@ -195,16 +195,18 @@ const submitTenantForm = async (page: Page, tenantName: string, domainName = '')
   // Enter the required tenant name.
   await page.getByLabel(...TenantsCreatePage.name).fill(tenantName);
 
+  // The primary email domain is optional, so it is only filled when supplied.
   if (domainName) {
-    // Add the optional domain field and enter the supplied domain.
-    await page.getByRole(...TenantsCreatePage.addDomain).click();
-    const domain = page.getByLabel(...TenantsCreatePage.domain);
-    await expect(domain).toBeVisible();
-    await domain.fill(domainName);
+    await page.getByLabel(...TenantsCreatePage.primaryDomain).fill(domainName);
   }
 
-  // Submit the tenant creation form.
-  await page.getByRole(...TenantsCreatePage.create).click();
+  // Walk the General and Billing steps to the review step.
+  await page.getByRole(...TenantsCreatePage.next).click();
+  await expect(page.getByLabel(...TenantsCreatePage.externalBillingId)).toBeVisible();
+  await page.getByRole(...TenantsCreatePage.next).click();
+
+  // Submit the tenant creation wizard.
+  await page.getByRole(...TenantsCreatePage.register).click();
 };
 
 const readTenantRecord = async (

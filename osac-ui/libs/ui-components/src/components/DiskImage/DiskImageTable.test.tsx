@@ -133,8 +133,9 @@ describe('DiskImageTable', () => {
 
     await user.click(screen.getByRole('button', { name: 'Actions for disk-image-available-1' }));
     await user.click(screen.getByRole('button', { name: 'Actions for disk-image-obsolete-1' }));
+    expect(screen.getByRole('menuitem', { name: 'Deprecate' })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: 'Reactivate' })).toBeInTheDocument();
-    expect(screen.queryByRole('menuitem', { name: 'Deprecate' })).not.toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: 'Obsolete' })).not.toBeInTheDocument();
   });
 });

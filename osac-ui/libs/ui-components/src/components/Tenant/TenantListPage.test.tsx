@@ -83,7 +83,7 @@ describe('TenantListPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Tenants' })).toBeInTheDocument();
     });
-    expect(screen.getByRole('link', { name: 'Create tenant' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Register tenant' })).toHaveAttribute(
       'href',
       '/admin/tenants/create',
     );
@@ -239,5 +239,50 @@ describe('TenantListPage', () => {
 
       expect(screen.getByRole('button', { name: 'All states' })).toBeInTheDocument();
     });
+  });
+});
+
+describe('TenantListPage external billing ID', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    const withBillingId = {
+      ...makeTenant('t-1', 'acme', TenantState.SYNCED),
+      spec: { domains: ['acme.example.com'], externalBillingId: 'A00078421' },
+    } as Tenant;
+    mockListResource([withBillingId, makeTenant('t-2', 'globex', TenantState.SYNCED)]);
+  });
+
+  it('shows the stored id with a link to its billing step', async () => {
+    localStorage.setItem(getViewTypePrefKey('tenants'), 'list');
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('A00078421')).toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole('button', { name: 'Edit external billing ID for acme' }),
+    ).toBeInTheDocument();
+  });
+
+  it('offers to add the id when the tenant has none', async () => {
+    localStorage.setItem(getViewTypePrefKey('tenants'), 'list');
+    renderPage();
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: 'Add external billing ID for globex' }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it('shows the billing id in the card view', async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('A00078421')).toBeInTheDocument();
+    });
+    expect(
+      screen.getByRole('button', { name: 'Edit external billing ID for acme' }),
+    ).toBeInTheDocument();
   });
 });

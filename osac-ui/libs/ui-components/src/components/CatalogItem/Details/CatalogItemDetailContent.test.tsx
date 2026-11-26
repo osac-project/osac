@@ -143,7 +143,7 @@ const clusterItem = create(ClusterCatalogItemSchema, {
       podCidr: { behavior: { case: 'locked', value: '10.128.0.0/14' } },
       serviceCidr: { behavior: { case: 'editable', value: { defaultValue: '172.30.0.0/16' } } },
     },
-    sshPublicKey: { behavior: { case: 'locked', value: 'ssh-rsa hidden' } },
+    sshKey: { behavior: { case: 'locked', value: { name: 'ssh-key' } } },
     pullSecretSecret: { behavior: { case: 'locked', value: { name: 'pull-secret' } } },
     autoExternalIpAttachment: { behavior: { case: 'locked', value: true } },
     networkAttachment: { behavior: { case: 'locked', value: {} } },

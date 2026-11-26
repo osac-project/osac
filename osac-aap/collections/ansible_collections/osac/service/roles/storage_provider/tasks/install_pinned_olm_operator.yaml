@@ -1,0 +1,75 @@
+---
+# The legacy filename is retained, but OLM now manages both initial approval
+# and future upgrades through the provider's stable-channel Subscription.
+- name: Validate OLM install target matches the selected provider
+  ansible.builtin.assert:
+    that:
+      - storage_provider_olm_operator_subscription == storage_provider_olm_operator_package
+      - >-
+        (storage_provider_olm_operator_package == 'trident-operator'
+         and storage_provider_olm_operator_namespace == 'trident-operator')
+        or
+        (storage_provider_olm_operator_package == 'vast-csi-operator'
+         and storage_provider_olm_operator_namespace == 'vast-csi-system')
+      - storage_provider_olm_subscription_installer.install_plan_approval == 'Automatic'
+    fail_msg: "Refusing to reconcile an unsupported or non-automatic CSI operator Subscription"
+
+- name: Wait for OLM to install or upgrade the current stable-channel CSV
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: Subscription
+    name: "{{ storage_provider_olm_operator_subscription }}"
+    namespace: "{{ storage_provider_olm_operator_namespace }}"
+    kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
+    validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
+  register: _storage_provider_olm_subscription
+  retries: 60
+  delay: 10
+  until: >-
+    _storage_provider_olm_subscription.resources | length > 0
+    and (_storage_provider_olm_subscription.resources[0].status.currentCSV | default('', true) | length > 0)
+    and (_storage_provider_olm_subscription.resources[0].status.installedCSV | default('', true) | length > 0)
+    and _storage_provider_olm_subscription.resources[0].status.installedCSV
+        == _storage_provider_olm_subscription.resources[0].status.currentCSV
+
+- name: Record the CSV installed by OLM
+  ansible.builtin.set_fact:
+    _storage_provider_olm_target_csv: >-
+      {{ _storage_provider_olm_subscription.resources[0].status.installedCSV }}
+
+- name: Validate the installed CSV matches the provider's stable Automatic Subscription
+  ansible.builtin.assert:
+    that:
+      - _storage_provider_olm_target_csv is match('^' ~ storage_provider_olm_operator_package ~ '\.')
+      - _storage_provider_olm_subscription.resources[0].spec.channel == storage_provider_olm_subscription_installer.channel
+      - _storage_provider_olm_subscription.resources[0].spec.installPlanApproval == 'Automatic'
+      - _storage_provider_olm_subscription.resources[0].spec.name == storage_provider_olm_subscription_installer.package
+      - _storage_provider_olm_subscription.resources[0].spec.source == storage_provider_olm_subscription_installer.catalog_source
+      - _storage_provider_olm_subscription.resources[0].spec.sourceNamespace == storage_provider_olm_subscription_installer.catalog_namespace
+      - "'startingCSV' not in _storage_provider_olm_subscription.resources[0].spec"
+    fail_msg: >-
+      Subscription '{{ storage_provider_olm_operator_subscription }}' did not install the current CSV
+      from its configured stable Automatic channel.
+
+- name: Wait for the selected operator CSV to succeed
+  kubernetes.core.k8s_info:
+    api_version: operators.coreos.com/v1alpha1
+    kind: ClusterServiceVersion
+    name: "{{ _storage_provider_olm_target_csv }}"
+    namespace: "{{ storage_provider_olm_operator_namespace }}"
+    kubeconfig: "{{ storage_provider_target_kubeconfig | default(omit) }}"
+    validate_certs: "{{ false if (storage_provider_target_kubeconfig_insecure | default(false) | bool) else omit }}"
+  register: _storage_provider_olm_csv
+  retries: 30
+  delay: 10
+  until: >-
+    _storage_provider_olm_csv.resources | length > 0
+    and _storage_provider_olm_csv.resources[0].status.phase | default('') == 'Succeeded'
+
+- name: Record the OLM-selected provider version
+  ansible.builtin.debug:
+    msg: >-
+      Installed {{ storage_provider_olm_operator_package }} CSV
+      {{ _storage_provider_olm_target_csv }}
+      (version {{ _storage_provider_olm_csv.resources[0].spec.version }}); OLM automatically approves
+      installations and future upgrades from the configured stable channel.

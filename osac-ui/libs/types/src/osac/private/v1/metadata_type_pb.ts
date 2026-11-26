@@ -121,7 +121,7 @@ export type Metadata = Message<"osac.private.v1.Metadata"> & {
   /**
    * Version is a numeric field that is automatically incremented with every change to the object. Set `lock` to true
    * on an Update request to require this version to match the stored version; a stale version is rejected with
-   * Aborted. If `lock` is omitted or false, the Update proceeds without an optimistic version check.
+   * Aborted. If `lock` is omitted or false, only changes to `finalizers` are version-checked.
    *
    * @generated from field: int32 version = 8;
    */
@@ -153,6 +153,11 @@ export type Metadata = Message<"osac.private.v1.Metadata"> & {
   /**
    * Finalizers indicate tasks that need to be completed before the object can be completely deleted. When the object
    * has been deleted and this list is empty the system will automatically archive the object.
+   *
+   * An Update that changes this list, compared as a set, must carry the current `version`, whether or not `lock` is
+   * set, or it is rejected with Aborted; without `metadata` it has no version to carry and is rejected with
+   * InvalidArgument. Most Updates without a mask replace the whole object, so send a mask when changing other fields
+   * of an object that may have finalizers.
    *
    * @generated from field: repeated string finalizers = 12;
    */

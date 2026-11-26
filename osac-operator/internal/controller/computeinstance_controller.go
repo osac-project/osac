@@ -2061,11 +2061,11 @@ func updateComputeInstanceProvisioningStatus(instance *v1alpha1.ComputeInstance,
 	manual := instance.Annotations[osacComputeInstanceManagementStateAnnotation] == ManagementStateManual
 	if !manual {
 		instance.Status.LastProvisioningFailure = nil
-		if failure := provision.LastFailure; failure != nil && instance.Status.ProvisionConfigVersion == instance.Status.DesiredConfigVersion {
-			instance.Status.LastProvisioningFailure = &v1alpha1.ComputeInstanceProvisioningFailure{
-				Reason: failure.Reason, Message: failure.Message, Attempt: failure.Attempt,
-				ObservedAt: failure.ObservedAt.DeepCopy(),
-			}
+	}
+	if failure := provision.LastFailure; failure != nil && instance.Status.ProvisionConfigVersion == instance.Status.DesiredConfigVersion {
+		instance.Status.LastProvisioningFailure = &v1alpha1.ComputeInstanceProvisioningFailure{
+			Reason: failure.Reason, Message: failure.Message, Attempt: failure.Attempt,
+			ObservedAt: failure.ObservedAt.DeepCopy(),
 		}
 	}
 	reason, message := "", ""

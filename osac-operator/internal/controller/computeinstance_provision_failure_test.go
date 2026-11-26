@@ -484,6 +484,51 @@ var _ = Describe("ComputeInstance public retry projection", func() {
 		Entry("running retry", true),
 	)
 
+	DescribeTable("recovers saved failure details in manual mode after a summary conflict", func(stale bool) {
+		attempt := int32(1)
+		if stale {
+			fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
+			result := reconcileOK()
+			clock.Step(result.RequeueAfter)
+			reconcileOK()
+			clock.Step(time.Second)
+			attempt = 2
+		}
+		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text-latest","retryable":true}}`)
+		writes.when = func(ci *osacv1alpha1.ComputeInstance) bool {
+			return ci.Status.LastProvisioningFailure != nil && ci.Status.LastProvisioningFailure.Attempt == attempt
+		}
+		_, err := run()
+		Expect(apierrors.IsConflict(err)).To(BeTrue())
+		reload()
+		checkpoint := instance.Status.Jobs[0].LastFailure.DeepCopy()
+		Expect(checkpoint.Attempt).To(Equal(attempt))
+		if stale {
+			Expect(instance.Status.LastProvisioningFailure.Attempt).To(Equal(int32(1)))
+		} else {
+			Expect(instance.Status.LastProvisioningFailure).To(BeNil())
+		}
+		jobs := instance.DeepCopy().Status.Jobs
+		instance.Annotations[osacComputeInstanceManagementStateAnnotation] = ManagementStateManual
+		Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+		recreate()
+		for range 2 {
+			reconcileOK()
+			expectReason(osacv1alpha1.ReasonWaitingForVM)
+			failure := instance.Status.LastProvisioningFailure
+			Expect(failure).NotTo(BeNil())
+			Expect(failure.Reason).To(Equal(checkpoint.Reason))
+			Expect(failure.Message).To(Equal(checkpoint.Message))
+			Expect(failure.Attempt).To(Equal(checkpoint.Attempt))
+			Expect(failure.ObservedAt.Time.Equal(checkpoint.ObservedAt.Time)).To(BeTrue())
+			Expect(instance.Status.Jobs).To(Equal(jobs))
+			Expect(fake.tasks()).To(HaveLen(int(attempt)))
+		}
+	},
+		Entry("empty summary", false),
+		Entry("stale summary", true),
+	)
+
 	It("preserves failure details after a manual configuration change with a ready tenant", func() {
 		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
 		reconcileOK()

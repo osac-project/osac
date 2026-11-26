@@ -83,6 +83,61 @@ spec:
                 x-kubernetes-validations:
                 - message: accessMode is immutable
                   rule: self == oldSelf
+              diskImage:
+                description: |-
+                  DiskImage references the DiskImage catalog object the volume is
+                  provisioned from. Absent for blank disks. Immutable after creation.
+                properties:
+                  id:
+                    description: ID is the fulfillment record identifier of the DiskImage.
+                    minLength: 1
+                    type: string
+                  name:
+                    description: Name is the DiskImage name, carried for observability.
+                    type: string
+                  project:
+                    description: Project is the DiskImage project, carried for observability.
+                    type: string
+                  shared:
+                    description: |-
+                      Shared marks a shared-tenant DiskImage reference, carried verbatim
+                      from the ComputeInstance spec; it is not interpreted here — the
+                      reference resolves by ID.
+                    type: boolean
+                required:
+                - id
+                type: object
+                x-kubernetes-validations:
+                - message: diskImage is immutable
+                  rule: self == oldSelf
+              owner:
+                description: |-
+                  Owner identifies the fulfillment workload that owns this volume.
+                  Set only by the VMaaS provisioning path; CaaS volumes are owned by
+                  their CaaS cluster, for which a dedicated owner type is future
+                  work — today this field distinguishes VMaaS volumes only. Immutable
+                  after creation.
+                properties:
+                  reference:
+                    description: Reference is the fulfillment record identifier of
+                      the owning workload.
+                    minLength: 1
+                    type: string
+                  type:
+                    allOf:
+                    - enum:
+                      - ComputeInstance
+                    - enum:
+                      - ComputeInstance
+                    description: Type is the kind of workload that owns the volume.
+                    type: string
+                required:
+                - reference
+                - type
+                type: object
+                x-kubernetes-validations:
+                - message: owner is immutable
+                  rule: self == oldSelf
               sizeGiB:
                 description: SizeGiB is the requested storage capacity in gibibytes.
                 format: int64
@@ -99,6 +154,35 @@ spec:
                 type: string
                 x-kubernetes-validations:
                 - message: storageTier is immutable
+                  rule: self == oldSelf
+              target:
+                description: |-
+                  Target records where an owned volume's storage is provisioned.
+                  Immutable after creation.
+                properties:
+                  dataVolumeName:
+                    description: |-
+                      DataVolumeName is the deterministic name of the provisioned storage
+                      object that the owning workload references.
+                    minLength: 1
+                    type: string
+                  diskKey:
+                    description: DiskKey is the disk key on the owning workload ("boot",
+                      "disk-1", ...).
+                    minLength: 1
+                    type: string
+                  namespace:
+                    description: Namespace is the namespace where the provisioned
+                      storage is created.
+                    minLength: 1
+                    type: string
+                required:
+                - dataVolumeName
+                - diskKey
+                - namespace
+                type: object
+                x-kubernetes-validations:
+                - message: target is immutable
                   rule: self == oldSelf
               topology:
                 description: |-

@@ -300,7 +300,10 @@ func (s *PrivateVolumesServer) Update(ctx context.Context,
 
 	// Merge the update into a clone of the existing object:
 	merged := cloneVolume(existing)
-	applyVolumeUpdate(merged, request.GetObject(), request.GetUpdateMask())
+	merged, err = s.applyVolumeUpdate(merged, request.GetObject(), request.GetUpdateMask())
+	if err != nil {
+		return
+	}
 
 	// Validate immutable fields:
 	err = validateVolumeImmutability(merged, existing)
@@ -320,64 +323,35 @@ func cloneVolume(v *privatev1.Volume) *privatev1.Volume {
 	return proto.Clone(v).(*privatev1.Volume)
 }
 
-// applyVolumeUpdate applies the update fields onto the base object, respecting the field mask.
+// applyVolumeUpdate applies the update fields onto the merged object, respecting the field mask.
 // If no mask is provided, all fields from the update are applied.
 // Field mask paths use the spec/status prefix (e.g., "spec.storage_tier", "status.state") per API conventions.
-func applyVolumeUpdate(base, update *privatev1.Volume, mask *fieldmaskpb.FieldMask) {
+// Mask application uses the generic path compiler shared with the generic update layer, so
+// exact paths and nested sub-field paths are handled uniformly: the requested values reach
+// validateVolumeImmutability, which rejects changed immutable fields and accepts repeats of
+// stored values.
+func (s *PrivateVolumesServer) applyVolumeUpdate(
+	merged, update *privatev1.Volume,
+	mask *fieldmaskpb.FieldMask,
+) (*privatev1.Volume, error) {
 	if mask == nil || len(mask.GetPaths()) == 0 {
-		proto.Merge(base, update)
-		return
+		proto.Merge(merged, update)
+		return merged, nil
 	}
-	for _, path := range mask.GetPaths() {
-		switch path {
-		case "spec.storage_tier":
-			base.GetSpec().SetStorageTier(update.GetSpec().GetStorageTier())
-		case "spec.size_gib":
-			base.GetSpec().SetSizeGib(update.GetSpec().GetSizeGib())
-		case "spec.access_mode":
-			base.GetSpec().SetAccessMode(update.GetSpec().GetAccessMode())
-		case "spec.topology":
-			if topology := update.GetSpec().GetTopology(); topology != nil {
-				base.GetSpec().SetTopology(proto.Clone(topology).(*privatev1.VolumeTopology))
-			} else {
-				base.GetSpec().SetTopology(nil)
-			}
-		case "spec.topology.segments":
-			if base.GetSpec().GetTopology() == nil {
-				base.GetSpec().SetTopology(&privatev1.VolumeTopology{})
-			}
-			src := update.GetSpec().GetTopology().GetSegments()
-			dst := make(map[string]string, len(src))
-			for k, v := range src {
-				dst[k] = v
-			}
-			base.GetSpec().GetTopology().SetSegments(dst)
-		case "spec.owner":
-			if owner := update.GetSpec().GetOwner(); owner != nil {
-				base.GetSpec().SetOwner(proto.Clone(owner).(*privatev1.VolumeOwner))
-			} else {
-				base.GetSpec().SetOwner(nil)
-			}
-		case "spec.disk_image":
-			if diskImage := update.GetSpec().GetDiskImage(); diskImage != nil {
-				base.GetSpec().SetDiskImage(proto.Clone(diskImage).(*privatev1.DiskImageReference))
-			} else {
-				base.GetSpec().SetDiskImage(nil)
-			}
-		case "spec.target":
-			if target := update.GetSpec().GetTarget(); target != nil {
-				base.GetSpec().SetTarget(proto.Clone(target).(*privatev1.VolumeTarget))
-			} else {
-				base.GetSpec().SetTarget(nil)
-			}
-		case "status.provider":
-			base.GetStatus().SetProvider(update.GetStatus().GetProvider())
-		case "status.protocol":
-			base.GetStatus().SetProtocol(update.GetStatus().GetProtocol())
-		default:
-			// Unknown paths are handled by the generic update layer.
+	fieldPaths, err := s.generic.compilePaths(mask.GetPaths())
+	if err != nil {
+		return nil, grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid update mask: %s", err)
+	}
+	for _, fieldPath := range fieldPaths {
+		if value, ok := fieldPath.Get(update); ok {
+			fieldPath.Set(merged, value)
+		} else {
+			fieldPath.Clear(merged)
 		}
 	}
+	// Detach message and map values aliased from the request during the apply,
+	// mirroring the generic update layer's post-apply clone.
+	return cloneVolume(merged), nil
 }
 
 // validateVolumeImmutability checks that immutable volume fields have not been changed.

@@ -79,15 +79,33 @@ ${eps}ports:
 EOF
 }
 
-# Remove stale slices of the two Services before applying the bridge. This
-# runs after the release made the Services selectorless, so the EndpointSlice
-# controller no longer reconciles them and cannot recreate what is deleted;
-# without this, Envoy-era slices from a driver switch would keep sending
-# consumers to the removed Envoy Pods next to the bridge endpoints.
+# Wait for the release to make the Services selectorless before touching
+# their slices: this script starts alongside helm, and on a driver switch
+# the gateway may already be ready while the Services still carry their
+# Envoy selector - deleting slices then would let the EndpointSlice
+# controller recreate them. A missing Service (clean install, helm not
+# that far yet) also keeps waiting.
+for service in fulfillment-api fulfillment-internal-api; do
+  until selector=$(oc get service -n "${NS}" "${service}" \
+      -o jsonpath='{.spec.selector}' 2>/dev/null) && [ -z "${selector}" ]; do
+    if (( SECONDS >= deadline )); then
+      echo "ERROR: Service ${NS}/${service} did not become selectorless after ${TIMEOUT_SECONDS}s" >&2
+      exit 1
+    fi
+    echo "  waiting for ${NS}/${service} to become selectorless..."
+    sleep 5
+  done
+done
+
+# Remove stale slices of the two Services before applying the bridge: the
+# Services are selectorless now, so the EndpointSlice controller no longer
+# reconciles them and cannot recreate what is deleted. Without this,
+# Envoy-era slices from a driver switch would keep sending consumers to the
+# removed Envoy Pods next to the bridge endpoints.
 for service in fulfillment-api fulfillment-internal-api; do
   oc get endpointslices -n "${NS}" -l "kubernetes.io/service-name=${service}" \
     -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null \
-    | grep -v -- '-gateway$' \
+    | { grep -v -- '-gateway$' || true; } \
     | while read -r stale; do
         [ -n "${stale}" ] || continue
         echo "removing stale EndpointSlice ${NS}/${stale} (service ${service})"

@@ -363,6 +363,7 @@ func buildHandlerList() []handlerRegistrar {
 		privatev1.RegisterQuotaLimitRequestsHandler,
 		privatev1.RegisterQuotaUsageHandler,
 		privatev1.RegisterQuotaDefaultLimitsHandler,
+		privatev1.RegisterWorkloadClustersHandler,
 		// CaaS:
 		publicv1.RegisterClusterTemplatesHandler,
 		publicv1.RegisterAddOnOperatorsHandler,

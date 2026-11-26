@@ -132,6 +132,17 @@ reader_roles := {
   "tenant-reader",
   "cloud-provider-reader",
 }
+
+# WorkloadCluster is a provider-global resource exposed only through the
+# private API to cloud-provider administrators.
+cloud_provider_admin_roles := {
+  "cloud-provider-admin",
+}
+default is_cloud_provider_admin = false
+is_cloud_provider_admin if {
+  some role in subject_realm_roles
+  role in cloud_provider_admin_roles
+}
 default is_reader = false
 is_reader if {
   some role in subject_realm_roles
@@ -512,6 +523,17 @@ legacy_allow if {
 legacy_allow if {
   is_reader
   grpc_method == "/osac.public.v1.SelfSubjectAccessReviews/Create"
+}
+
+# WorkloadClusters are provider-global and intentionally have no Delete grant.
+legacy_allow if {
+  is_cloud_provider_admin
+  grpc_method in {
+    "/osac.private.v1.WorkloadClusters/List",
+    "/osac.private.v1.WorkloadClusters/Get",
+    "/osac.private.v1.WorkloadClusters/Create",
+    "/osac.private.v1.WorkloadClusters/Update",
+  }
 }
 
 # Tenant admins can manage catalog items, users, identity providers,

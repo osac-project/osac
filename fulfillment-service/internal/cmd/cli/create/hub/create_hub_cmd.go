@@ -16,6 +16,7 @@ package hub
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/proto"
@@ -55,6 +56,12 @@ func Cmd() *cobra.Command {
 		"",
 		namespaceFlagHelp,
 	)
+	flags.StringArrayVar(
+		&runner.labels,
+		"label",
+		nil,
+		labelFlagHelp,
+	)
 	return result
 }
 
@@ -63,6 +70,7 @@ type runnerContext struct {
 	name       string
 	kubeconfig string
 	namespace  string
+	labels     []string
 }
 
 func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
@@ -88,6 +96,10 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	if c.namespace == "" {
 		return fmt.Errorf("namespace name is required")
 	}
+	labels, err := parseLabels(c.labels)
+	if err != nil {
+		return err
+	}
 
 	// Create the gRPC connection from the configuration:
 	conn, err := cfg.Connect(ctx, cmd.Flags())
@@ -108,7 +120,8 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	// Prepare the hub:
 	hub := privatev1.Hub_builder{
 		Metadata: privatev1.Metadata_builder{
-			Name: c.name,
+			Name:   c.name,
+			Labels: labels,
 		}.Build(),
 		Spec: privatev1.HubSpec_builder{
 			Kubeconfig: kubeconfig,
@@ -131,6 +144,27 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func parseLabels(values []string) (map[string]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+	labels := make(map[string]string, len(values))
+	for _, value := range values {
+		key, labelValue, ok := strings.Cut(value, "=")
+		if !ok {
+			return nil, fmt.Errorf("invalid label %q: must be in key=value format", value)
+		}
+		if key == "" {
+			return nil, fmt.Errorf("invalid label %q: key must not be empty", value)
+		}
+		if _, exists := labels[key]; exists {
+			return nil, fmt.Errorf("duplicate label key %q", key)
+		}
+		labels[key] = labelValue
+	}
+	return labels, nil
+}
+
 const shortHelp = `Create a hub`
 
 const longHelp = `
@@ -144,7 +178,8 @@ To create a hub:
 {{ bt 3 }}shell
 {{ binary }} create hub --name my-hub \
   --kubeconfig /path/to/kubeconfig \
-  --namespace osac-orders
+  --namespace osac-orders \
+  --label ai-grid=true
 {{ bt 3 }}
 `
 
@@ -159,4 +194,8 @@ API.
 
 const namespaceFlagHelp = `
 _NAMESPACE_ - Namespace where cluster orders will be created.
+`
+
+const labelFlagHelp = `
+_KEY=VALUE_ - Label to set on the Hub. Can be specified multiple times.
 `

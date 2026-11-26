@@ -55,6 +55,7 @@ import "osac/private/v1/subnet_type.proto";
 import "osac/private/v1/user_type.proto";
 import "osac/private/v1/virtual_network_type.proto";
 import "osac/private/v1/volume_type.proto";
+import "osac/private/v1/workload_cluster_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
 
@@ -118,6 +119,7 @@ message Event {
     QuotaDefaultLimit quota_default_limit = 42 [(cleanapi.field).private = true];
     QuotaThreshold quota_threshold = 43 [(cleanapi.field).private = true];
     QuotaLimitRequest quota_limit_request = 44 [(cleanapi.field).private = true];
+    WorkloadCluster workload_cluster = 45 [(cleanapi.field).private = true];
   }
 
   reserved 10;

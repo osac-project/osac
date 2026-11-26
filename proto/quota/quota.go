@@ -81,6 +81,7 @@ var kindsThatUseNothing = []string{
 	"Subnet",
 	"Tenant",
 	"User",
+	"WorkloadCluster",
 }
 
 // Kind is the quota price of one resource kind, from its annotations.

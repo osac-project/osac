@@ -511,7 +511,8 @@ func (t *tool) listObjectTables(ctx context.Context, pool *pgxpool.Pool) (result
 				'quota_outbox',
 				'schema_migrations',
 				'storage_tier_backends',
-				'tenant_domains'
+				'tenant_domains',
+				'workload_cluster_hub_refs'
 			)
 		order by
 			c.relname

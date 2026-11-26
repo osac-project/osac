@@ -12,7 +12,7 @@ from typing import TextIO
 
 import yaml
 
-from tests.conformance.model import Plan, TestIdentity
+from tests.conformance.model import MARKER_PREFIX, NON_BLOCKING_MARKER, Plan, TestIdentity
 from tests.conformance.redact import Redactor
 
 _RUN_ID_ALPHABET = string.ascii_lowercase + string.digits
@@ -80,11 +80,7 @@ class OutputSink:
 
 
 def _test_markers(test: TestIdentity) -> list[str]:
-    return [
-        label
-        for label in sorted(test.labels)
-        if label.startswith("conformance_") and label != "conformance_non_blocking"
-    ]
+    return [label for label in sorted(test.labels) if label.startswith(MARKER_PREFIX) and label != NON_BLOCKING_MARKER]
 
 
 def plan_document(plan: Plan, redactor: Redactor) -> dict[str, object]:

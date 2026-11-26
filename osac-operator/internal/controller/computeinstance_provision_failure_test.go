@@ -484,6 +484,26 @@ var _ = Describe("ComputeInstance public retry projection", func() {
 		Entry("running retry", true),
 	)
 
+	It("preserves failure details after a manual configuration change with a ready tenant", func() {
+		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
+		reconcileOK()
+		failure := instance.Status.LastProvisioningFailure.DeepCopy()
+		jobs := instance.DeepCopy().Status.Jobs
+		instance.Annotations[osacComputeInstanceManagementStateAnnotation] = ManagementStateManual
+		restart := metav1.NewTime(clock.Now().Add(time.Second))
+		instance.Spec.RestartRequestedAt = &restart
+		Expect(k8sClient.Update(ctx, instance)).To(Succeed())
+		recreate()
+		for range 2 {
+			reconcileOK()
+			Expect(instance.Status.DesiredConfigVersion).NotTo(Equal(instance.Status.ProvisionConfigVersion))
+			expectReason(osacv1alpha1.ReasonWaitingForVM)
+			Expect(instance.Status.LastProvisioningFailure).To(Equal(failure))
+			Expect(instance.Status.Jobs).To(Equal(jobs))
+			Expect(fake.tasks()).To(HaveLen(1))
+		}
+	})
+
 	It("replays the latest failure and successful clearing across real projection conflicts and restart", func() {
 		fake.finish(computeInstanceProvisionTask, "failed", `{"osac_error":{"message":"private-provider-text","retryable":true}}`)
 		result := reconcileOK()

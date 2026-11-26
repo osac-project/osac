@@ -134,9 +134,7 @@ class PytestTestTree:
         nodeid = self._absolute_nodeid(manifest_nodeid)
         markers = frozenset(str(marker) for marker in item.get("markers", []))
         classification = (
-            Classification.INFORMING
-            if {"conformance_informing", "conformance/informing"} & markers
-            else Classification.BLOCKING
+            Classification.NON_BLOCKING if "conformance_non_blocking" in markers else Classification.BLOCKING
         )
         return TestIdentity(
             id=self._canonical_id(manifest_nodeid),

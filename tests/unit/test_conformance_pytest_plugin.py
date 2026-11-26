@@ -43,15 +43,13 @@ def _tree(tmp_path: Path) -> Path:
     (tree / "test_sample.py").write_text(
         "import pytest\n"
         "@pytest.mark.conformance_generic\n"
-        "@pytest.mark.conformance_blocking\n"
         "def test_passes():\n"
         "    assert True\n"
-        "@pytest.mark.conformance_netris\n"
-        "@pytest.mark.conformance_informing\n"
+        "@pytest.mark.conformance_network\n"
+        "@pytest.mark.conformance_non_blocking\n"
         "def test_fails():\n"
         "    assert False\n"
         "@pytest.mark.conformance_generic\n"
-        "@pytest.mark.conformance_blocking\n"
         "def test_skips():\n"
         "    pytest.skip('optional')\n"
     )
@@ -89,7 +87,6 @@ def test_teardown_skip_is_recorded(tmp_path: Path) -> None:
         "def skipping():\n"
         "    yield\n"
         "    pytest.skip('teardown skipped')\n"
-        "@pytest.mark.conformance_blocking\n"
         "def test_body_passes(skipping):\n"
         "    assert True\n"
     )

@@ -26,8 +26,8 @@ def _target() -> tuple[Path, str]:
     return Path(target["kubeconfig"]), target.get("namespace") or "osac"
 
 
-@pytest.mark.conformance_netris
-@pytest.mark.conformance_informing
+@pytest.mark.conformance_network
+@pytest.mark.conformance_non_blocking
 def test_netris_settings_are_present() -> None:
     kubeconfig, namespace = _target()
     try:

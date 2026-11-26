@@ -15,10 +15,10 @@ selectors:
     type: marker
     markers:
       - conformance_caas
-  - id: netris
+  - id: network
     type: marker
     markers:
-      - conformance_netris
+      - conformance_network
 
 profiles:
   - id: generic
@@ -33,6 +33,6 @@ profiles:
   - id: cluster
     selectors:
       - caas
-  - id: netris
+  - id: network
     selectors:
-      - netris
+      - network

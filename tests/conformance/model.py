@@ -31,7 +31,7 @@ class CheckResult(StrEnum):
 
 class Classification(StrEnum):
     BLOCKING = "blocking"
-    INFORMING = "informing"
+    NON_BLOCKING = "non_blocking"
 
 
 @dataclass(frozen=True)

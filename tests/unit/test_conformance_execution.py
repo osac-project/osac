@@ -65,12 +65,10 @@ def _tree(tmp_path: Path) -> Path:
     (tree / "test_sample.py").write_text(
         "import pytest\n"
         "@pytest.mark.conformance_generic\n"
-        "@pytest.mark.conformance_blocking\n"
         "def test_passes():\n"
         "    print('pass output')\n"
         f"    print('api_key={_REDACTION_MARKER_C}')\n"
         "@pytest.mark.conformance_generic\n"
-        "@pytest.mark.conformance_blocking\n"
         "def test_fails():\n"
         "    assert False, 'expected failure'\n"
     )
@@ -85,6 +83,28 @@ def test_collect_reads_markers_into_identities(tmp_path: Path) -> None:
     assert len(tests) == 2
     assert all(test.classification is Classification.BLOCKING for test in tests)
     assert all(test.profiles == () for test in tests)
+
+
+def test_collect_maps_the_non_blocking_marker_to_a_classification(tmp_path: Path) -> None:
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "test_sample.py").write_text(
+        "import pytest\n"
+        "@pytest.mark.conformance_generic\n"
+        "def test_blocking():\n"
+        "    pass\n"
+        "@pytest.mark.conformance_network\n"
+        "@pytest.mark.conformance_non_blocking\n"
+        "def test_non_blocking():\n"
+        "    pass\n"
+    )
+
+    tests = PytestTestTree(root=tree, python=sys.executable).collect()
+
+    assert {test.id: test.classification for test in tests} == {
+        "test_sample.py::test_blocking": Classification.BLOCKING,
+        "test_sample.py::test_non_blocking": Classification.NON_BLOCKING,
+    }
 
 
 def test_run_maps_pytest_outcomes_to_conformance_results(tmp_path: Path) -> None:

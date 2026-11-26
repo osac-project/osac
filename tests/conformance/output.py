@@ -80,15 +80,11 @@ class OutputSink:
 
 
 def _test_markers(test: TestIdentity) -> list[str]:
-    markers: list[str] = []
-    for label in sorted(test.labels):
-        if (
-            label.startswith("conformance/") and not label.startswith(("conformance/blocking", "conformance/informing"))
-        ) or (
-            label.startswith("conformance_") and not label.startswith(("conformance_blocking", "conformance_informing"))
-        ):
-            markers.append(label)
-    return markers
+    return [
+        label
+        for label in sorted(test.labels)
+        if label.startswith("conformance_") and label != "conformance_non_blocking"
+    ]
 
 
 def plan_document(plan: Plan, redactor: Redactor) -> dict[str, object]:

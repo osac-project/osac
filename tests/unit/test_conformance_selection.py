@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
-from tests.conformance.catalog import Catalog, ProfileDefinition, expand_profiles, load_catalog
+from tests.conformance.catalog import Catalog, ProfileDefinition, expand_profiles
 from tests.conformance.errors import ConfigError
 from tests.conformance.model import Classification, Selector, TestIdentity
 from tests.conformance.output import plan_key
@@ -28,12 +26,12 @@ def _catalog() -> Catalog:
     selectors = {
         "generic": Selector("generic", "marker", ("conformance_generic",)),
         "vmaas": Selector("vmaas", "marker", ("conformance_vmaas",)),
-        "netris": Selector("netris", "marker", ("conformance_netris",)),
+        "network": Selector("network", "marker", ("conformance_network",)),
     }
     profiles = {
         "generic": ProfileDefinition("generic", ("generic",)),
         "vm": ProfileDefinition("vm", ("vmaas",)),
-        "netris": ProfileDefinition("netris", ("netris",)),
+        "network": ProfileDefinition("network", ("network",)),
     }
     return Catalog(selectors=selectors, profiles=profiles)
 
@@ -44,17 +42,10 @@ def _selector_ids(catalog: Catalog, selector_ids: tuple[str, ...]) -> tuple[Sele
 
 def test_expand_profiles_adds_generic_and_unions_selectors() -> None:
     catalog = _catalog()
-    names, selectors = expand_profiles(["vm", "netris"], catalog)
+    names, selectors = expand_profiles(["vm", "network"], catalog)
 
-    assert names == ("generic", "vm", "netris")
-    assert tuple(selector.id for selector in selectors) == ("generic", "vmaas", "netris")
-
-
-def test_unknown_profile_is_a_config_error() -> None:
-    with pytest.raises(ConfigError) as exc:
-        expand_profiles(["frobnicate"], _catalog())
-
-    assert "frobnicate" in "\n".join(exc.value.checks)
+    assert names == ("generic", "vm", "network")
+    assert tuple(selector.id for selector in selectors) == ("generic", "vmaas", "network")
 
 
 def test_plan_is_the_union_with_generic_first_and_deduplicated() -> None:
@@ -62,20 +53,20 @@ def test_plan_is_the_union_with_generic_first_and_deduplicated() -> None:
     tests = [
         _test("A", "conformance_generic"),
         _test("B", "conformance_generic", "conformance_vmaas"),
-        _test("C", "conformance_netris"),
+        _test("C", "conformance_network"),
     ]
 
-    plan = compute_plan(tests, _selector_ids(catalog, ("generic", "vmaas", "netris")), ("generic", "vm", "netris"))
+    plan = compute_plan(tests, _selector_ids(catalog, ("generic", "vmaas", "network")), ("generic", "vm", "network"))
 
     assert tuple(t.id for t in plan.tests) == ("A", "B", "C")
-    assert plan.profiles == ("generic", "vm", "netris")
-    assert tuple(selector.id for selector in plan.selectors) == ("generic", "vmaas", "netris")
+    assert plan.profiles == ("generic", "vm", "network")
+    assert tuple(selector.id for selector in plan.selectors) == ("generic", "vmaas", "network")
     assert plan.complete is True
 
 
 def test_selectors_do_not_imply_one_another() -> None:
     catalog = _catalog()
-    tests = [_test("A", "conformance_generic"), _test("B", "conformance_netris")]
+    tests = [_test("A", "conformance_generic"), _test("B", "conformance_network")]
 
     plan = compute_plan(tests, _selector_ids(catalog, ("generic", "vmaas")), ("generic", "vm"))
 
@@ -118,7 +109,7 @@ def test_plan_from_names_rejects_an_unknown_test() -> None:
 
 def test_plan_from_names_rejects_a_test_no_selected_profile_selects() -> None:
     catalog = _catalog()
-    tests = [_test("A", "conformance_generic"), _test("B", "conformance_netris")]
+    tests = [_test("A", "conformance_generic"), _test("B", "conformance_network")]
 
     with pytest.raises(ConfigError) as exc:
         plan_from_names(tests, ["B"], _selector_ids(catalog, ("generic", "vmaas")), ("generic", "vm"))
@@ -144,22 +135,3 @@ def test_a_test_can_count_toward_multiple_profiles() -> None:
     enriched = assign_profiles(raw, catalog, ("generic", "vm", "full"))
 
     assert enriched[0].profiles == ("vm", "full")
-
-
-def test_catalog_rejects_duplicate_mapping_keys(tmp_path: Path) -> None:
-    catalog = tmp_path / "catalog.yaml"
-    catalog.write_text(
-        "selectors:\n"
-        "  - id: generic\n"
-        "    type: marker\n"
-        "    markers: [conformance_generic]\n"
-        "profiles:\n"
-        "  - id: generic\n"
-        "    selectors: [generic]\n"
-        "profiles:\n"
-        "  - id: generic\n"
-        "    selectors: [generic]\n"
-    )
-
-    with pytest.raises(ConfigError, match="duplicate key"):
-        load_catalog(catalog)

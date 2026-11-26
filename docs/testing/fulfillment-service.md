@@ -104,36 +104,104 @@ identity E2E is [OSAC-6614](https://redhat.atlassian.net/browse/OSAC-6614).
   E2E coverage.
 - Quota tables and APIs ([DEV] [OSAC-7613](https://redhat.atlassian.net/browse/OSAC-7613)):
   the five quota tables are covered by
-  `internal/database/migrations/153_create_quota_tables_test.go` (per-scope
+  `internal/database/migrations/154_create_quota_tables_test.go` (per-scope
   dimension uniqueness including pending deletion, identity and ownership
   immutability, tenant and project foreign keys, the one-pending-request rule,
   the changes-table audit of limit changes, the outbox's tenant and project
   references, and the active companions); the concurrent link indexes the
   usage counter nets against, the volumes name-pattern index and the
-  bare-metal instances cluster-link index (migrations 154 and 155), by their
+  bare-metal instances cluster-link index (migrations 155 and 156), by their
   own migration tests; the
   quota limit, default limit, threshold, limit request and usage services by
   `internal/servers/quota_servers_test.go` against real PostgreSQL; and the
   registry-driven usage counter by `internal/quotausage/counter_test.go`
   against real resource rows, including the larger-of rule for a mid-resize
   VM, created resources counting in their own kind with the parent adding
-  only the excess, and a stored reference resolving its type by the scope it
-  carries, so a same-name type of another scope can't replace it. The same
-  suite covers the counting rules (the release map
-  of the quota state standard): rows in a mapped state stop counting, an
-  empty default changes nothing, rules load from the file named by
-  `OSAC_QUOTA_COUNTING_RULES`, a missing file means no rules, and rules the
-  counter can't apply fail the build. The tenant and project reconcilers'
+  only the excess, one parent row's reserved-but-uncreated room read per
+  row, counting until archive rather than delete, children in failed states
+  still counting, and a stored reference resolving its type by the scope it
+  carries, so a same-name type of another scope can't replace it. The
+  tenant and project reconcilers'
   quota-row cleanup, and the outbox rows the tenants and projects servers
   remove with an accepted delete, are covered by the controllers suites and
   `internal/servers`. Tenancy and attribution are suite
   doubles; the reviewed reader grant of `QuotaUsage/Get` is asserted in
   `internal/auth`, and the role grants are exercised through the server
   specs' visibility doubles, which check the servers enforce each role's
-  visibility. Deployed REST or CLI journeys for the quota APIs, the
-  Approve/Deny path under a deployed Cloud Provider Admin identity, and
-  enforcement and warning publishing are not exercised; enforcement is
-  [OSAC-7614](https://redhat.atlassian.net/browse/OSAC-7614).
+  visibility. `it/it_quota_apis_test.go` covers the deployed REST journeys: a
+  tenant override, a project limit and the usage report round-trip through the
+  gateway, a checked request prices an id-only tier reference, and the
+  Approve path under a deployed Cloud Provider Admin identity saves the
+  request and writes the tenant's override while the tenant identity is
+  denied. No CLI journey covers the quota APIs.
+- Quota enforcement in the request path
+  ([DEV] [OSAC-7614](https://redhat.atlassian.net/browse/OSAC-7614)):
+  `internal/servers/quota_enforcement_test.go` covers the
+  generic server's check against real PostgreSQL: a create or update over a
+  project, ancestor-project or tenant limit fails with `FAILED_PRECONDITION`,
+  ErrorInfo reason `QUOTA_EXCEEDED` and a `QuotaFailure` detail naming the
+  scope, dimension, limit, usage, added amount and the field paths that add
+  it, and writes nothing; limit resolution as the tightest of the project's
+  own limit, its ancestors' and the tenant's (a project limit above the
+  tenant's doesn't bypass the tenant's); the dry run of a create runs the check; a
+  create that adds nothing to a dimension fits at limit 0; the check is
+  skipped for the built-in `shared` and `system` tenants; an update whose
+  mask names no annotated spec field is not checked; a resize down frees no
+  quota until the resource runs smaller (the larger-of rule through the
+  counter); two parallel creates for the last vCPU in separate transactions
+  let exactly one pass (the tenant row lock before the count at READ
+  COMMITTED); a checked create in one tenant finishes while another tenant's
+  row is locked, and two counts of one check see a commit that lands between
+  them, the statement-level window of READ COMMITTED; a cluster create and a VM
+  create that lock the same subnet row in concurrent transactions both finish; crossed thresholds, a threshold set
+  or lowered below the usage, and a created or lowered limit tighter than
+  the usage it applies to (a project limit, a tenant override whose
+  descendant projects hold the thresholds, an approved limit request, and a
+  lowered default after its change commits) write their quota warnings to
+  the outbox, while a raised limit, a deleted threshold and a tenant whose
+  override keeps its limit warn nothing; and the four quota metrics are
+  exposed through a Prometheus registry.
+  `internal/servers/quota_enforcement_decisions_test.go` (plain Go table
+  cases, no database) covers the arithmetic of the refusal decision: the
+  project chain, the subtree sums, the limit resolution order, the scope
+  walk and first crossing of the comparison, the update-mask coverage and
+  the parent-id parser.
+  `internal/servers/quota_enforcement_composite_test.go` (a DescribeTable)
+  covers the netting of the system's creates against the
+  parent's ask: the operator's create of a host linked to an admitted
+  cluster adds nothing at a full tenant and passes, first host and last
+  host alike, and so does the create of a VM's boot-disk volume for an
+  admitted VM; a user's create, a host beyond the cluster's ask, a host of
+  a missing parent, a host after the cluster's node set was removed, and a
+  host of a full node set with room in another node set all add their full
+  price.
+  `internal/servers/private_clusters_server_test.go` covers the automatic
+  endpoints of the check (its quota specs): a cluster whose two
+  automatic external IPs exceed the external-IP limit is refused before any
+  write (no cluster, no address, pool capacity unchanged), and a cluster
+  whose two automatic addresses exactly fit the limit passes while a second
+  is refused reporting the two addresses the tenant really holds. The
+  suite's `BeforeEach` seeds generous default limits (including
+  trigger-seeded defaults for host types, storage tiers and GPU resources as
+  they appear), because the check refuses a request that adds to a dimension
+  with no limit, the way an unconfigured provider does. Tenancy and
+  attribution are suite doubles. Deployed coverage:
+  `tests/e2e/vmaas/regression/test_quota_enforcement.py` drives the deployed private
+  API: an admin caps a project, a tenant user's over-limit order is refused
+  with the scope and dimension in the message, and the volume count is
+  unchanged. `tests/e2e/caas/regression/test_cluster_host_quota.py` drives
+  the deployed cluster-hosts-counted-once journey on real bare metal: the
+  tenant's host-type limit leaves room for exactly one cluster's node-set
+  ask, the usage report shows the full ask before any host exists and
+  exactly the ask after the cluster is Ready with all its hosts, and a
+  second cluster of the same size is refused upfront. The E2E suite sets
+  generous default limits at session start (tests/e2e/conftest.py) and
+  where it creates types, tiers and GPU resources, because a dimension
+  with no default has limit 0. Not exercised: the quota publisher (the
+  notifications API, [OSAC-75](https://redhat.atlassian.net/browse/OSAC-75),
+  does not exist; warnings accumulate in the outbox by design), and the
+  host-retry journey, whose retrying count is not implemented
+  ([OSAC-7791](https://redhat.atlassian.net/browse/OSAC-7791)).
 
 - **StorageTier/Volume reference guard ([OSAC-7049](https://redhat.atlassian.net/browse/OSAC-7049), DEV):** `internal/cmd/service/start/grpcserver`, `internal/servers` and `internal/database/migrations` exercise production DAOs and in-process handlers against temporary PostgreSQL, including concurrent access. Tenancy and attribution are controlled; deployed service, operator and provider behavior is not covered.
 

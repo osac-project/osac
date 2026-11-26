@@ -274,6 +274,12 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		BareMetalEnabled:    c.args.services.BMaaS,
 	}
 
+	// Publish the installation's networking settings before building any server. The quota
+	// check and the usage counters both derive their uncreated-kinds list from them, and the
+	// first server built freezes that list: publishing later would leave servers built
+	// earlier charging for resources this install never creates.
+	servers.SetInstallationNetworkingSettings(&networkingSettings)
+
 	// Get the context and create a cancellable version:
 	ctx, cancel := context.WithCancel(cmd.Context())
 
@@ -589,6 +595,19 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 		return err
 	}
 
+	// Create the collector that reports the depth of the quota outbox. It counts on the pool
+	// the process already has, at scrape time, so a stuck outbox is visible in the metrics
+	// before the publisher exists:
+	c.logger.InfoContext(ctx, "Creating quota outbox collector")
+	_, err = metrics.NewQuotaOutboxCollector().
+		SetLogger(c.logger).
+		SetPool(dbPool).
+		SetRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create quota outbox collector: %w", err)
+	}
+
 	// Prepare the transactions manager:
 	c.logger.InfoContext(ctx, "Creating transactions manager")
 	txManager, err := database.NewTxManager().
@@ -788,19 +807,35 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	}
 	tierResolver := newDAOTierResolver(storageTiersDAO, storageBackendsDAO)
 
+	// Create the worker that writes the warnings of default limit changes. Both default limits
+	// servers share it, so one serialized worker scans every change, and it stops with the
+	// process:
+	c.logger.InfoContext(ctx, "Creating quota default limit scanner")
+	quotaDefaultLimitScanner, err := servers.NewQuotaDefaultLimitScanner().
+		SetLogger(c.logger).
+		SetTxManager(txManager).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create quota default limit scanner: %w", err)
+	}
+	shutdown.AddFunction("quota default limit scanner", 0, func(context.Context) error {
+		return quotaDefaultLimitScanner.Close()
+	})
+
 	// Register all filterable resources' public and private servers:
 	resourceServers, err := RegisterResourceServers(ctx, grpcServer, ResourceServerDeps{
-		Logger:                  c.logger,
-		PrivateAttributionLogic: privateAttributionLogic,
-		PublicAttributionLogic:  publicAttributionLogic,
-		TenancyLogic:            tenancyLogic,
-		MetricsRegisterer:       metricsRegisterer,
-		HubScheme:               hubScheme,
-		SecretStore:             secretStore,
-		TierResolver:            tierResolver,
-		PrivateUsersServer:      privateUsersServer,
-		Services:                c.args.services,
-		NetworkingSettings:      networkingSettings,
+		Logger:                   c.logger,
+		PrivateAttributionLogic:  privateAttributionLogic,
+		PublicAttributionLogic:   publicAttributionLogic,
+		TenancyLogic:             tenancyLogic,
+		MetricsRegisterer:        metricsRegisterer,
+		HubScheme:                hubScheme,
+		SecretStore:              secretStore,
+		TierResolver:             tierResolver,
+		PrivateUsersServer:       privateUsersServer,
+		Services:                 c.args.services,
+		NetworkingSettings:       networkingSettings,
+		QuotaDefaultLimitScanner: quotaDefaultLimitScanner,
 	})
 	if err != nil {
 		return err

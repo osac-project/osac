@@ -18,7 +18,7 @@ from uuid import uuid4
 import pytest
 
 from tests.e2e.caas.readiness_diagnostics import snapshot_cluster_readiness
-from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient
+from tests.e2e.core.grpc_client import PRIVATE_API, GRPCClient, host_quota_dimension
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import StuckState, poll_until, run_unchecked
@@ -132,16 +132,25 @@ def get_bmi_instance_type_from_template(grpc: GRPCClient, *, template_name: str)
 def bmi_instance_type_for_tests(
     grpc: GRPCClient, *, template_name: str, configured: str, host_selector: dict[str, str] | None = None
 ) -> Iterator[str]:
+    """Yield a quotable BareMetalInstanceType name for BMaaS tests.
+
+    Every path sets the dimension's quota default: a BMI of the type counts
+    against bare_metal.instances.<name>, and quota is enforced in the request
+    path, so the tenant's first BMI of the type is refused without a default.
+    """
     if configured:
+        grpc.set_quota_default(dimension=host_quota_dimension(configured))
         yield configured
         return
 
     from_template = get_bmi_instance_type_from_template(grpc, template_name=template_name)
     if from_template:
+        grpc.set_quota_default(dimension=host_quota_dimension(from_template))
         yield from_template
         return
 
     name = unique_name("e2e-bmi-type")
+    # The created path sets its default inside create_baremetal_instance_type.
     type_id = grpc.create_baremetal_instance_type(name=name, host_label_selector=host_selector, fabric_port="data-0")
     try:
         yield name

@@ -5,7 +5,7 @@ import re
 import subprocess
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TypeVar
 
 from tests.e2e.core.runner import run, run_unchecked
 from tests.e2e.core.sanitize import register_endpoint
@@ -13,6 +13,59 @@ from tests.e2e.core.sanitize import register_endpoint
 PUBLIC_API: str = "osac.public.v1"
 PRIVATE_API: str = "osac.private.v1"
 DEFAULT_HOST_LABEL_SELECTOR = {"osac.openshift.io/host-type": "default"}
+
+# A generous default limit for the quota dimensions the E2E suite touches.
+# Quota is enforced in the request path and a dimension with no default has
+# limit 0, so every type, tier or GPU resource this suite creates also sets
+# its dimension's default, or the tenant's first create with it is refused.
+QUOTA_DEFAULT_VALUE: int = 10_000
+
+_T = TypeVar("_T")
+
+
+def host_quota_dimension(instance_type: str) -> str:
+    """The quota dimension a bare-metal host of ``instance_type`` counts against.
+
+    A host counts against bare_metal.instances.<type>, and quota is enforced in
+    the request path, so a tenant's first host of the type is refused without a
+    default or limit of that dimension.
+    """
+    return f"bare_metal.instances.{instance_type}"
+
+
+def quota_limit_name(dimension: str) -> str:
+    """The DNS-1123 name of a quota limit or default of ``dimension``.
+
+    The private server derives a name from the dimension when the caller sends
+    none, but the gateway validates the object before the handler runs, so the
+    caller must send one. The same dimension always gets the same name, so a
+    repeated run updates the row it left behind instead of adding one.
+    """
+    base = re.sub(r"[^a-z0-9]+", "-", dimension.lower()).strip("-")[:54].rstrip("-")
+    return f"limit-{base}" if base else "limit"
+
+
+def _retry_transport(call: Callable[[], _T], what: str, *, retries: int = 10, delay: int = 5) -> _T:
+    """Run one private-API call, retrying the transient transport failure it can hit.
+
+    OSAC-3553: the first call after `helm --wait` returns can fail with
+    `code = Unavailable` or a refused connection before the route converges.
+    Retry only those; any other error still fails fast. The two error shapes are
+    matched differently: a completed RPC prints grpcurl's `Code: <Name>` block,
+    while a transport failure prints the Go status string
+    `code = Unavailable desc = ...` -- see
+    tests/e2e/vmaas/sanity/external_ip/conftest.py.
+    """
+    for attempt in range(retries):
+        try:
+            return call()
+        except subprocess.CalledProcessError as e:
+            output = (e.stdout or "") + (e.stderr or "")
+            if attempt < retries - 1 and ("Unavailable" in output or "connection refused" in output.lower()):
+                time.sleep(delay)
+                continue
+            raise RuntimeError(f"Failed to {what}: {output}") from e
+    raise RuntimeError(f"Failed to {what}: gave up after {retries} attempts")
 
 
 def _metadata(*, name: str, tenant: str | None = None, project: str | None = None) -> dict[str, str]:
@@ -182,6 +235,87 @@ class GRPCClient:
         __tracebackhide__ = True
         return run_unchecked(*self._build_args(service=service, data=data), timeout=timeout)
 
+    def get_quota_default(self, *, dimension: str) -> dict[str, Any] | None:
+        """The default limit of one dimension, or None when it has none."""
+        items = self.list_with_filter(
+            service=f"{PRIVATE_API}.QuotaDefaultLimits/List", filter_expr=f'this.spec.dimension == "{dimension}"'
+        )
+        return items[0] if items else None
+
+    def set_quota_default(self, *, dimension: str, value: int = QUOTA_DEFAULT_VALUE) -> str:
+        """Set the default limit of one quota dimension for every tenant and return its id.
+
+        Creates the default, or replaces its value when the dimension already
+        has one. Defaults belong to no tenant, so this needs the private (cloud
+        provider admin) identity.
+        """
+        return self.upsert_quota_limit(dimension=dimension, value=value)
+
+    def upsert_quota_limit(
+        self, *, dimension: str, value: int = QUOTA_DEFAULT_VALUE, tenant: str = "", project: str = ""
+    ) -> str:
+        """Create or replace one quota limit row and return its id.
+
+        With no tenant the row is the dimension's default for every tenant. With
+        a tenant it is that tenant's override, or the project's own limit when a
+        project is named; only the private (cloud provider admin) identity may
+        set either. Replacing the value of a row a prior run left behind keeps
+        repeated runs convergent, and a create that loses a race to another
+        xdist worker seeding the same row is treated as that row's update. The
+        id lets a caller delete the row it created, or put back the value it
+        changed.
+        """
+        name = quota_limit_name(dimension)
+        if tenant:
+            service = "QuotaLimits"
+            filter_expr = f'this.metadata.tenant == "{tenant}" && this.spec.dimension == "{dimension}"'
+            metadata: dict[str, str] = {"name": name, "tenant": tenant}
+            if project:
+                metadata["project"] = project
+            spec: dict[str, Any] = {
+                "dimension": dimension,
+                "value": str(value),
+                "scope": "QUOTA_SCOPE_PROJECT" if project else "QUOTA_SCOPE_TENANT",
+            }
+            object_: dict[str, Any] = {"metadata": metadata, "spec": spec}
+        else:
+            service = "QuotaDefaultLimits"
+            filter_expr = f'this.spec.dimension == "{dimension}"'
+            object_ = {"metadata": {"name": name}, "spec": {"dimension": dimension, "value": str(value)}}
+
+        def find() -> dict[str, Any] | None:
+            rows = self.list_with_filter(service=f"{PRIVATE_API}.{service}/List", filter_expr=filter_expr)
+            return next((row for row in rows if ((row.get("metadata") or {}).get("project") or "") == project), None)
+
+        def replace(object_id: str) -> str:
+            self.call(
+                service=f"{PRIVATE_API}.{service}/Update",
+                data={
+                    "object": {"id": object_id, "spec": {"value": str(value)}},
+                    "updateMask": {"paths": ["spec.value"]},
+                },
+            )
+            return object_id
+
+        existing = find()
+        if existing:
+            return replace(str(existing["id"]))
+        try:
+            response = self.call(service=f"{PRIVATE_API}.{service}/Create", data={"object": object_})
+        except subprocess.CalledProcessError as e:
+            output = (e.stdout or "") + (e.stderr or "")
+            # Another worker seeded the same row between the list and the create.
+            if not re.search(r"Code:\s*AlreadyExists", output):
+                raise
+            seeded = find()
+            if seeded is None:
+                raise
+            return replace(str(seeded["id"]))
+        return str(response["object"]["id"])
+
+    def delete_quota_default(self, *, default_id: str) -> None:
+        self.call(service=f"{PRIVATE_API}.QuotaDefaultLimits/Delete", data={"id": default_id})
+
     # Cluster operations
 
     def list_cluster_ids(self) -> list[str]:
@@ -264,25 +398,21 @@ class GRPCClient:
     # Tenant operations
 
     def ensure_tenant(self, *, name: str, retries: int = 10, delay: int = 5) -> None:
-        # OSAC-3553: retry the transient `code = Unavailable` / connection-refused
-        # transport failure the first call can hit after `helm --wait` returns,
-        # before the route converges. AlreadyExists is idempotent success; any
-        # other error still fails fast. Note the two error shapes are matched
-        # differently: a completed RPC prints grpcurl's `Code: <Name>` block
-        # (AlreadyExists), while a transport failure prints the Go status string
-        # `code = Unavailable desc = ...` -- see tests/e2e/vmaas/sanity/external_ip/conftest.py.
-        for attempt in range(retries):
+        """Create a tenant if it does not exist, retrying the first-call transport failure.
+
+        AlreadyExists is idempotent success; every other error fails fast.
+        """
+
+        def create() -> None:
             try:
                 self.call(service=f"{PRIVATE_API}.Tenants/Create", data={"object": {"metadata": {"name": name}}})
-                return
             except subprocess.CalledProcessError as e:
                 output = (e.stdout or "") + (e.stderr or "")
                 if re.search(r"Code:\s*AlreadyExists", output):
                     return
-                if attempt < retries - 1 and ("Unavailable" in output or "connection refused" in output.lower()):
-                    time.sleep(delay)
-                    continue
-                raise RuntimeError(f"Failed to create tenant '{name}': {output}") from e
+                raise
+
+        _retry_transport(create, f"create tenant '{name}'", retries=retries, delay=delay)
 
     def find_tenant_id(self, *, name: str) -> str:
         """Return the tenant UUID for ``name``, or empty string if it is missing."""
@@ -507,6 +637,11 @@ class GRPCClient:
         response: dict[str, Any] = self.call(
             service=f"{PRIVATE_API}.InstanceTypes/Create", data={"object": {"metadata": {"name": name}, "spec": spec}}
         )
+        # A VM of a GPU type counts against compute.gpu.<resource>, a dimension
+        # named by the GPU resource, not by the type: vcpus and memory_gib are
+        # the type's only fixed dimensions.
+        if gpu is not None and gpu.get("resource_name"):
+            self.set_quota_default(dimension=f"compute.gpu.{gpu['resource_name']}")
         return response["object"]["id"]
 
     def get_instance_type(self, *, name: str) -> dict[str, Any]:
@@ -649,6 +784,10 @@ class GRPCClient:
         response: dict[str, Any] = self.call(
             service=f"{PRIVATE_API}.BareMetalInstanceTypes/Create", data={"object": obj}
         )
+        # A BMI of this type counts against bare_metal.instances.<name>, a
+        # dimension named by the type, so a type the suite creates must also
+        # make its dimension quotable.
+        self.set_quota_default(dimension=host_quota_dimension(name))
         return response["object"]["id"]
 
     def ensure_bare_metal_instance_type(
@@ -684,6 +823,9 @@ class GRPCClient:
         response: dict[str, Any] = self.call(service=f"{PRIVATE_API}.BareMetalInstanceTypes/List")
         for item in response.get("items", []):
             if item.get("metadata", {}).get("name") == name:
+                # A type left behind by a prior run needs its dimension's
+                # default just the same; the create path set it already.
+                self.set_quota_default(dimension=host_quota_dimension(name))
                 return item["id"]
         raise RuntimeError(f"BareMetalInstanceType '{name}' reported AlreadyExists but not found in list")
 
@@ -798,6 +940,9 @@ class GRPCClient:
                 }
             },
         )
+        # A BMI of this type counts against bare_metal.instances.<name>, so a
+        # type the suite creates must also make its dimension quotable.
+        self.set_quota_default(dimension=host_quota_dimension(name))
         return response["object"]["id"]
 
     def delete_baremetal_instance_type(self, *, type_id: str) -> None:
@@ -1037,6 +1182,10 @@ class GRPCClient:
                 }
             },
         )
+        # A volume on this tier counts against storage.<name>.gib, a dimension
+        # named by the tier, so a tier the suite creates must also make its
+        # dimension quotable.
+        self.set_quota_default(dimension=f"storage.{name}.gib")
         return response["object"]["id"]
 
     def delete_storage_tier(self, *, tier_id: str) -> None:

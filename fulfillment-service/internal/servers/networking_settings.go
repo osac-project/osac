@@ -77,3 +77,18 @@ func resolveNetworkingSettings(value *NetworkingSettings) NetworkingSettings {
 	}
 	return *value
 }
+
+// installationNetworkingSettings holds the installation's networking settings for the shared
+// quota parts, such as the list of kinds this install never creates. The server startup
+// publishes them once, before any server is built.
+var installationNetworkingSettings = DefaultNetworkingSettings()
+
+// SetInstallationNetworkingSettings publishes the installation's networking settings and
+// discards the shared quota parts derived from the previous ones, so the next server built
+// derives them again. Nil means the defaults. Call it once, before building any server: the
+// first build freezes the shared parts, and a later call would leave servers built earlier
+// charging for resources the later settings say are never created.
+func SetInstallationNetworkingSettings(value *NetworkingSettings) {
+	installationNetworkingSettings = resolveNetworkingSettings(value)
+	resetSharedEnforcerParts()
+}

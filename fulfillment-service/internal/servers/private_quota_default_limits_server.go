@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -33,6 +34,7 @@ type PrivateQuotaDefaultLimitsServerBuilder struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	filterDesc        protoreflect.MessageDescriptor
+	scanner           *QuotaDefaultLimitScanner
 }
 
 var _ privatev1.QuotaDefaultLimitsServer = (*PrivateQuotaDefaultLimitsServer)(nil)
@@ -45,6 +47,7 @@ type PrivateQuotaDefaultLimitsServer struct {
 
 	logger  *slog.Logger
 	generic *GenericServer[*privatev1.QuotaDefaultLimit]
+	scanner *QuotaDefaultLimitScanner
 }
 
 func NewPrivateQuotaDefaultLimitsServer() *PrivateQuotaDefaultLimitsServerBuilder {
@@ -78,6 +81,14 @@ func (b *PrivateQuotaDefaultLimitsServerBuilder) SetFilterDesc(value protoreflec
 	return b
 }
 
+// SetScanner sets the worker that writes the warnings a default limit change leaves behind. It
+// is optional: without a scanner the server still changes defaults, but schedules no scan, as
+// the unit specs that only exercise the API do.
+func (b *PrivateQuotaDefaultLimitsServerBuilder) SetScanner(value *QuotaDefaultLimitScanner) *PrivateQuotaDefaultLimitsServerBuilder {
+	b.scanner = value
+	return b
+}
+
 func (b *PrivateQuotaDefaultLimitsServerBuilder) Build() (result *PrivateQuotaDefaultLimitsServer, err error) {
 	if b.logger == nil {
 		err = errors.New("logger is mandatory")
@@ -107,6 +118,7 @@ func (b *PrivateQuotaDefaultLimitsServerBuilder) Build() (result *PrivateQuotaDe
 	result = &PrivateQuotaDefaultLimitsServer{
 		logger:  b.logger,
 		generic: generic,
+		scanner: b.scanner,
 	}
 	return
 }
@@ -150,6 +162,12 @@ func (s *PrivateQuotaDefaultLimitsServer) Create(ctx context.Context,
 	limit.GetMetadata().SetTenant(auth.SharedTenant)
 	limit.GetMetadata().SetProject("")
 	err = s.generic.Create(ctx, request, &response)
+	// The generic create returns before the write on a dry run, so the scan is the only thing
+	// left to skip there; an update commits, so it refuses a dry run instead. No default
+	// existed for the dimension before, so the scan compares against none.
+	if err == nil && !isDryRun(ctx) {
+		s.scheduleDefaultScan(ctx, response.GetObject().GetSpec().GetDimension(), 0)
+	}
 	return
 }
 
@@ -160,14 +178,58 @@ func (s *PrivateQuotaDefaultLimitsServer) Update(ctx context.Context,
 		err = grpcstatus.Errorf(grpccodes.InvalidArgument, "object identifier is mandatory")
 		return
 	}
+	if err = rejectUpdateDryRun(ctx); err != nil {
+		return
+	}
+	// Read the old value with the row locked, so the scan sees the value this update
+	// replaces:
+	getResponse, err := s.generic.dao.Get().SetId(id).SetLock(true).Do(ctx)
+	if err != nil {
+		err = ConvertDAOErrorToGRPC(err, "get", id)
+		return
+	}
+	oldValue := getResponse.GetObject().GetSpec().GetValue()
 	err = s.generic.UpdateWithValidation(ctx, request, &response, validateQuotaDefaultLimitUpdate)
+	if err == nil {
+		s.scheduleDefaultScan(ctx, response.GetObject().GetSpec().GetDimension(), oldValue)
+	}
 	return
 }
 
 func (s *PrivateQuotaDefaultLimitsServer) Delete(ctx context.Context,
 	request *privatev1.QuotaDefaultLimitsDeleteRequest) (response *privatev1.QuotaDefaultLimitsDeleteResponse, err error) {
+	var getResponse *privatev1.QuotaDefaultLimitsGetResponse
+	err = s.generic.Get(ctx, privatev1.QuotaDefaultLimitsGetRequest_builder{
+		Id: request.GetId(),
+	}.Build(), &getResponse)
+	if err != nil {
+		return
+	}
+	limit := getResponse.GetObject()
 	err = s.generic.Delete(ctx, request, &response)
+	if err == nil {
+		s.scheduleDefaultScan(ctx, limit.GetSpec().GetDimension(), limit.GetSpec().GetValue())
+	}
 	return
+}
+
+// scheduleDefaultScan queues the threshold warnings of every tenant the change tightened, after
+// the change commits: a default belongs to every tenant, and no request transaction should scan
+// them all. The shared worker coalesces rapid changes of one dimension and serializes the walks.
+func (s *PrivateQuotaDefaultLimitsServer) scheduleDefaultScan(ctx context.Context, dimension string, oldDefault int64) {
+	if s.scanner == nil {
+		return
+	}
+	tx, err := database.TxFromContext(ctx)
+	if err != nil {
+		return
+	}
+	tx.OnCommit(func() {
+		// The commit has already happened, so the scan still sees the change. The worker is
+		// detached from this request, so the RPC's deadline can't kill the scan and the
+		// response doesn't wait for it:
+		s.scanner.schedule(s.generic.quota, dimension, oldDefault)
+	})
 }
 
 func (s *PrivateQuotaDefaultLimitsServer) Signal(ctx context.Context,

@@ -120,7 +120,7 @@ export type Metadata = Message<"osac.public.v1.Metadata"> & {
   /**
    * Version is a numeric field that is automatically incremented with every change to the object. Set `lock` to true
    * on an Update request to require this version to match the stored version; a stale version is rejected with
-   * Aborted. If `lock` is omitted or false, the Update proceeds without an optimistic version check.
+   * Aborted. If `lock` is omitted or false, only changes to `finalizers` are version-checked.
    *
    * @generated from field: int32 version = 8;
    */

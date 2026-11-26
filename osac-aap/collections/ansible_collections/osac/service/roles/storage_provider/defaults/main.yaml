@@ -14,3 +14,48 @@ storage_provider_csi_backends_chart_ref: >-
 storage_provider_csi_backends_chart_version: ""
 storage_provider_csi_backends_release_name: "osac-csi-backends"
 storage_provider_csi_backends_namespace: "osac-csi-backends"
+
+# Automatic approval lets OLM install the current stable-channel bundle and
+# approve subsequent stable-channel upgrades without waiting for another AAP job.
+storage_provider_csi_driver_matrix:
+  netapp:
+    protocols:
+      block: "csi.trident.netapp.io"
+    installer:
+      method: olm
+      package: trident-operator
+      channel: stable
+      # The certified Trident CSV supports AllNamespaces only. Keep its
+      # Subscription isolated from unrelated operator updates.
+      namespace: trident-operator
+      operator_group: trident-operator-group
+      install_plan_approval: Automatic
+      catalog_source: certified-operators
+      catalog_namespace: openshift-marketplace
+      # Keep the Trident operand namespace aligned with netapp_storage's
+      # NETAPP_CSI_OPERATOR_NAMESPACE setting; this is separate from the OLM
+      # Subscription namespace above.
+      trident_namespace: "{{ lookup('env', 'NETAPP_CSI_OPERATOR_NAMESPACE') | default('trident', true) }}"
+  vast:
+    protocols:
+      nfs: "csi.vastdata.com"
+      block: "block.csi.vastdata.com"
+    installer:
+      method: olm
+      # The VAST Subscription and operator resources share this namespace.
+      # Configurable through the AAP execution environment.
+      namespace: "{{ lookup('env', 'VAST_CSI_OPERATOR_NAMESPACE') | default('vast-csi-system', true) }}"
+      package: vast-csi-operator
+      channel: stable
+      install_plan_approval: Automatic
+      catalog_source: certified-operators
+      catalog_namespace: openshift-marketplace
+  lvms: {}
+
+# One OLM Subscription spec shape shared by all native CSI providers.
+storage_provider_olm_subscription_spec:
+  channel: "{{ storage_provider_olm_subscription_channel }}"
+  installPlanApproval: "{{ storage_provider_olm_subscription_install_plan_approval }}"
+  name: "{{ storage_provider_olm_subscription_package }}"
+  source: "{{ storage_provider_olm_subscription_catalog_source }}"
+  sourceNamespace: "{{ storage_provider_olm_subscription_catalog_namespace }}"

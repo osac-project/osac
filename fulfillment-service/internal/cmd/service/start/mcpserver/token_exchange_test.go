@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -32,6 +33,7 @@ import (
 	"go.uber.org/mock/gomock"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/serviceaccounts"
 )
 
 var _ = Describe("OAuth token exchange", func() {
@@ -51,10 +53,19 @@ var _ = Describe("OAuth token exchange", func() {
 			"exp": float64(time.Now().Add(time.Minute).Unix()),
 		}
 		incoming = jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-		outgoing = jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+		outgoing = jwt.NewWithClaims(jwt.SigningMethodRS256, maps.Clone(claims))
 	})
 
 	It("exchanges a caller token through a confidential client and accepts only a validated API token for that caller", func() {
+		incomingClaims := incoming.Claims.(jwt.MapClaims)
+		incomingClaims["azp"] = "osac-mcp-client"
+		incomingClaims["client_id"] = "osac-mcp-client"
+		incomingClaims["aud"] = "https://mcp.example.com/"
+		outgoingClaims := outgoing.Claims.(jwt.MapClaims)
+		outgoingClaims["azp"] = "https://mcp.example.com/"
+		outgoingClaims["client_id"] = "https://mcp.example.com/"
+		outgoingClaims["aud"] = auth.Audience
+
 		client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			Expect(r.Method).To(Equal(http.MethodPost))
 			clientID, secret, ok := r.BasicAuth()
@@ -85,16 +96,16 @@ var _ = Describe("OAuth token exchange", func() {
 	})
 
 	It("rejects identity or permission expansion in an exchanged token", func() {
-		outgoing = jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
-			"iss": "https://issuer.example.com/realms/osac", "sub": "user-1",
-			"preferred_username": "alice", "groups": []any{"tenant1", "admin"},
-			"exp": float64(time.Now().Add(time.Minute).Unix()),
-		})
+		claims := outgoing.Claims.(jwt.MapClaims)
+		claims["groups"] = []any{"tenant1", "admin"}
 		Expect(sameCaller(incoming, outgoing)).To(MatchError("OAuth token exchange changed the caller permissions"))
-		outgoing = jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
-			"iss": "https://issuer.example.com/realms/osac", "sub": "user-2",
-			"exp": float64(time.Now().Add(time.Minute).Unix()),
-		})
+
+		claims["groups"] = []any{"tenant1"}
+		claims["azp"] = serviceaccounts.ClientID("tenant1", "account1")
+		Expect(sameCaller(incoming, outgoing)).To(MatchError("OAuth token exchange changed the caller permissions"))
+
+		delete(claims, "azp")
+		claims["sub"] = "user-2"
 		Expect(sameCaller(incoming, outgoing)).To(MatchError("OAuth token exchange changed the caller identity"))
 	})
 

@@ -17,7 +17,6 @@ describe('ClusterNodeSetsSection', () => {
               workers: {
                 size: 3,
                 baremetalInstanceType: { name: 'standard-host' },
-                version: { name: 'desired-version', id: 'desired-id' },
               },
               gpu: { size: 2, baremetalInstanceType: { name: 'accelerated-host' } },
             },

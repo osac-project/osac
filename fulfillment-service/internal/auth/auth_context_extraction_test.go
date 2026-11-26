@@ -22,6 +22,7 @@ import (
 var _ = Describe("Auth context extraction", func() {
 	It("maps tenant-scoped OAuth client credentials to a tenant subject", func() {
 		token := &jwt.Token{Claims: jwt.MapClaims{
+			"iss":         "https://keycloak.example/realms/osac",
 			"client_id":   "osac-sa-tenant-account",
 			"osac_tenant": "tenant-a",
 		}}
@@ -29,6 +30,7 @@ var _ = Describe("Auth context extraction", func() {
 		result, err := ExtractAuthContext(token)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(result.AuthMethod).To(Equal("jwt"))
+		Expect(result.Issuer).To(Equal("https://keycloak.example/realms/osac"))
 		Expect(result.Username).To(Equal("osac-sa-tenant-account"))
 		Expect(result.Organization).To(Equal([]any{"tenant-a"}))
 	})
@@ -36,6 +38,8 @@ var _ = Describe("Auth context extraction", func() {
 	It("prefers user identity and organization claims when present", func() {
 		token := &jwt.Token{Claims: jwt.MapClaims{
 			"preferred_username": "alice",
+			"azp":                "tenant-app",
+			"aud":                []any{Audience, "tenant-app"},
 			"client_id":          "osac-sa-tenant-account",
 			"organization":       []any{"tenant-from-organization"},
 			"osac_tenant":        "tenant-from-client",
@@ -43,6 +47,9 @@ var _ = Describe("Auth context extraction", func() {
 
 		result, err := ExtractAuthContext(token)
 		Expect(err).ToNot(HaveOccurred())
+		Expect(result.AuthorizedParty).To(Equal("tenant-app"))
+		Expect(result.ClientID).To(Equal("osac-sa-tenant-account"))
+		Expect(result.Audiences).To(Equal([]string{Audience, "tenant-app"}))
 		Expect(result.Username).To(Equal("alice"))
 		Expect(result.Organization).To(Equal([]any{"tenant-from-organization"}))
 	})

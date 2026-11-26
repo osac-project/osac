@@ -26,6 +26,78 @@ name to its SSH host, for example `{"virtual-bmh-1":"198.51.100.10"}`. Those
 CatalogItems must allow the supplied `instance_type` value (leave the field
 editable or unset; do not lock it).
 
+## Inventory backend selection
+
+`OSAC_INVENTORY_BACKEND` selects the backend the suites run against:
+`metal3` (default) or `netbox`.
+
+- Selection is env-var-only — the cluster's configured inventory `type` is
+  not consulted for test routing. The operator allocates only from its
+  configured `type`, so `OSAC_INVENTORY_BACKEND` must match it on the
+  cluster under test.
+- The abstraction covers the inventory layer only (free-host counts, claim,
+  release).
+- Once a host is allocated, the operator hands over to BMH/metal3 in every
+  mode: the BMI's externalHostID names the BMH (on netbox:
+  `netbox-<device-id>`, created on the fly).
+- All provisioning assertions (provisioned state, image URL, consumerRef,
+  online, power on/off, inspected NICs) run against that BMH exactly as on a
+  metal3-only cluster.
+- The networking regression is metal3-specific and does not route.
+
+### NetBox connection settings
+
+Primary source on `netbox`: the BMF chart's Secrets in the OSAC namespace
+(`osac-inventory-config`, `osac-netbox-token`, the optional
+`osac-netbox-ca`, and `osac-management-config`). Env vars are
+debug/external-NetBox overrides that win when set:
+
+| Var | Purpose | Default |
+|---|---|---|
+| `OSAC_INVENTORY_BACKEND` | `metal3` or `netbox` — the only backend selector | `metal3` |
+| `OSAC_NETBOX_URL` / `OSAC_NETBOX_TOKEN` | NetBox URL and API token overrides | from BMF Secrets |
+| `OSAC_NETBOX_CA_FILE` / `OSAC_NETBOX_INSECURE` | CA PEM file / disable TLS certificate verification — the only verification switch; the deployed `allowInsecureHTTP` merely permits an `http://` URL and never disables verification | CA from the `osac-netbox-ca` Secret / verification on |
+
+Secret pairing rules:
+
+- URL Secret: read only when `OSAC_NETBOX_URL` is unset.
+- Token Secret: read only when the URL comes from the deployed config — an
+  override URL never receives the deployed token; set `OSAC_NETBOX_TOKEN`
+  explicitly for an external NetBox.
+- CA Secret: applies only when the URL comes from the deployed config — an
+  override URL uses system roots unless `OSAC_NETBOX_CA_FILE` is set, so the
+  deployed NetBox's private CA never leaks into an external connection.
+- `osac-management-config` BMH-namespace cross-check: cluster-scoped,
+  best-effort, every mode.
+
+### Pre-staged inventory
+
+Both backends stage their inventory before the suite starts — never the
+tests:
+
+- metal3: BMHs enrolled into the BMH namespace by the lab/CI infrastructure
+  (the netris Ansible backend in osac-test-infra) or the platform admin on a
+  real deployment.
+- netbox: devices staged by the provider reconcile
+  (`reconcile-netbox-devices.py`, driven by
+  `setup-virtual-netbox-devices.sh` in CI).
+- The `inventory_hosts` session fixture only asserts that at least one host
+  is available.
+
+### Host selector
+
+The auto-created instance type's host selector is backend-dependent:
+
+- metal3: the `osac.openshift.io/host-type` BMH label.
+- netbox: the `host_type` device custom field, stamped on every staged
+  device by the provider reconcile (the netbox equivalent of the infra
+  backend labelling BMHs).
+
+### Release
+
+On deprovision the operator deletes the per-device BMH and restores the
+device to `staged` — release checks wait for both.
+
 ## Running
 
 From the repository root, collect the affected suites before running them:

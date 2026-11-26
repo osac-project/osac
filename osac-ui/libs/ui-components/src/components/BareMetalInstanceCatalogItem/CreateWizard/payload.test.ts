@@ -44,7 +44,7 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
     expect(payload.fields?.instanceType).toEqual({
       behavior: {
         case: 'locked',
-        value: { id: 'instance-type-1', name: 'acme-1tb', shared: true },
+        value: { id: 'instance-type-1', name: 'acme-1tb', tenant: 'shared' },
       },
     });
     expect(payload.fields?.diskImage).toEqual({
@@ -73,7 +73,7 @@ describe('buildBareMetalCatalogItemCreatePayload', () => {
       behavior: {
         case: 'editable',
         value: {
-          defaultValue: { id: 'instance-type-1', name: 'acme-1tb', shared: true },
+          defaultValue: { id: 'instance-type-1', name: 'acme-1tb', tenant: 'shared' },
         },
       },
     });
@@ -128,7 +128,7 @@ describe('bare metal catalog item initial values and updates', () => {
         instanceType: {
           behavior: {
             case: 'locked',
-            value: { id: 'instance-type-1', name: 'acme-1tb', shared: true },
+            value: { id: 'instance-type-1', name: 'acme-1tb', tenant: 'shared' },
           },
         },
         diskImage: {
@@ -227,7 +227,7 @@ describe('bare metal catalog item initial values and updates', () => {
         instanceType: {
           behavior: {
             case: 'editable',
-            value: { defaultValue: { name: 'bare-metal.large', shared: true } },
+            value: { defaultValue: { name: 'bare-metal.large', tenant: 'shared' } },
           },
         },
         diskImage: {

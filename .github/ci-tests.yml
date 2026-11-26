@@ -6,11 +6,13 @@
 # To add a component's tests: add a leg here (and, for a new kind of test, its steps in workflows/tests.yml), add its
 # filter to ci-filters.yml, and nothing else. Changes to this file need a code owner's approval (see CODEOWNERS).
 #
-# id       the leg's name, shown as the job name
-# group    unit | integration
-# kind     which steps of tests.yml run
-# dir/cmd  go-unit only: the module and the command run in it
-# timeout  minutes before the job is cancelled (default 360)
+# id              the leg's name, shown as the job name
+# group           unit | integration
+# kind            which steps of tests.yml run
+# dir/cmd         go-unit only: the module and the command run in it
+# timeout         minutes before the job is cancelled (default 360)
+# pr_repetitions  pull requests only: how many times the leg runs, in parallel (default 1). The merge queue, the
+#                 schedule, the manual runs and the flake-detection campaigns keep one execution.
 - id: Unit tests (fulfillment-service)
   group: unit
   kind: go-unit
@@ -69,6 +71,10 @@
   group: integration
   kind: it-fulfillment-service
   timeout: 120  # Kind setup, image builds, four serial test phases, and log collection.
+  # Five executions of the same commit in parallel on a pull request, so a test that fails once in a while is caught
+  # before it merges instead of being retested until it passes. One failure fails CI. The merge queue and every other
+  # caller of tests.yml keep one execution.
+  pr_repetitions: 5
   filters: [code, integration-tests-fulfillment-service]
 - id: Integration test (osac-operator)
   group: integration

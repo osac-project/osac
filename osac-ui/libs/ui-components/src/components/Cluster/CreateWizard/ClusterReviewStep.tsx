@@ -108,7 +108,7 @@ export const ClusterReviewStep = () => {
           <DescriptionListGroup>
             <DescriptionListTerm>{t('SSH public key')}</DescriptionListTerm>
             <DescriptionListDescription>
-              {displayValue(values.spec.sshPublicKey.value)}
+              {displayValue(values.spec.sshKey.value)}
             </DescriptionListDescription>
           </DescriptionListGroup>
           <DescriptionListGroup>

@@ -82,12 +82,10 @@ func (c *runnerContext) run(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	renderComputeInstance(c.console, matched)
-
-	return nil
+	return renderComputeInstance(c.console, matched)
 }
 
-func renderComputeInstance(w io.Writer, ci *publicv1.ComputeInstance) {
+func renderComputeInstance(w io.Writer, ci *publicv1.ComputeInstance) error {
 	writer := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	catalogItem := "-"
 	if ci.Spec != nil {
@@ -104,17 +102,110 @@ func renderComputeInstance(w io.Writer, ci *publicv1.ComputeInstance) {
 		state = ci.Status.State.String()
 		state = strings.TrimPrefix(state, "COMPUTE_INSTANCE_STATE_")
 	}
-	fmt.Fprintf(writer, "ID:\t%s\n", ci.Id)
-	fmt.Fprintf(writer, "Catalog Item:\t%s\n", catalogItem)
-	fmt.Fprintf(writer, "State:\t%s\n", state)
-	if ci.Status != nil && ci.Status.GetLastRestartedAt() != nil {
-		fmt.Fprintf(writer, "Last Restarted At:\t%s\n", ci.Status.GetLastRestartedAt().AsTime().Format(time.RFC3339))
+	if _, err := fmt.Fprintf(writer, "ID:\t%s\n", ci.Id); err != nil {
+		return err
 	}
-	writer.Flush()
+	if _, err := fmt.Fprintf(writer, "Catalog Item:\t%s\n", catalogItem); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(writer, "State:\t%s\n", state); err != nil {
+		return err
+	}
+	if ci.Status != nil && ci.Status.GetLastRestartedAt() != nil {
+		if _, err := fmt.Fprintf(writer, "Last Restarted At:\t%s\n", ci.Status.GetLastRestartedAt().AsTime().Format(time.RFC3339)); err != nil {
+			return err
+		}
+	}
+	for _, condition := range ci.GetStatus().GetConditions() {
+		if condition.GetType() == publicv1.ComputeInstanceConditionType_COMPUTE_INSTANCE_CONDITION_TYPE_PROVISIONED &&
+			condition.GetStatus() == publicv1.ConditionStatus_CONDITION_STATUS_FALSE &&
+			(condition.GetReason() == "RetryScheduled" || condition.GetReason() == "RetryRunning") {
+			if _, err := fmt.Fprintln(writer, "Provisioning:\tRetrying"); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	if failure := ci.GetStatus().GetLastProvisioningFailure(); failure != nil {
+		reason := fmt.Sprintf("UNKNOWN:%d", failure.GetReason())
+		if name, ok := publicv1.ComputeInstanceProvisioningFailureReason_name[int32(failure.GetReason())]; ok {
+			reason = strings.TrimPrefix(name, "COMPUTE_INSTANCE_PROVISIONING_FAILURE_REASON_")
+		}
+		if _, err := fmt.Fprintf(writer, "Last Provisioning Failure Reason:\t%s\n", reason); err != nil {
+			return err
+		}
+		if message := failure.GetMessage(); message != "" {
+			if _, err := fmt.Fprintf(writer, "Last Provisioning Failure Message:\t%s\n", message); err != nil {
+				return err
+			}
+		}
+		if attempt := failure.GetAttempt(); attempt > 0 {
+			if _, err := fmt.Fprintf(writer, "Last Provisioning Failure Attempt:\t%d\n", attempt); err != nil {
+				return err
+			}
+		}
+		if observed := failure.GetObservedAt(); observed != nil && observed.CheckValid() == nil {
+			if _, err := fmt.Fprintf(writer, "Last Provisioning Failure Observed At:\t%s\n", observed.AsTime().UTC().Format(time.RFC3339)); err != nil {
+				return err
+			}
+		}
+	}
+	return writer.Flush()
 }
 
 const shortHelp = `Describe a compute instance`
 
 const longHelp = `
-Describe a compute instance.
+Describe a compute instance, including provisioning retry and the latest failure when available.
+
+{{ bt 3 }}shell
+{{ binary }} describe computeinstance my-vm
+{{ bt 3 }}
+
+During retry backoff ({{ bt }}RetryScheduled{{ bt }}), the additional rows can look like:
+
+{{ bt 3 }}text
+Provisioning:                         Retrying
+Last Provisioning Failure Reason:     PROVIDER_REPORTED
+Last Provisioning Failure Message:    Provisioning failed.
+Last Provisioning Failure Attempt:    2
+Last Provisioning Failure Observed At: 2026-01-02T03:04:05Z
+{{ bt 3 }}
+
+During a running retry ({{ bt }}RetryRunning{{ bt }}), the same latest-failure rows remain
+visible alongside:
+
+{{ bt 3 }}text
+Provisioning: Retrying
+{{ bt 3 }}
+
+A terminal failure ({{ bt }}ProvisioningFailed{{ bt }}) retains its failure details,
+but has no provisioning retry row. For example:
+
+{{ bt 3 }}text
+Last Provisioning Failure Reason:  PROVIDER_REPORTED
+Last Provisioning Failure Message: Provisioning failed.
+{{ bt 3 }}
+
+Missing or legacy failure fields add no failure rows. A legacy scheduled retry
+can still show {{ bt }}Provisioning: Retrying{{ bt }} without failure details.
+An instance with neither retry nor failure fields shows only its existing details, for example:
+
+{{ bt 3 }}text
+ID:           my-vm
+Catalog Item: small
+State:        STARTING
+{{ bt 3 }}
+
+After the provisioning job succeeds, retry and failure rows disappear even while
+{{ bt }}WaitingForVM{{ bt }} or {{ bt }}ProvisioningStorage{{ bt }} still reports infrastructure progress.
+The existing state remains independent, for example:
+
+{{ bt 3 }}text
+ID:           my-vm
+Catalog Item: small
+State:        STARTING
+{{ bt 3 }}
+
+Failure presence and message text alone never imply retry. Failure timestamps use RFC 3339.
 `

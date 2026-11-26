@@ -15,7 +15,9 @@ package projectmembership
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -25,6 +27,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/controllers"
 	"github.com/osac-project/osac/fulfillment-service/internal/controllers/finalizers"
 	"github.com/osac-project/osac/fulfillment-service/internal/idp"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -1655,6 +1658,69 @@ var _ = Describe("Deletion Cleanup", func() {
 		err := task.delete(ctx)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(membership.GetMetadata().GetFinalizers()).ToNot(ContainElement(finalizers.ProjectMembershipFinalizer))
+	})
+
+	It("should requeue when user removal fails during cleanup", func() {
+		user := privatev1.User_builder{
+			Spec: privatev1.UserSpec_builder{
+				Username: "alice",
+			}.Build(),
+			Status: privatev1.UserStatus_builder{
+				KeycloakUserId: "keycloak-alice-id",
+			}.Build(),
+		}.Build()
+
+		project := privatev1.Project_builder{
+			Metadata: privatev1.Metadata_builder{
+				Name:   "my-project",
+				Tenant: "acme",
+			}.Build(),
+			Spec: privatev1.ProjectSpec_builder{}.Build(),
+		}.Build()
+
+		membership := privatev1.ProjectMembership_builder{
+			Metadata: privatev1.Metadata_builder{
+				Finalizers: []string{finalizers.ProjectMembershipFinalizer},
+				Project:    "project-id",
+			}.Build(),
+			Spec: privatev1.ProjectMembershipSpec_builder{
+				Users: userRefs("user-id"),
+				Role:  privatev1.ProjectMembershipRole_PROJECT_MEMBERSHIP_ROLE_MANAGER,
+			}.Build(),
+			Status: privatev1.ProjectMembershipStatus_builder{
+				Users: userRefs("user-id"),
+			}.Build(),
+		}.Build()
+
+		mockProjectsClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.ProjectsGetResponse{Object: project}, nil)
+
+		mockIdpClient.EXPECT().
+			GetGroupIDByPath(gomock.Any(), "acme", "/my-project/system:managers").
+			Return("group-id", nil)
+
+		mockUsersClient.EXPECT().
+			Get(gomock.Any(), gomock.Any()).
+			Return(&privatev1.UsersGetResponse{Object: user}, nil)
+
+		mockIdpClient.EXPECT().
+			RemoveUserFromGroup(gomock.Any(), "acme", "keycloak-alice-id", "group-id").
+			Return(fmt.Errorf("keycloak unavailable"))
+
+		task := &task{
+			r:          functionObj,
+			membership: membership,
+		}
+
+		err := task.delete(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("failed to remove user user-id during cleanup"))
+		Expect(controllers.IsRequeueable(err)).To(BeTrue())
+		var retryable interface{ RequeueAfter() time.Duration }
+		Expect(errors.As(err, &retryable)).To(BeTrue())
+		Expect(retryable.RequeueAfter()).To(Equal(time.Second))
+		Expect(membership.GetMetadata().GetFinalizers()).To(ContainElement(finalizers.ProjectMembershipFinalizer))
 	})
 
 	It("should handle group not found during cleanup with gRPC status code", func() {

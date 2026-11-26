@@ -15,7 +15,15 @@ from typing import Protocol
 
 from tests.conformance.errors import ConfigError
 from tests.conformance.interrupt import Interrupted, InterruptGate
-from tests.conformance.model import Classification, Plan, Result, RunContext, TestIdentity, TestOutcome
+from tests.conformance.model import (
+    NON_BLOCKING_MARKER,
+    Classification,
+    Plan,
+    Result,
+    RunContext,
+    TestIdentity,
+    TestOutcome,
+)
 from tests.conformance.output import safe_component
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -133,11 +141,7 @@ class PytestTestTree:
         manifest_nodeid = str(item["nodeid"])
         nodeid = self._absolute_nodeid(manifest_nodeid)
         markers = frozenset(str(marker) for marker in item.get("markers", []))
-        classification = (
-            Classification.INFORMING
-            if {"conformance_informing", "conformance/informing"} & markers
-            else Classification.BLOCKING
-        )
+        classification = Classification.NON_BLOCKING if NON_BLOCKING_MARKER in markers else Classification.BLOCKING
         return TestIdentity(
             id=self._canonical_id(manifest_nodeid),
             name=name,

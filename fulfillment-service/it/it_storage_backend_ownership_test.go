@@ -70,7 +70,8 @@ var _ = Describe("Storage backend ownership API", func() {
 		Entry("NetApp", "netapp"),
 	)
 
-	It("creates a credential-free CSP-managed backend through the private CLI", func(ctx context.Context) {
+	registerWithCLI := func(ctx context.Context, name string, flags ...string) *privatev1.StorageBackend {
+		GinkgoHelper()
 		homeDir, err := tool.NewCLIHomeDir()
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() { Expect(os.RemoveAll(homeDir)).To(Succeed()) })
@@ -80,7 +81,6 @@ var _ = Describe("Storage backend ownership API", func() {
 		)
 		Expect(code).To(Equal(0), "login failed: %s", stderr)
 
-		name := "it-csp-cli-" + uuid.New()
 		DeferCleanup(func(ctx context.Context) {
 			listed, err := client.List(ctx, privatev1.StorageBackendsListRequest_builder{
 				Filter: new(`this.metadata.name == "` + name + `"`),
@@ -91,17 +91,60 @@ var _ = Describe("Storage backend ownership API", func() {
 				Expect(err).NotTo(HaveOccurred())
 			}
 		})
-		_, stderr, code = tool.RunCLI(ctx, homeDir,
-			"create", "storagebackend", "--name", name, "--provider", "netapp", "--csp-managed",
-		)
+		args := append([]string{"create", "storagebackend", "--name", name}, flags...)
+		_, stderr, code = tool.RunCLI(ctx, homeDir, args...)
 		Expect(code).To(Equal(0), "create failed: %s", stderr)
 		output, stderr, code := tool.RunCLI(ctx, homeDir, "get", "storagebackend", name, "-o", "json")
 		Expect(code).To(Equal(0), "get failed: %s", stderr)
 		backend := &privatev1.StorageBackend{}
 		Expect((protojson.UnmarshalOptions{DiscardUnknown: true}).Unmarshal([]byte(output), backend)).To(Succeed())
+		return backend
+	}
+
+	It("creates a credential-free CSP-managed backend through the private CLI", func(ctx context.Context) {
+		backend := registerWithCLI(ctx, "it-csp-cli-"+uuid.New(), "--provider", "netapp", "--csp-managed")
 		Expect(backend.GetSpec().GetCspManaged()).To(BeTrue())
 		Expect(backend.GetSpec().GetEndpoint()).To(BeEmpty())
 		Expect(backend.GetSpec().GetCredentials()).To(BeNil())
+	})
+
+	It("registers endpoint-only VAST through the CLI and admits only NFS tiers", func(ctx context.Context) {
+		const endpoint = "https://vast.example.com"
+		backend := registerWithCLI(ctx, "it-vast-nfs-"+uuid.New(), "--provider", "vast", "--endpoint", endpoint)
+		got, err := client.Get(ctx, privatev1.StorageBackendsGetRequest_builder{Id: backend.GetId()}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(got.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageBackendState_STORAGE_BACKEND_STATE_READY))
+		Expect(got.GetObject().GetSpec().GetEndpoint()).To(Equal(endpoint))
+		Expect(got.GetObject().GetSpec().GetCredentials()).To(BeNil())
+		Expect(got.GetObject().GetSpec().GetCspManaged()).To(BeFalse())
+
+		tiers := privatev1.NewStorageTiersClient(tool.InternalView().AdminConn())
+		createTier := func(name string, protocol privatev1.StorageProtocol) (*privatev1.StorageTiersCreateResponse, error) {
+			DeferCleanup(func(ctx context.Context) {
+				_, err := tiers.Delete(ctx, privatev1.StorageTiersDeleteRequest_builder{Id: name}.Build())
+				if status.Code(err) != codes.NotFound {
+					Expect(err).NotTo(HaveOccurred())
+				}
+			})
+			return tiers.Create(ctx, privatev1.StorageTiersCreateRequest_builder{
+				Object: privatev1.StorageTier_builder{
+					Metadata: privatev1.Metadata_builder{Name: name}.Build(),
+					Spec: privatev1.StorageTierSpec_builder{
+						Protocol: protocol,
+						Backends: []*privatev1.BackendAssociation{privatev1.BackendAssociation_builder{BackendId: backend.GetId()}.Build()},
+					}.Build(),
+				}.Build(),
+			}.Build())
+		}
+		nfs, err := createTier("it-nfs-"+uuid.New(), privatev1.StorageProtocol_STORAGE_PROTOCOL_NFS)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(nfs.GetObject().GetStatus().GetState()).To(Equal(privatev1.StorageTierState_STORAGE_TIER_STATE_ACTIVE))
+		blockName := "it-block-" + uuid.New()
+		_, err = createTier(blockName, privatev1.StorageProtocol_STORAGE_PROTOCOL_BLOCK)
+		Expect(status.Code(err)).To(Equal(codes.InvalidArgument))
+		Expect(status.Convert(err).Message()).To(ContainSubstring("credentials"))
+		_, err = tiers.Get(ctx, privatev1.StorageTiersGetRequest_builder{Id: blockName}.Build())
+		Expect(status.Code(err)).To(Equal(codes.NotFound))
 	})
 
 	It("persists a credential-free CSP-managed backend and enforces immutable ownership", func(ctx context.Context) {
@@ -152,7 +195,7 @@ var _ = Describe("Storage backend ownership API", func() {
 		Expect(got.GetObject().GetMetadata().GetTenant()).To(Equal("shared"))
 	})
 
-	It("rejects credential-free registration with default OSAC ownership", func(ctx context.Context) {
+	It("requires an endpoint for VAST registration with default OSAC ownership", func(ctx context.Context) {
 		_, err := client.Create(ctx, privatev1.StorageBackendsCreateRequest_builder{
 			Object: privatev1.StorageBackend_builder{
 				Metadata: privatev1.Metadata_builder{Name: "it-osac-backend-" + uuid.New()}.Build(),

@@ -198,6 +198,60 @@ class K8sClient:
                         proc.kill()
                         proc.wait(timeout=5)
 
+    @contextlib.contextmanager
+    def watch_phase_transition(self, *, resource: str, name: str) -> Iterator[Callable[[str], str]]:
+        """Yield a callable returning a phase's recorded transition timestamp.
+
+        Start the watch before the state change: a short STOPPING phase can go
+        by faster than a polling loop observes, but a watch established first
+        always receives the modification that stamps the phase and its
+        transition time. The callable returns the first recorded timestamp for
+        the requested phase, or an empty string when the phase was skipped.
+        """
+        with tempfile.TemporaryDirectory() as run_dir:
+            out_path = Path(run_dir) / "watch.out"
+            err_path = Path(run_dir) / "watch.err"
+            with out_path.open("w") as out, err_path.open("w") as err:
+                command = [
+                    *self._base(),
+                    "get",
+                    resource,
+                    name,
+                    "-n",
+                    self.namespace,
+                    "-o",
+                    'jsonpath={.status.phase}:{.status.phaseTransitionTime}{"\\n"}',
+                    "--watch",
+                ]
+                proc = subprocess.Popen(command, stdout=out, stderr=err)
+            try:
+                deadline = time.monotonic() + 30
+                while not _watch_lines(out_path):
+                    if proc.poll() is not None:
+                        raise RuntimeError(f"kubectl watch exited early: {err_path.read_text().strip()}")
+                    if time.monotonic() > deadline:
+                        raise RuntimeError(f"kubectl watch for {resource} {name} produced no output within 30s")
+                    time.sleep(0.2)
+
+                def phase_stamp(phase: str) -> str:
+                    if proc.poll() is not None:
+                        raise RuntimeError(f"kubectl watch exited early: {err_path.read_text().strip()}")
+                    for line in _watch_lines(out_path):
+                        recorded_phase, _, stamp = line.partition(":")
+                        if recorded_phase == phase and stamp:
+                            return stamp
+                    return ""
+
+                yield phase_stamp
+            finally:
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=5)
+
     def get_by_label(self, *, resource: str, label: str, jsonpath: str) -> str:
         return run(*self._base(), "get", resource, "-n", self.namespace, "-l", label, "-o", f"jsonpath={jsonpath}")
 
@@ -868,6 +922,11 @@ class K8sClient:
             if state in states:
                 count += 1
         return count
+
+    def is_bmh_present(self, *, name: str, bmh_namespace: str) -> bool:
+        """Return whether a BareMetalHost exists in the management namespace."""
+        _output, rc = self._get("get", "baremetalhost", name, "-n", bmh_namespace, checked=False)
+        return rc == 0
 
     def get_bmh_hardware_nics(self, *, name: str, bmh_namespace: str) -> list[str]:
         """Return lowercased MAC addresses from BareMetalHost hardware inspection data."""

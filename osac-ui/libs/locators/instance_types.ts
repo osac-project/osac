@@ -36,7 +36,7 @@ export const InstanceTypesCreatePage = {
   pageTitle: ['heading', { name: 'Create instance type', exact: true }],
   instanceTypesBreadcrumb: ['button', { name: 'Instance types', exact: true }],
   name: id(instanceTypeFieldIds.name),
-  description: id(instanceTypeFieldIds.description),
+  description: ['[id="spec.description"]'],
   vcpus: id(instanceTypeFieldIds.vcpus),
   memoryGib: id(instanceTypeFieldIds.memoryGib),
   gpuCount: id(instanceTypeFieldIds.gpuCount),

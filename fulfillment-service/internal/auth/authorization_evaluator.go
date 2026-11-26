@@ -30,6 +30,7 @@ var authzPolicy string
 type EvaluatorBuilder struct {
 	emergencyServiceAccounts []string
 	serviceAccountResolver   ManagedServiceAccountResolver
+	aapSecretReaderIssuer    string
 }
 
 // ManagedServiceAccountResolver loads current Fulfillment authorization state
@@ -54,6 +55,11 @@ type AuthzDecision struct {
 // This structure preserves all claims needed for OPA policy evaluation, ensuring
 // identical authorization decisions for both actual operations and permission checks.
 type AuthContext struct {
+	Issuer          string
+	AuthorizedParty string
+	ClientID        string
+	Audiences       []string
+
 	// AuthMethod indicates the authentication method: "jwt" or "serviceaccount"
 	AuthMethod string
 
@@ -168,6 +174,41 @@ func (b *EvaluatorBuilder) SetManagedServiceAccountResolver(
 	return b
 }
 
+func (b *EvaluatorBuilder) SetAAPSecretReaderIssuer(value string) *EvaluatorBuilder {
+	b.aapSecretReaderIssuer = value
+	return b
+}
+
+// ResolveAAPSecretReaderIssuer selects a configured OIDC issuer for the reader
+// grant. An empty result disables the grant when there is no unique default.
+func ResolveAAPSecretReaderIssuer(trustedIssuers []string, configuredIssuer string) (string, error) {
+	issuers := make(map[string]struct{}, len(trustedIssuers))
+	for _, issuer := range trustedIssuers {
+		normalized, err := normalizeIssuerURL(issuer)
+		if err != nil {
+			return "", fmt.Errorf("invalid trusted token issuer: %w", err)
+		}
+		issuers[normalized] = struct{}{}
+	}
+	if configuredIssuer == "" {
+		if len(issuers) == 1 {
+			for issuer := range issuers {
+				return issuer, nil
+			}
+		}
+		return "", nil
+	}
+
+	issuer, err := normalizeIssuerURL(configuredIssuer)
+	if err != nil {
+		return "", err
+	}
+	if _, ok := issuers[issuer]; !ok {
+		return "", errors.New("AAP Secret reader issuer must be one of the trusted token issuers")
+	}
+	return issuer, nil
+}
+
 // Build creates an OPAAuthorizationEvaluator with the embedded authz.rego policy.
 func (b *EvaluatorBuilder) Build() (*OPAAuthorizationEvaluator, error) {
 	emergencyServiceAccounts, err := buildEmergencyServiceAccounts(b.emergencyServiceAccounts)
@@ -176,7 +217,10 @@ func (b *EvaluatorBuilder) Build() (*OPAAuthorizationEvaluator, error) {
 	}
 
 	policyData := inmem.NewFromObject(map[string]any{
-		"emergency_service_accounts": emergencyServiceAccounts,
+		"emergency_service_accounts":  emergencyServiceAccounts,
+		"aap_secret_reader_audience":  Audience,
+		"aap_secret_reader_client_id": aapSecretReaderClientID,
+		"aap_secret_reader_issuer":    b.aapSecretReaderIssuer,
 	})
 
 	query, err := rego.New(
@@ -358,6 +402,12 @@ func constructOPAInput(authContext *AuthContext, method string) map[string]any {
 		identity["user"] = user
 	} else {
 		// For JWT tokens, include username at top level and conditionally include claims
+		identity["iss"] = authContext.Issuer
+		identity["azp"] = authContext.AuthorizedParty
+		identity["client_id"] = authContext.ClientID
+		if len(authContext.Audiences) > 0 {
+			identity["aud"] = authContext.Audiences
+		}
 		if authContext.Username != "" {
 			identity["username"] = authContext.Username
 		}

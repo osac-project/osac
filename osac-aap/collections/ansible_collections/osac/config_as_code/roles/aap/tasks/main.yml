@@ -9,6 +9,24 @@
 - name: Validate the pinned launch policy
   ansible.builtin.include_tasks: validate_launch_policy.yml
 
+- name: Validate Fulfillment Secret reader configuration
+  when: aap_fulfillment_reader_enabled | bool
+  block:
+    - name: Check that the AAP bootstrap credential is configured
+      ansible.builtin.set_fact:
+        aap_fulfillment_reader_secret_configured: "{{ lookup('ansible.builtin.env', 'OSAC_AAP_SECRET_READER_CLIENT_SECRET') | length > 0 }}"
+      no_log: true
+
+    - name: Require the Fulfillment Secret reader credential and HTTPS URLs
+      ansible.builtin.assert:
+        that:
+          - aap_fulfillment_reader_secret_configured
+          - aap_fulfillment_reader_issuer_url is match('^https://')
+          - aap_fulfillment_reader_api_url is osac.service.fulfillment_api_url
+        fail_msg: >-
+          AAP bootstrap requires the dedicated Fulfillment reader credential, an HTTPS issuer URL,
+          and an HTTPS private API listener root with no credentials, query, or fragment.
+
 - name: OSAC AAP
   ansible.builtin.include_role:
     name: infra.aap_configuration.dispatch

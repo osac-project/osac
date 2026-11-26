@@ -1,0 +1,147 @@
+"""NetBox device client for E2E inventory fixtures.
+
+Thin fixture-facing wrapper around the official Python client (pynetbox).
+All device access goes through pynetbox; the tests never hand-roll NetBox
+REST calls. Value resolution (deployed BMF configuration versus debug env
+overrides) lives in the inventory fixture layer (`inventory.py`), not here.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import functools
+import os
+import tempfile
+from typing import Any
+
+import pynetbox
+import requests
+from pynetbox.core.api import Api
+
+
+def _status_value(status: object) -> str:
+    """Normalize a NetBox device status.
+
+    NetBox may return a plain string (brief responses) or a choice object
+    (``{"value": ..., "label": ...}`` / pynetbox Record with ``.value``).
+    """
+    if isinstance(status, str):
+        return status
+    if isinstance(status, dict):
+        value = status.get("value", "")
+        return value if isinstance(value, str) else ""
+    value = getattr(status, "value", None)
+    return value if isinstance(value, str) else ""
+
+
+# A stalled NetBox must fail the request, not hang the suite: requests has
+# no default timeout and pynetbox 7.8 passes none. (connect, read) seconds.
+# Timeouts surface as raw requests exceptions on purpose: the message is
+# connection-level (host, port, timeout) — no token, no body — and a raw
+# traceback is the more diagnostic failure.
+_REQUEST_TIMEOUT = (10, 30)
+
+
+class NetBoxClient:
+    """NetBox device reads on top of pynetbox.
+
+    - Construction performs no network calls.
+    - TLS goes through a dedicated ``requests.Session``:
+      - temp CA bundle file when ``ca_pem`` is given,
+      - disabled verification when ``insecure`` is set,
+      - default system verification otherwise.
+    - Every request has a finite timeout — a stalled NetBox fails the
+      request instead of hanging the suite.
+    - The API token is applied per request by pynetbox and must never
+      appear in logs or exceptions.
+    """
+
+    def __init__(
+        self, *, url: str, token: str, ca_pem: str | None = None, insecure: bool = False, api: Api | None = None
+    ) -> None:
+        # ``api`` injection keeps unit tests free of pynetbox internals.
+        self._api = api if api is not None else pynetbox.api(url, token=token)
+        self._ca_file: str | None = None
+        if api is None:
+            session = requests.Session()
+            # requests has no default timeout and pynetbox 7.8 passes none;
+            # binding it on Session.request covers every request pynetbox
+            # makes through the session.
+            session.request = functools.partial(session.request, timeout=_REQUEST_TIMEOUT)
+            if ca_pem is not None:
+                fd, self._ca_file = tempfile.mkstemp(prefix="osac-netbox-ca-", suffix=".pem")
+                with os.fdopen(fd, "w") as handle:
+                    handle.write(ca_pem)
+                session.verify = self._ca_file
+            elif insecure:
+                session.verify = False
+            self._api.http_session = session
+
+    @property
+    def api(self) -> Api:
+        return self._api
+
+    def close(self) -> None:
+        """Remove the temporary CA bundle, if any."""
+        if self._ca_file is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(self._ca_file)
+            self._ca_file = None
+
+    def _error(self, operation: str, exc: pynetbox.RequestError) -> RuntimeError:
+        """Build a sanitized RuntimeError: method, endpoint, status code only.
+
+        The token travels in the Authorization header, never the URL, but
+        response bodies and request payloads are dropped to guarantee no
+        credential or tenant data leaks through exception messages. The
+        ``from None`` at the raise sites keeps the RequestError (response
+        body included) out of the printed traceback; ``__context__`` still
+        holds it in-process, where nothing prints it.
+        """
+        req = getattr(exc, "req", None)
+        status = getattr(req, "status_code", "?")
+        url = getattr(req, "url", None) or getattr(exc, "base", "<unknown endpoint>")
+        method = getattr(getattr(req, "request", None), "method", "?")
+        return RuntimeError(f"NetBox {operation} failed: {method} {url} -> HTTP {status}")
+
+    def get_device_status(self, device_id: str) -> str:
+        """Return the device status value, or "" when the device is gone."""
+        try:
+            device = self._api.dcim.devices.get(device_id)
+        except pynetbox.RequestError as exc:
+            raise self._error("get_device_status", exc) from None
+        if device is None:
+            return ""
+        return _status_value(getattr(device, "status", ""))
+
+    def get_device(self, device_id: str) -> dict[str, Any]:
+        """Return the full device as a dict (custom_fields access)."""
+        try:
+            device = self._api.dcim.devices.get(device_id)
+        except pynetbox.RequestError as exc:
+            raise self._error("get_device", exc) from None
+        if device is None:
+            raise RuntimeError(f"NetBox device {device_id} was not found")
+        return device.serialize()
+
+    def list_devices(
+        self, *, name: str | None = None, status: str | None = None, custom_fields: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        """List devices, optionally filtered by exact name, status, and custom fields.
+
+        Custom-field filters are passed as ``cf_<name>`` query parameters,
+        matching the NetBox free-device query convention, e.g.
+        ``custom_fields={"osac_managed": True, "osac_instance_id__empty": True}``.
+        pynetbox handles pagination.
+        """
+        filters: dict[str, Any] = {}
+        if name is not None:
+            filters["name"] = name
+        if status is not None:
+            filters["status"] = status
+        for key, value in (custom_fields or {}).items():
+            filters[f"cf_{key}"] = value
+        try:
+            return [device.serialize() for device in self._api.dcim.devices.filter(**filters)]
+        except pynetbox.RequestError as exc:
+            raise self._error("list_devices", exc) from None

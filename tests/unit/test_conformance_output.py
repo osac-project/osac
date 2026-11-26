@@ -6,20 +6,21 @@ import re
 from pathlib import Path
 
 import pytest
+import yaml
 
 from tests.conformance.model import Classification, Plan, Selector, TestIdentity
-from tests.conformance.output import OutputSink, new_run_id, write_plan
+from tests.conformance.output import OutputSink, new_run_id, plan_key, write_plan
 from tests.conformance.redact import Redactor
 
 _REDACTION_MARKER = "redaction-marker"
 
 
-def _test(test_id: str = "TC-1") -> TestIdentity:
+def _test(test_id: str = "TC-1", *, labels: frozenset[str] = frozenset({"conformance_generic"})) -> TestIdentity:
     return TestIdentity(
         id=test_id,
         name=f"{test_id}: test",
         nodeid="tests/e2e/test_tc.py::test_tc",
-        labels=frozenset({"conformance_generic"}),
+        labels=labels,
         profiles=(),
         classification=Classification.BLOCKING,
     )
@@ -53,14 +54,25 @@ def test_evidence_is_redacted_and_confined(tmp_path: Path) -> None:
 def test_write_plan_records_selectors_and_tests(tmp_path: Path) -> None:
     plan = Plan((_test(),), ("generic",), (Selector("generic", "marker", ("conformance_generic",)),), True)
 
-    path = write_plan(plan, tmp_path, Redactor())
+    data = yaml.safe_load(write_plan(plan, tmp_path, Redactor()).read_text())
 
-    text = path.read_text()
-    assert "selectors:" in text
-    assert "markers:" in text
-    assert "TC-1" in text
-    assert "complete: true" in text
-    assert "key:" in text
+    assert data["profiles"] == ["generic"]
+    assert data["selectors"] == [{"id": "generic", "type": "marker", "markers": ["conformance_generic"]}]
+    assert data["complete"] is True
+    recorded = data["tests"][0]
+    assert recorded["id"] == "TC-1"
+    assert recorded["name"] == "TC-1: test"
+    assert recorded["key"] == plan_key("TC-1")
+    assert recorded["markers"] == ["conformance_generic"]
+
+
+def test_write_plan_omits_the_non_blocking_marker(tmp_path: Path) -> None:
+    test = _test(labels=frozenset({"conformance_netris", "conformance_non_blocking"}))
+    plan = Plan((test,), ("netris",), (Selector("netris", "marker", ("conformance_netris",)),), True)
+
+    data = yaml.safe_load(write_plan(plan, tmp_path, Redactor()).read_text())
+
+    assert data["tests"][0]["markers"] == ["conformance_netris"]
 
 
 def test_write_plan_redacts_test_ids_and_names(tmp_path: Path) -> None:
@@ -76,7 +88,6 @@ def test_write_plan_redacts_test_ids_and_names(tmp_path: Path) -> None:
     text = path.read_text()
     assert _REDACTION_MARKER not in text
     assert "<redacted>" in text
-    assert "key:" in text
 
 
 def test_evidence_directory_does_not_repeat_the_test_id(tmp_path: Path) -> None:

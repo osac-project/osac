@@ -165,3 +165,115 @@ esac
 		t.Fatalf("configuration file should be removed after failed startup: %v", err)
 	}
 }
+
+func TestContainerLateCreationCleanup(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		expiredContext bool
+		creation       string
+	}{
+		{name: "background cleanup context", creation: "on-kill"},
+		{name: "expired startup context", expiredContext: true, creation: "on-kill"},
+		{name: "daemon creates after launcher is reaped", creation: "after-reap"},
+		{name: "container never created"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stateDir := t.TempDir()
+			t.Setenv("FAKE_CONTAINER_STATE", stateDir)
+			t.Setenv("FAKE_CONTAINER_CREATION", test.creation)
+			tool := testContainerTool(t, `state=$FAKE_CONTAINER_STATE
+case "$1" in
+run)
+  printf '%s\n' "$$" > "$state/pid"
+  printf '%s\n' "$3" > "$state/name"
+  exec sleep 30
+  ;;
+port) exit 1 ;;
+kill)
+  [ "$2" = "$(cat "$state/name")" ] || exit 2
+  # The runtime reports a miss, then the container appears before cleanup can retry.
+  touch "$state/missed"
+  if [ "$FAKE_CONTAINER_CREATION" = on-kill ]; then touch "$state/container"; fi
+  printf 'Error: no such container\n' >&2
+  exit 1
+  ;;
+rm)
+  [ "$2" = -f ] && [ "$3" = -v ] && [ "$4" = "$(cat "$state/name")" ] || exit 2
+  if kill -0 "$(cat "$state/pid")" 2>/dev/null; then exit 2; fi
+  if [ "$FAKE_CONTAINER_CREATION" = after-reap ] && [ ! -f "$state/remove-attempted" ]; then
+    # Model a daemon completing a create request after the first post-reap lookup.
+    touch "$state/remove-attempted" "$state/container"
+    exit 0
+  fi
+  touch "$state/remove-attempted"
+  if [ ! -f "$state/container" ]; then
+    printf 'Error response from daemon: No such container: %s\n' "$4" >&2
+    exit 1
+  fi
+  rm "$state/container" && printf '%s\n' "$4"
+  ;;
+esac
+`)
+			container := testContainer(t, tool)
+			t.Cleanup(func() {
+				if container.runDone != nil {
+					_ = container.runCmd.Process.Kill()
+					select {
+					case <-container.runDone:
+					case <-time.After(2 * time.Second):
+						t.Error("test could not reap the fake launcher")
+					}
+				}
+				_ = os.Remove(container.configFile)
+			})
+			startCtx, cancelStart := context.WithTimeout(context.Background(), 250*time.Millisecond)
+			defer cancelStart()
+			if err := container.Start(startCtx); !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected port discovery deadline, got %v", err)
+			}
+			configFile := container.configFile
+			ready, cancelReady := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancelReady()
+			for {
+				if name, err := os.ReadFile(filepath.Join(stateDir, "name")); err == nil && strings.TrimSpace(string(name)) == container.id {
+					break
+				}
+				select {
+				case <-ready.Done():
+					t.Fatal("fake launcher did not record the fixture name")
+				case <-time.After(10 * time.Millisecond):
+				}
+			}
+
+			// Prevent a regression from blocking the test on the foreground process.
+			watchdog := time.AfterFunc(8*time.Second, func() { _ = container.runCmd.Process.Kill() })
+			stopCtx := context.Background()
+			if test.expiredContext {
+				stopCtx = startCtx
+			}
+			err := container.Stop(stopCtx)
+			if !watchdog.Stop() {
+				t.Error("cleanup blocked until the watchdog killed the launcher")
+			}
+			if err != nil {
+				t.Errorf("cleanup failed: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(stateDir, "missed")); err != nil {
+				t.Errorf("cleanup did not encounter the initial miss: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(stateDir, "remove-attempted")); err != nil {
+				t.Errorf("cleanup did not attempt removal after reaping the launcher: %v", err)
+			}
+			select {
+			case <-container.runDone:
+			default:
+				t.Error("foreground launcher was not reaped")
+			}
+			for _, path := range []string{filepath.Join(stateDir, "container"), configFile} {
+				if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("fixture resource remains at %s: %v", path, err)
+				}
+			}
+		})
+	}
+}

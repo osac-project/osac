@@ -15,6 +15,9 @@ package it
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -24,7 +27,12 @@ import (
 	. "github.com/onsi/gomega"
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
+	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/oauth"
+	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 	publicv1 "github.com/osac-project/osac/proto/gen/osac/public/v1"
 )
@@ -104,6 +112,94 @@ var _ = Describe("Ingress separation", func() {
 		Expect(response).ToNot(BeNil())
 		defer response.Body.Close()
 		Expect(response.StatusCode).To(Equal(http.StatusNotFound))
+	})
+
+	It("limits the AAP Keycloak client to private Secret reads across tenants", func(ctx SpecContext) {
+		const readerID = "osac-aap-secret-reader"
+		credential := &corev1.Secret{}
+		Expect(tool.KubeClient().Get(ctx, client.ObjectKey{
+			Namespace: "osac", Name: "aap-fulfillment-secret-reader",
+		}, credential)).To(Succeed())
+
+		store, err := auth.NewMemoryTokenStore().SetLogger(tool.logger).Build()
+		Expect(err).NotTo(HaveOccurred())
+		if len(credential.Data["client-secret"]) == 0 {
+			Fail("AAP reader credential is missing its client-secret key")
+		}
+		tokenSource, err := oauth.NewTokenSource().
+			SetLogger(tool.logger).
+			SetStore(store).
+			SetCaPool(tool.caPool).
+			SetIssuer(fmt.Sprintf("https://%s/realms/osac", keycloakAddr)).
+			SetFlow(oauth.CredentialsFlow).
+			SetClientId(readerID).
+			SetClientSecret(string(credential.Data["client-secret"])).
+			Build()
+		Expect(err).NotTo(HaveOccurred())
+
+		internal := tool.makeHttpClient(internalServiceAddr, tokenSource)
+		external := tool.makeHttpClient(externalServiceAddr, tokenSource)
+		DeferCleanup(internal.CloseIdleConnections)
+		DeferCleanup(external.CloseIdleConnections)
+		admin := privatev1.NewSecretsClient(tool.InternalView().AdminConn())
+		get := func(httpClient *http.Client, path string, status int) map[string]any {
+			GinkgoHelper()
+			request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, path, nil)
+			Expect(requestErr).NotTo(HaveOccurred())
+			response, requestErr := httpClient.Do(request)
+			Expect(requestErr).NotTo(HaveOccurred())
+			defer response.Body.Close()
+			Expect(response.StatusCode).To(Equal(status))
+			if status != http.StatusOK {
+				return nil
+			}
+			var object map[string]any
+			Expect(json.NewDecoder(response.Body).Decode(&object)).To(Succeed())
+			return object
+		}
+
+		ordinaryName := "aap-reader-" + uuid.New()
+		opaque := privatev1.SecretType_SECRET_TYPE_OPAQUE
+		for _, fixture := range []struct {
+			tenant     string
+			name       string
+			secretType privatev1.SecretType
+			key        string
+			status     int
+		}{
+			{"engineering", ordinaryName, privatev1.SecretType_SECRET_TYPE_USER_DATA, "userdata", http.StatusOK},
+			{"development", ordinaryName, privatev1.SecretType_SECRET_TYPE_USER_DATA, "userdata", http.StatusOK},
+			{auth.SharedTenant, ordinaryName, opaque, "value", http.StatusOK},
+			{auth.SystemTenant, ordinaryName, opaque, "value", http.StatusOK},
+			{"engineering", "break-glass-credentials-" + uuid.New(), opaque, "password", http.StatusForbidden},
+			{auth.SystemTenant, ordinaryName + "-sa", privatev1.SecretType_SECRET_TYPE_SERVICE_ACCOUNT_CREDENTIAL, "client_secret", http.StatusForbidden},
+		} {
+			data := map[string][]byte{fixture.key: []byte("synthetic fixture")}
+			created, createErr := admin.Create(ctx, privatev1.SecretsCreateRequest_builder{
+				Object: privatev1.Secret_builder{
+					Metadata: privatev1.Metadata_builder{
+						Name: fixture.name, Tenant: fixture.tenant,
+					}.Build(),
+					Type: fixture.secretType,
+					Data: data,
+				}.Build(),
+			}.Build())
+			Expect(createErr).NotTo(HaveOccurred())
+			id := created.GetObject().GetId()
+			DeferCleanup(func(cleanupCtx SpecContext) {
+				_, deleteErr := admin.Delete(cleanupCtx, privatev1.SecretsDeleteRequest_builder{Id: id}.Build())
+				Expect(deleteErr).NotTo(HaveOccurred())
+			})
+			privatePath := "/api/private/v1/secrets/" + id
+			object := get(internal, privatePath, fixture.status)
+			if fixture.status == http.StatusOK {
+				Expect(object["id"]).To(Equal(id))
+				Expect(object["data"]).To(HaveKeyWithValue(fixture.key, base64.StdEncoding.EncodeToString(data[fixture.key])))
+			}
+			get(internal, "/api/fulfillment/v1/secrets/"+id, http.StatusForbidden)
+			get(external, privatePath, http.StatusNotFound)
+		}
+		get(internal, "/api/private/v1/secrets", http.StatusForbidden)
 	})
 
 	// Console proxy routing tests

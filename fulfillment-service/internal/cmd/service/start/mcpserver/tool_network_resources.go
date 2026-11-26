@@ -29,12 +29,22 @@ import (
 type NetworkResourceType string
 
 const (
-	NetworkResourceTypeVirtualNetwork NetworkResourceType = "virtual_network"
-	NetworkResourceTypeSubnet         NetworkResourceType = "subnet"
-	NetworkResourceTypeSecurityGroup  NetworkResourceType = "security_group"
-
-	maxNetworkSecurityRules = 100
+	NetworkResourceTypeVirtualNetwork       NetworkResourceType = "virtual_network"
+	NetworkResourceTypeSubnet               NetworkResourceType = "subnet"
+	NetworkResourceTypeSecurityGroup        NetworkResourceType = "security_group"
+	NetworkResourceTypeExternalIP           NetworkResourceType = "external_ip"
+	NetworkResourceTypeExternalIPAttachment NetworkResourceType = "external_ip_attachment"
+	NetworkResourceTypeNATGateway           NetworkResourceType = "nat_gateway"
 )
+
+type NetworkClusterEndpoint string
+
+const (
+	NetworkClusterEndpointAPI     NetworkClusterEndpoint = "api"
+	NetworkClusterEndpointIngress NetworkClusterEndpoint = "ingress"
+)
+
+const maxNetworkSecurityRules = 100
 
 // CreateNetworkResourceInput creates one tenant network prerequisite. A
 // non-empty ID is an edit request, which the tool rejects without dispatch.
@@ -63,13 +73,35 @@ type CreateNetworkResourceOutput struct {
 }
 
 type DeleteNetworkResourceInput struct {
-	ResourceType NetworkResourceType `json:"resource_type" jsonschema:"network resource type: virtual_network, subnet, or security_group"`
+	ResourceType NetworkResourceType `json:"resource_type" jsonschema:"network resource type: virtual_network, subnet, security_group, external_ip, external_ip_attachment, or nat_gateway"`
 	ID           string              `json:"id" jsonschema:"ID of the exact network resource to delete"`
 }
 
 type DeleteNetworkResourceOutput struct {
 	ResourceType NetworkResourceType `json:"resource_type"`
 	ID           string              `json:"id"`
+}
+
+// ExposeNetworkResourceInput creates one public network exposure. A
+// non-empty ID is an edit request, which the tool rejects without dispatch.
+type ExposeNetworkResourceInput struct {
+	ID                  string                 `json:"id,omitempty" jsonschema:"optional existing resource ID; a non-empty value requests an unsupported in-place edit"`
+	ResourceType        NetworkResourceType    `json:"resource_type" jsonschema:"exposure resource type: external_ip, external_ip_attachment, or nat_gateway"`
+	Name                string                 `json:"name" jsonschema:"name for the new exposure resource"`
+	ExternalIPPoolID    string                 `json:"external_ip_pool_id,omitempty" jsonschema:"provider-managed ExternalIPPool ID for external_ip"`
+	ExternalIPID        string                 `json:"external_ip_id,omitempty" jsonschema:"ExternalIP ID for external_ip_attachment and nat_gateway"`
+	VirtualNetworkID    string                 `json:"virtual_network_id,omitempty" jsonschema:"VirtualNetwork ID for nat_gateway"`
+	ComputeInstanceID   string                 `json:"compute_instance_id,omitempty" jsonschema:"ComputeInstance target ID for external_ip_attachment"`
+	ClusterID           string                 `json:"cluster_id,omitempty" jsonschema:"Cluster target ID for external_ip_attachment"`
+	BareMetalInstanceID string                 `json:"baremetal_instance_id,omitempty" jsonschema:"BareMetalInstance target ID for external_ip_attachment"`
+	ClusterEndpoint     NetworkClusterEndpoint `json:"cluster_endpoint,omitempty" jsonschema:"cluster endpoint for cluster attachments: api or ingress"`
+}
+
+type ExposeNetworkResourceOutput struct {
+	ResourceType NetworkResourceType `json:"resource_type"`
+	ID           string              `json:"id"`
+	Version      int32               `json:"version"`
+	State        string              `json:"state"`
 }
 
 type networkCreateRequest struct {
@@ -79,6 +111,17 @@ type networkCreateRequest struct {
 	ipv4Cidr         string
 	ingress          []*publicv1.SecurityRule
 	egress           []*publicv1.SecurityRule
+}
+
+type networkExposeRequest struct {
+	resourceType             NetworkResourceType
+	name                     string
+	externalIPPoolID         string
+	externalIPID             string
+	virtualNetworkID         string
+	attachmentTargetKind     string
+	attachmentTargetID       string
+	attachmentTargetEndpoint publicv1.ExternalIPAttachmentEndpoint
 }
 
 func handleCreateNetworkResource(
@@ -160,10 +203,113 @@ func handleCreateNetworkResource(
 	}
 }
 
+func handleExposeNetworkResource(
+	externalIPs publicv1.ExternalIPsClient,
+	externalIPAttachments publicv1.ExternalIPAttachmentsClient,
+	natGateways publicv1.NATGatewaysClient,
+) mcp.ToolHandlerFor[ExposeNetworkResourceInput, ExposeNetworkResourceOutput] {
+	return func(
+		ctx context.Context, req *mcp.CallToolRequest, input ExposeNetworkResourceInput,
+	) (*mcp.CallToolResult, ExposeNetworkResourceOutput, error) {
+		var err error
+		input, err = normalizeExposeNetworkResourceInput(input)
+		if err != nil {
+			return nil, ExposeNetworkResourceOutput{}, safeInvalidRequestError(err)
+		}
+		if input.ID != "" {
+			return nil, ExposeNetworkResourceOutput{}, safeUnsupportedInPlaceNetworkEditError()
+		}
+		request, err := networkExposeRequestFromInput(input)
+		if err != nil {
+			return nil, ExposeNetworkResourceOutput{}, safeInvalidRequestError(err)
+		}
+		ctx, cancel := toolCallContext(ctx)
+		defer cancel()
+		ctx, err = forwardAPIToken(ctx, req)
+		if err != nil {
+			return nil, ExposeNetworkResourceOutput{}, err
+		}
+		switch request.resourceType {
+		case NetworkResourceTypeExternalIP:
+			response, err := externalIPs.Create(ctx, publicv1.ExternalIPsCreateRequest_builder{
+				Object: publicv1.ExternalIP_builder{
+					Metadata: publicv1.Metadata_builder{Name: request.name}.Build(),
+					Spec: publicv1.ExternalIPSpec_builder{
+						Pool: publicv1.ExternalIPPoolReference_builder{
+							Id: request.externalIPPoolID,
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			if err != nil {
+				return nil, ExposeNetworkResourceOutput{}, safeNetworkExposeCreateError(request, err)
+			}
+			created := response.GetObject()
+			return nil, networkExposeOutput(request.resourceType, created.GetId(), created.GetMetadata(), created.GetStatus().GetState().String()), nil
+		case NetworkResourceTypeExternalIPAttachment:
+			spec := publicv1.ExternalIPAttachmentSpec_builder{
+				ExternalIp: publicv1.ExternalIPLocalReference_builder{
+					Id: request.externalIPID,
+				}.Build(),
+				TargetEndpoint: request.attachmentTargetEndpoint,
+			}
+			switch request.attachmentTargetKind {
+			case "ComputeInstance":
+				spec.ComputeInstance = publicv1.ComputeInstanceLocalReference_builder{
+					Id: request.attachmentTargetID,
+				}.Build()
+			case "Cluster":
+				spec.Cluster = publicv1.ClusterLocalReference_builder{
+					Id: request.attachmentTargetID,
+				}.Build()
+			case "BareMetalInstance":
+				spec.BaremetalInstance = publicv1.BareMetalInstanceLocalReference_builder{
+					Id: request.attachmentTargetID,
+				}.Build()
+			}
+			response, err := externalIPAttachments.Create(ctx, publicv1.ExternalIPAttachmentsCreateRequest_builder{
+				Object: publicv1.ExternalIPAttachment_builder{
+					Metadata: publicv1.Metadata_builder{Name: request.name}.Build(),
+					Spec:     spec.Build(),
+				}.Build(),
+			}.Build())
+			if err != nil {
+				return nil, ExposeNetworkResourceOutput{}, safeNetworkExposeCreateError(request, err)
+			}
+			created := response.GetObject()
+			return nil, networkExposeOutput(request.resourceType, created.GetId(), created.GetMetadata(), created.GetStatus().GetState().String()), nil
+		case NetworkResourceTypeNATGateway:
+			response, err := natGateways.Create(ctx, publicv1.NATGatewaysCreateRequest_builder{
+				Object: publicv1.NATGateway_builder{
+					Metadata: publicv1.Metadata_builder{Name: request.name}.Build(),
+					Spec: publicv1.NATGatewaySpec_builder{
+						VirtualNetwork: publicv1.VirtualNetworkLocalReference_builder{
+							Id: request.virtualNetworkID,
+						}.Build(),
+						ExternalIp: publicv1.ExternalIPLocalReference_builder{
+							Id: request.externalIPID,
+						}.Build(),
+					}.Build(),
+				}.Build(),
+			}.Build())
+			if err != nil {
+				return nil, ExposeNetworkResourceOutput{}, safeNetworkExposeCreateError(request, err)
+			}
+			created := response.GetObject()
+			return nil, networkExposeOutput(request.resourceType, created.GetId(), created.GetMetadata(), created.GetStatus().GetState().String()), nil
+		default:
+			return nil, ExposeNetworkResourceOutput{}, safeInvalidRequestError(unsupportedExposeNetworkResourceTypeError(input.ResourceType))
+		}
+	}
+}
+
 func handleDeleteNetworkResource(
 	virtualNetworks publicv1.VirtualNetworksClient,
 	subnets publicv1.SubnetsClient,
 	securityGroups publicv1.SecurityGroupsClient,
+	externalIPs publicv1.ExternalIPsClient,
+	externalIPAttachments publicv1.ExternalIPAttachmentsClient,
+	natGateways publicv1.NATGatewaysClient,
 ) mcp.ToolHandlerFor[DeleteNetworkResourceInput, DeleteNetworkResourceOutput] {
 	return func(
 		ctx context.Context, req *mcp.CallToolRequest, input DeleteNetworkResourceInput,
@@ -186,6 +332,14 @@ func handleDeleteNetworkResource(
 			_, err = subnets.Delete(ctx, publicv1.SubnetsDeleteRequest_builder{Id: input.ID}.Build())
 		case NetworkResourceTypeSecurityGroup:
 			_, err = securityGroups.Delete(ctx, publicv1.SecurityGroupsDeleteRequest_builder{Id: input.ID}.Build())
+		case NetworkResourceTypeExternalIP:
+			_, err = externalIPs.Delete(ctx, publicv1.ExternalIPsDeleteRequest_builder{Id: input.ID}.Build())
+		case NetworkResourceTypeExternalIPAttachment:
+			_, err = externalIPAttachments.Delete(ctx, publicv1.ExternalIPAttachmentsDeleteRequest_builder{
+				Id: input.ID,
+			}.Build())
+		case NetworkResourceTypeNATGateway:
+			_, err = natGateways.Delete(ctx, publicv1.NATGatewaysDeleteRequest_builder{Id: input.ID}.Build())
 		}
 		if err != nil {
 			return nil, DeleteNetworkResourceOutput{}, safeNetworkDeleteError(err)
@@ -209,13 +363,28 @@ func normalizeDeleteNetworkResourceInput(input DeleteNetworkResourceInput) (Dele
 	input.ResourceType = NetworkResourceType(strings.TrimSpace(string(input.ResourceType)))
 	input.ID = strings.TrimSpace(input.ID)
 	switch input.ResourceType {
-	case NetworkResourceTypeVirtualNetwork, NetworkResourceTypeSubnet, NetworkResourceTypeSecurityGroup:
+	case NetworkResourceTypeVirtualNetwork, NetworkResourceTypeSubnet, NetworkResourceTypeSecurityGroup,
+		NetworkResourceTypeExternalIP, NetworkResourceTypeExternalIPAttachment, NetworkResourceTypeNATGateway:
 	default:
-		return DeleteNetworkResourceInput{}, unsupportedNetworkResourceTypeError(input.ResourceType)
+		return DeleteNetworkResourceInput{}, unsupportedDeleteNetworkResourceTypeError(input.ResourceType)
 	}
 	if input.ID == "" {
 		return DeleteNetworkResourceInput{}, fmt.Errorf("id is required")
 	}
+	return input, nil
+}
+
+func normalizeExposeNetworkResourceInput(input ExposeNetworkResourceInput) (ExposeNetworkResourceInput, error) {
+	input.ID = strings.TrimSpace(input.ID)
+	input.ResourceType = NetworkResourceType(strings.TrimSpace(string(input.ResourceType)))
+	input.Name = strings.TrimSpace(input.Name)
+	input.ExternalIPPoolID = strings.TrimSpace(input.ExternalIPPoolID)
+	input.ExternalIPID = strings.TrimSpace(input.ExternalIPID)
+	input.VirtualNetworkID = strings.TrimSpace(input.VirtualNetworkID)
+	input.ComputeInstanceID = strings.TrimSpace(input.ComputeInstanceID)
+	input.ClusterID = strings.TrimSpace(input.ClusterID)
+	input.BareMetalInstanceID = strings.TrimSpace(input.BareMetalInstanceID)
+	input.ClusterEndpoint = NetworkClusterEndpoint(strings.TrimSpace(string(input.ClusterEndpoint)))
 	return input, nil
 }
 
@@ -275,6 +444,92 @@ func networkCreateRequestFromInput(input CreateNetworkResourceInput) (networkCre
 		request.egress = egress
 	default:
 		return networkCreateRequest{}, unsupportedNetworkResourceTypeError(input.ResourceType)
+	}
+	return request, nil
+}
+
+func networkExposeRequestFromInput(input ExposeNetworkResourceInput) (networkExposeRequest, error) {
+	request := networkExposeRequest{
+		resourceType:     input.ResourceType,
+		name:             input.Name,
+		externalIPPoolID: input.ExternalIPPoolID,
+		externalIPID:     input.ExternalIPID,
+		virtualNetworkID: input.VirtualNetworkID,
+	}
+	if input.Name == "" {
+		return networkExposeRequest{}, fmt.Errorf("name is required")
+	}
+	targetCount := 0
+	if input.ComputeInstanceID != "" {
+		targetCount++
+		request.attachmentTargetKind = "ComputeInstance"
+		request.attachmentTargetID = input.ComputeInstanceID
+	}
+	if input.ClusterID != "" {
+		targetCount++
+		request.attachmentTargetKind = "Cluster"
+		request.attachmentTargetID = input.ClusterID
+	}
+	if input.BareMetalInstanceID != "" {
+		targetCount++
+		request.attachmentTargetKind = "BareMetalInstance"
+		request.attachmentTargetID = input.BareMetalInstanceID
+	}
+	switch input.ResourceType {
+	case NetworkResourceTypeExternalIP:
+		if input.ExternalIPPoolID == "" {
+			return networkExposeRequest{}, fmt.Errorf("external_ip_pool_id is required for external_ip")
+		}
+		if input.ExternalIPID != "" || input.VirtualNetworkID != "" || targetCount != 0 || input.ClusterEndpoint != "" {
+			return networkExposeRequest{}, fmt.Errorf("only external_ip_pool_id is valid for external_ip")
+		}
+	case NetworkResourceTypeExternalIPAttachment:
+		if input.ExternalIPID == "" {
+			return networkExposeRequest{}, fmt.Errorf("external_ip_id is required for external_ip_attachment")
+		}
+		if targetCount != 1 {
+			return networkExposeRequest{}, fmt.Errorf(
+				"external_ip_attachment requires exactly one target: compute_instance_id, cluster_id, or baremetal_instance_id",
+			)
+		}
+		if input.ExternalIPPoolID != "" || input.VirtualNetworkID != "" {
+			return networkExposeRequest{}, fmt.Errorf(
+				"external_ip_pool_id and virtual_network_id are not valid for external_ip_attachment",
+			)
+		}
+		if input.ClusterEndpoint == "" && request.attachmentTargetKind == "Cluster" {
+			return networkExposeRequest{}, fmt.Errorf("cluster_endpoint is required for cluster targets")
+		}
+		if input.ClusterEndpoint != "" && request.attachmentTargetKind != "Cluster" {
+			return networkExposeRequest{}, fmt.Errorf("cluster_endpoint is valid only for cluster targets")
+		}
+		switch input.ClusterEndpoint {
+		case "":
+		case NetworkClusterEndpointAPI:
+			request.attachmentTargetEndpoint = publicv1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_API
+		case NetworkClusterEndpointIngress:
+			request.attachmentTargetEndpoint = publicv1.ExternalIPAttachmentEndpoint_EXTERNAL_IP_ATTACHMENT_ENDPOINT_INGRESS
+		default:
+			return networkExposeRequest{}, fmt.Errorf(
+				"cluster_endpoint must be one of %s or %s",
+				NetworkClusterEndpointAPI,
+				NetworkClusterEndpointIngress,
+			)
+		}
+	case NetworkResourceTypeNATGateway:
+		if input.VirtualNetworkID == "" {
+			return networkExposeRequest{}, fmt.Errorf("virtual_network_id is required for nat_gateway")
+		}
+		if input.ExternalIPID == "" {
+			return networkExposeRequest{}, fmt.Errorf("external_ip_id is required for nat_gateway")
+		}
+		if input.ExternalIPPoolID != "" || targetCount != 0 || input.ClusterEndpoint != "" {
+			return networkExposeRequest{}, fmt.Errorf(
+				"external_ip_pool_id, attachment targets, and cluster_endpoint are not valid for nat_gateway",
+			)
+		}
+	default:
+		return networkExposeRequest{}, unsupportedExposeNetworkResourceTypeError(input.ResourceType)
 	}
 	return request, nil
 }
@@ -348,12 +603,44 @@ func networkCreateOutput(
 	}
 }
 
+func networkExposeOutput(
+	resourceType NetworkResourceType, id string, metadata *publicv1.Metadata, state string,
+) ExposeNetworkResourceOutput {
+	return ExposeNetworkResourceOutput{
+		ResourceType: resourceType,
+		ID:           id,
+		Version:      metadata.GetVersion(),
+		State:        state,
+	}
+}
+
 func unsupportedNetworkResourceTypeError(resourceType NetworkResourceType) error {
 	return fmt.Errorf(
 		"resource_type must be one of %s, %s, or %s",
 		NetworkResourceTypeVirtualNetwork,
 		NetworkResourceTypeSubnet,
 		NetworkResourceTypeSecurityGroup,
+	)
+}
+
+func unsupportedDeleteNetworkResourceTypeError(resourceType NetworkResourceType) error {
+	return fmt.Errorf(
+		"resource_type must be one of %s, %s, %s, %s, %s, or %s",
+		NetworkResourceTypeVirtualNetwork,
+		NetworkResourceTypeSubnet,
+		NetworkResourceTypeSecurityGroup,
+		NetworkResourceTypeExternalIP,
+		NetworkResourceTypeExternalIPAttachment,
+		NetworkResourceTypeNATGateway,
+	)
+}
+
+func unsupportedExposeNetworkResourceTypeError(resourceType NetworkResourceType) error {
+	return fmt.Errorf(
+		"resource_type must be one of %s, %s, or %s",
+		NetworkResourceTypeExternalIP,
+		NetworkResourceTypeExternalIPAttachment,
+		NetworkResourceTypeNATGateway,
 	)
 }
 
@@ -367,7 +654,7 @@ func safeNetworkCreateError(err error) error {
 	if status.Code(err) == codes.FailedPrecondition {
 		return newToolError(
 			"conflict",
-			"Aborted",
+			"FailedPrecondition",
 			"The network resource state conflicts with the request.",
 			false,
 		)
@@ -388,6 +675,68 @@ func safeDependentNetworkCreateError(parentID string, err error) error {
 		return safeNetworkCreateError(err)
 	default:
 		return safeNetworkCreateError(err)
+	}
+}
+
+func safeNetworkExposeCreateError(request networkExposeRequest, err error) error {
+	if status.Code(err) == codes.InvalidArgument {
+		message := status.Convert(err).Message()
+		for _, dependency := range networkExposeDependencies(request) {
+			if networkDependencyMissing(dependency.kind, dependency.id, message) {
+				return safeMissingPrerequisiteError(dependency.kind, dependency.id)
+			}
+		}
+	}
+	return safeNetworkCreateError(err)
+}
+
+type networkDependency struct {
+	kind string
+	id   string
+}
+
+func networkExposeDependencies(request networkExposeRequest) []networkDependency {
+	switch request.resourceType {
+	case NetworkResourceTypeExternalIP:
+		return []networkDependency{{kind: "ExternalIPPool", id: request.externalIPPoolID}}
+	case NetworkResourceTypeExternalIPAttachment:
+		return []networkDependency{
+			{kind: "ExternalIP", id: request.externalIPID},
+			{kind: request.attachmentTargetKind, id: request.attachmentTargetID},
+		}
+	case NetworkResourceTypeNATGateway:
+		return []networkDependency{
+			{kind: "VirtualNetwork", id: request.virtualNetworkID},
+			{kind: "ExternalIP", id: request.externalIPID},
+		}
+	default:
+		return nil
+	}
+}
+
+func networkDependencyMissing(kind, id, message string) bool {
+	switch kind {
+	case "ExternalIPPool":
+		return strings.Contains(message, fmt.Sprintf("pool '%s' does not exist", id)) ||
+			strings.Contains(message, fmt.Sprintf("ExternalIPPool %q not found", id))
+	case "VirtualNetwork":
+		return strings.Contains(message, fmt.Sprintf("parent VirtualNetwork '%s' does not exist", id)) ||
+			strings.Contains(message, fmt.Sprintf("VirtualNetwork '%s' does not exist", id)) ||
+			strings.Contains(message, fmt.Sprintf("VirtualNetwork %q not found", id))
+	case "ExternalIP":
+		return strings.Contains(message, fmt.Sprintf("ExternalIP '%s' does not exist", id)) ||
+			strings.Contains(message, fmt.Sprintf("ExternalIP %q not found", id))
+	case "ComputeInstance":
+		return strings.Contains(message, fmt.Sprintf("ComputeInstance '%s' does not exist", id)) ||
+			strings.Contains(message, fmt.Sprintf("ComputeInstance %q not found", id))
+	case "Cluster":
+		return strings.Contains(message, fmt.Sprintf("Cluster '%s' does not exist", id)) ||
+			strings.Contains(message, fmt.Sprintf("Cluster %q not found", id))
+	case "BareMetalInstance":
+		return strings.Contains(message, fmt.Sprintf("BareMetalInstance '%s' does not exist", id)) ||
+			strings.Contains(message, fmt.Sprintf("BareMetalInstance %q not found", id))
+	default:
+		return strings.Contains(message, fmt.Sprintf("%s '%s' does not exist", kind, id))
 	}
 }
 
@@ -412,7 +761,7 @@ func safeNetworkDeleteError(err error) error {
 	if status.Code(err) == codes.FailedPrecondition {
 		return newToolError(
 			"conflict",
-			"Aborted",
+			"FailedPrecondition",
 			"The network resource has active dependencies. Remove them before deleting it.",
 			false,
 		)

@@ -1,0 +1,112 @@
+{{- if .Values.keycloak.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: osac-infra-reconcile-aap-reader
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: osac-infra-reconcile-aap-reader
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: [secrets]
+  resourceNames: [keycloak-client-secrets]
+  verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: osac-infra-reconcile-aap-reader
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: osac-infra-reconcile-aap-reader
+subjects:
+- kind: ServiceAccount
+  name: osac-infra-reconcile-aap-reader
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: osac-infra-reconcile-aap-reader
+  namespace: keycloak
+  labels:
+    {{- include "osac-infra.hookLabels" . | nindent 4 }}
+  annotations:
+    # After wait-keycloak (15), before publishing OSAC credentials (17).
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "16"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: 5
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      securityContext:
+        {{- include "osac-infra.cliJobPodSecurityContext" . | nindent 8 }}
+      restartPolicy: OnFailure
+      serviceAccountName: osac-infra-reconcile-aap-reader
+      containers:
+      - name: reconcile
+        image: {{ .Values.cliImage }}
+        command: ["/bin/bash", "/scripts/reconcile-aap-reader-client.sh"]
+        env:
+        - name: HOME
+          value: /tmp
+        resources:
+          {{- toYaml .Values.hookResources | nindent 10 }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: [ALL]
+        volumeMounts:
+        - name: scripts
+          mountPath: /scripts
+          readOnly: true
+        - name: realm
+          mountPath: /realm-raw
+          readOnly: true
+        - name: ca
+          mountPath: /etc/keycloak/ca
+          readOnly: true
+        - name: admin
+          mountPath: /etc/keycloak/admin
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+      volumes:
+      - name: scripts
+        configMap:
+          name: keycloak-init-scripts
+      - name: realm
+        configMap:
+          name: keycloak-realm
+      - name: ca
+        secret:
+          secretName: keycloak-tls-cert
+          items:
+          - key: ca.crt
+            path: ca.crt
+      - name: admin
+        secret:
+          secretName: keycloak-admin-credentials
+          items:
+          - key: admin-username
+            path: admin-username
+          - key: admin-password
+            path: admin-password
+      - name: tmp
+        emptyDir: {}
+{{- end }}

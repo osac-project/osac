@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import itertools
+import logging
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -51,8 +52,14 @@ from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.sanity
 
+logger = logging.getLogger(__name__)
+
 # A round ticks every 60s; heartbeats may need a few rounds to surface.
 HEARTBEAT_TIMEOUT: int = 180
+
+# A final piece has been observed 480s late; add the helper's 150s quiet
+# window and one poll of slack.
+BILLING_END_TIMEOUT: int = 900
 
 # The recorded stamp and the heartbeat interval end come from different
 # pods, each truncating to whole seconds: comparisons between the two allow
@@ -305,54 +312,61 @@ def test_metering_stop_ends_billing(
         )
         metering.verify_event(heartbeat, resource_id=uuid)
 
-        halt_requested = datetime.now(UTC)
-        grpc.update_compute_instance_run_strategy(ci_id=uuid, run_strategy="Halted")
-        vm_ns: str = k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name)
-        poll_until(
-            fn=lambda: k8s_virt_client.get_vm_printable_status(name=ci_name, vm_namespace=vm_ns, checked=False),
-            until=lambda status: status == "Stopped",
-            retries=30,
-            delay=10,
-            description=f"{ci_name} VM stopped",
-            resource_kind=WaitResourceKind.VIRTUAL_MACHINE,
-            resource_id=ci_name,
-        )
+        with k8s_hub_client.watch_phase_transition(resource="computeinstance", name=ci_name) as phase_stamp:
+            grpc.update_compute_instance_run_strategy(ci_id=uuid, run_strategy="Halted")
+            vm_ns: str = k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name)
+            poll_until(
+                fn=lambda: k8s_virt_client.get_vm_printable_status(name=ci_name, vm_namespace=vm_ns, checked=False),
+                until=lambda status: status == "Stopped",
+                retries=30,
+                delay=10,
+                description=f"{ci_name} VM stopped",
+                resource_kind=WaitResourceKind.VIRTUAL_MACHINE,
+                resource_id=ci_name,
+            )
 
-        # Anchor the final interval on the stop time fulfillment recorded, not on the
-        # wall clock of the request: an interval that overruns the actual stop by up to
-        # a round would pass a wall-clock check.
-        instance = poll_until(
-            fn=lambda: grpc.get_compute_instance(ci_id=uuid),
-            until=lambda inst: (
-                inst.get("object", {}).get("status", {}).get("state") == "COMPUTE_INSTANCE_STATE_STOPPED"
-            ),
-            retries=30,
-            delay=5,
-            description=f"{ci_name} instance STOPPED in fulfillment",
-            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
-            resource_id=uuid,
-        )
-        stopped_at = parse_time(instance["object"]["status"]["stateTransitionTime"])
+            # Wait for fulfillment to observe the stop. The metering boundary is the
+            # CR's STOPPING phase, which precedes STOPPED: a VM stops billing when it
+            # starts stopping. The watch was established before the halt, so a short
+            # STOPPING phase cannot be missed.
+            instance = poll_until(
+                fn=lambda: grpc.get_compute_instance(ci_id=uuid),
+                until=lambda inst: (
+                    inst.get("object", {}).get("status", {}).get("state") == "COMPUTE_INSTANCE_STATE_STOPPED"
+                ),
+                retries=30,
+                delay=5,
+                description=f"{ci_name} instance STOPPED in fulfillment",
+                resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+                resource_id=uuid,
+            )
+            fulfillment_stopped_at = parse_time(instance["object"]["status"]["stateTransitionTime"])
+            stopping_stamp, stopped_stamp = poll_until(
+                fn=lambda: (phase_stamp("Stopping"), phase_stamp("Stopped")),
+                until=lambda pair: bool(pair[0]) or bool(pair[1]),
+                retries=30,
+                delay=1,
+                description=f"{ci_name} phase transition timestamps",
+                resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
+                resource_id=ci_name,
+            )
+            if stopping_stamp:
+                stopped_at = parse_time(stopping_stamp)
+            elif stopped_stamp:
+                stopped_at = parse_time(stopped_stamp)
+            else:
+                stopped_at = fulfillment_stopped_at
+            logger.info(
+                "stop timestamp: fulfillment=%s, anchor=%s", fulfillment_stopped_at.isoformat(), stopped_at.isoformat()
+            )
 
         # The stop reaches metering through several steps: operator feedback, a
-        # fulfillment status change, the event topic, the fold, and a round. A round that
-        # runs before the stop is folded still sends a full interval, and the real final
-        # partial interval arrives only in the next round, so wait past a full round
-        # before picking the final heartbeat.
-        time.sleep(90)
-
-        # The final heartbeat covers the partial interval up to the stop, so its
-        # interval ends at or after the halt was requested.
-        final = poll_until(
-            fn=lambda: _final_heartbeat(metering, uuid, halt_requested),
-            until=lambda event: event is not None,
-            retries=HEARTBEAT_TIMEOUT // 10,
-            delay=10,
-            description=f"final partial-interval heartbeat of {uuid}",
-            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
-            resource_id=uuid,
-        )
-        _, final_to, _ = usage_interval(final)
+        # fulfillment status change, the event topic, the fold, and a round. A round
+        # that runs before the stop is folded still sends a full interval, and the
+        # real final partial interval can land several rounds later. The wait keeps
+        # polling while the net end is below the recorded stop, so a late piece only
+        # delays the anchor; its quiet window starts once the end reaches it.
+        final_to = metering.wait_for_billing_end(uuid, deletion=stopped_at, timeout=BILLING_END_TIMEOUT)
 
         # The net billing ends at the recorded stop, not at the round that
         # observed it: a round that ran before the stop was folded sends a full
@@ -373,18 +387,6 @@ def test_metering_stop_ends_billing(
         metering.assert_no_events(HEARTBEAT_TYPE, resource_id=uuid, since=final_to.isoformat(), within=90)
     finally:
         _delete_vm(cli, grpc, k8s_hub_client, uuid=uuid, ci_name=ci_name)
-
-
-def _final_heartbeat(metering: MeteringCollector, resource_id: str, halt: datetime) -> dict[str, Any] | None:
-    latest_end: datetime | None = None
-    latest: dict[str, Any] | None = None
-    for event in metering.get_all_events(HEARTBEAT_TYPE, resource_id):
-        _, to, _ = usage_interval(event)
-        if latest_end is None or to > latest_end:
-            latest_end, latest = to, event
-    if latest is None or latest_end is None or latest_end < halt - CR_STAMP_TOLERANCE:
-        return None
-    return latest
 
 
 @pytest.mark.metering
@@ -597,22 +599,13 @@ def test_metering_delete_ends_billing(
         deletion_recorded = _delete_vm(cli, grpc, k8s_hub_client, uuid=uuid, ci_name=ci_name)
         assert deletion_recorded is not None, "the running VM's CR vanished before its deletion timestamp was read"
 
-        # The deletion reaches metering through the same steps as a stop, so wait
-        # past a full round before picking the final heartbeat.
-        time.sleep(90)
-
-        # The final heartbeat covers the partial interval up to the recorded
-        # deletion, so its interval ends at that timestamp.
-        final = poll_until(
-            fn=lambda: _final_heartbeat(metering, uuid, deletion_recorded),
-            until=lambda event: event is not None,
-            retries=HEARTBEAT_TIMEOUT // 10,
-            delay=10,
-            description=f"final partial-interval heartbeat of {uuid}",
-            resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
-            resource_id=uuid,
-        )
-        _, final_to, _ = usage_interval(final)
+        # A round skips its tick while the fold lags the event topic, so the final
+        # partial piece can land several rounds after the deletion. A round that
+        # ticked before the deletion was folded also sends a full interval whose
+        # negative correction lands later. The wait keeps polling while the net end
+        # is below the recorded deletion, so a late piece only delays the anchor;
+        # its quiet window starts once the end reaches it.
+        final_to = metering.wait_for_billing_end(uuid, deletion=deletion_recorded, timeout=BILLING_END_TIMEOUT)
 
         # The billed life is exact: the typed heartbeats collapse into contiguous
         # net intervals, each billing exactly its length in seconds, so the total

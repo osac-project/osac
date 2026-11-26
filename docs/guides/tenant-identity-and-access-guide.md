@@ -19,6 +19,7 @@
 - [Flow 2 — Break-glass created automatically](#flow-2--break-glass-created-automatically)
 - [Flow 3 — Tenant onboarding automatic](#flow-3--tenant-onboarding-automatic)
 - [Flow 4 — Configure IdP (OIDC)](#flow-4--configure-idp-oidc)
+  - [Request MFA or another authentication context](#request-mfa-or-another-authentication-context)
 - [Flow 5 — IdP users auto-join the tenant](#flow-5--idp-users-auto-join-the-tenant)
 - [Flow 6 — RoleBinding tenant-admin](#flow-6--rolebinding-tenant-admin)
 - [Read-only API access](#read-only-api-access)
@@ -454,6 +455,23 @@ osac get identityprovider oidc --output yaml | grep -E 'phase:|message:|client_i
 
 The **alias** (for example `osac-corp-oidc`) must match the `<idp-alias>` in the
 redirect URI you set on the IdP. That alias is the login button in Flows 5, 7, 10, and 12.
+
+### Request MFA or another authentication context
+
+To request multi-factor authentication (MFA) or another authentication context,
+add the OIDC `acr_values` query parameter to the IdP's **Authorization URL**
+(`spec.oidc.authorization_url` in the API). Use a value documented by your IdP,
+for example:
+`https://idp.example.com/authorize?acr_values=urn%3Aexample%3Amfa`.
+Here, `urn:example:mfa` is a placeholder, not a universal MFA value.
+
+The server accepts only `acr_values` as a query parameter in the configured
+Authorization URL. To request multiple values, separate them with URL-encoded
+spaces (`%20`) within a single `acr_values` parameter.
+
+The broker includes the configured parameter in the authorization request to
+the IdP. The IdP decides whether and how to honor it; OSAC does not enforce MFA.
+Seeing `acr_values` in the request does not prove MFA occurred.
 
 ### Lab note (mock IdP)
 

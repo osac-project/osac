@@ -151,6 +151,13 @@ func Cmd() *cobra.Command {
 		grpcAuthnTrustedTokenIssuersFlagHelp,
 	)
 	flags.StringVar(
+		&runner.args.aapSecretReaderIssuer,
+		"aap-secret-reader-issuer",
+		"",
+		"Trusted OIDC issuer for the AAP Secret reader grant. Defaults to the sole trusted issuer. "+
+			"With multiple trusted issuers, the grant requires an explicit selection.",
+	)
+	flags.StringVar(
 		&runner.args.tenancyLogic,
 		"tenancy-logic",
 		"default",
@@ -229,6 +236,7 @@ type runnerContext struct {
 		authType                 string
 		externalAuthAddress      string
 		trustedTokenIssuers      []string
+		aapSecretReaderIssuer    string
 		tenancyLogic             string
 		tokenSignerCrt           string
 		tokenSignerKey           string
@@ -249,6 +257,12 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	c.args.services.EnableAllIfNoneSet(cmd.Flags())
 	if err := c.args.services.Validate(); err != nil {
 		return fmt.Errorf("invalid service flags: %w", err)
+	}
+	aapSecretReaderIssuer, err := auth.ResolveAAPSecretReaderIssuer(
+		c.args.trustedTokenIssuers, c.args.aapSecretReaderIssuer,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to resolve AAP Secret reader issuer: %w", err)
 	}
 	excludedIPv4CIDRs, err := servers.ParseExcludedIPv4CIDRs(c.args.networkingExcludedIPv4CIDRs)
 	if err != nil {
@@ -509,6 +523,7 @@ func (c *runnerContext) run(cmd *cobra.Command, argv []string) error { //nolint:
 	evaluator, err := auth.NewEvaluator().
 		AddEmergencyServiceAccounts(c.args.emergencyServiceAccounts).
 		SetManagedServiceAccountResolver(serviceaccounts.ResolveAuthorization).
+		SetAAPSecretReaderIssuer(aapSecretReaderIssuer).
 		Build()
 	if err != nil {
 		return fmt.Errorf("failed to create authorization evaluator: %w", err)

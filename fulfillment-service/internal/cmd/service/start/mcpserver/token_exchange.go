@@ -22,9 +22,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -267,7 +269,12 @@ func sameCaller(source, target *jwt.Token) error {
 	}
 	sourceContext, sourceErr := auth.ExtractAuthContext(source)
 	targetContext, targetErr := auth.ExtractAuthContext(target)
-	if sourceErr != nil || targetErr != nil || !reflect.DeepEqual(sourceContext, targetContext) {
+	if sourceErr != nil || targetErr != nil {
+		return errors.New("OAuth token exchange changed the caller permissions")
+	}
+	sourceContext.RealmAccess = normalizeRealmRoleOrder(sourceContext.RealmAccess)
+	targetContext.RealmAccess = normalizeRealmRoleOrder(targetContext.RealmAccess)
+	if !reflect.DeepEqual(sourceContext, targetContext) {
 		return errors.New("OAuth token exchange changed the caller permissions")
 	}
 	targetExpiry, err := target.Claims.GetExpirationTime()
@@ -275,4 +282,25 @@ func sameCaller(source, target *jwt.Token) error {
 		return errors.New("OAuth token exchange returned an expired API token")
 	}
 	return nil
+}
+
+// Realm role order does not affect authorization. Sort copies so the original
+// token claims and all other authorization fields remain unchanged.
+func normalizeRealmRoleOrder(realmAccess map[string]any) map[string]any {
+	roles, ok := realmAccess["roles"].([]any)
+	if !ok || len(roles) < 2 {
+		return realmAccess
+	}
+	for _, role := range roles {
+		if _, ok := role.(string); !ok {
+			return realmAccess
+		}
+	}
+	sorted := slices.Clone(roles)
+	slices.SortFunc(sorted, func(a, b any) int {
+		return strings.Compare(a.(string), b.(string))
+	})
+	result := maps.Clone(realmAccess)
+	result["roles"] = sorted
+	return result
 }

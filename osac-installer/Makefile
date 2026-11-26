@@ -1274,6 +1274,12 @@ ifeq ($(SUITE),all)
 	$(MAKE) test SUITE=operator
 	$(MAKE) test SUITE=bmf
 endif
+ifeq ($(SUITE),fulfillment)
+ifeq ($(MCP_TEST_ENABLED),true)
+	python3 scripts/prepare-mcp-scope-regression.py $(KIND_CLUSTER_NAME)
+	$(MAKE) install-infra PLATFORM=$(PLATFORM) PROFILE=$(PROFILE) NS=$(NS)
+endif
+endif
 ifneq ($(filter $(SUITE),fulfillment compute-storage),)
 ifneq ($(strip $(FULFILLMENT_IT_REPORT_DIR)),)
 # A reused local output directory must not retain old reports for phases a failed run never reaches.
@@ -1498,6 +1504,12 @@ billing-render-test: helm-osac-deps ## Check billing provider config renders and
 mce-render-test: helm-infra-deps ## Check disabled MCE defaults, explicit enablement, and CaaS inheritance
 	uv run --project .. python scripts/test-mce-render.py
 
+.PHONY: mcp-keycloak-test
+mcp-keycloak-test: helm-infra-deps ## Test MCP Keycloak scope and mapper reconciliation
+	@command -v helm >/dev/null 2>&1 || { printf '%s\n' 'ERROR: helm is required for the MCP Keycloak chart-render test' >&2; exit 1; }
+	@python3 -c 'import yaml' >/dev/null 2>&1 || { printf '%s\n' 'ERROR: PyYAML is required for the MCP Keycloak chart-render test' >&2; exit 1; }
+	python3 scripts/test-mcp-keycloak-reconciliation.py
+
 .PHONY: lvms-optional-path-render-test
 lvms-optional-path-render-test: ## Check the OSAC-managed LVMS worker allowlist renders
 	uv run --project .. python scripts/test-lvms-optional-path-render.py
@@ -1551,7 +1563,7 @@ chart-name-independence-render-test: helm-osac-deps ## Check cross-chart secret/
 	uv run --project .. python scripts/test-chart-name-independence-render.py
 
 .PHONY: helm-validate
-helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test network-class-step-test input-validation-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test lvms-optional-path-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
+helm-validate: helm-lint service-account-idp-render-test csi-render-test helm-networking-test netris-ca-lifecycle-test network-class-step-test input-validation-test fulfillment-trust-render-test fulfillment-auth-test metering-auth-render-test event-publisher-render-test billing-render-test mce-render-test mcp-keycloak-test lvms-optional-path-render-test evpn-render-test dev-full-render-test openbao-security-context-test bmf-netbox-render-test chart-name-independence-render-test ## Validate all charts (lint + template)
 	@# bmaas-netbox-ci layers bmaas-ci as its base (see the profile-selection
 	@# block); validate the same combination the installer deploys.
 	@for d in values/*/; do \

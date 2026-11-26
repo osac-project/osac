@@ -20,6 +20,8 @@ import (
 	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/osac-project/osac/fulfillment-service/internal/authz"
 )
 
 // contextKey is the type used to store the authentication information in the context.
@@ -29,6 +31,7 @@ const (
 	subjectContextKey contextKey = iota
 	tokenContextKey
 	authenticationMethodContextKey
+	roleMutationDecisionContextKey
 )
 
 // ContextWithSubject creates a new context containing the given subject.
@@ -110,4 +113,21 @@ func TokenFromContext(ctx context.Context) *jwt.Token {
 		return nil
 	}
 	return token
+}
+
+// RoleMutationDecision records grants for a given subject when they make a request to mutate a role or rolebinding
+type RoleMutationDecision struct {
+	// Grants is a map of tenant name to assigned grants
+	Grants map[string]*authz.Grants
+}
+
+// ContextWithRoleMutationDecision attaches the request-local mutation decision.
+func ContextWithRoleMutationDecision(ctx context.Context, decision RoleMutationDecision) context.Context {
+	return context.WithValue(ctx, roleMutationDecisionContextKey, decision)
+}
+
+// RoleMutationDecisionFromContext reports the named-role mutation decision, when present.
+func RoleMutationDecisionFromContext(ctx context.Context) (RoleMutationDecision, bool) {
+	decision, ok := ctx.Value(roleMutationDecisionContextKey).(RoleMutationDecision)
+	return decision, ok
 }

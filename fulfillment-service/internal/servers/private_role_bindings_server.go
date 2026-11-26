@@ -27,6 +27,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
 	"github.com/osac-project/osac/fulfillment-service/internal/database/dao"
 	"github.com/osac-project/osac/fulfillment-service/internal/serviceaccounts"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -39,6 +40,7 @@ type PrivateRoleBindingsServerBuilder struct {
 	tenancyLogic      auth.TenancyLogic
 	metricsRegisterer prometheus.Registerer
 	filterDesc        protoreflect.MessageDescriptor
+	permissionCatalog *catalog.Catalog
 }
 
 var _ privatev1.RoleBindingsServer = (*PrivateRoleBindingsServer)(nil)
@@ -47,10 +49,11 @@ var _ privatev1.RoleBindingsServer = (*PrivateRoleBindingsServer)(nil)
 type PrivateRoleBindingsServer struct {
 	privatev1.UnimplementedRoleBindingsServer
 
-	logger  *slog.Logger
-	generic *GenericServer[*privatev1.RoleBinding]
-	roles   *dao.GenericDAO[*privatev1.Role]
-	users   *dao.GenericDAO[*privatev1.User]
+	logger            *slog.Logger
+	generic           *GenericServer[*privatev1.RoleBinding]
+	roles             *dao.GenericDAO[*privatev1.Role]
+	users             *dao.GenericDAO[*privatev1.User]
+	permissionCatalog *catalog.Catalog
 }
 
 // NewPrivateRoleBindingsServer creates a new builder for the private role bindings server.
@@ -87,6 +90,12 @@ func (b *PrivateRoleBindingsServerBuilder) SetMetricsRegisterer(value prometheus
 // expressions. This is optional. When unset, the descriptor of this server's own private message type is used.
 func (b *PrivateRoleBindingsServerBuilder) SetFilterDesc(value protoreflect.MessageDescriptor) *PrivateRoleBindingsServerBuilder {
 	b.filterDesc = value
+	return b
+}
+
+// SetPermissionCatalog configures delegation checks for named-role authorization.
+func (b *PrivateRoleBindingsServerBuilder) SetPermissionCatalog(value *catalog.Catalog) *PrivateRoleBindingsServerBuilder {
+	b.permissionCatalog = value
 	return b
 }
 
@@ -129,10 +138,11 @@ func (b *PrivateRoleBindingsServerBuilder) Build() (result *PrivateRoleBindingsS
 		return
 	}
 	result = &PrivateRoleBindingsServer{
-		logger:  b.logger,
-		generic: generic,
-		roles:   roles,
-		users:   users,
+		logger:            b.logger,
+		generic:           generic,
+		roles:             roles,
+		users:             users,
+		permissionCatalog: b.permissionCatalog,
 	}
 	return
 }
@@ -157,18 +167,21 @@ func (s *PrivateRoleBindingsServer) Create(ctx context.Context,
 
 func (s *PrivateRoleBindingsServer) Update(ctx context.Context,
 	request *privatev1.RoleBindingsUpdateRequest) (response *privatev1.RoleBindingsUpdateResponse, err error) {
-	prepare := func(ctx context.Context, current, candidate *privatev1.RoleBinding) error {
-		if !updateIncludesField(request.GetUpdateMask(), "spec") {
-			return nil
-		}
-		return s.validateRoleBinding(ctx, current, candidate)
-	}
-	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, prepare)
+	err = s.generic.UpdateWithCandidatePreparation(ctx, request, &response, s.validateRoleBinding)
 	return
 }
 
 func (s *PrivateRoleBindingsServer) Delete(ctx context.Context,
 	request *privatev1.RoleBindingsDeleteRequest) (response *privatev1.RoleBindingsDeleteResponse, err error) {
+	if _, scoped := auth.RoleMutationDecisionFromContext(ctx); scoped && request.GetId() != "" {
+		binding, err := getLockedReferenceResource(ctx, s.generic.dao, request.GetId())
+		if err != nil {
+			return nil, ConvertDAOErrorToGRPC(err, "delete", request.GetId())
+		}
+		if err := checkRoleMutationTenant(ctx, binding.GetMetadata().GetTenant()); err != nil {
+			return nil, err
+		}
+	}
 	err = s.generic.Delete(ctx, request, &response)
 	return
 }
@@ -180,19 +193,47 @@ func (s *PrivateRoleBindingsServer) Signal(ctx context.Context,
 }
 
 func (s *PrivateRoleBindingsServer) validateRoleBinding(ctx context.Context, current, candidate *privatev1.RoleBinding) error {
-	// The generic server has already applied the update mask. Metadata and status updates should
-	// remain possible even if the binding's Role has since been deleted.
+	tenant := candidate.GetMetadata().GetTenant()
+	if current != nil && current.GetMetadata().GetTenant() != tenant {
+		return status.Error(codes.InvalidArgument, "RoleBinding tenant cannot change")
+	}
 	if current != nil && proto.Equal(current.GetSpec(), candidate.GetSpec()) {
+		// Metadata and status updates can proceed even if the stored Role reference no longer resolves.
+		if _, scoped := auth.RoleMutationDecisionFromContext(ctx); scoped {
+			return checkRoleMutationTenant(ctx, tenant)
+		}
 		return nil
+	}
+
+	grants, err := roleMutationGrants(ctx, tenant)
+	if err != nil {
+		return err
 	}
 
 	ref := candidate.GetSpec().GetRole()
 	if ref.GetId() == "" && ref.GetName() == "" {
 		return status.Error(codes.InvalidArgument, "a role reference must specify an ID or name")
 	}
-	role, err := s.resolveRoleReference(ctx, candidate)
+	var role *privatev1.Role
+	if current != nil && ref.GetId() != "" && proto.Equal(current.GetSpec().GetRole(), ref) {
+		role, err = getShareLockedReferenceResource(ctx, s.roles, ref.GetId())
+		if err != nil {
+			return resourceLookupError(err, "role", ref.GetId(), "", codes.InvalidArgument)
+		}
+		err = validateResourceNotDeleted("role", ref.GetId(), "", role.GetMetadata())
+	} else {
+		role, err = s.resolveRoleReference(ctx, candidate)
+	}
 	if err != nil {
 		return err
+	}
+	if err := validateRoleBindingScope(role, tenant); err != nil {
+		return err
+	}
+	if grants != nil {
+		if err := validateRoleRules(s.permissionCatalog, grants, role.GetSpec().GetPermissions()); err != nil {
+			return err
+		}
 	}
 	if err := s.validateUserSubjects(ctx, candidate); err != nil {
 		return err
@@ -280,19 +321,18 @@ func (s *PrivateRoleBindingsServer) resolveRoleReference(ctx context.Context,
 			ref.SetId(local.GetItems()[0].GetId())
 		}
 	}
-	role, err := resolveAndCanonicalizeReferenceWithGet(ctx, s.roles, candidate.GetMetadata(), ref,
+	return resolveAndCanonicalizeReferenceWithGet(ctx, s.roles, candidate.GetMetadata(), ref,
 		"role", codes.InvalidArgument, getShareLockedReferenceResource[*privatev1.Role])
-	if err != nil {
-		return nil, err
-	}
+}
+
+func validateRoleBindingScope(role *privatev1.Role, bindingTenant string) error {
 	roleName := role.GetMetadata().GetName()
 	roleTenant := role.GetMetadata().GetTenant()
-	bindingTenant := candidate.GetMetadata().GetTenant()
 	if roleTenant != bindingTenant && roleTenant != auth.SharedTenant {
-		return nil, status.Error(codes.InvalidArgument, "role reference does not identify an allowed Role")
+		return status.Error(codes.InvalidArgument, "role reference does not identify an allowed Role")
 	}
 	if roleTenant == auth.SystemTenant && (roleName != "osac-csi-driver" || bindingTenant != auth.SystemTenant) {
-		return nil, status.Error(codes.InvalidArgument, "system Roles may only be bound in the system tenant")
+		return status.Error(codes.InvalidArgument, "system Roles may only be bound in the system tenant")
 	}
-	return role, nil
+	return nil
 }

@@ -24,6 +24,7 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/auth"
+	"github.com/osac-project/osac/fulfillment-service/internal/authz"
 	"github.com/osac-project/osac/fulfillment-service/internal/authz/catalog"
 	"github.com/osac-project/osac/fulfillment-service/internal/database"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -166,8 +167,14 @@ func (s *PrivateRolesServer) Delete(ctx context.Context,
 }
 
 func (s *PrivateRolesServer) checkRoleUnused(ctx context.Context, id string) error {
-	if _, err := getLockedReferenceResource(ctx, s.generic.dao, id); err != nil {
+	role, err := getLockedReferenceResource(ctx, s.generic.dao, id)
+	if err != nil {
 		return ConvertDAOErrorToGRPC(err, "delete", id)
+	}
+	if _, scoped := auth.RoleMutationDecisionFromContext(ctx); scoped {
+		if err := checkRoleMutationTenant(ctx, role.GetMetadata().GetTenant()); err != nil {
+			return err
+		}
 	}
 
 	referenced, err := s.hasRoleReferences(ctx, id)
@@ -209,15 +216,63 @@ func (s *PrivateRolesServer) Signal(ctx context.Context,
 // validatePermissions checks the permission rules of a role candidate against the permission
 // catalog. The generic server calls it after applying the update mask, so it always validates the
 // final set of rules of the role.
-func (s *PrivateRolesServer) validatePermissions(_ context.Context, _, candidate *privatev1.Role) error {
-	for i, rule := range candidate.GetSpec().GetPermissions() {
-		if err := s.permissionCatalog.ValidateRule(rule.GetService(), rule.GetMethods()); err != nil {
-			return grpcstatus.Errorf(
-				grpccodes.InvalidArgument,
-				"invalid permissions rule %d: %s",
-				i+1, err,
-			)
+func (s *PrivateRolesServer) validatePermissions(ctx context.Context, current, candidate *privatev1.Role) error {
+	tenant := candidate.GetMetadata().GetTenant()
+	if current != nil && current.GetMetadata().GetTenant() != tenant {
+		return grpcstatus.Error(grpccodes.InvalidArgument, "Role tenant cannot change")
+	}
+	grants, err := roleMutationGrants(ctx, tenant)
+	if err != nil {
+		return err
+	}
+	return validateRoleRules(s.permissionCatalog, grants, candidate.GetSpec().GetPermissions())
+}
+
+func roleMutationGrants(ctx context.Context, tenant string) (*authz.Grants, error) {
+	decision, ok := auth.RoleMutationDecisionFromContext(ctx)
+	if !ok {
+		// The legacy evaluator continues to authorize writes until the named-role cutover.
+		return nil, nil
+	}
+	if err := checkRoleMutationTenant(ctx, tenant); err != nil {
+		return nil, err
+	}
+	grants := decision.Grants[tenant]
+	if grants == nil || grants.Tenant != tenant || len(grants.Methods) == 0 {
+		return nil, grpcstatus.Error(grpccodes.PermissionDenied, "role mutation requires delegation grants in the target tenant")
+	}
+	return grants, nil
+}
+
+func checkRoleMutationTenant(ctx context.Context, tenant string) error {
+	if !auth.SubjectFromContext(ctx).Tenants.Contains(tenant) {
+		return grpcstatus.Error(grpccodes.PermissionDenied, "role mutation is not authorized in the target tenant")
+	}
+	return nil
+}
+
+func validateRoleRules(permissionCatalog *catalog.Catalog, grants *authz.Grants, rules []*privatev1.PermissionRule) error {
+	if permissionCatalog == nil {
+		return grpcstatus.Error(grpccodes.Internal, "permission catalog is unavailable")
+	}
+	firstUncovered := 0
+	for i, rule := range rules {
+		var err error
+		covered := true
+		if grants == nil {
+			err = permissionCatalog.ValidateRule(rule.GetService(), rule.GetMethods())
+		} else {
+			covered, err = grants.Covers(permissionCatalog, rule.GetService(), rule.GetMethods())
 		}
+		if err != nil {
+			return grpcstatus.Errorf(grpccodes.InvalidArgument, "invalid permissions rule %d: %s", i+1, err)
+		}
+		if !covered && firstUncovered == 0 {
+			firstUncovered = i + 1
+		}
+	}
+	if firstUncovered != 0 {
+		return grpcstatus.Errorf(grpccodes.PermissionDenied, "permissions rule %d exceeds grants in the target tenant", firstUncovered)
 	}
 	return nil
 }

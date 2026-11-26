@@ -14,6 +14,7 @@ import (
 	"github.com/open-policy-agent/opa/v1/storage/inmem"
 	"k8s.io/apimachinery/pkg/util/validation"
 
+	"github.com/osac-project/osac/fulfillment-service/internal/authz"
 	k8sfiles "github.com/osac-project/osac/fulfillment-service/internal/kubernetes/files"
 	"github.com/osac-project/osac/fulfillment-service/internal/serviceaccounts"
 )
@@ -48,6 +49,10 @@ type AuthzDecision struct {
 	SubjectTenant         string   // The home tenant extracted from OPA policy output (subject_tenant)
 	SubjectTenants        []string // The tenants extracted from OPA policy output (subject_tenant_result)
 	ManagedServiceAccount bool
+	// TenantGrants is the named-role evaluator's snapshot of grants by binding tenant.
+	// Named-role evaluations use a non-nil map and set SubjectTenants to the tenants
+	// authorized for this RPC. The legacy Rego evaluator leaves TenantGrants nil.
+	TenantGrants map[string]*authz.Grants
 }
 
 // AuthContext holds the complete identity claims extracted from a JWT token.

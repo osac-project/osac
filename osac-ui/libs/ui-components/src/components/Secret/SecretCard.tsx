@@ -27,8 +27,7 @@ const SecretCard = ({ secret, onEdit, onDelete }: SecretCardProps) => {
   const secretTypes = getSecretType(t);
   const typeLabel = secretTypes[secret.type] || secretTypes[SecretType.UNSPECIFIED];
   const dataKeys = getSecretTypeDataKeys(secret.type);
-  const dataKeysDescription =
-    dataKeys ?? (secret.type === SecretType.OPAQUE ? t('Unknown') : '-');
+  const dataKeysDescription = dataKeys ?? (secret.type === SecretType.OPAQUE ? t('Unknown') : '-');
 
   return (
     <ListPageCard

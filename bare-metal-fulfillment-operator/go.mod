@@ -16,7 +16,7 @@ require (
 	github.com/osac-project/osac/osac-operator/api v0.0.7
 	github.com/osac-project/osac/proto v0.0.0
 	github.com/prometheus/client_golang v1.25.0
-	github.com/stmcginnis/gofish v0.27.0
+	github.com/stmcginnis/gofish v0.28.0
 	go.uber.org/mock v0.6.0
 	golang.org/x/oauth2 v0.37.0
 	google.golang.org/grpc v1.85.0

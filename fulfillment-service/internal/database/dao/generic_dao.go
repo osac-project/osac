@@ -320,29 +320,35 @@ func (b *GenericDAOBuilder[O]) resolveTableName() string {
 	if b.table != "" {
 		return b.table
 	}
-	return b.tableName()
+	var object O
+	return TableNameFor(string(object.ProtoReflect().Descriptor().Name()))
 }
 
-// tableName calculates the table name from the protobuf message type name. It converts the CamelCase type
-// name to snake_case and pluralizes it. For example, `Cluster` becomes `clusters` and `ComputeInstance` becomes
-// `compute_instances`.
-func (b *GenericDAOBuilder[O]) tableName() string {
-	var object O
-	return flect.Pluralize(flect.Underscore(string(object.ProtoReflect().Descriptor().Name())))
+// TableNameFor derives the database table name of a proto message from the message's own name,
+// without its package: snake_case, pluralized. For example, "Cluster" becomes "clusters" and
+// "ComputeInstance" becomes "compute_instances". The generic DAO derives its default table name
+// this way, so anything that maps a message to its table derives the same name; a kind whose
+// server overrides the table with SetTableName must be mapped by hand where it differs.
+func TableNameFor(messageName string) string {
+	return flect.Pluralize(flect.Underscore(messageName))
 }
 
 var kindAcronyms = strings.NewReplacer("nat ", "NAT ", " nat", " NAT", "ip ", "IP ", " ip", " IP")
 
-// kindName returns a human-readable singular resource kind derived from the table name.
-// For example, `compute_instances` becomes `compute instance` and `external_ips` becomes `external IP`.
-func (b *GenericDAOBuilder[O]) kindName() string {
-	table := b.resolveTableName()
+// KindNameFor returns the human-readable singular kind of a table. "compute_instances" gives
+// "compute instance", and "external_ips" gives "external IP".
+func KindNameFor(table string) string {
 	if strings.HasSuffix(table, "_ips") {
 		table = strings.TrimSuffix(table, "s")
 	} else {
 		table = flect.Singularize(table)
 	}
 	return kindAcronyms.Replace(strings.ReplaceAll(table, "_", " "))
+}
+
+// kindName returns the human-readable singular resource kind derived from the table name.
+func (b *GenericDAOBuilder[O]) kindName() string {
+	return KindNameFor(b.resolveTableName())
 }
 
 func (b *GenericDAOBuilder[O]) registerOpDurationMetric() (result *prometheus.HistogramVec, err error) {

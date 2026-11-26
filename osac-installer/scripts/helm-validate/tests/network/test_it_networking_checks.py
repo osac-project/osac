@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 
-CHECKS = runpy.run_path(str(Path(__file__).with_name("it-networking-checks.py")))
+CHECKS = runpy.run_path(str(Path(__file__).resolve().parents[3] / "it-networking-checks.py"))
 
 
 class ManifestsToJsonTests(unittest.TestCase):
@@ -112,7 +112,3 @@ class RefusalPodTests(unittest.TestCase):
         dep["spec"]["template"]["spec"]["containers"][0]["args"] = ["start"]
         with self.assertRaises(ValueError):
             CHECKS["refusal_pod_manifest"](dep, "p3")
-
-
-if __name__ == "__main__":
-    unittest.main()

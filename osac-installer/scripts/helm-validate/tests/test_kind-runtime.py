@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 
-INSTALLER = Path(__file__).resolve().parents[1]
+INSTALLER = Path(__file__).resolve().parents[3]
 REPO = INSTALLER.parent
 RUNTIME = INSTALLER / "scripts/dev-full/kind-runtime.sh"
 JQ = shutil.which("jq")
@@ -2136,7 +2136,3 @@ echo 'stub archive' > "$4"
         self.assertEqual(result.stdout, "")
         self.assertEqual(inotify.read_text().strip(), "128")
         self.assertFalse(any(cmd.startswith("sysctl ") for cmd in self.commands()))
-
-
-if __name__ == "__main__":
-    unittest.main(verbosity=2)

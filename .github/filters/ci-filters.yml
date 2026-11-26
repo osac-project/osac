@@ -278,7 +278,7 @@ helm-osac-csi-driver:
 helm-osac-metering:
   - '{osac-metering/charts/**,.github/workflows/helm-lint.yaml}'
 helm-osac-installer:
-  - '{osac-installer/charts/**,osac-installer/values/**,osac-installer/ct.yaml,osac-installer/Makefile,osac-installer/scripts/test-mce-render.py,osac-installer/scripts/test-lvms-optional-path-render.py,osac-installer/scripts/test-billing-render.py,osac-installer/scripts/test-chart-name-independence-render.py,osac-installer/scripts/test-networking-values.py,osac-installer/scripts/test-networking-provisioning-overlay.py,osac-installer/scripts/testdata/**,osac-installer/scripts/test-network-class-step.py,osac-installer/scripts/test-netris-ca-lifecycle.py,osac-installer/scripts/test-bmf-netbox-render.py,osac-installer/scripts/lib.sh,osac-installer/scripts/test-infra-ready-wait.sh,osac-installer/scripts/test-input-validation.sh,osac-installer/scripts/test-validation-diagnostics.py,.github/workflows/helm-lint.yaml}'
+  - '{osac-installer/charts/**,osac-installer/values/**,osac-installer/ct.yaml,osac-installer/Makefile,osac-installer/scripts/helm-validate/**,osac-installer/scripts/test-networking-provisioning-overlay.py,osac-installer/scripts/testdata/**,osac-installer/scripts/lib.sh,osac-installer/scripts/test-infra-ready-wait.sh,osac-installer/scripts/test-input-validation.sh,osac-installer/scripts/test-validation-diagnostics.py,.github/workflows/helm-lint.yaml}'
 
 # Gates check-generated-code.yaml.
 proto-check:
@@ -356,7 +356,7 @@ unit-tests-e2e-policy:
 # Offline preflight and metering reader rendering, the preflight harness, and stubbed Kind runner checks.
 # Preflight rendering also covers the osac-aap and osac-csi-driver hook Jobs.
 unit-tests-osac-installer:
-  - '{osac-installer/charts/**,osac-installer/Makefile,osac-installer/scripts/test-preflight-*.py,osac-installer/scripts/test-kind-runtime.py,osac-installer/scripts/dev-full/**,osac-installer/scripts/lib.sh,osac-aap/charts/**,osac-csi-driver/charts/**,osac-metering/charts/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
+  - '{osac-installer/charts/**,osac-installer/Makefile,osac-installer/scripts/helm-validate/tests/**,osac-installer/scripts/helm-validate/preflight-kind.py,osac-installer/scripts/dev-full/**,osac-installer/scripts/lib.sh,osac-aap/charts/**,osac-csi-driver/charts/**,osac-metering/charts/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
 unit-tests-caas-integration:
   - '{tests/integration/caas/**,fulfillment-service/**,osac-operator/**,bare-metal-fulfillment-operator/**,proto/**,go.work,go.work.sum,.github/workflows/tests.yml,.github/ci-tests.yml}'
 
@@ -391,4 +391,11 @@ integration-tests-osac-aap:
   - '{osac-aap/**,tests/contract/network-task/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
 # The install preflight Kind test (a preflight-only copy of the osac chart, not the full stack).
 integration-tests-osac-installer-preflight:
-  - '{osac-installer/charts/**,osac-installer/Makefile,osac-installer/scripts/test-preflight-kind.py,osac-aap/charts/**,osac-csi-driver/charts/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
+  - '{osac-installer/charts/**,osac-installer/Makefile,osac-installer/scripts/helm-validate/preflight-kind.py,osac-aap/charts/**,osac-csi-driver/charts/**,.github/workflows/tests.yml,.github/ci-tests.yml}'
+
+# Claude/Codex component-hook smoke coverage. Keep this scoped to the shared
+# component hooks, their registrations, the Codex adapter, and the smoke test
+# itself. The workflow and filter are included so edits to the CI wiring are
+# exercised too.
+component-hooks-smoke:
+  - '{.claude/settings.json,.claude/hooks/component-*.sh,.codex/hooks.json,.codex/hooks/**,tools/test/component-hooks-smoke.sh,.agentic-ci/**,tools/test/agentic-ci-validation-smoke.py,.github/actions/setup-python/**,.github/filters/ci-filters.yml,.github/workflows/component-hooks-smoke.yml}'

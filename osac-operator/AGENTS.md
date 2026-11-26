@@ -106,7 +106,7 @@ the current image/manifests deployed into an explicitly selected Kind cluster.
 | Deployment, watches, RBAC, console proxy, networking or Helm wiring | Deploy current image/manifests, then `make integration-tests` against Kind |
 | Provider-disabled ComputeInstance launches | `make test` and `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=operator` (standalone integration target does not select this phase) |
 | ComputeInstance disk handoff through Fulfillment/operator | `make -C ../osac-installer test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage` |
-| Fulfillment TLS and trust rotation | `make test`, Kind integration, and `make -C ../osac-installer fulfillment-trust-render-test` |
+| Fulfillment TLS and trust rotation | `make test`, Kind integration, and `make -C ../osac-installer helm-validate PYTEST_TARGETS=scripts/helm-validate/tests/test_fulfillment-trust-render.py` |
 | Generated CRDs/manifests | `make manifests generate helm-crds check-helm-crds`, then applicable Envtest/Kind suite |
 | AAP, provisioning, KubeVirt or Fulfillment boundary | Qualifying real-boundary Contract/E2E; report missing coverage via the linked suite guide |
 

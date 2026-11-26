@@ -982,7 +982,6 @@ make test PLATFORM=kind PROFILE=dev NS=osac SUITE=compute-storage # API/operator
 make validate-inputs PLATFORM=... PROFILE=... NS=... # Offline input validation (no cluster changes)
 make helm-lint                                       # Lint all charts
 make helm-template       # Dry-run render all templates
-make mce-render-test                                  # Verify disabled MCE defaults and CaaS enablement
 make input-validation-test                             # Test the upfront input-validation gate
 make helm-validate                                   # Lint + template (full validation)
 make sync-charts         # Rebuild chart dependencies (legacy alias; runs helm dependency build)

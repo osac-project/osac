@@ -7,7 +7,7 @@ import pathlib
 import re
 import subprocess
 
-CHART = pathlib.Path(__file__).resolve().parents[1] / "charts/osac"
+CHART = pathlib.Path(__file__).resolve().parents[3] / "charts/osac"
 VALUES = CHART.parents[1] / "values"
 HOOKS = {
     "fulfillment-create-hub",
@@ -360,7 +360,7 @@ def check_infra_ca_bundle_targets() -> None:
     assert "CSI_NAMESPACE" not in template
 
 
-if __name__ == "__main__":
+def test_main() -> None:
     check(False)
     check(True)
     check_production_default()

@@ -334,7 +334,7 @@ sandbox:
       reason: "Metering journeys need a live METERING_ADAPTER_URL; sandbox collection excludes them with -m 'not metering'"
     - match: "image-build, kind-load-image, execution-environment-build, osac-ui container build"
       reason: "No podman or docker in the sandbox"
-    - match: "osac-installer helm-validate, ct lint, fulfillment-trust-render-test"
+    - match: "osac-installer helm-validate, ct lint"
       reason: "helm dependency build pulls the osac-ui chart from an OCI registry that is not an overlay egress preset"
     - match: "ansible-playbook runs, tests/integration in osac-aap"
       reason: "Playbooks act on real clusters and hosts"

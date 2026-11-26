@@ -7,7 +7,7 @@ import logging
 import re
 import time
 import urllib.error
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -528,7 +528,13 @@ class MeteringCollector:
         return typed
 
     def wait_for_billing_end(
-        self, resource_id: str, *, deletion: datetime, quiet: int = 150, timeout: int = 600
+        self,
+        resource_id: str,
+        *,
+        deletion: datetime,
+        late_meters: Collection[str] = (),
+        quiet: int = 150,
+        timeout: int = 600,
     ) -> datetime:
         """The end of the resource's billed life: the latest net interval end
         across its meters, read only once every meter reaches the recorded
@@ -544,23 +550,47 @@ class MeteringCollector:
         correction lands reads as billing past the anchor. The whole net
         interval state, not just the latest end, must be unchanged for the
         quiet window, because a correction can change billed usage inside
-        the life without moving the end. Each meter is tracked separately,
-        so one meter's final piece landing does not end the wait for another
-        meter's.
+        the life without moving the end. Each meter's last end must sit
+        within the clock tolerance of the deletion: a final interval that
+        ends a little early is still the recorded boundary, while a larger
+        overrun is an uncorrected overshoot and keeps the wait open. A meter
+        named in ``late_meters`` may end after the deletion: BMaaS allocation
+        bills the host until it is released, which can follow the CR deletion
+        request. Every other meter stays inside the clock tolerance. Each
+        meter is tracked separately, so one meter's final piece landing does
+        not end the wait for another meter's.
         """
         deadline = time.monotonic() + timeout
         latest: dict[str, list[tuple[datetime, datetime, Decimal]]] = {}
         unchanged_since: float | None = None
         while True:
-            intervals = self._latest_net_intervals(resource_id)
+            try:
+                intervals = self._latest_net_intervals(resource_id)
+            except (OSError, json.JSONDecodeError) as exc:
+                now = time.monotonic()
+                if now >= deadline:
+                    raise TimeoutError(
+                        f"billing of {resource_id}: metering events stayed unreachable "
+                        f"until the {timeout}s deadline: {exc}"
+                    ) from exc
+                # A missed observation cannot count toward the quiet window: restart it
+                # when the next fetch succeeds.
+                unchanged_since = None
+                logger.warning("Transient error fetching events during billing-end wait: %s", exc)
+                time.sleep(10)
+                continue
             now = time.monotonic()
-            if intervals != latest:
+            if intervals != latest or unchanged_since is None:
                 latest, unchanged_since = intervals, now
             if (
                 latest
                 and unchanged_since is not None
                 and now - unchanged_since >= quiet
-                and all(net[-1][1] >= deletion - CR_STAMP_TOLERANCE for net in latest.values())
+                and all(
+                    net[-1][1] >= deletion - CR_STAMP_TOLERANCE
+                    and (meter in late_meters or net[-1][1] <= deletion + CR_STAMP_TOLERANCE)
+                    for meter, net in latest.items()
+                )
             ):
                 return max(net[-1][1] for net in latest.values())
             if now >= deadline:

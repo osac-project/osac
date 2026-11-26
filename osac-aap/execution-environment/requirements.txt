@@ -205,7 +205,7 @@ packaging==26.0
     #   ansible-runner
     #   oslo-utils
     #   python-keystoneclient
-passlib==1.7.4
+passlib==1.9.5
     # via python-esiclient
 pbr==7.0.3
     # via

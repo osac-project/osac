@@ -507,6 +507,7 @@ func (t *tool) listObjectTables(ctx context.Context, pool *pgxpool.Pool) (result
 			c.relname not in (
 				'changes',
 				'installation_settings',
+				'audit_records',
 				'project_membership_subjects',
 				'quota_outbox',
 				'schema_migrations',

@@ -425,6 +425,12 @@ require "${TMP_DIR}/deployment-thanos-query-admin.yaml" 'value: keycloak'
 require "${TMP_DIR}/deployment-thanos-query-admin.yaml" \
   'value: "https://keycloak.example.com/realms/osac"'
 require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" 'value: openshift'
+# The infrastructure admin's arm is scoped to the platform visibility class;
+# the provider admin's arm is not.
+require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" 'name: SCOPE_LABEL'
+require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" 'value: visibility'
+require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" 'value: platform'
+reject "${TMP_DIR}/deployment-thanos-query-admin.yaml" 'name: SCOPE_LABEL'
 
 # The allowlist is the whole admin API surface: one entry per documented
 # endpoint and nothing else.

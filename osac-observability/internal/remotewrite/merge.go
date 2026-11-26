@@ -33,6 +33,10 @@ type Options struct {
 	Enabled            bool
 	ReceiveURL         string
 	PlatformNamespaces []string
+	// ProviderMetrics lists the metric families that only a Cloud Provider
+	// Admin may read. Every stored series is stamped with a `visibility` label
+	// from this list, and the admin query gate enforces it.
+	ProviderMetrics []string
 }
 
 // Merge returns the cluster-monitoring-config document with OSAC's owned keys
@@ -182,14 +186,14 @@ func remoteWriteEntry(opts Options) *yaml.Node {
 				),
 			),
 		),
-		key("writeRelabelConfigs"), relabelConfigs(opts.PlatformNamespaces),
+		key("writeRelabelConfigs"), relabelConfigs(opts.PlatformNamespaces, opts.ProviderMetrics),
 	)
 }
 
 // relabelConfigs is IC-1's stamp-and-drop allowlist. The platform namespace
 // list comes from values so a deployment that moves OSAC's namespaces changes
 // the list rather than the rule.
-func relabelConfigs(namespaces []string) *yaml.Node {
+func relabelConfigs(namespaces, providerMetrics []string) *yaml.Node {
 	platform := fmt.Sprintf("(%s)", strings.Join(namespaces, "|"))
 	return sequenceOf(
 		mappingOf(
@@ -228,7 +232,34 @@ func relabelConfigs(namespaces []string) *yaml.Node {
 			key("sourceLabels"), sequenceOf(scalar("__name__")),
 			key("regex"), scalar("kserve_.*|vllm_.*|dcgm_.*"),
 		),
+		// Metric visibility. Every stored series carries it, so the query gate
+		// can restrict a persona to one class without parsing metric names:
+		// platform first for everything, then the provider families override.
+		// The rules are ordered, and the second matches only series the first
+		// has already stamped.
+		mappingOf(
+			key("action"), scalar("replace"),
+			key("targetLabel"), scalar("visibility"),
+			key("replacement"), scalar("platform"),
+		),
+		mappingOf(
+			key("action"), scalar("replace"),
+			key("sourceLabels"), sequenceOf(scalar("__name__")),
+			key("targetLabel"), scalar("visibility"),
+			key("regex"), scalar(providerRegex(providerMetrics)),
+			key("replacement"), scalar("provider"),
+		),
 	)
+}
+
+// providerRegex joins the configured provider-only metric families into one
+// anchored alternation. An empty list classifies everything as platform, which
+// keeps the gate's scope matcher harmless when no split is configured.
+func providerRegex(metrics []string) string {
+	if len(metrics) == 0 {
+		return "^$"
+	}
+	return "(" + strings.Join(metrics, "|") + ")"
 }
 
 func dropNothingKept(regex string) *yaml.Node {

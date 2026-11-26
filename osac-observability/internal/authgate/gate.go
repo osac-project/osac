@@ -12,6 +12,8 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+
+	"github.com/osac-project/osac/osac-observability/internal/queryscope"
 )
 
 // ErrUnauthenticated means the credential is absent, malformed or expired.
@@ -27,16 +29,20 @@ type Authenticator interface {
 	Authenticate(ctx context.Context, token string) error
 }
 
-// Config carries the gate's upstream and authenticator.
+// Config carries the gate's upstream, authenticator and metric scope.
 type Config struct {
 	AllowlistURL  string
 	Authenticator Authenticator
+	// Scope restricts what the request may read. The zero value disables
+	// scoping, which is what the persona that may see every metric uses.
+	Scope queryscope.Rewriter
 }
 
 // Gate routes one authenticated request to the allowlist sidecar.
 type Gate struct {
 	allowlist *httputil.ReverseProxy
 	auth      Authenticator
+	scope     queryscope.Rewriter
 }
 
 // New builds a Gate. The upstream must be an absolute URL and an
@@ -52,6 +58,7 @@ func New(cfg Config) (*Gate, error) {
 	return &Gate{
 		allowlist: allowlist,
 		auth:      cfg.Authenticator,
+		scope:     cfg.Scope,
 	}, nil
 }
 
@@ -90,12 +97,32 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="osac", error="invalid_token"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 		default:
+			if err := g.applyScope(r); err != nil {
+				http.Error(w, "request cannot be scoped: "+err.Error(), http.StatusBadRequest)
+				return
+			}
 			g.allowlist.ServeHTTP(w, r)
 		}
 		return
 	}
 	w.Header().Set("WWW-Authenticate", `Bearer realm="osac"`)
 	http.Error(w, "authentication required", http.StatusUnauthorized)
+}
+
+// applyScope injects the persona's metric scope into the request parameters. A
+// request the scoper cannot parse is refused: forwarding it unscoped would leak
+// the other visibility class, which is the one thing this gate exists to
+// prevent.
+func (g *Gate) applyScope(r *http.Request) error {
+	if !g.scope.Enabled() {
+		return nil
+	}
+	params := r.URL.Query()
+	if err := g.scope.Request(r.URL.Path, params); err != nil {
+		return err
+	}
+	r.URL.RawQuery = params.Encode()
+	return nil
 }
 
 func bearerToken(r *http.Request) string {

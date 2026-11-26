@@ -22,13 +22,17 @@ const (
 	defaultName               = "cluster-monitoring-config"
 	defaultReceiveURL         = "https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive"
 	defaultPlatformNamespaces = `["osac","osac-csi","osac-observability"]`
-	dataKey                   = "config.yaml"
+	// Metric families only a Cloud Provider Admin may read. Every stored series
+	// is stamped from this list, and the admin query gate enforces it.
+	defaultProviderMetrics = `["osac_metering_.*"]`
+	dataKey                = "config.yaml"
 )
 
 type config struct {
 	Enabled            bool
 	ReceiveURL         string
 	PlatformNamespaces []string
+	ProviderMetrics    []string
 	Namespace          string
 	Name               string
 }
@@ -76,6 +80,10 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if len(cfg.PlatformNamespaces) == 0 {
 		return config{}, fmt.Errorf("OBS_PLATFORM_NAMESPACES must list at least one namespace")
 	}
+	provider := valueOr(getenv, "OBS_PROVIDER_METRICS", defaultProviderMetrics)
+	if err := json.Unmarshal([]byte(provider), &cfg.ProviderMetrics); err != nil {
+		return config{}, fmt.Errorf("OBS_PROVIDER_METRICS: %w", err)
+	}
 	return cfg, nil
 }
 
@@ -91,6 +99,7 @@ func (cfg config) options() remotewrite.Options {
 		Enabled:            cfg.Enabled,
 		ReceiveURL:         cfg.ReceiveURL,
 		PlatformNamespaces: cfg.PlatformNamespaces,
+		ProviderMetrics:    cfg.ProviderMetrics,
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/osac-project/osac/osac-observability/internal/authgate"
+	"github.com/osac-project/osac/osac-observability/internal/queryscope"
 )
 
 // inClusterConfig is a seam for the tests: the OpenShift mode is the only one
@@ -31,6 +32,7 @@ type config struct {
 	listenAddr    string
 	mode          string
 	allowlistURL  string
+	scope         queryscope.Rewriter
 	authenticator authgate.Authenticator
 }
 
@@ -42,6 +44,7 @@ func main() {
 	gate, err := authgate.New(authgate.Config{
 		AllowlistURL:  cfg.allowlistURL,
 		Authenticator: cfg.authenticator,
+		Scope:         cfg.scope,
 	})
 	if err != nil {
 		log.Fatalf("query-auth-gate: %v", err)
@@ -82,6 +85,13 @@ func loadConfig(getenv func(string) string) (config, error) {
 		listenAddr:   getenv("LISTEN_ADDR"),
 		mode:         strings.ToLower(strings.TrimSpace(getenv("MODE"))),
 		allowlistURL: getenv("ALLOWLIST_URL"),
+		scope: queryscope.Rewriter{
+			Label: getenv("SCOPE_LABEL"),
+			Value: getenv("SCOPE_VALUE"),
+		},
+	}
+	if (cfg.scope.Label == "") != (cfg.scope.Value == "") {
+		return config{}, errors.New("SCOPE_LABEL and SCOPE_VALUE must be set together")
 	}
 	if cfg.listenAddr == "" {
 		cfg.listenAddr = ":9092"

@@ -215,6 +215,10 @@ reject "${TMP_DIR}/disabled-jobs.yaml" 'name: osac-observability-remote-write'
 reject "${disabled}" 'namespace: openshift-monitoring'
 require "${TMP_DIR}/enabled-jobs.yaml" \
   'value: https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive'
+# The provider-only families are handed to the job, which stamps every series
+# with the visibility label the admin gates enforce.
+require "${TMP_DIR}/enabled-jobs.yaml" 'name: OBS_PROVIDER_METRICS'
+require "${TMP_DIR}/enabled-jobs.yaml" 'osac_metering_.*'
 
 echo "checking the admin query routes and proxies"
 # The Routes take their hosts from global.clusterDomain, which the enabled
@@ -268,6 +272,12 @@ require "${TMP_DIR}/deployment-thanos-query-admin.yaml" 'value: keycloak'
 require "${TMP_DIR}/deployment-thanos-query-admin.yaml" \
   'value: "https://keycloak.example.com/realms/osac"'
 require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" 'value: openshift'
+# The infrastructure admin's arm is scoped to the platform visibility class;
+# the provider admin's arm is not.
+require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" 'name: SCOPE_LABEL'
+require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" 'value: visibility'
+require "${TMP_DIR}/deployment-thanos-query-admin-openshift.yaml" 'value: platform'
+reject "${TMP_DIR}/deployment-thanos-query-admin.yaml" 'name: SCOPE_LABEL'
 
 allowlist="${TMP_DIR}/allowlist-configmap.yaml"
 extract_kind_name "${enabled}" ConfigMap osac-observability-query-allowlist >"${allowlist}"

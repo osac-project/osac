@@ -552,6 +552,15 @@
                     "type": "string",
                     "minLength": 1
                   }
+                },
+                "providerOnlyMetrics": {
+                  "type": "array",
+                  "description": "Metric families only a Cloud Provider Admin may read; every stored series is stamped visibility=platform or visibility=provider from this list and the infrastructure admin Route is restricted to platform",
+                  "default": ["osac_metering_.*"],
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
                 }
               },
               "additionalProperties": false

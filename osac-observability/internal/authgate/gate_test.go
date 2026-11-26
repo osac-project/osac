@@ -12,8 +12,11 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/osac-project/osac/osac-observability/internal/queryscope"
 	"time"
 
 	authv1 "k8s.io/api/authentication/v1"
@@ -445,6 +448,67 @@ func newTestGate(t *testing.T, auth Authenticator) (*Gate, *countingServer) {
 		t.Fatalf("New: %v", err)
 	}
 	return gate, allowlist
+}
+
+// newScopedTestGate returns a gate that restricts every request to
+// visibility="platform" and an upstream that records what it receives.
+func newScopedTestGate(t *testing.T, auth Authenticator) (*Gate, *countingServer, *string) {
+	t.Helper()
+	var received string
+	allowlist := newCountingServer(t, func(_ http.ResponseWriter, r *http.Request) {
+		received = r.URL.RawQuery
+	})
+	gate, err := New(Config{
+		AllowlistURL:  allowlist.URL,
+		Authenticator: auth,
+		Scope:         queryscope.Rewriter{Label: "visibility", Value: "platform"},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return gate, allowlist, &received
+}
+
+func TestGateScopesAnAuthorizedQuery(t *testing.T) {
+	gate, allowlist, received := newScopedTestGate(t, &stubAuth{})
+	rec := httptest.NewRecorder()
+	gate.ServeHTTP(rec, bearerRequest("/api/v1/query?query=up", "valid"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if allowlist.hits.Load() != 1 {
+		t.Fatalf("allowlist hits = %d, want 1", allowlist.hits.Load())
+	}
+	if !strings.Contains(*received, `visibility%3D%22platform%22`) &&
+		!strings.Contains(*received, `visibility="platform"`) {
+		t.Fatalf("forwarded query %q carries no scope matcher", *received)
+	}
+}
+
+// A request the scoper cannot parse must not be forwarded unscoped.
+func TestGateRejectsAnUnscopableQuery(t *testing.T) {
+	gate, allowlist, _ := newScopedTestGate(t, &stubAuth{})
+	rec := httptest.NewRecorder()
+	gate.ServeHTTP(rec, bearerRequest("/api/v1/query?query=up%7B", "valid"))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if allowlist.hits.Load() != 0 {
+		t.Fatalf("allowlist reached with an unscopable query")
+	}
+}
+
+// The provider admin's arm leaves the query untouched.
+func TestGateLeavesAnUnscopedRequestAlone(t *testing.T) {
+	gate, allowlist := newTestGate(t, &stubAuth{})
+	rec := httptest.NewRecorder()
+	gate.ServeHTTP(rec, bearerRequest("/api/v1/query?query=up", "valid"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if allowlist.hits.Load() != 1 {
+		t.Fatalf("allowlist hits = %d, want 1", allowlist.hits.Load())
+	}
 }
 
 func bearerRequest(path, token string) *http.Request {

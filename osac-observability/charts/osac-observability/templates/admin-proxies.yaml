@@ -177,6 +177,14 @@ spec:
               value: {{ $allowlistURL | quote }}
             - name: OPENSHIFT_GROUP
               value: {{ $openshiftGroup | quote }}
+            # The infrastructure admin sees the platform visibility class only.
+            # Every series carries the label, stamped by the remote-write job,
+            # and the gate injects the matcher into every selector so a crafted
+            # query cannot reach the provider class.
+            - name: SCOPE_LABEL
+              value: visibility
+            - name: SCOPE_VALUE
+              value: platform
           ports:
             - name: gate
               containerPort: 9092

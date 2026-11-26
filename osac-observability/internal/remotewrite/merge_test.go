@@ -22,6 +22,7 @@ func testOptions(enabled bool) Options {
 		Enabled:            enabled,
 		ReceiveURL:         testReceiveURL,
 		PlatformNamespaces: []string{"osac", "osac-csi", "osac-observability"},
+		ProviderMetrics:    []string{"osac_metering_.*"},
 	}
 }
 
@@ -105,6 +106,14 @@ func expectedPayload() map[string]any {
         - action: drop
           sourceLabels: [__name__]
           regex: kserve_.*|vllm_.*|dcgm_.*
+        - action: replace
+          targetLabel: visibility
+          replacement: platform
+        - action: replace
+          sourceLabels: [__name__]
+          targetLabel: visibility
+          regex: (osac_metering_.*)
+          replacement: provider
 `, testReceiveURL, testNamespace, testNamespace)
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {

@@ -98,6 +98,13 @@ tests:
           content:
             name: ADMIN_ROLE
             value: cloud-provider-admin
+      # The Cloud Provider Admin's arm is not scoped: it sees platform and
+      # provider metrics.
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SCOPE_LABEL
+            value: visibility
       # The gate fetches discovery and the JWK set from the cluster-signed
       # Route, so it reads the copied trust bundle.
       - contains:
@@ -139,6 +146,17 @@ tests:
           content:
             name: OPENSHIFT_GROUP
             value: osac-cloud-infrastructure-admins
+      # The infrastructure admin sees the platform visibility class only.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SCOPE_LABEL
+            value: visibility
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SCOPE_VALUE
+            value: platform
       # The gate calls TokenReview and reads the group, so it needs its token.
       - equal:
           path: spec.template.spec.serviceAccountName

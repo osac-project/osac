@@ -159,6 +159,12 @@ global:
       osacControlPlane: "30s"
       # kube_pod_* and container_* are kept only for these namespaces.
       platformNamespaces: [osac, osac-csi, osac-observability]
+      # Metric families only a Cloud Provider Admin may read. Every stored
+      # series is stamped with visibility=platform or visibility=provider from
+      # this list, and the infrastructure admin's query Route is restricted to
+      # platform. Regexes are matched against the metric name.
+      providerOnlyMetrics:
+        - osac_metering_.*
     objectStorage:
       # Required when enabled. Names an existing Secret in osac-observability
       # whose AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY keys are exported

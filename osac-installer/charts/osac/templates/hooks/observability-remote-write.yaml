@@ -117,6 +117,10 @@ spec:
               value: {{ $observability.enabled | default false | quote }}
             - name: OBS_PLATFORM_NAMESPACES
               value: {{ $collection.platformNamespaces | default (list "osac" "osac-csi" "osac-observability") | toJson | quote }}
+            # Stamped onto every stored series as the visibility label; the
+            # admin query gate restricts the infrastructure admin to platform.
+            - name: OBS_PROVIDER_METRICS
+              value: {{ $collection.providerOnlyMetrics | default (list "osac_metering_.*") | toJson | quote }}
             - name: OBS_RECEIVE_URL
               value: https://thanos-receive.osac-observability.svc.cluster.local:19291/api/v1/receive
           securityContext:

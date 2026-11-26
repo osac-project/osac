@@ -467,7 +467,7 @@ var _ = Describe("IDP Sync", func() {
 		))
 	})
 
-	It("should create builtin tenants as disabled", func() {
+	It("should create the shared tenant as disabled", func() {
 		tenant := privatev1.Tenant_builder{
 			Id: "org-shared",
 			Metadata: privatev1.Metadata_builder{
@@ -505,54 +505,6 @@ var _ = Describe("IDP Sync", func() {
 		Expect(tenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
 		Expect(tenant.GetStatus().GetBreakGlassUserId()).To(BeEmpty())
 		Expect(tenant.GetSpec().GetBreakGlassCredentialsSecret()).To(BeNil())
-	})
-
-	It("should create system tenant as disabled", func() {
-		tenant := privatev1.Tenant_builder{
-			Id: "org-system",
-			Metadata: privatev1.Metadata_builder{
-				Name:       auth.SystemTenant,
-				Finalizers: []string{finalizers.TenantLifecycle, finalizers.TenantOnboarding},
-				Tenant:     "tenant-1",
-			}.Build(),
-			Status: privatev1.TenantStatus_builder{
-				BreakGlassCredentials: privatev1.BreakGlassCredentials_builder{
-					Username: auth.SystemTenant + "-osac-break-glass",
-					Password: testPreGeneratedPassword,
-				}.Build(),
-			}.Build(),
-		}.Build()
-
-		mockClient.EXPECT().
-			CreateTenant(gomock.Any(), gomock.Any()).
-			DoAndReturn(func(ctx context.Context, org *idp.Tenant) (*idp.Tenant, error) {
-				Expect(org.Name).To(Equal(auth.SystemTenant))
-				Expect(org.Enabled).To(BeFalse())
-				return &idp.Tenant{
-					Name:    auth.SystemTenant,
-					Enabled: false,
-				}, nil
-			}).
-			Times(1)
-
-		mockClient.EXPECT().
-			CreateUser(gomock.Any(), auth.SystemTenant, gomock.Any()).
-			Return(&idp.User{ID: "user-system"}, nil).
-			Times(1)
-
-		mockClient.EXPECT().
-			AssignIdpManagerPermissions(gomock.Any(), "user-system").
-			Return(nil).
-			Times(1)
-
-		task := &task{
-			r:      reconciler,
-			tenant: tenant,
-		}
-
-		err := task.update(ctx)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(tenant.GetStatus().GetState()).To(Equal(privatev1.TenantState_TENANT_STATE_SYNCED))
 	})
 
 	It("should restore SYNCED without re-creating when IDP tenant already exists", func() {

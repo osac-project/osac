@@ -492,5 +492,10 @@ template. A tenant user creates a cluster with `--catalog-item` and omits
 instead supply a pull Secret from their own tenant if the catalog item allows
 it. Tenant users cannot read the shared Secret value or reference it directly.
 
+Cluster creation requires an effective pull Secret reference after catalog rules
+and template defaults are applied. If the template does not provide a default,
+supply `--pull-secret` referencing a pull Secret in your tenant. Requests with
+neither an explicit reference nor an inherited default fail with `InvalidArgument`.
+
 The [Catalog Items guide](../../fulfillment-service/docs/CATALOG_ITEMS.md#shared-pull-secrets-in-cluster-templates)
 shows the template field and explains the catalog rules.

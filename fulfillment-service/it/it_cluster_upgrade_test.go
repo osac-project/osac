@@ -143,14 +143,16 @@ var _ = Describe("Cluster upgrade", func() {
 	})
 
 	createCluster := func(nodeSets map[string]*publicv1.ClusterNodeSet) *publicv1.Cluster {
+		pullSecretID := createCatalogItemPullSecretFixture(ctx, usersGroup)
 		created, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
 			Object: publicv1.Cluster_builder{
 				Metadata: publicv1.Metadata_builder{
 					Name: fmt.Sprintf("upgrade-cluster-%s", uuid.New()[24:32]),
 				}.Build(),
 				Spec: publicv1.ClusterSpec_builder{
-					Template: publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
-					NodeSets: nodeSets,
+					Template:         publicv1.ClusterTemplateReference_builder{Id: templateID}.Build(),
+					NodeSets:         nodeSets,
+					PullSecretSecret: publicv1.SecretLocalReference_builder{Id: pullSecretID}.Build(),
 				}.Build(),
 			}.Build(),
 		}.Build())

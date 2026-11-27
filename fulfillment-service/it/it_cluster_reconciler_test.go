@@ -57,7 +57,7 @@ var _ = Describe("Cluster reconciler", func() {
 		bmitName              string
 		templatesClient       privatev1.ClusterTemplatesClient
 		templateId            string
-		network               catalogItemNetworkFixture
+		network               resourceNetworkFixture
 	)
 
 	makeAny := func(value proto.Message) *anypb.Any {
@@ -75,7 +75,7 @@ var _ = Describe("Cluster reconciler", func() {
 		privateClustersClient = privatev1.NewClustersClient(tool.InternalView().AdminConn())
 		instanceTypesClient = privatev1.NewBareMetalInstanceTypesClient(tool.InternalView().AdminConn())
 		templatesClient = privatev1.NewClusterTemplatesClient(tool.InternalView().AdminConn())
-		network = createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network = createNetworkFixture(ctx, usersGroup, "")
 
 		// Create a bare metal instance type for testing:
 		bmitName = fmt.Sprintf("test-bmit-%s", uuid.New()[24:32])

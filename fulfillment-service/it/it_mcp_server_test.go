@@ -768,7 +768,7 @@ var _ = Describe("MCP server", func() {
 		)
 		currentVersionAfterRestart := restartedResponse.GetObject().GetMetadata().GetVersion()
 
-		otherNetwork := createCatalogItemNetworkInClassFixture(ctx, "development", "", networkClassID)
+		otherNetwork := createNetworkInClassFixture(ctx, "development", "", networkClassID)
 		otherSession := connectMCPCaller(ctx, mcpHTTPServer.URL, "it-mcp-other-tenant", "ben")
 
 		otherCreated, err := callMCPTool[mcpserver.CreateComputeInstanceOutput](

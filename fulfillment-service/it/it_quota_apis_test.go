@@ -47,7 +47,7 @@ var _ = Describe("Quota APIs", func() {
 			// gives the tenant images.count usage of one:
 			tenant, _ := createCatalogItemTenantAdminFixture(ctx)
 			project := createCatalogItemProjectFixture(ctx, tenant)
-			createCatalogItemDiskImageInProjectFixture(ctx, tenant, project, catalogItemFixtureName())
+			createDiskImageInProjectFixture(ctx, tenant, project, resourceFixtureName())
 			adminClient := tool.ExternalView().AdminClient()
 
 			// Set the tenant override through the REST gateway:
@@ -133,9 +133,9 @@ var _ = Describe("Quota APIs", func() {
 			// the deployed counterpart of the unit path the deleted reference-name helper
 			// used to cover.
 			tenantAdmin := createCatalogItemTenantAdminIdentityFixture(ctx)
-			network := createCatalogItemNetworkFixture(ctx, tenantAdmin.TenantID, "")
-			instanceType := createCatalogItemComputeInstanceTypeFixture(ctx)
-			image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
+			network := createNetworkFixture(ctx, tenantAdmin.TenantID, "")
+			instanceType := createComputeInstanceTypeFixture(ctx)
+			image := createDiskImageFixture(ctx, "shared", resourceFixtureName())
 			tier := createCatalogItemStorageTierFixture(ctx)
 
 			// The tier's name is the dimension the boot disk prices under:
@@ -146,7 +146,7 @@ var _ = Describe("Quota APIs", func() {
 			Expect(err).NotTo(HaveOccurred())
 			tierName := tierResponse.GetObject().GetMetadata().GetName()
 
-			template := createCatalogItemComputeInstanceTemplateFixture(ctx,
+			template := createComputeInstanceTemplateFixture(ctx,
 				privatev1.ComputeInstanceTemplateSpecDefaults_builder{
 					RunStrategy: new(privatev1.ComputeInstanceRunStrategy_COMPUTE_INSTANCE_RUN_STRATEGY_ALWAYS),
 				}.Build(), nil)

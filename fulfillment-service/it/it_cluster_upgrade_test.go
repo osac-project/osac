@@ -86,7 +86,7 @@ var _ = Describe("Cluster upgrade", func() {
 		}.Build())
 		Expect(err).NotTo(HaveOccurred())
 		bmitID = bmitResponse.GetObject().GetId()
-		deferCatalogItemFixtureDeletion(func(ctx context.Context) error {
+		deferResourceFixtureDeletion(func(ctx context.Context) error {
 			_, err := instanceTypes.Delete(ctx, privatev1.BareMetalInstanceTypesDeleteRequest_builder{
 				Id: bmitID,
 			}.Build())
@@ -122,7 +122,7 @@ var _ = Describe("Cluster upgrade", func() {
 		Expect(targetSemver).NotTo(Equal(defaultVersionSemver))
 		targetVersionName = fmt.Sprintf("upgrade-cv-%s", uuid.New()[24:32])
 		targetImage = fmt.Sprintf("quay.io/openshift-release-dev/ocp-release:%s-multi", targetSemver)
-		diskImage := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
+		diskImage := createDiskImageFixture(ctx, "shared", resourceFixtureName())
 		targetVersion, err := clusterVersions.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
 			Object: privatev1.ClusterVersion_builder{
 				Metadata: privatev1.Metadata_builder{Name: targetVersionName}.Build(),
@@ -435,7 +435,7 @@ var _ = Describe("Cluster upgrade", func() {
 			parsedDefault.Major(), parsedDefault.Minor()+4, cvVersionCounter.Add(1))
 		skewVersionName := fmt.Sprintf("skew-cv-%s", uuid.New()[24:32])
 		skewImage := fmt.Sprintf("quay.io/openshift-release-dev/ocp-release:%s-multi", skewSemver)
-		skewDiskImage := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
+		skewDiskImage := createDiskImageFixture(ctx, "shared", resourceFixtureName())
 		skewVersion, err := clusterVersions.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
 			Object: privatev1.ClusterVersion_builder{
 				Metadata: privatev1.Metadata_builder{Name: skewVersionName}.Build(),

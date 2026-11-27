@@ -96,7 +96,7 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		tenant, _ := createCatalogItemTenantAdminFixture(ctx)
 		conn := createCatalogItemMemberFixture(ctx, tenant)
-		network := createCatalogItemNetworkFixture(ctx, tenant, "")
+		network := createNetworkFixture(ctx, tenant, "")
 		instance, err := createComputeInstanceFixture(ctx, conn, publicv1.ComputeInstanceSpec_builder{
 			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
 			NetworkAttachments: []*publicv1.ComputeNetworkAttachment{network.computeInstanceAttachment()},
@@ -258,7 +258,7 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 
 	It("persists deletion feedback after a referenced Secret disappears", func(ctx context.Context) {
 		templateID := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
-		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network := createNetworkFixture(ctx, usersGroup, "")
 		secretID := createCatalogItemUserDataSecretFixture(ctx, usersGroup)
 		instance, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.ComputeInstanceSpec_builder{
 			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: templateID}.Build(),
@@ -326,7 +326,7 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 	})
 
 	It("rejects public updates that change network attachments", func(ctx context.Context) {
-		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network := createNetworkFixture(ctx, usersGroup, "")
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		instance, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.ComputeInstanceSpec_builder{
 			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
@@ -358,7 +358,7 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 
 	It("allows run_strategy updates through the public API", func(ctx context.Context) {
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
-		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network := createNetworkFixture(ctx, usersGroup, "")
 		conn := tool.ExternalView().UserConn()
 		instance, err := createComputeInstanceFixture(ctx, conn, publicv1.ComputeInstanceSpec_builder{
 			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
@@ -401,10 +401,10 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 	})
 
 	It("allows instance_type updates through the public API", func(ctx context.Context) {
-		firstInstanceType := createCatalogItemComputeInstanceTypeFixture(ctx)
-		secondInstanceType := createCatalogItemComputeInstanceTypeFixture(ctx)
+		firstInstanceType := createComputeInstanceTypeFixture(ctx)
+		secondInstanceType := createComputeInstanceTypeFixture(ctx)
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
-		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network := createNetworkFixture(ctx, usersGroup, "")
 		conn := tool.ExternalView().UserConn()
 		instance, err := createComputeInstanceFixture(ctx, conn, publicv1.ComputeInstanceSpec_builder{
 			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),
@@ -431,7 +431,7 @@ var _ = Describe("Compute instance updates", Label("compute-updates"), func() {
 	})
 
 	DescribeTable("validates networking against persisted deletion state", func(ctx context.Context, deleteFirst, maskDeletionTimestamp bool) {
-		network := createCatalogItemNetworkFixture(ctx, usersGroup, "")
+		network := createNetworkFixture(ctx, usersGroup, "")
 		template := createCatalogItemComputeInstanceProvisioningTemplateFixture(ctx, nil)
 		resource, err := createComputeInstanceFixture(ctx, tool.ExternalView().UserConn(), publicv1.ComputeInstanceSpec_builder{
 			Template:           publicv1.ComputeInstanceTemplateReference_builder{Id: template}.Build(),

@@ -1,9 +1,8 @@
 """Capture-only AAP: records HTTP inputs and never executes provisioning.
 
-This is the operator Kind suite's copy of
-fulfillment-service/it/testdata/compute_storage_aap.py, which keeps the
-recorder in the same component as the test that consumes it. Keep the
-endpoints in sync when either suite changes.
+This is the operator Kind suite's Python copy of the Go recorder at
+fulfillment-service/it/testdata/computestorageaap/main.go. Keep the endpoints
+in sync when either suite changes.
 """
 
 import json

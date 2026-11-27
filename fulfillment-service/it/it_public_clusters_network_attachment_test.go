@@ -239,7 +239,7 @@ var _ = Describe("Cluster with ClusterNetworkAttachment", func() {
 
 		BeforeEach(func() {
 			tenants := privatev1.NewTenantsClient(tool.InternalView().ControllerConn())
-			metadata := catalogItemUnmanagedFixtureMetadata("", "")
+			metadata := unmanagedResourceFixtureMetadata("", "")
 			created, err := tenants.Create(ctx, privatev1.TenantsCreateRequest_builder{
 				Object: privatev1.Tenant_builder{
 					Metadata: metadata,

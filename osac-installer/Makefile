@@ -1284,7 +1284,7 @@ ifneq ($(strip $(JUNIT_REPORT_DIR)),)
 	rm -f $(foreach phase,$(if $(filter fulfillment,$(SUITE)),service-only networking-operator bmaas-disabled) compute-storage,"$(abspath $(JUNIT_REPORT_DIR)/$(phase).xml)")
 endif
 # Exercise event-driven reconciliation without full synchronization in every test phase.
-	python3 -m unittest discover -s ../fulfillment-service/it/testdata -p test_compute_storage_aap.py
+	cd ../fulfillment-service && go test -race ./it/testdata/computestorageaap
 	$(MAKE) test-platform-images
 endif
 ifeq ($(SUITE),fulfillment)

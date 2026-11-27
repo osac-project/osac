@@ -96,7 +96,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 			var (
 				tenantClusterMapping map[string][]string
 				clusterBMIT          string
-				tenantNetworks       map[string]catalogItemNetworkFixture
+				tenantNetworks       map[string]resourceNetworkFixture
 			)
 
 			BeforeAll(func(ctx context.Context) {
@@ -157,11 +157,11 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 					// Cluster creates use the tenant's default networking.
 					ensureTenantDefaultNetworkingFixture(ctx, tenant, "")
 				}
-				networkClassID := createCatalogItemNetworkClassFixture(ctx)
-				tenantNetworks = make(map[string]catalogItemNetworkFixture)
+				networkClassID := createNetworkClassFixture(ctx)
+				tenantNetworks = make(map[string]resourceNetworkFixture)
 				for _, tenant := range ServiceAccountTenants {
 					if _, exists := tenantNetworks[tenant]; !exists {
-						tenantNetworks[tenant] = createCatalogItemNetworkInClassFixture(ctx, tenant, "", networkClassID)
+						tenantNetworks[tenant] = createNetworkInClassFixture(ctx, tenant, "", networkClassID)
 					}
 				}
 
@@ -373,7 +373,7 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 				tenantClusterMapping map[string][]string
 				clusterTenantMapping map[string][]string
 				clusterBMIT          string
-				tenantNetworks       map[string]catalogItemNetworkFixture
+				tenantNetworks       map[string]resourceNetworkFixture
 			)
 
 			BeforeAll(func(ctx context.Context) {
@@ -407,10 +407,10 @@ var _ = Describe("Multitenancy basic tenant isolation", Ordered, Label("multiten
 					// Cluster creates use the tenant's default networking.
 					ensureTenantDefaultNetworkingFixture(ctx, tenant, "")
 				}
-				networkClassID := createCatalogItemNetworkClassFixture(ctx)
-				tenantNetworks = make(map[string]catalogItemNetworkFixture, len(uniqueTenants))
+				networkClassID := createNetworkClassFixture(ctx)
+				tenantNetworks = make(map[string]resourceNetworkFixture, len(uniqueTenants))
 				for tenant := range uniqueTenants {
-					tenantNetworks[tenant] = createCatalogItemNetworkInClassFixture(ctx, tenant, "", networkClassID)
+					tenantNetworks[tenant] = createNetworkInClassFixture(ctx, tenant, "", networkClassID)
 				}
 
 				// Create a bare metal instance type for testing

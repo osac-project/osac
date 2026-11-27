@@ -21,6 +21,8 @@ global:
   #   metering.database.connection[].secret.name: <run id>-db-metering-config
   #   metering.database.connection[].secret.name: <run id>-db-metering-client-cert
   #   operator.aap.url: <aap controller url>/api/controller
+  #   operator.aap.organization: <run id>
+  #   operator.aap.templatePrefix: <run id>
   #
   # global.instanceId names every shared-service object the run creates: the
   # database names (<run id>_service, <run id>_metering) and the workload-db
@@ -37,6 +39,19 @@ global:
   # (see charts/osac/values.yaml). operator.aap.url points the operator at
   # the shared AAP by its outer route: the in-cluster default
   # (http://osac-aap/api/controller) does not resolve inside a vcluster.
+  #
+  # operator.aap.organization and operator.aap.templatePrefix point every
+  # job the operator launches at the run's own AAP organization and its
+  # templates. The config-as-code hook creates the run's organization
+  # (global.instanceId names it) and publishes the templates as
+  # <run id>-<template>: <run id>-create-hosted-cluster for a CaaS cluster
+  # order, <run id>-delete-hosted-cluster for its teardown,
+  # <run id>-publish-templates for the publish hook and <run id>-<task> for
+  # each network task. Both keys must stay set for every suite: the chart's
+  # "osac" defaults name the outer install's shared organization and
+  # templates, so an unset prefix launches the outer install's job
+  # templates instead of the run's. CaaS is where it bites first: a cluster
+  # order cannot provision without its own create-hosted-cluster template.
   #
   # --- Suite selection -----------------------------------------------
   # One profile serves all three suites: the overlay selects the suite with

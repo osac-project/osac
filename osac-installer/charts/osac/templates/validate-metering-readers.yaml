@@ -10,7 +10,7 @@ names are customer-supplied infrastructure identifiers (often internal
 hostnames), and the offline validation gate surfaces these render errors in
 its logs.
 */}}
-{{- $reserved := list (include "osac.fulfillmentKafkaUserName" .) "osac-metering" "osac-metering-echo-adapter" "osac-metering-m360-adapter" -}}
+{{- $reserved := list (include "osac.fulfillmentKafkaUserName" .) "osac-metering" "osac-metering-echo-adapter" "osac-metering-m360-adapter" "osac-metering-cost-management-adapter" -}}
 {{- range $index, $reader := .Values.metering.readers }}
 {{- $name := required "metering.readers[].name is required" $reader.name -}}
 {{- if has $name $reserved }}

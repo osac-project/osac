@@ -99,6 +99,22 @@ m360Adapter:
     apiKeySecret: ""     # name of K8s Secret with key "api-key"
     apiVersion: "v1"
 
+## Cost Management adapter — maps metering events to Red Hat Cost Management.
+costManagementAdapter:
+  enabled: false
+  image:
+    repository: ghcr.io/osac-project/metering-cost-management-adapter
+    tag: latest  # PLACEHOLDER -- overwritten at release time
+    pullPolicy: Always
+  costManagement:
+    apiUrl: ""
+    eventsPath: "/api/v1/events"  # use "/v1/events" behind Envoy /api/cost-events prefix rewrite
+    readyPath: "/readyz"          # set "" for HEAD reachability check behind an authenticating gateway
+    apiTokenSecret: ""            # optional K8s Secret containing the Bearer token
+    apiTokenSecretKey: "token"
+    caCertConfigMap: ""           # optional ConfigMap with a custom CA PEM for remote/two-cluster HTTPS
+    caCertKey: "ca.crt"
+
 ## Prometheus monitoring. Both require a Prometheus operator or OpenShift
 ## user-workload monitoring that selects these resources. The metrics exist
 ## because billing can stop while the metering pod stays ready: the round

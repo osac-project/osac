@@ -12,6 +12,9 @@ stays ready, and the metrics are the only signal that shows it.
 {{- if .Values.m360Adapter.enabled }}
 {{- $monitors = append $monitors (dict "component" "m360-adapter" "port" "http" "suffix" "-m360-adapter") }}
 {{- end }}
+{{- if .Values.costManagementAdapter.enabled }}
+{{- $monitors = append $monitors (dict "component" "cost-management-adapter" "port" "http" "suffix" "-cost-management-adapter") }}
+{{- end }}
 {{- range $i, $monitor := $monitors }}
 {{- if $i }}
 ---

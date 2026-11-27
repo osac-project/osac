@@ -425,8 +425,7 @@ func (s *PrivateComputeInstancesServer) validateWindowsUserData(
 	// Validate inline user data.
 	if spec.GetUserDataSource().HasInline() {
 		if err := isPureXMLNoDTD([]byte(spec.GetUserDataSource().GetInline())); err != nil {
-			return grpcstatus.Errorf(grpccodes.InvalidArgument,
-				"user_data_source.inline is not well-formed XML: %s", err)
+			return mapWindowsXMLValidationError(err, "user_data_source.inline")
 		}
 		return nil
 	}

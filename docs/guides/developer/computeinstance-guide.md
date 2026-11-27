@@ -15,6 +15,7 @@ To change a VM's InstanceType after creation, see [Resizing a VM](computeinstanc
 - [Step 2: Choose an instance type](#step-2-choose-an-instance-type)
 - [Register an SSH key](#register-an-ssh-key)
 - [Step 3: Create the ComputeInstance](#step-3-create-the-computeinstance)
+  - [User data: inline or Secret](#user-data-inline-or-secret)
 - [Step 4: Monitor the instance](#step-4-monitor-the-instance)
 - [Step 5: Access the console](#step-5-access-the-console)
 
@@ -460,9 +461,10 @@ curl -fsS $CURL_FLAGS -X POST -H "Authorization: Bearer $TOKEN" \
 ```
 
 > **Note:** The `--ssh-key` flag refers to a registered SSH public key Secret by name. The
-> `--user-data` field uses cloud-init format. The example
+> `--user-data` field in this Linux example uses cloud-init format. The example
 > above creates a user and disables password expiry, allowing you to log in via the VM
-> console. Adjust the username and password as needed.
+> console. Adjust the username and password as needed. Windows DiskImages use Unattend.xml
+> XML instead of cloud-init.
 >
 > The `--network-attachment` flag uses the format
 > `subnet=<subnet-id>[,security-groups=<sg-id1>,<sg-id2>]`. Security groups are optional.
@@ -482,6 +484,51 @@ To attach security groups via the API, add them to each network attachment:
   }
 ]
 ```
+
+### User data: inline or Secret
+
+The examples above provide user data inline. The `--user-data` flag takes the
+content itself, not a file path. You can instead create a Secret and reference
+it by name or ID. The `--user-data` and `--user-data-secret` flags are mutually
+exclusive; API requests set either `spec.user_data_source.inline` or
+`spec.user_data_source.secret`.
+
+For a Linux image, create a `user-data` Secret containing initialization data
+supported by that image, such as cloud-init YAML:
+
+```bash
+osac create secret --name linux-cloud-init --type=user-data \
+  --from-file=userdata=/path/to/cloud-init.yaml
+```
+
+Then replace the inline `--user-data` option in the CLI example above with:
+
+```bash
+  --user-data-secret linux-cloud-init
+```
+
+In gRPC or REST requests, set the following field inside `spec`:
+
+```json
+{
+  "user_data_source": {
+    "secret": {
+      "name": "linux-cloud-init"
+    }
+  }
+}
+```
+
+For a Windows DiskImage, inline XML user data is already supported. The
+catalog item's field policy determines whether you can supply user data.
+
+Current `user_data_source.secret` references require a `user-data` Secret,
+including for Windows DiskImages, where its contents are checked as XML during
+VM admission. The new `windows-user-data` type supports Secret creation and
+retrieval; ComputeInstance references are pending
+[OSAC-7713](https://redhat.atlassian.net/browse/OSAC-7713). See
+[Managing Secrets](../secrets-guide.md#windows-user-data-windows-user-data)
+for its creation example and XML validation rules.
 
 ### Alternative: Create from a YAML file
 

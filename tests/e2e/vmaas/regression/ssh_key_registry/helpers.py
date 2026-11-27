@@ -24,7 +24,6 @@ from tests.e2e.core.wait_kinds import WaitResourceKind
 _UUID_RE = re.compile(r"\b[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\b")
 
 
-
 def _rpc_status(detail: str) -> str:
     """Read the gRPC status field, never a status-like word in a message."""
     match = re.search(r"(?:^|\n)\s*code:\s*(\w+)\b|rpc error:\s*code\s*=\s*(\w+)\b", detail.lower())
@@ -221,8 +220,14 @@ def _instances_named(cli: OsacCLI, name: str, *, project: str = "") -> list[dict
 
 def _instance_cr_name(k8s: K8sClient, instance_id: str) -> str:
     output, _ = k8s._get(
-        "get", "computeinstances.osac.openshift.io", "-n", k8s.namespace,
-        "-l", f"osac.openshift.io/computeinstance-uuid={instance_id}", "-o", "json",
+        "get",
+        "computeinstances.osac.openshift.io",
+        "-n",
+        k8s.namespace,
+        "-l",
+        f"osac.openshift.io/computeinstance-uuid={instance_id}",
+        "-o",
+        "json",
     )
     objects = json.loads(output).get("items", [])
     matches = [
@@ -510,7 +515,6 @@ def _verified_kubernetes_environment(client: K8sClient) -> dict[str, str]:
     return environment
 
 
-
 def _assert_vm_key_injected(cr: dict[str, Any], k8s_virt_client: K8sClient, expected_key: str) -> None:
     """Verify CR projection, the VM Secret and noCloud credential wiring."""
     __tracebackhide__ = True
@@ -540,7 +544,6 @@ def _guest_ssh_environment(k8s_virt_client: K8sClient) -> dict[str, str]:
     if shutil.which("virtctl") is None or shutil.which("ssh") is None:
         pytest.skip("Guest SSH requires both ssh and virtctl")
     return _verified_kubernetes_environment(k8s_virt_client)
-
 
 
 def _optional_guest_ssh_environment(request: pytest.FixtureRequest) -> tuple[dict[str, str] | None, str]:

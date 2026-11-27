@@ -297,8 +297,7 @@ def test_ssh_key_reference_cannot_be_changed(
                     raise AssertionError("Test VM name already exists")
                 spec = copy.deepcopy(control["spec"])
                 spec["sshKey"] = (
-                    {"name": names[0], "project": missing_project}
-                    if "=" in selector else {"name": selector}
+                    {"name": names[0], "project": missing_project} if "=" in selector else {"name": selector}
                 )
                 observation = f"{api_name} (id={rejected_id})"
                 uncertain.add(observation)
@@ -1548,8 +1547,11 @@ def test_deployed_logs_hide_ssh_key_material(
                                 controller_url=controller_url, token=token, path=f"jobs/{job_id}/"
                             ).get("status", ""),
                             until=lambda state: state in {"successful", "failed", "error", "canceled"},
-                            retries=60, delay=5, description="AAP job completion before hygiene scan",
-                            resource_kind=WaitResourceKind.AAP_JOB, resource_id=job_id,
+                            retries=60,
+                            delay=5,
+                            description="AAP job completion before hygiene scan",
+                            resource_kind=WaitResourceKind.AAP_JOB,
+                            resource_id=job_id,
                         )
                         content = _controller_request(
                             controller_url=controller_url, token=token, path=f"jobs/{job_id}/stdout/?format=json"

@@ -27,8 +27,7 @@ from tests.e2e.vmaas.regression.ssh_key_registry.helpers import (
 
 def _labeled_crs(k8s: K8sClient, resource: str, kind: str, resource_id: str) -> list[dict[str, object]]:
     output, _ = k8s._get(
-        "get", resource, "-n", k8s.namespace,
-        "-l", f"osac.openshift.io/{kind}-uuid={resource_id}", "-o", "json",
+        "get", resource, "-n", k8s.namespace, "-l", f"osac.openshift.io/{kind}-uuid={resource_id}", "-o", "json"
     )
     return json.loads(output).get("items", [])
 
@@ -111,8 +110,7 @@ def external_ssh_service(k8s: K8sClient, cr: dict[str, object]) -> Iterator[str]
                 return ""
             address = str(ipaddress.ip_address(ingress[0]["ip"]))
             slice_output, _ = k8s._get(
-                "get", "endpointslices", "-n", namespace,
-                "-l", f"kubernetes.io/service-name={name}", "-o", "json",
+                "get", "endpointslices", "-n", namespace, "-l", f"kubernetes.io/service-name={name}", "-o", "json"
             )
             slices = json.loads(slice_output).get("items", [])
             ready = any(

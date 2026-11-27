@@ -1,5 +1,28 @@
 # VMaaS SSH-key registry test coverage
 
+Run the regression cases from the repository root with a compatible deployed
+VMaaS environment:
+
+```bash
+uv run pytest -n 0 tests/e2e/vmaas/regression/ssh_key_registry/
+```
+
+The standard VMaaS sanity selection does not run this regression directory.
+The suite uses the E2E tenant and user fixtures, the OSAC CLI, `ssh-keygen`,
+the public and private Fulfillment APIs, and hub Kubernetes access. Some
+project and catalog cases require the VM fixtures to belong to `tenant1` and
+skip otherwise. The guest and log-inspection cases also need
+`OSAC_VM_KUBECONFIG` with TLS verification; guest authentication needs `ssh`
+and `virtctl`. Direct guest access additionally needs a ready ExternalIPPool
+when provider networking is enabled, or an existing MetalLB pool when it is
+disabled. Missing guest prerequisites or a missing suitable pool can skip the
+guest check; inspect the pytest results for skips before claiming coverage.
+
+These tests create and delete Secrets, ComputeInstances, projects, and other
+resources in the configured deployment. The shared E2E session fixtures also
+prepare tenants and users. Check the target and fixture ownership before a run;
+an uncertain creation or failed route cleanup can require manual inspection.
+
 | Case | Coverage | Test location |
 | --- | --- | --- |
 | TC-01 | SSH-key Secret lifecycle and duplicate names | Regression: [test_secret_registry.py](test_secret_registry.py), `test_ssh_key_secret_lifecycle` |

@@ -64,6 +64,7 @@ var kindsThatUseNothing = []string{
 	"Hub",
 	"IdentityProvider",
 	"NetworkClass",
+	"Notification",
 	"Project",
 	"ProjectMembership",
 	"QuotaDefaultLimit",

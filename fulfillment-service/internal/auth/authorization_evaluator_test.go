@@ -901,6 +901,8 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 				"/osac.public.v1.InstanceTypes/List":                 {},
 				"/osac.public.v1.NATGateways/Get":                    {},
 				"/osac.public.v1.NATGateways/List":                   {},
+				"/osac.public.v1.Notifications/Get":                  {},
+				"/osac.public.v1.Notifications/List":                 {},
 				"/osac.public.v1.ProjectMemberships/List":            {},
 				"/osac.public.v1.Projects/List":                      {},
 				"/osac.public.v1.QuotaUsage/Get":                     {},
@@ -1015,6 +1017,19 @@ var _ = Describe("OPA Authorization Evaluator", func() {
 			adminCreate, err := evaluator.Evaluate(ctx, adminReader, "/osac.private.v1.Hubs/Create")
 			Expect(err).ToNot(HaveOccurred())
 			Expect(adminCreate.Allowed).To(BeTrue())
+
+			clientNotificationCreate, err := evaluator.Evaluate(ctx, clientContext, "/osac.public.v1.Notifications/Create")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(clientNotificationCreate.Allowed).To(BeFalse())
+
+			tenantAdminNotificationCreate, err := evaluator.Evaluate(ctx, makeUser([]any{"tenant-admin"}, []any{}),
+				"/osac.public.v1.Notifications/Create")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(tenantAdminNotificationCreate.Allowed).To(BeTrue())
+
+			clientNotificationList, err := evaluator.Evaluate(ctx, clientContext, "/osac.public.v1.Notifications/List")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(clientNotificationList.Allowed).To(BeTrue())
 		})
 	})
 

@@ -558,7 +558,9 @@ func isHandlerOwnedReferenceType(name protoreflect.FullName) bool {
 	return name == "osac.private.v1.AddOnOperatorReference" ||
 		name == "osac.public.v1.AddOnOperatorReference" ||
 		name == "osac.private.v1.ServiceAccountReference" ||
-		name == "osac.public.v1.ServiceAccountReference"
+		name == "osac.public.v1.ServiceAccountReference" ||
+		name == "osac.private.v1.NotificationObjectReference" ||
+		name == "osac.public.v1.NotificationObjectReference"
 }
 
 func newTestReferenceValidator() *references.ReferenceValidator {

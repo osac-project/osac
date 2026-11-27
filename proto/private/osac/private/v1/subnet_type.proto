@@ -195,6 +195,17 @@ enum SubnetState {
   reserved "SUBNET_STATE_DELETE_FAILED";
 }
 
+// Reference to a Subnet resource.
+message SubnetReference {
+  string id = 1;
+  string name = 2;
+  string project = 3;
+  bool shared = 4;
+  // Tenant where the referenced object lives. If omitted, the owner tenant is used;
+  // the legacy shared selector can select the shared tenant.
+  string tenant = 5;
+}
+
 // Local reference to a Subnet resource.
 message SubnetLocalReference {
   string id = 1;

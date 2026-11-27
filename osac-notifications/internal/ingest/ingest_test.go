@@ -100,7 +100,7 @@ var _ = Describe("Ingest", func() {
 			slog.Default(),
 			grant.DefaultMap,
 			store,
-			fanout.NewInbox(slog.Default(), client),
+			fanout.NewDispatcher(fanout.NewInbox(slog.Default(), client), nil),
 			dlq.Nop{},
 		)
 		outcome, err := pipeline.Handle(context.Background(), "osac.notifications.acme", body())
@@ -117,7 +117,7 @@ var _ = Describe("Ingest", func() {
 			slog.Default(),
 			grant.DefaultMap,
 			store,
-			fanout.NewInbox(slog.Default(), client),
+			fanout.NewDispatcher(fanout.NewInbox(slog.Default(), client), nil),
 			dlq.Nop{},
 		)
 		outcome, err := pipeline.Handle(context.Background(), "osac.notifications.acme", body())
@@ -134,7 +134,7 @@ var _ = Describe("Ingest", func() {
 			slog.Default(),
 			grant.DefaultMap,
 			store,
-			fanout.NewInbox(slog.Default(), client),
+			fanout.NewDispatcher(fanout.NewInbox(slog.Default(), client), nil),
 			dead,
 		)
 		outcome, err := pipeline.Handle(context.Background(), "osac.notifications.acme", body())
@@ -151,7 +151,7 @@ var _ = Describe("Ingest", func() {
 			slog.Default(),
 			grant.DefaultMap,
 			store,
-			fanout.NewInbox(slog.Default(), client),
+			fanout.NewDispatcher(fanout.NewInbox(slog.Default(), client), nil),
 			dlq.Nop{},
 		)
 		_, err := pipeline.Handle(context.Background(), "osac.notifications.acme", body())
@@ -171,7 +171,7 @@ var _ = Describe("Ingest", func() {
 			slog.Default(),
 			grant.DefaultMap,
 			store,
-			fanout.NewInbox(slog.Default(), client),
+			fanout.NewDispatcher(fanout.NewInbox(slog.Default(), client), nil),
 			dead,
 		)
 		bad, err := json.Marshal(map[string]any{

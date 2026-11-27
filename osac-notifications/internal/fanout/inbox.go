@@ -15,11 +15,11 @@ package fanout
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
-	"regexp"
-	"strings"
 
 	"google.golang.org/grpc"
 	grpccodes "google.golang.org/grpc/codes"
@@ -31,8 +31,6 @@ import (
 
 // ErrNonRetryable marks fan-out failures that should not stay pending (failed + DLQ).
 var ErrNonRetryable = errors.New("non-retryable")
-
-var dns1123Label = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // NotificationsCreateClient creates inbox notifications via the private API.
 type NotificationsCreateClient interface {
@@ -86,14 +84,11 @@ func (i *Inbox) FanOut(ctx context.Context, accepted *cevent.Accepted) error {
 				Tenant: accepted.Tenant,
 			}.Build(),
 			Spec: privatev1.NotificationSpec_builder{
-				Kind:     kind,
-				Severity: severity,
-				Type:     accepted.Type,
-				Title:    accepted.Data.Title,
-				Event: privatev1.NotificationEventReference_builder{
-					Id:     accepted.ID,
-					Source: accepted.Source,
-				}.Build(),
+				Kind:        kind,
+				Severity:    severity,
+				Type:        accepted.Type,
+				Title:       accepted.Data.Title,
+				Source:      accepted.Source,
 				RecipientId: userID,
 			}.Build(),
 		}.Build()
@@ -101,7 +96,7 @@ func (i *Inbox) FanOut(ctx context.Context, accepted *cevent.Accepted) error {
 			object.GetSpec().SetDescription(accepted.Data.Description)
 		}
 		if resource != nil {
-			object.GetSpec().SetResource(resource)
+			object.GetSpec().SetObject(resource)
 		}
 		if len(accepted.Data.Details) > 0 {
 			details := make(map[string]string, len(accepted.Data.Details))
@@ -128,16 +123,14 @@ func (i *Inbox) FanOut(ctx context.Context, accepted *cevent.Accepted) error {
 	return nil
 }
 
-// inboxName builds a deterministic RFC 1123 DNS label.
-// Invalid or over-long names return ErrNonRetryable.
+// inboxName builds a deterministic RFC 1123 DNS label from recipient + event.
+// Raw ids often exceed the 63-char DNS label limit when concatenated.
 func inboxName(eventID, userID string) (string, error) {
-	name := strings.ToLower("inbox-" + userID + "-" + eventID)
-	name = strings.ReplaceAll(name, "/", "-")
-	name = strings.ReplaceAll(name, "_", "-")
-	if !dns1123Label.MatchString(name) {
-		return "", fmt.Errorf("%w: metadata.name %q is not a valid DNS label", ErrNonRetryable, name)
+	if eventID == "" || userID == "" {
+		return "", fmt.Errorf("%w: event id and recipient id are required for inbox name", ErrNonRetryable)
 	}
-	return name, nil
+	sum := sha256.Sum256([]byte(userID + "\x00" + eventID))
+	return "inbox-" + hex.EncodeToString(sum[:16]), nil
 }
 
 func permanentGRPC(err error) bool {
@@ -177,28 +170,28 @@ func severityFromSegment(segment string) (privatev1.NotificationSeverity, error)
 	}
 }
 
-func mapResource(resource *cevent.Resource) *privatev1.NotificationResourceReference {
+func mapResource(resource *cevent.Resource) *privatev1.NotificationObjectReference {
 	if resource == nil {
 		return nil
 	}
-	out := &privatev1.NotificationResourceReference{}
+	out := &privatev1.NotificationObjectReference{}
 	switch {
 	case resource.Cluster != nil && resource.Cluster.ID != "":
-		out.SetCluster(privatev1.ClusterLocalReference_builder{Id: resource.Cluster.ID}.Build())
+		out.SetCluster(privatev1.ClusterReference_builder{Id: resource.Cluster.ID}.Build())
 	case resource.ComputeInstance != nil && resource.ComputeInstance.ID != "":
-		out.SetComputeInstance(privatev1.ComputeInstanceLocalReference_builder{
+		out.SetComputeInstance(privatev1.ComputeInstanceReference_builder{
 			Id: resource.ComputeInstance.ID,
 		}.Build())
 	case resource.VirtualNetwork != nil && resource.VirtualNetwork.ID != "":
-		out.SetVirtualNetwork(privatev1.VirtualNetworkLocalReference_builder{
+		out.SetVirtualNetwork(privatev1.VirtualNetworkReference_builder{
 			Id: resource.VirtualNetwork.ID,
 		}.Build())
 	case resource.Subnet != nil && resource.Subnet.ID != "":
-		out.SetSubnet(privatev1.SubnetLocalReference_builder{Id: resource.Subnet.ID}.Build())
+		out.SetSubnet(privatev1.SubnetReference_builder{Id: resource.Subnet.ID}.Build())
 	case resource.ExternalIP != nil && resource.ExternalIP.ID != "":
-		out.SetExternalIp(privatev1.ExternalIPLocalReference_builder{Id: resource.ExternalIP.ID}.Build())
+		out.SetExternalIp(privatev1.ExternalIPReference_builder{Id: resource.ExternalIP.ID}.Build())
 	case resource.BareMetal != nil && resource.BareMetal.ID != "":
-		out.SetBareMetalInstance(privatev1.BareMetalInstanceLocalReference_builder{
+		out.SetBareMetalInstance(privatev1.BareMetalInstanceReference_builder{
 			Id: resource.BareMetal.ID,
 		}.Build())
 	default:

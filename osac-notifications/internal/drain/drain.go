@@ -27,17 +27,17 @@ const defaultBatch = 100
 
 // Drain finishes pending notification_intent rows after Kafka commit-after-intent.
 type Drain struct {
-	logger   *slog.Logger
-	intents  intent.Intents
-	inbox    *fanout.Inbox
-	dlq      dlq.Publisher
-	batch    int
-	interval time.Duration
+	logger     *slog.Logger
+	intents    intent.Intents
+	dispatcher *fanout.Dispatcher
+	dlq        dlq.Publisher
+	batch      int
+	interval   time.Duration
 }
 
 // New builds a pending-intent drain loop.
-func New(logger *slog.Logger, intents intent.Intents, inbox *fanout.Inbox, deadLetter dlq.Publisher,
-	interval time.Duration) *Drain {
+func New(logger *slog.Logger, intents intent.Intents, dispatcher *fanout.Dispatcher,
+	deadLetter dlq.Publisher, interval time.Duration) *Drain {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -48,12 +48,12 @@ func New(logger *slog.Logger, intents intent.Intents, inbox *fanout.Inbox, deadL
 		deadLetter = dlq.Nop{}
 	}
 	return &Drain{
-		logger:   logger,
-		intents:  intents,
-		inbox:    inbox,
-		dlq:      deadLetter,
-		batch:    defaultBatch,
-		interval: interval,
+		logger:     logger,
+		intents:    intents,
+		dispatcher: dispatcher,
+		dlq:        deadLetter,
+		batch:      defaultBatch,
+		interval:   interval,
 	}
 }
 
@@ -75,7 +75,7 @@ func (d *Drain) Run(ctx context.Context) {
 
 // Once fans out one batch of pending intents.
 func (d *Drain) Once(ctx context.Context) error {
-	if d == nil || d.intents == nil || d.inbox == nil {
+	if d == nil || d.intents == nil || d.dispatcher == nil {
 		return nil
 	}
 	pending, err := d.intents.ListPending(ctx, d.batch)
@@ -101,7 +101,7 @@ func (d *Drain) Once(ctx context.Context) error {
 			}
 			continue
 		}
-		if err := d.inbox.FanOut(ctx, accepted); err != nil {
+		if err := d.dispatcher.FanOut(ctx, accepted); err != nil {
 			if fanout.Permanent(err) {
 				if failErr := d.fail(ctx, rec, err.Error()); failErr != nil {
 					d.logger.ErrorContext(ctx, "Failed to DLQ/mark permanent fan-out failure",
@@ -113,7 +113,7 @@ func (d *Drain) Once(ctx context.Context) error {
 				}
 				continue
 			}
-			d.logger.ErrorContext(ctx, "Drain inbox fan-out failed; will retry",
+			d.logger.ErrorContext(ctx, "Drain fan-out failed; will retry",
 				slog.String("tenant", rec.Tenant),
 				slog.String("source", rec.Source),
 				slog.String("id", rec.ID),

@@ -84,6 +84,17 @@ func (m *TestStore) MarkStatus(_ context.Context, tenant, source, id, status str
 	return nil
 }
 
+// Get implements Intents.
+func (m *TestStore) Get(_ context.Context, tenant, source, id string) (Record, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row, ok := m.rows[memoryKey{tenant, source, id}]
+	if !ok {
+		return Record{}, false, nil
+	}
+	return row.record, true, nil
+}
+
 // ListPending implements Intents.
 func (m *TestStore) ListPending(_ context.Context, limit int) ([]Record, error) {
 	m.mu.Lock()

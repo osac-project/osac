@@ -636,6 +636,20 @@ legacy_allow if {
   }
 }
 
+# Tenant admins manage webhook subscriptions and read delivery history.
+legacy_allow if {
+  is_tenant_admin
+  grpc_method in {
+    "/osac.public.v1.NotificationSubscriptions/Create",
+    "/osac.public.v1.NotificationSubscriptions/Delete",
+    "/osac.public.v1.NotificationSubscriptions/Get",
+    "/osac.public.v1.NotificationSubscriptions/List",
+    "/osac.public.v1.NotificationSubscriptions/Update",
+    "/osac.public.v1.NotificationSubscriptionDeliveries/Get",
+    "/osac.public.v1.NotificationSubscriptionDeliveries/List",
+  }
+}
+
 # Tenant IdP managers can manage identity providers and assign users to roles
 legacy_allow if {
   is_tenant_idp_manager

@@ -37,16 +37,16 @@ const (
 
 // Ingest validates CloudEvents, stores intents, and best-effort fans out.
 type Ingest struct {
-	logger  *slog.Logger
-	grants  grant.Map
-	intents intent.Intents
-	inbox   *fanout.Inbox
-	dlq     dlq.Publisher
+	logger     *slog.Logger
+	grants     grant.Map
+	intents    intent.Intents
+	dispatcher *fanout.Dispatcher
+	dlq        dlq.Publisher
 }
 
 // New builds an ingest pipeline.
-func New(logger *slog.Logger, grants grant.Map, intents intent.Intents, inbox *fanout.Inbox,
-	deadLetter dlq.Publisher) *Ingest {
+func New(logger *slog.Logger, grants grant.Map, intents intent.Intents,
+	dispatcher *fanout.Dispatcher, deadLetter dlq.Publisher) *Ingest {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -56,7 +56,10 @@ func New(logger *slog.Logger, grants grant.Map, intents intent.Intents, inbox *f
 	if deadLetter == nil {
 		deadLetter = dlq.Nop{}
 	}
-	return &Ingest{logger: logger, grants: grants, intents: intents, inbox: inbox, dlq: deadLetter}
+	return &Ingest{
+		logger: logger, grants: grants, intents: intents,
+		dispatcher: dispatcher, dlq: deadLetter,
+	}
 }
 
 // Handle validates, stores a durable intent, and best-effort fans out.
@@ -91,11 +94,11 @@ func (i *Ingest) Handle(ctx context.Context, topic string, body []byte) (Outcome
 		return Accepted, nil
 	}
 
-	if err := i.inbox.FanOut(ctx, accepted); err != nil {
+	if err := i.dispatcher.FanOut(ctx, accepted); err != nil {
 		if fanout.Permanent(err) {
 			return Accepted, i.failIntent(ctx, accepted, body, err)
 		}
-		i.logger.ErrorContext(ctx, "Eager inbox fan-out failed; leaving intent pending for drain",
+		i.logger.ErrorContext(ctx, "Eager fan-out failed: leaving intent pending for drain",
 			slog.String("tenant", accepted.Tenant),
 			slog.String("source", accepted.Source),
 			slog.String("id", accepted.ID),
@@ -115,7 +118,7 @@ func (i *Ingest) Handle(ctx context.Context, topic string, body []byte) (Outcome
 }
 
 func (i *Ingest) failIntent(ctx context.Context, accepted *cevent.Accepted, body []byte, cause error) error {
-	i.logger.ErrorContext(ctx, "Permanent inbox fan-out failure; writing DLQ and marking failed",
+	i.logger.ErrorContext(ctx, "Permanent fan-out failure; writing DLQ and marking failed",
 		slog.String("tenant", accepted.Tenant),
 		slog.String("source", accepted.Source),
 		slog.String("id", accepted.ID),

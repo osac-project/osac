@@ -107,7 +107,9 @@ var _ = Describe("Drain", func() {
 		seedPending(store, payload)
 
 		client := &fakeClient{}
-		d := drain.New(slog.Default(), store, fanout.NewInbox(slog.Default(), client), dlq.Nop{}, time.Second)
+		d := drain.New(slog.Default(), store,
+			fanout.NewDispatcher(fanout.NewInbox(slog.Default(), client), nil),
+			dlq.Nop{}, time.Second)
 		Expect(d.Once(context.Background())).To(Succeed())
 		Expect(client.n).To(Equal(1))
 		Expect(store.StatusOf("acme", "osac-fulfillment", "evt-pending")).To(Equal(intent.StatusCompleted))
@@ -118,7 +120,9 @@ var _ = Describe("Drain", func() {
 		seedPending(store, pendingPayload())
 
 		client := &fakeClient{err: errors.New("boom")}
-		d := drain.New(slog.Default(), store, fanout.NewInbox(slog.Default(), client), dlq.Nop{}, time.Second)
+		d := drain.New(slog.Default(), store,
+			fanout.NewDispatcher(fanout.NewInbox(slog.Default(), client), nil),
+			dlq.Nop{}, time.Second)
 		Expect(d.Once(context.Background())).To(Succeed())
 		Expect(store.StatusOf("acme", "osac-fulfillment", "evt-pending")).To(Equal(intent.StatusPending))
 	})
@@ -129,7 +133,9 @@ var _ = Describe("Drain", func() {
 
 		client := &fakeClient{err: grpcstatus.Error(grpccodes.InvalidArgument, "bad")}
 		dead := &recordingDLQ{}
-		d := drain.New(slog.Default(), store, fanout.NewInbox(slog.Default(), client), dead, time.Second)
+		d := drain.New(slog.Default(), store,
+			fanout.NewDispatcher(fanout.NewInbox(slog.Default(), client), nil),
+			dead, time.Second)
 		Expect(d.Once(context.Background())).To(Succeed())
 		Expect(store.StatusOf("acme", "osac-fulfillment", "evt-pending")).To(Equal(intent.StatusFailed))
 		Expect(dead.n).To(Equal(1))

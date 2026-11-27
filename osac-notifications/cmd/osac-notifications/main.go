@@ -39,6 +39,8 @@ import (
 	"github.com/osac-project/osac/osac-notifications/internal/grant"
 	"github.com/osac-project/osac/osac-notifications/internal/ingest"
 	"github.com/osac-project/osac/osac-notifications/internal/intent"
+	"github.com/osac-project/osac/osac-notifications/internal/match"
+	"github.com/osac-project/osac/osac-notifications/internal/webhook"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
 )
 
@@ -74,7 +76,7 @@ func main() {
 		logger.Error("connect postgres", slog.Any("error", err))
 		os.Exit(1)
 	}
-	defer pool.connectClose()
+	defer pool.Close()
 
 	conn, err := dialFulfillment(ctx, *grpcAddr, *grpcPlaintext, *grpcToken)
 	if err != nil {
@@ -116,9 +118,15 @@ func main() {
 	deadLetter := dlq.NewKafkaPublisher(producer)
 	intents := intent.NewStore(pool)
 	inbox := fanout.NewInbox(logger, privatev1.NewNotificationsClient(conn))
-	pipeline := ingest.New(logger, grant.DefaultMap, intents, inbox, deadLetter)
+	subsClient := privatev1.NewNotificationSubscriptionsClient(conn)
+	deliveriesClient := privatev1.NewNotificationSubscriptionDeliveriesClient(conn)
+	matcher := match.New(logger, subsClient, deliveriesClient)
+	dispatcher := fanout.NewDispatcher(inbox, matcher)
+	pipeline := ingest.New(logger, grant.DefaultMap, intents, dispatcher, deadLetter)
 	handler := consumer.NewHandler(logger, pipeline)
-	intentDrain := drain.New(logger, intents, inbox, deadLetter, *drainInterval)
+	intentDrain := drain.New(logger, intents, dispatcher, deadLetter, *drainInterval)
+	secretsClient := privatev1.NewSecretsClient(conn)
+	webhookWorker := webhook.NewWorker(logger, deliveriesClient, subsClient, secretsClient, intents, *drainInterval)
 
 	logger.Info("osac-notifications starting",
 		slog.String("group", *kafkaGroup),
@@ -126,6 +134,7 @@ func main() {
 	)
 
 	go intentDrain.Run(ctx)
+	go webhookWorker.Run(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {

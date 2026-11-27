@@ -77,17 +77,27 @@ func (r Record) ToAccepted() (*cevent.Accepted, error) {
 			return nil, fmt.Errorf("unmarshal data: %w", err)
 		}
 	}
+	matchSubs := true
+	if raw, ok := event.Extensions()["osacmatchsubscriptions"]; ok {
+		switch v := raw.(type) {
+		case bool:
+			matchSubs = v
+		case string:
+			matchSubs = v == "true" || v == "1"
+		}
+	}
 	return &cevent.Accepted{
-		Event:    event,
-		Tenant:   r.Tenant,
-		Source:   r.Source,
-		ID:       r.ID,
-		Kind:     r.Kind,
-		Type:     r.Type,
-		Severity: r.Severity,
-		Topic:    r.Topic,
-		Data:     data,
-		Payload:  append(json.RawMessage(nil), r.Payload...),
+		Event:     event,
+		Tenant:    r.Tenant,
+		Source:    r.Source,
+		ID:        r.ID,
+		Kind:      r.Kind,
+		Type:      r.Type,
+		Severity:  r.Severity,
+		Topic:     r.Topic,
+		MatchSubs: matchSubs,
+		Data:      data,
+		Payload:   append(json.RawMessage(nil), r.Payload...),
 	}, nil
 }
 
@@ -96,6 +106,7 @@ type Intents interface {
 	Accept(ctx context.Context, accepted *cevent.Accepted) (Result, error)
 	MarkStatus(ctx context.Context, tenant, source, id, status string) error
 	ListPending(ctx context.Context, limit int) ([]Record, error)
+	Get(ctx context.Context, tenant, source, id string) (Record, bool, error)
 }
 
 // Store writes durable accept intents.
@@ -160,6 +171,28 @@ func (s *Store) MarkStatus(ctx context.Context, tenant, source, id, status strin
 		return fmt.Errorf("mark notification_intent %s: %w", status, err)
 	}
 	return nil
+}
+
+// Get returns one intent by CloudEvent identity.
+func (s *Store) Get(ctx context.Context, tenant, source, id string) (Record, bool, error) {
+	if s == nil || s.db == nil {
+		return Record{}, false, fmt.Errorf("intent store is not configured")
+	}
+	var rec Record
+	err := s.db.QueryRow(ctx, `
+		select tenant, source, id, kind, type, severity, topic, payload
+		from notification_intent
+		where tenant = $1 and source = $2 and id = $3
+	`, tenant, source, id).Scan(
+		&rec.Tenant, &rec.Source, &rec.ID, &rec.Kind, &rec.Type, &rec.Severity, &rec.Topic, &rec.Payload,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return Record{}, false, nil
+		}
+		return Record{}, false, fmt.Errorf("get notification_intent: %w", err)
+	}
+	return rec, true, nil
 }
 
 // ListPending returns the oldest pending intents up to limit.

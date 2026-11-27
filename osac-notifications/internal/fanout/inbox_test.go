@@ -97,7 +97,7 @@ var _ = Describe("Inbox fan-out", func() {
 		Expect(client.calls).To(HaveLen(1))
 	})
 
-	It("returns non-retryable when metadata.name would exceed 63 characters", func() {
+	It("creates inbox items when event ids are longer than a DNS label", func() {
 		client := &fakeClient{}
 		inbox := fanout.NewInbox(slog.Default(), client)
 		accepted := &cevent.Accepted{
@@ -112,9 +112,10 @@ var _ = Describe("Inbox fan-out", func() {
 				Recipients: []cevent.Recipient{{Type: "user", ID: "u1"}},
 			},
 		}
-		err := inbox.FanOut(context.Background(), accepted)
-		Expect(err).To(HaveOccurred())
-		Expect(fanout.Permanent(err)).To(BeTrue())
-		Expect(client.calls).To(BeEmpty())
+		Expect(inbox.FanOut(context.Background(), accepted)).To(Succeed())
+		Expect(client.calls).To(HaveLen(1))
+		name := client.calls[0].GetMetadata().GetName()
+		Expect(name).To(HavePrefix("inbox-"))
+		Expect(len(name)).To(BeNumerically("<=", 63))
 	})
 })

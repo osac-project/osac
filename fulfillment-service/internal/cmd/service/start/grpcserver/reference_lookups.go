@@ -344,5 +344,19 @@ func registerReferenceLookups(
 		references.NewScopedDAOLookupFunc(secretsDAO),
 	)
 
+	// Notification subscription references on delivery objects.
+	notificationSubscriptionsDAO, err := dao.NewGenericDAO[*privatev1.NotificationSubscription]().
+		SetLogger(logger).
+		SetTenancyLogic(tenancyLogic).
+		SetMetricsRegisterer(metricsRegisterer).
+		Build()
+	if err != nil {
+		return fmt.Errorf("failed to create NotificationSubscription DAO for reference lookups: %w", err)
+	}
+	references.RegisterDAOLookup(validator,
+		"osac.private.v1.NotificationSubscriptionLocalReference", notificationSubscriptionsDAO)
+	references.RegisterDAOLookup(validator,
+		"osac.public.v1.NotificationSubscriptionLocalReference", notificationSubscriptionsDAO)
+
 	return nil
 }

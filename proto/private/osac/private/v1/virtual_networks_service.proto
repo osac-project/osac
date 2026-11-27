@@ -108,7 +108,7 @@ message VirtualNetworksDeleteRequest {
   string id = 1;
 }
 
-message VirtualNetworksDeleteResponse {}
+message VirtualNetworksDeleteResponse { VirtualNetwork object = 1; }
 
 message VirtualNetworksSignalRequest {
   option (cleanapi.message).private = true;
@@ -154,7 +154,7 @@ service VirtualNetworks {
 
   // Deletes a virtual network.
   rpc Delete(VirtualNetworksDeleteRequest) returns (VirtualNetworksDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/virtual_networks/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/virtual_networks/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

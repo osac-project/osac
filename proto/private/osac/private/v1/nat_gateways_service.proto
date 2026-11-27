@@ -108,7 +108,7 @@ message NATGatewaysDeleteRequest {
   string id = 1;
 }
 
-message NATGatewaysDeleteResponse {}
+message NATGatewaysDeleteResponse { NATGateway object = 1; }
 
 message NATGatewaysSignalRequest {
   option (cleanapi.message).private = true;
@@ -154,7 +154,7 @@ service NATGateways {
 
   // Deletes a NAT gateway. The SNAT rule is removed and the ExternalIP is released for other use.
   rpc Delete(NATGatewaysDeleteRequest) returns (NATGatewaysDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/nat_gateways/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/nat_gateways/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

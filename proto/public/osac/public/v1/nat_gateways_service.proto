@@ -87,7 +87,7 @@ message NATGatewaysDeleteRequest {
   string id = 1;
 }
 
-message NATGatewaysDeleteResponse {}
+message NATGatewaysDeleteResponse { NATGateway object = 1; }
 
 service NATGateways {
   // Retrieves the list of NAT gateways.
@@ -114,6 +114,6 @@ service NATGateways {
 
   // Deletes a NAT gateway. The SNAT rule is removed and the ExternalIP is released for other use.
   rpc Delete(NATGatewaysDeleteRequest) returns (NATGatewaysDeleteResponse) {
-    option (google.api.http) = {delete: "/api/fulfillment/v1/nat_gateways/{id}"};
+    option (google.api.http) = {delete: "/api/fulfillment/v1/nat_gateways/{id}" response_body: "object"};
   }
 }

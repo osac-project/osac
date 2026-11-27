@@ -49,7 +49,7 @@ message FabricDomainsUpdateRequest {
 
 message FabricDomainsUpdateResponse { FabricDomain object = 1; }
 message FabricDomainsDeleteRequest { string id = 1; }
-message FabricDomainsDeleteResponse {}
+message FabricDomainsDeleteResponse { FabricDomain object = 1; }
 message FabricDomainsSignalRequest {
   option (cleanapi.message).private = true;
   string id = 1;
@@ -74,7 +74,7 @@ service FabricDomains {
     option (google.api.http) = {patch: "/api/private/v1/fabric_domains/{object.id}" body: "object" response_body: "object"};
   }
   rpc Delete(FabricDomainsDeleteRequest) returns (FabricDomainsDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/fabric_domains/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/fabric_domains/{id}" response_body: "object"};
   }
   rpc Signal(FabricDomainsSignalRequest) returns (FabricDomainsSignalResponse) {
     option (cleanapi.method).private = true;

@@ -114,7 +114,7 @@ message ComputeInstancesDeleteRequest {
   string id = 1;
 }
 
-message ComputeInstancesDeleteResponse {}
+message ComputeInstancesDeleteResponse { ComputeInstance object = 1; }
 
 
 message ComputeInstancesSignalRequest {
@@ -160,7 +160,7 @@ service ComputeInstances {
 
   // Deletes a compute instance.
   rpc Delete(ComputeInstancesDeleteRequest) returns (ComputeInstancesDeleteResponse) {
-    option (google.api.http) = {delete: "/api/private/v1/compute_instances/{id}"};
+    option (google.api.http) = {delete: "/api/private/v1/compute_instances/{id}" response_body: "object"};
   }
 
   // Indicates that something changed in the object or the system that may require reconciling the object.

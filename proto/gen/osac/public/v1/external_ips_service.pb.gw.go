@@ -247,7 +247,7 @@ func RegisterExternalIPsHandlerServer(ctx context.Context, mux *runtime.ServeMux
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ExternalIPs_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ExternalIPs_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ExternalIPs_Delete_0{resp.(*ExternalIPsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 
 	return nil
@@ -355,7 +355,7 @@ func RegisterExternalIPsHandlerClient(ctx context.Context, mux *runtime.ServeMux
 			runtime.HTTPError(annotatedContext, mux, outboundMarshaler, w, req, err)
 			return
 		}
-		forward_ExternalIPs_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, resp, mux.GetForwardResponseOptions()...)
+		forward_ExternalIPs_Delete_0(annotatedContext, mux, outboundMarshaler, w, req, response_ExternalIPs_Delete_0{resp.(*ExternalIPsDeleteResponse)}, mux.GetForwardResponseOptions()...)
 	})
 	return nil
 }
@@ -373,6 +373,14 @@ type response_ExternalIPs_Create_0 struct {
 }
 
 func (m response_ExternalIPs_Create_0) XXX_ResponseBody() interface{} {
+	return m.Object
+}
+
+type response_ExternalIPs_Delete_0 struct {
+	*ExternalIPsDeleteResponse
+}
+
+func (m response_ExternalIPs_Delete_0) XXX_ResponseBody() interface{} {
 	return m.Object
 }
 

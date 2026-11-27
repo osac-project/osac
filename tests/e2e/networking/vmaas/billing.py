@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4
@@ -35,6 +35,7 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import (
     CR_STAMP_TOLERANCE,
     HEARTBEAT_TYPE,
+    RELEASE_STAMP_TOLERANCE,
     MeteringCollector,
     assert_contiguous_exact_seconds,
     assert_dimension_sets_disjoint,
@@ -77,6 +78,7 @@ def external_ip_bills_allocation_through_deletion(
     # Resolve the CR before any delete can remove it: the deletion assertions
     # below need its recorded deletion timestamp.
     eip_cr_name = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=eip_id)
+    release_observed: datetime | None = None
     try:
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=eip_cr_name)
 
@@ -113,6 +115,7 @@ def external_ip_bills_allocation_through_deletion(
         assert_contiguous_exact_seconds(events, "ExternalIP")
     finally:
         deletion_recorded = _delete_external_ip(grpc, k8s_hub_client, external_ip_id=eip_id, cr_name=eip_cr_name)
+        release_observed = datetime.now(UTC)
 
     assert deletion_recorded is not None, (
         "the ExternalIP CR never got a deletion timestamp, so no deletion time was recorded"
@@ -121,8 +124,14 @@ def external_ip_bills_allocation_through_deletion(
     # The billing end is the meter's own last interval end, anchored on the
     # recorded deletion: a round skips its tick while the fold lags the event
     # topic, so the final partial piece can land several round intervals after
-    # the deletion.
-    billing_end = metering.wait_for_billing_end(eip_id, deletion=deletion_recorded)
+    # the deletion. Allocation bills through DELETING until the address is
+    # released, which can follow the CR deletion request.
+    billing_end = metering.wait_for_billing_end(eip_id, deletion=deletion_recorded, late_meters={"allocation"})
+    assert release_observed is not None
+    assert billing_end <= release_observed + RELEASE_STAMP_TOLERANCE, (
+        f"ExternalIP allocation billed until {billing_end.isoformat()}, more than "
+        f"{RELEASE_STAMP_TOLERANCE} after the address was observed released at {release_observed.isoformat()}"
+    )
 
     # The whole life stays billed: the heartbeats collapse into contiguous net
     # intervals, each billing exactly one second per second, and the last one
@@ -319,6 +328,7 @@ def nat_gateway_bills_allocation(
     eip_cr_name = wait_for_external_ip_cr(k8s=k8s_hub_client, uuid=eip_id)
     nat_id: str | None = None
     nat_cr_name: str | None = None
+    release_observed: datetime | None = None
     try:
         wait_for_external_ip_allocated(k8s=k8s_hub_client, name=eip_cr_name)
         # The server accepts the NATGateway only once the API, not only the CR, says ALLOCATED.
@@ -389,6 +399,8 @@ def nat_gateway_bills_allocation(
             if nat_id is not None
             else None
         )
+        if nat_id is not None:
+            release_observed = datetime.now(UTC)
         try:
             teardown_external_ip(grpc, k8s_hub_client, eip_id, "billing NAT")
         except Exception as exc:
@@ -407,7 +419,12 @@ def nat_gateway_bills_allocation(
         # intervals after the deletion, and reading the end before the piece
         # lands anchors on an intermediate round, making the piece read as
         # billing past the anchor.
-        billing_end = metering.wait_for_billing_end(nat_id, deletion=deletion_recorded)
+        billing_end = metering.wait_for_billing_end(nat_id, deletion=deletion_recorded, late_meters={"allocation"})
+        assert release_observed is not None
+        assert billing_end <= release_observed + RELEASE_STAMP_TOLERANCE, (
+            f"NATGateway allocation billed until {billing_end.isoformat()}, more than "
+            f"{RELEASE_STAMP_TOLERANCE} after the gateway was observed removed at {release_observed.isoformat()}"
+        )
 
         # The billed life is exact: the heartbeats collapse into contiguous net
         # intervals, each billing exactly one second per second, and the last

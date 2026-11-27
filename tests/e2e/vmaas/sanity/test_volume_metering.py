@@ -15,7 +15,7 @@ from __future__ import annotations
 import contextlib
 import itertools
 import subprocess
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -26,6 +26,7 @@ from tests.e2e.core.helpers import unique_name
 from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.metering import (
     HEARTBEAT_TYPE,
+    RELEASE_STAMP_TOLERANCE,
     MeteringCollector,
     assert_exact_contiguous_life,
     delete_recording_timestamp,
@@ -86,6 +87,7 @@ def test_volume_bills_gibibyte_seconds(
     )
     volume_id: str = response["object"]["id"]
     volume_cr_name: str | None = None
+    release_observed: datetime | None = None
 
     try:
         volume = poll_until(
@@ -158,6 +160,7 @@ def test_volume_bills_gibibyte_seconds(
             )
     finally:
         deletion_recorded = _delete_volume(private_grpc, k8s_hub_client, volume_id=volume_id, cr_name=volume_cr_name)
+        release_observed = datetime.now(UTC)
 
     assert deletion_recorded is not None, "the Volume CR was never deleted, so no deletion timestamp was recorded"
 
@@ -166,7 +169,13 @@ def test_volume_bills_gibibyte_seconds(
     # topic, so the final partial piece can land several round intervals after
     # the deletion, and reading the end before the piece lands anchors on an
     # intermediate round, making the piece read as billing past the anchor.
-    billing_end = metering.wait_for_billing_end(volume_id, deletion=deletion_recorded)
+    # Capacity bills through DELETING until the volume is actually removed.
+    billing_end = metering.wait_for_billing_end(volume_id, deletion=deletion_recorded, late_meters={"capacity"})
+    assert release_observed is not None
+    assert billing_end <= release_observed + RELEASE_STAMP_TOLERANCE, (
+        f"volume capacity billed until {billing_end.isoformat()}, more than "
+        f"{RELEASE_STAMP_TOLERANCE} after the volume was observed removed at {release_observed.isoformat()}"
+    )
 
     # The billed life is exact: the typed heartbeats collapse into contiguous
     # net intervals, each billing exactly its size in GiB per second, and the

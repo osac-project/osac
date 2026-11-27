@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import itertools
-import logging
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -51,8 +50,6 @@ from tests.e2e.core.runner import poll_until
 from tests.e2e.core.wait_kinds import WaitResourceKind
 
 pytestmark = pytest.mark.sanity
-
-logger = logging.getLogger(__name__)
 
 # A round ticks every 60s; heartbeats may need a few rounds to surface.
 HEARTBEAT_TIMEOUT: int = 180
@@ -312,7 +309,7 @@ def test_metering_stop_ends_billing(
         )
         metering.verify_event(heartbeat, resource_id=uuid)
 
-        with k8s_hub_client.watch_phase_transition(resource="computeinstance", name=ci_name) as phase_stamp:
+        with k8s_hub_client.watch_phase_transition(resource="computeinstance", name=ci_name) as phase_snapshot:
             grpc.update_compute_instance_run_strategy(ci_id=uuid, run_strategy="Halted")
             vm_ns: str = k8s_hub_client.get_compute_instance_vm_namespace(name=ci_name)
             poll_until(
@@ -341,24 +338,23 @@ def test_metering_stop_ends_billing(
                 resource_id=uuid,
             )
             fulfillment_stopped_at = parse_time(instance["object"]["status"]["stateTransitionTime"])
-            stopping_stamp, stopped_stamp = poll_until(
-                fn=lambda: (phase_stamp("Stopping"), phase_stamp("Stopped")),
-                until=lambda pair: bool(pair[0]) or bool(pair[1]),
+            phase_stamps = poll_until(
+                fn=phase_snapshot,
+                until=lambda stamps: "Stopped" in stamps,
                 retries=30,
                 delay=1,
                 description=f"{ci_name} phase transition timestamps",
                 resource_kind=WaitResourceKind.COMPUTE_INSTANCE,
                 resource_id=ci_name,
             )
+            stopping_stamp = phase_stamps.get("Stopping", "")
+            stopped_stamp = phase_stamps.get("Stopped", "")
             if stopping_stamp:
                 stopped_at = parse_time(stopping_stamp)
             elif stopped_stamp:
                 stopped_at = parse_time(stopped_stamp)
             else:
                 stopped_at = fulfillment_stopped_at
-            logger.info(
-                "stop timestamp: fulfillment=%s, anchor=%s", fulfillment_stopped_at.isoformat(), stopped_at.isoformat()
-            )
 
         # The stop reaches metering through several steps: operator feedback, a
         # fulfillment status change, the event topic, the fold, and a round. A round

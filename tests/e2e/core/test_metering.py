@@ -259,11 +259,14 @@ def test_stop_journey_accepts_corrected_net_usage(monkeypatch: pytest.MonkeyPatc
     )
 
     @contextlib.contextmanager
-    def watch_phase_transition(**_kwargs: object) -> Iterator[Callable[[str], str]]:
-        yield lambda phase: {
-            "Stopping": (START + timedelta(seconds=45)).isoformat(),
-            "Stopped": (START + timedelta(seconds=55)).isoformat(),
-        }.get(phase, "")
+    def watch_phase_transition(**_kwargs: object) -> Iterator[Callable[[], dict[str, str]]]:
+        def phase_snapshot() -> dict[str, str]:
+            return {
+                "Stopping": (START + timedelta(seconds=45)).isoformat(),
+                "Stopped": (START + timedelta(seconds=55)).isoformat(),
+            }
+
+        yield phase_snapshot
 
     def get_jsonpath(**_kwargs: object) -> str:
         return "2026-10-05T10:03:00Z"

@@ -199,14 +199,16 @@ class K8sClient:
                         proc.wait(timeout=5)
 
     @contextlib.contextmanager
-    def watch_phase_transition(self, *, resource: str, name: str) -> Iterator[Callable[[str], str]]:
-        """Yield a callable returning a phase's recorded transition timestamp.
+    def watch_phase_transition(self, *, resource: str, name: str) -> Iterator[Callable[[], dict[str, str]]]:
+        """Yield a callable returning one snapshot of recorded phase timestamps.
 
         Start the watch before the state change: a short STOPPING phase can go
         by faster than a polling loop observes, but a watch established first
         always receives the modification that stamps the phase and its
-        transition time. The callable returns the first recorded timestamp for
-        the requested phase, or an empty string when the phase was skipped.
+        transition time. One call reads the watch output once and returns every
+        phase timestamp in that snapshot, so a caller choosing between
+        ``Stopping`` and ``Stopped`` cannot see the two phases from different
+        reads.
         """
         with tempfile.TemporaryDirectory() as run_dir:
             out_path = Path(run_dir) / "watch.out"
@@ -233,16 +235,17 @@ class K8sClient:
                         raise RuntimeError(f"kubectl watch for {resource} {name} produced no output within 30s")
                     time.sleep(0.2)
 
-                def phase_stamp(phase: str) -> str:
+                def phase_snapshot() -> dict[str, str]:
                     if proc.poll() is not None:
                         raise RuntimeError(f"kubectl watch exited early: {err_path.read_text().strip()}")
+                    stamps: dict[str, str] = {}
                     for line in _watch_lines(out_path):
                         recorded_phase, _, stamp = line.partition(":")
-                        if recorded_phase == phase and stamp:
-                            return stamp
-                    return ""
+                        if recorded_phase and stamp and recorded_phase not in stamps:
+                            stamps[recorded_phase] = stamp
+                    return stamps
 
-                yield phase_stamp
+                yield phase_snapshot
             finally:
                 if proc.poll() is None:
                     proc.terminate()

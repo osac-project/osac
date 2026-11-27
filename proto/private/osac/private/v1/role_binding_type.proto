@@ -19,6 +19,7 @@ import "cleanapi/cleanapi.proto";
 import "google/api/field_behavior.proto";
 import "osac/private/v1/metadata_type.proto";
 import "osac/private/v1/role_type.proto";
+import "osac/private/v1/service_account_type.proto";
 import "osac/private/v1/user_type.proto";
 
 option (cleanapi.file).package = "osac.public.v1";
@@ -59,12 +60,6 @@ message RoleBindingSpec {
   // To grant a role to a service account, create a RoleBinding with the desired role and include the service account's
   // ID in this list. Service account grants are evaluated by Fulfillment and are not synchronized to Keycloak roles.
   repeated ServiceAccountReference service_accounts = 3;
-}
-
-// Reference to a tenant-owned service account.
-message ServiceAccountReference {
-  // Unique identifier assigned by the server.
-  string id = 1;
 }
 
 // Current observed state of a role binding, reflecting its synchronization with the underlying authorization system.

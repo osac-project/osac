@@ -35,7 +35,6 @@ describe('useUserPreferences', () => {
         new StorageEvent('storage', {
           key: TEST_PREF_KEY,
           newValue: 'cards',
-          storageArea: localStorage,
         }),
       );
     });

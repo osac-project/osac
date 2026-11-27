@@ -1,0 +1,66 @@
+---
+# Entry point: removes the OSAC CSI driver from a cluster. Use it with
+# include_role and tasks_from: uninstall_driver. teardown_cluster_storage
+# deletes StorageClasses only and does not call this.
+#
+# Inputs:
+#   _remote_kubeconfig                path to the kubeconfig of the target cluster (required)
+#   _remote_kubeconfig_insecure       skip TLS verification of the target API (default false)
+#
+# Best-effort: each step ignores its own failure so the later steps still run.
+# Uninstalls the Helm release, deletes the credentials Secret named by
+# osac_csi_driver_credentials_secret_name, then deletes the driver namespace.
+# The credentials Secret delete is cleanup of a Secret placed by the caller or by
+# installs made before this role stopped creating it.
+
+# Checks only that a target kubeconfig was passed. It cannot tell a guest
+# cluster's kubeconfig from the hub's: a caller that passes the hub kubeconfig
+# acts on the hub.
+- name: Fail when called without a guest-cluster kubeconfig (hub path unsupported)
+  ansible.builtin.fail:
+    msg: >-
+      osac_csi_driver uninstall_driver requires a guest-cluster admin_kubeconfig
+      (_remote_kubeconfig must be set). The OSAC CSI meta-driver is only deployed to
+      CaaS tenant clusters, not to the hub cluster.
+  when: _remote_kubeconfig is not defined or _remote_kubeconfig | length == 0
+
+- name: Uninstall OSAC CSI driver Helm release from guest cluster
+  kubernetes.core.helm:
+    kubeconfig: "{{ _remote_kubeconfig }}"
+    validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
+    release_name: "{{ osac_csi_driver_helm_release }}"
+    release_namespace: "{{ osac_csi_driver_namespace }}"
+    state: absent
+    wait: true
+    wait_timeout: 3m
+  no_log: true
+  ignore_errors: true  # noqa: ignore-errors
+
+- name: Delete tenant credential Secret from guest cluster
+  kubernetes.core.k8s:
+    kubeconfig: "{{ _remote_kubeconfig }}"
+    validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
+    state: absent
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ osac_csi_driver_credentials_secret_name }}"
+        namespace: "{{ osac_csi_driver_namespace }}"
+  no_log: true
+  ignore_errors: true  # noqa: ignore-errors
+
+- name: Delete OSAC CSI driver namespace from guest cluster
+  kubernetes.core.k8s:
+    kubeconfig: "{{ _remote_kubeconfig }}"
+    validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
+    state: absent
+    wait: true
+    wait_timeout: 120
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ osac_csi_driver_namespace }}"
+  no_log: true
+  ignore_errors: true  # noqa: ignore-errors

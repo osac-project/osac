@@ -86,6 +86,7 @@ ROLE_TESTS=(
   "netris_fabric"
   "cudn_evpn"
   "network_task_playbook"
+  "osac_csi_storage_class"
 )
 
 ROLE_SCENARIO_TESTS=(
@@ -234,6 +235,21 @@ for scenario in test_happy_path test_tier_not_available test_empty_list test_dup
     PASSED+=("tenant_storage_class:${scenario}")
   else
     FAILED+=("tenant_storage_class:${scenario}")
+  fi
+done
+echo ""
+
+echo "=== Running OSAC CSI Storage Role Tests ==="
+echo ""
+
+OSAC_CSI_STORAGE_TEST="${SCRIPT_DIR}/../../collections/ansible_collections/osac/templates/roles/osac_csi_storage/tests/test.yml"
+
+for scenario in test_hub_path_rejected test_input_validation test_install_driver_values; do
+  echo "Testing osac_csi_storage: ${scenario}"
+  if run_ansible_playbook "${OSAC_CSI_STORAGE_TEST}" -e "${scenario}=true"; then
+    PASSED+=("osac_csi_storage:${scenario}")
+  else
+    FAILED+=("osac_csi_storage:${scenario}")
   fi
 done
 echo ""

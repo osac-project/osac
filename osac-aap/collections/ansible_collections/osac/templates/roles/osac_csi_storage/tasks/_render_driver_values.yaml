@@ -1,0 +1,105 @@
+---
+# Renders the Helm values for the OSAC CSI driver release. Included by
+# install_driver.yaml before its Helm task.
+#
+# Requires: the osac_csi_driver_* defaults of this role.
+# Optional: fulfillment_endpoint and fulfillment_issuer_url. They are required
+# for the hub-controller install; when unset or empty (guest node mode) they are
+# omitted from the values. controller.fulfillment.credentials and .tls are
+# emitted only when both are set (the chart fails to render credentials without
+# them); when neither is set the controller key is omitted entirely.
+#
+# Sets the fact _osac_csi_driver_helm_values: the computed values with
+# osac_csi_driver_extra_values merged over them. The merge is recursive and the
+# caller's values win; a list in the extra values replaces the computed list.
+# Exception: driverName, namespace, controller.fulfillment.credentials.secretName
+# and controller.fulfillment.tls.insecureSkipVerify must still equal what this role
+# computed from its own variables; extra values that change one fail the render.
+# Other keys under tls (for example caBundle.configMap and caBundle.key) merge normally.
+
+- name: Derive OSAC CSI driver vendor sockets configuration
+  ansible.builtin.set_fact:
+    _osac_csi_derived_vendor_sockets: >-
+      {% set _pairs = [] -%}
+      {% for _k, _v in osac_csi_driver_vendor_node_socket_paths.items() -%}
+      {% set _sock = _v if _v.endswith('.sock') else (_v ~ '/csi.sock') -%}
+      {% set _ = _pairs.append(_k ~ '=' ~ _sock) -%}
+      {% endfor -%}
+      {{ _pairs | sort | join(',') }}
+
+- name: Compute OSAC CSI driver Helm values from the role variables
+  ansible.builtin.set_fact:
+    _osac_csi_driver_computed_values: >-
+      {{ {'driverName': osac_csi_driver_name,
+          'namespace': osac_csi_driver_namespace,
+          'node': {'vendorSockets': _osac_csi_derived_vendor_sockets}}
+         | combine({'controller': {'fulfillment': _osac_csi_driver_fulfillment}}
+                   if (_osac_csi_driver_fulfillment | length > 0) else {}) }}
+  vars:
+    _osac_csi_driver_fulfillment_static:
+      credentials:
+        secretName: "{{ osac_csi_driver_credentials_secret_name }}"
+        clientIdKey: client-id
+        clientSecretKey: client-secret
+      tls:
+        insecureSkipVerify: "{{ osac_csi_driver_fulfillment_tls_insecure | bool }}"
+    _osac_csi_driver_fulfillment: >-
+      {{ ({'endpoint': fulfillment_endpoint}
+          if (fulfillment_endpoint | default('') | length > 0) else {})
+         | combine({'issuerUrl': fulfillment_issuer_url}
+                   if (fulfillment_issuer_url | default('') | length > 0) else {})
+         | combine(_osac_csi_driver_fulfillment_static
+                   if ((fulfillment_endpoint | default('') | length > 0)
+                       and (fulfillment_issuer_url | default('') | length > 0)) else {}) }}
+  no_log: true
+
+- name: Merge the extra values over the computed OSAC CSI driver Helm values
+  ansible.builtin.set_fact:
+    _osac_csi_driver_merged_values: >-
+      {{ _osac_csi_driver_computed_values
+         | combine(osac_csi_driver_extra_values | default({}), recursive=True) }}
+  no_log: true
+
+# Walks each protected key path in the computed and in the merged values and
+# collects the paths whose value differs (a path absent on both sides is equal).
+# The fact holds key paths only, never values.
+- name: Find protected keys that the extra values changed
+  ansible.builtin.set_fact:
+    _osac_csi_driver_overridden_keys: >-
+      {% set ns = namespace(bad=[]) -%}
+      {% for _path in _osac_csi_driver_protected_paths -%}
+      {% set c = namespace(v=_osac_csi_driver_computed_values) -%}
+      {% set m = namespace(v=_osac_csi_driver_merged_values) -%}
+      {% for _key in _path.split('.') -%}
+      {% set c.v = c.v[_key] if (c.v is mapping and _key in c.v) else none -%}
+      {% set m.v = m.v[_key] if (m.v is mapping and _key in m.v) else none -%}
+      {% endfor -%}
+      {% if c.v != m.v -%}
+      {% set ns.bad = ns.bad + [_path] -%}
+      {% endif -%}
+      {% endfor -%}
+      {{ ns.bad }}
+  vars:
+    _osac_csi_driver_protected_paths:
+      - driverName
+      - namespace
+      - controller.fulfillment.credentials.secretName
+      - controller.fulfillment.tls.insecureSkipVerify
+  no_log: true
+
+# Not no_log: the message carries key paths only, never the attempted values,
+# and does not template osac_csi_driver_extra_values.
+- name: Refuse extra values that override role-computed keys
+  ansible.builtin.fail:
+    msg: >-
+      osac_csi_driver_extra_values may not override
+      {{ _osac_csi_driver_overridden_keys | join(', ') }};
+      set them through osac_csi_driver_name, osac_csi_driver_namespace,
+      osac_csi_driver_credentials_secret_name and
+      osac_csi_driver_fulfillment_tls_insecure.
+  when: _osac_csi_driver_overridden_keys | length > 0
+
+- name: Publish the rendered OSAC CSI driver Helm values
+  ansible.builtin.set_fact:
+    _osac_csi_driver_helm_values: "{{ _osac_csi_driver_merged_values }}"
+  no_log: true

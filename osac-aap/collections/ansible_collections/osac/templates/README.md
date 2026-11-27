@@ -389,9 +389,43 @@ PersistentVolume or PersistentVolumeClaim still uses one of the tenant's
 StorageClasses. `teardown_backend` leaves the prepared SVM, accounts, and QoS policy
 groups untouched.
 
-**Block encryption:** When `spec.blockEncryptionPassphrase` is provided in the Tenant CR
+**OSAC CSI provider specifics (`osac_csi_storage`):** The role creates and deletes
+per-tier StorageClasses on a CaaS tenant cluster and nothing else. It requires the
+OSAC CSI driver to be registered there already (a `CSIDriver` named
+`osac_csi_driver_name`); without it `ensure_storage_class` fails and records the
+reason `csi_driver_not_registered` in `osac_storage_provider_failures`. It places no
+credentials on the cluster, and its StorageClasses do not allow volume expansion.
+`teardown_cluster_storage` deletes only the tenant's StorageClasses. Installing the
+driver is a separate entry point, `tasks_from: install_driver`, with
+`uninstall_driver` as its counterpart; the StorageClass actions do not call either.
+Callers map `osac_job_vars.fulfillment_endpoint` and
+`osac_job_vars.fulfillment_issuer_url` to the top-level vars `fulfillment_endpoint`
+and `fulfillment_issuer_url` that `install_driver` reads.
+`install_driver` accepts `osac_csi_driver_extra_values`, a dict merged recursively
+over the computed Helm values. The caller's values win, and a list replaces the
+computed list instead of merging. The caller fills it only from playbook or operator
+job vars, never from tenant-controlled input and never with a VAST credential.
+The caller's values win except for four keys, which change only through their own
+role variables: `driverName` (`osac_csi_driver_name`), `namespace`
+(`osac_csi_driver_namespace`), `controller.fulfillment.credentials.secretName`
+(`osac_csi_driver_credentials_secret_name`) and
+`controller.fulfillment.tls.insecureSkipVerify`
+(`osac_csi_driver_fulfillment_tls_insecure`). Extra values that change one of them
+fail the render with a message naming the key path, not the value. Other `tls` keys
+merge normally: `controller.fulfillment.tls.caBundle.configMap` and `.key`, for
+example, may be set through the dict to point the driver at a CA bundle (the chart
+mounts it when fulfillment trust is enabled).
+Nothing calls `install_driver` yet; a separate per-cluster install job will, see
+[OSAC-7841](https://redhat.atlassian.net/browse/OSAC-7841). `uninstall_driver` has
+no caller, and none is needed today: fulfillment-service refuses to delete a tenant
+while it still has clusters (`rejectDeleteWhileResourcesExist` in
+`fulfillment-service/internal/servers/private_tenants_server.go`), and deleting a
+cluster removes its guest cluster.
+
+**Block encryption (`vast_storage` only; `osac_csi_storage` has no block-encryption
+handling):** When `spec.blockEncryptionPassphrase` is provided in the Tenant CR
 event payload, the passphrase is persisted to the hub Secret during `setup` and used by
-`ensure_storage_class` to populate the CSI Secret's `passphrase` field and set
+the `vast_storage` `ensure_storage_class` to populate the CSI Secret's `passphrase` field and set
 `hostEncryption: "true"` on block-protocol StorageClasses. On CSI Secret recreation,
 `ensure_storage_class` reads the passphrase from the hub Secret so it survives the
 original event. NFS encryption is managed at the VAST cluster level and is not

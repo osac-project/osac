@@ -1,0 +1,73 @@
+---
+# Entry point: installs the OSAC CSI driver on a cluster with Helm. Use it with
+# include_role and tasks_from: install_driver. The StorageClass tasks of this
+# role (ensure_storage_class) do not install the driver; they require it to be
+# registered already.
+#
+# Inputs:
+#   _remote_kubeconfig                path to the kubeconfig of the target cluster (required)
+#   _remote_kubeconfig_insecure       skip TLS verification of the target API (default false)
+#   tenant_name                       labels the driver namespace (required)
+#   fulfillment_endpoint              fulfillment-service endpoint for the controller
+#                                     (required when the driver talks to the hub
+#                                     fulfillment service, controller-enabled install;
+#                                     omitted from the values when unset; the controller
+#                                     credentials and tls are emitted only when both
+#                                     this and fulfillment_issuer_url are set)
+#   fulfillment_issuer_url            OAuth2 issuer URL for the controller
+#                                     (same requirement as fulfillment_endpoint)
+#   Callers map osac_job_vars.fulfillment_endpoint and
+#   osac_job_vars.fulfillment_issuer_url to these two top-level vars.
+#   osac_csi_driver_extra_values      dict merged over the computed Helm values
+#                                     (default {}); see _render_driver_values.yaml
+#
+# The caller sets osac_csi_driver_extra_values only from playbook or operator
+# job vars, never from tenant-controlled input, and never with a VAST credential.
+#
+# Creates the driver namespace and the Helm release. Idempotent: the namespace
+# is left as is and Helm upgrade --install does nothing when the release is
+# unchanged. Creates no credential Secret.
+
+# Checks only that a target kubeconfig was passed. It cannot tell a guest
+# cluster's kubeconfig from the hub's: a caller that passes the hub kubeconfig
+# acts on the hub.
+- name: Fail when called without a guest-cluster kubeconfig (hub path unsupported)
+  ansible.builtin.fail:
+    msg: >-
+      osac_csi_driver install_driver requires a guest-cluster admin_kubeconfig
+      (_remote_kubeconfig must be set).  The OSAC CSI meta-driver is only deployed to
+      CaaS tenant clusters, not to the hub cluster.
+  when: _remote_kubeconfig is not defined or _remote_kubeconfig | length == 0
+
+- name: Ensure OSAC CSI driver namespace exists on guest cluster
+  kubernetes.core.k8s:
+    kubeconfig: "{{ _remote_kubeconfig }}"
+    validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ osac_csi_driver_namespace }}"
+        labels:
+          app.kubernetes.io/managed-by: osac-aap
+          osac.openshift.io/tenant: "{{ tenant_name }}"
+          pod-security.kubernetes.io/enforce: privileged
+          pod-security.kubernetes.io/warn: privileged
+
+- name: Render OSAC CSI driver Helm values
+  ansible.builtin.include_tasks: _render_driver_values.yaml
+
+- name: Deploy OSAC CSI driver via Helm on guest cluster
+  kubernetes.core.helm:
+    kubeconfig: "{{ _remote_kubeconfig }}"
+    validate_certs: "{{ false if (_remote_kubeconfig_insecure | default(false) | bool) else omit }}"
+    release_name: "{{ osac_csi_driver_helm_release }}"
+    chart_ref: "{{ osac_csi_driver_chart_ref }}"
+    chart_version: "{{ osac_csi_driver_chart_version }}"
+    release_namespace: "{{ osac_csi_driver_namespace }}"
+    create_namespace: false
+    wait: true
+    wait_timeout: 5m
+    values: "{{ _osac_csi_driver_helm_values }}"
+  no_log: true

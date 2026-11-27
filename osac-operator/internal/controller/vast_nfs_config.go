@@ -263,6 +263,5 @@ func validVASTNFSDataAddress(address string) bool {
 	if net.ParseIP(ipAddress) != nil {
 		return true
 	}
-	dnsName := strings.TrimSuffix(address, ".")
-	return len(validation.IsFullyQualifiedDomainName(nil, strings.ToLower(dnsName))) == 0
+	return len(validation.IsFullyQualifiedDomainName(nil, strings.ToLower(address))) == 0
 }

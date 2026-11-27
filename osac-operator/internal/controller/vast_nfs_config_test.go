@@ -304,6 +304,7 @@ func TestResolveVASTNFSConfigRejectsInvalidBundles(t *testing.T) {
 		{"parent traversal in root export", strings.Replace(vastNFSFixtureBundle, "/acme/claas", "/acme/../other", 1)},
 		{"named VIP pool is unsupported", strings.Replace(vastNFSFixtureBundle, "endpoints:\n  data: acme-nfs.example.com\n", "", 1) + "  vip_pool_name: fixture-pool\n"},
 		{"URL instead of direct mount address", strings.ReplaceAll(vastNFSFixtureBundle, "acme-nfs.example.com", "https://fixture-only.example.com/path")},
+		{"DNS name with two trailing dots", strings.ReplaceAll(vastNFSFixtureBundle, "acme-nfs.example.com", "acme-nfs.example.com..")},
 		{"missing direct mount address", strings.Replace(vastNFSFixtureBundle, "endpoints:\n  data: acme-nfs.example.com\n", "", 1)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

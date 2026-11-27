@@ -1,0 +1,5 @@
+---
+- name: Publish RFC 2136 endpoint records
+  ansible.builtin.include_tasks: endpoint_operation.yaml
+  vars:
+    _dns_rfc2136_operation: publish

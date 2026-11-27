@@ -1,0 +1,13 @@
+---
+dns_rfc2136_server: "{{ lookup('ansible.builtin.env', 'DNS_RFC2136_SERVER') }}"
+dns_rfc2136_port: >-
+  {{ lookup('ansible.builtin.env', 'DNS_RFC2136_PORT', default='53') }}
+dns_rfc2136_protocol: >-
+  {{ lookup('ansible.builtin.env', 'DNS_RFC2136_PROTOCOL', default='tcp') }}
+dns_rfc2136_key_name: >-
+  {{ lookup('ansible.builtin.env', 'DNS_RFC2136_KEY_NAME') }}
+dns_rfc2136_key_algorithm: >-
+  {{ lookup('ansible.builtin.env', 'DNS_RFC2136_KEY_ALGORITHM',
+            default='hmac-sha256') }}
+dns_rfc2136_key_secret: >-
+  {{ lookup('ansible.builtin.env', 'DNS_RFC2136_KEY_SECRET') }}

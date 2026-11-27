@@ -1,0 +1,4 @@
+---
+- name: Reject markerless RFC 2136 operations
+  ansible.builtin.fail:
+    msg: RFC 2136 requires an explicit generation-aware endpoint operation.

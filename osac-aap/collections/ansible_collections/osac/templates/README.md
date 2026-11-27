@@ -296,6 +296,49 @@ or API tokens — these 4 resources use `ansible.builtin.uri` directly. Per-tena
 credentials are stored in a hub-cluster Secret and used in CSI Secrets. Password
 rotation requires teardown + re-provisioning.
 
+**VAST without admin credentials (tenant-credentials-only mode):** A backend runs in
+this mode only when its entry in `storage_backend_connections` is a mapping with a
+non-blank `endpoint` and a blank `username` and a blank `password`. Blank means missing,
+null or an empty string; there is no trimming, so whitespace counts as present. Any other
+incomplete shape, such as only one of the two credentials, a null or string entry, `{}` or a blank
+endpoint, is not this mode and fails the "missing one or more of endpoint,
+username, password" validation. In this mode `setup` and `teardown_backend` make no VAST
+calls, do not run the OLM-based vendor CSI operator install (`ensure_csi_operator.yaml`)
+and write no hub Secret. `setup` reports `tenant_credentials_only: true` in its tenant
+config. `ensure_storage_class` is not supported in this mode: it creates VMS views,
+policies and QoS with admin credentials. It fails with "VAST backend '<id>' has no admin
+credentials (tenant-credentials-only mode); StorageClass provisioning is not supported
+without admin credentials." before any hub Secret read or VAST call, and records reason
+`storage_class_unsupported_without_admin_credentials` in `osac_storage_provider_failures`.
+The dispatcher's hub vendor CSI controller step (`ensure_csi_backends.yaml`, off by
+default) is not affected by this mode: the hub VAST CSI controller is what the OSAC CSI
+volume path uses.
+
+- The mode is selected by missing credentials, so credentials that resolve empty (or
+  renamed keys) imitate it. Check what the operator passes if a backend unexpectedly
+  skips VAST work.
+- Limitation: this mode is not reachable through the API today: fulfillment-service
+  refuses a non-CSP storage backend without admin credentials ("credentials are required
+  for OSAC-managed storage backends"). It stays dormant until the API accepts a non-CSP
+  backend without admin credentials, which is expected under OSAC-7839. When it becomes
+  reachable, readiness for these backends has to come from the per-tenant record, because
+  a backend in this mode writes no hub Secret.
+- `setup` and `teardown_backend` first read the hub Secret
+  (`<prefix><tenant>-<backend_id>`) through the Kubernetes API, so the role needs hub
+  access even without admin credentials. They refuse, and fail the job, when an
+  admin-flow hub Secret exists (the VAST objects it records need admin credentials) or
+  when it cannot be read. Both record a failure in `osac_storage_provider_failures`
+  (reasons `admin_flow_leftovers_without_credentials` and `hub_secret_unreadable`).
+  The dispatcher's `ignore_errors` does not catch failures raised inside the included
+  role files, so a refusal in `teardown_backend` fails the teardown job and stops that
+  tenant's remaining backends. A refusal in `setup` also stops the tenant's remaining
+  backends, because the dispatcher's setup loop has no rescue.
+- The leftovers check relies on the hub Secret. VAST objects left without a Secret are
+  not detected: a failed admin-flow rollback (which deletes the Secret before the VAST
+  cleanup) or a job killed before the Secret write.
+- `teardown_backend` must not be dispatched with a guest kubeconfig: the hub Secret
+  lookup would miss and the teardown would report nothing to remove.
+
 **NetApp provider specifics (`netapp_storage`):** The `netapp_storage` role serves
 OSAC-managed NetApp ONTAP block tiers on VMaaS through NetApp Trident (`ontap-san`
 driver). It never calls the ONTAP API itself: Trident on the target cluster does,

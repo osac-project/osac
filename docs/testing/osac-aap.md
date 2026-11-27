@@ -30,6 +30,11 @@ in `osac-aap/Makefile`.
 - Storage target-routing scenarios: separate management/workload Kind APIs;
   placement and kubeconfig use are real. Tenant status resolution, VM boot and
   deployed AAP/provider lifecycle are outside the fixture.
+- VAST backend job without admin credentials
+  ([OSAC-7904](https://redhat.atlassian.net/browse/OSAC-7904)): "makes no VAST
+  calls" is proven against the mock VMS server's call log, not a VAST cluster,
+  and the payload shape that selects the mode is not final
+  ([OSAC-7839](https://redhat.atlassian.net/browse/OSAC-7839)).
 - `netapp_storage` ([OSAC-5813](https://redhat.atlassian.net/browse/OSAC-5813);
   `tests/unit/test_netapp_storage_role.py` and
   `tests/integration/targets/netapp_storage_provider/`, also in

@@ -57,7 +57,54 @@
   ansible.builtin.set_fact:
     _vast_required_protocols: "{{ _provider_tiers | map(attribute='protocol') | unique | sort | list }}"
 
+# ── Tenant-credentials-only mode ──
+# When the backend's connection entry has an endpoint and no admin credentials,
+# make no VAST calls and skip the vendor CSI operator install. Before reporting
+# success, check that the admin flow left no hub Secret behind: a Secret from an
+# earlier admin-credentialed run means VAST objects exist that this run could not
+# manage. Reading the Secret is a Kubernetes read, not a VAST call.
+- name: Decide whether this backend runs without VAST admin credentials
+  ansible.builtin.include_tasks: _detect_credential_mode.yaml
+
+- name: Read tenant config Secret from hub cluster (tenant-credentials-only mode)
+  when: _vast_tenant_credentials_only | bool
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ vast_storage_tenant_config_secret_prefix }}{{ tenant_name }}-{{ _vast_backend_id }}"
+    namespace: "{{ vast_storage_config_namespace }}"
+  register: _vast_setup_hub_secret
+  no_log: true
+  failed_when: false
+
+- name: Refuse to continue without admin credentials unless the hub Secret is readable and absent
+  when: _vast_tenant_credentials_only | bool
+  ansible.builtin.include_tasks: _refuse_without_admin_credentials.yaml
+  vars:
+    _vast_hub_secret_var: _vast_setup_hub_secret
+    _vast_hub_secret_cleared: {}
+    _vast_refuse_unreadable_tail: >-
+      refusing to report setup for backend '{{ _vast_backend_id }}' without knowing whether
+      admin-flow resources exist.
+    _vast_refuse_present_tail: cannot be managed without them.
+
+- name: Report tenant-credentials-only mode in the tenant config
+  when: _vast_tenant_credentials_only | bool
+  ansible.builtin.set_fact:
+    storage_provider_tenant_config:
+      provider: vast
+      backend_id: "{{ _vast_backend_id }}"
+      tenant_credentials_only: true
+
+- name: Log that VAST work is skipped
+  when: _vast_tenant_credentials_only | bool
+  ansible.builtin.debug:
+    msg: >-
+      No admin credentials supplied for VAST backend '{{ _vast_backend_id }}':
+      skipping VAST API calls and vendor CSI operator install.
+
 - name: Provision VAST resources for tenant
+  when: not (_vast_tenant_credentials_only | bool)
   block:
     - name: Resolve VAST admin credentials from storage_backend_connections
       ansible.builtin.include_tasks: read_credentials.yaml
@@ -522,6 +569,7 @@
       no_log: true
 
 - name: Set storage_provider_tenant_config output fact
+  when: not (_vast_tenant_credentials_only | bool)
   ansible.builtin.set_fact:
     storage_provider_tenant_config:
       vast_tenant_id: "{{ _vast_tenant_result.tenants.id | string }}"

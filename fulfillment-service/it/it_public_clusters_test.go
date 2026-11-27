@@ -16,6 +16,7 @@ package it
 import (
 	"context"
 	"fmt"
+	"os"
 
 	. "github.com/onsi/ginkgo/v2/dsl/core"
 	. "github.com/onsi/ginkgo/v2/dsl/table"
@@ -23,6 +24,7 @@ import (
 	grpccodes "google.golang.org/grpc/codes"
 	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/osac-project/osac/fulfillment-service/internal/uuid"
 	privatev1 "github.com/osac-project/osac/proto/gen/osac/private/v1"
@@ -571,6 +573,99 @@ var _ = Describe("Public clusters", func() {
 		Expect(storedSpec.GetNetworkAttachment().GetSecurityGroups()).To(HaveLen(1))
 		Expect(storedSpec.GetNetworkAttachment().GetSecurityGroups()[0].GetId()).To(Equal(network.securityGroupID))
 	})
+
+	DescribeTable("describes any referenced version", func(state privatev1.ClusterVersionState, enabled bool, expectedState string) {
+		image := createCatalogItemDiskImageFixture(ctx, "shared", catalogItemFixtureName())
+		versionsClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())
+		version := nextCVVersion()
+		versionResponse, err := versionsClient.Create(ctx, privatev1.ClusterVersionsCreateRequest_builder{
+			Object: privatev1.ClusterVersion_builder{
+				Metadata: privatev1.Metadata_builder{Name: fmt.Sprintf("test-cv-%s", uuid.New()[24:32])}.Build(),
+				Spec: privatev1.ClusterVersionSpec_builder{
+					Version:   version,
+					Image:     fmt.Sprintf("quay.io/openshift-release-dev/ocp-release:%s-multi", version),
+					DiskImage: privatev1.DiskImageReference_builder{Id: image.GetId()}.Build(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		versionObject := versionResponse.GetObject()
+		DeferCleanup(func() {
+			_, err := versionsClient.Delete(ctx, privatev1.ClusterVersionsDeleteRequest_builder{Id: versionObject.GetId()}.Build())
+			Expect(err).NotTo(HaveOccurred())
+		})
+
+		clusterResponse, err := clustersClient.Create(ctx, publicv1.ClustersCreateRequest_builder{
+			Object: publicv1.Cluster_builder{
+				Metadata: publicv1.Metadata_builder{Name: fmt.Sprintf("test-cluster-%s", uuid.New()[24:32])}.Build(),
+				Spec: publicv1.ClusterSpec_builder{
+					Template:          publicv1.ClusterTemplateReference_builder{Id: templateId}.Build(),
+					Version:           publicv1.ClusterVersionReference_builder{Name: versionObject.GetMetadata().GetName()}.Build(),
+					NodeSets:          testClusterNodeSets(bmitName, 1),
+					NetworkAttachment: network.clusterAttachment(),
+				}.Build(),
+			}.Build(),
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+		cluster := clusterResponse.GetObject()
+		DeferCleanup(func(cleanupCtx context.Context) {
+			cleanupErr := cleanupNetworkFixtureResource(cleanupCtx,
+				func(ctx context.Context) error {
+					_, err := clustersClient.Delete(ctx, publicv1.ClustersDeleteRequest_builder{Id: cluster.GetId()}.Build())
+					return err
+				},
+				func(ctx context.Context) (*privatev1.Metadata, error) {
+					response, err := privateClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: cluster.GetId()}.Build())
+					if err != nil {
+						return nil, err
+					}
+					return response.GetObject().GetMetadata(), nil
+				},
+				func(ctx context.Context) error {
+					response, err := privateClustersClient.Get(ctx, privatev1.ClustersGetRequest_builder{Id: cluster.GetId()}.Build())
+					if err != nil {
+						return err
+					}
+					object := response.GetObject()
+					object.GetMetadata().SetFinalizers(nil)
+					_, err = privateClustersClient.Update(ctx, privatev1.ClustersUpdateRequest_builder{
+						Object: object, UpdateMask: catalogItemUpdateMask("metadata.finalizers"), Lock: true,
+					}.Build())
+					return err
+				})
+			Expect(cleanupErr).NotTo(HaveOccurred())
+		})
+
+		_, err = versionsClient.Update(ctx, privatev1.ClusterVersionsUpdateRequest_builder{
+			Object: privatev1.ClusterVersion_builder{
+				Id: versionObject.GetId(),
+				Spec: privatev1.ClusterVersionSpec_builder{
+					State:   state,
+					Enabled: proto.Bool(enabled),
+				}.Build(),
+			}.Build(),
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.state", "spec.enabled"}},
+		}.Build())
+		Expect(err).NotTo(HaveOccurred())
+
+		homeDir, err := tool.NewCLIHomeDir()
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(os.RemoveAll(homeDir)).To(Succeed()) })
+		_, stderr, code := tool.LoginCLI(ctx, homeDir, adminUsername, adminsPassword)
+		Expect(code).To(Equal(0), "login failed: %s", stderr)
+
+		output, stderr, code := tool.RunCLI(ctx, homeDir, "describe", "cluster", cluster.GetId())
+		Expect(code).To(Equal(0), "describe cluster failed: %s", stderr)
+		Expect(stderr).NotTo(ContainSubstring("Warning: failed to resolve cluster version"))
+		Expect(output).To(ContainSubstring(versionObject.GetMetadata().GetName()))
+		Expect(output).To(ContainSubstring(version))
+		Expect(output).To(ContainSubstring(expectedState))
+	},
+		Entry("active and enabled", privatev1.ClusterVersionState_CLUSTER_VERSION_STATE_ACTIVE, true, "ACTIVE"),
+		Entry("deprecated and enabled", privatev1.ClusterVersionState_CLUSTER_VERSION_STATE_DEPRECATED, true, "DEPRECATED"),
+		Entry("obsolete and enabled", privatev1.ClusterVersionState_CLUSTER_VERSION_STATE_OBSOLETE, true, "OBSOLETE"),
+		Entry("obsolete and disabled", privatev1.ClusterVersionState_CLUSTER_VERSION_STATE_OBSOLETE, false, "OBSOLETE"),
+	)
 
 	DescribeTable("Rejects create with an unusable explicit version", func(suffix string, invalidSpec *privatev1.ClusterVersionSpec, expectedMessage string) {
 		cvClient := privatev1.NewClusterVersionsClient(tool.InternalView().AdminConn())

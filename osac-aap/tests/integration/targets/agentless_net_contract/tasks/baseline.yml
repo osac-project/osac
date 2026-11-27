@@ -71,68 +71,52 @@
             prefix: osac-agentless-contract-
           register: agentless_net_contract_tempdir
 
-        - name: Record fixture paths
-          ansible.builtin.set_fact:
-            agentless_net_contract_state_file: "{{ agentless_net_contract_tempdir.path }}/network.sqlite3"
-            agentless_net_contract_switch_state: "{{ agentless_net_contract_tempdir.path }}/switch.json"
-            agentless_net_contract_fail_marker: "{{ agentless_net_contract_tempdir.path }}/switch-failed-once"
-            agentless_net_contract_lease_file: "{{ agentless_net_contract_tempdir.path }}/dhcp/dnsmasq.leases"
-            agentless_net_contract_inventory:
-              all:
-                vars:
-                  agentless_net_provisioning_network:
-                    name: provisioning
-                    vlan_id: 30
-                  agentless_net_host_ports:
-                    bmi-01.example.test:
-                      eno1: {switch: leaf-1, port: swp1}
-                      eno2: {switch: leaf-1, port: swp2}
-                children:
-                  net_nodes:
-                    hosts:
-                      network-node:
-                        ansible_host: 127.0.0.1
-                        ansible_user: contract-test
-                  switches:
-                    hosts:
-                      leaf-1:
-                        ansible_host: 127.0.0.1
-                        ansible_user: contract-test
-                        ansible_network_os: cumulus
-                        trunk_ports: [swp100]
-
-        - name: Prepare the versioned API-ID state database
+        - name: Prepare the reusable AgentlessNet AWX fixture
           ansible.builtin.command:
             argv:
               - "{{ ansible_playbook_python }}"
-              - "{{ playbook_dir }}/../files/prepare_state.py"
-              - "{{ agentless_net_contract_state_file }}"
+              - "{{ playbook_dir }}/../../../common/agentless_net_awx_fixture.py"
+              - --workspace
+              - "{{ agentless_net_contract_tempdir.path }}"
+              - --job-workspace
+              - "{{ agentless_net_contract_tempdir.path }}"
+              - --project-root-in-job
+              - "{{ playbook_dir }}/../../../../.."
+              - --tenant
+              - "{{ agentless_net_contract_tenant }}"
+              - --fixture-name
+              - agentless-net-contract
           args:
             chdir: "{{ playbook_dir }}/../../../../../"
+          register: agentless_net_contract_prepared_fixture
           changed_when: true
+
+        - name: Store the reusable fixture settings
+          ansible.builtin.set_fact:
+            agentless_net_contract_fixture: "{{ agentless_net_contract_prepared_fixture.stdout | from_json }}"
+
+        - name: Set paths from the reusable fixture contract
+          ansible.builtin.set_fact:
+            agentless_net_contract_state_file: >-
+              {{ agentless_net_contract_fixture.job_environment['AGENTLESS_NET_STATE_FILE'] }}
+            agentless_net_contract_switch_state: >-
+              {{ agentless_net_contract_fixture.job_environment['OSAC_AGENTLESS_SWITCH_STATE_FILE'] }}
+            agentless_net_contract_fail_marker: >-
+              {{ agentless_net_contract_fixture.job_environment['OSAC_AGENTLESS_SWITCH_FAIL_MARKER'] }}
+            agentless_net_contract_lease_file: >-
+              {{ agentless_net_contract_fixture.job_environment['OSAC_AGENTLESS_DHCP_LEASE_FILE'] }}
 
         - name: Write the child playbook inventory
           ansible.builtin.copy:
             dest: "{{ agentless_net_contract_tempdir.path }}/inventory.yaml"
             mode: "0600"
-            content: >-
-              {{ {'all': {'hosts': {'localhost': {}}, 'vars': {
-                  'ansible_connection': 'local', 'ansible_become': false,
-                  'ansible_python_interpreter': ansible_playbook_python}}} | to_nice_yaml }}
+            content: "{{ agentless_net_contract_fixture.job_inventory | to_nice_yaml }}"
 
         - name: Create a private SSH control directory for the fake transport
           ansible.builtin.file:
             path: "{{ agentless_net_contract_tempdir.path }}/ssh-control"
             state: directory
             mode: "0700"
-
-        - name: Seed the stateful fake switch VLANs
-          ansible.builtin.copy:
-            dest: "{{ agentless_net_contract_switch_state }}"
-            mode: "0600"
-            content: >-
-              {{ {'ports': {'swp1': [30], 'swp2': [30], 'swp3': [200]},
-                  'tombstones': []} | to_json }}
 
         - name: Build the physical NetworkAttachment task input
           ansible.builtin.set_fact:
@@ -258,13 +242,13 @@
           block:
             - name: Create the fake DHCP directory
               ansible.builtin.file:
-                path: "{{ agentless_net_contract_tempdir.path }}/dhcp"
+                path: "{{ agentless_net_contract_fixture.workspace }}/dhcp"
                 state: directory
                 mode: "0700"
 
             - name: Mark the fake DHCP lease file initialized
               ansible.builtin.copy:
-                dest: "{{ agentless_net_contract_tempdir.path }}/dhcp/.initialized"
+                dest: "{{ agentless_net_contract_fixture.workspace }}/dhcp/.initialized"
                 content: "initialized\n"
                 mode: "0600"
 
@@ -694,6 +678,18 @@
         - name: Run cluster ingress release through the generic playbook
           ansible.builtin.include_tasks: run_playbook.yaml
       always:
+        - name: Clean up the reusable AgentlessNet fixture
+          ansible.builtin.command:
+            argv:
+              - "{{ ansible_playbook_python }}"
+              - "{{ playbook_dir }}/../../../common/agentless_net_awx_fixture.py"
+              - --cleanup-workspace
+              - "{{ agentless_net_contract_fixture.workspace }}"
+          args:
+            chdir: "{{ playbook_dir }}/../../../../../"
+          changed_when: false
+          when: agentless_net_contract_fixture is defined
+
         - name: Remove temporary AgentlessNet contract fixtures
           ansible.builtin.file:
             path: "{{ agentless_net_contract_tempdir.path }}"

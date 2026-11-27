@@ -87,8 +87,23 @@ global:
   #     # lookup, which a vcluster has no API for; hosted clusters live in
   #     # the outer cluster, so the overlay passes its domain explicitly.
   #     HOSTED_CLUSTER_BASE_DOMAIN: hosted.<outer domain without apps.>
-  #   clusterVersions.enabled: true
-  #   clusterVersions.versions: <copy of values/caas-ci/instance.yaml's list>
+  #   # The two ClusterVersions the CaaS tests order, copied verbatim from
+  #   # values/caas-ci/instance.yaml:216-227. They stay in the overlay, not
+  #   # here: the profile serves VMaaS and BMaaS runs too, and an enabled
+  #   # seed job would run for them as well. The 4.22 default carries the
+  #   # RHCOS DiskImage its ClusterOrders boot their nodes from (registered
+  #   # through the VMaaS-owned DiskImages API, which is why vmaas stays on).
+  #   clusterVersions:
+  #     enabled: true
+  #     versions:
+  #     - version: "4.20.0"
+  #       image: "quay.io/openshift-release-dev/ocp-release:4.20.0-multi"
+  #     - version: "4.22.0"
+  #       image: "quay.io/openshift-release-dev/ocp-release:4.22.0-multi"
+  #       default: true
+  #       diskImage:
+  #         name: rhcos-4-22
+  #         sourceRef: oci://quay.io/osac-project/rhcos:4.22.0
   #
   # No per-suite preflight keys: the metal3 checks (requiredFor bmaas) skip
   # themselves when bmf.remoteClusterKubeconfigSecretName is set, the MCE

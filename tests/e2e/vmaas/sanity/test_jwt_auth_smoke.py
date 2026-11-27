@@ -8,7 +8,6 @@ import pytest
 from tests.e2e.core.grpc_client import GRPCClient
 from tests.e2e.core.helpers import (
     wait_for_security_group_cr,
-    wait_for_security_group_deletion,
     wait_for_subnet_cr,
     wait_for_subnet_deletion,
     wait_for_virtual_network_cr,
@@ -18,6 +17,7 @@ from tests.e2e.core.k8s_client import K8sClient
 from tests.e2e.core.osac_cli import OsacCLI
 from tests.e2e.core.runner import poll_until, run_unchecked
 from tests.e2e.core.wait_kinds import WaitResourceKind
+from tests.e2e.vmaas.networking_lifecycle_helpers import delete_and_wait_for_security_group
 
 pytestmark = pytest.mark.sanity
 
@@ -120,8 +120,7 @@ def test_jwt_security_group_lifecycle(jwt_grpc_tenant1: GRPCClient, k8s_hub_clie
     assert sg_id in jwt_grpc_tenant1.list_security_group_ids()
     sg_cr_name = wait_for_security_group_cr(k8s=k8s_hub_client, uuid=sg_id)
 
-    jwt_grpc_tenant1.delete_security_group(sg_id=sg_id)
-    wait_for_security_group_deletion(k8s=k8s_hub_client, name=sg_cr_name)
+    delete_and_wait_for_security_group(jwt_grpc_tenant1, k8s_hub_client, sg_id, sg_cr_name)
     jwt_grpc_tenant1.delete_subnet(subnet_id=subnet_id)
     wait_for_subnet_deletion(k8s=k8s_hub_client, name=subnet_cr_name)
     poll_until(

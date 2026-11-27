@@ -36,6 +36,7 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
     grpc: GRPCClient,
     private_grpc: GRPCClient,
     k8s_hub_client: K8sClient,
+    k8s_target_client: K8sClient,
     cluster_template: str,
     caas_disk_image_version: str,
     pull_secret_name: str,
@@ -107,7 +108,7 @@ def test_cluster_delete_reports_deleting_state_without_provisioning(
                 jobs = snapshot.get("status", {}).get("jobs") or []
                 assert not jobs, f"ClusterOrder {co_name} deletion must record no provider networking job, got {jobs}"
         wait_for_cluster_grpc_deleting_or_archived(grpc=grpc, uuid=uuid)
-        wait_for_cluster_deletion(k8s=k8s_hub_client, name=co_name)
+        wait_for_cluster_deletion(k8s=k8s_hub_client, target_k8s=k8s_target_client, name=co_name)
         wait_for_cluster_grpc_removal(grpc=grpc, uuid=uuid)
 
         # The gate stayed shut: no control plane time and no worker hardware

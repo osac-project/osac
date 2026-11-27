@@ -500,24 +500,35 @@ def _hosted_references(orders: dict[str, Any]) -> list[tuple[str, str]]:
     )
 
 
-def caas_source(k8s: K8sClient, namespace: str) -> SourceFn:
-    """CaaS resources and hosted/controller namespace logs while the test's workers still exist."""
+def caas_source(k8s: K8sClient, namespace: str, target_k8s: K8sClient | None = None) -> SourceFn:
+    """CaaS resources and hosted/controller namespace logs while the test's workers still exist.
+
+    ClusterOrders stay on the hub. In a vcluster run the HyperShift and Assisted
+    resources and the controllers that own them live on the outer cluster, so
+    `target_k8s` (the hub when unset) reads those and their namespaces.
+    """
+    target_client = k8s if target_k8s is None else target_k8s
 
     def source(directory: Path, window: Window) -> None:
         def command(*args: str) -> str:
             return run(*k8s.base_args(), *args, timeout=window.timeout(CAAS_COMMAND_TIMEOUT_S))
 
+        def target_command(*args: str) -> str:
+            return run(*target_client.base_args(), *args, timeout=window.timeout(CAAS_COMMAND_TIMEOUT_S))
+
         orders = _collect_state(
             directory, "caas-clusterorders", command, "clusterorders.osac.openshift.io", "-n", namespace
         )
         agent_namespace = os.environ.get("OSAC_AGENT_NAMESPACE") or namespace
-        for resource, target in (
+        for resource, target_namespace in (
             ("agents.agent-install.openshift.io", agent_namespace),
             ("infraenvs.agent-install.openshift.io", namespace),
         ):
-            _collect_state(directory, f"caas-{target}-{resource}", command, resource, "-n", target)
-        namespaces = {
-            namespace,
+            _collect_state(
+                directory, f"caas-{target_namespace}-{resource}", target_command, resource, "-n", target_namespace
+            )
+        hub_namespaces = {namespace}
+        target_namespaces = {
             agent_namespace,
             "multicluster-engine",
             "hypershift",
@@ -526,34 +537,59 @@ def caas_source(k8s: K8sClient, namespace: str) -> SourceFn:
         hosted_namespaces = set()
         for hosted_namespace, name in _hosted_references(orders):
             hosted_namespaces.update((hosted_namespace, f"{hosted_namespace}-{name}"))
-            for resource, target in (
+            for resource, target_namespace in (
                 ("hostedclusters.hypershift.openshift.io", hosted_namespace),
                 ("nodepools.hypershift.openshift.io", hosted_namespace),
                 ("hostedcontrolplanes.hypershift.openshift.io", f"{hosted_namespace}-{name}"),
             ):
-                _collect_state(directory, f"caas-{target}-{resource}", command, resource, "-n", target)
-        namespaces.update(hosted_namespaces)
+                _collect_state(
+                    directory, f"caas-{target_namespace}-{resource}", target_command, resource, "-n", target_namespace
+                )
+        target_namespaces.update(hosted_namespaces)
+        # The install namespace stays on the hub; the generic sources already
+        # read its controllers, and everything else the CaaS journey creates
+        # lives on the target cluster.
+        commands_by_namespace = {name: target_command for name in target_namespaces if name}
+        commands_by_namespace.update({name: command for name in hub_namespaces})
         pods_by_namespace = {}
-        for target in sorted(namespaces, key=lambda target: (target not in hosted_namespaces, target)):
-            prefix = f"caas-{target}"
-            pods_by_namespace[target] = _collect_state(directory, f"{prefix}-pods", command, "pods", "-n", target)
-            _collect_state(directory, f"{prefix}-events", command, "events", "-n", target)
-        for target, pods in pods_by_namespace.items():
-            _pod_logs(directory, f"caas-{target}", target, pods, command, window)
+        for target_namespace in sorted(commands_by_namespace, key=lambda name: (name not in hosted_namespaces, name)):
+            namespace_command = commands_by_namespace[target_namespace]
+            prefix = f"caas-{target_namespace}"
+            pods_by_namespace[target_namespace] = _collect_state(
+                directory, f"{prefix}-pods", namespace_command, "pods", "-n", target_namespace
+            )
+            _collect_state(directory, f"{prefix}-events", namespace_command, "events", "-n", target_namespace)
+        for target_namespace, pods in pods_by_namespace.items():
+            _pod_logs(
+                directory,
+                f"caas-{target_namespace}",
+                target_namespace,
+                pods,
+                commands_by_namespace[target_namespace],
+                window,
+            )
 
     return source
 
 
-def caas_guest_source(k8s: K8sClient, namespace: str) -> SourceFn:
-    """One-shot guest reads using only each referenced HCP credential, held in memory."""
+def caas_guest_source(k8s: K8sClient, namespace: str, target_k8s: K8sClient | None = None) -> SourceFn:
+    """One-shot guest reads using only each referenced HCP credential, held in memory.
+
+    The HostedControlPlane and its kubeconfig Secret live on the outer cluster in
+    a vcluster run, so `target_k8s` (the hub when unset) reads them; the guest
+    reads then use only that credential.
+    """
+    target_client = k8s if target_k8s is None else target_k8s
 
     def source(directory: Path, window: Window) -> None:
         __tracebackhide__ = True
 
         def management(*args: str) -> str:
-            return run(*k8s.base_args(), *args, timeout=window.timeout(CAAS_COMMAND_TIMEOUT_S))
+            return run(*target_client.base_args(), *args, timeout=window.timeout(CAAS_COMMAND_TIMEOUT_S))
 
-        orders = json.loads(management("get", "clusterorders.osac.openshift.io", "-n", namespace, "-o", "json"))
+        orders = json.loads(
+            run(*k8s.base_args(), "get", "clusterorders.osac.openshift.io", "-n", namespace, "-o", "json")
+        )
         references = _hosted_references(orders)
         if not references:
             record_error(directory, "caas-guest", "skipped: ClusterOrders have no hosted-cluster references")

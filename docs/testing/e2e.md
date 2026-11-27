@@ -11,13 +11,14 @@ import/selection readiness only, not deployed helper or lifecycle correctness.
 
 The fixtures read the deployment they target from the environment, so the same
 suites run against a single OpenShift cluster and against a vcluster run (the
-hub is a vcluster API while VMs, AAP, Keycloak and the databases stay on the
-outer cluster):
+hub is a vcluster API while VMs, CaaS HyperShift/Assisted resources, AAP,
+Keycloak and the databases stay on the outer cluster):
 
 | Variable | Meaning |
 |---|---|
 | `KUBECONFIG` or `OSAC_HUB_KUBECONFIG` | Hub kubeconfig. `OSAC_HUB_KUBECONFIG` wins; without either, the current context is used. Point it at the vcluster API for a vcluster run. |
 | `OSAC_VM_KUBECONFIG` | Kubeconfig of the cluster where VirtualMachines and VMIs land (the outer cluster in a vcluster run). Required by the VMaaS and networking suites. |
+| `OSAC_TARGET_KUBECONFIG` | Kubeconfig of the cluster that owns the CaaS/HyperShift resources: Agents, InfraEnvs, HostedClusters, NodePools, the HostedControlPlane and its kubeconfig Secret (the outer cluster in a vcluster run). The CaaS suite reads those through `k8s_target_client`. Unset reads them from the hub, which is a single-cluster deployment. |
 | `OSAC_IMPERSONATE_USER` | User kubectl impersonates, default `system:admin`. Set it to an empty value for a vanilla Kubernetes hub (a vcluster), which rejects impersonation, so the kubeconfig identity is used. |
 | `OSAC_NAMESPACE` | Install namespace. Default `osac-devel`; a vcluster run installs into `osac`. |
 | `OSAC_CLUSTER_DOMAIN` | Outer cluster domain. Required for a vcluster run because a vcluster has no `ingresses.config.openshift.io` to read. |

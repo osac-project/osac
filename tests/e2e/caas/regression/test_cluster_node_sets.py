@@ -36,6 +36,7 @@ def test_cluster_create_with_two_node_sets(
     grpc: GRPCClient,
     private_grpc: GRPCClient,
     k8s_hub_client: K8sClient,
+    k8s_target_client: K8sClient,
     cluster_template: str,
     pull_secret_name: str,
     ssh_key_secret: str,
@@ -71,7 +72,12 @@ def test_cluster_create_with_two_node_sets(
             add_on_operators=requested_operator_names,
         )
         cluster = assert_cluster_with_two_node_sets_available(
-            grpc=grpc, k8s=k8s_hub_client, metering=metering, uuid=uuid, instance_types=instance_types
+            grpc=grpc,
+            k8s=k8s_hub_client,
+            target_k8s=k8s_target_client,
+            metering=metering,
+            uuid=uuid,
+            instance_types=instance_types,
         )
         if os.environ.get("OSAC_FULFILLMENT_TRUST_E2E") == "true":
             assert_management_tls(k8s_hub_client, require_metering=True)
@@ -87,6 +93,7 @@ def test_cluster_create_with_two_node_sets(
         _assert_cluster_add_on_operators_installed(
             client=grpc,
             hub_k8s=k8s_hub_client,
+            target_k8s=k8s_target_client,
             cluster_id=uuid,
             cluster_order_name=cluster.co_name,
             expected_operator_specs=operator_specs,
@@ -95,7 +102,9 @@ def test_cluster_create_with_two_node_sets(
         )
         capture_snapshot(request.config, request.node.nodeid)
         cli.delete_cluster(uuid=uuid)
-        _assert_cluster_deleted(grpc=grpc, k8s=k8s_hub_client, metering=metering, uuid=uuid, cluster=cluster)
+        _assert_cluster_deleted(
+            grpc=grpc, k8s=k8s_hub_client, target_k8s=k8s_target_client, metering=metering, uuid=uuid, cluster=cluster
+        )
     except (Exception, pytest.fail.Exception) as exc:
         capture_failure(request.config, exc, request.node.nodeid)
         raise

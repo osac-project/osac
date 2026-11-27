@@ -127,13 +127,19 @@ def _assert_cluster_add_on_operators_installed(
     expected_operator_specs: Iterable[AddOnOperatorSpec],
     identity: str,
     hosted_cluster_reference: tuple[str, str],
+    target_k8s: K8sClient | None = None,
 ) -> None:
     specs = tuple(expected_operator_specs)
     wait_for_cluster_order_condition(k8s=hub_k8s, name=cluster_order_name, condition_type="AddOnOperatorsReady")
     hosted_cluster_name, hosted_cluster_namespace = hosted_cluster_reference
 
+    # The HostedControlPlane and its kubeconfig Secret live on the outer cluster
+    # when the hub is a vcluster; target_k8s defaults to the hub.
     workload_kubeconfig = wait_for_hosted_cluster_kubeconfig(
-        k8s=hub_k8s, hosted_cluster_namespace=hosted_cluster_namespace, hosted_cluster_name=hosted_cluster_name
+        k8s=hub_k8s,
+        target_k8s=target_k8s,
+        hosted_cluster_namespace=hosted_cluster_namespace,
+        hosted_cluster_name=hosted_cluster_name,
     )
     with tempfile.NamedTemporaryFile(prefix="osac-workload-", suffix=".kubeconfig") as kubeconfig_file:
         kubeconfig_file.write(workload_kubeconfig)
